@@ -1,6 +1,9 @@
 use super::compile::{CompileQueue, Finished, Generations};
 use super::*;
 use crate::debug::hot_reload::pending::PendingShaders;
+use concinnity_cook::compile::program::{CompileFailure, EntryFailure, Severity};
+use concinnity_cook::compile::shader::CompiledShader;
+use concinnity_core::components::ShaderSource;
 use concinnity_core::components::ShaderStage;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -25,7 +28,7 @@ impl LiveEdit for ShaderBackend {
         bucket: u32,
         programs: &ShaderPrograms,
     ) -> RenderResult<WorldShaderSwap> {
-        self.updates.push((bucket, programs.fragment.clone()));
+        self.updates.push((bucket, programs.fragment.text.clone()));
         if self.reject {
             return Err(RenderError::ShaderCompile("pipeline build failed".into()));
         }
@@ -37,20 +40,45 @@ impl LiveEdit for ShaderBackend {
     }
 }
 
-// Stands in for dxc: a fragment containing "error" fails, anything else
-// "compiles" to programs carrying the texts.
+// Stands in for dxc: a fragment containing "error" fails with an error on its
+// first line, anything else "compiles" to programs carrying the texts.
 fn fake_compiler() -> Compiler {
     Arc::new(|name: &str, texts: &ShaderTexts| {
-        if texts.fragment.contains("error") {
-            return Err(format!("Shader '{name}': syntax error"));
+        if texts.fragment.text.contains("error") {
+            let output = format!("{}:1:1: error: syntax error\n", texts.fragment.path);
+            return Err(ShaderReloadFailure::Compile(CompileFailure {
+                owner: format!("Shader '{name}'"),
+                diagnostics: fake_diagnostics(&output),
+                failures: vec![EntryFailure {
+                    entry: "fragment_main".to_string(),
+                    output,
+                }],
+                hint: "",
+            }));
         }
-        Ok(ShaderPrograms {
-            name: name.to_string(),
-            vertex: texts.vertex.clone(),
-            fragment: texts.fragment.clone(),
-            programs: Vec::new(),
+        Ok(CompiledShader {
+            programs: ShaderPrograms {
+                name: name.to_string(),
+                vertex: texts.vertex.clone(),
+                fragment: texts.fragment.clone(),
+                programs: Vec::new(),
+            },
+            warnings: Vec::new(),
         })
     })
+}
+
+// The one diagnostic the fake compiler reports.
+fn fake_diagnostics(output: &str) -> Vec<Diagnostic> {
+    let (path, message) = output.split_once(":1:1: error: ").unwrap();
+    vec![Diagnostic {
+        path: path.to_string(),
+        line: 1,
+        column: 1,
+        severity: Severity::Error,
+        message: message.trim_end().to_string(),
+        context: String::new(),
+    }]
 }
 
 fn entry(id: u32, bucket: u32, files: &[(ShaderStage, &Path)]) -> ShaderSourceEntry {
@@ -152,8 +180,8 @@ fn outcomes(reports: &[ShaderReloadReport]) -> Vec<(&str, &'static str)> {
         .iter()
         .map(|r| {
             let kind = match r.outcome {
-                ShaderReloadOutcome::Swapped(_) => "swapped",
-                ShaderReloadOutcome::AppliesOnLoad => "applies on load",
+                ShaderReloadOutcome::Swapped { .. } => "swapped",
+                ShaderReloadOutcome::AppliesOnLoad { .. } => "applies on load",
                 ShaderReloadOutcome::Failed(_) => "failed",
             };
             (r.name.as_str(), kind)
@@ -178,7 +206,7 @@ fn a_request_rebuilds_just_the_named_shader() {
     assert_eq!(outcomes(&reports), [("shader2", "swapped")]);
     assert_eq!(backend.updates, [(1, "water v2".to_string())]);
     // The edit is also kept for the next install of the bucket.
-    assert_eq!(f.overrides.get(1).unwrap().fragment, "water v2");
+    assert_eq!(f.overrides.get(1).unwrap().fragment.text, "water v2");
 }
 
 // The world default rebuilds through bucket 0 and needs no override, since
@@ -205,7 +233,7 @@ fn a_non_resident_shader_is_kept_for_its_scene_load() {
     f.reload.request(&pending(&[3]));
     let reports = poll_for(&mut f.reload, &mut backend, 1);
     assert_eq!(outcomes(&reports), [("shader3", "applies on load")]);
-    assert_eq!(f.overrides.get(2).unwrap().fragment, "cave v2");
+    assert_eq!(f.overrides.get(2).unwrap().fragment.text, "cave v2");
 }
 
 // Saving a file two Shaders share, which the watcher turns into a request for
@@ -227,14 +255,13 @@ fn a_shared_file_reloads_every_shader_reading_it() {
     let mut buckets: Vec<u32> = backend.updates.iter().map(|&(b, _)| b).collect();
     buckets.sort_unstable();
     assert_eq!(buckets, [1, 2]);
-    assert_eq!(
-        f.overrides.get(1).unwrap().vertex.as_deref(),
-        Some("sway v2")
-    );
-    assert_eq!(
-        f.overrides.get(2).unwrap().vertex.as_deref(),
-        Some("sway v2")
-    );
+    for bucket in [1, 2] {
+        let programs = f.overrides.get(bucket).unwrap();
+        assert_eq!(
+            programs.vertex.as_ref().map(|v| v.text.as_str()),
+            Some("sway v2")
+        );
+    }
 }
 
 // `reload-assets` asks for every Shader.
@@ -264,12 +291,20 @@ fn a_compile_error_leaves_the_pipeline_and_the_override_alone() {
     f.write("water.hlsl", "water error");
     f.reload.request(&pending(&[2]));
     let reports = poll_for(&mut f.reload, &mut backend, 1);
-    assert!(matches!(
-        &reports[..],
-        [ShaderReloadReport { outcome: ShaderReloadOutcome::Failed(e), .. }] if e.contains("syntax error")
-    ));
+    let [
+        ShaderReloadReport {
+            outcome: ShaderReloadOutcome::Failed(ShaderReloadFailure::Compile(failed)),
+            ..
+        },
+    ] = &reports[..]
+    else {
+        panic!("one compile failure: {reports:?}");
+    };
+    // The error names the file by the catalog's resolved path.
+    let water = f.dir.path().join("water.hlsl");
+    assert_eq!(failed.diagnostics[0].path, water.to_string_lossy());
     assert_eq!(backend.updates.len(), 1);
-    assert_eq!(f.overrides.get(1).unwrap().fragment, "water v2");
+    assert_eq!(f.overrides.get(1).unwrap().fragment.text, "water v2");
 }
 
 // A pipeline the backend refuses to build is reported and not kept.
@@ -285,8 +320,15 @@ fn a_rejected_pipeline_is_not_kept_as_an_override() {
     let reports = poll_for(&mut f.reload, &mut backend, 1);
     assert!(matches!(
         reports[0].outcome,
-        ShaderReloadOutcome::Failed(ref e) if e.contains("pipeline rebuild rejected")
+        ShaderReloadOutcome::Failed(ShaderReloadFailure::Rejected(ref e)) if e.contains("pipeline build failed")
     ));
+    let ShaderReloadOutcome::Failed(e) = &reports[0].outcome else {
+        unreachable!()
+    };
+    assert!(
+        e.to_string().starts_with("pipeline rebuild rejected: "),
+        "{e}"
+    );
     assert!(f.overrides.get(1).is_none());
 }
 
@@ -299,7 +341,7 @@ fn an_unreadable_file_fails_before_compiling() {
     let reports = f.reload.request(&pending(&[2]));
     assert!(matches!(
         &reports[..],
-        [ShaderReloadReport { name, outcome: ShaderReloadOutcome::Failed(e) }]
+        [ShaderReloadReport { name, outcome: ShaderReloadOutcome::Failed(ShaderReloadFailure::Unstarted(e)) }]
             if name == "shader2" && e.contains("water.hlsl")
     ));
     std::thread::sleep(Duration::from_millis(50));
@@ -328,11 +370,18 @@ fn an_empty_catalog_reloads_nothing() {
     assert!(backend.updates.is_empty());
 }
 
+fn compiled(programs: ShaderPrograms) -> CompiledShader {
+    CompiledShader {
+        programs,
+        warnings: Vec::new(),
+    }
+}
+
 fn finished(id: u32, generation: u64) -> Finished {
     Finished {
         id: AssetId(id),
         generation,
-        result: Ok(ShaderPrograms::default()),
+        result: Ok(compiled(ShaderPrograms::default())),
     }
 }
 
@@ -366,9 +415,14 @@ fn a_stale_compile_finishing_late_is_dropped() {
     let mut queue = CompileQueue::new();
     let (release_old, old_gate) = channel::<()>();
     let (old_done, old_finished) = channel::<()>();
-    let program = |fragment: &str| ShaderPrograms {
-        fragment: fragment.to_string(),
-        ..Default::default()
+    let program = |fragment: &str| {
+        compiled(ShaderPrograms {
+            fragment: ShaderSource {
+                path: "f.hlsl".to_string(),
+                text: fragment.to_string(),
+            },
+            ..Default::default()
+        })
     };
     let old = program("old");
     queue
@@ -388,7 +442,7 @@ fn a_stale_compile_finishing_late_is_dropped() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(applied.len(), 1);
-    assert_eq!(applied[0].1.as_ref().unwrap().fragment, "new");
+    assert_eq!(applied[0].1.as_ref().unwrap().programs.fragment.text, "new");
 
     release_old.send(()).unwrap();
     old_finished
@@ -396,4 +450,33 @@ fn a_stale_compile_finishing_late_is_dropped() {
         .expect("the old compile ran");
     std::thread::sleep(Duration::from_millis(50));
     assert!(queue.drain().is_empty());
+}
+
+// With the real compiler: a broken file read through the catalog fails with
+// its error at the line it is on, under the path the catalog resolved, so a
+// caller finds the entry's file by comparing paths.
+#[test]
+fn a_real_compile_error_names_the_catalogs_path_and_line() {
+    if !concinnity_shader::dxc_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("broken.hlsl");
+    std::fs::write(
+        &path,
+        "float4 shade(VertexOut v, GpuObjectData od)\n{\n    return missing_tint;\n}\n",
+    )
+    .unwrap();
+    let catalog_entry = entry(9, 0, &[(ShaderStage::Fragment, &path)]);
+    let texts = ShaderTexts::read(&catalog_entry).unwrap();
+    let Err(ShaderReloadFailure::Compile(failed)) = compile::compile("broken", &texts) else {
+        panic!("a compile failure");
+    };
+    let errors: Vec<(&str, u32)> = failed.errors().map(|d| (d.path.as_str(), d.line)).collect();
+    assert_eq!(
+        errors,
+        [(catalog_entry.path(ShaderStage::Fragment).unwrap(), 3)]
+    );
+    let failure = ShaderReloadFailure::Compile(failed);
+    assert_eq!(failure.first_error_at().as_deref(), Some("broken.hlsl:3"));
 }

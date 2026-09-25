@@ -13,6 +13,9 @@ use concinnity_cook::authoring::world::find_world_jsonl;
 /// `json_path` is used when it names an existing file; otherwise the world is
 /// discovered.
 pub fn build(json_path: Option<&str>) -> std::io::Result<()> {
+    // The cook reports what does not fail the build, such as a shader
+    // warning, through the log.
+    concinnity_engine::app::run::init_logging();
     let resolved;
     let json_path = match json_path {
         Some(p) if std::path::Path::new(p).exists() => p,

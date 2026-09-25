@@ -939,8 +939,11 @@ mod tests {
         let programs = concinnity_core::components::ShaderPrograms {
             name: "wall".to_string(),
             vertex: None,
-            fragment: "float4 shade(VertexOut v, GpuObjectData od) { return (float4)(1.0); }"
-                .to_string(),
+            fragment: concinnity_core::components::ShaderSource {
+                path: "shaders/wall.hlsl".to_string(),
+                text: "float4 shade(VertexOut v, GpuObjectData od) { return (float4)(1.0); }"
+                    .to_string(),
+            },
             programs: Vec::new(),
         };
         let vs = world_entry(&programs, "vertex_main_bindless", false).unwrap();

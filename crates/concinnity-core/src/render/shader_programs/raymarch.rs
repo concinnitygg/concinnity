@@ -8,7 +8,7 @@
 use alloc::string::String;
 
 use crate::platform::Platform;
-use crate::render::shader_source;
+use crate::render::shader_source::{self, Splice};
 
 /// The shader file every entry below compiles from.
 pub const FILE: &str = "raymarch.hlsl";
@@ -125,7 +125,7 @@ pub fn source_with(
         platform,
         &[(family.define(), "1")],
         resolve,
-        &[(BODY_MARKER, field)],
+        &[Splice::inline(BODY_MARKER, field)],
     )
 }
 

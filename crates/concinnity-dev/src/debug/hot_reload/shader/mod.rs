@@ -6,11 +6,13 @@
 //! `ShaderOverrides` and install when the scene loads.
 
 mod compile;
+mod failure;
 mod files;
 
 #[cfg(test)]
 mod tests;
 
+use concinnity_cook::compile::program::Diagnostic;
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::render::backend::{LiveEdit, WorldShaderSwap};
 use concinnity_engine::gfx::system::parked::ShaderOverrides;
@@ -20,18 +22,25 @@ use std::time::{Duration, Instant};
 
 use super::pending::PendingShaders;
 use compile::{CompileQueue, CompileResult, ShaderTexts};
+pub(crate) use failure::ShaderReloadFailure;
 pub(super) use files::ShaderFileIndex;
 
-// What became of one Shader's reload.
+// What became of one Shader's reload. Warnings and errors name a Shader's own
+// files by `ShaderFile::resolved_path`, the path the recompile read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ShaderReloadOutcome {
-    // The live pipeline was rebuilt from the edit, taking this long on the
+    // The live pipeline was rebuilt from the edit, taking `frame_time` on the
     // frame thread.
-    Swapped(Duration),
+    Swapped {
+        frame_time: Duration,
+        warnings: Vec<Diagnostic>,
+    },
     // The Shader's scene is not loaded; the edit installs when it loads.
-    AppliesOnLoad,
+    AppliesOnLoad {
+        warnings: Vec<Diagnostic>,
+    },
     // The live pipeline keeps its previous source.
-    Failed(String),
+    Failed(ShaderReloadFailure),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,7 +94,7 @@ impl ShaderReload {
                 Ok(()) => tracing::info!("Shader hot-reload: recompiling '{}'", entry.name),
                 Err(e) => failed.push(ShaderReloadReport {
                     name: entry.name.clone(),
-                    outcome: ShaderReloadOutcome::Failed(e),
+                    outcome: ShaderReloadOutcome::Failed(ShaderReloadFailure::Unstarted(e)),
                 }),
             }
         }
@@ -100,7 +109,13 @@ impl ShaderReload {
             .filter_map(|(id, result)| {
                 let entry = self.catalog.get(id)?;
                 let outcome = match result {
-                    Ok(programs) => apply(entry, programs, backend, &self.overrides),
+                    Ok(compiled) => apply(
+                        entry,
+                        compiled.programs,
+                        compiled.warnings,
+                        backend,
+                        &self.overrides,
+                    ),
                     Err(e) => ShaderReloadOutcome::Failed(e),
                 };
                 Some(ShaderReloadReport {
@@ -118,16 +133,20 @@ impl ShaderReload {
 fn apply(
     entry: &ShaderSourceEntry,
     programs: ShaderPrograms,
+    warnings: Vec<Diagnostic>,
     backend: &mut dyn LiveEdit,
     overrides: &ShaderOverrides,
 ) -> ShaderReloadOutcome {
     let programs = Arc::new(programs);
     let started = Instant::now();
     let outcome = match backend.update_world_shader(entry.bucket, &programs) {
-        Ok(WorldShaderSwap::Swapped) => ShaderReloadOutcome::Swapped(started.elapsed()),
-        Ok(WorldShaderSwap::NotResident) => ShaderReloadOutcome::AppliesOnLoad,
+        Ok(WorldShaderSwap::Swapped) => ShaderReloadOutcome::Swapped {
+            frame_time: started.elapsed(),
+            warnings,
+        },
+        Ok(WorldShaderSwap::NotResident) => ShaderReloadOutcome::AppliesOnLoad { warnings },
         Err(e) => {
-            return ShaderReloadOutcome::Failed(format!("pipeline rebuild rejected: {e}"));
+            return ShaderReloadOutcome::Failed(ShaderReloadFailure::Rejected(e.to_string()));
         }
     };
     if entry.bucket != 0 {
@@ -144,24 +163,30 @@ pub(crate) fn report(
     use crate::editor::notify::Action;
     for ShaderReloadReport { name, outcome } in reports {
         match outcome {
-            ShaderReloadOutcome::Swapped(frame_time) => {
+            ShaderReloadOutcome::Swapped {
+                frame_time,
+                warnings,
+            } => {
                 tracing::info!(
-                    "Shader hot-reload: '{name}' recompiled, pipeline swapped ({:.1} ms on the \
+                    "Shader hot-reload: '{name}' recompiled{}, pipeline swapped ({:.1} ms on the \
                      frame thread)",
+                    warned(warnings),
                     frame_time.as_secs_f64() * 1000.0
                 );
                 if let Some(n) = notify {
-                    n.success(&format!("Shader '{name}' reloaded"));
+                    n.success(&format!("Shader '{name}' reloaded{}", warned(warnings)));
                 }
             }
-            ShaderReloadOutcome::AppliesOnLoad => {
+            ShaderReloadOutcome::AppliesOnLoad { warnings } => {
                 tracing::info!(
-                    "Shader hot-reload: '{name}' recompiled; its scene is not loaded, so the \
-                     edit installs when it loads"
+                    "Shader hot-reload: '{name}' recompiled{}; its scene is not loaded, so the \
+                     edit installs when it loads",
+                    warned(warnings)
                 );
                 if let Some(n) = notify {
                     n.success(&format!(
-                        "Shader '{name}' reloaded (applies when its scene loads)"
+                        "Shader '{name}' reloaded{} (applies when its scene loads)",
+                        warned(warnings)
                     ));
                 }
             }
@@ -170,12 +195,22 @@ pub(crate) fn report(
                     "Shader hot-reload: '{name}' failed: {e} (live pipeline kept its previous source)"
                 );
                 if let Some(n) = notify {
+                    let at = e.first_error_at().map(|at| format!(" at {at}"));
                     n.error_with(
-                        &format!("Shader '{name}' reload failed"),
+                        &format!("Shader '{name}' reload failed{}", at.unwrap_or_default()),
                         Action::OpenConsole,
                     );
                 }
             }
         }
+    }
+}
+
+// " with N warnings", or nothing. Each warning is logged where it was compiled.
+fn warned(warnings: &[Diagnostic]) -> String {
+    match warnings.len() {
+        0 => String::new(),
+        1 => " with 1 warning".to_string(),
+        n => format!(" with {n} warnings"),
     }
 }

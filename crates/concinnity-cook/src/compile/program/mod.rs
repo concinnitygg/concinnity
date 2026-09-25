@@ -24,10 +24,17 @@ use std::path::Path;
 use concinnity_core::components::compiled_programs::CompiledProgram;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::shader_source;
+use concinnity_shader::diagnostics;
+
+mod failure;
+
+pub use concinnity_shader::diagnostics::{Diagnostic, Severity};
+pub use failure::{CompileFailure, EntryFailure, ProgramError};
 
 /// One entry point to compile out of an assembled source.
 pub(crate) struct Job<'a> {
-    /// The template's file name, which dxc diagnostics carry.
+    /// The template's file name, which dxc diagnostics carry for every line
+    /// outside a `#line`-fenced splice.
     pub file: &'a str,
     /// The entry point.
     pub entry: &'a str,
@@ -57,51 +64,95 @@ pub(crate) fn require_compiler(owner: &str, have_compiler: bool) -> std::io::Res
     ))
 }
 
+/// What [`compile_all`] produced: the programs in job order, and every
+/// warning the compiler printed on the way, each once.
+#[derive(Debug)]
+pub(crate) struct Compiled {
+    pub programs: Vec<CompiledProgram>,
+    pub warnings: Vec<Diagnostic>,
+}
+
 /// Compile every job for `platform` side by side, in a scratch directory named
-/// `scratch`, and return the programs in job order.
+/// `scratch`.
 ///
-/// A failure names `owner` and the entry, carries dxc's own diagnostic, and
-/// ends with whatever `hint` adds for that diagnostic. When several entries
-/// fail, the first in job order is reported, so every run reports the same one.
+/// A failure names `owner` and every entry that failed, carries dxc's
+/// diagnostics (each once, however many entries reported it) and its raw
+/// output, and ends with whatever `hint` adds for that output. Warnings are
+/// logged against `owner` and returned beside the programs.
 pub(crate) fn compile_all(
     owner: &str,
     scratch: &str,
     jobs: &[Job<'_>],
     platform: Platform,
-    hint: impl Fn(&str) -> &'static str + Sync,
-) -> std::io::Result<Vec<CompiledProgram>> {
+    hint: impl Fn(&str) -> &'static str,
+) -> Result<Compiled, ProgramError> {
     use rayon::prelude::*;
 
-    let work = concinnity_host::scratch::Scratch::dir(scratch)?;
-    let compiled: Vec<_> = jobs
+    let work = concinnity_host::scratch::Scratch::dir(scratch).map_err(|source| {
+        ProgramError::Scratch {
+            owner: owner.to_string(),
+            source,
+        }
+    })?;
+    let results: Vec<_> = jobs
         .par_iter()
-        .map(|job| {
-            let artifact = compile(owner, job, platform, work.path()).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("{owner}: compiling '{}': {e}{}", job.entry, hint(&e)),
-                )
-            })?;
-            Ok(CompiledProgram {
-                entry: job.entry.to_string(),
-                source_digest: shader_source::source_digest(job.source),
-                artifact,
-            })
-        })
+        .map(|job| compile(job, platform, work.path()))
         .collect();
-    compiled.into_iter().collect()
+    gather(owner, jobs, results, hint)
+}
+
+// Fold each job's result into the programs and their warnings, or into one
+// failure naming every entry that failed.
+fn gather(
+    owner: &str,
+    jobs: &[Job<'_>],
+    results: Vec<Result<concinnity_shader::Compiled, String>>,
+    hint: impl Fn(&str) -> &'static str,
+) -> Result<Compiled, ProgramError> {
+    let mut programs = Vec::with_capacity(jobs.len());
+    let mut warnings = Vec::new();
+    let mut failures = Vec::new();
+    for (job, result) in jobs.iter().zip(results) {
+        match result {
+            Ok(compiled) => {
+                if let Some(printed) = compiled.warnings {
+                    let parsed = diagnostics::parse(&printed);
+                    if parsed.is_empty() {
+                        tracing::warn!("{owner}: compiling '{}':\n{printed}", job.entry);
+                    }
+                    warnings.extend(parsed);
+                }
+                programs.push(CompiledProgram {
+                    entry: job.entry.to_string(),
+                    source_digest: shader_source::source_digest(job.source),
+                    artifact: compiled.artifact,
+                });
+            }
+            Err(output) => failures.push(EntryFailure {
+                entry: job.entry.to_string(),
+                output,
+            }),
+        }
+    }
+    if !failures.is_empty() {
+        return Err(CompileFailure::new(owner, failures, hint).into());
+    }
+    let warnings = diagnostics::dedup(warnings);
+    for warning in &warnings {
+        tracing::warn!("{owner}: {warning}");
+    }
+    Ok(Compiled { programs, warnings })
 }
 
 // One entry point of a job's source, emitted for `platform`. The text is
-// authored, so a dxc warning is logged against `owner` rather than failing the
-// build.
+// authored, so a dxc warning comes back beside the artifact rather than
+// failing the build.
 fn compile(
-    owner: &str,
     job: &Job<'_>,
     platform: Platform,
     work_dir: &Path,
-) -> Result<Vec<u8>, String> {
-    let compiled = concinnity_shader::compile_with_warnings(
+) -> Result<concinnity_shader::Compiled, String> {
+    concinnity_shader::compile_with_warnings(
         &concinnity_shader::HlslJob {
             source: job.source,
             file_name: job.file,
@@ -109,11 +160,7 @@ fn compile(
             target: concinnity_shader::HlslTarget::cooked(platform),
         },
         work_dir,
-    )?;
-    if let Some(warnings) = compiled.warnings {
-        tracing::warn!("{owner}: compiling '{}':\n{warnings}", job.entry);
-    }
-    Ok(compiled.artifact)
+    )
 }
 
 #[cfg(test)]
@@ -138,9 +185,8 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
-        let msl =
-            compile("test", &job(PIXEL), Platform::Metal, dir.path()).expect("MSL off any host");
-        let text = String::from_utf8(msl).expect("MSL is text");
+        let msl = compile(&job(PIXEL), Platform::Metal, dir.path()).expect("MSL off any host");
+        let text = String::from_utf8(msl.artifact).expect("MSL is text");
         assert!(text.contains("fragment "), "got: {text}");
         assert!(text.contains("main_ps"), "got: {text}");
     }
@@ -161,15 +207,15 @@ mod tests {
     }
 
     // Each program carries the digest of the text it came from, in job order,
-    // and the first failing entry is the one reported with the caller's hint.
+    // and a failure names every entry that failed, with the caller's hint.
     #[test]
-    fn programs_come_back_in_job_order_and_the_first_failure_wins() {
+    fn programs_come_back_in_job_order_and_a_failure_names_every_failed_entry() {
         if !concinnity_shader::dxc_available() {
             return;
         }
         let other = PIXEL.replace("1.0", "0.5");
         let jobs = [job(PIXEL), job(&other)];
-        let programs = compile_all(
+        let compiled = compile_all(
             "Shader 'x'",
             "program-order",
             &jobs,
@@ -177,7 +223,7 @@ mod tests {
             |_| "",
         )
         .unwrap();
-        let digests: Vec<u64> = programs.iter().map(|p| p.source_digest).collect();
+        let digests: Vec<u64> = compiled.programs.iter().map(|p| p.source_digest).collect();
         assert_eq!(
             digests,
             [
@@ -185,6 +231,7 @@ mod tests {
                 shader_source::source_digest(&other)
             ]
         );
+        assert!(compiled.warnings.is_empty());
 
         let broken = [
             job(PIXEL),
@@ -205,11 +252,58 @@ mod tests {
             |_| "\nhint",
         )
         .unwrap_err();
+        let ProgramError::Compile(failed) = &err else {
+            panic!("a compile failure: {err}");
+        };
+        let entries: Vec<&str> = failed.failures.iter().map(|f| f.entry.as_str()).collect();
+        assert_eq!(entries, ["first", "second"]);
+        assert!(failed.errors().all(|d| d.path == "x.hlsl"), "{err}");
         let message = err.to_string();
         assert!(
-            message.starts_with("Shader 'x': compiling 'first': "),
+            message.starts_with("Shader 'x': compiling 'first', 'second':"),
             "{message}"
         );
         assert!(message.ends_with("\nhint"), "{message}");
+    }
+
+    // A warning every entry printed comes back once, and the programs keep job
+    // order.
+    #[test]
+    fn a_warning_from_every_entry_is_returned_once() {
+        let warned = |bytes: &[u8]| {
+            Ok(concinnity_shader::Compiled {
+                artifact: bytes.to_vec(),
+                warnings: Some(
+                    "user.hlsl:3:7: warning: implicit truncation\n  x = y;\n      ^".to_string(),
+                ),
+            })
+        };
+        let jobs = [
+            Job {
+                entry: "a",
+                ..job(PIXEL)
+            },
+            Job {
+                entry: "b",
+                ..job(PIXEL)
+            },
+        ];
+        let compiled = gather(
+            "Shader 'x'",
+            &jobs,
+            vec![warned(b"A"), warned(b"B")],
+            |_| "",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let artifacts: Vec<&[u8]> = compiled.programs.iter().map(|p| &p.artifact[..]).collect();
+        assert_eq!(artifacts, [b"A", b"B"]);
+        assert_eq!(compiled.warnings.len(), 1);
+        assert_eq!(
+            (
+                compiled.warnings[0].path.as_str(),
+                compiled.warnings[0].line
+            ),
+            ("user.hlsl", 3)
+        );
     }
 }

@@ -11,7 +11,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::platform::Platform;
-use crate::render::shader_source;
+use crate::render::shader_source::{self, Splice};
 
 /// The marker the world's `vertex` file is spliced at.
 pub const VERTEX_MARKER: &str = "{SURFACE_VERTEX}";
@@ -45,24 +45,37 @@ pub fn program(entry: &str) -> Option<&'static Program> {
     ALL.iter().find(|p| p.entry == entry)
 }
 
-/// The world's two files, as text.
+/// One of the world's files: the path it was read from and its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceFile<'a> {
+    /// The path a compiler's diagnostics name the file by. It rides the
+    /// assembled text in a `#line` directive, so it is part of what an
+    /// artifact's source digest covers.
+    pub path: &'a str,
+    /// The file's text.
+    pub text: &'a str,
+}
+
+/// The world's two files.
 #[derive(Debug, Clone, Copy)]
 pub struct Sources<'a> {
     /// The `vertex` file, when declared.
-    pub vertex: Option<&'a str>,
+    pub vertex: Option<SourceFile<'a>>,
     /// The `fragment` file.
-    pub fragment: &'a str,
+    pub fragment: SourceFile<'a>,
 }
 
 impl<'a> Sources<'a> {
     /// The splices that put the declared files in place of the engine's
-    /// default hooks. An undeclared vertex file leaves the default.
-    pub fn splices(&self) -> Vec<(&'static str, &'a str)> {
+    /// default hooks, each fenced under its own path. An undeclared vertex file
+    /// leaves the default.
+    pub fn splices(&self) -> Vec<Splice<'a>> {
+        let splice = |marker, file: SourceFile<'a>| Splice::from_file(marker, file.text, file.path);
         let mut out = Vec::with_capacity(2);
         if let Some(v) = self.vertex {
-            out.push((VERTEX_MARKER, v));
+            out.push(splice(VERTEX_MARKER, v));
         }
-        out.push((FRAGMENT_MARKER, self.fragment));
+        out.push(splice(FRAGMENT_MARKER, self.fragment));
         out
     }
 }
@@ -92,11 +105,24 @@ mod tests {
 
     const SHADE: &str =
         "float4 shade(VertexOut v, GpuObjectData od) { return float4(1.0, 0.0, 1.0, 1.0); }";
+    const TRANSFORM: &str = "VertexOut transform(float4x4 m, float3 p, float3 n, float3 t, float3 c, float2 uv)\n\
+        {\n    return project_vertex(m, p, n, t, c, uv);\n}\n";
+
+    fn file<'a>(path: &'a str, text: &'a str) -> SourceFile<'a> {
+        SourceFile { path, text }
+    }
 
     fn fragment_only() -> Sources<'static> {
         Sources {
             vertex: None,
-            fragment: SHADE,
+            fragment: file("shaders/magenta.hlsl", SHADE),
+        }
+    }
+
+    fn vertex_and_fragment() -> Sources<'static> {
+        Sources {
+            vertex: Some(file("shaders/sway.hlsl", TRANSFORM)),
+            fragment: file("shaders/magenta.hlsl", SHADE),
         }
     }
 
@@ -150,13 +176,7 @@ mod tests {
         assert!(!src.contains(FRAGMENT_MARKER) && !src.contains(VERTEX_MARKER));
         assert!(src.contains("return project_vertex(model, pos, normal, tangent, color, uv);"));
 
-        let both = Sources {
-            vertex: Some(
-                "VertexOut transform(float4x4 m, float3 p, float3 n, float3 t, float3 c, float2 uv) { return project_vertex(m, p, n, t, c, uv); }",
-            ),
-            fragment: SHADE,
-        };
-        let src = source(frag, Platform::Metal, &both);
+        let src = source(frag, Platform::Metal, &vertex_and_fragment());
         assert!(src.contains("VertexOut transform(float4x4 m,"));
         assert!(!src.contains("return project_vertex(model, pos, normal, tangent, color, uv);"));
     }
@@ -172,5 +192,80 @@ mod tests {
         assert_eq!(a, b);
         assert!(a.contains(SHADE));
         assert!(a.starts_with("#define CN_BACKEND_METAL 1\n"));
+    }
+
+    // Each line of `src` that is not a `#line` directive, with the file and
+    // line a compiler numbers it by.
+    fn numbered<'s>(src: &'s str, file: &str) -> Vec<(String, usize, &'s str)> {
+        let mut current = String::from(file);
+        let mut line = 1;
+        let mut out = Vec::new();
+        for text in src.lines() {
+            if let Some(rest) = text.strip_prefix("#line ") {
+                let (number, path) = rest.split_once(' ').expect("a line and a path");
+                line = number.parse().expect("a line number");
+                current = String::from(path.trim_matches('"'));
+                continue;
+            }
+            out.push((current.clone(), line, text));
+            line += 1;
+        }
+        out
+    }
+
+    // Against the real template: the world's lines number from 1 under their
+    // own paths, and every template line keeps the number it has with the
+    // markers left in place, which is what a compiler reported before.
+    fn assert_numbering(sources: &Sources<'_>) {
+        for program in ALL {
+            let fenced = source(program, Platform::Vulkan, sources);
+            let markers_kept: Vec<Splice<'_>> = sources
+                .splices()
+                .iter()
+                .map(|s| Splice::inline(s.marker, s.marker))
+                .collect();
+            let unspliced = shader_source::assemble_with_splices(
+                program.file,
+                Platform::Vulkan,
+                &[],
+                crate::render::shaders::embedded,
+                &markers_kept,
+            );
+            let template: Vec<&str> = unspliced.lines().collect();
+            let mut spliced = alloc::collections::BTreeMap::<String, Vec<&str>>::new();
+            for (path, line, text) in numbered(&fenced, program.file) {
+                if path == program.file {
+                    assert!(
+                        template[line - 1].ends_with(text),
+                        "{}:{line} reads {text:?}, template has {:?}",
+                        program.file,
+                        template[line - 1]
+                    );
+                } else {
+                    let lines = spliced.entry(path).or_default();
+                    assert_eq!(line, lines.len() + 1, "numbered from 1");
+                    lines.push(text);
+                }
+            }
+            let mut want = alloc::collections::BTreeMap::new();
+            want.insert(
+                String::from(sources.fragment.path),
+                sources.fragment.text.lines().collect::<Vec<_>>(),
+            );
+            if let Some(v) = sources.vertex {
+                want.insert(String::from(v.path), v.text.lines().collect());
+            }
+            assert_eq!(spliced, want, "{}", program.entry);
+        }
+    }
+
+    #[test]
+    fn a_fragment_only_shader_numbers_its_file_and_the_template() {
+        assert_numbering(&fragment_only());
+    }
+
+    #[test]
+    fn a_vertex_and_fragment_shader_numbers_both_files_and_the_template() {
+        assert_numbering(&vertex_and_fragment());
     }
 }

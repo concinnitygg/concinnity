@@ -160,6 +160,41 @@ pub fn assemble_with(
     assemble_with_splices(file, platform, defines, resolve, &[])
 }
 
+/// Caller-supplied text for one marker, and the file it was read from when it
+/// has one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Splice<'a> {
+    /// The marker the text replaces.
+    pub marker: &'a str,
+    /// The text spliced in.
+    pub text: &'a str,
+    /// The file the text was read from. When set, `#line` directives fence the
+    /// text: one ahead of it names this file, so a compiler reports the text's
+    /// own lines against it, and one after it restores the template's
+    /// numbering.
+    pub path: Option<&'a str>,
+}
+
+impl<'a> Splice<'a> {
+    /// Text with no file of its own, spliced in verbatim.
+    pub const fn inline(marker: &'a str, text: &'a str) -> Self {
+        Self {
+            marker,
+            text,
+            path: None,
+        }
+    }
+
+    /// Text read from `path`.
+    pub const fn from_file(marker: &'a str, text: &'a str, path: &'a str) -> Self {
+        Self {
+            marker,
+            text,
+            path: Some(path),
+        }
+    }
+}
+
 /// The same assembly with caller-supplied text spliced in as well, for a shader
 /// whose source is only complete once something outside the shader tree is
 /// known. The raymarched SDF volumes are the case: a world authors the distance
@@ -168,16 +203,21 @@ pub fn assemble_with(
 ///
 /// A caller's splice wins over a [`FRAGMENTS`] row for the same marker, which
 /// is how a world Shader's hooks replace the engine's default ones; the
-/// caller's splices also run again after the table, so a fragment may carry
-/// one of their markers and still have it filled. Like the defines and the
-/// shared fragments, they ride the text, which is what makes the
-/// content-addressed shader cache key two worlds' shaders apart.
+/// caller's splices also run after the table, so a fragment may carry one of
+/// their markers and still have it filled. Like the defines and the shared
+/// fragments, they ride the text, which is what makes the content-addressed
+/// shader cache key two worlds' shaders apart.
+///
+/// A splice with a [`path`](Splice::path) is fenced by `#line` directives, and
+/// the one after it names `file`, so `file` must be the name the compile is
+/// given for the assembled text. Lines outside every splice then report as
+/// they would with no splice at all.
 pub fn assemble_with_splices(
     file: &str,
     platform: Platform,
     defines: &[(&str, &str)],
     resolve: impl Fn(&str) -> Option<&'static str>,
-    splices: &[(&str, &str)],
+    splices: &[Splice<'_>],
 ) -> String {
     let mut spliced = read(file, &resolve);
     // The table fills every marker the caller does not claim, then the
@@ -185,25 +225,91 @@ pub fn assemble_with_splices(
     // world file is never expanded and a marker a fragment introduces is
     // still reached.
     for (marker, fragment_file) in FRAGMENTS {
-        if spliced.contains(marker) && !splices.iter().any(|(m, _)| m == marker) {
+        if spliced.contains(marker) && !splices.iter().any(|s| s.marker == *marker) {
             let text = read(fragment_file, &resolve);
             spliced = Cow::Owned(spliced.replace(marker, &text));
         }
     }
-    spliced = splice_all(spliced, splices);
     let mut all = Vec::with_capacity(defines.len() + 1);
     all.push((backend_define(platform), "1"));
     all.extend_from_slice(defines);
-    inject_defines(&spliced, &all)
+    splice_all(&inject_defines(&spliced, &all), file, splices)
 }
 
-fn splice_all<'a>(mut text: Cow<'a, str>, splices: &[(&str, &str)]) -> Cow<'a, str> {
-    for (marker, fill) in splices {
-        if text.contains(marker) {
-            text = Cow::Owned(text.replace(marker, fill));
+// Every caller marker in `text` replaced, in one pass, so no splice's text is
+// ever rescanned for another's marker. Lines are counted in `text` itself,
+// which is the numbering a restoring `#line` puts back.
+fn splice_all(text: &str, file: &str, splices: &[Splice<'_>]) -> String {
+    let mut out =
+        String::with_capacity(text.len() + splices.iter().map(|s| s.text.len()).sum::<usize>());
+    let mut rest = text;
+    let mut line = 1;
+    while let Some((at, splice)) = next_marker(rest, splices) {
+        let before = &rest[..at];
+        out.push_str(before);
+        line += before.bytes().filter(|&b| b == b'\n').count();
+        push_splice(&mut out, splice, file, line);
+        rest = &rest[at + splice.marker.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+// The earliest caller marker in `text`, and where it starts.
+fn next_marker<'s, 'a>(text: &str, splices: &'s [Splice<'a>]) -> Option<(usize, &'s Splice<'a>)> {
+    splices
+        .iter()
+        .filter(|s| !s.marker.is_empty())
+        .filter_map(|s| text.find(s.marker).map(|at| (at, s)))
+        .min_by_key(|(at, _)| *at)
+}
+
+// Append one splice whose marker sat on `line` of `file`. The rest of that
+// line follows the restoring directive, so it keeps its own number.
+fn push_splice(out: &mut String, splice: &Splice<'_>, file: &str, line: usize) {
+    let Some(path) = splice.path else {
+        out.push_str(splice.text);
+        return;
+    };
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    push_line_directive(out, 1, path);
+    out.push_str(splice.text);
+    if !splice.text.ends_with('\n') {
+        out.push('\n');
+    }
+    push_line_directive(out, line, file);
+}
+
+fn push_line_directive(out: &mut String, line: usize, path: &str) {
+    use core::fmt::Write as _;
+    let _ = writeln!(out, "#line {line} \"{}\"", escape_path(path));
+}
+
+// `path` as the body of an HLSL string literal: backslashes (a Windows
+// separator) and quotes escaped, and a control character as a fixed-width octal
+// escape, so the compiler reads back exactly `path`.
+fn escape_path(path: &str) -> Cow<'_, str> {
+    if !path
+        .chars()
+        .any(|c| c == '\\' || c == '"' || c.is_ascii_control())
+    {
+        return Cow::Borrowed(path);
+    }
+    let mut out = String::with_capacity(path.len() + 8);
+    for c in path.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c if c.is_ascii_control() => {
+                use core::fmt::Write as _;
+                let _ = write!(out, "\\{:03o}", c as u32);
+            }
+            c => out.push(c),
         }
     }
-    text
+    Cow::Owned(out)
 }
 
 fn read(file: &str, resolve: &impl Fn(&str) -> Option<&'static str>) -> Cow<'static, str> {
@@ -320,7 +426,7 @@ mod tests {
             M,
             &[],
             |f| (f == "x.hlsl").then_some("A\n{SDF_BODY}\nB\n"),
-            &[("{SDF_BODY}", "float map() { return 1.0; }")],
+            &[Splice::inline("{SDF_BODY}", "float map() { return 1.0; }")],
         );
         assert_eq!(body(&src), "A\nfloat map() { return 1.0; }\nB\n");
     }
@@ -339,7 +445,7 @@ mod tests {
                 "post_common.hlsl" => Some("frag {SDF_BODY} end"),
                 _ => None,
             },
-            &[("{SDF_BODY}", "FILLED")],
+            &[Splice::inline("{SDF_BODY}", "FILLED")],
         );
         assert_eq!(body(&src), "frag FILLED end\n");
     }
@@ -353,7 +459,7 @@ mod tests {
             M,
             &[],
             |f| (f == "x.hlsl").then_some("{SURFACE_FRAGMENT}\n"),
-            &[(
+            &[Splice::inline(
                 "{SURFACE_FRAGMENT}",
                 "// see {MAIN_TYPES} and {SURFACE_VERTEX}\n",
             )],
@@ -371,7 +477,7 @@ mod tests {
             M,
             &[],
             |f| (f == "x.hlsl").then_some(body),
-            &[("{SURFACE_FRAGMENT}", "WORLD SHADE")],
+            &[Splice::inline("{SURFACE_FRAGMENT}", "WORLD SHADE")],
         );
         assert!(src.contains("WORLD SHADE"));
         assert!(
@@ -395,7 +501,7 @@ mod tests {
             M,
             &[("RAYMARCH_SURFACE", "1")],
             shaders::embedded,
-            &[("{SDF_BODY}", "// the world's field")],
+            &[Splice::inline("{SDF_BODY}", "// the world's field")],
         );
         for (marker, _) in FRAGMENTS {
             assert!(!src.contains(marker), "unspliced {marker}");
@@ -466,5 +572,76 @@ mod tests {
             assert_eq!(shaders::embedded(name), Some(*text));
         }
         assert_eq!(shaders::embedded("not_a_shader.hlsl"), None);
+    }
+
+    // A splice read from a file is fenced: its lines number from 1 under its
+    // path, and the template's numbering resumes after it as if the marker had
+    // never been replaced.
+    #[test]
+    fn a_file_splice_is_fenced_by_line_directives() {
+        let src = assemble_with_splices(
+            "t.hlsl",
+            M,
+            &[],
+            |f| (f == "t.hlsl").then_some("a\n{HOOK}\nb\n"),
+            &[Splice::from_file("{HOOK}", "x\ny", "hooks/h.hlsl")],
+        );
+        assert_eq!(
+            body(&src),
+            "a\n#line 1 \"hooks/h.hlsl\"\nx\ny\n#line 3 \"t.hlsl\"\n\nb\n"
+        );
+    }
+
+    // A marker mid-line starts the directive on a line of its own, and the rest
+    // of the marker's line keeps that line's number.
+    #[test]
+    fn a_marker_mid_line_keeps_the_rest_of_its_line_numbered() {
+        let src = assemble_with_splices(
+            "t.hlsl",
+            M,
+            &[("A", "1")],
+            |f| (f == "t.hlsl").then_some("a {HOOK} b\nc\n"),
+            &[Splice::from_file("{HOOK}", "x\n", "h.hlsl")],
+        );
+        assert_eq!(
+            src,
+            "#define CN_BACKEND_METAL 1\n#define A 1\na \n#line 1 \"h.hlsl\"\nx\n#line 3 \"t.hlsl\"\n b\nc\n"
+        );
+    }
+
+    // Each fence restores the numbering of the text around it, so a second
+    // splice's restore counts no line the first one added; a splice with no
+    // file lands verbatim, unfenced.
+    #[test]
+    fn every_fence_restores_the_template_numbering() {
+        let src = assemble_with_splices(
+            "t.hlsl",
+            M,
+            &[],
+            |f| (f == "t.hlsl").then_some("{V}\n{F}\n{I}\nend\n"),
+            &[
+                Splice::from_file("{V}", "v1\nv2\nv3\n", "v.hlsl"),
+                Splice::from_file("{F}", "f1\n", "f.hlsl"),
+                Splice::inline("{I}", "inline"),
+            ],
+        );
+        assert_eq!(
+            body(&src),
+            "#line 1 \"v.hlsl\"\nv1\nv2\nv3\n#line 2 \"t.hlsl\"\n\n\
+             #line 1 \"f.hlsl\"\nf1\n#line 3 \"t.hlsl\"\n\ninline\nend\n"
+        );
+    }
+
+    // A Windows path's separators and a quote are escaped, so the compiler
+    // reads back the path exactly; an ordinary path is left as it is.
+    #[test]
+    fn a_path_is_escaped_for_the_string_literal() {
+        assert_eq!(escape_path("shaders/water.hlsl"), "shaders/water.hlsl");
+        assert_eq!(
+            escape_path(r#"C:\world\my "best" shader.hlsl"#),
+            r#"C:\\world\\my \"best\" shader.hlsl"#
+        );
+        assert_eq!(escape_path("a\tb\nc\u{7f}"), r"a\011b\012c\177");
+        assert_eq!(escape_path("vatten/sjö.hlsl"), "vatten/sjö.hlsl");
     }
 }

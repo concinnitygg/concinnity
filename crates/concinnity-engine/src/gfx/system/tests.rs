@@ -165,7 +165,10 @@ impl WorldBuilder {
         let container = ShaderPrograms {
             name: "shader".into(),
             vertex: None,
-            fragment: "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }".into(),
+            fragment: concinnity_core::components::ShaderSource {
+                path: "shaders/wall.hlsl".into(),
+                text: "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }".into(),
+            },
             programs: entries
                 .iter()
                 .map(|e| compiled_programs::CompiledProgram {

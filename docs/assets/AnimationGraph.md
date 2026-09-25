@@ -9,8 +9,7 @@ the time, a graph plays exactly one *state* at a time and moves between
 states along declared transitions, crossfading poses over each
 transition's `duration_secs`. Transitions fire when their conditions --
 comparisons against the graph's named float `parameters` -- pass. Gameplay
-systems write parameter values each frame (the `anim-param` debug command
-does the same from a `cn debug` session).
+systems write parameter values each frame.
 
 A graph owns its target: every [Animation](Animation.md) targeting the
 graph's mesh must be referenced by exactly one state, and at most one

@@ -17,7 +17,7 @@ concinnity_core::install_global_allocator!();
 // binary's convention and nobody else's.
 const STATE_DIR: &str = ".concinnity";
 
-fn main() -> std::io::Result<()> {
+fn main() -> std::process::ExitCode {
     // Parses argv, and on macOS may replace this process image to bring up
     // Metal validation, so nothing above it may spawn a thread.
     let invocation = concinnity_dev::cli::Invocation::from_args();
@@ -29,7 +29,15 @@ fn main() -> std::io::Result<()> {
     concinnity_engine::crash::install(Some(&tree.crashes_dir()));
     concinnity_dev::project::open(tree.clone());
 
-    invocation.dispatch(&tree)
+    // Printed with Display rather than the Debug a returned error gets, so a
+    // multi-line report such as a shader diagnostic reads as written.
+    match invocation.dispatch(&tree) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
 }
 
 // The tree rooted at the directory the command was run from: `assets/` and

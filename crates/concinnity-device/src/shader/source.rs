@@ -8,6 +8,7 @@
 
 use concinnity_core::platform::Platform;
 use concinnity_core::render::shader_programs::Variant;
+use concinnity_core::render::shader_source::Splice;
 
 /// The exact source text a program compiles for `platform`. `file` names the
 /// shader under core's `src/render/shaders/`; under `hot_reload` its checkout
@@ -19,7 +20,7 @@ pub(crate) fn assemble(
     platform: Platform,
     file: &str,
     defines: &[(&str, &str)],
-    splices: &[(&str, &str)],
+    splices: &[Splice<'_>],
 ) -> String {
     let resolve = |f: &str| hot_reload.then(|| from_checkout(f)).flatten();
     concinnity_core::render::shader_source::assemble_with_splices(

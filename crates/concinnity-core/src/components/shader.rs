@@ -9,6 +9,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::compiled_programs::CompiledProgram;
+use crate::render::shader_programs::surface::{SourceFile, Sources};
 
 /// One of the two files a [Shader](#shader) declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -126,8 +127,8 @@ pub enum ShaderStage {
 /// `cn build` compiles both files for the backend it cooks for and stores the
 /// result in the world; a player needs no shader compiler. A file that fails
 /// to compile, or omits its hook, fails the build naming the Shader and the
-/// hook; a compiler warning is logged against the Shader and the build goes
-/// on.
+/// hook, with each compiler error reported at its file and line; a compiler
+/// warning is logged the same way and the build goes on.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 pub struct Shader {
     /// Path to the `.hlsl` file defining `shade`. Required.
@@ -171,15 +172,52 @@ impl Shader {
 pub struct ShaderPrograms {
     /// The Shader's asset name, for diagnostics.
     pub name: String,
-    /// The `vertex` file's text, when the Shader declares one.
-    pub vertex: Option<String>,
-    /// The `fragment` file's text.
-    pub fragment: String,
+    /// The `vertex` file, when the Shader declares one.
+    pub vertex: Option<ShaderSource>,
+    /// The `fragment` file.
+    pub fragment: ShaderSource,
     /// Compiled entries, in the order the cook emitted them.
     pub programs: Vec<CompiledProgram>,
 }
 
+/// One of a Shader's files as it was compiled: the path it was compiled under
+/// and its text.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+)]
+pub struct ShaderSource {
+    /// The path compiler diagnostics name the file by.
+    pub path: String,
+    /// The file's text.
+    pub text: String,
+}
+
+impl ShaderSource {
+    /// The file, borrowed.
+    pub fn as_file(&self) -> SourceFile<'_> {
+        SourceFile {
+            path: &self.path,
+            text: &self.text,
+        }
+    }
+}
+
 impl ShaderPrograms {
+    /// The files, as the assembly splices them.
+    pub fn sources(&self) -> Sources<'_> {
+        Sources {
+            vertex: self.vertex.as_ref().map(ShaderSource::as_file),
+            fragment: self.fragment.as_file(),
+        }
+    }
+
     /// Serialize the payload for the blob.
     pub fn encode(&self) -> Result<Vec<u8>, postcard::Error> {
         postcard::to_allocvec(self)
@@ -261,7 +299,10 @@ mod tests {
         let payload = ShaderPrograms {
             name: "wall".to_string(),
             vertex: None,
-            fragment: "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }".to_string(),
+            fragment: ShaderSource {
+                path: "shaders/wall.hlsl".to_string(),
+                text: "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }".to_string(),
+            },
             programs: vec![CompiledProgram {
                 entry: "fragment_main".to_string(),
                 source_digest: 3,

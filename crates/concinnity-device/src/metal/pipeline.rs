@@ -241,10 +241,10 @@ pub(super) fn build_post_pipeline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::ShaderPrograms;
     use concinnity_core::components::compiled_programs::CompiledProgram;
+    use concinnity_core::components::{ShaderPrograms, ShaderSource};
     use concinnity_core::platform::Platform;
-    use concinnity_core::render::shader_programs::surface::{self, Sources};
+    use concinnity_core::render::shader_programs::surface;
     use concinnity_core::render::shader_source::source_digest;
 
     const SHADE: &str = "float4 shade(VertexOut v, GpuObjectData od) { return (float4)(1.0); }";
@@ -252,11 +252,16 @@ mod tests {
     // A Shader whose cooked MSL for both pipeline entries matches this build's
     // templates, so reading it compiles nothing.
     fn cooked() -> ShaderPrograms {
-        let sources = Sources {
+        let mut cooked = ShaderPrograms {
+            name: "wall".to_string(),
             vertex: None,
-            fragment: SHADE,
+            fragment: ShaderSource {
+                path: "shaders/wall.hlsl".to_string(),
+                text: SHADE.to_string(),
+            },
+            programs: Vec::new(),
         };
-        let programs = [WORLD_VERTEX_ENTRY, WORLD_FRAGMENT_ENTRY]
+        cooked.programs = [WORLD_VERTEX_ENTRY, WORLD_FRAGMENT_ENTRY]
             .into_iter()
             .map(|entry| {
                 let program = surface::program(entry).unwrap();
@@ -265,18 +270,13 @@ mod tests {
                     source_digest: source_digest(&surface::source(
                         program,
                         Platform::Metal,
-                        &sources,
+                        &cooked.sources(),
                     )),
                     artifact: format!("// msl for {entry}").into_bytes(),
                 }
             })
             .collect();
-        ShaderPrograms {
-            name: "wall".to_string(),
-            vertex: None,
-            fragment: SHADE.to_string(),
-            programs,
-        }
+        cooked
     }
 
     // The warm caches exactly the MSL the pipeline build then looks up, for

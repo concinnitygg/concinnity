@@ -46,11 +46,7 @@ pub(crate) fn artifact<'a>(
             "Shader '{label}': no main-pass entry named '{entry}'"
         ))
     })?;
-    let sources = Sources {
-        vertex: programs.vertex.as_deref(),
-        fragment: &programs.fragment,
-    };
-    let source = source(program, req, &sources);
+    let source = source(program, req, &programs.sources());
     let digest = shader_source::source_digest(&source);
     if let Some(bytes) = programs.artifact(entry, digest) {
         return Ok(Cow::Borrowed(bytes));
@@ -78,6 +74,7 @@ fn source(program: &surface::Program, req: &Request, sources: &Sources<'_>) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::ShaderSource;
     use concinnity_core::components::compiled_programs::CompiledProgram;
 
     const SHADE: &str = "float4 shade(VertexOut v, GpuObjectData od) { return (float4)(1.0); }";
@@ -94,22 +91,23 @@ mod tests {
     }
 
     fn stored(platform: Platform, entry: &str, bytes: &[u8]) -> ShaderPrograms {
-        let sources = Sources {
-            vertex: None,
-            fragment: SHADE,
-        };
-        let program = surface::program(entry).unwrap();
-        let src = surface::source(program, platform, &sources);
-        ShaderPrograms {
+        let mut programs = ShaderPrograms {
             name: "wall".to_string(),
             vertex: None,
-            fragment: SHADE.to_string(),
-            programs: vec![CompiledProgram {
-                entry: entry.to_string(),
-                source_digest: shader_source::source_digest(&src),
-                artifact: bytes.to_vec(),
-            }],
-        }
+            fragment: ShaderSource {
+                path: "shaders/wall.hlsl".to_string(),
+                text: SHADE.to_string(),
+            },
+            programs: Vec::new(),
+        };
+        let program = surface::program(entry).unwrap();
+        let src = surface::source(program, platform, &programs.sources());
+        programs.programs.push(CompiledProgram {
+            entry: entry.to_string(),
+            source_digest: shader_source::source_digest(&src),
+            artifact: bytes.to_vec(),
+        });
+        programs
     }
 
     // The stored artifact is taken whenever the template still matches, which
@@ -130,12 +128,8 @@ mod tests {
     #[test]
     fn an_artifact_from_another_host_does_not_match() {
         let metal = stored(Platform::Metal, "fragment_main_bindless", b"stored bytes");
-        let sources = Sources {
-            vertex: None,
-            fragment: SHADE,
-        };
         let program = surface::program("fragment_main_bindless").unwrap();
-        let other_host = surface::source(program, Platform::Vulkan, &sources);
+        let other_host = surface::source(program, Platform::Vulkan, &metal.sources());
         assert!(
             metal
                 .artifact(
@@ -169,11 +163,7 @@ mod tests {
         let mut programs = stored(Platform::Metal, "fragment_main_bindless", b"stale");
         programs.programs[0].source_digest ^= 1;
         let program = surface::program("fragment_main_bindless").unwrap();
-        let sources = Sources {
-            vertex: None,
-            fragment: SHADE,
-        };
-        let want = surface::source(program, Platform::Metal, &sources);
+        let want = surface::source(program, Platform::Metal, &programs.sources());
         let req = request(Platform::Metal);
         let got = artifact(
             &programs,

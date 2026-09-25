@@ -92,8 +92,8 @@ loads at startup.
 `cn build` compiles both files for the backend it cooks for and stores the
 result in the world; a player needs no shader compiler. A file that fails
 to compile, or omits its hook, fails the build naming the Shader and the
-hook; a compiler warning is logged against the Shader and the build goes
-on.
+hook, with each compiler error reported at its file and line; a compiler
+warning is logged the same way and the build goes on.
 
 ## Parameters
 

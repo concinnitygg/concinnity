@@ -3,31 +3,38 @@
 //! request's generation: only a Shader's newest request is applied, so an older
 //! compile that finishes late never overwrites a newer save.
 
-use concinnity_core::components::ShaderPrograms;
+use concinnity_cook::compile::shader::CompiledShader;
+use concinnity_core::components::{ShaderSource, ShaderStage};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::shader_programs::surface::Sources;
 use concinnity_engine::gfx::system::shader_sources::ShaderSourceEntry;
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-pub(in crate::debug::hot_reload) type CompileResult = Result<ShaderPrograms, String>;
+use super::ShaderReloadFailure;
 
-// A Shader's files as read at the moment of the save.
+pub(in crate::debug::hot_reload) type CompileResult = Result<CompiledShader, ShaderReloadFailure>;
+
+// A Shader's files as read at the moment of the save, each under the resolved
+// path it was read from, which is the path its diagnostics then name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::debug::hot_reload) struct ShaderTexts {
-    pub vertex: Option<String>,
-    pub fragment: String,
+    pub vertex: Option<ShaderSource>,
+    pub fragment: ShaderSource,
 }
 
 impl ShaderTexts {
     // Read `entry`'s files. The error names the file that could not be read.
     pub(in crate::debug::hot_reload) fn read(entry: &ShaderSourceEntry) -> Result<Self, String> {
-        use concinnity_core::components::ShaderStage;
         let read = |stage| {
             entry
                 .path(stage)
                 .map(|path| {
                     concinnity_cook::compile::shader::read_shader_source(path)
+                        .map(|text| ShaderSource {
+                            path: path.to_string(),
+                            text,
+                        })
                         .map_err(|e| e.to_string())
                 })
                 .transpose()
@@ -38,35 +45,37 @@ impl ShaderTexts {
                 .ok_or_else(|| "the Shader declares no fragment file".to_string())?,
         })
     }
+
+    pub(in crate::debug::hot_reload) fn sources(&self) -> Sources<'_> {
+        Sources {
+            vertex: self.vertex.as_ref().map(ShaderSource::as_file),
+            fragment: self.fragment.as_file(),
+        }
+    }
 }
 
 // Compile `texts` exactly as `cn build` would for this host's backend, then do
 // the device-free part of the pipeline build so the swap on the frame thread
 // is short.
 pub(in crate::debug::hot_reload) fn compile(name: &str, texts: &ShaderTexts) -> CompileResult {
-    let sources = Sources {
-        vertex: texts.vertex.as_deref(),
-        fragment: &texts.fragment,
-    };
     // Inside the bounded job pool, so the compile's rayon fan-out over the
     // programs does not claim every core the frame loop also needs.
-    let programs = concinnity_host::thread::jobs::pool().install(|| {
+    let compiled = concinnity_host::thread::jobs::pool().install(|| {
         concinnity_cook::compile::shader::compile_world_shader(
             name,
-            &sources,
+            &texts.sources(),
             crate::cook_platform(),
         )
-        .map_err(|e| e.to_string())
     })?;
     // A Shader catalog is only captured in a dev-loop session, whose backend is
     // always built with hot reload on.
-    if let Err(e) = concinnity_engine::warm_world_shader(&programs, true) {
+    if let Err(e) = concinnity_engine::warm_world_shader(&compiled.programs, true) {
         tracing::warn!(
             "Shader hot-reload: '{name}' could not be prepared off the frame thread ({e}); \
              the swap will build it"
         );
     }
-    Ok(programs)
+    Ok(compiled)
 }
 
 // One worker's result, tagged with the request it answers.

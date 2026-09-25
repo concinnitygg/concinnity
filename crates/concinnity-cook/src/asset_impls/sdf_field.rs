@@ -64,10 +64,10 @@ fn compile_with(
                 })
         })
         .collect();
-    let programs = program::compile_all(&owner, &format!("sdf-{name}"), &jobs, platform, |_| "")?;
+    let compiled = program::compile_all(&owner, &format!("sdf-{name}"), &jobs, platform, |_| "")?;
     Ok(SdfPrograms {
         field: field.to_string(),
-        programs,
+        programs: compiled.programs,
     })
 }
 

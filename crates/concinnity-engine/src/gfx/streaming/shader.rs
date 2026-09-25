@@ -147,7 +147,10 @@ mod tests {
         ShaderPrograms {
             name: "wall".into(),
             vertex: None,
-            fragment: "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }".into(),
+            fragment: concinnity_core::components::ShaderSource {
+                path: "shaders/wall.hlsl".into(),
+                text: "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }".into(),
+            },
             programs: vec![compiled_programs::CompiledProgram {
                 entry: "fragment_main_bindless".into(),
                 source_digest: 1,

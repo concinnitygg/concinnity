@@ -88,7 +88,7 @@
 - [AaMode](AaMode.md) - Anti-aliasing mode for `PostProcessConfig.aa_mode`. `Off` runs no edge smoothing; `Fxaa` (default) applies the composite's single-frame edge filter, which is nearly free; `Taa` adds a temporal pass that jitters the projection and reprojects detail across frames for the cleanest edges, at the cost of a velocity pre-pass and a per-frame history buffer.
 - [AnimationCondition](AnimationCondition.md) - One transition condition, `parameter <op> value`. All of a transition's conditions must pass for it to fire.
 - [AnimationIkChain](AnimationIkChain.md) - One two-bone IK chain, pinning the chain's end joint (typically a foot) to the ground the physics scene finds beneath it.
-- [AnimationParam](AnimationParam.md) - A named float parameter driving a graph's transitions. Gameplay systems (or the `anim-param` debug command) write parameter values at runtime; transitions compare against them. Flag-like parameters use 0 and 1.
+- [AnimationParam](AnimationParam.md) - A named float parameter driving a graph's transitions. Gameplay systems write parameter values at runtime; transitions compare against them. Flag-like parameters use 0 and 1.
 - [AnimationState](AnimationState.md) - One state of the graph: while active it plays either a single [Animation](Animation.md) `clip` or a `blend` (a blendspace mixing several clips by parameter value). Exactly one of the two must be set.
 - [AnimationTrack](AnimationTrack.md) - An animation channel: a time-ordered list of keyframes for one joint.
 - [AnimationTransition](AnimationTransition.md) - One directed transition between two states.

@@ -1859,6 +1859,13 @@ into a blob record. `UnknownType`, `NotAuthorable`, `NotAComponent`, `Args`,
 `Encode`. `Args` carries serde_json's own report of what it found and what
 the schema expected.
 
+**`ProgramError`** (concinnity-cook) — why an asset's authored programs (a
+`Shader`'s files, an `SdfVolume`'s field) did not compile. `Scratch`, and
+`Compile`, which holds a `CompileFailure`: every rejected entry with dxc's raw
+output, the located `Diagnostic`s across them (each once, however many entries
+compiled the same file), and the asset's hint. A Shader's files are spliced
+under `#line` directives, so a diagnostic in one names that file and line.
+
 **`CnError`** (concinnity-ffi) — the flat code a C host reads, `Ok` first so
 zero is success. Built from the structured error at the boundary, where the
 full cause chain goes to the log.

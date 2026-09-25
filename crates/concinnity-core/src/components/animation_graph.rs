@@ -12,8 +12,8 @@ use crate::ecs::{Ref, de_opt_ref};
 use crate::ecs::{SkinnedMeshHandle, de_opt_skinned_mesh_handle};
 
 /// A named float parameter driving a graph's transitions. Gameplay systems
-/// (or the `anim-param` debug command) write parameter values at runtime;
-/// transitions compare against them. Flag-like parameters use 0 and 1.
+/// write parameter values at runtime; transitions compare against them.
+/// Flag-like parameters use 0 and 1.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct AnimationParam {
@@ -283,8 +283,7 @@ pub struct AnimationTransition {
 /// states along declared transitions, crossfading poses over each
 /// transition's `duration_secs`. Transitions fire when their conditions --
 /// comparisons against the graph's named float `parameters` -- pass. Gameplay
-/// systems write parameter values each frame (the `anim-param` debug command
-/// does the same from a `cn debug` session).
+/// systems write parameter values each frame.
 ///
 /// A graph owns its target: every [Animation](#animation) targeting the
 /// graph's mesh must be referenced by exactly one state, and at most one

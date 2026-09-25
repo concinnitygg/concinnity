@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 use crate::shader::source;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::shader_programs::{ShaderProgram, metal, shared};
+use concinnity_core::render::shader_source::Splice;
 use concinnity_shader::layout::StructLayout;
 
 // The module whose decorations state `platform`'s layout. The split is the
@@ -42,7 +43,7 @@ pub(super) struct Program {
     // Text spliced in at a marker no file in the shader tree can fill. Only the
     // raymarched volumes need one: their source is completed by a world's own
     // distance field, so reflecting them means supplying a stand-in for it.
-    pub splices: &'static [(&'static str, &'static str)],
+    pub splices: &'static [Splice<'static>],
 }
 
 impl Program {
@@ -98,7 +99,7 @@ pub(super) static MAIN_BINDLESS_FRAG: Program = Program {
 // The same fragment compiled around a world `shade` that samples only the last
 // texture member, through the last sampler.
 pub(super) static MAIN_BINDLESS_FRAG_LATE_MEMBER_SHADE: Program = Program {
-    splices: &[(
+    splices: &[Splice::inline(
         "{SURFACE_FRAGMENT}",
         "float4 shade(VertexOut v, GpuObjectData od) { return float4(ltc_magnitude_sample(v.uv), 0.0, 1.0); }",
     )],
@@ -225,7 +226,7 @@ pub(super) static HIZ_INIT_SINGLE: Program = Program {
 // A stand-in distance field for the raymarch programs. Their source is only
 // complete once a world supplies one, so reflecting them means splicing a field
 // here -- synthetic, in source, because a test may not read a world's.
-const SDF_STANDIN: (&str, &str) = (
+const SDF_STANDIN: Splice<'static> = Splice::inline(
     "{SDF_BODY}",
     "float map(float3 p, SdfParams q, float t) { return sdSphere(p, 0.5); }\n\
      SdfSurface shade(float3 p, float3 n, SdfParams q, float t, float2 uv) {\n\

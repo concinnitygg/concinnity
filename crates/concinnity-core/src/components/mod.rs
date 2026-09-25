@@ -272,7 +272,7 @@ pub use scroll_panel::ScrollPanel;
 pub use scroll_panel::ScrollRow;
 pub use sdf_volume::SdfVolume;
 pub use setting_command::{SettingCommand, SettingOp};
-pub use shader::{Shader, ShaderPrograms, ShaderStage};
+pub use shader::{Shader, ShaderPrograms, ShaderSource, ShaderStage};
 pub use skeleton_pose::SkeletonPose;
 pub use skinned_mesh::CharacterCapsule;
 pub use skinned_mesh::MorphDelta;

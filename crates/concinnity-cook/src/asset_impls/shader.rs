@@ -1,5 +1,5 @@
 use concinnity_core::components::{Shader, ShaderPrograms, ShaderStage};
-use concinnity_core::render::shader_programs::surface::Sources;
+use concinnity_core::render::shader_programs::surface::{SourceFile, Sources};
 
 use crate::asset::BuildCtx;
 use crate::compile::shader::{compile_world_shader, read_shader_source};
@@ -50,7 +50,7 @@ fn world_shader_programs(
     have_compiler: bool,
 ) -> std::io::Result<ShaderPrograms> {
     crate::compile::program::require_compiler(&format!("Shader '{name}'"), have_compiler)?;
-    compile_world_shader(name, sources, platform)
+    Ok(compile_world_shader(name, sources, platform)?.programs)
 }
 
 impl crate::asset::BuildAsset for Shader {
@@ -72,12 +72,21 @@ impl crate::asset::BuildAsset for Shader {
             )
         })?;
         let fragment = read_shader_source(&resolve_source_path_for(&fragment_raw, ctx))?;
-        let vertex = declared_path(args, ShaderStage::Vertex)
-            .map(|raw| read_shader_source(&resolve_source_path_for(&raw, ctx)))
+        let vertex_raw = declared_path(args, ShaderStage::Vertex);
+        let vertex = vertex_raw
+            .as_deref()
+            .map(|raw| read_shader_source(&resolve_source_path_for(raw, ctx)))
             .transpose()?;
+        // Diagnostics name each file as the world declared it.
         let sources = Sources {
-            vertex: vertex.as_deref(),
-            fragment: &fragment,
+            vertex: vertex_raw
+                .as_deref()
+                .zip(vertex.as_deref())
+                .map(|(path, text)| SourceFile { path, text }),
+            fragment: SourceFile {
+                path: &fragment_raw,
+                text: &fragment,
+            },
         };
         let programs = world_shader_programs(
             ctx.name,
@@ -148,8 +157,14 @@ mod tests {
     #[test]
     fn a_shader_needing_a_compiler_fails_when_there_is_none() {
         let sources = Sources {
-            vertex: Some("VertexOut transform() {}"),
-            fragment: "float4 shade() { return float4(1.0); }",
+            vertex: Some(SourceFile {
+                path: "v.hlsl",
+                text: "VertexOut transform() {}",
+            }),
+            fragment: SourceFile {
+                path: "f.hlsl",
+                text: "float4 shade() { return float4(1.0); }",
+            },
         };
         let err = world_shader_programs(
             "wall",

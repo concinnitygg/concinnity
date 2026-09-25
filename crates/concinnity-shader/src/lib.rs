@@ -33,6 +33,7 @@
 include!(concat!(env!("OUT_DIR"), "/source_hash.rs"));
 
 pub mod declarations;
+pub mod diagnostics;
 mod dxc;
 #[cfg(feature = "spirv-cross")]
 pub mod layout;
