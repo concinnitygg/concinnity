@@ -70,6 +70,8 @@ pub(crate) mod notify;
 // Extent outlines for assets with spatial reach but no geometry: trigger
 // volumes, light ranges, frusta, probe bounds.
 mod outlines;
+// Copies of the files an entry owns, for a duplicate that must not share them.
+mod owned_files;
 // Per-field override state for a template-derived asset, whose authored line
 // is a sparse patch over what the expansion generated.
 mod overrides;

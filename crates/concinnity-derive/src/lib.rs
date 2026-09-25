@@ -9,6 +9,7 @@
 
 mod asset_fields;
 mod docs;
+mod owned_file;
 mod schema;
 mod serde_attrs;
 mod vocabulary;
@@ -24,7 +25,11 @@ use proc_macro::TokenStream;
 /// `skip_deserializing` leave a field out. A container `rename_all` is refused,
 /// since no schema uses one. The schema also records serde's `default`
 /// attributes, which decide what an omitted key reads as.
-#[proc_macro_derive(AssetFields, attributes(serde))]
+///
+/// `#[asset(owned_file)]` on a path field records it as a file the asset owns:
+/// its authored source, which belongs to that asset rather than being shared
+/// content other assets may read.
+#[proc_macro_derive(AssetFields, attributes(serde, asset))]
 pub fn derive_asset_fields(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
     asset_fields::expand(&input)

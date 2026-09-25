@@ -164,6 +164,12 @@ fn schema_path(path: &str) -> String {
         .join(".")
 }
 
+// Whether form path `key` is `path` or a leaf under it (`a.b` is under `a`).
+pub(crate) fn is_at_or_under(key: &str, path: &str) -> bool {
+    key.strip_prefix(path)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+}
+
 // Fill a reference field's options: `(none)` followed by `names` (the world's
 // existing assets of the target type), selecting whichever matches the field's
 // current target (stashed in `initial`), else `(none)`. The hook calls this after

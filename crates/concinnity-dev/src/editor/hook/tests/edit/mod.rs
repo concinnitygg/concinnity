@@ -12,6 +12,8 @@ mod overrides_tests;
 mod palette_tests;
 mod select_tests;
 mod shader_edits_tests;
+mod shader_fixtures;
+mod shader_form_tests;
 mod shaders_tests;
 mod story_tests;
 mod variables_tests;

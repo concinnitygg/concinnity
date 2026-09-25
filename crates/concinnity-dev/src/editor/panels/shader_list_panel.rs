@@ -3,8 +3,9 @@
 //! first), the Materials naming it, and a row per file with that file's last
 //! reload status on the right, then "+ Add vertex file" for a Shader without
 //! one; "+ New Shader" ends the list. Clicking a file opens it in the Shader
-//! source panel (`shader_source_panel.rs`). A heading's "..." menu renames or
-//! deletes its Shader, and a vertex file's removes that file.
+//! source panel (`shader_source_panel.rs`), and clicking a heading opens its
+//! Shader's form. A heading's "..." menu edits, duplicates or deletes its
+//! Shader, and a vertex file's removes that file.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
@@ -29,8 +30,8 @@ const MENU: MenuIds = MenuIds {
     dot_bg: AssetId(BASE + 6),
     dots: [AssetId(BASE + 7), AssetId(BASE + 8), AssetId(BASE + 9)],
     bg: AssetId(BASE + 10),
-    item_bgs: [AssetId(BASE + 11), AssetId(BASE + 12)],
-    item_labels: [AssetId(BASE + 13), AssetId(BASE + 14)],
+    item_bgs: [AssetId(BASE + 11), AssetId(BASE + 12), AssetId(BASE + 15)],
+    item_labels: [AssetId(BASE + 13), AssetId(BASE + 14), AssetId(BASE + 16)],
 };
 
 // The row pools sit above the chrome ids, one sub-range per element.
@@ -430,8 +431,8 @@ mod tests {
         let (x, y) = at(0);
         assert_eq!(
             hit_test(&view, x, y, o, s),
-            Some(ShadersAction::Consume),
-            "a heading does nothing"
+            Some(ShadersAction::Row(0)),
+            "a heading opens its form"
         );
         assert_eq!(hit_test(&view, 5000.0, 5000.0, o, s), None);
         let scrolled = ShadersView { scroll: 1, ..view };
@@ -495,7 +496,7 @@ mod tests {
         };
         let (_, _, items) = open_menu_rects(&open, o, s).unwrap();
         let at = |r: [f32; 4]| (r[0] + 2.0, r[1] + 2.0);
-        let (x, y) = at(items[1]);
+        let (x, y) = at(items[2]);
         assert_eq!(
             hit_test(&open, x, y, o, s),
             Some(ShadersAction::Menu(MenuItem::Delete))
@@ -533,7 +534,7 @@ mod tests {
         };
         place(&mut world, Some(&view), o, s);
         assert!(label(&world, MENU.item_labels[0]).visible);
-        assert_eq!(label(&world, MENU.item_labels[1]).content, "Delete");
+        assert_eq!(label(&world, MENU.item_labels[2]).content, "Delete");
         assert!(
             !label(&world, badge_label(2)).visible,
             "covered by the menu"

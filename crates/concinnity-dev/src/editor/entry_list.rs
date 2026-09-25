@@ -98,6 +98,20 @@ impl EntryList {
         Some(self.values.remove(index))
     }
 
+    // Move the entry at `from` so it sits at `to`, its key and file with it.
+    // Out-of-range positions leave the list as it is.
+    pub(crate) fn move_entry(&mut self, from: usize, to: usize) {
+        if from >= self.values.len() || to >= self.values.len() {
+            return;
+        }
+        let value = self.values.remove(from);
+        let key = self.keys.remove(from);
+        let file = self.files.remove(from);
+        self.values.insert(to, value);
+        self.keys.insert(to, key);
+        self.files.insert(to, file);
+    }
+
     // The included file the entry at `index` was read from; `None` for an
     // entry of the world file itself.
     pub(crate) fn included_from(&self, index: usize) -> Option<&Path> {
@@ -219,6 +233,18 @@ mod tests {
             b.key_at(0),
             "a second list mints its own keys, so a key means one entry"
         );
+    }
+
+    #[test]
+    fn a_moved_entry_keeps_its_key() {
+        let mut l = list(&["a", "b", "c"]);
+        let c = l.key_at(2).unwrap();
+        l.move_entry(2, 0);
+        assert_eq!(l.index_of(c), Some(0));
+        assert_eq!(l[0]["args"]["$id"], "c");
+        assert_eq!(l[1]["args"]["$id"], "a");
+        l.move_entry(0, 9);
+        assert_eq!(l.index_of(c), Some(0), "out of range moves nothing");
     }
 
     #[test]

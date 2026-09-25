@@ -77,10 +77,6 @@ pub(crate) enum Action {
         save: bool,
         then: super::panels::shader_source::Leave,
     },
-    // Add a Shader named with whatever the dialog's field holds.
-    NameShader,
-    // Rename the Shader of this name to whatever the dialog's field holds.
-    RenameShader(String),
     // Delete the Shader of this name, and its files when the dialog's box is
     // checked.
     DeleteShader(String),

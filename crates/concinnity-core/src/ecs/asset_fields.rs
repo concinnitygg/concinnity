@@ -9,6 +9,9 @@
 //! derives `AssetFields` itself, whose fields then appear under dotted paths
 //! (`collider.shape`). Every other field is plain data.
 //!
+//! A path field marked `#[asset(owned_file)]` is also recorded as a file the
+//! asset owns: its authored source, as opposed to content other assets share.
+//!
 //! Paths are the authored keys: a field's serde `rename` replaces its name, a
 //! `flatten` field contributes its fields at the parent's level, and a `skip`
 //! field is not authored at all.
@@ -39,13 +42,16 @@ pub struct EnumField {
     pub variants: &'static [&'static str],
 }
 
-/// The reference and vocabulary fields one schema declares.
+/// The reference, vocabulary and owned-file fields one schema declares.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FieldTable {
     /// Every reference field, in declaration order.
     pub refs: Vec<RefField>,
     /// Every closed-vocabulary field, in declaration order.
     pub enums: Vec<EnumField>,
+    /// The dotted path of every field holding a file the asset owns, in
+    /// declaration order.
+    pub owned_files: Vec<String>,
 }
 
 /// An authored schema's reference and vocabulary fields, derived from its
@@ -183,6 +189,11 @@ pub mod probe {
         }
     }
 
+    /// Record the field at `key` as a file the asset owns.
+    pub fn owned_file(prefix: &str, key: Option<&str>, out: &mut FieldTable) {
+        out.owned_files.push(join(prefix, key));
+    }
+
     /// Plain data: nothing to record.
     pub trait ByNothing {
         /// Record nothing.
@@ -214,6 +225,8 @@ mod tests {
         label: Option<Ref<TextLabel>>,
         fit: SpriteFit,
         weight: f32,
+        #[asset(owned_file)]
+        script: alloc::string::String,
     }
 
     #[derive(AssetFields)]
@@ -240,6 +253,9 @@ mod tests {
         #[serde(flatten)]
         flat: Leaf,
         name: alloc::string::String,
+        #[asset(owned_file)]
+        #[serde(rename = "src")]
+        source: Option<alloc::string::String>,
     }
 
     fn paths<F>(fields: &[F], path: impl Fn(&F) -> &str) -> Vec<&str> {
@@ -283,6 +299,20 @@ mod tests {
         );
         assert_eq!(enums[0].variants, SpriteFit::NAMES);
         assert_eq!(enums[1].variants, PropColliderShape::NAMES);
+    }
+
+    #[test]
+    fn owned_files_are_found_by_mark_under_their_authored_keys() {
+        assert_eq!(
+            Top::field_table().owned_files,
+            [
+                "inner.leaf.script",
+                "inner.many.script",
+                "inner.maybe.script",
+                "script",
+                "src",
+            ]
+        );
     }
 
     #[test]

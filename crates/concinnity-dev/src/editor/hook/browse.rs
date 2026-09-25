@@ -49,6 +49,7 @@ impl EditorHook {
         if self.form.touched {
             form_title.push_str(" *");
         }
+        let (form_extras, form_blocked) = self.form_extras_data(world);
         let names = |set: &std::collections::BTreeSet<AssetHandle>| {
             set.iter().filter_map(|h| self.handle_name(h)).collect()
         };
@@ -60,6 +61,8 @@ impl EditorHook {
             picker_options: self.picker_options(world),
             form_title,
             form_overrides: self.form_overrides_data(),
+            form_extras,
+            form_blocked,
         }
     }
 
@@ -102,6 +105,8 @@ impl EditorHook {
             field_dropdown: self.form.field_dropdown,
             field_dropdown_scroll: self.form.field_dropdown_scroll,
             form_error: self.form.error.as_deref(),
+            extras: &d.form_extras,
+            blocked: d.form_blocked.as_deref(),
             overrides: d
                 .form_overrides
                 .as_ref()

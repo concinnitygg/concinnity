@@ -1,5 +1,5 @@
-//! The data half of the Shaders panel's edits: the name a prompt's typed text
-//! makes, the file name a Shader's name becomes, what a delete says it will
+//! The data half of the Shaders panel's edits: whether a typed name can name
+//! a Shader, the file name a Shader's name becomes, what a delete says it will
 //! do, and which of a Shader's files no other Shader reads.
 
 use concinnity_cook::authoring::world::is_label_of;
@@ -31,7 +31,7 @@ impl ShaderEdit {
     }
 }
 
-// The name typed into a Shader prompt, trimmed, or why it cannot be one: a
+// The name typed for a Shader, trimmed, or why it cannot be one: a
 // Material names its Shader, so the name cannot be blank, and a
 // `<Type>#<n>` label is reserved for an unnamed entry.
 pub(crate) fn check_name(typed: &str) -> Result<String, String> {

@@ -2,7 +2,8 @@
 //! `hook/edit/shader_source.rs`): opening a file, the question leaving unsaved
 //! edits asks and each of its answers, the close button asking the same, a
 //! save writing the file and waiting on its recompile, and the Shader limit.
-//! The panel's edits are `shader_edits_tests.rs`.
+//! The panel's edits are `shader_edits_tests.rs`, its form
+//! `shader_form_tests.rs`.
 
 use concinnity_core::components::ShaderStage;
 use concinnity_core::ecs::World;
@@ -15,7 +16,7 @@ use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::hook;
 use crate::editor::modal;
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::panels::shader_list::{self, RowKind};
+use crate::editor::panels::shader_list::RowKind;
 use crate::editor::panels::shader_list_panel::ShadersAction;
 use crate::editor::panels::shader_source::{self, Leave, SourceKey};
 
@@ -90,7 +91,7 @@ fn leaving_unsaved_edits_asks_first() {
 
     // Discard: water opens and lit's file is untouched.
     h.modal = None;
-    h.answer_leave_shader_source(false, Leave::Open(key("water")));
+    h.answer_leave_shader_source(false, Leave::Open(key("water")), &mut World::new());
     assert_eq!(open_shader(&h).as_deref(), Some("water"));
     assert_eq!(
         std::fs::read_to_string(dir.path().join("lit.hlsl")).unwrap(),
@@ -99,7 +100,7 @@ fn leaving_unsaved_edits_asks_first() {
 
     // Save: the edits are written, then lit opens.
     h.shaders.source.as_mut().unwrap().area.type_char('y');
-    h.answer_leave_shader_source(true, Leave::Open(key("lit")));
+    h.answer_leave_shader_source(true, Leave::Open(key("lit")), &mut World::new());
     assert_eq!(
         std::fs::read_to_string(dir.path().join("water.hlsl")).unwrap(),
         "ywater"
@@ -138,7 +139,7 @@ fn closing_asks_only_over_unsaved_edits() {
         }
     );
     h.modal = None;
-    h.answer_leave_shader_source(false, Leave::Close);
+    h.answer_leave_shader_source(false, Leave::Close, &mut world);
     assert!(!panel.is_open(&h));
 
     h.open_shader_file(key("lit"));
@@ -236,10 +237,10 @@ fn the_list_resolves_each_file_once() {
     assert_eq!(RESOLVED.with(Cell::get), 2);
 }
 
-// A world at the Shader limit lists "+ New Shader" unclickable, and a create
-// that is reached anyway adds nothing.
+// A world at the Shader limit lists "+ New Shader" unclickable; the form's
+// own refusal at the limit is `shader_form_tests.rs`.
 #[test]
-fn no_shader_is_added_past_the_limit() {
+fn new_shader_is_unavailable_at_the_limit() {
     let entries: Vec<serde_json::Value> = (0..MAX_SHADER_BUCKETS)
         .map(|i| shader(&format!("s{i}"), Path::new("/cn-none/s.hlsl")))
         .collect();
@@ -247,10 +248,5 @@ fn no_shader_is_added_past_the_limit() {
     let last = h.shader_rows().last().cloned().unwrap();
     assert_eq!(last.kind, RowKind::Note);
     assert!(!last.clickable());
-    h.prompt_new_shader(None);
-    assert!(h.modal.is_none(), "no name is asked for");
-    h.create_shader("more", &mut World::new());
-    assert_eq!(shader_list::shader_count(&h.entries), MAX_SHADER_BUCKETS);
-    assert!(!h.dirty);
-    assert!(h.shaders.source.is_none());
+    assert!(!h.form_open());
 }

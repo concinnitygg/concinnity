@@ -111,10 +111,8 @@ impl EditorHook {
             modal::Action::Worlds(confirm) => self.apply_worlds_confirm(confirm, world),
             modal::Action::NameWorld => self.name_untitled_world(typed),
             modal::Action::LeaveShaderSource { save, then } => {
-                self.answer_leave_shader_source(save, then)
+                self.answer_leave_shader_source(save, then, world)
             }
-            modal::Action::NameShader => self.create_shader(typed, world),
-            modal::Action::RenameShader(name) => self.rename_shader(&name, typed, world),
             modal::Action::DeleteShader(name) => self.delete_shader(&name, checked),
         }
     }

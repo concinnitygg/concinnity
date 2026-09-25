@@ -24,7 +24,7 @@ use crate::editor::panels::import_panel;
 use crate::editor::panels::lighting;
 use crate::editor::panels::lighting_panel;
 use crate::editor::panels::preview::{self, PreviewAction};
-use crate::editor::panels::registry::{Panel, PanelKey};
+use crate::editor::panels::registry::{self, Panel, PanelKey};
 use crate::editor::panels::shader_list;
 use crate::editor::panels::shader_list_panel;
 use crate::editor::panels::shader_source_panel;
@@ -146,18 +146,18 @@ impl Panel for EditPanel {
     // The form is part of the assets UI: shown / interactive only while the
     // browse panel is on.
     fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.form_open() && hook.panel_open
+        hook.form_open() && registry::panel(hook.form.host).is_open(hook)
     }
     fn close(&self, hook: &mut EditorHook, world: &mut World) {
         hook.apply_form(FormAction::Close, world);
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        form_panel::size(hook.form.fields.len())
+        form_panel::size(hook.form_row_count())
     }
     // The field list tracks the type's args; the height resizes only when there
     // are more fields than the default window shows.
     fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
-        form_panel::max_size(hook.form.fields.len())
+        form_panel::max_size(hook.form_row_count())
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         form_panel::default_origin(vp[0])

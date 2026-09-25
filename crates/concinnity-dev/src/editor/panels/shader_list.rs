@@ -218,7 +218,8 @@ pub(crate) fn file_status(
 // What a row of the panel stands for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RowKind {
-    // Shader `i`'s name; its menu renames or deletes it.
+    // Shader `i`'s name; a click or its menu's Edit opens its form, and its
+    // menu duplicates or deletes it.
     Header(usize),
     // A line of information under a Shader, or a control that is unavailable.
     Note,
@@ -236,7 +237,8 @@ pub(crate) enum RowKind {
 // An action a row's "..." menu offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuItem {
-    Rename,
+    Edit,
+    Duplicate,
     Delete,
     // Stop declaring the vertex file; the file stays on disk.
     RemoveVertex,
@@ -245,14 +247,15 @@ pub(crate) enum MenuItem {
 impl MenuItem {
     pub(crate) fn caption(self) -> &'static str {
         match self {
-            MenuItem::Rename => "Rename",
+            MenuItem::Edit => "Edit",
+            MenuItem::Duplicate => "Duplicate",
             MenuItem::Delete => "Delete",
             MenuItem::RemoveVertex => "Remove",
         }
     }
 
     pub(crate) fn danger(self) -> bool {
-        !matches!(self, MenuItem::Rename)
+        matches!(self, MenuItem::Delete | MenuItem::RemoveVertex)
     }
 }
 
@@ -270,14 +273,14 @@ pub(crate) struct Row {
 impl Row {
     // Whether a click on the row's body does anything.
     pub(crate) fn clickable(&self) -> bool {
-        !matches!(self.kind, RowKind::Header(_) | RowKind::Note)
+        !matches!(self.kind, RowKind::Note)
     }
 
     // What the row's menu offers; a row without a menu shows no dots. The
     // fragment file has none, since a Shader cannot go without it.
     pub(crate) fn menu(&self) -> &'static [MenuItem] {
         match &self.kind {
-            RowKind::Header(_) => &[MenuItem::Rename, MenuItem::Delete],
+            RowKind::Header(_) => &[MenuItem::Edit, MenuItem::Duplicate, MenuItem::Delete],
             RowKind::File(key) if key.stage == ShaderStage::Vertex => &[MenuItem::RemoveVertex],
             _ => &[],
         }
@@ -451,20 +454,24 @@ mod tests {
         assert_eq!(row_count(&entries()), rows.len());
     }
 
-    // A header's menu renames or deletes its Shader; only a vertex file's menu
-    // removes the file, since the fragment is required.
+    // A header's menu edits, duplicates or deletes its Shader; only a vertex
+    // file's menu removes the file, since the fragment is required.
     #[test]
-    fn menus_rename_delete_or_remove_the_vertex_file() {
+    fn menus_edit_duplicate_delete_or_remove_the_vertex_file() {
         let shaders = declared(&entries(), str::to_string);
         let rows = rows(&shaders, &ReportBoard::default(), None);
         let menu = |i: usize| rows[i].menu().to_vec();
         assert_eq!(rows[4].kind, RowKind::Header(1));
-        assert_eq!(menu(4), [MenuItem::Rename, MenuItem::Delete]);
-        assert!(!rows[4].clickable(), "the header's body does nothing");
+        assert_eq!(
+            menu(4),
+            [MenuItem::Edit, MenuItem::Duplicate, MenuItem::Delete]
+        );
+        assert!(rows[4].clickable(), "the header's body opens its form");
         assert!(menu(6).is_empty(), "the fragment file");
         assert_eq!(menu(7), [MenuItem::RemoveVertex]);
         assert!(menu(5).is_empty() && menu(3).is_empty());
-        assert!(MenuItem::Delete.danger() && !MenuItem::Rename.danger());
+        assert!(MenuItem::Delete.danger() && !MenuItem::Edit.danger());
+        assert!(!MenuItem::Duplicate.danger());
     }
 
     // At the Shader limit "+ New Shader" stays listed, unclickable, with why.

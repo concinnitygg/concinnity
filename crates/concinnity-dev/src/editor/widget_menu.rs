@@ -11,7 +11,7 @@ use super::theme;
 use super::widget::{self, place_rounded, point_in};
 
 pub(crate) const DOT_SZ: f32 = 20.0;
-pub(crate) const MAX_ITEMS: usize = 2;
+pub(crate) const MAX_ITEMS: usize = 3;
 const MENU_W: f32 = 132.0;
 const ITEM_H: f32 = 26.0;
 const ITEM_PAD: f32 = 10.0;
@@ -183,8 +183,8 @@ mod tests {
         dot_bg: AssetId(1),
         dots: [AssetId(2), AssetId(3), AssetId(4)],
         bg: AssetId(5),
-        item_bgs: [AssetId(6), AssetId(7)],
-        item_labels: [AssetId(8), AssetId(9)],
+        item_bgs: [AssetId(6), AssetId(7), AssetId(10)],
+        item_labels: [AssetId(8), AssetId(9), AssetId(11)],
     };
     const ROW: [f32; 4] = [0.0, 100.0, 400.0, 28.0];
 

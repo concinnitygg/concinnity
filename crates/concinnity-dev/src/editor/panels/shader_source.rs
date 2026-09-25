@@ -1,8 +1,8 @@
 //! The data half of the Shader source panel: which of a Shader's files it
-//! edits and where that file is on disk, the starter files a new Shader and
-//! an added vertex file begin as, and the rules for leaving a file with unsaved edits and for a file
-//! that changed on disk while open. What a reload outcome shows is
-//! `shader_diagnostics`.
+//! edits, where that file is on disk and where a new one goes, and the rules
+//! for leaving a file with unsaved edits and for a file that changed on disk
+//! while open. What a reload outcome shows is `shader_diagnostics`; what a new
+//! file starts as is `shader_templates`.
 
 use concinnity_core::components::ShaderStage;
 use std::path::{Path, PathBuf};
@@ -44,28 +44,6 @@ pub(crate) fn same_file(a: &str, b: &str) -> bool {
     }
 }
 
-// The fragment file a "+ New Shader" writes: the engine's own lighting,
-// returned as-is, ready to adjust. Pinned compilable by test.
-pub(crate) const STARTER_SHADER: &str = "\
-// The surface's color. shade_surface is the engine's own lighting.
-float4 shade(VertexOut v, GpuObjectData od)
-{
-    return shade_surface(v, od);
-}
-";
-
-// The vertex file "+ Add vertex file" writes: the engine's own projection,
-// so adding it changes nothing until it is edited. Pinned compilable by test.
-pub(crate) const STARTER_VERTEX: &str = "\
-// Where the vertex lands and what it hands shade. project_vertex is the
-// engine's own projection.
-VertexOut transform(float4x4 model, float3 pos, float3 normal, float3 tangent,
-                    float3 color, float2 uv)
-{
-    return project_vertex(model, pos, normal, tangent, color, uv);
-}
-";
-
 // Where a new Shader file named `name` goes: `shaders/<name>.hlsl` under
 // `dir`, numbered past any file already there.
 pub(crate) fn starter_path(dir: &Path, name: &str, exists: impl Fn(&Path) -> bool) -> PathBuf {
@@ -100,6 +78,8 @@ pub(crate) enum Leave {
     Close,
     // Close, then make an edit that takes the open file away.
     Edit(ShaderEdit),
+    // Close, then confirm the open add / edit form again.
+    ConfirmForm,
 }
 
 // Whether leaving the open file `open` for `then` has to ask first: only with
@@ -108,7 +88,7 @@ pub(crate) fn must_ask(dirty: bool, open: &SourceKey, then: &Leave) -> bool {
     dirty
         && match then {
             Leave::Open(key) => key != open,
-            Leave::Close | Leave::Edit(_) => true,
+            Leave::Close | Leave::Edit(_) | Leave::ConfirmForm => true,
         }
 }
 
@@ -289,42 +269,5 @@ mod tests {
             &nested.join(".").join("lit.hlsl").to_string_lossy()
         ));
         assert!(!same_file("/cn-none/a.hlsl", "/cn-none/b.hlsl"));
-    }
-
-    // The starter must compile as a real Shader; a template change breaks this
-    // test instead of shipping a starter that fails its first save.
-    #[test]
-    fn the_starter_shader_compiles() {
-        compiles_clean(None);
-    }
-
-    // The same for the starter vertex file, beside the starter fragment.
-    #[test]
-    fn the_starter_vertex_file_compiles() {
-        compiles_clean(Some(STARTER_VERTEX));
-    }
-
-    fn compiles_clean(vertex: Option<&str>) {
-        use concinnity_core::render::shader_programs::surface::{SourceFile, Sources};
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
-        let sources = Sources {
-            vertex: vertex.map(|text| SourceFile {
-                path: "shaders/starter_vertex.hlsl",
-                text,
-            }),
-            fragment: SourceFile {
-                path: "shaders/starter.hlsl",
-                text: STARTER_SHADER,
-            },
-        };
-        let compiled = concinnity_cook::compile::shader::compile_world_shader(
-            "starter",
-            &sources,
-            crate::cook_platform(),
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
-        assert!(compiled.warnings.is_empty(), "{:?}", compiled.warnings);
     }
 }

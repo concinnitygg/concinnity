@@ -1,24 +1,21 @@
-//! EditorHook: the Shaders panel's edits. "+ New Shader" asks for a name and
-//! writes a starter fragment file; a heading's menu renames its Shader (its
-//! `$id` and every reference to it, never its files) or deletes it (its entry,
-//! the references to it, and, when asked, the files no other Shader reads);
-//! "+ Add vertex file" writes a starter vertex file, and a vertex file's menu
-//! stops declaring it. Each is one undoable world edit. An edit that takes away
-//! the file the source panel shows closes it first, asking over unsaved edits.
+//! EditorHook: the Shaders panel's edits beyond its form (`shader_form.rs`).
+//! A heading's menu deletes its Shader (its entry, the references to it, and,
+//! when asked, the files no other Shader reads); "+ Add vertex file" writes a
+//! starter vertex file, and a vertex file's menu stops declaring it. Each is
+//! one undoable world edit. An edit that takes away the file the source panel
+//! shows closes it first, asking over unsaved edits.
 
 use concinnity_cook::authoring::refs::retarget_references;
-use concinnity_cook::authoring::world::{find_entry, set_entry_id};
+use concinnity_cook::authoring::world::find_entry;
 use concinnity_core::components::ShaderStage;
-use concinnity_core::ecs::World;
 use std::path::{Path, PathBuf};
 
 use crate::editor::hook::EditorHook;
-use crate::editor::modal::{self, Action, Button};
+use crate::editor::modal::{Action, Button};
 use crate::editor::notify;
 use crate::editor::panels::shader_edit::{self, ShaderEdit};
-use crate::editor::panels::shader_list;
 use crate::editor::panels::shader_source::{self, Leave, SourceKey, same_file};
-use crate::editor::widget;
+use crate::editor::panels::shader_templates;
 
 const SHADER: &str = "Shader";
 
@@ -35,62 +32,6 @@ fn cancel() -> Button {
 }
 
 impl EditorHook {
-    // "+ New Shader": ask what to call it. `rejected` says why the last name
-    // was turned down.
-    pub(in crate::editor::hook) fn prompt_new_shader(&mut self, rejected: Option<String>) {
-        if !self.can_add_shader() {
-            return;
-        }
-        let message = rejected.unwrap_or_else(|| "Name the new Shader.".to_string());
-        self.open_prompt(
-            &message,
-            vec![cancel(), button("Create", false, Action::NameShader)],
-        );
-    }
-
-    fn can_add_shader(&mut self) -> bool {
-        let can = shader_list::can_add_shader(shader_list::shader_count(&self.entries));
-        if !can {
-            self.notifier.push(
-                notify::Level::Error,
-                &format!("No Shader added: {}", shader_list::limit_reason()),
-            );
-        }
-        can
-    }
-
-    // Add a Shader named `typed` (made unique) reading a starter fragment file
-    // written under the project's assets, then open the file. The entry is a
-    // world edit like any other; the file is written now, since the build
-    // reads Shader files from disk.
-    pub(in crate::editor::hook) fn create_shader(&mut self, typed: &str, world: &mut World) {
-        let name = match shader_edit::check_name(typed) {
-            Ok(name) => self.unique_from(&name),
-            Err(reason) => {
-                self.prompt_new_shader(Some(reason));
-                widget::seed_field(world, modal::NAME_INPUT, typed);
-                return;
-            }
-        };
-        if !self.can_add_shader() {
-            return;
-        }
-        let (path, declared) = new_shader_file(&shader_edit::file_stem(&name));
-        if !self.write_starter(&path, shader_source::STARTER_SHADER) {
-            return;
-        }
-        self.entries.push(serde_json::json!({
-            "type": SHADER, "args": { "$id": name, "fragment": declared },
-        }));
-        self.mark_changed();
-        self.notifier
-            .success(&format!("Added Shader '{name}' ({declared})"));
-        self.open_shader_file(SourceKey {
-            shader: name,
-            stage: ShaderStage::Fragment,
-        });
-    }
-
     // Write a new Shader file, or say why it could not be written.
     fn write_starter(&self, path: &Path, text: &str) -> bool {
         let written = path
@@ -104,71 +45,6 @@ impl EditorHook {
             );
         }
         written.is_ok()
-    }
-
-    // A heading's Rename: ask for the new name, seeded with the current one.
-    pub(in crate::editor::hook) fn prompt_rename_shader(&mut self, i: usize, world: &mut World) {
-        let Some(shader) = self.declared_shaders().into_iter().nth(i) else {
-            return;
-        };
-        let message = format!("Rename the Shader '{}'.", shader.name);
-        self.reprompt_rename(&shader.name, &message, &shader.name, world);
-    }
-
-    fn reprompt_rename(&mut self, name: &str, message: &str, seed: &str, world: &mut World) {
-        self.open_prompt(
-            message,
-            vec![
-                cancel(),
-                button("Rename", false, Action::RenameShader(name.to_string())),
-            ],
-        );
-        widget::seed_field(world, modal::NAME_INPUT, seed);
-    }
-
-    // Rename Shader `old` to `typed` (made unique against the other entries):
-    // its `$id` and every reference to it, in one edit. Its files keep their
-    // names, and a source panel open on it follows the new name.
-    pub(in crate::editor::hook) fn rename_shader(
-        &mut self,
-        old: &str,
-        typed: &str,
-        world: &mut World,
-    ) {
-        let Some(idx) = find_entry(&self.entries, old) else {
-            return;
-        };
-        let base = match shader_edit::check_name(typed) {
-            Ok(base) => base,
-            Err(reason) => return self.reprompt_rename(old, &reason, typed, world),
-        };
-        let Some(new) = self
-            .entries
-            .key_at(idx)
-            .and_then(|key| self.finalize_rename(&base, key))
-        else {
-            return;
-        };
-        if new == old {
-            return;
-        }
-        set_entry_id(&mut self.entries[idx], &new);
-        let moved = self.retarget_shader(old, Some(&new));
-        if !self.commit() {
-            return;
-        }
-        if let Some(src) = self.shaders.source.as_mut()
-            && src.key.shader == old
-        {
-            src.key.shader = new.clone();
-        }
-        let followers = match moved {
-            0 => String::new(),
-            1 => " and the 1 reference to it".to_string(),
-            n => format!(" and the {n} references to it"),
-        };
-        self.notifier
-            .success(&format!("Renamed Shader '{old}' to '{new}'{followers}"));
     }
 
     // Point every reference to Shader `from` at `to`, or drop it with `None`.
@@ -297,7 +173,7 @@ impl EditorHook {
         let (path, declared) = new_shader_file(&shader_edit::vertex_stem(&shader.name));
         // A read-only entry refuses the edit below, so it gets no file either.
         if !self.entries.is_read_only(idx)
-            && !self.write_starter(&path, shader_source::STARTER_VERTEX)
+            && !self.write_starter(&path, shader_templates::VERTEX[0].text)
         {
             return;
         }
@@ -342,7 +218,7 @@ impl EditorHook {
 
 // Where a new Shader file `stem` goes under the project's assets, numbered
 // past files already there, and how a world line declares it.
-fn new_shader_file(stem: &str) -> (PathBuf, String) {
+pub(in crate::editor::hook) fn new_shader_file(stem: &str) -> (PathBuf, String) {
     let dir = crate::project::assets_dir().unwrap_or_else(|| PathBuf::from("assets"));
     let path = shader_source::starter_path(&dir, stem, Path::exists);
     let root = std::env::current_dir().unwrap_or_default();

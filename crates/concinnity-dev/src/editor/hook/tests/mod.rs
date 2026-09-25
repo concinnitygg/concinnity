@@ -20,6 +20,7 @@ mod drop_floor_tests;
 mod duplicate_tests;
 mod editing_tests;
 mod edits_tests;
+mod form_extras_tests;
 mod hide_tests;
 mod layout_tests;
 mod panels_tests;

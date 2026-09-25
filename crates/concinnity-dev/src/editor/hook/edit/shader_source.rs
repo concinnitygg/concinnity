@@ -45,16 +45,25 @@ impl EditorHook {
 
     // The confirmation dialog's answer: write first when `save`, and leave
     // only when that write landed.
-    pub(in crate::editor::hook) fn answer_leave_shader_source(&mut self, save: bool, then: Leave) {
+    pub(in crate::editor::hook) fn answer_leave_shader_source(
+        &mut self,
+        save: bool,
+        then: Leave,
+        world: &mut World,
+    ) {
         if save && !self.save_shader_source() {
             return;
         }
+        let confirm = then == Leave::ConfirmForm;
         self.go_to_leave(then);
+        if confirm {
+            self.confirm_form(world);
+        }
     }
 
     fn go_to_leave(&mut self, then: Leave) {
         match then {
-            Leave::Close => self.shaders.source = None,
+            Leave::Close | Leave::ConfirmForm => self.shaders.source = None,
             Leave::Open(key) => self.load_shader_source(key),
             Leave::Edit(edit) => {
                 self.shaders.source = None;

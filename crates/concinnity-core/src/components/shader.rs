@@ -132,10 +132,12 @@ pub enum ShaderStage {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 pub struct Shader {
     /// Path to the `.hlsl` file defining `shade`. Required.
+    #[asset(owned_file)]
     pub fragment: String,
     /// Path to the `.hlsl` file defining `transform`. Omit to keep the
     /// engine's own projection.
     #[serde(default)]
+    #[asset(owned_file)]
     pub vertex: Option<String>,
     /// Injected at load time from BlobAssetDef::payload.
     #[serde(skip)]

@@ -5,6 +5,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{args_with_id, replace_args};
 use concinnity_core::ecs::World;
 
+use super::form_extras::{self, with_optional_id};
 use super::{
     EditorHook, FormTarget, FormTemplate, declared_id, names_of_types, short_status, visible_slot,
 };
@@ -64,6 +65,10 @@ impl EditorHook {
             (None, Some(e)) => declared_id(e).unwrap_or_default().to_string(),
             (None, None) => self.unique_name(&ty),
         };
+        self.form.extras = match &template {
+            Some(_) => None,
+            None => form_extras::for_type(&ty, &self.entries, &target),
+        };
         self.form.template = template;
         self.form.touched = false;
         self.form.override_menu = None;
@@ -76,6 +81,7 @@ impl EditorHook {
         self.form.error = None;
         self.form.selected_type = Some(ty);
         self.form.target = target;
+        self.form.host = PanelKey::Assets;
         self.picker_open = false;
         self.row_menu = None;
         self.form.field_dropdown = None;
@@ -102,12 +108,16 @@ impl EditorHook {
         let Some(ty) = self.form.selected_type.clone() else {
             return;
         };
-        self.form.fields =
-            form::fields_for_with(&ty, Some(&self.form.args), &self.form.vec_expanded);
-        // Clamp the scroll window to the (possibly changed) field count -- an array
+        let mut fields = form::fields_for_with(&ty, Some(&self.form.args), &self.form.vec_expanded);
+        if let Some(extras) = &self.form.extras {
+            let hidden = extras.hidden_fields();
+            fields.retain(|f| !hidden.iter().any(|h| form::is_at_or_under(&f.key, h)));
+        }
+        self.form.fields = fields;
+        // Clamp the scroll window to the (possibly changed) row count -- an array
         // shrink can leave `form_scroll` past the new last page.
         let window = self.form_window();
-        let max = self.form.fields.len().saturating_sub(window);
+        let max = self.form_row_count().saturating_sub(window);
         self.form.scroll = self.form.scroll.min(max);
         // Reference fields pick from the world's existing assets of their target
         // type. Resolve the option lists up front (reads `entries` + the cooked
@@ -235,6 +245,13 @@ impl EditorHook {
                 self.form.field_dropdown_scroll = 0;
                 self.form.error = None;
             }
+            FormAction::PressExtra(id) => {
+                if let Some(extras) = self.form.extras.as_mut() {
+                    extras.press(id);
+                    self.form.touched = true;
+                }
+                self.form.error = None;
+            }
             FormAction::PickFieldOption(opt) => {
                 if let Some(open) = self.form.field_dropdown
                     && let Some(f) = self.form.fields.get_mut(open)
@@ -320,12 +337,25 @@ impl EditorHook {
         // Fold the live control values into the working args (which already holds the
         // structure: nested objects, array lengths), then validate the whole thing.
         self.capture_controls(world);
-        let args = self.form.args.clone();
+        let mut args = self.form.args.clone();
+        let mut files = Vec::new();
+        if let Some(extras) = &self.form.extras {
+            let cx = self.extras_cx(&typed);
+            if let Some(reason) = extras.blocked(&cx) {
+                self.form.error = Some(reason);
+                return;
+            }
+            files = extras.fill_args(&cx, &mut args);
+        }
         if let Err(e) = form::validate(&ty, &typed, &args) {
             self.form.error = Some(short_status(&e));
             return;
         }
         let args_val = serde_json::Value::Object(args);
+        if self.form.extras.is_some() {
+            self.commit_with_extras(&ty, &typed, args_val, files);
+            return;
+        }
         // A template-derived asset commits the minimal patch against its
         // template baseline: only the fields that differ are authored, so
         // everything else keeps tracking the template. Its name is the link to
@@ -387,13 +417,5 @@ impl EditorHook {
         }
         self.mark_changed();
         self.form.close();
-    }
-}
-
-// `args` declaring `id` as the `$id`, or anonymous when there is none.
-fn with_optional_id(args: serde_json::Value, id: Option<&str>) -> serde_json::Value {
-    match id {
-        Some(id) => args_with_id(args, id),
-        None => args,
     }
 }

@@ -5,6 +5,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields};
 
+use crate::owned_file::is_owned_file;
 use crate::schema::{AuthoredField, struct_schema};
 use crate::serde_attrs::{container_attrs, field_attrs};
 
@@ -56,6 +57,13 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let mut probes = Vec::new();
     for AuthoredField { field, key, .. } in &authored {
         let ty = &field.ty;
+        let owned = is_owned_file(&field.attrs)?;
+        if owned && key.is_empty() {
+            return Err(syn::Error::new_spanned(
+                field,
+                "a flattened field cannot be an owned file",
+            ));
+        }
         let key = if key.is_empty() {
             quote!(::core::option::Option::None)
         } else {
@@ -65,6 +73,11 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             (&&&&::concinnity_core::ecs::asset_fields::probe::Probe::<#ty>::NEW)
                 .collect(prefix, #key, out);
         });
+        if owned {
+            probes.push(quote! {
+                ::concinnity_core::ecs::asset_fields::probe::owned_file(prefix, #key, out);
+            });
+        }
     }
 
     // A schema with no authored fields names neither the probe traits nor its
@@ -142,6 +155,33 @@ mod tests {
             out.contains(":: concinnity_core :: ecs :: asset_fields :: AssetFields"),
             "{out}"
         );
+    }
+
+    #[test]
+    fn an_owned_file_is_recorded_under_its_key() {
+        let out = expanded(syn::parse_quote! {
+            struct S {
+                #[asset(owned_file)]
+                #[serde(rename = "src")]
+                source: String,
+                other: String,
+            }
+        });
+        assert_eq!(out.matches("probe :: owned_file").count(), 1, "{out}");
+        assert!(
+            out.contains("owned_file (prefix , :: core :: option :: Option :: Some (\"src\")"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_flattened_owned_file_and_an_unknown_asset_attribute_are_refused() {
+        for input in [
+            syn::parse_quote! { struct S { #[asset(owned_file)] #[serde(flatten)] x: Inner } },
+            syn::parse_quote! { struct S { #[asset(shared)] x: String } },
+        ] {
+            assert!(expand(&input).is_err());
+        }
     }
 
     #[test]

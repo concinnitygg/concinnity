@@ -109,6 +109,7 @@
 #[serde(default)]
 pub struct StoryImport {
     /// Path to the Markdown story file, relative to the project root.
+    #[asset(owned_file)]
     pub source: String,
     /// Whether to generate a title screen (story title, Start and Quit
     /// buttons) as the initial screen. When `false`, the story's first page is

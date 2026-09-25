@@ -384,6 +384,8 @@ struct PanelData {
     picker_options: Option<Vec<crate::editor::panels::assets_panel::PickerOption>>,
     form_title: String,
     form_overrides: Option<FormOverridesData>,
+    form_extras: Vec<crate::editor::panels::form_extras::ExtraRow>,
+    form_blocked: Option<String>,
 }
 
 // Owned per-tick override state backing a `form_panel::OverridesView`.
@@ -477,6 +479,7 @@ mod duplicate;
 mod editing;
 mod edits;
 mod fly;
+mod form_extras;
 mod form_state;
 mod handles;
 mod hide;

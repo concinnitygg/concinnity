@@ -98,6 +98,18 @@ pub(crate) fn is_singleton(ty: &str) -> bool {
     RegisteredType::parse(ty).is_some_and(|t| t.singleton())
 }
 
+// Why a world holding `entries` cannot take another `ty`, for a type with a
+// per-world limit past one.
+pub(crate) fn add_refused(ty: &str, entries: &[serde_json::Value]) -> Option<String> {
+    match ty {
+        "Shader" => {
+            let count = super::shader_list::shader_count(entries);
+            (!super::shader_list::can_add_shader(count)).then(super::shader_list::limit_reason)
+        }
+        _ => None,
+    }
+}
+
 // Every type the "+" picker offers: the multi-instance addables plus the config
 // singletons.
 pub(crate) fn picker_types() -> impl Iterator<Item = &'static str> {

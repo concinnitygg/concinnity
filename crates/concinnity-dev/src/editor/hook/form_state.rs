@@ -4,9 +4,11 @@
 
 use std::collections::HashSet;
 
+use super::form_extras::FormExtras;
 use crate::editor::entry_list::EntryId;
 use crate::editor::panels::form::FormField;
 use crate::editor::panels::form_panel::FormFocus;
+use crate::editor::panels::registry::PanelKey;
 
 // The type of the open form doubles as the open signal: `selected_type` is
 // `None` while the panel is closed.
@@ -48,6 +50,10 @@ pub(in crate::editor::hook) struct FormState {
     pub(in crate::editor::hook) vec_expanded: HashSet<String>,
     // The unapplied-edit marker behind the heading's "*".
     pub(in crate::editor::hook) touched: bool,
+    // The type's rows and commit steps beyond its schema fields, if it has any.
+    pub(in crate::editor::hook) extras: Option<Box<dyn FormExtras>>,
+    // The panel the form was opened from; it shows while that panel does.
+    pub(in crate::editor::hook) host: PanelKey,
 }
 
 impl Default for FormState {
@@ -67,6 +73,8 @@ impl Default for FormState {
             entity_menu_open: false,
             vec_expanded: HashSet::new(),
             touched: false,
+            extras: None,
+            host: PanelKey::Assets,
         }
     }
 }
@@ -83,6 +91,8 @@ impl FormState {
         self.override_menu = None;
         self.entity_menu_open = false;
         self.vec_expanded.clear();
+        self.extras = None;
+        self.host = PanelKey::Assets;
         self.scroll = 0;
         self.focus = FormFocus::Name;
         self.error = None;
@@ -177,6 +187,8 @@ mod tests {
             entity_menu_open: true,
             vec_expanded: HashSet::from(["pos".to_string()]),
             touched: true,
+            extras: None,
+            host: PanelKey::Shaders,
         };
         s.close();
         assert_eq!(s.selected_type, None);
@@ -188,5 +200,6 @@ mod tests {
         assert_eq!(s.error, None);
         assert_eq!((s.field_dropdown, s.field_dropdown_scroll), (None, 0));
         assert!(!s.touched);
+        assert_eq!(s.host, PanelKey::Assets);
     }
 }

@@ -48,6 +48,7 @@ pub struct SdfVolume {
     /// resolved relative to the project's `assets/` at build time. The file
     /// defines `map` and `shade`, or `sampleVolume` for a volumetric volume.
     #[serde(default)]
+    #[asset(owned_file)]
     pub fragment_shader: String,
     /// Worst-case gradient of the SDF, used to size the cone-march step. `1.0`
     /// is correct for any well-formed SDF; higher values shorten the step but

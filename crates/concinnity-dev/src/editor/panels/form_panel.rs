@@ -21,6 +21,7 @@ use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
 use super::form::{self, FieldKind, FormField};
+use super::form_extras::{self, ExtraRow};
 use super::registry::{self, PanelKey};
 use crate::editor::overrides::FieldOrigin;
 use crate::editor::theme;
@@ -142,6 +143,7 @@ const NAME_SCALE: f32 = 1.05;
 
 const BTN_TINT: [f32; 4] = [0.22, 0.40, 0.56, 1.0];
 const BTN_TINT_HOVER: [f32; 4] = [0.28, 0.48, 0.66, 1.0];
+const BTN_TINT_DISABLED: [f32; 4] = [0.20, 0.24, 0.30, 1.0];
 const CYCLE_TINT: [f32; 4] = theme::BUTTON_TINT;
 const OPTION_TINT: [f32; 4] = [0.16, 0.16, 0.20, 0.0];
 const OPTION_TINT_HOVER: [f32; 4] = theme::HOVER_TINT;
@@ -291,10 +293,19 @@ fn field_dropdown_backing(o: [f32; 2], w: f32, slot: usize, shown: usize) -> [f3
     ]
 }
 
-// How many field slots are on screen at effective size `s`: the field count
-// capped at the height-derived window.
+// How many slots are on screen at effective size `s`: the fields and the
+// type's extra rows, capped at the height-derived window.
 fn visible_field_count(view: &FormView, s: [f32; 2]) -> usize {
-    view.form_fields.len().min(rows_for_height(s[1]))
+    view.row_count().min(rows_for_height(s[1]))
+}
+
+// The rects of slot `r`, for an extra row drawn into it.
+fn extra_slot(o: [f32; 2], w: f32, r: usize) -> form_extras::Slot {
+    form_extras::Slot {
+        row: field_row_rect(o, w, r),
+        control: form_control_rect(o, w, r),
+        toggle: form_toggle_rect(o, w, r),
+    }
 }
 
 // The accent bar down an overridden row's left edge.
@@ -452,6 +463,8 @@ pub(crate) enum FormAction {
     OpenFieldDropdown(usize),
     // Pick option `i` from the open field-value dropdown.
     PickFieldOption(usize),
+    // Press the type's extra row with this id.
+    PressExtra(usize),
     // Append / drop the last element of array arg field `i`.
     AddArrayElement(usize),
     RemoveArrayElement(usize),
@@ -511,7 +524,18 @@ pub(crate) struct FormView<'a> {
     pub form_error: Option<&'a str>,
     // Per-field override state when the form edits a template-derived asset.
     pub overrides: Option<OverridesView<'a>>,
+    // The type's rows after the fields.
+    pub extras: &'a [ExtraRow],
+    // Why confirming is unavailable right now, when it is.
+    pub blocked: Option<&'a str>,
     pub mouse: [f32; 2],
+}
+
+impl FormView<'_> {
+    // The fields and the extra rows: what the scroll window runs over.
+    pub(crate) fn row_count(&self) -> usize {
+        self.form_fields.len() + self.extras.len()
+    }
 }
 
 // Whether the cursor is over the panel (for wheel-scrolling the field window).
@@ -614,7 +638,12 @@ pub(crate) fn hit_test(
     for r in 0..visible_field_count(view, s) {
         let j = scroll + r;
         let Some(f) = view.form_fields.get(j) else {
-            break;
+            if let Some(row) = view.extras.get(j - view.form_fields.len())
+                && form_extras::hits(row, &extra_slot(o, w, r), mx, my)
+            {
+                return Some(FormAction::PressExtra(row.id));
+            }
+            continue;
         };
         match f.kind {
             FieldKind::Bool => {
@@ -689,26 +718,37 @@ pub(crate) fn place(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: 
     show_name_heading(world, o, w, view.form_focus == FormFocus::Name);
     let apply_btn = apply_rect(o, w);
     let hover = point_in(view.mouse[0], view.mouse[1], apply_btn);
+    let (tint, caption) = match (view.blocked.is_some(), hover) {
+        (true, _) => (BTN_TINT_DISABLED, LABEL_DIM),
+        (false, true) => (BTN_TINT_HOVER, LABEL_WHITE),
+        (false, false) => (BTN_TINT, LABEL_WHITE),
+    };
     place_rounded(
         world,
         APPLY_BG,
         apply_btn,
-        if hover { BTN_TINT_HOVER } else { BTN_TINT },
+        tint,
         theme::CONTROL_RADIUS,
         true,
     );
     let confirm = if view.editing { "Apply" } else { "Add" };
-    place_center_label(world, APPLY_LABEL, apply_btn, confirm, LABEL_WHITE, true);
+    place_center_label(world, APPLY_LABEL, apply_btn, confirm, caption, true);
 
-    // A validation error, if the last commit was rejected (a reserved line, so
-    // showing it never shifts the fields below).
-    if let Some(err) = view.form_error {
+    // A validation error, if the last commit was rejected, else why confirming
+    // is unavailable (a reserved line, so showing it never shifts the fields
+    // below).
+    let status = match (view.form_error, view.blocked) {
+        (Some(err), _) => Some((err, ERROR_LABEL)),
+        (None, Some(reason)) => Some((reason, LABEL_DIM)),
+        (None, None) => None,
+    };
+    if let Some((text, color)) = status {
         widget::place_left_label(
             world,
             FORM_STATUS,
             [o[0] + PAD, widget::header_y(o, PAD) + NAME_H + 6.0],
-            err,
-            ERROR_LABEL,
+            text,
+            color,
             true,
         );
     }
@@ -718,7 +758,15 @@ pub(crate) fn place(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: 
     for r in 0..visible_field_count(view, s) {
         let j = scroll + r;
         let Some(field) = view.form_fields.get(j) else {
-            break;
+            if let Some(row) = view.extras.get(j - view.form_fields.len()) {
+                let ids = form_extras::SlotIds {
+                    caption: form_row_label(r),
+                    control: form_toggle_bg(r),
+                    text: form_enum_label(r),
+                };
+                form_extras::place(world, row, &extra_slot(o, w, r), ids, view.mouse);
+            }
+            continue;
         };
         let row = field_row_rect(o, w, r);
         // A nested (dotted-path) field shows its indented caption; a disclosed
@@ -906,7 +954,7 @@ pub(crate) fn place(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: 
 
     // A scrollbar down the field region's right edge when the form overflows the
     // visible window.
-    layout_form_scrollbar(world, view.form_fields.len(), scroll, o, w, window);
+    layout_form_scrollbar(world, view.row_count(), scroll, o, w, window);
 
     // The open value dropdown draws last so it floats over the slots below it.
     if let Some(open) = view.field_dropdown {
@@ -1259,6 +1307,8 @@ mod tests {
             field_dropdown_scroll: 0,
             form_error: None,
             overrides: None,
+            extras: &[],
+            blocked: None,
             mouse: [0.0, 0.0],
         }
     }
@@ -1989,6 +2039,74 @@ mod tests {
             ),
             Some(FormAction::RemoveArrayElement(0))
         );
+    }
+
+    fn extra_rows() -> Vec<ExtraRow> {
+        vec![
+            ExtraRow::label("Stages", None),
+            ExtraRow {
+                id: 4,
+                caption: "vertex".into(),
+                indent: true,
+                control: form_extras::ExtraControl::Check {
+                    on: false,
+                    enabled: true,
+                },
+                detail: None,
+            },
+        ]
+    }
+
+    // A type's extra rows follow its fields in the same window: a press on one
+    // reports its id, and each draws into the slot it lands in.
+    #[test]
+    fn extra_rows_follow_the_fields_and_report_their_id() {
+        let fields = float_fields(1);
+        let extras = extra_rows();
+        let v = FormView {
+            extras: &extras,
+            ..view(&fields)
+        };
+        let o = test_origin();
+        let s = size(v.row_count());
+        let t = form_toggle_rect(o, EDIT_W, 2);
+        assert_eq!(
+            hit_test(&v, t[0] + 3.0, t[1] + 3.0, o, s),
+            Some(FormAction::PressExtra(4))
+        );
+        let heading = form_control_rect(o, EDIT_W, 1);
+        assert_eq!(
+            hit_test(&v, heading[0] + 3.0, heading[1] + 3.0, o, s),
+            Some(FormAction::Consume),
+            "a label row presses nothing"
+        );
+        let mut world = injected_world();
+        place(&mut world, Some(&v), o, s);
+        assert_eq!(label(&world, form_row_label(1)).content, "Stages");
+        assert_eq!(label(&world, form_row_label(2)).content, "vertex");
+        assert!(sprite_visible(&world, form_toggle_bg(2)));
+    }
+
+    // A blocked form says why on its status line, under an error when there is
+    // one, and dims its confirm button.
+    #[test]
+    fn a_blocked_form_says_why_and_dims_its_confirm() {
+        let fields = float_fields(1);
+        let v = FormView {
+            blocked: Some("name taken"),
+            ..view(&fields)
+        };
+        let o = test_origin();
+        let mut world = injected_world();
+        place(&mut world, Some(&v), o, size(1));
+        assert_eq!(label(&world, FORM_STATUS).content, "name taken");
+        assert_eq!(sprite(&world, APPLY_BG).tint, BTN_TINT_DISABLED);
+        let v = FormView {
+            form_error: Some("bad"),
+            ..v
+        };
+        place(&mut world, Some(&v), o, size(1));
+        assert_eq!(label(&world, FORM_STATUS).content, "bad");
     }
 
     #[test]

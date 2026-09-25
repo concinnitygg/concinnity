@@ -485,6 +485,12 @@ macro_rules! define_registered_type {
             pub fn ref_fields(self) -> &'static [RefField] {
                 &self.field_table().refs
             }
+            /// The fields holding a file this type owns: its authored source,
+            /// which belongs to the asset rather than being content other
+            /// assets share. Each is the dotted path [`Self::ref_fields`] uses.
+            pub fn owned_file_fields(self) -> &'static [String] {
+                &self.field_table().owned_files
+            }
             /// The structural flags, from the entry's metadata: `singleton`
             /// (at most one instance belongs to a world; authoring tools use an
             /// edit-or-add flow), `useful_blank` (meaningful when declared with
@@ -1085,6 +1091,31 @@ mod tests {
             .iter()
             .map(|f| (f.path.as_str(), f.targets.to_vec()))
             .collect()
+    }
+
+    // The types whose authored source files belong to them, and nothing else:
+    // an imported model or texture is shared content, not an owned file.
+    #[test]
+    fn owned_file_fields_name_each_types_own_sources() {
+        let owners: Vec<(RegisteredType, &[String])> = RegisteredType::all()
+            .iter()
+            .map(|&t| (t, t.owned_file_fields()))
+            .filter(|(_, files)| !files.is_empty())
+            .collect();
+        assert_eq!(
+            owners,
+            [
+                (
+                    RegisteredType::Shader,
+                    &["fragment".to_string(), "vertex".to_string()][..]
+                ),
+                (
+                    RegisteredType::SdfVolume,
+                    &["fragment_shader".to_string()][..]
+                ),
+                (RegisteredType::StoryImport, &["source".to_string()][..]),
+            ]
+        );
     }
 
     // `ref_fields` reports each type's asset-reference fields and their targets,
