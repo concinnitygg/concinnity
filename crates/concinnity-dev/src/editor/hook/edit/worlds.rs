@@ -192,12 +192,6 @@ impl EditorHook {
         }
     }
 
-    // Whether a name prompt is open, so the shortcuts that would otherwise
-    // fire on a keystroke stand down while it is being typed into.
-    pub(in crate::editor::hook) fn naming_world(&self) -> bool {
-        self.modal.as_ref().is_some_and(|m| m.field)
-    }
-
     // Ask what to call the untitled world the session is on. `rejected` carries
     // back why the last attempt was turned down, so the dialog reopens saying
     // so rather than dismissing the work.

@@ -257,7 +257,7 @@ pub(crate) struct EditorHook {
     // The confirmation dialog (`hook/drive/modal.rs`), if open. Screen-modal:
     // while open every press and wheel is swallowed before any other routing,
     // and only one of its buttons closes it.
-    modal: Option<drive::modal::ModalState>,
+    modal: Option<crate::editor::modal::Dialog>,
     worlds: WorldsState,
     // Whether the session's world has never been named: `+` starts one, the
     // whole editor comes up on it, and the first SAVE asks what to call it
@@ -716,7 +716,7 @@ impl EditorHook {
             || self.behavior.picking
             || self.variables_name_focus
             || self.variables_value_focus
-            || self.naming_world()
+            || self.prompting()
             || self.palette.open
     }
 }

@@ -32,7 +32,7 @@ impl EditorHook {
         self.leave_shader_source(Leave::Close);
     }
 
-    fn leave_shader_source(&mut self, then: Leave) {
+    pub(in crate::editor::hook) fn leave_shader_source(&mut self, then: Leave) {
         if let Some(src) = &self.shaders.source
             && shader_source::must_ask(src.area.is_dirty(), &src.key, &then)
         {
@@ -56,6 +56,10 @@ impl EditorHook {
         match then {
             Leave::Close => self.shaders.source = None,
             Leave::Open(key) => self.load_shader_source(key),
+            Leave::Edit(edit) => {
+                self.shaders.source = None;
+                self.apply_shader_edit(edit);
+            }
         }
     }
 

@@ -126,6 +126,14 @@ impl EditorHook {
         self.template_index = None;
     }
 
+    // `mark_changed`, answering whether the edit stood: one that reached a
+    // read-only entry is undone, and says why.
+    pub(super) fn commit(&mut self) -> bool {
+        let refused = self.entries.changed_read_only(&self.baseline).is_some();
+        self.mark_changed();
+        !refused
+    }
+
     // Put the entries back as they were before an edit that changed the
     // read-only baseline entry at `index`, and say where that entry lives. The
     // preview is rebuilt, since a drag may already have moved what it shows.
@@ -200,6 +208,8 @@ impl EditorHook {
         self.shape_drag = None;
         self.content_drag = None;
         self.create_menu = None;
+        self.shaders.menu = None;
+        self.follow_shader_source();
         // The Lighting panel's text controls hold committed values; re-seed so
         // they show the restored list, not the undone edit.
         if self.lighting_open {

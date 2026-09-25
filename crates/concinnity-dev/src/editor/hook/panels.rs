@@ -975,7 +975,11 @@ impl Panel for ShadersPanel {
                 hook.apply_shaders_action(a, &rows, world);
                 true
             }
-            None => false,
+            // A press anywhere else closes the row menu without being taken.
+            None => {
+                hook.shaders.menu = None;
+                false
+            }
         }
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {

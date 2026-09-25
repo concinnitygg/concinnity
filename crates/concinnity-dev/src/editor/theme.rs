@@ -46,6 +46,10 @@ pub(crate) const SELECTED_TINT: [f32; 4] = [0.18, 0.28, 0.46, 1.0];
 pub(crate) const BUTTON_TINT: [f32; 4] = [0.19, 0.20, 0.25, 1.0];
 pub(crate) const ACCENT_TINT: [f32; 4] = [0.26, 0.42, 0.66, 1.0];
 
+// A checkbox's box, on and off.
+pub(crate) const CHECK_ON_TINT: [f32; 4] = [0.30, 0.66, 0.34, 1.0];
+pub(crate) const CHECK_OFF_TINT: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
+
 // Label colors: normal body text, dimmed secondary text, and headings.
 pub(crate) const LABEL: [f32; 3] = [0.90, 0.90, 0.92];
 pub(crate) const LABEL_DIM: [f32; 3] = [0.60, 0.60, 0.66];

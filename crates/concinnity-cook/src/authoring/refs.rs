@@ -6,7 +6,8 @@
 //! (scene partitioning, provenance tooling) get the full edge list without
 //! per-type knowledge.
 
-use crate::authoring::field_path::string_leaves;
+use crate::authoring::field_path::{retarget_leaves, string_leaves};
+use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 use crate::check::asset_refs::CrossRef;
 use crate::check::cross_reference::cross_refs_for;
@@ -32,10 +33,37 @@ pub fn referenced_names(asset: &WorldJsonlAsset) -> Vec<String> {
     names
 }
 
+/// Point every reference field of `entry` that may name a `target_type` asset
+/// and names `from` at `to` instead, or, with `None`, drop it so the field
+/// takes its default. Returns how many references changed. Covers the fields
+/// the registry derives from the schema, not the structured
+/// `CrossReferenced` ones.
+pub fn retarget_references(
+    entry: &mut serde_json::Value,
+    target_type: &str,
+    from: &str,
+    to: Option<&str>,
+) -> usize {
+    let Some(ty) = entry
+        .get("type")
+        .and_then(|t| t.as_str())
+        .and_then(RegisteredType::parse)
+    else {
+        return 0;
+    };
+    let Some(args) = entry.get_mut("args") else {
+        return 0;
+    };
+    ty.ref_fields()
+        .iter()
+        .filter(|f| f.targets.is_empty() || f.targets.contains(&target_type))
+        .map(|f| retarget_leaves(args, &f.path, from, to))
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::authoring::registry::RegisteredType;
 
     fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
@@ -114,5 +142,22 @@ mod tests {
             serde_json::json!({"model": "m"}),
         );
         assert!(referenced_names(&light).is_empty());
+    }
+
+    #[test]
+    fn a_retarget_rewrites_only_fields_that_may_name_the_type() {
+        let mut material = serde_json::json!({"type": "Material", "args": {
+            "$id": "m", "shader": "water", "albedo": "water",
+        }});
+        assert_eq!(
+            retarget_references(&mut material, "Shader", "water", Some("sea")),
+            1
+        );
+        assert_eq!(material["args"]["shader"], "sea");
+        assert_eq!(material["args"]["albedo"], "water", "a texture slot");
+        assert_eq!(retarget_references(&mut material, "Shader", "sea", None), 1);
+        assert!(material["args"].get("shader").is_none());
+        let mut unknown = serde_json::json!({"type": "Nope", "args": {"shader": "sea"}});
+        assert_eq!(retarget_references(&mut unknown, "Shader", "sea", None), 0);
     }
 }

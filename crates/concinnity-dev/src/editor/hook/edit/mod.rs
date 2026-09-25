@@ -11,8 +11,8 @@
 //!
 //! One module per surface: `asset_tree`, `behavior`, `character_shape`,
 //! `console`, `content`, `export`, `import`, `lighting`, `map`, `overrides`,
-//! `palette`, `select`, `shaders` (with its `shader_source`), `story`,
-//! `variables` and `worlds`.
+//! `palette`, `select`, `shaders` (with its `shader_edits` and
+//! `shader_source`), `story`, `variables` and `worlds`.
 //!
 //! A panel whose state outgrew a few hook fields keeps it in a `*_state` sibling
 //! (`behavior_state`, `console_state`, `map_state`, `palette_state`,
@@ -35,6 +35,7 @@ pub(super) mod overrides;
 pub(super) mod palette;
 pub(super) mod palette_state;
 pub(super) mod select;
+pub(super) mod shader_edits;
 pub(super) mod shader_source;
 pub(super) mod shaders;
 pub(super) mod shaders_state;

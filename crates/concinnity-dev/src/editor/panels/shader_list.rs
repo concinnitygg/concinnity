@@ -1,7 +1,8 @@
 //! The data half of the Shaders panel: every `Shader` the world declares, in
 //! declaration order, with the Materials that name it and its files, and the
-//! rows the panel lists them as. A file's status is its Shader's latest reload
-//! outcome as it bears on that file.
+//! rows the panel lists them as, with the actions each row's menu offers. A
+//! file's status is its Shader's latest reload outcome as it bears on that
+//! file.
 
 use concinnity_cook::authoring::world::entry_handles;
 use concinnity_core::components::ShaderStage;
@@ -95,10 +96,18 @@ pub(crate) fn row_count(entries: &[serde_json::Value]) -> usize {
             })
             .count()
     };
+    // The header, the Materials, each file, and "+ Add vertex file" without
+    // one.
     let per_shader: usize = entries
         .iter()
         .filter(|e| entry_type(e) == Some("Shader"))
-        .map(|e| 2 + files(e))
+        .map(|e| {
+            let has_vertex = e
+                .get("args")
+                .and_then(|a| a.get(shader_source::stage_name(ShaderStage::Vertex)))
+                .is_some_and(|v| v.is_string());
+            2 + files(e) + usize::from(!has_vertex)
+        })
         .sum();
     per_shader + 1
 }
@@ -209,16 +218,42 @@ pub(crate) fn file_status(
 // What a row of the panel stands for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RowKind {
-    // A Shader's name.
-    Header,
+    // Shader `i`'s name; its menu renames or deletes it.
+    Header(usize),
     // A line of information under a Shader, or a control that is unavailable.
     Note,
     // The Materials naming Shader `i`; a click selects them.
     Materials(usize),
-    // One file of a Shader; a click opens it.
+    // One file of a Shader; a click opens it, and a vertex file's menu
+    // removes it.
     File(SourceKey),
+    // "+ Add vertex file" under Shader `i`, which declares none.
+    AddVertex(usize),
     // "+ New Shader".
     New,
+}
+
+// An action a row's "..." menu offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MenuItem {
+    Rename,
+    Delete,
+    // Stop declaring the vertex file; the file stays on disk.
+    RemoveVertex,
+}
+
+impl MenuItem {
+    pub(crate) fn caption(self) -> &'static str {
+        match self {
+            MenuItem::Rename => "Rename",
+            MenuItem::Delete => "Delete",
+            MenuItem::RemoveVertex => "Remove",
+        }
+    }
+
+    pub(crate) fn danger(self) -> bool {
+        !matches!(self, MenuItem::Rename)
+    }
 }
 
 // One row as drawn: its caption, an optional right-hand badge, whether it is
@@ -233,14 +268,25 @@ pub(crate) struct Row {
 }
 
 impl Row {
-    // Whether a click on the row does anything.
+    // Whether a click on the row's body does anything.
     pub(crate) fn clickable(&self) -> bool {
-        !matches!(self.kind, RowKind::Header | RowKind::Note)
+        !matches!(self.kind, RowKind::Header(_) | RowKind::Note)
+    }
+
+    // What the row's menu offers; a row without a menu shows no dots. The
+    // fragment file has none, since a Shader cannot go without it.
+    pub(crate) fn menu(&self) -> &'static [MenuItem] {
+        match &self.kind {
+            RowKind::Header(_) => &[MenuItem::Rename, MenuItem::Delete],
+            RowKind::File(key) if key.stage == ShaderStage::Vertex => &[MenuItem::RemoveVertex],
+            _ => &[],
+        }
     }
 }
 
-// The panel's rows: per Shader its name, the Materials naming it, and a row
-// per file, then "+ New Shader" (a note at the Shader limit). `open` is the
+// The panel's rows: per Shader its name, the Materials naming it, a row per
+// file and "+ Add vertex file" when it declares none, then "+ New Shader" (a
+// note at the Shader limit). `open` is the
 // file the source panel shows.
 pub(crate) fn rows(
     shaders: &[ShaderDecl],
@@ -250,7 +296,7 @@ pub(crate) fn rows(
     let mut out = Vec::new();
     for (i, shader) in shaders.iter().enumerate() {
         out.push(Row {
-            kind: RowKind::Header,
+            kind: RowKind::Header(i),
             text: shader.name.clone(),
             badge: shader.default.then(|| ("default".to_string(), Tone::Info)),
             indent: false,
@@ -273,6 +319,15 @@ pub(crate) fn rows(
                 ),
                 badge: Some((status.label(), status.tone())),
                 indent: true,
+            });
+        }
+        if shader.file(ShaderStage::Vertex).is_none() {
+            out.push(Row {
+                kind: RowKind::AddVertex(i),
+                text: "+ Add vertex file".to_string(),
+                badge: None,
+                indent: true,
+                selected: false,
             });
         }
     }
@@ -376,6 +431,7 @@ mod tests {
                 "lit",
                 "shades every Material naming no Shader",
                 "fragment  /cn-none/lit.hlsl",
+                "+ Add vertex file",
                 "reeds",
                 "used by reed_mat, marsh_mat",
                 "fragment  /cn-none/reeds.hlsl",
@@ -384,13 +440,31 @@ mod tests {
             ]
         );
         assert_eq!(rows[0].badge, Some(("default".to_string(), Tone::Info)));
-        assert_eq!(rows[3].badge, None);
-        assert_eq!(rows[4].kind, RowKind::Materials(1));
+        assert_eq!(rows[3].kind, RowKind::AddVertex(0));
+        assert!(rows[3].clickable());
+        assert_eq!(rows[4].badge, None);
+        assert_eq!(rows[5].kind, RowKind::Materials(1));
         assert!(!rows[1].clickable());
-        assert!(rows[6].selected && !rows[5].selected);
-        assert_eq!(rows[7].kind, RowKind::New);
-        assert!(rows[7].clickable());
+        assert!(rows[7].selected && !rows[6].selected);
+        assert_eq!(rows[8].kind, RowKind::New);
+        assert!(rows[8].clickable());
         assert_eq!(row_count(&entries()), rows.len());
+    }
+
+    // A header's menu renames or deletes its Shader; only a vertex file's menu
+    // removes the file, since the fragment is required.
+    #[test]
+    fn menus_rename_delete_or_remove_the_vertex_file() {
+        let shaders = declared(&entries(), str::to_string);
+        let rows = rows(&shaders, &ReportBoard::default(), None);
+        let menu = |i: usize| rows[i].menu().to_vec();
+        assert_eq!(rows[4].kind, RowKind::Header(1));
+        assert_eq!(menu(4), [MenuItem::Rename, MenuItem::Delete]);
+        assert!(!rows[4].clickable(), "the header's body does nothing");
+        assert!(menu(6).is_empty(), "the fragment file");
+        assert_eq!(menu(7), [MenuItem::RemoveVertex]);
+        assert!(menu(5).is_empty() && menu(3).is_empty());
+        assert!(MenuItem::Delete.danger() && !MenuItem::Rename.danger());
     }
 
     // At the Shader limit "+ New Shader" stays listed, unclickable, with why.

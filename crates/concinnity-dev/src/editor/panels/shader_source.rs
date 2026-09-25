@@ -1,12 +1,13 @@
 //! The data half of the Shader source panel: which of a Shader's files it
-//! edits and where that file is on disk, the starter file "+ New Shader"
-//! writes, and the rules for leaving a file with unsaved edits and for a file
+//! edits and where that file is on disk, the starter files a new Shader and
+//! an added vertex file begin as, and the rules for leaving a file with unsaved edits and for a file
 //! that changed on disk while open. What a reload outcome shows is
 //! `shader_diagnostics`.
 
 use concinnity_core::components::ShaderStage;
 use std::path::{Path, PathBuf};
 
+use super::shader_edit::ShaderEdit;
 use crate::editor::modal;
 
 // One file of one Shader: the Shader's name and which of its files.
@@ -53,8 +54,20 @@ float4 shade(VertexOut v, GpuObjectData od)
 }
 ";
 
-// Where a new Shader named `name` keeps its fragment file: `shaders/<name>.hlsl`
-// under `dir`, numbered past any file already there.
+// The vertex file "+ Add vertex file" writes: the engine's own projection,
+// so adding it changes nothing until it is edited. Pinned compilable by test.
+pub(crate) const STARTER_VERTEX: &str = "\
+// Where the vertex lands and what it hands shade. project_vertex is the
+// engine's own projection.
+VertexOut transform(float4x4 model, float3 pos, float3 normal, float3 tangent,
+                    float3 color, float2 uv)
+{
+    return project_vertex(model, pos, normal, tangent, color, uv);
+}
+";
+
+// Where a new Shader file named `name` goes: `shaders/<name>.hlsl` under
+// `dir`, numbered past any file already there.
 pub(crate) fn starter_path(dir: &Path, name: &str, exists: impl Fn(&Path) -> bool) -> PathBuf {
     let shaders = dir.join("shaders");
     let first = shaders.join(format!("{name}.hlsl"));
@@ -85,6 +98,8 @@ pub(crate) fn declared_form(path: &Path, root: &Path) -> String {
 pub(crate) enum Leave {
     Open(SourceKey),
     Close,
+    // Close, then make an edit that takes the open file away.
+    Edit(ShaderEdit),
 }
 
 // Whether leaving the open file `open` for `then` has to ask first: only with
@@ -93,7 +108,7 @@ pub(crate) fn must_ask(dirty: bool, open: &SourceKey, then: &Leave) -> bool {
     dirty
         && match then {
             Leave::Open(key) => key != open,
-            Leave::Close => true,
+            Leave::Close | Leave::Edit(_) => true,
         }
 }
 
@@ -179,6 +194,12 @@ mod tests {
         assert!(!must_ask(false, &open, &other));
         assert!(!must_ask(false, &open, &Leave::Close));
         assert!(!must_ask(true, &open, &Leave::Open(open.clone())));
+        let delete = Leave::Edit(ShaderEdit::Delete {
+            name: "water".to_string(),
+            files: false,
+        });
+        assert!(must_ask(true, &open, &delete));
+        assert!(!must_ask(false, &open, &delete));
     }
 
     // Cancel stays put; Discard and Save both carry where to go next, and only
@@ -274,12 +295,26 @@ mod tests {
     // test instead of shipping a starter that fails its first save.
     #[test]
     fn the_starter_shader_compiles() {
+        compiles_clean(None);
+    }
+
+    // The same for the starter vertex file, beside the starter fragment.
+    #[test]
+    fn the_starter_vertex_file_compiles() {
+        compiles_clean(Some(STARTER_VERTEX));
+    }
+
+    fn compiles_clean(vertex: Option<&str>) {
+        use concinnity_core::render::shader_programs::surface::{SourceFile, Sources};
         if !concinnity_shader::dxc_available() {
             return;
         }
-        let sources = concinnity_core::render::shader_programs::surface::Sources {
-            vertex: None,
-            fragment: concinnity_core::render::shader_programs::surface::SourceFile {
+        let sources = Sources {
+            vertex: vertex.map(|text| SourceFile {
+                path: "shaders/starter_vertex.hlsl",
+                text,
+            }),
+            fragment: SourceFile {
                 path: "shaders/starter.hlsl",
                 text: STARTER_SHADER,
             },

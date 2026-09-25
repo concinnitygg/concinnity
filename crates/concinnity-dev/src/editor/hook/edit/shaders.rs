@@ -1,21 +1,17 @@
 //! EditorHook: the Shaders panel's actions. The panel lists every Shader the
 //! working entries declare; a file row opens the source panel on that file
 //! (`shader_source.rs`), a Materials row selects the Materials naming the
-//! Shader, and "+ New Shader" writes a starter fragment file and adds its
-//! `Shader` entry like any other added asset.
+//! Shader, and the rest (a new Shader, a rename or delete from a heading's
+//! menu, adding or removing a vertex file) are edits in `shader_edits.rs`.
 
-use concinnity_core::components::ShaderStage;
 use concinnity_core::ecs::World;
-use std::path::{Path, PathBuf};
 
 use super::shaders_state::RowsKey;
 use crate::debug::hot_reload::ShaderReports;
 use crate::editor::hook::EditorHook;
-use crate::editor::notify;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::panels::shader_list::{self, Row, RowKind, ShaderDecl};
+use crate::editor::panels::shader_list::{self, MenuItem, Row, RowKind, ShaderDecl};
 use crate::editor::panels::shader_list_panel::{self, ShadersAction, ShadersView};
-use crate::editor::panels::shader_source::{self, SourceKey};
 
 impl EditorHook {
     // A clone of the board the hot-reload driver publishes each Shader's
@@ -57,10 +53,12 @@ impl EditorHook {
         rows: &'a [Row],
         mouse: [f32; 2],
     ) -> ShadersView<'a> {
+        let menu = self.shaders.menu.as_ref();
         ShadersView {
             rows,
             scroll: self.shaders.scroll,
             mouse,
+            menu: menu.and_then(|kind| rows.iter().position(|r| &r.kind == kind)),
         }
     }
 
@@ -68,6 +66,7 @@ impl EditorHook {
         let window = shader_list_panel::rows_for_height(self.effective_size(PanelKey::Shaders)[1]);
         let max = shader_list::row_count(&self.entries).saturating_sub(window);
         self.shaders.scroll = crate::editor::hook::scroll_step(self.shaders.scroll, delta, max);
+        self.shaders.menu = None;
     }
 
     // Route a resolved Shaders-panel click on `rows`.
@@ -77,14 +76,39 @@ impl EditorHook {
         rows: &[Row],
         world: &mut World,
     ) {
-        let ShadersAction::Row(i) = action else {
-            return;
+        let i = match action {
+            ShadersAction::Row(i) => i,
+            ShadersAction::OpenMenu(i) => {
+                self.shaders.menu = rows.get(i).map(|r| r.kind.clone());
+                return;
+            }
+            ShadersAction::Menu(item) => {
+                if let Some(kind) = self.shaders.menu.take() {
+                    self.apply_menu_item(item, kind, world);
+                }
+                return;
+            }
+            ShadersAction::CloseMenu => {
+                self.shaders.menu = None;
+                return;
+            }
+            ShadersAction::Consume => return,
         };
         match rows.get(i).map(|r| &r.kind) {
             Some(RowKind::File(key)) => self.open_shader_file(key.clone()),
             Some(&RowKind::Materials(shader)) => self.select_shader_materials(shader, world),
-            Some(RowKind::New) => self.create_shader(),
-            Some(RowKind::Header | RowKind::Note) | None => {}
+            Some(&RowKind::AddVertex(shader)) => self.add_vertex_file(shader),
+            Some(RowKind::New) => self.prompt_new_shader(None),
+            Some(RowKind::Header(_) | RowKind::Note) | None => {}
+        }
+    }
+
+    fn apply_menu_item(&mut self, item: MenuItem, kind: RowKind, world: &mut World) {
+        match (item, kind) {
+            (MenuItem::Rename, RowKind::Header(i)) => self.prompt_rename_shader(i, world),
+            (MenuItem::Delete, RowKind::Header(i)) => self.confirm_delete_shader(i),
+            (MenuItem::RemoveVertex, RowKind::File(key)) => self.remove_vertex_file(&key.shader),
+            _ => {}
         }
     }
 
@@ -100,45 +124,5 @@ impl EditorHook {
         }
         self.selection.set(handles);
         self.follow_active(world);
-    }
-
-    // Write a starter fragment file under the project's assets and add a
-    // `Shader` entry reading it, then open the file. The entry is a normal
-    // world edit (dirty, undoable, previewed by a rebuild); the file is
-    // written now, since the build reads Shader files from disk.
-    pub(in crate::editor::hook) fn create_shader(&mut self) {
-        if !shader_list::can_add_shader(shader_list::shader_count(&self.entries)) {
-            self.notifier.push(
-                notify::Level::Error,
-                &format!("No Shader added: {}", shader_list::limit_reason()),
-            );
-            return;
-        }
-        let name = self.unique_name("shader");
-        let dir = crate::project::assets_dir().unwrap_or_else(|| PathBuf::from("assets"));
-        let path = shader_source::starter_path(&dir, &name, Path::exists);
-        let written = path
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&path, shader_source::STARTER_SHADER));
-        if let Err(e) = written {
-            self.notifier.error_with(
-                &format!("Could not write {}: {e}", path.display()),
-                notify::Action::OpenConsole,
-            );
-            return;
-        }
-        let root = std::env::current_dir().unwrap_or_default();
-        let declared = shader_source::declared_form(&path, &root);
-        self.entries.push(serde_json::json!({
-            "type": "Shader", "args": { "$id": name, "fragment": declared },
-        }));
-        self.mark_changed();
-        self.notifier
-            .success(&format!("Added Shader '{name}' ({declared})"));
-        self.open_shader_file(SourceKey {
-            shader: name,
-            stage: ShaderStage::Fragment,
-        });
     }
 }

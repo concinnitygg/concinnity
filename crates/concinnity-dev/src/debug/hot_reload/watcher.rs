@@ -50,7 +50,7 @@ pub(super) fn spawn_watcher(
         // shared debounce: marking is idempotent, and a debounce could swallow
         // the save of a second Shader right after the first.
         if kind == ReloadKind::Shaders {
-            let touched = shader_files.shaders_touched(&event.paths);
+            let touched = shader_files.shaders_to_recompile(&event.paths);
             if !touched.is_empty() {
                 tracing::info!(
                     "asset hot-reload: detected change to {:?}, scheduling {} Shader recompile(s)",

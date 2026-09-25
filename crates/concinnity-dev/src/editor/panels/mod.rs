@@ -40,6 +40,7 @@ pub(crate) mod list_panel;
 pub(crate) mod preview;
 pub(crate) mod registry;
 pub(crate) mod shader_diagnostics;
+pub(crate) mod shader_edit;
 pub(crate) mod shader_list;
 pub(crate) mod shader_list_panel;
 pub(crate) mod shader_source;

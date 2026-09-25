@@ -30,8 +30,6 @@ const BOTTOM_PAD: f32 = 6.0;
 // the shared hover / selected highlights otherwise. A checkbox reflects its own
 // on / off state separately.
 const ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
-const BOX_TINT_ON: [f32; 4] = [0.30, 0.66, 0.34, 1.0];
-const BOX_TINT_OFF: [f32; 4] = [0.30, 0.30, 0.34, 1.0];
 
 // The reserved-id layout every row-list panel follows, offset from its `base`:
 // the panel surface + title label + close button, then three contiguous per-row
@@ -174,7 +172,11 @@ pub(crate) fn place(
         );
         let label_x = match row.check {
             Some(on) => {
-                let box_tint = if on { BOX_TINT_ON } else { BOX_TINT_OFF };
+                let box_tint = if on {
+                    theme::CHECK_ON_TINT
+                } else {
+                    theme::CHECK_OFF_TINT
+                };
                 place_rounded(
                     world,
                     check_box(base, i),
@@ -375,7 +377,10 @@ mod tests {
         let close = world.get_by_id::<TextLabel>(close_label(BASE)).unwrap();
         assert!(close.visible && close.content == "X");
         // The checkbox is green while on and the label is inset past the box.
-        assert_eq!(sprite(&world, check_box(BASE, 0)).tint, BOX_TINT_ON);
+        assert_eq!(
+            sprite(&world, check_box(BASE, 0)).tint,
+            theme::CHECK_ON_TINT
+        );
         let label = world.get_by_id::<TextLabel>(row_label(BASE, 0)).unwrap();
         assert_eq!(label.content, "Toggle");
         assert_eq!(label.x, o[0] + CHECK_LABEL_INSET);
@@ -389,7 +394,10 @@ mod tests {
             &[Row::checkbox("Toggle", false)],
             [0.0, 0.0],
         );
-        assert_eq!(sprite(&world, check_box(BASE, 0)).tint, BOX_TINT_OFF);
+        assert_eq!(
+            sprite(&world, check_box(BASE, 0)).tint,
+            theme::CHECK_OFF_TINT
+        );
     }
 
     #[test]

@@ -147,7 +147,7 @@ fn plus_opens_an_untitled_world_that_the_first_save_names() {
 
     // SAVE asks for the name rather than writing.
     h.save();
-    assert!(h.naming_world(), "the prompt is up with its field");
+    assert!(h.prompting(), "the prompt is up with its field");
 
     set_world_name(&mut world, " lobby ");
     press_modal(&mut h, &mut world, "Save");
@@ -184,7 +184,7 @@ fn the_name_prompt_reopens_on_a_name_it_cannot_use() {
             .map(|m| m.message.clone())
             .unwrap_or_default();
         assert!(
-            h.naming_world() && message.contains(expect),
+            h.prompting() && message.contains(expect),
             "'{typed}' was rejected as: {message}"
         );
         assert!(h.untitled, "'{typed}' left the session untitled");

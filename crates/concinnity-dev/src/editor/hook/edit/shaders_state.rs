@@ -7,7 +7,7 @@ use std::time::SystemTime;
 
 use crate::debug::hot_reload::{ReportBoard, ShaderReports};
 use crate::editor::panels::shader_diagnostics::{self, Status, Tone};
-use crate::editor::panels::shader_list::{Row, ShaderDecl};
+use crate::editor::panels::shader_list::{Row, RowKind, ShaderDecl};
 use crate::editor::panels::shader_source::{self, DiskChange, SourceKey};
 use crate::editor::text_area::TextArea;
 use crate::editor::text_area::markers::GutterMarker;
@@ -18,6 +18,9 @@ use crate::editor::text_area::markers::GutterMarker;
 pub(in crate::editor::hook) struct ShadersState {
     pub(in crate::editor::hook) open: bool,
     pub(in crate::editor::hook) scroll: usize,
+    // The row whose "..." menu is open, by what it stands for, so a rebuild of
+    // the rows keeps it on the same row.
+    pub(in crate::editor::hook) menu: Option<RowKind>,
     pub(in crate::editor::hook) reports: ShaderReports,
     pub(in crate::editor::hook) source: Option<SourceState>,
     // Each declared path's on-disk path under `paths_dir`, from `resolve`.
@@ -44,6 +47,7 @@ impl Default for ShadersState {
         Self {
             open: false,
             scroll: 0,
+            menu: None,
             reports: ShaderReports::default(),
             source: None,
             paths: HashMap::new(),
@@ -60,6 +64,7 @@ impl ShadersState {
     // resolved paths. Shown state is not the world's.
     pub(in crate::editor::hook) fn reset_for_world(&mut self) {
         self.scroll = 0;
+        self.menu = None;
         self.source = None;
         self.paths.clear();
         self.rows.clear();

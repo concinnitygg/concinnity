@@ -1,8 +1,8 @@
 //! The Shaders and Shader source panels' actions (`hook/edit/shaders.rs`,
 //! `hook/edit/shader_source.rs`): opening a file, the question leaving unsaved
 //! edits asks and each of its answers, the close button asking the same, a
-//! save writing the file and waiting on its recompile, and "+ New Shader"
-//! writing its starter beside the entry that names it.
+//! save writing the file and waiting on its recompile, and the Shader limit.
+//! The panel's edits are `shader_edits_tests.rs`.
 
 use concinnity_core::components::ShaderStage;
 use concinnity_core::ecs::World;
@@ -195,39 +195,6 @@ fn failed_at(path: &str, line: u32, column: u32) -> ShaderReloadOutcome {
     }))
 }
 
-// "+ New Shader" writes the starter under the project's assets, adds a Shader
-// entry declaring it (a world edit like any other), and opens it.
-#[test]
-fn a_new_shader_writes_its_starter_and_adds_its_entry() {
-    let _guard = crate::test_support::lock();
-    let tree = concinnity_testing::TempTree::new();
-    let old = std::env::current_dir().unwrap();
-    std::env::set_current_dir(tree.path()).unwrap();
-    let root = std::env::current_dir().unwrap();
-    crate::project::open(concinnity_host::store::paths::StateTree::at(&root));
-
-    let mut h = hook(Vec::new());
-    h.create_shader();
-    assert_eq!(h.entries.len(), 1);
-    assert_eq!(h.entries[0]["type"], "Shader");
-    assert_eq!(h.entries[0]["args"]["$id"], "editor_shader");
-    assert_eq!(
-        h.entries[0]["args"]["fragment"],
-        "assets/shaders/editor_shader.hlsl"
-    );
-    assert!(h.dirty, "the new entry is a world edit");
-    let written = std::fs::read_to_string(root.join("assets/shaders/editor_shader.hlsl")).unwrap();
-    assert_eq!(written, shader_source::STARTER_SHADER);
-    assert_eq!(open_shader(&h).as_deref(), Some("editor_shader"));
-    assert_eq!(
-        h.shaders.source.as_ref().unwrap().area.text(),
-        shader_source::STARTER_SHADER
-    );
-
-    std::env::set_current_dir(old).unwrap();
-    crate::test_support::isolate_state_dir();
-}
-
 thread_local! {
     static RESOLVED: Cell<usize> = const { Cell::new(0) };
 }
@@ -280,7 +247,9 @@ fn no_shader_is_added_past_the_limit() {
     let last = h.shader_rows().last().cloned().unwrap();
     assert_eq!(last.kind, RowKind::Note);
     assert!(!last.clickable());
-    h.create_shader();
+    h.prompt_new_shader(None);
+    assert!(h.modal.is_none(), "no name is asked for");
+    h.create_shader("more", &mut World::new());
     assert_eq!(shader_list::shader_count(&h.entries), MAX_SHADER_BUCKETS);
     assert!(!h.dirty);
     assert!(h.shaders.source.is_none());

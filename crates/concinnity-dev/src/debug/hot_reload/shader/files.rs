@@ -23,8 +23,19 @@ impl ShaderFileIndex {
         )
     }
 
+    // The Shaders an event on `paths` recompiles: those reading a file still
+    // there. A deleted file has nothing to compile, and the rebuild that
+    // follows drops its Shader from the catalog; a save, atomic or not, leaves
+    // the file at its path.
+    pub(in crate::debug::hot_reload) fn shaders_to_recompile<'a>(
+        &self,
+        paths: impl IntoIterator<Item = &'a PathBuf>,
+    ) -> BTreeSet<AssetId> {
+        self.shaders_touched(paths.into_iter().filter(|p| p.exists()))
+    }
+
     // The Shaders reading any of `paths`.
-    pub(in crate::debug::hot_reload) fn shaders_touched<'a>(
+    fn shaders_touched<'a>(
         &self,
         paths: impl IntoIterator<Item = &'a PathBuf>,
     ) -> BTreeSet<AssetId> {
@@ -121,6 +132,29 @@ mod tests {
                 .into_iter()
                 .collect::<Vec<_>>(),
             [AssetId(4)]
+        );
+    }
+
+    // An event on a file that is gone (its Shader deleted it) recompiles
+    // nothing, while one on a file still there recompiles its Shader.
+    #[test]
+    fn a_removed_file_recompiles_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (lit, water) = (dir.path().join("lit.hlsl"), dir.path().join("water.hlsl"));
+        std::fs::write(&lit, "").unwrap();
+        std::fs::write(&water, "").unwrap();
+        let index = ShaderFileIndex::new(&catalog(&[
+            (1, &lit.to_string_lossy(), None),
+            (2, &water.to_string_lossy(), None),
+        ]));
+        std::fs::remove_file(&water).unwrap();
+        assert!(index.shaders_to_recompile([&water]).is_empty());
+        assert_eq!(
+            index
+                .shaders_to_recompile([&lit, &water])
+                .into_iter()
+                .collect::<Vec<_>>(),
+            [AssetId(1)]
         );
     }
 

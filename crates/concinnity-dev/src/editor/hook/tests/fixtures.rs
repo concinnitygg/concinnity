@@ -541,12 +541,27 @@ pub(in crate::editor::hook) fn world_names(h: &EditorHook) -> Vec<String> {
 pub(in crate::editor::hook) fn press_modal(h: &mut EditorHook, world: &mut World, label: &str) {
     let i = button_index(h, label);
     let state = h.modal.as_ref().unwrap();
-    let (count, field) = (state.buttons.len(), state.field);
-    let r = modal::button_rect(modal::panel_rect(VP, field), count, i);
+    let (count, c) = (state.buttons.len(), state.controls());
+    let r = modal::button_rect(modal::panel_rect(VP, c), count, i);
+    click_modal_at(h, world, [r[0] + 2.0, r[1] + 2.0]);
+}
+
+// Press the open dialog's checkbox.
+pub(in crate::editor::hook) fn press_modal_check(h: &mut EditorHook, world: &mut World) {
+    let c = h.modal.as_ref().expect("a dialog is open").controls();
+    let p = modal::panel_rect(VP, c);
+    let at = (0..p[3] as usize)
+        .map(|dy| [p[0] + 20.0, p[1] + dy as f32])
+        .find(|m| modal::hit_check(m[0], m[1], VP, c))
+        .expect("the dialog has a checkbox");
+    click_modal_at(h, world, at);
+}
+
+fn click_modal_at(h: &mut EditorHook, world: &mut World, at: [f32; 2]) {
     let input = FrameInput {
         left_click: true,
-        mouse_x: r[0] + 2.0,
-        mouse_y: r[1] + 2.0,
+        mouse_x: at[0],
+        mouse_y: at[1],
         viewport: VP,
         ..Default::default()
     };
