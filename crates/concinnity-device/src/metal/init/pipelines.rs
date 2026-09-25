@@ -21,7 +21,7 @@ use objc2_metal::{
 use crate::metal::context::{BINDLESS_SAMPLER_ARG_BUFFER_INDEX, BINDLESS_TEXTURE_ARG_BUFFER_INDEX};
 use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::error::allocation_failed;
-use crate::metal::pipeline::world_function;
+use crate::metal::pipeline::{WORLD_FRAGMENT_ENTRY, WORLD_VERTEX_ENTRY, world_function};
 
 // Describes the per-vertex buffer layout so Metal can map [[stage_in]]:
 //   buffer(1): interleaved [float3 pos, float3 normal, float3 tangent, float3 color, float2 uv]
@@ -95,9 +95,9 @@ pub(crate) fn build_main_pipeline(
             )?,
         ),
         Some(programs) => (
-            world_function(device, hot_reload, programs, "vertex_main_bindless")
+            world_function(device, hot_reload, programs, WORLD_VERTEX_ENTRY)
                 .map_err(|e| e.context("the world's main pass"))?,
-            world_function(device, hot_reload, programs, "fragment_main_bindless")
+            world_function(device, hot_reload, programs, WORLD_FRAGMENT_ENTRY)
                 .map_err(|e| e.context("the world's main pass"))?,
         ),
     };
@@ -255,8 +255,8 @@ pub(crate) fn build_bucket_pipeline(
         world_function(device, hot_reload, programs, entry)
             .map_err(|e| e.context(format_args!("shader bucket {bucket}")))
     };
-    let vert_fn = world("vertex_main_bindless")?;
-    let frag_fn = world("fragment_main_bindless")?;
+    let vert_fn = world(WORLD_VERTEX_ENTRY)?;
+    let frag_fn = world(WORLD_FRAGMENT_ENTRY)?;
 
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexDescriptor(Some(vert_desc));

@@ -157,6 +157,11 @@ pub(crate) enum Call {
     },
     SetDrawCullDistance(usize, f32),
     SetFade(f32),
+    // A shader bucket's pipeline installed, with the name its programs carry.
+    InstallWorldShader {
+        bucket: u32,
+        name: Option<String>,
+    },
 }
 
 // Shared mutable state behind the mock: the ordered call log, the captured
@@ -460,6 +465,18 @@ impl SkinnedDraws for MockBackend {
 }
 
 impl DrawStreaming for MockBackend {
+    fn install_world_shader(
+        &mut self,
+        bucket: u32,
+        shader: concinnity_core::render::backend_init::WorldShader<'_>,
+    ) -> RenderResult<()> {
+        self.record(Call::InstallWorldShader {
+            bucket,
+            name: shader.programs.map(|p| p.name.clone()),
+        });
+        Ok(())
+    }
+
     fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()> {
         let mut s = self.state.lock().unwrap();
         s.calls.push(Call::EvictTextureSlot(slot));

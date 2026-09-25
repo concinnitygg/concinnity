@@ -14,9 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::decode::{poll_pending_assets, poll_pending_envmap, reload_assets};
-use super::passes::{
-    reload_procedural_meshes, reload_shader_stages, reload_stories, reload_volumetric_fog,
-};
+use super::passes::{reload_procedural_meshes, reload_stories, reload_volumetric_fog};
+use super::shader::ShaderReload;
 use super::watcher::spawn_watcher;
 
 // A worker result still in flight: the receiving end of the channel a
@@ -116,13 +115,11 @@ pub(crate) struct AssetHotReloadState {
     // live `world.jsonl`. No file watcher: the trigger is the same
     // `PENDING_WORLD` flag the Prop-diff path consumes.
     pub procedural_meshes: ProceduralMeshSourceMap,
-    // The world default `Shader`'s files, which can be recompiled from disk.
-    // The asset watcher recognizes shader-source events against the parent
-    // directories of these entries and sets
-    // [`super::pending::set_pending_shader_stages`] (separate
-    // from the texture / mesh / LUT batch path so a shader save does not
-    // also kick a 43-texture re-decode).
-    pub shader_stages: ShaderStageSourceMap,
+    // Every world `Shader`'s files, the compiles in flight, and the overrides
+    // shared with the streaming pump. The asset watcher marks the Shaders a
+    // save touches (separate from the texture / mesh / LUT batch path so a
+    // shader save does not also kick a 43-texture re-decode).
+    pub shaders: ShaderReload,
     // Path to the world.jsonl the renderer was initialized from, when
     // known. Used both as a watch-dir source (its parent directory joins
     // the texture / model / HDRI / LUT dirs) and as the file the
@@ -206,7 +203,7 @@ impl std::fmt::Debug for AssetHotReloadState {
             .field("meshes", &self.meshes.entries.len())
             .field("skinned_meshes", &self.skinned_meshes.entries.len())
             .field("procedural_meshes", &self.procedural_meshes.entries.len())
-            .field("shader_stages", &self.shader_stages.entries.len())
+            .field("shaders", &self.shaders.catalog.len())
             .field("world_jsonl_path", &self.world_jsonl_path)
             .field("pending", &self.pending.load(Ordering::Relaxed))
             .field("env_map_inflight", &env_inflight)
@@ -241,7 +238,8 @@ impl AssetHotReloadState {
             meshes,
             skinned_meshes,
             procedural_meshes,
-            shader_stages,
+            shaders,
+            shader_overrides,
         } = sources;
         Self {
             map,
@@ -250,7 +248,7 @@ impl AssetHotReloadState {
             meshes,
             skinned_meshes,
             procedural_meshes,
-            shader_stages,
+            shaders: ShaderReload::new(shaders, shader_overrides),
             world_jsonl_path,
             pending,
             env_map_inflight: Mutex::new(None),
@@ -331,32 +329,17 @@ pub(crate) fn run_frame(
         reload_assets(state);
     }
 
-    // World-loaded Shader reload poll. The backend builds every
-    // replacement into a temporary first and only swaps on success, so a typo
-    // in one shader leaves the live pipelines untouched.
-    if super::pending::take_pending_shader_stages() {
-        let ss_result = reload_shader_stages(&state.shader_stages, backend);
-        if ss_result.recompiled > 0 || ss_result.failed > 0 {
-            tracing::info!(
-                "Shader hot-reload: recompiled={} failed={} pipelines_rebuilt={}",
-                ss_result.recompiled,
-                ss_result.failed,
-                ss_result.pipelines_rebuilt,
-            );
-            // The failure count decides the toast: the log line above stays
-            // INFO either way, so severity cannot be read off it.
-            if let Some(n) = notify {
-                if ss_result.failed > 0 {
-                    n.error_with(
-                        &format!("Shader reload: {} failed", ss_result.failed),
-                        Action::OpenConsole,
-                    );
-                } else {
-                    n.success(&format!("Shaders reloaded ({})", ss_result.recompiled));
-                }
-            }
-        }
+    // World Shader reload: start a compile for every Shader a save touched,
+    // then swap in whichever compiles have finished. The compile runs on a
+    // worker and the backend builds before it swaps, so neither a slow compile
+    // nor a typo stalls or breaks the live frame.
+    let pending_shaders = super::pending::take_pending_shaders();
+    let mut shader_reports = Vec::new();
+    if !pending_shaders.is_empty() {
+        shader_reports = state.shaders.request(&pending_shaders);
     }
+    shader_reports.extend(state.shaders.poll(backend));
+    super::shader::report(&shader_reports, notify);
 
     // Markdown story reload poll: re-expand the world's StoryImports and
     // queue every changed graph for the story system. Cheap when the flag is

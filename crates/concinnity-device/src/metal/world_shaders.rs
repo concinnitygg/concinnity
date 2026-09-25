@@ -6,6 +6,7 @@
 // those scenes pin and unpin, so the pipeline build lands behind the loading
 // screen rather than on the frame that first draws the material.
 
+use concinnity_core::render::backend::WorldShaderSwap;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -35,6 +36,27 @@ impl MtlContext {
         )?;
         self.cull.world_pipelines[slot] = Some(pso);
         Ok(())
+    }
+
+    // Rebuild one world Shader's pipeline from hot-reloaded programs. Bucket 0
+    // is the main pipeline; another bucket is rebuilt only while installed, and
+    // `install_world_shader` builds before it replaces, so a failed build leaves
+    // the live pipeline bound.
+    pub(super) fn update_world_shader(
+        &mut self,
+        bucket: u32,
+        programs: &concinnity_core::components::ShaderPrograms,
+    ) -> RenderResult<WorldShaderSwap> {
+        if bucket == 0 {
+            self.update_default_world_shader(programs)?;
+            return Ok(WorldShaderSwap::Swapped);
+        }
+        self.world_pipeline_slot(bucket)?;
+        if !self.world_shader_resident(bucket as usize) {
+            return Ok(WorldShaderSwap::NotResident);
+        }
+        self.install_world_shader(bucket, programs)?;
+        Ok(WorldShaderSwap::Swapped)
     }
 
     // Release one bucket's pipeline. A Metal command buffer retains the

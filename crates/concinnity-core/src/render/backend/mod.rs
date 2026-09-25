@@ -40,7 +40,9 @@ mod tuning;
 mod window;
 
 pub use effects::SceneEffects;
-pub use live_edit::{DrawGeometryUpdate, LiveEdit, SkinnedDrawGeometryUpdate, SkinnedSlotLayout};
+pub use live_edit::{
+    DrawGeometryUpdate, LiveEdit, SkinnedDrawGeometryUpdate, SkinnedSlotLayout, WorldShaderSwap,
+};
 pub use probe::{
     BackendProbe, DeviceCapabilities, GpuClassInput, GpuProfile, GpuTier, GpuVendor,
     apple_family_from_device_name, classify_tier,
@@ -402,8 +404,8 @@ mod tests {
                 op(backend.update_environment_map(&[])),
             ),
             (
-                "update_world_shader_pipelines",
-                op(backend.update_world_shader_pipelines(&ShaderPrograms::default())),
+                "update_world_shader",
+                op(backend.update_world_shader(0, &ShaderPrograms::default())),
             ),
             (
                 "reload_world",

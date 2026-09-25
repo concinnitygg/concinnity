@@ -396,23 +396,13 @@ impl VkContext {
         Ok(())
     }
 
-    // Rebuild bucket 0 of the GPU-driven main pass from a freshly compiled world
-    // Shader and hot-swap it. Driven by asset hot-reload (`cn debug` only) when
-    // one of the Shader's files is saved or the `reload-assets` debug tool
-    // call fires. Mirrors the rebuild-then-swap safety pattern of
+    // Rebuild bucket 0 of the GPU-driven main pass from the world default
+    // Shader's freshly compiled programs and hot-swap it, for
+    // `update_world_shader`. Mirrors the rebuild-then-swap safety pattern of
     // `reload_shaders`: the replacement is constructed first and the swap only
     // runs when the build succeeds, so a typo in a shader edit leaves the live
-    // pipeline untouched and the session keeps rendering. Sibling of
-    // `DxContext::update_world_shader_pipelines` /
-    // `MtlContext::update_world_shader_pipelines`.
-    //
-    // Buckets past 0 and the shadow / G-buffer / cull pipelines are
-    // engine-internal or scene-owned and are not rebuilt here.
-    //
-    // Reached only through the bin's `cn debug` runtime-mutation path (dead
-    // from the FFI lib crate's roots, live in the concinnity binary), like the
-    // other runtime-mutation methods on `VkContext`.
-    pub(crate) fn update_world_shader_pipelines(
+    // pipeline untouched and the session keeps rendering.
+    pub(in crate::vulkan) fn update_default_world_shader(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
     ) -> RenderResult<()> {

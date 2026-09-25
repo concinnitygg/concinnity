@@ -12,6 +12,7 @@
 // Mirrors `metal/world_shaders.rs` and `directx/world_shaders.rs`.
 
 use ash::vk;
+use concinnity_core::render::backend::WorldShaderSwap;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
 
@@ -50,6 +51,33 @@ impl VkContext {
         self.evict_world_shader(bucket);
         self.cull.world_pipelines[slot] = Some(pipeline);
         Ok(())
+    }
+
+    // Rebuild one world Shader's pipeline from hot-reloaded programs. Bucket 0
+    // is the main pass's pipeline; another bucket is rebuilt only while
+    // installed, and `install_world_shader` builds before it retires the old
+    // pipeline, so a failed build leaves the live one bound.
+    pub(in crate::vulkan) fn update_world_shader(
+        &mut self,
+        bucket: u32,
+        programs: &concinnity_core::components::ShaderPrograms,
+    ) -> RenderResult<WorldShaderSwap> {
+        if bucket == 0 {
+            self.update_default_world_shader(programs)?;
+            return Ok(WorldShaderSwap::Swapped);
+        }
+        self.world_pipeline_slot(bucket)?;
+        if !self.world_shader_resident(bucket as usize) {
+            return Ok(WorldShaderSwap::NotResident);
+        }
+        self.install_world_shader(
+            bucket,
+            backend_init::WorldShader {
+                programs: Some(programs),
+                deferred: false,
+            },
+        )?;
+        Ok(WorldShaderSwap::Swapped)
     }
 
     // Release one bucket's pipeline. A Vulkan pipeline may not be destroyed while

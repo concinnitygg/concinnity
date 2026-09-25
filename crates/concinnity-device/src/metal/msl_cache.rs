@@ -44,12 +44,7 @@ pub(super) fn compiled_library(
     label: &str,
     embedded: Option<(u64, &'static [u8])>,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLLibrary>>> {
-    let key = metallib_key(source, "main");
-    let compile = || match key {
-        Some(_) => compile_to_metallib(source, label),
-        None => Err(RenderError::ShaderCompile("no Metal toolchain".into())),
-    };
-    match crate::shader::builtin::fetch(label, source, embedded, key.as_ref(), compile) {
+    match metallib_bytes(source, label, embedded) {
         Ok(bytes) => match super::pipeline::load_library(device, &bytes) {
             Ok(library) => Ok(library),
             Err(e) => {
@@ -66,6 +61,32 @@ pub(super) fn compiled_library(
     }
 }
 
+// The metallib for `source`: `embedded` when it was built from this exact text,
+// else the cached bytes, else a fresh compile stored into the cache.
+fn metallib_bytes(
+    source: &str,
+    label: &str,
+    embedded: Option<(u64, &'static [u8])>,
+) -> RenderResult<std::borrow::Cow<'static, [u8]>> {
+    let key = metallib_key(source, "main");
+    let compile = || match key {
+        Some(_) => compile_to_metallib(source, label),
+        None => Err(RenderError::ShaderCompile("no Metal toolchain".into())),
+    };
+    crate::shader::builtin::fetch(label, source, embedded, key.as_ref(), compile)
+}
+
+// Compile a cooked MSL artifact's metallib into the cache without a device, so
+// a later `cooked_function` of the same artifact loads it instead of compiling.
+pub(super) fn warm_cooked(msl: &[u8], label: &str) -> RenderResult<()> {
+    metallib_bytes(msl_text(msl, label)?, label, None).map(drop)
+}
+
+fn msl_text<'a>(msl: &'a [u8], label: &str) -> RenderResult<&'a str> {
+    std::str::from_utf8(msl)
+        .map_err(|e| RenderError::ShaderCompile(format!("{label}: artifact is not MSL text: {e}")))
+}
+
 // `entry` out of the library a cooked MSL artifact builds. `label` names the
 // artifact's owner in errors.
 pub(super) fn cooked_function(
@@ -74,10 +95,7 @@ pub(super) fn cooked_function(
     entry: &str,
     label: &str,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLFunction>>> {
-    let text = std::str::from_utf8(msl).map_err(|e| {
-        RenderError::ShaderCompile(format!("{label}: artifact is not MSL text: {e}"))
-    })?;
-    let library = compiled_library(device, text, label, None)?;
+    let library = compiled_library(device, msl_text(msl, label)?, label, None)?;
     library
         .newFunctionWithName(&NSString::from_str(entry))
         .ok_or_else(|| RenderError::ShaderCompile(format!("{label}: {entry} not found")))

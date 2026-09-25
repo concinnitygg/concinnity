@@ -51,6 +51,7 @@ mod device;
 /// Whether this build links a rendering backend. A build with no backend
 /// feature has none, so the only loop that can run a world is a headless one.
 pub use device::AVAILABLE as HAS_RENDER_BACKEND;
+pub use device::warm_world_shader;
 /// Skeletal animation playback. Internal system, constructed by `World::start`
 /// when the world declares any `Animation`; produces per-frame skinning matrices.
 /// `pub` so the editor crate can drive the clip hot-reload through the

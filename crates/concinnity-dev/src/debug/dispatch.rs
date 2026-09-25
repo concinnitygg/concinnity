@@ -236,13 +236,13 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                 Some(flag) => {
                     flag.store(true, std::sync::atomic::Ordering::SeqCst);
                     // AnimationSystem, the GraphicsSystem world-reload pass,
-                    // and the world-loaded shader reload pass each
+                    // and the world Shader reload pass each
                     // listen on their own sibling flags. Fire all four here
                     // so a single tool call reloads every hot-reloadable
                     // surface in one shot.
                     hot_reload::set_pending_animations();
                     hot_reload::set_pending_world();
-                    hot_reload::set_pending_shader_stages();
+                    hot_reload::mark_all_shaders_pending();
                     serde_json::json!({ "ok": true, "reload_queued": true })
                 }
                 // `tick` captures the flag once `GraphicsSystem` exposes it,
@@ -662,7 +662,7 @@ mod tests {
         // flags so the side effects do not leak into other tests.
         let _guard = crate::test_support::lock();
         hot_reload::take_pending_world();
-        hot_reload::take_pending_shader_stages();
+        hot_reload::take_pending_shaders();
         hot_reload::take_pending_stories();
         hot_reload::take_pending_animations();
 
@@ -678,7 +678,7 @@ mod tests {
         // The world, Shader-stage, and animation reload surfaces were signaled;
         // drain them so they do not leak.
         assert!(hot_reload::take_pending_world());
-        assert!(hot_reload::take_pending_shader_stages());
+        assert!(hot_reload::take_pending_shaders().all);
         assert!(hot_reload::take_pending_animations());
         // Stories reload only on their own `.md` watch, so reload-assets leaves
         // that flag clear.

@@ -10,6 +10,9 @@
 // building every pipeline in one frame.
 
 use concinnity_core::components::ShaderPrograms;
+use std::sync::Arc;
+
+use crate::gfx::system::parked::ShaderOverrides;
 
 // Where a deferred bucket's compiled stage container is read from.
 pub(crate) enum ShaderPayloadSource {
@@ -17,6 +20,31 @@ pub(crate) enum ShaderPayloadSource {
     Bytes(Vec<u8>),
     // Disk-backed world (`cn run`): the payload's absolute range in its blob.
     Disk { path: String, offset: u64, len: u64 },
+}
+
+// A pending install of one bucket: its cooked programs and the hot-reloaded
+// edits that win over them.
+pub(crate) struct ShaderInstall {
+    bucket: u32,
+    cooked: Arc<ShaderPrograms>,
+    overrides: Option<ShaderOverrides>,
+}
+
+impl ShaderInstall {
+    // The programs to build: the bucket's hot-reloaded edit as of this call,
+    // else the cooked ones.
+    pub(crate) fn programs(&self) -> Arc<ShaderPrograms> {
+        match self.overrides.as_ref().and_then(|o| o.get(self.bucket)) {
+            Some(edited) => {
+                tracing::info!(
+                    "StreamingSystem: shader bucket {} installs its hot-reloaded edit",
+                    self.bucket
+                );
+                edited
+            }
+            None => Arc::clone(&self.cooked),
+        }
+    }
 }
 
 // One deferred bucket as init recorded it.
@@ -35,12 +63,15 @@ struct Entry {
 
 pub(crate) struct ShaderWarmup {
     entries: Vec<Entry>,
+    // Hot-reloaded programs that win over the cooked payload, under
+    // hot-reload capture only.
+    overrides: Option<ShaderOverrides>,
 }
 
 impl ShaderWarmup {
     // Every deferred bucket starts blocked and non-resident, matching every
     // scene starting unpinned: the first pin sync unblocks the start scene's.
-    pub(crate) fn new(deferred: Vec<DeferredBucket>) -> Self {
+    pub(crate) fn new(deferred: Vec<DeferredBucket>, overrides: Option<ShaderOverrides>) -> Self {
         Self {
             entries: deferred
                 .into_iter()
@@ -51,6 +82,7 @@ impl ShaderWarmup {
                     resident: false,
                 })
                 .collect(),
+            overrides,
         }
     }
 
@@ -74,8 +106,10 @@ impl ShaderWarmup {
             .map(|e| (e.bucket, !e.blocked))
     }
 
-    // Read and decode one bucket's compiled programs.
-    pub(crate) fn load(&self, bucket: u32) -> Result<ShaderPrograms, String> {
+    // Read one bucket's cooked programs for an install. The install picks
+    // between them and a hot-reloaded edit only when it runs, since an edit can
+    // land between recording the install and replaying it.
+    pub(crate) fn load(&self, bucket: u32) -> Result<ShaderInstall, String> {
         let entry = self
             .entries
             .iter()
@@ -87,8 +121,13 @@ impl ShaderWarmup {
                 super::file_range::read_at(path, *offset, *len)?
             }
         };
-        ShaderPrograms::decode(&bytes)
-            .map_err(|e| format!("shader bucket {bucket}: payload decode: {e:?}"))
+        let cooked = ShaderPrograms::decode(&bytes)
+            .map_err(|e| format!("shader bucket {bucket}: payload decode: {e:?}"))?;
+        Ok(ShaderInstall {
+            bucket,
+            cooked: Arc::new(cooked),
+            overrides: self.overrides.clone(),
+        })
     }
 
     pub(crate) fn note_resident(&mut self, bucket: u32, resident: bool) {
@@ -123,11 +162,25 @@ mod tests {
         DeferredBucket { bucket, source }
     }
 
+    fn warmup_with(overrides: Option<ShaderOverrides>) -> ShaderWarmup {
+        ShaderWarmup::new(
+            vec![
+                deferred(1, ShaderPayloadSource::Bytes(payload_bytes())),
+                deferred(2, ShaderPayloadSource::Bytes(payload_bytes())),
+            ],
+            overrides,
+        )
+    }
+
     fn warmup() -> ShaderWarmup {
-        ShaderWarmup::new(vec![
-            deferred(1, ShaderPayloadSource::Bytes(payload_bytes())),
-            deferred(2, ShaderPayloadSource::Bytes(payload_bytes())),
-        ])
+        warmup_with(None)
+    }
+
+    fn edited(name: &str) -> Arc<ShaderPrograms> {
+        Arc::new(ShaderPrograms {
+            name: name.into(),
+            ..Default::default()
+        })
     }
 
     #[test]
@@ -169,7 +222,7 @@ mod tests {
 
     #[test]
     fn load_decodes_the_programs() {
-        let programs = warmup().load(1).expect("load");
+        let programs = warmup().load(1).expect("load").programs();
         assert_eq!(programs.programs.len(), 1);
         assert_eq!(
             programs.artifact("fragment_main_bindless", 1),
@@ -186,17 +239,21 @@ mod tests {
         let mut file = std::fs::File::create(&path).unwrap();
         file.write_all(b"header").unwrap();
         file.write_all(&bytes).unwrap();
-        let w = ShaderWarmup::new(vec![deferred(
-            3,
-            ShaderPayloadSource::Disk {
-                path,
-                offset: 6,
-                len: bytes.len() as u64,
-            },
-        )]);
+        let w = ShaderWarmup::new(
+            vec![deferred(
+                3,
+                ShaderPayloadSource::Disk {
+                    path,
+                    offset: 6,
+                    len: bytes.len() as u64,
+                },
+            )],
+            None,
+        );
         assert_eq!(
             w.load(3)
                 .expect("load")
+                .programs()
                 .artifact("fragment_main_bindless", 1),
             Some(&[4u8, 5][..])
         );
@@ -205,7 +262,10 @@ mod tests {
     #[test]
     fn load_reports_an_unknown_bucket_and_a_corrupt_payload() {
         assert!(warmup().load(9).is_err());
-        let w = ShaderWarmup::new(vec![deferred(1, ShaderPayloadSource::Bytes(vec![0xff; 4]))]);
+        let w = ShaderWarmup::new(
+            vec![deferred(1, ShaderPayloadSource::Bytes(vec![0xff; 4]))],
+            None,
+        );
         assert!(w.load(1).is_err());
     }
 
@@ -215,5 +275,43 @@ mod tests {
         w.note_resident(9, true);
         w.set_blocked(9, false);
         assert_eq!(w.next_pending(), None);
+    }
+
+    // A hot-reloaded edit installs in place of the cooked payload, and only for
+    // its own bucket.
+    #[test]
+    fn an_override_wins_over_the_cooked_payload() {
+        let overrides = ShaderOverrides::default();
+        let w = warmup_with(Some(overrides.clone()));
+        assert_eq!(w.load(1).expect("cooked").programs().name, "wall");
+        overrides.set(1, edited("wall edited"));
+        assert_eq!(w.load(1).expect("override").programs().name, "wall edited");
+        assert_eq!(w.load(2).expect("cooked").programs().name, "wall");
+    }
+
+    // The override is read when the install runs, not when it was loaded, so an
+    // edit landing in between still installs; a later edit replaces an earlier.
+    #[test]
+    fn an_install_picks_up_an_edit_made_after_it_was_loaded() {
+        let overrides = ShaderOverrides::default();
+        let w = warmup_with(Some(overrides.clone()));
+        let install = w.load(2).expect("load");
+        overrides.set(2, edited("first"));
+        assert_eq!(install.programs().name, "first");
+        overrides.set(2, edited("second"));
+        assert_eq!(install.programs().name, "second");
+    }
+
+    // An override never makes a bucket the warmup does not own loadable, and a
+    // fresh override set (a rebuilt world) installs the cooked programs again.
+    #[test]
+    fn an_override_neither_invents_a_bucket_nor_outlives_its_set() {
+        let overrides = ShaderOverrides::default();
+        overrides.set(9, edited("stray"));
+        overrides.set(1, edited("old world"));
+        let w = warmup_with(Some(overrides));
+        assert!(w.load(9).is_err());
+        let rebuilt = warmup_with(Some(ShaderOverrides::default()));
+        assert_eq!(rebuilt.load(1).expect("cooked").programs().name, "wall");
     }
 }

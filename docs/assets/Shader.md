@@ -93,8 +93,7 @@ loads at startup.
 result in the world; a player needs no shader compiler. A file that fails
 to compile, or omits its hook, fails the build naming the Shader and the
 hook; a compiler warning is logged against the Shader and the build goes
-on. Under `cn debug` a save to either file recompiles it and swaps the
-live pipelines.
+on.
 
 ## Parameters
 

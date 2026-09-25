@@ -21,7 +21,7 @@ use concinnity_core::components::build_skeleton_from_joint_defs;
 use concinnity_core::components::hdr_sample_count;
 use concinnity_core::components::{
     BlockType, Camera3D, GraphicsConfig, HitRegion, Material, Model, PostProcessConfig, Shader,
-    ShaderStage, StreamingConfig, VoxelWorld, Window,
+    StreamingConfig, VoxelWorld, Window,
 };
 use concinnity_core::ecs::FontHandle;
 use concinnity_core::ecs::FrameRateCap;
@@ -161,7 +161,9 @@ fn deferred_shader_source(
 
 struct DecodedShaders {
     locators: Vec<PayloadLocator>,
-    source_map: super::hot_reload_sources::ShaderStageSourceMap,
+    source_map: super::shader_sources::ShaderSourceMap,
+    // Hot-reloaded programs shared with the shader warmup, under capture.
+    overrides: super::parked::ShaderOverrides,
     // One entry per world Shader, in drain order == cook handle order, so a
     // baked ShaderHandle value indexes this directly. Entry 0 is the world
     // default pipeline's program.
@@ -1083,9 +1085,9 @@ impl GraphicsSystem {
     // pipeline table consumes. Drain order matches cook's shader handle
     // assignment (both walk the declaration-ordered asset list), so a baked
     // `ShaderHandle` indexes the returned list directly; entry 0 drives the
-    // world default pipeline. Under `cn debug` also records the default
-    // shader's resolved on-disk stage source paths so the asset hot-reload
-    // watcher can recompile + rebuild its pipelines on a shader save. Returns
+    // world default pipeline. Under hot-reload capture also records every
+    // Shader's resolved on-disk files so the asset hot-reload watcher can
+    // recompile it and rebuild its pipeline on a save. Returns
     // None, failing init, if any payload is missing or unreadable.
     //
     // A world that declares no Shader is the common case: it gets a single
@@ -1103,7 +1105,8 @@ impl GraphicsSystem {
             return Some(DecodedShaders {
                 locators: Vec::new(),
                 shaders: vec![DecodedShader::default()],
-                source_map: super::hot_reload_sources::ShaderStageSourceMap::new(),
+                source_map: Default::default(),
+                overrides: Default::default(),
             });
         }
 
@@ -1123,6 +1126,7 @@ impl GraphicsSystem {
             .collect();
         let blob_disk_backed = ctx.blob.disk_backed();
         let mut deferred_sources = Vec::new();
+        let overrides = super::parked::ShaderOverrides::default();
 
         let mut locators = Vec::with_capacity(world_shaders.len());
         let mut shaders = Vec::with_capacity(world_shaders.len());
@@ -1192,34 +1196,27 @@ impl GraphicsSystem {
             );
             self.shader_warmup = Some(crate::gfx::streaming::shader::ShaderWarmup::new(
                 deferred_sources,
+                capture_sources.then(|| overrides.clone()),
             ));
         }
 
-        // Capture the default Shader's declared files so the asset hot-reload
-        // watcher can recompile and rebuild its pipelines on a save.
-        // Material-referenced shaders past entry 0 reload via `cn build`.
-        let world_default = &world_shaders[0];
-        let mut shader_stage_source_map = super::hot_reload_sources::ShaderStageSourceMap::new();
-        if capture_sources {
+        let source_map = if capture_sources {
             let assets_dir = self.assets_dir();
-            for stage in [ShaderStage::Vertex, ShaderStage::Fragment] {
-                let Some(raw) = world_default.stage(stage) else {
-                    continue;
-                };
-                let resolved =
-                    concinnity_host::store::source::resolve_source_path(raw, assets_dir.as_deref());
-                shader_stage_source_map.entries.push(
-                    super::hot_reload_sources::ShaderStageSourceEntry {
-                        stage,
-                        resolved_path: resolved,
-                    },
-                );
-            }
-        }
+            super::shader_sources::ShaderSourceMap::build(
+                shader_ids.iter().copied().zip(&world_shaders),
+                |raw| {
+                    concinnity_host::store::source::resolve_source_path(raw, assets_dir.as_deref())
+                },
+                concinnity_host::thread::asset_id::name_of,
+            )
+        } else {
+            Default::default()
+        };
 
         Some(DecodedShaders {
             locators,
-            source_map: shader_stage_source_map,
+            source_map,
+            overrides,
             shaders,
         })
     }
@@ -1669,7 +1666,8 @@ impl GraphicsSystem {
 
         let DecodedShaders {
             locators: shader_locators,
-            source_map: shader_stage_source_map,
+            source_map: shader_source_map,
+            overrides: shader_overrides,
             shaders: decoded_shaders,
         } = self.decode_shaders(ctx, streaming_config.is_some(), capture_sources)?;
 
@@ -1894,7 +1892,8 @@ impl GraphicsSystem {
                         &component_mesh_handles,
                         &mesh_handle_to_draws,
                     ),
-                    shader_stages: shader_stage_source_map,
+                    shaders: shader_source_map,
+                    shader_overrides,
                 },
                 texture_name_to_slot,
             );

@@ -12,9 +12,13 @@
 //!   state      `AssetHotReloadState` + decode result types + `run_frame` entry
 //!   watcher    the `notify` filesystem watcher
 //!   decode     off-thread payload decode + poll/apply (textures, meshes, IBL)
-//!   passes     world.jsonl / ProceduralMesh / VolumetricFog / Shader reload
+//!   passes     world.jsonl / ProceduralMesh / VolumetricFog / story reload
+//!   shader     per-Shader recompile: off-thread compile, newest save wins,
+//!              pipeline swap on the frame thread, live override for a Shader
+//!              whose scene is not loaded
 //!   animation  file-backed Animation clip re-import into the AnimationSystem
-//!   pending    process-wide world.jsonl / Shader / story / Animation "changed" flags
+//!   pending    process-wide world.jsonl / story / Animation "changed" flags and
+//!              the pending Shader set
 //!   world_path the session's world.jsonl path, shared with the host that switches worlds
 
 mod animation;
@@ -22,6 +26,7 @@ mod decode;
 mod driver;
 mod passes;
 mod pending;
+mod shader;
 mod state;
 mod watcher;
 mod world_path;
@@ -31,12 +36,12 @@ mod tests;
 
 pub(crate) use driver::HotReloadDriver;
 pub(crate) use pending::{
-    set_pending_animations, set_pending_shader_stages, set_pending_stories, set_pending_world,
+    mark_all_shaders_pending, set_pending_animations, set_pending_stories, set_pending_world,
 };
 pub(crate) use world_path::WorldPathHandle;
 // The `reload-assets` dispatch test drains the sibling reload flags the handler
 // raises so they don't leak into other tests; only that test needs them.
 #[cfg(test)]
 pub(crate) use pending::{
-    take_pending_animations, take_pending_shader_stages, take_pending_stories, take_pending_world,
+    take_pending_animations, take_pending_shaders, take_pending_stories, take_pending_world,
 };

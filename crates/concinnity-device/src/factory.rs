@@ -37,6 +37,28 @@ pub fn probe_gpu_profile() -> Option<backend::GpuProfile> {
     }
 }
 
+/// Do the device-free part of building a world Shader's pipeline ahead of time,
+/// on the calling thread, so a later `update_world_shader` or install of the
+/// same programs spends less time on the render thread. Metal compiles and
+/// caches each entry's metallib; DirectX and Vulkan have nothing to do ahead of
+/// pipeline creation. `hot_reload` is the flag the backend was built with,
+/// which decides the source text and so what is cached. A failure only means
+/// the pipeline build does the work itself.
+pub fn warm_world_shader(
+    programs: &concinnity_core::components::ShaderPrograms,
+    hot_reload: bool,
+) -> RenderResult<()> {
+    #[cfg(backend_metal)]
+    {
+        crate::metal::warm_world_shader(programs, hot_reload)
+    }
+    #[cfg(not(backend_metal))]
+    {
+        let _ = (programs, hot_reload);
+        Ok(())
+    }
+}
+
 /// Route the assembled `BackendInit` to the backend selected at compile time.
 /// Construction inputs are documented on `BackendInit` itself.
 pub fn init_backend(

@@ -8,20 +8,20 @@
 
 use concinnity_core::components::Identity;
 use concinnity_core::components::ProceduralMesh;
-use concinnity_core::components::ShaderStage;
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use super::parked::TextureNameSlots;
+use super::parked::{ShaderOverrides, TextureNameSlots};
+use super::shader_sources::ShaderSourceMap;
 use crate::gfx::draw_list::MeshSourceMeta;
 
 // Every unique parent directory across `paths`. The watcher subscribes to
 // these; a bare-filename source (no parent) is skipped and only reachable via
 // the `reload-assets` debug tool call. Callers pass resolved paths.
-fn watch_dirs_of<'a>(paths: impl Iterator<Item = &'a str>) -> Vec<PathBuf> {
+pub(super) fn watch_dirs_of<'a>(paths: impl Iterator<Item = &'a str>) -> Vec<PathBuf> {
     let mut dirs: BTreeSet<PathBuf> = BTreeSet::new();
     for path in paths {
         if let Some(parent) = Path::new(path).parent()
@@ -168,52 +168,6 @@ impl ProceduralMeshSourceMap {
     /// Entries in the catalog.
     pub fn len(&self) -> usize {
         self.entries.len()
-    }
-}
-
-/// One of the world default Shader's files, as a reload entry: which hook it
-/// defines plus the resolved on-disk path the build pipeline read, so the
-/// hot-reload helper can recompile the Shader through the cook's own compile
-/// and hand the fresh programs back to the backend for a pipeline rebuild.
-#[derive(Debug, Clone)]
-pub struct ShaderStageSourceEntry {
-    /// Which of the Shader's files this is.
-    pub stage: ShaderStage,
-    /// Resolved on-disk path the build pipeline read at compile time. Stored
-    /// resolved (not raw) so the watcher can subscribe to a real parent
-    /// directory even when the asset declaration used a bare filename.
-    pub resolved_path: String,
-}
-
-/// Catalog of the world default Shader's files, which the renderer can
-/// hot-reload. Owned by `GraphicsSystem` under `cn debug` only; consumed by
-/// `reload_shader_stages` when the asset hot-reload watcher fires on one of
-/// them. At most one entry per [`concinnity_core::components::ShaderStage`].
-#[derive(Debug, Clone, Default)]
-pub struct ShaderStageSourceMap {
-    /// One entry per reloadable shader stage.
-    pub entries: Vec<ShaderStageSourceEntry>,
-}
-
-impl ShaderStageSourceMap {
-    /// An empty catalog.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Whether the catalog is empty.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    /// Entries in the catalog.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Directories the watcher must subscribe to for these sources.
-    pub fn watch_dirs(&self) -> Vec<PathBuf> {
-        watch_dirs_of(self.entries.iter().map(|e| e.resolved_path.as_str()))
     }
 }
 
@@ -366,8 +320,11 @@ pub struct HotReloadSources {
     pub skinned_meshes: SkinnedMeshSourceMap,
     /// Reloadable procedural meshes.
     pub procedural_meshes: ProceduralMeshSourceMap,
-    /// Reloadable shader stages.
-    pub shader_stages: ShaderStageSourceMap,
+    /// Reloadable world Shaders.
+    pub shaders: ShaderSourceMap,
+    /// Hot-reloaded Shader programs, shared with the streaming pump so a
+    /// Shader whose scene loads later installs the edit.
+    pub shader_overrides: ShaderOverrides,
 }
 
 impl HotReloadSources {
@@ -379,7 +336,7 @@ impl HotReloadSources {
             && self.meshes.is_empty()
             && self.skinned_meshes.is_empty()
             && self.procedural_meshes.is_empty()
-            && self.shader_stages.is_empty()
+            && self.shaders.is_empty()
     }
 }
 
@@ -452,14 +409,14 @@ pub(super) fn capture_hot_reload_sources(
         "asset hot-reload: captured {} file-backed texture source(s), {} \
          ColorLut source(s), {} EnvironmentMap source(s), {} Mesh \
          source(s), {} SkinnedMesh source(s), {} ProceduralMesh source(s), \
-         and {} shader stage source(s)",
+         and {} Shader source(s)",
         sources.map.len(),
         usize::from(sources.color_lut.is_some()),
         usize::from(sources.environment_map.is_some()),
         sources.meshes.len(),
         sources.skinned_meshes.len(),
         sources.procedural_meshes.len(),
-        sources.shader_stages.len(),
+        sources.shaders.len(),
     );
     (sources, TextureNameSlots(texture_name_to_slot))
 }
@@ -583,38 +540,6 @@ mod tests {
         assert_eq!(dirs(&map.watch_dirs()), ["assets/chars"]);
     }
 
-    // Shader files watch their resolved paths, one entry per stage.
-    #[test]
-    fn shader_stage_map_watches_resolved_parents() {
-        use concinnity_core::components::ShaderStage;
-
-        let mut map = ShaderStageSourceMap::new();
-        assert!(map.is_empty());
-        for (stage, path) in [
-            (ShaderStage::Vertex, "shaders/sway.hlsl"),
-            (ShaderStage::Fragment, "shaders/surface/scene.hlsl"),
-        ] {
-            map.entries.push(ShaderStageSourceEntry {
-                stage,
-                resolved_path: path.to_string(),
-            });
-        }
-
-        assert_eq!(map.len(), 2);
-        assert_eq!(dirs(&map.watch_dirs()), ["shaders", "shaders/surface"]);
-    }
-
-    // An entry with no on-disk file contributes no subscription.
-    #[test]
-    fn shader_stage_map_skips_an_empty_resolved_path() {
-        let mut map = ShaderStageSourceMap::new();
-        map.entries.push(ShaderStageSourceEntry {
-            stage: ShaderStage::Fragment,
-            resolved_path: String::new(),
-        });
-        assert!(map.watch_dirs().is_empty());
-    }
-
     // Procedural meshes have no source file, so the map only counts entries;
     // their reload trigger is a world.jsonl save, not a watched directory.
     #[test]
@@ -642,7 +567,7 @@ mod tests {
         assert!(sources.meshes.is_empty());
         assert!(sources.skinned_meshes.is_empty());
         assert!(sources.procedural_meshes.is_empty());
-        assert!(sources.shader_stages.is_empty());
+        assert!(sources.shaders.is_empty());
         assert!(sources.color_lut.is_none());
         assert!(sources.environment_map.is_none());
         assert!(sources.is_empty());
@@ -681,10 +606,14 @@ mod tests {
                 })
             },
             |s| {
-                s.shader_stages.entries.push(ShaderStageSourceEntry {
-                    stage: ShaderStage::Fragment,
-                    resolved_path: "shaders/scene.hlsl".to_string(),
-                })
+                s.shaders
+                    .entries
+                    .push(super::super::shader_sources::ShaderSourceEntry {
+                        id: AssetId(1),
+                        name: "scene".to_string(),
+                        bucket: 0,
+                        files: Vec::new(),
+                    })
             },
         ];
         for (i, populate) in populated.iter().enumerate() {

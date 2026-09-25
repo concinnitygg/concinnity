@@ -37,6 +37,25 @@ pub(crate) fn probe_gpu_profile() -> Option<GpuProfile> {
     })
 }
 
+/// Do the device-free part of building a world Shader's pipeline on the calling
+/// thread, so the render thread's later build of the same programs costs less.
+/// `hot_reload` is the flag the backend was built with. A build with no backend
+/// has nothing to do.
+pub fn warm_world_shader(
+    programs: &concinnity_core::components::ShaderPrograms,
+    hot_reload: bool,
+) -> RenderResult<()> {
+    #[cfg(any(backend_metal, backend_dx, backend_vk))]
+    {
+        concinnity_device::warm_world_shader(programs, hot_reload)
+    }
+    #[cfg(not(any(backend_metal, backend_dx, backend_vk)))]
+    {
+        let _ = (programs, hot_reload);
+        Ok(())
+    }
+}
+
 /// Build the backend the client draws through, or report why there is none.
 pub(crate) fn init_backend(init: BackendInit<'_>) -> RenderResult<Box<dyn RenderBackend>> {
     #[cfg(any(backend_metal, backend_dx, backend_vk))]

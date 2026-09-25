@@ -14,6 +14,7 @@
 // Unlike Metal there is no on-disk GPU-binary cache behind the build: see
 // `docs/todos.md` for why the D3D12 pipeline-library equivalent is still open.
 
+use concinnity_core::render::backend::WorldShaderSwap;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -51,6 +52,33 @@ impl DxContext {
         self.evict_world_shader(bucket);
         self.cull.world_pipelines[slot] = Some(pso);
         Ok(())
+    }
+
+    // Rebuild one world Shader's pipeline from hot-reloaded programs. Bucket 0
+    // is the main pass's PSO; another bucket is rebuilt only while installed,
+    // and `install_world_shader` builds before it retires the old PSO, so a
+    // failed build leaves the live one bound.
+    pub(in crate::directx) fn update_world_shader(
+        &mut self,
+        bucket: u32,
+        programs: &concinnity_core::components::ShaderPrograms,
+    ) -> RenderResult<WorldShaderSwap> {
+        if bucket == 0 {
+            self.update_default_world_shader(programs)?;
+            return Ok(WorldShaderSwap::Swapped);
+        }
+        self.world_pipeline_slot(bucket)?;
+        if !self.world_shader_resident(bucket as usize) {
+            return Ok(WorldShaderSwap::NotResident);
+        }
+        self.install_world_shader(
+            bucket,
+            backend_init::WorldShader {
+                programs: Some(programs),
+                deferred: false,
+            },
+        )?;
+        Ok(WorldShaderSwap::Swapped)
     }
 
     // Release one bucket's pipeline. D3D12 command lists do not keep a pipeline

@@ -371,13 +371,14 @@ impl StreamingState {
         };
         let resident = if want_resident {
             match warmup.load(bucket) {
-                Ok(programs) => {
+                Ok(install) => {
                     // The payload is in hand; the recorded install is what
                     // ends the deferral. Pipeline creation is device work, so
                     // it runs (and is timed) at replay beside the draw.
                     ops.record(move |backend| {
+                        let programs = install.programs();
                         let shader = backend_init::WorldShader {
-                            programs: Some(&programs),
+                            programs: Some(&*programs),
                             deferred: false,
                         };
                         let started = std::time::Instant::now();
@@ -1148,6 +1149,50 @@ mod tests {
         let outcome = ops.replay(backend);
         state.apply_op_failures(&outcome.failures, &mut slots);
         out
+    }
+
+    // A hot-reloaded edit that lands after a scene's shader install was
+    // recorded, but before the op queue replays it, is what the install builds.
+    #[test]
+    fn a_recorded_shader_install_builds_an_edit_made_before_replay() {
+        use crate::gfx::streaming::shader::{DeferredBucket, ShaderPayloadSource, ShaderWarmup};
+        use crate::gfx::system::parked::ShaderOverrides;
+        use concinnity_core::components::ShaderPrograms;
+
+        let cooked = ShaderPrograms {
+            name: "cooked".into(),
+            ..Default::default()
+        };
+        let overrides = ShaderOverrides::default();
+        let mut warmup = ShaderWarmup::new(
+            vec![DeferredBucket {
+                bucket: 1,
+                source: ShaderPayloadSource::Bytes(cooked.encode().unwrap()),
+            }],
+            Some(overrides.clone()),
+        );
+        warmup.set_blocked(1, false);
+        let mut state = empty_state();
+        state.shader_warmup = Some(warmup);
+
+        let mut ops = RenderOps::default();
+        state.drive_shader_warmup(&mut ops);
+        overrides.set(
+            1,
+            Arc::new(ShaderPrograms {
+                name: "edited".into(),
+                ..Default::default()
+            }),
+        );
+        let (recorded, mut backend) = recording_backend();
+        ops.replay(&mut backend);
+        assert_eq!(
+            recorded.lock().unwrap().calls,
+            [Call::InstallWorldShader {
+                bucket: 1,
+                name: Some("edited".into()),
+            }]
+        );
     }
 
     fn drive_until(

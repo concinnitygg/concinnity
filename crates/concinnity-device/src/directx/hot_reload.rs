@@ -514,21 +514,18 @@ fn swap_ssao_pipelines(
     ssao.blur_pso = rebuilt.blur_pso;
 }
 
-// World-Shader runtime hot-swap (RenderBackend::update_world_shader_pipelines)
+// World-Shader runtime hot-swap (RenderBackend::update_world_shader)
 
 // cn-debug-only runtime-mutation surface; dead from the FFI lib crate's roots,
 // live in the concinnity binary. See the note on the analogous block in
 // [directx/particle.rs].
 impl DxContext {
-    // Rebuild bucket 0 of the GPU-driven main pass from a freshly compiled world
-    // Shader and hot-swap it, for the live-reload path (`reload_shader_stages`
-    // -> here). Buckets past 0 and the shadow, G-buffer and cull pipelines are
-    // engine-internal or scene-owned and are not rebuilt here.
-    //
-    // The replacement is built first; a compile / PSO-create failure
-    // early-returns with the live pipeline untouched, mirroring
-    // `reload_shaders`. Mirrors `MtlContext::update_world_shader_pipelines`.
-    pub(crate) fn update_world_shader_pipelines(
+    // Rebuild bucket 0 of the GPU-driven main pass from the world default
+    // Shader's freshly compiled programs and hot-swap it, for
+    // `update_world_shader`. The replacement is built first; a compile /
+    // PSO-create failure early-returns with the live pipeline untouched,
+    // mirroring `reload_shaders`.
+    pub(in crate::directx) fn update_default_world_shader(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
     ) -> RenderResult<()> {

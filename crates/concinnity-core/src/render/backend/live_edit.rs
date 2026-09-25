@@ -13,6 +13,16 @@ use crate::render::backend_init::{BackendInit, SwapchainConfig};
 use crate::render::error::{RenderError, RenderResult};
 use alloc::vec::Vec;
 
+/// What [`LiveEdit::update_world_shader`] did with the fresh programs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorldShaderSwap {
+    /// The bucket's live pipeline was rebuilt and swapped in.
+    Swapped,
+    /// The bucket has no pipeline installed, so nothing was built; the programs
+    /// apply when the bucket is next installed.
+    NotResident,
+}
+
 /// One draw slot's fresh geometry, supplied to
 /// [`LiveEdit::rebuild_static_geometry`] when an asset hot-reload
 /// changed its vertex / index count and the slot can no longer hold the new
@@ -271,17 +281,22 @@ pub trait LiveEdit {
         let _ = (draw_idx, cull_distance);
     }
 
-    /// Rebuild the live world-default pipelines (main, instanced, skinned)
-    /// from a freshly compiled Shader payload. Driven by asset hot-reload
-    /// (`cn debug` only) when one of the Shader's files is saved or a
-    /// `reload-assets` debug tool call fires. The backend builds every replacement
-    /// into a temporary first and only swaps when every build succeeds, so a
-    /// compile error never overwrites a live pipeline with a half-built
-    /// replacement.
-    fn update_world_shader_pipelines(&mut self, programs: &ShaderPrograms) -> RenderResult<()> {
-        let _ = programs;
+    /// Rebuild one world Shader's pipeline from freshly compiled programs.
+    /// Driven by asset hot-reload (`cn debug` and `cn editor`) when one of the
+    /// Shader's files is saved or a `reload-assets` debug tool call fires.
+    /// Bucket 0 is the world default program; any other bucket is a
+    /// Material-named Shader. The backend builds the replacement first and only
+    /// swaps when the build succeeds, so a compile error never overwrites a live
+    /// pipeline. A bucket whose pipeline is not installed (its scene is not
+    /// loaded) builds nothing and reports [`WorldShaderSwap::NotResident`].
+    fn update_world_shader(
+        &mut self,
+        bucket: u32,
+        programs: &ShaderPrograms,
+    ) -> RenderResult<WorldShaderSwap> {
+        let _ = (bucket, programs);
         Err(RenderError::Unsupported {
-            op: "update_world_shader_pipelines",
+            op: "update_world_shader",
         })
     }
 

@@ -259,7 +259,7 @@ impl MtlContext {
 
         // Shadow pass shaders are engine-internal (compiled from
         // `shadow.metal`), so they rebuild here alongside the other
-        // built-ins rather than in `update_world_shader_pipelines`. The static
+        // built-ins rather than in `update_default_world_shader`. The static
         // shadow pipeline shares the 56-byte static layout; the skinned one
         // rides the 80-byte skinned layout.
         let shadow = rebuild_if_live!(
@@ -379,10 +379,9 @@ impl MtlContext {
         Ok(())
     }
 
-    // Rebuild the world-loaded main pipeline from a freshly compiled Shader
-    // payload. Driven by asset hot-reload (`cn debug` only) when one of the
-    // Shader's files is saved or `reload-assets` is fired. Mirrors the
-    // rebuild-then-swap safety pattern of [`Self::reload_shaders`]: every
+    // Rebuild the main pipeline from the world default Shader's freshly
+    // compiled payload, for [`Self::update_world_shader`] on bucket 0. Mirrors
+    // the rebuild-then-swap safety pattern of [`Self::reload_shaders`]: every
     // replacement is constructed into a temporary first, and the swap only
     // runs when every build succeeds, so a typo in a shader edit leaves the
     // live pipelines untouched and the session keeps rendering.
@@ -391,7 +390,7 @@ impl MtlContext {
     // this is the one pipeline it owns. The shadow and G-buffer pipelines
     // compile from engine-internal source and are covered by
     // [`Self::reload_shaders`].
-    pub(super) fn update_world_shader_pipelines(
+    pub(super) fn update_default_world_shader(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
     ) -> RenderResult<()> {

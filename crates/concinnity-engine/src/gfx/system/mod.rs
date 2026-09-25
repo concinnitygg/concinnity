@@ -344,6 +344,7 @@ pub mod parked;
 mod prop_draws;
 pub(crate) mod scene;
 mod scene_lights;
+pub mod shader_sources;
 mod skinned_templates;
 mod sky_follow;
 mod stream_plan;

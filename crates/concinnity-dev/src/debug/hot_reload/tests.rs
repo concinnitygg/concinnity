@@ -523,49 +523,9 @@ fn state_with_only_procedural_meshes_still_spawns_a_watcher() {
 }
 
 #[test]
-fn shader_stage_source_map_round_trips_empty() {
-    let m = ShaderStageSourceMap::new();
-    assert!(m.is_empty());
-    assert_eq!(m.len(), 0);
-    assert!(m.watch_dirs().is_empty());
-}
-
-#[test]
-fn shader_stage_source_map_collects_unique_parent_dirs() {
-    use concinnity_core::components::ShaderStage;
-    let mut m = ShaderStageSourceMap::new();
-    m.entries.push(ShaderStageSourceEntry {
-        stage: ShaderStage::Vertex,
-        resolved_path: "assets/shaders/sway.hlsl".to_string(),
-    });
-    m.entries.push(ShaderStageSourceEntry {
-        stage: ShaderStage::Fragment,
-        resolved_path: "assets/other/custom.hlsl".to_string(),
-    });
-    let dirs = m.watch_dirs();
-    assert_eq!(dirs.len(), 2);
-    assert!(dirs.iter().any(|p| p.ends_with("assets/shaders")));
-    assert!(dirs.iter().any(|p| p.ends_with("assets/other")));
-}
-
-#[test]
-fn shader_stage_source_map_skips_bare_filenames_in_watch_dirs() {
-    // A bare filename has no parent directory; the watcher would try to
-    // subscribe to "" which notify rejects. The `reload-assets` debug tool
-    // call still works for these.
-    use concinnity_core::components::ShaderStage;
-    let mut m = ShaderStageSourceMap::new();
-    m.entries.push(ShaderStageSourceEntry {
-        stage: ShaderStage::Vertex,
-        resolved_path: "standalone.hlsl".to_string(),
-    });
-    assert!(m.watch_dirs().is_empty());
-}
-
-#[test]
 fn a_shader_source_is_an_asset_event() {
     // The world Shader's files travel through the same watcher as the texture
-    // / mesh paths; the closure routes them to the shader-stage flag rather
+    // / mesh paths; the closure routes them to the Shader recompile rather
     // than the texture-decode batch.
     for path in ["/tmp/scene.hlsl", "/tmp/SCENE.HLSL"] {
         let evt = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
@@ -595,8 +555,8 @@ fn modified(path: &str) -> Event {
 #[test]
 fn each_extension_routes_to_its_reload_pass() {
     for (path, expected) in [
-        ("/tmp/lit.hlsl", ReloadKind::ShaderStages),
-        ("/tmp/LIT.HLSL", ReloadKind::ShaderStages),
+        ("/tmp/lit.hlsl", ReloadKind::Shaders),
+        ("/tmp/LIT.HLSL", ReloadKind::Shaders),
         ("/tmp/world.jsonl", ReloadKind::World),
         ("/tmp/WORLD.JSONL", ReloadKind::World),
         ("/tmp/intro.md", ReloadKind::Stories),
@@ -636,8 +596,8 @@ fn a_shader_among_several_paths_still_routes_to_the_shader_pass() {
     let trailing = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
         .add_path(PathBuf::from("/tmp/albedo.png"))
         .add_path(PathBuf::from("/tmp/lit.hlsl"));
-    assert_eq!(classify_event(&leading), Some(ReloadKind::ShaderStages));
-    assert_eq!(classify_event(&trailing), Some(ReloadKind::ShaderStages));
+    assert_eq!(classify_event(&leading), Some(ReloadKind::Shaders));
+    assert_eq!(classify_event(&trailing), Some(ReloadKind::Shaders));
 }
 
 // A create or a remove is as much a reload trigger as a modify: an asset added
@@ -654,50 +614,36 @@ fn creates_and_removes_route_like_modifies() {
 }
 
 #[test]
-fn state_with_only_shader_stages_still_spawns_a_watcher() {
-    // World loaded only via shader-stage edits (no textures, no
-    // meshes, no LUTs, no IBL, no world.jsonl) still want the watcher
-    // alive so a shader save triggers the recompile pass.
-    use concinnity_core::components::ShaderStage;
-    let mut stages = ShaderStageSourceMap::new();
-    stages.entries.push(ShaderStageSourceEntry {
-        stage: ShaderStage::Vertex,
-        resolved_path: concinnity_host::scratch::path("asset_hot_reload_shader_only.hlsl")
-            .to_string_lossy()
-            .into_owned(),
-    });
+fn state_with_only_shaders_still_spawns_a_watcher() {
+    // A world whose only reloadable sources are Shader files (no textures, no
+    // meshes, no LUTs, no IBL, no world.jsonl) still wants the watcher alive
+    // so a shader save triggers the recompile.
+    use concinnity_engine::gfx::system::shader_sources::{
+        ShaderFile, ShaderSourceEntry, ShaderSourceMap,
+    };
+    let path = concinnity_host::scratch::path("asset_hot_reload_shader_only.hlsl")
+        .to_string_lossy()
+        .into_owned();
+    let shaders = ShaderSourceMap {
+        entries: vec![ShaderSourceEntry {
+            id: concinnity_core::ecs::asset_id::AssetId(1),
+            name: "lit".to_string(),
+            bucket: 0,
+            files: vec![ShaderFile {
+                stage: concinnity_core::components::ShaderStage::Fragment,
+                resolved_path: path,
+            }],
+        }],
+    };
     let state = AssetHotReloadState::from_sources(
         HotReloadSources {
-            shader_stages: stages,
+            shaders,
             ..Default::default()
         },
         None,
     );
-    assert_eq!(state.shader_stages.len(), 1);
-    assert_eq!(state.shader_stages.entries[0].stage, ShaderStage::Vertex);
-}
-
-#[test]
-fn shader_stage_reload_result_default_is_all_zero() {
-    let r = ShaderStageReloadResult::default();
-    assert_eq!(r.recompiled, 0);
-    assert_eq!(r.failed, 0);
-    assert!(!r.pipelines_rebuilt);
-}
-
-#[test]
-fn reload_shader_stages_on_empty_map_is_a_no_op() {
-    // The helper must short-circuit before touching the backend on a
-    // world with no captured Shader sources (e.g. the GLSL-only
-    // path on Vulkan, or a world that pre-dated the capture). The
-    // default backend trait impl errors on
-    // `update_world_shader_pipelines`; an empty map must not hit it.
-    let map = ShaderStageSourceMap::new();
-    let mut backend = crate::debug::test_backend::StubBackend;
-    let r = reload_shader_stages(&map, &mut backend);
-    assert_eq!(r.recompiled, 0);
-    assert_eq!(r.failed, 0);
-    assert!(!r.pipelines_rebuilt);
+    assert_eq!(state.shaders.catalog.len(), 1);
+    assert_eq!(state.shaders.catalog.entries[0].name, "lit");
 }
 
 #[test]
@@ -1957,30 +1903,6 @@ fn reload_stories_ignores_worlds_without_stories() {
     assert!(snapshots.is_empty());
 }
 
-// reload_shader_stages
-
-#[test]
-fn reload_shader_stages_missing_source_counts_as_failed_without_a_rebuild() {
-    use concinnity_core::components::ShaderStage;
-    let dir = tempfile::tempdir().unwrap();
-    let mut map = ShaderStageSourceMap::new();
-    map.entries.push(ShaderStageSourceEntry {
-        stage: ShaderStage::Vertex,
-        resolved_path: dir
-            .path()
-            .join("zz_never_written_stage.hlsl")
-            .to_string_lossy()
-            .into_owned(),
-    });
-    // The RecordingBackend would record a pipeline rebuild; a compile failure
-    // must abort the pass before the backend is touched.
-    let mut backend = RecordingBackend::default();
-    let r = reload_shader_stages(&map, &mut backend);
-    assert_eq!(r.recompiled, 0);
-    assert_eq!(r.failed, 1);
-    assert!(!r.pipelines_rebuilt);
-}
-
 // AssetHotReloadState
 
 #[test]
@@ -2224,7 +2146,7 @@ fn reload_assets_skips_the_envmap_spawn_while_a_convolution_is_in_flight() {
 // for the whole test so this is race-free.
 fn clear_pending_flags() {
     super::pending::take_pending_world();
-    super::pending::take_pending_shader_stages();
+    super::pending::take_pending_shaders();
     super::pending::take_pending_stories();
 }
 
@@ -2275,15 +2197,15 @@ fn run_frame_consumes_the_state_reload_flag_without_spawning_on_an_empty_catalog
 }
 
 #[test]
-fn run_frame_consumes_the_shader_stage_flag() {
+fn run_frame_consumes_the_pending_shader_set() {
     let _guard = crate::test_support::lock();
     clear_pending_flags();
     let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
-    super::pending::set_pending_shader_stages();
+    super::pending::mark_all_shaders_pending();
     let _ = drive_run_frame(&mut state);
-    // run_frame swallowed the flag; the empty Shader map made the pass a
-    // no-op, but the flag consumption is the observable that it fired.
-    assert!(!super::pending::take_pending_shader_stages());
+    // run_frame took the set; the empty Shader catalog made the pass a no-op,
+    // but the consumption is the observable that it ran.
+    assert!(super::pending::take_pending_shaders().is_empty());
 }
 
 #[test]
