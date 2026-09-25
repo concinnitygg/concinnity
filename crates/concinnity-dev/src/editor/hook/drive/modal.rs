@@ -80,6 +80,9 @@ impl EditorHook {
             modal::Action::Dismiss => {}
             modal::Action::Worlds(confirm) => self.apply_worlds_confirm(confirm, world),
             modal::Action::NameWorld => self.name_untitled_world(typed),
+            modal::Action::LeaveShaderSource { save, then } => {
+                self.answer_leave_shader_source(save, then)
+            }
         }
     }
 

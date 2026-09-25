@@ -77,6 +77,7 @@ use edit::behavior_state::BehaviorState;
 use edit::console_state::ConsoleState;
 use edit::map_state::MapState;
 use edit::palette_state::PaletteState;
+use edit::shaders_state::ShadersState;
 use edit::story_state::StoryState;
 use edit::worlds_state::WorldsState;
 use form_state::{FormState, FormTarget, FormTemplate};
@@ -160,6 +161,8 @@ pub(crate) struct EditorHook {
     shape_seed: u64,
     shape_drag: Option<drag::shape::ShapeDrag>,
     story: StoryState,
+    // The Shaders list and the Shader source panel it opens.
+    shaders: ShadersState,
     // What a text area copies to when the window reaches no system clipboard.
     text_clipboard: InternalClipboard,
     // The session's monotonic clock, for timing presses into double-clicks.
@@ -531,6 +534,7 @@ impl EditorHook {
             shape_seed: 0,
             shape_drag: None,
             story: StoryState::default(),
+            shaders: ShadersState::default(),
             text_clipboard: InternalClipboard::default(),
             clock: std::time::Instant::now(),
             import_open: false,
@@ -705,6 +709,7 @@ impl EditorHook {
             || self.form.selected_type.is_some()
             || self.lighting_focus.is_some()
             || self.story_typing()
+            || self.shader_typing()
             || self.import_focus
             || self.behavior.focus
             || self.behavior.name_focus
@@ -729,6 +734,12 @@ impl DebugHook for EditorHook {
         // Bring the Assets tree up to date before anything reads it, so this
         // frame's hit test and draw agree on the rows.
         self.refresh_tree_if_needed();
+        // The Shader panels take in reload outcomes, on-disk changes, and
+        // edits to the declared Shaders before anything draws them.
+        self.drive_shader_source();
+        if self.shaders.open {
+            self.shader_rows();
+        }
         // Accumulate the Health panel's per-frame counters and, on its throttled
         // boundary, resample. Unconditional: the rates measure a continuous
         // window, so gating this on the panel being open would make the first

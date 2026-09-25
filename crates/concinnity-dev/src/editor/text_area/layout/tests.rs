@@ -197,11 +197,13 @@ fn markers_draw_in_the_gutter_and_read_out_on_hover() {
     let markers = [
         GutterMarker {
             line: 1,
+            column: 0,
             severity: Severity::Warning,
             message: "unused".into(),
         },
         GutterMarker {
             line: 3,
+            column: 0,
             severity: Severity::Error,
             message: "undeclared identifier".into(),
         },

@@ -15,7 +15,8 @@
 //!   passes     world.jsonl / ProceduralMesh / VolumetricFog / story reload
 //!   shader     per-Shader recompile: off-thread compile, newest save wins,
 //!              pipeline swap on the frame thread, live override for a Shader
-//!              whose scene is not loaded
+//!              whose scene is not loaded, and each Shader's latest outcome
+//!              for an editor session to show
 //!   animation  file-backed Animation clip re-import into the AnimationSystem
 //!   pending    process-wide world.jsonl / story / Animation "changed" flags and
 //!              the pending Shader set
@@ -38,7 +39,11 @@ pub(crate) use driver::HotReloadDriver;
 pub(crate) use pending::{
     mark_all_shaders_pending, set_pending_animations, set_pending_stories, set_pending_world,
 };
+pub(crate) use shader::{ReportBoard, ShaderReloadFailure, ShaderReloadOutcome, ShaderReports};
 pub(crate) use world_path::WorldPathHandle;
+// The editor's tests publish reports of their own.
+#[cfg(test)]
+pub(crate) use shader::ShaderReloadReport;
 // The `reload-assets` dispatch test drains the sibling reload flags the handler
 // raises so they don't leak into other tests; only that test needs them.
 #[cfg(test)]

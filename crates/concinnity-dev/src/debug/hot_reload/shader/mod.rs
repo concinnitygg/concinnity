@@ -8,6 +8,7 @@
 mod compile;
 mod failure;
 mod files;
+mod latest;
 
 #[cfg(test)]
 mod tests;
@@ -24,6 +25,7 @@ use super::pending::PendingShaders;
 use compile::{CompileQueue, CompileResult, ShaderTexts};
 pub(crate) use failure::ShaderReloadFailure;
 pub(super) use files::ShaderFileIndex;
+pub(crate) use latest::{ReportBoard, ShaderReports};
 
 // What became of one Shader's reload. Warnings and errors name a Shader's own
 // files by `ShaderFile::resolved_path`, the path the recompile read.

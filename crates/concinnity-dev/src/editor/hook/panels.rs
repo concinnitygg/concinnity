@@ -25,6 +25,9 @@ use crate::editor::panels::lighting;
 use crate::editor::panels::lighting_panel;
 use crate::editor::panels::preview::{self, PreviewAction};
 use crate::editor::panels::registry::{Panel, PanelKey};
+use crate::editor::panels::shader_list;
+use crate::editor::panels::shader_list_panel;
+use crate::editor::panels::shader_source_panel;
 use crate::editor::panels::story_panel;
 use crate::editor::panels::template::{self, TemplatesAction};
 use crate::editor::panels::template_panel;
@@ -904,6 +907,160 @@ impl Panel for StoryPanel {
     }
     fn hide(&self, world: &mut World) {
         story_panel::hide_all(world);
+    }
+}
+
+pub(crate) struct ShadersPanel;
+
+impl ShadersPanel {
+    fn row_count(&self, hook: &EditorHook) -> usize {
+        shader_list::row_count(&hook.entries)
+    }
+}
+
+impl Panel for ShadersPanel {
+    fn key(&self) -> PanelKey {
+        PanelKey::Shaders
+    }
+    fn resizable(&self) -> bool {
+        true
+    }
+    fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
+        shader_list_panel::max_size(self.row_count(hook))
+    }
+    fn view_row(&self) -> Option<&'static str> {
+        Some("Shaders")
+    }
+    fn is_open(&self, hook: &EditorHook) -> bool {
+        hook.shaders.open
+    }
+    // Opening builds the rows before the panel's first draw.
+    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.shaders.open = !hook.shaders.open;
+        if hook.shaders.open {
+            hook.shader_rows();
+        }
+    }
+    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.shaders.open = false;
+    }
+    fn size(&self, hook: &EditorHook) -> [f32; 2] {
+        shader_list_panel::size(self.row_count(hook))
+    }
+    fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        shader_list_panel::default_origin(vp[0])
+    }
+    fn sprite_ids(&self) -> Vec<AssetId> {
+        shader_list_panel::all_sprite_ids()
+    }
+    fn label_ids(&self) -> Vec<AssetId> {
+        shader_list_panel::all_label_ids()
+    }
+    fn press(
+        &self,
+        hook: &mut EditorHook,
+        world: &mut World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        let s = hook.effective_size(PanelKey::Shaders);
+        let rows = hook.shader_rows().to_vec();
+        let action = {
+            let view = hook.make_shaders_view(&rows, [mx, my]);
+            shader_list_panel::hit_test(&view, mx, my, o, s)
+        };
+        match action {
+            Some(a) => {
+                hook.apply_shaders_action(a, &rows, world);
+                true
+            }
+            None => false,
+        }
+    }
+    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
+        let s = hook.effective_size(PanelKey::Shaders);
+        shader_list_panel::cursor_over(mx, my, o, s)
+    }
+    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
+        hook.scroll_shaders(delta);
+    }
+    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let s = hook.effective_size(PanelKey::Shaders);
+        let view = hook.make_shaders_view(&hook.shaders.rows, mouse);
+        shader_list_panel::place(world, Some(&view), o, s);
+    }
+    fn hide(&self, world: &mut World) {
+        shader_list_panel::hide_all(world);
+    }
+}
+
+pub(crate) struct ShaderSourcePanel;
+
+impl Panel for ShaderSourcePanel {
+    fn key(&self) -> PanelKey {
+        PanelKey::ShaderSource
+    }
+    fn resizable(&self) -> bool {
+        true
+    }
+    fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
+        shader_source_panel::max_size()
+    }
+    // Opened from the Shaders list, on one file.
+    fn is_open(&self, hook: &EditorHook) -> bool {
+        hook.shaders.source.is_some()
+    }
+    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.close_shader_source();
+    }
+    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
+        shader_source_panel::size()
+    }
+    fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        shader_source_panel::default_origin(vp[0])
+    }
+    fn sprite_ids(&self) -> Vec<AssetId> {
+        shader_source_panel::all_sprite_ids()
+    }
+    fn label_ids(&self) -> Vec<AssetId> {
+        shader_source_panel::all_label_ids()
+    }
+    fn code_label_ids(&self) -> Vec<AssetId> {
+        shader_source_panel::code_label_ids()
+    }
+    fn press(
+        &self,
+        hook: &mut EditorHook,
+        _world: &mut World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        let s = hook.effective_size(PanelKey::ShaderSource);
+        match shader_source_panel::hit_test(mx, my, o, s) {
+            Some(a) => {
+                hook.apply_source_action(a, mx, my);
+                true
+            }
+            None => false,
+        }
+    }
+    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
+        let s = hook.effective_size(PanelKey::ShaderSource);
+        shader_source_panel::cursor_over_area(mx, my, o, s)
+    }
+    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
+        hook.scroll_shader_source(delta);
+    }
+    fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
+        hook.shader_source_keys(world, input);
+    }
+    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        hook.draw_shader_source(world, o, mouse);
+    }
+    fn hide(&self, world: &mut World) {
+        shader_source_panel::hide_all(world);
     }
 }
 

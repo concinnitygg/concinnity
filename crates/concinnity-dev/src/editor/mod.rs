@@ -187,13 +187,15 @@ pub fn run_editor(
         Some(port) => {
             let server = crate::debug::DebugServer::start(port)?
                 .with_notifier(editor_hook.notifier())
-                .with_world_path(editor_hook.world_path_handle());
+                .with_world_path(editor_hook.world_path_handle())
+                .with_shader_reports(editor_hook.shader_reports());
             MultiHook::boxed(vec![Box::new(editor_hook), Box::new(server)])
         }
         None => {
             let reload = crate::debug::hot_reload::HotReloadDriver::new()
                 .with_notifier(editor_hook.notifier())
-                .with_world_path(editor_hook.world_path_handle());
+                .with_world_path(editor_hook.world_path_handle())
+                .with_shader_reports(editor_hook.shader_reports());
             MultiHook::boxed(vec![Box::new(editor_hook), Box::new(reload)])
         }
     };

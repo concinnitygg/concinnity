@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use super::decode::{poll_pending_assets, poll_pending_envmap, reload_assets};
 use super::passes::{reload_procedural_meshes, reload_stories, reload_volumetric_fog};
-use super::shader::ShaderReload;
+use super::shader::{ShaderReload, ShaderReloadReport};
 use super::watcher::spawn_watcher;
 
 // A worker result still in flight: the receiving end of the channel a
@@ -292,6 +292,8 @@ pub(crate) struct FrameHotReloadEffects {
     // Freshly re-compiled story graphs from a `.md` save, to be sent as
     // `StoryReload` events so the running story system swaps them in.
     pub story_updates: Vec<Story>,
+    // What became of each Shader recompile that finished this frame.
+    pub shader_reports: Vec<ShaderReloadReport>,
 }
 
 // Run every asset / shader / world.jsonl reload pass for one frame and return
@@ -312,6 +314,7 @@ pub(crate) fn run_frame(
     let mut effects = FrameHotReloadEffects {
         skeleton_updates: Vec::new(),
         story_updates: Vec::new(),
+        shader_reports: Vec::new(),
     };
 
     // Asset-payload poll. Pick up any completed off-thread work first so a
@@ -340,6 +343,7 @@ pub(crate) fn run_frame(
     }
     shader_reports.extend(state.shaders.poll(backend));
     super::shader::report(&shader_reports, notify);
+    effects.shader_reports = shader_reports;
 
     // Markdown story reload poll: re-expand the world's StoryImports and
     // queue every changed graph for the story system. Cheap when the flag is

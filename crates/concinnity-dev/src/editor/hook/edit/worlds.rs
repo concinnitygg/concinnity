@@ -363,6 +363,7 @@ impl EditorHook {
         self.lighting_focus = None;
         self.lighting_status = None;
         self.story.reset_for_world();
+        self.shaders.reset_for_world();
         self.lighting_touched = false;
 
         // The panel has done its job; it stays a registered panel, so the View

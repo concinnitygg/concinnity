@@ -31,6 +31,7 @@ pub(crate) enum PanelKey {
     Templates,
     Lighting,
     Story,
+    Shaders,
     Import,
     Health,
     Console,
@@ -42,6 +43,8 @@ pub(crate) enum PanelKey {
     // Last (default frontmost), so the detail floats over the Templates list
     // it spawns from before any interaction reorders the focus stack.
     TemplateDetail,
+    // Likewise over the Shaders list it opens from.
+    ShaderSource,
     // After TemplateDetail: the palette is a transient launcher overlay, so it
     // starts above everything it can open.
     Palette,
@@ -50,7 +53,7 @@ pub(crate) enum PanelKey {
     Worlds,
 }
 
-pub(crate) const PANEL_COUNT: usize = 18;
+pub(crate) const PANEL_COUNT: usize = 20;
 
 impl PanelKey {
     pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [
@@ -61,6 +64,7 @@ impl PanelKey {
         PanelKey::Templates,
         PanelKey::Lighting,
         PanelKey::Story,
+        PanelKey::Shaders,
         PanelKey::Import,
         PanelKey::Health,
         PanelKey::Console,
@@ -70,6 +74,7 @@ impl PanelKey {
         PanelKey::Content,
         PanelKey::CharacterShape,
         PanelKey::TemplateDetail,
+        PanelKey::ShaderSource,
         PanelKey::Palette,
         PanelKey::Worlds,
     ];
@@ -121,8 +126,11 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             // the Behavior panel it takes a whole block: its pools run well
             // past 0xF300.
             PanelKey::Map => 0xF000,
-            // The text area's row pools outgrow a 0x100 block.
+            // The text area's row pools outgrow a 0x100 block, so a panel
+            // holding one takes a whole block.
             PanelKey::Story => 0x1_0000,
+            PanelKey::ShaderSource => 0x1_1000,
+            PanelKey::Shaders => 0x1_2000,
         }
 }
 
@@ -222,6 +230,7 @@ static PANELS: [&dyn Panel; PANEL_COUNT] = [
     &panels::TemplatesPanel,
     &panels::LightingPanel,
     &panels::StoryPanel,
+    &panels::ShadersPanel,
     &panels::ImportPanel,
     &panels::HealthPanel,
     &panels::ConsolePanel,
@@ -231,6 +240,7 @@ static PANELS: [&dyn Panel; PANEL_COUNT] = [
     &panels::ContentPanel,
     &panels::CharacterShapePanel,
     &panels::TemplateDetailPanel,
+    &panels::ShaderSourcePanel,
     &panels::PalettePanel,
     &panels::WorldsPanel,
 ];
@@ -367,6 +377,7 @@ mod tests {
                 "Templates",
                 "Lighting",
                 "Story",
+                "Shaders",
                 "Import",
                 "Health",
                 "Console",

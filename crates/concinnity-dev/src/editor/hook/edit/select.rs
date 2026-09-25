@@ -65,7 +65,7 @@ impl EditorHook {
     }
 
     // The handles addressing a run of working-entry positions.
-    fn entry_handles(&self, positions: Vec<usize>) -> Vec<AssetHandle> {
+    pub(in crate::editor::hook) fn entry_handles(&self, positions: Vec<usize>) -> Vec<AssetHandle> {
         positions
             .into_iter()
             .filter_map(|i| self.entries.key_at(i).map(AssetHandle::Entry))

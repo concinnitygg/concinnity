@@ -79,6 +79,12 @@ impl DebugServer {
         self.reload = self.reload.with_world_path(handle);
         self
     }
+
+    // Publish each Shader's latest reload outcome to `reports`.
+    pub(crate) fn with_shader_reports(mut self, reports: hot_reload::ShaderReports) -> Self {
+        self.reload = self.reload.with_shader_reports(reports);
+        self
+    }
 }
 
 impl DebugServer {

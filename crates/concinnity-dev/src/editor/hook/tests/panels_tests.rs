@@ -10,15 +10,17 @@
 //! others: the View panel's rows toggling what shows, and the Templates panel's
 //! pick opening a detail panel whose apply adds the template's entries.
 
-use concinnity_core::components::{FrameInput, Sprite, TextInput, TextLabel};
+use concinnity_core::components::{FrameInput, ShaderStage, Sprite, TextInput, TextLabel};
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
 use super::fixtures::{hook, set_input, world_with_input};
 use crate::debug_hook::DebugHook;
 use crate::editor::hook::EditorHook;
+use crate::editor::hook::edit::shaders_state::SourceState;
 use crate::editor::hud::{self, HudAction};
 use crate::editor::panels::registry::{self, Panel, PanelKey};
+use crate::editor::panels::shader_source::SourceKey;
 use crate::editor::panels::template_panel::{self, TemplateAction};
 use crate::editor::panels::{list_panel, template, view};
 use crate::editor::{inject, widget};
@@ -50,6 +52,14 @@ fn open_every_panel(h: &mut EditorHook, world: &mut World) {
     h.view_open = true;
     h.open_template = Some(0);
     h.palette.open = true;
+    h.shaders.source = Some(SourceState::new(
+        SourceKey {
+            shader: "lit".to_string(),
+            stage: ShaderStage::Fragment,
+        },
+        "/cn-none/lit.hlsl".to_string(),
+        "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }".to_string(),
+    ));
 }
 
 // Every declared element of `p`, forced visible so a `hide` that misses one is
@@ -213,7 +223,7 @@ fn every_view_toggle_opens_and_closes_its_panel() {
     }
 }
 
-// The title-bar X shuts every panel, including the three with no View row. Each
+// The title-bar X shuts every panel, including the ones with no View row. Each
 // is re-opened first because the compound gates chain: closing the Assets panel
 // also takes the edit form with it, and closing Templates the detail panel.
 #[test]

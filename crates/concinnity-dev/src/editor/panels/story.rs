@@ -13,6 +13,7 @@ pub(crate) fn error_marker(error: &str) -> Option<GutterMarker> {
     let line: usize = number.parse().ok()?;
     Some(GutterMarker {
         line: line.checked_sub(1)?,
+        column: 0,
         severity: Severity::Error,
         message: message.to_string(),
     })

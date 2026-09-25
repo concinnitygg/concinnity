@@ -65,6 +65,12 @@ pub(crate) enum Action {
     // Name the untitled world the session is on, with whatever the dialog's
     // field holds, and save it there.
     NameWorld,
+    // Leave the Shader source panel's file for `then`, writing it first when
+    // `save`.
+    LeaveShaderSource {
+        save: bool,
+        then: super::panels::shader_source::Leave,
+    },
 }
 
 // The dialog's footprint. A prompt is taller by the field it carries.

@@ -12,7 +12,9 @@
 //! reserved-id allocation, the View panel's rows, HUD injection, the focus
 //! stack, dragging and click routing all derive from. `assets_panel` is the Assets
 //! panel, over the tree `asset_tree` builds and the grouping `asset_list`
-//! shares with the outliner. `form` and `form_panel` are the add / edit form
+//! shares with the outliner. The Shaders list (`shader_list*`) spawns the
+//! Shader source panel (`shader_source*`, with `shader_diagnostics` for what a
+//! compile marks). `form` and `form_panel` are the add / edit form
 //! every panel opens, and `list_panel` the shared chrome behind the simple row
 //! lists (Preview, Templates, View).
 //!
@@ -37,6 +39,11 @@ pub(crate) mod lighting_panel;
 pub(crate) mod list_panel;
 pub(crate) mod preview;
 pub(crate) mod registry;
+pub(crate) mod shader_diagnostics;
+pub(crate) mod shader_list;
+pub(crate) mod shader_list_panel;
+pub(crate) mod shader_source;
+pub(crate) mod shader_source_panel;
 pub(crate) mod story;
 pub(crate) mod story_panel;
 pub(crate) mod template;

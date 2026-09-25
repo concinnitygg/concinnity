@@ -2371,6 +2371,7 @@ fn apply_effects_splices_the_matching_skeleton_pose_only() {
                 new_skeleton,
             }],
             story_updates: Vec::new(),
+            shader_reports: Vec::new(),
         },
     );
 
@@ -2403,6 +2404,7 @@ fn apply_effects_sends_a_story_reload_event() {
         FrameHotReloadEffects {
             skeleton_updates: Vec::new(),
             story_updates: vec![story],
+            shader_reports: Vec::new(),
         },
     );
 
