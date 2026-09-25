@@ -321,7 +321,7 @@ impl EditorHook {
 
     // Enter blurs the search field (the filter applies live while typing).
     pub(in crate::editor::hook) fn tree_keys(&mut self, _world: &mut World, input: &FrameInput) {
-        if self.search_focus && input.captured_key == Some(InputKey::Enter) {
+        if self.search_focus && input.pressed_fresh(InputKey::Enter) {
             self.search_focus = false;
         }
     }

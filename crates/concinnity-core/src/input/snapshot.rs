@@ -1,9 +1,11 @@
 //! Backend-agnostic input snapshot returned by RenderBackend::take_input.
 
+use alloc::vec::Vec;
+
 /// Accumulated input state since the last poll. Drained and reset every
 /// frame by GraphicsSystem and converted into a FrameInput component for
 /// Camera3DSystem to consume.
-#[derive(Default, Debug, Clone, Copy)]
+#[derive(Default, Debug, Clone)]
 pub struct InputSnapshot {
     /// Forward movement key held.
     pub forward: bool,
@@ -21,7 +23,7 @@ pub struct InputSnapshot {
     pub jump: bool,
     /// True while the Control key is held. A UI modifier (a story fast-forwards
     /// its dialogue while it is down); not gated by menu state, like `escape` and
-    /// `captured_key`. Wired on Metal; DirectX / Vulkan set it from their key
+    /// `key_events`. Wired on Metal; DirectX / Vulkan set it from their key
     /// callbacks.
     pub ctrl: bool,
     /// True while the Option/Alt key is held. A UI modifier (the editor's orbit
@@ -61,25 +63,17 @@ pub struct InputSnapshot {
     /// not captured. (In captured-cursor worlds Escape continues to release
     /// the cursor, as before, and this pulse stays false.)
     pub escape: bool,
-    /// The canonical key pressed this poll, for the settings-menu rebind
-    /// capture, or `None`. A one-frame pulse, surfaced regardless of menu /
-    /// capture state. Wired on Metal; DirectX / Vulkan set it from their key
-    /// callbacks.
-    pub captured_key: Option<crate::components::InputKey>,
-    /// The printable character produced by this poll's key press (with the OS's
-    /// shift / dead-key / layout handling applied), for text-input fields, or
-    /// `None`. A one-frame pulse like `captured_key`, ungated by menu / capture
-    /// state. Editing keys (Backspace / Delete / arrows) are not here: those
-    /// arrive via `captured_key`. Wired on Metal; DirectX / Vulkan set it from
-    /// their WM_CHAR / char callback when built on Windows / Linux.
-    pub typed_char: Option<char>,
+    /// Every key press (auto-repeats included) and typed character since the
+    /// last poll, in arrival order. Ungated by menu / capture state, so the
+    /// settings-menu rebind capture and text fields see every key.
+    pub key_events: Vec<crate::components::KeyEvent>,
 }
 
 /// One frame's sampled window input, taken beside the backend right after the
 /// draw (whose event pump produced it) and consumed by the input system. In
 /// serial execution it is deposited and consumed within the same tick; the
 /// pipelined driver ships it across the thread boundary instead.
-#[derive(Default, Debug, Clone, Copy)]
+#[derive(Default, Debug, Clone)]
 pub struct InputPacket {
     /// The raw sampled input state.
     pub raw: InputSnapshot,
@@ -107,11 +101,11 @@ impl InputPacket {
     }
 
     /// Fold a newer packet onto this one without losing edges: one-frame
-    /// pulses OR together, deltas accumulate, positions and held states take
-    /// the newer value. Only needed when a consumer misses a frame (startup,
+    /// pulses OR together, deltas accumulate, key events queue after the older
+    /// ones, and positions and held states take the newer value. Only needed when a consumer misses a frame (startup,
     /// a stall); steady state is one packet per tick.
     pub fn merge_from(&mut self, newer: InputPacket) {
-        let old = self.raw;
+        let old = core::mem::take(&mut self.raw);
         let mut raw = newer.raw;
         raw.interact |= old.interact;
         raw.jump |= old.jump;
@@ -122,8 +116,8 @@ impl InputPacket {
         raw.mouse_dx += old.mouse_dx;
         raw.mouse_dy += old.mouse_dy;
         raw.scroll_delta += old.scroll_delta;
-        raw.captured_key = raw.captured_key.or(old.captured_key);
-        raw.typed_char = raw.typed_char.or(old.typed_char);
+        let newer_events = core::mem::replace(&mut raw.key_events, old.key_events);
+        raw.key_events.extend(newer_events);
         self.raw = raw;
         self.cursor_outside_window = newer.cursor_outside_window;
         self.viewport = newer.viewport;
@@ -151,10 +145,12 @@ pub fn wheel_notches_to_scroll_delta(notches: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::KeyEvent;
+    use alloc::vec;
 
     // A missed consume must not lose edges: pulses OR, deltas accumulate,
-    // positions and held state take the newer value, and an earlier one-frame
-    // Option pulse survives a newer empty poll.
+    // positions and held state take the newer value, and the earlier key
+    // events stay ahead of the newer ones.
     #[test]
     fn packet_merge_keeps_pulses_and_accumulates_deltas() {
         let mut pending = InputPacket {
@@ -165,7 +161,7 @@ mod tests {
                 scroll_delta: 1.0,
                 mouse_x: 10.0,
                 left_button_down: true,
-                typed_char: Some('a'),
+                key_events: vec![KeyEvent::Text('a')],
                 ..Default::default()
             },
             cursor_outside_window: true,
@@ -179,6 +175,7 @@ mod tests {
                 scroll_delta: -0.5,
                 mouse_x: 42.0,
                 left_button_down: false,
+                key_events: vec![KeyEvent::Text('b')],
                 ..Default::default()
             },
             cursor_outside_window: false,
@@ -196,9 +193,9 @@ mod tests {
             "held state takes the newer value"
         );
         assert_eq!(
-            pending.raw.typed_char,
-            Some('a'),
-            "the typed pulse survives"
+            pending.raw.key_events,
+            [KeyEvent::Text('a'), KeyEvent::Text('b')],
+            "key events queue in arrival order across the merge"
         );
         assert!(!pending.cursor_outside_window);
         assert_eq!(pending.viewport, (200.0, 150.0));

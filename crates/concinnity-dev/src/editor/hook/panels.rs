@@ -30,6 +30,7 @@ use crate::editor::panels::template::{self, TemplatesAction};
 use crate::editor::panels::template_panel;
 use crate::editor::panels::variables_panel;
 use crate::editor::panels::view::{self, ViewAction};
+use crate::editor::text_area::layout::Metrics;
 use crate::editor::viewport::snap;
 use crate::editor::widget;
 use crate::editor::worlds;
@@ -841,10 +842,10 @@ impl Panel for StoryPanel {
     }
     // Opening (re)loads the source file, so the panel always starts from the
     // on-disk truth.
-    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
+    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.story.open = !hook.story.open;
         if hook.story.open {
-            hook.load_story(world);
+            hook.load_story();
         }
     }
     fn close(&self, hook: &mut EditorHook, _world: &mut World) {
@@ -862,16 +863,13 @@ impl Panel for StoryPanel {
     fn label_ids(&self) -> Vec<AssetId> {
         story_panel::all_label_ids()
     }
-    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        story_panel::all_field_ids()
-            .into_iter()
-            .map(|id| (id, ""))
-            .collect()
+    fn code_label_ids(&self) -> Vec<AssetId> {
+        story_panel::code_label_ids()
     }
     fn press(
         &self,
         hook: &mut EditorHook,
-        world: &mut World,
+        _world: &mut World,
         mx: f32,
         my: f32,
         o: [f32; 2],
@@ -883,7 +881,7 @@ impl Panel for StoryPanel {
         };
         match action {
             Some(a) => {
-                hook.apply_story_action(a, world);
+                hook.apply_story_action(a, mx, my);
                 true
             }
             None => false,
@@ -891,7 +889,7 @@ impl Panel for StoryPanel {
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::Story);
-        story_panel::cursor_over_lines(mx, my, o, s)
+        story_panel::cursor_over_area(mx, my, o, s)
     }
     fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
         hook.scroll_story(delta);
@@ -902,10 +900,10 @@ impl Panel for StoryPanel {
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let s = hook.effective_size(PanelKey::Story);
         let view = hook.make_story_view(mouse);
-        story_panel::place(world, Some(&view), o, s);
+        story_panel::place(world, Some(&view), o, s, Metrics::code());
     }
     fn hide(&self, world: &mut World) {
-        story_panel::place(world, None, [0.0, 0.0], story_panel::size());
+        story_panel::hide_all(world);
     }
 }
 

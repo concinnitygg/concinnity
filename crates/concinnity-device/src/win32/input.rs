@@ -3,7 +3,7 @@
 // wnd_proc (window.rs); this struct is the snapshot consumed by
 // GraphicsSystem each tick.
 
-use concinnity_core::components::InputKey;
+use concinnity_core::components::{InputKey, KeyEvent, KeyMods, KeyPress};
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -54,17 +54,17 @@ pub(crate) struct KeyState {
     // (When the cursor is captured the wnd_proc routes Escape through
     // `release_cursor` instead, matching the Metal backend.)
     pub escape_pending: bool,
-    // One-shot: the canonical key pressed since the last `take`, for the
-    // settings-menu rebind capture. Set on any mapped key-down; reset by `take`.
-    pub captured_key: Option<InputKey>,
-    // One-shot: the printable glyph typed since the last `take`, for text-input
-    // fields (the editor's name/filter/arg fields). Filled from WM_CHAR, which
-    // Windows resolves for the active layout, Shift, and dead keys, so casing
-    // and shifted symbols are already correct. One codepoint per frame (fast
-    // typing / IME multi-codepoint frames drop extras, matching `captured_key`);
-    // reset by `take`. Editing / navigation keys produce no WM_CHAR and instead
-    // ride `captured_key` (Backspace / Delete / Left / Right in `key_from_vk`).
-    pub typed_char: Option<char>,
+    // Held Shift modifier, tracked from VK_SHIFT like `ctrl` so each queued
+    // press records the modifiers held at that moment.
+    pub shift: bool,
+    // Every key press (auto-repeats included) and printable glyph since the
+    // last `take`, in arrival order; drained by `take`. Glyphs come from
+    // WM_CHAR, which Windows resolves for the active layout, Shift, and dead
+    // keys; editing / navigation keys produce no WM_CHAR and travel as presses.
+    pub events: Vec<KeyEvent>,
+    // The high half of a surrogate pair WM_CHAR delivered, waiting for its low
+    // half so a character outside the Basic Multilingual Plane types whole.
+    pub high_surrogate: Option<u16>,
     // The runtime movement key map. `on_key_down` / `on_key_up` decode events
     // through it instead of hardcoded keys, so a settings-menu rebind takes
     // effect immediately. Defaults to W/S/A/D/Shift/Space/E. (Windows delivers
@@ -109,17 +109,35 @@ impl KeyState {
         }
     }
 
-    // Update held/pending flags from a WM_KEYDOWN message. F1 stays fixed (the
-    // stat-HUD toggle); every other key routes through the key map.
-    pub(crate) fn on_key_down(&mut self, vk: VIRTUAL_KEY) {
+    // The modifiers held right now, recorded on each queued press.
+    fn mods(&self) -> KeyMods {
+        KeyMods {
+            shift: self.shift,
+            ctrl: self.ctrl,
+            alt: self.alt,
+            cmd: false,
+        }
+    }
+
+    // Update held/pending flags from a WM_KEYDOWN message. `repeat` is set for
+    // the auto-repeat of a key already held (lParam bit 30). F1 stays fixed
+    // (the stat-HUD toggle); every other key routes through the key map.
+    pub(crate) fn on_key_down(&mut self, vk: VIRTUAL_KEY, repeat: bool) {
         if vk == VK_F1 {
             self.hud_toggle_pending = true;
         }
         if vk == VK_CONTROL {
             self.ctrl = true;
         }
+        if vk == VK_SHIFT {
+            self.shift = true;
+        }
         if let Some(key) = key_from_vk(vk) {
-            self.captured_key = Some(key);
+            self.events.push(KeyEvent::Press(KeyPress {
+                key,
+                mods: self.mods(),
+                repeat,
+            }));
             self.apply_binding(key, true, true);
         }
     }
@@ -147,6 +165,7 @@ impl KeyState {
     pub(crate) fn on_focus_lost(&mut self) {
         self.ctrl = false;
         self.alt = false;
+        self.shift = false;
     }
 
     // Update held flags from a WM_KEYUP message.
@@ -154,19 +173,33 @@ impl KeyState {
         if vk == VK_CONTROL {
             self.ctrl = false;
         }
+        if vk == VK_SHIFT {
+            self.shift = false;
+        }
         if let Some(key) = key_from_vk(vk) {
             self.apply_binding(key, false, false);
         }
     }
 
-    // Record a printable glyph from a WM_CHAR message. `TranslateMessage`
+    // Record one UTF-16 code unit from a WM_CHAR message. `TranslateMessage`
     // synthesizes WM_CHAR from WM_KEYDOWN after layout / modifier resolution, so
-    // `c` is the final text character. Control characters (Backspace, Tab,
-    // Enter, Escape, delete) are filtered out -- those editing / navigation keys
-    // ride `captured_key` via `key_from_vk` instead.
-    pub(crate) fn on_char(&mut self, c: char) {
-        if is_printable_glyph(c) {
-            self.typed_char = Some(c);
+    // the units are the final text; a surrogate pair arrives as two messages and
+    // is joined here. Control characters (Backspace, Tab, Enter, Escape,
+    // delete) are filtered out: those keys travel as presses instead.
+    pub(crate) fn on_char(&mut self, unit: u16) {
+        let pair = match self.high_surrogate.take() {
+            Some(high) => [high, unit],
+            None if (0xD800..0xDC00).contains(&unit) => {
+                self.high_surrogate = Some(unit);
+                return;
+            }
+            None => [unit, 0],
+        };
+        let len = if pair[1] == 0 { 1 } else { 2 };
+        for c in char::decode_utf16(pair[..len].iter().copied()).flatten() {
+            if is_printable_glyph(c) {
+                self.events.push(KeyEvent::Text(c));
+            }
         }
     }
 
@@ -214,17 +247,12 @@ impl KeyState {
             // to the shell (Win+K opens a system panel), so nothing here claims
             // it.
             cmd: false,
-            captured_key: self.captured_key,
-            // Printable text input from WM_CHAR (text-input fields read it). A
-            // one-shot like `captured_key`, reset below.
-            typed_char: self.typed_char,
+            key_events: std::mem::take(&mut self.events),
         };
         self.interact_pending = false;
         self.jump_pending = false;
         self.hud_toggle_pending = false;
         self.escape_pending = false;
-        self.captured_key = None;
-        self.typed_char = None;
         s
     }
 }
@@ -238,7 +266,7 @@ pub(crate) fn vk_from_wparam(wparam: usize) -> VIRTUAL_KEY {
 // field, i.e. not a control character. WM_CHAR delivers actual text, so unlike
 // macOS there is no private-use function-key range to exclude; the editing /
 // navigation keys arrive as their control codes (0x08 Backspace, 0x1B Escape,
-// etc.) and are rejected here so they route through `captured_key` instead.
+// etc.) and are rejected here so they travel as presses instead.
 fn is_printable_glyph(c: char) -> bool {
     !c.is_control()
 }
@@ -294,6 +322,10 @@ fn key_from_vk(vk: VIRTUAL_KEY) -> Option<InputKey> {
         VK_RIGHT => InputKey::Right,
         VK_UP => InputKey::Up,
         VK_DOWN => InputKey::Down,
+        VK_HOME => InputKey::Home,
+        VK_END => InputKey::End,
+        VK_PRIOR => InputKey::PageUp,
+        VK_NEXT => InputKey::PageDown,
         VK_OEM_MINUS => InputKey::Minus,
         VK_OEM_PLUS => InputKey::Equals,
         VK_OEM_4 => InputKey::LeftBracket,
@@ -332,7 +364,7 @@ mod tests {
         // Ctrl fast-forward never fired on Windows (worked on Metal only).
         let mut ks = KeyState::default();
         assert!(!snapshot(&mut ks).ctrl, "ctrl starts released");
-        ks.on_key_down(VK_CONTROL);
+        ks.on_key_down(VK_CONTROL, false);
         assert!(snapshot(&mut ks).ctrl, "ctrl held after VK_CONTROL down");
         // Held modifier, not a one-shot: still set on a later frame with no new
         // event (so a sustained hold keeps fast-forwarding).
@@ -341,38 +373,77 @@ mod tests {
         assert!(!snapshot(&mut ks).ctrl, "ctrl released after VK_CONTROL up");
     }
 
-    #[test]
-    fn typed_char_carries_a_printable_glyph_once() {
-        // Regression: `typed_char` used to be hardcoded `None` in `take`, so
-        // text-input fields (the editor's name / filter / arg fields) could not
-        // be typed into on Windows (worked on Metal only).
-        let mut ks = KeyState::default();
-        assert_eq!(snapshot(&mut ks).typed_char, None, "starts empty");
-        ks.on_char('A');
-        assert_eq!(
-            snapshot(&mut ks).typed_char,
-            Some('A'),
-            "printable glyph surfaces in the snapshot"
-        );
-        // One-shot: cleared by `take`, so a held key does not re-insert on a
-        // frame with no new WM_CHAR.
-        assert_eq!(snapshot(&mut ks).typed_char, None, "cleared after take");
+    fn text(ks: &mut KeyState) -> String {
+        snapshot(ks)
+            .key_events
+            .iter()
+            .filter_map(|e| match e {
+                KeyEvent::Text(c) => Some(*c),
+                KeyEvent::Press(_) => None,
+            })
+            .collect()
+    }
+
+    fn unit(c: char) -> u16 {
+        let mut buf = [0u16; 2];
+        c.encode_utf16(&mut buf)[0]
     }
 
     #[test]
-    fn control_chars_do_not_become_typed_chars() {
+    fn typed_glyphs_queue_in_order_and_drain_once() {
+        // Regression: typing used to keep one glyph per frame, so fast typing
+        // at a low frame rate dropped keys.
+        let mut ks = KeyState::default();
+        assert_eq!(text(&mut ks), "", "starts empty");
+        for c in "Abc".chars() {
+            ks.on_char(unit(c));
+        }
+        assert_eq!(text(&mut ks), "Abc", "every glyph of the frame survives");
+        assert_eq!(text(&mut ks), "", "drained by take");
+    }
+
+    #[test]
+    fn surrogate_pairs_join_into_one_char() {
+        let mut ks = KeyState::default();
+        let mut buf = [0u16; 2];
+        for &u in '\u{1F600}'.encode_utf16(&mut buf).iter() {
+            ks.on_char(u);
+        }
+        assert_eq!(text(&mut ks), "\u{1F600}");
+    }
+
+    #[test]
+    fn control_chars_do_not_become_text() {
         // Backspace / Enter / Escape / Tab arrive as WM_CHAR control codes; they
-        // must be filtered so they route through `captured_key` (editing keys),
-        // not inserted as text.
+        // must be filtered so they travel as presses, not inserted as text.
         let mut ks = KeyState::default();
         for c in ['\u{08}', '\r', '\n', '\u{1b}', '\t', '\u{7f}'] {
-            ks.on_char(c);
+            ks.on_char(unit(c));
         }
-        assert_eq!(
-            snapshot(&mut ks).typed_char,
-            None,
-            "control chars are not printable glyphs"
-        );
+        assert_eq!(text(&mut ks), "", "control chars are not printable glyphs");
+    }
+
+    #[test]
+    fn presses_record_modifiers_and_repeats_in_order() {
+        let mut ks = KeyState::default();
+        ks.on_key_down(VK_CONTROL, false);
+        ks.on_key_down(VK_Z, false);
+        ks.on_key_up(VK_CONTROL);
+        ks.on_key_down(VK_LEFT, false);
+        ks.on_key_down(VK_LEFT, true);
+        let presses: Vec<KeyPress> = snapshot(&mut ks)
+            .key_events
+            .iter()
+            .filter_map(|e| match e {
+                KeyEvent::Press(p) => Some(*p),
+                KeyEvent::Text(_) => None,
+            })
+            .collect();
+        let keys: Vec<InputKey> = presses.iter().map(|p| p.key).collect();
+        assert_eq!(keys, [InputKey::Z, InputKey::Left, InputKey::Left]);
+        assert!(presses[0].mods.ctrl, "Ctrl held for the Z");
+        assert!(!presses[1].mods.ctrl, "released before the Left");
+        assert!(!presses[1].repeat && presses[2].repeat);
     }
 
     #[test]
@@ -388,16 +459,25 @@ mod tests {
     }
 
     #[test]
-    fn editing_keys_decode_for_captured_key() {
-        // Backspace and forward-delete decode so text fields can edit; they ride
-        // `captured_key`, not `typed_char` (mirrors metal/input.rs).
+    fn editing_keys_decode_as_presses() {
+        // The editing and navigation keys decode so text fields can edit; they
+        // travel as presses, never as text (mirrors appkit/input.rs).
         assert_eq!(key_from_vk(VK_BACK), Some(InputKey::Backspace));
         assert_eq!(key_from_vk(VK_DELETE), Some(InputKey::Delete));
         assert_eq!(key_from_vk(VK_LEFT), Some(InputKey::Left));
         assert_eq!(key_from_vk(VK_RIGHT), Some(InputKey::Right));
-        // A key-down surfaces the editing key on `captured_key`.
+        assert_eq!(key_from_vk(VK_HOME), Some(InputKey::Home));
+        assert_eq!(key_from_vk(VK_END), Some(InputKey::End));
+        assert_eq!(key_from_vk(VK_PRIOR), Some(InputKey::PageUp));
+        assert_eq!(key_from_vk(VK_NEXT), Some(InputKey::PageDown));
         let mut ks = KeyState::default();
-        ks.on_key_down(VK_BACK);
-        assert_eq!(snapshot(&mut ks).captured_key, Some(InputKey::Backspace));
+        ks.on_key_down(VK_BACK, false);
+        assert_eq!(
+            snapshot(&mut ks).key_events,
+            [KeyEvent::Press(KeyPress::new(
+                InputKey::Backspace,
+                KeyMods::NONE
+            ))]
+        );
     }
 }

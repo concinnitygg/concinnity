@@ -6,6 +6,9 @@
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
+use concinnity_core::components::KeyEvent;
+use concinnity_core::components::KeyMods;
+use concinnity_core::components::KeyPress;
 
 use super::fixtures::{
     behavior, behavior_escape_input, behavior_session, open_args, press_behavior_key, press_remove,
@@ -396,7 +399,7 @@ fn behavior_tab_does_nothing_while_the_palette_is_open() {
 
 fn ctrl_key_input(key: InputKey) -> FrameInput {
     FrameInput {
-        captured_key: Some(key),
+        key_events: vec![KeyEvent::Press(KeyPress::new(key, KeyMods::CTRL))],
         ctrl: true,
         viewport: [1280.0, 720.0],
         ..Default::default()

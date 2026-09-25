@@ -9,6 +9,7 @@ use concinnity_cook::authoring::world::write_world_jsonl;
 use concinnity_core::components::Camera3D;
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
+use concinnity_core::components::KeyEvent;
 use concinnity_core::components::TextInput;
 use concinnity_core::components::Transform;
 use concinnity_core::ecs::Entity;
@@ -341,9 +342,17 @@ pub(in crate::editor::hook) fn type_name(world: &mut World, text: &str) {
     widget::seed_field(world, behavior::panel::NAME_INPUT, text);
 }
 
-pub(in crate::editor::hook) fn story_key_input(key: InputKey) -> FrameInput {
+// Put the Story panel's text area in charge of the keyboard: open, focused,
+// and frontmost.
+pub(in crate::editor::hook) fn focus_story(h: &mut EditorHook) {
+    h.story.open = true;
+    h.story.focus = true;
+    h.focus_panel(crate::editor::panels::registry::PanelKey::Story);
+}
+
+pub(in crate::editor::hook) fn key_input(key: InputKey) -> FrameInput {
     FrameInput {
-        captured_key: Some(key),
+        key_events: vec![KeyEvent::press(key)],
         viewport: [1280.0, 720.0],
         ..Default::default()
     }
@@ -452,7 +461,7 @@ pub(in crate::editor::hook) fn press_behavior_key(
     world: &mut World,
     key: InputKey,
 ) {
-    h.behavior_keys(world, &story_key_input(key));
+    h.behavior_keys(world, &key_input(key));
 }
 
 // The outline row index of the first row with `label`.

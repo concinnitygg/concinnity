@@ -16,6 +16,7 @@ use concinnity_core::components::WindowMode;
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::window::clipboard::Clipboard;
 use concinnity_core::window::display_mode::DisplayMode;
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
@@ -116,6 +117,10 @@ impl AppKitVkWindow {
 
     pub(crate) fn take_input(&mut self) -> InputSnapshot {
         self.win.take_input()
+    }
+
+    pub(crate) fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
+        self.win.clipboard()
     }
 
     pub(crate) fn request_cursor_capture(&mut self) {

@@ -13,18 +13,22 @@ use super::EditorHook;
 impl EditorHook {
     // Transport shortcuts: Ctrl+P plays / pauses, Ctrl+Shift+P stops,
     // Ctrl+Period steps. Unlike the history shortcuts these stay live while
-    // the world runs (pausing it is their whole point; `captured_key`
-    // surfaces through play mode), standing down only while a text field
+    // the world runs (pausing it is their whole point; key events surface
+    // through play mode), standing down only while a text field
     // owns the keyboard or a gizmo drag is mid-flight.
     pub(super) fn sim_keys(&mut self, input: &FrameInput) {
         if !input.ctrl || self.text_focus_active() || self.gizmo_drag.is_some() {
             return;
         }
-        match input.captured_key {
-            Some(InputKey::P) if input.shift => self.sim_stop(),
-            Some(InputKey::P) => self.sim_toggle_play(),
-            Some(InputKey::Period) => self.sim.step(),
-            _ => {}
+        for press in input.key_presses() {
+            match press.key {
+                // A held Ctrl+P toggles once; a held Ctrl+Period keeps stepping.
+                InputKey::P if press.repeat => {}
+                InputKey::P if press.mods.shift => self.sim_stop(),
+                InputKey::P => self.sim_toggle_play(),
+                InputKey::Period => self.sim.step(),
+                _ => {}
+            }
         }
     }
 

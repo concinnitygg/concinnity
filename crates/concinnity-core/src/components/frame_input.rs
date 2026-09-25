@@ -1,3 +1,6 @@
+use crate::components::{InputKey, KeyEvent, KeyPress};
+use alloc::vec::Vec;
+
 /// Per-frame keyboard and mouse input state.
 ///
 /// One `FrameInput` is updated each frame from the window's keyboard and mouse
@@ -21,7 +24,7 @@ pub struct FrameInput {
     pub jump: bool,
     /// True while the Control key is held. A modifier used by UI (e.g. a story
     /// fast-forwards its dialogue while it is down). Like [escape](#structfield.escape)
-    /// and [captured_key](#structfield.captured_key) it is not frozen while a
+    /// and [key_events](#structfield.key_events) it is not frozen while a
     /// menu is open.
     pub ctrl: bool,
     /// True while the Shift key is held. A modifier used by UI (e.g. additive
@@ -52,13 +55,13 @@ pub struct FrameInput {
     pub look_axis: [f32; 2],
     /// The gamepad button pressed this frame, for one frame, or `None`.
     /// Surfaced regardless of menu state (like
-    /// [captured_key](#structfield.captured_key)) so the settings menu can
+    /// [key_events](#structfield.key_events)) so the settings menu can
     /// capture a button for rebinding.
     pub captured_button: Option<crate::components::GamepadButton>,
     /// The UI-navigation pulse this frame, or `None`. A one-frame
     /// [NavDirection](#navdirection) produced from a d-pad press (repeating
     /// while held) or a deliberate left-stick deflection. Surfaced regardless
-    /// of menu state (like [captured_key](#structfield.captured_key)); menu
+    /// of menu state (like [key_events](#structfield.key_events)); menu
     /// focus movement consumes it only while a screen is active, so during
     /// play the d-pad and stick keep their movement meaning.
     pub nav: Option<crate::components::NavDirection>,
@@ -115,15 +118,116 @@ pub struct FrameInput {
     /// actions. In worlds that capture the cursor, Escape instead releases the
     /// cursor and this stays false.
     pub escape: bool,
-    /// The canonical key pressed this frame, for one frame, or `None`. Surfaced
-    /// regardless of menu state (unlike the gameplay keys, which freeze while a
-    /// menu is open) so the settings menu can capture a key for rebinding and
-    /// scrollable menu lists can react to the arrow keys.
-    pub captured_key: Option<crate::components::InputKey>,
-    /// The printable character typed this frame (Unicode, with shift / layout
-    /// applied by the OS), for text-input fields, or `None`. A one-frame pulse
-    /// surfaced regardless of menu state, like
-    /// [captured_key](#structfield.captured_key). Editing keys (Backspace,
-    /// Delete, arrows) arrive via `captured_key`, not here.
-    pub typed_char: Option<char>,
+    /// Every key press (auto-repeats included) and every typed character since
+    /// the last frame, in the order the window received them, so fast typing at
+    /// a low frame rate loses nothing. Surfaced regardless of menu state (unlike
+    /// the gameplay keys, which freeze while a menu is open) so text fields type
+    /// while a menu is up, the settings menu can capture a key for rebinding,
+    /// and scrollable menu lists react to the arrow keys.
+    pub key_events: Vec<KeyEvent>,
+}
+
+impl FrameInput {
+    /// This frame's key presses, in order.
+    pub fn key_presses(&self) -> impl Iterator<Item = KeyPress> + '_ {
+        self.key_events.iter().filter_map(|e| match e {
+            KeyEvent::Press(p) => Some(*p),
+            KeyEvent::Text(_) => None,
+        })
+    }
+
+    /// The keys pressed this frame, in order, auto-repeats included: what
+    /// navigation and text editing follow, so a held key keeps stepping.
+    pub fn pressed_keys(&self) -> impl Iterator<Item = InputKey> + '_ {
+        self.key_presses().map(|p| p.key)
+    }
+
+    /// The keys freshly pressed this frame, in order, auto-repeats left out:
+    /// what a toggle, a binding, or a confirm follows, so a held key fires once.
+    pub fn fresh_keys(&self) -> impl Iterator<Item = InputKey> + '_ {
+        self.key_presses().filter(|p| !p.repeat).map(|p| p.key)
+    }
+
+    /// Whether `key` was pressed (or repeated) this frame.
+    pub fn pressed(&self, key: InputKey) -> bool {
+        self.pressed_keys().any(|k| k == key)
+    }
+
+    /// Whether `key` was freshly pressed this frame, not auto-repeated.
+    pub fn pressed_fresh(&self, key: InputKey) -> bool {
+        self.fresh_keys().any(|k| k == key)
+    }
+
+    /// The characters typed this frame, in order.
+    pub fn typed_chars(&self) -> impl Iterator<Item = char> + '_ {
+        self.key_events.iter().filter_map(|e| match e {
+            KeyEvent::Text(c) => Some(*c),
+            KeyEvent::Press(_) => None,
+        })
+    }
+
+    /// Whether any character was typed this frame.
+    pub fn typed_any(&self) -> bool {
+        self.typed_chars().next().is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::KeyMods;
+    use alloc::vec;
+
+    fn press(key: InputKey) -> KeyEvent {
+        KeyEvent::Press(KeyPress::new(key, KeyMods::NONE))
+    }
+
+    // Two presses and the text they typed in one frame all survive, in order.
+    #[test]
+    fn the_queue_keeps_every_event_in_order() {
+        let input = FrameInput {
+            key_events: vec![
+                press(InputKey::A),
+                KeyEvent::Text('a'),
+                press(InputKey::Backspace),
+                press(InputKey::B),
+                KeyEvent::Text('b'),
+            ],
+            ..Default::default()
+        };
+        let keys: Vec<InputKey> = input.pressed_keys().collect();
+        assert_eq!(keys, [InputKey::A, InputKey::Backspace, InputKey::B]);
+        let text: Vec<char> = input.typed_chars().collect();
+        assert_eq!(text, ['a', 'b']);
+        assert_eq!(input.fresh_keys().next(), Some(InputKey::A));
+        assert!(input.pressed(InputKey::Backspace));
+        assert!(!input.pressed(InputKey::Enter));
+        assert!(input.typed_any());
+    }
+
+    // A held key's auto-repeat still steps navigation but is not fresh.
+    #[test]
+    fn repeats_are_pressed_but_not_fresh() {
+        let repeat = KeyPress {
+            repeat: true,
+            ..KeyPress::new(InputKey::Down, KeyMods::NONE)
+        };
+        let input = FrameInput {
+            key_events: vec![KeyEvent::Press(repeat), press(InputKey::Enter)],
+            ..Default::default()
+        };
+        assert!(input.pressed(InputKey::Down));
+        assert!(!input.pressed_fresh(InputKey::Down));
+        assert!(input.pressed_fresh(InputKey::Enter));
+        let fresh: Vec<InputKey> = input.fresh_keys().collect();
+        assert_eq!(fresh, [InputKey::Enter]);
+    }
+
+    #[test]
+    fn an_empty_frame_reports_nothing() {
+        let input = FrameInput::default();
+        assert_eq!(input.fresh_keys().next(), None);
+        assert!(!input.typed_any());
+        assert_eq!(input.key_presses().count(), 0);
+    }
 }

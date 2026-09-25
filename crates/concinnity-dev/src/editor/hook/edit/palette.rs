@@ -34,16 +34,13 @@ impl EditorHook {
         input: &FrameInput,
         world: &mut World,
     ) {
-        if input.captured_key != Some(InputKey::K)
-            || !(input.ctrl || input.cmd)
-            || self.sim.playing()
-        {
+        if !input.pressed_fresh(InputKey::K) || !(input.ctrl || input.cmd) || self.sim.playing() {
             return;
         }
         self.toggle_palette(world);
         if self.palette.open {
-            // The same keypress may deliver a typed_char after this tick; one
-            // unfocused frame keeps it out of the fresh query.
+            // The same keypress may queue a typed character too; one unfocused
+            // frame keeps it out of the fresh query.
             self.palette.blur = true;
         }
     }
@@ -144,18 +141,21 @@ impl EditorHook {
     // The per-frame editing keys: Up / Down move the highlight, Enter commits.
     // Typing goes to the field; Escape closes through the global escape drive.
     pub(in crate::editor::hook) fn palette_keys(&mut self, world: &mut World, input: &FrameInput) {
-        match input.captured_key {
-            Some(InputKey::Enter) => self.commit_palette(world),
-            Some(key @ (InputKey::Up | InputKey::Down)) => {
-                let delta = if key == InputKey::Up { -1 } else { 1 };
-                let total = self.palette.matches.len();
-                let Some(at) = navigate::step(Some(self.palette.pick), delta, total) else {
-                    return;
-                };
-                self.palette.pick = at;
-                self.palette.scroll = navigate::scroll_to(at, self.palette.scroll, WINDOW);
+        for press in input.key_presses() {
+            let key = press.key;
+            match key {
+                InputKey::Enter if !press.repeat => self.commit_palette(world),
+                InputKey::Up | InputKey::Down => {
+                    let delta = if key == InputKey::Up { -1 } else { 1 };
+                    let total = self.palette.matches.len();
+                    let Some(at) = navigate::step(Some(self.palette.pick), delta, total) else {
+                        continue;
+                    };
+                    self.palette.pick = at;
+                    self.palette.scroll = navigate::scroll_to(at, self.palette.scroll, WINDOW);
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
 

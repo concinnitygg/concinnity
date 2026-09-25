@@ -141,36 +141,37 @@ impl EditorHook {
             && !self.text_focus_active()
             && self.gizmo_drag.is_none()
         {
-            match input.captured_key {
-                Some(InputKey::T) => {
-                    self.gizmo_mode = gizmo::GizmoMode::Translate;
-                }
-                Some(InputKey::R) => self.gizmo_mode = gizmo::GizmoMode::Rotate,
-                Some(InputKey::S) => self.gizmo_mode = gizmo::GizmoMode::Scale,
-                // F frames the selection; Shift+F keeps the old fly
-                // toggle one modifier away.
-                Some(InputKey::F) => {
-                    if input.shift {
-                        self.toggle_fly();
-                    } else {
-                        self.frame_selection(input.viewport, world);
+            for press in input.key_presses() {
+                match press.key {
+                    // F and H toggle, so a held key acts once.
+                    InputKey::F | InputKey::H if press.repeat => {}
+                    InputKey::T => self.gizmo_mode = gizmo::GizmoMode::Translate,
+                    InputKey::R => self.gizmo_mode = gizmo::GizmoMode::Rotate,
+                    InputKey::S => self.gizmo_mode = gizmo::GizmoMode::Scale,
+                    // F frames the selection; Shift+F keeps the old fly
+                    // toggle one modifier away.
+                    InputKey::F => {
+                        if press.mods.shift {
+                            self.toggle_fly();
+                        } else {
+                            self.frame_selection(input.viewport, world);
+                        }
+                    }
+                    // H hides the selection; Shift+H isolates it.
+                    InputKey::H => {
+                        if press.mods.shift {
+                            self.toggle_isolate();
+                        } else {
+                            self.hide_selected();
+                        }
+                    }
+                    // 1..9 glide back to a saved camera bookmark.
+                    key => {
+                        if let Some(slot) = bookmarks::slot_for(key) {
+                            self.recall_bookmark(slot, world);
+                        }
                     }
                 }
-                // H hides the selection; Shift+H isolates it.
-                Some(InputKey::H) => {
-                    if input.shift {
-                        self.toggle_isolate();
-                    } else {
-                        self.hide_selected();
-                    }
-                }
-                // 1..9 glide back to a saved camera bookmark.
-                Some(key) => {
-                    if let Some(slot) = bookmarks::slot_for(key) {
-                        self.recall_bookmark(slot, world);
-                    }
-                }
-                None => {}
             }
         }
         // Backtick toggles the console. The flag cleared here is the
@@ -194,24 +195,25 @@ impl EditorHook {
             && self.gizmo_drag.is_none()
             && self.shape_drag.is_none()
         {
-            match input.captured_key {
-                Some(InputKey::Z) => self.undo(world),
-                Some(InputKey::Y) => self.redo(world),
-                Some(InputKey::D) if self.frontmost_open_panel() != Some(PanelKey::Behavior) => {
-                    self.duplicate_selection();
-                }
-                Some(InputKey::Down) => {
-                    self.drop_selection_to_floor(world);
-                }
-                // Ctrl+H makes everything visible again.
-                Some(InputKey::H) => self.unhide_all(),
-                // Ctrl+1..9 save the camera pose to a bookmark.
-                Some(key) => {
-                    if let Some(slot) = bookmarks::slot_for(key) {
-                        self.save_bookmark(slot, world);
+            for key in input.pressed_keys() {
+                match key {
+                    InputKey::Z => self.undo(world),
+                    InputKey::Y => self.redo(world),
+                    InputKey::D if self.frontmost_open_panel() != Some(PanelKey::Behavior) => {
+                        self.duplicate_selection();
+                    }
+                    InputKey::Down => {
+                        self.drop_selection_to_floor(world);
+                    }
+                    // Ctrl+H makes everything visible again.
+                    InputKey::H => self.unhide_all(),
+                    // Ctrl+1..9 save the camera pose to a bookmark.
+                    key => {
+                        if let Some(slot) = bookmarks::slot_for(key) {
+                            self.save_bookmark(slot, world);
+                        }
                     }
                 }
-                None => {}
             }
         }
         // The transport shortcuts, live in every state (pausing a

@@ -70,16 +70,23 @@ impl EditorHook {
             self.cancel_behavior_key(world);
             return;
         }
-        let Some(key) = input.captured_key else {
-            return;
-        };
+        for press in input.key_presses() {
+            // Enter commits and Tab toggles the view: a held key acts once.
+            if press.repeat && matches!(press.key, InputKey::Enter | InputKey::Tab) {
+                continue;
+            }
+            self.behavior_key(press.key, press.mods.ctrl, world);
+        }
+    }
+
+    fn behavior_key(&mut self, key: InputKey, ctrl: bool, world: &mut World) {
         if self.behavior_palette_open() {
             self.behavior_palette_key(key, world);
             return;
         }
         // Ctrl carries the clipboard, and only while no field holds the keyboard:
         // a copy is about the selected node, not about the text being typed.
-        if input.ctrl {
+        if ctrl {
             if !self.behavior.focus && !self.behavior.name_focus {
                 self.clipboard_behavior_key(key, world);
             }

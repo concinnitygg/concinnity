@@ -8,6 +8,8 @@
 mod appkit;
 #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 mod glfw;
+#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+mod glfw_clipboard;
 #[cfg(target_os = "windows")]
 mod win32;
 

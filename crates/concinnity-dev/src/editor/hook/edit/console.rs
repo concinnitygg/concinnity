@@ -51,7 +51,7 @@ impl EditorHook {
         input: &FrameInput,
         world: &mut World,
     ) {
-        if input.captured_key != Some(InputKey::Backtick) || input.ctrl {
+        if !input.pressed_fresh(InputKey::Backtick) || input.ctrl {
             return;
         }
         if self.sim.playing() || self.non_console_text_focus() {
@@ -59,8 +59,8 @@ impl EditorHook {
         }
         self.toggle_console(world);
         if self.console.open {
-            // The same keypress delivers a '`' typed_char after this tick;
-            // one unfocused frame keeps it out of the fresh command line.
+            // The same keypress queues a '`' character too; one unfocused
+            // frame keeps it out of the fresh command line.
             self.console.blur = true;
         }
     }
@@ -144,25 +144,28 @@ impl EditorHook {
         if !self.console.focus {
             return;
         }
-        match input.captured_key {
-            Some(InputKey::Enter) => {
-                let line = widget::field_text(world, console_panel::INPUT);
-                widget::seed_field(world, console_panel::INPUT, "");
-                let line = line.trim().to_string();
-                if !line.is_empty() {
-                    self.run_console_line(world, &line);
+        for press in input.key_presses() {
+            match press.key {
+                // A held Enter submits once.
+                InputKey::Enter if !press.repeat => {
+                    let line = widget::field_text(world, console_panel::INPUT);
+                    widget::seed_field(world, console_panel::INPUT, "");
+                    let line = line.trim().to_string();
+                    if !line.is_empty() {
+                        self.run_console_line(world, &line);
+                    }
                 }
-            }
-            Some(InputKey::Tab) => self.accept_console_ghost(world),
-            Some(InputKey::Right) => {
-                let at_end = widget::input(world, console_panel::INPUT)
-                    .map(|t| t.caret >= t.content.chars().count())
-                    .unwrap_or(false);
-                if at_end {
-                    self.accept_console_ghost(world);
+                InputKey::Tab => self.accept_console_ghost(world),
+                InputKey::Right => {
+                    let at_end = widget::input(world, console_panel::INPUT)
+                        .map(|t| t.caret >= t.content.chars().count())
+                        .unwrap_or(false);
+                    if at_end {
+                        self.accept_console_ghost(world);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         }
     }
 

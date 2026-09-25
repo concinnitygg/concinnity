@@ -10,7 +10,7 @@
 //! component is present. GLFW's CursorDisabled mode delivers raw relative
 //! deltas directly via CursorPos events, so no manual warping is needed.
 
-use concinnity_core::components::{InputKey, WindowMode};
+use concinnity_core::components::{InputKey, KeyEvent, KeyMods, KeyPress, WindowMode};
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -129,6 +129,17 @@ fn apply_binding(input: &mut InputSnapshot, km: KeyMap, key: InputKey, pressed: 
 // Map a GLFW key to a canonical `InputKey`, or `None` for a key the engine does not
 // bind (function keys, Escape, Ctrl/Alt, keypad, etc.). Left/Right Shift both map
 // to `InputKey::Shift`: GLFW delivers them as ordinary key events.
+// The modifiers GLFW reports with a key event. Super stays out: it belongs to
+// the desktop shell on Linux, so `cmd` is never set there.
+fn key_mods(mods: glfw::Modifiers) -> KeyMods {
+    KeyMods {
+        shift: mods.contains(glfw::Modifiers::Shift),
+        ctrl: mods.contains(glfw::Modifiers::Control),
+        alt: mods.contains(glfw::Modifiers::Alt),
+        cmd: false,
+    }
+}
+
 fn key_from_glfw(key: glfw::Key) -> Option<InputKey> {
     use glfw::Key as G;
     Some(match key {
@@ -178,6 +189,10 @@ fn key_from_glfw(key: glfw::Key) -> Option<InputKey> {
         G::Down => InputKey::Down,
         G::Left => InputKey::Left,
         G::Right => InputKey::Right,
+        G::Home => InputKey::Home,
+        G::End => InputKey::End,
+        G::PageUp => InputKey::PageUp,
+        G::PageDown => InputKey::PageDown,
         G::Minus => InputKey::Minus,
         G::Equal => InputKey::Equals,
         G::LeftBracket => InputKey::LeftBracket,
@@ -590,38 +605,48 @@ impl GlfwWindow {
                     // (cleared by `take_input`).
                     self.input.hud_toggle = true;
                 }
-                glfw::WindowEvent::Key(key, _, action, _) => {
-                    // Held Alt modifier (the editor's Alt+drag orbit). GLFW
-                    // delivers both Alt keys as ordinary key events and
-                    // `key_from_glfw` maps neither, so track it here rather than
-                    // through the key map.
-                    if matches!(key, glfw::Key::LeftAlt | glfw::Key::RightAlt)
-                        && action != glfw::Action::Repeat
-                    {
-                        self.input.alt = action == glfw::Action::Press;
+                glfw::WindowEvent::Key(key, _, action, mods) => {
+                    // Held Alt / Control modifiers (the editor's Alt+drag orbit,
+                    // a story's Ctrl fast-forward). GLFW delivers both sides as
+                    // ordinary key events and `key_from_glfw` maps neither, so
+                    // track them here rather than through the key map.
+                    if action != glfw::Action::Repeat {
+                        let down = action == glfw::Action::Press;
+                        match key {
+                            glfw::Key::LeftAlt | glfw::Key::RightAlt => self.input.alt = down,
+                            glfw::Key::LeftControl | glfw::Key::RightControl => {
+                                self.input.ctrl = down;
+                            }
+                            _ => {}
+                        }
                     }
                     // Decode through the runtime key map (GLFW delivers Shift as
                     // Left/Right Shift key events, so it is handled like any other
-                    // key -- no separate modifier path, matching DirectX).
-                    if action != glfw::Action::Repeat
-                        && let Some(canon) = key_from_glfw(key)
-                    {
-                        let pressed = action == glfw::Action::Press;
-                        if pressed {
-                            self.input.captured_key = Some(canon);
+                    // key -- no separate modifier path, matching DirectX). Every
+                    // press queues, auto-repeats included; only a fresh press or a
+                    // release drives the gameplay bindings.
+                    if let Some(canon) = key_from_glfw(key) {
+                        if action != glfw::Action::Release {
+                            self.input.key_events.push(KeyEvent::Press(KeyPress {
+                                key: canon,
+                                mods: key_mods(mods),
+                                repeat: action == glfw::Action::Repeat,
+                            }));
                         }
-                        apply_binding(&mut self.input, self.keymap, canon, pressed);
+                        if action != glfw::Action::Repeat {
+                            let pressed = action == glfw::Action::Press;
+                            apply_binding(&mut self.input, self.keymap, canon, pressed);
+                        }
                     }
                 }
                 glfw::WindowEvent::Char(c) => {
                     // The layout- / modifier-resolved printable glyph for
-                    // text-input fields, one codepoint per event (matching
-                    // `captured_key`). GLFW reports only text input here (no
-                    // control / navigation keys), but filter defensively so the
-                    // contract matches the Win32 / Metal paths. Editing keys
-                    // (Backspace / Delete / Left / Right) ride `captured_key`.
+                    // text-input fields, one codepoint per event. GLFW reports
+                    // only text input here (no control / navigation keys), but
+                    // filter defensively so the contract matches the Win32 /
+                    // AppKit paths; editing keys travel as presses.
                     if !c.is_control() {
-                        self.input.typed_char = Some(c);
+                        self.input.key_events.push(KeyEvent::Text(c));
                     }
                 }
                 glfw::WindowEvent::CursorPos(x, y) => {
@@ -700,16 +725,16 @@ impl GlfwWindow {
     // (interact/jump/left_click) and the per-call accumulated mouse delta
     // are cleared.
     pub(crate) fn take_input(&mut self) -> InputSnapshot {
-        let snapshot = self.input;
+        let snapshot = InputSnapshot {
+            key_events: std::mem::take(&mut self.input.key_events),
+            ..self.input.clone()
+        };
         self.input.interact = false;
         self.input.jump = false;
         self.input.left_click = false;
         self.input.right_click = false;
         self.input.hud_toggle = false;
         self.input.escape = false;
-        self.input.captured_key = None;
-        // One-shot like `captured_key`: the printable glyph is consumed once.
-        self.input.typed_char = None;
         self.input.mouse_dx = 0.0;
         self.input.mouse_dy = 0.0;
         // Accumulated like the mouse delta; the held-button flag persists until
@@ -792,14 +817,28 @@ mod tests {
     }
 
     #[test]
-    fn editing_keys_decode_for_captured_key() {
-        // Backspace and forward-delete decode so text fields can edit; they ride
-        // `captured_key`, not `typed_char` (mirrors metal / win32). Printable
-        // glyphs arrive separately via WindowEvent::Char.
+    fn editing_keys_decode_as_presses() {
+        // The editing and navigation keys decode so text fields can edit; they
+        // travel as presses (mirrors appkit / win32). Printable glyphs arrive
+        // separately via WindowEvent::Char.
         use glfw::Key as G;
         assert_eq!(key_from_glfw(G::Backspace), Some(InputKey::Backspace));
         assert_eq!(key_from_glfw(G::Delete), Some(InputKey::Delete));
         assert_eq!(key_from_glfw(G::Left), Some(InputKey::Left));
         assert_eq!(key_from_glfw(G::Right), Some(InputKey::Right));
+        assert_eq!(key_from_glfw(G::Home), Some(InputKey::Home));
+        assert_eq!(key_from_glfw(G::End), Some(InputKey::End));
+        assert_eq!(key_from_glfw(G::PageUp), Some(InputKey::PageUp));
+        assert_eq!(key_from_glfw(G::PageDown), Some(InputKey::PageDown));
+    }
+
+    #[test]
+    fn key_mods_read_each_flag_but_super() {
+        use glfw::Modifiers as M;
+        assert_eq!(key_mods(M::empty()), KeyMods::NONE);
+        assert_eq!(key_mods(M::Control), KeyMods::CTRL);
+        assert_eq!(key_mods(M::Super), KeyMods::NONE);
+        let both = key_mods(M::Shift | M::Alt);
+        assert!(both.shift && both.alt && !both.ctrl);
     }
 }

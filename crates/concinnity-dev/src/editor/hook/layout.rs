@@ -39,6 +39,7 @@ impl EditorHook {
         p.sprite_ids()
             .into_iter()
             .chain(p.label_ids())
+            .chain(p.code_label_ids())
             .chain(p.field_ids().into_iter().map(|(id, _)| id))
             .collect()
     }

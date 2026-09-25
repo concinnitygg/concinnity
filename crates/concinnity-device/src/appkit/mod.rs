@@ -10,6 +10,7 @@
 // Counterpart of the `win32` module on Windows.
 
 pub(crate) mod chrome;
+pub(crate) mod clipboard;
 pub(crate) mod display_mode;
 pub(crate) mod input;
 pub(crate) mod window;

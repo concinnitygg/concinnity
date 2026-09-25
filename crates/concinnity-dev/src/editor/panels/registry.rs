@@ -93,7 +93,6 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             PanelKey::Templates => 0x600,
             PanelKey::TemplateDetail => 0x700,
             PanelKey::Lighting => 0x800,
-            PanelKey::Story => 0x900,
             PanelKey::Import => 0xA00,
             PanelKey::Health => 0xB00,
             // 0xC00..0xE00 belong to the highlight, gizmo, and marquee
@@ -122,6 +121,8 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
             // the Behavior panel it takes a whole block: its pools run well
             // past 0xF300.
             PanelKey::Map => 0xF000,
+            // The text area's row pools outgrow a 0x100 block.
+            PanelKey::Story => 0x1_0000,
         }
 }
 
@@ -165,6 +166,10 @@ pub(crate) trait Panel: Sync {
     // placeholder text. The source for HUD injection and the draw-layer map.
     fn sprite_ids(&self) -> Vec<AssetId>;
     fn label_ids(&self) -> Vec<AssetId>;
+    // Labels drawn in the monospace code face rather than the HUD face.
+    fn code_label_ids(&self) -> Vec<AssetId> {
+        Vec::new()
+    }
     fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
         Vec::new()
     }
@@ -199,7 +204,7 @@ pub(crate) trait Panel: Sync {
     }
     // Move the panel's scroll region one step in the wheel direction.
     fn scroll(&self, _hook: &mut EditorHook, _world: &mut World, _delta: f32) {}
-    // Per-frame editing keys (`FrameInput.captured_key`), delivered to the
+    // Per-frame editing keys (`FrameInput.key_events`), delivered to the
     // frontmost open panel only, so panels never fight over the keyboard.
     fn frame_keys(&self, _hook: &mut EditorHook, _world: &mut World, _input: &FrameInput) {}
     // Per-frame layout while shown.
@@ -340,6 +345,9 @@ mod tests {
             }
             for id in p.label_ids() {
                 claim(id, format!("{key:?} labels"));
+            }
+            for id in p.code_label_ids() {
+                claim(id, format!("{key:?} code labels"));
             }
             for (id, _) in p.field_ids() {
                 claim(id, format!("{key:?} fields"));

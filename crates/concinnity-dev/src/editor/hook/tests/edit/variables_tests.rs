@@ -11,7 +11,7 @@ use concinnity_core::ecs::World;
 
 use crate::editor::behavior;
 use crate::editor::behavior::panel::BehaviorAction;
-use crate::editor::hook::tests::fixtures::{behavior, entry_with_args, hook, story_key_input};
+use crate::editor::hook::tests::fixtures::{behavior, entry_with_args, hook, key_input};
 use crate::editor::hook::{EditorHook, entry_type};
 
 use crate::editor::panels::registry::{self, PanelKey};
@@ -184,7 +184,7 @@ fn typing_a_starting_value_writes_it_and_a_bad_one_is_refused() {
     select_var(&mut h, &mut world, "spawn");
     h.apply_variables_action(VariablesAction::FocusValue, &mut world);
     widget::seed_field(&mut world, variables_panel::VALUE_INPUT, "1, 2, 3");
-    h.variables_keys(&mut world, &story_key_input(InputKey::Enter));
+    h.variables_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["value"]["vec3"],
         serde_json::json!([1.0, 2.0, 3.0]),
@@ -194,7 +194,7 @@ fn typing_a_starting_value_writes_it_and_a_bad_one_is_refused() {
     // field goes back to what the table holds.
     h.apply_variables_action(VariablesAction::FocusValue, &mut world);
     widget::seed_field(&mut world, variables_panel::VALUE_INPUT, "nonsense");
-    h.variables_keys(&mut world, &story_key_input(InputKey::Enter));
+    h.variables_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["value"]["vec3"],
         serde_json::json!([1.0, 2.0, 3.0]),
@@ -217,7 +217,7 @@ fn renaming_a_variable_commits_on_enter_and_refuses_a_blank() {
     select_var(&mut h, &mut world, "score");
     h.apply_variables_action(VariablesAction::FocusName, &mut world);
     widget::seed_field(&mut world, variables_panel::NAME_INPUT, "points");
-    h.variables_keys(&mut world, &story_key_input(InputKey::Enter));
+    h.variables_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["name"],
         serde_json::json!("points")
@@ -230,7 +230,7 @@ fn renaming_a_variable_commits_on_enter_and_refuses_a_blank() {
 
     h.apply_variables_action(VariablesAction::FocusName, &mut world);
     widget::seed_field(&mut world, variables_panel::NAME_INPUT, "   ");
-    h.variables_keys(&mut world, &story_key_input(InputKey::Enter));
+    h.variables_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(
         table_args(&h)["vars"][0]["name"],
         serde_json::json!("points")

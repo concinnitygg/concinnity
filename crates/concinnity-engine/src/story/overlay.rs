@@ -243,10 +243,12 @@ impl StorySystem {
             self.slot_scroll_accum += SLOT_SCROLL_UNIT;
             scroll -= 1;
         }
-        match frame.captured_key {
-            Some(InputKey::Down) => scroll += 1,
-            Some(InputKey::Up) => scroll -= 1,
-            _ => {}
+        for key in frame.pressed_keys() {
+            match key {
+                InputKey::Down => scroll += 1,
+                InputKey::Up => scroll -= 1,
+                _ => {}
+            }
         }
         let max = self.max_slot_scroll() as i32;
         let clamped = scroll.clamp(0, max);

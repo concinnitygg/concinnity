@@ -72,6 +72,7 @@ use super::widget;
 use super::worlds;
 use crate::debug::hot_reload::WorldPathHandle;
 use crate::debug_hook::DebugHook;
+use crate::editor::text_area::clipboard::InternalClipboard;
 use edit::behavior_state::BehaviorState;
 use edit::console_state::ConsoleState;
 use edit::map_state::MapState;
@@ -159,6 +160,10 @@ pub(crate) struct EditorHook {
     shape_seed: u64,
     shape_drag: Option<drag::shape::ShapeDrag>,
     story: StoryState,
+    // What a text area copies to when the window reaches no system clipboard.
+    text_clipboard: InternalClipboard,
+    // The session's monotonic clock, for timing presses into double-clicks.
+    clock: std::time::Instant,
     // The Import panel: shown state, whether the path field holds keyboard
     // focus, the list window scroll, and the last Add's outcome.
     import_open: bool,
@@ -526,6 +531,8 @@ impl EditorHook {
             shape_seed: 0,
             shape_drag: None,
             story: StoryState::default(),
+            text_clipboard: InternalClipboard::default(),
+            clock: std::time::Instant::now(),
             import_open: false,
             import_focus: false,
             import_scroll: 0,
@@ -697,7 +704,7 @@ impl EditorHook {
             || self.picker_open
             || self.form.selected_type.is_some()
             || self.lighting_focus.is_some()
-            || self.story.focus
+            || self.story_typing()
             || self.import_focus
             || self.behavior.focus
             || self.behavior.name_focus
@@ -747,13 +754,12 @@ impl DebugHook for EditorHook {
             // Typing into a batching panel's focused field marks its
             // unapplied-edit state (the heading's "*"). Frontmost-gated,
             // because only the frontmost panel's field owns the keyboard.
-            if input.typed_char.is_some() {
+            if input.typed_any() {
                 match self.frontmost_open_panel() {
                     Some(PanelKey::Edit) => self.form.touched = true,
                     Some(PanelKey::Lighting) if self.lighting_focus.is_some() => {
                         self.lighting_touched = true;
                     }
-                    Some(PanelKey::Story) if self.story.focus => self.story.touched = true,
                     _ => {}
                 }
             }

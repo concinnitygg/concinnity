@@ -9,7 +9,7 @@
 
 mod layout;
 
-use concinnity_core::components::{InputKey, Window};
+use concinnity_core::components::{InputKey, KeyEvent, Window};
 use concinnity_core::ecs::FontHandle;
 use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::backend::{FrameParams, RenderBackend};
@@ -121,7 +121,10 @@ fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
 fn dismissed(input: &InputSnapshot, hovered: bool) -> bool {
     input.escape
         || (input.left_click && hovered)
-        || matches!(input.captured_key, Some(InputKey::Enter))
+        || input
+            .key_events
+            .iter()
+            .any(|e| matches!(e, KeyEvent::Press(p) if p.key == InputKey::Enter))
 }
 
 #[cfg(test)]
@@ -158,7 +161,7 @@ mod tests {
     #[test]
     fn enter_dismisses() {
         let input = InputSnapshot {
-            captured_key: Some(InputKey::Enter),
+            key_events: vec![KeyEvent::press(InputKey::Enter)],
             ..Default::default()
         };
         assert!(dismissed(&input, false));

@@ -32,6 +32,7 @@ pub use super::graphics_config::{GraphicsConfig, ShadowUpdate};
 pub use super::hit_region::HitRegion;
 pub use super::instanced_prop::{InstanceTransform, InstancedProp};
 pub use super::key_binding::KeyBinding;
+pub use super::key_event::{KeyEvent, KeyMods, KeyPress};
 pub use super::layout_container::{Justify, LabelBox, LabelPlacement, LayoutContainer, LayoutRow};
 pub use super::loading_overlay::LoadingOverlay;
 pub use super::model::{Model, SubMeshRef};

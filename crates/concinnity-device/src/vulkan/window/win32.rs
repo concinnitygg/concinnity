@@ -11,6 +11,7 @@ use concinnity_core::components::WindowMode;
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::window::clipboard::Clipboard;
 use concinnity_core::window::display_mode::DisplayMode;
 
 use crate::win32::display_mode::{self, FullscreenDisplayMode};
@@ -60,6 +61,10 @@ impl Win32Window {
     // Snapshot of the accumulated input since the last call.
     pub(crate) fn take_input(&mut self) -> InputSnapshot {
         take_input_snapshot(&mut self.win_state)
+    }
+
+    pub(crate) fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
+        Some(&mut *self.win_state)
     }
 
     // Arm click-to-capture rather than grabbing the cursor immediately: a

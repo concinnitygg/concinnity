@@ -4,6 +4,9 @@
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
+use concinnity_core::components::KeyEvent;
+use concinnity_core::components::KeyMods;
+use concinnity_core::components::KeyPress;
 use concinnity_core::components::TextInput;
 use concinnity_core::ecs::World;
 
@@ -56,7 +59,7 @@ fn duplicate_selection_clones_entries_and_selects_the_copies() {
 fn ctrl_d_duplicates_unless_the_behavior_panel_owns_it() {
     let mut world = world_with_input(FrameInput {
         ctrl: true,
-        captured_key: Some(InputKey::D),
+        key_events: vec![KeyEvent::Press(KeyPress::new(InputKey::D, KeyMods::CTRL))],
         viewport: [1280.0, 720.0],
         ..Default::default()
     });

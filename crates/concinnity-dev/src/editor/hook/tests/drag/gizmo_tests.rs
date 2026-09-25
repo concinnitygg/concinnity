@@ -6,6 +6,9 @@
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
+use concinnity_core::components::KeyEvent;
+use concinnity_core::components::KeyMods;
+use concinnity_core::components::KeyPress;
 use concinnity_core::components::Transform;
 use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::World;
@@ -444,7 +447,7 @@ fn gizmo_mode_keys_switch_unless_typing() {
     let key = |h: &mut EditorHook, k: InputKey| {
         let mut world = world_with_input(FrameInput {
             viewport: [1280.0, 720.0],
-            captured_key: Some(k),
+            key_events: vec![KeyEvent::press(k)],
             ..Default::default()
         });
         h.tick(&mut world);
@@ -461,7 +464,7 @@ fn gizmo_mode_keys_switch_unless_typing() {
     let shift_f = |h: &mut EditorHook| {
         let mut world = world_with_input(FrameInput {
             viewport: [1280.0, 720.0],
-            captured_key: Some(InputKey::F),
+            key_events: vec![KeyEvent::Press(KeyPress::new(InputKey::F, KeyMods::SHIFT))],
             shift: true,
             ..Default::default()
         });
@@ -475,7 +478,7 @@ fn gizmo_mode_keys_switch_unless_typing() {
     assert!(!h.fly, "Shift+F again stops it");
 
     // A focused text field keeps the keys for typing.
-    h.story.focus = true;
+    crate::editor::hook::tests::fixtures::focus_story(&mut h);
     key(&mut h, InputKey::R);
     assert_eq!(h.gizmo_mode, gizmo::GizmoMode::Translate);
     shift_f(&mut h);

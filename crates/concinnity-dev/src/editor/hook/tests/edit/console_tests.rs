@@ -6,7 +6,9 @@
 
 // A world holding the console's command-line field.
 
-use concinnity_core::components::{FrameInput, InputKey, TextInput, TextLabel};
+use concinnity_core::components::{
+    FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextInput, TextLabel,
+};
 use concinnity_core::ecs::World;
 
 use crate::debug_hook::DebugHook;
@@ -120,7 +122,7 @@ fn enter_submits_the_line_and_clears_the_field() {
     h.console_keys(
         &mut world,
         &FrameInput {
-            captured_key: Some(InputKey::Enter),
+            key_events: vec![KeyEvent::press(InputKey::Enter)],
             ..Default::default()
         },
     );
@@ -142,7 +144,7 @@ fn enter_on_a_blank_line_submits_nothing() {
     h.console_keys(
         &mut world,
         &FrameInput {
-            captured_key: Some(InputKey::Enter),
+            key_events: vec![KeyEvent::press(InputKey::Enter)],
             ..Default::default()
         },
     );
@@ -161,7 +163,7 @@ fn the_keys_are_ignored_while_the_command_line_is_unfocused() {
     h.console_keys(
         &mut world,
         &FrameInput {
-            captured_key: Some(InputKey::Enter),
+            key_events: vec![KeyEvent::press(InputKey::Enter)],
             ..Default::default()
         },
     );
@@ -183,7 +185,7 @@ fn tab_accepts_the_del_ghost() {
     h.console_keys(
         &mut world,
         &FrameInput {
-            captured_key: Some(InputKey::Tab),
+            key_events: vec![KeyEvent::press(InputKey::Tab)],
             ..Default::default()
         },
     );
@@ -199,7 +201,7 @@ fn tab_accepts_the_del_ghost() {
 fn right_accepts_the_ghost_only_at_the_end_of_the_line() {
     let entries = vec![serde_json::json!({"type":"PointLight","args":{"$id":"lantern_post"}})];
     let key = FrameInput {
-        captured_key: Some(InputKey::Right),
+        key_events: vec![KeyEvent::press(InputKey::Right)],
         ..Default::default()
     };
 
@@ -240,7 +242,7 @@ fn the_accept_keys_are_inert_without_a_ghost() {
     h.console_keys(
         &mut world,
         &FrameInput {
-            captured_key: Some(InputKey::Tab),
+            key_events: vec![KeyEvent::press(InputKey::Tab)],
             ..Default::default()
         },
     );
@@ -455,7 +457,7 @@ fn backtick_toggles_the_console_with_a_one_frame_blur() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
     let input = FrameInput {
-        captured_key: Some(InputKey::Backtick),
+        key_events: vec![KeyEvent::press(InputKey::Backtick)],
         ..Default::default()
     };
 
@@ -480,9 +482,27 @@ fn backtick_toggles_the_console_with_a_one_frame_blur() {
     assert!(!h.console.open && !h.console.focus, "second press closes");
 
     // While another text field is focused, backtick is just a character.
-    h.story.focus = true;
+    crate::editor::hook::tests::fixtures::focus_story(&mut h);
     h.drive_console_toggle(&input, &mut world);
     assert!(!h.console.open);
+}
+
+// A held backtick opens the console once; its auto-repeat does not close it.
+#[test]
+fn a_held_backtick_toggles_once() {
+    let mut h = hook(Vec::new());
+    let mut world = world_with_fields();
+    let press = |repeat| FrameInput {
+        key_events: vec![KeyEvent::Press(KeyPress {
+            repeat,
+            ..KeyPress::new(InputKey::Backtick, KeyMods::NONE)
+        })],
+        ..Default::default()
+    };
+    h.drive_console_toggle(&press(false), &mut world);
+    assert!(h.console.open);
+    h.drive_console_toggle(&press(true), &mut world);
+    assert!(h.console.open, "the repeat leaves it open");
 }
 
 // The /del ghost completes against authored names, and Tab accepts it into
@@ -503,7 +523,7 @@ fn console_ghost_completes_del_names_and_tab_accepts() {
     assert_eq!(h.console_ghost(&world), "be_red");
     h.console.focus = true;
     let tab = FrameInput {
-        captured_key: Some(InputKey::Tab),
+        key_events: vec![KeyEvent::press(InputKey::Tab)],
         ..Default::default()
     };
     h.console_keys(&mut world, &tab);
@@ -523,7 +543,7 @@ fn tick_opens_the_console_blurred_then_focuses() {
     let _guard = crate::test_support::lock();
     isolate_state_dir();
     let mut world = world_with_input(FrameInput {
-        captured_key: Some(InputKey::Backtick),
+        key_events: vec![KeyEvent::press(InputKey::Backtick)],
         viewport: [1280.0, 720.0],
         ..Default::default()
     });
@@ -543,7 +563,7 @@ fn tick_opens_the_console_blurred_then_focuses() {
 
     // Next frame, no key held: focus asserts.
     for i in world.query_mut::<FrameInput>() {
-        i.captured_key = None;
+        i.key_events.clear();
     }
     h.tick(&mut world);
     let input = world.get_by_id::<TextInput>(console_panel::INPUT).unwrap();

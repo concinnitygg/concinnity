@@ -12,7 +12,7 @@ pub(super) const REBIND_PROMPT: &str = "Press a key...";
 const PAD_REBIND_PROMPT: &str = "Press a button...";
 
 // An in-progress key rebind: a Controls-tab rebind row was clicked and is
-// waiting for the user to press a key. The next `FrameInput.captured_key` binds
+// waiting for the user to press a key. The next key `FrameInput` reports binds
 // it; Escape cancels and restores the row's previous value text.
 #[derive(Debug)]
 pub(super) struct Capture {
@@ -46,7 +46,7 @@ impl UiInputSystem {
         let op = if captures_button(cap.setting_key) {
             input.captured_button.map(SettingOp::RebindButton)
         } else {
-            input.captured_key.map(SettingOp::Rebind)
+            input.fresh_keys().next().map(SettingOp::Rebind)
         };
         if input.escape {
             self.cancel_capture(ctx);

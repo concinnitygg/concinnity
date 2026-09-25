@@ -21,7 +21,8 @@ pub(super) struct UiIntent {
     pub(super) confirm: bool,
     // Escape, or the pad's East button while a screen is up.
     pub(super) ui_escape: bool,
-    // The key name KeyBindings and screen toggles match this frame.
+    // The key name KeyBindings and screen toggles match this frame: the
+    // frame's last fresh press, so a held key toggles or fires once.
     pub(super) pressed_key: Option<&'static str>,
 }
 
@@ -39,19 +40,16 @@ pub(super) fn frame_intent(
     });
     let menu_keys = screen_active && !typing;
     let nav = if menu_keys {
-        input.nav.or(match input.captured_key {
-            Some(InputKey::Up) => Some(NavDirection::Up),
-            Some(InputKey::Down) => Some(NavDirection::Down),
-            Some(InputKey::Left) => Some(NavDirection::Left),
-            Some(InputKey::Right) => Some(NavDirection::Right),
-            _ => None,
-        })
+        input
+            .nav
+            .or_else(|| input.pressed_keys().filter_map(arrow_nav).last())
     } else {
         None
     };
     // An unfocused Enter still reaches the KeyBindings (e.g. a story's advance
-    // binding); a cursor move this frame has already dismissed the focus.
-    let enter_pressed = menu_keys && input.captured_key == Some(InputKey::Enter);
+    // binding); a cursor move this frame has already dismissed the focus. A
+    // held Enter confirms once, like a binding fires once.
+    let enter_pressed = menu_keys && input.pressed_fresh(InputKey::Enter);
     let enter_confirm = enter_pressed && has_focus && !cursor_moved;
     let confirm = (menu_keys && input.confirm) || enter_confirm;
     let ui_escape = input.escape || (input.back && screen_active);
@@ -60,7 +58,7 @@ pub(super) fn frame_intent(
     let pressed_key = if ui_escape {
         Some("Escape")
     } else {
-        input.captured_key.map(InputKey::name)
+        input.fresh_keys().last().map(InputKey::name)
     };
     UiIntent {
         cursor_moved,
@@ -73,9 +71,21 @@ pub(super) fn frame_intent(
     }
 }
 
+// The focus step an arrow key asks for.
+fn arrow_nav(key: InputKey) -> Option<NavDirection> {
+    match key {
+        InputKey::Up => Some(NavDirection::Up),
+        InputKey::Down => Some(NavDirection::Down),
+        InputKey::Left => Some(NavDirection::Left),
+        InputKey::Right => Some(NavDirection::Right),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::{KeyEvent, KeyMods, KeyPress};
 
     fn at(mx: f32, my: f32) -> FrameInput {
         FrameInput {
@@ -87,7 +97,18 @@ mod tests {
 
     fn key(k: InputKey) -> FrameInput {
         FrameInput {
-            captured_key: Some(k),
+            key_events: vec![KeyEvent::press(k)],
+            ..Default::default()
+        }
+    }
+
+    fn held(k: InputKey) -> FrameInput {
+        let press = KeyPress {
+            repeat: true,
+            ..KeyPress::new(k, KeyMods::NONE)
+        };
+        FrameInput {
+            key_events: vec![KeyEvent::Press(press)],
             ..Default::default()
         }
     }
@@ -118,7 +139,7 @@ mod tests {
     fn pad_nav_wins_over_an_arrow_key() {
         let input = FrameInput {
             nav: Some(NavDirection::Left),
-            captured_key: Some(InputKey::Right),
+            key_events: vec![KeyEvent::press(InputKey::Right)],
             ..Default::default()
         };
         assert_eq!(menu(&input, false).nav, Some(NavDirection::Left));
@@ -143,6 +164,42 @@ mod tests {
         let moved = frame_intent(&moved, false, true, true, Some((0.0, 0.0)));
         assert!(moved.enter_pressed);
         assert!(!moved.enter_confirm);
+    }
+
+    // Several presses in one frame: the last one names the binding, and an
+    // arrow earlier in the frame still navigates.
+    #[test]
+    fn the_last_press_names_the_key_and_arrows_still_navigate() {
+        let input = FrameInput {
+            key_events: vec![
+                KeyEvent::press(InputKey::Down),
+                KeyEvent::press(InputKey::Shift),
+                KeyEvent::press(InputKey::Space),
+            ],
+            ..Default::default()
+        };
+        let intent = menu(&input, false);
+        assert_eq!(intent.pressed_key, Some("Space"));
+        assert_eq!(intent.nav, Some(NavDirection::Down));
+    }
+
+    // A held key's auto-repeat names no key for bindings or toggles and
+    // confirms nothing, but a held arrow keeps stepping the focus.
+    #[test]
+    fn repeats_navigate_but_never_fire() {
+        let space = menu(&held(InputKey::Space), true);
+        assert_eq!(space.pressed_key, None);
+        let enter = menu(&held(InputKey::Enter), true);
+        assert!(!enter.enter_pressed && !enter.confirm);
+        assert_eq!(
+            menu(&held(InputKey::Down), false).nav,
+            Some(NavDirection::Down)
+        );
+        assert_eq!(
+            menu(&key(InputKey::Space), false).pressed_key,
+            Some("Space"),
+            "a fresh press still names its key"
+        );
     }
 
     #[test]
@@ -181,10 +238,10 @@ mod tests {
     }
 
     #[test]
-    fn escape_overrides_the_captured_key_name() {
+    fn escape_overrides_the_pressed_key_name() {
         let input = FrameInput {
             escape: true,
-            captured_key: Some(InputKey::Space),
+            key_events: vec![KeyEvent::press(InputKey::Space)],
             ..Default::default()
         };
         let intent = frame_intent(&input, true, false, false, None);

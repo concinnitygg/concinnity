@@ -14,8 +14,8 @@ use crate::editor::behavior::graph::CardKind;
 use crate::editor::behavior::panel::{BehaviorAction, Status, ViewMode};
 use crate::editor::behavior::path;
 use crate::editor::hook::tests::fixtures::{
-    behavior, behavior_escape_input, behavior_row, behavior_session, entry, open_args,
-    press_behavior_key, press_remove, select_behavior, selected, story_key_input, type_name,
+    behavior, behavior_escape_input, behavior_row, behavior_session, entry, key_input, open_args,
+    press_behavior_key, press_remove, select_behavior, selected, type_name,
 };
 use crate::editor::hook::{EditorHook, declared_id};
 
@@ -184,11 +184,11 @@ fn behavior_value_field_commits_on_enter_and_reports_a_bad_value() {
     assert!(h.behavior.focus, "a typed row is ready to type into");
 
     widget::seed_field(&mut world, behavior::panel::VALUE_INPUT, "2.5");
-    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
+    h.behavior_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(open_args(&h)["delay"], serde_json::json!(2.5));
 
     widget::seed_field(&mut world, behavior::panel::VALUE_INPUT, "soon");
-    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
+    h.behavior_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(
         open_args(&h)["delay"],
         serde_json::json!(2.5),
@@ -327,7 +327,7 @@ fn behavior_rename_commits_on_enter() {
     );
 
     type_name(&mut world, "  welcome  ");
-    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
+    h.behavior_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(h.behavior_data().name, "welcome", "trimmed on the way in");
     assert!(!h.behavior.name_focus, "committing gives up the keyboard");
     assert!(h.dirty && h.rebuild_preview, "renaming is a world edit");
@@ -345,7 +345,7 @@ fn behavior_rename_keeps_the_name_unique() {
     ]);
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
     type_name(&mut world, "chase");
-    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
+    h.behavior_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(h.behavior_data().name, "chase_1");
     assert_eq!(
         widget::field_text(&world, behavior::panel::NAME_INPUT),
@@ -355,7 +355,7 @@ fn behavior_rename_keeps_the_name_unique() {
 
     // Committing a name unchanged is not a collision with itself.
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
-    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
+    h.behavior_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(h.behavior_data().name, "chase_1");
 }
 
@@ -364,7 +364,7 @@ fn behavior_rename_refuses_a_blank_name() {
     let (mut h, mut world) = behavior_session(vec![behavior("greet", serde_json::json!({}))]);
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
     type_name(&mut world, "   ");
-    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
+    h.behavior_keys(&mut world, &key_input(InputKey::Enter));
 
     assert_eq!(h.behavior_data().name, "greet", "nothing was written");
     assert!(!h.dirty, "and no edit was recorded");
@@ -389,7 +389,7 @@ fn behavior_rename_reruns_the_checker_under_the_new_name() {
     )]);
     h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
     type_name(&mut world, "still_broken");
-    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
+    h.behavior_keys(&mut world, &key_input(InputKey::Enter));
 
     let Some(Status::Error { message: e, .. }) = &h.behavior.status else {
         panic!("expected the error to survive the rename");
@@ -411,7 +411,7 @@ fn behavior_name_reverts_when_it_loses_focus() {
         widget::field_text(&world, behavior::panel::NAME_INPUT),
         "greet"
     );
-    h.behavior_keys(&mut world, &story_key_input(InputKey::Enter));
+    h.behavior_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(h.behavior_data().name, "greet");
     assert!(!h.dirty);
 }

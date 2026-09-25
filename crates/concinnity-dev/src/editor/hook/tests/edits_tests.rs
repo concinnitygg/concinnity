@@ -6,6 +6,9 @@
 
 use concinnity_cook::authoring::world::parse_world_jsonl;
 use concinnity_core::components::FrameInput;
+use concinnity_core::components::KeyEvent;
+use concinnity_core::components::KeyMods;
+use concinnity_core::components::KeyPress;
 use concinnity_core::components::TextLabel;
 use concinnity_core::ecs::World;
 
@@ -258,7 +261,7 @@ fn ctrl_z_y_step_history_unless_typing_or_playing() {
         let mut world = world_with_input(FrameInput {
             viewport: [1280.0, 720.0],
             ctrl: true,
-            captured_key: Some(key),
+            key_events: vec![KeyEvent::Press(KeyPress::new(key, KeyMods::CTRL))],
             ..Default::default()
         });
         h.tick(&mut world);
@@ -268,7 +271,7 @@ fn ctrl_z_y_step_history_unless_typing_or_playing() {
     h.mark_changed();
 
     // Typing in the Story panel: the shortcut must not fire.
-    h.story.focus = true;
+    crate::editor::hook::tests::fixtures::focus_story(&mut h);
     step(&mut h, InputKey::Z);
     assert_eq!(
         h.entries.len(),

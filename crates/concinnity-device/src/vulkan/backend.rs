@@ -33,6 +33,7 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::particles;
 use concinnity_core::render::reflection_probe;
 use concinnity_core::render::volumetric_fog;
+use concinnity_core::window::clipboard::Clipboard;
 use concinnity_core::window::display_mode;
 
 use super::context::{VkContext, debug_assert_main_thread};
@@ -103,6 +104,11 @@ impl WindowControl for VkContext {
         fn set_keymap(&mut self, keymap: &KeyMap);
         fn logical_size(&self) -> (f32, f32);
         fn top_content_inset(&self) -> f32;
+    }
+
+    fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
+        debug_assert_main_thread("clipboard");
+        self.window_mut().clipboard()
     }
 }
 

@@ -17,15 +17,13 @@ use crate::editor::panels::asset_tree;
 use crate::editor::panels::asset_tree::TreeGroup;
 use crate::editor::panels::assets_panel::PanelAction;
 use crate::editor::panels::form;
-use crate::editor::panels::story_panel;
 use crate::editor::widget;
-use concinnity_core::components::TextInput;
 use concinnity_core::ecs::World;
 
 use crate::editor::hook::tests::fixtures::entry_target;
 use crate::editor::hook::tests::fixtures::selected;
 use crate::editor::hook::tests::fixtures::{
-    a_promotable_asset, click_row, entry, expandable_hook, hook, row_of, seed_tree, set_field,
+    a_promotable_asset, click_row, entry, expandable_hook, hook, row_of, seed_tree,
     world_with_fields,
 };
 use crate::editor::hook::{EditorHook, declared_id};
@@ -666,17 +664,10 @@ fn unapplied_markers_follow_edit_and_apply() {
     h.lighting_touched = true;
     h.seed_lighting(&mut world);
     assert!(!h.lighting_touched);
-    // Story: a changed line marks on commit; loading clears.
-    h.story.lines = vec!["hello".to_string()];
-    h.story.line = 0;
-    world.push_identified(story_panel::LINE_INPUT, TextInput::default());
-    set_field(&mut world, story_panel::LINE_INPUT, "hello edited");
-    h.commit_story_line(&world);
-    assert!(h.story.touched, "a changed line marks the story");
-    // An unchanged commit does not re-mark after a clear.
-    h.story.touched = false;
-    h.commit_story_line(&world);
-    assert!(!h.story.touched, "an identical line is not an edit");
-    let dirty_view = h.make_story_view([0.0, 0.0]);
-    assert!(!dirty_view.dirty);
+    // Story: an edit marks the heading; undoing back to the loaded text clears.
+    h.story.area = crate::editor::text_area::TextArea::from_text("hello");
+    h.story.area.type_char('!');
+    assert!(h.make_story_view([0.0, 0.0]).area.is_dirty());
+    h.story.area.undo();
+    assert!(!h.make_story_view([0.0, 0.0]).area.is_dirty());
 }

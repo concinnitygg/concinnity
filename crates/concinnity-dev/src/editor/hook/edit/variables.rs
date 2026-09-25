@@ -329,7 +329,7 @@ impl EditorHook {
             self.variables_value_focus = false;
             return;
         }
-        if input.captured_key != Some(InputKey::Enter) {
+        if !input.pressed_fresh(InputKey::Enter) {
             return;
         }
         if self.variables_name_focus {

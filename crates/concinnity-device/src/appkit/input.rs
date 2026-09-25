@@ -4,8 +4,8 @@
 //! every backend that renders into an NSView; `window.rs` owns the event pump
 //! that drives them. Mirrors `win32/input.rs`.
 
-use concinnity_core::components::InputKey;
-use objc2_app_kit::NSEvent;
+use concinnity_core::components::{InputKey, KeyEvent, KeyMods};
+use objc2_app_kit::{NSEvent, NSEventModifierFlags};
 
 // Persistent key state tracked across frames. InputKey booleans are set on KeyDown
 // and cleared on KeyUp; they are never reset between frames so that held keys
@@ -44,19 +44,14 @@ pub(super) struct KeyState {
     // cleared by take_input(). When the cursor is captured Escape continues
     // to call release_cursor() instead.
     pub(super) escape_pulse: bool,
-    // Pulse: the canonical key pressed since the last take_input(), for the
-    // settings menu's rebind capture. Set on any KeyDown with a known mapping
-    // (and on the Shift rising edge); cleared by take_input(). Not gated by
-    // capture / menu state so a rebind row can read it while a menu is open.
-    pub(super) captured_key: Option<InputKey>,
-    // Pulse: the printable character produced by the last key press, taken from
-    // the NSEvent's `characters` (so shift / option / dead keys resolve to the
-    // right glyph), for text-input fields; cleared by take_input(). Control
-    // glyphs (Backspace, Enter, Escape, arrows) are filtered out -- those travel
-    // as `captured_key`.
-    pub(super) typed_char: Option<char>,
+    // Every key press (repeats included) and printable character since the
+    // last take_input(), in arrival order; drained by take_input(). Not gated
+    // by capture / menu state, so a rebind row and text fields see every key.
+    // Control glyphs (Backspace, Enter, Escape, arrows) never become text:
+    // those travel as presses.
+    pub(super) events: Vec<KeyEvent>,
     // Whether Shift is currently held, tracked from FlagsChanged so the rising
-    // edge can fire `captured_key` and drive any action bound to Shift (Shift is
+    // edge can queue a Shift press and drive any action bound to Shift (Shift is
     // a pure modifier on macOS: it generates FlagsChanged, not KeyDown/KeyUp).
     pub(super) shift_down: bool,
     // Whether Control is currently held, tracked from FlagsChanged like Shift.
@@ -96,6 +91,17 @@ pub(super) fn printable_char(event: &NSEvent) -> Option<char> {
     let text = event.characters()?.to_string();
     let c = text.chars().next()?;
     is_printable_glyph(c).then_some(c)
+}
+
+// The modifiers a key event carries, read from the event itself so they hold
+// whatever order the queue delivered FlagsChanged in.
+pub(super) fn event_mods(flags: NSEventModifierFlags) -> KeyMods {
+    KeyMods {
+        shift: flags.contains(NSEventModifierFlags::Shift),
+        ctrl: flags.contains(NSEventModifierFlags::Control),
+        alt: flags.contains(NSEventModifierFlags::Option),
+        cmd: flags.contains(NSEventModifierFlags::Command),
+    }
 }
 
 // Map a macOS virtual key code to a canonical `InputKey`, or `None` for a key the
@@ -149,6 +155,10 @@ pub(super) fn key_from_mac(kc: u16) -> Option<InputKey> {
         124 => InputKey::Right,
         125 => InputKey::Down,
         126 => InputKey::Up,
+        115 => InputKey::Home,
+        119 => InputKey::End,
+        116 => InputKey::PageUp,
+        121 => InputKey::PageDown,
         27 => InputKey::Minus,
         24 => InputKey::Equals,
         33 => InputKey::LeftBracket,
@@ -184,10 +194,22 @@ mod tests {
 
     #[test]
     fn editing_keys_decode() {
-        // Backspace and forward-delete decode so text fields can edit; they ride
-        // `captured_key`, not `typed_char`.
+        // The editing and navigation keys decode so text fields can edit; they
+        // travel as presses, never as text.
         assert_eq!(key_from_mac(51), Some(InputKey::Backspace));
         assert_eq!(key_from_mac(117), Some(InputKey::Delete));
+        assert_eq!(key_from_mac(115), Some(InputKey::Home));
+        assert_eq!(key_from_mac(119), Some(InputKey::End));
+        assert_eq!(key_from_mac(116), Some(InputKey::PageUp));
+        assert_eq!(key_from_mac(121), Some(InputKey::PageDown));
+    }
+
+    #[test]
+    fn event_mods_read_each_flag() {
+        assert_eq!(event_mods(NSEventModifierFlags::empty()), KeyMods::NONE);
+        assert_eq!(event_mods(NSEventModifierFlags::Command), KeyMods::CMD);
+        let both = event_mods(NSEventModifierFlags::Option | NSEventModifierFlags::Shift);
+        assert!(both.alt && both.shift && !both.ctrl && !both.cmd);
     }
 
     #[test]

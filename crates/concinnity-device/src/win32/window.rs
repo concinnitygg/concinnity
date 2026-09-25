@@ -454,7 +454,9 @@ unsafe extern "system" fn wnd_proc(
                         release_cursor(state);
                     }
                 }
-                state.key.on_key_down(vk);
+                // lParam bit 30 is the key's previous state: set on an auto-repeat.
+                let repeat = (lparam.0 >> 30) & 1 == 1;
+                state.key.on_key_down(vk, repeat);
                 LRESULT(0)
             }
             WM_KEYUP => {
@@ -480,13 +482,9 @@ unsafe extern "system" fn wnd_proc(
                 // `TranslateMessage` (in `pump_messages`) synthesizes WM_CHAR
                 // from WM_KEYDOWN with the layout / Shift / dead-key resolution
                 // already applied, so wParam is the final UTF-16 code unit. Feed
-                // printable glyphs to text-input fields; `on_char` filters out the
-                // control codes (Backspace, Enter, Escape, ...). Lone surrogate
-                // halves (non-BMP input) yield `None` and are dropped, matching
-                // the one-codepoint-per-frame contract.
-                if let Some(c) = char::from_u32(wparam.0 as u32) {
-                    state.key.on_char(c);
-                }
+                // it to the text queue; `on_char` joins surrogate pairs and filters
+                // out the control codes (Backspace, Enter, Escape, ...).
+                state.key.on_char(wparam.0 as u16);
                 LRESULT(0)
             }
             WM_KILLFOCUS => {

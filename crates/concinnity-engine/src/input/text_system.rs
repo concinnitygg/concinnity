@@ -1,11 +1,12 @@
 //! Drives editable TextInput fields: click-to-focus, character entry from the
-//! frame's typed character, and caret editing / movement from the Backspace /
-//! Delete / Left / Right keys. Present whenever the world has any `TextInput`
+//! frame's typed characters, and caret editing / movement from the Backspace /
+//! Delete / Left / Right / Home / End keys, every event of the frame applied in
+//! the order it arrived. Present whenever the world has any `TextInput`
 //! (see `World::build_text_input`). Focus and caret live on the component itself
 //! (runtime-only fields), so the renderer and any reader see the edited text in
 //! place.
 
-use concinnity_core::components::{FrameInput, InputKey, SpriteFit, TextInput};
+use concinnity_core::components::{FrameInput, InputKey, KeyEvent, SpriteFit, TextInput};
 use concinnity_core::ecs::{Access, Entity, PipelineContext, StepResult, System};
 use concinnity_core::gfx::overlay::OverlayTransform;
 
@@ -17,17 +18,29 @@ enum Edit {
     Delete,
     Left,
     Right,
+    Home,
+    End,
 }
 
-// The caret edit a non-printable key requests, if any. Printable characters
-// arrive via `FrameInput.typed_char` and take precedence (see `step`).
+// The caret edit a non-printable key requests, if any. A printable key's
+// character arrives as its own text event (see `edit_from_event`).
 fn command_from_key(key: InputKey) -> Option<Edit> {
     match key {
         InputKey::Backspace => Some(Edit::Backspace),
         InputKey::Delete => Some(Edit::Delete),
         InputKey::Left => Some(Edit::Left),
         InputKey::Right => Some(Edit::Right),
+        InputKey::Home => Some(Edit::Home),
+        InputKey::End => Some(Edit::End),
         _ => None,
+    }
+}
+
+// The edit one keyboard event requests, if any.
+fn edit_from_event(event: &KeyEvent) -> Option<Edit> {
+    match event {
+        KeyEvent::Text(ch) => Some(Edit::Insert(*ch)),
+        KeyEvent::Press(press) => command_from_key(press.key),
     }
 }
 
@@ -73,6 +86,8 @@ fn apply_edit(content: &mut String, caret: &mut usize, edit: Edit, max_len: usiz
         }
         Edit::Left => *caret = c.saturating_sub(1),
         Edit::Right => *caret = (c + 1).min(n),
+        Edit::Home => *caret = 0,
+        Edit::End => *caret = n,
     }
 }
 
@@ -116,14 +131,13 @@ impl System for TextInputSystem {
             None => return StepResult::Continue,
         };
 
-        // A printable character types; otherwise a Backspace / Delete / arrow
-        // moves or edits at the caret. Printable input wins (control keys never
-        // produce a `typed_char`).
-        let edit = if let Some(ch) = input.typed_char {
-            Some(Edit::Insert(ch))
-        } else {
-            input.captured_key.and_then(command_from_key)
-        };
+        // Every character typed and editing key pressed this frame, in order,
+        // so fast typing at a low frame rate loses nothing.
+        let edits: Vec<Edit> = input
+            .key_events
+            .iter()
+            .filter_map(edit_from_event)
+            .collect();
 
         // On a click, focus moves to the top-most visible field under the cursor
         // (last one wins, matching draw order); a click that misses every field
@@ -151,10 +165,10 @@ impl System for TextInputSystem {
             if ti.focused {
                 let n = ti.content.chars().count();
                 ti.caret = if input.left_click { n } else { ti.caret.min(n) };
-                if ti.visible
-                    && let Some(edit) = edit
-                {
-                    apply_edit(&mut ti.content, &mut ti.caret, edit, ti.max_len as usize);
+                if ti.visible {
+                    for &edit in &edits {
+                        apply_edit(&mut ti.content, &mut ti.caret, edit, ti.max_len as usize);
+                    }
                 }
             }
         }
@@ -256,8 +270,20 @@ mod tests {
         assert_eq!(command_from_key(InputKey::Delete), Some(Edit::Delete));
         assert_eq!(command_from_key(InputKey::Left), Some(Edit::Left));
         assert_eq!(command_from_key(InputKey::Right), Some(Edit::Right));
+        assert_eq!(command_from_key(InputKey::Home), Some(Edit::Home));
+        assert_eq!(command_from_key(InputKey::End), Some(Edit::End));
         assert_eq!(command_from_key(InputKey::A), None);
         assert_eq!(command_from_key(InputKey::Enter), None);
+    }
+
+    #[test]
+    fn home_and_end_jump_the_caret() {
+        let mut s = "abc".to_string();
+        let mut c = 1;
+        apply_edit(&mut s, &mut c, Edit::End, 0);
+        assert_eq!(c, 3);
+        apply_edit(&mut s, &mut c, Edit::Home, 0);
+        assert_eq!(c, 0);
     }
 
     #[test]
@@ -292,11 +318,45 @@ mod tests {
         );
         world.start(SYSTEMS).unwrap();
         world.add_component(FrameInput {
-            typed_char: Some('h'),
+            key_events: vec![KeyEvent::Text('h')],
             ..Default::default()
         });
         world.step();
         assert_eq!(world.query::<TextInput>().next().unwrap().content, "h");
+    }
+
+    // Several keystrokes landing in one frame all apply, in arrival order: the
+    // fast-typing case a one-per-frame pulse used to drop.
+    #[test]
+    fn every_event_of_a_frame_applies_in_order() {
+        let mut world = World::new();
+        world.push_identified(
+            AssetId(1),
+            TextInput {
+                focused: true,
+                screen: None,
+                ..Default::default()
+            },
+        );
+        world.start(SYSTEMS).unwrap();
+        world.add_component(FrameInput {
+            key_events: vec![
+                KeyEvent::press(InputKey::A),
+                KeyEvent::Text('a'),
+                KeyEvent::press(InputKey::B),
+                KeyEvent::Text('b'),
+                KeyEvent::press(InputKey::Backspace),
+                KeyEvent::press(InputKey::C),
+                KeyEvent::Text('c'),
+                KeyEvent::press(InputKey::Home),
+                KeyEvent::Text('>'),
+            ],
+            ..Default::default()
+        });
+        world.step();
+        let field = world.query::<TextInput>().next().unwrap();
+        assert_eq!(field.content, ">ac");
+        assert_eq!(field.caret, 1);
     }
 
     #[test]

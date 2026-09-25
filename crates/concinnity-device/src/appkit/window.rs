@@ -7,9 +7,10 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::{InputKey, WindowMode};
+use concinnity_core::components::{InputKey, KeyEvent, KeyPress, WindowMode};
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
+use concinnity_core::window::clipboard::Clipboard;
 use concinnity_core::window::display_mode::DisplayMode;
 use objc2::rc::Retained;
 use objc2_app_kit::{
@@ -23,7 +24,7 @@ use super::chrome::{
     windowed_style_mask,
 };
 use super::display_mode::{self, FullscreenDisplayMode};
-use super::input::{KeyState, key_from_mac, printable_char};
+use super::input::{KeyState, event_mods, key_from_mac, printable_char};
 
 unsafe extern "C" {
     // Moves the OS cursor without generating a mouse-moved event.
@@ -80,6 +81,7 @@ pub(crate) struct AppKitWindow {
     // once per frame by the backend's draw path.
     fullscreen_display: FullscreenDisplayMode,
     keys: KeyState,
+    clipboard: super::clipboard::SystemClipboard,
     // The runtime movement key map (canonical action -> key). `handle_key`
     // decodes physical events through this instead of hardcoded keys, so a
     // settings-menu rebind takes effect immediately. Defaults to W/S/A/D/Shift/
@@ -122,8 +124,15 @@ impl AppKitWindow {
             _window_delegate: window_delegate,
             fullscreen_display: FullscreenDisplayMode::new(),
             keys: KeyState::default(),
+            clipboard: super::clipboard::SystemClipboard,
             keymap: KeyMap::default(),
         }
+    }
+
+    // The general pasteboard, reachable in every window mode: it is the
+    // system's, not the window's.
+    pub(crate) fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
+        Some(&mut self.clipboard)
     }
 
     // The view the backend renders into, for the presentation resources it owns
@@ -499,8 +508,7 @@ impl AppKitWindow {
             ctrl: self.keys.control_down,
             alt: self.keys.alt_down,
             cmd: self.keys.command_down,
-            captured_key: self.keys.captured_key,
-            typed_char: self.keys.typed_char,
+            key_events: std::mem::take(&mut self.keys.events),
         };
         self.keys.interact_pulse = false;
         self.keys.jump_pulse = false;
@@ -511,8 +519,6 @@ impl AppKitWindow {
         self.keys.right_click_pulse = false;
         self.keys.hud_toggle_pulse = false;
         self.keys.escape_pulse = false;
-        self.keys.captured_key = None;
-        self.keys.typed_char = None;
         snapshot
     }
 
@@ -545,13 +551,16 @@ impl AppKitWindow {
                     // released, independent of any other key event. Shift is a
                     // pure modifier on macOS (no KeyDown/KeyUp), so it is decoded
                     // here: drive any action bound to Shift (sprint by default)
-                    // and fire the rebind-capture pulse on its rising edge.
+                    // and queue a Shift press on its rising edge.
                     let flags = event.modifierFlags();
                     let shift = flags.contains(NSEventModifierFlags::Shift);
                     let edge_down = shift && !self.keys.shift_down;
                     self.keys.shift_down = shift;
                     if edge_down {
-                        self.keys.captured_key = Some(InputKey::Shift);
+                        self.keys.events.push(KeyEvent::Press(KeyPress::new(
+                            InputKey::Shift,
+                            event_mods(flags),
+                        )));
                     }
                     self.apply_binding(InputKey::Shift, shift, edge_down);
                     // Control is a held modifier too (a story's Ctrl fast-forward
@@ -744,13 +753,16 @@ impl AppKitWindow {
         }
         // Read from the event rather than the tracked flag so the decisions
         // below hold whatever order the queue delivered FlagsChanged in.
-        let command = event
-            .modifierFlags()
-            .contains(NSEventModifierFlags::Command);
+        let mods = event_mods(event.modifierFlags());
+        let command = mods.cmd;
         // Rebindable keys, decoded through the runtime key map.
         if let Some(key) = key_from_mac(kc) {
             if pressed {
-                self.keys.captured_key = Some(key);
+                self.keys.events.push(KeyEvent::Press(KeyPress {
+                    key,
+                    mods,
+                    repeat: event.isARepeat(),
+                }));
             }
             // A Command chord is a shortcut, so its press drives no gameplay
             // action (Cmd+W is not "walk forward"). A release always binds:
@@ -768,7 +780,7 @@ impl AppKitWindow {
             && !command
             && let Some(c) = printable_char(event)
         {
-            self.keys.typed_char = Some(c);
+            self.keys.events.push(KeyEvent::Text(c));
         }
     }
 }

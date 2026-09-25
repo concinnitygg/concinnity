@@ -7,7 +7,7 @@ use concinnity_core::components::InputKey;
 use concinnity_core::ecs::World;
 
 use crate::editor::hook::EditorHook;
-use crate::editor::hook::tests::fixtures::{entry, hook, story_key_input};
+use crate::editor::hook::tests::fixtures::{entry, hook, key_input};
 
 use crate::editor::inject;
 
@@ -165,7 +165,7 @@ fn import_enter_key_adds() {
     let glb = dir.join("prop.glb");
     std::fs::write(&glb, b"glb").unwrap();
     type_path(&mut world, &glb.to_string_lossy());
-    h.import_keys(&mut world, &story_key_input(InputKey::Enter));
+    h.import_keys(&mut world, &key_input(InputKey::Enter));
     assert_eq!(h.entries.len(), 1);
 }
 

@@ -1,10 +1,11 @@
 //! The window a backend renders into, as the settings menu sees it.
 //!
 //! Vsync, window mode and size, the display-mode list, the overlay's logical
-//! size, and the cursor state the UI drives. Every method here is about the
+//! size, the cursor state the UI drives, and the system clipboard. Every method here is about the
 //! surface and its input, never about the scene drawn on it.
 
 use crate::input::keymap::KeyMap;
+use crate::window::clipboard::Clipboard;
 use alloc::vec::Vec;
 
 /// The presentation surface and its input: vsync, window mode and size, the
@@ -128,5 +129,12 @@ pub trait WindowControl {
     /// built-in defaults.
     fn set_keymap(&mut self, keymap: &KeyMap) {
         let _ = keymap;
+    }
+
+    /// The system clipboard this window reaches. Default `None`: a headless
+    /// backend or an embedded view has none, and a caller falls back to a
+    /// clipboard of its own.
+    fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
+        None
     }
 }

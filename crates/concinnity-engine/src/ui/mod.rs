@@ -1396,6 +1396,9 @@ mod tests {
     use concinnity_core::components::GamepadAction;
     use concinnity_core::components::GamepadButton;
     use concinnity_core::components::InputKey;
+    use concinnity_core::components::KeyEvent;
+    use concinnity_core::components::KeyMods;
+    use concinnity_core::components::KeyPress;
     use concinnity_core::components::TextAlign;
     use concinnity_core::components::{HitRegion, ScrollGroup, ScrollRow, TextLabel};
     use concinnity_core::ecs::World;
@@ -1929,7 +1932,7 @@ mod tests {
         let pulse_down = || FrameInput {
             mouse_x: 500.0,
             mouse_y: 120.0,
-            captured_key: Some(InputKey::Down),
+            key_events: vec![KeyEvent::press(InputKey::Down)],
             ..Default::default()
         };
 
@@ -1953,7 +1956,7 @@ mod tests {
         world.add_component(FrameInput {
             mouse_x: 500.0,
             mouse_y: 120.0,
-            captured_key: Some(InputKey::Enter),
+            key_events: vec![KeyEvent::press(InputKey::Enter)],
             ..Default::default()
         });
         world.step();
@@ -2818,7 +2821,7 @@ mod tests {
     fn nav_focus_walks_panel_rows_and_scrolls_them_into_view() {
         let (mut world, e0) = scrollbar_panel_world();
         let pulse_down = || FrameInput {
-            captured_key: Some(InputKey::Down),
+            key_events: vec![KeyEvent::press(InputKey::Down)],
             ..Default::default()
         };
 
@@ -2910,7 +2913,7 @@ mod tests {
 
         // Press a key: it binds, pushing a Rebind command carrying the key.
         world.add_component(FrameInput {
-            captured_key: Some(InputKey::Q),
+            key_events: vec![KeyEvent::press(InputKey::Q)],
             ..Default::default()
         });
         world.step();
@@ -2922,6 +2925,38 @@ mod tests {
         assert_eq!(cmd.value_label, Some(value));
         assert!(matches!(cmd.op, SettingOp::Rebind(InputKey::Q)));
         assert!(cmd.persist);
+    }
+
+    // A capture binds a fresh press only: a key still auto-repeating from
+    // before the capture began does not bind.
+    #[test]
+    fn rebind_capture_ignores_a_repeat() {
+        let (mut world, _value) = rebind_world();
+        world.add_component(make_frame_input(50.0, 20.0, true));
+        world.step();
+        let repeat = KeyPress {
+            repeat: true,
+            ..KeyPress::new(InputKey::E, KeyMods::NONE)
+        };
+        world.add_component(FrameInput {
+            key_events: vec![KeyEvent::Press(repeat)],
+            ..Default::default()
+        });
+        world.step();
+        assert!(
+            produced_setting_commands(&world).is_empty(),
+            "a repeat does not bind"
+        );
+        world.add_component(FrameInput {
+            key_events: vec![KeyEvent::press(InputKey::Q)],
+            ..Default::default()
+        });
+        world.step();
+        let cmd = produced_setting_commands(&world)
+            .into_iter()
+            .next()
+            .unwrap();
+        assert!(matches!(cmd.op, SettingOp::Rebind(InputKey::Q)));
     }
 
     // Escape while capturing cancels and restores the row's previous value text.
@@ -2947,11 +2982,11 @@ mod tests {
 
     // A captured key with no active capture binds nothing.
     #[test]
-    fn captured_key_without_capture_is_ignored() {
+    fn a_key_press_without_capture_is_ignored() {
         use concinnity_core::components::InputKey;
         let (mut world, _value) = rebind_world();
         world.add_component(FrameInput {
-            captured_key: Some(InputKey::Q),
+            key_events: vec![KeyEvent::press(InputKey::Q)],
             ..Default::default()
         });
         world.step();
@@ -3044,7 +3079,7 @@ mod tests {
     }
 
     // A non-Escape KeyBinding fires when its key is pressed (surfaced as the
-    // one-frame captured_key), so a story's Space / Enter advance bindings work.
+    // frame's key events), so a story's Space / Enter advance bindings work.
     #[test]
     fn pressed_key_binding_fires_action() {
         for key in [InputKey::Space, InputKey::Enter] {
@@ -3057,7 +3092,7 @@ mod tests {
             world.start(SYSTEMS).unwrap();
 
             world.add_component(FrameInput {
-                captured_key: Some(key),
+                key_events: vec![KeyEvent::press(key)],
                 ..Default::default()
             });
             world.step();
@@ -3083,7 +3118,7 @@ mod tests {
         world.start(SYSTEMS).unwrap();
 
         world.add_component(FrameInput {
-            captured_key: Some(InputKey::Down),
+            key_events: vec![KeyEvent::press(InputKey::Down)],
             ..Default::default()
         });
         world.step();
@@ -3217,7 +3252,7 @@ mod tests {
 
         let backtick = |w: &mut World| {
             w.add_component(FrameInput {
-                captured_key: Some(InputKey::Backtick),
+                key_events: vec![KeyEvent::press(InputKey::Backtick)],
                 ..Default::default()
             });
             w.step();
@@ -3229,6 +3264,50 @@ mod tests {
         assert!(shown(&world), "toggle key opens the screen");
         backtick(&mut world);
         assert!(!shown(&world), "toggle key closes it again");
+    }
+
+    // A held toggle key's auto-repeat does not flip the screen back and forth:
+    // only the fresh press toggles.
+    #[test]
+    fn a_held_toggle_key_toggles_once() {
+        let mut world = World::new();
+        world.push_identified(
+            AssetId(80),
+            Screen {
+                toggle_key: "Backtick".to_string(),
+                ..Default::default()
+            },
+        );
+        world.push_identified(
+            AssetId(81),
+            Sprite {
+                width: 10.0,
+                height: 10.0,
+                visible: true,
+                screen: Some(Ref::new(AssetId(80))),
+                ..Default::default()
+            },
+        );
+        world.start(SYSTEMS).unwrap();
+        let shown = |w: &World| w.get_by_id::<Sprite>(AssetId(81)).unwrap().visible;
+        let frame = |w: &mut World, repeat: bool| {
+            let press = KeyPress {
+                repeat,
+                ..KeyPress::new(InputKey::Backtick, KeyMods::NONE)
+            };
+            w.add_component(FrameInput {
+                key_events: vec![KeyEvent::Press(press)],
+                ..Default::default()
+            });
+            w.step();
+            w.add_component(FrameInput::default());
+            w.step();
+        };
+        frame(&mut world, false);
+        assert!(shown(&world), "the fresh press opens the screen");
+        frame(&mut world, true);
+        frame(&mut world, true);
+        assert!(shown(&world), "the held key's repeats leave it open");
     }
 
     // A screen's `focus` TextInput gains keyboard focus when the screen
@@ -3262,7 +3341,7 @@ mod tests {
 
         let backtick = |w: &mut World| {
             w.add_component(FrameInput {
-                captured_key: Some(InputKey::Backtick),
+                key_events: vec![KeyEvent::press(InputKey::Backtick)],
                 ..Default::default()
             });
             w.step();
@@ -3295,7 +3374,7 @@ mod tests {
         world.start(SYSTEMS).unwrap();
 
         world.add_component(FrameInput {
-            captured_key: Some(InputKey::T),
+            key_events: vec![KeyEvent::press(InputKey::T)],
             ..Default::default()
         });
         world.step();
@@ -3309,7 +3388,7 @@ mod tests {
             ti.focused = false;
         }
         world.add_component(FrameInput {
-            captured_key: Some(InputKey::T),
+            key_events: vec![KeyEvent::press(InputKey::T)],
             ..Default::default()
         });
         world.step();
@@ -3334,7 +3413,7 @@ mod tests {
 
         // No screen on top: the scoped binding stays quiet.
         world.add_component(FrameInput {
-            captured_key: Some(InputKey::Space),
+            key_events: vec![KeyEvent::press(InputKey::Space)],
             ..Default::default()
         });
         world.step();
@@ -3347,7 +3426,7 @@ mod tests {
         world.add_component(FrameInput::default());
         world.step();
         world.add_component(FrameInput {
-            captured_key: Some(InputKey::Space),
+            key_events: vec![KeyEvent::press(InputKey::Space)],
             ..Default::default()
         });
         world.step();

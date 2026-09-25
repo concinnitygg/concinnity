@@ -9,6 +9,9 @@ use concinnity_core::components::Behavior;
 use concinnity_core::components::BehaviorLiteral;
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::InputKey;
+use concinnity_core::components::KeyEvent;
+use concinnity_core::components::KeyMods;
+use concinnity_core::components::KeyPress;
 use concinnity_core::components::Sprite;
 use concinnity_core::components::Variables;
 use concinnity_core::ecs::ComponentAsset;
@@ -28,7 +31,14 @@ fn transport_keys_play_pause_stop_and_step() {
     let key = |k, shift| FrameInput {
         ctrl: true,
         shift,
-        captured_key: Some(k),
+        key_events: vec![KeyEvent::Press(KeyPress::new(
+            k,
+            KeyMods {
+                ctrl: true,
+                shift,
+                ..KeyMods::NONE
+            },
+        ))],
         ..Default::default()
     };
     h.sim_keys(&key(InputKey::P, false));
@@ -45,9 +55,28 @@ fn transport_keys_play_pause_stop_and_step() {
     );
 
     // A focused text field owns the keyboard.
-    h.story.focus = true;
+    crate::editor::hook::tests::fixtures::focus_story(&mut h);
     h.sim_keys(&key(InputKey::P, false));
     assert_eq!(h.sim.state, sim::SimState::Stopped);
+}
+
+// Holding Ctrl+P toggles once: its auto-repeat neither pauses nor replays.
+#[test]
+fn a_held_ctrl_p_toggles_once() {
+    let mut h = hook(Vec::new());
+    let press = |repeat| FrameInput {
+        ctrl: true,
+        key_events: vec![KeyEvent::Press(KeyPress {
+            repeat,
+            ..KeyPress::new(InputKey::P, KeyMods::CTRL)
+        })],
+        ..Default::default()
+    };
+    h.sim_keys(&press(false));
+    assert!(h.sim.playing());
+    h.sim_keys(&press(true));
+    h.sim_keys(&press(true));
+    assert!(h.sim.playing(), "the repeats leave it playing");
 }
 
 #[test]

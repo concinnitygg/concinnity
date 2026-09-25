@@ -108,8 +108,9 @@ fn compose_frame_input(
         // Ctrl does on the platforms that use it.
         cmd: raw.cmd,
         // Not gated by `gameplay`: the rebind captures work while the
-        // settings menu is open (the camera is what freezes behind it).
-        captured_key: raw.captured_key,
+        // settings menu is open (the camera is what freezes behind it), and
+        // text-input fields type while a menu (or the in-engine editor) is up.
+        key_events: raw.key_events.clone(),
         captured_button: pad.first_pressed(),
         // Not gated by `gameplay`: menu focus movement + confirm/back consume
         // these while a screen is active; during play UI ignores them and the
@@ -117,9 +118,6 @@ fn compose_frame_input(
         nav,
         confirm: pad.pressed(GamepadButton::South),
         back: pad.pressed(GamepadButton::East),
-        // Not gated by `gameplay`: text-input fields type while a menu
-        // (or the in-engine editor) is up, like the rebind capture.
-        typed_char: raw.typed_char,
     }
 }
 

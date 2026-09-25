@@ -49,6 +49,7 @@ fn hud_font(world: &mut World) -> Option<FontHandle> {
 // is the fallback when the layer map is empty.)
 pub(crate) fn editor_hud(world: &mut World) {
     let font = hud_font(world);
+    let code_font = super::code_font::inject(world);
     pin_editor_window(world);
     // Opt in to viewport picking: GraphicsSystem captures pick candidates at
     // start only when this resource is already present, then refreshes it each
@@ -129,6 +130,9 @@ pub(crate) fn editor_hud(world: &mut World) {
         }
         for id in p.label_ids() {
             world.push_identified(id, row_label("", hidden, font, false));
+        }
+        for id in p.code_label_ids() {
+            world.push_identified(id, code_label(code_font));
         }
         for (id, placeholder) in p.field_ids() {
             world.push_identified(id, text_field(placeholder, font));
@@ -278,6 +282,13 @@ fn row_label(content: &str, rect: [f32; 4], font: Option<FontHandle>, visible: b
     );
     l.font = font;
     l.scale = theme::TEXT_SCALE;
+    l
+}
+
+// A hidden label in the monospace code face, at the size code text draws at.
+fn code_label(font: Option<FontHandle>) -> TextLabel {
+    let mut l = row_label("", [0.0; 4], font, false);
+    l.scale = super::code_font::SCALE;
     l
 }
 
@@ -475,10 +486,11 @@ mod tests {
     // The button + field text draws with the engine HUD face, baked into the
     // world's font table here rather than at world start -- NOT the first
     // label in the world, whose font may be a user world's oversized display
-    // face. The DebugHud is dropped and its default turned off, since the
-    // editor takes over F1.
+    // face. Code text draws with the monospace face appended after it. The
+    // DebugHud is dropped and its default turned off, since the editor takes
+    // over F1.
     #[test]
-    fn bakes_the_engine_hud_face_and_takes_over_the_debug_hud() {
+    fn bakes_the_hud_and_code_faces_and_takes_over_the_debug_hud() {
         let mut world = World::new();
         world.push_identified(
             AssetId(0),
@@ -490,10 +502,14 @@ mod tests {
         world.add_component(DebugHud::default());
         editor_hud(&mut world);
 
-        // One face appended, and it is the one the panels use.
-        let fonts = world.resource::<FontTable>().expect("the face was baked");
-        assert_eq!(fonts.len(), 1);
+        // Two faces appended: the HUD face the panels use, then the code face.
+        let fonts = world.resource::<FontTable>().expect("the faces were baked");
+        assert_eq!(fonts.len(), 2);
         let baked = FontHandle(0);
+        let code = super::super::panels::story_panel::code_label_ids()[0];
+        let code = world.get_by_id::<TextLabel>(code).unwrap();
+        assert_eq!(code.font, Some(FontHandle(1)));
+        assert_eq!(code.scale, super::super::code_font::SCALE);
         let save = world.get_by_id::<TextLabel>(hud::SAVE_LABEL).unwrap();
         assert_eq!(save.font, Some(baked));
         let field = world

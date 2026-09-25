@@ -34,6 +34,8 @@ mod behavior;
 // Display chip's rows a second time.
 #[cfg(target_os = "macos")]
 mod app_menu;
+// The monospace face code text draws with, baked once for the process.
+mod code_font;
 // The viewport's right-click "Create here" menu, anchored at the cursor.
 mod create_menu;
 // The authored entry list, with the session key every entry is addressed by.
@@ -85,6 +87,8 @@ mod session_store;
 // The Play / Pause / Step / Stop transport over the preview world. Pure
 // state; the hook drives it.
 mod sim;
+// A multi-line code text surface: its pure editing model and its layout.
+mod text_area;
 // The chrome's shared palette and metrics, so every surface reads as one.
 mod theme;
 // The editor's view of the thumbnail set a build baked into the cache.
