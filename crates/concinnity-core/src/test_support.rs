@@ -160,6 +160,7 @@ pub(crate) fn draw_object() -> DrawObject {
             orm_map_index: 0,
             transparent: 0,
             see_through: 0,
+            params_index: 5,
         },
         visible: true,
         resident: true,

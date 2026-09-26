@@ -58,14 +58,17 @@ pub(super) struct RecordFrameView<'a> {
 
 impl VkContext {
     // Rebuild this frame's `GpuObjectData` storage buffer for the bindless
-    // static pass: one 144-byte record per build-time `DrawObject`, indexed
+    // static pass: one record per build-time `DrawObject`, indexed
     // by object id. Streamed `VoxelWorld` chunks (past `draw.n_objects`) are
     // skipped: they fill the runtime reserve instead. The pool indices
     // address the shared handle-indexed texture pool: albedo = `texture_slot`,
     // normal = the normal map's own handle (or the flat-normal fallback slot
     // for a normal-less draw). Rebuilt every frame so `update_model` /
     // `update_visibility` edits are reflected; a no-op when bindless is off.
-    fn build_object_buffer(&self, frame_idx: usize) {
+    fn build_object_buffer(&mut self, frame_idx: usize) {
+        if let Some(params) = self.cull.material_params.as_mut() {
+            params.upload(frame_idx);
+        }
         let Some(buf) = self.cull.object_buffers.get(frame_idx) else {
             return;
         };

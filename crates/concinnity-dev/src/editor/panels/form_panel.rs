@@ -435,18 +435,20 @@ fn field_caption(fields: &[FormField], field: &FormField) -> String {
 fn element_axis_label(fields: &[FormField], key: &str) -> Option<String> {
     let (parent, last) = key.rsplit_once('.')?;
     let idx: usize = last.parse().ok()?;
-    let is_vec_parent = fields
-        .iter()
-        .any(|f| f.key == parent && matches!(f.kind, FieldKind::Vec { color: false, .. }));
-    is_vec_parent.then(|| axis_letter(idx))
+    let len = fields.iter().find_map(|f| match f.kind {
+        FieldKind::Vec { len, color: false } if f.key == parent => Some(len),
+        _ => None,
+    })?;
+    Some(axis_letter(idx, len))
 }
 
-// A vector element's axis label: x / y / z / w for the first four, else `[i]`.
-fn axis_letter(i: usize) -> String {
-    ["x", "y", "z", "w"]
-        .get(i)
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| format!("[{i}]"))
+// A vector element's label: x / y / z / w in a vector of up to four, and its
+// index in a longer one, whose elements are not axes.
+fn axis_letter(i: usize, len: usize) -> String {
+    match ["x", "y", "z", "w"].get(i) {
+        Some(axis) if len <= 4 => axis.to_string(),
+        _ => format!("[{i}]"),
+    }
 }
 
 // A resolved form-panel click. Field actions carry the LOGICAL field index.
@@ -1640,6 +1642,15 @@ mod tests {
             hit_test(&v, c[0] + 5.0, c[1] + 5.0, o, size(v.form_fields.len())),
             Some(FormAction::ToggleVecExpand(0))
         );
+    }
+
+    // Elements of a vector longer than four are not axes, so they read by index.
+    #[test]
+    fn a_long_vector_labels_its_elements_by_index() {
+        assert_eq!(axis_letter(0, 3), "x");
+        assert_eq!(axis_letter(3, 4), "w");
+        assert_eq!(axis_letter(2, 8), "[2]");
+        assert_eq!(axis_letter(7, 8), "[7]");
     }
 
     // An expanded vector shows its element leaves labeled by axis (x / y / z), each

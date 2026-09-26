@@ -32,6 +32,7 @@ mod init;
 mod light_cull;
 mod lights;
 mod line;
+mod material_params;
 mod metallib;
 mod model_history;
 mod msl_cache;

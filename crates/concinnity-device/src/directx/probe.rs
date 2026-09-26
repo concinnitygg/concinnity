@@ -149,6 +149,7 @@ pub(in crate::directx) struct IndirectDraw<'a> {
     pub indirect: &'a ID3D12Resource,
     pub indirect_offset: u32,
     pub object_gva: u64,
+    pub material_params_gva: u64,
 }
 
 // Render-target dimensions for the capture.
@@ -377,6 +378,9 @@ impl DxContext {
         // and the draw-args buffer (LOD by distance from the probe eye). Both are
         // frustum-independent, reused by every face's cull.
         self.build_object_buffer(slot);
+        if let Some(params) = self.cull.material_params.as_mut() {
+            params.upload(slot);
+        }
         self.build_draw_args_buffer(
             slot,
             eye,
@@ -592,6 +596,7 @@ impl DxContext {
                 indirect,
                 indirect_offset: 0,
                 object_gva,
+                material_params_gva: self.material_params_gva(slot),
             },
             FaceExtent {
                 width: PROBE_FACE_SIZE,
@@ -895,6 +900,7 @@ impl DxContext {
             indirect,
             indirect_offset,
             object_gva,
+            material_params_gva,
         } = draw;
         let FaceExtent { width, height } = extent;
         let bindless_pso = self
@@ -955,6 +961,10 @@ impl DxContext {
             cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu);
             cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
             cmd.SetGraphicsRootShaderResourceView(8, object_gva);
+            cmd.SetGraphicsRootShaderResourceView(
+                super::material_params::MATERIAL_PARAMS_ROOT_PARAM,
+                material_params_gva,
+            );
             // [12] per-scene GpuLight storage buffer (t1). Probe + planar faces
             // reuse the bindless main PSO, which references it unconditionally.
             cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);

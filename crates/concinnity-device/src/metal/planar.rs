@@ -233,6 +233,7 @@ impl MtlContext {
                 },
                 crate::metal::draw::main::GpuFrameBuffers {
                     object_buffer: params.object_buffer,
+                    material_params: params.material_params,
                     bindless_tex_args: params.bindless_tex_args,
                     deformed_skinned: params.deformed_skinned,
                     counts: self.draw_record_counts(),

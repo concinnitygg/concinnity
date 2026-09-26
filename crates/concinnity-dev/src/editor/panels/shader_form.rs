@@ -37,6 +37,8 @@ pub(crate) struct UsedBy {
     pub(crate) other: Option<String>,
     // Read from an included file, so not the editor's to change.
     pub(crate) read_only: bool,
+    // The `params` it sets, for the Shader to read.
+    pub(crate) params: Option<String>,
 }
 
 // The form's own state beyond the schema fields.
@@ -83,6 +85,7 @@ impl ShaderForm {
                     on,
                     other: names.filter(|_| !on).map(str::to_string),
                     read_only: entries.is_read_only(i),
+                    params: params_summary(e),
                 })
             })
             .collect();
@@ -199,10 +202,14 @@ impl ShaderForm {
         let none = self.used_by.is_empty().then(|| "no Materials".to_string());
         out.push(ExtraRow::label("Used by", none));
         for (i, m) in self.used_by.iter().enumerate() {
-            let detail = match (&m.other, m.read_only) {
+            let status = match (&m.other, m.read_only) {
                 (_, true) => Some("included".to_string()),
                 (Some(other), false) => Some(format!("names '{other}'")),
                 (None, false) => None,
+            };
+            let detail = match (status, &m.params) {
+                (Some(status), Some(params)) => Some(format!("{status}; {params}")),
+                (status, params) => status.or_else(|| params.clone()),
             };
             out.push(check(MATERIAL + i, &m.name, m.on, !m.read_only, detail));
         }
@@ -271,6 +278,23 @@ impl ShaderForm {
             _ => {}
         }
     }
+}
+
+// A Material entry's `params` up to the last one it sets, as `material_param`
+// reads them; `None` when it sets none.
+fn params_summary(entry: &serde_json::Value) -> Option<String> {
+    let params = entry.get("args")?.get("params")?.as_array()?;
+    let last = params
+        .iter()
+        .rposition(|v| v.as_f64().is_some_and(|x| x != 0.0))?;
+    let shown: Vec<String> = params[..=last]
+        .iter()
+        .map(|v| match v {
+            serde_json::Value::Number(n) => super::form::number_text(n),
+            other => other.to_string(),
+        })
+        .collect();
+    Some(format!("params {}", shown.join(", ")))
 }
 
 fn check(id: usize, caption: &str, on: bool, enabled: bool, detail: Option<String>) -> ExtraRow {
@@ -413,6 +437,25 @@ mod tests {
                 ("plain", false, None)
             ]
         );
+    }
+
+    // A Material's row names the parameters it sets, through the last non-zero
+    // one, beside whatever else the row says about it.
+    #[test]
+    fn a_material_row_names_its_params() {
+        let mut striped = material("striped", Some("lit"));
+        striped["args"]["params"] = json!([12, 0.5, 0, 0, 0, 0, 0, 0]);
+        let mut zeroed = material("zeroed", None);
+        zeroed["args"]["params"] = json!([0, 0, 0, 0, 0, 0, 0, 0]);
+        let entries = EntryList::new(vec![shader("lit"), shader("other"), striped, zeroed]);
+        let form = ShaderForm::open(&entries, Some(1));
+        let rows = form.rows(&names(&["lit", "other"]), &Paths::default());
+        assert_eq!(
+            row(&rows, "striped").detail.as_deref(),
+            Some("names 'lit'; params 12, 0.5")
+        );
+        assert_eq!(row(&rows, "zeroed").detail, None);
+        assert_eq!(params_summary(&material("bare", None)), None);
     }
 
     #[test]

@@ -113,8 +113,9 @@ fn create_descriptor_pool(
             n_atlas + n_frames * 6 + bindless_pool_size as u32 * bindless_sets_count,
         )
         .add(vk::DescriptorType::SAMPLER, n_atlas + n_frames * 6)
-        // One per cluster per frame (instance matrices) + one per frame for the
-        // bindless GpuObjectData buffer + four per frame for the GPU-cull set
+        // One per cluster per frame (instance matrices) + two per frame for the
+        // bindless set's GpuObjectData buffer and material parameter table +
+        // four per frame for the GPU-cull set
         // (object + draw-args + indirect-command + cull-status SSBOs) + three
         // per (frame, cascade) for the shadow cull sets + the G-buffer's
         // model-history slot and draw args per frame and object buffer and
@@ -123,7 +124,7 @@ fn create_descriptor_pool(
         .add(
             vk::DescriptorType::STORAGE_BUFFER,
             n_cluster * n_frames
-                + bindless_sets_count
+                + 2 * bindless_sets_count
                 + 4 * bindless_sets_count
                 + 3 * shadow_cull_set_count
                 + 2 * gbuffer_sets_count

@@ -8,7 +8,7 @@ use concinnity_core::components;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::gfx::render_types::{
-    MaterialUniforms, PostProcessTunables, SkinnedDrawObject,
+    MATERIAL_PARAM_COUNT, MaterialUniforms, PostProcessTunables, SkinnedDrawObject,
 };
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
@@ -176,6 +176,7 @@ impl LiveEdit for MtlContext {
         fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> RenderResult<()>;
         fn set_draw_material(&mut self, draw_idx: usize, material: MaterialUniforms, texture_slot: usize, normal_map_slot: usize);
         fn set_draw_cull_distance(&mut self, draw_idx: usize, cull_distance: f32);
+        fn set_material_params(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]);
         fn update_world_shader(&mut self, bucket: u32, programs: &concinnity_core::components::ShaderPrograms) -> RenderResult<backend::WorldShaderSwap>;
         fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()>;
         fn rebuild_static_geometry(&mut self, changes: Vec<backend::DrawGeometryUpdate>) -> RenderResult<()>;

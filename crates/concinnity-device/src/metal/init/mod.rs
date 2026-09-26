@@ -276,7 +276,7 @@ impl MtlContext {
             },
         )?;
         let instanced = cull::build_instanced(world.instanced_clusters, scene.textures.len());
-        let rings = commands::build_rings(&gpu);
+        let rings = commands::build_rings(&gpu, world.material_params);
 
         let ctx = Self {
             last_present_texture: None,

@@ -279,6 +279,8 @@ pub(super) struct FrameRings {
     pub joint: super::frame_rings::JointRing,
     pub object_scratch: Vec<render_types::GpuObjectData>,
     pub draw_args_scratch: Vec<render_types::GpuDrawArgs>,
+    // The material parameter table, over the same slots as `object`.
+    pub material_params: super::material_params::MaterialParamRing,
 }
 
 // Transparent water surfaces and the pipelines that draw them. The RT variants
@@ -1400,6 +1402,16 @@ impl MtlContext {
             // unchanged -- so this is cheap).
             self.rt.topology_dirty = true;
         }
+    }
+
+    // Replace one row of the material parameter table; every ring slot is
+    // rewritten as the frames come round to it.
+    pub(crate) fn set_material_params(
+        &mut self,
+        row: u32,
+        params: [f32; render_types::MATERIAL_PARAM_COUNT],
+    ) {
+        self.rings.material_params.set(row, params);
     }
 
     // Rewrite a draw slot's `cull_distance` in place. Driven by the editor's

@@ -54,6 +54,7 @@ pub(in crate::metal) struct MainPassCamera {
 #[derive(Clone, Copy)]
 pub(in crate::metal) struct GpuFrameBuffers<'a> {
     pub object_buffer: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub material_params: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub bindless_tex_args: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub deformed_skinned: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub counts: crate::metal::context::DrawRecordCounts,
@@ -353,8 +354,7 @@ impl MtlContext {
         let GpuFrameBuffers {
             object_buffer,
             bindless_tex_args,
-            deformed_skinned,
-            counts,
+            ..
         } = gpu;
         let (Some(obj_buf), Some(tex_args), false) = (
             object_buffer,
@@ -420,14 +420,8 @@ impl MtlContext {
         self.bind_main_pass_shared(&encoder, &view_uniforms);
         // Main2 is the same main camera as phase 1, so it reads the clusters too.
         self.bind_clusters(&encoder, true);
-        let draw_calls = self.execute_bindless_static_icb(
-            &encoder,
-            obj_buf,
-            tex_args,
-            &self.cull.icbs_2,
-            deformed_skinned,
-            counts,
-        );
+        let draw_calls =
+            self.execute_bindless_static_icb(&encoder, obj_buf, tex_args, &self.cull.icbs_2, gpu);
 
         Ok(draw_calls)
     }
@@ -456,16 +450,27 @@ impl MtlContext {
         obj_buf: &Retained<ProtocolObject<dyn MTLBuffer>>,
         tex_args: &Retained<ProtocolObject<dyn MTLBuffer>>,
         icbs: &[Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>],
-        deformed_skinned: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
-        counts: crate::metal::context::DrawRecordCounts,
+        gpu: GpuFrameBuffers,
     ) -> u32 {
         use objc2_metal::{MTLRenderStages, MTLResourceUsage};
+        let GpuFrameBuffers {
+            material_params,
+            deformed_skinned,
+            counts,
+            ..
+        } = gpu;
         // Object records (binding 9) + bindless textures (binding 7) are shared
         // by both ranges: the skinned records live in the same object buffer and
         // sample the same flat pool. The object id reaches the shader via each
         // command's [[base_instance]].
         enc.set_vertex_buffer(obj_buf, 0, 9);
         enc.set_fragment_buffer(obj_buf, 0, 9);
+        // The material parameter table either hook may read.
+        if let Some(params) = material_params {
+            let slot = crate::metal::material_params::MATERIAL_PARAMS_BUFFER_INDEX;
+            enc.set_vertex_buffer(params, 0, slot);
+            enc.set_fragment_buffer(params, 0, slot);
+        }
         enc.set_fragment_buffer(tex_args, 0, BINDLESS_TEXTURE_ARG_BUFFER_INDEX);
         // The engine sampler block (single-source main program only;
         // world-authored fragments use inline samplers and ignore the
@@ -642,8 +647,7 @@ impl MtlContext {
         let GpuFrameBuffers {
             object_buffer,
             bindless_tex_args,
-            deformed_skinned,
-            counts,
+            ..
         } = gpu;
         enc.pushDebugGroup(&objc2_foundation::NSString::from_str("main geometry"));
         if !self.bind_main_pass_shared(enc, view_uniforms) {
@@ -668,14 +672,8 @@ impl MtlContext {
         {
             // Shared with the phase-2 main pass under two-pass occlusion: see
             // `execute_bindless_static_icb`.
-            draw_calls += self.execute_bindless_static_icb(
-                enc,
-                obj_buf,
-                tex_args,
-                bucket_icbs,
-                deformed_skinned,
-                counts,
-            );
+            draw_calls +=
+                self.execute_bindless_static_icb(enc, obj_buf, tex_args, bucket_icbs, gpu);
         }
         enc.popDebugGroup();
         draw_calls

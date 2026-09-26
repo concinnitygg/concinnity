@@ -132,6 +132,9 @@ pub struct MaterialUniforms {
     /// opaque-pass skip, and the RT-BLAS exclude all key off it, so Layer 2 is
     /// opt-in per material. Always 0 unless `transparent` is also 1.
     pub see_through: u32,
+    /// Row of the material parameter table holding this material's `params`;
+    /// row 0 is the all-zero row a draw without a material reads.
+    pub params_index: u32,
 }
 
 /// Runtime-clone cap: how many spawned clones the GPU-driven cull records
@@ -179,6 +182,7 @@ impl MaterialUniforms {
         orm_map_index: 0,
         transparent: 0,
         see_through: 0,
+        params_index: 0,
     };
 }
 
@@ -1250,7 +1254,7 @@ impl DrawObject {
 /// cull kernel can read object bounds straight from this buffer without a
 /// layout change.
 ///
-/// Layout (144 bytes) must stay in sync with the shader-side record, declared
+/// Layout (160 bytes) must stay in sync with the shader-side record, declared
 /// once in `shaders/object_common.hlsl` and spliced into every pass that
 /// strides the buffer; `shader_layout` in concinnity-device pins this struct
 /// against the compiled module's layout of it on every target.
@@ -1294,6 +1298,24 @@ pub struct GpuObjectData {
     /// Alpha-cutout threshold in [0, 1]; 0 disables the test. Mirrors
     /// `MaterialUniforms::alpha_cutoff`.
     pub alpha_cutoff: f32,
+    /// Row of the material parameter table this object reads. Mirrors
+    /// `MaterialUniforms::params_index`.
+    pub params_index: u32,
+    /// Padding that keeps the record a whole number of 16-byte rows.
+    pub _pad: [u32; 3],
+}
+
+/// Number of generic floats a `Material` carries for its Shader.
+pub const MATERIAL_PARAM_COUNT: usize = 8;
+
+/// One row of the material parameter table: a material's `params`, as the
+/// main pass reads them. Declared in `shaders/main_bindless.hlsl` as two
+/// `float4`s; row 0 is all zeros, for draws without a material.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::NoUninit)]
+#[repr(C)]
+pub struct GpuMaterialParams {
+    /// The material's parameters, in order.
+    pub values: [f32; MATERIAL_PARAM_COUNT],
 }
 
 /// Resolve an albedo `texture_slot` to its index in the handle-indexed texture
@@ -1357,6 +1379,8 @@ impl GpuObjectData {
             cull_distance: bounds.cull_distance,
             bb_max: bounds.bb_max,
             alpha_cutoff: material.alpha_cutoff,
+            params_index: material.params_index,
+            _pad: [0; 3],
         }
     }
 }
@@ -1379,15 +1403,15 @@ pub fn pack_object_record(obj: &DrawObject, albedo_index: u32, normal_index: u32
     GpuObjectData::new(obj.model, &obj.material, bounds, albedo_index, normal_index)
 }
 
-// Pack one instance of an `InstancedCluster` into a `GpuObjectData` for the
-// GPU-driven bindless instanced path: the cluster's material + flat-pool texture
-// indices, this instance's model matrix, and the instance's world AABB (the
-// cluster's mesh-local AABB transformed by the model) so the compute cull tests
-// each instance independently. Mirrors `pack_object_record`, sourcing the bounds
-// from the cluster rather than a `DrawObject`. The instanced mesh's indices are
-// already absolute (rebased at `append_mesh`), so the per-instance draw args use
-// `base_vertex = 0`.
-pub(crate) fn pack_instance_record(
+/// Pack one instance of an `InstancedCluster` into a `GpuObjectData` for the
+/// GPU-driven bindless instanced path: the cluster's material + flat-pool texture
+/// indices, this instance's model matrix, and the instance's world AABB (the
+/// cluster's mesh-local AABB transformed by the model) so the compute cull tests
+/// each instance independently. Mirrors `pack_object_record`, sourcing the bounds
+/// from the cluster rather than a `DrawObject`. The instanced mesh's indices are
+/// already absolute (rebased at `append_mesh`), so the per-instance draw args use
+/// `base_vertex = 0`.
+pub fn pack_instance_record(
     cluster: &InstancedCluster,
     model: [[f32; 4]; 4],
     albedo_index: u32,
@@ -1987,7 +2011,7 @@ mod tests {
         // `object_common.hlsl` spells each (vec3, scalar)
         // pair as one 16-byte lane; the four indices fill the lane between the
         // material block and the cull bounds.
-        assert_eq!(size_of::<GpuObjectData>(), 144);
+        assert_eq!(size_of::<GpuObjectData>(), 160);
         assert_eq!(offset_of!(GpuObjectData, model), 0);
         assert_eq!(offset_of!(GpuObjectData, tint), 64);
         assert_eq!(offset_of!(GpuObjectData, roughness), 76);
@@ -2001,6 +2025,15 @@ mod tests {
         assert_eq!(offset_of!(GpuObjectData, cull_distance), 124);
         assert_eq!(offset_of!(GpuObjectData, bb_max), 128);
         assert_eq!(offset_of!(GpuObjectData, alpha_cutoff), 140);
+        assert_eq!(offset_of!(GpuObjectData, params_index), 144);
+        assert_eq!(offset_of!(GpuObjectData, _pad), 148);
+    }
+
+    #[test]
+    fn gpu_material_params_layout_matches_shaders() {
+        // `main_bindless.hlsl` declares the row as two float4s.
+        assert_eq!(size_of::<GpuMaterialParams>(), 32);
+        assert_eq!(offset_of!(GpuMaterialParams, values), 0);
     }
 
     #[test]
@@ -2389,6 +2422,7 @@ mod tests {
         assert_eq!(rec.bb_min, obj.bb_min);
         assert_eq!(rec.bb_max, obj.bb_max);
         assert_eq!(rec.cull_distance, obj.cull_distance);
+        assert_eq!(rec.params_index, obj.material.params_index);
     }
 
     #[test]
@@ -2399,6 +2433,7 @@ mod tests {
         let rec = pack_object_record(&draw_object(), 0, 1);
         assert_eq!(rec.emissive_map_index, 0);
         assert_eq!(rec.orm_map_index, 0);
+        assert_eq!(rec._pad, [0; 3]);
     }
 
     #[test]

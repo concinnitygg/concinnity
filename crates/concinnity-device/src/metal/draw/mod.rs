@@ -127,6 +127,7 @@ impl MtlContext {
 
         let SceneBuffers {
             object_buffer,
+            material_params,
             cull_draw_args,
             bindless_tex_args,
         } = self.build_scene_buffers(SceneBufferArgs {
@@ -238,6 +239,7 @@ impl MtlContext {
             inv_vp,
             frustum: &frustum,
             object_buffer: object_buffer.as_ref(),
+            material_params: material_params.as_ref(),
             bindless_tex_args: bindless_tex_args.as_ref(),
             deformed_skinned: deformed_this_frame.as_ref(),
             deformed_prev: deformed_prev_frame.as_ref(),

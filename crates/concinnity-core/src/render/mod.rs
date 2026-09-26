@@ -37,6 +37,7 @@ pub mod hdr_output;
 pub mod hiz_spd;
 pub mod lights;
 pub mod ltc;
+pub mod material_params;
 pub mod mipmap;
 pub mod model_history;
 pub mod ops;

@@ -150,6 +150,9 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     pub inv_vp: [[f32; 4]; 4],
     pub frustum: &'a Frustum,
     pub object_buffer: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
+    // This frame's copy of the material parameter table; `Some` with
+    // `object_buffer`.
+    pub material_params: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub bindless_tex_args: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     // This frame's skinned deformed-vertex buffer. `Some` only when a
     // SkinnedMesh has uploaded. The Cull pass's `encode_main_skin` writes it; the Main /
@@ -584,6 +587,7 @@ impl MtlContext {
                 },
                 crate::metal::draw::main::GpuFrameBuffers {
                     object_buffer: params.object_buffer,
+                    material_params: params.material_params,
                     bindless_tex_args: params.bindless_tex_args,
                     deformed_skinned: params.deformed_skinned,
                     counts: self.draw_record_counts(),
@@ -620,6 +624,7 @@ impl MtlContext {
                 },
                 crate::metal::draw::main::GpuFrameBuffers {
                     object_buffer: params.object_buffer,
+                    material_params: params.material_params,
                     bindless_tex_args: params.bindless_tex_args,
                     deformed_skinned: params.deformed_skinned,
                     counts: self.draw_record_counts(),

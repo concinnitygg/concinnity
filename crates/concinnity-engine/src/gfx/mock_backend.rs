@@ -156,6 +156,10 @@ pub(crate) enum Call {
         normal_map_slot: usize,
     },
     SetDrawCullDistance(usize, f32),
+    SetMaterialParams {
+        row: u32,
+        params: [f32; render_types::MATERIAL_PARAM_COUNT],
+    },
     SetFade(f32),
     // A shader bucket's pipeline installed, with the name its programs carry.
     InstallWorldShader {
@@ -698,6 +702,10 @@ impl LiveEdit for MockBackend {
 
     fn set_draw_cull_distance(&mut self, draw_idx: usize, cull_distance: f32) {
         self.record(Call::SetDrawCullDistance(draw_idx, cull_distance));
+    }
+
+    fn set_material_params(&mut self, row: u32, params: [f32; render_types::MATERIAL_PARAM_COUNT]) {
+        self.record(Call::SetMaterialParams { row, params });
     }
 }
 

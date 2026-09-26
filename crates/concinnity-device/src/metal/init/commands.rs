@@ -9,6 +9,7 @@ use concinnity_core::profile::RenderStats;
 use super::InitGpu;
 use crate::metal::context::{Diagnostics, FrameRings};
 use crate::metal::frame_rings::{JointRing, TransientRing};
+use crate::metal::material_params::MaterialParamRing;
 use crate::metal::pass_timing::PassTimingResources;
 
 // The bindless buffers an async reflection-probe bake reads across frames
@@ -20,7 +21,10 @@ use crate::metal::pass_timing::PassTimingResources;
 // frame never overwrites, keeping the bake's CPU-written buffers valid
 // across its asynchronous (no `waitUntilCompleted`) GPU capture. See
 // metal/probe.rs `bake_ring_slot`.
-pub(super) fn build_rings(gpu: &InitGpu<'_>) -> FrameRings {
+pub(super) fn build_rings(
+    gpu: &InitGpu<'_>,
+    material_params: Vec<concinnity_core::gfx::render_types::GpuMaterialParams>,
+) -> FrameRings {
     let frames_in_flight = gpu.frames_in_flight;
     FrameRings {
         object: TransientRing::new(frames_in_flight.max(1) + 1),
@@ -31,6 +35,7 @@ pub(super) fn build_rings(gpu: &InitGpu<'_>) -> FrameRings {
         joint: JointRing::new(frames_in_flight.max(1) + 1),
         object_scratch: Vec::new(),
         draw_args_scratch: Vec::new(),
+        material_params: MaterialParamRing::new(material_params, frames_in_flight.max(1) + 1),
     }
 }
 

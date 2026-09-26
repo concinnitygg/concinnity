@@ -1116,6 +1116,8 @@ struct BakeResources {
     draw_args_buf: PooledBuffer,
     indirect_buf: PooledBuffer,
     _status_buf: PooledBuffer,
+    // The material parameter table as the bake started; every face's set binds it.
+    _params_buf: PooledBuffer,
     _pool: OwnedDescriptorPool,
     cull_set: vk::DescriptorSet,
     // One texture-pool set per face, written from the live pool right before
@@ -1281,12 +1283,12 @@ impl BakeResources {
         let tex_pool = ctx.cull.bindless_pool_size as u32;
         let has_hiz = u32::from(ctx.cull.hiz.is_some());
         let faces = PROBE_FACE_COUNT as u32;
-        // The six per-face global sets, the four cull SSBOs, the object SSBO and
-        // texture pool of each face's bindless set, and a Hi-Z set (an image and
-        // a UBO) when the world runs Hi-Z.
+        // The six per-face global sets, the four cull SSBOs, the object SSBO,
+        // texture pool and parameter table of each face's bindless set, and a
+        // Hi-Z set (an image and a UBO) when the world runs Hi-Z.
         let pool_sizes = PoolSizes::default()
             .sets(&global_set(), faces)
-            .add(vk::DescriptorType::STORAGE_BUFFER, 4 + faces)
+            .add(vk::DescriptorType::STORAGE_BUFFER, 4 + 2 * faces)
             .add(
                 vk::DescriptorType::SAMPLED_IMAGE,
                 faces * tex_pool + has_hiz,
@@ -1324,8 +1326,16 @@ impl BakeResources {
         write_storage_buffer(device, cull_set, 2, indirect_buf.buffer(), indirect_size);
         write_storage_buffer(device, cull_set, 3, status_buf.buffer(), status_size);
 
+        // The material parameter table as the bake starts, for every face.
+        let params_buf = ctx
+            .cull
+            .material_params
+            .as_ref()
+            .ok_or_else(|| RenderError::Other("probe: no material parameter table".into()))?
+            .snapshot(alloc)?;
+
         // Per-face bindless sets (set 1): object SSBO + the shared texture pool
-        // array. Only the SSBO is written here; each face's pool array is
+        // array + the parameter table. Only the SSBOs are written here; each face's pool array is
         // written from the live pool right before that face records
         // (`write_face_pool`), so a mid-bake streamed swap needs no rewrite of
         // a pending set.
@@ -1343,14 +1353,21 @@ impl BakeResources {
                 .buffer(object_buf.buffer())
                 .offset(0)
                 .range(object_size);
+            let params_info = vk::DescriptorBufferInfo::default()
+                .buffer(params_buf.buffer())
+                .offset(0)
+                .range(vk::WHOLE_SIZE);
             let writes: Vec<vk::WriteDescriptorSet> = bindless_sets
                 .iter()
-                .map(|&set| {
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(0)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(&obj_info))
+                .flat_map(|&set| {
+                    [
+                        vk::WriteDescriptorSet::default()
+                            .dst_set(set)
+                            .dst_binding(0)
+                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                            .buffer_info(std::slice::from_ref(&obj_info)),
+                        super::material_params::write(set, &params_info),
+                    ]
                 })
                 .collect();
             // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
@@ -1388,6 +1405,7 @@ impl BakeResources {
             draw_args_buf,
             indirect_buf,
             _status_buf: status_buf,
+            _params_buf: params_buf,
             _pool: pool,
             cull_set,
             bindless_sets,

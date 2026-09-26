@@ -340,6 +340,10 @@ impl DxContext {
                 cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
                 // [8] root SRV: this frame's StructuredBuffer<GpuObjectData>.
                 cmd.SetGraphicsRootShaderResourceView(8, object_gva);
+                cmd.SetGraphicsRootShaderResourceView(
+                    crate::directx::material_params::MATERIAL_PARAMS_ROOT_PARAM,
+                    self.material_params_gva(frame_idx),
+                );
                 // [9] descriptor table: blurred SSAO occlusion (or 1x1 white
                 // fallback when SSAO is disabled).
                 cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
@@ -437,6 +441,10 @@ impl DxContext {
                 cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu);
                 cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
                 cmd.SetGraphicsRootShaderResourceView(8, object_gva);
+                cmd.SetGraphicsRootShaderResourceView(
+                    crate::directx::material_params::MATERIAL_PARAMS_ROOT_PARAM,
+                    self.material_params_gva(frame_idx),
+                );
                 cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
                 let probes = self.probe_bindings(frame_idx);
                 self.bind_main_probe_set(cmd, probes.set_cbv, probes.records);
@@ -614,6 +622,10 @@ impl DxContext {
                 cmd.set_graphics_sampler_table(6, self.descriptors.shadow_sampler_gpu);
                 cmd.set_graphics_sampler_table(7, self.descriptors.linear_sampler_gpu);
                 cmd.SetGraphicsRootShaderResourceView(8, object_gva);
+                cmd.SetGraphicsRootShaderResourceView(
+                    crate::directx::material_params::MATERIAL_PARAMS_ROOT_PARAM,
+                    self.material_params_gva(frame_idx),
+                );
                 cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu());
                 let probes = self.probe_bindings(frame_idx);
                 self.bind_main_probe_set(cmd, probes.set_cbv, probes.records);

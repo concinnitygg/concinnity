@@ -12,7 +12,7 @@
 // reflects it against `GpuObjectData` on every target, and its
 // `no_shader_redeclares_the_object_record` scan keeps it that way.
 
-// Mirrors `GpuObjectData` in concinnity-core/src/gfx/render_types.rs (144 B).
+// Mirrors `GpuObjectData` in concinnity-core/src/gfx/render_types.rs (160 B).
 // Each (vec3, scalar) pair is spelled as one float4: MSL sizes a float3 at 16
 // bytes in a structured buffer as well as in a constant buffer, so a literal
 // transcription pushes every following field four bytes late on Metal alone.
@@ -31,6 +31,11 @@ struct GpuObjectData
     float4 bb_min_cull_distance;
     // xyz = bounding-box maximum, w = alpha cutoff.
     float4 bb_max_alpha_cutoff;
+    // Row of the material parameter table the main pass binds.
+    uint params_index;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
 };
 
 // Mirrors `GpuDrawArgs` in concinnity-core/src/gfx/render_types.rs (16 B): the

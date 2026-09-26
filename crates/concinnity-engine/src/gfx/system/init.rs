@@ -123,6 +123,13 @@ struct TextureTableDecode {
     count: usize,
 }
 
+// The MaterialTable decoded by `build_material_map`: each material's draw entry
+// by handle, and the material parameter table's rows.
+struct DecodedMaterials {
+    map: std::collections::HashMap<MaterialHandle, MaterialEntry>,
+    params: Vec<concinnity_core::gfx::render_types::GpuMaterialParams>,
+}
+
 // One world Shader as decoded at init: its compiled programs, or nothing for
 // a bucket a non-start scene owns.
 #[derive(Default)]
@@ -1039,17 +1046,19 @@ impl GraphicsSystem {
     }
 
     // Decode the MaterialTable (dense by `MaterialHandle`) into the per-object GPU
-    // uniforms + resolved texture slots the draw list indexes. Materials have no
-    // payload; all data lives in the baked `data_bytes`. Returns None,
-    // failing init, on any decode or resolution failure.
+    // uniforms + resolved texture slots the draw list indexes, and the material
+    // parameter table's rows. Materials have no payload; all data lives in the
+    // baked `data_bytes`. Returns None, failing init, on any decode or
+    // resolution failure.
     fn build_material_map(
         &self,
         ctx: &mut PipelineContext,
         texture_count: usize,
-    ) -> Option<std::collections::HashMap<MaterialHandle, MaterialEntry>> {
+    ) -> Option<DecodedMaterials> {
         let material_table = ctx.resource::<MaterialTable>().cloned().unwrap_or_default();
         let mut material_map: std::collections::HashMap<MaterialHandle, MaterialEntry> =
             std::collections::HashMap::with_capacity(material_table.len());
+        let mut params = Vec::with_capacity(material_table.len());
         for (material_handle, entry) in material_table.0.iter().enumerate() {
             let mat: Material = match postcard::from_bytes(&entry.data_bytes) {
                 Ok(m) => m,
@@ -1062,9 +1071,11 @@ impl GraphicsSystem {
                     return None;
                 }
             };
-            match crate::gfx::material_entry::of(&mat, texture_count) {
+            let handle = MaterialHandle(material_handle as u32);
+            params.push(mat.params);
+            match crate::gfx::material_entry::of(handle, &mat, texture_count) {
                 Ok(entry) => {
-                    material_map.insert(MaterialHandle(material_handle as u32), entry);
+                    material_map.insert(handle, entry);
                 }
                 Err(field) => {
                     tracing::error!(
@@ -1077,7 +1088,10 @@ impl GraphicsSystem {
                 }
             }
         }
-        Some(material_map)
+        Some(DecodedMaterials {
+            map: material_map,
+            params: concinnity_core::render::material_params::rows(params),
+        })
     }
 
     // Drain the world's Shader components, read every compiled stage
@@ -1679,7 +1693,10 @@ impl GraphicsSystem {
             name_to_slot: texture_name_to_slot,
             count: texture_count,
         } = self.decode_texture_table(ctx, capture_sources)?;
-        let material_map = self.build_material_map(ctx, texture_count)?;
+        let DecodedMaterials {
+            map: material_map,
+            params: material_params,
+        } = self.build_material_map(ctx, texture_count)?;
 
         // Build skinned draw objects, the shared skinned vertex/index buffers,
         // and bind-pose skeletons from the decoded SkinnedMesh geometry. Runs
@@ -1824,6 +1841,7 @@ impl GraphicsSystem {
                 n_chunk_max: voxel_world
                     .as_ref()
                     .map_or(0, super::streaming::chunk_reserve_count),
+                material_params,
             },
             // One entry per world Shader, indexed by ShaderHandle value;
             // entry 0 is the world default program.

@@ -53,6 +53,7 @@ const MAIN_BINDLESS_REGISTERS: &[(&str, &str)] = &[
     ("area_lights_sb", "t17"),
     ("ltc_matrix", "t18"),
     ("ltc_magnitude", "t19"),
+    ("material_params_sb", "t20"),
     ("tex_pool", "t0, space1"),
     ("shadow_sampler", "s0"),
     ("linear_sampler", "s1"),

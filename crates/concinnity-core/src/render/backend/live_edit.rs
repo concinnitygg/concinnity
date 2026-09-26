@@ -8,7 +8,7 @@
 
 use crate::components::ShaderPrograms;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
-use crate::gfx::render_types::MaterialUniforms;
+use crate::gfx::render_types::{MATERIAL_PARAM_COUNT, MaterialUniforms};
 use crate::render::backend_init::{BackendInit, SwapchainConfig};
 use crate::render::error::{RenderError, RenderResult};
 use alloc::vec::Vec;
@@ -272,6 +272,15 @@ pub trait LiveEdit {
         normal_map_slot: usize,
     ) {
         let _ = (draw_idx, material, texture_slot, normal_map_slot);
+    }
+
+    /// Replace one row of the material parameter table with a material's new
+    /// `params`; `row` is [`crate::render::material_params::row_of`] of its
+    /// handle. Every draw reading the row picks the values up on the next
+    /// frame. Driven by the editor's live material seam. Default no-op, for a
+    /// backend that draws no world Shader.
+    fn set_material_params(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]) {
+        let _ = (row, params);
     }
 
     /// Rewrite a draw slot's `cull_distance` in place. Driven by the editor's

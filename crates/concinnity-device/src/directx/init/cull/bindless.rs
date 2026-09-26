@@ -2,7 +2,7 @@
 //! material-referenced shader buckets, and the per-frame object buffers.
 
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::backend_init::WorldShader;
+use concinnity_core::render::backend_init::{SceneData, WorldShader};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -15,6 +15,7 @@ use crate::directx::init::pipelines::{
     BindlessMainShaders, BucketPipelineTargets, build_bucket_pipeline, build_world_pipeline_table,
     compile_main_bindless_shaders, create_main_bindless_root_signature,
 };
+use crate::directx::material_params::DxMaterialParams;
 
 pub(super) struct BindlessPass {
     pub(super) root_sig: ID3D12RootSignature,
@@ -23,6 +24,7 @@ pub(super) struct BindlessPass {
     pub(super) shaders: BindlessMainShaders,
     pub(super) object_buffers: Vec<PooledBuffer>,
     pub(super) object_ptrs: Vec<*mut u8>,
+    pub(super) material_params: Option<DxMaterialParams>,
 }
 
 // The world's Shaders, one per bucket (`BackendInit::shaders`): entry 0 is the
@@ -33,6 +35,7 @@ pub(super) struct BindlessPass {
 // `install_world_shader`.
 pub(super) fn build_bindless_pass(
     gpu: &InitGpu<'_>,
+    world: &SceneData<'_>,
     world_shaders: &[WorldShader<'_>],
     plan: &CullPlan,
     msaa_samples: u32,
@@ -104,6 +107,15 @@ pub(super) fn build_bindless_pass(
             object_buffers.push(buf);
         }
     }
+    // The material parameter table, over the same slots as the object buffers.
+    let material_params = match n_cull {
+        0 => None,
+        _ => Some(DxMaterialParams::new(
+            &gpu.hw.alloc,
+            world.material_params.clone(),
+            FRAMES + 1,
+        )?),
+    };
 
     Ok(BindlessPass {
         root_sig: brs,
@@ -112,5 +124,6 @@ pub(super) fn build_bindless_pass(
         shaders: bindless_main_shaders,
         object_buffers,
         object_ptrs,
+        material_params,
     })
 }

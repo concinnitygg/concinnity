@@ -79,6 +79,7 @@ pub(super) struct SceneBufferArgs<'a> {
 // hidden, and individually `None` when the path that fills them is inactive.
 pub(super) struct SceneBuffers {
     pub(super) object_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
+    pub(super) material_params: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub(super) cull_draw_args: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub(super) bindless_tex_args: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
 }
@@ -651,8 +652,8 @@ impl MtlContext {
             && (self.taa.enabled || self.upscale.scaler.is_some())
             && self.gbuffer.targets.is_some()
             && self.gbuffer.bindless_pipeline.is_some();
-        let (object_buffer, cull_draw_args, bindless_tex_args) = if world_hidden {
-            (None, None, None)
+        let (object_buffer, material_params, cull_draw_args, bindless_tex_args) = if world_hidden {
+            (None, None, None, None)
         } else {
             // Per-frame GPU buffer prep for the bindless path.
             // The object data + indirect-args + bindless texture argbuf are
@@ -664,6 +665,14 @@ impl MtlContext {
                 self.build_object_buffer(ring_slot)?
             } else {
                 None
+            };
+            let material_params = match object_buffer {
+                Some(_) => Some(
+                    self.rings
+                        .material_params
+                        .buffer(&self.hw.device, ring_slot)?,
+                ),
+                None => None,
             };
             let cull_draw_args = if object_buffer.is_some() {
                 let draw_args = self.build_draw_args_buffer(
@@ -719,10 +728,16 @@ impl MtlContext {
                 skinned_joint_bufs,
             );
 
-            (object_buffer, cull_draw_args, bindless_tex_args)
+            (
+                object_buffer,
+                material_params,
+                cull_draw_args,
+                bindless_tex_args,
+            )
         };
         Ok(SceneBuffers {
             object_buffer,
+            material_params,
             cull_draw_args,
             bindless_tex_args,
         })

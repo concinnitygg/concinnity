@@ -150,6 +150,7 @@ pub(in crate::metal) struct BakeGpu {
     depth: Retained<ProtocolObject<dyn MTLTexture>>,
     capture: Retained<ProtocolObject<dyn MTLTexture>>,
     object_buffer: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+    material_params: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
     draw_args: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
     joint_bufs: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     morph_weight_bufs: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
@@ -399,6 +400,7 @@ impl MtlContext {
         let object_buffer = self
             .build_object_buffer(slot)?
             .ok_or_else(|| RenderError::Other("probe: no static geometry to bake".into()))?;
+        let material_params = self.rings.material_params.buffer(&self.hw.device, slot)?;
         let draw_args = self
             .build_draw_args_buffer(
                 eye,
@@ -453,6 +455,7 @@ impl MtlContext {
                 depth,
                 capture,
                 object_buffer,
+                material_params,
                 draw_args,
                 joint_bufs,
                 morph_weight_bufs,
@@ -555,6 +558,7 @@ impl MtlContext {
             },
             crate::metal::draw::main::GpuFrameBuffers {
                 object_buffer: Some(&gpu.object_buffer),
+                material_params: Some(&gpu.material_params),
                 bindless_tex_args: Some(tex_args),
                 deformed_skinned: gpu.deformed.as_ref(),
                 counts,

@@ -165,6 +165,11 @@ pub const ENTRIES: &[Entry] = &[
         "The engine's own projection of a model-space vertex.",
     ),
     helper(
+        "material_param",
+        "float material_param(uint index)",
+        "Parameter index (0-7) of the surface's Material params; 0 without a material.",
+    ),
+    helper(
         "pool_sample",
         "float4 pool_sample(uint index, float2 uv)",
         "A texel of the world texture a record index names.",

@@ -63,12 +63,18 @@ pub fn is_available(world: &World) -> bool {
 /// (only a dev session records their identities, see
 /// [`crate::resource::MaterialNames`]) or its record does not decode.
 pub fn material(world: &World, name: AssetId) -> Option<DrawMaterial> {
+    by_handle(world, material_handle(world, name)?)
+}
+
+// The handle the `Material` asset interned as `name` loaded under, when the
+// running world records material identities.
+pub(crate) fn material_handle(world: &World, name: AssetId) -> Option<MaterialHandle> {
     let handle = world
         .resource::<crate::resource::MaterialNames>()?
         .0
         .iter()
         .position(|&id| id == name.0)?;
-    by_handle(world, MaterialHandle(handle as u32))
+    Some(MaterialHandle(handle as u32))
 }
 
 /// The material `entity`'s draw slots currently render with. `None` for an
@@ -144,7 +150,7 @@ fn by_handle(world: &World, handle: MaterialHandle) -> Option<DrawMaterial> {
     let mat: Material = postcard::from_bytes(bytes).ok()?;
     Some(DrawMaterial {
         handle: Some(handle),
-        entry: material_entry::of(&mat, texture_count(world)).ok()?,
+        entry: material_entry::of(handle, &mat, texture_count(world)).ok()?,
     })
 }
 
@@ -164,11 +170,8 @@ fn draws_of(world: &World, entity: Entity) -> Vec<u32> {
 
 // Run `f` against the frame's op queue, taking it for the call and parking it
 // again after (the handoff every recording system uses). `None` when the world
-// cannot take a draw change, which leaves the slot exactly as it was.
-fn with_ops<R>(world: &mut World, f: impl FnOnce(&mut RenderOps) -> R) -> Option<R> {
-    if !is_available(world) {
-        return None;
-    }
+// has no queue to record into, which leaves the backend exactly as it was.
+pub(crate) fn with_ops<R>(world: &mut World, f: impl FnOnce(&mut RenderOps) -> R) -> Option<R> {
     let mut queues = world.resource_mut::<ActiveRenderQueues>()?.0.take()?;
     let out = f(&mut queues.ops);
     if let Some(slot) = world.resource_mut::<ActiveRenderQueues>() {

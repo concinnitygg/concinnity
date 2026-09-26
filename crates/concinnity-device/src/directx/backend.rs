@@ -142,6 +142,7 @@ impl LiveEdit for DxContext {
         fn update_skinned_skeleton(&mut self, skinned_index: usize, new_joint_count: usize) -> RenderResult<()>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> RenderResult<Vec<backend::SkinnedSlotLayout>>;
         fn rebuild_static_geometry(&mut self, changes: Vec<backend::DrawGeometryUpdate>) -> RenderResult<()>;
+        fn set_material_params(&mut self, row: u32, params: [f32; concinnity_core::gfx::render_types::MATERIAL_PARAM_COUNT]);
     }
 
     // The swapchain config this live context was built with. A live `cn editor`

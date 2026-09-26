@@ -147,6 +147,7 @@ pub(super) fn build_cull(
             descriptors,
             targets,
             scene,
+            material_params: &world.material_params,
             swapchain_format,
         },
     )?;
@@ -200,6 +201,7 @@ pub(super) fn build_cull(
         bindless_main_spv: bindless.main_spv,
         bindless_sets: bindless.sets,
         object_buffers: bindless.object_buffers,
+        material_params: bindless.material_params,
         cull_pipeline: compute.pipeline,
         cull_pipeline_layout: compute.pipeline_layout,
         cull_set_layout: compute.set_layout,

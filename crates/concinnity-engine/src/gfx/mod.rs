@@ -22,6 +22,9 @@ pub mod lighting_preview;
 /// The renderer's reading of one compiled `Material`: GPU uniforms plus the
 /// texture-pool slots its references resolve to.
 pub(crate) mod material_entry;
+/// Live edits of a loaded Material's Shader parameters, for an editor
+/// previewing them without a rebuild.
+pub mod material_preview;
 /// Live re-resolution of a `CharacterShape` against a running world's poses,
 /// for an editor previewing slider edits without a rebuild.
 pub mod shape_preview;

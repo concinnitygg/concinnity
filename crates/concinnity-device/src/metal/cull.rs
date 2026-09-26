@@ -4,7 +4,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::cull_status::CullStatus;
-use concinnity_core::gfx::frustum::{Frustum, transform_aabb};
+use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -168,6 +168,16 @@ pub(super) struct FlatPoolIndices {
     pub orm: u32,
 }
 
+impl FlatPoolIndices {
+    // `rec` with its emissive and ORM indices replaced by the flat-pool ones:
+    // the core packers copy the material's raw indices, which Metal caps.
+    fn onto(&self, mut rec: render_types::GpuObjectData) -> render_types::GpuObjectData {
+        rec.emissive_map_index = self.emissive;
+        rec.orm_map_index = self.orm;
+        rec
+    }
+}
+
 pub(super) fn metal_flat_pool_indices(
     texture_count: usize,
     texture_slot: usize,
@@ -204,7 +214,6 @@ pub(super) fn metal_instance_records(
     clusters: &[render_types::InstancedCluster],
     texture_count: usize,
 ) -> Vec<render_types::GpuObjectData> {
-    use concinnity_core::gfx::render_types::GpuObjectData;
     let total: usize = clusters.iter().map(|c| c.instances.len()).sum();
     let mut records = Vec::with_capacity(total);
     for cluster in clusters {
@@ -215,23 +224,8 @@ pub(super) fn metal_instance_records(
             &cluster.material,
         );
         for &model in &cluster.instances {
-            let (bb_min, bb_max) =
-                transform_aabb(cluster.local_bb_min, cluster.local_bb_max, model);
-            records.push(GpuObjectData {
-                model,
-                tint: cluster.material.tint,
-                roughness: cluster.material.roughness,
-                emissive: cluster.material.emissive,
-                metallic: cluster.material.metallic,
-                albedo_index: idx.albedo,
-                normal_index: idx.normal,
-                emissive_map_index: idx.emissive,
-                orm_map_index: idx.orm,
-                bb_min,
-                cull_distance: cluster.cull_distance,
-                bb_max,
-                alpha_cutoff: cluster.material.alpha_cutoff,
-            });
+            let rec = render_types::pack_instance_record(cluster, model, idx.albedo, idx.normal);
+            records.push(idx.onto(rec));
         }
     }
     records
@@ -255,10 +249,9 @@ pub(super) fn metal_skinned_record(
         obj.normal_map_slot,
         &obj.material,
     );
-    let mut rec = render_types::pack_skinned_record(obj, idx.albedo, idx.normal);
-    rec.emissive_map_index = idx.emissive;
-    rec.orm_map_index = idx.orm;
-    rec
+    idx.onto(render_types::pack_skinned_record(
+        obj, idx.albedo, idx.normal,
+    ))
 }
 
 // The per-frame cull IO buffers: the packed DrawObject records the kernel tests
@@ -366,7 +359,6 @@ impl MtlContext {
         &mut self,
         ring_slot: usize,
     ) -> RenderResult<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>> {
-        use concinnity_core::gfx::render_types::GpuObjectData;
         if self.cull_count() == 0 {
             return Ok(None);
         }
@@ -387,21 +379,9 @@ impl MtlContext {
                 obj.normal_map_slot,
                 &obj.material,
             );
-            objects.push(GpuObjectData {
-                model: obj.model,
-                tint: obj.material.tint,
-                roughness: obj.material.roughness,
-                emissive: obj.material.emissive,
-                metallic: obj.material.metallic,
-                albedo_index: idx.albedo,
-                normal_index: idx.normal,
-                emissive_map_index: idx.emissive,
-                orm_map_index: idx.orm,
-                bb_min: obj.bb_min,
-                cull_distance: obj.cull_distance,
-                bb_max: obj.bb_max,
-                alpha_cutoff: obj.material.alpha_cutoff,
-            });
+            objects.push(idx.onto(render_types::pack_object_record(
+                obj, idx.albedo, idx.normal,
+            )));
         }
         // Fold the instanced clusters into the same buffer: each instance's
         // pre-built record is appended after the static objects so one cull

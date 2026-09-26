@@ -78,7 +78,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         occlusion_two_pass,
     } = inputs;
     let bindless =
-        bindless::build_bindless_pass(gpu, world_shaders, plan, targets.hdr.msaa_samples)?;
+        bindless::build_bindless_pass(gpu, world, world_shaders, plan, targets.hdr.msaa_samples)?;
     let compute = compute::build_compute_cull(
         gpu,
         compute::ComputeInputs {
@@ -113,6 +113,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         bindless_main_shaders: bindless.shaders,
         object_buffer_resources: bindless.object_buffers,
         object_buffer_ptrs: bindless.object_ptrs,
+        material_params: bindless.material_params,
         bindless_pool_gpu,
         cull_root_sig: compute.root_sig,
         cull_pso: compute.pso,

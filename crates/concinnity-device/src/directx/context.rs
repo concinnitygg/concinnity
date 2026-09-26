@@ -1095,6 +1095,10 @@ impl DxContext {
         // buffer, which every probe-reading pass binds. A ring (one of each per
         // frame) so this write never races a prior frame's in-flight GPU read.
         self.upload_probe_set(frame)?;
+        // The material parameter table's copy for this frame, after a change.
+        if let Some(params) = self.cull.material_params.as_mut() {
+            params.upload(frame);
+        }
 
         // 2. Open the END cmd list (Composite + final timestamp +
         //    ResolveQueryData + per-frame restore barriers). The

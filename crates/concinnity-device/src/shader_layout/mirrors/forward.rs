@@ -3,8 +3,8 @@
 //! can drift apart, so each is checked against the same Rust mirror.
 
 use concinnity_core::gfx::render_types::{
-    AreaLightData, ClusterParams, DirectionalLightData, GpuLight, GpuObjectData, LightUniforms,
-    PointLightData, ShadowUniforms, SpotShadowData,
+    AreaLightData, ClusterParams, DirectionalLightData, GpuLight, GpuMaterialParams, GpuObjectData,
+    LightUniforms, PointLightData, ShadowUniforms, SpotShadowData,
 };
 use concinnity_core::render::uniforms::ViewUniforms;
 
@@ -68,10 +68,22 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             orm_map_index,
             [bb_min, cull_distance] => ["bb_min_cull_distance"],
             [bb_max, alpha_cutoff] => ["bb_max_alpha_cutoff"],
+            params_index,
+            [_pad] => ["_pad0", "_pad1", "_pad2"],
         })),
     ];
     cases.extend(light_cull());
     cases
+}
+
+// The parameter table's row. Only a variant whose hooks read a parameter
+// compiles the table, so it is checked against one.
+pub(in crate::shader_layout) fn material_params() -> Vec<Case> {
+    vec![everywhere(
+        mirror!(GpuMaterialParams => "GpuMaterialParams" {
+            values,
+        }),
+    )]
 }
 
 pub(in crate::shader_layout) fn light_cull() -> Vec<Case> {

@@ -14,6 +14,7 @@ mod component;
 mod diff;
 mod draw;
 mod lighting;
+mod material;
 mod placement;
 mod shape;
 
@@ -63,6 +64,8 @@ pub(crate) enum Apply {
     RenderConfig(RenderConfig),
     /// Rewrite what a placement's draw slots render with.
     Draw(draw::DrawChange),
+    /// Rewrite a material's row of the renderer's parameter table.
+    MaterialParams(material::ParamsChange),
 }
 
 /// A render-config asset an edit can push at the running renderer.
@@ -106,6 +109,7 @@ pub(crate) fn commit(world: &mut World, plan: Vec<Apply>) {
             Apply::Sun { entity, light } => lighting::commit_sun(world, entity, light),
             Apply::RenderConfig(config) => lighting::commit(world, config),
             Apply::Draw(change) => draw::commit(world, change),
+            Apply::MaterialParams(change) => material::commit(world, change),
         }
     }
 }
@@ -127,6 +131,7 @@ fn plan_one(world: &World, entries: &[Value], change: &diff::ArgsChange) -> Opti
         .or_else(|| component::plan(world, ct, &change.name, &change.before, &change.args))
         .or_else(|| placement::plan(world, &change.name, &change.args, &change.keys))
         .or_else(|| draw::plan(world, ct, &change.name, &change.args, &change.keys))
+        .or_else(|| material::plan(world, ct, &change.name, &change.args, &change.keys))
 }
 
 #[cfg(test)]

@@ -35,6 +35,13 @@
 
 {PROBE_TYPES}
 
+// Mirrors `GpuMaterialParams` in concinnity-core/src/gfx/render_types.rs (32 B):
+// one material's eight Shader parameters. Row 0 is all zeros.
+struct GpuMaterialParams
+{
+    float4 values[2];
+};
+
 // ---- Resource bindings ----
 
 #ifdef CN_BACKEND_METAL
@@ -85,6 +92,8 @@ SamplerState tex_sampler : register(s0, space2);
 [[vk::binding(9, 0)]] StructuredBuffer<AreaLightData> area_lights_sb : register(t14);
 // One parallax record per live reflection probe.
 [[vk::binding(10, 0)]] StructuredBuffer<ProbeUniforms> probe_records_sb : register(t15);
+// The material parameter table, indexed by GpuObjectData.params_index.
+[[vk::binding(11, 0)]] StructuredBuffer<GpuMaterialParams> material_params_sb : register(t16);
 
 // The pool's sampler, under the name the other hosts declare it by.
 #define linear_sampler tex_sampler
@@ -125,6 +134,8 @@ StructuredBuffer<AreaLightData> area_lights_sb : register(t17);
 // The two LTC lookup tables, sampled at (roughness, sqrt(1 - NdV)).
 Texture2D<float4> ltc_matrix : register(t18);
 Texture2D<float4> ltc_magnitude : register(t19);
+// The material parameter table, indexed by GpuObjectData.params_index.
+StructuredBuffer<GpuMaterialParams> material_params_sb : register(t20);
 // Bindless texture pool: [albedo textures..] ++ [normal maps..]. Unbounded so
 // the shader never over-declares the host's per-frame descriptor region.
 Texture2D<float4> tex_pool[] : register(t0, space1);
@@ -173,6 +184,8 @@ SamplerState cube_sampler : register(s2);
 // Bindless texture pool: [albedo textures..] ++ [normal maps..]. The object
 // record's albedo_index / normal_index address it directly.
 [[vk::binding(1, 1)]] Texture2D<float4> tex_pool[] : register(t1, space1);
+// The material parameter table, indexed by GpuObjectData.params_index.
+[[vk::binding(2, 1)]] StructuredBuffer<GpuMaterialParams> material_params_sb : register(t2, space1);
 
 
 #endif // binding model
@@ -188,6 +201,7 @@ SamplerState cube_sampler : register(s2);
 #define CLUSTER_LIST cluster_list_sb
 #define SPOT_SHADOWS spot_shadows_sb
 #define AREA_LIGHTS area_lights_sb
+#define MATERIAL_PARAMS material_params_sb
 #define probe_cube_sampler cube_sampler
 
 float4 pool_sample(uint idx, float2 uv)
@@ -270,6 +284,19 @@ bool environment_specular(ProbeMask probes, float3 world_pos, float3 R, float ro
 
 {MAIN_SHADING}
 
+// The parameter table row of the draw being shaded. Each entry point sets it
+// before calling a hook, so `material_param` reads the right material from
+// either hook without a parameter of its own.
+static uint surface_params_row;
+
+// Parameter `index` (0-7) of the material the surface being drawn uses; 0
+// for a surface drawn without a material.
+float material_param(uint index)
+{
+    uint i = min(index, 7u);
+    return MATERIAL_PARAMS[surface_params_row].values[i >> 2][i & 3u];
+}
+
 // ---- The world's hooks ----
 
 // A world Shader defines these; the engine's defaults delegate to
@@ -301,6 +328,7 @@ VertexOut vertex_main_bindless(
 {
     uint oid = object_instance_index(instance_id);
 #endif
+    surface_params_row = OBJECTS[oid].params_index;
     VertexOut o = transform(OBJECTS[oid].model, v.pos, v.normal, v.tangent, v.color, v.uv);
     o.object_id = oid;
     return o;
@@ -311,5 +339,7 @@ VertexOut vertex_main_bindless(
 [shader("pixel")]
 float4 fragment_main_bindless(VertexOut v) : SV_Target
 {
-    return shade(v, OBJECTS[v.object_id]);
+    GpuObjectData od = OBJECTS[v.object_id];
+    surface_params_row = od.params_index;
+    return shade(v, od);
 }

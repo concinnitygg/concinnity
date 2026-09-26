@@ -417,11 +417,15 @@ pub(super) struct VkCull {
     // the GLSL. Empty when the world authored its own main shader.
     pub(super) bindless_main_spv: (Vec<u8>, Vec<u8>),
     // One bindless descriptor set per frame-in-flight: binding 0 is that frame's
-    // GpuObjectData storage buffer, binding 1 the shared texture pool.
+    // GpuObjectData storage buffer, binding 1 the shared texture pool, binding 2
+    // that frame's material parameter table.
     pub(super) bindless_sets: Vec<vk::DescriptorSet>,
     // Per-frame GpuObjectData storage buffers, persistently mapped; rebuilt each
     // frame from `draw.objects[..draw.n_objects]`.
     pub(super) object_buffers: Vec<PooledBuffer>,
+    // The material parameter table, one copy per frame at binding 2 of that
+    // frame's bindless set. `None` when the bindless pass is inactive.
+    pub(super) material_params: Option<super::material_params::VkMaterialParams>,
     // Compute cull pipeline + its per-frame sets (bindings 0/1/2 = that frame's
     // object SSBO, draw-args SSBO, indirect-command SSBO). Sets are pool-freed.
     pub(super) cull_pipeline: Option<OwnedPipeline>,
@@ -530,6 +534,7 @@ impl VkCull {
         // only the pipelines, layouts, and the per-frame model-history buffers
         // are destroyed here.
         self.object_buffers.clear();
+        self.material_params = None;
         self.draw_args_buffers.clear();
         self.indirect_buffers.clear();
         self.cull_status_buffers.clear();

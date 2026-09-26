@@ -101,10 +101,15 @@ pub(crate) struct FormField {
     pub variant_idx: usize,
 }
 
+// The longest all-numeric array the form edits as a vector: a Material's eight
+// `params`. Longer fixed arrays (an SdfVolume's 32 `params`) stay at their
+// default.
+const MAX_VECTOR_LEN: usize = 8;
+
 // The editable kind of a field, from its `key` and default value `v`, or `None`
-// for a kind left at its default. A 2..=4-element all-numeric array is a vector;
-// it is a color when the key names one (so the layout can add a swatch), which no
-// vector key ever does.
+// for a kind left at its default. A 2..=MAX_VECTOR_LEN-element all-numeric array
+// is a vector; it is a color when the key names one (so the layout can add a
+// swatch), which no vector key ever does.
 fn kind_of(key: &str, v: &Value) -> Option<FieldKind> {
     match v {
         Value::String(_) => Some(FieldKind::Str),
@@ -114,7 +119,9 @@ fn kind_of(key: &str, v: &Value) -> Option<FieldKind> {
         } else {
             FieldKind::Float
         }),
-        Value::Array(a) if (2..=4).contains(&a.len()) && a.iter().all(Value::is_number) => {
+        Value::Array(a)
+            if (2..=MAX_VECTOR_LEN).contains(&a.len()) && a.iter().all(Value::is_number) =>
+        {
             Some(FieldKind::Vec {
                 len: a.len(),
                 color: is_color_key(key),
@@ -221,7 +228,7 @@ fn value_text(v: &Value) -> String {
 // `0.05000000074505806`); a genuine f64 that does not round-trip through f32 keeps
 // full precision. Integers print as-is. Re-parsing the shortened text yields the
 // same f32, so the displayed value round-trips unchanged through cook.
-fn number_text(n: &serde_json::Number) -> String {
+pub(crate) fn number_text(n: &serde_json::Number) -> String {
     if n.is_i64() || n.is_u64() {
         return n.to_string();
     }
@@ -763,7 +770,7 @@ mod tests {
         assert_eq!(field("color").unwrap().initial, "1.0, 1.0, 1.0");
     }
 
-    // Only 2..=4-element all-numeric arrays become vectors; longer arrays, empty
+    // Only 2..=8-element all-numeric arrays become vectors; longer arrays, empty
     // arrays, and arrays of non-numbers are left at their defaults.
     #[test]
     fn kind_of_only_accepts_small_numeric_arrays() {
@@ -805,6 +812,15 @@ mod tests {
                 color: false
             })
         );
+        // A Material's eight `params` are the longest vector.
+        assert_eq!(
+            kind_of("params", &json!(vec![0.0_f64; 8])),
+            Some(FieldKind::Vec {
+                len: 8,
+                color: false
+            })
+        );
+        assert_eq!(kind_of("params", &json!(vec![0.0_f64; 9])), None);
         // A 32-element SdfVolume `params` array is too long for a vector.
         assert_eq!(kind_of("params", &json!(vec![0.0_f64; 32])), None);
         // Empty and single-element arrays are not vectors.
@@ -1460,6 +1476,43 @@ mod tests {
             Some(4.5)
         );
         assert!(validate("PointLight", "probe", &args).is_ok());
+    }
+
+    // A Material's eight `params` disclose into one Float leaf each, and an edit
+    // of one writes back into the full array, which cooks.
+    #[test]
+    fn material_params_edit_one_element_at_a_time() {
+        use std::collections::HashSet;
+        let collapsed = fields_for("Material", None);
+        assert_eq!(
+            collapsed.iter().find(|f| f.key == "params").map(|f| f.kind),
+            Some(FieldKind::Vec {
+                len: 8,
+                color: false
+            })
+        );
+        let expanded = HashSet::from(["params".to_string()]);
+        let fields = fields_for_with("Material", None, &expanded);
+        let leaves: Vec<&str> = fields
+            .iter()
+            .filter(|f| f.key.starts_with("params."))
+            .map(|f| f.key.as_str())
+            .collect();
+        assert_eq!(leaves.len(), 8);
+        let idx = fields
+            .iter()
+            .position(|f| f.key == "params.5")
+            .expect("a params.5 leaf");
+        let mut texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
+        texts[idx] = "2.5".into();
+        let args = assemble("Material", None, &fields, &texts);
+        let params = get_at_path(&args, "params")
+            .and_then(Value::as_array)
+            .expect("params stays an array");
+        assert_eq!(params.len(), 8);
+        assert_eq!(params[5].as_f64(), Some(2.5));
+        assert_eq!(params[4].as_f64(), Some(0.0));
+        assert!(validate("Material", "striped", &args).is_ok());
     }
 
     // f32-origin floats display at their shortest round-tripping form, not serde's

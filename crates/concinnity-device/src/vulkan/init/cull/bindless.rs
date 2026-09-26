@@ -10,6 +10,7 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use super::CullPlan;
 use crate::vulkan::context::{VkDescriptors, VkSceneAssets, VkTargets};
 use crate::vulkan::init::InitGpu;
+use crate::vulkan::material_params::{self, MATERIAL_PARAMS_BINDING, VkMaterialParams};
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout};
 use crate::vulkan::pipeline::*;
 use crate::vulkan::resources::alloc_descriptor_sets;
@@ -21,6 +22,7 @@ pub(super) struct BindlessPass {
     pub(super) set_layout: Option<OwnedSetLayout>,
     pub(super) sets: Vec<vk::DescriptorSet>,
     pub(super) object_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
+    pub(super) material_params: Option<VkMaterialParams>,
     pub(super) main_spv: (Vec<u8>, Vec<u8>),
 }
 
@@ -30,6 +32,7 @@ pub(super) struct BindlessInputs<'a> {
     pub(super) descriptors: &'a VkDescriptors,
     pub(super) targets: &'a VkTargets,
     pub(super) scene: &'a VkSceneAssets,
+    pub(super) material_params: &'a [render_types::GpuMaterialParams],
     pub(super) swapchain_format: vk::Format,
 }
 
@@ -52,6 +55,7 @@ pub(super) fn build_bindless_pass(
         descriptors,
         targets,
         scene,
+        material_params,
         swapchain_format,
     } = inputs;
     let CullPlan {
@@ -62,15 +66,17 @@ pub(super) fn build_bindless_pass(
         ..
     } = *plan;
     // Bindless static pass: bindless static main pass resources. A dedicated
-    // set layout (set 1: SSBO + bindless texture pool), pipeline layout,
-    // pipeline, per-frame GpuObjectData storage buffers, and one descriptor
-    // set per frame. `None`/empty when the bindless pass is inactive.
+    // set layout (set 1: object SSBO + bindless texture pool + material
+    // parameter table), pipeline layout, pipeline, per-frame GpuObjectData
+    // storage buffers and parameter tables, and one descriptor set per frame.
+    // `None`/empty when the bindless pass is inactive.
     let (
         bindless_pipeline,
         bindless_pipeline_layout,
         bindless_set_layout,
         bindless_sets,
         object_buffers,
+        params,
         bindless_main_spv,
     ) = if bindless_active {
         let set_bindings = [
@@ -84,6 +90,11 @@ pub(super) fn build_bindless_pass(
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(bindless_pool_size as u32)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(MATERIAL_PARAMS_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
         ];
         // On a budget-constrained device the pool binding is declared
         // update-after-bind so it budgets against the update-after-bind
@@ -93,6 +104,7 @@ pub(super) fn build_bindless_pass(
         let binding_flags = [
             vk::DescriptorBindingFlags::empty(),
             vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
+            vk::DescriptorBindingFlags::empty(),
         ];
         let mut flags_info =
             vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
@@ -143,9 +155,12 @@ pub(super) fn build_bindless_pass(
             )?);
         }
 
+        let params = VkMaterialParams::new(alloc, material_params.to_vec(), frames)?;
+
         // One bindless set per frame: binding 0 = that frame's SSBO,
         // binding 1 = the shared pool ([albedo views..] ++ [normal..]), read
-        // through the global set's linear sampler.
+        // through the global set's linear sampler, binding 2 = that frame's
+        // material parameter table.
         let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
         let sets =
             alloc_descriptor_sets(device, descriptors.descriptor_pool.handle(), &set_layouts)?;
@@ -173,6 +188,7 @@ pub(super) fn build_bindless_pass(
                 .buffer(buffers[i].buffer())
                 .offset(0)
                 .range(object_buffer_size);
+            let params_info = params.descriptor(i);
             let writes = [
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
@@ -185,6 +201,7 @@ pub(super) fn build_bindless_pass(
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                     .image_info(&pool_infos),
+                material_params::write(set, &params_info),
             ];
             // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
             // every set and resource it names belongs to this device.
@@ -197,6 +214,7 @@ pub(super) fn build_bindless_pass(
             Some(set_layout),
             sets,
             buffers,
+            Some(params),
             engine_pair,
         )
     } else {
@@ -206,6 +224,7 @@ pub(super) fn build_bindless_pass(
             None,
             Vec::new(),
             Vec::new(),
+            None,
             (Vec::new(), Vec::new()),
         )
     };
@@ -215,6 +234,7 @@ pub(super) fn build_bindless_pass(
         set_layout: bindless_set_layout,
         sets: bindless_sets,
         object_buffers,
+        material_params: params,
         main_spv: bindless_main_spv,
     })
 }

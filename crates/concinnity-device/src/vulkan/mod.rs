@@ -27,6 +27,7 @@ mod instance_exts;
 mod light_cull;
 mod line;
 mod loader;
+mod material_params;
 mod owned;
 mod parallel_encoder;
 mod particle;

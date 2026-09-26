@@ -552,6 +552,7 @@ impl DxContext {
                     indirect,
                     indirect_offset: set.region_offset(slot),
                     object_gva: frame_object_gva,
+                    material_params_gva: self.material_params_gva(params.frame_idx),
                 },
                 crate::directx::probe::FaceExtent {
                     width: w,

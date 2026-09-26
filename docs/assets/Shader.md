@@ -45,6 +45,9 @@ binding, register, attribute or varying of their own:
   `return shade_surface(v, od) * tint;` starts from it.
 - `project_vertex(model, pos, normal, tangent, color, uv)`: the engine's
   projection.
+- `material_param(index)`: parameter `index`, 0 to 7, of the `params` the
+  surface's [Material](Material.md) sets, from either hook; 0 for a surface
+  drawn without a material.
 - `pool_sample(index, uv)`: a texture from the world's pool by the record's
   index.
 - `decode_normal_map(rg)`: a tangent-space normal from a normal-map texel.
@@ -64,6 +67,24 @@ binding, register, attribute or varying of their own:
 `VertexOut` is the engine's varying block: `position` (clip), `world_pos`,
 `normal`, `tangent`, `bitangent`, `uv`, `view_depth` and `color`. A `shade`
 must not read `v.object_id`; the record is `od`.
+
+# Parameters from the Material
+
+A Shader declares no inputs of its own. Each [Material](Material.md) instead
+carries eight numbers, its `params`, which `material_param(0)` through
+`material_param(7)` read for the surface being drawn, so one Shader can be
+set up differently by every material that uses it. What each parameter
+means is the Shader's to decide, and worth a comment at the top of its
+file:
+
+```hlsl
+// material_param(0): glow strength, material_param(1): pulses per second
+float4 shade(VertexOut v, GpuObjectData od)
+{
+    float pulse = 0.5 + 0.5 * sin(VIEW.elapsed * 6.2831 * material_param(1));
+    return shade_surface(v, od) + float4(od.tint_roughness.rgb * material_param(0) * pulse, 0.0);
+}
+```
 
 # More than one Shader
 

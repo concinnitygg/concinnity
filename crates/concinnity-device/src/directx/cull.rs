@@ -60,6 +60,9 @@ pub(in crate::directx) struct CullState {
     // frame-in-flight, persistently mapped. Rebuilt each frame.
     pub object_buffer_resources: Vec<PooledBuffer>,
     pub object_buffer_ptrs: Vec<*mut u8>,
+    // The material parameter table, over the same slots as the object buffers;
+    // `None` when the world has nothing to drive.
+    pub material_params: Option<super::material_params::DxMaterialParams>,
     // Flat-pool SRV region bases, one per frame in flight, bound to bindless
     // root param [5] as the texture pool for the frame being recorded. The
     // copies exist so a streamed texture swap rewrites the copy whose frame

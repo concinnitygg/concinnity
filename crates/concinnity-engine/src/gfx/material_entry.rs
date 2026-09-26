@@ -8,6 +8,7 @@
 use concinnity_core::components::Material;
 use concinnity_core::ecs::{MaterialHandle, TextureHandle};
 use concinnity_core::gfx::render_types::{MaterialUniforms, NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT};
+use concinnity_core::render::material_params;
 
 // One decoded material as build_draw_list consumes it: resolved texture pool
 // slots, the GPU uniforms, and the shader bucket its draws render under.
@@ -32,10 +33,14 @@ impl MaterialEntry {
     };
 }
 
-/// The entry a decoded `Material` bakes to against a texture pool of
+/// The entry the `Material` at `handle` bakes to against a texture pool of
 /// `texture_count` entries. `Err` names the reference that points past the
 /// pool, which cook validated and so marks a corrupt build.
-pub(crate) fn of(mat: &Material, texture_count: usize) -> Result<MaterialEntry, &'static str> {
+pub(crate) fn of(
+    handle: MaterialHandle,
+    mat: &Material,
+    texture_count: usize,
+) -> Result<MaterialEntry, &'static str> {
     // Unset fallbacks differ per field. Albedo and the normal map select a
     // reserved fallback entry through a sentinel no real handle can collide
     // with. Slot 0 stays the sentinel the shader gates on for the emissive and
@@ -70,6 +75,7 @@ pub(crate) fn of(mat: &Material, texture_count: usize) -> Result<MaterialEntry, 
             orm_map_index: orm_map_slot as u32,
             transparent: u32::from(mat.transparent),
             see_through: u32::from(mat.see_through),
+            params_index: material_params::row_of(Some(handle)),
         },
         shader_bucket: mat.shader.map_or(0, |h| h.0),
     })
@@ -104,7 +110,7 @@ mod tests {
     // albedo and the normal map, and slot 0 for the maps the shader gates on.
     #[test]
     fn unset_references_take_their_fallbacks() {
-        let entry = of(&material(), 4).expect("bakes");
+        let entry = of(MaterialHandle(0), &material(), 4).expect("bakes");
         assert_eq!(entry.albedo_slot, NO_ALBEDO_SLOT);
         assert_eq!(entry.normal_map_slot, NO_NORMAL_MAP_SLOT);
         assert_eq!(entry.uniforms.emissive_map_index, 0);
@@ -118,7 +124,7 @@ mod tests {
         let mut mat = material();
         mat.albedo = Some(TextureHandle(2));
         mat.normal_map = Some(TextureHandle(3));
-        let entry = of(&mat, 4).expect("bakes");
+        let entry = of(MaterialHandle(0), &mat, 4).expect("bakes");
         assert_eq!(entry.albedo_slot, 2);
         assert_eq!(entry.normal_map_slot, 3);
     }
@@ -129,15 +135,42 @@ mod tests {
     fn a_reference_past_the_pool_names_its_field() {
         let mut mat = material();
         mat.orm_map = Some(TextureHandle(9));
-        assert_eq!(of(&mat, 4).err(), Some("orm_map"));
+        assert_eq!(of(MaterialHandle(0), &mat, 4).err(), Some("orm_map"));
     }
 
     #[test]
     fn the_shader_reference_becomes_the_draw_bucket() {
         let mut mat = material();
-        assert_eq!(of(&mat, 0).expect("bakes").shader_bucket, 0);
+        assert_eq!(
+            of(MaterialHandle(0), &mat, 0).expect("bakes").shader_bucket,
+            0
+        );
         mat.shader = Some(concinnity_core::ecs::ShaderHandle(3));
-        assert_eq!(of(&mat, 0).expect("bakes").shader_bucket, 3);
+        assert_eq!(
+            of(MaterialHandle(0), &mat, 0).expect("bakes").shader_bucket,
+            3
+        );
+    }
+
+    // Every draw of one material reads the parameter row after its handle, so
+    // draws sharing a material share the row; a draw without one reads row 0.
+    #[test]
+    fn a_material_draws_with_the_parameter_row_after_its_handle() {
+        let mat = material();
+        let entry = of(MaterialHandle(3), &mat, 0).expect("bakes");
+        assert_eq!(entry.uniforms.params_index, 4);
+        let map = std::collections::HashMap::from([(MaterialHandle(3), entry)]);
+        let draws = [Some(MaterialHandle(3)), Some(MaterialHandle(3)), None];
+        let rows: Vec<u32> = draws
+            .iter()
+            .map(|&m| {
+                resolve_material_slots(m, &map)
+                    .expect("resolves")
+                    .uniforms
+                    .params_index
+            })
+            .collect();
+        assert_eq!(rows, [4, 4, material_params::NO_MATERIAL_ROW]);
     }
 
     // A draw naming no material binds the reserved fallbacks under the default
@@ -161,7 +194,7 @@ mod tests {
     // A material handle must resolve in the table.
     #[test]
     fn a_material_handle_must_resolve() {
-        let entry = of(&material(), 4).expect("bakes");
+        let entry = of(MaterialHandle(0), &material(), 4).expect("bakes");
         let map = std::collections::HashMap::from([(MaterialHandle(2), entry)]);
         let got = resolve_material_slots(Some(MaterialHandle(2)), &map).expect("resolves");
         assert_eq!(got.uniforms.roughness, 0.25);

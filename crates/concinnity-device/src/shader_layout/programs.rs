@@ -106,6 +106,25 @@ pub(super) static MAIN_BINDLESS_FRAG_LATE_MEMBER_SHADE: Program = Program {
     ..MAIN_BINDLESS_FRAG
 };
 
+// The bindless pair compiled around world hooks that read a material
+// parameter, so the parameter table is bound on both stages.
+const PARAMS_SHADE: &str = "float4 shade(VertexOut v, GpuObjectData od) { return float4(material_param(3), 0.0, 0.0, 1.0); }";
+const PARAMS_TRANSFORM: &str = "VertexOut transform(float4x4 m, float3 p, float3 n, float3 t, float3 c, float2 uv)\n\
+    {\n    return project_vertex(m, p + n * material_param(0), n, t, c, uv);\n}\n";
+
+pub(super) static MAIN_BINDLESS_FRAG_PARAMS_SHADE: Program = Program {
+    splices: &[Splice::inline("{SURFACE_FRAGMENT}", PARAMS_SHADE)],
+    ..MAIN_BINDLESS_FRAG
+};
+
+pub(super) static MAIN_BINDLESS_VERT_PARAMS_TRANSFORM: Program = Program {
+    row: &shared::MAIN_BINDLESS_VERT,
+    splices: &[
+        Splice::inline("{SURFACE_VERTEX}", PARAMS_TRANSFORM),
+        Splice::inline("{SURFACE_FRAGMENT}", PARAMS_SHADE),
+    ],
+};
+
 // The phase-1 variant: the only one that declares every struct the family has.
 // Metal runs it as the decision half.
 pub(super) static CULL_KERNEL: Program = Program {

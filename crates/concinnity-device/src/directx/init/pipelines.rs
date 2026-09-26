@@ -374,6 +374,18 @@ pub(super) fn create_main_bindless_root_signature(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
+        // [20] Root SRV: the material parameter table at t20, which either
+        // world hook may read.
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Descriptor: D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: 20, // t20
+                    RegisterSpace: 0,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
+        },
     ];
 
     serialize_and_create_root_sig(device, &params, "main bindless root sig")

@@ -8,6 +8,32 @@ lit and shaded.
 Reference it from a [Prop](Prop.md)'s `material` field. The `material` field takes
 precedence over the older `texture` field.
 
+# Shader parameters
+
+`params` holds eight numbers of your own for a [Shader](Shader.md) to read.
+The engine gives them no meaning and its own lighting ignores them; they
+exist so that one Shader can be shared by many materials that each set it
+up differently: a stripe count, a pulse speed, a blend amount. Every
+parameter defaults to 0.
+
+A Shader's `shade` and `transform` read them with `material_param(i)`,
+where `i` runs from 0 to 7 and picks `params[i]` of the material the
+surface being drawn uses. A surface drawn without a material reads 0 for
+all eight.
+
+A Shader's `fragment` file reading a stripe count from `params[0]` and a
+scroll speed from `params[1]`:
+
+```hlsl
+float4 shade(VertexOut v, GpuObjectData od)
+{
+    float stripes = material_param(0);
+    float speed = material_param(1);
+    float band = step(0.5, frac(v.uv.x * stripes + VIEW.elapsed * speed));
+    return shade_surface(v, od) * lerp(0.4, 1.0, band);
+}
+```
+
 ## Parameters
 
 - `albedo`: A string. The [Texture](Texture.md) asset used as the base color (albedo) map. Optional.
@@ -23,3 +49,4 @@ precedence over the older `texture` field.
 - `transparent`: A boolean. When true, the surface is a translucent dielectric (glass): it renders in the engine's transparent pass instead of the opaque pass, refracting and reflecting the scene rather than writing solid color + depth. The importer sets this for materials it detects as glass; authored materials can opt in directly. Defaults to false (opaque).
 - `see_through`: A boolean. When true, the glass is rendered as genuinely see-through: the scene behind it shows through with a sharp per-pixel reflection (requires a ray-tracing-capable GPU). When false (the default), a `transparent` surface still renders as low-roughness reflective glass that hides whatever is behind it. See-through only looks right when the space behind the glass is actually modeled, so it is opt-in per material. Setting it implies `transparent`.
 - `shader`: A string. The [Shader](Shader.md) asset that shades surfaces using this material. When omitted, the world's default shader is used. Referencing a shader from a material ties that shader's lifetime to the material's: a shader referenced only by scene-exclusive materials loads and unloads with the scene.
+- `params`: An array of 8 floats. Eight numbers for the material's [Shader](Shader.md) to read, as `material_param(0)` through `material_param(7)`. What each one means is up to the Shader; the engine's own shading ignores them. All 0 by default.

@@ -206,6 +206,35 @@ fn a_world_fragment_declares_the_whole_argument_buffers() {
     }
 }
 
+// A world hook that calls `material_param` reads the table at the slot the
+// Metal encoder binds it, from either stage.
+#[test]
+fn a_world_hook_reads_material_params_where_metal_binds_them() {
+    if !concinnity_shader::dxc_available() {
+        return;
+    }
+    let slot = "material_params_sb [[buffer(16)]]";
+    for program in [
+        &programs::MAIN_BINDLESS_FRAG_PARAMS_SHADE,
+        &programs::MAIN_BINDLESS_VERT_PARAMS_TRANSFORM,
+    ] {
+        let msl = programs::msl(program).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            msl.contains(slot),
+            "{}: the parameter table is not at buffer(16)",
+            program.row.entry
+        );
+    }
+}
+
+#[test]
+fn material_params_layouts_match_the_shader() {
+    check(
+        &programs::MAIN_BINDLESS_FRAG_PARAMS_SHADE,
+        &mirrors::forward::material_params(),
+    );
+}
+
 #[test]
 fn cull_layouts_match_the_shader() {
     check(&programs::CULL_KERNEL, &mirrors::geometry::cull());

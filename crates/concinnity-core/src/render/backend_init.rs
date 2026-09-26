@@ -11,8 +11,8 @@ use crate::components::{
 use crate::gfx::auto_exposure::AutoExposureSettings;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{
-    AreaLightData, DrawObject, GpuLight, InstancedCluster, LightUniforms, PostProcessTunables,
-    SpotShadowData,
+    AreaLightData, DrawObject, GpuLight, GpuMaterialParams, InstancedCluster, LightUniforms,
+    PostProcessTunables, SpotShadowData,
 };
 use crate::render::decal::DecalRecord;
 use crate::render::particles::ParticleEmitterRecord;
@@ -47,6 +47,10 @@ pub struct SceneData<'a> {
     /// frame. Honored by DirectX + Vulkan; Metal's per-frame rebuild already
     /// covers chunks, so it needs no reserve.
     pub n_chunk_max: usize,
+    /// The material parameter table's rows (see
+    /// [`crate::render::material_params`]): the zero row, then one per
+    /// material in handle order. Every draw's `params_index` addresses it.
+    pub material_params: Vec<GpuMaterialParams>,
 }
 
 /// One world Shader as the backend receives it: the cook's compiled programs,
@@ -339,6 +343,7 @@ impl<'a> BackendInit<'a> {
                 instanced_clusters: Vec::new(),
                 n_skinned: 0,
                 n_chunk_max: 0,
+                material_params: Vec::new(),
             },
             shaders: vec![WorldShader {
                 programs: None,
@@ -463,6 +468,7 @@ mod tests {
             instanced_clusters: Vec::new(),
             n_skinned: 0,
             n_chunk_max: 0,
+            material_params: Vec::new(),
         }
     }
 
