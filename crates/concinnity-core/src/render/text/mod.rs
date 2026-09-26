@@ -7,10 +7,14 @@ use crate::ecs::FontHandle;
 use crate::gfx::overlay::OverlayTransform;
 use crate::gfx::render_types::{TextDrawCall, TextVertex};
 use crate::render::overlay_maps::Placement;
-use alloc::borrow::Cow;
-use alloc::string::String;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
+
+mod lines;
+mod runs;
+
+use lines::laid_out;
+use runs::RunColors;
 
 /// One face's per-glyph metrics, keyed by Unicode code point.
 pub type FontMetrics = HashMap<u32, crate::gfx::font::GlyphMetrics>;
@@ -145,151 +149,6 @@ fn advance_px(ch: char, font: &LoadedFont, scale: f32) -> f32 {
         })
 }
 
-// The content a label actually draws: its text broken to `wrap_width` and
-// capped at `max_lines`. Wrapping measures in the label's own pixel space with
-// `label.scale`, which gives the same breaks as measuring in window pixels: a
-// screen-owned label scales its advances and its wrap width by the same overlay
-// factor. A centered label has no container (it is fitted to the viewport), so
-// it is left alone. Borrows the authored content whenever no line breaks or
-// truncates, so a fitting label allocates nothing.
-fn laid_out<'a>(label: &'a TextLabel, font: &LoadedFont) -> Cow<'a, str> {
-    if label.centered || (label.wrap_width <= 0.0 && label.max_lines == 0) {
-        return Cow::Borrowed(&label.content);
-    }
-    let mut lines: Vec<&str> = Vec::new();
-    let mut authored_lines = 0usize;
-    for authored in label.content.split('\n') {
-        authored_lines += 1;
-        if label.wrap_width > 0.0 {
-            wrap_line(authored, font, label.scale, label.wrap_width, &mut lines);
-        } else {
-            lines.push(authored);
-        }
-    }
-    let max = label.max_lines as usize;
-    let truncated = max > 0 && lines.len() > max;
-    if truncated {
-        lines.truncate(max);
-    }
-    if !truncated && lines.len() == authored_lines {
-        return Cow::Borrowed(&label.content);
-    }
-    let ellipsized = truncated
-        .then(|| lines.pop())
-        .flatten()
-        .map(|last| with_ellipsis(last, font, label.scale, label.wrap_width));
-    let mut out = String::with_capacity(label.content.len() + 4);
-    for (i, line) in lines.iter().enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        out.push_str(line);
-    }
-    if let Some(last) = ellipsized {
-        if !lines.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(&last);
-    }
-    Cow::Owned(out)
-}
-
-// Greedily pack `line`'s words into `out` as subslices of `line`, breaking at
-// spaces. A word too wide to fit a line of its own is split mid-word, since
-// leaving it whole would put it back outside the container wrapping exists to
-// respect. Widths accumulate one glyph advance at a time in authored order,
-// matching a from-scratch measure of the same text.
-fn wrap_line<'a>(line: &'a str, font: &LoadedFont, scale: f32, width: f32, out: &mut Vec<&'a str>) {
-    let advance = |ch: char| advance_px(ch, font, scale);
-    // The line under construction, `line[start..end]`, and its measured width.
-    let (mut start, mut end) = (0usize, 0usize);
-    let mut current_width = 0.0_f32;
-    // Byte offset of the next word (words are separated by single spaces).
-    let mut pos = 0usize;
-    for word in line.split(' ') {
-        let word_end = pos + word.len();
-        // The candidate: the word appended to the current line (joined by the
-        // space between them), or the word alone when the line is empty.
-        let (cand_start, cand_width) = if end > start {
-            let mut w = current_width;
-            for ch in line[end..word_end].chars() {
-                w += advance(ch);
-            }
-            (start, w)
-        } else {
-            let mut w = 0.0_f32;
-            for ch in word.chars() {
-                w += advance(ch);
-            }
-            (pos, w)
-        };
-        if cand_width <= width {
-            (start, end, current_width) = (cand_start, word_end, cand_width);
-            pos = word_end + 1;
-            continue;
-        }
-        if end > start {
-            out.push(&line[start..end]);
-        }
-        // The word now starts a line of its own; split it if even that overflows.
-        (start, end) = (pos, word_end);
-        loop {
-            let (mut w, mut chars) = (0.0_f32, 0usize);
-            for ch in line[start..end].chars() {
-                w += advance(ch);
-                chars += 1;
-            }
-            if w <= width || chars <= 1 {
-                current_width = w;
-                break;
-            }
-            // The longest head (at least one char) that fits the width.
-            let mut acc = 0.0_f32;
-            let mut head_end = start;
-            for (i, ch) in line[start..end].char_indices() {
-                let next = acc + advance(ch);
-                if head_end > start && next > width {
-                    break;
-                }
-                acc = next;
-                head_end = start + i + ch.len_utf8();
-            }
-            out.push(&line[start..head_end]);
-            start = head_end;
-        }
-        pos = word_end + 1;
-    }
-    out.push(&line[start..end]);
-}
-
-// `line` shortened until it and a trailing ellipsis fit `width`: the longest
-// prefix whose width plus the ellipsis fits, found in one forward scan. Prefix
-// widths accumulate one glyph advance at a time in authored order, with the
-// ellipsis advances added after, matching a from-scratch measure of the same
-// candidate. A zero width (capping lines without wrapping them) leaves the
-// line as it is.
-fn with_ellipsis(line: &str, font: &LoadedFont, scale: f32, width: f32) -> String {
-    const ELLIPSIS: &str = "...";
-    let mut out = String::with_capacity(line.len() + ELLIPSIS.len());
-    let mut end = line.len();
-    if width > 0.0 {
-        let ellipsis_w: f32 = ELLIPSIS.chars().map(|ch| advance_px(ch, font, scale)).sum();
-        end = 0;
-        let mut prefix_w = 0.0_f32;
-        for (i, ch) in line.char_indices() {
-            let w = prefix_w + advance_px(ch, font, scale);
-            if w + ellipsis_w > width {
-                break;
-            }
-            prefix_w = w;
-            end = i + ch.len_utf8();
-        }
-    }
-    out.push_str(&line[..end]);
-    out.push_str(ELLIPSIS);
-    out
-}
-
 // Baseline position relative to a label's top-left `y`, so the cap-height band
 // is vertically centered within the line box `[y, y + line_height]`. Pinning the
 // baseline to the box bottom (the old behavior) left a large gap above the
@@ -336,7 +195,7 @@ pub fn measure_label_box(label: &TextLabel, loaded_fonts: &FontSet) -> Option<La
     let font = loaded_fonts.resolve(label.font)?;
     let scale = label.scale;
     let line_height = font.size_px * scale;
-    let content = laid_out(label, font);
+    let content = laid_out(label, font).text;
     let lines = content.split('\n').count().max(1) as f32;
     let text_w = widest_line_width(&content, font, scale);
     let pad = label.padding;
@@ -401,7 +260,9 @@ pub fn build_text_calls_into<'a>(
         // Everything below reads the laid-out content, not the authored string,
         // so alignment, the background box, and the glyph run agree on the lines
         // that are actually drawn.
-        let content = laid_out(label, font);
+        let laid = laid_out(label, font);
+        let content = laid.text.as_ref();
+        let mut colors = RunColors::new(&label.color_runs, label.color);
         // One quad per glyph plus the optional background box; the byte length
         // upper-bounds the glyph count.
         let quads = content.len() + 1;
@@ -416,7 +277,7 @@ pub fn build_text_calls_into<'a>(
         // below does not measure the same content a second time.
         let mut widest_line: Option<f32> = None;
         let (x0, y0, scale) = if label.centered && win_w > 0.0 && win_h > 0.0 {
-            let w1 = text_advance_width(&content, font, 1.0);
+            let w1 = text_advance_width(content, font, 1.0);
             let h1 = font.size_px;
             let scale = if w1 > 0.0 && h1 > 0.0 {
                 let sw = win_w * 0.85 / w1;
@@ -425,7 +286,7 @@ pub fn build_text_calls_into<'a>(
             } else {
                 label.scale
             };
-            let tw = text_advance_width(&content, font, scale);
+            let tw = text_advance_width(content, font, scale);
             let th = h1 * scale;
             ((win_w - tw) / 2.0, (win_h - th) / 2.0, scale)
         } else {
@@ -448,7 +309,7 @@ pub fn build_text_calls_into<'a>(
             let x0 = match label.align {
                 TextAlign::Left => ax,
                 TextAlign::Center | TextAlign::Right => {
-                    let w = widest_line_width(&content, font, scale);
+                    let w = widest_line_width(content, font, scale);
                     widest_line = Some(w);
                     if label.align == TextAlign::Center {
                         ax - w / 2.0
@@ -479,9 +340,9 @@ pub fn build_text_calls_into<'a>(
         // fully disappears).
         if label.background[3] > 0.0 && !content.is_empty() {
             let lines = content.split('\n').count().max(1) as f32;
-            let text_w = widest_line.unwrap_or_else(|| widest_line_width(&content, font, scale));
+            let text_w = widest_line.unwrap_or_else(|| widest_line_width(content, font, scale));
             let pad = label.padding;
-            let (top_above, bot_below) = content_v_extent(&content, font, scale);
+            let (top_above, bot_below) = content_v_extent(content, font, scale);
             let last_baseline = baseline + (lines - 1.0) * line_height;
             let (x0b, y0b) = (x0 - pad, baseline - top_above - pad);
             let (x1b, y1b) = (x0 + text_w + pad, last_baseline + bot_below + pad);
@@ -506,7 +367,7 @@ pub fn build_text_calls_into<'a>(
             indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
         }
 
-        for ch in content.chars() {
+        for (i, ch) in content.chars().enumerate() {
             if ch == '\n' {
                 x_cursor = x0;
                 baseline += line_height;
@@ -536,30 +397,31 @@ pub fn build_text_calls_into<'a>(
             let v0 = m.atlas_y as f32 / ah;
             let u1 = (m.atlas_x as f32 + m.atlas_w as f32) / aw;
             let v1 = (m.atlas_y as f32 + m.atlas_h as f32) / ah;
+            let color = colors.at(laid.source(i));
             let base = vertices.len() as u16;
             vertices.extend_from_slice(&[
                 TextVertex {
                     pos: [gx, gy],
                     uv: [u0, v0],
-                    color: label.color,
+                    color,
                     mode: 0.0,
                 },
                 TextVertex {
                     pos: [gx + gw, gy],
                     uv: [u1, v0],
-                    color: label.color,
+                    color,
                     mode: 0.0,
                 },
                 TextVertex {
                     pos: [gx + gw, gy + gh],
                     uv: [u1, v1],
-                    color: label.color,
+                    color,
                     mode: 0.0,
                 },
                 TextVertex {
                     pos: [gx, gy + gh],
                     uv: [u0, v1],
-                    color: label.color,
+                    color,
                     mode: 0.0,
                 },
             ]);
@@ -595,7 +457,7 @@ mod tests {
     use crate::ecs::asset_id::AssetId;
     use crate::gfx::font::GlyphMetrics;
 
-    use alloc::string::ToString;
+    use alloc::string::{String, ToString};
     fn make_glyph(atlas_w: u16, atlas_h: u16, advance_px: f32) -> GlyphMetrics {
         GlyphMetrics {
             char_code: 0,
@@ -631,6 +493,7 @@ mod tests {
             x,
             y: 0.0,
             color: [1.0, 1.0, 1.0],
+            color_runs: Vec::new(),
             scale: 1.0,
             centered: false,
             align: crate::components::TextAlign::Left,
@@ -660,6 +523,7 @@ mod tests {
         label.wrap_width = width;
         label.max_lines = max_lines;
         laid_out(&label, &font)
+            .text
             .split('\n')
             .map(String::from)
             .collect()
@@ -1147,5 +1011,122 @@ mod tests {
         let wm = measure_label_box(&with_missing, &fonts).unwrap().w;
         // The '?' contributes exactly one space advance (7) of extra width.
         assert!((wm - wk - 7.0).abs() < 1e-4, "wk={wk} wm={wm}");
+    }
+
+    const W: [f32; 3] = [1.0, 1.0, 1.0];
+    const RED: [f32; 3] = [1.0, 0.0, 0.0];
+    const BLUE: [f32; 3] = [0.0, 0.0, 1.0];
+
+    fn colored(label: &mut TextLabel, runs: &[(u32, u32, [f32; 3])]) {
+        label.color_runs = runs
+            .iter()
+            .map(|&(start, length, color)| crate::components::ColorRun {
+                start,
+                length,
+                color,
+            })
+            .collect();
+    }
+
+    // One color per drawn glyph quad, skipping the background box.
+    fn glyph_colors(label: &TextLabel) -> Vec<[f32; 3]> {
+        let mut fonts = FontSet::default();
+        fonts.insert(FontHandle(0), even_font());
+        let calls = build_text_calls(core::slice::from_ref(label), &fonts, [400.0, 400.0]);
+        let skip = if label.background[3] > 0.0 { 4 } else { 0 };
+        let quads = calls[0].vertices[skip..].chunks(4);
+        quads
+            .map(|q| {
+                assert!(
+                    q.iter().all(|v| v.color == q[0].color),
+                    "one color per glyph"
+                );
+                q[0].color
+            })
+            .collect()
+    }
+
+    #[test]
+    fn color_runs_color_their_glyphs_and_the_rest_take_the_label_color() {
+        let mut label = make_label(FontHandle(0), "ab cd", 0.0);
+        colored(&mut label, &[(1, 3, RED)]);
+        assert_eq!(glyph_colors(&label), [W, RED, RED, RED, W]);
+        label.background = [0.0, 0.0, 0.0, 1.0];
+        assert_eq!(
+            glyph_colors(&label),
+            [W, RED, RED, RED, W],
+            "the box keeps its own"
+        );
+    }
+
+    #[test]
+    fn a_newline_counts_as_a_character() {
+        let mut label = make_label(FontHandle(0), "ab\ncd", 0.0);
+        colored(&mut label, &[(3, 1, RED)]);
+        assert_eq!(glyph_colors(&label), [W, W, RED, W]);
+    }
+
+    #[test]
+    fn color_runs_follow_their_characters_through_wrapping() {
+        // "aa bb cc" wraps to "aa bb" / "cc": the space at the break is gone.
+        let mut label = make_label(FontHandle(0), "aa bb cc", 0.0);
+        label.wrap_width = 50.0;
+        colored(&mut label, &[(3, 2, BLUE), (6, 2, RED)]);
+        assert_eq!(glyph_colors(&label), [W, W, W, BLUE, BLUE, RED, RED]);
+
+        // A word split mid-way keeps every character's color across the split.
+        let mut label = make_label(FontHandle(0), "aaaaaaaa", 0.0);
+        label.wrap_width = 50.0;
+        colored(&mut label, &[(4, 2, RED)]);
+        assert_eq!(glyph_colors(&label), [W, W, W, W, RED, RED, W, W]);
+    }
+
+    #[test]
+    fn an_ellipsis_takes_the_color_of_the_text_it_hides() {
+        // Two lines of "aa bb" / "cc dd ..." cut to "aa bb" / "cc...".
+        let mut label = make_label(FontHandle(0), "aa bb cc dd ee ff", 0.0);
+        label.wrap_width = 50.0;
+        label.max_lines = 2;
+        colored(&mut label, &[(7, 1, BLUE), (8, 3, RED)]);
+        assert_eq!(
+            glyph_colors(&label),
+            [W, W, W, W, W, W, BLUE, RED, RED, RED]
+        );
+    }
+
+    #[test]
+    fn alignment_and_measure_do_not_depend_on_color_runs() {
+        let mut fonts = FontSet::default();
+        fonts.insert(FontHandle(0), even_font());
+        for align in [TextAlign::Left, TextAlign::Center, TextAlign::Right] {
+            let mut plain = make_label(FontHandle(0), "aa bb cc", 100.0);
+            plain.align = align;
+            plain.wrap_width = 50.0;
+            plain.background = [0.0, 0.0, 0.0, 1.0];
+            let mut runs = plain.clone();
+            colored(&mut runs, &[(0, 4, RED)]);
+            let positions = |l: &TextLabel| -> Vec<[f32; 2]> {
+                build_text_calls(core::slice::from_ref(l), &fonts, [400.0, 400.0])[0]
+                    .vertices
+                    .iter()
+                    .map(|v| v.pos)
+                    .collect()
+            };
+            assert_eq!(positions(&plain), positions(&runs), "{align:?}");
+            assert_eq!(
+                measure_label_box(&plain, &fonts),
+                measure_label_box(&runs, &fonts)
+            );
+            assert_eq!(glyph_colors(&runs)[..4], [RED; 4], "{align:?}");
+        }
+    }
+
+    // Content can change every frame, so a run reaching past it draws what it
+    // covers rather than failing the label.
+    #[test]
+    fn a_run_past_the_content_colors_what_is_there() {
+        let mut label = make_label(FontHandle(0), "ab", 0.0);
+        colored(&mut label, &[(1, 9, RED), (20, 2, BLUE)]);
+        assert_eq!(glyph_colors(&label), [W, RED]);
     }
 }

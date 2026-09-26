@@ -1018,8 +1018,8 @@ impl Panel for ShaderSourcePanel {
     fn close(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.close_shader_source();
     }
-    fn size(&self, _hook: &EditorHook) -> [f32; 2] {
-        shader_source_panel::size()
+    fn size(&self, hook: &EditorHook) -> [f32; 2] {
+        shader_source_panel::size(hook.shaders.reference.open)
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         shader_source_panel::default_origin(vp[0])
@@ -1042,7 +1042,7 @@ impl Panel for ShaderSourcePanel {
         o: [f32; 2],
     ) -> bool {
         let s = hook.effective_size(PanelKey::ShaderSource);
-        match shader_source_panel::hit_test(mx, my, o, s) {
+        match shader_source_panel::hit_test(mx, my, o, s, hook.shaders.reference.open) {
             Some(a) => {
                 hook.apply_source_action(a, mx, my);
                 true
@@ -1052,10 +1052,12 @@ impl Panel for ShaderSourcePanel {
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::ShaderSource);
-        shader_source_panel::cursor_over_area(mx, my, o, s)
+        let reference = hook.shaders.reference.open;
+        shader_source_panel::cursor_over_area(mx, my, o, s, reference)
+            || (reference && shader_source_panel::cursor_over_reference(mx, my, o, s))
     }
-    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
-        hook.scroll_shader_source(delta);
+    fn scroll_at(&self, hook: &mut EditorHook, _world: &mut World, delta: f32, mx: f32, my: f32) {
+        hook.scroll_shader_source(delta, mx, my);
     }
     fn frame_keys(&self, hook: &mut EditorHook, world: &mut World, input: &FrameInput) {
         hook.shader_source_keys(world, input);

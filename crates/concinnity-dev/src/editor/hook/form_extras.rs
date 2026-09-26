@@ -41,12 +41,14 @@ pub(in crate::editor::hook) struct NewFile {
     pub(in crate::editor::hook) text: String,
 }
 
-// The entry a commit landed on, and its `$id` before and after.
+// The entry a commit landed on, its `$id` before and after, and how many
+// references a rename moved with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::editor::hook) struct Committed {
     pub(in crate::editor::hook) key: EntryId,
     pub(in crate::editor::hook) before: Option<String>,
     pub(in crate::editor::hook) name: Option<String>,
+    pub(in crate::editor::hook) moved: usize,
 }
 
 pub(in crate::editor::hook) trait FormExtras:
@@ -178,16 +180,19 @@ impl EditorHook {
     fn commit_form_entry(&mut self, ty: &str, typed: &str, args: serde_json::Value) -> Committed {
         match self.form.target.entry() {
             Some(key) => {
-                let before = self
-                    .entries
-                    .by_key(key)
-                    .and_then(declared_id)
-                    .map(str::to_string);
-                let name = self.finalize_rename(typed, key);
+                let renamed = self.rename_entry(key, typed);
                 if let Some(obj) = self.entries.by_key_mut(key).and_then(|e| e.as_object_mut()) {
-                    obj.insert("args".to_string(), with_optional_id(args, name.as_deref()));
+                    obj.insert(
+                        "args".to_string(),
+                        with_optional_id(args, renamed.name.as_deref()),
+                    );
                 }
-                Committed { key, before, name }
+                Committed {
+                    key,
+                    before: renamed.before,
+                    name: renamed.name,
+                    moved: renamed.moved,
+                }
             }
             None => {
                 let name = self.finalize_name(typed);
@@ -198,6 +203,7 @@ impl EditorHook {
                     key,
                     before: None,
                     name,
+                    moved: 0,
                 }
             }
         }

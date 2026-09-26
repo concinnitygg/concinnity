@@ -396,12 +396,15 @@ impl EditorHook {
         }
         match self.form.target.entry() {
             Some(key) => {
-                let id = self.finalize_rename(&typed, key);
+                let renamed = self.rename_entry(key, &typed);
                 if let Some(obj) = self.entries.by_key_mut(key).and_then(|e| e.as_object_mut()) {
                     obj.insert(
                         "args".to_string(),
-                        with_optional_id(args_val, id.as_deref()),
+                        with_optional_id(args_val, renamed.name.as_deref()),
                     );
+                }
+                if let Some(message) = renamed.message(&ty) {
+                    self.notifier.success(&message);
                 }
             }
             // A new asset, or the promotion of a generated one: both append. A

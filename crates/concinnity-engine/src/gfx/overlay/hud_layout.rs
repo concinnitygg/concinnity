@@ -210,6 +210,7 @@ mod tests {
             x: SENTINEL,
             y: SENTINEL,
             color: [1.0, 1.0, 1.0],
+            color_runs: Vec::new(),
             scale: 1.0,
             centered: false,
             align: TextAlign::Left,

@@ -82,11 +82,11 @@ impl EditorHook {
         let Some(key) = self.entries.key_at(idx) else {
             return;
         };
-        let Some(name) = self.finalize_rename(&typed, key) else {
-            return;
-        };
-        concinnity_cook::authoring::world::set_entry_id(&mut self.entries[idx], &name);
+        let renamed = self.rename_entry(key, &typed);
         self.mark_changed();
+        if let Some(message) = renamed.message("Behavior") {
+            self.notifier.success(&message);
+        }
         self.behavior.name_focus = false;
         // The checker's messages carry the behavior's name, so its verdict is
         // re-read under the new one rather than left quoting the old.

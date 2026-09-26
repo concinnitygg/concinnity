@@ -384,7 +384,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity"
-version = "0.19.59"
+version = "0.19.60"
 dependencies = [
  "concinnity-cook",
  "concinnity-core",
@@ -399,7 +399,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-cook"
-version = "0.19.59"
+version = "0.19.60"
 dependencies = [
  "basisu",
  "bytemuck",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-core"
-version = "0.19.59"
+version = "0.19.60"
 dependencies = [
  "bytemuck",
  "ciborium",
@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-derive"
-version = "0.19.59"
+version = "0.19.60"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-dev"
-version = "0.19.59"
+version = "0.19.60"
 dependencies = [
  "ciborium",
  "clap",
@@ -488,7 +488,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-device"
-version = "0.19.59"
+version = "0.19.60"
 dependencies = [
  "ash",
  "block2",
@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-engine"
-version = "0.19.59"
+version = "0.19.60"
 dependencies = [
  "ciborium",
  "concinnity-core",
@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-ffi"
-version = "0.19.59"
+version = "0.19.60"
 dependencies = [
  "cbindgen",
  "concinnity-core",
@@ -565,7 +565,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-host"
-version = "0.19.59"
+version = "0.19.60"
 dependencies = [
  "concinnity-core",
  "concinnity-testing",
@@ -579,7 +579,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-shader"
-version = "0.19.59"
+version = "0.19.60"
 dependencies = [
  "concinnity-core",
  "concinnity-testing",
@@ -597,7 +597,7 @@ dependencies = [
 
 [[package]]
 name = "concinnity-toolchain"
-version = "0.19.59"
+version = "0.19.60"
 dependencies = [
  "concinnity-core",
  "concinnity-shader",

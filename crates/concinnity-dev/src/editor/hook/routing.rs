@@ -242,7 +242,7 @@ impl EditorHook {
                     }
                     let o = self.origin(key, vp);
                     if p.wheel_over(self, world, mx, my, o) {
-                        p.scroll(self, world, input.scroll_delta);
+                        p.scroll_at(self, world, input.scroll_delta, mx, my);
                         break;
                     }
                 }

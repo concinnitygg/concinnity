@@ -8,8 +8,10 @@ use std::time::SystemTime;
 use crate::debug::hot_reload::{ReportBoard, ShaderReports};
 use crate::editor::panels::shader_diagnostics::{self, Status, Tone};
 use crate::editor::panels::shader_list::{Row, RowKind, ShaderDecl};
+use crate::editor::panels::shader_reference::Reference;
 use crate::editor::panels::shader_source::{self, DiskChange, SourceKey};
 use crate::editor::text_area::TextArea;
+use crate::editor::text_area::highlight::HLSL;
 use crate::editor::text_area::markers::GutterMarker;
 
 // The list's shown state and scroll, the board the hot-reload driver publishes
@@ -31,6 +33,8 @@ pub(in crate::editor::hook) struct ShadersState {
     // The list's rows, rebuilt only when what they show changes.
     pub(in crate::editor::hook) rows: Vec<Row>,
     pub(in crate::editor::hook) rows_key: Option<RowsKey>,
+    // The source panel's reference column: shown state, folds and scroll.
+    pub(in crate::editor::hook) reference: Reference,
 }
 
 // What the list's rows are built from: the declared Shaders, the board as of
@@ -55,6 +59,7 @@ impl Default for ShadersState {
             resolve: shader_source::resolve_path,
             rows: Vec::new(),
             rows_key: None,
+            reference: Reference::default(),
         }
     }
 }
@@ -120,6 +125,11 @@ pub(in crate::editor::hook) struct SourceState {
     pub(in crate::editor::hook) next_check: f64,
 }
 
+// A Shader file's text area, highlighted as HLSL.
+fn source_area(text: &str) -> TextArea {
+    TextArea::from_text(text).highlighted(&HLSL)
+}
+
 // How often the open file is checked for a change on disk.
 const DISK_CHECK_S: f64 = 0.5;
 
@@ -129,7 +139,7 @@ impl SourceState {
             key,
             mtime: modified(&path),
             path,
-            area: TextArea::from_text(&text),
+            area: source_area(&text),
             focus: false,
             status: None,
             markers: Vec::new(),
@@ -234,7 +244,7 @@ impl SourceState {
             DiskChange::Unchanged => {}
             DiskChange::Reload => {
                 let caret = self.area.caret();
-                self.area = TextArea::from_text(&disk);
+                self.area = source_area(&disk);
                 self.area.go_to(caret.line, caret.col);
                 self.known = disk;
                 self.noticed = None;

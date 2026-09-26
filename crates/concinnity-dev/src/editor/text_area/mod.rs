@@ -6,6 +6,7 @@
 mod buffer;
 pub(crate) mod clipboard;
 mod editing;
+pub(crate) mod highlight;
 mod history;
 pub(crate) mod keys;
 pub(crate) mod layout;
@@ -15,10 +16,14 @@ mod navigate;
 mod pointer;
 mod view;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+
+use concinnity_core::components::ColorRun;
 
 pub(crate) use buffer::Pos;
 use buffer::{Buffer, ordered};
+use highlight::Highlighter;
+use highlight::states::LineStates;
 use history::{Cursor, History};
 pub(crate) use view::{Scroll, ViewSize};
 
@@ -32,6 +37,13 @@ struct ClickRun {
     at: f64,
     pos: Pos,
     count: u8,
+}
+
+// The language a text is highlighted as, and its lines' start states so far.
+#[derive(Debug)]
+struct Highlight {
+    language: &'static dyn Highlighter,
+    states: RefCell<LineStates>,
 }
 
 #[derive(Debug, Default)]
@@ -57,6 +69,7 @@ pub(crate) struct TextArea {
     clicks: Option<ClickRun>,
     // The widest line in cells, computed on demand and dropped by every edit.
     widest: Cell<Option<usize>>,
+    highlight: Option<Highlight>,
 }
 
 impl TextArea {
@@ -65,6 +78,43 @@ impl TextArea {
         Self {
             buffer: Buffer::from_text(text),
             ..Self::default()
+        }
+    }
+
+    // Color the text as `language` draws it.
+    pub(crate) fn highlighted(mut self, language: &'static dyn Highlighter) -> Self {
+        self.highlight = Some(Highlight {
+            language,
+            states: RefCell::default(),
+        });
+        self
+    }
+
+    // Append the color runs for the cells `[left, left + width)` of `line` to
+    // `out`, counted from `left`. Nothing without a highlighter.
+    pub(crate) fn line_runs(
+        &self,
+        line: usize,
+        left: usize,
+        width: usize,
+        out: &mut Vec<ColorRun>,
+    ) {
+        let Some(hl) = &self.highlight else {
+            return;
+        };
+        let mut states = hl.states.borrow_mut();
+        let start = states.start_of(line, hl.language, |i| self.buffer.line(i));
+        let mut spans = Vec::new();
+        let text = self.buffer.line(line);
+        let after = hl.language.line(text, start, &mut spans);
+        states.learn(line, after);
+        highlight::window::window_runs(text, &spans, left, width, out);
+    }
+
+    // Line `line` changed, or lines were added or removed below it.
+    fn edited(&self, line: usize) {
+        if let Some(hl) = &self.highlight {
+            hl.states.borrow_mut().edited(line);
         }
     }
 

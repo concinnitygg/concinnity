@@ -212,6 +212,11 @@ pub(crate) trait Panel: Sync {
     }
     // Move the panel's scroll region one step in the wheel direction.
     fn scroll(&self, _hook: &mut EditorHook, _world: &mut World, _delta: f32) {}
+    // The wheel at `(mx, my)`, for a panel with more than one region to
+    // scroll; the rest scroll their one region.
+    fn scroll_at(&self, hook: &mut EditorHook, world: &mut World, delta: f32, _mx: f32, _my: f32) {
+        self.scroll(hook, world, delta);
+    }
     // Per-frame editing keys (`FrameInput.key_events`), delivered to the
     // frontmost open panel only, so panels never fight over the keyboard.
     fn frame_keys(&self, _hook: &mut EditorHook, _world: &mut World, _input: &FrameInput) {}

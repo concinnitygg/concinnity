@@ -14,7 +14,7 @@ pub(crate) fn visual_col(line: &str, col: usize) -> usize {
 }
 
 // The cell after character `c` drawn starting at cell `v`.
-fn advance(v: usize, c: char) -> usize {
+pub(crate) fn advance(v: usize, c: char) -> usize {
     if c == '\t' {
         (v / TAB_WIDTH + 1) * TAB_WIDTH
     } else {

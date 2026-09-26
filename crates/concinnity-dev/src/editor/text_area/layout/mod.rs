@@ -379,6 +379,8 @@ fn place_row(
         l.scale = m.label_scale;
         l.color = theme::LABEL;
         l.content = view::display_slice(area.line(line), scroll.left, g.cols);
+        l.color_runs.clear();
+        area.line_runs(line, scroll.left, g.cols, &mut l.color_runs);
         l.visible = !l.content.is_empty();
     }
     let marker = marker_on(view.markers, line);

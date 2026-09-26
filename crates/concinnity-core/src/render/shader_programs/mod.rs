@@ -41,6 +41,9 @@ pub mod spd;
 /// What every backend compiles for a world `Shader`.
 pub mod surface;
 
+/// What a world `Shader`'s files can read from the engine.
+pub mod vocabulary;
+
 /// What the Vulkan backend compiles to SPIR-V.
 pub mod vk;
 

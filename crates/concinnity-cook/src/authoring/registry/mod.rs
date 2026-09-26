@@ -1094,7 +1094,8 @@ mod tests {
     }
 
     // The types whose authored source files belong to them, and nothing else:
-    // an imported model or texture is shared content, not an owned file.
+    // an imported model or texture is shared content, and so is a placed
+    // SdfVolume's field file, which every copy of the volume reads.
     #[test]
     fn owned_file_fields_name_each_types_own_sources() {
         let owners: Vec<(RegisteredType, &[String])> = RegisteredType::all()
@@ -1108,10 +1109,6 @@ mod tests {
                 (
                     RegisteredType::Shader,
                     &["fragment".to_string(), "vertex".to_string()][..]
-                ),
-                (
-                    RegisteredType::SdfVolume,
-                    &["fragment_shader".to_string()][..]
                 ),
                 (RegisteredType::StoryImport, &["source".to_string()][..]),
             ]

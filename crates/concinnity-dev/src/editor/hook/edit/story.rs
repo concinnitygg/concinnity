@@ -10,14 +10,15 @@
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
 
+use super::story_state::story_area;
 use crate::editor::hook::{EditorHook, entry_type, short_status};
 use crate::editor::notify;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::panels::story;
 use crate::editor::panels::story_panel::{self, StoryAction, StoryView};
+use crate::editor::text_area::clipboard;
 use crate::editor::text_area::keys::Platform;
 use crate::editor::text_area::layout::{Geometry, Metrics};
-use crate::editor::text_area::{TextArea, clipboard};
 
 impl EditorHook {
     // The `entries` index of the first StoryImport (the panel's subject).
@@ -58,7 +59,7 @@ impl EditorHook {
                 String::new()
             }
         };
-        self.story.area = TextArea::from_text(&text);
+        self.story.area = story_area(&text);
     }
 
     // Whether the text area holds the keyboard: focused by a press and the

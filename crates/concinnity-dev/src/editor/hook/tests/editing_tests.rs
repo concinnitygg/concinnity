@@ -10,7 +10,9 @@ use concinnity_core::components::Sprite;
 use concinnity_core::components::TextInput;
 use concinnity_core::ecs::World;
 
-use super::fixtures::{click_row, entry, hook, row_of, seed_tree, set_field, world_with_fields};
+use super::fixtures::{
+    click_row, entry, entry_with_args, hook, row_of, seed_tree, set_field, world_with_fields,
+};
 use crate::debug_hook::DebugHook;
 use crate::editor::hook::{EditorHook, FormTarget, declared_id, visible_slot};
 
@@ -1056,4 +1058,49 @@ fn edit_form_seeds_and_updates_existing_args() {
     h.apply_form(FormAction::Confirm, &mut world);
     assert_eq!(h.entries.len(), 1, "edited in place");
     assert_eq!(h.entries[0]["args"][&key].as_f64(), Some(9.0));
+}
+
+// Renaming through the form moves every reference to the old name with it, in
+// the same undo step: a Prop naming the Material follows, and a name that
+// collides is made unique and the references follow THAT name.
+#[test]
+fn renaming_through_the_form_moves_the_references_with_it() {
+    let mut h = hook(vec![
+        entry("mat", "Material"),
+        entry("stone", "Material"),
+        entry_with_args(
+            "box",
+            "Prop",
+            serde_json::json!({"mesh": "cube", "material": "mat"}),
+        ),
+        entry_with_args(
+            "cube",
+            "ProceduralMesh",
+            serde_json::json!({"generator": "box"}),
+        ),
+    ]);
+    let mut world = world_with_fields();
+    let target = entry_target(&h, 0);
+    h.open_form(&mut world, "Material".to_string(), target);
+    set_field(&mut world, form_panel::NAME_INPUT, "stone");
+    h.apply_form(FormAction::Confirm, &mut world);
+    assert_eq!(h.entries[0]["args"]["$id"], "stone_1");
+    assert_eq!(h.entries[2]["args"]["material"], "stone_1");
+
+    let target = entry_target(&h, 3);
+    h.open_form(&mut world, "ProceduralMesh".to_string(), target);
+    set_field(&mut world, form_panel::NAME_INPUT, "crate");
+    h.apply_form(FormAction::Confirm, &mut world);
+    assert_eq!(
+        h.entries[2]["args"]["mesh"], "crate",
+        "a structured reference"
+    );
+
+    h.undo(&mut world);
+    assert_eq!(h.entries[3]["args"]["$id"], "cube");
+    assert_eq!(h.entries[2]["args"]["mesh"], "cube");
+    h.undo(&mut world);
+    assert_eq!(h.entries[0]["args"]["$id"], "mat");
+    assert_eq!(h.entries[2]["args"]["material"], "mat");
+    assert!(!h.can_undo(), "each rename was one step");
 }

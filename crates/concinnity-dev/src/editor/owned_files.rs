@@ -164,6 +164,11 @@ mod tests {
         assert_eq!(declared_files(&story), ["story/tale.md"]);
         let mesh = json!({"type": "Mesh", "args": {"source": "rock.glb"}});
         assert!(declared_files(&mesh).is_empty(), "an import is not owned");
+        let sdf = json!({"type": "SdfVolume", "args": {"fragment_shader": "blob.hlsl"}});
+        assert!(
+            declared_files(&sdf).is_empty(),
+            "every placed volume reads it"
+        );
     }
 
     #[test]
@@ -226,9 +231,9 @@ mod tests {
         let shaders = dir.path().join("shaders");
         std::fs::create_dir_all(&shaders).unwrap();
         std::fs::write(shaders.join("blob.hlsl"), "sdf").unwrap();
-        let mut sdf = json!({"type": "SdfVolume", "args": {"fragment_shader": "blob.hlsl"}});
+        let mut blob = json!({"type": "Shader", "args": {"fragment": "blob.hlsl"}});
         let resolve = |d: &str| shaders.join(d).to_string_lossy().into_owned();
-        let copied = copy_owned(&mut sdf, resolve, |name| name == "blob_copy.hlsl");
+        let copied = copy_owned(&mut blob, resolve, |name| name == "blob_copy.hlsl");
         assert_eq!(
             copied,
             [Copied::To {
@@ -236,7 +241,7 @@ mod tests {
                 to: "blob_copy_1.hlsl".into()
             }]
         );
-        assert_eq!(sdf["args"]["fragment_shader"], "blob_copy_1.hlsl");
+        assert_eq!(blob["args"]["fragment"], "blob_copy_1.hlsl");
 
         let mut gone = json!({"type": "StoryImport", "args": {"source": "/cn-none/tale.md"}});
         let copied = copy_owned(&mut gone, str::to_string, |_| false);

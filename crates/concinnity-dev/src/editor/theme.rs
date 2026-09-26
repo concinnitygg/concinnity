@@ -62,6 +62,20 @@ pub(crate) const LOG_WARN: [f32; 3] = [0.95, 0.78, 0.45];
 pub(crate) const LOG_ERROR: [f32; 3] = [0.95, 0.55, 0.55];
 pub(crate) const LOG_COMMAND: [f32; 3] = [0.58, 0.72, 0.95];
 
+// Highlighted source in the code text area, by token.
+pub(crate) const CODE_KEYWORD: [f32; 3] = [0.78, 0.56, 0.96];
+pub(crate) const CODE_TYPE: [f32; 3] = [0.42, 0.78, 0.86];
+pub(crate) const CODE_NUMBER: [f32; 3] = [0.72, 0.86, 0.56];
+pub(crate) const CODE_STRING: [f32; 3] = [0.92, 0.66, 0.46];
+pub(crate) const CODE_COMMENT: [f32; 3] = [0.46, 0.54, 0.48];
+pub(crate) const CODE_PREPROCESSOR: [f32; 3] = [0.88, 0.52, 0.72];
+// The names the engine provides, set apart so an author sees what is theirs.
+pub(crate) const CODE_ENGINE: [f32; 3] = [0.96, 0.80, 0.40];
+pub(crate) const CODE_HEADING: [f32; 3] = [0.56, 0.74, 1.00];
+pub(crate) const CODE_EMPHASIS: [f32; 3] = [0.90, 0.72, 0.94];
+pub(crate) const CODE_LINK: [f32; 3] = [0.44, 0.78, 0.96];
+pub(crate) const CODE_LITERAL: [f32; 3] = [0.74, 0.84, 0.62];
+
 // Toast severity accents (the notification stack's edge stripe).
 pub(crate) const NOTIFY_INFO: [f32; 4] = [0.58, 0.72, 0.95, 1.0];
 pub(crate) const NOTIFY_SUCCESS: [f32; 4] = [0.42, 0.72, 0.46, 1.0];

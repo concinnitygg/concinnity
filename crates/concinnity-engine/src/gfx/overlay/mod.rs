@@ -494,6 +494,7 @@ mod tests {
             x: 0.0,
             y: 0.0,
             color: [1.0, 1.0, 1.0],
+            color_runs: Vec::new(),
             scale: 1.0,
             centered: false,
             align: TextAlign::Left,

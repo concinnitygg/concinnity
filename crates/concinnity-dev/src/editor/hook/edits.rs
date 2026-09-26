@@ -1,11 +1,13 @@
 //! EditorHook: unique-name generation and edit persistence (SAVE, the atomic
 //! world.jsonl write, and the in-memory live-preview world rebuild).
 
-use concinnity_cook::authoring::world::entry_handle;
+use concinnity_cook::authoring::refs::rename_references;
+use concinnity_cook::authoring::registry::RegisteredType;
+use concinnity_cook::authoring::world::{ID_KEY, entry_handle, set_entry_id};
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
-use super::{EditorHook, EntryId, EntryList, FormTarget, declared_id};
+use super::{EditorHook, EntryId, EntryList, FormTarget, declared_id, entry_type};
 use crate::editor::behavior;
 use crate::editor::build_renderable;
 use crate::editor::entry_list::build_text;
@@ -80,6 +82,49 @@ impl EditorHook {
                 return Some(candidate);
             }
             i += 1;
+        }
+    }
+
+    // Rename `key`'s entry to `typed` (made unique against the other entries,
+    // or anonymous when blank) and point every reference to its old `$id` at
+    // the new one. The caller commits, so the rename and the references it
+    // moved are one undo step.
+    pub(super) fn rename_entry(&mut self, key: EntryId, typed: &str) -> Renamed {
+        let name = self.finalize_rename(typed, key);
+        let Some(idx) = self.entries.index_of(key) else {
+            return Renamed {
+                before: None,
+                name,
+                moved: 0,
+            };
+        };
+        let before = declared_id(&self.entries[idx]).map(str::to_string);
+        match &name {
+            Some(n) => set_entry_id(&mut self.entries[idx], n),
+            None => {
+                if let Some(args) = self.entries[idx]
+                    .get_mut("args")
+                    .and_then(|a| a.as_object_mut())
+                {
+                    args.remove(ID_KEY);
+                }
+            }
+        }
+        let target = entry_type(&self.entries[idx]).and_then(RegisteredType::parse);
+        let moved = match (&before, &name, target) {
+            (Some(old), Some(new), Some(target)) if old != new => {
+                let args = self.entries[idx].get("args").cloned().unwrap_or_default();
+                self.entries
+                    .iter_mut()
+                    .map(|e| rename_references(e, target, &args, old, new))
+                    .sum()
+            }
+            _ => 0,
+        };
+        Renamed {
+            before,
+            name,
+            moved,
         }
     }
 
@@ -310,5 +355,39 @@ impl EditorHook {
         let tmp = format!("{}.tmp", self.world_path);
         std::fs::write(&tmp, content)?;
         std::fs::rename(&tmp, &self.world_path)
+    }
+}
+
+// What a rename did: the `$id` before and after, and how many references to
+// the old one it moved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Renamed {
+    pub(super) before: Option<String>,
+    pub(super) name: Option<String>,
+    pub(super) moved: usize,
+}
+
+impl Renamed {
+    // The toast for a rename that moved references, else `None`.
+    pub(super) fn message(&self, kind: &str) -> Option<String> {
+        let (Some(before), Some(name)) = (&self.before, &self.name) else {
+            return None;
+        };
+        if self.moved == 0 || before == name {
+            return None;
+        }
+        Some(format!(
+            "Renamed {kind} '{before}' to '{name}'{}",
+            references_note(self.moved)
+        ))
+    }
+}
+
+// " and the N references to it", after a rename message.
+pub(super) fn references_note(moved: usize) -> String {
+    match moved {
+        0 => String::new(),
+        1 => " and the 1 reference to it".to_string(),
+        n => format!(" and the {n} references to it"),
     }
 }

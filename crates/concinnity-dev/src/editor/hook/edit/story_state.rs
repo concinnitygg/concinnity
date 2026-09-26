@@ -1,7 +1,13 @@
 //! EditorHook: the Story panel's session state, beside its actions in `story.rs`.
 
 use crate::editor::text_area::TextArea;
+use crate::editor::text_area::highlight::MARKDOWN;
 use crate::editor::text_area::markers::GutterMarker;
+
+// A story source's text area, highlighted as Markdown.
+pub(in crate::editor::hook) fn story_area(text: &str) -> TextArea {
+    TextArea::from_text(text).highlighted(&MARKDOWN)
+}
 
 // Shown state, the loaded source in its text area, whether that area holds the
 // keyboard (while the panel is frontmost), the source path shown in the
@@ -21,7 +27,7 @@ impl StoryState {
     // Drop the source read out of the world being left. Shown state is not the
     // world's.
     pub(in crate::editor::hook) fn reset_for_world(&mut self) {
-        self.area = TextArea::default();
+        self.area = story_area("");
         self.focus = false;
         self.path = String::new();
         self.status = None;

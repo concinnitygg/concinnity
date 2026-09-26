@@ -145,3 +145,23 @@ fn a_shader_is_not_duplicated_past_the_limit() {
         "{cards:?}"
     );
 }
+
+// A placed SdfVolume shares its field file with its copies, as a Prop shares
+// its mesh: the copy names the same file and nothing is written.
+#[test]
+fn a_duplicated_sdf_volume_shares_its_field_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let field = dir.path().join("blob.hlsl");
+    std::fs::write(&field, "sdf").unwrap();
+    let declared = field.to_string_lossy().into_owned();
+    let mut world = World::new();
+    let mut h = hook(vec![serde_json::json!({"type": "SdfVolume", "args": {
+        "$id": "blob", "fragment_shader": declared,
+    }})]);
+    select(&mut h, &["blob"]);
+    h.run_console_line(&mut world, "/dup");
+    assert_eq!(h.entries.len(), 2);
+    assert_eq!(h.entries[1]["args"]["fragment_shader"], declared.as_str());
+    let files: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+    assert_eq!(files.len(), 1, "no copy written");
+}

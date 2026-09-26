@@ -14,13 +14,20 @@ A `\n` in `content` starts a new line. When `background` has an alpha > 0, a
 box is filled behind the glyphs, extended outward by `padding` pixels,
 useful for HUD chips.
 
+Parts of the text can take colors of their own through `color_runs`: a
+speaker's name in a line of dialogue, the key term in a hint, a warning
+word in a status line. Every character no run covers draws in `color`.
+
+A line of dialogue with the speaker's name in gold:
+
 ## Parameters
 
 - `font`: A string. The [Font](Font.md) asset to use for rendering. Unset draws with the engine's built-in face at its native 24px.
 - `content`: A string. Text to display. Can be updated each frame. Defaults to `""`.
 - `x`: A float. Horizontal position in pixels from the left edge of the window. Defaults to `10.0`.
 - `y`: A float. Vertical position in pixels from the top edge of the window. Defaults to `10.0`.
-- `color`: An array of 3 floats. Linear-space RGB text color. Defaults to `[1.0, 1.0, 1.0]`.
+- `color`: An array of 3 floats. Linear-space RGB text color, for every character no run in `color_runs` covers. Defaults to `[1.0, 1.0, 1.0]`.
+- `color_runs`: An array of [ColorRun](ColorRun.md) objects. Spans of `content` drawn in colors of their own, in order along the text and never overlapping. Positions count characters, not bytes, and a `\n` counts as one. A run keeps its characters however the text wraps or aligns, since only color varies; the build rejects a run reaching past the end of `content` or starting before the previous one ends. Defaults to `[]`.
 - `scale`: A float. Uniform scale applied on top of the font's `size_px` (24 for the built-in face). 1.0 = native size. Ignored when `centered` is set, which sizes the text to the viewport instead. Defaults to `1.0`.
 - `centered`: A boolean. When true, fit the label to the viewport and center it there each frame, so `x`, `y`, `align` and `scale` are all ignored. Defaults to `false`.
 - `align`: A string (see [TextAlign](TextAlign.md)). Horizontal alignment relative to `x` (measured with the real font metrics). Ignored when `centered` is set. Defaults to `"left"`.

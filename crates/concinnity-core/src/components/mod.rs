@@ -307,6 +307,7 @@ pub use streaming_config::StreamingConfig;
 pub use text_input::TextInput;
 pub use text_label::TextAlign;
 pub use text_label::TextLabel;
+pub use text_label::{ColorRun, ColorRunError, color_run_error};
 pub use texture::Texture;
 pub use trigger_volume::TriggerFilter;
 pub use trigger_volume::TriggerVolume;

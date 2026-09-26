@@ -1162,3 +1162,29 @@ fn behavior_palette_filter_field_draws_above_the_backing_it_sits_in() {
         "the field and the backing it sits in share a layer"
     );
 }
+
+// A rename moves what names the behavior with it, as one undo step.
+#[test]
+fn behavior_rename_moves_what_names_it() {
+    let (mut h, mut world) = behavior_session(vec![
+        behavior("greet", serde_json::json!({})),
+        behavior(
+            "chase",
+            serde_json::json!({"do": [{"despawn": {"target": {"named": "greet"}}}]}),
+        ),
+    ]);
+    h.apply_behavior_action(BehaviorAction::FocusName, &mut world, [0.0, 0.0]);
+    type_name(&mut world, "welcome");
+    h.behavior_keys(&mut world, &key_input(InputKey::Enter));
+    assert_eq!(declared_id(&h.entries[0]), Some("welcome"));
+    let named = &h.entries[1]["args"]["do"][0]["despawn"]["target"]["named"];
+    assert_eq!(named, "welcome");
+
+    h.undo(&mut world);
+    assert_eq!(declared_id(&h.entries[0]), Some("greet"));
+    assert_eq!(
+        h.entries[1]["args"]["do"][0]["despawn"]["target"]["named"],
+        "greet"
+    );
+    assert!(!h.can_undo(), "one step");
+}

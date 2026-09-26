@@ -28,6 +28,8 @@ pub(crate) mod shader;
 
 pub use shader::is_shader_extension;
 pub(crate) mod shape;
+/// `TextLabel` argument checks.
+pub(crate) mod text_label;
 pub(crate) mod texture;
 pub(crate) mod voxel_chunk;
 pub(crate) mod voxel_world;
@@ -55,6 +57,7 @@ fn check_authored_asset(
         RegisteredType::AudioEmitter => audio::check_emitter(name, args),
         RegisteredType::AudioCue => audio::check_cue(name, args),
         RegisteredType::PropBody => audio::check_prop_body(name, args),
+        RegisteredType::TextLabel => text_label::check(name, args),
         _ => Ok(()),
     }
 }

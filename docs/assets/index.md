@@ -99,6 +99,7 @@
 - [CameraTravel](CameraTravel.md) - One straight run on a [CameraTrack](CameraTrack.md)'s travel track.
 - [CameraTurn](CameraTurn.md) - One turn on a [CameraTrack](CameraTrack.md)'s turn track.
 - [CharacterCapsule](CharacterCapsule.md) - A kinematic character capsule for a [SkinnedMesh](SkinnedMesh.md), in world units (after the mesh's `scale`).
+- [ColorRun](ColorRun.md) - A span of a [TextLabel](TextLabel.md)'s `content` drawn in a color of its own.
 - [CueKind](CueKind.md) - How an [AudioCue](AudioCue.md) plays its clip.
 - [Ease](Ease.md) - How a [CameraTrack](CameraTrack.md) leg paces the run between its start and its end.
 - [FileKind](FileKind.md) - The category of file content, inferred from the extension when not supplied.

@@ -4,13 +4,13 @@
 //! renames with every reference following, and in both the Materials and the
 //! world default ride the same undo step.
 
-use concinnity_cook::authoring::refs::retarget_references;
 use concinnity_cook::authoring::world::entry_handles;
 use concinnity_core::components::ShaderStage;
 
 use super::shader_edits::new_shader_file;
 use crate::editor::entry_list::EntryList;
 use crate::editor::hook::EditorHook;
+use crate::editor::hook::edits::references_note;
 use crate::editor::hook::form_extras::{Committed, ExtrasCx, FormExtras, NewFile};
 use crate::editor::hook::form_state::FormTarget;
 use crate::editor::panels::form_extras::ExtraRow;
@@ -26,8 +26,6 @@ pub(in crate::editor::hook) struct ShaderExtras {
     form: ShaderForm,
     // The Shader's name when the form opened, for an edit.
     original: Option<String>,
-    // How many references a rename moved, for the toast.
-    moved: usize,
 }
 
 impl ShaderExtras {
@@ -36,7 +34,6 @@ impl ShaderExtras {
         Self {
             form: ShaderForm::open(entries, editing),
             original: editing.and_then(|i| entry_handles(entries).swap_remove(i)),
-            moved: 0,
         }
     }
 
@@ -178,12 +175,6 @@ impl FormExtras for ShaderExtras {
         let Some(name) = c.name.as_deref() else {
             return;
         };
-        if let Some(before) = c.before.as_deref().filter(|b| *b != name) {
-            self.moved = entries
-                .iter_mut()
-                .map(|e| retarget_references(e, SHADER, before, Some(name)))
-                .sum();
-        }
         self.form.assign_materials(entries, name);
         if let Some(idx) = entries.index_of(c.key) {
             self.form.place_default(entries, idx);
@@ -225,11 +216,7 @@ impl FormExtras for ShaderExtras {
             Some(before) => format!("Renamed Shader '{before}' to '{name}'"),
             None => format!("Updated Shader '{name}'"),
         };
-        match self.moved {
-            0 => {}
-            1 => message.push_str(" and the 1 reference to it"),
-            n => message.push_str(&format!(" and the {n} references to it")),
-        }
+        message.push_str(&references_note(c.moved));
         if self.removes_vertex() {
             message.push_str("; its vertex file stays on disk");
         }

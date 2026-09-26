@@ -90,6 +90,7 @@ impl TextArea {
     // Replace `[start, end)` with `text` in the buffer, returning the change.
     fn replace(&mut self, start: Pos, end: Pos, text: &str) -> Change {
         self.widest.set(None);
+        self.edited(start.line);
         let removed = self.buffer.remove(start, end);
         self.buffer.insert(start, text);
         Change {
@@ -226,11 +227,17 @@ impl TextArea {
 
     // Paste in place of the selection, with the pasted line endings made LF.
     fn paste(&mut self, clipboard: &mut dyn Clipboard) {
-        let Some(text) = clipboard.text() else {
-            return;
-        };
-        let text = normalize_newlines(&text);
+        if let Some(text) = clipboard.text() {
+            self.insert(&text);
+        }
+    }
+
+    // Replace the selection (or insert at the caret) with `text`, as one undo
+    // step of its own.
+    pub(crate) fn insert(&mut self, text: &str) {
+        let text = normalize_newlines(text);
         if !text.is_empty() {
+            self.history.seal();
             self.replace_selection(&text, EditKind::Other);
         }
     }
@@ -239,11 +246,14 @@ impl TextArea {
         let Some(step) = self.history.undo() else {
             return;
         };
+        let mut edited = usize::MAX;
         for c in step.changes.iter().rev() {
             self.buffer.remove(c.at, c.inserted_end());
             self.buffer.insert(c.at, &c.removed);
+            edited = edited.min(c.at.line);
         }
         let before = step.before;
+        self.edited(edited);
         self.after_history_jump(before);
     }
 
@@ -251,11 +261,14 @@ impl TextArea {
         let Some(step) = self.history.redo() else {
             return;
         };
+        let mut edited = usize::MAX;
         for c in &step.changes {
             self.buffer.remove(c.at, c.removed_end());
             self.buffer.insert(c.at, &c.inserted);
+            edited = edited.min(c.at.line);
         }
         let after = step.after;
+        self.edited(edited);
         self.after_history_jump(after);
     }
 

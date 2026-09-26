@@ -8,12 +8,15 @@
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
+use concinnity_core::render::shader_programs::vocabulary::ENTRIES;
 
 use super::shaders_state::SourceState;
 use crate::editor::hook::EditorHook;
 use crate::editor::notify;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::panels::shader_diagnostics::{Status, Tone};
+use crate::editor::panels::shader_reference::{self, RefClick, RefRow};
+use crate::editor::panels::shader_reference_panel::{self, RefView};
 use crate::editor::panels::shader_source::{self, Leave, SourceKey};
 use crate::editor::panels::shader_source_panel::{self, SourceAction, SourceView};
 use crate::editor::text_area::clipboard;
@@ -154,13 +157,24 @@ impl EditorHook {
         let vp = self.viewport;
         let o = self.origin(PanelKey::ShaderSource, vp);
         let s = self.effective_size(PanelKey::ShaderSource);
+        let reference = self.shaders.reference.open;
         let src = self.shaders.source.as_mut()?;
-        let g = shader_source_panel::area_geometry(o, s, &src.area, Metrics::code());
+        let g = shader_source_panel::area_geometry(o, s, reference, &src.area, Metrics::code());
         src.area.set_view(g.view());
         Some(g)
     }
 
-    pub(in crate::editor::hook) fn scroll_shader_source(&mut self, delta: f32) {
+    // The wheel over the panel at `(mx, my)`: the reference column scrolls
+    // its rows, anywhere else the text.
+    pub(in crate::editor::hook) fn scroll_shader_source(&mut self, delta: f32, mx: f32, my: f32) {
+        let vp = self.viewport;
+        let o = self.origin(PanelKey::ShaderSource, vp);
+        let s = self.effective_size(PanelKey::ShaderSource);
+        if self.shaders.reference.open && shader_source_panel::cursor_over_reference(mx, my, o, s) {
+            let step = if delta > 0.0 { -1 } else { 1 };
+            self.scroll_reference(step);
+            return;
+        }
         self.shader_geometry();
         let shift = self.shift_held;
         if let Some(src) = self.shaders.source.as_mut() {
@@ -181,14 +195,32 @@ impl EditorHook {
         })
     }
 
-    // The panel's view, with its title and status owned by the caller.
+    // The reference column's rows as they stand.
+    fn reference_rows(&self) -> Vec<RefRow<'static>> {
+        self.shaders.reference.rows(ENTRIES)
+    }
+
+    // Move the reference column by `step` rows, within its rows.
+    fn scroll_reference(&mut self, step: isize) {
+        let vp = self.viewport;
+        let o = self.origin(PanelKey::ShaderSource, vp);
+        let s = self.effective_size(PanelKey::ShaderSource);
+        let shown = shader_reference_panel::rows_shown(shader_source_panel::reference_rect(o, s));
+        let total = self.reference_rows().len();
+        self.shaders.reference.scroll_by(step, total, shown);
+    }
+
+    // The panel's view, with its title, status and reference rows owned by
+    // the caller.
     pub(in crate::editor::hook) fn make_source_view<'a>(
         &'a self,
         src: &'a SourceState,
         title: &'a str,
         status: Option<&'a Status>,
+        rows: &'a [RefRow<'a>],
         mouse: [f32; 2],
     ) -> SourceView<'a> {
+        let reference = &self.shaders.reference;
         SourceView {
             title,
             path: &src.path,
@@ -197,6 +229,11 @@ impl EditorHook {
             status,
             markers: &src.markers,
             mouse,
+            reference: reference.open.then_some(RefView {
+                rows,
+                scroll: reference.scroll,
+                mouse,
+            }),
         }
     }
 
@@ -213,7 +250,8 @@ impl EditorHook {
         let s = self.effective_size(PanelKey::ShaderSource);
         let title = src.title();
         let status = Self::shader_status(src);
-        let view = self.make_source_view(src, &title, status.as_ref(), mouse);
+        let rows = self.reference_rows();
+        let view = self.make_source_view(src, &title, status.as_ref(), &rows, mouse);
         shader_source_panel::place(world, Some(&view), o, s, Metrics::code());
     }
 
@@ -263,10 +301,35 @@ impl EditorHook {
                     src.focus = true;
                 }
             }
+            SourceAction::ToggleReference => {
+                self.shaders.reference.open ^= true;
+            }
+            SourceAction::Reference(slot) => self.press_reference(slot),
             // A click on panel chrome blurs the text area.
             SourceAction::Consume => {
                 if let Some(src) = self.shaders.source.as_mut() {
                     src.focus = false;
+                }
+            }
+        }
+    }
+
+    // A press on the reference column's `slot`-th shown row: a heading folds
+    // its group, a name goes in at the caret and the text takes the keyboard.
+    fn press_reference(&mut self, slot: usize) {
+        let rows = self.reference_rows();
+        let Some(row) = rows.get(self.shaders.reference.scroll + slot) else {
+            return;
+        };
+        match shader_reference::click(row) {
+            RefClick::Fold(group) => {
+                self.shaders.reference.toggle(group);
+                self.scroll_reference(0);
+            }
+            RefClick::Insert(text) => {
+                if let Some(src) = self.shaders.source.as_mut() {
+                    src.area.insert(&text);
+                    src.focus = true;
                 }
             }
         }

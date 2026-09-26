@@ -8,8 +8,9 @@
 
 use crate::authoring::field_path::{retarget_leaves, string_leaves};
 use crate::authoring::registry::RegisteredType;
+use crate::authoring::resource_type::is_mesh_source;
 use crate::authoring::world::WorldJsonlAsset;
-use crate::check::asset_refs::CrossRef;
+use crate::check::asset_refs::{CrossRef, RefKind};
 use crate::check::cross_reference::cross_refs_for;
 
 /// The names of every asset `asset` references, in field/declaration order.
@@ -59,6 +60,95 @@ pub fn retarget_references(
         .filter(|f| f.targets.is_empty() || f.targets.contains(&target_type))
         .map(|f| retarget_leaves(args, &f.path, from, to))
         .sum()
+}
+
+/// Point every reference in `entry` naming `from` at `to`, for a rename of
+/// that asset, a `target` declared with `target_args`: the fields the registry
+/// derives and the structured references the build resolves by name (a Prop's
+/// `mesh`, a Model's submeshes, a Behavior's nodes and trigger sources, an
+/// AnimationGraph's blendspace clips). Returns how many references changed.
+pub fn rename_references(
+    entry: &mut serde_json::Value,
+    target: RegisteredType,
+    target_args: &serde_json::Value,
+    from: &str,
+    to: &str,
+) -> usize {
+    let mut moved = retarget_references(entry, target.as_str(), from, Some(to));
+    let Some(ty) = entry
+        .get("type")
+        .and_then(|t| t.as_str())
+        .and_then(RegisteredType::parse)
+    else {
+        return moved;
+    };
+    let Some(args) = entry.get_mut("args") else {
+        return moved;
+    };
+    let accepts = |kind: RefKind| match kind {
+        RefKind::MeshSource => is_mesh_source(target, target_args),
+        RefKind::Scene => target == RegisteredType::Scene,
+        RefKind::Animation => target == RegisteredType::Animation,
+        RefKind::AudioClip => target == RegisteredType::AudioClip,
+        RefKind::Screen => target == RegisteredType::Screen,
+        RefKind::TriggerVolume => target == RegisteredType::TriggerVolume,
+        RefKind::AnyAsset => true,
+    };
+    let naming = |args: &serde_json::Value| {
+        cross_refs_for(ty, "", args)
+            .iter()
+            .filter(|r| {
+                matches!(r, CrossRef::Resolve { kind, target, .. } if target == from && accepts(*kind))
+            })
+            .count()
+    };
+    // A string reading `from` is a reference exactly when the build reads it
+    // as one: rewriting it leaves one reference fewer to `from`.
+    let mut left = naming(args);
+    for pointer in pointers_to(args, from) {
+        if left == 0 {
+            break;
+        }
+        set_pointer(args, &pointer, to);
+        let now = naming(args);
+        if now < left {
+            left = now;
+            moved += 1;
+        } else {
+            set_pointer(args, &pointer, from);
+        }
+    }
+    moved
+}
+
+// The JSON pointer of every string in `value` that reads `text`.
+fn pointers_to(value: &serde_json::Value, text: &str) -> Vec<String> {
+    fn walk(value: &serde_json::Value, at: String, text: &str, out: &mut Vec<String>) {
+        match value {
+            serde_json::Value::String(s) if s == text => out.push(at),
+            serde_json::Value::Array(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    walk(item, format!("{at}/{i}"), text, out);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for (key, item) in map {
+                    let key = key.replace('~', "~0").replace('/', "~1");
+                    walk(item, format!("{at}/{key}"), text, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(value, String::new(), text, &mut out);
+    out
+}
+
+fn set_pointer(value: &mut serde_json::Value, pointer: &str, text: &str) {
+    if let Some(leaf) = value.pointer_mut(pointer) {
+        *leaf = serde_json::Value::String(text.to_string());
+    }
 }
 
 #[cfg(test)]
@@ -159,5 +249,55 @@ mod tests {
         assert!(material["args"].get("shader").is_none());
         let mut unknown = serde_json::json!({"type": "Nope", "args": {"shader": "sea"}});
         assert_eq!(retarget_references(&mut unknown, "Shader", "sea", None), 0);
+    }
+
+    // A rename follows the structured references too, and only the strings the
+    // build reads as references: a label that happens to read the old name
+    // stays.
+    #[test]
+    fn a_rename_follows_structured_references() {
+        let mesh = serde_json::json!({"generator": "box"});
+        let mut prop = serde_json::json!({"type": "Prop", "args": {
+            "$id": "p", "mesh": "box", "material": "box",
+        }});
+        assert_eq!(
+            rename_references(
+                &mut prop,
+                RegisteredType::ProceduralMesh,
+                &mesh,
+                "box",
+                "crate"
+            ),
+            1
+        );
+        assert_eq!(prop["args"]["mesh"], "crate");
+        assert_eq!(prop["args"]["material"], "box", "a Material slot");
+
+        let mut behavior = serde_json::json!({"type": "Behavior", "args": {
+            "$id": "b",
+            "on": {"enter": "gate"},
+            "do": [
+                {"despawn": {"target": {"named": "gate"}}},
+                {"log": {"text": "gate"}},
+            ],
+        }});
+        let volume = serde_json::json!({});
+        let moved = rename_references(
+            &mut behavior,
+            RegisteredType::TriggerVolume,
+            &volume,
+            "gate",
+            "door",
+        );
+        assert_eq!(moved, 2);
+        assert_eq!(behavior["args"]["on"]["enter"], "door");
+        assert_eq!(
+            behavior["args"]["do"][0]["despawn"]["target"]["named"],
+            "door"
+        );
+        assert_eq!(
+            behavior["args"]["do"][1]["log"]["text"], "gate",
+            "plain text"
+        );
     }
 }
