@@ -13,7 +13,7 @@ use concinnity_engine::gfx::system;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use super::shader::ShaderReports;
+use super::report::ReloadReports;
 use super::state::{AssetHotReloadState, FrameHotReloadEffects, run_frame};
 use super::world_path::WorldPathHandle;
 use crate::debug_hook::DebugHook;
@@ -32,9 +32,9 @@ pub(crate) struct HotReloadDriver {
     // The session's world.jsonl path, read at every arm so a world switch is
     // watched from the next rebuild on. `None` watches no world file.
     world_path: Option<WorldPathHandle>,
-    // Where each Shader's latest reload outcome is published for an editor
-    // session's Shader panels. `None` outside an editor session.
-    shader_reports: Option<ShaderReports>,
+    // Where each Shader's and SdfVolume's latest reload outcome is published
+    // for an editor session's panels. `None` outside an editor session.
+    reload_reports: Option<ReloadReports>,
 }
 
 impl HotReloadDriver {
@@ -43,7 +43,7 @@ impl HotReloadDriver {
             state: None,
             notifier: None,
             world_path: None,
-            shader_reports: None,
+            reload_reports: None,
         }
     }
 
@@ -60,9 +60,9 @@ impl HotReloadDriver {
         self
     }
 
-    // Publish each Shader's latest reload outcome to `reports`.
-    pub(crate) fn with_shader_reports(mut self, reports: ShaderReports) -> Self {
-        self.shader_reports = Some(reports);
+    // Publish each subject's latest reload outcome to `reports`.
+    pub(crate) fn with_reload_reports(mut self, reports: ReloadReports) -> Self {
+        self.reload_reports = Some(reports);
         self
     }
 
@@ -79,8 +79,8 @@ impl HotReloadDriver {
     pub(crate) fn arm(&mut self, sources: system::hot_reload_sources::HotReloadSources) {
         let world_jsonl_path = self.world_path.as_ref().map(WorldPathHandle::get);
         let state = AssetHotReloadState::from_sources(sources, world_jsonl_path);
-        if let Some(reports) = &self.shader_reports {
-            reports.arm(state.shaders.catalog.entries.iter().map(|e| e.name.clone()));
+        if let Some(reports) = &self.reload_reports {
+            reports.arm(state.shaders.subjects().chain(state.sdf_fields.subjects()));
         }
         self.state = Some(state);
     }
@@ -104,8 +104,8 @@ impl HotReloadDriver {
             return;
         };
         let effects = run_frame(state, backend, fog, self.notifier.as_ref());
-        if let Some(reports) = &self.shader_reports {
-            reports.publish(&effects.shader_reports);
+        if let Some(reports) = &self.reload_reports {
+            reports.publish(&effects.reload_reports);
         }
         apply_effects(world, effects);
     }

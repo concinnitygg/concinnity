@@ -11,7 +11,7 @@ use concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
 use std::cell::Cell;
 use std::path::Path;
 
-use crate::debug::hot_reload::{ShaderReloadOutcome, ShaderReloadReport};
+use crate::debug::hot_reload::{ReloadOutcome, ReloadReport, ReloadSubject};
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::hook;
 use crate::editor::modal;
@@ -156,7 +156,7 @@ fn a_save_waits_on_its_recompile() {
     let mut h = session(dir.path());
     h.shaders
         .reports
-        .arm(["lit".to_string(), "water".to_string()]);
+        .arm([ReloadSubject::shader("lit"), ReloadSubject::shader("water")]);
     h.open_shader_file(key("lit"));
     h.drive_shader_source();
     h.shaders.source.as_mut().unwrap().area.type_char('x');
@@ -167,8 +167,8 @@ fn a_save_waits_on_its_recompile() {
     assert_eq!(src.status.as_ref().unwrap().text, "Compiling...");
 
     let path = src.path.clone();
-    h.shaders.reports.publish(&[ShaderReloadReport {
-        name: "lit".to_string(),
+    h.shaders.reports.publish(&[ReloadReport {
+        subject: ReloadSubject::shader("lit"),
         outcome: failed_at(&path, 1, 3),
     }]);
     h.drive_shader_source();
@@ -178,10 +178,10 @@ fn a_save_waits_on_its_recompile() {
     assert_eq!(src.area.caret().col, 2, "the caret jumped to the error");
 }
 
-fn failed_at(path: &str, line: u32, column: u32) -> ShaderReloadOutcome {
-    use crate::debug::hot_reload::ShaderReloadFailure;
+fn failed_at(path: &str, line: u32, column: u32) -> ReloadOutcome {
+    use crate::debug::hot_reload::ReloadFailure;
     use concinnity_cook::compile::program::{CompileFailure, Diagnostic, Severity};
-    ShaderReloadOutcome::Failed(ShaderReloadFailure::Compile(CompileFailure {
+    ReloadOutcome::Failed(ReloadFailure::Compile(CompileFailure {
         owner: "Shader 'lit'".to_string(),
         failures: Vec::new(),
         diagnostics: vec![Diagnostic {
@@ -216,15 +216,15 @@ fn the_list_resolves_each_file_once() {
     RESOLVED.with(|n| n.set(0));
     h.shaders
         .reports
-        .arm(["lit".to_string(), "water".to_string()]);
+        .arm([ReloadSubject::shader("lit"), ReloadSubject::shader("water")]);
     for _ in 0..5 {
         h.shader_rows();
     }
     assert_eq!(RESOLVED.with(Cell::get), 2, "one per declared file");
 
     let lit = dir.path().join("lit.hlsl").to_string_lossy().into_owned();
-    h.shaders.reports.publish(&[ShaderReloadReport {
-        name: "lit".to_string(),
+    h.shaders.reports.publish(&[ReloadReport {
+        subject: ReloadSubject::shader("lit"),
         outcome: failed_at(&lit, 1, 1),
     }]);
     let badge = h

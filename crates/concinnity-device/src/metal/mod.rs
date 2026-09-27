@@ -62,3 +62,4 @@ mod world_shaders;
 pub(crate) use context::MtlContext;
 pub(crate) use gpu_profile::probe_gpu_profile;
 pub(crate) use pipeline::warm_world_shader;
+pub(crate) use raymarch::warm_sdf_field;

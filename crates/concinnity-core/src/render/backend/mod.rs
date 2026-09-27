@@ -41,7 +41,7 @@ mod window;
 
 pub use effects::SceneEffects;
 pub use live_edit::{
-    DrawGeometryUpdate, LiveEdit, SkinnedDrawGeometryUpdate, SkinnedSlotLayout, WorldShaderSwap,
+    DrawGeometryUpdate, LiveEdit, PipelineSwap, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
 pub use probe::{
     BackendProbe, DeviceCapabilities, GpuClassInput, GpuProfile, GpuTier, GpuVendor,

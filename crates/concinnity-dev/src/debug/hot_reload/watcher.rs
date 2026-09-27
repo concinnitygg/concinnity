@@ -31,8 +31,10 @@ pub(super) fn spawn_watcher(
         procedural_meshes: _,
         shaders,
         shader_overrides: _,
+        sdf_fields,
     } = sources;
-    let shader_files = super::shader::ShaderFileIndex::new(shaders);
+    let shader_files = super::shader::file_index(shaders);
+    let sdf_files = super::sdf::file_index(sdf_fields);
     let debounce = Duration::from_millis(150);
     let last_fire = Mutex::new(Instant::now() - debounce);
     let mut watcher = match notify::recommended_watcher(move |res: notify::Result<Event>| {
@@ -46,18 +48,23 @@ pub(super) fn spawn_watcher(
         let Some(kind) = classify_event(&event) else {
             return;
         };
-        // A shader save marks just the Shaders reading the file. It skips the
-        // shared debounce: marking is idempotent, and a debounce could swallow
-        // the save of a second Shader right after the first.
+        // A shader save marks just the Shaders and SdfVolumes reading the
+        // file. It skips the shared debounce: marking is idempotent, and a
+        // debounce could swallow the save of a second file right after the
+        // first.
         if kind == ReloadKind::Shaders {
-            let touched = shader_files.shaders_to_recompile(&event.paths);
-            if !touched.is_empty() {
+            let shaders = shader_files.to_recompile(&event.paths);
+            let volumes = sdf_files.to_recompile(&event.paths);
+            if !shaders.is_empty() || !volumes.is_empty() {
                 tracing::info!(
-                    "asset hot-reload: detected change to {:?}, scheduling {} Shader recompile(s)",
+                    "asset hot-reload: detected change to {:?}, scheduling {} Shader and {} \
+                     SdfVolume recompile(s)",
                     event.paths,
-                    touched.len()
+                    shaders.len(),
+                    volumes.len()
                 );
-                super::pending::mark_shaders_pending(touched);
+                super::pending::mark_shaders_pending(shaders);
+                super::pending::mark_sdf_volumes_pending(volumes);
             }
             return;
         }
@@ -106,6 +113,9 @@ pub(super) fn spawn_watcher(
         dirs.insert(dir);
     }
     for dir in shaders.watch_dirs() {
+        dirs.insert(dir);
+    }
+    for dir in sdf_fields.watch_dirs() {
         dirs.insert(dir);
     }
     if let Some(path) = world_jsonl_path {
@@ -160,7 +170,7 @@ pub(super) fn spawn_watcher(
 // recompile plus a pipeline rebuild but no texture or mesh decode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ReloadKind {
-    // `.hlsl`: recompile the Shaders reading the file.
+    // `.hlsl`: recompile the Shaders and SdfVolumes reading the file.
     Shaders,
     // `.jsonl`, the world file.
     World,

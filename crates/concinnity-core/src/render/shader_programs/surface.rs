@@ -11,7 +11,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::platform::Platform;
-use crate::render::shader_source::{self, Splice};
+use crate::render::shader_source::{self, SourceFile, Splice};
 
 /// The marker the world's `vertex` file is spliced at.
 pub const VERTEX_MARKER: &str = "{SURFACE_VERTEX}";
@@ -45,17 +45,6 @@ pub fn program(entry: &str) -> Option<&'static Program> {
     ALL.iter().find(|p| p.entry == entry)
 }
 
-/// One of the world's files: the path it was read from and its text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SourceFile<'a> {
-    /// The path a compiler's diagnostics name the file by. It rides the
-    /// assembled text in a `#line` directive, so it is part of what an
-    /// artifact's source digest covers.
-    pub path: &'a str,
-    /// The file's text.
-    pub text: &'a str,
-}
-
 /// The world's two files.
 #[derive(Debug, Clone, Copy)]
 pub struct Sources<'a> {
@@ -70,12 +59,11 @@ impl<'a> Sources<'a> {
     /// default hooks, each fenced under its own path. An undeclared vertex file
     /// leaves the default.
     pub fn splices(&self) -> Vec<Splice<'a>> {
-        let splice = |marker, file: SourceFile<'a>| Splice::from_file(marker, file.text, file.path);
         let mut out = Vec::with_capacity(2);
         if let Some(v) = self.vertex {
-            out.push(splice(VERTEX_MARKER, v));
+            out.push(Splice::of(VERTEX_MARKER, v));
         }
-        out.push(splice(FRAGMENT_MARKER, self.fragment));
+        out.push(Splice::of(FRAGMENT_MARKER, self.fragment));
         out
     }
 }

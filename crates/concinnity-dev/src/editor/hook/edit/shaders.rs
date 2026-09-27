@@ -9,7 +9,7 @@
 use concinnity_core::ecs::World;
 
 use super::shaders_state::RowsKey;
-use crate::debug::hot_reload::ShaderReports;
+use crate::debug::hot_reload::ReloadReports;
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::{EditorHook, FormTarget};
 use crate::editor::panels::registry::PanelKey;
@@ -17,9 +17,9 @@ use crate::editor::panels::shader_list::{self, MenuItem, Row, RowKind, ShaderDec
 use crate::editor::panels::shader_list_panel::{self, ShadersAction, ShadersView};
 
 impl EditorHook {
-    // A clone of the board the hot-reload driver publishes each Shader's
+    // A clone of the board the hot-reload driver publishes each subject's
     // latest outcome to (see `run_editor`).
-    pub(crate) fn shader_reports(&self) -> ShaderReports {
+    pub(crate) fn reload_reports(&self) -> ReloadReports {
         self.shaders.reports.clone()
     }
 

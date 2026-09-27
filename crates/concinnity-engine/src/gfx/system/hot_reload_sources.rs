@@ -15,6 +15,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use super::parked::{ShaderOverrides, TextureNameSlots};
+use super::sdf_field_sources::SdfFieldMap;
 use super::shader_sources::ShaderSourceMap;
 use crate::gfx::draw_list::MeshSourceMeta;
 
@@ -325,6 +326,8 @@ pub struct HotReloadSources {
     /// Hot-reloaded Shader programs, shared with the streaming pump so a
     /// Shader whose scene loads later installs the edit.
     pub shader_overrides: ShaderOverrides,
+    /// Reloadable `SdfVolume` fields.
+    pub sdf_fields: SdfFieldMap,
 }
 
 impl HotReloadSources {
@@ -337,6 +340,7 @@ impl HotReloadSources {
             && self.skinned_meshes.is_empty()
             && self.procedural_meshes.is_empty()
             && self.shaders.is_empty()
+            && self.sdf_fields.is_empty()
     }
 }
 
@@ -409,7 +413,7 @@ pub(super) fn capture_hot_reload_sources(
         "asset hot-reload: captured {} file-backed texture source(s), {} \
          ColorLut source(s), {} EnvironmentMap source(s), {} Mesh \
          source(s), {} SkinnedMesh source(s), {} ProceduralMesh source(s), \
-         and {} Shader source(s)",
+         {} Shader source(s), and {} SdfVolume field(s)",
         sources.map.len(),
         usize::from(sources.color_lut.is_some()),
         usize::from(sources.environment_map.is_some()),
@@ -417,6 +421,7 @@ pub(super) fn capture_hot_reload_sources(
         sources.skinned_meshes.len(),
         sources.procedural_meshes.len(),
         sources.shaders.len(),
+        sources.sdf_fields.len(),
     );
     (sources, TextureNameSlots(texture_name_to_slot))
 }

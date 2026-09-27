@@ -80,9 +80,9 @@ impl DebugServer {
         self
     }
 
-    // Publish each Shader's latest reload outcome to `reports`.
-    pub(crate) fn with_shader_reports(mut self, reports: hot_reload::ShaderReports) -> Self {
-        self.reload = self.reload.with_shader_reports(reports);
+    // Publish each subject's latest reload outcome to `reports`.
+    pub(crate) fn with_reload_reports(mut self, reports: hot_reload::ReloadReports) -> Self {
+        self.reload = self.reload.with_reload_reports(reports);
         self
     }
 }

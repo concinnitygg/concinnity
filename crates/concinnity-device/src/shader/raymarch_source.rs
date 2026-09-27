@@ -11,11 +11,12 @@
 // checkout, digests differently, and recompiles. A machine with no compiler
 // says so, naming the volume, rather than drawing nothing.
 
+use concinnity_core::components::SdfVolume;
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::shader_programs::raymarch::{self, Family};
-use concinnity_core::render::shader_source;
+use concinnity_core::render::shader_source::{self, SourceFile};
 use std::borrow::Cow;
 
 /// Decode a volume's payload. A payload that does not decode is a build the
@@ -32,7 +33,34 @@ pub(crate) fn decode(payload: &[u8], label: &str) -> Result<SdfPrograms, String>
 /// full read plus a full write of the HDR target, so a world whose volumes are
 /// all opaque skips an encoder and its barriers outright.
 pub(crate) fn taps_scene(programs: &SdfPrograms) -> bool {
-    raymarch::field_taps_scene(&programs.field)
+    raymarch::field_taps_scene(&programs.field.text)
+}
+
+/// The flags that decide which pipelines a volume draws with, as it was built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct VolumeFlags {
+    pub volumetric: bool,
+    pub cast_shadows: bool,
+}
+
+impl VolumeFlags {
+    pub(crate) fn of(volume: &SdfVolume) -> Self {
+        Self {
+            volumetric: volume.volumetric,
+            cast_shadows: volume.cast_shadows,
+        }
+    }
+
+    /// Whether the volume draws a shadow caster. A medium never does, whatever
+    /// its asset says.
+    pub(crate) fn casts(self) -> bool {
+        self.families().any(|f| f == Family::Shadow)
+    }
+
+    /// Every family the volume draws with.
+    pub(crate) fn families(self) -> impl Iterator<Item = Family> {
+        raymarch::families(self.volumetric, self.cast_shadows)
+    }
 }
 
 /// Which artifact a host wants. Every artifact holds one entry point, which is
@@ -59,7 +87,12 @@ pub(crate) fn artifact<'a>(
     compile: impl FnOnce(Platform, &str, &str, &str) -> RenderResult<Vec<u8>>,
 ) -> RenderResult<Cow<'a, [u8]>> {
     let Request { label, entry, .. } = *req;
-    let source = source(req.family, req.platform, &programs.field, req.hot_reload);
+    let source = source(
+        req.family,
+        req.platform,
+        programs.field.as_file(),
+        req.hot_reload,
+    );
     let digest = shader_source::source_digest(&source);
     if let Some(bytes) = programs.artifact(entry, digest) {
         return Ok(Cow::Borrowed(bytes));
@@ -103,7 +136,7 @@ pub(crate) fn family_artifacts(
 
 // The source text this host expects for one family, preferring the checkout's
 // templates under hot-reload exactly as every other single-source shader does.
-fn source(family: Family, platform: Platform, field: &str, hot_reload: bool) -> String {
+fn source(family: Family, platform: Platform, field: SourceFile<'_>, hot_reload: bool) -> String {
     if !hot_reload {
         return raymarch::source(family, platform, field);
     }
@@ -118,15 +151,22 @@ fn source(family: Family, platform: Platform, field: &str, hot_reload: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::components::ShaderSource;
     use concinnity_core::components::compiled_programs::CompiledProgram;
     use concinnity_core::render::error::RenderError;
 
-    const FIELD: &str = "// a field";
+    const FIELD: SourceFile<'static> = SourceFile {
+        path: "shaders/blob.hlsl",
+        text: "// a field",
+    };
 
     fn stored(family: Family, platform: Platform, entry: &str, bytes: &[u8]) -> SdfPrograms {
         let src = raymarch::source(family, platform, FIELD);
         SdfPrograms {
-            field: FIELD.to_string(),
+            field: ShaderSource {
+                path: FIELD.path.to_string(),
+                text: FIELD.text.to_string(),
+            },
             programs: vec![CompiledProgram {
                 entry: entry.to_string(),
                 source_digest: shader_source::source_digest(&src),
@@ -257,9 +297,29 @@ mod tests {
             "raymarch_vertex",
             b"stored bytes",
         );
-        assert!(!taps_scene(&programs), "'{FIELD}' calls nothing");
-        programs.field = SURFACE_FIELD.to_string();
+        assert!(!taps_scene(&programs), "'{}' calls nothing", FIELD.text);
+        programs.field.text = SURFACE_FIELD.to_string();
         assert!(taps_scene(&programs), "the surface field calls the tap");
+    }
+
+    // A medium never casts, so a volumetric volume that also sets
+    // `cast_shadows` builds no caster and warms none.
+    #[test]
+    fn only_a_casting_surface_volume_draws_a_shadow_caster() {
+        let flags = |volumetric, cast_shadows| VolumeFlags {
+            volumetric,
+            cast_shadows,
+        };
+        assert!(flags(false, true).casts());
+        assert!(!flags(false, false).casts());
+        assert!(!flags(true, true).casts());
+        let families: Vec<Family> = flags(true, true).families().collect();
+        assert_eq!(families, [Family::Volumetric]);
+        let volume = SdfVolume {
+            cast_shadows: true,
+            ..SdfVolume::default()
+        };
+        assert_eq!(VolumeFlags::of(&volume), flags(false, true));
     }
 
     // A payload that does not decode names the volume, which is the only thing
@@ -324,10 +384,14 @@ VolumeSample sampleVolume(float3 p, SdfParams params, float time)
         for platform in Platform::ALL {
             let target = concinnity_shader::HlslTarget::cooked(platform);
             for family in [Family::Surface, Family::Volumetric, Family::Shadow] {
-                let field = if family == Family::Volumetric {
+                let text = if family == Family::Volumetric {
                     VOLUMETRIC_FIELD
                 } else {
                     SURFACE_FIELD
+                };
+                let field = SourceFile {
+                    path: FIELD.path,
+                    text,
                 };
                 let source = raymarch::source(family, platform, field);
                 for program in raymarch::ALL.iter().filter(|p| p.family == family) {

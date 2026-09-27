@@ -24,6 +24,7 @@
 
 use ash::vk;
 use concinnity_core::components::SdfVolume;
+use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::platform::Platform;
@@ -40,7 +41,7 @@ use super::texture::{
     GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
     one_shot_submit, transition_image_layout_range,
 };
-use crate::shader::raymarch_source::family_artifacts;
+use crate::shader::raymarch_source::{VolumeFlags, family_artifacts};
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout,
     VkDevice,
@@ -62,6 +63,8 @@ pub(in crate::vulkan) use concinnity_core::render::uniforms::{
 // it out to the padding the other two hosts allocate, and a range narrower than
 // what the shader declares is a validation finding.
 use concinnity_core::render::uniforms::RaymarchShadowCascade;
+
+mod swap;
 
 pub(in crate::vulkan) fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
     RaymarchVolumeUniforms {
@@ -157,6 +160,10 @@ fn copy_scene_snapshot(
 // UBO (uploaded once at init), its descriptor set, and the visibility flag the
 // encoder + `any_visible` read.
 struct RaymarchVolumeRecord {
+    // The volume's asset name, for pipeline errors.
+    label: String,
+    // The flags the volume's pipelines were built for.
+    flags: VolumeFlags,
     // Owned, not a raw handle: the record outlives the local the pipeline was
     // built into, so storing the bare `vk::Pipeline` destroyed it at the end of
     // the loop iteration and left every draw binding a dangling one.
@@ -883,6 +890,79 @@ fn create_snapshot(
     Ok(GpuImage::from_pooled(pooled, view))
 }
 
+// What a volume's pipelines are built against: the device, the pass's render
+// passes and layouts, and the target configuration the pass was built with.
+struct VolumePipelineTargets<'a> {
+    device: &'a VkDevice,
+    render_pass: vk::RenderPass,
+    layout: vk::PipelineLayout,
+    shadow_render_pass: vk::RenderPass,
+    shadow_layout: vk::PipelineLayout,
+    msaa_samples: vk::SampleCountFlags,
+    hot_reload: bool,
+}
+
+// Every pipeline one volume draws with: its own, and its shadow caster when it
+// casts one.
+struct VolumePipelines {
+    pipeline: OwnedPipeline,
+    shadow_pipeline: Option<OwnedPipeline>,
+}
+
+// Build the pipelines of a volume with these flags from its compiled field. A
+// medium authors `sampleVolume` and renders alpha-blended without a depth
+// write; a surface volume authors `map` and `shade` and sphere-traces an opaque
+// surface.
+fn build_volume_pipelines(
+    t: &VolumePipelineTargets<'_>,
+    programs: &SdfPrograms,
+    flags: VolumeFlags,
+    label: &str,
+) -> RenderResult<VolumePipelines> {
+    let family = if flags.volumetric {
+        Family::Volumetric
+    } else {
+        Family::Surface
+    };
+    let (vert_spv, frag_spv) =
+        family_artifacts(programs, family, Platform::Vulkan, t.hot_reload, label)?;
+    let create = if flags.volumetric {
+        create_volumetric_pipeline
+    } else {
+        create_pipeline
+    };
+    let pipeline = create(
+        t.device,
+        t.render_pass,
+        t.layout,
+        t.msaa_samples,
+        &vert_spv,
+        &frag_spv,
+    )?;
+    let shadow_pipeline = if flags.casts() {
+        let (sh_vert, sh_frag) = family_artifacts(
+            programs,
+            Family::Shadow,
+            Platform::Vulkan,
+            t.hot_reload,
+            label,
+        )?;
+        Some(create_shadow_pipeline(
+            t.device,
+            t.shadow_render_pass,
+            t.shadow_layout,
+            &sh_vert,
+            &sh_frag,
+        )?)
+    } else {
+        None
+    };
+    Ok(VolumePipelines {
+        pipeline,
+        shadow_pipeline,
+    })
+}
+
 // Vulkan device/instance handles used to create + rebuild raymarch GPU
 // resources. Shared by `try_new` and `rebuild`.
 #[derive(Clone, Copy)]
@@ -1002,7 +1082,9 @@ impl RaymarchResources {
             )?);
         }
 
-        let has_shadow = sdf_volumes.iter().any(|s| s.volume.cast_shadows);
+        let has_shadow = sdf_volumes
+            .iter()
+            .any(|s| VolumeFlags::of(&s.volume).casts());
         let descriptor_pool =
             create_descriptor_pool(device, frames, sdf_volumes.len(), has_shadow)?;
         let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
@@ -1083,62 +1165,24 @@ impl RaymarchResources {
         {
             let programs = crate::shader::raymarch_source::decode(payload, label)
                 .map_err(RenderError::Other)?;
-            // A medium authors `sampleVolume` and renders alpha-blended without a
-            // depth write; a surface volume authors `map` and `shade` and
-            // sphere-traces an opaque surface. The asset's flag selects which.
-            let pipeline = if vol.volumetric {
-                let (vert_spv, frag_spv) = family_artifacts(
-                    &programs,
-                    Family::Volumetric,
-                    Platform::Vulkan,
-                    hot_reload,
-                    label,
-                )?;
-                create_volumetric_pipeline(
+            let flags = VolumeFlags::of(vol);
+            let VolumePipelines {
+                pipeline,
+                shadow_pipeline,
+            } = build_volume_pipelines(
+                &VolumePipelineTargets {
                     device,
-                    render_pass.handle(),
-                    pipeline_layout.handle(),
-                    msaa_samples,
-                    &vert_spv,
-                    &frag_spv,
-                )?
-            } else {
-                let (vert_spv, frag_spv) = family_artifacts(
-                    &programs,
-                    Family::Surface,
-                    Platform::Vulkan,
-                    hot_reload,
-                    label,
-                )?;
-                create_pipeline(
-                    device,
-                    render_pass.handle(),
-                    pipeline_layout.handle(),
-                    msaa_samples,
-                    &vert_spv,
-                    &frag_spv,
-                )?
-            };
-
-            // Depth-only shadow caster when the asset opts in.
-            let shadow_pipeline = if vol.cast_shadows {
-                let (sh_vert, sh_frag) = family_artifacts(
-                    &programs,
-                    Family::Shadow,
-                    Platform::Vulkan,
-                    hot_reload,
-                    label,
-                )?;
-                Some(create_shadow_pipeline(
-                    device,
+                    render_pass: render_pass.handle(),
+                    layout: pipeline_layout.handle(),
                     shadow_render_pass,
-                    shadow_pipeline_layout.handle(),
-                    &sh_vert,
-                    &sh_frag,
-                )?)
-            } else {
-                None
-            };
+                    shadow_layout: shadow_pipeline_layout.handle(),
+                    msaa_samples,
+                    hot_reload,
+                },
+                &programs,
+                flags,
+                label,
+            )?;
 
             let uniforms = volume_uniforms_from(vol);
             let volume_ubo = alloc.create_buffer(
@@ -1155,6 +1199,8 @@ impl RaymarchResources {
             write_volume_set(device, volume_set, volume_ubo.buffer());
 
             volumes.push(RaymarchVolumeRecord {
+                label: label.clone(),
+                flags,
                 pipeline,
                 shadow_pipeline,
                 _volume_ubo: volume_ubo,

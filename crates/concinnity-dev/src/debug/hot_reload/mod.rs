@@ -13,20 +13,28 @@
 //!   watcher    the `notify` filesystem watcher
 //!   decode     off-thread payload decode + poll/apply (textures, meshes, IBL)
 //!   passes     world.jsonl / ProceduralMesh / VolumetricFog / story reload
-//!   shader     per-Shader recompile: off-thread compile, newest save wins,
-//!              pipeline swap on the frame thread, live override for a Shader
-//!              whose scene is not loaded, and each Shader's latest outcome
-//!              for an editor session to show
+//!   shader     per-Shader recompile: pipeline swap on the frame thread, and a
+//!              live override for a Shader whose scene is not loaded
+//!   sdf        per-SdfVolume field recompile: one compile per field and flag
+//!              set, swapped into every volume reading the field
+//!   compile_queue  the off-thread compiles both run, newest save wins
+//!   files      which subjects a filesystem event touches
+//!   report     what became of each reload: log, toast, and the board an
+//!              editor session's panels read
 //!   animation  file-backed Animation clip re-import into the AnimationSystem
 //!   pending    process-wide world.jsonl / story / Animation "changed" flags and
-//!              the pending Shader set
+//!              the pending Shader and SdfVolume sets
 //!   world_path the session's world.jsonl path, shared with the host that switches worlds
 
 mod animation;
+mod compile_queue;
 mod decode;
 mod driver;
+mod files;
 mod passes;
 mod pending;
+mod report;
+mod sdf;
 mod shader;
 mod state;
 mod watcher;
@@ -39,14 +47,15 @@ pub(crate) use driver::HotReloadDriver;
 pub(crate) use pending::{
     mark_all_shaders_pending, set_pending_animations, set_pending_stories, set_pending_world,
 };
-pub(crate) use shader::{ReportBoard, ShaderReloadFailure, ShaderReloadOutcome, ShaderReports};
+pub(crate) use report::{ReloadFailure, ReloadOutcome, ReloadReports, ReloadSubject, ReportBoard};
 pub(crate) use world_path::WorldPathHandle;
 // The editor's tests publish reports of their own.
 #[cfg(test)]
-pub(crate) use shader::ShaderReloadReport;
+pub(crate) use report::ReloadReport;
 // The `reload-assets` dispatch test drains the sibling reload flags the handler
 // raises so they don't leak into other tests; only that test needs them.
 #[cfg(test)]
 pub(crate) use pending::{
-    take_pending_animations, take_pending_shaders, take_pending_stories, take_pending_world,
+    take_pending_animations, take_pending_sdf_volumes, take_pending_shaders, take_pending_stories,
+    take_pending_world,
 };

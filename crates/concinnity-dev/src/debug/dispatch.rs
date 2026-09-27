@@ -663,6 +663,7 @@ mod tests {
         let _guard = crate::test_support::lock();
         hot_reload::take_pending_world();
         hot_reload::take_pending_shaders();
+        hot_reload::take_pending_sdf_volumes();
         hot_reload::take_pending_stories();
         hot_reload::take_pending_animations();
 
@@ -675,10 +676,11 @@ mod tests {
         assert_eq!(r["ok"], true);
         assert_eq!(r["reload_queued"], true);
         assert!(flag.load(Ordering::SeqCst));
-        // The world, Shader-stage, and animation reload surfaces were signaled;
-        // drain them so they do not leak.
+        // The world, Shader, SdfVolume field, and animation reload surfaces
+        // were signaled; drain them so they do not leak.
         assert!(hot_reload::take_pending_world());
         assert!(hot_reload::take_pending_shaders().all);
+        assert!(hot_reload::take_pending_sdf_volumes().all);
         assert!(hot_reload::take_pending_animations());
         // Stories reload only on their own `.md` watch, so reload-assets leaves
         // that flag clear.

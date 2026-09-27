@@ -9,7 +9,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::compiled_programs::CompiledProgram;
-use crate::render::shader_programs::surface::{SourceFile, Sources};
+use crate::render::shader_programs::surface::Sources;
+use crate::render::shader_source::SourceFile;
 
 /// One of the two files a [Shader](#shader) declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -203,8 +204,8 @@ pub struct ShaderPrograms {
     pub programs: Vec<CompiledProgram>,
 }
 
-/// One of a Shader's files as it was compiled: the path it was compiled under
-/// and its text.
+/// An authored file as it was compiled (one of a Shader's files, or an
+/// `SdfVolume`'s field): the path it was compiled under and its text.
 #[derive(
     Debug,
     Clone,

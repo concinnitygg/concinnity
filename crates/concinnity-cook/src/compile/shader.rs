@@ -12,7 +12,8 @@
 
 use concinnity_core::components::{ShaderPrograms, ShaderSource};
 use concinnity_core::platform::Platform;
-use concinnity_core::render::shader_programs::surface::{self, SourceFile, Sources};
+use concinnity_core::render::shader_programs::surface::{self, Sources};
+use concinnity_core::render::shader_source::SourceFile;
 use concinnity_shader::diagnostics::Diagnostic;
 
 use crate::compile::program::{self, ProgramError};

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::debug::hot_reload::{ReportBoard, ShaderReports};
+use crate::debug::hot_reload::{ReloadReports, ReloadSubject, ReportBoard};
 use crate::editor::panels::shader_diagnostics::{self, Status, Tone};
 use crate::editor::panels::shader_list::{Row, RowKind, ShaderDecl};
 use crate::editor::panels::shader_reference::Reference;
@@ -23,7 +23,7 @@ pub(in crate::editor::hook) struct ShadersState {
     // The row whose "..." menu is open, by what it stands for, so a rebuild of
     // the rows keeps it on the same row.
     pub(in crate::editor::hook) menu: Option<RowKind>,
-    pub(in crate::editor::hook) reports: ShaderReports,
+    pub(in crate::editor::hook) reports: ReloadReports,
     pub(in crate::editor::hook) source: Option<SourceState>,
     // Each declared path's on-disk path under `paths_dir`, from `resolve`.
     // Kept, because resolving a bare file name walks the assets tree.
@@ -52,7 +52,7 @@ impl Default for ShadersState {
             open: false,
             scroll: 0,
             menu: None,
-            reports: ShaderReports::default(),
+            reports: ReloadReports::default(),
             source: None,
             paths: HashMap::new(),
             paths_dir: None,
@@ -171,8 +171,9 @@ impl SourceState {
     // outcome, or a catalog armed from a rebuilt world. `true` when an outcome
     // answering a save of this panel's arrived with an error to jump to.
     pub(in crate::editor::hook) fn take_board(&mut self, board: &ReportBoard) -> bool {
-        self.live = board.is_live(&self.key.shader);
-        if let Some(latest) = board.latest(&self.key.shader)
+        let subject = ReloadSubject::shader(&self.key.shader);
+        self.live = board.is_live(&subject);
+        if let Some(latest) = board.latest(&subject)
             && latest.seq > self.seen
         {
             self.seen = latest.seq;
@@ -267,7 +268,7 @@ fn modified(path: &str) -> Option<SystemTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::debug::hot_reload::{ShaderReloadFailure, ShaderReloadOutcome, ShaderReloadReport};
+    use crate::debug::hot_reload::{ReloadFailure, ReloadOutcome, ReloadReport, ReloadSubject};
     use concinnity_cook::compile::program::{CompileFailure, Diagnostic, Severity};
     use concinnity_core::components::ShaderStage;
 
@@ -282,8 +283,8 @@ mod tests {
         )
     }
 
-    fn failed_at(path: &str, line: u32) -> ShaderReloadOutcome {
-        ShaderReloadOutcome::Failed(ShaderReloadFailure::Compile(CompileFailure {
+    fn failed_at(path: &str, line: u32) -> ReloadOutcome {
+        ReloadOutcome::Failed(ReloadFailure::Compile(CompileFailure {
             owner: "Shader 'water'".to_string(),
             failures: Vec::new(),
             diagnostics: vec![Diagnostic {
@@ -298,9 +299,9 @@ mod tests {
         }))
     }
 
-    fn publish(reports: &ShaderReports, outcome: ShaderReloadOutcome) {
-        reports.publish(&[ShaderReloadReport {
-            name: "water".to_string(),
+    fn publish(reports: &ReloadReports, outcome: ReloadOutcome) {
+        reports.publish(&[ReloadReport {
+            subject: ReloadSubject::shader("water"),
             outcome,
         }]);
     }
@@ -309,8 +310,8 @@ mod tests {
     // answer to that save, asks for the jump. A later clean compile clears it.
     #[test]
     fn a_save_is_answered_by_its_report() {
-        let reports = ShaderReports::default();
-        reports.arm(["water".to_string()]);
+        let reports = ReloadReports::default();
+        reports.arm([ReloadSubject::shader("water")]);
         let mut s = state("/cn-none/water.hlsl", "a\nb\nc");
         assert!(!s.take_board(&reports.snapshot()));
         assert_eq!(s.live, Some(true));
@@ -325,7 +326,7 @@ mod tests {
 
         publish(
             &reports,
-            ShaderReloadOutcome::Swapped {
+            ReloadOutcome::Swapped {
                 frame_time: std::time::Duration::ZERO,
                 warnings: Vec::new(),
             },
@@ -339,8 +340,8 @@ mod tests {
     // does not move the caret.
     #[test]
     fn an_unasked_report_marks_without_jumping() {
-        let reports = ShaderReports::default();
-        reports.arm(["water".to_string()]);
+        let reports = ReloadReports::default();
+        reports.arm([ReloadSubject::shader("water")]);
         let mut s = state("/cn-none/water.hlsl", "a\nb");
         publish(&reports, failed_at("/cn-none/water.hlsl", 1));
         assert!(!s.take_board(&reports.snapshot()));
@@ -351,19 +352,19 @@ mod tests {
     // recompile; a rebuild answers a save still waiting.
     #[test]
     fn a_new_shader_waits_for_the_rebuild() {
-        let reports = ShaderReports::default();
-        reports.arm(["lit".to_string()]);
+        let reports = ReloadReports::default();
+        reports.arm([ReloadSubject::shader("lit")]);
         let mut s = state("/cn-none/water.hlsl", "a");
         s.take_board(&reports.snapshot());
         assert_eq!(s.live, Some(false));
         s.saved("a".to_string());
         assert!(!s.compiling);
 
-        reports.arm(["lit".to_string(), "water".to_string()]);
+        reports.arm([ReloadSubject::shader("lit"), ReloadSubject::shader("water")]);
         s.take_board(&reports.snapshot());
         s.saved("a".to_string());
         assert!(s.compiling);
-        reports.arm(["lit".to_string(), "water".to_string()]);
+        reports.arm([ReloadSubject::shader("lit"), ReloadSubject::shader("water")]);
         s.take_board(&reports.snapshot());
         assert!(!s.compiling);
         assert_eq!(s.status.as_ref().unwrap().tone, Tone::Info);

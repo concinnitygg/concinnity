@@ -440,7 +440,12 @@ mod tests {
         entries.sort_unstable();
         assert_eq!(entries, ["raymarch_fragment", "raymarch_vertex"]);
         assert!(programs.programs.iter().all(|p| !p.artifact.is_empty()));
-        assert!(programs.field.contains("float map("));
+        assert!(programs.field.text.contains("float map("));
+        assert_eq!(
+            programs.field.path,
+            field.to_str().unwrap(),
+            "the declared path"
+        );
 
         let err = (entry("SdfVolume").compile)(&serde_json::json!({}), &ctx())
             .expect_err("no distance field");

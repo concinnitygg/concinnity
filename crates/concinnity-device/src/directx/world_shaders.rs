@@ -14,7 +14,7 @@
 // Unlike Metal there is no on-disk GPU-binary cache behind the build: see
 // `docs/todos.md` for why the D3D12 pipeline-library equivalent is still open.
 
-use concinnity_core::render::backend::WorldShaderSwap;
+use concinnity_core::render::backend::PipelineSwap;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -62,14 +62,14 @@ impl DxContext {
         &mut self,
         bucket: u32,
         programs: &concinnity_core::components::ShaderPrograms,
-    ) -> RenderResult<WorldShaderSwap> {
+    ) -> RenderResult<PipelineSwap> {
         if bucket == 0 {
             self.update_default_world_shader(programs)?;
-            return Ok(WorldShaderSwap::Swapped);
+            return Ok(PipelineSwap::Swapped);
         }
         self.world_pipeline_slot(bucket)?;
         if !self.world_shader_resident(bucket as usize) {
-            return Ok(WorldShaderSwap::NotResident);
+            return Ok(PipelineSwap::NotResident);
         }
         self.install_world_shader(
             bucket,
@@ -78,7 +78,7 @@ impl DxContext {
                 deferred: false,
             },
         )?;
-        Ok(WorldShaderSwap::Swapped)
+        Ok(PipelineSwap::Swapped)
     }
 
     // Release one bucket's pipeline. D3D12 command lists do not keep a pipeline

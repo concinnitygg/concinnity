@@ -7,19 +7,20 @@
 //! whether the cheap in-place write fits before it asks for the rebuild.
 
 use crate::components::ShaderPrograms;
+use crate::components::sdf_programs::SdfPrograms;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::{MATERIAL_PARAM_COUNT, MaterialUniforms};
 use crate::render::backend_init::{BackendInit, SwapchainConfig};
 use crate::render::error::{RenderError, RenderResult};
 use alloc::vec::Vec;
 
-/// What [`LiveEdit::update_world_shader`] did with the fresh programs.
+/// What a pipeline rebuild from fresh programs did
+/// ([`LiveEdit::update_world_shader`], [`LiveEdit::replace_sdf_volume_pipelines`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorldShaderSwap {
-    /// The bucket's live pipeline was rebuilt and swapped in.
+pub enum PipelineSwap {
+    /// The live pipelines were rebuilt and swapped in.
     Swapped,
-    /// The bucket has no pipeline installed, so nothing was built; the programs
-    /// apply when the bucket is next installed.
+    /// Nothing the programs feed has a pipeline installed, so nothing was built.
     NotResident,
 }
 
@@ -297,15 +298,36 @@ pub trait LiveEdit {
     /// Material-named Shader. The backend builds the replacement first and only
     /// swaps when the build succeeds, so a compile error never overwrites a live
     /// pipeline. A bucket whose pipeline is not installed (its scene is not
-    /// loaded) builds nothing and reports [`WorldShaderSwap::NotResident`].
+    /// loaded) builds nothing and reports [`PipelineSwap::NotResident`].
     fn update_world_shader(
         &mut self,
         bucket: u32,
         programs: &ShaderPrograms,
-    ) -> RenderResult<WorldShaderSwap> {
+    ) -> RenderResult<PipelineSwap> {
         let _ = (bucket, programs);
         Err(RenderError::Unsupported {
             op: "update_world_shader",
+        })
+    }
+
+    /// Rebuild one raymarched `SdfVolume`'s pipelines from a freshly compiled
+    /// field. Driven by asset hot-reload (`cn debug` and `cn editor`) when the
+    /// volume's field file is saved. `volume` is the volume's position in
+    /// [`WorldFx::sdf_volumes`](crate::render::backend_init::WorldFx::sdf_volumes),
+    /// the order the backend built them in. Every pipeline the volume draws
+    /// with is rebuilt from `programs`: its surface or volumetric pipeline, and
+    /// its shadow caster when it casts one, keeping the flags it was built
+    /// with. Every replacement is built before any is swapped in, so a failed
+    /// build leaves the live pipelines drawing. A volume the backend holds no
+    /// pipelines for builds nothing and reports [`PipelineSwap::NotResident`].
+    fn replace_sdf_volume_pipelines(
+        &mut self,
+        volume: usize,
+        programs: &SdfPrograms,
+    ) -> RenderResult<PipelineSwap> {
+        let _ = (volume, programs);
+        Err(RenderError::Unsupported {
+            op: "replace_sdf_volume_pipelines",
         })
     }
 

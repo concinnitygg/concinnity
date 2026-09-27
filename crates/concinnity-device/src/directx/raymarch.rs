@@ -66,7 +66,9 @@ use crate::directx::root_constants::RootConstants;
 use crate::directx::texture::{
     HDR_FORMAT, create_fallback_white_resource, create_hdr_resolve_target, transition_barrier,
 };
-use crate::shader::raymarch_source::family_artifacts;
+use crate::shader::raymarch_source::{VolumeFlags, family_artifacts};
+
+mod swap;
 
 fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
     RaymarchVolumeUniforms {
@@ -86,6 +88,8 @@ fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
 // per-volume cbuffer (uploaded once at init) and the optional
 // shadow-cast PSO.
 pub(in crate::directx) struct RaymarchVolumeRecord {
+    // The volume's asset name, for pipeline errors.
+    pub(in crate::directx) label: String,
     pub(in crate::directx) pso: ID3D12PipelineState,
     // Depth-only shadow PSO. `Some` when the asset's `cast_shadows`
     // is true at init; the shadow encoder iterates only the records
@@ -104,6 +108,7 @@ pub(in crate::directx) struct RaymarchVolumeRecord {
     volume_cbuffer: PooledBuffer,
     pub(in crate::directx) volume_cbuffer_gva: u64,
     pub(in crate::directx) visible: bool,
+    pub(in crate::directx) volumetric: bool,
     pub(in crate::directx) cast_shadows: bool,
     // Whether the authored field samples the scene behind the surface. The
     // pass copies the scene spine into `hdr_resolve_copy` only when some
@@ -615,6 +620,66 @@ fn compile_volume_shadow_pso(
     create_raymarch_shadow_pso(device, root_sig, &vs, &ps)
 }
 
+// What a volume's PSOs are built against: the device, the pass's two root
+// signatures, and the target configuration the pass was built with.
+pub(in crate::directx) struct VolumePsoTargets<'a> {
+    pub(in crate::directx) device: &'a ID3D12Device,
+    pub(in crate::directx) info_queue: Option<&'a ID3D12InfoQueue>,
+    pub(in crate::directx) root_sig: &'a ID3D12RootSignature,
+    pub(in crate::directx) shadow_root_sig: &'a ID3D12RootSignature,
+    pub(in crate::directx) msaa_samples: u32,
+    pub(in crate::directx) hot_reload: bool,
+}
+
+// Every PSO one volume draws with: its own, and its shadow caster when it
+// casts one.
+pub(in crate::directx) struct VolumePsos {
+    pub(in crate::directx) pso: ID3D12PipelineState,
+    pub(in crate::directx) shadow_pso: Option<ID3D12PipelineState>,
+}
+
+// Build the PSOs of a volume with these flags from its compiled field. A
+// medium authors `sampleVolume` and blends without a depth write; a surface
+// volume authors `map` and `shade` and writes an opaque surface.
+pub(in crate::directx) fn build_volume_psos(
+    t: &VolumePsoTargets<'_>,
+    programs: &SdfPrograms,
+    flags: VolumeFlags,
+    label: &str,
+) -> RenderResult<VolumePsos> {
+    let pso = dump_on_err(
+        t.info_queue,
+        if flags.volumetric {
+            compile_volume_volumetric_pso(
+                t.device,
+                t.root_sig,
+                programs,
+                label,
+                t.msaa_samples,
+                t.hot_reload,
+            )
+        } else {
+            compile_volume_pso(
+                t.device,
+                t.root_sig,
+                programs,
+                label,
+                t.msaa_samples,
+                t.hot_reload,
+            )
+        },
+    )?;
+    let shadow_pso = if flags.casts() {
+        Some(dump_on_err(
+            t.info_queue,
+            compile_volume_shadow_pso(t.device, t.shadow_root_sig, programs, label, t.hot_reload),
+        )?)
+    } else {
+        None
+    };
+    Ok(VolumePsos { pso, shadow_pso })
+}
+
 // Build the shared unit-cube proxy geometry. 8 corners at ±1; 36 CCW
 // indices (the encoder culls front faces so only back faces fire).
 // The vertex shader scales positions by `vol_extent` to land at the
@@ -990,43 +1055,19 @@ impl RaymarchResources {
         {
             let programs = crate::shader::raymarch_source::decode(payload, label)
                 .map_err(RenderError::Other)?;
-            let pso = dump_on_err(
-                info_queue,
-                if vol.volumetric {
-                    compile_volume_volumetric_pso(
-                        device,
-                        &root_sig,
-                        &programs,
-                        label,
-                        msaa_samples,
-                        hot_reload,
-                    )
-                } else {
-                    compile_volume_pso(
-                        device,
-                        &root_sig,
-                        &programs,
-                        label,
-                        msaa_samples,
-                        hot_reload,
-                    )
-                },
-            )?;
-            // Shadow PSO only when the asset opts in.
-            let shadow_pso = if vol.cast_shadows {
-                Some(dump_on_err(
+            let VolumePsos { pso, shadow_pso } = build_volume_psos(
+                &VolumePsoTargets {
+                    device,
                     info_queue,
-                    compile_volume_shadow_pso(
-                        device,
-                        &shadow_root_sig,
-                        &programs,
-                        label,
-                        hot_reload,
-                    ),
-                )?)
-            } else {
-                None
-            };
+                    root_sig: &root_sig,
+                    shadow_root_sig: &shadow_root_sig,
+                    msaa_samples,
+                    hot_reload,
+                },
+                &programs,
+                VolumeFlags::of(vol),
+                label,
+            )?;
             // Per-volume cbuffer (static: `center`, `extent`,
             // `params` don't change frame-to-frame).
             let uniforms = volume_uniforms_from(vol);
@@ -1053,11 +1094,13 @@ impl RaymarchResources {
             }
             let gva = com::gpu_va(&cb);
             volumes.push(RaymarchVolumeRecord {
+                label: label.clone(),
                 pso,
                 shadow_pso,
                 volume_cbuffer: cb,
                 volume_cbuffer_gva: gva,
                 visible: vol.visible,
+                volumetric: vol.volumetric,
                 cast_shadows: vol.cast_shadows,
                 refractive: crate::shader::raymarch_source::taps_scene(&programs),
             });

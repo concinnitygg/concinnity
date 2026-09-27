@@ -1782,6 +1782,14 @@ impl GraphicsSystem {
         let total_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
 
         let fx = drain_world_fx(ctx, texture_count);
+        let sdf_fields = if capture_sources {
+            let assets_dir = self.assets_dir();
+            super::sdf_field_sources::SdfFieldMap::build(&fx.sdf_volumes, |raw| {
+                concinnity_host::store::source::find_existing(raw, assets_dir.as_deref(), None)
+            })
+        } else {
+            Default::default()
+        };
         let decal_count = fx.decals.len();
         let particle_count = fx.particles.len();
         let fog_settings = fx.fog;
@@ -1912,6 +1920,7 @@ impl GraphicsSystem {
                     ),
                     shaders: shader_source_map,
                     shader_overrides,
+                    sdf_fields,
                 },
                 texture_name_to_slot,
             );

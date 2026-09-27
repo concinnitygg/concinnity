@@ -7,17 +7,18 @@
 //! Making this one a build-time artifact too is what keeps a shipped player from
 //! needing a shader compiler: the cook runs dxc and stores what it emitted.
 //!
-//! The field text rides along with the artifacts because a compiled artifact is
-//! only usable while the template it was built against still matches. The
-//! renderer assembles the source it expects, digests it, and takes the stored
-//! artifact only on a match; a hot-reload edit to the engine template misses
-//! every entry and recompiles, which is the behavior that makes editing one
-//! possible at all.
+//! The field rides along with the artifacts because a compiled artifact is only
+//! usable while the template it was built against still matches. The renderer
+//! assembles the source it expects, digests it, and takes the stored artifact
+//! only on a match; a hot-reload edit to the engine template misses every entry
+//! and recompiles, which is the behavior that makes editing one possible at
+//! all. The field's path is part of that source, fenced around the text so a
+//! compiler names the author's file, so it rides along too.
 
-use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::compiled_programs::CompiledProgram;
+use super::shader::ShaderSource;
 
 /// An `SdfVolume`'s payload: the authored field plus every entry the cook
 /// compiled from it.
@@ -32,9 +33,10 @@ use super::compiled_programs::CompiledProgram;
     crate::ecs::AssetFields,
 )]
 pub struct SdfPrograms {
-    /// The authored distance field, spliced at `{SDF_BODY}`. Kept so a renderer
-    /// that cannot use a stored artifact can still assemble and compile.
-    pub field: String,
+    /// The authored distance field and the path it was compiled under, spliced
+    /// at `{SDF_BODY}`. Kept so a renderer can assemble the source the stored
+    /// artifacts were built from, and compile when it cannot use them.
+    pub field: ShaderSource,
     /// Compiled entries, in the order the cook emitted them.
     pub programs: Vec<CompiledProgram>,
 }
@@ -63,9 +65,16 @@ mod tests {
     use alloc::string::ToString;
     use alloc::vec;
 
+    fn field(text: &str) -> ShaderSource {
+        ShaderSource {
+            path: "shaders/blob.hlsl".to_string(),
+            text: text.to_string(),
+        }
+    }
+
     fn programs() -> SdfPrograms {
         SdfPrograms {
-            field: "float map() { return 1.0; }".to_string(),
+            field: field("float map() { return 1.0; }"),
             programs: vec![
                 CompiledProgram {
                     entry: "raymarch_vertex".to_string(),
@@ -121,10 +130,10 @@ mod tests {
     #[test]
     fn a_payload_with_no_artifacts_still_carries_the_field() {
         let p = SdfPrograms {
-            field: "float map() { return 0.0; }".to_string(),
+            field: field("float map() { return 0.0; }"),
             programs: Vec::new(),
         };
         assert!(p.artifact("raymarch_fragment", 0).is_none());
-        assert!(!p.field.is_empty());
+        assert!(!p.field.text.is_empty());
     }
 }

@@ -11,7 +11,7 @@
 use concinnity_cook::compile::program::{CompileFailure, Diagnostic, Severity as DxcSeverity};
 
 use super::shader_source::same_file;
-use crate::debug::hot_reload::{ShaderReloadFailure, ShaderReloadOutcome};
+use crate::debug::hot_reload::{ReloadFailure, ReloadOutcome};
 use crate::editor::text_area::markers::{GutterMarker, Severity};
 
 // How a status line reads.
@@ -47,15 +47,13 @@ pub(crate) struct ReportView {
 }
 
 // The view of `outcome` for the panel open on the file at resolved path `file`.
-pub(crate) fn report_view(outcome: &ShaderReloadOutcome, file: &str) -> ReportView {
+pub(crate) fn report_view(outcome: &ReloadOutcome, file: &str) -> ReportView {
     match outcome {
-        ShaderReloadOutcome::Swapped { warnings, .. } => {
-            compiled(warnings, file, "pipeline swapped")
-        }
-        ShaderReloadOutcome::AppliesOnLoad { warnings } => {
+        ReloadOutcome::Swapped { warnings, .. } => compiled(warnings, file, "pipeline swapped"),
+        ReloadOutcome::AppliesOnLoad { warnings } => {
             compiled(warnings, file, "applies when its scene loads")
         }
-        ShaderReloadOutcome::Failed(ShaderReloadFailure::Compile(failed)) => {
+        ReloadOutcome::Failed(ReloadFailure::Compile(failed)) => {
             let markers = markers_for(&failed.diagnostics, file);
             let jump = markers
                 .iter()
@@ -71,7 +69,7 @@ pub(crate) fn report_view(outcome: &ShaderReloadOutcome, file: &str) -> ReportVi
                 jump,
             }
         }
-        ShaderReloadOutcome::Failed(other) => ReportView {
+        ReloadOutcome::Failed(other) => ReportView {
             markers: Vec::new(),
             status: Status::new(other.to_string(), Tone::Error),
             jump: None,
@@ -206,8 +204,8 @@ mod tests {
         }
     }
 
-    fn failed(diagnostics: Vec<Diagnostic>, hint: &'static str) -> ShaderReloadOutcome {
-        ShaderReloadOutcome::Failed(ShaderReloadFailure::Compile(CompileFailure {
+    fn failed(diagnostics: Vec<Diagnostic>, hint: &'static str) -> ReloadOutcome {
+        ReloadOutcome::Failed(ReloadFailure::Compile(CompileFailure {
             owner: "Shader 'water'".to_string(),
             failures: vec![EntryFailure {
                 entry: "fs_main".to_string(),
@@ -304,7 +302,7 @@ mod tests {
         let warning = diagnostic(FILE, 3, DxcSeverity::Warning, "implicit truncation");
         let mut moved = warning.clone();
         moved.column = 9;
-        let outcome = ShaderReloadOutcome::Swapped {
+        let outcome = ReloadOutcome::Swapped {
             frame_time: Duration::from_millis(3),
             warnings: vec![warning.clone(), moved, warning],
         };
@@ -318,7 +316,7 @@ mod tests {
     // A clean compile clears every marker.
     #[test]
     fn a_clean_compile_marks_nothing() {
-        let outcome = ShaderReloadOutcome::Swapped {
+        let outcome = ReloadOutcome::Swapped {
             frame_time: Duration::from_millis(3),
             warnings: Vec::new(),
         };
@@ -332,7 +330,7 @@ mod tests {
 
     #[test]
     fn an_unloaded_scene_applies_later() {
-        let outcome = ShaderReloadOutcome::AppliesOnLoad {
+        let outcome = ReloadOutcome::AppliesOnLoad {
             warnings: vec![diagnostic(
                 "shaders/other.hlsl",
                 1,
@@ -347,8 +345,7 @@ mod tests {
 
     #[test]
     fn a_failure_without_diagnostics_shows_its_message() {
-        let outcome =
-            ShaderReloadOutcome::Failed(ShaderReloadFailure::Rejected("no device".to_string()));
+        let outcome = ReloadOutcome::Failed(ReloadFailure::Rejected("no device".to_string()));
         let view = report_view(&outcome, FILE);
         assert!(view.markers.is_empty());
         assert_eq!(view.status.tone, Tone::Error);

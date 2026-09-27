@@ -1,53 +1,31 @@
 use concinnity_core::components::SdfVolume;
+use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::platform::Platform;
+use concinnity_core::render::shader_source::SourceFile;
 
 use crate::asset::BuildCtx;
 use crate::authoring::source_args::sdf_volume_source_path;
+use crate::compile::sdf_field::compile_sdf_field;
 
-// Resolve a raw `fragment_shader` arg to an on-disk path, picking the first
-// candidate that exists. `<assets>` is the build's asset search root.
-// Resolution order:
-//   1. `<assets>/<raw>`: runtime-fetched cache (the production
-//      location once a world has been built and `cn run` fetches its
-//      dependencies).
-//   2. `<assets>/<bare>` recursive search: same bare-filename
-//      match `Shader` does.
-//   3. `<artifacts_dir>/<raw>`: LLM-written artifact under
-//      `data/artifacts/<account_id>/`, matching the existing Shader stage path.
-//   4. `assets/<raw>`: source-tree convenience for `cn debug` run from
-//      `concinnity-engine/` against shaders authored in the repo's `assets/`
-//      directory.
-//   5. `<raw>` as-is: relative-to-cwd fallback (matches how other asset
-//      `source` fields handle e.g. `"../concinnity-infra/assets/..."`).
-// Returns `None` when nothing exists; `compile_payload` falls back to the raw
-// path in that case so the read error surfaces with a useful message.
+// Resolve a raw `fragment_shader` arg to the first on-disk path that exists
+// among the build's asset root, its artifacts dir, the checkout's `assets/`
+// and the working directory. `None` when nothing exists; `compile_payload`
+// falls back to the raw path then, so the read error names it.
 pub(super) fn resolve_source_path(raw: &str, ctx: &BuildCtx<'_>) -> Option<String> {
-    let raw_path = std::path::Path::new(raw);
-    let mut candidates: Vec<String> = Vec::new();
-    if raw_path.is_absolute() {
-        candidates.push(raw.to_string());
-    } else {
-        if let Some(assets) = ctx.assets_dir {
-            candidates.push(assets.join(raw).to_string_lossy().into_owned());
-        }
-        if raw_path
-            .parent()
-            .map(|d| d.as_os_str().is_empty())
-            .unwrap_or(true)
-            && let Some(found) = ctx
-                .assets_dir
-                .and_then(|dir| concinnity_host::store::source::find_in(dir, raw))
-        {
-            candidates.push(found);
-        }
-        if let Some(dir) = ctx.artifacts_dir {
-            candidates.push(format!("{dir}/{raw}"));
-        }
-        candidates.push(format!("assets/{raw}"));
-        candidates.push(raw.to_string());
-    }
-    candidates
-        .into_iter()
-        .find(|p| std::path::Path::new(p).exists())
+    concinnity_host::store::source::find_existing(raw, ctx.assets_dir, ctx.artifacts_dir)
+}
+
+// A volume's compiled field, or an error naming what this host is missing.
+fn field_programs(
+    name: &str,
+    field: SourceFile<'_>,
+    platform: Platform,
+    flags: (bool, bool),
+    have_compiler: bool,
+) -> std::io::Result<SdfPrograms> {
+    crate::compile::program::require_compiler(&format!("SdfVolume '{name}'"), have_compiler)?;
+    let (volumetric, cast_shadows) = flags;
+    Ok(compile_sdf_field(name, field, platform, volumetric, cast_shadows)?.programs)
 }
 
 impl crate::asset::BuildAsset for SdfVolume {
@@ -85,8 +63,17 @@ impl crate::asset::BuildAsset for SdfVolume {
         let volumetric = flag("volumetric").unwrap_or(false);
         let cast_shadows = flag("cast_shadows").unwrap_or(false);
 
-        let programs =
-            super::sdf_field::compile(ctx.name, &field, ctx.platform, volumetric, cast_shadows)?;
+        // Diagnostics name the field as the world declared it.
+        let programs = field_programs(
+            ctx.name,
+            SourceFile {
+                path: &raw,
+                text: &field,
+            },
+            ctx.platform,
+            (volumetric, cast_shadows),
+            concinnity_shader::dxc_available(),
+        )?;
         programs.encode().map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -120,7 +107,6 @@ impl crate::asset::BuildAsset for SdfVolume {
 mod tests {
     use super::*;
     use crate::asset::{BuildAsset, SourceFiles};
-    use concinnity_core::platform::Platform;
 
     fn args(source: &str) -> serde_json::Value {
         serde_json::json!({ "fragment_shader": source })
@@ -150,6 +136,26 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
     return s;
 }
 "#;
+
+    // A volume whose field has to be compiled on a host with no compiler is an
+    // error naming the volume, not a payload that quietly draws nothing.
+    #[test]
+    fn a_volume_needing_a_compiler_fails_when_there_is_none() {
+        let field = SourceFile {
+            path: "shaders/blob.hlsl",
+            text: "float map(float3 p) { return length(p) - 1.0; }",
+        };
+        let err = field_programs("blob", field, Platform::Metal, (false, true), false)
+            .expect_err("no compiler is an error");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        let message = err.to_string();
+        assert!(message.contains("blob"), "{message}");
+        assert!(
+            message.contains("compiled payload") || message.contains("dxc"),
+            "{message}"
+        );
+    }
 
     #[test]
     fn an_absolute_path_resolves_only_when_it_exists() {

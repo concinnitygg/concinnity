@@ -6,7 +6,7 @@
 // those scenes pin and unpin, so the pipeline build lands behind the loading
 // screen rather than on the frame that first draws the material.
 
-use concinnity_core::render::backend::WorldShaderSwap;
+use concinnity_core::render::backend::PipelineSwap;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -46,17 +46,17 @@ impl MtlContext {
         &mut self,
         bucket: u32,
         programs: &concinnity_core::components::ShaderPrograms,
-    ) -> RenderResult<WorldShaderSwap> {
+    ) -> RenderResult<PipelineSwap> {
         if bucket == 0 {
             self.update_default_world_shader(programs)?;
-            return Ok(WorldShaderSwap::Swapped);
+            return Ok(PipelineSwap::Swapped);
         }
         self.world_pipeline_slot(bucket)?;
         if !self.world_shader_resident(bucket as usize) {
-            return Ok(WorldShaderSwap::NotResident);
+            return Ok(PipelineSwap::NotResident);
         }
         self.install_world_shader(bucket, programs)?;
-        Ok(WorldShaderSwap::Swapped)
+        Ok(PipelineSwap::Swapped)
     }
 
     // Release one bucket's pipeline. A Metal command buffer retains the

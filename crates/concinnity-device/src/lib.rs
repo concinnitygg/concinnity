@@ -58,4 +58,4 @@ mod audit;
 pub(crate) mod suballoc;
 
 mod factory;
-pub use factory::{init_backend, probe_gpu_profile, warm_world_shader};
+pub use factory::{init_backend, probe_gpu_profile, warm_sdf_field, warm_world_shader};

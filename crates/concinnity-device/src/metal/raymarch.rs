@@ -54,6 +54,11 @@ use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
 use super::error::allocation_failed;
 use super::scoped_encoder::ScopedEncoder;
+use crate::shader::raymarch_source::VolumeFlags;
+
+mod swap;
+
+pub(crate) use swap::warm_sdf_field;
 
 // Metal buffer index for the proxy cube's vertex stream.
 //
@@ -71,6 +76,8 @@ type RaymarchLightsGpu = LightUniforms;
 // Per-`SdfVolume` GPU state: the compiled render pipeline (one PSO per
 // volume) plus the static per-volume uniforms.
 pub(in crate::metal) struct RaymarchVolumeRecord {
+    // The volume's asset name, for pipeline errors.
+    pub(in crate::metal) label: String,
     // The volume's draw pipeline. Compiled as the opaque surface variant
     // (cone-marched SDF, depth write) for a normal volume, or the
     // alpha-blended volumetric variant (Beer-Lambert march, no depth write)
@@ -354,6 +361,46 @@ pub(in crate::metal) fn build_raymarch_volumetric_pipeline(
         })
 }
 
+// Every pipeline one volume draws with: its own, and its shadow caster when it
+// casts one.
+pub(in crate::metal) struct VolumePipelines {
+    pub(in crate::metal) pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    pub(in crate::metal) shadow_pipeline:
+        Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+}
+
+// Build the pipelines of a volume with these flags from its compiled field.
+pub(in crate::metal) fn build_volume_pipelines(
+    device: &ProtocolObject<dyn MTLDevice>,
+    programs: &SdfPrograms,
+    flags: VolumeFlags,
+    hot_reload: bool,
+    asset_label: &str,
+) -> RenderResult<VolumePipelines> {
+    // A medium is integrated rather than surfaced, so it builds the blended
+    // pipeline and nothing else: its field defines `sampleVolume` and no
+    // `map`, which the surface entries would fail to link against.
+    let pipeline = if flags.volumetric {
+        build_raymarch_volumetric_pipeline(device, programs, hot_reload, asset_label)?
+    } else {
+        build_raymarch_pipeline(device, programs, hot_reload, asset_label)?
+    };
+    let shadow_pipeline = if flags.casts() {
+        Some(build_raymarch_shadow_pipeline(
+            device,
+            programs,
+            hot_reload,
+            asset_label,
+        )?)
+    } else {
+        None
+    };
+    Ok(VolumePipelines {
+        pipeline,
+        shadow_pipeline,
+    })
+}
+
 // Build the per-volume record (PSO + per-volume uniforms) from one declared
 // `SdfVolume` and the compiled field the build packed into its payload.
 pub(in crate::metal) fn build_raymarch_volume_record(
@@ -366,25 +413,18 @@ pub(in crate::metal) fn build_raymarch_volume_record(
     // A payload that does not decode is a cook/asset failure, not a compile.
     let programs =
         crate::shader::raymarch_source::decode(payload, asset_label).map_err(RenderError::Other)?;
-    // A medium is integrated rather than surfaced, so it builds the blended
-    // pipeline and nothing else: its field defines `sampleVolume` and no
-    // `map`, which the surface entries would fail to link against.
-    let pipeline = if volume.volumetric {
-        build_raymarch_volumetric_pipeline(device, &programs, hot_reload, asset_label)?
-    } else {
-        build_raymarch_pipeline(device, &programs, hot_reload, asset_label)?
-    };
-    let shadow_pipeline = if volume.cast_shadows {
-        Some(build_raymarch_shadow_pipeline(
-            device,
-            &programs,
-            hot_reload,
-            asset_label,
-        )?)
-    } else {
-        None
-    };
+    let VolumePipelines {
+        pipeline,
+        shadow_pipeline,
+    } = build_volume_pipelines(
+        device,
+        &programs,
+        VolumeFlags::of(volume),
+        hot_reload,
+        asset_label,
+    )?;
     Ok(RaymarchVolumeRecord {
+        label: asset_label.to_string(),
         pipeline,
         shadow_pipeline,
         uniforms: volume_uniforms_from(volume),

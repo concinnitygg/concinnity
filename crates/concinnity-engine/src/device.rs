@@ -56,6 +56,27 @@ pub fn warm_world_shader(
     }
 }
 
+/// Do the device-free part of building a raymarched volume's pipelines on the
+/// calling thread, so the render thread's later build of the same programs
+/// costs less. `hot_reload` is the flag the backend was built with. A build
+/// with no backend has nothing to do.
+pub fn warm_sdf_field(
+    programs: &concinnity_core::components::sdf_programs::SdfPrograms,
+    volumetric: bool,
+    cast_shadows: bool,
+    hot_reload: bool,
+) -> RenderResult<()> {
+    #[cfg(any(backend_metal, backend_dx, backend_vk))]
+    {
+        concinnity_device::warm_sdf_field(programs, volumetric, cast_shadows, hot_reload)
+    }
+    #[cfg(not(any(backend_metal, backend_dx, backend_vk)))]
+    {
+        let _ = (programs, volumetric, cast_shadows, hot_reload);
+        Ok(())
+    }
+}
+
 /// Build the backend the client draws through, or report why there is none.
 pub(crate) fn init_backend(init: BackendInit<'_>) -> RenderResult<Box<dyn RenderBackend>> {
     #[cfg(any(backend_metal, backend_dx, backend_vk))]

@@ -106,7 +106,8 @@ pub(crate) fn text(stage: ShaderStage, i: usize) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::shader_programs::surface::{SourceFile, Sources};
+    use concinnity_core::render::shader_programs::surface::Sources;
+    use concinnity_core::render::shader_source::SourceFile;
 
     // Compile `fragment` with `vertex` as a real Shader, cleanly. A starter
     // that fails here would fail its first save instead.

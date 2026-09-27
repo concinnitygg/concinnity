@@ -28,6 +28,7 @@ pub(crate) mod physics_budget;
 pub mod program;
 pub(crate) mod root_motion;
 pub(crate) mod scene_partition;
+pub mod sdf_field;
 pub mod shader;
 pub(crate) mod spawn_population;
 pub mod texture;

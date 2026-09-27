@@ -1,5 +1,6 @@
-//! Process-wide "world.jsonl changed" / "these world Shaders changed" /
-//! "Markdown story source changed" / "Animation source changed" signals (dev
+//! Process-wide "world.jsonl changed" / "these world Shaders changed" / "these
+//! SdfVolume fields changed" / "Markdown story source changed" / "Animation
+//! source changed" signals (dev
 //! sessions only). Set by the asset hot-reload watcher and the `reload-assets`
 //! debug tool call; consumed by the per-frame reload poll in
 //! `super::state::run_frame` and, for animations, by `super::animation`. They
@@ -18,38 +19,57 @@ use std::sync::{Mutex, PoisonError};
 // non-transform arg changes are detected and logged but not applied.
 static PENDING_WORLD: AtomicBool = AtomicBool::new(false);
 
-// The world Shaders whose files changed. The watcher marks the Shaders that
-// read a saved file and `reload-assets` marks every one; the shader reload
-// poll takes the set and recompiles just those. Kept apart from `PENDING_WORLD`
-// so a shader save does not also kick the Prop-diff and procedural-mesh passes.
-static PENDING_SHADERS: Mutex<PendingShaders> = Mutex::new(PendingShaders {
-    all: false,
-    ids: BTreeSet::new(),
-});
+// The world Shaders whose files changed, by asset id, and the SdfVolumes whose
+// field changed, by name. The watcher marks the subjects that read a saved file
+// and `reload-assets` marks every one; the shader reload poll takes each set
+// and recompiles just those. Kept apart from `PENDING_WORLD` so a shader save
+// does not also kick the Prop-diff and procedural-mesh passes.
+static PENDING_SHADERS: Mutex<Pending<AssetId>> = Mutex::new(Pending::none());
+static PENDING_SDF_VOLUMES: Mutex<Pending<String>> = Mutex::new(Pending::none());
 
-// Which world Shaders a reload was asked for.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct PendingShaders {
-    // Every Shader in the catalog, whatever `ids` holds.
+// Which subjects of one catalog a reload was asked for.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Pending<K> {
+    // Every subject in the catalog, whatever `ids` holds.
     pub all: bool,
-    pub ids: BTreeSet<AssetId>,
+    pub ids: BTreeSet<K>,
 }
 
-impl PendingShaders {
+pub(crate) type PendingShaders = Pending<AssetId>;
+pub(crate) type PendingSdfVolumes = Pending<String>;
+
+impl<K> Pending<K> {
+    pub(crate) const fn none() -> Self {
+        Self {
+            all: false,
+            ids: BTreeSet::new(),
+        }
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         !self.all && self.ids.is_empty()
     }
+}
 
-    // Whether the Shader `id` is asked for.
-    pub(crate) fn wants(&self, id: AssetId) -> bool {
-        self.all || self.ids.contains(&id)
+impl<K> Default for Pending<K> {
+    fn default() -> Self {
+        Self::none()
     }
 }
 
-fn pending_shaders() -> std::sync::MutexGuard<'static, PendingShaders> {
-    PENDING_SHADERS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+impl<K: Ord> Pending<K> {
+    // Whether the subject `id` is asked for.
+    pub(crate) fn wants<Q>(&self, id: &Q) -> bool
+    where
+        K: std::borrow::Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.all || self.ids.contains(id)
+    }
+}
+
+fn lock<K>(pending: &'static Mutex<Pending<K>>) -> std::sync::MutexGuard<'static, Pending<K>> {
+    pending.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 // Raise the "world.jsonl changed" flag. Called by the asset hot-reload watcher
@@ -92,18 +112,31 @@ static PENDING_STORIES: AtomicBool = AtomicBool::new(false);
 // Mark the Shaders `ids` for recompiling. Called by the asset hot-reload
 // watcher with the Shaders that read a saved file.
 pub(crate) fn mark_shaders_pending(ids: impl IntoIterator<Item = AssetId>) {
-    pending_shaders().ids.extend(ids);
+    lock(&PENDING_SHADERS).ids.extend(ids);
 }
 
-// Mark every Shader for recompiling. Called by the `reload-assets` handler.
+// Mark the SdfVolumes `names` for recompiling. Called by the asset hot-reload
+// watcher with the volumes whose field is the saved file.
+pub(crate) fn mark_sdf_volumes_pending(names: impl IntoIterator<Item = String>) {
+    lock(&PENDING_SDF_VOLUMES).ids.extend(names);
+}
+
+// Mark every world Shader and every SdfVolume field for recompiling. Called by
+// the `reload-assets` handler.
 pub(crate) fn mark_all_shaders_pending() {
-    pending_shaders().all = true;
+    lock(&PENDING_SHADERS).all = true;
+    lock(&PENDING_SDF_VOLUMES).all = true;
 }
 
 // Take the pending Shader set, leaving it empty. The reload poll calls this at
 // frame start and recompiles whatever it names.
 pub(crate) fn take_pending_shaders() -> PendingShaders {
-    std::mem::take(&mut *pending_shaders())
+    std::mem::take(&mut *lock(&PENDING_SHADERS))
+}
+
+// Take the pending SdfVolume set, leaving it empty, as `take_pending_shaders`.
+pub(crate) fn take_pending_sdf_volumes() -> PendingSdfVolumes {
+    std::mem::take(&mut *lock(&PENDING_SDF_VOLUMES))
 }
 
 // Raise the "Markdown story source changed" flag. Called by the asset
@@ -156,6 +189,7 @@ mod tests {
     #[test]
     fn pending_shaders_collect_marks_until_taken() {
         let _guard = crate::test_support::lock();
+        let prior_volumes = take_pending_sdf_volumes();
         let prior = take_pending_shaders();
         assert!(take_pending_shaders().is_empty());
         mark_shaders_pending([AssetId(3), AssetId(1)]);
@@ -168,13 +202,21 @@ mod tests {
         );
         assert!(take_pending_shaders().is_empty());
 
+        mark_sdf_volumes_pending(["cloud".to_string()]);
+        assert!(take_pending_shaders().is_empty(), "the sets are separate");
+        assert!(take_pending_sdf_volumes().wants("cloud"));
+
+        // `reload-assets` asks for every subject of both catalogs.
         mark_all_shaders_pending();
         let all = take_pending_shaders();
-        assert!(all.wants(AssetId(99)));
+        assert!(all.wants(&AssetId(99)));
+        assert!(take_pending_sdf_volumes().wants("blob"));
         assert!(take_pending_shaders().is_empty());
+        assert!(take_pending_sdf_volumes().is_empty());
 
         mark_shaders_pending(prior.ids);
-        if prior.all {
+        mark_sdf_volumes_pending(prior_volumes.ids);
+        if prior.all || prior_volumes.all {
             mark_all_shaders_pending();
         }
     }
@@ -185,8 +227,8 @@ mod tests {
             all: false,
             ids: [AssetId(2)].into(),
         };
-        assert!(some.wants(AssetId(2)));
-        assert!(!some.wants(AssetId(5)));
+        assert!(some.wants(&AssetId(2)));
+        assert!(!some.wants(&AssetId(5)));
         assert!(!some.is_empty());
         assert!(PendingShaders::default().is_empty());
     }

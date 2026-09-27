@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex};
 
 use super::decode::{poll_pending_assets, poll_pending_envmap, reload_assets};
 use super::passes::{reload_procedural_meshes, reload_stories, reload_volumetric_fog};
-use super::shader::{ShaderReload, ShaderReloadReport};
+use super::report::ReloadReport;
+use super::sdf::SdfReload;
+use super::shader::ShaderReload;
 use super::watcher::spawn_watcher;
 
 // A worker result still in flight: the receiving end of the channel a
@@ -120,6 +122,9 @@ pub(crate) struct AssetHotReloadState {
     // save touches (separate from the texture / mesh / LUT batch path so a
     // shader save does not also kick a 43-texture re-decode).
     pub shaders: ShaderReload,
+    // Every SdfVolume's field and the compiles in flight, marked by the same
+    // watcher branch as the Shaders.
+    pub sdf_fields: SdfReload,
     // Path to the world.jsonl the renderer was initialized from, when
     // known. Used both as a watch-dir source (its parent directory joins
     // the texture / model / HDRI / LUT dirs) and as the file the
@@ -204,6 +209,7 @@ impl std::fmt::Debug for AssetHotReloadState {
             .field("skinned_meshes", &self.skinned_meshes.entries.len())
             .field("procedural_meshes", &self.procedural_meshes.entries.len())
             .field("shaders", &self.shaders.catalog.len())
+            .field("sdf_fields", &self.sdf_fields.catalog.len())
             .field("world_jsonl_path", &self.world_jsonl_path)
             .field("pending", &self.pending.load(Ordering::Relaxed))
             .field("env_map_inflight", &env_inflight)
@@ -240,6 +246,7 @@ impl AssetHotReloadState {
             procedural_meshes,
             shaders,
             shader_overrides,
+            sdf_fields,
         } = sources;
         Self {
             map,
@@ -249,6 +256,7 @@ impl AssetHotReloadState {
             skinned_meshes,
             procedural_meshes,
             shaders: ShaderReload::new(shaders, shader_overrides),
+            sdf_fields: SdfReload::new(sdf_fields),
             world_jsonl_path,
             pending,
             env_map_inflight: Mutex::new(None),
@@ -292,8 +300,9 @@ pub(crate) struct FrameHotReloadEffects {
     // Freshly re-compiled story graphs from a `.md` save, to be sent as
     // `StoryReload` events so the running story system swaps them in.
     pub story_updates: Vec<Story>,
-    // What became of each Shader recompile that finished this frame.
-    pub shader_reports: Vec<ShaderReloadReport>,
+    // What became of each Shader and SdfVolume recompile that finished this
+    // frame, or could not start.
+    pub reload_reports: Vec<ReloadReport>,
 }
 
 // Run every asset / shader / world.jsonl reload pass for one frame and return
@@ -314,7 +323,7 @@ pub(crate) fn run_frame(
     let mut effects = FrameHotReloadEffects {
         skeleton_updates: Vec::new(),
         story_updates: Vec::new(),
-        shader_reports: Vec::new(),
+        reload_reports: Vec::new(),
     };
 
     // Asset-payload poll. Pick up any completed off-thread work first so a
@@ -332,18 +341,23 @@ pub(crate) fn run_frame(
         reload_assets(state);
     }
 
-    // World Shader reload: start a compile for every Shader a save touched,
-    // then swap in whichever compiles have finished. The compile runs on a
-    // worker and the backend builds before it swaps, so neither a slow compile
-    // nor a typo stalls or breaks the live frame.
+    // World Shader and SdfVolume field reload: start a compile for every
+    // subject a save touched, then swap in whichever compiles have finished.
+    // The compile runs on a worker and the backend builds before it swaps, so
+    // neither a slow compile nor a typo stalls or breaks the live frame.
     let pending_shaders = super::pending::take_pending_shaders();
-    let mut shader_reports = Vec::new();
+    let mut reload_reports = Vec::new();
     if !pending_shaders.is_empty() {
-        shader_reports = state.shaders.request(&pending_shaders);
+        reload_reports = state.shaders.request(&pending_shaders);
     }
-    shader_reports.extend(state.shaders.poll(backend));
-    super::shader::report(&shader_reports, notify);
-    effects.shader_reports = shader_reports;
+    reload_reports.extend(state.shaders.poll(backend));
+    let pending_volumes = super::pending::take_pending_sdf_volumes();
+    if !pending_volumes.is_empty() {
+        reload_reports.extend(state.sdf_fields.request(&pending_volumes));
+    }
+    reload_reports.extend(state.sdf_fields.poll(backend));
+    super::report::report(&reload_reports, notify);
+    effects.reload_reports = reload_reports;
 
     // Markdown story reload poll: re-expand the world's StoryImports and
     // queue every changed graph for the story system. Cheap when the flag is

@@ -10,7 +10,7 @@ use concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
 
 use super::shader_diagnostics::Tone;
 use super::shader_source::{self, SourceKey, same_file};
-use crate::debug::hot_reload::{ReportBoard, ShaderReloadFailure, ShaderReloadOutcome};
+use crate::debug::hot_reload::{ReloadFailure, ReloadOutcome, ReloadSubject, ReportBoard};
 use crate::editor::select_related;
 
 // One declared file of a Shader.
@@ -181,10 +181,11 @@ pub(crate) fn file_status(
     shader: &ShaderDecl,
     file: &DeclaredFile,
 ) -> FileStatus {
-    if board.is_live(&shader.name) == Some(false) {
+    let subject = ReloadSubject::shader(&shader.name);
+    if board.is_live(&subject) == Some(false) {
         return FileStatus::NotLive;
     }
-    let Some(latest) = board.latest(&shader.name) else {
+    let Some(latest) = board.latest(&subject) else {
         return FileStatus::Built;
     };
     let warnings_here = |warnings: &[concinnity_cook::compile::program::Diagnostic]| {
@@ -194,11 +195,11 @@ pub(crate) fn file_status(
             .count()
     };
     match &latest.outcome {
-        ShaderReloadOutcome::Swapped { warnings, .. } => FileStatus::Ok(warnings_here(warnings)),
-        ShaderReloadOutcome::AppliesOnLoad { warnings } => {
+        ReloadOutcome::Swapped { warnings, .. } => FileStatus::Ok(warnings_here(warnings)),
+        ReloadOutcome::AppliesOnLoad { warnings } => {
             FileStatus::AppliesOnLoad(warnings_here(warnings))
         }
-        ShaderReloadOutcome::Failed(ShaderReloadFailure::Compile(failed)) => {
+        ReloadOutcome::Failed(ReloadFailure::Compile(failed)) => {
             let in_sibling = |path: &str| {
                 shader
                     .files
@@ -211,7 +212,7 @@ pub(crate) fn file_status(
                 false => FileStatus::Failed,
             }
         }
-        ShaderReloadOutcome::Failed(_) => FileStatus::Failed,
+        ReloadOutcome::Failed(_) => FileStatus::Failed,
     }
 }
 
@@ -373,7 +374,7 @@ fn materials_row(i: usize, shader: &ShaderDecl) -> Row {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::debug::hot_reload::{ShaderReloadOutcome, ShaderReports};
+    use crate::debug::hot_reload::{ReloadOutcome, ReloadReports};
     use concinnity_cook::compile::program::{CompileFailure, Diagnostic, Severity};
     use serde_json::json;
 
@@ -501,8 +502,8 @@ mod tests {
         }
     }
 
-    fn failed(path: &str) -> ShaderReloadOutcome {
-        ShaderReloadOutcome::Failed(ShaderReloadFailure::Compile(CompileFailure {
+    fn failed(path: &str) -> ReloadOutcome {
+        ReloadOutcome::Failed(ReloadFailure::Compile(CompileFailure {
             owner: "Shader 'reeds'".to_string(),
             failures: Vec::new(),
             diagnostics: vec![error_in(path)],
@@ -519,11 +520,11 @@ mod tests {
             .collect()
     }
 
-    fn board(name: &str, outcome: ShaderReloadOutcome) -> ReportBoard {
-        let reports = ShaderReports::default();
-        reports.arm(["lit".to_string(), "reeds".to_string()]);
-        reports.publish(&[crate::debug::hot_reload::ShaderReloadReport {
-            name: name.to_string(),
+    fn board(name: &str, outcome: ReloadOutcome) -> ReportBoard {
+        let reports = ReloadReports::default();
+        reports.arm([ReloadSubject::shader("lit"), ReloadSubject::shader("reeds")]);
+        reports.publish(&[crate::debug::hot_reload::ReloadReport {
+            subject: ReloadSubject::shader(name),
             outcome,
         }]);
         reports.snapshot()
@@ -551,12 +552,12 @@ mod tests {
             severity: Severity::Warning,
             ..error_in("/cn-none/reeds.hlsl")
         };
-        let swapped = ShaderReloadOutcome::Swapped {
+        let swapped = ReloadOutcome::Swapped {
             frame_time: std::time::Duration::ZERO,
             warnings: vec![warning.clone()],
         };
         assert_eq!(statuses(&board("reeds", swapped)), [Ok(1), Ok(0)]);
-        let later = ShaderReloadOutcome::AppliesOnLoad {
+        let later = ReloadOutcome::AppliesOnLoad {
             warnings: vec![warning],
         };
         assert_eq!(
@@ -564,8 +565,8 @@ mod tests {
             [AppliesOnLoad(1), AppliesOnLoad(0)]
         );
         assert_eq!(statuses(&ReportBoard::default()), [Built, Built]);
-        let reports = ShaderReports::default();
-        reports.arm(["lit".to_string()]);
+        let reports = ReloadReports::default();
+        reports.arm([ReloadSubject::shader("lit")]);
         assert_eq!(statuses(&reports.snapshot()), [NotLive, NotLive]);
     }
 }

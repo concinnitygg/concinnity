@@ -1,12 +1,12 @@
-//! Why a Shader reload left the live pipeline as it was.
+//! Why a reload left the live pipelines as they were.
 
 use concinnity_cook::compile::program::{CompileFailure, ProgramError};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ShaderReloadFailure {
-    // The compiler rejected the files. Its diagnostics name a Shader's own
-    // files by `ShaderFile::resolved_path`, the path the recompile read.
+pub(crate) enum ReloadFailure {
+    // The compiler rejected the files. Its diagnostics name the subject's own
+    // files by the resolved path the recompile read.
     Compile(CompileFailure),
     // The backend refused to build a pipeline from the compiled programs.
     Rejected(String),
@@ -14,7 +14,7 @@ pub(crate) enum ShaderReloadFailure {
     Unstarted(String),
 }
 
-impl ShaderReloadFailure {
+impl ReloadFailure {
     // The first error's file name and line, for a message too short for the
     // whole report.
     pub(crate) fn first_error_at(&self) -> Option<String> {
@@ -30,7 +30,7 @@ impl ShaderReloadFailure {
     }
 }
 
-impl From<ProgramError> for ShaderReloadFailure {
+impl From<ProgramError> for ReloadFailure {
     fn from(e: ProgramError) -> Self {
         match e {
             ProgramError::Compile(failed) => Self::Compile(failed),
@@ -39,7 +39,7 @@ impl From<ProgramError> for ShaderReloadFailure {
     }
 }
 
-impl fmt::Display for ShaderReloadFailure {
+impl fmt::Display for ReloadFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Compile(failed) => failed.fmt(f),

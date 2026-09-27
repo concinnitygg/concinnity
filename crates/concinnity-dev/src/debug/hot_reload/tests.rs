@@ -2147,6 +2147,7 @@ fn reload_assets_skips_the_envmap_spawn_while_a_convolution_is_in_flight() {
 fn clear_pending_flags() {
     super::pending::take_pending_world();
     super::pending::take_pending_shaders();
+    super::pending::take_pending_sdf_volumes();
     super::pending::take_pending_stories();
 }
 
@@ -2203,9 +2204,10 @@ fn run_frame_consumes_the_pending_shader_set() {
     let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
     super::pending::mark_all_shaders_pending();
     let _ = drive_run_frame(&mut state);
-    // run_frame took the set; the empty Shader catalog made the pass a no-op,
-    // but the consumption is the observable that it ran.
+    // run_frame took both sets; the empty catalogs made the passes a no-op,
+    // but the consumption is the observable that they ran.
     assert!(super::pending::take_pending_shaders().is_empty());
+    assert!(super::pending::take_pending_sdf_volumes().is_empty());
 }
 
 #[test]
@@ -2371,7 +2373,7 @@ fn apply_effects_splices_the_matching_skeleton_pose_only() {
                 new_skeleton,
             }],
             story_updates: Vec::new(),
-            shader_reports: Vec::new(),
+            reload_reports: Vec::new(),
         },
     );
 
@@ -2404,7 +2406,7 @@ fn apply_effects_sends_a_story_reload_event() {
         FrameHotReloadEffects {
             skeleton_updates: Vec::new(),
             story_updates: vec![story],
-            shader_reports: Vec::new(),
+            reload_reports: Vec::new(),
         },
     );
 

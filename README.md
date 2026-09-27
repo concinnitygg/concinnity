@@ -66,14 +66,6 @@ concinnity = "0.19"
 
 ## Quick Start
 
-#### CLI Usage
-
-```bash
-concinnity editor
-```
-
-This launches an editor UI where you can create your first world.
-
 #### Library Usage
 
 ```rust

@@ -1,5 +1,6 @@
 use concinnity_core::components::{Shader, ShaderPrograms, ShaderStage};
-use concinnity_core::render::shader_programs::surface::{SourceFile, Sources};
+use concinnity_core::render::shader_programs::surface::Sources;
+use concinnity_core::render::shader_source::SourceFile;
 
 use crate::asset::BuildCtx;
 use crate::compile::shader::{compile_world_shader, read_shader_source};

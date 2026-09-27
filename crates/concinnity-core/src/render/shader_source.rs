@@ -193,6 +193,23 @@ impl<'a> Splice<'a> {
             path: Some(path),
         }
     }
+
+    /// An authored file, fenced under its own path.
+    pub const fn of(marker: &'a str, file: SourceFile<'a>) -> Self {
+        Self::from_file(marker, file.text, file.path)
+    }
+}
+
+/// An authored file a world splices into an engine template: the path it was
+/// read from and its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceFile<'a> {
+    /// The path a compiler's diagnostics name the file by. It rides the
+    /// assembled text in a `#line` directive, so it is part of what an
+    /// artifact's source digest covers.
+    pub path: &'a str,
+    /// The file's text.
+    pub text: &'a str,
 }
 
 /// The same assembly with caller-supplied text spliced in as well, for a shader
