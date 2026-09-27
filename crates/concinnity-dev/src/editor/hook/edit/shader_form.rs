@@ -126,6 +126,10 @@ impl FormExtras for ShaderExtras {
         self.form.press(id);
     }
 
+    fn switch_type(&self) -> Option<&'static str> {
+        self.form.switch_type()
+    }
+
     fn blocked(&self, cx: &ExtrasCx) -> Option<String> {
         let shaders = shader_names(cx.entries).len();
         self.form.blocked(cx.name, cx.name_taken(cx.name), shaders)
@@ -155,10 +159,7 @@ impl FormExtras for ShaderExtras {
         let Some(original) = self.original.clone().filter(|_| self.removes_vertex()) else {
             return false;
         };
-        let open = SourceKey {
-            shader: original,
-            stage: ShaderStage::Vertex,
-        };
+        let open = SourceKey::shader(&original, ShaderStage::Vertex);
         let Some(src) = hook.shaders.source.as_ref().filter(|s| s.key == open) else {
             return false;
         };
@@ -196,10 +197,7 @@ impl FormExtras for ShaderExtras {
                 .unwrap_or_default()
                 .to_string()
         };
-        let open = |stage| SourceKey {
-            shader: name.clone(),
-            stage,
-        };
+        let open = |stage| SourceKey::shader(&name, stage);
         if self.form.is_new() {
             let fragment = declared(ShaderStage::Fragment);
             hook.notifier
@@ -208,9 +206,10 @@ impl FormExtras for ShaderExtras {
             return;
         }
         if let Some(src) = hook.shaders.source.as_mut()
-            && c.before.as_deref() == Some(src.key.shader.as_str())
+            && let SourceKey::Shader { name: open, .. } = &mut src.key
+            && c.before.as_deref() == Some(open.as_str())
         {
-            src.key.shader = name.clone();
+            *open = name.clone();
         }
         let mut message = match c.before.as_deref().filter(|b| *b != name) {
             Some(before) => format!("Renamed Shader '{before}' to '{name}'"),

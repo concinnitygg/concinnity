@@ -22,10 +22,7 @@ fn session(dir: &Path) -> EditorHook {
         "$id": "lit",
         "fragment": lit.to_string_lossy(),
     }})]);
-    h.open_shader_file(SourceKey {
-        shader: "lit".to_string(),
-        stage: ShaderStage::Fragment,
-    });
+    h.open_shader_file(SourceKey::shader("lit", ShaderStage::Fragment));
     h
 }
 

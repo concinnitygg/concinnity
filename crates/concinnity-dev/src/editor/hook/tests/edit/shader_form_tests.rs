@@ -5,78 +5,19 @@
 //! default. Each commit is one undo step.
 
 use concinnity_core::components::ShaderStage;
-use concinnity_core::ecs::World;
 use concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
 use std::path::Path;
 
-use super::shader_fixtures::{args, click, in_project, key, material, shader, shader_names, write};
-use crate::editor::hook::EditorHook;
+use super::shader_fixtures::{
+    args, blocked, click, confirm, detail, form_world, in_project, key, material, plain_material,
+    press, rows, shader, shader_names, toasts, type_name, write,
+};
 use crate::editor::hook::FormTarget;
-use crate::editor::hook::tests::fixtures::{hook, press_modal, set_field, world_with_fields};
-use crate::editor::modal;
-use crate::editor::panels::form_extras::{ExtraControl, ExtraRow};
-use crate::editor::panels::form_panel::{self, FormAction};
+use crate::editor::hook::tests::fixtures::{hook, press_modal};
+use crate::editor::panels::form_panel;
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::panels::shader_list::{self, RowKind};
 use crate::editor::panels::shader_templates;
-
-// A world with the form's fields and the dialog's, so a leave question can be
-// answered while the form is open.
-fn form_world() -> World {
-    let mut world = world_with_fields();
-    for id in modal::all_field_ids() {
-        world.push_identified(id, concinnity_core::components::TextInput::default());
-    }
-    world
-}
-
-fn plain_material(name: &str) -> serde_json::Value {
-    serde_json::json!({"type": "Material", "args": {"$id": name}})
-}
-
-fn type_name(world: &mut World, name: &str) {
-    set_field(world, form_panel::NAME_INPUT, name);
-}
-
-fn rows(h: &EditorHook, world: &World) -> Vec<ExtraRow> {
-    h.form_extras_data(world).0
-}
-
-fn blocked(h: &EditorHook, world: &World) -> Option<String> {
-    h.form_extras_data(world).1
-}
-
-// Press the row captioned `caption` that is a checkbox (or, with `choice`, a
-// choice).
-fn press(h: &mut EditorHook, world: &mut World, caption: &str, choice: bool) {
-    let row = rows(h, world)
-        .into_iter()
-        .find(|r| {
-            r.caption == caption && matches!(r.control, ExtraControl::Choice { .. }) == choice
-        })
-        .unwrap_or_else(|| panic!("no '{caption}' row"));
-    h.apply_form(FormAction::PressExtra(row.id), world);
-}
-
-fn detail(h: &EditorHook, world: &World, caption: &str) -> Option<String> {
-    rows(h, world)
-        .into_iter()
-        .find(|r| r.caption == caption)
-        .and_then(|r| r.detail)
-}
-
-fn confirm(h: &mut EditorHook, world: &mut World) {
-    h.apply_form(FormAction::Confirm, world);
-}
-
-fn toasts(h: &EditorHook) -> Vec<String> {
-    h.notifier
-        .stack()
-        .cards
-        .into_iter()
-        .map(|c| c.message)
-        .collect()
-}
 
 // "+ New Shader" opens the form empty; a blank name blocks it, and Create
 // writes each file from its starter, assigns the Materials picked, and opens
@@ -228,7 +169,10 @@ fn a_rename_through_the_form_rewrites_every_reference() {
         args(&h, "ocean")["fragment"],
         water.to_string_lossy().as_ref()
     );
-    assert_eq!(h.shaders.source.as_ref().unwrap().key.shader, "ocean");
+    assert_eq!(
+        h.shaders.source.as_ref().unwrap().key,
+        key("ocean", ShaderStage::Fragment)
+    );
     assert!(
         toasts(&h)
             .iter()
@@ -238,7 +182,10 @@ fn a_rename_through_the_form_rewrites_every_reference() {
     h.undo(&mut world);
     assert_eq!(shader_names(&h), ["lit", "water"]);
     assert_eq!(args(&h, "sea")["shader"], "water");
-    assert_eq!(h.shaders.source.as_ref().unwrap().key.shader, "water");
+    assert_eq!(
+        h.shaders.source.as_ref().unwrap().key,
+        key("water", ShaderStage::Fragment)
+    );
     assert!(!h.can_undo(), "the rename was one step");
 }
 

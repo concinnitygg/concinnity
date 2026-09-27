@@ -114,6 +114,7 @@ impl EditorHook {
                 self.answer_leave_shader_source(save, then, world)
             }
             modal::Action::DeleteShader(name) => self.delete_shader(&name, checked),
+            modal::Action::DeleteSdfField(path) => self.delete_sdf_field(&path, checked),
         }
     }
 

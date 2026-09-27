@@ -2,7 +2,9 @@
 //! main-pass template defines ahead of the hooks, the fields of the uniform
 //! blocks it binds, and the fields of the two structs the hooks receive. One
 //! list, which authoring tools show and highlight from and which the `Shader`
-//! rustdoc and the template are both tested against.
+//! rustdoc and the template are both tested against. An `SdfVolume`'s
+//! distance field has its own list, [`sdf::ENTRIES`], held to the `SdfVolume`
+//! rustdoc and the raymarch template the same way.
 
 use alloc::string::String;
 
@@ -47,6 +49,12 @@ pub enum Kind {
     RecordField,
     /// A field of the varying block, read as `v.field`.
     Varying,
+    /// A function the file defines, which the engine calls.
+    Hook,
+    /// A struct the file names.
+    Type,
+    /// A field of the named struct a hook fills in and returns.
+    ReturnField(&'static str),
 }
 
 /// The struct `shade` receives its material record as.
@@ -55,21 +63,24 @@ pub const RECORD_STRUCT: &str = "GpuObjectData";
 pub const VARYING_STRUCT: &str = "VertexOut";
 
 impl Kind {
-    /// The HLSL struct declaring a field kind; `None` for a helper.
+    /// The HLSL struct declaring a field kind; `None` for a function or a
+    /// type.
     pub const fn declared_in(self) -> Option<&'static str> {
         match self {
-            Kind::Helper => None,
+            Kind::Helper | Kind::Hook | Kind::Type => None,
             Kind::BlockField(b) => Some(b.declared_as()),
             Kind::RecordField => Some(RECORD_STRUCT),
             Kind::Varying => Some(VARYING_STRUCT),
+            Kind::ReturnField(s) => Some(s),
         }
     }
 
     /// What a file writes ahead of a field's name to reach it: the block's
-    /// name, or the parameter the `shade` hook names the struct by.
+    /// name, or the parameter the `shade` hook names the struct by. A returned
+    /// struct is held under whatever name the file gives it, so it has none.
     pub const fn owner(self) -> Option<&'static str> {
         match self {
-            Kind::Helper => None,
+            Kind::Helper | Kind::Hook | Kind::Type | Kind::ReturnField(_) => None,
             Kind::BlockField(b) => Some(b.name()),
             Kind::RecordField => Some("od"),
             Kind::Varying => Some("v"),
@@ -91,12 +102,15 @@ pub struct Entry {
 }
 
 impl Entry {
-    /// The text a file writes to use the entry: `VIEW.elapsed`, or a
-    /// helper's call with its parameters named as the signature names them.
+    /// The text a file writes to use the entry: `VIEW.elapsed`, a helper's
+    /// call with its parameters named as the signature names them, a hook's
+    /// whole prototype, or the bare name of a type or a returned field.
     pub fn usage(&self) -> String {
-        match self.kind.owner() {
-            Some(owner) => alloc::format!("{owner}.{}", self.name),
-            None => call_skeleton(self.name, self.signature),
+        match (self.kind, self.kind.owner()) {
+            (_, Some(owner)) => alloc::format!("{owner}.{}", self.name),
+            (Kind::Helper, None) => call_skeleton(self.name, self.signature),
+            (Kind::Hook, None) => String::from(self.signature),
+            (_, None) => String::from(self.name),
         }
     }
 }
@@ -303,5 +317,9 @@ pub const ENTRIES: &[Entry] = &[
     field(V, "color", "float3 color", "Vertex color."),
 ];
 
+pub mod sdf;
+
+#[cfg(test)]
+mod scan;
 #[cfg(test)]
 mod tests;

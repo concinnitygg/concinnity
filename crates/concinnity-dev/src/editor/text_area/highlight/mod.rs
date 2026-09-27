@@ -9,7 +9,7 @@ mod markdown;
 pub(crate) mod states;
 pub(crate) mod window;
 
-pub(crate) use hlsl::HLSL;
+pub(crate) use hlsl::{HLSL, SDF_HLSL};
 pub(crate) use markdown::MARKDOWN;
 
 use crate::editor::theme;

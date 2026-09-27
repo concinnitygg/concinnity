@@ -1,13 +1,14 @@
 //! The data half of the Shaders panel: every `Shader` the world declares, in
-//! declaration order, with the Materials that name it and its files, and the
-//! rows the panel lists them as, with the actions each row's menu offers. A
-//! file's status is its Shader's latest reload outcome as it bears on that
-//! file.
+//! declaration order, with the Materials that name it and its files, then the
+//! SdfVolume distance fields (`sdf_field_list`), and the rows the panel lists
+//! them as, with the actions each row's menu offers. A file's status is its
+//! Shader's latest reload outcome as it bears on that file.
 
 use concinnity_cook::authoring::world::entry_handles;
 use concinnity_core::components::ShaderStage;
 use concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
 
+use super::sdf_field_list::{FieldDecl, field_rows};
 use super::shader_diagnostics::Tone;
 use super::shader_source::{self, SourceKey, same_file};
 use crate::debug::hot_reload::{ReloadFailure, ReloadOutcome, ReloadSubject, ReportBoard};
@@ -81,35 +82,6 @@ pub(crate) fn declared(
             })
         })
         .collect()
-}
-
-// How many rows `rows` lists for `entries`, without resolving any Material:
-// the panel sizes itself from this several times a frame.
-pub(crate) fn row_count(entries: &[serde_json::Value]) -> usize {
-    let files = |e: &serde_json::Value| {
-        [ShaderStage::Fragment, ShaderStage::Vertex]
-            .into_iter()
-            .filter(|&stage| {
-                e.get("args")
-                    .and_then(|a| a.get(shader_source::stage_name(stage)))
-                    .is_some_and(|v| v.is_string())
-            })
-            .count()
-    };
-    // The header, the Materials, each file, and "+ Add vertex file" without
-    // one.
-    let per_shader: usize = entries
-        .iter()
-        .filter(|e| entry_type(e) == Some("Shader"))
-        .map(|e| {
-            let has_vertex = e
-                .get("args")
-                .and_then(|a| a.get(shader_source::stage_name(ShaderStage::Vertex)))
-                .is_some_and(|v| v.is_string());
-            2 + files(e) + usize::from(!has_vertex)
-        })
-        .sum();
-    per_shader + 1
 }
 
 // How many Shaders the entries declare.
@@ -231,6 +203,13 @@ pub(crate) enum RowKind {
     File(SourceKey),
     // "+ Add vertex file" under Shader `i`, which declares none.
     AddVertex(usize),
+    // A section's title.
+    Section,
+    // Distance field `i`'s file; a click opens it, and its menu opens it,
+    // selects its volumes, or deletes them.
+    Field(usize),
+    // A volume reading the field above, by name; a click opens its form.
+    FieldVolume(String),
     // "+ New Shader".
     New,
 }
@@ -243,6 +222,8 @@ pub(crate) enum MenuItem {
     Delete,
     // Stop declaring the vertex file; the file stays on disk.
     RemoveVertex,
+    Open,
+    SelectVolumes,
 }
 
 impl MenuItem {
@@ -252,6 +233,8 @@ impl MenuItem {
             MenuItem::Duplicate => "Duplicate",
             MenuItem::Delete => "Delete",
             MenuItem::RemoveVertex => "Remove",
+            MenuItem::Open => "Open",
+            MenuItem::SelectVolumes => "Select volumes",
         }
     }
 
@@ -274,7 +257,7 @@ pub(crate) struct Row {
 impl Row {
     // Whether a click on the row's body does anything.
     pub(crate) fn clickable(&self) -> bool {
-        !matches!(self.kind, RowKind::Note)
+        !matches!(self.kind, RowKind::Note | RowKind::Section)
     }
 
     // What the row's menu offers; a row without a menu shows no dots. The
@@ -282,18 +265,23 @@ impl Row {
     pub(crate) fn menu(&self) -> &'static [MenuItem] {
         match &self.kind {
             RowKind::Header(_) => &[MenuItem::Edit, MenuItem::Duplicate, MenuItem::Delete],
-            RowKind::File(key) if key.stage == ShaderStage::Vertex => &[MenuItem::RemoveVertex],
+            RowKind::File(SourceKey::Shader {
+                stage: ShaderStage::Vertex,
+                ..
+            }) => &[MenuItem::RemoveVertex],
+            RowKind::Field(_) => &[MenuItem::Open, MenuItem::SelectVolumes, MenuItem::Delete],
             _ => &[],
         }
     }
 }
 
 // The panel's rows: per Shader its name, the Materials naming it, a row per
-// file and "+ Add vertex file" when it declares none, then "+ New Shader" (a
-// note at the Shader limit). `open` is the
-// file the source panel shows.
+// file and "+ Add vertex file" when it declares none, then the distance
+// fields, then "+ New Shader", which at the Shader limit creates only SDF
+// fields. `open` is the file the source panel shows.
 pub(crate) fn rows(
     shaders: &[ShaderDecl],
+    fields: &[FieldDecl],
     board: &ReportBoard,
     open: Option<&SourceKey>,
 ) -> Vec<Row> {
@@ -308,10 +296,7 @@ pub(crate) fn rows(
         });
         out.push(materials_row(i, shader));
         for file in &shader.files {
-            let key = SourceKey {
-                shader: shader.name.clone(),
-                stage: file.stage,
-            };
+            let key = SourceKey::shader(&shader.name, file.stage);
             let status = file_status(board, shader, file);
             out.push(Row {
                 selected: open == Some(&key),
@@ -335,14 +320,12 @@ pub(crate) fn rows(
             });
         }
     }
-    let (kind, text) = match can_add_shader(shaders.len()) {
-        true => (RowKind::New, "+ New Shader".to_string()),
-        false => (RowKind::Note, format!("+ New Shader: {}", limit_reason())),
-    };
+    out.extend(field_rows(fields, board, open));
     out.push(Row {
-        kind,
-        text,
-        badge: None,
+        kind: RowKind::New,
+        text: "+ New Shader".to_string(),
+        badge: (!can_add_shader(shaders.len()))
+            .then(|| ("SDF fields only".to_string(), Tone::Info)),
         indent: false,
         selected: false,
     });
@@ -423,11 +406,8 @@ mod tests {
     #[test]
     fn rows_list_each_shader_then_the_new_row() {
         let shaders = declared(&entries(), str::to_string);
-        let open = SourceKey {
-            shader: "reeds".to_string(),
-            stage: ShaderStage::Vertex,
-        };
-        let rows = rows(&shaders, &ReportBoard::default(), Some(&open));
+        let open = SourceKey::shader("reeds", ShaderStage::Vertex);
+        let rows = rows(&shaders, &[], &ReportBoard::default(), Some(&open));
         let texts: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         assert_eq!(
             texts,
@@ -452,7 +432,7 @@ mod tests {
         assert!(rows[7].selected && !rows[6].selected);
         assert_eq!(rows[8].kind, RowKind::New);
         assert!(rows[8].clickable());
-        assert_eq!(row_count(&entries()), rows.len());
+        assert_eq!(rows[8].badge, None);
     }
 
     // A header's menu edits, duplicates or deletes its Shader; only a vertex
@@ -460,7 +440,7 @@ mod tests {
     #[test]
     fn menus_edit_duplicate_delete_or_remove_the_vertex_file() {
         let shaders = declared(&entries(), str::to_string);
-        let rows = rows(&shaders, &ReportBoard::default(), None);
+        let rows = rows(&shaders, &[], &ReportBoard::default(), None);
         let menu = |i: usize| rows[i].menu().to_vec();
         assert_eq!(rows[4].kind, RowKind::Header(1));
         assert_eq!(
@@ -475,20 +455,24 @@ mod tests {
         assert!(!MenuItem::Duplicate.danger());
     }
 
-    // At the Shader limit "+ New Shader" stays listed, unclickable, with why.
+    // At the Shader limit "+ New Shader" still creates SDF fields, and says
+    // that is all it creates.
     #[test]
-    fn the_new_row_is_unavailable_at_the_shader_limit() {
+    fn the_new_row_creates_only_fields_at_the_shader_limit() {
         let full: Vec<serde_json::Value> = (0..MAX_SHADER_BUCKETS)
             .map(|i| json!({"type": "Shader", "args": {"$id": format!("s{i}"), "fragment": "/cn-none/s.hlsl"}}))
             .collect();
         assert!(!can_add_shader(shader_count(&full)));
         assert!(can_add_shader(shader_count(&full[1..])));
         let shaders = declared(&full, str::to_string);
-        let rows = rows(&shaders, &ReportBoard::default(), None);
+        let rows = rows(&shaders, &[], &ReportBoard::default(), None);
         let last = rows.last().unwrap();
-        assert_eq!(last.kind, RowKind::Note);
-        assert!(!last.clickable());
-        assert!(last.text.contains(&limit_reason()), "{}", last.text);
+        assert_eq!(last.kind, RowKind::New);
+        assert!(last.clickable());
+        assert_eq!(
+            last.badge,
+            Some(("SDF fields only".to_string(), Tone::Info))
+        );
     }
 
     fn error_in(path: &str) -> Diagnostic {

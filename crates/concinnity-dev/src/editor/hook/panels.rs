@@ -25,7 +25,6 @@ use crate::editor::panels::lighting;
 use crate::editor::panels::lighting_panel;
 use crate::editor::panels::preview::{self, PreviewAction};
 use crate::editor::panels::registry::{self, Panel, PanelKey};
-use crate::editor::panels::shader_list;
 use crate::editor::panels::shader_list_panel;
 use crate::editor::panels::shader_source_panel;
 use crate::editor::panels::story_panel;
@@ -913,8 +912,10 @@ impl Panel for StoryPanel {
 pub(crate) struct ShadersPanel;
 
 impl ShadersPanel {
+    // The rows as last built; the frame drive rebuilds them first while the
+    // panel shows.
     fn row_count(&self, hook: &EditorHook) -> usize {
-        shader_list::row_count(&hook.entries)
+        hook.shaders.rows.len()
     }
 }
 

@@ -1,17 +1,33 @@
 //! HLSL: keywords, types, numbers, strings, comments (a block comment may run
-//! across lines), preprocessor directives, and the names the engine provides a
-//! Shader, from the engine's own vocabulary table.
+//! across lines), preprocessor directives, and the names the engine provides
+//! the file, from one of the engine's vocabulary tables: a Shader's, or an
+//! SdfVolume distance field's.
 
 use concinnity_core::render::shader_programs::vocabulary::{
-    Block, ENTRIES, Kind, RECORD_STRUCT, VARYING_STRUCT,
+    self, Entry, Kind, RECORD_STRUCT, VARYING_STRUCT,
 };
 
 use super::{Highlighter, LineState, Scan, Span, Token, push};
 
-pub(crate) static HLSL: Hlsl = Hlsl;
+// A Shader file.
+pub(crate) static HLSL: Hlsl = Hlsl {
+    entries: vocabulary::ENTRIES,
+    structs: &[RECORD_STRUCT, VARYING_STRUCT],
+};
 
+// An SdfVolume's distance field.
+pub(crate) static SDF_HLSL: Hlsl = Hlsl {
+    entries: vocabulary::sdf::ENTRIES,
+    structs: &[],
+};
+
+// HLSL setting apart the names `entries` lists, and the `structs` the file
+// receives by name beyond them.
 #[derive(Debug)]
-pub(crate) struct Hlsl;
+pub(crate) struct Hlsl {
+    entries: &'static [Entry],
+    structs: &'static [&'static str],
+}
 
 const IN_BLOCK_COMMENT: LineState = LineState(1);
 
@@ -108,28 +124,31 @@ fn is_type(word: &str) -> bool {
     })
 }
 
-// A name the engine provides on its own: a helper, a block, or one of the
-// structs the hooks take.
-fn is_engine_name(word: &str) -> bool {
-    word == RECORD_STRUCT
-        || word == VARYING_STRUCT
-        || Block::ALL.iter().any(|b| b.name() == word)
-        || ENTRIES
-            .iter()
-            .any(|e| e.kind == Kind::Helper && e.name == word)
-}
+impl Hlsl {
+    // A name the engine provides on its own: a function, a type, a block, or
+    // one of the structs the hooks take.
+    fn is_engine_name(&self, word: &str) -> bool {
+        self.structs.contains(&word)
+            || self.entries.iter().any(|e| match e.kind {
+                Kind::Helper | Kind::Hook | Kind::Type => e.name == word,
+                Kind::BlockField(b) => b.name() == word,
+                Kind::RecordField | Kind::Varying | Kind::ReturnField(_) => false,
+            })
+    }
 
-// Whether `field`, read through `owner.`, is one the engine provides. A block
-// field names its block; the hooks' structs can be held under any name.
-fn is_engine_field(owner: Option<&str>, field: &str) -> bool {
-    ENTRIES.iter().any(|e| {
-        e.name == field
-            && match e.kind {
-                Kind::Helper => false,
-                Kind::BlockField(b) => owner == Some(b.name()),
-                Kind::RecordField | Kind::Varying => true,
-            }
-    })
+    // Whether `field`, read through `owner.`, is one the engine provides. A
+    // block field names its block; the hooks' structs can be held under any
+    // name.
+    fn is_engine_field(&self, owner: Option<&str>, field: &str) -> bool {
+        self.entries.iter().any(|e| {
+            e.name == field
+                && match e.kind {
+                    Kind::Helper | Kind::Hook | Kind::Type => false,
+                    Kind::BlockField(b) => owner == Some(b.name()),
+                    Kind::RecordField | Kind::Varying | Kind::ReturnField(_) => true,
+                }
+        })
+    }
 }
 
 fn is_ident_start(c: char) -> bool {
@@ -187,12 +206,13 @@ impl Highlighter for Hlsl {
                 }
                 let word: String = s.chars[start..s.at].iter().collect();
                 let token = if after_dot {
-                    is_engine_field(owner.as_deref(), &word).then_some(Token::Engine)
+                    self.is_engine_field(owner.as_deref(), &word)
+                        .then_some(Token::Engine)
                 } else if KEYWORDS.contains(&word.as_str()) {
                     Some(Token::Keyword)
                 } else if is_type(&word) {
                     Some(Token::Type)
-                } else if is_engine_name(&word) {
+                } else if self.is_engine_name(&word) {
                     Some(Token::Engine)
                 } else {
                     None

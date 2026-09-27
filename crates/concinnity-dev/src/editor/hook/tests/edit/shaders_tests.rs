@@ -1,13 +1,12 @@
 //! The Shaders and Shader source panels' actions (`hook/edit/shaders.rs`,
 //! `hook/edit/shader_source.rs`): opening a file, the question leaving unsaved
 //! edits asks and each of its answers, the close button asking the same, a
-//! save writing the file and waiting on its recompile, and the Shader limit.
+//! save writing the file and waiting on its recompile.
 //! The panel's edits are `shader_edits_tests.rs`, its form
 //! `shader_form_tests.rs`.
 
 use concinnity_core::components::ShaderStage;
 use concinnity_core::ecs::World;
-use concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
 use std::cell::Cell;
 use std::path::Path;
 
@@ -28,10 +27,7 @@ fn shader(name: &str, fragment: &Path) -> serde_json::Value {
 }
 
 fn key(shader: &str) -> SourceKey {
-    SourceKey {
-        shader: shader.to_string(),
-        stage: ShaderStage::Fragment,
-    }
+    SourceKey::shader(shader, ShaderStage::Fragment)
 }
 
 // A hook over two Shaders whose fragment files hold "lit" and "water".
@@ -44,7 +40,10 @@ fn session(dir: &Path) -> EditorHook {
 }
 
 fn open_shader(h: &EditorHook) -> Option<String> {
-    h.shaders.source.as_ref().map(|s| s.key.shader.clone())
+    h.shaders.source.as_ref().and_then(|s| match &s.key {
+        SourceKey::Shader { name, .. } => Some(name.clone()),
+        SourceKey::Field { .. } => None,
+    })
 }
 
 fn modal_actions(h: &EditorHook) -> Vec<modal::Action> {
@@ -235,18 +234,4 @@ fn the_list_resolves_each_file_once() {
         .unwrap();
     assert_eq!(badge.0, "failed");
     assert_eq!(RESOLVED.with(Cell::get), 2);
-}
-
-// A world at the Shader limit lists "+ New Shader" unclickable; the form's
-// own refusal at the limit is `shader_form_tests.rs`.
-#[test]
-fn new_shader_is_unavailable_at_the_limit() {
-    let entries: Vec<serde_json::Value> = (0..MAX_SHADER_BUCKETS)
-        .map(|i| shader(&format!("s{i}"), Path::new("/cn-none/s.hlsl")))
-        .collect();
-    let mut h = hook(entries);
-    let last = h.shader_rows().last().cloned().unwrap();
-    assert_eq!(last.kind, RowKind::Note);
-    assert!(!last.clickable());
-    assert!(!h.form_open());
 }

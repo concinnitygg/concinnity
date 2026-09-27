@@ -80,6 +80,9 @@ pub(crate) enum Action {
     // Delete the Shader of this name, and its files when the dialog's box is
     // checked.
     DeleteShader(String),
+    // Delete the volumes reading the distance field at this path, and the
+    // file when the dialog's box is checked.
+    DeleteSdfField(String),
 }
 
 // An open dialog: its message, its buttons left to right, whether it carries

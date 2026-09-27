@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use concinnity_core::components::ColorRun;
-use concinnity_core::render::shader_programs::vocabulary::{ENTRIES, Kind};
+use concinnity_core::render::shader_programs::vocabulary::{ENTRIES, Kind, sdf};
 
 use super::states::LineStates;
 use super::window::window_runs;
@@ -109,6 +109,31 @@ fn hlsl_sets_apart_every_name_the_engine_provides() {
     let line = "float4 shade(VertexOut v, GpuObjectData od)";
     assert_eq!(token_of(&HLSL, line, "VertexOut"), Some(Token::Engine));
     assert_eq!(token_of(&HLSL, line, "GpuObjectData"), Some(Token::Engine));
+}
+
+// A distance field's own names: the functions it defines and calls, the
+// structs it names, and a returned struct's fields under any name. A Shader's
+// names are plain there, and the field's are plain in a Shader.
+#[test]
+fn the_sdf_highlighter_sets_apart_the_fields_own_names() {
+    for e in sdf::ENTRIES {
+        let line = match e.kind {
+            Kind::ReturnField(_) => format!("s.{} = 1;", e.name),
+            _ => format!("x = {}(a);", e.name),
+        };
+        assert_eq!(
+            token_of(&SDF_HLSL, &line, e.name),
+            Some(Token::Engine),
+            "{line}"
+        );
+    }
+    assert_eq!(
+        token_of(&SDF_HLSL, "x = shade_surface(v, od);", "shade_surface"),
+        None
+    );
+    assert_eq!(token_of(&SDF_HLSL, "x = VIEW.elapsed;", "VIEW"), None);
+    assert_eq!(token_of(&HLSL, "x = sdSphere(p, 1.0);", "sdSphere"), None);
+    assert_eq!(token_of(&SDF_HLSL, "float albedo = 1;", "albedo"), None);
 }
 
 #[test]

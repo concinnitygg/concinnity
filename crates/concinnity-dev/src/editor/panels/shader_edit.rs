@@ -1,6 +1,7 @@
 //! The data half of the Shaders panel's edits: whether a typed name can name
-//! a Shader, the file name a Shader's name becomes, what a delete says it will
-//! do, and which of a Shader's files no other Shader reads.
+//! a Shader or a volume, the file name a name becomes, what a delete says it
+//! will do, and which of a Shader's files no other Shader reads. Deleting a
+//! distance field is `sdf_field_edit`.
 
 use concinnity_cook::authoring::world::is_label_of;
 
@@ -17,27 +18,33 @@ pub(crate) enum ShaderEdit {
     RemoveVertex(String),
     // Remove the Shader, and with `files` the files only it reads.
     Delete { name: String, files: bool },
+    // Remove the volumes reading the field at `path`, and with `files` the
+    // file.
+    DeleteField { path: String, files: bool },
 }
 
 impl ShaderEdit {
     // Whether the edit takes away the file `open` shows.
     pub(crate) fn closes(&self, open: &SourceKey) -> bool {
-        match self {
-            ShaderEdit::RemoveVertex(name) => {
-                open.shader == *name && open.stage == ShaderStage::Vertex
+        match (self, open) {
+            (ShaderEdit::RemoveVertex(name), SourceKey::Shader { name: n, stage }) => {
+                n == name && *stage == ShaderStage::Vertex
             }
-            ShaderEdit::Delete { name, .. } => open.shader == *name,
+            (ShaderEdit::Delete { name, .. }, SourceKey::Shader { name: n, .. }) => n == name,
+            (ShaderEdit::DeleteField { path, .. }, SourceKey::Field { path: p }) => p == path,
+            _ => false,
         }
     }
 }
 
-// The name typed for a Shader, trimmed, or why it cannot be one: a
-// Material names its Shader, so the name cannot be blank, and a
-// `<Type>#<n>` label is reserved for an unnamed entry.
-pub(crate) fn check_name(typed: &str) -> Result<String, String> {
+// The name typed for a new `what` (a Shader, a volume), trimmed, or why it
+// cannot be one: a Material names its Shader and a new field's file takes its
+// volume's name, so the name cannot be blank, and a `<Type>#<n>` label is
+// reserved for an unnamed entry.
+pub(crate) fn check_name(typed: &str, what: &str) -> Result<String, String> {
     let name = typed.trim();
     if name.is_empty() {
-        return Err("Enter a name for the Shader.".to_string());
+        return Err(format!("Enter a name for the {what}."));
     }
     if name
         .split_once('#')
@@ -152,7 +159,7 @@ pub(crate) fn files_check(files: &Files) -> Check {
     }
 }
 
-fn file_name(path: &str) -> &str {
+pub(crate) fn file_name(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
@@ -201,14 +208,17 @@ mod tests {
 
     #[test]
     fn a_name_is_trimmed_and_cannot_be_blank_or_a_label() {
-        assert_eq!(check_name("  water "), Ok("water".to_string()));
-        assert!(check_name("   ").is_err());
-        assert!(check_name("Shader#2").is_err());
+        assert_eq!(check_name("  water ", "Shader"), Ok("water".to_string()));
+        assert_eq!(
+            check_name("   ", "volume"),
+            Err("Enter a name for the volume.".to_string())
+        );
+        assert!(check_name("Shader#2", "Shader").is_err());
         assert!(
-            check_name("water#2").is_err(),
+            check_name("water#2", "Shader").is_err(),
             "any label shape is reserved"
         );
-        assert_eq!(check_name("water#a"), Ok("water#a".to_string()));
+        assert_eq!(check_name("water#a", "Shader"), Ok("water#a".to_string()));
     }
 
     #[test]
@@ -289,10 +299,7 @@ mod tests {
 
     #[test]
     fn an_edit_closes_only_the_files_it_takes_away() {
-        let open = |stage| SourceKey {
-            shader: "reeds".to_string(),
-            stage,
-        };
+        let open = |stage| SourceKey::shader("reeds", stage);
         let remove = ShaderEdit::RemoveVertex("reeds".to_string());
         assert!(remove.closes(&open(ShaderStage::Vertex)));
         assert!(!remove.closes(&open(ShaderStage::Fragment)));
@@ -306,6 +313,16 @@ mod tests {
             files: false,
         };
         assert!(!other.closes(&open(ShaderStage::Fragment)));
+        let field = SourceKey::Field {
+            path: "/cn-none/blob.hlsl".to_string(),
+        };
+        let drop = ShaderEdit::DeleteField {
+            path: "/cn-none/blob.hlsl".to_string(),
+            files: true,
+        };
+        assert!(drop.closes(&field));
+        assert!(!drop.closes(&open(ShaderStage::Fragment)));
+        assert!(!delete.closes(&field));
     }
 
     #[test]

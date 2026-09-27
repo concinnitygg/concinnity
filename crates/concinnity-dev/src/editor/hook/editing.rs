@@ -246,11 +246,16 @@ impl EditorHook {
                 self.form.error = None;
             }
             FormAction::PressExtra(id) => {
+                let mut switch = None;
                 if let Some(extras) = self.form.extras.as_mut() {
                     extras.press(id);
                     self.form.touched = true;
+                    switch = extras.switch_type();
                 }
                 self.form.error = None;
+                if let Some(ty) = switch {
+                    self.switch_form_type(world, ty);
+                }
             }
             FormAction::PickFieldOption(opt) => {
                 if let Some(open) = self.form.field_dropdown

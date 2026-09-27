@@ -1,13 +1,15 @@
 //! EditorHook: per-type extras on the add / edit form. A type whose form
 //! needs more than its schema fields implements `FormExtras`: rows after the
 //! fields, a reason confirming is unavailable, args it fills in itself, files
-//! a commit writes, and edits to other entries that ride the same undo step.
-//! `for_type` is the registry; a type without extras gets the plain form.
+//! a commit writes, edits to other entries that ride the same undo step, and
+//! a row choosing another type's form to create with instead. `for_type` is
+//! the registry; a type without extras gets the plain form.
 
 use std::path::PathBuf;
 
 use concinnity_core::ecs::World;
 
+use super::edit::sdf_form::SdfExtras;
 use super::edit::shader_form::ShaderExtras;
 use super::{EditorHook, FormTarget, declared_id};
 use crate::editor::entry_list::{EntryId, EntryList};
@@ -65,6 +67,11 @@ pub(in crate::editor::hook) trait FormExtras:
     // A press on the row with `id`.
     fn press(&mut self, id: usize);
 
+    // The type a new asset's form should become, after a press chose one.
+    fn switch_type(&self) -> Option<&'static str> {
+        None
+    }
+
     // Why confirming is unavailable, when it is.
     fn blocked(&self, _cx: &ExtrasCx) -> Option<String> {
         None
@@ -101,6 +108,7 @@ pub(in crate::editor::hook) fn for_type(
     match (ty, target) {
         (_, FormTarget::Promote(_)) => None,
         ("Shader", _) => Some(Box::new(ShaderExtras::open(entries, target))),
+        ("SdfVolume", _) => Some(Box::new(SdfExtras::open(entries, target))),
         _ => None,
     }
 }
@@ -126,6 +134,40 @@ impl EditorHook {
         let typed = widget::field_text(world, form_panel::NAME_INPUT);
         let cx = self.extras_cx(&typed);
         (extras.rows(&cx), extras.blocked(&cx))
+    }
+
+    // Turn the open new-asset form into one for `ty`, keeping the typed name
+    // and the panel it shows beside.
+    pub(in crate::editor::hook) fn switch_form_type(&mut self, world: &mut World, ty: &str) {
+        let typed = widget::field_text(world, form_panel::NAME_INPUT);
+        let host = self.form.host;
+        self.open_form(world, ty.to_string(), FormTarget::New);
+        self.form.host = host;
+        self.form.touched = true;
+        self.place_form_at_view(world);
+        widget::focus_field_with(world, form_panel::NAME_INPUT, &typed);
+    }
+
+    // Put the open new-asset form's position where the create menu would land
+    // a click at the middle of the view, for a type that carries one.
+    pub(in crate::editor::hook) fn place_form_at_view(&mut self, world: &mut World) {
+        let Some(ty) = self.form.selected_type.clone() else {
+            return;
+        };
+        let key = crate::editor::create_menu::position_key(&ty);
+        if !self.form.args.contains_key(key) {
+            return;
+        }
+        let vp = self.viewport;
+        let middle = [vp[0] * 0.5, (crate::editor::hud::body_top() + vp[1]) * 0.5];
+        let Some(pos) = self.drop_point(world, vp, middle, false) else {
+            return;
+        };
+        let pos = pos.map(super::drag::gizmo::round3);
+        self.form
+            .args
+            .insert(key.to_string(), serde_json::json!(pos));
+        self.refresh_form(world);
     }
 
     // Every row the form lists: its fields and its extra rows. The count does

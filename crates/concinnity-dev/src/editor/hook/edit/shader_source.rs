@@ -1,19 +1,22 @@
 //! EditorHook: the Shader source panel's actions. The panel is a code text
-//! area over one of a Shader's `.hlsl` files. Save (the button or the save
-//! shortcut) writes the file and nothing else: the hot-reload watcher sees the
-//! write and recompiles the Shader, exactly as it does for a save from any
-//! other editor, and the outcome it publishes marks the lines its diagnostics
-//! name. Leaving a file with unsaved edits asks first; a change on disk is
-//! followed while the buffer is clean.
+//! area over one of a Shader's `.hlsl` files or an SdfVolume's distance field.
+//! Save (the button or the save shortcut) writes the file and nothing else:
+//! the hot-reload watcher sees the write and recompiles the Shader, or every
+//! volume reading the field, exactly as it does for a save from any other
+//! editor, and the outcomes it publishes mark the lines their diagnostics name.
+//! Leaving a file with unsaved edits asks first; a change on disk is followed
+//! while the buffer is clean.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
 use concinnity_core::render::shader_programs::vocabulary::ENTRIES;
 
-use super::shaders_state::SourceState;
+use super::shaders_state::{SourceState, vocabulary_of};
+use crate::debug::hot_reload::ReloadSubject;
 use crate::editor::hook::EditorHook;
 use crate::editor::notify;
 use crate::editor::panels::registry::PanelKey;
+use crate::editor::panels::sdf_field_list;
 use crate::editor::panels::shader_diagnostics::{Status, Tone};
 use crate::editor::panels::shader_reference::{self, RefClick, RefRow};
 use crate::editor::panels::shader_reference_panel::{self, RefView};
@@ -82,22 +85,29 @@ impl EditorHook {
             self.focus_panel(PanelKey::ShaderSource);
             return;
         }
-        let Some(file) = self
-            .declared_shaders()
-            .into_iter()
-            .find(|s| s.name == key.shader)
-            .and_then(|s| s.file(key.stage).cloned())
-        else {
+        let path = match &key {
+            SourceKey::Shader { name, stage } => self
+                .declared_shaders()
+                .into_iter()
+                .find(|s| &s.name == name)
+                .and_then(|s| s.file(*stage).map(|f| f.path.clone())),
+            SourceKey::Field { path } => self
+                .declared_fields()
+                .into_iter()
+                .find(|f| &f.path == path)
+                .map(|f| f.path),
+        };
+        let Some(path) = path else {
             return;
         };
-        let (text, status) = match std::fs::read_to_string(&file.path) {
+        let (text, status) = match std::fs::read_to_string(&path) {
             Ok(text) => (text, None),
             Err(e) => (
                 String::new(),
-                Some(Status::new(format!("{}: {e}", file.path), Tone::Error)),
+                Some(Status::new(format!("{path}: {e}"), Tone::Error)),
             ),
         };
-        let mut src = SourceState::new(key, file.path, text);
+        let mut src = SourceState::new(key, path, text);
         src.status = status;
         src.focus = true;
         self.shaders.source = Some(src);
@@ -115,28 +125,47 @@ impl EditorHook {
             let message = format!("{}: {e}", src.path);
             src.status = Some(Status::new(message.clone(), Tone::Error));
             self.notifier.error_with(
-                &format!("Shader save failed: {message}"),
+                &format!("Save failed: {message}"),
                 notify::Action::OpenConsole,
             );
             return false;
         }
         src.saved(text);
-        // A Shader outside the running world's catalog has no recompile to
-        // wait on; the rebuild compiles it from the file just written.
+        // A file read by something outside the running world's catalog has no
+        // recompile to wait on; the rebuild compiles it from what was written.
         if src.live == Some(false) {
             self.require_rebuild();
         }
         true
     }
 
+    // What the open file's reports are published under: its Shader, or every
+    // volume reading the field.
+    fn source_subjects(&mut self) -> Vec<ReloadSubject> {
+        match self.shaders.source.as_ref().map(|s| s.key.clone()) {
+            Some(SourceKey::Shader { name, .. }) => vec![ReloadSubject::shader(&name)],
+            Some(SourceKey::Field { path }) => self
+                .declared_fields()
+                .iter()
+                .find(|f| f.path == path)
+                .map(sdf_field_list::subjects)
+                .unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+
     // Once a frame: take in the latest reload outcomes, and follow the file on
     // disk.
     pub(in crate::editor::hook) fn drive_shader_source(&mut self) {
         let now = self.clock.elapsed().as_secs_f64();
+        if self.shaders.source.is_none() {
+            return;
+        }
+        let subjects = self.source_subjects();
         let Some(src) = self.shaders.source.as_mut() else {
             return;
         };
-        if src.take_board(&self.shaders.reports.snapshot())
+        if src.take_board(&self.shaders.reports.snapshot(), &subjects)
             && let Some((line, column)) = src.jump
         {
             src.area.go_to(line, column);
@@ -182,8 +211,8 @@ impl EditorHook {
         }
     }
 
-    // The status the panel shows: its own, or a note that the Shader is not
-    // in the running world yet.
+    // The status the panel shows: its own, or a note that what reads the file
+    // is not in the running world yet.
     fn shader_status(src: &SourceState) -> Option<Status> {
         src.status.clone().or_else(|| {
             (src.live == Some(false)).then(|| {
@@ -195,9 +224,14 @@ impl EditorHook {
         })
     }
 
-    // The reference column's rows as they stand.
+    // The reference column's rows as they stand, for the open file's kind.
     fn reference_rows(&self) -> Vec<RefRow<'static>> {
-        self.shaders.reference.rows(ENTRIES)
+        let entries = self
+            .shaders
+            .source
+            .as_ref()
+            .map_or(ENTRIES, |s| vocabulary_of(&s.key));
+        self.shaders.reference.rows(entries)
     }
 
     // Move the reference column by `step` rows, within its rows.

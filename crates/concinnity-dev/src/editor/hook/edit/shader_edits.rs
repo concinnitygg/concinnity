@@ -19,7 +19,7 @@ use crate::editor::panels::shader_templates;
 
 const SHADER: &str = "Shader";
 
-fn button(label: &str, danger: bool, action: Action) -> Button {
+pub(super) fn button(label: &str, danger: bool, action: Action) -> Button {
     Button {
         label: label.to_string(),
         danger,
@@ -27,7 +27,7 @@ fn button(label: &str, danger: bool, action: Action) -> Button {
     }
 }
 
-fn cancel() -> Button {
+pub(super) fn cancel() -> Button {
     button("Cancel", false, Action::Dismiss)
 }
 
@@ -86,7 +86,7 @@ impl EditorHook {
 
     // Make `edit`, closing the source panel first when it shows a file the
     // edit takes away; Cancel on the unsaved-changes question abandons it.
-    fn edit_shader(&mut self, edit: ShaderEdit) {
+    pub(in crate::editor::hook) fn edit_shader(&mut self, edit: ShaderEdit) {
         match &self.shaders.source {
             Some(src) if edit.closes(&src.key) => self.leave_shader_source(Leave::Edit(edit)),
             _ => self.apply_shader_edit(edit),
@@ -97,6 +97,7 @@ impl EditorHook {
         match edit {
             ShaderEdit::RemoveVertex(name) => self.apply_remove_vertex(&name),
             ShaderEdit::Delete { name, files } => self.apply_delete(&name, files),
+            ShaderEdit::DeleteField { path, files } => self.apply_delete_field(&path, files),
         }
     }
 
@@ -189,10 +190,7 @@ impl EditorHook {
         }
         self.notifier
             .success(&format!("Added a vertex file to '{}'", shader.name));
-        self.open_shader_file(SourceKey {
-            shader: shader.name,
-            stage: ShaderStage::Vertex,
-        });
+        self.open_shader_file(SourceKey::shader(&shader.name, ShaderStage::Vertex));
     }
 
     // After an undo or redo, a source panel whose Shader is no longer declared
@@ -202,7 +200,10 @@ impl EditorHook {
         let Some(src) = &self.shaders.source else {
             return;
         };
-        let (open, stage, path) = (src.key.shader.clone(), src.key.stage, src.path.clone());
+        let SourceKey::Shader { name: open, stage } = src.key.clone() else {
+            return;
+        };
+        let path = src.path.clone();
         let shaders = self.declared_shaders();
         if shaders.iter().any(|s| s.name == open) {
             return;
@@ -211,7 +212,10 @@ impl EditorHook {
             .into_iter()
             .find(|s| s.file(stage).is_some_and(|f| same_file(&f.path, &path)));
         if let (Some(shader), Some(src)) = (renamed, self.shaders.source.as_mut()) {
-            src.key.shader = shader.name;
+            src.key = SourceKey::Shader {
+                name: shader.name,
+                stage,
+            };
         }
     }
 }

@@ -10,7 +10,7 @@ mod toast;
 use concinnity_cook::compile::program::Diagnostic;
 use std::time::Duration;
 
-pub(crate) use board::{ReloadReports, ReportBoard};
+pub(crate) use board::{Latest, ReloadReports, ReportBoard};
 pub(crate) use failure::ReloadFailure;
 
 // The kind of asset a reload rebuilt.

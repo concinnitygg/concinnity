@@ -7,6 +7,11 @@
 // the including file defines ahead of the splice, which is what lets the three
 // hosts' binding models differ without the shading differing.
 
+// The volume's own box, for a field that places its shape relative to the
+// volume reading it rather than at fixed world coordinates.
+float3 volume_center() { return VOL.center.xyz; }
+float3 volume_extent() { return VOL.extent.xyz; }
+
 // Distance-field primitives, after https://iquilezles.org/articles/distfunctions/
 // Kept small and well known; an authored `map` composes them.
 

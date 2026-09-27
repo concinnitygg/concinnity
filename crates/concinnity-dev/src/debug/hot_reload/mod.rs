@@ -47,7 +47,9 @@ pub(crate) use driver::HotReloadDriver;
 pub(crate) use pending::{
     mark_all_shaders_pending, set_pending_animations, set_pending_stories, set_pending_world,
 };
-pub(crate) use report::{ReloadFailure, ReloadOutcome, ReloadReports, ReloadSubject, ReportBoard};
+pub(crate) use report::{
+    Latest, ReloadFailure, ReloadOutcome, ReloadReports, ReloadSubject, ReportBoard,
+};
 pub(crate) use world_path::WorldPathHandle;
 // The editor's tests publish reports of their own.
 #[cfg(test)]

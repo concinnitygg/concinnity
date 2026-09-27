@@ -2,10 +2,13 @@
 //! `shader_list` builds. Each Shader is a heading row (badged "default" on the
 //! first), the Materials naming it, and a row per file with that file's last
 //! reload status on the right, then "+ Add vertex file" for a Shader without
-//! one; "+ New Shader" ends the list. Clicking a file opens it in the Shader
-//! source panel (`shader_source_panel.rs`), and clicking a heading opens its
-//! Shader's form. A heading's "..." menu edits, duplicates or deletes its
-//! Shader, and a vertex file's removes that file.
+//! one; the SDF fields follow under their own heading, each file with the
+//! volumes reading it, and "+ New Shader" ends the list. Clicking a file opens
+//! it in the Shader source panel (`shader_source_panel.rs`), clicking a
+//! heading opens its Shader's form and clicking a volume its volume's form. A
+//! heading's "..." menu edits, duplicates or deletes its Shader, a vertex
+//! file's removes that file, and a field's opens it, selects its volumes or
+//! deletes them.
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
@@ -306,9 +309,9 @@ fn place_row(world: &mut World, slot: usize, row: &Row, rect: [f32; 4], mouse: [
     );
     let color = match row.kind {
         RowKind::New | RowKind::AddVertex(_) => ADD_COLOR,
-        RowKind::Header(_) => HEADING_COLOR,
+        RowKind::Header(_) | RowKind::Section | RowKind::Field(_) => HEADING_COLOR,
         RowKind::Note => theme::LABEL_DIM,
-        RowKind::Materials(_) | RowKind::File(_) => theme::LABEL,
+        RowKind::Materials(_) | RowKind::File(_) | RowKind::FieldVolume(_) => theme::LABEL,
     };
     let x = rect[0] + PAD + if row.indent { asset_list::INDENT } else { 0.0 };
     let dots = DOT_INSET + widget_menu::DOT_SZ + DOT_GAP;
@@ -388,19 +391,13 @@ mod tests {
             row(RowKind::Header(0), "lit", Some("default")),
             row(RowKind::Materials(0), "used by a", None),
             row(
-                RowKind::File(SourceKey {
-                    shader: "lit".to_string(),
-                    stage: ShaderStage::Fragment,
-                }),
+                RowKind::File(SourceKey::shader("lit", ShaderStage::Fragment)),
                 "fragment  lit.hlsl",
                 Some("failed"),
             ),
             row(RowKind::New, "+ New Shader", None),
             row(
-                RowKind::File(SourceKey {
-                    shader: "lit".to_string(),
-                    stage: ShaderStage::Vertex,
-                }),
+                RowKind::File(SourceKey::shader("lit", ShaderStage::Vertex)),
                 "vertex  sway.hlsl",
                 None,
             ),

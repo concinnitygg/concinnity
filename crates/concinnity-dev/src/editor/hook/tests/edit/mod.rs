@@ -10,6 +10,8 @@ mod lighting_tests;
 mod map_tests;
 mod overrides_tests;
 mod palette_tests;
+mod sdf_edits_tests;
+mod sdf_form_tests;
 mod select_tests;
 mod shader_edits_tests;
 mod shader_fixtures;

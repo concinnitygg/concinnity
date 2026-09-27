@@ -1,8 +1,9 @@
-//! The data half of the Shader source panel: which of a Shader's files it
-//! edits, where that file is on disk and where a new one goes, and the rules
-//! for leaving a file with unsaved edits and for a file that changed on disk
-//! while open. What a reload outcome shows is `shader_diagnostics`; what a new
-//! file starts as is `shader_templates`.
+//! The data half of the Shader source panel: which file it edits (one of a
+//! Shader's, or an SdfVolume's distance field), where that file is on disk and
+//! where a new one goes, and the rules for leaving a file with unsaved edits
+//! and for a file that changed on disk while open. What a reload outcome shows
+//! is `shader_diagnostics`; what a new file starts as is `shader_templates`
+//! and `sdf_templates`.
 
 use concinnity_core::components::ShaderStage;
 use std::path::{Path, PathBuf};
@@ -10,11 +11,22 @@ use std::path::{Path, PathBuf};
 use super::shader_edit::ShaderEdit;
 use crate::editor::modal;
 
-// One file of one Shader: the Shader's name and which of its files.
+// The file the panel edits: one of a Shader's, by the Shader's name and which
+// of its files, or a distance field, by its resolved path, since every volume
+// declaring that file reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SourceKey {
-    pub(crate) shader: String,
-    pub(crate) stage: ShaderStage,
+pub(crate) enum SourceKey {
+    Shader { name: String, stage: ShaderStage },
+    Field { path: String },
+}
+
+impl SourceKey {
+    pub(crate) fn shader(name: &str, stage: ShaderStage) -> Self {
+        SourceKey::Shader {
+            name: name.to_string(),
+            stage,
+        }
+    }
 }
 
 pub(crate) fn stage_name(stage: ShaderStage) -> &'static str {
@@ -30,6 +42,20 @@ pub(crate) fn stage_name(stage: ShaderStage) -> &'static str {
 // matches them against what this returns.
 pub(crate) fn resolve_path(declared: &str, assets_dir: Option<&Path>) -> String {
     concinnity_host::store::source::resolve_source_path(declared, assets_dir)
+}
+
+// The on-disk path of a declared distance field, as the renderer's catalog and
+// the cook find it; a file not written yet is where a new one under the assets
+// directory would go.
+pub(crate) fn resolve_field_path(declared: &str, assets_dir: Option<&Path>) -> String {
+    concinnity_host::store::source::find_existing(declared, assets_dir, None).unwrap_or_else(|| {
+        match assets_dir {
+            Some(dir) if !Path::new(declared).is_absolute() => {
+                dir.join(declared).to_string_lossy().into_owned()
+            }
+            _ => declared.to_string(),
+        }
+    })
 }
 
 // Whether two spellings name one file: the same text, or the same file once
@@ -157,10 +183,7 @@ mod tests {
     use super::*;
 
     fn key(shader: &str, stage: ShaderStage) -> SourceKey {
-        SourceKey {
-            shader: shader.to_string(),
-            stage,
-        }
+        SourceKey::shader(shader, stage)
     }
 
     // Leaving asks only over unsaved edits, and reopening the open file is not
@@ -249,6 +272,30 @@ mod tests {
             declared_form(Path::new("/cn-none/elsewhere/a.hlsl"), root),
             "/cn-none/elsewhere/a.hlsl"
         );
+    }
+
+    // A field resolves under the assets directory first, as the cook finds
+    // it, and a file not written yet lands there too.
+    #[test]
+    fn a_field_resolves_under_the_assets_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let shaders = dir.path().join("shaders");
+        std::fs::create_dir_all(&shaders).unwrap();
+        std::fs::write(shaders.join("blob.hlsl"), "").unwrap();
+        let found = resolve_field_path("shaders/blob.hlsl", Some(dir.path()));
+        assert!(same_file(
+            &found,
+            &shaders.join("blob.hlsl").to_string_lossy()
+        ));
+        let fresh = resolve_field_path("shaders/new.hlsl", Some(dir.path()));
+        assert_eq!(fresh, dir.path().join("shaders/new.hlsl").to_string_lossy());
+        let elsewhere = tempfile::tempdir().unwrap();
+        let absolute = elsewhere
+            .path()
+            .join("a.hlsl")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(resolve_field_path(&absolute, Some(dir.path())), absolute);
     }
 
     // A path with a directory resolves as written; a bare name is looked up

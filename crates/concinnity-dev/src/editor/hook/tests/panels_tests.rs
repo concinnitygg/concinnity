@@ -53,10 +53,7 @@ fn open_every_panel(h: &mut EditorHook, world: &mut World) {
     h.open_template = Some(0);
     h.palette.open = true;
     h.shaders.source = Some(SourceState::new(
-        SourceKey {
-            shader: "lit".to_string(),
-            stage: ShaderStage::Fragment,
-        },
+        SourceKey::shader("lit", ShaderStage::Fragment),
         "/cn-none/lit.hlsl".to_string(),
         "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }".to_string(),
     ));

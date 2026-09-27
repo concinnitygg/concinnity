@@ -1,7 +1,8 @@
-//! The data half of the reference column beside a Shader file: every name the
-//! engine provides a Shader, from the engine's vocabulary table, grouped by
-//! kind under headings that fold. Clicking a name inserts it at the caret, a
-//! helper as a call naming its parameters. Its layout is
+//! The data half of the reference column beside a Shader file or an SDF field:
+//! every name the engine provides the file, from the engine's vocabulary table
+//! for its kind, grouped by kind under headings that fold. Clicking a name
+//! inserts it at the caret, a helper as a call naming its parameters and a
+//! function to define as its prototype. Its layout is
 //! `shader_reference_panel.rs`.
 
 use concinnity_core::render::shader_programs::vocabulary::{Entry, Kind};
@@ -9,15 +10,21 @@ use concinnity_core::render::shader_programs::vocabulary::{Entry, Kind};
 // The kinds the column groups names under, in the order it lists them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Group {
+    Hooks,
     Helpers,
+    Types,
+    Returns,
     Blocks,
     Record,
     Varyings,
 }
 
 impl Group {
-    pub(crate) const ALL: [Group; 4] = [
+    pub(crate) const ALL: [Group; 7] = [
+        Group::Hooks,
         Group::Helpers,
+        Group::Types,
+        Group::Returns,
         Group::Blocks,
         Group::Record,
         Group::Varyings,
@@ -25,7 +32,10 @@ impl Group {
 
     fn of(kind: Kind) -> Group {
         match kind {
+            Kind::Hook => Group::Hooks,
             Kind::Helper => Group::Helpers,
+            Kind::Type => Group::Types,
+            Kind::ReturnField(_) => Group::Returns,
             Kind::BlockField(_) => Group::Blocks,
             Kind::RecordField => Group::Record,
             Kind::Varying => Group::Varyings,
@@ -34,7 +44,10 @@ impl Group {
 
     pub(crate) fn title(self) -> &'static str {
         match self {
+            Group::Hooks => "Functions to define",
             Group::Helpers => "Helpers",
+            Group::Types => "Types",
+            Group::Returns => "Returned fields",
             Group::Blocks => "VIEW and LIGHTS",
             Group::Record => "Material record (od)",
             Group::Varyings => "Varyings (v)",
@@ -69,9 +82,11 @@ impl RefRow<'_> {
                 let mark = if *folded { '+' } else { '-' };
                 format!("{mark} {} ({count})", group.title())
             }
-            RefRow::Name(e) => match e.kind.owner() {
-                Some(owner) => format!("{owner}.{}", e.name),
-                None => format!("{}()", e.name),
+            RefRow::Name(e) => match (e.kind, e.kind.owner()) {
+                (_, Some(owner)) => format!("{owner}.{}", e.name),
+                (Kind::ReturnField(s), None) => format!("{s}.{}", e.name),
+                (Kind::Type, None) => e.name.to_string(),
+                (_, None) => format!("{}()", e.name),
             },
         }
     }
@@ -162,7 +177,7 @@ impl Reference {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::shader_programs::vocabulary::ENTRIES;
+    use concinnity_core::render::shader_programs::vocabulary::{ENTRIES, sdf};
 
     fn names<'a>(rows: &[RefRow<'a>]) -> Vec<String> {
         rows.iter().map(RefRow::text).collect()
@@ -178,14 +193,48 @@ mod tests {
                 RefRow::Name(_) => None,
             })
             .collect();
-        assert_eq!(headings, Group::ALL);
-        assert_eq!(rows.len(), ENTRIES.len() + Group::ALL.len());
+        let surface = [
+            Group::Helpers,
+            Group::Blocks,
+            Group::Record,
+            Group::Varyings,
+        ];
+        assert_eq!(headings, surface);
+        assert_eq!(rows.len(), ENTRIES.len() + surface.len());
         let text = names(&rows);
         assert!(text[0].starts_with("- Helpers ("));
         assert!(text.contains(&"shade_surface()".to_string()));
         assert!(text.contains(&"VIEW.elapsed".to_string()));
         assert!(text.contains(&"od.tint_roughness".to_string()));
         assert!(text.contains(&"v.world_pos".to_string()));
+    }
+
+    // A distance field lists what it defines first, then what it calls, the
+    // types it names and the fields it returns; a click on a function to define
+    // writes its prototype.
+    #[test]
+    fn a_field_lists_its_own_groups() {
+        let rows = Reference::default().rows(sdf::ENTRIES);
+        let headings: Vec<Group> = rows
+            .iter()
+            .filter_map(|r| match r {
+                RefRow::Heading { group, .. } => Some(*group),
+                RefRow::Name(_) => None,
+            })
+            .collect();
+        assert_eq!(
+            headings,
+            [Group::Hooks, Group::Helpers, Group::Types, Group::Returns]
+        );
+        let text = names(&rows);
+        assert!(text.contains(&"map()".to_string()));
+        assert!(text.contains(&"SdfParams".to_string()));
+        assert!(text.contains(&"SdfSurface.albedo".to_string()));
+        let map = rows.iter().find(|r| r.text() == "map()").unwrap();
+        assert_eq!(
+            click(map),
+            RefClick::Insert("float map(float3 p, SdfParams params, float time)".to_string())
+        );
     }
 
     #[test]
@@ -210,7 +259,7 @@ mod tests {
         ));
         assert!(names(&rows)[0].starts_with("+ Helpers"));
         r.toggle(Group::Helpers);
-        assert_eq!(r.rows(ENTRIES).len(), ENTRIES.len() + Group::ALL.len());
+        assert_eq!(r.rows(ENTRIES).len(), ENTRIES.len() + 4);
     }
 
     #[test]

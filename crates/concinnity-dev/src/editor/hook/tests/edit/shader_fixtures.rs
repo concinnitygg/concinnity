@@ -1,12 +1,17 @@
 //! What the Shaders panel's test companions share: entry literals, a hook's
-//! Shader names and args, clicks on the list, and a working directory at a
-//! fresh project for the edits that write files under its assets.
+//! Shader names and args, clicks on the list and on a form's extra rows, and a
+//! working directory at a fresh project for the edits that write files under
+//! its assets.
 
 use concinnity_core::components::ShaderStage;
 use concinnity_core::ecs::World;
 use std::path::{Path, PathBuf};
 
 use crate::editor::hook::EditorHook;
+use crate::editor::hook::tests::fixtures::{set_field, world_with_fields};
+use crate::editor::modal;
+use crate::editor::panels::form_extras::{ExtraControl, ExtraRow};
+use crate::editor::panels::form_panel::{self, FormAction};
 use crate::editor::panels::shader_list::{MenuItem, RowKind};
 use crate::editor::panels::shader_list_panel::ShadersAction;
 use crate::editor::panels::shader_source::SourceKey;
@@ -23,10 +28,7 @@ pub(super) fn material(name: &str, shader: &str) -> serde_json::Value {
 }
 
 pub(super) fn key(shader: &str, stage: ShaderStage) -> SourceKey {
-    SourceKey {
-        shader: shader.to_string(),
-        stage,
-    }
+    SourceKey::shader(shader, stage)
 }
 
 pub(super) fn write(dir: &Path, name: &str) -> PathBuf {
@@ -49,6 +51,64 @@ pub(super) fn shader_names(h: &EditorHook) -> Vec<String> {
         .iter()
         .filter(|e| e["type"] == "Shader")
         .filter_map(|e| e["args"]["$id"].as_str().map(str::to_string))
+        .collect()
+}
+
+// A world with the form's fields and the dialog's, so a leave question can be
+// answered while the form is open.
+pub(super) fn form_world() -> World {
+    let mut world = world_with_fields();
+    for id in modal::all_field_ids() {
+        world.push_identified(id, concinnity_core::components::TextInput::default());
+    }
+    world
+}
+
+pub(super) fn plain_material(name: &str) -> serde_json::Value {
+    serde_json::json!({"type": "Material", "args": {"$id": name}})
+}
+
+pub(super) fn type_name(world: &mut World, name: &str) {
+    set_field(world, form_panel::NAME_INPUT, name);
+}
+
+pub(super) fn rows(h: &EditorHook, world: &World) -> Vec<ExtraRow> {
+    h.form_extras_data(world).0
+}
+
+pub(super) fn blocked(h: &EditorHook, world: &World) -> Option<String> {
+    h.form_extras_data(world).1
+}
+
+// Press the row captioned `caption` that is a checkbox (or, with `choice`, a
+// choice).
+pub(super) fn press(h: &mut EditorHook, world: &mut World, caption: &str, choice: bool) {
+    let row = rows(h, world)
+        .into_iter()
+        .find(|r| {
+            r.caption == caption && matches!(r.control, ExtraControl::Choice { .. }) == choice
+        })
+        .unwrap_or_else(|| panic!("no '{caption}' row"));
+    h.apply_form(FormAction::PressExtra(row.id), world);
+}
+
+pub(super) fn detail(h: &EditorHook, world: &World, caption: &str) -> Option<String> {
+    rows(h, world)
+        .into_iter()
+        .find(|r| r.caption == caption)
+        .and_then(|r| r.detail)
+}
+
+pub(super) fn confirm(h: &mut EditorHook, world: &mut World) {
+    h.apply_form(FormAction::Confirm, world);
+}
+
+pub(super) fn toasts(h: &EditorHook) -> Vec<String> {
+    h.notifier
+        .stack()
+        .cards
+        .into_iter()
+        .map(|c| c.message)
         .collect()
 }
 

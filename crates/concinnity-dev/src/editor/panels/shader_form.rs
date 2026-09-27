@@ -1,12 +1,14 @@
-//! The data half of the Shader form's extras: its stages, starter files,
-//! world-default choice and the Materials that name it, as form rows; why the
-//! form cannot confirm; and the edits a commit makes to other entries.
+//! The data half of the Shader form's extras: on create its kind, then its
+//! stages, starter files, world-default choice and the Materials that name it,
+//! as form rows; why the form cannot confirm; and the edits a commit makes to
+//! other entries.
 
 use concinnity_cook::authoring::world::{entry_handles, find_entry};
 use concinnity_core::components::ShaderStage;
 
 use super::form_extras::{ExtraControl, ExtraRow};
 use super::shader_edit::check_name;
+use super::shader_kind::{KIND_ROW, ShaderKind};
 use super::shader_list::{can_add_shader, limit_reason};
 use super::shader_source::stage_name;
 use super::shader_templates;
@@ -45,6 +47,8 @@ pub(crate) struct UsedBy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ShaderForm {
     pub(crate) mode: Mode,
+    // What a create makes; a kind of another type switches the form.
+    pub(crate) kind: ShaderKind,
     pub(crate) vertex: bool,
     pub(crate) fragment_starter: usize,
     pub(crate) vertex_starter: usize,
@@ -102,6 +106,7 @@ impl ShaderForm {
                 Mode::New => first.is_none(),
             },
             mode,
+            kind: ShaderKind::Surface,
             fragment_starter: 0,
             vertex_starter: 0,
             used_by,
@@ -131,8 +136,14 @@ impl ShaderForm {
         }
     }
 
+    // The type the form should become, after a press chose a kind of another.
+    pub(crate) fn switch_type(&self) -> Option<&'static str> {
+        self.kind.switch_from(SHADER)
+    }
+
     pub(crate) fn press(&mut self, id: usize) {
         match id {
+            KIND_ROW if self.is_new() => self.kind = self.kind.next(),
             VERTEX => self.vertex = !self.vertex,
             FRAGMENT_STARTER => {
                 self.fragment_starter =
@@ -156,7 +167,11 @@ impl ShaderForm {
 
     // The rows, in a world declaring `shaders` in order, showing `paths`.
     pub(crate) fn rows(&self, shaders: &[String], paths: &Paths) -> Vec<ExtraRow> {
-        let mut out = vec![ExtraRow::label("Stages", None)];
+        let mut out = Vec::new();
+        if self.is_new() {
+            out.push(self.kind.row());
+        }
+        out.push(ExtraRow::label("Stages", None));
         out.push(check(
             0,
             stage_name(ShaderStage::Fragment),
@@ -234,7 +249,7 @@ impl ShaderForm {
     // Why the form cannot confirm under `name`: a bad name, one another entry
     // declares (`taken`), or no room for another of the world's `shaders`.
     pub(crate) fn blocked(&self, name: &str, taken: bool, shaders: usize) -> Option<String> {
-        let name = match check_name(name) {
+        let name = match check_name(name, SHADER) {
             Ok(name) => name,
             Err(reason) => return Some(reason),
         };
@@ -494,6 +509,7 @@ mod tests {
         assert_eq!(
             captions(&form),
             [
+                "Kind",
                 "Stages",
                 "fragment",
                 "vertex",
@@ -505,19 +521,19 @@ mod tests {
             ]
         );
         let rows = form.rows(&shaders, &paths);
-        assert_eq!(rows[1].detail.as_deref(), Some("assets/shaders/water.hlsl"));
-        assert_eq!(rows[2].detail, None, "no vertex file while it is off");
+        assert_eq!(rows[2].detail.as_deref(), Some("assets/shaders/water.hlsl"));
+        assert_eq!(rows[3].detail, None, "no vertex file while it is off");
         assert_eq!(row(&rows, "m").detail.as_deref(), Some("names 'lit'"));
 
         form.press(VERTEX);
         form.press(DEFAULT);
         let rows = form.rows(&shaders, &paths);
         assert_eq!(
-            rows[2].detail.as_deref(),
+            rows[3].detail.as_deref(),
             Some("assets/shaders/water_vertex.hlsl")
         );
         assert_eq!(
-            captions(&form)[3..7],
+            captions(&form)[4..8],
             ["Starters", "fragment", "vertex", "World default"]
         );
         assert!(
@@ -528,6 +544,10 @@ mod tests {
         let edit = ShaderForm::open(&entries, Some(0));
         let rows = edit.rows(&shaders, &paths);
         assert!(!rows.iter().any(|r| r.caption == "Starters"));
+        assert!(
+            !rows.iter().any(|r| r.caption == "Kind"),
+            "an edit keeps its type"
+        );
         assert_eq!(
             row(&rows, "World default").control,
             ExtraControl::Check {
@@ -536,6 +556,20 @@ mod tests {
             },
             "the only Shader stays the default"
         );
+    }
+
+    // Choosing a field kind on create switches the form to an SdfVolume's; an
+    // edit ignores the kind row.
+    #[test]
+    fn a_field_kind_switches_a_new_form() {
+        let mut form = ShaderForm::open(&EntryList::new(Vec::new()), None);
+        assert_eq!(form.switch_type(), None);
+        form.press(KIND_ROW);
+        assert_eq!(form.kind, ShaderKind::SdfField);
+        assert_eq!(form.switch_type(), Some("SdfVolume"));
+        let mut edit = ShaderForm::open(&EntryList::new(vec![shader("lit")]), Some(0));
+        edit.press(KIND_ROW);
+        assert_eq!(edit.switch_type(), None);
     }
 
     #[test]
