@@ -11,6 +11,7 @@ use concinnity_core::components::CharacterRig;
 use concinnity_core::components::Children;
 use concinnity_core::components::FrameInput;
 use concinnity_core::components::GlobalTransform;
+use concinnity_core::components::HDR_MULTISAMPLE_COUNT;
 use concinnity_core::components::IndirectLighting;
 use concinnity_core::components::Lifetime;
 use concinnity_core::components::Parent;
@@ -21,6 +22,7 @@ use concinnity_core::components::SkinnedMesh;
 use concinnity_core::components::Spawner;
 use concinnity_core::components::Transform;
 use concinnity_core::components::UiAction;
+use concinnity_core::components::UpscaleQuality;
 use concinnity_core::components::compiled_programs;
 use concinnity_core::components::{
     Camera3D, DespawnRequest, GraphicsConfig, HitRegion, Material, Prop, RenderHandle,
@@ -52,6 +54,7 @@ use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::profile::FrameProfile;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::{GpuProfile, GpuTier, GpuVendor};
+use concinnity_core::render::backend_init;
 use concinnity_core::render::backend_init::SwapchainConfig;
 use concinnity_core::render::error;
 use concinnity_core::render::text;
@@ -73,7 +76,8 @@ use crate::app::run::LaunchRequest;
 use crate::gfx::mock_backend::{
     Call, MockBackend, MockState, TestHooks, recording_hooks, recording_hooks_with,
 };
-use crate::gfx::quality_preset::QualityPreset;
+use crate::gfx::quality_preset::{QualityPreset, resolve_ceiling};
+use crate::gfx::render_config::{GraphicsBaseline, resolve_graphics};
 
 const MESH: AssetId = AssetId(1);
 const TEX: AssetId = AssetId(2);
@@ -771,6 +775,50 @@ fn low_preset_ceiling_clamps_quality_knobs() {
     assert_eq!(live.authored.shadow_cadence.distance, 80);
     assert_eq!(live.authored.shadow_cadence.cascades, 4);
     assert_eq!(live.authored.anisotropy, 16);
+}
+
+fn post_settings_under(
+    world: &GraphicsBaseline,
+    user: &crate::config::GraphicsSettings,
+    preset: QualityPreset,
+) -> backend_init::PostSettings {
+    let ceiling = resolve_ceiling(preset, &GpuProfile::UNKNOWN);
+    let graphics = resolve_graphics(world, user, &ceiling);
+    super::init::post_settings(&graphics, world, &LaunchRequest::default())
+}
+
+#[test]
+fn post_settings_hdr_samples_follow_the_clamped_aa_mode() {
+    let post = PostProcessConfig {
+        aa_mode: AaMode::Taa,
+        temporal_upscaling: false,
+        ..Default::default()
+    };
+    let world = GraphicsBaseline::new(None, Some(&post), None);
+    let user = crate::config::GraphicsSettings::default();
+
+    let unclamped = post_settings_under(&world, &user, QualityPreset::Custom);
+    assert!(unclamped.taa_enabled);
+    assert_eq!(unclamped.hdr_samples, 1);
+    // The Low ceiling caps TAA to FXAA, which multisamples the HDR target.
+    let clamped = post_settings_under(&world, &user, QualityPreset::Low);
+    assert!(!clamped.taa_enabled);
+    assert_eq!(clamped.hdr_samples, HDR_MULTISAMPLE_COUNT);
+}
+
+#[test]
+fn post_settings_upscale_scale_is_native_without_a_post_process_config() {
+    let user = crate::config::GraphicsSettings {
+        render_scale: Some(UpscaleQuality::Performance),
+        ..Default::default()
+    };
+    let undeclared = GraphicsBaseline::default();
+    let native = post_settings_under(&undeclared, &user, QualityPreset::Custom);
+    assert_eq!(native.upscale_scale, 1.0);
+
+    let declared = GraphicsBaseline::new(None, Some(&PostProcessConfig::default()), None);
+    let scaled = post_settings_under(&declared, &user, QualityPreset::Custom);
+    assert_eq!(scaled.upscale_scale, UpscaleQuality::Performance.scale());
 }
 
 #[test]

@@ -294,8 +294,8 @@ impl GraphicsSystem {
     }
 
     // Seed and persist the first-launch `Auto` quality preset.
-    fn seed_first_launch_preset(&self) {
-        let mut s = crate::config::Settings::load(self.state.as_ref());
+    fn seed_first_launch_preset(&self, persisted: &crate::config::Settings) {
+        let mut s = persisted.clone();
         s.graphics.quality_preset = Some(crate::gfx::quality_preset::QualityPreset::Auto);
         if let Err(e) = s.save(self.state.as_ref()) {
             tracing::warn!("first-launch quality preset save failed: {e}");

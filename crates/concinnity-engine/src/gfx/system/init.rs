@@ -66,7 +66,7 @@ use super::*;
 use crate::app::run::LaunchRequest;
 use crate::gfx::draw_list;
 use crate::gfx::material_entry::MaterialEntry;
-use crate::gfx::render_config::{GraphicsBaseline, resolve_graphics};
+use crate::gfx::render_config::{GraphicsBaseline, ResolvedGraphics, resolve_graphics};
 use crate::settings::quality_rows::{quality_cycle, quality_toggle};
 use crate::settings::system::{SettingsSlot, SettingsState};
 
@@ -195,110 +195,219 @@ fn font_less_text(ctx: &PipelineContext) -> bool {
         || ctx.query::<TextInput>().any(|t| t.font.is_none())
 }
 
-impl GraphicsSystem {
-    // Resolve every render setting (window, quality preset + ceiling, post-process
-    // tunables, shadows, streaming caps, keymap) into a fresh settings state, sync
-    // the settings-menu value labels, and return it with the config the rest of
-    // init needs.
-    fn init_render_settings(
-        &mut self,
-        ctx: &mut PipelineContext,
-        launch: &LaunchRequest,
-    ) -> (ResolvedRenderConfig, SettingsState) {
-        let mut settings = SettingsState::new();
-        // Persisted settings-menu choices override the world's authored defaults
-        // below (each field is None when the user never changed that setting).
-        let user_graphics = self.persisted_settings().graphics;
-        settings.persisted_graphics = user_graphics.clone();
+// The GPU the backend is built for and the quality preset resolved against it.
+struct DetectedQuality {
+    gpu_profile: backend::GpuProfile,
+    preset: crate::gfx::quality_preset::QualityPreset,
+    ceiling: crate::gfx::quality_preset::QualityCeiling,
+}
 
-        // Detect the GPU before the backend is built so the auto-config quality
-        // ceiling can influence the render targets / effect pipelines sized at
-        // backend init. Held on the settings state for the menu's preset label.
-        settings.gpu_profile = self.detect_gpu_profile();
-        // Published so readouts outside the graphics system (the editor's Health
-        // panel) can size live VRAM against the device's budget without reaching
-        // for the backend itself.
-        ctx.insert_resource(settings.gpu_profile);
-        crate::crash::note(
-            "gpu",
-            &format!(
-                "{:?} {:?}",
-                settings.gpu_profile.vendor, settings.gpu_profile.tier
-            ),
-        );
-        // Resolve the master quality preset. The launch's `--quality-preset` flag
-        // wins first and is never persisted, so a test / CI / GPU probe can force
-        // a preset (e.g. `custom` for no clamp) without touching settings.bin.
-        // Otherwise the persisted choice; `None` there = never configured (a first
-        // launch, or a settings file written before the preset existed): seed
-        // `Auto` and persist once, which records the detection without baking any
-        // per-field value (the per-field overrides keep their `None = world
-        // default` meaning). `Auto` re-resolves from the detected tier each launch;
-        // `Custom` / an unclassified GPU impose no ceiling.
-        use crate::gfx::quality_preset::QualityPreset;
-        let active_preset = launch
-            .resolve_quality_preset(user_graphics.quality_preset)
-            .unwrap_or_else(|| {
-                self.seed_first_launch_preset();
-                QualityPreset::Auto
-            });
-        // Hold the resolved preset as the live value the settings-menu master
-        // row cycles (and that an individual quality-row change flips to Custom).
-        settings.quality_preset = active_preset;
-        let quality_ceiling =
-            crate::gfx::quality_preset::resolve_ceiling(active_preset, &settings.gpu_profile);
-        tracing::info!(
-            "auto-config: GPU tier {:?}, quality preset {:?}",
-            settings.gpu_profile.tier,
-            active_preset,
-        );
-
-        if let Some(w) = ctx.drain::<Window>().into_iter().next() {
-            settings.window_args = w;
-        }
-        // Capture the DebugHud chip ids (cursor, camera, sys, passes stack
-        // order) so the frame step can anchor them to the top-right of the
-        // window. Passes is last because it grows/shrinks with the frame's step
-        // count, so keeping it at the bottom leaves the fixed-height chips
-        // unshifted. The DebugHud component is queried (not drained) by its
-        // system, so it is still present here; absent fields are skipped.
-        self.debug_hud_chips = ctx
-            .query::<DebugHud>()
-            .next()
-            .map(|d| {
-                [d.mouse_label, d.camera_label, d.sys_label, d.passes_label]
-                    .into_iter()
-                    .flatten()
-                    .map(Ref::id)
-                    .collect()
-            })
-            .unwrap_or_default();
-        // Capture the StatHud chip ids (fps, gpu wait, vram, ram, ev, edr strip order) so
-        // the frame step can pack them tight from the top-left. Like DebugHud
-        // the component is queried (not drained), so it is still present here.
-        self.stat_hud_chips = ctx
-            .query::<StatHud>()
-            .next()
-            .map(|s| {
-                [
-                    s.fps_label,
-                    s.gpu_wait_label,
-                    s.vram_label,
-                    s.ram_label,
-                    s.ev_label,
-                    s.edr_label,
-                ]
+// The DebugHud chip ids (cursor, camera, sys, passes: the top-right stack
+// order) and the StatHud chip ids (fps, gpu wait, vram, ram, ev, edr: the
+// top-left strip order) the frame step anchors. Passes is last because its
+// height follows the frame's step count.
+fn capture_hud_chips(ctx: &PipelineContext) -> (Vec<AssetId>, Vec<AssetId>) {
+    let debug = ctx
+        .query::<DebugHud>()
+        .next()
+        .map(|d| {
+            [d.mouse_label, d.camera_label, d.sys_label, d.passes_label]
                 .into_iter()
                 .flatten()
                 .map(Ref::id)
                 .collect()
-            })
-            .unwrap_or_default();
+        })
+        .unwrap_or_default();
+    let stat = ctx
+        .query::<StatHud>()
+        .next()
+        .map(|s| {
+            [
+                s.fps_label,
+                s.gpu_wait_label,
+                s.vram_label,
+                s.ram_label,
+                s.ev_label,
+                s.edr_label,
+            ]
+            .into_iter()
+            .flatten()
+            .map(Ref::id)
+            .collect()
+        })
+        .unwrap_or_default();
+    (debug, stat)
+}
+
+// The post-processing config the backend is built with.
+pub(super) fn post_settings(
+    graphics: &ResolvedGraphics,
+    authored: &GraphicsBaseline,
+    launch: &LaunchRequest,
+) -> backend_init::PostSettings {
+    let post_config = &graphics.quality.post_config;
+    let quality = derive_quality_settings(post_config);
+    backend_init::PostSettings {
+        post_process: graphics.post_process,
+        taa_enabled: quality.taa,
+        // Restart-class: the main-pass pipelines, render targets and planar /
+        // probe faces all bake the count, so a live AA toggle keeps it.
+        hdr_samples: hdr_sample_count(post_config.aa_mode, graphics.temporal_upscaling),
+        ssao: quality.ssao,
+        ssr: quality.ssr,
+        ssgi: quality.ssgi,
+        rt_reflections: quality.rt_reflections,
+        rt_dynamic: launch.resolve_rt_dynamic(),
+        rt_skinned_geometry: launch.resolve_rt_skinned_geometry(),
+        reflection_blur_scale: quality.reflection_blur_scale,
+        auto_exposure: quality.auto_exposure,
+        auto_exposure_bias_ev: quality.auto_exposure_bias_ev,
+        hdr_display: graphics.hdr_display,
+        hdr_pq: graphics.hdr_pq,
+        temporal_upscaling: graphics.temporal_upscaling,
+        upscale_scale: if authored.post_declared {
+            graphics.quality.render_scale.scale()
+        } else {
+            1.0
+        },
+        upscale_backend: graphics.upscale_backend,
+        occlusion_two_pass: graphics.occlusion_two_pass,
+    }
+}
+
+// Set every settings-menu row to its live value before the first render, so a
+// persisted or authored choice shows instead of the build's placeholder. Must
+// run before UiInputSystem.init drains the HitRegions and ScrollPanels.
+fn sync_menu_labels(
+    ctx: &mut PipelineContext,
+    settings: &mut SettingsState,
+    persisted: &crate::config::Settings,
+) {
+    let volume_of = |stored: Option<f32>| stored.unwrap_or(crate::settings::DEFAULT_VOLUME);
+    let master_volume = volume_of(persisted.audio.master_volume);
+    let music_volume = volume_of(persisted.audio.music_volume);
+    let sfx_volume = volume_of(persisted.audio.sfx_volume);
+    let voice_volume = volume_of(persisted.audio.voice_volume);
+    let g = &settings.graphics;
+    sync_setting_value_labels(ctx, |key| match key {
+        SettingKey::Vsync => Some(g.vsync as usize),
+        SettingKey::FpsCap => Some(crate::settings::fps_cap_index(g.fps_cap)),
+        SettingKey::WindowMode => Some(crate::settings::window_mode_index(
+            settings.window_args.mode,
+        )),
+        // Resolution is a dynamic dropdown, labeled once the backend has
+        // enumerated the display modes.
+        SettingKey::RenderScale => {
+            Some(crate::settings::render_scale_index(g.quality.render_scale))
+        }
+        SettingKey::UpscaleBackend => {
+            Some(crate::settings::upscale_backend_index(g.upscale_backend))
+        }
+        SettingKey::MasterVolume => Some(crate::settings::volume_index(master_volume)),
+        SettingKey::MusicVolume => Some(crate::settings::volume_index(music_volume)),
+        SettingKey::SfxVolume => Some(crate::settings::volume_index(sfx_volume)),
+        SettingKey::VoiceVolume => Some(crate::settings::volume_index(voice_volume)),
+        SettingKey::TemporalUpscaling => Some(g.temporal_upscaling as usize),
+        SettingKey::HdrDisplay => Some(g.hdr_display as usize),
+        SettingKey::HdrPq => Some(g.hdr_pq as usize),
+        SettingKey::PerfStats => Some(g.perf_stats as usize),
+        SettingKey::ShowFps => Some(g.show_fps as usize),
+        SettingKey::ShowVram => Some(g.show_vram as usize),
+        SettingKey::ShadowMapSize => Some(crate::settings::shadow_resolution_index(
+            g.quality.shadow_map_size,
+        )),
+        SettingKey::ShadowUpdate => Some(crate::settings::shadow_update_index(
+            g.quality.shadow_cadence.update,
+        )),
+        SettingKey::ShadowDistance => Some(crate::settings::shadow_distance_index(
+            g.quality.shadow_cadence.distance,
+        )),
+        SettingKey::ShadowCascades => Some(crate::settings::shadow_cascades_index(
+            g.quality.shadow_cadence.cascades,
+        )),
+        SettingKey::Anisotropy => Some(crate::settings::anisotropy_index(g.quality.anisotropy)),
+        SettingKey::FramesInFlight => Some(crate::settings::frames_in_flight_index(
+            g.frames_in_flight as u32,
+        )),
+        SettingKey::OcclusionTwoPass => Some(g.occlusion_two_pass as usize),
+        SettingKey::TextureQuality => Some(crate::settings::texture_quality_index(g.texture_cap)),
+        key => quality_toggle(key)
+            .map(|row| (row.get)(&g.quality.post_config) as usize)
+            .or_else(|| quality_cycle(key).map(|row| (row.index)(&g.quality.post_config))),
+    });
+    // After the generic sync: under Auto the master row names the resolved
+    // tier ("Auto (High)"), which the static option table cannot express.
+    let preset_label =
+        crate::gfx::quality_preset::preset_label(settings.quality_preset, &settings.gpu_profile);
+    set_setting_row_label(ctx, SettingKey::GraphicsQuality, &preset_label);
+    settings.init_sliders(ctx, persisted);
+    settings.init_rebind_rows(ctx);
+    settings.init_cycle_value_labels(ctx);
+    settings.capture_perf_sub_rows(ctx);
+    settings.capture_resolution_row(ctx);
+}
+
+impl GraphicsSystem {
+    // Detect the GPU and resolve the quality preset and its ceiling. Runs
+    // before the backend is built, since the ceiling sizes its render targets
+    // and effect pipelines.
+    fn detect_quality(
+        &self,
+        ctx: &mut PipelineContext,
+        launch: &LaunchRequest,
+        persisted: &crate::config::Settings,
+    ) -> DetectedQuality {
+        use crate::gfx::quality_preset::QualityPreset;
+        let gpu_profile = self.detect_gpu_profile();
+        ctx.insert_resource(gpu_profile);
+        crate::crash::note(
+            "gpu",
+            &format!("{:?} {:?}", gpu_profile.vendor, gpu_profile.tier),
+        );
+        // `--quality-preset` wins and is never persisted; a preset never
+        // chosen seeds and persists `Auto` once.
+        let preset = launch
+            .resolve_quality_preset(persisted.graphics.quality_preset)
+            .unwrap_or_else(|| {
+                self.seed_first_launch_preset(persisted);
+                QualityPreset::Auto
+            });
+        let ceiling = crate::gfx::quality_preset::resolve_ceiling(preset, &gpu_profile);
+        tracing::info!(
+            "auto-config: GPU tier {:?}, quality preset {:?}",
+            gpu_profile.tier,
+            preset,
+        );
+        DetectedQuality {
+            gpu_profile,
+            preset,
+            ceiling,
+        }
+    }
+
+    // Drain the world's render config, resolve it against the user's persisted
+    // choices and the quality ceiling into a fresh settings state, sync the
+    // settings-menu labels, and return the config the rest of init needs.
+    fn init_render_settings(
+        &mut self,
+        ctx: &mut PipelineContext,
+        launch: &LaunchRequest,
+        persisted: &crate::config::Settings,
+        quality: DetectedQuality,
+    ) -> (ResolvedRenderConfig, SettingsState) {
+        let user_graphics = &persisted.graphics;
+        let mut settings = SettingsState::new();
+        settings.persisted_graphics = user_graphics.clone();
+        settings.gpu_profile = quality.gpu_profile;
+        settings.quality_preset = quality.preset;
+
+        if let Some(w) = ctx.drain::<Window>().into_iter().next() {
+            settings.window_args = w;
+        }
         if let Some(m) = user_graphics.window_mode {
             settings.window_args.mode = m;
         }
-        // The chosen fullscreen display mode. Fullscreen-only: it never feeds
-        // the windowed size, which stays the world's authored `Window` value.
+        // Fullscreen-only: the windowed size stays the world's authored value.
         if let Some([w, h, hz]) = user_graphics.resolution {
             settings.resolution = Some(display_mode::DisplayMode {
                 width: w,
@@ -313,171 +422,27 @@ impl GraphicsSystem {
             self.max_frames = args.max_frames;
         }
         let post_config = ctx.drain::<PostProcessConfig>().into_iter().next();
-        // Drained here so the resolved caps land before the streamer is built.
         let mut streaming_config = ctx.drain::<StreamingConfig>().into_iter().next();
         settings.authored = GraphicsBaseline::new(
             graphics_config.as_ref(),
             post_config.as_ref(),
             streaming_config.as_ref(),
         );
-        settings.graphics = resolve_graphics(&settings.authored, &user_graphics, &quality_ceiling);
+        settings.graphics = resolve_graphics(&settings.authored, user_graphics, &quality.ceiling);
         if let Some(sc) = streaming_config.as_mut() {
             sc.texture_cap = settings.graphics.texture_cap;
             sc.texture_budget = settings.graphics.texture_budget;
         }
+        settings.keymap = persisted.controls.keymap.unwrap_or_default();
+        settings.gamepad_map = persisted.controls.gamepad_map.unwrap_or_default();
 
-        let resolved_post = &settings.graphics.quality.post_config;
-        let taa_enabled = resolved_post.aa_mode.taa_enabled();
-        let ssao_settings = SsaoSettings::from_config(resolved_post);
-        let ssr_settings = SsrSettings::from_config(resolved_post);
-        let rt_reflection_settings = RtReflectionSettings::from_config(resolved_post);
-        let reflection_blur_scale = resolved_post.reflection_blur_divisor();
-        let ssgi_settings = SsgiSettings::from_config(resolved_post);
-        // The authored `exposure_ev` becomes an additive bias on the adapted EV
-        // when auto-exposure is on; otherwise the static path bakes it into
-        // `post_process.exposure` and the bias here is unused.
-        let auto_exposure_settings = resolved_post.auto_exposure_settings();
-        let auto_exposure_bias_ev = resolved_post.exposure_ev;
-        let upscale_scale = if settings.authored.post_declared {
-            settings.graphics.quality.render_scale.scale()
-        } else {
-            1.0
-        };
-
-        // Set each settings value label to its live value before the first
-        // render, so a persisted/authored choice shows instead of the build's
-        // placeholder. HitRegions are still present here: GraphicsSystem.init
-        // runs before UiInputSystem.init, which drains them.
-        // Audio / controls value labels read from the persisted settings store
-        // (with the baseline default when unset); their owning systems apply the
-        // value at their own init.
-        let user_settings = self.persisted_settings();
-        let volume_of = |stored: Option<f32>| stored.unwrap_or(crate::settings::DEFAULT_VOLUME);
-        let master_volume = volume_of(user_settings.audio.master_volume);
-        let music_volume = volume_of(user_settings.audio.music_volume);
-        let sfx_volume = volume_of(user_settings.audio.sfx_volume);
-        let voice_volume = volume_of(user_settings.audio.voice_volume);
-        // Movement key map: a persisted rebind set overrides the engine default.
-        // Pushed to the backend after it is built (below) and used to sync the
-        // Controls-tab rebind row labels (`init_rebind_rows`).
-        settings.keymap = user_settings.controls.keymap.unwrap_or_default();
-        // Gamepad button map: same override rule; InputSystem loads its own
-        // copy at its init, so this one only drives the rebind row labels and
-        // the SettingsSystem drain.
-        settings.gamepad_map = user_settings.controls.gamepad_map.unwrap_or_default();
-        let g = &settings.graphics;
-        sync_setting_value_labels(ctx, |key| match key {
-            SettingKey::Vsync => Some(g.vsync as usize),
-            SettingKey::FpsCap => Some(crate::settings::fps_cap_index(g.fps_cap)),
-            SettingKey::WindowMode => Some(crate::settings::window_mode_index(
-                settings.window_args.mode,
-            )),
-            // Resolution is a dynamic dropdown; its label is set from the
-            // enumerated mode list after the backend is built.
-            SettingKey::RenderScale => {
-                Some(crate::settings::render_scale_index(g.quality.render_scale))
-            }
-            SettingKey::UpscaleBackend => {
-                Some(crate::settings::upscale_backend_index(g.upscale_backend))
-            }
-            SettingKey::MasterVolume => Some(crate::settings::volume_index(master_volume)),
-            SettingKey::MusicVolume => Some(crate::settings::volume_index(music_volume)),
-            SettingKey::SfxVolume => Some(crate::settings::volume_index(sfx_volume)),
-            SettingKey::VoiceVolume => Some(crate::settings::volume_index(voice_volume)),
-            // Display-output / upscaling toggles (Off/On).
-            SettingKey::TemporalUpscaling => Some(g.temporal_upscaling as usize),
-            SettingKey::HdrDisplay => Some(g.hdr_display as usize),
-            SettingKey::HdrPq => Some(g.hdr_pq as usize),
-            // Stats-HUD display toggles (Off/On).
-            SettingKey::PerfStats => Some(g.perf_stats as usize),
-            SettingKey::ShowFps => Some(g.show_fps as usize),
-            SettingKey::ShowVram => Some(g.show_vram as usize),
-            // Shadow quality knobs (resolution restart-required, cadence live).
-            SettingKey::ShadowMapSize => Some(crate::settings::shadow_resolution_index(
-                g.quality.shadow_map_size,
-            )),
-            SettingKey::ShadowUpdate => Some(crate::settings::shadow_update_index(
-                g.quality.shadow_cadence.update,
-            )),
-            SettingKey::ShadowDistance => Some(crate::settings::shadow_distance_index(
-                g.quality.shadow_cadence.distance,
-            )),
-            SettingKey::ShadowCascades => Some(crate::settings::shadow_cascades_index(
-                g.quality.shadow_cadence.cascades,
-            )),
-            SettingKey::Anisotropy => Some(crate::settings::anisotropy_index(g.quality.anisotropy)),
-            // System / streaming restart rows.
-            SettingKey::FramesInFlight => Some(crate::settings::frames_in_flight_index(
-                g.frames_in_flight as u32,
-            )),
-            SettingKey::OcclusionTwoPass => Some(g.occlusion_two_pass as usize),
-            SettingKey::TextureQuality => {
-                Some(crate::settings::texture_quality_index(g.texture_cap))
-            }
-            // mouse_sensitivity is a slider now, synced by `init_sliders`.
-            // Quality toggles (index 0 = Off, 1 = On) and quality cycle knobs.
-            key => quality_toggle(key)
-                .map(|row| (row.get)(&g.quality.post_config) as usize)
-                .or_else(|| quality_cycle(key).map(|row| (row.index)(&g.quality.post_config))),
-        });
-        // The master "Graphics Quality" row carries the resolved tier under Auto
-        // (e.g. "Auto (High)"), which the static option table cannot express, so
-        // it is set directly after the generic sync above writes the bare name.
-        let preset_label =
-            crate::gfx::quality_preset::preset_label(active_preset, &settings.gpu_profile);
-        set_setting_row_label(ctx, SettingKey::GraphicsQuality, &preset_label);
-        // Capture the slider rows and sync each handle + value label to its live
-        // value (e.g. the persisted/authored exposure). Like the cycle-row sync
-        // above, this runs before UiInputSystem drains the HitRegions.
-        settings.init_sliders(ctx, &user_settings);
-        // Capture the rebind rows and sync each value label to the live bound
-        // key (persisted or default). Like the slider sync, before UiInputSystem
-        // drains the HitRegions.
-        settings.init_rebind_rows(ctx);
-        // Capture each cycle row's value-label id, so a preset change can relabel
-        // its dependent rows (and a quality-row change the master row) at runtime,
-        // when the HitRegions are gone. Also before UiInputSystem drains them.
-        settings.init_cycle_value_labels(ctx);
-        // Capture the show_fps / show_vram row labels and apply the initial
-        // gray-out from the resolved "Display performance stats" master toggle.
-        // Before UiInputSystem drains the HitRegions / ScrollPanels.
-        settings.capture_perf_sub_rows(ctx);
-        // Capture the Resolution row's labels and apply the initial gray-out
-        // from the resolved window mode (the row only applies in fullscreen).
-        settings.capture_resolution_row(ctx);
-        // Capture each ScrollPanel's per-element clip bands for the draw path,
-        // before UiInputSystem drains the panels (init order: graphics first).
+        sync_menu_labels(ctx, &mut settings, persisted);
         self.init_clip_rects(ctx);
-        let g = &settings.graphics;
-        // Restart-class like `temporal_upscaling`, its other input: the main-pass
-        // pipelines, the render targets and the planar / probe faces all bake the
-        // count, so a live AA toggle keeps the count this launch resolved.
-        let hdr_samples = hdr_sample_count(g.quality.post_config.aa_mode, g.temporal_upscaling);
 
-        let post = backend_init::PostSettings {
-            post_process: g.post_process,
-            taa_enabled,
-            hdr_samples,
-            ssao: ssao_settings,
-            ssr: ssr_settings,
-            ssgi: ssgi_settings,
-            rt_reflections: rt_reflection_settings,
-            rt_dynamic: launch.resolve_rt_dynamic(),
-            rt_skinned_geometry: launch.resolve_rt_skinned_geometry(),
-            reflection_blur_scale,
-            auto_exposure: auto_exposure_settings,
-            auto_exposure_bias_ev,
-            hdr_display: g.hdr_display,
-            hdr_pq: g.hdr_pq,
-            temporal_upscaling: g.temporal_upscaling,
-            upscale_scale,
-            upscale_backend: g.upscale_backend,
-            occlusion_two_pass: g.occlusion_two_pass,
-        };
         (
             ResolvedRenderConfig {
-                post,
-                quality_ceiling,
+                post: post_settings(&settings.graphics, &settings.authored, launch),
+                quality_ceiling: quality.ceiling,
                 streaming_config,
                 world_ambient_intensity: settings.authored.world_ambient(),
             },
@@ -1408,6 +1373,9 @@ impl GraphicsSystem {
 
     fn try_init(&mut self, ctx: &mut PipelineContext) -> Option<()> {
         let launch = ctx.resource::<LaunchRequest>().copied().unwrap_or_default();
+        let persisted = self.persisted_settings();
+        let quality = self.detect_quality(ctx, &launch, &persisted);
+        (self.debug_hud_chips, self.stat_hud_chips) = capture_hud_chips(ctx);
         let (
             ResolvedRenderConfig {
                 post,
@@ -1416,7 +1384,7 @@ impl GraphicsSystem {
                 world_ambient_intensity,
             },
             mut settings,
-        ) = self.init_render_settings(ctx, &launch);
+        ) = self.init_render_settings(ctx, &launch, &persisted, quality);
         // Infinite-world chunk streaming. The first declared VoxelWorld wins;
         // with none declared, no chunks stream. BlockTypes are drained here so
         // the runtime can resolve the VoxelWorld palette to chunk-mesh data.
