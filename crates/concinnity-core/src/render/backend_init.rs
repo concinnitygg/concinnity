@@ -87,19 +87,28 @@ pub struct MediaPayloads<'a> {
     pub color_lut_bytes: Option<&'a [u8]>,
 }
 
+/// The cascade-shadow schedule the backend reads each frame. Unlike the shadow
+/// map resolution, none of it sizes a GPU resource, so it can change live.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ShadowCadence {
+    /// Cascade re-render policy: hybrid amortizes far cascades across frames.
+    pub update: ShadowUpdate,
+    /// Shadow distance in world units, capped at the camera far plane by the
+    /// per-frame cascade split.
+    pub distance: u32,
+    /// Cascade count (1..=4) the per-frame split + schedule render; the
+    /// cascade array capacity stays 4.
+    pub cascades: u32,
+}
+
 /// Shadow-mapping knobs from GraphicsConfig. `map_size == 0` disables the
 /// shadow pipeline and cascade array entirely.
 #[derive(Copy, Clone, Debug)]
 pub struct ShadowParams {
     /// Shadow map edge in texels; 0 disables shadows entirely.
     pub map_size: u32,
-    /// Cascade re-render policy: hybrid amortizes far cascades across frames.
-    pub update: ShadowUpdate,
-    /// Shadow distance in world units, capped at the camera far plane by the
-    /// per-frame cascade split.
-    pub distance: u32,
-    /// Cascade count (1..=4) the per-frame split + schedule render.
-    pub cascades: u32,
+    /// The live cascade schedule, seeded here at init.
+    pub cadence: ShadowCadence,
 }
 
 /// Post-process and display settings resolved from PostProcessConfig (plus
@@ -361,9 +370,11 @@ impl<'a> BackendInit<'a> {
             area_lights: Vec::new(),
             shadows: ShadowParams {
                 map_size: 0,
-                update: ShadowUpdate::default(),
-                distance: 0,
-                cascades: 1,
+                cadence: ShadowCadence {
+                    update: ShadowUpdate::default(),
+                    distance: 0,
+                    cascades: 1,
+                },
             },
             anisotropy: 1,
             planar_planes: 0,
@@ -566,9 +577,11 @@ mod tests {
     fn sceneless_world_trims_scene_features() {
         let mut shadows = ShadowParams {
             map_size: 2048,
-            update: ShadowUpdate::default(),
-            distance: 120,
-            cascades: 4,
+            cadence: ShadowCadence {
+                update: ShadowUpdate::default(),
+                distance: 120,
+                cascades: 4,
+            },
         };
         let mut post = full_post();
         let mut fx = empty_fx();

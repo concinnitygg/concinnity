@@ -1,7 +1,5 @@
-//! RenderBackend impl for MtlContext. Thin forwarders to the inherent
-//! methods scattered across metal/{context,resources,streaming,draw}.rs.
-//! Method resolution picks the inherent over the trait method when both
-//! have the same name, so `self.draw_frame(...)` calls the inherent here.
+//! RenderBackend impl for MtlContext, one impl block per trait family; the
+//! bodies come from `crate::forward`.
 
 use concinnity_core::bake;
 use concinnity_core::components;
@@ -31,25 +29,6 @@ use concinnity_core::window::display_mode;
 use super::context::{MtlContext, debug_assert_main_thread};
 use crate::forward::forward;
 
-// Most of the trait families are a mechanical 1:1 call into the inherent
-// method of the same name, so the shared `forward!` macro writes those bodies
-// from the signature list each impl block states. Inherent-over-trait method
-// resolution makes the generated `self.<name>(...)` bind the inherent method,
-// so there is no recursion. Methods that diverge (a receiver mismatch,
-// dropped or renamed args, a custom body) are written out by hand beside the
-// invocation.
-//
-// `assert = debug_assert_main_thread` guards the generated `&mut self` arms, so
-// every mutation entry point reached through the boxed trait object proves the
-// main-thread invariant the `unsafe impl Send for MtlContext` rests on: loud in
-// debug, free in release. The `&self` arms stay unguarded: read-only access is
-// the in-order parallel fan-out's whole point and is allowed off the main
-// thread.
-//
-// `via` / `via_mut` forward the entry points whose implementation
-// lives on the shared AppKit window layer rather than on `MtlContext` itself.
-// Metal and Vulkan share that layer, so those arms carry no backend-specific
-// behavior; only the main-thread assertion differs from a direct call.
 impl RenderBackend for MtlContext {
     forward! { assert = debug_assert_main_thread,
         via = self.window().appkit, via_mut = self.window_mut().appkit;
@@ -159,9 +138,7 @@ impl RenderTuning for MtlContext {
         fn set_ambient_intensity(&mut self, value: f32);
         fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
         fn apply_quality_settings(&mut self, settings: QualitySettings) -> RenderResult<()>;
-        fn set_shadow_update(&mut self, update: components::ShadowUpdate);
-        fn set_shadow_distance(&mut self, distance: u32);
-        fn set_shadow_cascades(&mut self, count: u32);
+        fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence);
         fn update_quality_params(&mut self, settings: QualitySettings);
         fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>);
     }

@@ -76,16 +76,7 @@ pub(super) struct VkShadow {
     // Per-frame CSM updates use this; refresh it when lights change for a moving
     // sun.
     pub(super) light_dir: [f32; 3],
-    // Cascade re-render policy from GraphicsConfig.shadow_update. Hybrid
-    // refreshes the near cascade every frame and the far cascades round-robin.
-    pub(super) update: components::ShadowUpdate,
-    // Shadow distance in world units (GraphicsConfig.shadow_distance), read by the
-    // per-frame cascade-split computation and capped at the camera far plane.
-    pub(super) distance: u32,
-    // Active shadow cascade count, 1..=4 (GraphicsConfig.shadow_cascades). The
-    // per-frame split + schedule read it; only the first `cascades` of the four
-    // slots are rendered + sampled. Stored at init (applies at the next launch).
-    pub(super) cascades: u32,
+    pub(super) cadence: backend_init::ShadowCadence,
     // Round-robin clock + primed-set for the cascade schedule; advanced once per
     // frame in draw_frame.
     pub(super) scheduler: shadow_schedule::ShadowCascadeScheduler,
@@ -1881,27 +1872,8 @@ impl VkContext {
         self.uniforms.light_dirty.mark_all();
     }
 
-    // Set the live shadow cascade re-render cadence. The per-frame cascade split
-    // reads `shadow.update` at the start of each draw (see draw.rs), so a change
-    // takes effect on the next frame with no rebuild or allocation.
-    pub(crate) fn set_shadow_update(&mut self, update: components::ShadowUpdate) {
-        self.shadow.update = update;
-    }
-
-    // Set the live shadow distance (world units). The per-frame cascade-split
-    // computation reads `shadow.distance` each draw (capped at the camera far
-    // plane), so a change takes effect on the next frame with no allocation (it
-    // sizes no GPU resource).
-    pub(crate) fn set_shadow_distance(&mut self, distance: u32) {
-        self.shadow.distance = distance;
-    }
-
-    // Set the live shadow cascade count (1..=4). The per-frame split + schedule
-    // read `shadow.cascades` each draw; only the first `count` of the four slots
-    // are rendered + sampled, so a change takes effect on the next frame with no
-    // resize (the shadow-map array stays sized for the 4-cascade capacity).
-    pub(crate) fn set_shadow_cascades(&mut self, count: u32) {
-        self.shadow.cascades = count;
+    pub(crate) fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
+        self.shadow.cadence = cadence;
     }
 
     // Update the live scalar sub-tunables of the SSAO / SSR / SSGI / auto-exposure

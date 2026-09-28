@@ -1001,14 +1001,14 @@ fn live_shadow_knobs_push_to_the_backend() {
     let mut f = Fixture::new();
 
     f.next(SettingKey::ShadowUpdate);
-    assert!(f.saw(&Call::SetShadowUpdate));
+    assert!(f.saw(&Call::SetShadowCadence(f.state.shadow_cadence())));
     assert_eq!(f.state.shadow_update, settings::shadow_update_at(1));
 
     f.next(SettingKey::ShadowDistance);
-    assert!(f.saw(&Call::SetShadowDistance(f.state.shadow_distance)));
+    assert!(f.saw(&Call::SetShadowCadence(f.state.shadow_cadence())));
 
     f.next(SettingKey::ShadowCascades);
-    assert!(f.saw(&Call::SetShadowCascades(f.state.shadow_cascades)));
+    assert!(f.saw(&Call::SetShadowCadence(f.state.shadow_cadence())));
 
     assert_eq!(f.state.quality_preset, QualityPreset::Custom);
     let cfg = f.persisted();
@@ -1131,9 +1131,7 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
     );
     assert!(f.saw(&Call::ApplyQualitySettings));
     assert!(f.saw(&Call::UpdatePostProcess));
-    assert!(f.saw(&Call::SetShadowUpdate));
-    assert!(f.saw(&Call::SetShadowDistance(f.state.shadow_distance)));
-    assert!(f.saw(&Call::SetShadowCascades(f.state.shadow_cascades)));
+    assert!(f.saw(&Call::SetShadowCadence(f.state.shadow_cadence())));
     assert_eq!(f.label(TOGGLE_LABEL), "On", "the dependent row relabeled");
     assert_eq!(
         f.label(QUALITY_LABEL),

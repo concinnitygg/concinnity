@@ -14,9 +14,9 @@
 //! covered. Spot slices keep the per-object caster encoders below: the indirect
 //! buffer is laid out per cascade and has no slots for them.
 
-use concinnity_core::components;
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
+use concinnity_core::render::backend_init::ShadowCadence;
 use concinnity_core::render::shadow_schedule;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -38,16 +38,7 @@ pub(in crate::directx) struct ShadowState {
     pub map_size: u32,
     pub srv_gpu: SrvSlot,
     pub light_dir: [f32; 3],
-    // Cascade re-render policy from GraphicsConfig.shadow_update. Hybrid
-    // refreshes the near cascade every frame and the far cascades round-robin.
-    pub update: components::ShadowUpdate,
-    // Shadow distance in world units (GraphicsConfig.shadow_distance), read by the
-    // per-frame cascade-split computation and capped at the camera far plane.
-    pub distance: u32,
-    // Active shadow cascade count, 1..=4 (GraphicsConfig.shadow_cascades). The
-    // per-frame split + schedule read it; only the first `cascades` of the four
-    // slots are rendered + sampled. Stored at init (applies at the next launch).
-    pub cascades: u32,
+    pub cadence: ShadowCadence,
     // Round-robin clock + primed-set for the cascade schedule; advanced once per
     // frame in record_frame.
     pub scheduler: shadow_schedule::ShadowCascadeScheduler,

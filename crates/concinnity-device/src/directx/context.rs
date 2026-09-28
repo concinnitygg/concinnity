@@ -1605,27 +1605,8 @@ impl DxContext {
         self.uniforms.mark_lights_dirty();
     }
 
-    // Set the live shadow cascade re-render cadence. The per-frame cascade split
-    // reads `shadow.update` at the start of each draw (see draw_frame), so a
-    // change takes effect on the next frame with no rebuild or allocation.
-    pub(crate) fn set_shadow_update(&mut self, update: components::ShadowUpdate) {
-        self.shadow.update = update;
-    }
-
-    // Set the live shadow distance (world units). The per-frame cascade-split
-    // computation reads `shadow.distance` each draw (capped at the camera far
-    // plane), so a change takes effect on the next frame with no allocation (it
-    // sizes no GPU resource).
-    pub(crate) fn set_shadow_distance(&mut self, distance: u32) {
-        self.shadow.distance = distance;
-    }
-
-    // Set the live shadow cascade count (1..=4). The per-frame split + schedule
-    // read `shadow.cascades` each draw; only the first `count` of the four slots
-    // are rendered + sampled, so a change takes effect on the next frame with no
-    // resize (the shadow-map array stays sized for the 4-cascade capacity).
-    pub(crate) fn set_shadow_cascades(&mut self, count: u32) {
-        self.shadow.cascades = count;
+    pub(crate) fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
+        self.shadow.cadence = cadence;
     }
 
     // Update the live scalar sub-tunables of the SSAO / SSR / SSGI / auto-exposure

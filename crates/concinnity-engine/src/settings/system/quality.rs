@@ -71,14 +71,10 @@ impl SettingsState {
         self.shadow_map_size = self.authored_shadow_map_size.min(ceiling.shadow_map_size);
         self.shadow_update =
             quality_preset::clamp_shadow_update(self.authored_shadow_update, &ceiling);
-        let update = self.shadow_update;
-        ops.record(move |backend| backend.set_shadow_update(update));
         self.shadow_distance = self.authored_shadow_distance.min(ceiling.shadow_distance);
-        let distance = self.shadow_distance;
-        ops.record(move |backend| backend.set_shadow_distance(distance));
         self.shadow_cascades = self.authored_shadow_cascades.min(ceiling.shadow_cascades);
-        let count = self.shadow_cascades;
-        ops.record(move |backend| backend.set_shadow_cascades(count));
+        let cadence = self.shadow_cadence();
+        ops.record(move |backend| backend.set_shadow_cadence(cadence));
         self.anisotropy = self.authored_anisotropy.min(ceiling.anisotropy);
 
         // Persist the preset and drop the per-row quality overrides, so the next

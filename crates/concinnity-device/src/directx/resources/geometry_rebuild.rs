@@ -6,9 +6,9 @@
 //! the new ones) where Metal can just read `StorageModeShared` `contents()`.
 
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
-use concinnity_core::gfx::render_types::LodSlice;
 use concinnity_core::render::backend;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::geometry_repack;
 use concinnity_core::render::rt_geom;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT;
@@ -24,37 +24,20 @@ use crate::directx::error::map_hresult;
 // suppressed-but-live-root methods, so they need no attribute of their own.
 // See the note on the analogous block in [directx/decal.rs].
 impl DxContext {
-    // Rebuild the shared static-mesh vertex + index buffers, swapping in
-    // fresh geometry for the draws named in `changes`. Driven by asset
-    // hot-reload (`cn debug` only) when a `Mesh` re-import has a different
-    // vertex / index / LOD-alternate count than its init-time slot. Walks
-    // every `DrawObject` in order: for each draw in `changes`, the new
-    // vertices / indices / LOD alternates are appended to a fresh CPU
-    // buffer; for unchanged draws, the current geometry is read back from
-    // the live `vertex_buffer` / `index_buffer` (DEFAULT heap → READBACK
-    // staging buffer + one-shot GPU copy + Map) and copied with index
-    // rebasing. New DEFAULT-heap buffers are created at the post-rebuild
-    // size and the contents uploaded through UPLOAD-heap staging; the old
-    // buffers are dropped only after the swap commits.
-    //
-    // Streamed-mesh sub-allocators (`mesh_vtx_alloc`, `mesh_idx_alloc`) are
-    // **not** preserved; the rebuilt buffer is sized exactly for the
-    // current draws, so any subsequent `upload_mesh` will fail allocation.
-    // `cn debug`-only assumption: the caller (asset hot-reload) runs this
-    // at frame start, when the renderer is otherwise quiet.
+    // Swap in rebuilt shared static-mesh buffers for the draws named in
+    // `changes`, when a reloaded mesh no longer fits its slot. The DEFAULT-heap
+    // buffers are read back through READBACK staging for the repack, and the
+    // result is uploaded through UPLOAD staging into fresh DEFAULT-heap
+    // buffers. The streamed-mesh sub-allocators are not preserved, so a later
+    // `upload_mesh` fails allocation.
     pub(crate) fn rebuild_static_geometry(
         &mut self,
         changes: Vec<backend::DrawGeometryUpdate>,
     ) -> RenderResult<()> {
-        use std::collections::HashMap;
-
         // Stop the GPU + CPU pipelines so the readback + swap can run safely.
         // Costs a frame-time stall but only fires under `cn debug` when the
         // source `.glb` size actually changed.
         self.wait_idle();
-
-        let mut change_map: HashMap<usize, backend::DrawGeometryUpdate> =
-            changes.into_iter().map(|c| (c.draw_idx, c)).collect();
 
         // Read the current shared buffers back to CPU memory via READBACK
         // staging (DEFAULT-heap resources are not CPU-mappable). One one-shot
@@ -123,149 +106,21 @@ impl DxContext {
         let old_vertices: Vec<Vertex> = read_typed_vec(&v_readback, old_v_count)?;
         let old_indices: Vec<u32> = read_typed_vec(&i_readback, old_i_count)?;
 
-        // Build the rebuilt buffers + per-draw layout CPU-side. Mirrors the
-        // Metal walk byte-for-byte except for the readback source.
-        let mut new_vertices: Vec<Vertex> = Vec::new();
-        let mut new_indices: Vec<u32> = Vec::new();
-        type DrawLayout = (usize, usize, usize, usize, i32, Vec<LodSlice>);
-        let mut new_layouts: Vec<DrawLayout> = Vec::with_capacity(self.draw.objects.len());
-
-        for (draw_idx, obj) in self.draw.objects.iter().enumerate() {
-            let new_v_byte_off = new_vertices.len() * std::mem::size_of::<Vertex>();
-            let new_i_elem_off = new_indices.len();
-            let new_base_u32 = new_vertices.len() as u32;
-            // base_vertex == 0 means "absolute indices" (the static draws);
-            // non-zero means "mesh-relative indices, GPU adds base_vertex at
-            // fetch time" (voxel chunks). Preserve each draw's semantics on
-            // rebuild.
-            let absolute_indices = obj.base_vertex == 0;
-            let new_base_vertex = if absolute_indices {
-                0
-            } else {
-                (new_v_byte_off / std::mem::size_of::<Vertex>()) as i32
-            };
-
-            if let Some(change) = change_map.remove(&draw_idx) {
-                new_vertices.extend_from_slice(&change.vertices);
-                if absolute_indices {
-                    new_indices.extend(change.indices.iter().map(|i| u32::from(*i) + new_base_u32));
-                } else {
-                    new_indices.extend(change.indices.iter().map(|i| u32::from(*i)));
-                }
-                let mut new_lods: Vec<LodSlice> = Vec::with_capacity(change.lod_alternates.len());
-                for (switch_distance, alt_idx) in &change.lod_alternates {
-                    let alt_off = new_indices.len();
-                    if absolute_indices {
-                        new_indices.extend(alt_idx.iter().map(|i| u32::from(*i) + new_base_u32));
-                    } else {
-                        new_indices.extend(alt_idx.iter().map(|i| u32::from(*i)));
-                    }
-                    new_lods.push(LodSlice {
-                        index_offset: alt_off,
-                        index_count: alt_idx.len(),
-                        switch_distance: *switch_distance,
-                    });
-                }
-                new_layouts.push((
-                    new_v_byte_off,
-                    change.vertices.len(),
-                    new_i_elem_off,
-                    change.indices.len(),
-                    new_base_vertex,
-                    new_lods,
-                ));
-            } else {
-                // Unchanged draw: copy current geometry verbatim, rebasing
-                // absolute indices onto the new vertex region.
-                let v_start = obj.vertex_offset / std::mem::size_of::<Vertex>();
-                let v_end = v_start + obj.vertex_count;
-                if v_end > old_vertices.len() {
-                    return Err(RenderError::Other(format!(
-                        "rebuild_static_geometry: draw {} vertex region [{}, {}) out \
-                         of bounds (buffer has {} vertices)",
-                        draw_idx,
-                        v_start,
-                        v_end,
-                        old_vertices.len()
-                    )));
-                }
-                new_vertices.extend_from_slice(&old_vertices[v_start..v_end]);
-                let old_base_u32 = if absolute_indices {
-                    v_start as u32
-                } else {
-                    obj.base_vertex as u32
-                };
-                let i_end = obj.index_offset + obj.index_count;
-                if i_end > old_indices.len() {
-                    return Err(RenderError::Other(format!(
-                        "rebuild_static_geometry: draw {} index region [{}, {}) out \
-                         of bounds (buffer has {} indices)",
-                        draw_idx,
-                        obj.index_offset,
-                        i_end,
-                        old_indices.len()
-                    )));
-                }
-                if absolute_indices {
-                    for &idx in &old_indices[obj.index_offset..i_end] {
-                        new_indices.push(idx.wrapping_sub(old_base_u32) + new_base_u32);
-                    }
-                } else {
-                    new_indices.extend_from_slice(&old_indices[obj.index_offset..i_end]);
-                }
-                let mut new_lods: Vec<LodSlice> = Vec::with_capacity(obj.lod_alternates.len());
-                for slice in &obj.lod_alternates {
-                    let alt_end = slice.index_offset + slice.index_count;
-                    if alt_end > old_indices.len() {
-                        return Err(RenderError::Other(format!(
-                            "rebuild_static_geometry: draw {} LOD slice [{}, {}) out \
-                             of bounds (buffer has {} indices)",
-                            draw_idx,
-                            slice.index_offset,
-                            alt_end,
-                            old_indices.len()
-                        )));
-                    }
-                    let alt_off = new_indices.len();
-                    if absolute_indices {
-                        for &idx in &old_indices[slice.index_offset..alt_end] {
-                            new_indices.push(idx.wrapping_sub(old_base_u32) + new_base_u32);
-                        }
-                    } else {
-                        new_indices.extend_from_slice(&old_indices[slice.index_offset..alt_end]);
-                    }
-                    new_lods.push(LodSlice {
-                        index_offset: alt_off,
-                        index_count: slice.index_count,
-                        switch_distance: slice.switch_distance,
-                    });
-                }
-                new_layouts.push((
-                    new_v_byte_off,
-                    obj.vertex_count,
-                    new_i_elem_off,
-                    obj.index_count,
-                    new_base_vertex,
-                    new_lods,
-                ));
-            }
-        }
-
-        if !change_map.is_empty() {
+        let repacked = geometry_repack::repack_static_geometry(
+            &self.draw.objects,
+            &old_vertices,
+            &old_indices,
+            changes,
+        )?;
+        if repacked.ignored_changes > 0 {
             tracing::warn!(
                 "rebuild_static_geometry: {} change(s) targeted draw indices not in \
                  draw_objects (ignored)",
-                change_map.len()
+                repacked.ignored_changes
             );
         }
-
-        if new_vertices.is_empty() || new_indices.is_empty() {
-            return Err(RenderError::Other(
-                "rebuild_static_geometry: post-rebuild buffers would be empty (no \
-                 static draws to ship)"
-                    .into(),
-            ));
-        }
+        let new_vertices = repacked.vertices;
+        let new_indices = repacked.indices;
 
         // Allocate the new DEFAULT-heap buffers + UPLOAD-heap staging copies
         // and ship the rebuilt contents in a single one-shot submit. The new
@@ -319,16 +174,8 @@ impl DxContext {
         // line the old `vertex_buffer` / `index_buffer` resources are
         // unreachable; the next-frame fence wait has already happened, so
         // the COM refcount drop is safe.
-        for (i, (v_off, v_count, i_off, i_count, base_v, lods)) in
-            new_layouts.into_iter().enumerate()
-        {
-            let obj = &mut self.draw.objects[i];
-            obj.vertex_offset = v_off;
-            obj.vertex_count = v_count;
-            obj.index_offset = i_off;
-            obj.index_count = i_count;
-            obj.base_vertex = base_v;
-            obj.lod_alternates = lods;
+        for (layout, obj) in repacked.layouts.into_iter().zip(&mut self.draw.objects) {
+            layout.apply_to(obj);
         }
         self.scene.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_vbuf),

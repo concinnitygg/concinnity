@@ -251,8 +251,7 @@ pub trait BackendProbe {
     /// only observable record of what the cull decided. Driven by the
     /// `cull-status` debug tool call; synchronous (it idles the device).
     ///
-    /// Default [`RenderError::Unsupported`]: a backend with no GPU-driven cull,
-    /// or one whose readback path is not implemented.
+    /// Default [`RenderError::Unsupported`]: a backend with no GPU-driven cull.
     fn read_cull_status(&mut self) -> RenderResult<Vec<u32>> {
         Err(RenderError::Unsupported {
             op: "read_cull_status",

@@ -1,6 +1,5 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::{
     ClusterParams, DrawObject, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES, ShadowUniforms,
@@ -204,17 +203,7 @@ pub(super) struct ShadowState {
     // Per-cascade resolution, stored so the shadow pass can size the viewport to
     // the texture array's per-slice dimensions.
     pub map_size: u32,
-    // Cascade re-render policy from `GraphicsConfig.shadow_update`. Hybrid
-    // refreshes the near cascade every frame and the far cascades round-robin.
-    pub update: components::ShadowUpdate,
-    // Shadow distance in world units (`GraphicsConfig.shadow_distance`), read by
-    // the per-frame cascade-split computation and capped at the camera far
-    // plane. Mutable so `set_shadow_distance` can change it live.
-    pub distance: u32,
-    // Active cascade count, 1..=4 (`GraphicsConfig.shadow_cascades`). The
-    // per-frame split + schedule read it; only the first `cascades` of the four
-    // slots are rendered + sampled. Mutable so `set_shadow_cascades` is live.
-    pub cascades: u32,
+    pub cadence: backend_init::ShadowCadence,
     // Round-robin clock + primed-set for the cascade schedule; advanced once per
     // frame by `next_shadow_cascade_mask`.
     pub scheduler: shadow_schedule::ShadowCascadeScheduler,

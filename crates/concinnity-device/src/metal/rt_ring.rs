@@ -30,6 +30,7 @@ use objc2_metal::{
 };
 
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::rt_refit::SkinnedRefit;
 
 use super::error::allocation_failed;
 use super::frame_rings::grow_to;
@@ -37,44 +38,6 @@ use super::frame_rings::grow_to;
 type Buffer = Retained<ProtocolObject<dyn MTLBuffer>>;
 type Structure = Retained<ProtocolObject<dyn MTLAccelerationStructure>>;
 type PrimDesc = Retained<MTLPrimitiveAccelerationStructureDescriptor>;
-
-// Full rebuilds per slot: after this many consecutive refits, the next skinned
-// update rebuilds the slot's BLAS from scratch. A refit keeps the tree the last
-// full build produced and only re-fits its bounding boxes, so traversal quality
-// decays as the pose drifts away from the one the tree was built for. Each slot
-// counts independently and they are touched on different frames, so the
-// rebuilds stagger rather than landing on one frame.
-const REFIT_LIMIT: u32 = 32;
-
-// The geometry one skinned BLAS is built over: its slice of the shared skinned
-// index buffer. Equal signatures mean the same triangles with only the vertex
-// positions moved, which is exactly when Metal allows a refit; anything else
-// (a mesh hot-reload, a different mesh becoming visible) changes the triangle
-// set and needs a full rebuild.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) struct SkinnedShape {
-    pub index_offset: usize,
-    pub index_count: usize,
-}
-
-// Whether a slot's skinned BLAS can be refit from this frame's pose or must be
-// rebuilt from scratch.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum BlasUpdate {
-    Build,
-    Refit,
-}
-
-// Rebuild when the triangle set changed (a refit is then illegal), when the slot
-// has no built tree to refit, or once every `limit` refits to bound the quality
-// drift. Pure so the cadence is unit-testable without a GPU.
-fn blas_update(shape_changed: bool, built: bool, refits: u32, limit: u32) -> BlasUpdate {
-    if shape_changed || !built || refits >= limit {
-        BlasUpdate::Build
-    } else {
-        BlasUpdate::Refit
-    }
-}
 
 // Identifies the TLAS descriptor a slot has cached. A descriptor pins the array
 // of referenced BLAS, the instance buffer and the instance count; while all
@@ -104,12 +67,10 @@ pub(super) struct RtFrameSlot {
     deformed: Option<Buffer>,
     blas: Vec<Structure>,
     descs: Vec<PrimDesc>,
-    shape: Vec<SkinnedShape>,
     // Build scratch the descriptors above reported when `blas` was allocated.
     blas_scratch: usize,
-    // Whether `blas` holds trees a refit can update (false until first built).
-    built: bool,
-    refits: u32,
+    // The shapes `blas` were last built over and the refit run since.
+    pub refit: SkinnedRefit,
     tlas: Option<Structure>,
     tlas_size: usize,
     tlas_desc: Option<(
@@ -128,10 +89,8 @@ impl RtFrameSlot {
             deformed: None,
             blas: Vec::new(),
             descs: Vec::new(),
-            shape: Vec::new(),
             blas_scratch: 0,
-            built: false,
-            refits: 0,
+            refit: SkinnedRefit::default(),
             tlas: None,
             tlas_size: 0,
             tlas_desc: None,
@@ -249,23 +208,16 @@ impl RtFrameSlot {
             .clone())
     }
 
-    // Whether this slot's BLAS were last built over exactly `shapes`.
-    pub(super) fn shape_matches(&self, shapes: &[SkinnedShape]) -> bool {
-        self.shape == shapes
-    }
-
-    // Replace this slot's skinned BLAS with structures built over `shapes`, along
-    // with the descriptors they were sized from and the build scratch they need.
-    // The outgoing structures are dropped in place: a slot is written only by the
-    // frame that owns it, and the fence guarantees the previous writer retired.
-    pub(super) fn set_skinned(&mut self, built: SkinnedBlasSet, shapes: &[SkinnedShape]) {
+    // Replace this slot's skinned BLAS with fresh structures, along with the
+    // descriptors they were sized from and the build scratch they need. The new
+    // structures hold no tree, so the refit record resets. The outgoing ones are
+    // dropped in place: a slot is written only by the frame that owns it, and the
+    // fence guarantees the previous writer retired.
+    pub(super) fn set_skinned(&mut self, built: SkinnedBlasSet) {
         self.blas = built.blas;
         self.descs = built.descs;
         self.blas_scratch = built.scratch_bytes;
-        self.shape.clear();
-        self.shape.extend_from_slice(shapes);
-        self.built = false;
-        self.refits = 0;
+        self.refit.reset();
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -281,21 +233,6 @@ impl RtFrameSlot {
 
     pub(super) fn skinned_descs(&self) -> &[PrimDesc] {
         &self.descs
-    }
-
-    // How this frame's skinned BLAS should be updated, recording the choice so
-    // the refit run stays bounded. `shape_changed` must be set when the
-    // structures or the buffer they trace were just replaced.
-    pub(super) fn plan_blas_update(&mut self, shape_changed: bool) -> BlasUpdate {
-        let update = blas_update(shape_changed, self.built, self.refits, REFIT_LIMIT);
-        match update {
-            BlasUpdate::Build => {
-                self.built = true;
-                self.refits = 0;
-            }
-            BlasUpdate::Refit => self.refits += 1,
-        }
-        update
     }
 
     // The top-level structure, (re)allocated when `size` outgrows it. Sizing is
@@ -346,15 +283,13 @@ impl RtFrameSlot {
     // them bound. The buffers are kept -- only the pose-dependent structures are
     // invalid.
     pub(super) fn release(&mut self) {
-        if self.blas.is_empty() && !self.built {
+        self.refit.reset();
+        if self.blas.is_empty() {
             return;
         }
         self.blas.clear();
         self.descs.clear();
-        self.shape.clear();
         self.blas_scratch = 0;
-        self.built = false;
-        self.refits = 0;
         self.generation = self.generation.wrapping_add(1);
     }
 }
@@ -403,55 +338,6 @@ fn shared_buffer(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_changed_triangle_set_forces_a_full_build() {
-        // A refit cannot add or remove geometry, so a changed shape always
-        // rebuilds even when the slot has a tree and refits to spare.
-        assert_eq!(blas_update(true, true, 0, 32), BlasUpdate::Build);
-    }
-
-    #[test]
-    fn an_unbuilt_slot_cannot_be_refit() {
-        assert_eq!(blas_update(false, false, 0, 32), BlasUpdate::Build);
-    }
-
-    #[test]
-    fn a_stable_shape_refits_until_the_limit() {
-        assert_eq!(blas_update(false, true, 0, 32), BlasUpdate::Refit);
-        assert_eq!(blas_update(false, true, 31, 32), BlasUpdate::Refit);
-        // The 32nd refit is instead a rebuild, bounding the quality drift.
-        assert_eq!(blas_update(false, true, 32, 32), BlasUpdate::Build);
-        assert_eq!(blas_update(false, true, 99, 32), BlasUpdate::Build);
-    }
-
-    #[test]
-    fn a_zero_limit_never_refits() {
-        assert_eq!(blas_update(false, true, 0, 0), BlasUpdate::Build);
-    }
-
-    #[test]
-    fn shape_equality_is_offset_and_count() {
-        let a = SkinnedShape {
-            index_offset: 12,
-            index_count: 300,
-        };
-        assert_eq!(a, a);
-        assert_ne!(
-            a,
-            SkinnedShape {
-                index_offset: 13,
-                index_count: 300,
-            }
-        );
-        assert_ne!(
-            a,
-            SkinnedShape {
-                index_offset: 12,
-                index_count: 303,
-            }
-        );
-    }
 
     #[test]
     fn tlas_key_separates_head_slot_and_instance_count() {

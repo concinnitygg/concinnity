@@ -10,10 +10,10 @@
 //! bloom, decals, fog, particles, and the uploaded geometry are untouched (so no
 //! particle-sim reset and no multi-second geometry re-upload).
 
-use concinnity_core::components;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::QualitySettings;
+use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::auto_exposure::AutoExposureGpu;
@@ -80,27 +80,8 @@ impl MtlContext {
         self.light_uniforms.ambient_intensity = value;
     }
 
-    // Set the live shadow cascade re-render cadence. The scheduler reads
-    // `shadow.update` at the start of each shadow pass, so a change takes effect
-    // on the next draw. Every cascade is already primed, so switching policy never
-    // leaves a slice unsampled (priming is one-shot per cascade, not per policy).
-    pub(crate) fn set_shadow_update(&mut self, update: components::ShadowUpdate) {
-        self.shadow.update = update;
-    }
-
-    // Set the live shadow distance (world units). The per-frame cascade-split
-    // computation reads `shadow.distance` each draw, so a change takes effect on
-    // the next frame with no allocation (it sizes no GPU resource).
-    pub(crate) fn set_shadow_distance(&mut self, distance: u32) {
-        self.shadow.distance = distance;
-    }
-
-    // Set the live shadow cascade count (1..=4). The per-frame split + schedule
-    // read `shadow.cascades` each draw; only the first `count` of the four slots
-    // are rendered + sampled, so a change takes effect on the next frame with no
-    // resize (the shadow-map array stays sized for the 4-cascade capacity).
-    pub(crate) fn set_shadow_cascades(&mut self, count: u32) {
-        self.shadow.cascades = count;
+    pub(crate) fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
+        self.shadow.cadence = cadence;
     }
 
     // Update the live scalar sub-tunables of the SSAO / SSR / SSGI / auto-exposure

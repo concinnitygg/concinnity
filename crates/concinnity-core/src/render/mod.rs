@@ -33,6 +33,7 @@ pub mod error;
 pub mod feedback;
 pub mod frame_dirty;
 pub mod fullscreen;
+pub mod geometry_repack;
 pub mod hdr_output;
 pub mod hiz_spd;
 pub mod lights;

@@ -1,16 +1,5 @@
-//! RenderBackend impl for DxContext. Thin forwarders to the inherent
-//! methods scattered across directx/{context,resources}.rs.
-//!
-//! The trait splits into one supertrait per operation family, so this is one
-//! impl block per family, in the order they are declared on `RenderBackend`.
-//!
-//! Most forwarders are a mechanical 1:1 call into the inherent method of the
-//! same name, so each block states the signatures and the shared `forward!`
-//! macro writes the bodies. `assert = debug_assert_main_thread` guards the
-//! generated `&mut self` arms, so every mutation reached through the boxed
-//! trait object proves the main-thread invariant the `unsafe impl Send for
-//! DxContext` rests on. Forwarders that rename, drop args, or have a custom body
-//! stay hand-written beside the invocation. Mirrors src/metal/backend.rs.
+//! RenderBackend impl for DxContext, one impl block per trait family; the
+//! bodies come from `crate::forward`.
 
 use concinnity_core::bake;
 use concinnity_core::components;
@@ -124,9 +113,7 @@ impl RenderTuning for DxContext {
         fn set_ambient_intensity(&mut self, value: f32);
         fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
         fn apply_quality_settings(&mut self, settings: backend::QualitySettings) -> RenderResult<()>;
-        fn set_shadow_update(&mut self, update: components::ShadowUpdate);
-        fn set_shadow_distance(&mut self, distance: u32);
-        fn set_shadow_cascades(&mut self, count: u32);
+        fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence);
         fn update_quality_params(&mut self, settings: backend::QualitySettings);
         fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>);
     }

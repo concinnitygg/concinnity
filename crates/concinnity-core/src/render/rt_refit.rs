@@ -2,19 +2,15 @@
 //! acceleration structures. A skinned object's BLAS traces vertices a compute
 //! pass re-poses every frame, so it has to be updated every frame -- but while
 //! the triangle set is unchanged that update can be a REFIT (Vulkan's
-//! `VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR`, DXR's `PERFORM_UPDATE`),
-//! which re-fits the existing tree's bounding volumes in place instead of
+//! `VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR`, DXR's `PERFORM_UPDATE`,
+//! Metal's `refitAccelerationStructure`), which re-fits the existing tree's bounding volumes in place instead of
 //! rebuilding it from scratch.
 //!
 //! A refit keeps the tree the last full build produced, so traversal quality
 //! decays as the pose drifts away from the one that tree was built for; this
 //! module bounds that with a periodic full rebuild. It owns only the pure
 //! decision -- the descriptors, the allocation and the recorded build are
-//! per-backend (directx/raytrace.rs, vulkan/raytrace.rs). Split out so the
-//! cadence is unit-testable without a GPU.
-//!
-//! Consumed by the DirectX + Vulkan backends. The Metal backend keeps its own
-//! equivalent copy (metal/rt_ring.rs).
+//! per-backend. Split out so the cadence is unit-testable without a GPU.
 
 use alloc::vec::Vec;
 
@@ -30,8 +26,10 @@ pub const REFIT_LIMIT: u32 = 32;
 /// the positions moved, which is exactly when a refit is legal; anything else (a
 /// mesh hot-reload, a different mesh becoming visible, a grown deformed buffer)
 /// changes the geometry description and needs a full rebuild. `vertex_extent` is
-/// carried because both APIs require the vertex count to match the structure
-/// being updated, even though the vertex buffer's address may move.
+/// carried because DXR and Vulkan require the vertex count to match the structure
+/// being updated, even though the vertex buffer's address may move. Metal's
+/// descriptors pin no vertex count, so it leaves `vertex_extent` 0 and a grown
+/// deformed range alone does not force a rebuild there.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct SkinnedShape {
     /// First index of this slot's range in the shared index buffer.
@@ -95,6 +93,12 @@ impl SkinnedRefit {
             BlasUpdate::Refit => self.refits += 1,
         }
         update
+    }
+
+    /// Whether the last planned update was over exactly `shapes`, so structures
+    /// allocated for them can still be refit.
+    pub fn matches(&self, shapes: &[SkinnedShape]) -> bool {
+        self.shapes == shapes
     }
 
     /// Forget the tree this slot's BLAS hold, so the next update rebuilds rather
@@ -206,6 +210,17 @@ mod tests {
         // the run then restarts.
         assert_eq!(slot.plan(&shapes, false), BlasUpdate::Build);
         assert_eq!(slot.plan(&shapes, false), BlasUpdate::Refit);
+    }
+
+    #[test]
+    fn matches_tracks_the_last_planned_shapes() {
+        let mut slot = SkinnedRefit::default();
+        assert!(slot.matches(&[]));
+        slot.plan(&[shape(0)], false);
+        assert!(slot.matches(&[shape(0)]));
+        assert!(!slot.matches(&[shape(1)]));
+        slot.reset();
+        assert!(!slot.matches(&[shape(0)]));
     }
 
     #[test]

@@ -84,9 +84,7 @@ pub(super) fn build_shadow(
         srv_gpu: shadow_srv_gpu,
         // The first directional light's direction, for per-frame CSM updates.
         light_dir: lights::sun_direction(light_uniforms),
-        update: shadows.update,
-        distance: shadows.distance,
-        cascades: shadows.cascades,
+        cadence: shadows.cadence,
         scheduler: Default::default(),
         render_mask: 0,
         uniforms: csm::empty_shadow_uniforms(),

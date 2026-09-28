@@ -37,7 +37,7 @@ impl MtlContext {
     pub(in crate::metal) fn next_shadow_cascade_mask(&mut self) -> u32 {
         self.shadow
             .scheduler
-            .next_mask(self.shadow.update, self.shadow.cascades)
+            .next_mask(self.shadow.cadence.update, self.shadow.cadence.cascades)
     }
 
     // pub(in crate::metal) so the render-graph executor in

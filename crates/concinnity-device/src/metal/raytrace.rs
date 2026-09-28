@@ -45,6 +45,7 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
 use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_core::render::rt_geom::{cluster_geom_entry, geom_entry, skinned_geom_entry};
+use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedShape};
 use concinnity_core::render::rt_topology::{GeomSig, participates_in_bvh, plan_topology_refresh};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -69,7 +70,7 @@ use super::context::write_buffer_slice;
 use super::encode::ComputeEncode;
 use super::error::{allocation_failed, completed_command_buffer};
 use super::frame_rings::RetirePool;
-use super::rt_ring::{BlasUpdate, RtFrameRing, SkinnedBlasSet, SkinnedShape, TlasKey};
+use super::rt_ring::{RtFrameRing, SkinnedBlasSet, TlasKey};
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + color + uv = 14 floats). The RT kernel reads positions at this stride; the
@@ -1598,6 +1599,7 @@ impl RtAccelData {
         shapes.extend(skinned_objects.iter().map(|&i| SkinnedShape {
             index_offset: skinned.objects[i].index_offset,
             index_count: skinned.objects[i].index_count,
+            vertex_extent: 0,
         }));
 
         // TLAS instances + geometry table, in instance order: static draw objects
@@ -1628,17 +1630,14 @@ impl RtAccelData {
         // old one, so it counts as a shape change even when the triangles did not
         // move.
         let (deformed_verts, deformed_fresh) = slot.deformed(device, deformed_bytes)?;
-        let shape_changed = deformed_fresh || !slot.shape_matches(shapes);
+        let shape_changed = deformed_fresh || !slot.refit.matches(shapes);
         if shape_changed {
-            slot.set_skinned(
-                allocate_skinned_blas(
-                    device,
-                    deformed_verts.as_ref(),
-                    skinned_indices.as_ref(),
-                    shapes,
-                )?,
+            slot.set_skinned(allocate_skinned_blas(
+                device,
+                deformed_verts.as_ref(),
+                skinned_indices.as_ref(),
                 shapes,
-            );
+            )?);
         }
 
         // This frame's instance descriptors + geometry entries, written straight
@@ -1712,7 +1711,7 @@ impl RtAccelData {
         // Settle build-or-refit last, once every fallible step above has passed:
         // recording a build the encoder never ran would leave the slot claiming a
         // tree a later refit could not update.
-        let update = slot.plan_blas_update(shape_changed);
+        let update = slot.refit.plan(shapes, shape_changed);
 
         // Stage 2: skinned BLAS + TLAS update, committed WITHOUT waiting:
         // same-queue commit order runs it after the skin compute above and before

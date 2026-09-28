@@ -84,15 +84,15 @@ pub trait WindowControl {
 
     /// Switch the window between windowed / borderless / fullscreen at runtime.
     /// The change flows through the backend's normal resize path (no GPU rebuild
-    /// beyond the resize it triggers). Default no-op for backends without a
-    /// window (embedded / preview) or that don't yet implement it.
+    /// beyond the resize it triggers). Default no-op: a backend without a window
+    /// (embedded / preview) ignores it.
     fn set_window_mode(&mut self, mode: crate::components::WindowMode) {
         let _ = mode;
     }
 
     /// Resize the window's content area at runtime (meaningful in windowed mode).
-    /// Drives the same resize path as a user-dragged resize. Default no-op for
-    /// backends without a window or that don't yet implement it.
+    /// Drives the same resize path as a user-dragged resize. Default no-op: a
+    /// backend without a window ignores it.
     fn set_window_size(&mut self, width: u32, height: u32) {
         let _ = (width, height);
     }

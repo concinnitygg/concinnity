@@ -130,22 +130,15 @@ pub fn apply_graphics_config(world: &mut World, config: &GraphicsConfig) -> bool
         state.anisotropy = resolve::anisotropy(config.anisotropy, &user, &ceiling);
 
         state.authored_shadow_update = config.shadow_update;
-        let update = resolve::shadow_update(config.shadow_update, &user, &ceiling);
-        if update != state.shadow_update {
-            state.shadow_update = update;
-            ops.record(move |backend| backend.set_shadow_update(update));
-        }
         state.authored_shadow_distance = config.shadow_distance;
-        let distance = resolve::shadow_distance(config.shadow_distance, &user, &ceiling);
-        if distance != state.shadow_distance {
-            state.shadow_distance = distance;
-            ops.record(move |backend| backend.set_shadow_distance(distance));
-        }
         state.authored_shadow_cascades = config.shadow_cascades;
-        let cascades = resolve::shadow_cascades(config.shadow_cascades, &user, &ceiling);
-        if cascades != state.shadow_cascades {
-            state.shadow_cascades = cascades;
-            ops.record(move |backend| backend.set_shadow_cascades(cascades));
+        let before = state.shadow_cadence();
+        state.shadow_update = resolve::shadow_update(config.shadow_update, &user, &ceiling);
+        state.shadow_distance = resolve::shadow_distance(config.shadow_distance, &user, &ceiling);
+        state.shadow_cascades = resolve::shadow_cascades(config.shadow_cascades, &user, &ceiling);
+        let cadence = state.shadow_cadence();
+        if cadence != before {
+            ops.record(move |backend| backend.set_shadow_cadence(cadence));
         }
     })
     .is_some()
@@ -367,9 +360,8 @@ mod tests {
         let mut f = Fixture::new();
         assert!(apply_graphics_config(&mut f.world, &graphics_config()));
         let calls = f.replay();
-        assert!(calls.contains(&Call::SetShadowDistance(120)));
-        assert!(calls.contains(&Call::SetShadowCascades(2)));
         let state = f.state();
+        assert_eq!(calls, vec![Call::SetShadowCadence(state.shadow_cadence())]);
         assert_eq!(state.shadow_distance, 120);
         assert_eq!(state.authored_shadow_distance, 120);
         assert_eq!(state.shadow_cascades, 2);
@@ -377,9 +369,9 @@ mod tests {
     }
 
     // Re-applying the same config records nothing: the seam is edge-triggered,
-    // so a burst of edits that touch other fields never restates a knob.
+    // so a burst of edits that touch other fields never restates the cadence.
     #[test]
-    fn an_unchanged_knob_records_no_call() {
+    fn an_unchanged_cadence_records_no_call() {
         let mut f = Fixture::new();
         apply_graphics_config(&mut f.world, &graphics_config());
         f.replay();
@@ -400,13 +392,11 @@ mod tests {
 
         assert!(apply_graphics_config(&mut f.world, &graphics_config()));
         let calls = f.replay();
-        assert!(
-            !calls
-                .iter()
-                .any(|c| matches!(c, Call::SetShadowDistance(_))),
-            "the overridden row does not move"
-        );
-        assert!(calls.contains(&Call::SetShadowCascades(2)), "the rest do");
+        let [Call::SetShadowCadence(cadence)] = calls.as_slice() else {
+            panic!("one cadence push expected: {calls:?}");
+        };
+        assert_eq!(cadence.distance, 500, "the overridden row does not move");
+        assert_eq!(cadence.cascades, 2, "the rest do");
         let state = f.state();
         assert_eq!(state.shadow_distance, 500, "the user's value stands");
         assert_eq!(

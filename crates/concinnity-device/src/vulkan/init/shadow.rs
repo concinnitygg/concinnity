@@ -110,9 +110,7 @@ pub(super) fn build_shadow(
         // cached at init so subsequent frames don't have to look it up.
         // Matches the Metal/DirectX pattern.
         light_dir: lights::sun_direction(light_uniforms),
-        update: shadows.update,
-        distance: shadows.distance,
-        cascades: shadows.cascades,
+        cadence: shadows.cadence,
         scheduler: Default::default(),
         render_mask: 0,
     })

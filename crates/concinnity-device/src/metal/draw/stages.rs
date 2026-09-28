@@ -263,10 +263,10 @@ impl MtlContext {
                 fov_y_rad: fov_y_radians,
                 aspect: cascade_aspect,
                 near,
-                shadow_distance: (self.shadow.distance as f32).min(far),
+                shadow_distance: (self.shadow.cadence.distance as f32).min(far),
                 light_dir_to_source: self.shadow.light_dir,
                 shadow_map_size: self.shadow.map_size,
-                active_cascades: self.shadow.cascades,
+                active_cascades: self.shadow.cadence.cascades,
             });
             // Pick this frame's cascades and refresh only their VPs; cascades
             // skipped this frame keep the VP their slice was rendered with so

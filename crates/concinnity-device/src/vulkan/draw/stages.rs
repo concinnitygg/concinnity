@@ -345,10 +345,10 @@ impl VkContext {
                 fov_y_rad: fov_y_radians,
                 aspect: cascade_aspect,
                 near,
-                shadow_distance: (self.shadow.distance as f32).min(far),
+                shadow_distance: (self.shadow.cadence.distance as f32).min(far),
                 light_dir_to_source: self.shadow.light_dir,
                 shadow_map_size: self.shadow.map_size,
-                active_cascades: self.shadow.cascades,
+                active_cascades: self.shadow.cadence.cascades,
             });
             // Advance the cascade schedule and refresh only this frame's
             // cascades' light VPs; skipped cascades keep the VP + depth their
@@ -356,11 +356,11 @@ impl VkContext {
             // consistently. Splits depend only on the camera range (not which
             // cascades render), so always refresh. encode_shadow_pass
             // re-rasterizes only the masked slices.
-            let update = self.shadow.update;
+            let update = self.shadow.cadence.update;
             let mask = self
                 .shadow
                 .scheduler
-                .next_mask(update, self.shadow.cascades);
+                .next_mask(update, self.shadow.cadence.cascades);
             self.shadow.render_mask = mask;
             self.shadow.uniforms.cascade_splits = fresh.cascade_splits;
             self.shadow.uniforms.active_cascades = fresh.active_cascades;
@@ -377,7 +377,7 @@ impl VkContext {
         // N. No uniform refresh: the projections are static and were baked at
         // init. A no-op (mask stays 0) when the world has no shadowed spot.
         self.spot_shadow.advance(matches!(
-            self.shadow.update,
+            self.shadow.cadence.update,
             components::ShadowUpdate::EveryFrame
         ));
     }

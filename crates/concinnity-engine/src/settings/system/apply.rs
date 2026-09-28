@@ -436,8 +436,8 @@ impl SettingsState {
                 let cur = settings::shadow_update_index(self.shadow_update);
                 let next = settings::cycle(cur, opts.len(), op);
                 self.shadow_update = settings::shadow_update_at(next);
-                let update = self.shadow_update;
-                ops.record(move |backend| backend.set_shadow_update(update));
+                let cadence = self.shadow_cadence();
+                ops.record(move |backend| backend.set_shadow_cadence(cadence));
                 cfg.graphics.shadow_update = Some(self.shadow_update);
                 next
             }
@@ -445,8 +445,8 @@ impl SettingsState {
                 let cur = settings::shadow_distance_index(self.shadow_distance);
                 let next = settings::cycle(cur, opts.len(), op);
                 self.shadow_distance = settings::shadow_distance_at(next);
-                let distance = self.shadow_distance;
-                ops.record(move |backend| backend.set_shadow_distance(distance));
+                let cadence = self.shadow_cadence();
+                ops.record(move |backend| backend.set_shadow_cadence(cadence));
                 cfg.graphics.shadow_distance = Some(self.shadow_distance);
                 next
             }
@@ -454,8 +454,8 @@ impl SettingsState {
                 let cur = settings::shadow_cascades_index(self.shadow_cascades);
                 let next = settings::cycle(cur, opts.len(), op);
                 self.shadow_cascades = settings::shadow_cascades_at(next);
-                let count = self.shadow_cascades;
-                ops.record(move |backend| backend.set_shadow_cascades(count));
+                let cadence = self.shadow_cadence();
+                ops.record(move |backend| backend.set_shadow_cadence(cadence));
                 cfg.graphics.shadow_cascades = Some(self.shadow_cascades);
                 next
             }

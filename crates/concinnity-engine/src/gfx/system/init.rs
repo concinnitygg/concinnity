@@ -1872,9 +1872,7 @@ impl GraphicsSystem {
             area_lights: light_data.area_lights,
             shadows: ShadowParams {
                 map_size: settings.shadow_map_size,
-                update: settings.shadow_update,
-                distance: settings.shadow_distance,
-                cascades: settings.shadow_cascades,
+                cadence: settings.shadow_cadence(),
             },
             anisotropy: settings.anisotropy,
             // Restart-required: the mirror targets are allocated once at backend

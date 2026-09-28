@@ -12,10 +12,9 @@
 //!
 //! A fallible default returns [`RenderError::Unsupported`](crate::render::error::RenderError::Unsupported),
 //! never a silent `Ok`, unless doing nothing is the complete answer: a backend
-//! without a morph path has no morph data to attach, and one without a live
-//! quality rebuild applies the settings at the next launch. An infallible
-//! setter defaults to a no-op; a caller that must know whether one lands gates
-//! on [`DeviceCapabilities`] first.
+//! without a morph path has no morph data to attach. An infallible setter
+//! defaults to a no-op; a caller that must know whether one lands gates on
+//! [`DeviceCapabilities`] first.
 //!
 //! Implementations are thin forwarders to the inherent methods on `MtlContext`
 //! / `DxContext` / `VkContext`; concinnity-device generates the 1:1 ones from
@@ -253,6 +252,7 @@ mod tests {
     use crate::input::keymap::KeyMap;
     use crate::profile::RenderStats;
     use crate::render::backend_init::BackendInit;
+    use crate::render::error::RenderError;
     use alloc::vec;
 
     const IDENTITY: [[f32; 4]; 4] = [
@@ -334,11 +334,16 @@ mod tests {
         backend.update_post_process(PostProcessTunables::DEFAULT);
         backend.set_ambient_intensity(1.0);
         backend.set_keymap(&KeyMap::default());
-        assert!(backend.apply_quality_settings(stub_quality()).is_ok());
+        assert!(matches!(
+            backend.apply_quality_settings(stub_quality()),
+            Err(RenderError::Unsupported { .. })
+        ));
         backend.update_quality_params(stub_quality());
-        backend.set_shadow_update(crate::components::ShadowUpdate::EveryFrame);
-        backend.set_shadow_distance(200);
-        backend.set_shadow_cascades(3);
+        backend.set_shadow_cadence(crate::render::backend_init::ShadowCadence {
+            update: crate::components::ShadowUpdate::EveryFrame,
+            distance: 200,
+            cascades: 3,
+        });
         backend.update_fog_settings(None);
         backend.update_directional_lights(&[]);
         backend.set_draw_material(0, MaterialUniforms::DEFAULT, 0, 0);

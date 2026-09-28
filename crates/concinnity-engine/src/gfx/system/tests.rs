@@ -759,8 +759,8 @@ fn low_preset_ceiling_clamps_quality_knobs() {
     let s = lock(&state);
     let init = s.init.as_ref().unwrap();
     assert_eq!(init.shadows.map_size, 1024);
-    assert_eq!(init.shadows.distance, 40);
-    assert_eq!(init.shadows.cascades, 2);
+    assert_eq!(init.shadows.cadence.distance, 40);
+    assert_eq!(init.shadows.cadence.cascades, 2);
     assert_eq!(init.anisotropy, 4);
     let live = settings_state(&world);
     assert_eq!(live.authored_shadow_map_size, 4096);

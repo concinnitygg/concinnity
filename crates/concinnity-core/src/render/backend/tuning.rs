@@ -7,7 +7,8 @@
 
 use crate::gfx::auto_exposure::AutoExposureSettings;
 use crate::gfx::render_types::PostProcessTunables;
-use crate::render::error::RenderResult;
+use crate::render::backend_init::ShadowCadence;
+use crate::render::error::{RenderError, RenderResult};
 use crate::render::post::rt_reflections::RtReflectionSettings;
 use crate::render::post::ssao::SsaoSettings;
 use crate::render::post::ssgi::settings::SsgiSettings;
@@ -20,8 +21,7 @@ use crate::render::volumetric_fog::FogSettings;
 /// changes, so the backend receives ready-to-use settings rather than re-deriving
 /// from the asset. Each `Option` mirrors the init-time gate: `None` means the
 /// feature is off and its passes / resources should be torn down; `Some` means it
-/// is on and its resources should exist. A backend without a live-rebuild path
-/// ignores this (the choice still persists and applies at the next launch).
+/// is on and its resources should exist.
 pub struct QualitySettings {
     /// Temporal anti-aliasing on/off (the `Taa` anti-aliasing mode). The backend
     /// additionally suppresses TAA while temporal upscaling is active (the scaler
@@ -52,9 +52,10 @@ pub struct QualitySettings {
 
 /// Live render settings: quality, shadows, post-process and lighting.
 ///
-/// All defaulted, and every default is a no-op: a backend that reads a setting
-/// only at init keeps its init-time value, and the caller need not know which
-/// ones those are.
+/// All defaulted. The infallible setters default to a no-op, so a backend that
+/// reads a setting only at init keeps its init-time value. The one fallible
+/// method, [`apply_quality_settings`](Self::apply_quality_settings), defaults to
+/// [`RenderError::Unsupported`] so the caller learns the rebuild did not happen.
 pub trait RenderTuning {
     /// Supply the reflection-probe placements (from declared `ReflectionProbe`
     /// assets, or empty to auto-seed from the scene bounds). The backend bakes a
@@ -104,41 +105,20 @@ pub trait RenderTuning {
     /// these gate render passes whose GPU resources (pipelines, render targets,
     /// ray-tracing acceleration structures) are built once at init, so applying a
     /// change rebuilds the affected resources in place rather than flipping a
-    /// uniform. Default: `Ok` with nothing rebuilt, for a backend that only reads
-    /// these at init, where the choice takes effect at the next launch.
+    /// uniform. Default: [`RenderError::Unsupported`], for a backend with no live
+    /// rebuild path.
     fn apply_quality_settings(&mut self, settings: QualitySettings) -> RenderResult<()> {
         let _ = settings;
-        Ok(())
+        Err(RenderError::Unsupported {
+            op: "apply_quality_settings",
+        })
     }
 
-    /// Set the shadow cascade re-render cadence live. The cascade scheduler reads
-    /// the policy at the start of each shadow pass, so a change takes effect on the
-    /// next draw with no pipeline rebuild or allocation (unlike the shadow map
-    /// resolution, which is sized once at init). Default no-op: a backend that only
-    /// reads the cadence at init keeps the init-time value, so the choice takes
-    /// effect at the next launch there.
-    fn set_shadow_update(&mut self, update: crate::components::ShadowUpdate) {
-        let _ = update;
-    }
-
-    /// Set the shadow distance (world units the cascades cover, capped at the
-    /// camera far plane) live. The per-frame cascade-split computation reads it
-    /// each draw, so a change takes effect on the next frame with no allocation or
-    /// rebuild (it sizes no GPU resource, unlike the shadow map resolution).
-    /// Default no-op: a backend that only reads the distance at init keeps the
-    /// init-time value, so the choice takes effect at the next launch there.
-    fn set_shadow_distance(&mut self, distance: u32) {
-        let _ = distance;
-    }
-
-    /// Set the live shadow cascade count (1..=4). The cascade-split math + the
-    /// re-render schedule read it each frame and only the first `count` cascades
-    /// are projected, rendered, and sampled (the array capacity stays 4), so a
-    /// change takes effect on the next frame with no resize or rebuild. Default
-    /// no-op: a backend that only reads the count at init keeps the init-time
-    /// value, so the choice takes effect at the next launch there.
-    fn set_shadow_cascades(&mut self, count: u32) {
-        let _ = count;
+    /// Replace the live cascade-shadow schedule. The shadow pass reads it each
+    /// frame, so a change lands on the next draw with no rebuild; the shadow map
+    /// resolution is init-only. Default no-op: the init-time cadence stays.
+    fn set_shadow_cadence(&mut self, cadence: ShadowCadence) {
+        let _ = cadence;
     }
 
     /// Update the live scalar sub-tunables of the SSAO / SSR / SSGI / auto-exposure
@@ -158,9 +138,7 @@ pub trait RenderTuning {
     }
 
     /// Replace the live volumetric-fog settings, or disable the fog pass when
-    /// `None`. Driven by world.jsonl hot-reload (`cn debug` only). Default
-    /// no-op: backends that have not implemented the swap leave the fog pass
-    /// at whatever settings were resolved at init.
+    /// `None`. Default no-op: the fog pass keeps its init-time settings.
     ///
     /// A backend that built its fog pipeline lazily based on the world's
     /// init-time `VolumetricFog` cannot enable the pass via this call when

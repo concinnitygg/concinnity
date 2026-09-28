@@ -34,6 +34,7 @@ use concinnity_core::ecs::{EventCursor, HudPrefs, PipelineContext, StepResult, S
 use concinnity_core::gfx::render_types;
 use concinnity_core::input::keymap;
 use concinnity_core::render::backend;
+use concinnity_core::render::backend_init::ShadowCadence;
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot;
@@ -303,6 +304,15 @@ impl SettingsState {
     // The active quality preset's performance ceiling on this GPU.
     pub(crate) fn ceiling(&self) -> crate::gfx::quality_preset::QualityCeiling {
         crate::gfx::quality_preset::resolve_ceiling(self.quality_preset, &self.gpu_profile)
+    }
+
+    // The live cascade schedule the backend reads each frame.
+    pub(crate) fn shadow_cadence(&self) -> ShadowCadence {
+        ShadowCadence {
+            update: self.shadow_update,
+            distance: self.shadow_distance,
+            cascades: self.shadow_cascades,
+        }
     }
 
     // Apply any imperative scene jumps sent by UiInputSystem last tick, copied

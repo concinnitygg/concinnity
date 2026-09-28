@@ -8,7 +8,6 @@
 
 use concinnity_core::bake::texture;
 use concinnity_core::components::DirectionalLight;
-use concinnity_core::components::ShadowUpdate;
 use concinnity_core::components::WindowMode;
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::gfx::render_types;
@@ -21,7 +20,9 @@ use concinnity_core::render::backend::{
     BackendProbe, ChunkMesh, DeviceCapabilities, DrawStreaming, FrameParams, GpuProfile, LiveEdit,
     RenderBackend, RenderTuning, SceneEffects, SkinnedDraws, WindowControl,
 };
-use concinnity_core::render::backend_init::{BackendInit, ShadowParams, SwapchainConfig};
+use concinnity_core::render::backend_init::{
+    BackendInit, ShadowCadence, ShadowParams, SwapchainConfig,
+};
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reflection_probe;
@@ -134,9 +135,7 @@ pub(crate) enum Call {
     UpdateDirectionalLights(Vec<([f32; 3], [f32; 3], f32)>),
     UpdateFogSettings(Option<volumetric_fog::FogSettings>),
     SetKeymap,
-    SetShadowUpdate,
-    SetShadowDistance(u32),
-    SetShadowCascades(u32),
+    SetShadowCadence(ShadowCadence),
     UpdatePostProcess,
     ApplyQualitySettings,
     UpdateQualityParams,
@@ -641,16 +640,8 @@ impl RenderTuning for MockBackend {
         self.record(Call::UpdateFogSettings(settings));
     }
 
-    fn set_shadow_update(&mut self, _update: ShadowUpdate) {
-        self.record(Call::SetShadowUpdate);
-    }
-
-    fn set_shadow_distance(&mut self, distance: u32) {
-        self.record(Call::SetShadowDistance(distance));
-    }
-
-    fn set_shadow_cascades(&mut self, count: u32) {
-        self.record(Call::SetShadowCascades(count));
+    fn set_shadow_cadence(&mut self, cadence: ShadowCadence) {
+        self.record(Call::SetShadowCadence(cadence));
     }
 
     fn update_post_process(&mut self, _tunables: render_types::PostProcessTunables) {

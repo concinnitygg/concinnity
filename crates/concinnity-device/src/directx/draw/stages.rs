@@ -254,16 +254,16 @@ impl DxContext {
                 fov_y_rad: fov_y_radians,
                 aspect,
                 near,
-                shadow_distance: (self.shadow.distance as f32).min(far),
+                shadow_distance: (self.shadow.cadence.distance as f32).min(far),
                 light_dir_to_source: self.shadow.light_dir,
                 shadow_map_size: self.shadow.map_size,
-                active_cascades: self.shadow.cascades,
+                active_cascades: self.shadow.cadence.cascades,
             });
-            let update = self.shadow.update;
+            let update = self.shadow.cadence.update;
             let mask = self
                 .shadow
                 .scheduler
-                .next_mask(update, self.shadow.cascades);
+                .next_mask(update, self.shadow.cadence.cascades);
             self.shadow.render_mask = mask;
             self.shadow.uniforms.cascade_splits = fresh.cascade_splits;
             self.shadow.uniforms.active_cascades = fresh.active_cascades;
@@ -279,7 +279,7 @@ impl DxContext {
         // N. No uniform refresh: the projections are static and were baked at
         // init. A no-op (mask stays 0) when the world has no shadowed spot.
         self.spot_shadow.advance(matches!(
-            self.shadow.update,
+            self.shadow.cadence.update,
             components::ShadowUpdate::EveryFrame
         ));
     }
