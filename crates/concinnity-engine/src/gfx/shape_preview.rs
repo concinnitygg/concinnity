@@ -108,6 +108,7 @@ mod tests {
     use super::*;
     use concinnity_core::animation::skeleton::{Joint, JointPose, Skeleton};
     use concinnity_core::components::{JointProportion, ShapeSlider};
+    use concinnity_core::gfx::render_types::SkinnedIndex;
 
     fn chain() -> Skeleton {
         let joint = |name: &str, parent: Option<usize>, y: f32| Joint {
@@ -123,7 +124,11 @@ mod tests {
 
     fn world_with_pose() -> World {
         let mut world = World::new();
-        world.add_component(SkeletonPose::new(SkinnedMeshHandle(0), 0, chain()));
+        world.add_component(SkeletonPose::new(
+            SkinnedMeshHandle(0),
+            SkinnedIndex(0),
+            chain(),
+        ));
         world.insert_resource(SkinnedMeshMorphNames(vec![vec![
             "jaw+".to_string(),
             "jaw-".to_string(),

@@ -2,7 +2,8 @@
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::{
-    ClusterParams, DrawObject, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES, ShadowUniforms,
+    ClusterParams, DrawIndex, DrawObject, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES,
+    ShadowUniforms,
 };
 use concinnity_core::profile;
 use concinnity_core::render::backend;
@@ -1263,9 +1264,9 @@ impl MtlContext {
     // Update the model matrices of the given draw objects, one
     // `(slot, matrix)` entry per changed object. Out-of-range slots have no
     // effect.
-    pub(crate) fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+    pub(crate) fn update_models(&mut self, updates: &[(DrawIndex, [[f32; 4]; 4])]) {
         for &(index, model) in updates {
-            if let Some(obj) = self.draw.objects.get_mut(index as usize) {
+            if let Some(obj) = self.draw.objects.get_mut(index.index()) {
                 obj.model = model;
             }
         }
@@ -1273,8 +1274,8 @@ impl MtlContext {
 
     // Show or hide a single draw object. Hidden objects are skipped in both
     // the shadow and main passes. Has no effect if the index is out of range.
-    pub(crate) fn update_visibility(&mut self, index: usize, visible: bool) {
-        if let Some(obj) = self.draw.objects.get_mut(index) {
+    pub(crate) fn update_visibility(&mut self, index: DrawIndex, visible: bool) {
+        if let Some(obj) = self.draw.objects.get_mut(index.index()) {
             obj.visible = visible;
         }
     }
@@ -1284,8 +1285,8 @@ impl MtlContext {
     // the ray-tracing BLAS / geometry-table rebuild), so it leaves no ghost in
     // any pass. The geometry buffers stay allocated; the engine's draw-slot
     // allocator recycles the index. Has no effect if the index is out of range.
-    pub(crate) fn retire_draw_object(&mut self, index: usize) {
-        if let Some(obj) = self.draw.objects.get_mut(index) {
+    pub(crate) fn retire_draw_object(&mut self, index: DrawIndex) {
+        if let Some(obj) = self.draw.objects.get_mut(index.index()) {
             obj.visible = false;
             obj.resident = false;
         }
@@ -1299,24 +1300,10 @@ impl MtlContext {
         &mut self,
         obj: DrawObject,
         dst: draw_slot::SlotAlloc,
-    ) -> usize {
-        match dst {
-            draw_slot::SlotAlloc::Reuse(slot) => {
-                self.draw.objects[slot] = obj;
-                self.model_history.reoccupy_draw(slot);
-                slot
-            }
-            draw_slot::SlotAlloc::Append(slot) => {
-                debug_assert_eq!(
-                    slot,
-                    self.draw.objects.len(),
-                    "appended draw slot must match the draw-object count"
-                );
-                self.draw.objects.push(obj);
-                self.model_history.reoccupy_draw(slot);
-                slot
-            }
-        }
+    ) -> DrawIndex {
+        let slot = draw_slot::place_draw_object(&mut self.draw.objects, obj, dst);
+        self.model_history.reoccupy_draw(slot);
+        slot
     }
 
     // Set the scene-transition fade for the next draw_frame call. Applied in
@@ -1334,11 +1321,11 @@ impl MtlContext {
     // cull admits it every frame like a streamed chunk.
     pub(crate) fn clone_static_draw_object(
         &mut self,
-        src_draw_idx: usize,
+        src_draw_idx: DrawIndex,
         model: [[f32; 4]; 4],
         dst: draw_slot::SlotAlloc,
     ) -> error::RenderResult<()> {
-        let src = self.draw.objects.get(src_draw_idx).ok_or_else(|| {
+        let src = self.draw.objects.get(src_draw_idx.index()).ok_or_else(|| {
             error::RenderError::Other(format!(
                 "clone_static_draw_object: src draw {} out of range",
                 src_draw_idx
@@ -1376,12 +1363,12 @@ impl MtlContext {
     // its `material` arg. Has no effect if the index is out of range.
     pub(crate) fn set_draw_material(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         material: render_types::MaterialUniforms,
         texture_slot: usize,
         normal_map_slot: usize,
     ) {
-        if let Some(obj) = self.draw.objects.get_mut(draw_idx) {
+        if let Some(obj) = self.draw.objects.get_mut(draw_idx.index()) {
             obj.material = material;
             obj.texture_slot = texture_slot;
             obj.normal_map_slot = normal_map_slot;
@@ -1406,8 +1393,8 @@ impl MtlContext {
     // Rewrite a draw slot's `cull_distance` in place. Driven by the editor's
     // live draw seam when a Prop edits its `cull_distance` arg. Has no effect
     // if the index is out of range.
-    pub(crate) fn set_draw_cull_distance(&mut self, draw_idx: usize, cull_distance: f32) {
-        if let Some(obj) = self.draw.objects.get_mut(draw_idx) {
+    pub(crate) fn set_draw_cull_distance(&mut self, draw_idx: DrawIndex, cull_distance: f32) {
+        if let Some(obj) = self.draw.objects.get_mut(draw_idx.index()) {
             obj.cull_distance = cull_distance.max(0.0);
         }
     }
@@ -1541,7 +1528,7 @@ impl MtlContext {
 }
 
 impl scene_flow::SceneControl for MtlContext {
-    fn update_visibility(&mut self, draw_idx: usize, visible: bool) {
+    fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
         self.update_visibility(draw_idx, visible);
     }
 

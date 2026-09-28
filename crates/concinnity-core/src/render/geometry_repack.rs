@@ -14,7 +14,7 @@ use core::mem::size_of;
 use core::ops::Range;
 
 use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::{DrawObject, LodSlice};
+use crate::gfx::render_types::{DrawIndex, DrawObject, LodSlice};
 use crate::render::backend::DrawGeometryUpdate;
 use crate::render::error::{RenderError, RenderResult};
 
@@ -70,11 +70,12 @@ pub fn repack_static_geometry(
     old_indices: &[u32],
     changes: Vec<DrawGeometryUpdate>,
 ) -> RenderResult<RepackedGeometry> {
-    let mut change_map: BTreeMap<usize, DrawGeometryUpdate> =
+    let mut change_map: BTreeMap<DrawIndex, DrawGeometryUpdate> =
         changes.into_iter().map(|c| (c.draw_idx, c)).collect();
     let mut packer = Packer::default();
     let mut layouts = Vec::with_capacity(objects.len());
-    for (draw_idx, obj) in objects.iter().enumerate() {
+    for (i, obj) in objects.iter().enumerate() {
+        let draw_idx = DrawIndex::from_usize(i);
         let layout = match change_map.remove(&draw_idx) {
             Some(change) => packer.push_change(obj, &change),
             None => packer.copy_draw(draw_idx, obj, old_vertices, old_indices)?,
@@ -155,7 +156,7 @@ impl Packer {
 
     fn copy_draw(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         obj: &DrawObject,
         old_vertices: &[Vertex],
         old_indices: &[u32],
@@ -212,7 +213,7 @@ impl Packer {
 fn region<'a, T>(
     buf: &'a [T],
     range: Range<usize>,
-    draw_idx: usize,
+    draw_idx: DrawIndex,
     what: &str,
     unit: &str,
 ) -> RenderResult<&'a [T]> {
@@ -268,9 +269,9 @@ mod tests {
         }
     }
 
-    fn change(draw_idx: usize, vertex_count: usize, indices: Vec<u16>) -> DrawGeometryUpdate {
+    fn change(draw_idx: u32, vertex_count: usize, indices: Vec<u16>) -> DrawGeometryUpdate {
         DrawGeometryUpdate {
-            draw_idx,
+            draw_idx: DrawIndex(draw_idx),
             vertices: vertices(vertex_count, 100.0),
             indices,
             lod_alternates: Vec::new(),

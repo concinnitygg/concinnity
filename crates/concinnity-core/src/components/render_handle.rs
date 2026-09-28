@@ -1,3 +1,4 @@
+use crate::gfx::render_types::DrawIndex;
 use crate::memory::InlineVec;
 
 /// The backend draw-object slot(s) an entity occupies.
@@ -11,5 +12,5 @@ pub struct RenderHandle {
     /// Backend draw-object indices owned by this entity.
     ///
     /// Held inline for the single-slot case, which is most of them.
-    pub draws: InlineVec<u32>,
+    pub draws: InlineVec<DrawIndex>,
 }

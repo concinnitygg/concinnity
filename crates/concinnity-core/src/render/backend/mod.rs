@@ -38,6 +38,7 @@ mod tuning;
 // The presentation surface and its input, as the settings menu sees it.
 mod window;
 
+pub use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
 pub use effects::SceneEffects;
 pub use live_edit::{
     DrawGeometryUpdate, LiveEdit, PipelineSwap, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
@@ -130,7 +131,7 @@ pub trait RenderBackend:
     /// crossed once per frame rather than once per entity; the caller sends
     /// only slots whose matrix actually changed. An out-of-range slot is
     /// ignored.
-    fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]);
+    fn update_models(&mut self, updates: &[(DrawIndex, [[f32; 4]; 4])]);
 
     /// Retire a draw object: hide it from every pass (main, shadow, velocity)
     /// and exclude it from the ray-tracing acceleration structure, so a
@@ -138,7 +139,7 @@ pub trait RenderBackend:
     /// untouched; the engine's draw-slot allocator returns the index to its
     /// free list so a later `clone_static_draw_object` can recycle it. A no-op
     /// if the index is out of range.
-    fn retire_draw_object(&mut self, draw_idx: usize);
+    fn retire_draw_object(&mut self, draw_idx: DrawIndex);
 }
 
 // A do-nothing backend used to exercise the provided (default) method bodies
@@ -153,7 +154,7 @@ pub(crate) mod test_stub {
     pub(crate) struct StubBackend;
 
     impl SceneControl for StubBackend {
-        fn update_visibility(&mut self, _draw_idx: usize, _visible: bool) {}
+        fn update_visibility(&mut self, _draw_idx: DrawIndex, _visible: bool) {}
         fn set_fade(&mut self, _fade: f32) {}
     }
 
@@ -170,8 +171,8 @@ pub(crate) mod test_stub {
             Ok(())
         }
         fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
-        fn update_models(&mut self, _updates: &[(u32, [[f32; 4]; 4])]) {}
-        fn retire_draw_object(&mut self, _draw_idx: usize) {}
+        fn update_models(&mut self, _updates: &[(DrawIndex, [[f32; 4]; 4])]) {}
+        fn retire_draw_object(&mut self, _draw_idx: DrawIndex) {}
     }
 
     impl SkinnedDraws for StubBackend {
@@ -183,7 +184,12 @@ pub(crate) mod test_stub {
         ) -> RenderResult<()> {
             Ok(())
         }
-        fn update_skinned_pose(&mut self, _skinned_index: usize, _matrices: &[[[f32; 4]; 4]]) {}
+        fn update_skinned_pose(
+            &mut self,
+            _skinned_index: SkinnedIndex,
+            _matrices: &[[[f32; 4]; 4]],
+        ) {
+        }
     }
 
     impl DrawStreaming for StubBackend {
@@ -197,12 +203,12 @@ pub(crate) mod test_stub {
         ) -> RenderResult<()> {
             Ok(())
         }
-        fn evict_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> RenderResult<()> {
+        fn evict_mesh(&mut self, _draw_idx: DrawIndex, _retire_frame: u64) -> RenderResult<()> {
             Ok(())
         }
         fn upload_mesh(
             &mut self,
-            _draw_idx: usize,
+            _draw_idx: DrawIndex,
             _verts: &[crate::gfx::mesh_payload::Vertex],
             _idxs: &[u16],
             _frame: u64,
@@ -223,10 +229,18 @@ pub(crate) mod test_stub {
         ) -> RenderResult<()> {
             Ok(())
         }
-        fn remove_chunk_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> RenderResult<()> {
+        fn remove_chunk_mesh(
+            &mut self,
+            _draw_idx: DrawIndex,
+            _retire_frame: u64,
+        ) -> RenderResult<()> {
             Ok(())
         }
-        fn set_chunk_model(&mut self, _draw_idx: usize, _model: [[f32; 4]; 4]) -> RenderResult<()> {
+        fn set_chunk_model(
+            &mut self,
+            _draw_idx: DrawIndex,
+            _model: [[f32; 4]; 4],
+        ) -> RenderResult<()> {
             Ok(())
         }
     }
@@ -298,8 +312,8 @@ mod tests {
         // Not hot-swap-capable: a live world reload routes to a full rebuild.
         assert!(backend.hot_swap_config().is_none());
         // No geometry-size introspection for the reload size check.
-        assert!(backend.draw_geometry_size(0).is_none());
-        assert!(backend.draw_lod_index_counts(0).is_none());
+        assert!(backend.draw_geometry_size(DrawIndex(0)).is_none());
+        assert!(backend.draw_lod_index_counts(DrawIndex(0)).is_none());
     }
 
     #[test]
@@ -307,9 +321,9 @@ mod tests {
         let mut backend = StubBackend;
 
         // Runtime skinned-spawn fallbacks: nothing to reveal or hide.
-        backend.reveal_skinned_instance(0, IDENTITY);
-        backend.retire_skinned_draw_object(0);
-        backend.update_skinned_models(&[(0, IDENTITY)]);
+        backend.reveal_skinned_instance(SkinnedIndex(0), IDENTITY);
+        backend.retire_skinned_draw_object(SkinnedIndex(0));
+        backend.update_skinned_models(&[(SkinnedIndex(0), IDENTITY)]);
         // No morph deformation path: nothing to attach.
         assert!(backend.upload_skinned_morphs(vec![]).is_ok());
 
@@ -346,8 +360,8 @@ mod tests {
         });
         backend.update_fog_settings(None);
         backend.update_directional_lights(&[]);
-        backend.set_draw_material(0, MaterialUniforms::DEFAULT, 0, 0);
-        backend.set_draw_cull_distance(0, 50.0);
+        backend.set_draw_material(DrawIndex(0), MaterialUniforms::DEFAULT, 0, 0);
+        backend.set_draw_cull_distance(DrawIndex(0), 50.0);
 
         // A bucket with no per-bucket pipeline to build is resident as-is.
         assert!(
@@ -390,7 +404,7 @@ mod tests {
             ),
             (
                 "update_skinned_mesh_geometry",
-                op(backend.update_skinned_mesh_geometry(0, 0, &[], &[])),
+                op(backend.update_skinned_mesh_geometry(SkinnedIndex(0), 0, &[], &[])),
             ),
             (
                 "rebuild_skinned_geometry",
@@ -398,11 +412,11 @@ mod tests {
             ),
             (
                 "update_skinned_skeleton",
-                op(backend.update_skinned_skeleton(0, 0)),
+                op(backend.update_skinned_skeleton(SkinnedIndex(0), 0)),
             ),
             (
                 "update_mesh_geometry",
-                op(backend.update_mesh_geometry(0, &[], &[], &[])),
+                op(backend.update_mesh_geometry(DrawIndex(0), &[], &[], &[])),
             ),
             (
                 "update_environment_map",
@@ -421,9 +435,9 @@ mod tests {
             (
                 "clone_static_draw_object",
                 op(backend.clone_static_draw_object(
-                    0,
+                    DrawIndex(0),
                     IDENTITY,
-                    crate::render::draw_slot::SlotAlloc::Append(0),
+                    crate::render::draw_slot::SlotAlloc::Append(DrawIndex(0)),
                 )),
             ),
             ("add_decal", op(backend.add_decal(stub_decal()))),

@@ -17,6 +17,7 @@ use concinnity_core::components::ModelRenderer;
 use concinnity_core::components::RenderHandle;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Entity, MaterialHandle, World};
+use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::resource::MaterialTable;
 use concinnity_core::resource::TextureTable;
@@ -109,7 +110,7 @@ pub fn apply_material(world: &mut World, entity: Entity, material: DrawMaterial)
         for draw in draws {
             ops.record(move |backend| {
                 backend.set_draw_material(
-                    draw as usize,
+                    draw,
                     entry.uniforms,
                     entry.albedo_slot,
                     entry.normal_map_slot,
@@ -135,7 +136,7 @@ pub fn apply_cull_distance(world: &mut World, entity: Entity, cull_distance: f32
     }
     with_ops(world, |ops| {
         for draw in draws {
-            ops.record(move |backend| backend.set_draw_cull_distance(draw as usize, cull_distance));
+            ops.record(move |backend| backend.set_draw_cull_distance(draw, cull_distance));
         }
     })
     .is_some()
@@ -161,7 +162,7 @@ fn texture_count(world: &World) -> usize {
 
 // The backend draw slots the entity owns; empty for an entity the renderer
 // never gave one (nothing drawable, or a world with no graphics).
-fn draws_of(world: &World, entity: Entity) -> Vec<u32> {
+fn draws_of(world: &World, entity: Entity) -> Vec<DrawIndex> {
     world
         .get::<RenderHandle>(entity)
         .map(|h| h.draws.to_vec())
@@ -256,7 +257,7 @@ mod tests {
             self.world.insert(
                 entity,
                 RenderHandle {
-                    draws: [3u32, 4].into_iter().collect(),
+                    draws: [DrawIndex(3), DrawIndex(4)].into(),
                 },
             );
             entity
@@ -271,7 +272,7 @@ mod tests {
             self.world.insert(
                 entity,
                 RenderHandle {
-                    draws: [5u32, 6].into_iter().collect(),
+                    draws: [DrawIndex(5), DrawIndex(6)].into(),
                 },
             );
             entity
@@ -348,12 +349,12 @@ mod tests {
             f.replay(),
             vec![
                 Call::SetDrawMaterial {
-                    draw_idx: 3,
+                    draw_idx: DrawIndex(3),
                     texture_slot: 1,
                     normal_map_slot: render_types::NO_NORMAL_MAP_SLOT,
                 },
                 Call::SetDrawMaterial {
-                    draw_idx: 4,
+                    draw_idx: DrawIndex(4),
                     texture_slot: 1,
                     normal_map_slot: render_types::NO_NORMAL_MAP_SLOT,
                 },
@@ -373,8 +374,8 @@ mod tests {
         assert_eq!(
             f.replay(),
             vec![
-                Call::SetDrawCullDistance(3, 40.0),
-                Call::SetDrawCullDistance(4, 40.0),
+                Call::SetDrawCullDistance(DrawIndex(3), 40.0),
+                Call::SetDrawCullDistance(DrawIndex(4), 40.0),
             ]
         );
         assert_eq!(
@@ -393,8 +394,8 @@ mod tests {
         assert_eq!(
             f.replay(),
             vec![
-                Call::SetDrawCullDistance(5, 25.0),
-                Call::SetDrawCullDistance(6, 25.0),
+                Call::SetDrawCullDistance(DrawIndex(5), 25.0),
+                Call::SetDrawCullDistance(DrawIndex(6), 25.0),
             ]
         );
         assert_eq!(

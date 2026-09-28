@@ -18,7 +18,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject};
+use crate::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject, SkinnedIndex};
 use crate::render::model_history::ModelHistory;
 use crate::transform::IDENTITY;
 
@@ -46,8 +46,8 @@ impl SkinnedSlots {
     /// `GraphicsSystem` with the pose `AnimationSystem` computed. An empty pose
     /// is stored as a single identity joint so the shader always has one
     /// matrix to blend. Out-of-range indices are ignored.
-    pub fn update_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]) {
-        if let Some(slot) = self.joint_matrices.get_mut(skinned_index) {
+    pub fn update_pose(&mut self, skinned_index: SkinnedIndex, matrices: &[[[f32; 4]; 4]]) {
+        if let Some(slot) = self.joint_matrices.get_mut(skinned_index.index()) {
             slot.clear();
             slot.extend_from_slice(matrices);
             if slot.is_empty() {
@@ -58,8 +58,8 @@ impl SkinnedSlots {
 
     /// Replace one slot's morph weights. Out-of-range indices and slots without
     /// morph targets are ignored; extra weights are dropped.
-    pub fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]) {
-        if let Some(slot) = self.morph_weights.get_mut(skinned_index) {
+    pub fn update_morph_weights(&mut self, skinned_index: SkinnedIndex, weights: &[f32]) {
+        if let Some(slot) = self.morph_weights.get_mut(skinned_index.index()) {
             for (i, w) in slot.iter_mut().enumerate() {
                 *w = weights.get(i).copied().unwrap_or(0.0);
             }
@@ -77,19 +77,22 @@ impl SkinnedSlots {
     /// [`Self::update_pose`]. Counts above [`MAX_JOINTS`] are clamped.
     pub fn update_skeleton(
         &mut self,
-        skinned_index: usize,
+        skinned_index: SkinnedIndex,
         new_joint_count: usize,
     ) -> Result<(), String> {
-        let obj = self.draw_objects.get_mut(skinned_index).ok_or_else(|| {
-            format!(
-                "update_skinned_skeleton: skinned object {} out of range",
-                skinned_index
-            )
-        })?;
+        let obj = self
+            .draw_objects
+            .get_mut(skinned_index.index())
+            .ok_or_else(|| {
+                format!(
+                    "update_skinned_skeleton: skinned object {} out of range",
+                    skinned_index
+                )
+            })?;
         let capped = new_joint_count.min(MAX_JOINTS);
         obj.joint_count = capped;
         let size = capped.max(1);
-        if let Some(slot) = self.joint_matrices.get_mut(skinned_index) {
+        if let Some(slot) = self.joint_matrices.get_mut(skinned_index.index()) {
             slot.resize(size, IDENTITY);
         }
         Ok(())
@@ -102,11 +105,11 @@ impl SkinnedSlots {
     /// A no-op if the index is out of range.
     pub fn reveal(
         &mut self,
-        instance_index: usize,
+        instance_index: SkinnedIndex,
         model: [[f32; 4]; 4],
         history: &mut ModelHistory,
     ) {
-        let Some(obj) = self.draw_objects.get_mut(instance_index) else {
+        let Some(obj) = self.draw_objects.get_mut(instance_index.index()) else {
             return;
         };
         obj.model = model;
@@ -114,15 +117,15 @@ impl SkinnedSlots {
         // The slot's model-history entry belongs to the previous occupant, so
         // the next pre-pass must reproject through the revealed model instead.
         history.reoccupy_skinned(instance_index);
-        if let Some(palette) = self.joint_matrices.get_mut(instance_index) {
+        if let Some(palette) = self.joint_matrices.get_mut(instance_index.index()) {
             palette.iter_mut().for_each(|m| *m = IDENTITY);
         }
     }
 
     /// Hide a slot; the engine's instance pool recycles it. A no-op if the
     /// index is out of range.
-    pub fn retire(&mut self, skinned_index: usize) {
-        if let Some(obj) = self.draw_objects.get_mut(skinned_index) {
+    pub fn retire(&mut self, skinned_index: SkinnedIndex) {
+        if let Some(obj) = self.draw_objects.get_mut(skinned_index.index()) {
             obj.visible = false;
         }
     }
@@ -131,9 +134,9 @@ impl SkinnedSlots {
     /// `(skinned index, matrix)` entry per moved instance. The per-frame cull
     /// records read `obj.model` directly (they are rebuilt every frame), so
     /// this only writes the fields. Out-of-range indices have no effect.
-    pub fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+    pub fn update_models(&mut self, updates: &[(SkinnedIndex, [[f32; 4]; 4])]) {
         for &(skinned_index, model) in updates {
-            if let Some(obj) = self.draw_objects.get_mut(skinned_index as usize) {
+            if let Some(obj) = self.draw_objects.get_mut(skinned_index.index()) {
                 obj.model = model;
             }
         }
@@ -171,45 +174,45 @@ mod tests {
     #[test]
     fn update_pose_replaces_the_palette() {
         let mut slots = two_slots();
-        slots.update_pose(0, &[ONE, ONE]);
+        slots.update_pose(SkinnedIndex(0), &[ONE, ONE]);
         assert_eq!(slots.joint_matrices[0], alloc::vec![ONE, ONE]);
     }
 
     #[test]
     fn an_empty_pose_leaves_one_identity_joint() {
         let mut slots = two_slots();
-        slots.update_pose(0, &[]);
+        slots.update_pose(SkinnedIndex(0), &[]);
         assert_eq!(slots.joint_matrices[0], alloc::vec![IDENTITY]);
     }
 
     #[test]
     fn update_pose_ignores_an_out_of_range_slot() {
         let mut slots = two_slots();
-        slots.update_pose(9, &[ONE]);
+        slots.update_pose(SkinnedIndex(9), &[ONE]);
         assert_eq!(slots.joint_matrices.len(), 2);
     }
 
     #[test]
     fn morph_weights_are_padded_and_truncated_to_the_slot() {
         let mut slots = two_slots();
-        slots.update_morph_weights(0, &[0.5]);
+        slots.update_morph_weights(SkinnedIndex(0), &[0.5]);
         assert_eq!(slots.morph_weights[0], alloc::vec![0.5, 0.0]);
-        slots.update_morph_weights(0, &[0.25, 0.75, 1.0]);
+        slots.update_morph_weights(SkinnedIndex(0), &[0.25, 0.75, 1.0]);
         assert_eq!(slots.morph_weights[0], alloc::vec![0.25, 0.75]);
     }
 
     #[test]
     fn morph_weights_on_a_morphless_slot_are_ignored() {
         let mut slots = two_slots();
-        slots.update_morph_weights(1, &[0.5]);
+        slots.update_morph_weights(SkinnedIndex(1), &[0.5]);
         assert!(slots.morph_weights[1].is_empty());
     }
 
     #[test]
     fn a_grown_skeleton_seeds_new_joints_to_identity() {
         let mut slots = two_slots();
-        slots.update_pose(0, &[ONE, ONE, ONE]);
-        assert!(slots.update_skeleton(0, 5).is_ok());
+        slots.update_pose(SkinnedIndex(0), &[ONE, ONE, ONE]);
+        assert!(slots.update_skeleton(SkinnedIndex(0), 5).is_ok());
         assert_eq!(slots.draw_objects[0].joint_count, 5);
         assert_eq!(slots.joint_matrices[0].len(), 5);
         assert_eq!(slots.joint_matrices[0][4], IDENTITY);
@@ -218,7 +221,7 @@ mod tests {
     #[test]
     fn a_shrunk_skeleton_truncates_the_palette() {
         let mut slots = two_slots();
-        assert!(slots.update_skeleton(0, 1).is_ok());
+        assert!(slots.update_skeleton(SkinnedIndex(0), 1).is_ok());
         assert_eq!(slots.draw_objects[0].joint_count, 1);
         assert_eq!(slots.joint_matrices[0].len(), 1);
     }
@@ -226,7 +229,7 @@ mod tests {
     #[test]
     fn a_zero_joint_skeleton_keeps_one_palette_entry() {
         let mut slots = two_slots();
-        assert!(slots.update_skeleton(0, 0).is_ok());
+        assert!(slots.update_skeleton(SkinnedIndex(0), 0).is_ok());
         assert_eq!(slots.draw_objects[0].joint_count, 0);
         assert_eq!(slots.joint_matrices[0].len(), 1);
     }
@@ -234,7 +237,11 @@ mod tests {
     #[test]
     fn a_skeleton_above_the_cap_is_clamped() {
         let mut slots = two_slots();
-        assert!(slots.update_skeleton(0, MAX_JOINTS + 16).is_ok());
+        assert!(
+            slots
+                .update_skeleton(SkinnedIndex(0), MAX_JOINTS + 16)
+                .is_ok()
+        );
         assert_eq!(slots.draw_objects[0].joint_count, MAX_JOINTS);
         assert_eq!(slots.joint_matrices[0].len(), MAX_JOINTS);
     }
@@ -242,7 +249,7 @@ mod tests {
     #[test]
     fn an_out_of_range_skeleton_update_reports_the_slot() {
         let mut slots = two_slots();
-        let err = slots.update_skeleton(9, 4).unwrap_err();
+        let err = slots.update_skeleton(SkinnedIndex(9), 4).unwrap_err();
         assert!(err.contains('9'), "{err}");
     }
 
@@ -250,8 +257,8 @@ mod tests {
     fn reveal_shows_the_slot_and_resets_its_palette() {
         let mut slots = two_slots();
         let mut history = ModelHistory::new();
-        slots.update_pose(0, &[ONE, ONE, ONE]);
-        slots.reveal(0, ONE, &mut history);
+        slots.update_pose(SkinnedIndex(0), &[ONE, ONE, ONE]);
+        slots.reveal(SkinnedIndex(0), ONE, &mut history);
         assert!(slots.draw_objects[0].visible);
         assert_eq!(slots.draw_objects[0].model, ONE);
         assert_eq!(slots.joint_matrices[0], alloc::vec![IDENTITY; 3]);
@@ -266,7 +273,7 @@ mod tests {
         history.skinned_flags(0, 0);
         history.begin(HistoryMode::Track, 2);
         assert_eq!(history.skinned_flags(0, 0), 0);
-        slots.reveal(0, ONE, &mut history);
+        slots.reveal(SkinnedIndex(0), ONE, &mut history);
         history.begin(HistoryMode::Track, 2);
         assert_eq!(history.skinned_flags(0, 0), draw_args_no_history());
     }
@@ -275,7 +282,7 @@ mod tests {
     fn reveal_ignores_an_out_of_range_slot() {
         let mut slots = two_slots();
         let mut history = ModelHistory::new();
-        slots.reveal(9, ONE, &mut history);
+        slots.reveal(SkinnedIndex(9), ONE, &mut history);
         assert!(!slots.draw_objects[0].visible);
         assert!(!slots.draw_objects[1].visible);
     }
@@ -284,16 +291,16 @@ mod tests {
     fn retire_hides_the_slot() {
         let mut slots = two_slots();
         let mut history = ModelHistory::new();
-        slots.reveal(1, ONE, &mut history);
-        slots.retire(1);
+        slots.reveal(SkinnedIndex(1), ONE, &mut history);
+        slots.retire(SkinnedIndex(1));
         assert!(!slots.draw_objects[1].visible);
-        slots.retire(9);
+        slots.retire(SkinnedIndex(9));
     }
 
     #[test]
     fn update_models_writes_only_the_listed_slots() {
         let mut slots = two_slots();
-        slots.update_models(&[(1, ONE), (9, ONE)]);
+        slots.update_models(&[(SkinnedIndex(1), ONE), (SkinnedIndex(9), ONE)]);
         assert_eq!(slots.draw_objects[0].model, IDENTITY);
         assert_eq!(slots.draw_objects[1].model, ONE);
     }

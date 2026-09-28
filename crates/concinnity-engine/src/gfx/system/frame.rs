@@ -330,7 +330,7 @@ impl GraphicsSystem {
         for (_entity, global, handle) in ctx.join2::<GlobalTransform, RenderHandle>() {
             for &slot in &handle.draws {
                 self.model_push
-                    .push_changed(&mut snap.models, slot as usize, global.0);
+                    .push_changed(&mut snap.models, slot, global.0);
             }
         }
 
@@ -359,11 +359,8 @@ impl GraphicsSystem {
                 {
                     if let Some(handle) = ctx.get::<RenderHandle>(c.entity) {
                         for &slot in &handle.draws {
-                            self.model_push.push_changed(
-                                &mut snap.models,
-                                slot as usize,
-                                HIDDEN_MODEL,
-                            );
+                            self.model_push
+                                .push_changed(&mut snap.models, slot, HIDDEN_MODEL);
                         }
                     }
                 }
@@ -708,10 +705,10 @@ mod tests {
         ]
     }
 
-    fn bare_pose(skinned_index: usize, joints: usize) -> SkeletonPose {
+    fn bare_pose(skinned_index: u32, joints: usize) -> SkeletonPose {
         SkeletonPose {
             mesh_id: SkinnedMeshHandle(0),
-            skinned_index,
+            skinned_index: SkinnedIndex(skinned_index),
             skeleton: skeleton::Skeleton::new(Vec::new()),
             joint_matrices: vec![translated(1.0); joints],
             morph_weights: Vec::new(),
@@ -734,7 +731,7 @@ mod tests {
             ctx.insert(
                 e,
                 RenderHandle {
-                    draws: [3, 4].into(),
+                    draws: [DrawIndex(3), DrawIndex(4)].into(),
                 },
             );
         }
@@ -742,7 +739,10 @@ mod tests {
         let snap = extract_once(&mut gs, &mut world);
         assert_eq!(
             snap.models,
-            vec![(3, translated(2.0)), (4, translated(2.0))]
+            vec![
+                (DrawIndex(3), translated(2.0)),
+                (DrawIndex(4), translated(2.0))
+            ]
         );
 
         let snap = extract_once(&mut gs, &mut world);
@@ -764,14 +764,15 @@ mod tests {
         }
         let mut gs = GraphicsSystem::new(None);
         let snap = extract_once(&mut gs, &mut world);
-        let poses: Vec<(usize, usize)> = snap.poses.iter().map(|(idx, m)| (idx, m.len())).collect();
-        assert_eq!(poses, vec![(5, 2)]);
-        let morphs: Vec<(usize, Vec<f32>)> = snap
+        let poses: Vec<(SkinnedIndex, usize)> =
+            snap.poses.iter().map(|(idx, m)| (idx, m.len())).collect();
+        assert_eq!(poses, vec![(SkinnedIndex(5), 2)]);
+        let morphs: Vec<(SkinnedIndex, Vec<f32>)> = snap
             .morphs
             .iter()
             .map(|(idx, w)| (idx, w.to_vec()))
             .collect();
-        assert_eq!(morphs, vec![(5, vec![0.25, 0.75])]);
+        assert_eq!(morphs, vec![(SkinnedIndex(5), vec![0.25, 0.75])]);
 
         let snap = extract_once(&mut gs, &mut world);
         assert!(snap.poses.is_empty(), "consumed pose is not re-extracted");
@@ -915,13 +916,18 @@ mod tests {
             let mut ctx = world.ctx();
             let e = ctx.components.spawn();
             ctx.insert(e, GlobalTransform(translated(2.0)));
-            ctx.insert(e, RenderHandle { draws: [9].into() });
+            ctx.insert(
+                e,
+                RenderHandle {
+                    draws: [DrawIndex(9)].into(),
+                },
+            );
             e
         };
         // A shipped runtime: no candidates, so no pick index is published.
         let mut gs = GraphicsSystem::new(None);
         let snap = extract_once(&mut gs, &mut world);
-        assert_eq!(snap.models, vec![(9, translated(2.0))]);
+        assert_eq!(snap.models, vec![(DrawIndex(9), translated(2.0))]);
         assert!(world.resources.get::<PickIndex>().is_none());
 
         // The editor opted in and hid the asset: the queued model is
@@ -944,7 +950,10 @@ mod tests {
         let snap = extract_once(&mut gs, &mut world);
         assert_eq!(
             snap.models,
-            vec![(9, translated(3.0)), (9, HIDDEN_MODEL)],
+            vec![
+                (DrawIndex(9), translated(3.0)),
+                (DrawIndex(9), HIDDEN_MODEL)
+            ],
             "the hide overwrite follows the move so it wins on the backend"
         );
         let index = world.resources.get::<PickIndex>().unwrap();
@@ -961,7 +970,12 @@ mod tests {
             let mut ctx = world.ctx();
             let e = ctx.components.spawn();
             ctx.insert(e, GlobalTransform(translated(2.0)));
-            ctx.insert(e, RenderHandle { draws: [3].into() });
+            ctx.insert(
+                e,
+                RenderHandle {
+                    draws: [DrawIndex(3)].into(),
+                },
+            );
         }
         let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel(0);
         let (feedback_tx, feedback_rx) = std::sync::mpsc::channel();

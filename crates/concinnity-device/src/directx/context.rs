@@ -1181,16 +1181,16 @@ impl DxContext {
     // Update the model matrices of the given draw objects, one
     // `(slot, matrix)` entry per changed object. Out-of-range slots have no
     // effect.
-    pub(crate) fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+    pub(crate) fn update_models(&mut self, updates: &[(DrawIndex, [[f32; 4]; 4])]) {
         for &(index, model) in updates {
-            if let Some(obj) = self.draw.objects.get_mut(index as usize) {
+            if let Some(obj) = self.draw.objects.get_mut(index.index()) {
                 obj.model = model;
             }
         }
     }
 
-    pub(crate) fn update_visibility(&mut self, index: usize, visible: bool) {
-        if let Some(obj) = self.draw.objects.get_mut(index) {
+    pub(crate) fn update_visibility(&mut self, index: DrawIndex, visible: bool) {
+        if let Some(obj) = self.draw.objects.get_mut(index.index()) {
             obj.visible = visible;
         }
     }
@@ -1201,8 +1201,8 @@ impl DxContext {
     // any pass, then return its slot to the free list so the next runtime clone
     // (or streamed chunk) recycles it. The geometry buffers stay allocated.
     // No-op if the index is out of range.
-    pub(crate) fn retire_draw_object(&mut self, index: usize) {
-        if let Some(obj) = self.draw.objects.get_mut(index) {
+    pub(crate) fn retire_draw_object(&mut self, index: DrawIndex) {
+        if let Some(obj) = self.draw.objects.get_mut(index.index()) {
             obj.visible = false;
             obj.resident = false;
             // Slot recycling lives in the engine's draw-slot allocator; only
@@ -1719,7 +1719,7 @@ impl DxContext {
 }
 
 impl scene_flow::SceneControl for DxContext {
-    fn update_visibility(&mut self, draw_idx: usize, visible: bool) {
+    fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
         self.update_visibility(draw_idx, visible);
     }
     fn set_fade(&mut self, fade: f32) {

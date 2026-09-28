@@ -8,7 +8,8 @@
 
 use crate::support::Bench;
 use concinnity_core::components::{PointLight, RectAreaLight, SpotLight};
-use concinnity_core::render::draw_slot::{DrawSlotAllocator, SlotAlloc};
+use concinnity_core::gfx::render_types::DrawIndex;
+use concinnity_core::render::draw_slot::DrawSlotAllocator;
 use concinnity_core::render::lights::build_light_data;
 use concinnity_core::render::streaming::StreamPlanner;
 
@@ -86,14 +87,11 @@ pub(crate) fn benches(bench: &mut Bench) {
         let mut slots = DrawSlotAllocator::with_len(OBJECTS);
         bench.run("render/draw_slot_churn/1k", SLOT_CHURN as u64, || {
             for slot in 0..SLOT_CHURN {
-                slots.free(slot * 7 % OBJECTS);
+                slots.free(DrawIndex::from_usize(slot * 7 % OBJECTS));
             }
             let mut acc = 0usize;
             for _ in 0..SLOT_CHURN {
-                acc += match slots.allocate() {
-                    SlotAlloc::Reuse(slot) => slot,
-                    SlotAlloc::Append(slot) => slot,
-                };
+                acc += slots.allocate().slot().index();
             }
             acc
         });

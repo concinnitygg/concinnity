@@ -1147,6 +1147,47 @@ pub const NO_ALBEDO_SLOT: usize = usize::MAX;
 /// resolvers below agree with each backend's pool construction.
 pub const FALLBACK_TEXTURE_COUNT: usize = 2;
 
+macro_rules! draw_list_index {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        pub struct $name(pub u32);
+
+        impl $name {
+            /// The position this index names in its draw-object list.
+            pub const fn index(self) -> usize {
+                self.0 as usize
+            }
+
+            /// Wrap a draw-object list position. Debug builds assert that it
+            /// fits in a `u32`.
+            pub fn from_usize(i: usize) -> Self {
+                debug_assert!(
+                    u32::try_from(i).is_ok(),
+                    concat!(stringify!($name), " does not fit in a u32")
+                );
+                Self(i as u32)
+            }
+        }
+
+        impl core::fmt::Display for $name {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                core::fmt::Display::fmt(&self.0, f)
+            }
+        }
+    };
+}
+
+draw_list_index! {
+    /// A slot in a backend's static draw-object list ([`DrawObject`]).
+    DrawIndex
+}
+
+draw_list_index! {
+    /// A slot in a backend's skinned draw-object list ([`SkinnedDrawObject`]).
+    SkinnedIndex
+}
+
 /// One renderable object: vertex/index slice within the shared GPU buffers,
 /// a model matrix, albedo and normal-map texture slots, and material parameters.
 pub struct DrawObject {
@@ -1835,6 +1876,30 @@ mod tests {
             FALLBACK_TEXTURE_COUNT, 2,
             "the pool reserves exactly the flat-normal and white entries"
         );
+    }
+
+    #[test]
+    fn draw_indices_round_trip_through_usize() {
+        assert_eq!(DrawIndex::from_usize(7), DrawIndex(7));
+        assert_eq!(DrawIndex(7).index(), 7);
+        assert_eq!(SkinnedIndex::from_usize(3).index(), 3);
+        let max = u32::MAX as usize;
+        assert_eq!(DrawIndex::from_usize(max).0, u32::MAX);
+        assert_eq!(alloc::format!("{}", SkinnedIndex(12)), "12");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "DrawIndex does not fit in a u32")]
+    fn a_draw_index_past_u32_is_caught_in_debug() {
+        let _ = DrawIndex::from_usize(u32::MAX as usize + 1);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "SkinnedIndex does not fit in a u32")]
+    fn a_skinned_index_past_u32_is_caught_in_debug() {
+        let _ = SkinnedIndex::from_usize(u32::MAX as usize + 1);
     }
 
     // A clone copies an existing draw object, so a world with none reserves no

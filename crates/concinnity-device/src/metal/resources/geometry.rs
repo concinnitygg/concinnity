@@ -4,6 +4,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_core::render::error::{RenderError, RenderResult};
 
 use crate::metal::context::{MtlContext, bytes_of_slice, write_buffer_region, zero_buffer_region};
@@ -26,12 +27,12 @@ impl MtlContext {
     // race-free.
     pub(crate) fn upload_mesh(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         vertices: &[Vertex],
         indices: &[u16],
         frame: u64,
     ) -> RenderResult<()> {
-        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
+        let obj = self.draw.objects.get(draw_idx.index()).ok_or_else(|| {
             RenderError::Other(format!(
                 "upload_mesh: draw object {} out of range",
                 draw_idx
@@ -84,7 +85,7 @@ impl MtlContext {
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
         write_buffer_region(&self.scene.index_buffer, i_off, bytes_of_slice(&rebased))?;
 
-        let obj = &mut self.draw.objects[draw_idx];
+        let obj = &mut self.draw.objects[draw_idx.index()];
         obj.vertex_offset = v_off;
         obj.index_offset = i_off / std::mem::size_of::<u32>();
         obj.resident = true;
@@ -128,8 +129,12 @@ impl MtlContext {
     // the mesh back, wherever the allocators then place it. Zeroing makes the
     // region carry no geometry, so a stray draw renders nothing rather than
     // stale triangles.
-    pub(crate) fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()> {
-        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
+    pub(crate) fn evict_mesh(
+        &mut self,
+        draw_idx: DrawIndex,
+        retire_frame: u64,
+    ) -> RenderResult<()> {
+        let obj = self.draw.objects.get(draw_idx.index()).ok_or_else(|| {
             RenderError::Other(format!("evict_mesh: draw object {draw_idx} out of range"))
         })?;
         let v_off = obj.vertex_offset;
@@ -144,7 +149,7 @@ impl MtlContext {
         self.geometry_alloc
             .mesh_idx
             .free(i_off as u64, i_len as u64, retire_frame);
-        self.draw.objects[draw_idx].resident = false;
+        self.draw.objects[draw_idx.index()].resident = false;
         // The mesh leaves the RT-relevant draw set; the next RT update drops its
         // BLAS (deferred-freed once in-flight traces retire).
         self.rt.topology_dirty = true;
@@ -177,12 +182,12 @@ impl MtlContext {
     // `lod_distances` propagate without restart.
     pub(crate) fn update_mesh_geometry(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         vertices: &[Vertex],
         indices: &[u16],
         lod_alternates: &[(f32, Vec<u16>)],
     ) -> RenderResult<()> {
-        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
+        let obj = self.draw.objects.get(draw_idx.index()).ok_or_else(|| {
             RenderError::Other(format!(
                 "update_mesh_geometry: draw object {} out of range",
                 draw_idx
@@ -269,7 +274,7 @@ impl MtlContext {
         }
         // Refresh the per-LOD switch distances so JSON-side tweaks to
         // `lod_distances` propagate without a process restart.
-        let slot = &mut self.draw.objects[draw_idx];
+        let slot = &mut self.draw.objects[draw_idx.index()];
         for ((switch_distance, _), slice) in
             lod_alternates.iter().zip(slot.lod_alternates.iter_mut())
         {

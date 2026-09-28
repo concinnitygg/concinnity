@@ -3,7 +3,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::DrawObject;
+use concinnity_core::gfx::render_types::{DrawIndex, DrawObject};
 use concinnity_core::render::backend::ChunkMesh;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -162,7 +162,7 @@ impl MtlContext {
     // `add_chunk_mesh`.
     pub(crate) fn remove_chunk_mesh(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         retire_frame: u64,
     ) -> RenderResult<()> {
         let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)
@@ -191,7 +191,7 @@ impl MtlContext {
 
     pub(crate) fn set_chunk_model(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         model: [[f32; 4]; 4],
     ) -> RenderResult<()> {
         draw_slot::set_chunk_model(&mut self.draw.objects, draw_idx, model)

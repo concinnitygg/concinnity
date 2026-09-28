@@ -8,7 +8,7 @@
 //! [`RenderBackend`]: crate::render::backend::RenderBackend
 
 use crate::gfx::mesh_payload::SkinnedVertex;
-use crate::gfx::render_types::SkinnedDrawObject;
+use crate::gfx::render_types::{SkinnedDrawObject, SkinnedIndex};
 use crate::render::error::RenderResult;
 use alloc::vec::Vec;
 
@@ -29,7 +29,7 @@ pub trait SkinnedDraws {
         draw_objects: Vec<SkinnedDrawObject>,
     ) -> RenderResult<()>;
     /// Push one skinned slot's joint matrices for this frame.
-    fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]);
+    fn update_skinned_pose(&mut self, skinned_index: SkinnedIndex, matrices: &[[[f32; 4]; 4]]);
 
     /// Attach morph-target data to the skinned draw objects, called once after
     /// `upload_skinned`: `morphs[i]` belongs to draw object `i` (instance
@@ -46,7 +46,7 @@ pub trait SkinnedDraws {
     /// Push a skinned object's current morph-target weights, sampled by the
     /// animation system each frame. A no-op when the index is out of range or
     /// the object carries no morph targets.
-    fn update_morph_weights(&mut self, _skinned_index: usize, _weights: &[f32]) {}
+    fn update_morph_weights(&mut self, _skinned_index: SkinnedIndex, _weights: &[f32]) {}
 
     // Runtime skinned spawn (pre-reserved instance pool): a backend pre-reserves
     // hidden bind-pose copies at load (`SkinnedMesh.max_instances`) and reveals
@@ -59,12 +59,12 @@ pub trait SkinnedDraws {
     /// palette to bind so it does not flash a previous occupant's pose. Which
     /// instance to use is decided by the engine's instance pool; the backend
     /// only applies it. A no-op if the index is out of range.
-    fn reveal_skinned_instance(&mut self, _instance_index: usize, _model: [[f32; 4]; 4]) {}
+    fn reveal_skinned_instance(&mut self, _instance_index: SkinnedIndex, _model: [[f32; 4]; 4]) {}
 
     /// Hide a live skinned instance. The engine's instance pool returns the
     /// slot for reuse; the backend only hides it. A no-op if the index is out
     /// of range.
-    fn retire_skinned_draw_object(&mut self, _skinned_index: usize) {}
+    fn retire_skinned_draw_object(&mut self, _skinned_index: SkinnedIndex) {}
 
     /// Push this frame's changed skinned model-to-world matrices, one
     /// `(skinned index, matrix)` entry per moved instance, applied in order
@@ -72,5 +72,5 @@ pub trait SkinnedDraws {
     /// the per-frame cull rebuild reads the object's model directly, so this
     /// just writes the fields. Out-of-range indices are ignored; default
     /// no-op for a backend without movable skinned instances.
-    fn update_skinned_models(&mut self, _updates: &[(u32, [[f32; 4]; 4])]) {}
+    fn update_skinned_models(&mut self, _updates: &[(SkinnedIndex, [[f32; 4]; 4])]) {}
 }

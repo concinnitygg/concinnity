@@ -1349,7 +1349,7 @@ mod tests {
         let mut world = TestWorld::new();
         world.components.push_typed(CharacterRig::new(
             SkinnedMeshHandle(1),
-            0,
+            crate::gfx::render_types::SkinnedIndex(0),
             identity,
             0.6,
             0.3,

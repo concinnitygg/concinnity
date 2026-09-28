@@ -9,6 +9,7 @@ use concinnity_core::ecs::FrameTime;
 use concinnity_core::ecs::MenuActive;
 use concinnity_core::ecs::SkinnedMeshHandle;
 use concinnity_core::ecs::World;
+use concinnity_core::gfx::render_types::SkinnedIndex;
 use concinnity_core::transform;
 use concinnity_host::thread::asset_id;
 use concinnity_host::thread::asset_id::intern;
@@ -376,8 +377,14 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
         joint("knee", Some(0), [0.0, -1.0, 0.0]),
         joint("foot", Some(1), [0.0, -1.0, 0.0]),
     ]);
-    world.add_component(SkeletonPose::new(target, 0, skeleton));
-    world.add_component(CharacterRig::new(target, 0, transform::IDENTITY, 0.5, 0.3));
+    world.add_component(SkeletonPose::new(target, SkinnedIndex(0), skeleton));
+    world.add_component(CharacterRig::new(
+        target,
+        SkinnedIndex(0),
+        transform::IDENTITY,
+        0.5,
+        0.3,
+    ));
 
     // A constant clip (the bind pose) so the graph has something to play.
     let stand: Animation = serde_json::from_value(serde_json::json!({
@@ -467,7 +474,13 @@ fn rig_capsule_follows_root_motion() {
     world.add_component(PhysicsConfig::default());
     // GraphicsSystem publishes rigs in a rendering world; this headless test
     // seeds one directly before start so PhysicsSystem::init sees it.
-    world.add_component(CharacterRig::new(target, 0, transform::IDENTITY, 0.5, 0.3));
+    world.add_component(CharacterRig::new(
+        target,
+        SkinnedIndex(0),
+        transform::IDENTITY,
+        0.5,
+        0.3,
+    ));
     world.start(SYSTEMS).unwrap();
 
     world.insert_resource(frame_dt(0.005));
@@ -659,7 +672,7 @@ fn single_joint_pose(target: SkinnedMeshHandle) -> SkeletonPose {
         parent: None,
         bind: JointPose::default(),
     }]);
-    SkeletonPose::new(target, 0, skeleton)
+    SkeletonPose::new(target, SkinnedIndex(0), skeleton)
 }
 
 // One flat clip drives the single-clip sampling arm: the pose gets one skinning

@@ -153,21 +153,7 @@ impl VkContext {
         };
 
         // Write at the engine-allocated destination slot.
-        let draw_idx = match dst {
-            draw_slot::SlotAlloc::Reuse(slot) => {
-                self.draw.objects[slot] = obj;
-                slot
-            }
-            draw_slot::SlotAlloc::Append(slot) => {
-                debug_assert_eq!(
-                    slot,
-                    self.draw.objects.len(),
-                    "appended draw slot must match the draw-object count"
-                );
-                self.draw.objects.push(obj);
-                slot
-            }
-        };
+        let draw_idx = draw_slot::place_draw_object(&mut self.draw.objects, obj, dst);
         // The slot's model-history entry belongs to whatever held it before, so
         // a chunk that streams in reprojects through its own transform for one
         // frame rather than ghosting from the previous occupant's.
@@ -188,7 +174,7 @@ impl VkContext {
     // `add_chunk_mesh` fully overwrites.
     pub(crate) fn remove_chunk_mesh(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         retire_frame: u64,
     ) -> error::RenderResult<()> {
         let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)
@@ -207,7 +193,7 @@ impl VkContext {
 
     pub(crate) fn set_chunk_model(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         model: [[f32; 4]; 4],
     ) -> error::RenderResult<()> {
         draw_slot::set_chunk_model(&mut self.draw.objects, draw_idx, model)

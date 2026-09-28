@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use concinnity_core::components::BlockType;
 use concinnity_core::ecs::PayloadLocator;
 use concinnity_core::geometry::ChunkBlockType;
+use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_host::store::blob::blob_path;
 use concinnity_host::store::blob::payload_section_start;
 
@@ -73,8 +74,8 @@ pub(super) fn build_texture_payload_source(
 // into a blob file range, and a stream it cannot resolve is left out.
 pub(super) fn deferred_mesh_payloads(
     seeds: &HashMap<usize, DeferredMeshSeed>,
-    draw_to_handle: &HashMap<usize, usize>,
-    stream_draw_indices: &[usize],
+    draw_to_handle: &HashMap<DrawIndex, usize>,
+    stream_draw_indices: &[DrawIndex],
     resolve_disk: impl Fn(&PayloadLocator) -> Option<DeferredMeshPayload>,
 ) -> HashMap<usize, DeferredMeshPayload> {
     let mut payloads = HashMap::new();
@@ -201,9 +202,14 @@ mod tests {
         // Handle 4 is disk-backed (two draws), handle 5 is RAM-backed, handle 6
         // is not deferred.
         let seeds = HashMap::from([(4, seed(1, None)), (5, seed(1, Some(vec![7, 8])))]);
-        let draw_to_handle = HashMap::from([(10, 6), (11, 4), (12, 5), (13, 4)]);
-        let payloads =
-            deferred_mesh_payloads(&seeds, &draw_to_handle, &[10, 11, 12, 13], fake_disk);
+        let d = DrawIndex;
+        let draw_to_handle = HashMap::from([(d(10), 6), (d(11), 4), (d(12), 5), (d(13), 4)]);
+        let payloads = deferred_mesh_payloads(
+            &seeds,
+            &draw_to_handle,
+            &[d(10), d(11), d(12), d(13)],
+            fake_disk,
+        );
         assert_eq!(payloads.len(), 3);
         assert!(
             !payloads.contains_key(&0),
@@ -221,8 +227,13 @@ mod tests {
     #[test]
     fn deferred_mesh_payloads_skip_an_unresolvable_blob() {
         let seeds = HashMap::from([(4, seed(2, None)), (5, seed(1, None))]);
-        let draw_to_handle = HashMap::from([(0, 4), (1, 5)]);
-        let payloads = deferred_mesh_payloads(&seeds, &draw_to_handle, &[0, 1], fake_disk);
+        let draw_to_handle = HashMap::from([(DrawIndex(0), 4), (DrawIndex(1), 5)]);
+        let payloads = deferred_mesh_payloads(
+            &seeds,
+            &draw_to_handle,
+            &[DrawIndex(0), DrawIndex(1)],
+            fake_disk,
+        );
         assert_eq!(payloads.len(), 1);
         assert!(payloads.contains_key(&1));
     }

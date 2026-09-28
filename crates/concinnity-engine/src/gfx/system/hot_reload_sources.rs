@@ -10,6 +10,7 @@ use concinnity_core::components::Identity;
 use concinnity_core::components::ProceduralMesh;
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_host::thread::asset_id;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -89,7 +90,7 @@ pub struct MeshSourceEntry {
     /// reload reproduces the same defaults by passing through empty.
     pub lod_distances: Vec<f32>,
     /// Every draw slot that received this mesh's geometry at init.
-    pub draw_indices: Vec<usize>,
+    pub draw_indices: Vec<DrawIndex>,
 }
 
 /// Catalog of every file-backed `Mesh` asset the renderer can hot-reload.
@@ -143,7 +144,7 @@ pub struct ProceduralMeshSourceEntry {
     /// Typed equality classifies whether to regenerate.
     pub args: ProceduralMesh,
     /// Every draw slot that received this mesh's geometry at init.
-    pub draw_indices: Vec<usize>,
+    pub draw_indices: Vec<DrawIndex>,
 }
 
 /// Catalog of every `ProceduralMesh` asset whose generator args the
@@ -191,7 +192,7 @@ pub struct SkinnedMeshSourceEntry {
     /// Index into `MtlContext.skinned_draw_objects` (and the corresponding
     /// `SkinnedDrawObject` slot on every backend) of the draw this entry
     /// owns.
-    pub skinned_index: usize,
+    pub skinned_index: SkinnedIndex,
     /// Vertex offset (in vertex units, not bytes) into the shared skinned
     /// vertex buffer where this slot's geometry starts.
     pub vertex_base: u32,
@@ -363,7 +364,7 @@ pub(super) fn procedural_mesh_snapshot(
 // into, so it is omitted.
 pub(super) fn mesh_source_map(
     sources: &HashMap<usize, MeshSourceMeta>,
-    mesh_handle_to_draws: &HashMap<usize, Vec<usize>>,
+    mesh_handle_to_draws: &HashMap<usize, Vec<DrawIndex>>,
 ) -> MeshSourceMap {
     let entries = sources
         .iter()
@@ -386,7 +387,7 @@ pub(super) fn mesh_source_map(
 pub(super) fn procedural_mesh_source_map(
     snapshot: &HashMap<AssetId, (String, ProceduralMesh)>,
     component_handles: &HashMap<AssetId, usize>,
-    mesh_handle_to_draws: &HashMap<usize, Vec<usize>>,
+    mesh_handle_to_draws: &HashMap<usize, Vec<DrawIndex>>,
 ) -> ProceduralMeshSourceMap {
     let entries = snapshot
         .iter()
@@ -436,7 +437,7 @@ mod tests {
             primitive_index: 0,
             lod_levels: 1,
             lod_distances: Vec::new(),
-            draw_indices: vec![0],
+            draw_indices: vec![DrawIndex(0)],
         }
     }
 
@@ -444,7 +445,7 @@ mod tests {
         SkinnedMeshSourceEntry {
             source: source.to_string(),
             skin_index: 0,
-            skinned_index: 0,
+            skinned_index: SkinnedIndex(0),
             vertex_base: 0,
             vertex_count: 3,
             index_count: 3,
@@ -513,7 +514,7 @@ mod tests {
         assert!(map.is_empty());
 
         let mut shared = mesh_entry("assets/models/prop.glb");
-        shared.draw_indices = vec![3, 9, 12];
+        shared.draw_indices = vec![DrawIndex(3), DrawIndex(9), DrawIndex(12)];
         map.entries.push(shared);
         map.entries.push(mesh_entry("assets/models/tree.glb"));
         map.entries.push(mesh_entry("bare.glb"));
@@ -526,7 +527,7 @@ mod tests {
         );
         assert_eq!(
             map.entries[0].draw_indices,
-            vec![3, 9, 12],
+            vec![DrawIndex(3), DrawIndex(9), DrawIndex(12)],
             "a reload has to rewrite every slot carrying this mesh"
         );
     }
@@ -556,7 +557,7 @@ mod tests {
         map.entries.push(ProceduralMeshSourceEntry {
             name: "ground".to_string(),
             args: Default::default(),
-            draw_indices: vec![0, 1],
+            draw_indices: vec![DrawIndex(0), DrawIndex(1)],
         });
 
         assert!(!map.is_empty());
@@ -607,7 +608,7 @@ mod tests {
                 s.procedural_meshes.entries.push(ProceduralMeshSourceEntry {
                     name: "ground".to_string(),
                     args: Default::default(),
-                    draw_indices: vec![0],
+                    draw_indices: vec![DrawIndex(0)],
                 })
             },
             |s| {
@@ -654,12 +655,12 @@ mod tests {
             (1, meta("assets/unreferenced.glb")),
             (2, meta("assets/emptied.glb")),
         ]);
-        let draws = HashMap::from([(0, vec![3, 4]), (2, Vec::new())]);
+        let draws = HashMap::from([(0, vec![DrawIndex(3), DrawIndex(4)]), (2, Vec::new())]);
         let map = mesh_source_map(&sources, &draws);
         assert_eq!(map.len(), 1);
         let entry = &map.entries[0];
         assert_eq!(entry.source, "assets/drawn.glb");
-        assert_eq!(entry.draw_indices, vec![3, 4]);
+        assert_eq!(entry.draw_indices, vec![DrawIndex(3), DrawIndex(4)]);
         assert_eq!((entry.primitive_index, entry.lod_levels), (1, 2));
     }
 
@@ -674,10 +675,10 @@ mod tests {
             (AssetId(4), ("emptied".to_string(), args())),
         ]);
         let handles = HashMap::from([(AssetId(1), 0), (AssetId(3), 1), (AssetId(4), 2)]);
-        let draws = HashMap::from([(0, vec![5]), (2, Vec::new())]);
+        let draws = HashMap::from([(0, vec![DrawIndex(5)]), (2, Vec::new())]);
         let map = procedural_mesh_source_map(&snapshot, &handles, &draws);
         assert_eq!(map.len(), 1);
         assert_eq!(map.entries[0].name, "drawn");
-        assert_eq!(map.entries[0].draw_indices, vec![5]);
+        assert_eq!(map.entries[0].draw_indices, vec![DrawIndex(5)]);
     }
 }

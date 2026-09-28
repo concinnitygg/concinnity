@@ -25,6 +25,7 @@ use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     Entity, EventCursor, FrameTime, MenuActive, PipelineContext, StepResult, System,
 };
+use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::transform::propagation;
 
@@ -60,20 +61,16 @@ use concinnity_core::spawn as template;
 fn record_clone_static(
     ops: &mut RenderOps,
     slots: &mut RenderSlots,
-    src: usize,
+    src: DrawIndex,
     model: [[f32; 4]; 4],
-) -> Option<usize> {
-    use concinnity_core::render::draw_slot::SlotAlloc;
+) -> Option<DrawIndex> {
     let dst = slots.allocate_draw();
-    let idx = match dst {
-        SlotAlloc::Reuse(i) | SlotAlloc::Append(i) => i,
-    };
     ops.record(move |backend| {
         if let Err(e) = backend.clone_static_draw_object(src, model, dst) {
             tracing::warn!("SpawnSystem: draw-slot clone of {} failed: {}", src, e);
         }
     });
-    Some(idx)
+    Some(dst.slot())
 }
 
 // Claim a pre-reserved skinned instance and record its reveal: the
@@ -83,9 +80,9 @@ fn record_clone_static(
 fn record_skinned_claim(
     ops: &mut RenderOps,
     slots: &mut RenderSlots,
-    template: usize,
+    template: SkinnedIndex,
     model: [[f32; 4]; 4],
-) -> Option<usize> {
+) -> Option<SkinnedIndex> {
     let instance = slots.claim_skinned(template)?;
     ops.record(move |backend| backend.reveal_skinned_instance(instance, model));
     Some(instance)

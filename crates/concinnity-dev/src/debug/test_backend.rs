@@ -6,6 +6,7 @@
 use concinnity_core::bake::texture::TextureImage;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::backend;
 use concinnity_core::render::draw_slot;
@@ -15,7 +16,7 @@ use concinnity_core::render::scene_flow;
 pub(crate) struct StubBackend;
 
 impl scene_flow::SceneControl for StubBackend {
-    fn update_visibility(&mut self, _draw_idx: usize, _visible: bool) {}
+    fn update_visibility(&mut self, _draw_idx: DrawIndex, _visible: bool) {}
     fn set_fade(&mut self, _fade: f32) {}
 }
 
@@ -32,8 +33,8 @@ impl backend::RenderBackend for StubBackend {
         Ok(())
     }
     fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
-    fn update_models(&mut self, _updates: &[(u32, [[f32; 4]; 4])]) {}
-    fn retire_draw_object(&mut self, _draw_idx: usize) {}
+    fn update_models(&mut self, _updates: &[(DrawIndex, [[f32; 4]; 4])]) {}
+    fn retire_draw_object(&mut self, _draw_idx: DrawIndex) {}
 }
 
 impl backend::SkinnedDraws for StubBackend {
@@ -45,7 +46,7 @@ impl backend::SkinnedDraws for StubBackend {
     ) -> RenderResult<()> {
         Ok(())
     }
-    fn update_skinned_pose(&mut self, _skinned_index: usize, _matrices: &[[[f32; 4]; 4]]) {}
+    fn update_skinned_pose(&mut self, _skinned_index: SkinnedIndex, _matrices: &[[[f32; 4]; 4]]) {}
 }
 
 impl backend::DrawStreaming for StubBackend {
@@ -55,12 +56,12 @@ impl backend::DrawStreaming for StubBackend {
     fn update_texture_slot(&mut self, _slot: usize, _image: &TextureImage) -> RenderResult<()> {
         Ok(())
     }
-    fn evict_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> RenderResult<()> {
+    fn evict_mesh(&mut self, _draw_idx: DrawIndex, _retire_frame: u64) -> RenderResult<()> {
         Ok(())
     }
     fn upload_mesh(
         &mut self,
-        _draw_idx: usize,
+        _draw_idx: DrawIndex,
         _verts: &[mesh_payload::Vertex],
         _idxs: &[u16],
         _frame: u64,
@@ -81,10 +82,10 @@ impl backend::DrawStreaming for StubBackend {
     ) -> RenderResult<()> {
         Ok(())
     }
-    fn remove_chunk_mesh(&mut self, _draw_idx: usize, _retire_frame: u64) -> RenderResult<()> {
+    fn remove_chunk_mesh(&mut self, _draw_idx: DrawIndex, _retire_frame: u64) -> RenderResult<()> {
         Ok(())
     }
-    fn set_chunk_model(&mut self, _draw_idx: usize, _model: [[f32; 4]; 4]) -> RenderResult<()> {
+    fn set_chunk_model(&mut self, _draw_idx: DrawIndex, _model: [[f32; 4]; 4]) -> RenderResult<()> {
         Ok(())
     }
 }

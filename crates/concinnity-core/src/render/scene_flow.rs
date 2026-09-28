@@ -6,6 +6,7 @@
 
 use crate::components::SceneTransition;
 use crate::ecs::asset_id::AssetId;
+use crate::gfx::render_types::DrawIndex;
 use alloc::vec::Vec;
 
 const FADE_HALF_SECS: f32 = 0.3;
@@ -42,7 +43,7 @@ pub enum FadePhase {
 /// Backend operations required to drive scene visibility and fade transitions.
 pub trait SceneControl {
     /// Show or hide one draw slot.
-    fn update_visibility(&mut self, draw_idx: usize, visible: bool);
+    fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool);
     /// Fade the composited image to black by `fade` in `[0, 1]`: 0 leaves the
     /// frame untouched, 1 renders it fully black. Applied in the composite pass
     /// so the whole image fades, not just the pixels no geometry covers.
@@ -55,7 +56,7 @@ pub trait SceneControl {
 /// `scenes[i]` (`None` = always visible).
 #[derive(Default)]
 pub struct SceneVisibility {
-    draws: Vec<usize>,
+    draws: Vec<DrawIndex>,
     spans: Vec<(u32, u32)>,
     scenes: Vec<Option<AssetId>>,
 }
@@ -76,7 +77,7 @@ impl SceneVisibility {
     }
 
     /// Add one draw slot to the prop most recently begun.
-    pub fn push_draw(&mut self, draw_idx: usize) {
+    pub fn push_draw(&mut self, draw_idx: DrawIndex) {
         debug_assert!(!self.spans.is_empty(), "push_draw before begin_prop");
         self.draws.push(draw_idx);
         if let Some(span) = self.spans.last_mut() {
@@ -85,7 +86,7 @@ impl SceneVisibility {
     }
 
     /// Every prop's `(draw slots, scene)`, in insertion order.
-    pub fn props(&self) -> impl Iterator<Item = (&[usize], Option<AssetId>)> + '_ {
+    pub fn props(&self) -> impl Iterator<Item = (&[DrawIndex], Option<AssetId>)> + '_ {
         self.spans
             .iter()
             .zip(self.scenes.iter())
@@ -203,12 +204,12 @@ mod tests {
     // Minimal SceneControl implementation that records every call.
     #[derive(Default)]
     struct TestBackend {
-        visibility: Vec<(usize, bool)>,
+        visibility: Vec<(DrawIndex, bool)>,
         fades: Vec<f32>,
     }
 
     impl SceneControl for TestBackend {
-        fn update_visibility(&mut self, draw_idx: usize, visible: bool) {
+        fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
             self.visibility.push((draw_idx, visible));
         }
         fn set_fade(&mut self, fade: f32) {
@@ -224,12 +225,12 @@ mod tests {
         }
     }
 
-    fn vis(props: &[(&[usize], Option<AssetId>)]) -> SceneVisibility {
+    fn vis(props: &[(&[u32], Option<AssetId>)]) -> SceneVisibility {
         let mut v = SceneVisibility::default();
         for (draws, scene) in props {
             v.begin_prop(*scene);
             for &d in *draws {
-                v.push_draw(d);
+                v.push_draw(DrawIndex(d));
             }
         }
         v
@@ -247,15 +248,15 @@ mod tests {
         set_scene_visibility(&visibility, AssetId(0), &mut backend);
 
         assert!(
-            backend.visibility.contains(&(0, true)),
+            backend.visibility.contains(&(DrawIndex(0), true)),
             "prop in 'a' should be visible"
         );
         assert!(
-            backend.visibility.contains(&(1, true)),
+            backend.visibility.contains(&(DrawIndex(1), true)),
             "scene-less prop always visible"
         );
         assert!(
-            backend.visibility.contains(&(2, false)),
+            backend.visibility.contains(&(DrawIndex(2), false)),
             "prop in 'b' should be hidden"
         );
     }
@@ -265,7 +266,7 @@ mod tests {
         let visibility = vis(&[(&[0], None)]);
         let mut backend = TestBackend::default();
         set_scene_visibility(&visibility, AssetId(99), &mut backend);
-        assert_eq!(backend.visibility, vec![(0, true)]);
+        assert_eq!(backend.visibility, vec![(DrawIndex(0), true)]);
     }
 
     #[test]
@@ -433,7 +434,7 @@ mod tests {
         assert_eq!(result, Ok(()));
         assert_eq!(opt.as_ref().unwrap().current, AssetId(1));
         assert!(matches!(opt.as_ref().unwrap().fade, FadePhase::None));
-        assert!(backend.visibility.contains(&(1, true)));
+        assert!(backend.visibility.contains(&(DrawIndex(1), true)));
     }
 
     #[test]

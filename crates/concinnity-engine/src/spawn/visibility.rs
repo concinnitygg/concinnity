@@ -6,6 +6,7 @@
 
 use concinnity_core::components::{Hidden, RenderHandle};
 use concinnity_core::ecs::{Entity, PipelineContext};
+use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_core::render::ops::RenderOps;
 
 pub(super) fn set_subtree_visibility(
@@ -22,12 +23,12 @@ pub(super) fn set_subtree_visibility(
         }
         // Clone the slot list out so the immutable borrow ends before the
         // next entity's tag toggle.
-        let slots: concinnity_core::memory::InlineVec<u32> = ctx
+        let slots: concinnity_core::memory::InlineVec<DrawIndex> = ctx
             .get::<RenderHandle>(entity)
             .map(|h| h.draws.clone())
             .unwrap_or_default();
         for slot in slots {
-            ops.record(move |backend| backend.update_visibility(slot as usize, visible));
+            ops.record(move |backend| backend.update_visibility(slot, visible));
         }
     }
 }

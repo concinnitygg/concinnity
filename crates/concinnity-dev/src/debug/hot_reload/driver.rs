@@ -9,6 +9,7 @@ use concinnity_core::animation::skeleton;
 use concinnity_core::components::SkeletonPose;
 use concinnity_core::components::StoryReload;
 use concinnity_core::ecs::World;
+use concinnity_core::gfx::render_types::SkinnedIndex;
 use concinnity_engine::gfx::system;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -124,7 +125,7 @@ pub(crate) fn apply_effects(world: &mut World, effects: FrameHotReloadEffects) {
     // components so `AnimationSystem` produces right-sized output going
     // forward.
     if !effects.skeleton_updates.is_empty() {
-        let index_to_new: std::collections::HashMap<usize, skeleton::Skeleton> = effects
+        let index_to_new: std::collections::HashMap<SkinnedIndex, skeleton::Skeleton> = effects
             .skeleton_updates
             .into_iter()
             .map(|u| (u.skinned_index, u.new_skeleton))

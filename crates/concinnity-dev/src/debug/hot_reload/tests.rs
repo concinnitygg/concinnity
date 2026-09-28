@@ -10,6 +10,7 @@ use concinnity_core::ecs::EventCursor;
 use concinnity_core::ecs::World;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::render::backend;
 use concinnity_core::render::draw_slot;
@@ -144,21 +145,21 @@ fn mesh_source_map_collects_unique_parent_dirs() {
         primitive_index: 0,
         lod_levels: 1,
         lod_distances: Vec::new(),
-        draw_indices: vec![0, 1],
+        draw_indices: vec![DrawIndex(0), DrawIndex(1)],
     });
     m.entries.push(MeshSourceEntry {
         source: "assets/models/a.glb".to_string(),
         primitive_index: 1,
         lod_levels: 1,
         lod_distances: Vec::new(),
-        draw_indices: vec![2],
+        draw_indices: vec![DrawIndex(2)],
     });
     m.entries.push(MeshSourceEntry {
         source: "assets/hdri/b.glb".to_string(),
         primitive_index: 0,
         lod_levels: 1,
         lod_distances: Vec::new(),
-        draw_indices: vec![3],
+        draw_indices: vec![DrawIndex(3)],
     });
     let dirs = m.watch_dirs();
     assert_eq!(dirs.len(), 2);
@@ -177,7 +178,7 @@ fn mesh_source_map_skips_bare_filenames_in_watch_dirs() {
         primitive_index: 0,
         lod_levels: 1,
         lod_distances: Vec::new(),
-        draw_indices: vec![0],
+        draw_indices: vec![DrawIndex(0)],
     });
     assert!(m.watch_dirs().is_empty());
 }
@@ -192,7 +193,7 @@ fn state_with_only_meshes_still_spawns_a_watcher() {
         primitive_index: 0,
         lod_levels: 1,
         lod_distances: Vec::new(),
-        draw_indices: vec![0],
+        draw_indices: vec![DrawIndex(0)],
     });
     let state = AssetHotReloadState::from_sources(
         HotReloadSources {
@@ -202,7 +203,7 @@ fn state_with_only_meshes_still_spawns_a_watcher() {
         None,
     );
     assert_eq!(state.meshes.len(), 1);
-    assert_eq!(state.meshes.entries[0].draw_indices, vec![0]);
+    assert_eq!(state.meshes.entries[0].draw_indices, vec![DrawIndex(0)]);
 }
 
 #[test]
@@ -211,7 +212,7 @@ fn skinned_mesh_source_map_collects_unique_parent_dirs() {
     m.entries.push(SkinnedMeshSourceEntry {
         source: "assets/models/a.glb".to_string(),
         skin_index: 0,
-        skinned_index: 0,
+        skinned_index: SkinnedIndex(0),
         vertex_base: 0,
         vertex_count: 100,
         index_count: 300,
@@ -220,7 +221,7 @@ fn skinned_mesh_source_map_collects_unique_parent_dirs() {
     m.entries.push(SkinnedMeshSourceEntry {
         source: "assets/models/b.glb".to_string(),
         skin_index: 0,
-        skinned_index: 1,
+        skinned_index: SkinnedIndex(1),
         vertex_base: 100,
         vertex_count: 50,
         index_count: 150,
@@ -239,7 +240,7 @@ fn state_with_only_skinned_still_spawns_a_watcher() {
             .to_string_lossy()
             .into_owned(),
         skin_index: 0,
-        skinned_index: 0,
+        skinned_index: SkinnedIndex(0),
         vertex_base: 0,
         vertex_count: 8,
         index_count: 24,
@@ -372,7 +373,7 @@ fn apply_skinned_layouts_refreshes_every_matching_entry() {
         SkinnedMeshSourceEntry {
             source: "a.glb".to_string(),
             skin_index: 0,
-            skinned_index: 0,
+            skinned_index: SkinnedIndex(0),
             vertex_base: 0,
             vertex_count: 10,
             index_count: 30,
@@ -381,7 +382,7 @@ fn apply_skinned_layouts_refreshes_every_matching_entry() {
         SkinnedMeshSourceEntry {
             source: "b.glb".to_string(),
             skin_index: 0,
-            skinned_index: 1,
+            skinned_index: SkinnedIndex(1),
             vertex_base: 10,
             vertex_count: 20,
             index_count: 60,
@@ -390,13 +391,13 @@ fn apply_skinned_layouts_refreshes_every_matching_entry() {
     ];
     let layouts = vec![
         backend::SkinnedSlotLayout {
-            skinned_index: 0,
+            skinned_index: SkinnedIndex(0),
             vertex_base: 0,
             vertex_count: 15,
             index_count: 45,
         },
         backend::SkinnedSlotLayout {
-            skinned_index: 1,
+            skinned_index: SkinnedIndex(1),
             vertex_base: 15,
             vertex_count: 20,
             index_count: 60,
@@ -423,17 +424,17 @@ fn drain_pending_skeleton_updates_clears_the_queue() {
     // double-write the SkeletonPose components.
     let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
     state.pending_skeleton_updates.push(PendingSkeletonUpdate {
-        skinned_index: 0,
+        skinned_index: SkinnedIndex(0),
         new_skeleton: skeleton::Skeleton::new(Vec::new()),
     });
     state.pending_skeleton_updates.push(PendingSkeletonUpdate {
-        skinned_index: 3,
+        skinned_index: SkinnedIndex(3),
         new_skeleton: skeleton::Skeleton::new(Vec::new()),
     });
     let drained = state.drain_pending_skeleton_updates();
     assert_eq!(drained.len(), 2);
-    assert_eq!(drained[0].skinned_index, 0);
-    assert_eq!(drained[1].skinned_index, 3);
+    assert_eq!(drained[0].skinned_index, SkinnedIndex(0));
+    assert_eq!(drained[1].skinned_index, SkinnedIndex(3));
     // Second drain returns empty.
     assert!(state.drain_pending_skeleton_updates().is_empty());
 }
@@ -509,7 +510,7 @@ fn state_with_only_procedural_meshes_still_spawns_a_watcher() {
     proc.entries.push(ProceduralMeshSourceEntry {
         name: "box_mesh".to_string(),
         args: serde_json::from_value(serde_json::json!({"generator": "box"})).unwrap(),
-        draw_indices: vec![0],
+        draw_indices: vec![DrawIndex(0)],
     });
     let state = AssetHotReloadState::from_sources(
         HotReloadSources {
@@ -656,14 +657,14 @@ fn apply_skinned_layouts_leaves_entries_without_a_matching_layout_alone() {
     let mut entries = vec![SkinnedMeshSourceEntry {
         source: "a.glb".to_string(),
         skin_index: 0,
-        skinned_index: 7,
+        skinned_index: SkinnedIndex(7),
         vertex_base: 42,
         vertex_count: 12,
         index_count: 36,
         joint_count: 2,
     }];
     let layouts = vec![backend::SkinnedSlotLayout {
-        skinned_index: 0,
+        skinned_index: SkinnedIndex(0),
         vertex_base: 0,
         vertex_count: 99,
         index_count: 99,
@@ -683,22 +684,22 @@ fn apply_skinned_layouts_leaves_entries_without_a_matching_layout_alone() {
 struct RecordingBackend {
     texture_updates: Vec<(usize, u32, u32)>,
     lut_updates: Vec<u32>,
-    mesh_updates: Vec<usize>,
+    mesh_updates: Vec<DrawIndex>,
     static_rebuild_change_counts: Vec<usize>,
-    skinned_updates: Vec<usize>,
+    skinned_updates: Vec<SkinnedIndex>,
     skinned_rebuild_change_counts: Vec<usize>,
-    skeleton_updates: Vec<(usize, usize)>,
+    skeleton_updates: Vec<(SkinnedIndex, usize)>,
     env_updates: usize,
     fog_updates: usize,
     // Overrides for `draw_geometry_size`; absent draws report `None` like the
     // trait default.
-    geometry_sizes: std::collections::HashMap<usize, (usize, usize)>,
+    geometry_sizes: std::collections::HashMap<DrawIndex, (usize, usize)>,
     // Overrides for `draw_lod_index_counts`; absent draws report `None` like
     // the trait default.
-    lod_counts: std::collections::HashMap<usize, Vec<usize>>,
+    lod_counts: std::collections::HashMap<DrawIndex, Vec<usize>>,
     // Layouts `rebuild_skinned_geometry` hands back on success, stored as
     // (skinned_index, vertex_base, vertex_count, index_count).
-    skinned_layouts: Vec<(usize, u32, usize, usize)>,
+    skinned_layouts: Vec<(SkinnedIndex, u32, usize, usize)>,
     fail_texture_updates: bool,
     fail_lut_updates: bool,
     fail_mesh_updates: bool,
@@ -710,7 +711,7 @@ struct RecordingBackend {
 }
 
 impl scene_flow::SceneControl for RecordingBackend {
-    fn update_visibility(&mut self, _: usize, _: bool) {}
+    fn update_visibility(&mut self, _: DrawIndex, _: bool) {}
     fn set_fade(&mut self, _: f32) {}
 }
 
@@ -727,8 +728,8 @@ impl backend::RenderBackend for RecordingBackend {
         Ok(())
     }
     fn update_view(&mut self, _: [[f32; 4]; 4]) {}
-    fn update_models(&mut self, _: &[(u32, [[f32; 4]; 4])]) {}
-    fn retire_draw_object(&mut self, _: usize) {}
+    fn update_models(&mut self, _: &[(DrawIndex, [[f32; 4]; 4])]) {}
+    fn retire_draw_object(&mut self, _: DrawIndex) {}
 }
 
 impl backend::SkinnedDraws for RecordingBackend {
@@ -740,7 +741,7 @@ impl backend::SkinnedDraws for RecordingBackend {
     ) -> error::RenderResult<()> {
         Ok(())
     }
-    fn update_skinned_pose(&mut self, _: usize, _: &[[[f32; 4]; 4]]) {}
+    fn update_skinned_pose(&mut self, _: SkinnedIndex, _: &[[[f32; 4]; 4]]) {}
 }
 
 impl backend::DrawStreaming for RecordingBackend {
@@ -759,12 +760,12 @@ impl backend::DrawStreaming for RecordingBackend {
         }
         Ok(())
     }
-    fn evict_mesh(&mut self, _: usize, _: u64) -> error::RenderResult<()> {
+    fn evict_mesh(&mut self, _: DrawIndex, _: u64) -> error::RenderResult<()> {
         Ok(())
     }
     fn upload_mesh(
         &mut self,
-        _: usize,
+        _: DrawIndex,
         _: &[mesh_payload::Vertex],
         _: &[u16],
         _: u64,
@@ -781,10 +782,10 @@ impl backend::DrawStreaming for RecordingBackend {
     ) -> error::RenderResult<()> {
         Ok(())
     }
-    fn remove_chunk_mesh(&mut self, _: usize, _: u64) -> error::RenderResult<()> {
+    fn remove_chunk_mesh(&mut self, _: DrawIndex, _: u64) -> error::RenderResult<()> {
         Ok(())
     }
-    fn set_chunk_model(&mut self, _: usize, _: [[f32; 4]; 4]) -> error::RenderResult<()> {
+    fn set_chunk_model(&mut self, _: DrawIndex, _: [[f32; 4]; 4]) -> error::RenderResult<()> {
         Ok(())
     }
 }
@@ -805,15 +806,15 @@ impl backend::LiveEdit for RecordingBackend {
         }
         Ok(())
     }
-    fn draw_geometry_size(&self, draw_idx: usize) -> Option<(usize, usize)> {
+    fn draw_geometry_size(&self, draw_idx: DrawIndex) -> Option<(usize, usize)> {
         self.geometry_sizes.get(&draw_idx).copied()
     }
-    fn draw_lod_index_counts(&self, draw_idx: usize) -> Option<Vec<usize>> {
+    fn draw_lod_index_counts(&self, draw_idx: DrawIndex) -> Option<Vec<usize>> {
         self.lod_counts.get(&draw_idx).cloned()
     }
     fn update_mesh_geometry(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         _: &[mesh_payload::Vertex],
         _: &[u16],
         _: &[(f32, Vec<u16>)],
@@ -836,7 +837,7 @@ impl backend::LiveEdit for RecordingBackend {
     }
     fn update_skinned_mesh_geometry(
         &mut self,
-        skinned_index: usize,
+        skinned_index: SkinnedIndex,
         _: u32,
         _: &[mesh_payload::SkinnedVertex],
         _: &[u16],
@@ -870,7 +871,7 @@ impl backend::LiveEdit for RecordingBackend {
     }
     fn update_skinned_skeleton(
         &mut self,
-        skinned_index: usize,
+        skinned_index: SkinnedIndex,
         new_joint_count: usize,
     ) -> error::RenderResult<()> {
         self.skeleton_updates.push((skinned_index, new_joint_count));
@@ -1059,7 +1060,7 @@ fn decode_asset_batch_counts_a_missing_mesh_source_as_a_failure() {
         primitive_index: 0,
         lod_levels: 1,
         lod_distances: Vec::new(),
-        draw_indices: vec![0],
+        draw_indices: vec![DrawIndex(0)],
     };
     let batch = decode_asset_batch(Vec::new(), None, vec![entry], Vec::new());
     assert!(batch.meshes.is_empty());
@@ -1072,7 +1073,7 @@ fn decode_asset_batch_counts_a_missing_skinned_source_as_a_failure() {
     let entry = SkinnedMeshSourceEntry {
         source: dir.path().join("gone.glb").to_string_lossy().into_owned(),
         skin_index: 0,
-        skinned_index: 0,
+        skinned_index: SkinnedIndex(0),
         vertex_base: 0,
         vertex_count: 8,
         index_count: 24,
@@ -1249,7 +1250,7 @@ fn poll_pending_assets_applies_a_color_lut() {
     assert_eq!(backend.lut_updates, vec![2]);
 }
 
-fn one_mesh_state(draw_indices: Vec<usize>) -> AssetHotReloadState {
+fn one_mesh_state(draw_indices: Vec<DrawIndex>) -> AssetHotReloadState {
     let mut meshes = MeshSourceMap::new();
     meshes.entries.push(MeshSourceEntry {
         source: "model.glb".to_string(),
@@ -1278,7 +1279,7 @@ fn decoded_mesh(entry_idx: usize, vertex_count: usize) -> DecodedMesh {
 
 #[test]
 fn poll_pending_assets_updates_meshes_in_place_per_draw_slot() {
-    let mut state = one_mesh_state(vec![2, 5]);
+    let mut state = one_mesh_state(vec![DrawIndex(2), DrawIndex(5)]);
     let batch = DecodedAssetBatch {
         meshes: vec![decoded_mesh(0, 3)],
         ..Default::default()
@@ -1288,13 +1289,13 @@ fn poll_pending_assets_updates_meshes_in_place_per_draw_slot() {
     // the in-place path fires for every draw slot of the entry.
     let mut backend = RecordingBackend::default();
     assert!(poll_pending_assets(&mut state, &mut backend));
-    assert_eq!(backend.mesh_updates, vec![2, 5]);
+    assert_eq!(backend.mesh_updates, vec![DrawIndex(2), DrawIndex(5)]);
     assert!(backend.static_rebuild_change_counts.is_empty());
 }
 
 #[test]
 fn poll_pending_assets_rebuilds_a_size_changed_mesh() {
-    let mut state = one_mesh_state(vec![2, 5]);
+    let mut state = one_mesh_state(vec![DrawIndex(2), DrawIndex(5)]);
     let batch = DecodedAssetBatch {
         meshes: vec![decoded_mesh(0, 3)],
         ..Default::default()
@@ -1303,7 +1304,7 @@ fn poll_pending_assets_rebuilds_a_size_changed_mesh() {
     let mut backend = RecordingBackend::default();
     // The backend reports different init-time counts for draw 2, so the
     // whole entry (both slots) is queued into one rebuild call.
-    backend.geometry_sizes.insert(2, (999, 999));
+    backend.geometry_sizes.insert(DrawIndex(2), (999, 999));
     assert!(poll_pending_assets(&mut state, &mut backend));
     assert!(backend.mesh_updates.is_empty());
     assert_eq!(backend.static_rebuild_change_counts, vec![2]);
@@ -1339,7 +1340,7 @@ fn skinned_entry() -> SkinnedMeshSourceEntry {
     SkinnedMeshSourceEntry {
         source: "rig.glb".to_string(),
         skin_index: 0,
-        skinned_index: 4,
+        skinned_index: SkinnedIndex(4),
         vertex_base: 0,
         vertex_count: 2,
         index_count: 3,
@@ -1366,7 +1367,7 @@ fn poll_pending_assets_updates_skinned_meshes_in_place() {
     inject_batch(&state, batch);
     let mut backend = RecordingBackend::default();
     assert!(poll_pending_assets(&mut state, &mut backend));
-    assert_eq!(backend.skinned_updates, vec![4]);
+    assert_eq!(backend.skinned_updates, vec![SkinnedIndex(4)]);
     assert!(backend.skinned_rebuild_change_counts.is_empty());
     assert!(state.pending_skeleton_updates.is_empty());
 }
@@ -1380,7 +1381,7 @@ fn poll_pending_assets_rebuilds_size_changed_skinned_and_refreshes_the_layout() 
     };
     inject_batch(&state, batch);
     let mut backend = RecordingBackend::default();
-    backend.skinned_layouts.push((4, 7, 5, 3));
+    backend.skinned_layouts.push((SkinnedIndex(4), 7, 5, 3));
     assert!(poll_pending_assets(&mut state, &mut backend));
     assert!(backend.skinned_updates.is_empty());
     assert_eq!(backend.skinned_rebuild_change_counts, vec![1]);
@@ -1400,11 +1401,11 @@ fn poll_pending_assets_queues_a_skeleton_update_on_joint_count_change() {
     inject_batch(&state, batch);
     let mut backend = RecordingBackend::default();
     assert!(poll_pending_assets(&mut state, &mut backend));
-    assert_eq!(backend.skeleton_updates, vec![(4, 3)]);
+    assert_eq!(backend.skeleton_updates, vec![(SkinnedIndex(4), 3)]);
     assert_eq!(state.skinned_meshes.entries[0].joint_count, 3);
     let drained = state.drain_pending_skeleton_updates();
     assert_eq!(drained.len(), 1);
-    assert_eq!(drained[0].skinned_index, 4);
+    assert_eq!(drained[0].skinned_index, SkinnedIndex(4));
 }
 
 #[test]
@@ -1577,7 +1578,7 @@ fn poll_pending_assets_survives_a_color_lut_rejection() {
 
 #[test]
 fn poll_pending_assets_rebuilds_on_a_changed_lod_breakdown() {
-    let mut state = one_mesh_state(vec![0]);
+    let mut state = one_mesh_state(vec![DrawIndex(0)]);
     let batch = DecodedAssetBatch {
         meshes: vec![DecodedMesh {
             entry_idx: 0,
@@ -1592,7 +1593,7 @@ fn poll_pending_assets_rebuilds_on_a_changed_lod_breakdown() {
     // The slot's live LOD1 carries 3 indices; the reload's carries 6, so the
     // entry is queued for a rebuild rather than an in-place update even though
     // the base geometry size is unchanged.
-    backend.lod_counts.insert(0, vec![3]);
+    backend.lod_counts.insert(DrawIndex(0), vec![3]);
     assert!(poll_pending_assets(&mut state, &mut backend));
     assert!(backend.mesh_updates.is_empty());
     assert_eq!(backend.static_rebuild_change_counts, vec![1]);
@@ -1627,7 +1628,7 @@ fn poll_pending_assets_survives_a_skinned_in_place_rejection() {
         ..Default::default()
     };
     assert!(poll_pending_assets(&mut state, &mut backend));
-    assert_eq!(backend.skinned_updates, vec![4]);
+    assert_eq!(backend.skinned_updates, vec![SkinnedIndex(4)]);
     assert!(backend.skinned_rebuild_change_counts.is_empty());
 }
 
@@ -1750,7 +1751,7 @@ fn one_proc_mesh_map(name: &str, args: ProceduralMesh) -> ProceduralMeshSourceMa
     map.entries.push(ProceduralMeshSourceEntry {
         name: name.to_string(),
         args,
-        draw_indices: vec![0, 1],
+        draw_indices: vec![DrawIndex(0), DrawIndex(1)],
     });
     map
 }
@@ -1830,7 +1831,7 @@ fn reload_procedural_meshes_regenerates_changed_args_in_place() {
     assert_eq!((r.regenerated, r.unchanged, r.failed), (1, 0, 0));
     // In-place path (the default backend reports no size data): one update
     // per draw slot, and the captured args advance to the new snapshot.
-    assert_eq!(backend.mesh_updates, vec![0, 1]);
+    assert_eq!(backend.mesh_updates, vec![DrawIndex(0), DrawIndex(1)]);
     assert!(backend.static_rebuild_change_counts.is_empty());
     assert_eq!(map.entries[0].args, normalized_box_args(1.0));
 }
@@ -1857,7 +1858,7 @@ fn reload_procedural_meshes_rebuilds_on_size_change() {
     let path = write_world_line(dir.path(), &box_world_line("box_mesh", 1.0));
     let mut map = one_proc_mesh_map("box_mesh", normalized_box_args(0.5));
     let mut backend = RecordingBackend::default();
-    backend.geometry_sizes.insert(0, (1, 1));
+    backend.geometry_sizes.insert(DrawIndex(0), (1, 1));
     let r = reload_procedural_meshes(&path, &mut map, &mut backend);
     assert_eq!((r.regenerated, r.unchanged, r.failed), (1, 0, 0));
     assert!(backend.mesh_updates.is_empty());
@@ -1874,7 +1875,7 @@ fn reload_procedural_meshes_failed_rebuild_keeps_captured_args() {
         fail_static_rebuild: true,
         ..Default::default()
     };
-    backend.geometry_sizes.insert(0, (1, 1));
+    backend.geometry_sizes.insert(DrawIndex(0), (1, 1));
     let r = reload_procedural_meshes(&path, &mut map, &mut backend);
     assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 0, 1));
     assert_eq!(map.entries[0].args, normalized_box_args(0.5));
@@ -1996,7 +1997,7 @@ fn spawn_watcher_returns_none_when_no_directory_is_watchable() {
         primitive_index: 0,
         lod_levels: 1,
         lod_distances: Vec::new(),
-        draw_indices: vec![0],
+        draw_indices: vec![DrawIndex(0)],
     });
     let sources = HotReloadSources {
         meshes,
@@ -2063,7 +2064,7 @@ fn poll_pending_assets_survives_an_in_place_mesh_rejection() {
     // Default draw_geometry_size (None) keeps the in-place path; the backend
     // rejects every update but the poll must tally the failure and still report
     // the batch consumed rather than panic.
-    let mut state = one_mesh_state(vec![2, 5]);
+    let mut state = one_mesh_state(vec![DrawIndex(2), DrawIndex(5)]);
     let batch = DecodedAssetBatch {
         meshes: vec![decoded_mesh(0, 3)],
         ..Default::default()
@@ -2075,7 +2076,7 @@ fn poll_pending_assets_survives_an_in_place_mesh_rejection() {
     };
     assert!(poll_pending_assets(&mut state, &mut backend));
     // Both draw slots were attempted before the rejection was recorded.
-    assert_eq!(backend.mesh_updates, vec![2, 5]);
+    assert_eq!(backend.mesh_updates, vec![DrawIndex(2), DrawIndex(5)]);
     assert!(backend.static_rebuild_change_counts.is_empty());
     assert!(state.asset_batch_inflight.lock().unwrap().is_none());
 }
@@ -2085,7 +2086,7 @@ fn poll_pending_assets_survives_a_failed_static_rebuild() {
     // A reported size change routes the whole entry into rebuild_static_geometry,
     // which the backend rejects. The poll tallies the failure and clears the
     // in-flight slot without touching the in-place path.
-    let mut state = one_mesh_state(vec![2, 5]);
+    let mut state = one_mesh_state(vec![DrawIndex(2), DrawIndex(5)]);
     let batch = DecodedAssetBatch {
         meshes: vec![decoded_mesh(0, 3)],
         ..Default::default()
@@ -2095,7 +2096,7 @@ fn poll_pending_assets_survives_a_failed_static_rebuild() {
         fail_static_rebuild: true,
         ..Default::default()
     };
-    backend.geometry_sizes.insert(2, (999, 999));
+    backend.geometry_sizes.insert(DrawIndex(2), (999, 999));
     assert!(poll_pending_assets(&mut state, &mut backend));
     assert!(backend.mesh_updates.is_empty());
     assert_eq!(backend.static_rebuild_change_counts, vec![2]);
@@ -2351,12 +2352,12 @@ fn apply_effects_splices_the_matching_skeleton_pose_only() {
     let mut world = World::new();
     world.add_component(SkeletonPose::new(
         Default::default(),
-        0,
+        SkinnedIndex(0),
         Skeleton::new(Vec::new()),
     ));
     world.add_component(SkeletonPose::new(
         Default::default(),
-        1,
+        SkinnedIndex(1),
         Skeleton::new(Vec::new()),
     ));
 
@@ -2369,7 +2370,7 @@ fn apply_effects_splices_the_matching_skeleton_pose_only() {
         &mut world,
         FrameHotReloadEffects {
             skeleton_updates: vec![PendingSkeletonUpdate {
-                skinned_index: 1,
+                skinned_index: SkinnedIndex(1),
                 new_skeleton,
             }],
             story_updates: Vec::new(),
@@ -2377,10 +2378,10 @@ fn apply_effects_splices_the_matching_skeleton_pose_only() {
         },
     );
 
-    let joints_of = |idx: usize| {
+    let joints_of = |idx: u32| {
         world
             .query::<SkeletonPose>()
-            .find(|p| p.skinned_index == idx)
+            .find(|p| p.skinned_index == SkinnedIndex(idx))
             .map(|p| (p.skeleton.len(), p.joint_matrices.len()))
             .unwrap()
     };

@@ -39,7 +39,7 @@ pub(crate) fn refresh_visibility_snapshot(
         // by a hide request, and a scene switch must not relight them.
         if ctx.get::<Hidden>(entity).is_none() {
             for &slot in handle.draws.iter() {
-                scratch.visibility.push_draw(slot as usize);
+                scratch.visibility.push_draw(slot);
             }
         }
     }
@@ -92,7 +92,7 @@ mod tests {
     use concinnity_host::store::blob::BlobData;
 
     // Collect the snapshot's pairs for assertions.
-    fn snapshot_pairs(ctx: &PipelineContext) -> (Vec<Vec<usize>>, Vec<Option<AssetId>>) {
+    fn snapshot_pairs(ctx: &PipelineContext) -> (Vec<Vec<DrawIndex>>, Vec<Option<AssetId>>) {
         let mut scratch = SceneVisibilityScratch::default();
         refresh_visibility_snapshot(ctx, &mut scratch);
         let mut draws = Vec::new();
@@ -126,22 +126,39 @@ mod tests {
         ctx.insert(
             a,
             RenderHandle {
-                draws: [10, 11].into(),
+                draws: [DrawIndex(10), DrawIndex(11)].into(),
             },
         );
         ctx.insert(a, SceneMember(AssetId(7)));
         // Entity with no scene (always visible), one slot.
         let b = ctx.components.spawn();
-        ctx.insert(b, RenderHandle { draws: [20].into() });
+        ctx.insert(
+            b,
+            RenderHandle {
+                draws: [DrawIndex(20)].into(),
+            },
+        );
         // Entity in scene 8, one slot.
         let c = ctx.components.spawn();
-        ctx.insert(c, RenderHandle { draws: [30].into() });
+        ctx.insert(
+            c,
+            RenderHandle {
+                draws: [DrawIndex(30)].into(),
+            },
+        );
         ctx.insert(c, SceneMember(AssetId(8)));
 
         let (draws, scenes) = snapshot_pairs(&ctx);
 
         // Pairs follow RenderHandle column order (a, b, c).
-        assert_eq!(draws, vec![vec![10usize, 11], vec![20], vec![30]]);
+        assert_eq!(
+            draws,
+            vec![
+                vec![DrawIndex(10), DrawIndex(11)],
+                vec![DrawIndex(20)],
+                vec![DrawIndex(30)]
+            ]
+        );
         assert_eq!(scenes, vec![Some(AssetId(7)), None, Some(AssetId(8))]);
     }
 
@@ -163,13 +180,23 @@ mod tests {
         };
 
         let a = ctx.components.spawn();
-        ctx.insert(a, RenderHandle { draws: [10].into() });
+        ctx.insert(
+            a,
+            RenderHandle {
+                draws: [DrawIndex(10)].into(),
+            },
+        );
         let b = ctx.components.spawn();
-        ctx.insert(b, RenderHandle { draws: [20].into() });
+        ctx.insert(
+            b,
+            RenderHandle {
+                draws: [DrawIndex(20)].into(),
+            },
+        );
         ctx.insert(b, Hidden);
 
         let (draws, scenes) = snapshot_pairs(&ctx);
-        assert_eq!(draws, vec![vec![10usize], vec![]]);
+        assert_eq!(draws, vec![vec![DrawIndex(10)], vec![]]);
         assert_eq!(scenes, vec![None, None]);
     }
 
@@ -193,10 +220,15 @@ mod tests {
         let only_scene = ctx.components.spawn();
         ctx.insert(only_scene, SceneMember(AssetId(7)));
         let rendered = ctx.components.spawn();
-        ctx.insert(rendered, RenderHandle { draws: [5].into() });
+        ctx.insert(
+            rendered,
+            RenderHandle {
+                draws: [DrawIndex(5)].into(),
+            },
+        );
 
         let (draws, scenes) = snapshot_pairs(&ctx);
-        assert_eq!(draws, vec![vec![5usize]]);
+        assert_eq!(draws, vec![vec![DrawIndex(5)]]);
         assert_eq!(scenes, vec![None]);
     }
 }

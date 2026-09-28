@@ -5,6 +5,7 @@
 
 use concinnity_core::components::{Children, RenderHandle, SkeletonPose};
 use concinnity_core::ecs::{Entity, PipelineContext};
+use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::render::ops::RenderOps;
 
 use crate::gfx::render_slots::RenderSlots;
@@ -33,8 +34,8 @@ pub(super) fn collect_subtree(ctx: &PipelineContext, root: Entity) -> Vec<Entity
 // covers both so the cascade keeps a single `&mut backend` borrow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RetiredSlot {
-    Draw(usize),
-    Skinned(usize),
+    Draw(DrawIndex),
+    Skinned(SkinnedIndex),
 }
 
 // Despawn an entity and its descendants: retire every GPU slot each one owns,
@@ -54,12 +55,12 @@ fn despawn_collected(
     let entities = collect_subtree(ctx, root);
     for &entity in &entities {
         // Clone the slot list out so the immutable borrow ends before despawn.
-        let slots: concinnity_core::memory::InlineVec<u32> = ctx
+        let slots: concinnity_core::memory::InlineVec<DrawIndex> = ctx
             .get::<RenderHandle>(entity)
             .map(|h| h.draws.clone())
             .unwrap_or_default();
         for slot in slots {
-            retire(RetiredSlot::Draw(slot as usize));
+            retire(RetiredSlot::Draw(slot));
         }
         if let Some(skinned_index) = ctx.get::<SkeletonPose>(entity).map(|p| p.skinned_index) {
             retire(RetiredSlot::Skinned(skinned_index));
@@ -160,17 +161,27 @@ mod tests {
             ctx.insert(
                 parent,
                 RenderHandle {
-                    draws: [10, 11].into(),
+                    draws: [DrawIndex(10), DrawIndex(11)].into(),
                 },
             );
             ctx.insert(parent, Children([child].into()));
             ctx.insert(child, Transform::default());
-            ctx.insert(child, RenderHandle { draws: [12].into() });
+            ctx.insert(
+                child,
+                RenderHandle {
+                    draws: [DrawIndex(12)].into(),
+                },
+            );
             ctx.insert(child, Parent(parent));
             ctx.insert(other, Transform::default());
-            ctx.insert(other, RenderHandle { draws: [99].into() });
+            ctx.insert(
+                other,
+                RenderHandle {
+                    draws: [DrawIndex(99)].into(),
+                },
+            );
 
-            let mut retired: Vec<usize> = Vec::new();
+            let mut retired: Vec<DrawIndex> = Vec::new();
             let removed = despawn_collected(ctx, parent, |slot| {
                 if let RetiredSlot::Draw(i) = slot {
                     retired.push(i);
@@ -181,7 +192,7 @@ mod tests {
             retired.sort_unstable();
             assert_eq!(
                 retired,
-                vec![10, 11, 12],
+                vec![DrawIndex(10), DrawIndex(11), DrawIndex(12)],
                 "every slot in the subtree retired"
             );
 
@@ -191,7 +202,7 @@ mod tests {
             assert!(ctx.get::<RenderHandle>(child).is_none());
             assert_eq!(ctx.query::<Transform>().count(), 1, "only `other` remains");
             let survivor = ctx.get::<RenderHandle>(other).expect("other survives");
-            assert_eq!(survivor.draws, vec![99]);
+            assert_eq!(survivor.draws, [DrawIndex(99)]);
         });
     }
 
@@ -220,7 +231,11 @@ mod tests {
             let skinned = ctx.components.spawn();
             ctx.insert(
                 skinned,
-                SkeletonPose::new(SkinnedMeshHandle(1), 4, Skeleton::new(Vec::new())),
+                SkeletonPose::new(
+                    SkinnedMeshHandle(1),
+                    SkinnedIndex(4),
+                    Skeleton::new(Vec::new()),
+                ),
             );
 
             let mut retired: Vec<RetiredSlot> = Vec::new();
@@ -229,7 +244,7 @@ mod tests {
             assert_eq!(removed, 1);
             assert_eq!(
                 retired,
-                vec![RetiredSlot::Skinned(4)],
+                vec![RetiredSlot::Skinned(SkinnedIndex(4))],
                 "the skinned_index was retired, and there were no draw slots"
             );
             assert!(

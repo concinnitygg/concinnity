@@ -7,6 +7,7 @@ use concinnity_core::animation::skeleton;
 use concinnity_core::components::SkeletonJoint;
 use concinnity_core::components::Story;
 use concinnity_core::gfx::mesh_payload;
+use concinnity_core::gfx::render_types::SkinnedIndex;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_engine::gfx::system::hot_reload_sources::*;
 use concinnity_engine::gfx::system::parked::PushedFogSettings;
@@ -184,7 +185,7 @@ pub(crate) struct AssetHotReloadState {
 pub(crate) struct PendingSkeletonUpdate {
     // Backend slot the new skeleton belongs to. Used to find the matching
     // `SkeletonPose` (which carries the same `skinned_index`).
-    pub skinned_index: usize,
+    pub skinned_index: SkinnedIndex,
     // Fresh skeleton built from the re-imported `.glb`'s joint defs.
     pub new_skeleton: skeleton::Skeleton,
 }

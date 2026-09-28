@@ -9,6 +9,7 @@
 use concinnity_core::animation::skeleton;
 use concinnity_core::components::{GlobalTransform, Prop, RenderHandle, SkeletonPose};
 use concinnity_core::ecs::{Entity, SkinnedMeshHandle};
+use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::render::snapshot::RenderSnapshot;
 
 use super::{BenchWorld, bench};
@@ -41,7 +42,7 @@ fn draw_world(count: usize) -> (BenchWorld, Vec<Entity>) {
             world.components.insert_typed(
                 entity,
                 RenderHandle {
-                    draws: [i as u32].into(),
+                    draws: [DrawIndex::from_usize(i)].into(),
                 },
             );
             entity
@@ -59,7 +60,7 @@ fn pose_world(count: usize) -> BenchWorld {
             entity,
             SkeletonPose {
                 mesh_id: SkinnedMeshHandle(i as u32),
-                skinned_index: i,
+                skinned_index: SkinnedIndex::from_usize(i),
                 skeleton: skeleton::Skeleton::new(Vec::new()),
                 joint_matrices: vec![model_at(i); JOINTS],
                 morph_weights: Vec::new(),

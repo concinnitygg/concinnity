@@ -8,6 +8,7 @@ use concinnity_core::components::{
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Entity, MaterialHandle, PickIndex, PipelineContext};
+use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_core::memory::InlineVec;
 use concinnity_core::transform::propagation;
 
@@ -88,10 +89,7 @@ impl GraphicsSystem {
         self.pick_candidates.clear();
         let want_pick = ctx.resource::<PickIndex>().is_some();
         for (i, &entity) in prop_entities.iter().enumerate() {
-            let draws: InlineVec<u32> = data.prop_draw_indices[i]
-                .iter()
-                .map(|&slot| slot as u32)
-                .collect();
+            let draws: InlineVec<DrawIndex> = data.prop_draw_indices[i].iter().copied().collect();
             ctx.insert(entity, RenderHandle { draws });
             ctx.insert(entity, GlobalTransform(world_mats[i]));
             if want_pick && let Some(asset_id) = items[i].asset_id {

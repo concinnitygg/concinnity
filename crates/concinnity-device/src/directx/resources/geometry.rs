@@ -4,6 +4,7 @@
 //! streaming headroom.
 
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -86,12 +87,12 @@ impl DxContext {
     // command list (see `write_geometry_region`).
     pub(crate) fn upload_mesh(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         vertices: &[Vertex],
         indices: &[u16],
         frame: u64,
     ) -> RenderResult<()> {
-        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
+        let obj = self.draw.objects.get(draw_idx.index()).ok_or_else(|| {
             RenderError::Other(format!(
                 "upload_mesh: draw object {} out of range",
                 draw_idx
@@ -158,7 +159,7 @@ impl DxContext {
             idx_bytes,
         )?;
 
-        let obj = &mut self.draw.objects[draw_idx];
+        let obj = &mut self.draw.objects[draw_idx.index()];
         obj.vertex_offset = v_off;
         obj.index_offset = i_off / std::mem::size_of::<u32>();
         obj.resident = true;
@@ -182,12 +183,12 @@ impl DxContext {
     // buffer). Mirrors `MtlContext::update_mesh_geometry`.
     pub(crate) fn update_mesh_geometry(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         vertices: &[Vertex],
         indices: &[u16],
         lod_alternates: &[(f32, Vec<u16>)],
     ) -> RenderResult<()> {
-        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
+        let obj = self.draw.objects.get(draw_idx.index()).ok_or_else(|| {
             RenderError::Other(format!(
                 "update_mesh_geometry: draw object {} out of range",
                 draw_idx
@@ -286,7 +287,7 @@ impl DxContext {
         }
         // Refresh the per-LOD switch distances so JSON-side tweaks to
         // `lod_distances` propagate without a process restart.
-        let slot = &mut self.draw.objects[draw_idx];
+        let slot = &mut self.draw.objects[draw_idx.index()];
         for ((switch_distance, _), slice) in
             lod_alternates.iter().zip(slot.lod_alternates.iter_mut())
         {
@@ -312,8 +313,12 @@ impl DxContext {
     // The region is not zeroed: the draw leaves the RT-relevant set here, so
     // the next RT update retires its BLAS rather than tracing the vacated
     // bytes, and every raster pass skips a non-resident draw.
-    pub(crate) fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()> {
-        let obj = self.draw.objects.get(draw_idx).ok_or_else(|| {
+    pub(crate) fn evict_mesh(
+        &mut self,
+        draw_idx: DrawIndex,
+        retire_frame: u64,
+    ) -> RenderResult<()> {
+        let obj = self.draw.objects.get(draw_idx.index()).ok_or_else(|| {
             RenderError::Other(format!("evict_mesh: draw object {} out of range", draw_idx))
         })?;
         let v_off = obj.vertex_offset as u64;
@@ -322,7 +327,7 @@ impl DxContext {
         let i_len = (obj.index_count * std::mem::size_of::<u32>()) as u64;
         self.mesh_stream.vtx_alloc.free(v_off, v_len, retire_frame);
         self.mesh_stream.idx_alloc.free(i_off, i_len, retire_frame);
-        self.draw.objects[draw_idx].resident = false;
+        self.draw.objects[draw_idx.index()].resident = false;
         // The mesh leaves the RT-relevant draw set; the next RT update drops its
         // BLAS (deferred-freed once in-flight traces retire).
         self.rt.topology_dirty = true;

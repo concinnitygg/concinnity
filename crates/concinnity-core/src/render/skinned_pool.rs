@@ -12,6 +12,7 @@
 //! Built and consumed by every graphics backend's runtime skinned-spawn path
 //! (Metal, DirectX, Vulkan).
 
+use crate::gfx::render_types::SkinnedIndex;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
 
@@ -19,11 +20,11 @@ use hashbrown::HashMap;
 /// Recycles skinned draw slots as skinned instances spawn and despawn.
 pub struct SkinnedInstancePool {
     // template skinned-draw-object index -> its currently free instance slots.
-    free: HashMap<usize, Vec<usize>>,
+    free: HashMap<SkinnedIndex, Vec<SkinnedIndex>>,
     // instance slot -> the template it belongs to, so `release` returns it to
     // the right pool. Set once at `reserve` and never changed (a copy always
     // belongs to the template it was expanded from).
-    owner: HashMap<usize, usize>,
+    owner: HashMap<SkinnedIndex, SkinnedIndex>,
 }
 
 impl SkinnedInstancePool {
@@ -34,21 +35,21 @@ impl SkinnedInstancePool {
 
     /// Record a pre-reserved instance slot as free and owned by `template`.
     /// Called once per expanded copy at load.
-    pub fn reserve(&mut self, template: usize, instance: usize) {
+    pub fn reserve(&mut self, template: SkinnedIndex, instance: SkinnedIndex) {
         self.owner.insert(instance, template);
         self.free.entry(template).or_default().push(instance);
     }
 
     /// Claim a free instance slot for `template`, or `None` when the reserve is
     /// exhausted (more live copies than were pre-reserved).
-    pub fn acquire(&mut self, template: usize) -> Option<usize> {
+    pub fn acquire(&mut self, template: SkinnedIndex) -> Option<SkinnedIndex> {
         self.free.get_mut(&template).and_then(|slots| slots.pop())
     }
 
     /// Return a live instance slot to its template's free list. Returns false if
     /// the slot was never a pre-reserved instance (e.g. an authored template
     /// slot), so the caller can tell a recyclable slot from a fixed one.
-    pub fn release(&mut self, instance: usize) -> bool {
+    pub fn release(&mut self, instance: SkinnedIndex) -> bool {
         let Some(&template) = self.owner.get(&instance) else {
             return false;
         };
@@ -72,20 +73,20 @@ mod tests {
     fn acquire_then_release_recycles_the_same_slot() {
         let mut pool = SkinnedInstancePool::new();
         // Template 0 owns two pre-reserved copies: slots 1 and 2.
-        pool.reserve(0, 1);
-        pool.reserve(0, 2);
+        pool.reserve(SkinnedIndex(0), SkinnedIndex(1));
+        pool.reserve(SkinnedIndex(0), SkinnedIndex(2));
         assert_eq!(pool.total_free(), 2);
 
-        let a = pool.acquire(0).expect("first claim");
-        let b = pool.acquire(0).expect("second claim");
-        assert!(pool.acquire(0).is_none(), "reserve exhausted");
+        let a = pool.acquire(SkinnedIndex(0)).expect("first claim");
+        let b = pool.acquire(SkinnedIndex(0)).expect("second claim");
+        assert!(pool.acquire(SkinnedIndex(0)).is_none(), "reserve exhausted");
         assert_eq!(pool.total_free(), 0);
 
         // Releasing a claimed slot makes it available again, and the next claim
         // hands it back out instead of growing.
         assert!(pool.release(a));
         assert_eq!(pool.total_free(), 1);
-        let reused = pool.acquire(0).expect("reuse after release");
+        let reused = pool.acquire(SkinnedIndex(0)).expect("reuse after release");
         assert_eq!(reused, a, "a freed instance slot is recycled");
         let _ = b;
     }
@@ -93,36 +94,36 @@ mod tests {
     #[test]
     fn slots_return_only_to_their_own_template() {
         let mut pool = SkinnedInstancePool::new();
-        pool.reserve(0, 10); // template 0
-        pool.reserve(5, 20); // template 5
-        let s0 = pool.acquire(0).unwrap();
-        let s5 = pool.acquire(5).unwrap();
-        assert_eq!((s0, s5), (10, 20));
+        pool.reserve(SkinnedIndex(0), SkinnedIndex(10)); // template 0
+        pool.reserve(SkinnedIndex(5), SkinnedIndex(20)); // template 5
+        let s0 = pool.acquire(SkinnedIndex(0)).unwrap();
+        let s5 = pool.acquire(SkinnedIndex(5)).unwrap();
+        assert_eq!((s0, s5), (SkinnedIndex(10), SkinnedIndex(20)));
         pool.release(s0);
         pool.release(s5);
         // Each slot went back to its own template's pool, not the other's.
-        assert_eq!(pool.acquire(0), Some(10));
-        assert_eq!(pool.acquire(5), Some(20));
+        assert_eq!(pool.acquire(SkinnedIndex(0)), Some(SkinnedIndex(10)));
+        assert_eq!(pool.acquire(SkinnedIndex(5)), Some(SkinnedIndex(20)));
     }
 
     #[test]
     fn releasing_an_unknown_slot_is_a_clean_false() {
         let mut pool = SkinnedInstancePool::new();
-        pool.reserve(0, 1);
+        pool.reserve(SkinnedIndex(0), SkinnedIndex(1));
         // Slot 99 was never reserved (e.g. an authored template slot): release
         // reports it is not a pool slot and changes nothing.
-        assert!(!pool.release(99));
+        assert!(!pool.release(SkinnedIndex(99)));
         assert_eq!(pool.total_free(), 1);
     }
 
     #[test]
     fn total_free_sums_across_templates() {
         let mut pool = SkinnedInstancePool::new();
-        pool.reserve(0, 1);
-        pool.reserve(0, 2);
-        pool.reserve(3, 4);
+        pool.reserve(SkinnedIndex(0), SkinnedIndex(1));
+        pool.reserve(SkinnedIndex(0), SkinnedIndex(2));
+        pool.reserve(SkinnedIndex(3), SkinnedIndex(4));
         assert_eq!(pool.total_free(), 3);
-        pool.acquire(0);
+        pool.acquire(SkinnedIndex(0));
         assert_eq!(pool.total_free(), 2);
     }
 }

@@ -4,6 +4,7 @@ use crate::animation::pose_scratch::PoseScratch;
 use crate::animation::proportions::ProportionLayer;
 use crate::animation::skeleton::Skeleton;
 use crate::ecs::SkinnedMeshHandle;
+use crate::gfx::render_types::SkinnedIndex;
 use crate::transform::Mat4;
 
 /// Runtime-only link between a skinned mesh and its animation state.
@@ -27,7 +28,7 @@ pub struct SkeletonPose {
     /// `AnimationSystem` to match an `Animation` clip to its target.
     pub mesh_id: SkinnedMeshHandle,
     /// Index of this mesh's skinned draw object in the render backend.
-    pub skinned_index: usize,
+    pub skinned_index: SkinnedIndex,
     /// Bind-pose joint hierarchy, used to compose skinning matrices.
     pub skeleton: Skeleton,
     /// Current skinning matrices, one per joint. Seeded to the bind pose
@@ -55,7 +56,11 @@ pub struct SkeletonPose {
 impl SkeletonPose {
     /// Build a pose for `mesh_id`'s skinned draw object, seeded to the bind
     /// pose so the mesh renders undeformed until an animation drives it.
-    pub fn new(mesh_id: SkinnedMeshHandle, skinned_index: usize, skeleton: Skeleton) -> Self {
+    pub fn new(
+        mesh_id: SkinnedMeshHandle,
+        skinned_index: SkinnedIndex,
+        skeleton: Skeleton,
+    ) -> Self {
         let joint_matrices = skeleton.bind_skinning_matrices();
         Self {
             mesh_id,
@@ -96,7 +101,7 @@ impl SkeletonPose {
 
     /// A fresh pose sharing this one's skeleton and shape layers, for a
     /// runtime-spawned copy of the mesh at draw slot `skinned_index`.
-    pub fn clone_for_slot(&self, skinned_index: usize) -> Self {
+    pub fn clone_for_slot(&self, skinned_index: SkinnedIndex) -> Self {
         Self::new(self.mesh_id, skinned_index, self.skeleton.clone())
             .with_shape(self.morph_base.clone(), self.proportions.clone())
     }
@@ -138,8 +143,8 @@ mod tests {
                 length: 0.0,
             }],
         );
-        let pose =
-            SkeletonPose::new(SkinnedMeshHandle(1), 3, skeleton).with_shape(vec![0.25, 0.5], layer);
+        let pose = SkeletonPose::new(SkinnedMeshHandle(1), SkinnedIndex(3), skeleton)
+            .with_shape(vec![0.25, 0.5], layer);
         assert_eq!(pose.morph_weights, [0.25, 0.5]);
         // Root doubled: its skinning matrix is a pure scale of 2 (bind is
         // identity there), and the tip's bind position (0, 1, 0) skins to
@@ -148,8 +153,8 @@ mod tests {
         let tip = pose.joint_matrices[1];
         assert!((tip[1][1] + tip[3][1] - 2.0).abs() < 1e-5, "{tip:?}");
         assert!(pose.updated);
-        let copy = pose.clone_for_slot(7);
-        assert_eq!(copy.skinned_index, 7);
+        let copy = pose.clone_for_slot(SkinnedIndex(7));
+        assert_eq!(copy.skinned_index, SkinnedIndex(7));
         assert_eq!(copy.joint_matrices, pose.joint_matrices);
         assert_eq!(copy.morph_base, pose.morph_base);
     }

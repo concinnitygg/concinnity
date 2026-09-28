@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::mesh_seed::{self, MeshSeedRegion};
-use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster};
+use concinnity_core::gfx::render_types::{DrawIndex, DrawObject, InstancedCluster};
 
 use crate::gfx::streaming::mesh::DecodedMesh;
 
@@ -23,10 +23,10 @@ use crate::gfx::streaming::mesh::DecodedMesh;
 // alternates from every streamed draw so active_lod() always returns LOD0.
 pub(super) fn strip_streamed_lod_alternates(
     draw_objects: &mut [DrawObject],
-    stream_draw_indices: &[usize],
+    stream_draw_indices: &[DrawIndex],
 ) {
     for &draw_idx in stream_draw_indices {
-        if let Some(obj) = draw_objects.get_mut(draw_idx) {
+        if let Some(obj) = draw_objects.get_mut(draw_idx.index()) {
             obj.lod_alternates.clear();
         }
     }
@@ -38,8 +38,8 @@ pub(super) fn strip_streamed_lod_alternates(
 // the baked `deferred_counts` keyed by mesh-source handle instead.
 pub(super) fn plan_mesh_seed_bytes(
     mesh_payloads: &[DecodedMesh],
-    stream_draw_indices: &[usize],
-    draw_to_handle: &HashMap<usize, usize>,
+    stream_draw_indices: &[DrawIndex],
+    draw_to_handle: &HashMap<DrawIndex, usize>,
     deferred_counts: &HashMap<u32, (u32, u32)>,
     mesh_cap: usize,
     has_deferred_seeds: bool,
@@ -83,7 +83,7 @@ pub(super) struct MeshSeedCompaction<'a> {
     pub(super) indices: &'a mut Vec<u32>,
     pub(super) draw_objects: &'a mut Vec<DrawObject>,
     pub(super) instanced_clusters: &'a mut Vec<InstancedCluster>,
-    pub(super) stream_draw_indices: &'a [usize],
+    pub(super) stream_draw_indices: &'a [DrawIndex],
 }
 
 // Compact the resident geometry and append the planned `seed` headroom,
@@ -104,7 +104,7 @@ pub(super) fn compact_streamed_geometry(
     let (seed_vtx, seed_idx) = seed;
     let mut streamed = vec![false; draw_objects.len()];
     for &idx in stream_draw_indices {
-        if let Some(s) = streamed.get_mut(idx) {
+        if let Some(s) = streamed.get_mut(idx.index()) {
             *s = true;
         }
     }
@@ -196,7 +196,7 @@ mod tests {
                 switch_distance: 10.0,
             });
         }
-        strip_streamed_lod_alternates(&mut draws, &[1, 9]);
+        strip_streamed_lod_alternates(&mut draws, &[DrawIndex(1), DrawIndex(9)]);
         assert_eq!(draws[0].lod_alternates.len(), 1);
         assert!(draws[1].lod_alternates.is_empty());
         assert_eq!(draws[2].lod_alternates.len(), 1);
@@ -206,9 +206,16 @@ mod tests {
     fn a_deferred_mesh_with_an_empty_payload_contributes_its_baked_counts() {
         // Stream 0 is decoded, stream 1 is a deferred draw of mesh handle 5.
         let payloads = [mesh(4, 6), mesh(0, 0)];
-        let draw_to_handle = HashMap::from([(0, 2), (1, 5)]);
+        let draw_to_handle = HashMap::from([(DrawIndex(0), 2), (DrawIndex(1), 5)]);
         let counts = HashMap::from([(5, (10, 30))]);
-        let seed = plan_mesh_seed_bytes(&payloads, &[0, 1], &draw_to_handle, &counts, 8, true);
+        let seed = plan_mesh_seed_bytes(
+            &payloads,
+            &[DrawIndex(0), DrawIndex(1)],
+            &draw_to_handle,
+            &counts,
+            8,
+            true,
+        );
         assert_eq!(
             seed,
             Some((14 * VERTEX_BYTES, 36 * INDEX_BYTES)),
@@ -219,10 +226,10 @@ mod tests {
     #[test]
     fn a_cap_covering_the_set_with_nothing_deferred_plans_no_seed() {
         let payloads = [mesh(4, 6), mesh(3, 3)];
-        let draw_to_handle = HashMap::from([(0, 0), (1, 1)]);
+        let draw_to_handle = HashMap::from([(DrawIndex(0), 0), (DrawIndex(1), 1)]);
         let seed = plan_mesh_seed_bytes(
             &payloads,
-            &[0, 1],
+            &[DrawIndex(0), DrawIndex(1)],
             &draw_to_handle,
             &HashMap::new(),
             8,
@@ -245,7 +252,7 @@ mod tests {
                 indices: &mut indices,
                 draw_objects: &mut draw_objects,
                 instanced_clusters: &mut instanced_clusters,
-                stream_draw_indices: &[1, 7],
+                stream_draw_indices: &[DrawIndex(1), DrawIndex(7)],
             },
             seed,
             1,

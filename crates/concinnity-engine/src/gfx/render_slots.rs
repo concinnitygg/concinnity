@@ -5,6 +5,7 @@
 //! because ops replay exactly once, in record order: an `Append` index always
 //! matches the backend's draw-object count when its op applies.
 
+use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::render::draw_slot::{DrawSlotAllocator, SlotAlloc};
 use concinnity_core::render::skinned_pool::SkinnedInstancePool;
 
@@ -25,7 +26,7 @@ impl RenderSlots {
     pub(crate) fn new(
         build_draw_count: usize,
         reuses_build_slots: bool,
-        skinned_reservations: &[(usize, usize)],
+        skinned_reservations: &[(SkinnedIndex, SkinnedIndex)],
     ) -> Self {
         let mut skinned = SkinnedInstancePool::new();
         for &(template, instance) in skinned_reservations {
@@ -49,21 +50,21 @@ impl RenderSlots {
 
     // Return a retired draw slot for reuse. Build-time slots stay allocated
     // on backends that cannot refit them (`reuse_floor`).
-    pub(crate) fn free_draw(&mut self, slot: usize) {
-        if slot >= self.reuse_floor {
+    pub(crate) fn free_draw(&mut self, slot: DrawIndex) {
+        if slot.index() >= self.reuse_floor {
             self.draws.free(slot);
         }
     }
 
     // Claim a free pre-reserved skinned instance of `template`, or `None`
     // when the reserve is exhausted.
-    pub(crate) fn claim_skinned(&mut self, template: usize) -> Option<usize> {
+    pub(crate) fn claim_skinned(&mut self, template: SkinnedIndex) -> Option<SkinnedIndex> {
         self.skinned.acquire(template)
     }
 
     // Return a live skinned instance to its template's pool. False if the
     // slot was never a pre-reserved instance (an authored template slot).
-    pub(crate) fn release_skinned(&mut self, instance: usize) -> bool {
+    pub(crate) fn release_skinned(&mut self, instance: SkinnedIndex) -> bool {
         self.skinned.release(instance)
     }
 
@@ -81,16 +82,16 @@ mod tests {
     fn build_slots_recycle_only_above_the_floor() {
         // A backend that cannot refit build-time slots: floor = build count.
         let mut slots = RenderSlots::new(4, false, &[]);
-        slots.free_draw(2);
+        slots.free_draw(DrawIndex(2));
         assert_eq!(
             slots.allocate_draw(),
-            SlotAlloc::Append(4),
+            SlotAlloc::Append(DrawIndex(4)),
             "a freed build-time slot is not recycled"
         );
-        slots.free_draw(4);
+        slots.free_draw(DrawIndex(4));
         assert_eq!(
             slots.allocate_draw(),
-            SlotAlloc::Reuse(4),
+            SlotAlloc::Reuse(DrawIndex(4)),
             "a runtime-append slot is recycled"
         );
     }
@@ -98,24 +99,39 @@ mod tests {
     #[test]
     fn build_slots_recycle_everywhere_without_the_floor() {
         let mut slots = RenderSlots::new(4, true, &[]);
-        slots.free_draw(2);
-        assert_eq!(slots.allocate_draw(), SlotAlloc::Reuse(2));
+        slots.free_draw(DrawIndex(2));
+        assert_eq!(slots.allocate_draw(), SlotAlloc::Reuse(DrawIndex(2)));
     }
 
     #[test]
     fn skinned_pool_claims_and_releases_per_template() {
-        let mut slots = RenderSlots::new(0, true, &[(0, 5), (0, 6), (3, 9)]);
+        let mut slots = RenderSlots::new(
+            0,
+            true,
+            &[
+                (SkinnedIndex(0), SkinnedIndex(5)),
+                (SkinnedIndex(0), SkinnedIndex(6)),
+                (SkinnedIndex(3), SkinnedIndex(9)),
+            ],
+        );
         assert_eq!(slots.skinned_free(), 3);
-        let a = slots.claim_skinned(0).expect("first copy");
-        let b = slots.claim_skinned(0).expect("second copy");
-        assert!(slots.claim_skinned(0).is_none(), "reserve exhausted");
-        assert!(slots.release_skinned(a));
-        assert_eq!(slots.claim_skinned(0), Some(a), "released slot recycles");
+        let a = slots.claim_skinned(SkinnedIndex(0)).expect("first copy");
+        let b = slots.claim_skinned(SkinnedIndex(0)).expect("second copy");
         assert!(
-            !slots.release_skinned(42),
+            slots.claim_skinned(SkinnedIndex(0)).is_none(),
+            "reserve exhausted"
+        );
+        assert!(slots.release_skinned(a));
+        assert_eq!(
+            slots.claim_skinned(SkinnedIndex(0)),
+            Some(a),
+            "released slot recycles"
+        );
+        assert!(
+            !slots.release_skinned(SkinnedIndex(42)),
             "unknown slot is not a pool slot"
         );
         let _ = b;
-        assert_eq!(slots.claim_skinned(3), Some(9));
+        assert_eq!(slots.claim_skinned(SkinnedIndex(3)), Some(SkinnedIndex(9)));
     }
 }

@@ -447,7 +447,7 @@ impl DxContext {
     // Mirrors `MtlContext::update_skinned_mesh_geometry`.
     pub(crate) fn update_skinned_mesh_geometry(
         &mut self,
-        skinned_index: usize,
+        skinned_index: SkinnedIndex,
         vertex_base: u32,
         vertices: &[SkinnedVertex],
         indices: &[u16],
@@ -456,7 +456,7 @@ impl DxContext {
             .skinned
             .slots
             .draw_objects
-            .get(skinned_index)
+            .get(skinned_index.index())
             .ok_or_else(|| {
                 RenderError::Other(format!(
                     "update_skinned_mesh_geometry: skinned object {} out of range",
@@ -531,7 +531,7 @@ impl DxContext {
     // its contract are documented there, once for all three backends.
     pub(crate) fn update_skinned_skeleton(
         &mut self,
-        skinned_index: usize,
+        skinned_index: SkinnedIndex,
         new_joint_count: usize,
     ) -> RenderResult<()> {
         self.skinned
@@ -540,21 +540,29 @@ impl DxContext {
             .map_err(RenderError::Other)
     }
 
-    pub(crate) fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]) {
+    pub(crate) fn update_skinned_pose(
+        &mut self,
+        skinned_index: SkinnedIndex,
+        matrices: &[[[f32; 4]; 4]],
+    ) {
         self.skinned.slots.update_pose(skinned_index, matrices);
     }
 
-    pub(crate) fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]) {
+    pub(crate) fn reveal_skinned_instance(
+        &mut self,
+        instance_index: SkinnedIndex,
+        model: [[f32; 4]; 4],
+    ) {
         self.skinned
             .slots
             .reveal(instance_index, model, &mut self.model_history.borrow_mut());
     }
 
-    pub(crate) fn retire_skinned_draw_object(&mut self, skinned_index: usize) {
+    pub(crate) fn retire_skinned_draw_object(&mut self, skinned_index: SkinnedIndex) {
         self.skinned.slots.retire(skinned_index);
     }
 
-    pub(crate) fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+    pub(crate) fn update_skinned_models(&mut self, updates: &[(SkinnedIndex, [[f32; 4]; 4])]) {
         self.skinned.slots.update_models(updates);
     }
 
@@ -686,7 +694,7 @@ impl DxContext {
 
     pub(in crate::directx) fn update_morph_weights(
         &mut self,
-        skinned_index: usize,
+        skinned_index: SkinnedIndex,
         weights: &[f32],
     ) {
         self.skinned

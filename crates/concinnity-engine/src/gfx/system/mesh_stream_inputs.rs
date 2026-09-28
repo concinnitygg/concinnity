@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::DrawIndex;
 
 use super::draw_geometry::draw_object_position;
 use crate::gfx::draw_list::DeferredMeshSeed;
@@ -15,7 +16,7 @@ use crate::gfx::streaming::mesh::DecodedMesh;
 // streamed mesh, its scoring center, and its decoded per-mesh geometry copy.
 // The three vecs are column-aligned.
 pub(super) struct MeshStreamData {
-    pub(super) draw_indices: Vec<usize>,
+    pub(super) draw_indices: Vec<DrawIndex>,
     pub(super) centers: Vec<Vec<[f32; 3]>>,
     pub(super) payloads: Vec<DecodedMesh>,
 }
@@ -56,15 +57,16 @@ pub(super) fn mesh_stream_data(
     draw_objects: &[render_types::DrawObject],
     all_vertices: &[Vertex],
     all_indices: &[u32],
-    deferred_draws: &HashSet<usize>,
+    deferred_draws: &HashSet<DrawIndex>,
 ) -> MeshStreamData {
-    let mut draw_indices: Vec<usize> = Vec::new();
+    let mut draw_indices: Vec<DrawIndex> = Vec::new();
     let mut centers: Vec<Vec<[f32; 3]>> = Vec::new();
     let mut payloads: Vec<DecodedMesh> = Vec::new();
-    for (draw_idx, obj) in draw_objects.iter().enumerate() {
+    for (i, obj) in draw_objects.iter().enumerate() {
         if !obj.cullable() {
             continue;
         }
+        let draw_idx = DrawIndex::from_usize(i);
         // A deferred draw appended no geometry (its record carries baked
         // counts over an empty region): stream it with an empty payload copy;
         // the deferred source decodes the blob payload instead.
@@ -103,8 +105,8 @@ pub(super) fn mesh_stream_data(
 
 // The mesh-source handle each draw object was built from.
 pub(super) fn draw_to_handle(
-    mesh_handle_to_draws: &HashMap<usize, Vec<usize>>,
-) -> HashMap<usize, usize> {
+    mesh_handle_to_draws: &HashMap<usize, Vec<DrawIndex>>,
+) -> HashMap<DrawIndex, usize> {
     mesh_handle_to_draws
         .iter()
         .flat_map(|(h, draws)| draws.iter().map(move |&d| (d, *h)))
@@ -114,8 +116,8 @@ pub(super) fn draw_to_handle(
 // The draw objects built from a mesh whose payload decode was deferred.
 pub(super) fn deferred_draws(
     deferred_mesh_seeds: &HashMap<usize, DeferredMeshSeed>,
-    mesh_handle_to_draws: &HashMap<usize, Vec<usize>>,
-) -> HashSet<usize> {
+    mesh_handle_to_draws: &HashMap<usize, Vec<DrawIndex>>,
+) -> HashSet<DrawIndex> {
     deferred_mesh_seeds
         .keys()
         .filter_map(|h| mesh_handle_to_draws.get(h))
@@ -223,7 +225,7 @@ mod tests {
         let vbyte = 2 * std::mem::size_of::<Vertex>();
         let objs = vec![draw(vbyte, 2, 0, 3, 0, NO_NORMAL_MAP_SLOT, true)];
         let data = mesh_stream_data(&objs, &verts, &indices, &Default::default());
-        assert_eq!(data.draw_indices, vec![0]);
+        assert_eq!(data.draw_indices, vec![DrawIndex(0)]);
         assert_eq!(data.payloads.len(), 1);
         assert_eq!(data.payloads[0].vertices.len(), 2);
         // Global indices 2,3,2 rebased mesh-relative (minus vbase 2): 0,1,0.
@@ -247,19 +249,24 @@ mod tests {
 
     #[test]
     fn draw_to_handle_maps_every_draw_of_a_handle_back_to_it() {
-        let by_handle = HashMap::from([(7, vec![0, 3, 5]), (2, vec![1])]);
+        let d = DrawIndex;
+        let by_handle = HashMap::from([(7, vec![d(0), d(3), d(5)]), (2, vec![d(1)])]);
         let inverted = draw_to_handle(&by_handle);
         assert_eq!(inverted.len(), 4);
-        for draw in [0, 3, 5] {
+        for draw in [d(0), d(3), d(5)] {
             assert_eq!(inverted[&draw], 7);
         }
-        assert_eq!(inverted[&1], 2);
+        assert_eq!(inverted[&d(1)], 2);
     }
 
     #[test]
     fn deferred_draws_collects_the_draws_of_deferred_handles_only() {
-        let by_handle = HashMap::from([(7, vec![0, 3]), (2, vec![1]), (9, vec![4])]);
+        let d = DrawIndex;
+        let by_handle = HashMap::from([(7, vec![d(0), d(3)]), (2, vec![d(1)]), (9, vec![d(4)])]);
         let seeds = HashMap::from([(7, seed()), (8, seed())]);
-        assert_eq!(deferred_draws(&seeds, &by_handle), HashSet::from([0, 3]));
+        assert_eq!(
+            deferred_draws(&seeds, &by_handle),
+            HashSet::from([d(0), d(3)])
+        );
     }
 }

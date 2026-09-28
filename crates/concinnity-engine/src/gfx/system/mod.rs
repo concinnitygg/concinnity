@@ -18,6 +18,7 @@
 use concinnity_core::components::{GamepadAction, GraphicsConfig, PostProcessConfig};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{Entity, PipelineContext, StepResult, System};
+use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::input::keymap;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
@@ -128,7 +129,7 @@ pub struct GraphicsSystem {
     mesh_streamer: Option<crate::gfx::streaming::mesh::MeshStreamer>,
     // Maps a streamed mesh's id to its DrawObject index, so completed loads
     // and evictions are applied to the right draw. Empty when not streaming.
-    mesh_stream_draw_indices: Vec<usize>,
+    mesh_stream_draw_indices: Vec<DrawIndex>,
     chunk_stream: Option<crate::gfx::streaming::system::ChunkStreamState>,
     // Shader buckets whose pipeline init deferred, with the payload source the
     // pump reads when their scene pins. Init scratch like the pools above.
@@ -157,8 +158,8 @@ pub struct GraphicsSystem {
     // Last-pushed model matrix per draw slot / skinned instance: a static
     // slot costs a compare instead of a snapshot entry, and each family
     // crosses the backend trait once per frame.
-    model_push: model_push::ModelPushCache,
-    skinned_model_push: model_push::ModelPushCache,
+    model_push: model_push::ModelPushCache<DrawIndex>,
+    skinned_model_push: model_push::ModelPushCache<SkinnedIndex>,
     // The owned per-frame draw inputs `extract` fills from world state and
     // `submit` replays onto the backend. Held here so its buffers keep their
     // capacity across frames; taken out of `self` for the duration of one

@@ -1,4 +1,5 @@
 use crate::ecs::SkinnedMeshHandle;
+use crate::gfx::render_types::SkinnedIndex;
 use crate::math::sin_cos;
 use crate::transform::Mat4;
 
@@ -18,7 +19,7 @@ pub struct CharacterRig {
     /// The `SkinnedMesh` resource this rig moves.
     pub target: SkinnedMeshHandle,
     /// Index of the mesh's skinned draw object in the render backend.
-    pub skinned_index: usize,
+    pub skinned_index: SkinnedIndex,
     /// The mesh's authored model matrix. Root-motion deltas are mapped
     /// through its rotation/scale, and the moved mesh keeps its orientation.
     pub base_model: Mat4,
@@ -54,7 +55,7 @@ impl CharacterRig {
     /// matrix; its translation column doubles as the starting position.
     pub fn new(
         target: SkinnedMeshHandle,
-        skinned_index: usize,
+        skinned_index: SkinnedIndex,
         base_model: Mat4,
         half_height: f32,
         radius: f32,
@@ -121,7 +122,13 @@ mod tests {
             rotation_deg: [0.0, 90.0, 0.0],
             scale: [2.0, 2.0, 2.0],
         };
-        let rig = CharacterRig::new(SkinnedMeshHandle(1), 0, pose.to_matrix(), 0.5, 0.3);
+        let rig = CharacterRig::new(
+            SkinnedMeshHandle(1),
+            SkinnedIndex(0),
+            pose.to_matrix(),
+            0.5,
+            0.3,
+        );
         assert_eq!(rig.position, [5.0, 0.0, 1.0]);
         let d = rig.world_delta([0.0, 0.0, 1.0]);
         assert!((d[0] - 2.0).abs() < 1e-4, "{d:?}");
@@ -134,7 +141,7 @@ mod tests {
         // convention, where yaw 0 looks down -Z).
         let mut rig = CharacterRig::new(
             SkinnedMeshHandle(1),
-            0,
+            SkinnedIndex(0),
             crate::transform::IDENTITY,
             0.5,
             0.3,
@@ -157,7 +164,13 @@ mod tests {
             rotation_deg: [0.0, 90.0, 0.0],
             scale: [1.0, 1.0, 1.0],
         };
-        let mut rig = CharacterRig::new(SkinnedMeshHandle(1), 0, pose.to_matrix(), 0.5, 0.3);
+        let mut rig = CharacterRig::new(
+            SkinnedMeshHandle(1),
+            SkinnedIndex(0),
+            pose.to_matrix(),
+            0.5,
+            0.3,
+        );
         rig.yaw = core::f32::consts::FRAC_PI_2;
         let d = rig.world_delta([0.0, 0.0, -1.0]);
         assert!((d[2] - 1.0).abs() < 1e-4, "{d:?}");
@@ -171,7 +184,13 @@ mod tests {
             rotation_deg: [0.0, 45.0, 0.0],
             scale: [1.0, 1.0, 1.0],
         };
-        let mut rig = CharacterRig::new(SkinnedMeshHandle(1), 0, pose.to_matrix(), 0.5, 0.3);
+        let mut rig = CharacterRig::new(
+            SkinnedMeshHandle(1),
+            SkinnedIndex(0),
+            pose.to_matrix(),
+            0.5,
+            0.3,
+        );
         rig.position = [9.0, 2.0, -4.0];
         let m = rig.model();
         assert_eq!([m[3][0], m[3][1], m[3][2]], [9.0, 2.0, -4.0]);

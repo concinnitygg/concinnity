@@ -5,7 +5,7 @@
 
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::SkinnedVertex;
-use concinnity_core::gfx::render_types::SkinnedDrawObject;
+use concinnity_core::gfx::render_types::{SkinnedDrawObject, SkinnedIndex};
 use concinnity_core::render::backend;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::rt_geom;
@@ -249,7 +249,7 @@ impl MtlContext {
         // `cn debug` and only when the source `.glb` size actually changed.
         self.wait_idle();
 
-        let mut change_map: HashMap<usize, backend::SkinnedDrawGeometryUpdate> =
+        let mut change_map: HashMap<SkinnedIndex, backend::SkinnedDrawGeometryUpdate> =
             changes.into_iter().map(|c| (c.skinned_index, c)).collect();
 
         let old_v_len = v_buf.length() / std::mem::size_of::<SkinnedVertex>();
@@ -275,10 +275,11 @@ impl MtlContext {
             Vec::with_capacity(self.skinned.slots.draw_objects.len());
         // Captured per-slot new layout (applied to `skinned_draw_objects`
         // after the read-only walk to avoid aliasing `self`).
-        let mut new_per_slot: Vec<(usize, u32, usize, usize, usize)> =
+        let mut new_per_slot: Vec<(SkinnedIndex, u32, usize, usize, usize)> =
             Vec::with_capacity(self.skinned.slots.draw_objects.len());
 
-        for (skinned_index, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
+        for (i, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
+            let skinned_index = SkinnedIndex::from_usize(i);
             let new_v_base = new_vertices.len() as u32;
             let new_i_off = new_indices.len();
 
@@ -399,7 +400,7 @@ impl MtlContext {
 
         // Apply the new per-slot layout.
         for (skinned_index, v_base, v_count, i_off, i_count) in new_per_slot {
-            let obj = &mut self.skinned.slots.draw_objects[skinned_index];
+            let obj = &mut self.skinned.slots.draw_objects[skinned_index.index()];
             obj.vertex_base = v_base;
             obj.vertex_count = v_count;
             obj.index_offset = i_off;
@@ -435,7 +436,7 @@ impl MtlContext {
     // [`Self::update_skinned_skeleton`].
     pub(crate) fn update_skinned_mesh_geometry(
         &mut self,
-        skinned_index: usize,
+        skinned_index: SkinnedIndex,
         vertex_base: u32,
         vertices: &[SkinnedVertex],
         indices: &[u16],
@@ -444,7 +445,7 @@ impl MtlContext {
             .skinned
             .slots
             .draw_objects
-            .get(skinned_index)
+            .get(skinned_index.index())
             .ok_or_else(|| {
                 RenderError::Other(format!(
                     "update_skinned_mesh_geometry: skinned object {} out of range",
@@ -670,19 +671,23 @@ impl MtlContext {
     // The CPU-side skinned entry points the `RenderBackend` impl forwards to.
     // Each is the `SkinnedSlots` operation of the same name; the behavior and
     // its contract are documented there, once for all three backends.
-    pub(crate) fn update_morph_weights(&mut self, skinned_index: usize, weights: &[f32]) {
+    pub(crate) fn update_morph_weights(&mut self, skinned_index: SkinnedIndex, weights: &[f32]) {
         self.skinned
             .slots
             .update_morph_weights(skinned_index, weights);
     }
 
-    pub(crate) fn update_skinned_pose(&mut self, skinned_index: usize, matrices: &[[[f32; 4]; 4]]) {
+    pub(crate) fn update_skinned_pose(
+        &mut self,
+        skinned_index: SkinnedIndex,
+        matrices: &[[[f32; 4]; 4]],
+    ) {
         self.skinned.slots.update_pose(skinned_index, matrices);
     }
 
     pub(crate) fn update_skinned_skeleton(
         &mut self,
-        skinned_index: usize,
+        skinned_index: SkinnedIndex,
         new_joint_count: usize,
     ) -> RenderResult<()> {
         self.skinned
@@ -691,17 +696,21 @@ impl MtlContext {
             .map_err(RenderError::Other)
     }
 
-    pub(crate) fn reveal_skinned_instance(&mut self, instance_index: usize, model: [[f32; 4]; 4]) {
+    pub(crate) fn reveal_skinned_instance(
+        &mut self,
+        instance_index: SkinnedIndex,
+        model: [[f32; 4]; 4],
+    ) {
         self.skinned
             .slots
             .reveal(instance_index, model, &mut self.model_history);
     }
 
-    pub(crate) fn retire_skinned_draw_object(&mut self, skinned_index: usize) {
+    pub(crate) fn retire_skinned_draw_object(&mut self, skinned_index: SkinnedIndex) {
         self.skinned.slots.retire(skinned_index);
     }
 
-    pub(crate) fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+    pub(crate) fn update_skinned_models(&mut self, updates: &[(SkinnedIndex, [[f32; 4]; 4])]) {
         self.skinned.slots.update_models(updates);
     }
 }

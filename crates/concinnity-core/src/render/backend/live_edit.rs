@@ -9,7 +9,7 @@
 use crate::components::ShaderPrograms;
 use crate::components::sdf_programs::SdfPrograms;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
-use crate::gfx::render_types::{MATERIAL_PARAM_COUNT, MaterialUniforms};
+use crate::gfx::render_types::{DrawIndex, MATERIAL_PARAM_COUNT, MaterialUniforms, SkinnedIndex};
 use crate::render::backend_init::{BackendInit, SwapchainConfig};
 use crate::render::error::{RenderError, RenderResult};
 use alloc::vec::Vec;
@@ -33,7 +33,7 @@ pub enum PipelineSwap {
 /// backend rebases them onto whatever new vertex region the draw lands in.
 pub struct DrawGeometryUpdate {
     /// The draw slot whose geometry is replaced.
-    pub draw_idx: usize,
+    pub draw_idx: DrawIndex,
     /// Replacement vertices.
     pub vertices: Vec<Vertex>,
     /// Replacement indices, mesh-relative.
@@ -54,7 +54,7 @@ pub struct DrawGeometryUpdate {
 /// (0-based); the backend rebases them onto the new vertex region.
 pub struct SkinnedDrawGeometryUpdate {
     /// The skinned slot whose geometry is replaced.
-    pub skinned_index: usize,
+    pub skinned_index: SkinnedIndex,
     /// Replacement vertices.
     pub vertices: Vec<SkinnedVertex>,
     /// Replacement indices, mesh-relative.
@@ -72,7 +72,7 @@ pub struct SkinnedDrawGeometryUpdate {
 /// reads as dead under `cargo check --lib`.
 pub struct SkinnedSlotLayout {
     /// The skinned slot this layout describes.
-    pub skinned_index: usize,
+    pub skinned_index: SkinnedIndex,
     /// First vertex of the slot's region in the shared skinned buffer.
     pub vertex_base: u32,
     /// Vertices in the slot's region.
@@ -114,7 +114,7 @@ pub trait LiveEdit {
     /// reloads before attempting [`Self::update_mesh_geometry`], which
     /// rejects size mismatches. Default returns `None`; backends that
     /// implement the rebuild path also override this.
-    fn draw_geometry_size(&self, draw_idx: usize) -> Option<(usize, usize)> {
+    fn draw_geometry_size(&self, draw_idx: DrawIndex) -> Option<(usize, usize)> {
         let _ = draw_idx;
         None
     }
@@ -127,7 +127,7 @@ pub trait LiveEdit {
     /// size-changing reloads: a `.glb` that re-exports with a different LOD
     /// breakdown queues the entry for [`Self::rebuild_static_geometry`]
     /// instead of [`Self::update_mesh_geometry`]'s in-place write.
-    fn draw_lod_index_counts(&self, draw_idx: usize) -> Option<Vec<usize>> {
+    fn draw_lod_index_counts(&self, draw_idx: DrawIndex) -> Option<Vec<usize>> {
         let _ = draw_idx;
         None
     }
@@ -160,7 +160,7 @@ pub trait LiveEdit {
     /// rebased onto it before writing.
     fn update_skinned_mesh_geometry(
         &mut self,
-        skinned_index: usize,
+        skinned_index: SkinnedIndex,
         vertex_base: u32,
         verts: &[SkinnedVertex],
         idxs: &[u16],
@@ -211,7 +211,7 @@ pub trait LiveEdit {
     /// change.
     fn update_skinned_skeleton(
         &mut self,
-        skinned_index: usize,
+        skinned_index: SkinnedIndex,
         new_joint_count: usize,
     ) -> RenderResult<()> {
         let _ = (skinned_index, new_joint_count);
@@ -236,7 +236,7 @@ pub trait LiveEdit {
     /// without a process restart.
     fn update_mesh_geometry(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         verts: &[Vertex],
         idxs: &[u16],
         lod_alternates: &[(f32, Vec<u16>)],
@@ -267,7 +267,7 @@ pub trait LiveEdit {
     /// rather than pushing an edit that would not land.
     fn set_draw_material(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         material: MaterialUniforms,
         texture_slot: usize,
         normal_map_slot: usize,
@@ -287,7 +287,7 @@ pub trait LiveEdit {
     /// Rewrite a draw slot's `cull_distance` in place. Driven by the editor's
     /// live draw seam when a Prop edits its `cull_distance` arg. Default no-op,
     /// gated by the same [`DeviceCapabilities::rewrites_draws`] flag.
-    fn set_draw_cull_distance(&mut self, draw_idx: usize, cull_distance: f32) {
+    fn set_draw_cull_distance(&mut self, draw_idx: DrawIndex, cull_distance: f32) {
         let _ = (draw_idx, cull_distance);
     }
 

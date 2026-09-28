@@ -8,7 +8,7 @@ use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{MaterialHandle, PayloadLocator};
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::mesh_seed::MeshSeedRegion;
-use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster};
+use concinnity_core::gfx::render_types::{DrawIndex, DrawObject, InstancedCluster};
 
 use super::GraphicsSystem;
 use super::mesh_seed_compaction::{
@@ -29,7 +29,7 @@ pub(super) struct StreamGeometry<'a> {
     pub(super) indices: &'a mut Vec<u32>,
     pub(super) draw_objects: &'a mut Vec<DrawObject>,
     pub(super) instanced_clusters: &'a mut Vec<InstancedCluster>,
-    pub(super) mesh_handle_to_draws: &'a HashMap<usize, Vec<usize>>,
+    pub(super) mesh_handle_to_draws: &'a HashMap<usize, Vec<DrawIndex>>,
     pub(super) deferred_mesh_seeds: &'a HashMap<usize, DeferredMeshSeed>,
     // Baked (vertex, index) counts of the deferred mesh sources, by handle.
     pub(super) deferred_mesh_counts: &'a HashMap<u32, (u32, u32)>,
@@ -41,7 +41,7 @@ pub(super) struct StreamGeometry<'a> {
 pub(super) struct StreamPlan {
     pub(super) texture_centers: Vec<Vec<[f32; 3]>>,
     pub(super) mesh: MeshStreamData,
-    pub(super) draw_to_handle: HashMap<usize, usize>,
+    pub(super) draw_to_handle: HashMap<DrawIndex, usize>,
     pub(super) seed_region: Option<MeshSeedRegion>,
 }
 
@@ -221,7 +221,7 @@ mod tests {
             indices,
             draw_objects,
             instanced_clusters: &mut Vec::new(),
-            mesh_handle_to_draws: &HashMap::from([(0, vec![0])]),
+            mesh_handle_to_draws: &HashMap::from([(0, vec![DrawIndex(0)])]),
             deferred_mesh_seeds: &HashMap::new(),
             deferred_mesh_counts: &HashMap::new(),
             texture_count: 2,
@@ -236,8 +236,8 @@ mod tests {
         let plan = plan(&mut vertices, &mut indices, &mut draws, None);
         assert!(plan.seed_region.is_none());
         assert_eq!(plan.texture_centers.len(), 2);
-        assert_eq!(plan.mesh.draw_indices, vec![0]);
-        assert_eq!(plan.draw_to_handle, HashMap::from([(0, 0)]));
+        assert_eq!(plan.mesh.draw_indices, vec![DrawIndex(0)]);
+        assert_eq!(plan.draw_to_handle, HashMap::from([(DrawIndex(0), 0)]));
         assert_eq!(draws[0].lod_alternates.len(), 1);
         assert_eq!(vertices.len(), 3);
     }

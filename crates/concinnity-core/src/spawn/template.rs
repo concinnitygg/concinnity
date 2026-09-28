@@ -8,6 +8,7 @@
 //! carries, when a Spawner is due, when a Lifetime is up -- is the world's, so
 //! it lives with the world.
 
+use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
 use crate::memory::InlineVec;
 
 use crate::components::{
@@ -34,17 +35,17 @@ pub fn spawn_from_template(
     name: Option<AssetId>,
     transform: Transform,
     lifetime: Option<f32>,
-    mut clone_slot: impl FnMut(usize, [[f32; 4]; 4]) -> Option<usize>,
+    mut clone_slot: impl FnMut(DrawIndex, [[f32; 4]; 4]) -> Option<DrawIndex>,
 ) -> Option<Entity> {
-    let src_slots: InlineVec<u32> = ctx.get::<RenderHandle>(template).map(|h| h.draws.clone())?;
+    let src_slots: InlineVec<DrawIndex> =
+        ctx.get::<RenderHandle>(template).map(|h| h.draws.clone())?;
     if src_slots.is_empty() {
         return None;
     }
     let model = transform.model_matrix();
     let mut draws = InlineVec::new();
     for src in src_slots {
-        let new_slot = clone_slot(src as usize, model)?;
-        draws.push(new_slot as u32);
+        draws.push(clone_slot(src, model)?);
     }
 
     // Copy whichever renderer the template carries so the new entity is a
@@ -105,7 +106,7 @@ pub fn spawn_skinned_from_template(
     name: Option<AssetId>,
     transform: Transform,
     lifetime: Option<f32>,
-    mut acquire_slot: impl FnMut(usize, [[f32; 4]; 4]) -> Option<usize>,
+    mut acquire_slot: impl FnMut(SkinnedIndex, [[f32; 4]; 4]) -> Option<SkinnedIndex>,
 ) -> Option<Entity> {
     let template_pose = ctx.get::<SkeletonPose>(template)?;
     let model = transform.model_matrix();
@@ -216,7 +217,6 @@ pub fn tick_lifetimes<'a>(ctx: &mut PipelineContext<'a>, dt: f32) -> FrameVec<'a
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::collections::BTreeMap;
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -225,6 +225,8 @@ mod tests {
         Arena, ComponentStorage, FrameContext, NoPayloads, Resources, SkinnedMeshHandle,
     };
     use crate::profile::FrameProfile;
+    use crate::render::draw_slot::DrawSlotAllocator;
+    use crate::render::skinned_pool::SkinnedInstancePool;
 
     // Build an isolated PipelineContext over fresh storage, mirroring the
     // despawn tests, so the spawn/despawn loop can run without a backend.
@@ -244,63 +246,6 @@ mod tests {
         body(&mut ctx)
     }
 
-    // A `clone_slot` seam standing in for a renderer's draw-slot allocator: it
-    // pops a vacated slot before growing, which is the property the recycle
-    // tests are about.
-    #[derive(Default)]
-    struct Slots {
-        free: Vec<usize>,
-        len: usize,
-    }
-
-    impl Slots {
-        fn with_len(len: usize) -> Slots {
-            Slots {
-                free: Vec::new(),
-                len,
-            }
-        }
-
-        fn allocate(&mut self) -> usize {
-            match self.free.pop() {
-                Some(slot) => slot,
-                None => {
-                    self.len += 1;
-                    self.len - 1
-                }
-            }
-        }
-
-        fn free(&mut self, slot: usize) {
-            self.free.push(slot);
-        }
-    }
-
-    // The `acquire_slot` seam's stand-in: the pre-reserved hidden copies a
-    // skinned template owns, and which of them are currently free.
-    #[derive(Default)]
-    struct Pool {
-        free: BTreeMap<usize, Vec<usize>>,
-        owner: BTreeMap<usize, usize>,
-    }
-
-    impl Pool {
-        fn reserve(&mut self, template: usize, instance: usize) {
-            self.owner.insert(instance, template);
-            self.free.entry(template).or_default().push(instance);
-        }
-
-        fn acquire(&mut self, template: usize) -> Option<usize> {
-            self.free.get_mut(&template).and_then(|slots| slots.pop())
-        }
-
-        fn release(&mut self, instance: usize) {
-            if let Some(&template) = self.owner.get(&instance) {
-                self.free.entry(template).or_default().push(instance);
-            }
-        }
-    }
-
     #[test]
     fn spawned_copy_carries_the_template_physics_components() {
         run(|ctx| {
@@ -314,7 +259,12 @@ mod tests {
                     cull_distance: 0.0,
                 },
             );
-            ctx.insert(template, RenderHandle { draws: [0].into() });
+            ctx.insert(
+                template,
+                RenderHandle {
+                    draws: [DrawIndex(0)].into(),
+                },
+            );
             ctx.insert(
                 template,
                 Collider(crate::components::PropCollider {
@@ -331,14 +281,14 @@ mod tests {
             );
             ctx.insert(template, Pickup);
 
-            let mut alloc = Slots::with_len(1);
+            let mut alloc = DrawSlotAllocator::with_len(1);
             let spawned = spawn_from_template(
                 ctx,
                 template,
                 None,
                 Transform::default(),
                 None,
-                |_src, _model| Some(alloc.allocate()),
+                |_src, _model| Some(alloc.allocate().slot()),
             )
             .expect("spawn");
 
@@ -370,10 +320,15 @@ mod tests {
                     cull_distance: 0.0,
                 },
             );
-            ctx.insert(template, RenderHandle { draws: [0].into() });
+            ctx.insert(
+                template,
+                RenderHandle {
+                    draws: [DrawIndex(0)].into(),
+                },
+            );
 
             // The backend starts with one live slot (the template's).
-            let mut alloc = Slots::with_len(1);
+            let mut alloc = DrawSlotAllocator::with_len(1);
 
             // First spawn appends a fresh slot past the template's.
             let first = spawn_from_template(
@@ -382,19 +337,23 @@ mod tests {
                 Some(AssetId(1)),
                 Transform::default(),
                 Some(0.5),
-                |_src, _model| Some(alloc.allocate()),
+                |_src, _model| Some(alloc.allocate().slot()),
             )
             .expect("first spawn");
             let first_slot = ctx.get::<RenderHandle>(first).unwrap().draws.clone();
-            assert_eq!(first_slot, vec![1], "first spawn appended slot 1");
+            assert_eq!(
+                first_slot,
+                vec![DrawIndex(1)],
+                "first spawn appended slot 1"
+            );
 
             // Its Lifetime expires; the expiry frees the slot like a despawn's
             // retire -> free does, then despawns the entity.
             let expired = tick_lifetimes(ctx, 1.0);
             assert_eq!(&*expired, &[first], "the short-lived spawn expired");
-            let freed: Vec<u32> = ctx.get::<RenderHandle>(first).unwrap().draws.to_vec();
+            let freed: Vec<DrawIndex> = ctx.get::<RenderHandle>(first).unwrap().draws.to_vec();
             for slot in &freed {
-                alloc.free(*slot as usize);
+                alloc.free(*slot);
             }
             ctx.despawn(first);
             assert!(ctx.get::<RenderHandle>(first).is_none(), "first despawned");
@@ -406,7 +365,7 @@ mod tests {
                 Some(AssetId(2)),
                 Transform::default(),
                 None,
-                |_src, _model| Some(alloc.allocate()),
+                |_src, _model| Some(alloc.allocate().slot()),
             )
             .expect("second spawn");
             let second_slot = ctx.get::<RenderHandle>(second).unwrap().draws.clone();
@@ -425,11 +384,15 @@ mod tests {
             let template = ctx.components.spawn();
             ctx.insert(
                 template,
-                SkeletonPose::new(SkinnedMeshHandle(10), 0, Skeleton::new(Vec::new())),
+                SkeletonPose::new(
+                    SkinnedMeshHandle(10),
+                    SkinnedIndex(0),
+                    Skeleton::new(Vec::new()),
+                ),
             );
-            let mut pool = Pool::default();
-            pool.reserve(0, 1);
-            pool.reserve(0, 2);
+            let mut pool = SkinnedInstancePool::new();
+            pool.reserve(SkinnedIndex(0), SkinnedIndex(1));
+            pool.reserve(SkinnedIndex(0), SkinnedIndex(2));
 
             // The spawn claims a pooled copy and the new entity points at it.
             let first = spawn_skinned_from_template(
@@ -479,10 +442,14 @@ mod tests {
             let template = ctx.components.spawn();
             ctx.insert(
                 template,
-                SkeletonPose::new(SkinnedMeshHandle(10), 0, Skeleton::new(Vec::new())),
+                SkeletonPose::new(
+                    SkinnedMeshHandle(10),
+                    SkinnedIndex(0),
+                    Skeleton::new(Vec::new()),
+                ),
             );
             // A template that reserved no instances has nothing to claim.
-            let mut pool = Pool::default();
+            let mut pool = SkinnedInstancePool::new();
             let spawned = spawn_skinned_from_template(
                 ctx,
                 template,
@@ -500,8 +467,13 @@ mod tests {
         run(|ctx| {
             let template = ctx.components.spawn();
             ctx.insert(template, Transform::default());
-            ctx.insert(template, RenderHandle { draws: [0].into() });
-            let mut alloc = Slots::with_len(1);
+            ctx.insert(
+                template,
+                RenderHandle {
+                    draws: [DrawIndex(0)].into(),
+                },
+            );
+            let mut alloc = DrawSlotAllocator::with_len(1);
 
             let spawned = spawn_from_template(
                 ctx,
@@ -509,7 +481,7 @@ mod tests {
                 Some(AssetId(42)),
                 Transform::default(),
                 None,
-                |_src, _model| Some(alloc.allocate()),
+                |_src, _model| Some(alloc.allocate().slot()),
             )
             .expect("spawn");
 

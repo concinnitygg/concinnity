@@ -363,8 +363,10 @@ pub(super) fn apply_skinned_layouts_to_entries(
     entries: &mut [SkinnedMeshSourceEntry],
     layouts: &[backend::SkinnedSlotLayout],
 ) {
-    let layout_by_skinned: std::collections::HashMap<usize, &backend::SkinnedSlotLayout> =
-        layouts.iter().map(|l| (l.skinned_index, l)).collect();
+    let layout_by_skinned: std::collections::HashMap<
+        render_types::SkinnedIndex,
+        &backend::SkinnedSlotLayout,
+    > = layouts.iter().map(|l| (l.skinned_index, l)).collect();
     for entry in entries.iter_mut() {
         if let Some(layout) = layout_by_skinned.get(&entry.skinned_index) {
             entry.vertex_base = layout.vertex_base;
@@ -657,11 +659,12 @@ pub(crate) fn poll_pending_assets(
                 // vertices/indices: discard any queued skeleton update
                 // tied to a failed rebuild so the SkeletonPose stays in
                 // sync with the unchanged geometry.
-                let failed_skinned: std::collections::HashSet<usize> = skinned_rebuild_entries
-                    .iter()
-                    .filter_map(|&i| state.skinned_meshes.entries.get(i))
-                    .map(|e| e.skinned_index)
-                    .collect();
+                let failed_skinned: std::collections::HashSet<render_types::SkinnedIndex> =
+                    skinned_rebuild_entries
+                        .iter()
+                        .filter_map(|&i| state.skinned_meshes.entries.get(i))
+                        .map(|e| e.skinned_index)
+                        .collect();
                 state
                     .pending_skeleton_updates
                     .retain(|u| !failed_skinned.contains(&u.skinned_index));

@@ -6,6 +6,7 @@ use concinnity_core::animation::proportions::ProportionLayer;
 use concinnity_core::animation::skeleton::Skeleton;
 use concinnity_core::components::{CharacterCapsule, CharacterShape, Identity, SkeletonPose};
 use concinnity_core::ecs::{PipelineContext, SkinnedMeshHandle};
+use concinnity_core::gfx::render_types::SkinnedIndex;
 use std::collections::HashMap;
 
 // The static layers one shape contributes to its mesh's pose.
@@ -81,7 +82,7 @@ pub(crate) fn layers(
 // The pose for a mesh, seeded through its shape layers when it has a shape.
 pub(super) fn seed_pose(
     handle: SkinnedMeshHandle,
-    skinned_index: usize,
+    skinned_index: SkinnedIndex,
     skeleton: Skeleton,
     layers: Option<ShapeLayers>,
 ) -> SkeletonPose {
@@ -157,7 +158,12 @@ mod tests {
             &layers.proportions,
         );
         assert!((half - 1.5).abs() < 1e-5 && (radius - 0.6).abs() < 1e-5);
-        let pose = seed_pose(SkinnedMeshHandle(0), 0, skeleton, Some(layers));
+        let pose = seed_pose(
+            SkinnedMeshHandle(0),
+            SkinnedIndex(0),
+            skeleton,
+            Some(layers),
+        );
         assert_eq!(pose.morph_weights, [0.0, 0.5]);
         assert_eq!(pose.joint_matrices[0][0][0], 1.5);
     }
@@ -173,7 +179,7 @@ mod tests {
         };
         let layers = resolve(&shape, &chain(), &["jaw".to_string()]);
         assert!(layers.morph_base.is_empty());
-        let pose = seed_pose(SkinnedMeshHandle(0), 0, chain(), Some(layers));
+        let pose = seed_pose(SkinnedMeshHandle(0), SkinnedIndex(0), chain(), Some(layers));
         assert!(pose.morph_weights.is_empty());
     }
 }

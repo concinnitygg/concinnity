@@ -35,6 +35,7 @@ use concinnity_core::ecs::SkinnedMeshHandle;
 use concinnity_core::ecs::TextureHandle;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::geometry::payload_joints_to_defs;
+use concinnity_core::gfx::render_types::SkinnedIndex;
 use concinnity_core::gfx::{mesh_payload, render_types};
 use concinnity_core::render::{backend, backend_init, text};
 use concinnity_core::resource::ColorLutTable;
@@ -107,7 +108,7 @@ struct SkinnedMeshAssembly {
     indices: Vec<u32>,
     draw_objects: Vec<render_types::SkinnedDrawObject>,
     skeletons: Vec<SkinnedSkeletonEntry>,
-    pool_reservations: Vec<(usize, usize)>,
+    pool_reservations: Vec<(SkinnedIndex, SkinnedIndex)>,
     morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>,
     source_map: super::hot_reload_sources::SkinnedMeshSourceMap,
 }
@@ -817,7 +818,7 @@ impl GraphicsSystem {
         // `(template_index, instance_index)` pairs seeding the backend skinned
         // instance pool: each instance is a hidden bind-pose copy reserved from
         // SkinnedMesh.max_instances.
-        let mut skinned_pool_reservations: Vec<(usize, usize)> = Vec::new();
+        let mut skinned_pool_reservations: Vec<(SkinnedIndex, SkinnedIndex)> = Vec::new();
         // Morph-target data per skinned draw object; instance copies share
         // their template's data through the Arc.
         let mut skinned_morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>> =
@@ -890,7 +891,7 @@ impl GraphicsSystem {
             };
 
             let mesh_morphs = (!morphs.is_empty()).then(|| std::sync::Arc::new(morphs.clone()));
-            let skinned_index = skinned_draw_objects.len();
+            let skinned_index = SkinnedIndex::from_usize(skinned_draw_objects.len());
             skinned_morphs.push(mesh_morphs.clone());
             skinned_draw_objects.push(render_types::SkinnedDrawObject {
                 vertex_base: base,
@@ -937,7 +938,7 @@ impl GraphicsSystem {
                     lod_alts,
                     copy_base,
                 );
-                let copy_skinned_index = skinned_draw_objects.len();
+                let copy_skinned_index = SkinnedIndex::from_usize(skinned_draw_objects.len());
                 skinned_morphs.push(mesh_morphs.clone());
                 skinned_draw_objects.push(render_types::SkinnedDrawObject {
                     vertex_base: copy_base,

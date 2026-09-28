@@ -11,7 +11,9 @@ use concinnity_core::components::DirectionalLight;
 use concinnity_core::components::WindowMode;
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::{DrawObject, MaterialUniforms, SkinnedDrawObject};
+use concinnity_core::gfx::render_types::{
+    DrawIndex, DrawObject, MaterialUniforms, SkinnedDrawObject, SkinnedIndex,
+};
 use concinnity_core::gfx::view_modes;
 use concinnity_core::input::keymap;
 use concinnity_core::input::snapshot::InputSnapshot;
@@ -95,33 +97,33 @@ pub(crate) enum Call {
         show: view_modes::ShowFlags,
     },
     UpdateView([[f32; 4]; 4]),
-    UpdateModel(usize),
-    RetireDrawObject(usize),
+    UpdateModel(DrawIndex),
+    RetireDrawObject(DrawIndex),
     UploadSkinned {
         vertices: usize,
         draws: usize,
     },
     UploadSkinnedMorphs,
-    UpdateSkinnedPose(usize),
-    UpdateSkinnedModel(usize),
-    RevealSkinnedInstance(usize),
+    UpdateSkinnedPose(SkinnedIndex),
+    UpdateSkinnedModel(SkinnedIndex),
+    RevealSkinnedInstance(SkinnedIndex),
     EvictTextureSlot(usize),
     UpdateTextureSlot {
         slot: usize,
         w: u32,
         h: u32,
     },
-    EvictMesh(usize),
+    EvictMesh(DrawIndex),
     UploadMesh {
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         vertices: usize,
         indices: usize,
     },
     SeedMeshStreaming,
     SetupChunkStreaming,
     AddChunkMesh,
-    RemoveChunkMesh(usize),
-    SetChunkModel(usize),
+    RemoveChunkMesh(DrawIndex),
+    SetChunkModel(DrawIndex),
     SetUiCursorHidden(bool),
     SetMenuMode(bool),
     SetCameraCapture(bool),
@@ -140,21 +142,21 @@ pub(crate) enum Call {
     ApplyQualitySettings,
     UpdateQualityParams,
     CloneStaticDrawObject {
-        src: usize,
-        new_idx: usize,
+        src: DrawIndex,
+        new_idx: DrawIndex,
     },
     UpdateVisibility {
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         visible: bool,
     },
     // A draw slot's material rewritten in place. The uniforms are not compared
     // (they carry no PartialEq); the pool slots identify which material landed.
     SetDrawMaterial {
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         texture_slot: usize,
         normal_map_slot: usize,
     },
-    SetDrawCullDistance(usize, f32),
+    SetDrawCullDistance(DrawIndex, f32),
     SetMaterialParams {
         row: u32,
         params: [f32; render_types::MATERIAL_PARAM_COUNT],
@@ -175,9 +177,9 @@ pub(crate) struct MockState {
     pub calls: Vec<Call>,
     pub init: Option<InitSnapshot>,
     // Latest model matrix pushed per draw slot.
-    pub models: std::collections::HashMap<usize, [[f32; 4]; 4]>,
+    pub models: std::collections::HashMap<DrawIndex, [[f32; 4]; 4]>,
     // Latest visibility pushed per draw slot.
-    pub visibility: std::collections::HashMap<usize, bool>,
+    pub visibility: std::collections::HashMap<DrawIndex, bool>,
     // Returned by the next window_closed() poll.
     pub window_closed: bool,
     // When set, draw_frame returns this error instead of Ok.
@@ -366,7 +368,7 @@ impl MockBackend {
 }
 
 impl SceneControl for MockBackend {
-    fn update_visibility(&mut self, draw_idx: usize, visible: bool) {
+    fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
         let mut s = self.state.lock().unwrap();
         s.visibility.insert(draw_idx, visible);
         s.calls.push(Call::UpdateVisibility { draw_idx, visible });
@@ -415,24 +417,24 @@ impl RenderBackend for MockBackend {
         self.record(Call::UpdateView(matrix));
     }
 
-    fn update_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+    fn update_models(&mut self, updates: &[(DrawIndex, [[f32; 4]; 4])]) {
         let mut s = self.state.lock().unwrap();
         for &(index, model) in updates {
-            s.models.insert(index as usize, model);
-            s.calls.push(Call::UpdateModel(index as usize));
+            s.models.insert(index, model);
+            s.calls.push(Call::UpdateModel(index));
         }
     }
 
-    fn retire_draw_object(&mut self, draw_idx: usize) {
+    fn retire_draw_object(&mut self, draw_idx: DrawIndex) {
         self.record(Call::RetireDrawObject(draw_idx));
     }
 }
 
 impl SkinnedDraws for MockBackend {
-    fn update_skinned_models(&mut self, updates: &[(u32, [[f32; 4]; 4])]) {
+    fn update_skinned_models(&mut self, updates: &[(SkinnedIndex, [[f32; 4]; 4])]) {
         let mut s = self.state.lock().unwrap();
         for &(index, _model) in updates {
-            s.calls.push(Call::UpdateSkinnedModel(index as usize));
+            s.calls.push(Call::UpdateSkinnedModel(index));
         }
     }
 
@@ -458,11 +460,11 @@ impl SkinnedDraws for MockBackend {
         s.fail_morph_upload.clone().map_or(Ok(()), Err)
     }
 
-    fn update_skinned_pose(&mut self, skinned_index: usize, _matrices: &[[[f32; 4]; 4]]) {
+    fn update_skinned_pose(&mut self, skinned_index: SkinnedIndex, _matrices: &[[[f32; 4]; 4]]) {
         self.record(Call::UpdateSkinnedPose(skinned_index));
     }
 
-    fn reveal_skinned_instance(&mut self, instance_index: usize, _model: [[f32; 4]; 4]) {
+    fn reveal_skinned_instance(&mut self, instance_index: SkinnedIndex, _model: [[f32; 4]; 4]) {
         self.record(Call::RevealSkinnedInstance(instance_index));
     }
 }
@@ -500,14 +502,14 @@ impl DrawStreaming for MockBackend {
         s.fail_texture_upload.clone().map_or(Ok(()), Err)
     }
 
-    fn evict_mesh(&mut self, draw_idx: usize, _retire_frame: u64) -> RenderResult<()> {
+    fn evict_mesh(&mut self, draw_idx: DrawIndex, _retire_frame: u64) -> RenderResult<()> {
         self.record(Call::EvictMesh(draw_idx));
         Ok(())
     }
 
     fn upload_mesh(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         verts: &[Vertex],
         idxs: &[u16],
         _frame: u64,
@@ -548,29 +550,25 @@ impl DrawStreaming for MockBackend {
         Ok(())
     }
 
-    fn remove_chunk_mesh(&mut self, draw_idx: usize, _retire_frame: u64) -> RenderResult<()> {
+    fn remove_chunk_mesh(&mut self, draw_idx: DrawIndex, _retire_frame: u64) -> RenderResult<()> {
         self.record(Call::RemoveChunkMesh(draw_idx));
         Ok(())
     }
 
-    fn set_chunk_model(&mut self, draw_idx: usize, _model: [[f32; 4]; 4]) -> RenderResult<()> {
+    fn set_chunk_model(&mut self, draw_idx: DrawIndex, _model: [[f32; 4]; 4]) -> RenderResult<()> {
         self.record(Call::SetChunkModel(draw_idx));
         Ok(())
     }
 
     fn clone_static_draw_object(
         &mut self,
-        src_draw_idx: usize,
+        src_draw_idx: DrawIndex,
         _model: [[f32; 4]; 4],
         dst: draw_slot::SlotAlloc,
     ) -> RenderResult<()> {
-        use concinnity_core::render::draw_slot::SlotAlloc;
-        let new_idx = match dst {
-            SlotAlloc::Reuse(i) | SlotAlloc::Append(i) => i,
-        };
         self.record(Call::CloneStaticDrawObject {
             src: src_draw_idx,
-            new_idx,
+            new_idx: dst.slot(),
         });
         Ok(())
     }
@@ -679,7 +677,7 @@ impl LiveEdit for MockBackend {
 
     fn set_draw_material(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         _material: MaterialUniforms,
         texture_slot: usize,
         normal_map_slot: usize,
@@ -691,7 +689,7 @@ impl LiveEdit for MockBackend {
         });
     }
 
-    fn set_draw_cull_distance(&mut self, draw_idx: usize, cull_distance: f32) {
+    fn set_draw_cull_distance(&mut self, draw_idx: DrawIndex, cull_distance: f32) {
         self.record(Call::SetDrawCullDistance(draw_idx, cull_distance));
     }
 

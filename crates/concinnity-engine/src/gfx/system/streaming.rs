@@ -13,6 +13,7 @@ use concinnity_core::gfx::chunk_coord;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::mesh_seed;
 use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_core::render::scene_residency;
 
 use super::stream_sources::{block_type_to_chunk, build_texture_payload_source};
@@ -187,7 +188,7 @@ pub(super) fn deferred_shader_buckets(
 pub(super) struct MeshStreamSetup {
     pub payloads: Vec<crate::gfx::streaming::mesh::DecodedMesh>,
     pub centers: Vec<Vec<[f32; 3]>>,
-    pub draw_indices: Vec<usize>,
+    pub draw_indices: Vec<DrawIndex>,
     pub(crate) disk_backed: bool,
     pub(crate) seed_region: Option<mesh_seed::MeshSeedRegion>,
     pub(crate) deferred_payloads:
@@ -245,7 +246,7 @@ impl GraphicsSystem {
             let mut scene_of_draw = std::collections::HashMap::new();
             for (_, member, handle) in ctx.join2::<SceneMember, RenderHandle>() {
                 for &slot in &handle.draws {
-                    scene_of_draw.insert(slot as usize, member.0);
+                    scene_of_draw.insert(slot, member.0);
                 }
             }
             for (stream_id, draw_idx) in self.mesh_stream_draw_indices.iter().enumerate() {
@@ -1092,7 +1093,7 @@ mod tests {
             MeshStreamSetup {
                 payloads: mesh_payloads(2),
                 centers: centers(2),
-                draw_indices: vec![4, 7],
+                draw_indices: vec![DrawIndex(4), DrawIndex(7)],
                 disk_backed: false,
                 seed_region: Some(mesh_seed::MeshSeedRegion {
                     vtx_offset: 0,
@@ -1122,7 +1123,7 @@ mod tests {
             MeshStreamSetup {
                 payloads: mesh_payloads(2),
                 centers: centers(2),
-                draw_indices: vec![4, 7],
+                draw_indices: vec![DrawIndex(4), DrawIndex(7)],
                 disk_backed: false,
                 seed_region: None,
                 deferred_payloads: Default::default(),
@@ -1130,10 +1131,13 @@ mod tests {
         );
 
         assert_eq!(gs.mesh_streamer.as_ref().map(|s| s.len()), Some(2));
-        assert_eq!(gs.mesh_stream_draw_indices, vec![4, 7]);
+        assert_eq!(
+            gs.mesh_stream_draw_indices,
+            vec![DrawIndex(4), DrawIndex(7)]
+        );
         let s = recorded.lock().unwrap();
-        assert!(s.saw(&Call::EvictMesh(4)));
-        assert!(s.saw(&Call::EvictMesh(7)));
+        assert!(s.saw(&Call::EvictMesh(DrawIndex(4))));
+        assert!(s.saw(&Call::EvictMesh(DrawIndex(7))));
         assert!(!s.saw(&Call::SeedMeshStreaming));
     }
 
@@ -1145,7 +1149,7 @@ mod tests {
             MeshStreamSetup {
                 payloads: mesh_payloads(1),
                 centers: centers(1),
-                draw_indices: vec![0],
+                draw_indices: vec![DrawIndex(0)],
                 disk_backed: false,
                 seed_region: None,
                 deferred_payloads: Default::default(),
@@ -1173,7 +1177,7 @@ mod tests {
             MeshStreamSetup {
                 payloads: mesh_payloads(1),
                 centers: centers(1),
-                draw_indices: vec![0],
+                draw_indices: vec![DrawIndex(0)],
                 disk_backed: false,
                 seed_region: None,
                 deferred_payloads: Default::default(),
@@ -1193,7 +1197,7 @@ mod tests {
             MeshStreamSetup {
                 payloads: mesh_payloads(1),
                 centers: centers(1),
-                draw_indices: vec![0],
+                draw_indices: vec![DrawIndex(0)],
                 disk_backed: false,
                 seed_region: None,
                 deferred_payloads: Default::default(),

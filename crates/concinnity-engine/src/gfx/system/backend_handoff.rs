@@ -2,6 +2,7 @@
 // runtime state to the world's shared resources.
 
 use concinnity_core::ecs::PipelineContext;
+use concinnity_core::gfx::render_types::SkinnedIndex;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::backend_init::BackendInit;
 use concinnity_core::render::error::RenderResult;
@@ -15,7 +16,7 @@ use super::parked::{PushedFogSettings, TextureNameSlots};
 pub(super) struct RuntimeHandoff<'a> {
     pub(super) draw_object_count: usize,
     pub(super) frames_in_flight: usize,
-    pub(super) skinned_pool_reservations: &'a [(usize, usize)],
+    pub(super) skinned_pool_reservations: &'a [(SkinnedIndex, SkinnedIndex)],
     pub(super) fog: Option<FogSettings>,
     // Present only under hot-reload capture.
     pub(super) texture_name_slots: Option<TextureNameSlots>,

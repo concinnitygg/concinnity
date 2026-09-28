@@ -24,9 +24,9 @@ use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{PipelineContext, StepResult, System};
 use concinnity_core::gfx::chunk_coord;
 use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_core::render::backend::ChunkMesh;
 use concinnity_core::render::backend_init;
-use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
 use concinnity_core::render::ops::{OpFailure, RenderOps};
 use concinnity_core::render::scene_flow;
@@ -70,7 +70,7 @@ pub(crate) struct CameraRelativeView {
 pub(crate) struct ChunkStreamState {
     pub(crate) streamer: crate::gfx::streaming::chunk::ChunkStreamer,
     // Maps a resident chunk's coordinate to its `DrawObject` index.
-    pub(crate) draws: std::collections::BTreeMap<chunk_coord::ChunkCoord, usize>,
+    pub(crate) draws: std::collections::BTreeMap<chunk_coord::ChunkCoord, DrawIndex>,
     pub(crate) chunk_w: f32,
     pub(crate) chunk_d: f32,
     // Render origin for camera-relative rendering: the chunk every resident
@@ -135,7 +135,7 @@ pub(crate) struct StreamingState {
     pub(crate) mesh_streamer: Option<crate::gfx::streaming::mesh::MeshStreamer>,
     // Maps a streamed mesh's id to its DrawObject index, so completed loads and
     // evictions are applied to the right draw. Empty when not streaming.
-    pub(crate) mesh_stream_draw_indices: Vec<usize>,
+    pub(crate) mesh_stream_draw_indices: Vec<DrawIndex>,
     // Infinite voxel-world chunk streaming. `Some` only when a `VoxelWorld` was
     // declared.
     pub(crate) chunk_stream: Option<ChunkStreamState>,
@@ -716,7 +716,7 @@ impl StreamingState {
             let frame = self.frame_count;
             let (chunk_w, chunk_d) = (cs.chunk_w, cs.chunk_d);
             let (tex, nm, mat) = (cs.texture_slot, cs.normal_map_slot, cs.material);
-            let mut added: Vec<(chunk_coord::ChunkCoord, usize)> = Vec::new();
+            let mut added: Vec<(chunk_coord::ChunkCoord, DrawIndex)> = Vec::new();
             cs.streamer.drain_completed(|coord, verts, idxs| {
                 if verts.is_empty() || idxs.is_empty() {
                     tracing::warn!(
@@ -728,10 +728,7 @@ impl StreamingState {
                 }
                 let model = chunk_model_matrix(coord, camera_chunk, chunk_w, chunk_d);
                 let dst = slots.allocate_draw();
-                let draw_idx = match dst {
-                    draw_slot::SlotAlloc::Reuse(i) | draw_slot::SlotAlloc::Append(i) => i,
-                };
-                added.push((coord, draw_idx));
+                added.push((coord, dst.slot()));
                 // A failed add comes back as an op failure; the rollback drops
                 // the tracking and frees the slot.
                 ops.record_with(move |backend, out| {
@@ -1111,7 +1108,7 @@ mod tests {
             4,
             resident_cap,
         ));
-        state.mesh_stream_draw_indices = vec![10, 11];
+        state.mesh_stream_draw_indices = vec![DrawIndex(10), DrawIndex(11)];
         state
     }
 
@@ -1745,12 +1742,12 @@ mod tests {
             h: 1
         }));
         assert!(s.saw(&Call::UploadMesh {
-            draw_idx: 10,
+            draw_idx: DrawIndex(10),
             vertices: 3,
             indices: 3,
         }));
         assert!(s.saw(&Call::UploadMesh {
-            draw_idx: 11,
+            draw_idx: DrawIndex(11),
             vertices: 3,
             indices: 3,
         }));
@@ -1800,7 +1797,7 @@ mod tests {
         );
         let s = recorded.lock().unwrap();
         assert!(s.saw(&Call::EvictTextureSlot(0)), "{:?}", s.calls);
-        assert!(s.saw(&Call::EvictMesh(10)), "{:?}", s.calls);
+        assert!(s.saw(&Call::EvictMesh(DrawIndex(10))), "{:?}", s.calls);
     }
 
     #[test]
@@ -1848,8 +1845,8 @@ mod tests {
         let mut state = empty_state();
         let mut cs = chunk_state(Arc::new(FailingChunk), 1, 1);
         // Stand in for two chunks already uploaded at draw slots 3 and 4.
-        cs.draws.insert(ChunkCoord::new(0, 0), 3);
-        cs.draws.insert(ChunkCoord::new(1, 0), 4);
+        cs.draws.insert(ChunkCoord::new(0, 0), DrawIndex(3));
+        cs.draws.insert(ChunkCoord::new(1, 0), DrawIndex(4));
         state.chunk_stream = Some(cs);
 
         drive_once(
@@ -1862,8 +1859,8 @@ mod tests {
         );
         {
             let s = recorded.lock().unwrap();
-            assert!(s.saw(&Call::SetChunkModel(3)));
-            assert!(s.saw(&Call::SetChunkModel(4)));
+            assert!(s.saw(&Call::SetChunkModel(DrawIndex(3))));
+            assert!(s.saw(&Call::SetChunkModel(DrawIndex(4))));
         }
         assert_eq!(
             state.chunk_stream.as_ref().unwrap().origin_chunk,
@@ -1897,7 +1894,7 @@ mod tests {
         let mut state = empty_state();
         let mut cs = chunk_state(Arc::new(FailingChunk), 0, 0);
         // Stand in for chunk (0, 0) already uploaded at draw slot 9.
-        cs.draws.insert(ChunkCoord::new(0, 0), 9);
+        cs.draws.insert(ChunkCoord::new(0, 0), DrawIndex(9));
         state.chunk_stream = Some(cs);
 
         // Frame 1 at the origin puts (0, 0) in the window.
@@ -1912,7 +1909,12 @@ mod tests {
             None,
         );
 
-        assert!(recorded.lock().unwrap().saw(&Call::RemoveChunkMesh(9)));
+        assert!(
+            recorded
+                .lock()
+                .unwrap()
+                .saw(&Call::RemoveChunkMesh(DrawIndex(9)))
+        );
         assert!(
             !state
                 .chunk_stream
@@ -1935,7 +1937,7 @@ mod tests {
         });
 
         let cs = state.chunk_stream.as_ref().unwrap();
-        assert_eq!(cs.draws.get(&ChunkCoord::new(0, 0)), Some(&0));
+        assert_eq!(cs.draws.get(&ChunkCoord::new(0, 0)), Some(&DrawIndex(0)));
         assert!(recorded.lock().unwrap().saw(&Call::AddChunkMesh));
     }
 

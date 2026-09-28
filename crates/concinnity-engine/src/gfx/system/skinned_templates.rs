@@ -8,7 +8,7 @@ use concinnity_core::components::{CharacterCapsule, CharacterRig, GlobalTransfor
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{PickIndex, PipelineContext, SkinnedMeshHandle};
 use concinnity_core::gfx::mesh_payload::{PayloadMorphs, SkinnedVertex};
-use concinnity_core::gfx::render_types::SkinnedDrawObject;
+use concinnity_core::gfx::render_types::{SkinnedDrawObject, SkinnedIndex};
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::error::RenderResult;
 
@@ -21,7 +21,7 @@ use super::{GraphicsSystem, PickCandidate, character_shape};
 pub(super) struct SkinnedSkeletonEntry {
     pub(super) handle: SkinnedMeshHandle,
     pub(super) name_id: AssetId,
-    pub(super) template_index: usize,
+    pub(super) template_index: SkinnedIndex,
     pub(super) skeleton: skeleton::Skeleton,
     pub(super) morph_names: Vec<String>,
     pub(super) model: [[f32; 4]; 4],

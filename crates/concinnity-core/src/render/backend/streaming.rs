@@ -11,7 +11,7 @@
 //! upload, block-compressed formats upload their chain verbatim.
 
 use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::MaterialUniforms;
+use crate::gfx::render_types::{DrawIndex, MaterialUniforms};
 use crate::render::backend_init::WorldShader;
 use crate::render::error::{RenderError, RenderResult};
 
@@ -59,11 +59,11 @@ pub trait DrawStreaming {
     /// and mark the draw slot non-resident. The regions are held against
     /// `retire_frame`, so a frame still in flight cannot have them reused
     /// underneath it. `Err` when the slot is out of range.
-    fn evict_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
+    fn evict_mesh(&mut self, draw_idx: DrawIndex, retire_frame: u64) -> RenderResult<()>;
     /// Upload a streamed mesh's geometry into a draw slot.
     fn upload_mesh(
         &mut self,
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         verts: &[Vertex],
         idxs: &[u16],
         frame: u64,
@@ -104,9 +104,9 @@ pub trait DrawStreaming {
         dst: crate::render::draw_slot::SlotAlloc,
     ) -> RenderResult<()>;
     /// Free a streamed chunk's geometry, retiring it after `retire_frame`.
-    fn remove_chunk_mesh(&mut self, draw_idx: usize, retire_frame: u64) -> RenderResult<()>;
+    fn remove_chunk_mesh(&mut self, draw_idx: DrawIndex, retire_frame: u64) -> RenderResult<()>;
     /// Move a streamed chunk by replacing its placement matrix.
-    fn set_chunk_model(&mut self, draw_idx: usize, model: [[f32; 4]; 4]) -> RenderResult<()>;
+    fn set_chunk_model(&mut self, draw_idx: DrawIndex, model: [[f32; 4]; 4]) -> RenderResult<()>;
 
     /// Instantiate a runtime copy of an existing draw object at a new transform:
     /// re-use the source slot's geometry region (`vertex_offset` / `vertex_count`
@@ -124,7 +124,7 @@ pub trait DrawStreaming {
     /// [`RenderError::Unsupported`], which the spawn path logs and skips.
     fn clone_static_draw_object(
         &mut self,
-        src_draw_idx: usize,
+        src_draw_idx: DrawIndex,
         model: [[f32; 4]; 4],
         dst: crate::render::draw_slot::SlotAlloc,
     ) -> RenderResult<()> {

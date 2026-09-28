@@ -16,7 +16,7 @@
 
 use alloc::vec::Vec;
 
-use crate::gfx::render_types::draw_args_no_history;
+use crate::gfx::render_types::{DrawIndex, SkinnedIndex, draw_args_no_history};
 
 /// How a frame's draw-args build treats the model-history ring.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -131,14 +131,14 @@ impl ModelHistory {
     /// Note that draw slot `draw_idx` now holds a different object. Call
     /// wherever a slot is written for a new occupant -- a reused or appended
     /// draw slot, a streamed chunk moving in, a spawned clone.
-    pub fn reoccupy_draw(&mut self, draw_idx: usize) {
-        bump(&mut self.draw_gen, draw_idx);
+    pub fn reoccupy_draw(&mut self, draw_idx: DrawIndex) {
+        bump(&mut self.draw_gen, draw_idx.index());
     }
 
     /// Note that skinned instance `skinned_idx` now holds a different object,
     /// as a revealed instance-pool slot does.
-    pub fn reoccupy_skinned(&mut self, skinned_idx: usize) {
-        bump(&mut self.skinned_gen, skinned_idx);
+    pub fn reoccupy_skinned(&mut self, skinned_idx: SkinnedIndex) {
+        bump(&mut self.skinned_gen, skinned_idx.index());
     }
 
     fn observe(&mut self, record: usize, token: u64) -> bool {
@@ -189,7 +189,7 @@ mod tests {
         h.draw_flags(1, 1);
         h.begin(HistoryMode::Track, 4);
         assert_eq!(h.draw_flags(1, 1), KEEP);
-        h.reoccupy_draw(1);
+        h.reoccupy_draw(DrawIndex(1));
         h.begin(HistoryMode::Track, 4);
         assert_eq!(h.draw_flags(1, 1), draw_args_no_history());
         h.begin(HistoryMode::Track, 4);
@@ -223,7 +223,7 @@ mod tests {
         h.begin(HistoryMode::Track, 4);
         assert_eq!(h.draw_flags(0, 3), KEEP);
         assert_eq!(h.skinned_flags(1, 3), KEEP);
-        h.reoccupy_skinned(3);
+        h.reoccupy_skinned(SkinnedIndex(3));
         h.begin(HistoryMode::Track, 4);
         // Only the skinned pool moved.
         assert_eq!(h.draw_flags(0, 3), KEEP);
@@ -301,11 +301,11 @@ mod tests {
     fn reoccupying_an_untracked_slot_grows_the_generation_table() {
         let mut h = ModelHistory::new();
         h.begin(HistoryMode::Track, 4);
-        h.reoccupy_draw(9);
+        h.reoccupy_draw(DrawIndex(9));
         assert_eq!(h.draw_flags(0, 9), draw_args_no_history());
         h.begin(HistoryMode::Track, 4);
         assert_eq!(h.draw_flags(0, 9), KEEP);
-        h.reoccupy_draw(9);
+        h.reoccupy_draw(DrawIndex(9));
         h.begin(HistoryMode::Track, 4);
         assert_eq!(h.draw_flags(0, 9), draw_args_no_history());
     }

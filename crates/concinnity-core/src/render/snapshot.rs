@@ -5,7 +5,7 @@
 //! cross a thread boundary. Buffers keep their capacity across frames; a
 //! steady-state extraction allocates nothing.
 
-use crate::gfx::render_types::{LineVertex, TextDrawCall};
+use crate::gfx::render_types::{DrawIndex, LineVertex, SkinnedIndex, TextDrawCall};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
 use crate::render::scene_flow::SceneControl;
 use alloc::vec::Vec;
@@ -75,13 +75,13 @@ pub struct UiIntents {
     pub camera_capture: Option<bool>,
 }
 
-/// Variable-length per-slot updates flattened into one values buffer plus
+/// Variable-length per-skinned-slot updates flattened into one values buffer plus
 /// `(slot, range)` spans, so extraction copies into persistent storage and
 /// submission replays one backend call per span.
 #[derive(Debug, Default)]
 pub struct SpanBuffer<T> {
     values: Vec<T>,
-    spans: Vec<(usize, u32, u32)>,
+    spans: Vec<(SkinnedIndex, u32, u32)>,
 }
 
 impl<T: Copy> SpanBuffer<T> {
@@ -97,14 +97,14 @@ impl<T: Copy> SpanBuffer<T> {
     }
 
     /// Append one slot's values as a new span.
-    pub fn push(&mut self, slot: usize, values: &[T]) {
+    pub fn push(&mut self, slot: SkinnedIndex, values: &[T]) {
         let start = self.values.len() as u32;
         self.values.extend_from_slice(values);
         self.spans.push((slot, start, values.len() as u32));
     }
 
     /// The spans in push order as `(slot, values)`.
-    pub fn iter(&self) -> impl Iterator<Item = (usize, &[T])> {
+    pub fn iter(&self) -> impl Iterator<Item = (SkinnedIndex, &[T])> {
         self.spans
             .iter()
             .map(|&(slot, start, len)| (slot, &self.values[start as usize..(start + len) as usize]))
@@ -120,7 +120,7 @@ pub enum SceneOp {
     /// Show or hide one draw slot.
     Visibility {
         /// The draw slot whose visibility changes.
-        draw_idx: usize,
+        draw_idx: DrawIndex,
         /// `true` to show the slot, `false` to hide it.
         visible: bool,
     },
@@ -131,7 +131,7 @@ pub enum SceneOp {
 pub struct SceneOpRecorder<'a>(pub &'a mut Vec<SceneOp>);
 
 impl SceneControl for SceneOpRecorder<'_> {
-    fn update_visibility(&mut self, draw_idx: usize, visible: bool) {
+    fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
         self.0.push(SceneOp::Visibility { draw_idx, visible });
     }
 
@@ -153,9 +153,9 @@ pub struct RenderSnapshot {
     pub ops: crate::render::ops::RenderOps,
     /// Changed static draw-slot model matrices, in push order (a slot pushed
     /// twice keeps both entries; the last write wins on the backend).
-    pub models: Vec<(u32, Mat4)>,
+    pub models: Vec<(DrawIndex, Mat4)>,
     /// Changed skinned-instance model matrices, in push order.
-    pub skinned_models: Vec<(u32, Mat4)>,
+    pub skinned_models: Vec<(SkinnedIndex, Mat4)>,
     /// Updated skinned joint matrices, keyed by skinned instance index.
     pub poses: SpanBuffer<Mat4>,
     /// Updated morph-target weights, keyed by skinned instance index.
@@ -201,22 +201,25 @@ mod tests {
     fn span_buffer_round_trips_slots_in_push_order() {
         let mut spans: SpanBuffer<u32> = SpanBuffer::default();
         assert!(spans.is_empty());
-        spans.push(7, &[1, 2, 3]);
-        spans.push(2, &[9]);
-        let collected: Vec<(usize, Vec<u32>)> =
+        spans.push(SkinnedIndex(7), &[1, 2, 3]);
+        spans.push(SkinnedIndex(2), &[9]);
+        let collected: Vec<(SkinnedIndex, Vec<u32>)> =
             spans.iter().map(|(slot, v)| (slot, v.to_vec())).collect();
-        assert_eq!(collected, vec![(7, vec![1, 2, 3]), (2, vec![9])]);
+        assert_eq!(
+            collected,
+            vec![(SkinnedIndex(7), vec![1, 2, 3]), (SkinnedIndex(2), vec![9])]
+        );
     }
 
     #[test]
     fn span_buffer_clear_keeps_capacity() {
         let mut spans: SpanBuffer<u32> = SpanBuffer::default();
-        spans.push(0, &[1, 2, 3, 4]);
-        spans.push(1, &[5, 6]);
+        spans.push(SkinnedIndex(0), &[1, 2, 3, 4]);
+        spans.push(SkinnedIndex(1), &[5, 6]);
         let values_ptr = spans.values.as_ptr();
         spans.clear();
         assert!(spans.is_empty());
-        spans.push(0, &[1, 2, 3]);
+        spans.push(SkinnedIndex(0), &[1, 2, 3]);
         assert_eq!(
             spans.values.as_ptr(),
             values_ptr,
@@ -230,19 +233,19 @@ mod tests {
         {
             let mut recorder = SceneOpRecorder(&mut ops);
             recorder.set_fade(0.5);
-            recorder.update_visibility(3, false);
-            recorder.update_visibility(4, true);
+            recorder.update_visibility(DrawIndex(3), false);
+            recorder.update_visibility(DrawIndex(4), true);
         }
         assert_eq!(
             ops,
             vec![
                 SceneOp::SetFade(0.5),
                 SceneOp::Visibility {
-                    draw_idx: 3,
+                    draw_idx: DrawIndex(3),
                     visible: false
                 },
                 SceneOp::Visibility {
-                    draw_idx: 4,
+                    draw_idx: DrawIndex(4),
                     visible: true
                 },
             ]
@@ -252,7 +255,7 @@ mod tests {
     #[test]
     fn snapshot_clear_resets_contents_and_keeps_capacity() {
         let mut snap = RenderSnapshot::default();
-        snap.models.push((1, [[0.0; 4]; 4]));
+        snap.models.push((DrawIndex(1), [[0.0; 4]; 4]));
         snap.scene_ops.push(SceneOp::SetFade(1.0));
         snap.frame.elapsed = 5.0;
         let models_ptr = snap.models.as_ptr();
@@ -260,7 +263,7 @@ mod tests {
         assert!(snap.models.is_empty());
         assert!(snap.scene_ops.is_empty());
         assert_eq!(snap.frame.elapsed, 0.0);
-        snap.models.push((2, [[0.0; 4]; 4]));
+        snap.models.push((DrawIndex(2), [[0.0; 4]; 4]));
         assert_eq!(
             snap.models.as_ptr(),
             models_ptr,

@@ -18,6 +18,7 @@ use concinnity_core::components::{
     Prop, PropCollider, RenderHandle, Transform,
 };
 use concinnity_core::ecs::World;
+use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_core::render::snapshot::RenderSnapshot;
 
 use super::BenchWorld;
@@ -133,9 +134,12 @@ fn static_extraction_allocates_nothing() {
         world
             .components
             .insert_typed(entity, GlobalTransform(glam_identity_at(i)));
-        world
-            .components
-            .insert_typed(entity, RenderHandle { draws: [i].into() });
+        world.components.insert_typed(
+            entity,
+            RenderHandle {
+                draws: [DrawIndex(i)].into(),
+            },
+        );
     }
     let mut gs = GraphicsSystem::new(None);
     let mut snap = RenderSnapshot::default();

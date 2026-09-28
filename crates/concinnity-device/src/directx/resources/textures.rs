@@ -219,7 +219,7 @@ impl DxContext {
     // descriptors of its own. Mirrors `MtlContext::clone_static_draw_object`.
     pub(crate) fn clone_static_draw_object(
         &mut self,
-        src_draw_idx: usize,
+        src_draw_idx: DrawIndex,
         model: [[f32; 4]; 4],
         dst: draw_slot::SlotAlloc,
     ) -> RenderResult<()> {
@@ -229,7 +229,7 @@ impl DxContext {
                 self.draw.n_runtime
             )));
         }
-        let src = self.draw.objects.get(src_draw_idx).ok_or_else(|| {
+        let src = self.draw.objects.get(src_draw_idx.index()).ok_or_else(|| {
             RenderError::Other(format!(
                 "clone_static_draw_object: src draw {} out of range",
                 src_draw_idx
@@ -265,24 +265,11 @@ impl DxContext {
         };
 
         // Write at the engine-allocated destination slot.
-        match dst {
-            draw_slot::SlotAlloc::Reuse(slot) => {
-                self.draw.objects[slot] = obj;
-                // The slot's model-history entry belongs to the prior occupant,
-                // so the clone reprojects through its own transform for one
-                // frame rather than ghosting from that occupant's.
-                self.model_history.borrow_mut().reoccupy_draw(slot);
-            }
-            draw_slot::SlotAlloc::Append(slot) => {
-                debug_assert_eq!(
-                    slot,
-                    self.draw.objects.len(),
-                    "appended draw slot must match the draw-object count"
-                );
-                self.draw.objects.push(obj);
-                self.model_history.borrow_mut().reoccupy_draw(slot);
-            }
-        }
+        let slot = draw_slot::place_draw_object(&mut self.draw.objects, obj, dst);
+        // The slot's model-history entry belongs to the prior occupant, so the
+        // clone reprojects through its own transform for one frame rather than
+        // ghosting from that occupant's.
+        self.model_history.borrow_mut().reoccupy_draw(slot);
         // The cloned prop joins the RT-relevant draw set; the next RT update folds
         // it into the BVH (it reuses the source mesh's geometry slice, so only
         // this clone's BLAS is built).

@@ -48,6 +48,7 @@ use concinnity_core::ecs::{
 };
 use concinnity_core::gfx::chunk_coord;
 use concinnity_core::gfx::mesh_payload;
+use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::profile::FrameProfile;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::{GpuProfile, GpuTier, GpuVendor};
@@ -441,11 +442,11 @@ fn init_builds_draw_list_and_render_handles() {
 
     // The prop entity received its GPU handle + init world matrix.
     let ctx = world.ctx();
-    let handles: Vec<Vec<u32>> = ctx
+    let handles: Vec<Vec<DrawIndex>> = ctx
         .query::<RenderHandle>()
         .map(|h| h.draws.to_vec())
         .collect();
-    assert_eq!(handles, vec![vec![0]]);
+    assert_eq!(handles, vec![vec![DrawIndex(0)]]);
     let globals: Vec<[[f32; 4]; 4]> = ctx.query::<GlobalTransform>().map(|g| g.0).collect();
     assert_eq!(globals.len(), 1);
     assert_eq!(globals[0][3][0], 1.0);
@@ -855,8 +856,16 @@ fn first_declared_scene_applies_start_visibility() {
 
     {
         let s = lock(&state);
-        assert_eq!(s.visibility.get(&0), Some(&true), "scene A prop visible");
-        assert_eq!(s.visibility.get(&1), Some(&false), "scene B prop hidden");
+        assert_eq!(
+            s.visibility.get(&DrawIndex(0)),
+            Some(&true),
+            "scene A prop visible"
+        );
+        assert_eq!(
+            s.visibility.get(&DrawIndex(1)),
+            Some(&false),
+            "scene B prop hidden"
+        );
     }
 
     // An imperative jump to scene B flips both.
@@ -869,8 +878,8 @@ fn first_declared_scene_applies_start_visibility() {
     }
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     let s = lock(&state);
-    assert_eq!(s.visibility.get(&0), Some(&false));
-    assert_eq!(s.visibility.get(&1), Some(&true));
+    assert_eq!(s.visibility.get(&DrawIndex(0)), Some(&false));
+    assert_eq!(s.visibility.get(&DrawIndex(1)), Some(&true));
 }
 
 #[test]
@@ -1027,8 +1036,8 @@ fn transform_edit_pushes_new_model_matrix() {
     step(&mut gs, &mut world);
 
     let s = lock(&state);
-    assert!(s.saw(&Call::UpdateModel(0)));
-    let model = s.models.get(&0).expect("slot 0 model pushed");
+    assert!(s.saw(&Call::UpdateModel(DrawIndex(0))));
+    let model = s.models.get(&DrawIndex(0)).expect("slot 0 model pushed");
     assert_eq!(model[3][0], 10.0);
     assert_eq!(model[3][1], 20.0);
     assert_eq!(model[3][2], 30.0);
@@ -1076,7 +1085,7 @@ fn model_matrices_push_only_on_change() {
     {
         let s = lock(&state);
         assert_eq!(model_pushes(&s), 1, "one move, one update");
-        assert_eq!(s.models.get(&0).expect("slot 0")[3][0], 4.0);
+        assert_eq!(s.models.get(&DrawIndex(0)).expect("slot 0")[3][0], 4.0);
     }
 
     // And the frame after the move is quiet again.
@@ -1408,14 +1417,21 @@ fn spawn_request_clones_template_draw_slot() {
     }
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
 
-    assert!(lock(&state).saw(&Call::CloneStaticDrawObject { src: 0, new_idx: 1 }));
+    assert!(lock(&state).saw(&Call::CloneStaticDrawObject {
+        src: DrawIndex(0),
+        new_idx: DrawIndex(1)
+    }));
     let ctx = world.ctx();
-    let mut handles: Vec<Vec<u32>> = ctx
+    let mut handles: Vec<Vec<DrawIndex>> = ctx
         .query::<RenderHandle>()
         .map(|h| h.draws.to_vec())
         .collect();
     handles.sort();
-    assert_eq!(handles, vec![vec![0], vec![1]], "spawned copy owns slot 1");
+    assert_eq!(
+        handles,
+        vec![vec![DrawIndex(0)], vec![DrawIndex(1)]],
+        "spawned copy owns slot 1"
+    );
 }
 
 #[test]
@@ -1436,7 +1452,7 @@ fn visibility_request_switches_slots_and_hidden_tag() {
     }
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     assert!(lock(&state).saw(&Call::UpdateVisibility {
-        draw_idx: 0,
+        draw_idx: DrawIndex(0),
         visible: false
     }));
     assert_eq!(
@@ -1455,7 +1471,7 @@ fn visibility_request_switches_slots_and_hidden_tag() {
     }
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     assert!(lock(&state).saw(&Call::UpdateVisibility {
-        draw_idx: 0,
+        draw_idx: DrawIndex(0),
         visible: true
     }));
     assert_eq!(
@@ -1479,7 +1495,7 @@ fn despawn_request_retires_draw_slots() {
     }
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
 
-    assert!(lock(&state).saw(&Call::RetireDrawObject(0)));
+    assert!(lock(&state).saw(&Call::RetireDrawObject(DrawIndex(0))));
     let ctx = world.ctx();
     assert_eq!(
         ctx.query::<RenderHandle>().count(),
@@ -1521,7 +1537,7 @@ fn streaming_init_evicts_streamable_slots() {
     // keeps its build-time region (cap covers the whole set) but is evicted
     // so the streamer brings it back nearest-first.
     assert!(s.saw(&Call::EvictTextureSlot(0)));
-    assert!(s.saw(&Call::EvictMesh(0)));
+    assert!(s.saw(&Call::EvictMesh(DrawIndex(0))));
 }
 
 #[test]
@@ -1575,7 +1591,7 @@ fn mesh_streaming_reuploads_evicted_geometry() {
             matches!(
                 c,
                 Call::UploadMesh {
-                    draw_idx: 0,
+                    draw_idx: DrawIndex(0),
                     vertices: 4,
                     indices: 6,
                 }
@@ -1854,7 +1870,7 @@ fn expired_lifetime_despawns_the_entity_and_retires_its_slot() {
     let mut spawn = crate::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
-    assert!(lock(&state).saw(&Call::RetireDrawObject(0)));
+    assert!(lock(&state).saw(&Call::RetireDrawObject(DrawIndex(0))));
     assert_eq!(
         world.ctx().query::<RenderHandle>().count(),
         0,
@@ -1897,7 +1913,10 @@ fn due_spawner_clones_its_template_at_its_own_transform() {
     let mut spawn = crate::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
-    assert!(lock(&state).saw(&Call::CloneStaticDrawObject { src: 0, new_idx: 1 }));
+    assert!(lock(&state).saw(&Call::CloneStaticDrawObject {
+        src: DrawIndex(0),
+        new_idx: DrawIndex(1)
+    }));
     let ctx = world.ctx();
     assert_eq!(
         ctx.query::<Lifetime>()
@@ -1942,7 +1961,7 @@ fn menu_active_freezes_lifetimes_and_spawners() {
     {
         let s = lock(&state);
         assert!(
-            !s.saw(&Call::RetireDrawObject(0)),
+            !s.saw(&Call::RetireDrawObject(DrawIndex(0))),
             "the expired Lifetime does not fire behind the menu"
         );
         assert!(
@@ -1962,7 +1981,7 @@ fn menu_active_freezes_lifetimes_and_spawners() {
     world.resources.insert(MenuActive(false));
     spawn_step(&mut spawn, &mut world);
     assert!(
-        lock(&state).saw(&Call::RetireDrawObject(0)),
+        lock(&state).saw(&Call::RetireDrawObject(DrawIndex(0))),
         "the expiry fires once the menu closes"
     );
 }
@@ -3849,12 +3868,12 @@ fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
 
     let ctx = world.ctx();
     // One SkeletonPose per mesh, each keyed to its handle and template draw.
-    let mut poses: Vec<(u32, usize)> = ctx
+    let mut poses: Vec<(u32, SkinnedIndex)> = ctx
         .query::<SkeletonPose>()
         .map(|p| (p.mesh_id.0, p.skinned_index))
         .collect();
     poses.sort();
-    assert_eq!(poses, vec![(0, 0), (1, 1)]);
+    assert_eq!(poses, vec![(0, SkinnedIndex(0)), (1, SkinnedIndex(1))]);
     // Only the capsule-carrying mesh gets a rig.
     let rigs: Vec<u32> = ctx.query::<CharacterRig>().map(|r| r.target.0).collect();
     assert_eq!(rigs, vec![0], "only the capsule mesh gets a character rig");
@@ -4011,7 +4030,7 @@ fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
 
     step(&mut gs, &mut world);
     assert!(
-        lock(&state).saw(&Call::UpdateSkinnedPose(0)),
+        lock(&state).saw(&Call::UpdateSkinnedPose(SkinnedIndex(0))),
         "the seeded bind pose is pushed on the first frame"
     );
 
@@ -4019,7 +4038,7 @@ fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
     lock(&state).calls.clear();
     step(&mut gs, &mut world);
     assert!(
-        !lock(&state).saw(&Call::UpdateSkinnedPose(0)),
+        !lock(&state).saw(&Call::UpdateSkinnedPose(SkinnedIndex(0))),
         "an untouched pose is not re-uploaded"
     );
 
@@ -4028,7 +4047,7 @@ fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
     lock(&state).calls.clear();
     step(&mut gs, &mut world);
     assert!(
-        lock(&state).saw(&Call::UpdateSkinnedPose(0)),
+        lock(&state).saw(&Call::UpdateSkinnedPose(SkinnedIndex(0))),
         "a flagged pose is uploaded"
     );
 
@@ -4042,7 +4061,7 @@ fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
     lock(&state).calls.clear();
     step(&mut gs, &mut world);
     assert!(
-        !lock(&state).saw(&Call::UpdateSkinnedPose(0)),
+        !lock(&state).saw(&Call::UpdateSkinnedPose(SkinnedIndex(0))),
         "pose uploads are skipped while a menu is open"
     );
 
@@ -4052,7 +4071,7 @@ fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
     lock(&state).calls.clear();
     step(&mut gs, &mut world);
     assert!(
-        lock(&state).saw(&Call::UpdateSkinnedPose(0)),
+        lock(&state).saw(&Call::UpdateSkinnedPose(SkinnedIndex(0))),
         "the editor override uploads a flagged pose"
     );
 }
@@ -4691,7 +4710,7 @@ fn editor_hidden_collapses_draws_and_skips_the_pick_index() {
         let index = world.resources.get::<PickIndex>().unwrap();
         assert!(index.entries.is_empty(), "a hidden prop is not pickable");
         let s = lock(&state);
-        let model = s.models.get(&0).expect("slot 0 model pushed");
+        let model = s.models.get(&DrawIndex(0)).expect("slot 0 model pushed");
         assert_eq!(*model, COLLAPSED, "the hidden prop's slot is degenerate");
     }
 
@@ -4700,7 +4719,7 @@ fn editor_hidden_collapses_draws_and_skips_the_pick_index() {
     let index = world.resources.get::<PickIndex>().unwrap();
     assert_eq!(index.entries.len(), 1, "clearing the set restores the prop");
     let s = lock(&state);
-    let model = s.models.get(&0).unwrap();
+    let model = s.models.get(&DrawIndex(0)).unwrap();
     assert_ne!(*model, COLLAPSED, "the real transform is pushed again");
 }
 
@@ -4755,7 +4774,7 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
         lock(&state)
             .calls
             .iter()
-            .any(|c| matches!(c, Call::UpdateSkinnedModel(0))),
+            .any(|c| matches!(c, Call::UpdateSkinnedModel(SkinnedIndex(0)))),
         "the moved template reaches the backend"
     );
     let index = world.resources.get::<PickIndex>().unwrap();

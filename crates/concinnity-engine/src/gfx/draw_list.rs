@@ -11,7 +11,7 @@ use concinnity_core::gfx::frustum;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::{
-    DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT,
+    DrawIndex, DrawObject, InstancedCluster, LodSlice, MaterialUniforms, NO_NORMAL_MAP_SLOT,
 };
 use concinnity_core::resource::MeshTable;
 pub(crate) use concinnity_core::transform::IDENTITY as IDENTITY4;
@@ -91,8 +91,8 @@ pub(crate) struct DrawListData {
     pub indices: Vec<u32>,
     pub(crate) draw_objects: Vec<DrawObject>,
     pub(crate) instanced_clusters: Vec<InstancedCluster>,
-    pub(crate) prop_draw_indices: Vec<Vec<usize>>,
-    pub(crate) mesh_handle_to_draws: std::collections::HashMap<usize, Vec<usize>>,
+    pub(crate) prop_draw_indices: Vec<Vec<DrawIndex>>,
+    pub(crate) mesh_handle_to_draws: std::collections::HashMap<usize, Vec<DrawIndex>>,
     pub(crate) prop_local_bounds: Vec<([f32; 3], [f32; 3])>,
 }
 
@@ -590,14 +590,14 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
     let mut all_indices: Vec<u32> = Vec::new();
     let mut draw_objects: Vec<DrawObject> = Vec::new();
     let mut instanced_clusters: Vec<InstancedCluster> = Vec::new();
-    let mut prop_draw_indices: Vec<Vec<usize>> = Vec::new();
+    let mut prop_draw_indices: Vec<Vec<DrawIndex>> = Vec::new();
     let mut prop_local_bounds: Vec<([f32; 3], [f32; 3])> = Vec::new();
     // Map every mesh-source handle to the draw slots that received a copy of
     // its geometry. Hot-reload (`cn debug` only) walks this to know which slots
-    // to overwrite when the source `.glb` changes. The `Vec<usize>` accumulates
+    // to overwrite when the source `.glb` changes. The slot list accumulates
     // every push since a mesh shared by N `Prop`s yields N independent draw
     // objects.
-    let mut mesh_handle_to_draws: std::collections::HashMap<usize, Vec<usize>> =
+    let mut mesh_handle_to_draws: std::collections::HashMap<usize, Vec<DrawIndex>> =
         std::collections::HashMap::new();
 
     // track explicitly referenced mesh handles so unreferenced ones get auto-rendered
@@ -660,7 +660,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
 
     for (item_idx, item) in items.iter().enumerate() {
         let model_mat = world_mats[item_idx];
-        let mut prop_idxs: Vec<usize> = Vec::new();
+        let mut prop_idxs: Vec<DrawIndex> = Vec::new();
         // Union of this prop's sub-mesh local bounds (all in the same model
         // space). NaN sentinels from empty meshes fall out of min/max.
         let mut prop_min = [f32::INFINITY; 3];
@@ -733,11 +733,9 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                         frustum::transform_aabb(local_min, local_max, model_mat)
                     };
                 union_local(local_min, local_max);
-                prop_idxs.push(draw_objects.len());
-                mesh_handle_to_draws
-                    .entry(sub_mesh)
-                    .or_default()
-                    .push(draw_objects.len());
+                let slot = DrawIndex::from_usize(draw_objects.len());
+                prop_idxs.push(slot);
+                mesh_handle_to_draws.entry(sub_mesh).or_default().push(slot);
                 draw_objects.push(DrawObject {
                     vertex_offset,
                     vertex_count,
@@ -809,11 +807,12 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     frustum::transform_aabb(local_min, local_max, model_mat)
                 };
             union_local(local_min, local_max);
-            prop_idxs.push(draw_objects.len());
+            let slot = DrawIndex::from_usize(draw_objects.len());
+            prop_idxs.push(slot);
             mesh_handle_to_draws
                 .entry(mesh_handle)
                 .or_default()
-                .push(draw_objects.len());
+                .push(slot);
             draw_objects.push(DrawObject {
                 vertex_offset,
                 vertex_count,
@@ -955,7 +954,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             mesh_handle_to_draws
                 .entry(mesh_handle)
                 .or_default()
-                .push(draw_objects.len());
+                .push(DrawIndex::from_usize(draw_objects.len()));
             draw_objects.push(DrawObject {
                 vertex_offset,
                 vertex_count,
@@ -1386,7 +1385,7 @@ mod tests {
         assert!(clusters.is_empty());
         // Two sub-meshes -> two draws, both belonging to the one prop.
         assert_eq!(draw_objects.len(), 2);
-        assert_eq!(prop_idxs, vec![vec![0, 1]]);
+        assert_eq!(prop_idxs, vec![vec![DrawIndex(0), DrawIndex(1)]]);
         assert_eq!(verts.len(), 8, "each quad's 4 verts appended once");
         assert_eq!(idxs.len(), 12);
         // First sub-mesh took its material's albedo/normal slots; the second
@@ -1396,8 +1395,8 @@ mod tests {
         assert_eq!(draw_objects[1].texture_slot, NO_ALBEDO_SLOT);
         assert_eq!(draw_objects[1].normal_map_slot, NO_NORMAL_MAP_SLOT);
         // Hot-reload map tracks each sub-mesh id -> its draw slot.
-        assert_eq!(mesh_handle_to_draws.get(&0), Some(&vec![0]));
-        assert_eq!(mesh_handle_to_draws.get(&1), Some(&vec![1]));
+        assert_eq!(mesh_handle_to_draws.get(&0), Some(&vec![DrawIndex(0)]));
+        assert_eq!(mesh_handle_to_draws.get(&1), Some(&vec![DrawIndex(1)]));
     }
 
     // A mesh present in the geometry table but referenced by no item, model, or
@@ -1432,7 +1431,7 @@ mod tests {
         assert_eq!(d.texture_slot, 0);
         assert!(!d.cullable(), "unreferenced mesh draws unconditionally");
         assert!(d.lod_alternates.is_empty());
-        assert_eq!(mesh_handle_to_draws.get(&0), Some(&vec![0]));
+        assert_eq!(mesh_handle_to_draws.get(&0), Some(&vec![DrawIndex(0)]));
     }
 
     // A Room is placed at the origin with culling disabled; its cook-assigned

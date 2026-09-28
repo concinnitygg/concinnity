@@ -355,6 +355,7 @@ mod tests {
     use concinnity_core::components::PropCollider;
     use concinnity_core::components::{FollowController, FrameInput};
     use concinnity_core::ecs::World;
+    use concinnity_core::gfx::render_types::SkinnedIndex;
     use concinnity_core::transform;
     use concinnity_host::thread::asset_id::intern;
 
@@ -424,7 +425,13 @@ mod tests {
         let target = SkinnedMeshHandle(intern("hero").0);
         let mut world = World::new();
         world.add_component(follow_camera("hero", drive, jump_height));
-        world.add_component(CharacterRig::new(target, 0, transform::IDENTITY, 0.5, 0.3));
+        world.add_component(CharacterRig::new(
+            target,
+            SkinnedIndex(0),
+            transform::IDENTITY,
+            0.5,
+            0.3,
+        ));
         let graph: AnimationGraph = serde_json::from_value(serde_json::json!({
             "target": "hero",
             "parameters": [{"name": "speed", "default": 0.0}],
