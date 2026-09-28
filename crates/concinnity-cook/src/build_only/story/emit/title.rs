@@ -1,10 +1,10 @@
+use concinnity_core::components::NamedAction;
 use concinnity_core::components::StoryCommand;
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::media::MediaAssets;
 use super::names::StoryNames;
 use super::widgets::{LabelStyle, label, screen, textured_cover_sprite, title_button};
-use crate::authoring::spec::asset::ui_action;
 use crate::build_only::story::model::Story;
 use crate::build_only::ui_spec::sprite;
 
@@ -66,18 +66,22 @@ pub(super) fn emit_title_screen(
     // Settings only when a settings screen exists), so their hit regions
     // follow their labels. Rows follow `TITLE_BUTTON_KEYS`.
     let rows = [
-        ("Start", 400.0, ui_action::story(StoryCommand::Start)),
-        ("Continue", 452.0, ui_action::story(StoryCommand::Continue)),
-        ("Load", 504.0, ui_action::story(StoryCommand::OpenLoad)),
+        ("Start", 400.0, NamedAction::Story(StoryCommand::Start)),
+        (
+            "Continue",
+            452.0,
+            NamedAction::Story(StoryCommand::Continue),
+        ),
+        ("Load", 504.0, NamedAction::Story(StoryCommand::OpenLoad)),
         (
             "Settings",
             556.0,
-            ui_action::story(StoryCommand::OpenSettings),
+            NamedAction::Story(StoryCommand::OpenSettings),
         ),
-        ("Quit", 608.0, ui_action::quit()),
+        ("Quit", 608.0, NamedAction::Quit),
     ];
     for (button, (text, y, action)) in title.buttons.iter().zip(rows) {
-        out.extend(title_button(button, &names.font_menu, text, y, &action));
+        out.extend(title_button(button, &names.font_menu, text, y, action));
     }
     out
 }
@@ -136,7 +140,10 @@ mod tests {
             assert_eq!(region["args"]["follow_label"], true);
         }
         assert_eq!(regions[1]["args"]["$id"], "s_title_continue_btn");
-        assert_eq!(regions[1]["args"]["action"], "story:continue");
+        assert_eq!(
+            regions[1]["args"]["action"],
+            serde_json::json!({"story": "continue"})
+        );
         assert_eq!(regions[4]["args"]["action"], "quit");
     }
 }

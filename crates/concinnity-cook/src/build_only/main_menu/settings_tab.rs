@@ -9,7 +9,7 @@ use super::rows::{
 use super::{TOP_MARGIN_FRAC, cursor_sprite, opaque};
 use crate::authoring::registry::build_only::MainMenu;
 use crate::authoring::spec::{asset, spec_to_value};
-use asset::ui_action;
+use concinnity_core::components::NamedAction;
 use concinnity_core::components::SettingVerb;
 
 // Average glyph advance as a fraction of the font pixel size, used to estimate
@@ -59,7 +59,7 @@ const BACK_GAP: f32 = 24.0;
 // Emit one settings tab as its own Screen: a "Settings" heading, the tab bar
 // (this tab highlighted, the others clickable), the tab's setting rows, an
 // optional read-only key reference, and a Back button. Each tab is a separate
-// Screen so the active-tab highlight is baked in; switching tabs is a screen:show.
+// Screen so the active-tab highlight is baked in; switching tabs is a `show`.
 pub(super) fn emit_settings_tab(
     menu_name: &str,
     active: &str,
@@ -169,7 +169,7 @@ pub(super) fn emit_settings_tab(
                 &asset::hit_region(
                     format!("{}_tabbtn_{}", screen, suffix),
                     [tab_x, row_y(0), *w, style.button_height],
-                    ui_action::screen_show(&format!("{}_settings_{}", menu_name, suffix)),
+                    NamedAction::Show((format!("{}_settings_{}", menu_name, suffix)).into()),
                 )
                 .set("label", label_name)
                 .set("hover_color", style.hover_color)
@@ -293,14 +293,17 @@ pub(super) fn emit_settings_tab(
                 ));
                 // A HitRegion over the control column captures a new key on
                 // click. Its `label` points at the value label so the client can
-                // refresh it; the `setting:<key>:rebind` action is a scroll
+                // refresh it; the rebind action is a scroll
                 // content region, so it reflows / clips / gates with its row.
                 let ctrl_w = (content_x + content_w - control_x).max(0.0);
                 out.push(spec_to_value(
                     &asset::hit_region(
                         format!("{}_rebind_btn_{}", screen, idx),
                         [control_x, base_y, ctrl_w, style.button_height],
-                        ui_action::setting(setting, SettingVerb::Rebind),
+                        NamedAction::Setting {
+                            key: setting,
+                            verb: SettingVerb::Rebind,
+                        },
                     )
                     .set("label", val.clone())
                     .set("hover_color", style.hover_color)
@@ -325,7 +328,7 @@ pub(super) fn emit_settings_tab(
                     &asset::hit_region(
                         format!("{}_grpbtn_{}", screen, gid),
                         [row_x, base_y, row_width, style.button_height],
-                        ui_action::group_toggle(gid),
+                        NamedAction::GroupToggle(gid),
                     )
                     .set("label", header.clone())
                     .set("hover_color", style.hover_color)
@@ -399,11 +402,10 @@ pub(super) fn emit_settings_tab(
     // the settings navigation, e.g. a story, can route it).
     let back_y = band_top + band_h + BACK_GAP;
     let back_label = format!("{}_label_back", screen);
-    let back_action = if style.settings_back_action.is_empty() {
-        ui_action::screen_show(menu_name)
-    } else {
-        style.settings_back_action.clone()
-    };
+    let back_action = style
+        .settings_back_action
+        .clone()
+        .unwrap_or_else(|| NamedAction::Show(menu_name.into()));
     out.push(centered_label(
         &back_label,
         "Back",

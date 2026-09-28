@@ -22,7 +22,7 @@ impl GamepadAction {
         GamepadAction::Interact,
     ];
 
-    /// The settings key string used in `setting:<key>:rebind` actions and the
+    /// The settings key string used in rebind actions and the
     /// engine settings registry. The `pad_` prefix distinguishes a button
     /// capture row from a `key_*` keyboard capture row.
     pub const fn setting_key(self) -> &'static str {

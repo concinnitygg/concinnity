@@ -48,7 +48,7 @@ pub(crate) fn resolve_path(declared: &str, assets_dir: Option<&Path>) -> String 
 // the cook find it; a file not written yet is where a new one under the assets
 // directory would go.
 pub(crate) fn resolve_field_path(declared: &str, assets_dir: Option<&Path>) -> String {
-    concinnity_host::store::source::find_existing(declared, assets_dir, None).unwrap_or_else(|| {
+    concinnity_host::store::source::find_existing(declared, assets_dir).unwrap_or_else(|| {
         match assets_dir {
             Some(dir) if !Path::new(declared).is_absolute() => {
                 dir.join(declared).to_string_lossy().into_owned()

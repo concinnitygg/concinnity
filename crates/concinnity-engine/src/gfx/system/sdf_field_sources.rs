@@ -5,7 +5,7 @@
 //! `concinnity_dev::debug::hot_reload`.
 
 use concinnity_core::render::backend_init::SdfVolumeSource;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// One volume as a reload entry: its name, where the backend holds it, the
 /// flags that decide which entries its field compiles, and the field's file.
@@ -53,6 +53,14 @@ impl SdfFieldMap {
             })
             .collect();
         Self { entries }
+    }
+
+    /// Build the catalog with each field resolved the way the cook found the
+    /// file it compiled, under the build's asset root `assets_dir`.
+    pub fn resolve(volumes: &[SdfVolumeSource], assets_dir: Option<&Path>) -> Self {
+        Self::build(volumes, |raw| {
+            concinnity_host::store::source::find_existing(raw, assets_dir)
+        })
     }
 
     /// Whether the catalog is empty.
@@ -153,6 +161,29 @@ mod tests {
             .map(|d| d.to_string_lossy().into_owned())
             .collect();
         assert_eq!(dirs, ["fields", "fields/blob"]);
+    }
+
+    // A bare field name is found anywhere under the asset root, as the cook
+    // finds it, so a field the build compiled from a nested directory is
+    // watched there.
+    #[test]
+    fn a_field_resolves_where_the_cook_found_it() {
+        let assets = tempfile::tempdir().unwrap();
+        let fields = assets.path().join("fields");
+        std::fs::create_dir_all(&fields).unwrap();
+        std::fs::write(fields.join("blob.hlsl"), "").unwrap();
+        let map = SdfFieldMap::resolve(
+            &[
+                source("blob", "blob.hlsl", false, true),
+                source("lost", "cn_no_such_field.hlsl", false, false),
+            ],
+            Some(assets.path()),
+        );
+        assert_eq!(map.len(), 1);
+        assert_eq!(
+            map.get("blob").unwrap().resolved_path,
+            fields.join("blob.hlsl").to_string_lossy()
+        );
     }
 
     #[test]

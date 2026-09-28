@@ -740,6 +740,8 @@ impl DebugHook for EditorHook {
         // The Shader panels take in reload outcomes, on-disk changes, and
         // edits to the declared Shaders before anything draws them.
         self.drive_shader_source();
+        self.shaders
+            .retry_missing(self.clock.elapsed().as_secs_f64());
         if self.shaders.open {
             self.shader_rows();
         }

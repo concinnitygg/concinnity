@@ -23,9 +23,9 @@ fn dump_settings_tab_probe_world() {
             "title": "Paused",
             "settings_profile": "minimal",
             "items": [
-                {"label": "Resume", "action": "return"},
-                {"label": "Save", "action": "story:save"},
-                {"label": "Load", "action": "story:load"},
+                {"label": "Resume", "action": "hide"},
+                {"label": "Save", "action": {"story": "save"}},
+                {"label": "Load", "action": {"story": "load"}},
                 {"label": "Settings", "action": "settings"},
                 {"label": "Quit to Title", "action": "quit"},
             ],
@@ -97,7 +97,7 @@ fn bare_menu_expands_to_default_layout() {
     assert_eq!(by_name(&assets, "main_menu_toggle")["type"], "KeyBinding");
     assert_eq!(
         by_name(&assets, "main_menu_toggle")["args"]["action"],
-        "screen:toggle:main_menu"
+        serde_json::json!({"toggle": "main_menu"})
     );
 
     // Three items -> three label/button pairs.
@@ -107,15 +107,15 @@ fn bare_menu_expands_to_default_layout() {
         assert!(ns.contains(&format!("main_menu_btn_{i}")));
     }
 
-    // Return resolves to screen:hide, Quit passes through, Settings opens the
+    // Resume hides the menu, Quit passes through, Settings opens the
     // generated sub-screen.
     assert_eq!(
         by_name(&assets, "main_menu_btn_0")["args"]["action"],
-        "screen:hide"
+        "hide"
     );
     assert_eq!(
         by_name(&assets, "main_menu_btn_1")["args"]["action"],
-        "screen:show:main_menu_settings_video"
+        serde_json::json!({"show": "main_menu_settings_video"})
     );
     assert_eq!(
         by_name(&assets, "main_menu_btn_2")["args"]["action"],
@@ -131,11 +131,11 @@ fn bare_menu_expands_to_default_layout() {
         by_name(&assets, "main_menu_settings_video")["args"]["initial"],
         false
     );
-    // Back returns to the menu screen (not screen:hide, since tabs navigate
+    // Back returns to the menu screen (not `hide`, since tabs navigate
     // explicitly rather than as a restore-prev modal).
     assert_eq!(
         by_name(&assets, "main_menu_settings_video_btn_back")["args"]["action"],
-        "screen:show:main_menu"
+        serde_json::json!({"show": "main_menu"})
     );
     // The video tab carries its own (accent) tab header and a vsync row.
     assert_eq!(
@@ -281,7 +281,7 @@ fn settings_emits_a_screen_per_tab() {
         // Every tab returns to the menu screen via Back.
         assert_eq!(
             by_name(&assets, &format!("m_settings_{suffix}_btn_back"))["args"]["action"],
-            "screen:show:m"
+            serde_json::json!({"show": "m"})
         );
     }
 }
@@ -316,7 +316,7 @@ fn audio_and_controls_tabs_carry_their_rows() {
 }
 
 // Each rebindable action emits a name + value label and a HitRegion firing
-// its `setting:<key>:rebind` capture action; Pause stays display-only.
+// its rebind capture action; Pause stays display-only.
 #[test]
 fn controls_tab_emits_rebind_rows() {
     let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{"$id":"m"}})];
@@ -348,7 +348,10 @@ fn controls_tab_emits_rebind_rows() {
         );
         let btn = by_name(&assets, &format!("m_settings_controls_rebind_btn_{i}"));
         assert_eq!(btn["type"], "HitRegion");
-        assert_eq!(btn["args"]["action"], format!("setting:{setting}:rebind"));
+        assert_eq!(
+            btn["args"]["action"],
+            serde_json::json!({"setting": {"key": setting, "verb": "rebind"}})
+        );
         // The region's label points at the value so the client refreshes it.
         assert_eq!(
             btn["args"]["label"],
@@ -392,16 +395,16 @@ fn tab_bar_switches_between_tabs() {
     );
     assert_eq!(
         by_name(&assets, "m_settings_video_tabbtn_audio")["args"]["action"],
-        "screen:show:m_settings_audio"
+        serde_json::json!({"show": "m_settings_audio"})
     );
     assert_eq!(
         by_name(&assets, "m_settings_video_tabbtn_controls")["args"]["action"],
-        "screen:show:m_settings_controls"
+        serde_json::json!({"show": "m_settings_controls"})
     );
     // From the controls tab you can hop back to video.
     assert_eq!(
         by_name(&assets, "m_settings_controls_tabbtn_video")["args"]["action"],
-        "screen:show:m_settings_video"
+        serde_json::json!({"show": "m_settings_video"})
     );
 }
 
@@ -417,14 +420,14 @@ fn custom_items_pass_actions_through_verbatim() {
     let mut assets = vec![serde_json::json!({
         "type": "MainMenu",
         "args": { "$id": "title", "items": [
-            {"label":"New Game","action":"scene:level_1"},
+            {"label":"New Game","action":{"scene": "level_1"}},
             {"label":"Quit","action":"quit"}
         ]}
     })];
     expand_main_menus(&mut assets).unwrap();
     assert_eq!(
         by_name(&assets, "title_btn_0")["args"]["action"],
-        "scene:level_1"
+        serde_json::json!({"scene": "level_1"})
     );
     assert_eq!(by_name(&assets, "title_btn_1")["args"]["action"], "quit");
     // No settings item -> no settings sub-screen.
@@ -638,7 +641,7 @@ fn video_advanced_group_collapses_render_scale_and_exposure() {
     );
     assert_eq!(
         by_name(&assets, "m_settings_video_grpbtn_1")["args"]["action"],
-        "group:toggle:1"
+        serde_json::json!({"group_toggle": 1})
     );
     // The panel declares the Quality + Advanced groups, both collapsed.
     let panel = by_name(&assets, "m_settings_video_scroll");
@@ -713,7 +716,7 @@ fn video_quality_group_holds_render_feature_toggles() {
     );
     assert_eq!(
         by_name(&assets, "m_settings_video_grpbtn_0")["args"]["action"],
-        "group:toggle:0"
+        serde_json::json!({"group_toggle": 0})
     );
     let panel = by_name(&assets, "m_settings_video_scroll");
     let groups = panel["args"]["groups"].as_array().unwrap();
@@ -771,7 +774,7 @@ fn video_quality_group_holds_render_feature_toggles() {
     }
 }
 
-// Regression: the gid in a group header's `group:toggle:<gid>` action is
+// Regression: the gid in a group header's `group_toggle` action is
 // used at runtime as an INDEX into `ScrollPanel.groups`, and a row's `group`
 // tag is the same index. So each group's position in the groups vec must
 // equal the gid baked into its header/row references. A mismatch toggled the
@@ -789,7 +792,7 @@ fn group_toggle_gid_indexes_its_own_group() {
         assert_eq!(group["header"], header_name, "group {gid} out of gid order");
         assert_eq!(
             by_name(&assets, &format!("m_settings_video_grpbtn_{gid}"))["args"]["action"],
-            format!("group:toggle:{gid}")
+            serde_json::json!({ "group_toggle": gid })
         );
         // The header label's title matches the group at this index.
         let content = by_name(&assets, &header_name)["args"]["content"]
@@ -958,7 +961,7 @@ fn minimal_profile_emits_only_video_and_audio_tabs() {
     // The Video tab bar switches to Audio but offers no Controls button.
     assert_eq!(
         by_name(&assets, "m_settings_video_tabbtn_audio")["args"]["action"],
-        "screen:show:m_settings_audio"
+        serde_json::json!({"show": "m_settings_audio"})
     );
     assert!(
         !assets
@@ -1017,7 +1020,7 @@ fn minimal_audio_tab_keeps_master_volume() {
 
 // A `settings_back_action` generates the settings screen even with no
 // "settings" item and routes the Back button through it (rather than the
-// default screen:show:<menu>).
+// default `show` of the menu).
 #[test]
 fn settings_back_action_generates_screen_and_overrides_back() {
     let mut assets = vec![serde_json::json!({
@@ -1025,8 +1028,8 @@ fn settings_back_action_generates_screen_and_overrides_back() {
         "args": {
             "$id": "m",
             "settings_profile": "minimal",
-            "settings_back_action": "story:settings_back",
-            "items": [{"label": "Settings", "action": "story:settings"}]
+            "settings_back_action": {"story": "settings_back"},
+            "items": [{"label": "Settings", "action": {"story": "settings"}}]
         }
     })];
     expand_main_menus(&mut assets).unwrap();
@@ -1037,7 +1040,7 @@ fn settings_back_action_generates_screen_and_overrides_back() {
     for suffix in ["video", "audio"] {
         assert_eq!(
             by_name(&assets, &format!("m_settings_{suffix}_btn_back"))["args"]["action"],
-            "story:settings_back"
+            serde_json::json!({"story": "settings_back"})
         );
     }
 }

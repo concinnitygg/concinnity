@@ -5,8 +5,8 @@ use crate::components::{Vocabulary, vocabulary_synonyms};
 use crate::ecs::{Ref, de_opt_ref};
 
 /// How a scene jump reaches the new scene. The single accepted vocabulary for
-/// a [Behavior](#behavior) scene node's `transition` and a `scene:<name>` UI
-/// action.
+/// a [Behavior](#behavior) scene node's `transition` and a `{"scene": "<name>"}`
+/// UI action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Vocabulary)]
 pub enum SceneTransition {
     /// Fade the whole composited image to black, swap scenes at the bottom of
@@ -39,7 +39,7 @@ impl SceneTransition {
 /// prop that names no scene is visible in every scene.
 ///
 /// The first declared Scene is active at world start. Scene changes are driven
-/// by actions: a UI `scene:<name>` action ([HitRegion](#hitregion) /
+/// by actions: a UI `{"scene": "<name>"}` action ([HitRegion](#hitregion) /
 /// [KeyBinding](#keybinding)) or a [Behavior](#behavior) scene node jumps to
 /// the named scene, with the transition ("Cut" or "FadeBlack") declared on the
 /// jump.

@@ -182,7 +182,7 @@ impl ScreenRegistry {
                     // Opening by toggle navigates like Show (replace the top),
                     // so an Escape-toggled menu returns from a settings
                     // sub-screen to the menu, and from the menu to the world.
-                    // Stacking on top is the explicit `screen:push:` action.
+                    // Stacking on top is the explicit `push` action.
                     self.stack.pop();
                     self.stack.retain(|s| *s != id);
                     self.stack.push(id);

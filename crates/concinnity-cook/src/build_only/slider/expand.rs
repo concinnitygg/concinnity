@@ -1,12 +1,13 @@
 // Build-time expansion: Slider -> a name TextLabel + a value TextLabel + a
 // track Sprite + a handle Sprite + a HitRegion that fires a
-// "setting:<key>:drag" action (carrying the handle so the runtime can move it).
+// setting `drag` action (carrying the handle so the runtime can move it).
 //
 // The handle and value label show a placeholder position here; the runtime
 // corrects them to the live value on the first frame and while dragging. Names
 // are prefixed with the Slider's own name so generated elements never collide
 // with hand-authored assets, and every element joins the Slider's `screen`.
 
+use concinnity_core::components::NamedAction;
 use concinnity_core::settings::{SettingKey, SettingKind};
 
 use crate::authoring::registry::RegisteredType;
@@ -16,7 +17,6 @@ use crate::build_only::expand::{asset_name, registered_type, schema_args};
 use crate::build_only::membership::scope_to_screen;
 use crate::build_only::row_setting::row_setting;
 use crate::build_only::ui_spec::{font_sizes, label_value, sprite};
-use asset::ui_action;
 use concinnity_core::components::SettingVerb;
 
 // Where the control group (track + value) starts, as a fraction of the row
@@ -65,7 +65,9 @@ pub(crate) fn expand_sliders(assets: &mut Vec<serde_json::Value>) -> Result<(), 
         let font_px = if slider.font.is_empty() {
             default_px
         } else {
-            *font_px_by_name.get(&slider.font).unwrap_or(&default_px)
+            *font_px_by_name
+                .get(slider.font.as_str())
+                .unwrap_or(&default_px)
         };
 
         let mut children = expand_one(&name, &slider, setting, font_px);
@@ -160,7 +162,10 @@ fn expand_one(name: &str, s: &Slider, setting: SettingKey, font_px: f32) -> Vec<
             &asset::hit_region(
                 format!("{}_drag", name),
                 [track_x, s.y, track_w, s.height],
-                ui_action::setting(setting, SettingVerb::Drag),
+                NamedAction::Setting {
+                    key: setting,
+                    verb: SettingVerb::Drag,
+                },
             )
             .set("label", value_name)
             .set("drag_handle", handle_name),
@@ -220,7 +225,10 @@ mod tests {
         // The drag region carries the value label, the handle, and the action.
         let drag = by_name(&assets, "sld_exposure_drag");
         assert_eq!(drag["type"], "HitRegion");
-        assert_eq!(drag["args"]["action"], "setting:exposure:drag");
+        assert_eq!(
+            drag["args"]["action"],
+            serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}})
+        );
         assert_eq!(drag["args"]["label"], "sld_exposure_value");
         assert_eq!(drag["args"]["drag_handle"], "sld_exposure_handle");
         // The region spans the track, at the full row height.

@@ -305,14 +305,13 @@ fn prop_args(
         "scale": scale
     });
     for (field, value) in [
-        ("model", &entry.model),
-        ("mesh", &entry.mesh),
-        ("material", &entry.material),
-        ("texture", &entry.texture),
-        ("parent", &entry.parent),
+        ("model", entry.model.as_str()),
+        ("mesh", entry.mesh.as_str()),
+        ("material", entry.material.as_str()),
+        ("parent", entry.parent.as_str()),
     ] {
         if !value.is_empty() {
-            args[field] = value.as_str().into();
+            args[field] = value.into();
         }
     }
     for (field, value) in [
@@ -557,7 +556,7 @@ mod tests {
     fn prop_entry_fields_and_collider_carry_through() {
         let mut assets = vec![
             serde_json::json!({"type":"Prefab","args":{"$id":"crate_set","props":[
-                {"name":"a","kind":"prop","model":"m","material":"mat","texture":"t",
+                {"name":"a","kind":"prop","model":"m","material":"mat",
                  "parent":"p","interactable":true,"pickup":true,
                  "collider":{"shape":"cuboid","radius":0.25}},
                 {"name":"b","kind":"prop","mesh":"box"}
@@ -568,7 +567,6 @@ mod tests {
         let a = &assets[0]["args"];
         assert_eq!(a["model"], "m");
         assert_eq!(a["material"], "mat");
-        assert_eq!(a["texture"], "t");
         assert_eq!(a["parent"], "p");
         assert_eq!(a["interactable"], true);
         assert_eq!(a["pickup"], true);

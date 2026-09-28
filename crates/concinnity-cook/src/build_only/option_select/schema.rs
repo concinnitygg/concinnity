@@ -1,12 +1,15 @@
 //! Settings-row option-select schema.
 
+use concinnity_core::components::{Font, Screen};
+use concinnity_core::ecs::NameRef;
+
 /// A settings row that cycles through a fixed set of values on click.
 ///
 /// `OptionSelect` is a build-time shorthand for one row of a settings menu: a
 /// left-aligned name, a right-aligned current value, and a clickable region
 /// that advances the value. It expands into a [TextLabel](#textlabel) for the
-/// name, a `TextLabel` for the value, and a [HitRegion](#hitregion) that fires a
-/// `"setting:<setting>:next"` action.
+/// name, a `TextLabel` for the value, and a [HitRegion](#hitregion) whose
+/// action advances `setting`.
 ///
 /// The `setting` field names an engine setting the runtime knows how to read,
 /// cycle, and apply (e.g. `"vsync"`); its option list lives in the engine, not
@@ -29,7 +32,7 @@
 pub struct OptionSelect {
     /// [Screen](#screen) the generated elements belong to. Empty leaves them
     /// screen-less, which draws them with the HUD rather than with a screen.
-    pub screen: String,
+    pub screen: NameRef<Screen>,
     /// Engine setting this row controls (e.g. `"vsync"`). Must be a setting the
     /// runtime recognizes; an unknown key renders but does nothing on click.
     pub setting: String,
@@ -44,7 +47,7 @@ pub struct OptionSelect {
     /// Row height in window pixels (the clickable region's height).
     pub height: f32,
     /// [Font](#font) for the row text. Empty uses the built-in font.
-    pub font: String,
+    pub font: NameRef<Font>,
     /// Pixel size of the row text when it uses the built-in font (that is, when
     /// `font` is empty). Ignored when `font` names a [Font](#font), which
     /// carries its own size.
@@ -68,14 +71,14 @@ pub struct OptionSelect {
 impl Default for OptionSelect {
     fn default() -> Self {
         Self {
-            screen: String::new(),
+            screen: NameRef::default(),
             setting: String::new(),
             label: String::new(),
             x: 0.0,
             y: 0.0,
             width: 360.0,
             height: 48.0,
-            font: String::new(),
+            font: NameRef::default(),
             font_px: 48.0,
             text_color: [0.85, 0.85, 0.85],
             value_color: [0.85, 0.85, 0.85],

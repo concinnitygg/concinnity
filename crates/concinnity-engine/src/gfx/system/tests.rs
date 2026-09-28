@@ -2538,12 +2538,12 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
     assert!(world.resources.get::<FrameRateCap>().is_some());
 }
 
-// One settings row: the `setting:<key>:<verb>` HitRegion the menu builds plus
+// One settings row: the setting-action HitRegion the menu builds plus
 // the value TextLabel it points at. Init syncs the label to the live value while
 // the regions are still present (UiInputSystem drains them afterwards).
 fn push_settings_row(b: &mut WorldBuilder, key: &str, verb: &str, label: AssetId) {
     b.push(HitRegion {
-        action: act(&format!("setting:{key}:{verb}")),
+        action: act(serde_json::json!({"setting": {"key": key, "verb": verb}})),
         label: Some(Ref::new(label)),
         ..Default::default()
     });
@@ -2705,7 +2705,7 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
         ("vignette", AssetId(202), AssetId(203)),
     ] {
         b.push(HitRegion {
-            action: act(&format!("setting:{key}:drag")),
+            action: act(serde_json::json!({"setting": {"key": key, "verb": "drag"}})),
             x: 0.0,
             width: 100.0,
             drag_handle: Some(Ref::new(handle)),
@@ -2729,7 +2729,7 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
     }
     // A drag region missing its handle / label is skipped rather than panicking.
     b.push(HitRegion {
-        action: act("setting:exposure:drag"),
+        action: act(serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}})),
         ..Default::default()
     });
     let mut world = b.build();
@@ -2796,7 +2796,7 @@ fn every_owned_slider_key_recovers_a_live_value() {
         let handle = AssetId(300 + i as u32 * 2);
         let label = AssetId(301 + i as u32 * 2);
         b.push(HitRegion {
-            action: act(&format!("setting:{key}:drag")),
+            action: act(serde_json::json!({"setting": {"key": key, "verb": "drag"}})),
             x: 0.0,
             width: 100.0,
             drag_handle: Some(Ref::new(handle)),
@@ -2852,7 +2852,9 @@ fn rebind_rows_show_their_bound_keys_at_init() {
     for (i, action) in Bindable::ALL.iter().enumerate() {
         let label = AssetId(400 + i as u32);
         b.push(HitRegion {
-            action: act(&format!("setting:{}:rebind", action.setting_key())),
+            action: act(
+                serde_json::json!({"setting": {"key": action.setting_key(), "verb": "rebind"}}),
+            ),
             label: Some(Ref::new(label)),
             ..Default::default()
         });
@@ -4772,6 +4774,6 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
 }
 
 // A test action from its text form, with integer targets.
-fn act(text: &str) -> Option<UiAction> {
-    Some(UiAction::parse(text, |_| None).unwrap())
+fn act(action: serde_json::Value) -> Option<UiAction> {
+    Some(serde_json::from_value(action).unwrap())
 }

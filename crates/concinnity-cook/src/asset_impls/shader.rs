@@ -6,9 +6,9 @@ use crate::asset::BuildCtx;
 use crate::compile::shader::{compile_world_shader, read_shader_source};
 
 // Resolve a declared source path to the on-disk path the build will read. A
-// bare filename is looked up recursively under the build's asset search root
-// first, then under `<artifacts_dir>` when set, then directly under
-// `<assets>/<raw>`. A path with a directory component is used verbatim.
+// bare filename is looked up recursively under the build's asset search root,
+// then falls back to `<assets>/<raw>`. A path with a directory component is
+// used verbatim.
 pub(super) fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
     let p = std::path::Path::new(raw);
     if p.parent().map(|d| d.as_os_str().is_empty()).unwrap_or(true) {
@@ -17,12 +17,6 @@ pub(super) fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
             .and_then(|dir| concinnity_host::store::source::find_in(dir, raw))
         {
             return path;
-        }
-        if let Some(dir) = ctx.artifacts_dir {
-            let artifact_path = format!("{dir}/{raw}");
-            if std::path::Path::new(&artifact_path).exists() {
-                return artifact_path;
-            }
         }
         if let Some(assets) = ctx.assets_dir {
             return assets.join(raw).to_string_lossy().into_owned();
@@ -131,19 +125,15 @@ mod tests {
     use super::*;
     use crate::asset::{BuildAsset, SourceFiles};
 
-    fn ctx<'a>(artifacts_dir: Option<&'a str>) -> BuildCtx<'a> {
-        with_assets(None, artifacts_dir)
+    fn ctx() -> BuildCtx<'static> {
+        with_assets(None)
     }
 
-    fn with_assets<'a>(
-        assets_dir: Option<&'a std::path::Path>,
-        artifacts_dir: Option<&'a str>,
-    ) -> BuildCtx<'a> {
+    fn with_assets(assets_dir: Option<&std::path::Path>) -> BuildCtx<'_> {
         BuildCtx {
             name: "s",
             platform: concinnity_core::platform::Platform::Metal,
             assets_dir,
-            artifacts_dir,
             all_assets: &[],
         }
     }
@@ -190,73 +180,38 @@ mod tests {
         // search applies, with or without an asset root.
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
-            resolve_source_path_for("shaders/x.hlsl", &ctx(None)),
+            resolve_source_path_for("shaders/x.hlsl", &ctx()),
             "shaders/x.hlsl"
         );
         assert_eq!(
-            resolve_source_path_for("shaders/x.hlsl", &with_assets(Some(dir.path()), None)),
+            resolve_source_path_for("shaders/x.hlsl", &with_assets(Some(dir.path()))),
             "shaders/x.hlsl"
         );
     }
 
-    // A bare filename is found by recursive search under the asset root, which
-    // wins over the artifacts dir.
+    // A bare filename is found by recursive search under the asset root.
     #[test]
-    fn resolve_source_path_for_prefers_a_nested_asset_over_an_artifact() {
+    fn resolve_source_path_for_finds_a_nested_asset() {
         let assets = tempfile::tempdir().unwrap();
         let nested = assets.path().join("shaders");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(nested.join("user.hlsl"), "// hlsl").unwrap();
-        let artifact_dir = tempfile::tempdir().unwrap();
-        std::fs::write(artifact_dir.path().join("user.hlsl"), "// hlsl").unwrap();
-        let artifacts = artifact_dir.path().to_string_lossy().into_owned();
-
         assert_eq!(
-            resolve_source_path_for(
-                "user.hlsl",
-                &with_assets(Some(assets.path()), Some(&artifacts))
-            ),
+            resolve_source_path_for("user.hlsl", &with_assets(Some(assets.path()))),
             nested.join("user.hlsl").to_string_lossy()
-        );
-    }
-
-    #[test]
-    fn resolve_source_path_for_prefers_an_artifact_over_the_assets_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("user.hlsl"), "// hlsl").unwrap();
-        let artifacts = dir.path().to_string_lossy().into_owned();
-        assert_eq!(
-            resolve_source_path_for("user.hlsl", &ctx(Some(&artifacts))),
-            format!("{artifacts}/user.hlsl")
         );
     }
 
     #[test]
     fn resolve_source_path_for_falls_back_to_the_assets_dir() {
         let assets = tempfile::tempdir().unwrap();
-        let expected = assets
-            .path()
-            .join("cn_no_such.hlsl")
-            .to_string_lossy()
-            .into_owned();
-        // No artifacts dir at all...
         assert_eq!(
-            resolve_source_path_for("cn_no_such.hlsl", &with_assets(Some(assets.path()), None)),
-            expected
-        );
-        // ...and an artifacts dir that doesn't hold the file both land there.
-        let dir = tempfile::tempdir().unwrap();
-        let artifacts = dir.path().to_string_lossy().into_owned();
-        assert_eq!(
-            resolve_source_path_for(
-                "cn_no_such.hlsl",
-                &with_assets(Some(assets.path()), Some(&artifacts))
-            ),
-            expected
+            resolve_source_path_for("cn_no_such.hlsl", &with_assets(Some(assets.path()))),
+            assets.path().join("cn_no_such.hlsl").to_string_lossy()
         );
         // With no search root at all the bare name is left as it was authored.
         assert_eq!(
-            resolve_source_path_for("cn_no_such.hlsl", &ctx(None)),
+            resolve_source_path_for("cn_no_such.hlsl", &ctx()),
             "cn_no_such.hlsl"
         );
     }
@@ -265,13 +220,13 @@ mod tests {
     // `shade`, and the error says which field to set.
     #[test]
     fn no_fragment_file_is_a_hard_error() {
-        let err = Shader::compile_payload(&serde_json::json!({}), &ctx(None)).unwrap_err();
+        let err = Shader::compile_payload(&serde_json::json!({}), &ctx()).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(
             err.to_string().contains("no `fragment` file declared"),
             "got: {err}"
         );
-        let err = Shader::compile_payload(&args(""), &ctx(None)).unwrap_err();
+        let err = Shader::compile_payload(&args(""), &ctx()).unwrap_err();
         assert!(
             err.to_string().contains("no `fragment` file declared"),
             "got: {err}"
@@ -282,7 +237,7 @@ mod tests {
     // runs.
     #[test]
     fn a_missing_file_names_the_path() {
-        let err = Shader::compile_payload(&args("/no/such/user.hlsl"), &ctx(None)).unwrap_err();
+        let err = Shader::compile_payload(&args("/no/such/user.hlsl"), &ctx()).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         assert!(err.to_string().contains("/no/such/user.hlsl"), "got: {err}");
 
@@ -292,7 +247,7 @@ mod tests {
         std::fs::write(&frag, "// f").unwrap();
         let mut both = both;
         both["fragment"] = serde_json::Value::String(frag.to_string_lossy().into_owned());
-        let err = Shader::compile_payload(&both, &ctx(None)).unwrap_err();
+        let err = Shader::compile_payload(&both, &ctx()).unwrap_err();
         assert!(err.to_string().contains("/no/such/v.hlsl"), "got: {err}");
     }
 
@@ -306,22 +261,22 @@ mod tests {
         let both = serde_json::json!({"vertex": raw_v, "fragment": raw_f});
         // Nothing on disk yet: an empty set, since there is no input to hash.
         assert_eq!(
-            Shader::source_files(&both, &ctx(None)),
+            Shader::source_files(&both, &ctx()),
             SourceFiles::Only(Vec::new())
         );
         std::fs::write(&frag, "// f").unwrap();
         assert_eq!(
-            Shader::source_files(&both, &ctx(None)),
+            Shader::source_files(&both, &ctx()),
             SourceFiles::Only(vec![raw_f.clone()])
         );
         std::fs::write(&vert, "// v").unwrap();
         assert_eq!(
-            Shader::source_files(&both, &ctx(None)),
+            Shader::source_files(&both, &ctx()),
             SourceFiles::Only(vec![raw_v, raw_f])
         );
         // A Shader declaring nothing hashes nothing.
         assert_eq!(
-            Shader::source_files(&serde_json::json!({}), &ctx(None)),
+            Shader::source_files(&serde_json::json!({}), &ctx()),
             SourceFiles::Only(Vec::new())
         );
         // The same files compile to different artifacts per backend.

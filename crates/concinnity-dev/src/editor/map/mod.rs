@@ -158,7 +158,7 @@ mod tests {
             RegisteredType::MainMenu,
             "MainMenu#0",
             json!({"initial": true, "items": [
-                {"label": "Start", "action": "scene:bistro"},
+                {"label": "Start", "action": {"scene": "bistro"}},
                 {"label": "Settings", "action": "settings"},
                 {"label": "Quit", "action": "quit"},
             ]}),

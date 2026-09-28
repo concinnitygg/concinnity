@@ -19,8 +19,10 @@ pub use crate::build_only::character_model::character_schema::{
 };
 pub use crate::build_only::character_model::schema::CharacterModel;
 pub use crate::build_only::include::schema::Include;
-pub use crate::build_only::light_rig::schema::LightRig;
-pub use crate::build_only::main_menu::schema::{MainMenu, MainMenuItem, SettingsProfile};
+pub use crate::build_only::light_rig::schema::{LightRig, RigLight};
+pub use crate::build_only::main_menu::schema::{
+    MainMenu, MainMenuItem, MenuItemAction, SettingsProfile,
+};
 pub use crate::build_only::material_palette::schema::{MaterialPalette, PaletteEntry};
 pub use crate::build_only::option_select::schema::OptionSelect;
 pub use crate::build_only::panel::schema::Panel;
@@ -72,10 +74,16 @@ macro_rules! for_each_build_only_type {
 }
 
 // The marker impls, generated from the list so the group and the trait cannot
-// disagree.
+// disagree. Each type is also a reference target under its registry name, as
+// core's are, so a field can name one.
 macro_rules! __impl_build_only {
     (build_only: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? } $(,)?) => {
-        $( impl BuildOnlyAsset for $ty {} )+
+        $(
+            impl BuildOnlyAsset for $ty {}
+            impl concinnity_core::ecs::RefTarget for $ty {
+                const TYPES: &'static [&'static str] = &[stringify!($variant)];
+            }
+        )+
     };
 }
 

@@ -2027,7 +2027,6 @@ mod tests {
         concinnity_cook::build_pipeline_from_str(
             &world,
             crate::project::assets_dir().as_deref(),
-            None,
             crate::cook_platform(),
         )
         .map(|_| ())

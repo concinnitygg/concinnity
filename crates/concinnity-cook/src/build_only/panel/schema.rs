@@ -1,5 +1,8 @@
 //! UI panel container schema.
 
+use concinnity_core::components::{Font, Screen};
+use concinnity_core::ecs::NameRef;
+
 /// A titled background container for grouping UI overlay elements.
 ///
 /// `Panel` is a build-time shorthand: it expands into a filled, optionally
@@ -28,7 +31,7 @@
 pub struct Panel {
     /// [Screen](#screen) the generated elements belong to. Empty leaves them
     /// screen-less, which draws them with the HUD rather than with a screen.
-    pub screen: String,
+    pub screen: NameRef<Screen>,
     /// Left edge of the panel in window pixels.
     pub x: f32,
     /// Top edge of the panel in window pixels.
@@ -45,7 +48,7 @@ pub struct Panel {
     /// Heading text drawn at the top-left. Empty draws no heading.
     pub title: String,
     /// [Font](#font) for the title. Empty uses the built-in font.
-    pub title_font: String,
+    pub title_font: NameRef<Font>,
     /// Linear-space RGB color of the title text.
     pub title_color: [f32; 3],
     /// Scale applied to the title text.
@@ -57,7 +60,7 @@ pub struct Panel {
 impl Default for Panel {
     fn default() -> Self {
         Self {
-            screen: String::new(),
+            screen: NameRef::default(),
             x: 0.0,
             y: 0.0,
             width: 400.0,
@@ -65,7 +68,7 @@ impl Default for Panel {
             color: [0.08, 0.09, 0.12, 0.96],
             corner_radius: 8.0,
             title: String::new(),
-            title_font: String::new(),
+            title_font: NameRef::default(),
             title_color: [0.95, 0.95, 0.97],
             title_scale: 1.0,
             padding: 16.0,

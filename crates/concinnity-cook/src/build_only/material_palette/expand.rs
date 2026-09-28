@@ -64,7 +64,7 @@ fn material_value(palette_name: &str, entry: &PaletteEntry) -> serde_json::Value
 fn preset_entry(alias: &str, albedo: &str, roughness: f32, metallic: f32) -> PaletteEntry {
     PaletteEntry {
         alias: alias.to_string(),
-        albedo: albedo.to_string(),
+        albedo: albedo.into(),
         roughness,
         metallic,
         ..Default::default()

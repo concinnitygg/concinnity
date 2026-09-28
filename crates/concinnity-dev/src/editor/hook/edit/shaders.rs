@@ -27,8 +27,8 @@ impl EditorHook {
         self.shaders.reports.clone()
     }
 
-    // Every Shader the working entries declare, each file resolved once and
-    // kept (`ShadersState::resolved`).
+    // Every Shader the working entries declare, each file resolved once it
+    // exists and kept (`ShadersState::resolved`).
     pub(in crate::editor::hook) fn declared_shaders(&mut self) -> Vec<ShaderDecl> {
         let dir = crate::project::assets_dir();
         let state = &mut self.shaders;

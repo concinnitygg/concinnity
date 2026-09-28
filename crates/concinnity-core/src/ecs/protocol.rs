@@ -386,7 +386,7 @@ pub struct HudPrefs {
 }
 
 /// A settings dropdown's open floating option list, or `None` when none is open.
-/// `UiInputSystem` owns the interaction state (open on a `setting:<key>:open`
+/// `UiInputSystem` owns the interaction state (open on a setting row's `open`
 /// click, close on a pick / outside click / Escape / scroll) and publishes this
 /// each frame; GraphicsSystem reads it the next tick to draw the list on top of
 /// the menu. GraphicsSystem runs first, so the list appears one frame after the

@@ -1059,7 +1059,7 @@ impl UiInputSystem {
 
         // Bucket each panel-content region into its row by center y. Only
         // content regions (a settings action or a group toggle) are bucketed;
-        // chrome regions (tabs, Back -- `screen:show`) are left fixed even when an
+        // chrome regions (tabs, Back -- a `show`) are left fixed even when an
         // overflow row's authored y reaches their position. Panels read
         // immutably while the regions are mutated (disjoint fields).
         let panels = &self.panels;
@@ -1406,8 +1406,8 @@ mod tests {
     use concinnity_core::window::display_mode;
 
     // A test action from its text form, with integer targets.
-    fn act(text: &str) -> Option<UiAction> {
-        Some(UiAction::parse(text, |_| None).unwrap())
+    fn act(action: serde_json::Value) -> Option<UiAction> {
+        Some(serde_json::from_value(action).unwrap())
     }
 
     fn make_frame_input(mx: f32, my: f32, clicked: bool) -> FrameInput {
@@ -1585,7 +1585,7 @@ mod tests {
             label: Some(Ref::new(AssetId(1))),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
-            action: act("screen:show:81"),
+            action: act(serde_json::json!({"show": 81})),
             drag_handle: None,
             screen: Some(Ref::new(menu)),
             disabled: false,
@@ -1665,7 +1665,7 @@ mod tests {
             label: Some(Ref::new(AssetId(1))),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
-            action: act("setting:window_mode:open"),
+            action: act(serde_json::json!({"setting": {"key": "window_mode", "verb": "open"}})),
             drag_handle: None,
             screen: Some(Ref::new(screen)),
             disabled: false,
@@ -1760,7 +1760,7 @@ mod tests {
             label: Some(Ref::new(AssetId(1))),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
-            action: act("setting:resolution:open"),
+            action: act(serde_json::json!({"setting": {"key": "resolution", "verb": "open"}})),
             drag_handle: None,
             screen: Some(Ref::new(screen)),
             disabled: false,
@@ -2041,7 +2041,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act("scene:3"),
+            action: act(serde_json::json!({"scene": 3})),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2071,7 +2071,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act("quit"),
+            action: act(serde_json::json!("quit")),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2188,7 +2188,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act("scene:7"),
+            action: act(serde_json::json!({"scene": 7})),
             drag_handle: None,
             screen: Some(Ref::new(screen_id)),
             disabled: false,
@@ -2247,7 +2247,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act("scene:7"),
+            action: act(serde_json::json!({"scene": 7})),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2274,7 +2274,7 @@ mod tests {
 
     #[test]
     fn fire_action_dispatches_view_variants() {
-        // screen:hide → ScreenCommand::Hide
+        // "hide" → ScreenCommand::Hide
         let mut world = World::new();
         world.add_component(HitRegion {
             x: 0.0,
@@ -2284,7 +2284,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act("screen:hide"),
+            action: act(serde_json::json!("hide")),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2299,7 +2299,7 @@ mod tests {
             Some(ScreenCommand::Hide)
         ));
 
-        // screen:show:42 → ScreenCommand::Show(42)
+        // {"show": 42} → ScreenCommand::Show(42)
         let mut world = World::new();
         world.add_component(HitRegion {
             x: 0.0,
@@ -2309,7 +2309,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act("screen:show:42"),
+            action: act(serde_json::json!({"show": 42})),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2322,7 +2322,7 @@ mod tests {
         let cmd = produced_screen_command(&world);
         assert!(matches!(cmd, Some(ScreenCommand::Show(AssetId(42)))));
 
-        // screen:toggle:43 → ScreenCommand::Toggle(43)
+        // {"toggle": 43} → ScreenCommand::Toggle(43)
         let mut world = World::new();
         world.add_component(HitRegion {
             x: 0.0,
@@ -2332,7 +2332,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act("screen:toggle:43"),
+            action: act(serde_json::json!({"toggle": 43})),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2360,7 +2360,7 @@ mod tests {
             label: Some(Ref::new(value_label)),
             hover_color: None,
             hover_scale: None,
-            action: act("setting:vsync:next"),
+            action: act(serde_json::json!({"setting": {"key": "vsync", "verb": "next"}})),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2382,7 +2382,7 @@ mod tests {
         // HitRegion is 100x40, so click within those bounds.
         let mut world = World::new();
         world.add_component(HitRegion {
-            action: act("setting:vsync:prev"),
+            action: act(serde_json::json!({"setting": {"key": "vsync", "verb": "prev"}})),
             ..Default::default()
         });
         world.start(SYSTEMS).unwrap();
@@ -2408,7 +2408,9 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act("setting:ray_traced_reflections:next"),
+            action: act(
+                serde_json::json!({"setting": {"key": "ray_traced_reflections", "verb": "next"}}),
+            ),
             drag_handle: None,
             screen: None,
             disabled: true,
@@ -2440,7 +2442,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act("setting:show_fps:next"),
+            action: act(serde_json::json!({"setting": {"key": "show_fps", "verb": "next"}})),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2474,7 +2476,7 @@ mod tests {
             label: Some(Ref::new(value_label)),
             hover_color: None,
             hover_scale: None,
-            action: act("setting:exposure:drag"),
+            action: act(serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}})),
             drag_handle: Some(Ref::new(AssetId(8))),
             screen: None,
             disabled: false,
@@ -2549,7 +2551,7 @@ mod tests {
             label: Some(Ref::new(header)),
             hover_color: None,
             hover_scale: None,
-            action: act("group:toggle:0"),
+            action: act(serde_json::json!({"group_toggle": 0})),
             drag_handle: None,
             screen: Some(Ref::new(screen)),
             disabled: false,
@@ -2566,7 +2568,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act("setting:vsync:next"),
+            action: act(serde_json::json!({"setting": {"key": "vsync", "verb": "next"}})),
             drag_handle: None,
             screen: Some(Ref::new(screen)),
             disabled: false,
@@ -2731,7 +2733,7 @@ mod tests {
                 label: None,
                 hover_color: None,
                 hover_scale: None,
-                action: act(&format!("setting:{key}:next")),
+                action: act(serde_json::json!({"setting": {"key": key, "verb": "next"}})),
                 drag_handle: None,
                 screen: Some(Ref::new(screen)),
                 disabled: false,
@@ -2887,7 +2889,7 @@ mod tests {
             label: Some(Ref::new(value)),
             hover_color: None,
             hover_scale: None,
-            action: act("setting:key_forward:rebind"),
+            action: act(serde_json::json!({"setting": {"key": "key_forward", "verb": "rebind"}})),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -3060,7 +3062,7 @@ mod tests {
         );
         world.add_component(KeyBinding {
             key: "Escape".to_string(),
-            action: act("screen:toggle:50"),
+            action: act(serde_json::json!({"toggle": 50})),
             ..Default::default()
         });
         world.start(SYSTEMS).unwrap();
@@ -3093,7 +3095,7 @@ mod tests {
             let mut world = World::new();
             world.add_component(KeyBinding {
                 key: key.name().to_string(),
-                action: act("story:advance"),
+                action: act(serde_json::json!({"story": "advance"})),
                 ..Default::default()
             });
             world.start(SYSTEMS).unwrap();
@@ -3119,7 +3121,7 @@ mod tests {
         let mut world = World::new();
         world.add_component(KeyBinding {
             key: "Space".to_string(),
-            action: act("story:advance"),
+            action: act(serde_json::json!({"story": "advance"})),
             ..Default::default()
         });
         world.start(SYSTEMS).unwrap();
@@ -3181,7 +3183,7 @@ mod tests {
         }
         world.add_component(KeyBinding {
             key: "Escape".to_string(),
-            action: act("screen:toggle:60"),
+            action: act(serde_json::json!({"toggle": 60})),
             ..Default::default()
         });
         world.start(SYSTEMS).unwrap();
@@ -3369,7 +3371,7 @@ mod tests {
         world.push_identified(AssetId(100), Screen::default());
         world.add_component(KeyBinding {
             key: "T".to_string(),
-            action: act("screen:toggle:100"),
+            action: act(serde_json::json!({"toggle": 100})),
             ..Default::default()
         });
         let mut field = TextInput {
@@ -3413,7 +3415,7 @@ mod tests {
         world.push_identified(AssetId(111), Screen::default());
         world.add_component(KeyBinding {
             key: "Space".to_string(),
-            action: act("screen:show:111"),
+            action: act(serde_json::json!({"show": 111})),
             screen: Some(Ref::new(AssetId(110))),
         });
         world.start(SYSTEMS).unwrap();
@@ -3449,7 +3451,7 @@ mod tests {
         );
     }
 
-    // `screen:push:` stacks a screen over the current one: both stay visible,
+    // `push` stacks a screen over the current one: both stay visible,
     // and hiding the pushed screen reveals the one beneath.
     #[test]
     fn push_stacks_over_the_current_screen() {
@@ -3601,8 +3603,8 @@ mod tests {
             },
         );
         for (id, y, action) in [
-            (1u32, 100.0f32, "screen:show:91"),
-            (2, 200.0, "screen:hide"),
+            (1u32, 100.0f32, serde_json::json!({"show": 91})),
+            (2, 200.0, serde_json::json!("hide")),
         ] {
             world.push_identified(AssetId(id), panel_label(y, menu, "Btn"));
             world.add_component(HitRegion {
@@ -3738,7 +3740,7 @@ mod tests {
                 label: Some(Ref::new(AssetId(1))),
                 hover_color: Some([1.0, 0.85, 0.3]),
                 hover_scale: Some(1.0),
-                action: act(&format!("setting:vsync:{suffix}")),
+                action: act(serde_json::json!({"setting": {"key": "vsync", "verb": suffix}})),
                 drag_handle: None,
                 screen: Some(Ref::new(screen)),
                 disabled: false,
@@ -3754,7 +3756,7 @@ mod tests {
             label: Some(Ref::new(AssetId(2))),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
-            action: act("setting:exposure:drag"),
+            action: act(serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}})),
             drag_handle: None,
             screen: Some(Ref::new(screen)),
             disabled: false,
@@ -3897,7 +3899,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act("story:advance"),
+            action: act(serde_json::json!({"story": "advance"})),
             drag_handle: None,
             screen: Some(Ref::new(stage)),
             disabled: false,
@@ -3936,7 +3938,7 @@ mod tests {
             label: Some(Ref::new(AssetId(7))),
             hover_color: None,
             hover_scale: None,
-            action: act("setting:pad_jump:rebind"),
+            action: act(serde_json::json!({"setting": {"key": "pad_jump", "verb": "rebind"}})),
             drag_handle: None,
             screen: None,
             disabled: false,

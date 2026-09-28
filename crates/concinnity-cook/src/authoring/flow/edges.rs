@@ -2,8 +2,9 @@
 
 use serde_json::Value;
 
-use super::action::{Move, parse_action};
+use super::action::{Move, read_action};
 use crate::authoring::registry::RegisteredType;
+use crate::authoring::registry::build_only::MenuItemAction;
 use crate::authoring::world::WorldJsonlAsset;
 use crate::build_only::main_menu::item_action;
 
@@ -43,16 +44,16 @@ pub fn flow_edges(assets: &[WorldJsonlAsset]) -> Vec<FlowEdge> {
     edges
 }
 
-/// The move a menu item's action makes, with the menu's conveniences resolved
-/// against it. Shared with [`places`](super::places), which needs to know
-/// whether an item opens the settings screen the menu generates.
-pub(super) fn menu_action(menu: &str, action: &str) -> Option<Move> {
-    parse_action(&item_action(menu, action))
+/// The move a menu item's action makes, with `"settings"` resolved to the
+/// settings screen the menu generates.
+fn menu_action(menu: &str, action: &Value) -> Option<Move> {
+    let action = serde_json::from_value::<MenuItemAction>(action.clone()).ok()?;
+    Move::of(&item_action(menu, &action))
 }
 
 // A clickable region or a key: the action it fires, from the screen it is on.
 fn region(asset: &WorldJsonlAsset, edges: &mut Vec<FlowEdge>) {
-    let Some(action) = text(&asset.args, "action").and_then(parse_action) else {
+    let Some(action) = asset.args.get("action").and_then(read_action) else {
         return;
     };
     edges.push(FlowEdge {
@@ -69,7 +70,7 @@ fn region(asset: &WorldJsonlAsset, edges: &mut Vec<FlowEdge>) {
 fn menu(asset: &WorldJsonlAsset, edges: &mut Vec<FlowEdge>) {
     let items = asset.args.get("items").and_then(Value::as_array);
     for item in items.into_iter().flatten() {
-        let Some(action) = text(item, "action").and_then(|a| menu_action(&asset.id, a)) else {
+        let Some(action) = item.get("action").and_then(|a| menu_action(&asset.id, a)) else {
             continue;
         };
         edges.push(FlowEdge {
@@ -150,7 +151,7 @@ mod tests {
         let world = [asset(
             RegisteredType::HitRegion,
             "start_btn",
-            json!({"screen": "menu", "action": "scene:bistro"}),
+            json!({"screen": "menu", "action": {"scene": "bistro"}}),
         )];
         let edges = flow_edges(&world);
         assert_eq!(edges.len(), 1);
@@ -166,7 +167,7 @@ mod tests {
         let world = [asset(
             RegisteredType::KeyBinding,
             "esc",
-            json!({"key": "Escape", "action": "screen:toggle:pause"}),
+            json!({"key": "Escape", "action": {"toggle": "pause"}}),
         )];
         let edges = flow_edges(&world);
         assert_eq!(edges[0].from, None);
@@ -181,7 +182,7 @@ mod tests {
             asset(
                 RegisteredType::HitRegion,
                 "c",
-                json!({"action": "setting:volume_master:next"}),
+                json!({"action": {"setting": {"key": "volume_master", "verb": "next"}}}),
             ),
             asset(RegisteredType::Prop, "d", json!({"action": "quit"})),
         ];
@@ -194,7 +195,7 @@ mod tests {
             RegisteredType::MainMenu,
             "main",
             json!({"items": [
-                {"label": "Start", "action": "scene:bistro"},
+                {"label": "Start", "action": {"scene": "bistro"}},
                 {"label": "Quit", "action": "quit"},
             ]}),
         )];
@@ -214,7 +215,7 @@ mod tests {
             RegisteredType::MainMenu,
             "main",
             json!({"items": [
-                {"label": "Continue", "action": "return"},
+                {"label": "Continue", "action": "hide"},
                 {"label": "Settings", "action": "settings"},
             ]}),
         )];
@@ -233,14 +234,14 @@ mod tests {
         let shorthand = [asset(
             RegisteredType::MainMenu,
             "main",
-            json!({"items": [{"label": "Start", "action": "scene:bistro"}]}),
+            json!({"items": [{"label": "Start", "action": {"scene": "bistro"}}]}),
         )];
         let by_hand = [
             asset(RegisteredType::Screen, "main", json!({"initial": true})),
             asset(
                 RegisteredType::HitRegion,
                 "main_btn_0",
-                json!({"screen": "main", "action": "scene:bistro"}),
+                json!({"screen": "main", "action": {"scene": "bistro"}}),
             ),
         ];
         let shorthand = flow_edges(&shorthand);

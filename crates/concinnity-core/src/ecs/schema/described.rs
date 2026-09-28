@@ -5,7 +5,6 @@
 use alloc::string::String;
 
 use super::{Described, FieldType};
-use crate::components::UiAction;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::handle::MeshHandle;
 
@@ -24,8 +23,6 @@ described!(bool => FieldType::Bool);
 described!(f32, f64 => FieldType::Float);
 described!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize => FieldType::Integer);
 described!(String, char => FieldType::Str);
-// An action is authored as its text form.
-described!(UiAction => FieldType::Str);
 described!(AssetId => FieldType::Reference(&[]));
 // A mesh field's target set depends on a File's kind, which a type cannot state.
 described!(MeshHandle => FieldType::Reference(&[]));

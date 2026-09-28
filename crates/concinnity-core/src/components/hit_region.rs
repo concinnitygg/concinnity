@@ -42,13 +42,7 @@ pub struct HitRegion {
     pub hover_color: Option<[f32; 3]>,
     /// Scale applied to the label while hovered. None = no change.
     pub hover_scale: Option<f32>,
-    /// Action to fire on click: `"quit"`, `"scene:<name>"`,
-    /// `"screen:show:<name>"`, `"screen:push:<name>"`, `"screen:toggle:<name>"`,
-    /// `"screen:hide"`, or a `"story:<verb>"` (`start`, `continue`, `advance`,
-    /// `choose:<i>`, `slot:<i>`, `auto`, `skip`, `log`, `save`, `load`, `pause`,
-    /// `settings`, `settings_back`). Empty fires nothing. A malformed action
-    /// fails the build.
-    #[serde(with = "crate::components::ui_action::optional")]
+    /// What a click fires. Unset fires nothing.
     pub action: Option<UiAction>,
     /// The [Sprite](#sprite) a [Slider](#slider) drag region moves along its
     /// track. `None` for ordinary regions. Set automatically when a `Slider`
@@ -127,7 +121,7 @@ mod tests {
     #[test]
     fn an_authored_region_parses_and_round_trips_through_postcard() {
         let h: HitRegion = crate::test_support::from_json(
-            r#"{"x":10,"y":20,"width":200,"height":48,"label":"play_label","action":"story:start",
+            r#"{"x":10,"y":20,"width":200,"height":48,"label":"play_label","action":{"story":"start"},
                 "hover_color":[1,0.85,0.3],"hover_scale":1.1,"drag_handle":"grip",
                 "screen":"menu","disabled":true,"follow_label":true,"fit":"cover"}"#,
         );

@@ -24,7 +24,8 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::ID_KEY;
-use concinnity_core::ecs::RefField;
+use concinnity_core::components::{AuthoredAction, NamedAction, StoryCommand};
+use concinnity_core::ecs::{ActionField, RefField};
 use serde_json::{Map, Value};
 
 // The form's default (and minimum) scrolling window: the number of field rows the
@@ -56,6 +57,11 @@ pub(crate) enum FieldKind {
     // `FormField::variants` = `(none)` + the world's assets of those types, which
     // the hook fills in (`set_ref_options`).
     Ref { targets: &'static [&'static str] },
+    // An action: cycled like a reference over `(none)`, the names in `extras`,
+    // and every action the world's Screens and Scenes can make, which the hook
+    // fills in (`set_action_options`). `FormField::choices` holds what each
+    // option writes.
+    Action { extras: &'static [&'static str] },
     // A variable-length array (non-vector) at `FormField::key`, rendered as a header
     // row with add / remove buttons; its element count is carried in
     // `FormField::variant_idx`. The elements' own leaves follow it as indexed
@@ -75,6 +81,7 @@ impl FieldKind {
             FieldKind::Bool
                 | FieldKind::Enum
                 | FieldKind::Ref { .. }
+                | FieldKind::Action { .. }
                 | FieldKind::Array
                 | FieldKind::Vec { color: false, .. }
         )
@@ -99,6 +106,9 @@ pub(crate) struct FormField {
     // into them (cycled on click). Empty for every other kind.
     pub variants: Vec<String>,
     pub variant_idx: usize,
+    // For `FieldKind::Action`: the value each of `variants` writes, in step
+    // with it. Empty for every other kind.
+    pub choices: Vec<Value>,
 }
 
 // The longest all-numeric array the form edits as a vector: a Material's eight
@@ -140,6 +150,8 @@ struct TypeMeta {
     ct: Option<RegisteredType>,
     // The derived reference fields; the add form turns each into a name picker.
     refs: &'static [RefField],
+    // The fields holding an action, each an action picker.
+    actions: &'static [ActionField],
 }
 
 impl TypeMeta {
@@ -148,7 +160,17 @@ impl TypeMeta {
     fn of(ty: &str) -> Self {
         let ct = RegisteredType::parse(ty);
         let refs = ct.map(|c| c.ref_fields()).unwrap_or(&[]);
-        TypeMeta { ct, refs }
+        let actions = ct.map(|c| c.action_fields()).unwrap_or(&[]);
+        TypeMeta { ct, refs, actions }
+    }
+
+    // The extra names the action at `field` takes, if it holds one.
+    fn action_extras(&self, field: &str) -> Option<&'static [&'static str]> {
+        let field = schema_path(field);
+        self.actions
+            .iter()
+            .find(|f| f.path == field)
+            .map(|f| f.extras)
     }
 
     // The target asset types of the reference at `field`, if it is one. A list
@@ -175,6 +197,72 @@ fn schema_path(path: &str) -> String {
 pub(crate) fn is_at_or_under(key: &str, path: &str) -> bool {
     key.strip_prefix(path)
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+}
+
+// The story commands an action picker offers: those with no index to choose.
+const PICKED_STORY_COMMANDS: [StoryCommand; 11] = [
+    StoryCommand::Start,
+    StoryCommand::Continue,
+    StoryCommand::Advance,
+    StoryCommand::ToggleAuto,
+    StoryCommand::ToggleSkip,
+    StoryCommand::ToggleLog,
+    StoryCommand::OpenSave,
+    StoryCommand::OpenLoad,
+    StoryCommand::TogglePause,
+    StoryCommand::OpenSettings,
+    StoryCommand::CloseSettings,
+];
+
+// Fill an action field's options: `(none)`, its `extras`, then every action
+// the world's `screens` and `scenes` let it make, each labeled by its verb and
+// target, selecting the one matching the field's current value (stashed as
+// JSON text in `initial`). A current value the list does not offer (a
+// generated settings-row action, a story choice) is kept as an option of its
+// own, so editing the entry never drops it.
+pub(crate) fn set_action_options(field: &mut FormField, screens: &[String], scenes: &[String]) {
+    let FieldKind::Action { extras } = field.kind else {
+        return;
+    };
+    let mut options: Vec<(String, Value)> = vec![(NONE_LABEL.to_string(), Value::Null)];
+    for extra in extras {
+        options.push((extra.to_string(), Value::from(*extra)));
+    }
+    let mut offer = |label: String, action: NamedAction| {
+        let value = serde_json::to_value(action).unwrap_or_default();
+        options.push((label, value));
+    };
+    offer("quit".into(), AuthoredAction::Quit);
+    offer("hide".into(), AuthoredAction::Hide);
+    for screen in screens {
+        offer(
+            format!("show {screen}"),
+            AuthoredAction::Show(screen.into()),
+        );
+        offer(
+            format!("push {screen}"),
+            AuthoredAction::Push(screen.into()),
+        );
+        offer(
+            format!("toggle {screen}"),
+            AuthoredAction::Toggle(screen.into()),
+        );
+    }
+    for scene in scenes {
+        offer(
+            format!("scene {scene}"),
+            AuthoredAction::Scene(scene.into()),
+        );
+    }
+    for cmd in PICKED_STORY_COMMANDS {
+        offer(format!("story {}", cmd.verb()), AuthoredAction::Story(cmd));
+    }
+    let current = serde_json::from_str::<Value>(&field.initial).unwrap_or(Value::Null);
+    if !current.is_null() && !options.iter().any(|(_, v)| *v == current) {
+        options.push((current.to_string(), current.clone()));
+    }
+    field.variant_idx = options.iter().position(|(_, v)| *v == current).unwrap_or(0);
+    (field.variants, field.choices) = options.into_iter().unzip();
 }
 
 // Fill a reference field's options: `(none)` followed by `names` (the world's
@@ -323,6 +411,25 @@ fn collect_value(
     out: &mut Vec<FormField>,
 ) {
     let leaf = path.rsplit('.').next().unwrap_or(path);
+    // An action is one picker whatever shape its current value takes, so it is
+    // found before a value could be flattened or skipped.
+    if let Some(extras) = meta.action_extras(path) {
+        let cur = root_seed.and_then(|s| get_at_path(s, path)).unwrap_or(def);
+        out.push(FormField {
+            key: path.to_string(),
+            kind: FieldKind::Action { extras },
+            initial: if cur.is_null() {
+                String::new()
+            } else {
+                cur.to_string()
+            },
+            boolval: false,
+            variants: Vec::new(),
+            variant_idx: 0,
+            choices: Vec::new(),
+        });
+        return;
+    }
     // Asset-ref fields default to null (which `kind_of` skips), so detect them first
     // from the type's derived references (matched by path). A list of references
     // is a list, whose elements are the pickers.
@@ -389,6 +496,7 @@ fn collect_value(
             boolval,
             variants,
             variant_idx,
+            choices: Vec::new(),
         });
         // A non-color vector can be disclosed into an editable leaf per element
         // (edited one component at a time); collapsed it is only the header row. A
@@ -410,6 +518,7 @@ fn collect_value(
                     boolval: false,
                     variants: Vec::new(),
                     variant_idx: 0,
+                    choices: Vec::new(),
                 });
             }
         }
@@ -446,6 +555,7 @@ fn collect_value(
             boolval: false,
             variants: Vec::new(),
             variant_idx: cur_arr.len(),
+            choices: Vec::new(),
         });
         for (i, elem) in cur_arr.iter().enumerate() {
             let elem_path = format!("{path}.{i}");
@@ -552,6 +662,13 @@ fn coerce(field: &FormField, text: &str, default: &Value) -> Value {
             .variants
             .get(field.variant_idx)
             .map(|v| Value::String(v.clone()))
+            .unwrap_or_else(|| default.clone()),
+        // An action emits the selected option's value (null for `(none)`), or
+        // keeps its value when no options were filled in.
+        FieldKind::Action { .. } => field
+            .choices
+            .get(field.variant_idx)
+            .cloned()
             .unwrap_or_else(|| default.clone()),
         // A reference emits the selected asset's name, or null for `(none)`.
         FieldKind::Ref { .. } => match field.variants.get(field.variant_idx) {
@@ -736,6 +853,11 @@ pub(crate) fn validate(ty: &str, name: &str, args: &Map<String, Value>) -> Resul
 }
 
 #[cfg(test)]
+mod action_tests;
+#[cfg(test)]
+mod save_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -898,6 +1020,7 @@ mod tests {
             boolval: false,
             variants: Vec::new(),
             variant_idx: 2,
+            choices: Vec::new(),
         };
         let default = json!([{"amplitude": 1.0}]);
         // An array header carries no editable value of its own.
@@ -952,9 +1075,9 @@ mod tests {
         assert_eq!(fit.variants, vec!["fit", "cover", "bottom"]);
         assert_eq!(fit.variant_idx, 0, "Sprite's default fit selects variant 0");
         // A free-form string field is left as an editable text field.
-        let hr = fields_for("HitRegion", None);
+        let kb = fields_for("KeyBinding", None);
         assert_eq!(
-            hr.iter().find(|f| f.key == "action").unwrap().kind,
+            kb.iter().find(|f| f.key == "key").unwrap().kind,
             FieldKind::Str
         );
     }
@@ -1127,6 +1250,7 @@ mod tests {
             boolval: false,
             variants: Vec::new(),
             variant_idx: 0,
+            choices: Vec::new(),
         };
         set_ref_options(&mut field, &["grass".into()]);
         assert!(field.variants.contains(&"imported_tex".to_string()));
@@ -1643,6 +1767,7 @@ mod tests {
                 boolval: false,
                 variants: Vec::new(),
                 variant_idx: 0,
+                choices: Vec::new(),
             },
             FormField {
                 key: "on".into(),
@@ -1651,6 +1776,7 @@ mod tests {
                 boolval: true,
                 variants: Vec::new(),
                 variant_idx: 0,
+                choices: Vec::new(),
             },
         ];
         let mut base = Map::new();
@@ -1710,6 +1836,7 @@ mod tests {
             boolval: false,
             variants: Vec::new(),
             variant_idx: 0,
+            choices: Vec::new(),
         };
         assert_eq!(coerce(&f, "abc", &Value::from(7)), Value::from(7));
         assert_eq!(coerce(&f, "42", &Value::from(7)), Value::from(42));
@@ -1752,7 +1879,7 @@ mod tests {
         let field = |k: &str| fields.iter().find(|f| f.key == k).map(|f| f.kind);
         assert_eq!(field("x"), Some(FieldKind::Float));
         assert_eq!(field("width"), Some(FieldKind::Float));
-        assert_eq!(field("action"), Some(FieldKind::Str));
+        assert_eq!(field("action"), Some(FieldKind::Action { extras: &[] }));
         assert_eq!(field("disabled"), Some(FieldKind::Bool));
         // Declared references become Ref pickers targeting their asset type.
         assert_eq!(

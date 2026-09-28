@@ -1783,10 +1783,10 @@ impl GraphicsSystem {
 
         let fx = drain_world_fx(ctx, texture_count);
         let sdf_fields = if capture_sources {
-            let assets_dir = self.assets_dir();
-            super::sdf_field_sources::SdfFieldMap::build(&fx.sdf_volumes, |raw| {
-                concinnity_host::store::source::find_existing(raw, assets_dir.as_deref(), None)
-            })
+            super::sdf_field_sources::SdfFieldMap::resolve(
+                &fx.sdf_volumes,
+                self.assets_dir().as_deref(),
+            )
         } else {
             Default::default()
         };

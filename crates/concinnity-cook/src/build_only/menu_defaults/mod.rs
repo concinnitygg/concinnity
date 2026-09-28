@@ -12,11 +12,11 @@
 // consumed: it is a stored component now, and the runtime pass drains it.
 
 use crate::authoring::world::args_with_id;
+use concinnity_core::components::NamedAction;
 use concinnity_core::components::{EngineDefaults, StoryCommand};
 
 use super::expand::{ExpandReport, asset_name, registered_type};
 use crate::authoring::registry::RegisteredType;
-use crate::authoring::spec::asset::ui_action;
 
 // Complete a world with the two defaults stated in build-only terms. Runs
 // before menu expansion, so an injected MainMenu expands like an authored one,
@@ -151,18 +151,18 @@ fn inject_story_pause_menu(
     });
 
     let mut items = vec![
-        serde_json::json!({ "label": "Resume", "action": ui_action::story(StoryCommand::TogglePause) }),
-        serde_json::json!({ "label": "Save", "action": ui_action::story(StoryCommand::OpenSave) }),
-        serde_json::json!({ "label": "Load", "action": ui_action::story(StoryCommand::OpenLoad) }),
-        serde_json::json!({ "label": "Settings", "action": ui_action::story(StoryCommand::OpenSettings) }),
+        serde_json::json!({ "label": "Resume", "action": NamedAction::Story(StoryCommand::TogglePause) }),
+        serde_json::json!({ "label": "Save", "action": NamedAction::Story(StoryCommand::OpenSave) }),
+        serde_json::json!({ "label": "Load", "action": NamedAction::Story(StoryCommand::OpenLoad) }),
+        serde_json::json!({ "label": "Settings", "action": NamedAction::Story(StoryCommand::OpenSettings) }),
     ];
     if has_title {
         items.push(serde_json::json!({
             "label": "Main Menu",
-            "action": ui_action::screen_show(&title_screen),
+            "action": NamedAction::Show(title_screen.into()),
         }));
     }
-    items.push(serde_json::json!({ "label": "Quit", "action": ui_action::quit() }));
+    items.push(serde_json::json!({ "label": "Quit", "action": NamedAction::Quit }));
 
     // The story system drives the pause and settings navigation (Resume /
     // Settings / the settings Back), so closing returns to the stage instead of
@@ -175,7 +175,7 @@ fn inject_story_pause_menu(
         "toggle_key": "",
         "dim": [0.0, 0.0, 0.0, 0.6],
         "settings_profile": "minimal",
-        "settings_back_action": ui_action::story(StoryCommand::CloseSettings),
+        "settings_back_action": NamedAction::Story(StoryCommand::CloseSettings),
         "items": items,
     });
     inject(assets, report, "story_pause_menu", &name, "MainMenu", args);
@@ -187,7 +187,7 @@ fn inject_story_pause_menu(
         "story_pause_menu",
         &format!("{}_key", name),
         "KeyBinding",
-        serde_json::json!({ "key": "Escape", "action": ui_action::story(StoryCommand::TogglePause) }),
+        serde_json::json!({ "key": "Escape", "action": NamedAction::Story(StoryCommand::TogglePause) }),
     );
 
     // Point the story at its pause menu and settings entry screens so the story

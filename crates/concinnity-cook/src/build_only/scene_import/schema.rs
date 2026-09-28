@@ -1,5 +1,8 @@
 //! Scene-import schema.
 
+use concinnity_core::components::Scene;
+use concinnity_core::ecs::NameRef;
+
 /// Imports a 3D scene file as a single declaration.
 ///
 /// One `SceneImport` stands in for the whole asset graph a scene file
@@ -39,7 +42,7 @@ pub struct SceneImport {
     pub source: String,
     /// [Scene](#scene) the generated [Prop](#prop)s belong to. Empty leaves
     /// them unbound, which makes them visible in every scene.
-    pub scene: String,
+    pub scene: NameRef<Scene>,
     /// Ceiling on the longest edge of each imported texture, in pixels. Large
     /// source maps (2K-4K) are box-filtered down so the compiled scene, which
     /// stores uncompressed pixels, stays within a sane memory budget. `0` keeps
@@ -58,7 +61,7 @@ impl Default for SceneImport {
     fn default() -> Self {
         Self {
             source: String::new(),
-            scene: String::new(),
+            scene: NameRef::default(),
             texture_max_size: 512,
             emissive_map_strength: 3.0,
             emit_camera: true,

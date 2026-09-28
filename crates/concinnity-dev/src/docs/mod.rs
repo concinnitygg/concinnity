@@ -123,7 +123,7 @@ fn remove_stale_pages(dir: &Path, keep: &BTreeMap<String, String>) -> io::Result
 mod tests {
     use super::*;
     use concinnity_core::ecs::schema::{
-        Body, FieldDefault, FieldSchema, FieldType, TypeSchema, ValueSchema,
+        Body, FieldDefault, FieldSchema, FieldType, TypeSchema, ValueSchema, VariantSchema,
     };
     use std::collections::BTreeMap as Map;
 
@@ -312,6 +312,88 @@ mod tests {
             mode.full_doc.contains("- `once`: Plays once.\n- `loop`"),
             "{}",
             mode.full_doc
+        );
+    }
+
+    static SWITCH: TypeSchema = TypeSchema {
+        name: "Switch",
+        doc: "Sends a signal when flipped.",
+        body: Body::Fields(&[FieldSchema {
+            key: "on_flip",
+            doc: "What a flip sends.",
+            ty: || FieldType::Optional(|| FieldType::Enum(&SIGNAL)),
+            default: FieldDefault::Null,
+        }]),
+        default: None,
+    };
+
+    static SIGNAL: TypeSchema = TypeSchema {
+        name: "Signal",
+        doc: "What a switch sends.",
+        body: Body::Variants(&[
+            VariantSchema {
+                name: "off",
+                doc: "Nothing",
+                payload: None,
+            },
+            VariantSchema {
+                name: "route",
+                doc: "Send it down a track.",
+                payload: Some(|| FieldType::Reference(&["Track"])),
+            },
+            VariantSchema {
+                name: "phase",
+                doc: "Change phase.",
+                payload: Some(|| FieldType::Enum(&PHASE)),
+            },
+        ]),
+        default: None,
+    };
+
+    static PHASE: TypeSchema = TypeSchema {
+        name: "Phase",
+        doc: "A phase to change to.",
+        body: Body::Variants(&[VariantSchema {
+            name: "step",
+            doc: "Step by a count.",
+            payload: Some(|| FieldType::Integer),
+        }]),
+        default: None,
+    };
+
+    // A tagged union a field holds gets a page listing each variant in its
+    // written form, and so does one reached only through another's payload.
+    #[test]
+    fn a_tagged_union_and_the_unions_its_payloads_reach_are_documented() {
+        let docs = reference::build(&[reference::AssetEntry {
+            name: "Switch",
+            schema: &SWITCH,
+        }]);
+        let switch = describe(&docs, "Switch");
+        assert!(
+            switch.full_doc.contains(
+                "- `on_flip`: A string or single-key object (see [Signal](Signal.md)). What a flip sends."
+            ),
+            "{}",
+            switch.full_doc
+        );
+        let signal = describe(&docs, "Signal");
+        for line in [
+            "- `\"off\"`: Nothing.",
+            "- `{\"route\": \"<Track name>\"}`: Send it down a track.",
+            "- `{\"phase\": <Phase>}`: Change phase. See [Phase](Phase.md).",
+        ] {
+            assert!(
+                signal.full_doc.contains(line),
+                "{line} in:\n{}",
+                signal.full_doc
+            );
+        }
+        let phase = describe(&docs, "Phase");
+        assert!(
+            phase
+                .full_doc
+                .contains("- `{\"step\": <integer>}`: Step by a count.")
         );
     }
 

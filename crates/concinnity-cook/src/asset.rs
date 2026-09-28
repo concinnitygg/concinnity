@@ -47,9 +47,6 @@ pub(crate) struct BuildCtx<'a> {
     // The build's asset search root: the tree a bare `source` filename is
     // searched under. `None` leaves bare filenames unresolved.
     pub(crate) assets_dir: Option<&'a Path>,
-    // Optional directory of user-supplied artifacts (e.g. account-uploaded
-    // shader source files) consulted when resolving bare filenames.
-    pub(crate) artifacts_dir: Option<&'a str>,
     // All sibling assets declared in the same world. Used by types like
     // `VoxelChunk` that need to resolve cross-asset references (palette).
     pub(crate) all_assets: &'a [WorldJsonlAsset],

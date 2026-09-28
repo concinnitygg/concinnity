@@ -1,9 +1,9 @@
+use concinnity_core::components::NamedAction;
 use concinnity_core::components::StoryCommand;
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::names::StoryNames;
 use super::widgets::{LabelStyle, hit_region, label, rounded_sprite_fit, screen, stage_sprite};
-use crate::authoring::spec::asset::ui_action;
 
 // The fixed dialog box the stage's name plate and dialog text sit on: nearly
 // flush with the canvas bottom, tall enough for the name plate to sit inside
@@ -75,14 +75,14 @@ pub(super) fn emit_stage(names: &StoryNames) -> Vec<serde_json::Value> {
         &stage.advance,
         (0.0, 0.0, win_w, win_h),
         None,
-        &ui_action::story(StoryCommand::Advance),
+        NamedAction::Story(StoryCommand::Advance),
     ));
     // Space and Enter both advance the dialogue (in addition to a click). Each
     // is its own KeyBinding; the UI fires whichever key was pressed.
     for (name, key) in stage.advance_keys.iter().zip(["Space", "Enter"]) {
         out.push(serde_json::json!({
             "type": "KeyBinding",
-            "args": { "$id": name, "key": key, "action": ui_action::story(StoryCommand::Advance) }
+            "args": { "$id": name, "key": key, "action": NamedAction::Story(StoryCommand::Advance) }
         }));
     }
     // The advance marker: a small rounded square at the dialog box's lower
@@ -124,7 +124,10 @@ mod tests {
         assert_eq!(keys[0]["args"]["$id"], "s_advance_key");
         assert_eq!(keys[0]["args"]["key"], "Space");
         assert_eq!(keys[1]["args"]["key"], "Enter");
-        assert!(keys.iter().all(|k| k["args"]["action"] == "story:advance"));
+        assert!(
+            keys.iter()
+                .all(|k| k["args"]["action"] == serde_json::json!({"story": "advance"}))
+        );
         assert_eq!(out.last().unwrap()["args"]["$id"], "s_stage_marker");
     }
 }

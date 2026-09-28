@@ -1,9 +1,9 @@
-// Action text read back to a name-level move. The builders in
-// `spec::asset::ui_action` write these strings and `UiAction::parse` reads them
-// into interned ids; an authoring tool needs the names they were written with,
-// before a build interns anything.
+// An authored action read as a name-level move: the part of an action that
+// changes where the world is, carrying the names the world declares rather than
+// the ids a build interns.
 
-use concinnity_core::components::StoryCommand;
+use concinnity_core::components::{AuthoredAction, NamedAction};
+use serde_json::Value;
 
 /// A move an action makes through the world's places.
 ///
@@ -54,145 +54,110 @@ impl Move {
     }
 }
 
-/// The move `text` makes, or `None` when it makes none: a settings row, a group
-/// toggle, `screen:clear` (which only the engine sends), or text naming no
-/// action at all.
-///
-/// A malformed target is no move either. The build rejects one, and answering
-/// with it would put a nameless place on a map.
-pub fn parse_action(text: &str) -> Option<Move> {
-    if text == "quit" {
-        return Some(Move::Quit);
-    }
-    let (kind, rest) = text.split_once(':')?;
-    let named = |name: &str| (!name.is_empty()).then(|| name.to_string());
-    match kind {
-        "scene" => named(rest).map(Move::Scene),
-        "screen" => match rest.split_once(':') {
-            Some(("show", name)) => named(name).map(Move::Show),
-            Some(("push", name)) => named(name).map(Move::Push),
-            Some(("toggle", name)) => named(name).map(Move::Toggle),
-            None if rest == "hide" => Some(Move::Back),
-            _ => None,
-        },
-        "story" => {
-            let verb = rest.split_once(':').map_or(rest, |(verb, _)| verb);
-            StoryCommand::VERBS.contains(&verb).then_some(Move::Story)
+impl Move {
+    /// The move `action` makes, or `None` when it makes none: a settings row or
+    /// group toggle, which change no place, or a target left empty, which the
+    /// build rejects and which would put a nameless place on a map.
+    pub fn of(action: &NamedAction) -> Option<Move> {
+        let named = |name: &str| (!name.is_empty()).then(|| name.to_string());
+        match action {
+            AuthoredAction::Quit => Some(Move::Quit),
+            AuthoredAction::Scene(name) => named(name).map(Move::Scene),
+            AuthoredAction::Show(name) => named(name).map(Move::Show),
+            AuthoredAction::Push(name) => named(name).map(Move::Push),
+            AuthoredAction::Toggle(name) => named(name).map(Move::Toggle),
+            AuthoredAction::Hide => Some(Move::Back),
+            AuthoredAction::Story(_) => Some(Move::Story),
+            AuthoredAction::GroupToggle(_) | AuthoredAction::Setting { .. } => None,
         }
-        _ => None,
     }
+}
+
+/// The move an authored action value makes, or `None` when it makes none or is
+/// no action at all.
+pub fn read_action(value: &Value) -> Option<Move> {
+    serde_json::from_value::<NamedAction>(value.clone())
+        .ok()
+        .as_ref()
+        .and_then(Move::of)
 }
 
 #[cfg(test)]
 mod tests {
-    use concinnity_core::components::{ScreenCommand, UiAction};
-    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_core::components::{SettingVerb, StoryCommand};
+    use concinnity_core::settings::SettingKey;
+    use serde_json::json;
 
     use super::*;
 
-    // Every text below resolves against a world declaring exactly this name, so
-    // a target that fails to resolve is the text's fault and not the world's.
-    fn ui_action(text: &str) -> Option<UiAction> {
-        UiAction::parse(text, |name| (name == "pause").then_some(AssetId(9))).ok()
+    #[test]
+    fn reads_each_move_to_its_target() {
+        let read = |v: Value| read_action(&v);
+        assert_eq!(read(json!("quit")), Some(Move::Quit));
+        assert_eq!(
+            read(json!({"scene": "pause"})),
+            Some(Move::Scene("pause".to_string()))
+        );
+        assert_eq!(
+            read(json!({"show": "pause"})),
+            Some(Move::Show("pause".to_string()))
+        );
+        assert_eq!(
+            read(json!({"push": "pause"})),
+            Some(Move::Push("pause".to_string()))
+        );
+        assert_eq!(
+            read(json!({"toggle": "pause"})),
+            Some(Move::Toggle("pause".to_string()))
+        );
+        assert_eq!(read(json!("hide")), Some(Move::Back));
+        assert_eq!(read(json!({"story": {"choose": 1}})), Some(Move::Story));
     }
-
-    // Whether the engine's own reading of the text changes where the world is.
-    fn ui_action_moves(text: &str) -> bool {
-        matches!(
-            ui_action(text),
-            Some(UiAction::Quit | UiAction::Scene(_) | UiAction::Screen(_) | UiAction::Story(_))
-        )
-    }
-
-    // Everything the two readings are held to agreeing on. A vocabulary that
-    // grows on one side without the other shows up here as a disagreement.
-    const TEXTS: &[&str] = &[
-        "quit",
-        "scene:pause",
-        "screen:show:pause",
-        "screen:push:pause",
-        "screen:toggle:pause",
-        "screen:hide",
-        "story:advance",
-        "story:page:2",
-        "group:toggle:3",
-        "setting:volume_master:drag",
-        "screen:clear",
-        "screen:hide:",
-        "screen:show:",
-        "screen:nudge:pause",
-        "scene:",
-        "story:",
-        "story:bogus",
-        "",
-        "pause",
-    ];
 
     #[test]
-    fn reads_the_same_texts_as_a_move_that_the_engine_reads_as_one() {
-        for text in TEXTS {
-            assert_eq!(
-                parse_action(text).is_some(),
-                ui_action_moves(text),
-                "`{text}`"
-            );
+    fn a_settings_row_an_empty_target_or_no_action_makes_no_move() {
+        for value in [
+            json!({"group_toggle": 3}),
+            json!({"setting": {"key": "master_volume", "verb": "drag"}}),
+            json!({"show": ""}),
+            json!("teleport"),
+            json!(null),
+        ] {
+            assert_eq!(read_action(&value), None, "{value}");
         }
     }
 
     #[test]
-    fn reads_each_move_to_its_target() {
-        assert_eq!(parse_action("quit"), Some(Move::Quit));
-        assert_eq!(
-            parse_action("scene:pause"),
-            Some(Move::Scene("pause".to_string()))
-        );
-        assert_eq!(
-            parse_action("screen:show:pause"),
-            Some(Move::Show("pause".to_string()))
-        );
-        assert_eq!(
-            parse_action("screen:push:pause"),
-            Some(Move::Push("pause".to_string()))
-        );
-        assert_eq!(
-            parse_action("screen:toggle:pause"),
-            Some(Move::Toggle("pause".to_string()))
-        );
-        assert_eq!(parse_action("screen:hide"), Some(Move::Back));
-        assert_eq!(parse_action("story:advance"), Some(Move::Story));
-    }
-
-    // An unresolved id target is a name like any other here: the engine interns
-    // it and the map draws the place it names.
-    #[test]
-    fn a_numeric_target_is_read_as_the_name_it_was_written_as() {
-        assert_eq!(
-            parse_action("screen:show:7"),
-            Some(Move::Show("7".to_string()))
-        );
-        assert_eq!(
-            ui_action("screen:show:7"),
-            Some(UiAction::Screen(ScreenCommand::Show(AssetId(7))))
-        );
-    }
-
-    #[test]
     fn only_a_move_naming_a_place_answers_a_target() {
-        assert_eq!(parse_action("scene:pause").unwrap().target(), Some("pause"));
-        assert_eq!(parse_action("screen:hide").unwrap().target(), None);
-        assert_eq!(parse_action("quit").unwrap().target(), None);
-        assert_eq!(parse_action("story:advance").unwrap().target(), None);
+        assert_eq!(Move::Scene("pause".to_string()).target(), Some("pause"));
+        assert_eq!(Move::Back.target(), None);
+        assert_eq!(Move::Quit.target(), None);
+        assert_eq!(Move::Story.target(), None);
     }
 
     // The word goes in the gap between two cards, so it has to stay one.
     #[test]
     fn every_verb_is_one_short_word() {
-        for text in TEXTS.iter().filter_map(|t| parse_action(t)) {
-            let verb = text.verb();
+        let actions: [NamedAction; 7] = [
+            AuthoredAction::Quit,
+            AuthoredAction::Scene("s".into()),
+            AuthoredAction::Show("s".into()),
+            AuthoredAction::Push("s".into()),
+            AuthoredAction::Toggle("s".into()),
+            AuthoredAction::Hide,
+            AuthoredAction::Story(StoryCommand::Advance),
+        ];
+        for action in &actions {
+            let verb = Move::of(action).unwrap().verb();
             assert!(
                 verb.len() <= 8 && verb.chars().all(|c| c.is_ascii_lowercase()),
                 "`{verb}`"
             );
         }
+        let row = AuthoredAction::Setting {
+            key: SettingKey::Vsync,
+            verb: SettingVerb::Next,
+        };
+        assert_eq!(Move::of(&row), None);
     }
 }

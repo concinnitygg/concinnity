@@ -1,6 +1,7 @@
 //! Prefab schema: a reusable template of props / lights / nested prefabs.
 
-use concinnity_core::components::PropCollider;
+use concinnity_core::components::{Material, Model, PropCollider, PropParent};
+use concinnity_core::ecs::NameRef;
 
 /// A reusable template of [Prop](#prop)s, [PointLight](#pointlight)s, and nested
 /// prefabs.
@@ -32,8 +33,8 @@ pub struct Prefab {
 #[serde(rename_all = "snake_case")]
 #[derive(Default, concinnity_core::components::Vocabulary)]
 pub enum PrefabKind {
-    /// A [Prop](#prop) built from the entry's `model` / `mesh` / `material` /
-    /// `texture` and transform fields.
+    /// A [Prop](#prop) built from the entry's `model` / `mesh` / `material`
+    /// and transform fields.
     #[default]
     #[vocab("prop")]
     Prop,
@@ -49,9 +50,9 @@ pub enum PrefabKind {
 
 /// One entry in a [Prefab]'s `props` list. The fields consulted depend on
 /// `kind`: a `prop` uses the render / collision / transform fields, a
-/// `point_light` uses the `light_*` fields, and a `prefab` uses `prefab`. Names
-/// in `model` / `mesh` / `material` / `texture` / `parent` / `prefab` are
-/// unresolved references to other assets, resolved when the entry expands.
+/// `point_light` uses the `light_*` fields, and a `prefab` uses `prefab`. The
+/// assets named by `model` / `mesh` / `material` / `parent` / `prefab` resolve
+/// when the entry expands.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
 #[serde(default)]
 pub struct PrefabEntry {
@@ -65,21 +66,21 @@ pub struct PrefabEntry {
     pub rotation_deg: [f32; 3],
     /// Local scale.
     pub scale: [f32; 3],
-    /// `prop`: [Model](#model) name.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub model: String,
-    /// `prop`: [Mesh](#mesh) / [ProceduralMesh](#proceduralmesh) name.
+    /// `prop`: [Model](#model) of the expanded prop. Takes precedence over
+    /// `mesh`.
+    #[serde(skip_serializing_if = "NameRef::is_empty")]
+    pub model: NameRef<Model>,
+    /// `prop`: [Mesh](#mesh) / [ProceduralMesh](#proceduralmesh) of the
+    /// expanded prop.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub mesh: String,
-    /// `prop`: [Material](#material) name.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub material: String,
-    /// `prop`: [Texture](#texture) name (older path; `material` takes priority).
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub texture: String,
-    /// `prop`: parent asset name for the expanded prop.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub parent: String,
+    /// `prop`: [Material](#material) of the expanded prop.
+    #[serde(skip_serializing_if = "NameRef::is_empty")]
+    pub material: NameRef<Material>,
+    /// `prop`: [Prop](#prop) or [SkyRotation](#skyrotation) the expanded prop
+    /// is parented to.
+    #[serde(skip_serializing_if = "NameRef::is_empty")]
+    pub parent: NameRef<PropParent>,
     /// `prop`: optional collision shape for the expanded prop.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collider: Option<PropCollider>,
@@ -93,9 +94,9 @@ pub struct PrefabEntry {
     pub light_intensity: f32,
     /// `point_light`: maximum reach in world units.
     pub light_range: f32,
-    /// `prefab`: name of another [Prefab] to expand at this entry's transform.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub prefab: String,
+    /// `prefab`: another [Prefab] to expand at this entry's transform.
+    #[serde(skip_serializing_if = "NameRef::is_empty")]
+    pub prefab: NameRef<Prefab>,
 }
 
 impl Default for PrefabEntry {
@@ -106,18 +107,17 @@ impl Default for PrefabEntry {
             position: [0.0, 0.0, 0.0],
             rotation_deg: [0.0, 0.0, 0.0],
             scale: [1.0, 1.0, 1.0],
-            model: String::new(),
+            model: NameRef::default(),
             mesh: String::new(),
-            material: String::new(),
-            texture: String::new(),
-            parent: String::new(),
+            material: NameRef::default(),
+            parent: NameRef::default(),
             collider: None,
             interactable: false,
             pickup: false,
             light_color: [1.0, 1.0, 1.0],
             light_intensity: 8.0,
             light_range: 6.0,
-            prefab: String::new(),
+            prefab: NameRef::default(),
         }
     }
 }

@@ -10,7 +10,7 @@ built from: a [Screen](Screen.md) layer, a dim backdrop [Sprite](Sprite.md), a
 optional [KeyBinding](KeyBinding.md) that toggles the menu, and an optional
 in-engine mouse cursor [Sprite](Sprite.md). So `world.jsonl` stays small.
 
-The bare form gives a centered Return / Settings / Quit menu that starts
+The bare form gives a centered Resume / Settings / Quit menu that starts
 closed, with Escape opening it, so the scene itself shows first. Set
 `"initial": true` to show the menu as soon as the world loads:
 
@@ -19,12 +19,8 @@ labels) at build time when the world declares none, so the menu's
 performance-stats toggles have chips to drive.
 
 **Items.** Each item has a `label` (the text) and an `action` fired on
-click. `action` takes the same vocabulary as [HitRegion](HitRegion.md)
-(`"quit"`, `"scene:<name>"`, `"screen:show:<name>"`, `"screen:push:<name>"`,
-`"screen:toggle:<name>"`, `"screen:hide"`, `"story:<verb>"`) plus two
-conveniences resolved against this menu:
-- `"return"`: hide this menu (the same as `"screen:hide"`).
-- `"settings"`: open a generated settings sub-menu that has a Back button.
+click: any [Action](Action.md) (`"hide"` closes the menu), or `"settings"`
+to open a generated settings sub-menu that has a Back button.
 
 **Generated names** are prefixed with the menu's `name` (`<name>_btn_0`,
 `<name>_label_0`, `<name>_cursor`, ...), so they never clash with
@@ -32,7 +28,7 @@ hand-authored assets and you never reference them by hand.
 
 ## Parameters
 
-- `items`: An array of [MainMenuItem](MainMenuItem.md) objects. Menu entries, top to bottom. Each one is a clickable button. Defaults to `[{"label": "Return", "action": "return"}, {"label": "Settings", "action": "settings"}, {"label": "Quit", "action": "quit"}]`.
+- `items`: An array of [MainMenuItem](MainMenuItem.md) objects. Menu entries, top to bottom. Each one is a clickable button. Defaults to `[{"label": "Resume", "action": "hide"}, {"label": "Settings", "action": "settings"}, {"label": "Quit", "action": "quit"}]`.
 - `title`: A string. Optional heading drawn above the items. Empty draws no heading. Defaults to `""`.
 - `initial`: A boolean. Show the menu as soon as the world loads. Off by default: the scene shows first and the toggle key opens the menu.
 - `toggle_key`: A string. InputKey that toggles the menu while the cursor is free. Empty binds no key. Only `"Escape"` is currently recognized by the runtime. Defaults to `"Escape"`.
@@ -43,7 +39,7 @@ hand-authored assets and you never reference them by hand.
 - `button_width`: A float. Width of each item's clickable region in pixels. Defaults to `360.0`.
 - `button_height`: A float. Height of each item's clickable region in pixels. Defaults to `60.0`.
 - `row_gap`: A float. Pixels between adjacent items. Defaults to `14.0`.
-- `font`: A string. [Font](Font.md) for the item text. Empty uses the built-in font. Defaults to `""`.
+- `font`: A string. [Font](Font.md) for the item text. Empty uses the built-in font.
 - `font_px`: A float. Pixel size of the item text when this menu emits its own built-in font (that is, when `font` is empty). Ignored when `font` names a [Font](Font.md), which carries its own size. In reference-space pixels. Defaults to `48.0`.
 - `text_color`: An array of 3 floats. Linear-space RGB color of the item text. Defaults to `[0.85, 0.85, 0.85]`.
 - `text_scale`: A float. Scale applied to the item text. Defaults to `1.1`.
@@ -53,4 +49,4 @@ hand-authored assets and you never reference them by hand.
 - `cursor_color`: An array of 4 floats. RGBA fill color of the arrow cursor. A contrasting outline is added automatically so it stays legible over any scene. Defaults to `[1.0, 1.0, 1.0, 1.0]`.
 - `cursor_size`: A float. Arrow cursor height in pixels (its width follows the arrow's shape). Defaults to `22.0`.
 - `settings_profile`: A string (see [SettingsProfile](SettingsProfile.md)). Which settings screen the `"settings"` item generates. `full` is the complete Video / Audio / Controls set a 3D world configures; `minimal` is the trimmed Video (window mode, resolution, vsync, frame rate) and Audio (volume) set that fits a world with nothing to render into (a visual-novel story, say), dropping the Controls tab and every scene-render group. Defaults to `"full"`.
-- `settings_back_action`: A string. Action fired by the settings screen's Back button, overriding the default (which returns to this menu). Setting it also generates the settings screen even when no item uses the `"settings"` convenience, so a caller that opens settings by its own action (a story, say) still gets the screen. Empty keeps the default Back-to-menu behavior.
+- `settings_back_action`: A string or single-key object (see [Action](Action.md)). What the settings screen's Back button fires, overriding the default (which returns to this menu). Setting it also generates the settings screen even when no item uses the `"settings"` convenience, so a caller that opens settings by its own action (a story, say) still gets the screen. Unset keeps the default Back-to-menu behavior.

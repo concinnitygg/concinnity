@@ -166,7 +166,7 @@ impl StageIds {
 }
 
 // A story's persisted position and variables, auto-written page by page
-// (resumed by `story:continue`) and written to numbered slots by the slot
+// (resumed by the story's `continue`) and written to numbered slots by the slot
 // overlay. Position is kept by node slug (stable across story edits, unlike
 // an index).
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -177,7 +177,7 @@ struct StorySave {
     vars: BTreeMap<String, i32>,
 }
 
-// The auto-save file (resumed by `story:continue`). One per game: v1 allows a
+// The auto-save file (resumed by the story's `continue`). One per game: v1 allows a
 // single story per world, so saves are a flat list with no per-story key.
 fn save_file(dir: &Path) -> PathBuf {
     dir.join("auto")

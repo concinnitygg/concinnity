@@ -19,7 +19,8 @@ pub mod probe;
 
 use alloc::boxed::Box;
 
-/// One authored type: a struct with named fields or a string-valued enum.
+/// One authored type: a struct with named fields, a string-valued enum, or a
+/// tagged union.
 #[derive(Clone, Copy)]
 pub struct TypeSchema {
     /// The type's Rust identifier.
@@ -42,6 +43,21 @@ pub enum Body {
     Fields(&'static [FieldSchema]),
     /// A JSON string: the enum's authored names, in declaration order.
     Values(&'static [ValueSchema]),
+    /// A tagged union: a variant with no payload is its name as a JSON string,
+    /// and one with a payload is an object with the name as its only key.
+    Variants(&'static [VariantSchema]),
+}
+
+/// One variant of a tagged union.
+#[derive(Clone, Copy)]
+pub struct VariantSchema {
+    /// The name the variant is written as.
+    pub name: &'static str,
+    /// The variant's documentation, one line per doc line.
+    pub doc: &'static str,
+    /// The type of the value under the name, or `None` for a variant written
+    /// as its bare name.
+    pub payload: Option<fn() -> FieldType>,
 }
 
 /// One authored field of a struct.
@@ -101,7 +117,7 @@ pub enum FieldType {
     },
     /// A JSON object of a described struct.
     Nested(&'static TypeSchema),
-    /// One of a described enum's names.
+    /// One of a described enum's values.
     Enum(&'static TypeSchema),
 }
 

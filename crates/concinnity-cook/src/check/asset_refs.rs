@@ -17,6 +17,8 @@ use concinnity_core::components::{
     VoxelChunk, VoxelWorld,
 };
 
+use crate::authoring::registry::build_only::Prefab;
+
 // The category of asset a structured name reference must resolve to.
 // Reference kinds are deliberately not 1:1 with asset types: `MeshSource`
 // accepts several types and `AnyAsset` accepts every declared name.
@@ -189,6 +191,39 @@ impl CrossReferenced for Prop {
                 name, mesh_ref
             ),
         }]
+    }
+}
+
+// A Prefab's prop entries name their mesh sources the way a Prop does; the
+// typed entry fields resolve through the derived table.
+impl CrossReferenced for Prefab {
+    fn cross_refs(name: &str, args: &serde_json::Value) -> Vec<CrossRef> {
+        let Some(entries) = args.get("props").and_then(|v| v.as_array()) else {
+            return Vec::new();
+        };
+        let text = |entry: &serde_json::Value, key: &str| {
+            entry
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(text(e, "kind").as_str(), "" | "prop"))
+            .filter(|(_, e)| text(e, "model").is_empty())
+            .filter_map(|(i, e)| {
+                let mesh = text(e, "mesh");
+                (!mesh.is_empty()).then(|| CrossRef::Resolve {
+                    kind: RefKind::MeshSource,
+                    error: format!(
+                        "Prefab '{name}': props[{i}].mesh '{mesh}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that `$id`"
+                    ),
+                    target: mesh,
+                })
+            })
+            .collect()
     }
 }
 

@@ -102,7 +102,6 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     let mut result = build_compiled(
         loaded.assets,
         crate::project::assets_dir().as_deref(),
-        None,
         crate::cook_platform(),
     )?;
 
@@ -227,7 +226,6 @@ pub(crate) fn build_world_str_to_disk(
     let result = concinnity_cook::build_compiled_with_progress(
         loaded.assets,
         crate::project::assets_dir().as_deref(),
-        None,
         crate::cook_platform(),
         progress,
     )?;

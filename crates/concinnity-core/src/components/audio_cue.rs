@@ -10,7 +10,7 @@ use crate::ecs::{Ref, de_opt_ref};
 /// Plays audio when a [Screen](#screen) is shown.
 ///
 /// A cue links a [Screen](#screen) to an [AudioClip](#audioclip): whenever UI
-/// navigation makes the screen active (a `screen:show` or `screen:toggle` action, a
+/// navigation makes the screen active (a `show` or `toggle` action, a
 /// [KeyBinding](#keybinding), dismissing an overlay back to it, or being the
 /// world's initial screen), the clip plays. Cues play flat on the main mix with
 /// no 3D position; use an [AudioEmitter](#audioemitter) for positional sound.

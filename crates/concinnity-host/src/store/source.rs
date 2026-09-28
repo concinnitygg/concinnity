@@ -39,15 +39,11 @@ pub fn resolve_source_path(source: &str, assets_dir: Option<&Path>) -> String {
 
 /// The first file that exists among the places a source string can name, in
 /// order: `<assets_dir>/<source>`; for a bare filename, a recursive search of
-/// `assets_dir`; `<artifacts_dir>/<source>`; `assets/<source>`, for a source
-/// authored against the checkout's asset tree; and `source` itself, relative to
-/// the working directory. An absolute `source` names only itself. `None` when
-/// nothing exists, so the caller's read error names the path it tried.
-pub fn find_existing(
-    source: &str,
-    assets_dir: Option<&Path>,
-    artifacts_dir: Option<&str>,
-) -> Option<String> {
+/// `assets_dir`; `assets/<source>`, for a source authored against the
+/// checkout's asset tree; and `source` itself, relative to the working
+/// directory. An absolute `source` names only itself. `None` when nothing
+/// exists, so the caller's read error names the path it tried.
+pub fn find_existing(source: &str, assets_dir: Option<&Path>) -> Option<String> {
     let mut candidates: Vec<String> = Vec::new();
     if Path::new(source).is_absolute() {
         candidates.push(source.to_string());
@@ -59,9 +55,6 @@ pub fn find_existing(
             && let Some(found) = assets_dir.and_then(|dir| find_in(dir, source))
         {
             candidates.push(found);
-        }
-        if let Some(dir) = artifacts_dir {
-            candidates.push(format!("{dir}/{source}"));
         }
         candidates.push(format!("assets/{source}"));
         candidates.push(source.to_string());
@@ -167,23 +160,21 @@ mod tests {
         );
     }
 
-    // A path under the assets dir wins over the same path under the artifacts
-    // dir, and a bare filename is searched for beneath it.
+    // A path is tried under the assets dir, and a bare filename is searched
+    // for beneath it.
     #[test]
     fn find_existing_tries_the_assets_dir_first() {
         let assets = tempfile::tempdir().unwrap();
-        let artifacts = tempfile::tempdir().unwrap();
-        for root in [assets.path(), artifacts.path()] {
-            std::fs::create_dir_all(root.join("shaders")).unwrap();
-            std::fs::write(root.join("shaders/blob.hlsl"), b"x").unwrap();
-        }
-        let artifacts_dir = artifacts.path().to_string_lossy().into_owned();
+        std::fs::create_dir_all(assets.path().join("shaders")).unwrap();
+        std::fs::write(assets.path().join("shaders/blob.hlsl"), b"x").unwrap();
+        let nested = assets
+            .path()
+            .join("shaders")
+            .join("blob.hlsl")
+            .to_string_lossy()
+            .into_owned();
         assert_eq!(
-            find_existing(
-                "shaders/blob.hlsl",
-                Some(assets.path()),
-                Some(&artifacts_dir)
-            ),
+            find_existing("shaders/blob.hlsl", Some(assets.path())),
             Some(
                 assets
                     .path()
@@ -193,22 +184,11 @@ mod tests {
             )
         );
         assert_eq!(
-            find_existing("shaders/blob.hlsl", None, Some(&artifacts_dir)),
-            Some(format!("{artifacts_dir}/shaders/blob.hlsl"))
+            find_existing("blob.hlsl", Some(assets.path())),
+            Some(nested)
         );
         assert_eq!(
-            find_existing("blob.hlsl", Some(assets.path()), None),
-            Some(
-                assets
-                    .path()
-                    .join("shaders")
-                    .join("blob.hlsl")
-                    .to_string_lossy()
-                    .into_owned()
-            )
-        );
-        assert_eq!(
-            find_existing("cn_no_such_field.hlsl", Some(assets.path()), None),
+            find_existing("cn_no_such_field.hlsl", Some(assets.path())),
             None
         );
     }

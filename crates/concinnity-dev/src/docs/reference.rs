@@ -30,7 +30,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use concinnity_core::ecs::schema::{self, Body, FieldSchema, TypeSchema, ValueSchema};
+use concinnity_core::ecs::schema::{
+    self, Body, FieldSchema, TypeSchema, ValueSchema, VariantSchema,
+};
 
 use super::defaults::{Defaults, default_text};
 use super::prose::{
@@ -195,13 +197,16 @@ fn render_struct(s: &'static TypeSchema, ctx: &mut Ctx) -> (String, String) {
 // Render a documented enum's page body: its enum-level rustdoc followed by a
 // `## Values` list, one bullet per authored name with its own doc.
 fn render_enum(s: &TypeSchema) -> (String, String) {
-    let values: Vec<EnumValue> = enum_values(s)
-        .iter()
-        .map(|v| EnumValue {
-            value: v.name.to_string(),
-            doc: collapse_doc(v.doc),
-        })
-        .collect();
+    let values: Vec<EnumValue> = match s.body {
+        Body::Variants(variants) => variants.iter().map(variant_value).collect(),
+        _ => enum_values(s)
+            .iter()
+            .map(|v| EnumValue {
+                value: v.name.to_string(),
+                doc: collapse_doc(v.doc),
+            })
+            .collect(),
+    };
     let cleaned = strip_table_lines(&strip_rust_blocks(s.doc));
     (
         first_paragraph(s.doc),
@@ -291,6 +296,13 @@ fn resolve_type(ty: schema::FieldType, ctx: &mut Ctx) -> FieldType {
                 FieldType::Named(s.name.to_string())
             }
         },
+        schema::FieldType::Enum(s) if matches!(s.body, Body::Variants(_)) => {
+            if !ctx.enums.contains_key(s.name) {
+                ctx.enums.insert(s.name, s);
+                reach_payloads(s, ctx);
+            }
+            FieldType::Tagged(s.name.to_string())
+        }
         schema::FieldType::Enum(s) => {
             if enum_is_documented(s) {
                 ctx.enums.entry(s.name).or_insert(s);
@@ -305,7 +317,7 @@ fn resolve_type(ty: schema::FieldType, ctx: &mut Ctx) -> FieldType {
 fn enum_values(s: &TypeSchema) -> &'static [ValueSchema] {
     match s.body {
         Body::Values(values) => values,
-        Body::Fields(_) => &[],
+        Body::Fields(_) | Body::Variants(_) => &[],
     }
 }
 
@@ -313,4 +325,49 @@ fn enum_values(s: &TypeSchema) -> &'static [ValueSchema] {
 // undocumented one is rendered inline as a closed set of string values.
 fn enum_is_documented(s: &TypeSchema) -> bool {
     !s.doc.trim().is_empty() || enum_values(s).iter().any(|v| !v.doc.trim().is_empty())
+}
+
+// A tagged-union variant as its written form: the bare name, or the one-key
+// object with a placeholder for what goes under it. A payload with its own
+// page is linked from the doc line.
+fn variant_value(v: &VariantSchema) -> EnumValue {
+    let mut doc = collapse_doc(v.doc);
+    let Some(payload) = v.payload else {
+        return EnumValue {
+            value: format!("\"{}\"", v.name),
+            doc,
+        };
+    };
+    let placeholder = match payload() {
+        schema::FieldType::Reference(targets) if !targets.is_empty() => {
+            format!("\"<{} name>\"", targets.join(" or "))
+        }
+        schema::FieldType::Reference(_) | schema::FieldType::Str => "\"<name>\"".to_string(),
+        schema::FieldType::Integer => "<integer>".to_string(),
+        schema::FieldType::Float => "<number>".to_string(),
+        schema::FieldType::Enum(inner) => {
+            doc = format!("{doc} See [{0}]({0}.md).", inner.name);
+            format!("<{}>", inner.name)
+        }
+        _ => "{...}".to_string(),
+    };
+    EnumValue {
+        value: format!("{{\"{}\": {placeholder}}}", v.name),
+        doc,
+    }
+}
+
+// Every tagged union a union's payloads reach, so each gets its own page.
+fn reach_payloads(s: &'static TypeSchema, ctx: &mut Ctx) {
+    let Body::Variants(variants) = s.body else {
+        return;
+    };
+    for payload in variants.iter().filter_map(|v| v.payload) {
+        if let schema::FieldType::Enum(inner) = payload()
+            && !ctx.enums.contains_key(inner.name)
+        {
+            ctx.enums.insert(inner.name, inner);
+            reach_payloads(inner, ctx);
+        }
+    }
 }

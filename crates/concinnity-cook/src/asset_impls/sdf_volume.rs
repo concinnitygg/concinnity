@@ -8,11 +8,11 @@ use crate::authoring::source_args::sdf_volume_source_path;
 use crate::compile::sdf_field::compile_sdf_field;
 
 // Resolve a raw `fragment_shader` arg to the first on-disk path that exists
-// among the build's asset root, its artifacts dir, the checkout's `assets/`
-// and the working directory. `None` when nothing exists; `compile_payload`
+// among the build's asset root, the checkout's `assets/` and the working
+// directory. `None` when nothing exists; `compile_payload`
 // falls back to the raw path then, so the read error names it.
 pub(super) fn resolve_source_path(raw: &str, ctx: &BuildCtx<'_>) -> Option<String> {
-    concinnity_host::store::source::find_existing(raw, ctx.assets_dir, ctx.artifacts_dir)
+    concinnity_host::store::source::find_existing(raw, ctx.assets_dir)
 }
 
 // A volume's compiled field, or an error naming what this host is missing.
@@ -112,12 +112,11 @@ mod tests {
         serde_json::json!({ "fragment_shader": source })
     }
 
-    fn ctx<'a>(artifacts_dir: Option<&'a str>) -> BuildCtx<'a> {
+    fn ctx(assets_dir: Option<&std::path::Path>) -> BuildCtx<'_> {
         BuildCtx {
             name: "blob",
             platform: Platform::Metal,
-            assets_dir: None,
-            artifacts_dir,
+            assets_dir,
             all_assets: &[],
         }
     }
@@ -174,34 +173,43 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
     }
 
     #[test]
-    fn a_relative_path_resolves_under_the_artifacts_dir() {
+    fn a_relative_path_resolves_under_the_assets_dir() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("shaders")).unwrap();
         std::fs::write(dir.path().join("shaders/chrome.hlsl"), FIELD).unwrap();
-        let artifacts = dir.path().to_string_lossy().into_owned();
         assert_eq!(
-            resolve_source_path("shaders/chrome.hlsl", &ctx(Some(&artifacts))),
-            Some(format!("{artifacts}/shaders/chrome.hlsl"))
+            resolve_source_path("shaders/chrome.hlsl", &ctx(Some(dir.path()))),
+            Some(
+                dir.path()
+                    .join("shaders/chrome.hlsl")
+                    .to_string_lossy()
+                    .into_owned()
+            )
         );
     }
 
     #[test]
-    fn a_bare_filename_resolves_under_the_artifacts_dir() {
+    fn a_bare_filename_is_found_anywhere_under_the_assets_dir() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("chrome.hlsl"), FIELD).unwrap();
-        let artifacts = dir.path().to_string_lossy().into_owned();
+        std::fs::create_dir(dir.path().join("fields")).unwrap();
+        std::fs::write(dir.path().join("fields/chrome.hlsl"), FIELD).unwrap();
         assert_eq!(
-            resolve_source_path("chrome.hlsl", &ctx(Some(&artifacts))),
-            Some(format!("{artifacts}/chrome.hlsl"))
+            resolve_source_path("chrome.hlsl", &ctx(Some(dir.path()))),
+            Some(
+                dir.path()
+                    .join("fields")
+                    .join("chrome.hlsl")
+                    .to_string_lossy()
+                    .into_owned()
+            )
         );
     }
 
     #[test]
     fn an_unresolvable_relative_path_returns_none() {
         let dir = tempfile::tempdir().unwrap();
-        let artifacts = dir.path().to_string_lossy().into_owned();
         assert_eq!(
-            resolve_source_path("cn_no_such_field.hlsl", &ctx(Some(&artifacts))),
+            resolve_source_path("cn_no_such_field.hlsl", &ctx(Some(dir.path()))),
             None
         );
         assert_eq!(

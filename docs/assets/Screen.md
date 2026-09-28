@@ -10,10 +10,10 @@ A UI element ([Sprite](Sprite.md), [TextLabel](TextLabel.md),
 naming it in the element's `screen`, mirroring the [Scene](Scene.md) →
 [Prop](Prop.md) relationship. Active screens form a stack; each is shown /
 hidden via [HitRegion](HitRegion.md) or [KeyBinding](KeyBinding.md) actions:
-- `screen:show:<name>` replaces the top of the stack (menu navigation)
-- `screen:push:<name>` opens on top of what is already showing
-- `screen:hide` closes the top screen, revealing what was beneath
-- `screen:toggle:<name>` closes the screen if it is on top, opens it otherwise
+- `{"show": "<name>"}` replaces the top of the stack (menu navigation)
+- `{"push": "<name>"}` opens on top of what is already showing
+- `"hide"` closes the top screen, revealing what was beneath
+- `{"toggle": "<name>"}` closes the screen if it is on top, opens it otherwise
 
 Screens draw in stack order (later on top); `layer` orders a screen
 against the always-on HUD and other screens independent of stack position.

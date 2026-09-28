@@ -653,7 +653,7 @@ pub(crate) fn hit_test(
                     return Some(FormAction::ToggleField(j));
                 }
             }
-            FieldKind::Enum | FieldKind::Ref { .. } => {
+            FieldKind::Enum | FieldKind::Ref { .. } | FieldKind::Action { .. } => {
                 if point_in(mx, my, form_control_rect(o, w, r)) {
                     // A small variant set cycles in place; a large one opens a
                     // floating dropdown instead of forcing many clicks.
@@ -792,7 +792,7 @@ pub(crate) fn place(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: 
                 let tint = if field.boolval { CHECK_ON } else { CHECK_OFF };
                 place_rounded(world, form_toggle_bg(r), t, tint, 4.0, true);
             }
-            FieldKind::Enum | FieldKind::Ref { .. } => {
+            FieldKind::Enum | FieldKind::Ref { .. } | FieldKind::Action { .. } => {
                 // A cycling button spanning the control, captioned with the
                 // current selection.
                 let c = form_control_rect(o, w, r);
@@ -1272,6 +1272,7 @@ mod tests {
             boolval: false,
             variants: Vec::new(),
             variant_idx: 0,
+            choices: Vec::new(),
         }
     }
 
@@ -1295,6 +1296,7 @@ mod tests {
             boolval: false,
             variants,
             variant_idx: 0,
+            choices: Vec::new(),
         }
     }
 
@@ -1586,6 +1588,7 @@ mod tests {
             boolval: false,
             variants: Vec::new(),
             variant_idx: 0,
+            choices: Vec::new(),
         }];
         place(
             &mut world,
@@ -1620,6 +1623,7 @@ mod tests {
             boolval: false,
             variants: Vec::new(),
             variant_idx: 0,
+            choices: Vec::new(),
         }];
         let v = view(&fields);
         place(&mut world, Some(&v), o, size(v.form_fields.len()));
@@ -1666,6 +1670,7 @@ mod tests {
             boolval: false,
             variants: Vec::new(),
             variant_idx: 0,
+            choices: Vec::new(),
         };
         let fields = [
             FormField {
@@ -1678,6 +1683,7 @@ mod tests {
                 boolval: false,
                 variants: Vec::new(),
                 variant_idx: 0,
+                choices: Vec::new(),
             },
             elem("0"),
             elem("1"),
@@ -1721,6 +1727,7 @@ mod tests {
             boolval: false,
             variants: vec!["left".into(), "center".into(), "right".into()],
             variant_idx: 1,
+            choices: Vec::new(),
         }];
         let v = view(&small);
         place(&mut world, Some(&v), o, size(v.form_fields.len()));
@@ -1847,6 +1854,7 @@ mod tests {
             boolval: false,
             variants: Vec::new(),
             variant_idx: 3,
+            choices: Vec::new(),
         }];
         let v = view(&fields);
         place(&mut world, Some(&v), o, size(v.form_fields.len()));
@@ -1948,6 +1956,7 @@ mod tests {
             boolval: false,
             variants: variants.iter().map(|s| s.to_string()).collect(),
             variant_idx: 0,
+            choices: Vec::new(),
         }
     }
 

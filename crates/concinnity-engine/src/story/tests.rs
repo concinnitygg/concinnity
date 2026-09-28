@@ -1323,7 +1323,7 @@ fn title_load_works_after_returning_to_the_title() {
     };
     write_save(&slot_file(dir.path(), 0), &save).unwrap();
 
-    // Quit to the title (a plain screen:show the pause menu's Quit fires).
+    // Quit to the title (a plain `show` the pause menu's Quit fires).
     world
         .events_mut::<ScreenCommand>()
         .send(ScreenCommand::Show(intern("s_title")));

@@ -182,11 +182,11 @@ mod tests {
     use super::*;
 
     // A candidate firing `action` text; empty text is no action.
-    fn cand(index: usize, x: f32, y: f32, action: &str) -> Candidate {
+    fn cand(index: usize, x: f32, y: f32, action: serde_json::Value) -> Candidate {
         Candidate {
             index,
             rect: [x, y, 200.0, 30.0],
-            action: (!action.is_empty()).then(|| UiAction::parse(action, |_| None).unwrap()),
+            action: serde_json::from_value(action).unwrap(),
         }
     }
 
@@ -201,14 +201,39 @@ mod tests {
     #[test]
     fn steppers_group_to_one_target_and_prev_twins_drop() {
         let t = targets(&[
-            cand(0, 0.0, 0.0, "setting:vsync:prev"),
-            cand(1, 60.0, 0.0, "setting:vsync:next"),
-            cand(2, 0.0, 40.0, "setting:exposure:drag"),
-            cand(3, 0.0, 80.0, "setting:window_mode:open"),
-            cand(4, 0.0, 120.0, "setting:key_forward:rebind"),
-            cand(5, 0.0, 160.0, "group:toggle:0"),
-            cand(6, 0.0, 200.0, "screen:hide"),
-            cand(7, 0.0, 240.0, ""),
+            cand(
+                0,
+                0.0,
+                0.0,
+                serde_json::json!({"setting": {"key": "vsync", "verb": "prev"}}),
+            ),
+            cand(
+                1,
+                60.0,
+                0.0,
+                serde_json::json!({"setting": {"key": "vsync", "verb": "next"}}),
+            ),
+            cand(
+                2,
+                0.0,
+                40.0,
+                serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}}),
+            ),
+            cand(
+                3,
+                0.0,
+                80.0,
+                serde_json::json!({"setting": {"key": "window_mode", "verb": "open"}}),
+            ),
+            cand(
+                4,
+                0.0,
+                120.0,
+                serde_json::json!({"setting": {"key": "key_forward", "verb": "rebind"}}),
+            ),
+            cand(5, 0.0, 160.0, serde_json::json!({"group_toggle": 0})),
+            cand(6, 0.0, 200.0, serde_json::json!("hide")),
+            cand(7, 0.0, 240.0, serde_json::json!(null)),
         ]);
         let by_index: Vec<usize> = t.iter().map(|t| t.index).collect();
         assert_eq!(by_index, vec![1, 2, 3, 4, 5, 6], "prev + empty drop");
@@ -221,9 +246,9 @@ mod tests {
     #[test]
     fn first_pulse_lands_topmost_leftmost() {
         let t = targets(&[
-            cand(0, 100.0, 200.0, "screen:hide"),
-            cand(1, 0.0, 50.0, "quit"),
-            cand(2, 300.0, 50.0, "scene:1"),
+            cand(0, 100.0, 200.0, serde_json::json!("hide")),
+            cand(1, 0.0, 50.0, serde_json::json!("quit")),
+            cand(2, 300.0, 50.0, serde_json::json!({"scene": 1})),
         ]);
         assert_eq!(navigate(&t, None, NavDirection::Down), Some(1));
         assert_eq!(initial(&t), Some(1));
@@ -232,9 +257,9 @@ mod tests {
     #[test]
     fn vertical_list_walks_and_wraps() {
         let t = targets(&[
-            cand(0, 0.0, 0.0, "screen:show:1"),
-            cand(1, 0.0, 50.0, "screen:show:2"),
-            cand(2, 0.0, 100.0, "screen:show:3"),
+            cand(0, 0.0, 0.0, serde_json::json!({"show": 1})),
+            cand(1, 0.0, 50.0, serde_json::json!({"show": 2})),
+            cand(2, 0.0, 100.0, serde_json::json!({"show": 3})),
         ]);
         let f0 = focus(&t, 0);
         assert_eq!(navigate(&t, Some(&f0), NavDirection::Down), Some(1));
@@ -255,9 +280,9 @@ mod tests {
     fn horizontal_neighbors_reachable_and_clamped_at_the_ends() {
         // A tab bar: three targets on one row.
         let t = targets(&[
-            cand(0, 0.0, 0.0, "screen:show:1"),
-            cand(1, 250.0, 0.0, "screen:show:2"),
-            cand(2, 500.0, 0.0, "screen:show:3"),
+            cand(0, 0.0, 0.0, serde_json::json!({"show": 1})),
+            cand(1, 250.0, 0.0, serde_json::json!({"show": 2})),
+            cand(2, 500.0, 0.0, serde_json::json!({"show": 3})),
         ]);
         let f0 = focus(&t, 0);
         assert_eq!(navigate(&t, Some(&f0), NavDirection::Right), Some(1));
@@ -275,9 +300,9 @@ mod tests {
         // From a tab, Down should land on the row list under it, not a nearer
         // target far to the side.
         let t = targets(&[
-            cand(0, 200.0, 0.0, "screen:show:1"),
-            cand(1, 700.0, 40.0, "screen:show:11"),
-            cand(2, 200.0, 90.0, "screen:show:12"),
+            cand(0, 200.0, 0.0, serde_json::json!({"show": 1})),
+            cand(1, 700.0, 40.0, serde_json::json!({"show": 11})),
+            cand(2, 200.0, 90.0, serde_json::json!({"show": 12})),
         ]);
         let f0 = focus(&t, 0);
         assert_eq!(navigate(&t, Some(&f0), NavDirection::Down), Some(2));
@@ -286,8 +311,8 @@ mod tests {
     #[test]
     fn vanished_focus_reanchors_from_its_last_rect() {
         let t = targets(&[
-            cand(0, 0.0, 0.0, "screen:show:1"),
-            cand(2, 0.0, 100.0, "screen:show:3"),
+            cand(0, 0.0, 0.0, serde_json::json!({"show": 1})),
+            cand(2, 0.0, 100.0, serde_json::json!({"show": 3})),
         ]);
         // The focused region (index 9) is gone; its rect sat between the two.
         let gone = FocusRef {

@@ -69,7 +69,6 @@ pub(crate) fn benches(bench: &mut Bench) {
             let result = build_pipeline_from_str(
                 &content,
                 Some(&assets_dir),
-                None,
                 concinnity_engine::platform::current(),
             )
             .expect("bench world compiles");
@@ -81,7 +80,6 @@ pub(crate) fn benches(bench: &mut Bench) {
         let result = build_pipeline_from_str(
             &content,
             Some(&assets_dir),
-            None,
             concinnity_engine::platform::current(),
         )
         .expect("bench world compiles");

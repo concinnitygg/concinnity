@@ -1,7 +1,7 @@
 //! EditorHook: unique-name generation and edit persistence (SAVE, the atomic
 //! world.jsonl write, and the in-memory live-preview world rebuild).
 
-use concinnity_cook::authoring::refs::rename_references;
+use concinnity_cook::authoring::refs::{count_references, rename_references};
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{ID_KEY, entry_handle, set_entry_id};
 use concinnity_core::ecs::World;
@@ -88,9 +88,11 @@ impl EditorHook {
     // Rename `key`'s entry to `typed` (made unique against the other entries,
     // or anonymous when blank) and point every reference to its old `$id` at
     // the new one. The caller commits, so the rename and the references it
-    // moved are one undo step.
+    // moved are one undo step. An entry other entries reference keeps its
+    // `$id` rather than going anonymous, since nothing can name an anonymous
+    // entry.
     pub(super) fn rename_entry(&mut self, key: EntryId, typed: &str) -> Renamed {
-        let name = self.finalize_rename(typed, key);
+        let mut name = self.finalize_rename(typed, key);
         let Some(idx) = self.entries.index_of(key) else {
             return Renamed {
                 before: None,
@@ -99,6 +101,22 @@ impl EditorHook {
             };
         };
         let before = declared_id(&self.entries[idx]).map(str::to_string);
+        let target = entry_type(&self.entries[idx]).and_then(RegisteredType::parse);
+        let args = self.entries[idx].get("args").cloned().unwrap_or_default();
+        if let (None, Some(old), Some(target)) = (&name, &before, target) {
+            let naming: usize = self
+                .entries
+                .iter()
+                .map(|e| count_references(e, target, &args, old))
+                .sum();
+            if naming > 0 {
+                self.notifier.push(
+                    notify::Level::Error,
+                    &format!("'{old}' keeps its `$id`: {}", naming_note(naming)),
+                );
+                name = before.clone();
+            }
+        }
         match &name {
             Some(n) => set_entry_id(&mut self.entries[idx], n),
             None => {
@@ -110,7 +128,6 @@ impl EditorHook {
                 }
             }
         }
-        let target = entry_type(&self.entries[idx]).and_then(RegisteredType::parse);
         let moved = match (&before, &name, target) {
             (Some(old), Some(new), Some(target)) if old != new => {
                 let args = self.entries[idx].get("args").cloned().unwrap_or_default();
@@ -380,6 +397,14 @@ impl Renamed {
             "Renamed {kind} '{before}' to '{name}'{}",
             references_note(self.moved)
         ))
+    }
+}
+
+// "N references name it", for an entry that cannot go anonymous.
+fn naming_note(naming: usize) -> String {
+    match naming {
+        1 => "1 reference names it".to_string(),
+        n => format!("{n} references name it"),
     }
 }
 

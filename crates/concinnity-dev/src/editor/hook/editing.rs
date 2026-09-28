@@ -135,6 +135,20 @@ impl EditorHook {
         for (i, names) in ref_opts {
             form::set_ref_options(&mut self.form.fields[i], &names);
         }
+        // Action fields pick from what the world's Screens and Scenes let an
+        // action do.
+        if self
+            .form
+            .fields
+            .iter()
+            .any(|f| matches!(f.kind, form::FieldKind::Action { .. }))
+        {
+            let screens = self.ref_options(&["Screen"]);
+            let scenes = self.ref_options(&["Scene"]);
+            for field in &mut self.form.fields {
+                form::set_action_options(field, &screens, &scenes);
+            }
+        }
         // Seed only the text controls inside the visible window (their pool is
         // slot-indexed). Bool (checkbox), Enum + Ref (cycle buttons), and Array (a
         // header) have no text input to seed.

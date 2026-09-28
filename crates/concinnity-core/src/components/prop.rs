@@ -6,7 +6,7 @@ use crate::ecs::MaterialHandle;
 use crate::ecs::MeshHandle;
 use crate::ecs::de_opt_material_handle;
 use crate::ecs::de_opt_mesh_handle;
-use crate::ecs::{Ref, RefTarget, de_opt_ref};
+use crate::ecs::{NameRef, Ref, RefTarget, de_opt_ref};
 use alloc::string::String;
 
 /// The collision volume a [PropCollider](#propcollider)'s `shape` names. The
@@ -143,10 +143,10 @@ pub struct Prop {
     /// in every scene. Used by scene switches for per-scene visibility.
     #[serde(default, deserialize_with = "de_opt_ref")]
     pub scene: Option<Ref<Scene>>,
-    /// Name of a [Prefab](#prefab) to instantiate at this prop's transform. When
+    /// A [Prefab](#prefab) to instantiate at this prop's transform. When
     /// set, it expands into concrete child props and lights, replacing this
     /// prop. Cannot be combined with `model` or `mesh`.
-    pub prefab: String,
+    pub prefab: NameRef<PrefabTemplate>,
     /// Optional view-distance cutoff in world units. When > 0 the prop is hidden
     /// once the camera is further than this from it. 0 (default) keeps the prop
     /// visible at any distance.
@@ -167,6 +167,15 @@ impl RefTarget for PropParent {
     const TYPES: &'static [&'static str] = &["Prop", "SkyRotation"];
 }
 
+/// What a [Prop](#prop)'s `prefab` may name: a [Prefab](#prefab), the template
+/// the build expands the prop into.
+#[derive(Debug, Clone, Copy)]
+pub struct PrefabTemplate;
+
+impl RefTarget for PrefabTemplate {
+    const TYPES: &'static [&'static str] = &["Prefab"];
+}
+
 impl Default for Prop {
     fn default() -> Self {
         Self {
@@ -181,7 +190,7 @@ impl Default for Prop {
             pickup: false,
             parent: None,
             scene: None,
-            prefab: String::new(),
+            prefab: NameRef::default(),
             cull_distance: 0.0,
             is_held: false,
         }

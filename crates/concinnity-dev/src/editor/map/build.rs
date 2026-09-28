@@ -325,7 +325,7 @@ mod tests {
             asset(
                 RegisteredType::MainMenu,
                 "main",
-                json!({"initial": true, "items": [{"label": "Start", "action": "scene:bistro"}]}),
+                json!({"initial": true, "items": [{"label": "Start", "action": {"scene": "bistro"}}]}),
             ),
         ]);
         assert_eq!(at(&chart, "main").column, 0);
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn a_wire_says_what_the_author_called_the_move_unless_it_is_too_wide() {
         let chart = mapped(vec![menu(json!([
-            {"label": "Start", "action": "scene:bistro"},
+            {"label": "Start", "action": {"scene": "bistro"}},
             {"label": "Settings", "action": "settings"},
         ]))]);
         let labels: Vec<&str> = chart
@@ -357,8 +357,8 @@ mod tests {
     #[test]
     fn a_move_onto_a_place_the_world_does_not_declare_says_what_is_missing() {
         let chart = mapped(vec![menu(json!([
-            {"label": "Start", "action": "scene:typo"},
-            {"label": "Help", "action": "screen:push:typo"},
+            {"label": "Start", "action": {"scene": "typo"}},
+            {"label": "Help", "action": {"push": "typo"}},
         ]))]);
         assert_eq!(at(&chart, "typo").kind, CardKind::Missing);
         assert_eq!(at(&chart, "typo").detail, "missing scene");
@@ -376,7 +376,7 @@ mod tests {
             asset(
                 RegisteredType::KeyBinding,
                 "esc",
-                json!({"key": "Escape", "action": "screen:toggle:pause"}),
+                json!({"key": "Escape", "action": {"toggle": "pause"}}),
             ),
         ]);
         assert_eq!(
@@ -413,7 +413,7 @@ mod tests {
     #[test]
     fn a_move_reaching_no_place_draws_no_arrow() {
         let chart = mapped(vec![menu(json!([
-            {"label": "Back", "action": "return"},
+            {"label": "Back", "action": "hide"},
             {"label": "Quit", "action": "quit"},
         ]))]);
         assert_eq!(titles(&chart), ["main"]);
@@ -429,7 +429,7 @@ mod tests {
             asset(
                 RegisteredType::HitRegion,
                 "close",
-                json!({"screen": "pause", "action": "screen:toggle:pause"}),
+                json!({"screen": "pause", "action": {"toggle": "pause"}}),
             ),
         ]);
         assert_eq!(at(&chart, "pause").column, 0);
@@ -446,12 +446,12 @@ mod tests {
             asset(
                 RegisteredType::HitRegion,
                 "play",
-                json!({"screen": "menu", "action": "scene:level"}),
+                json!({"screen": "menu", "action": {"scene": "level"}}),
             ),
             asset(
                 RegisteredType::HitRegion,
                 "give_up",
-                json!({"screen": "level", "action": "screen:show:menu"}),
+                json!({"screen": "level", "action": {"show": "menu"}}),
             ),
         ]);
         assert_eq!(at(&chart, "menu").column, 0);
@@ -468,7 +468,7 @@ mod tests {
             world.push(asset(
                 RegisteredType::HitRegion,
                 &format!("{screen}_go"),
-                json!({"screen": screen, "action": format!("screen:show:{next}")}),
+                json!({"screen": screen, "action": {"show": next}}),
             ));
         }
         let chart = mapped(world);
@@ -483,9 +483,9 @@ mod tests {
         let chart = mapped(vec![
             asset(RegisteredType::Scene, "level", json!({})),
             menu(json!([
-                {"label": "Play", "action": "scene:level"},
-                {"label": "Play", "action": "scene:level"},
-                {"label": "Again", "action": "screen:show:level"},
+                {"label": "Play", "action": {"scene": "level"}},
+                {"label": "Play", "action": {"scene": "level"}},
+                {"label": "Again", "action": {"show": "level"}},
             ])),
         ]);
         assert_eq!(chart.wires.len(), 2);

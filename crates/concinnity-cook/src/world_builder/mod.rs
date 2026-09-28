@@ -168,7 +168,7 @@ impl WorldBuilder {
         let text = write_world_jsonl(&self.entries).map_err(from_io)?;
         let loaded: LoadedWorld =
             prepare_world(&text, assets_dir.as_deref()).map_err(WorldBuildError::Validation)?;
-        build_compiled(loaded.assets, assets_dir.as_deref(), None, self.platform).map_err(from_io)
+        build_compiled(loaded.assets, assets_dir.as_deref(), self.platform).map_err(from_io)
     }
 }
 

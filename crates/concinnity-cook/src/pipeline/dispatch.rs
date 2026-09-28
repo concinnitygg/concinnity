@@ -88,7 +88,6 @@ mod tests {
             platform: concinnity_core::platform::Platform::Metal,
             name: "test",
             assets_dir: None,
-            artifacts_dir: None,
             all_assets: &[],
         }
     }
@@ -398,7 +397,6 @@ mod tests {
             platform: concinnity_core::platform::Platform::Metal,
             name: "chunk",
             assets_dir: None,
-            artifacts_dir: None,
             all_assets: &blocks,
         };
         let args = serde_json::json!({

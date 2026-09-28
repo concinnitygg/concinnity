@@ -25,7 +25,7 @@ use concinnity_core::components::Room;
 use concinnity_core::components::Spawner;
 use concinnity_core::ecs::ComponentTag;
 use concinnity_core::ecs::ResourceKind;
-use concinnity_core::ecs::{AssetFields, EnumField, FieldTable, RefField};
+use concinnity_core::ecs::{ActionField, AssetFields, EnumField, FieldTable, RefField};
 pub use concinnity_core::ecs::{AssetOrigin, AssetPayload};
 use concinnity_host::thread::asset_id;
 use std::sync::OnceLock;
@@ -484,6 +484,12 @@ macro_rules! define_registered_type {
             /// `Ref<T>` or a resource handle, and the types it may name.
             pub fn ref_fields(self) -> &'static [RefField] {
                 &self.field_table().refs
+            }
+            /// The fields of this type holding an action, each with the names
+            /// it takes besides one. The targets an action names are among
+            /// [`Self::ref_fields`], under the action's own path.
+            pub fn action_fields(self) -> &'static [ActionField] {
+                &self.field_table().actions
             }
             /// The fields holding a file this type owns: its authored source,
             /// which belongs to the asset rather than being content other
@@ -1084,6 +1090,31 @@ mod tests {
                 }
             }
         }
+    }
+
+    // Every field holding an action is listed, with the names it takes besides
+    // one, and the Screens and Scenes its actions name are reference fields
+    // under its path.
+    #[test]
+    fn action_fields_list_every_action_and_its_targets() {
+        let actions = |ty: RegisteredType| -> Vec<(&str, &[&str])> {
+            ty.action_fields()
+                .iter()
+                .map(|f| (f.path.as_str(), f.extras))
+                .collect()
+        };
+        assert_eq!(actions(RegisteredType::HitRegion), [("action", &[][..])]);
+        assert_eq!(actions(RegisteredType::KeyBinding), [("action", &[][..])]);
+        assert_eq!(
+            actions(RegisteredType::MainMenu),
+            [
+                ("items.action", &["settings"][..]),
+                ("settings_back_action", &[][..])
+            ]
+        );
+        let refs = ref_pairs(RegisteredType::MainMenu);
+        assert!(refs.contains(&("items.action.show", vec!["Screen"])));
+        assert!(refs.contains(&("settings_back_action.scene", vec!["Scene"])));
     }
 
     fn ref_pairs(ty: RegisteredType) -> Vec<(&'static str, Vec<&'static str>)> {

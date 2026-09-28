@@ -1,9 +1,9 @@
 // Build-time expansion of an OptionSelect settings row. A setting with more than
 // two options expands to a dropdown (name + current value + a downward chevron
-// under one click region firing "setting:<key>:open", which opens a floating
+// under one click region firing the setting's `open`, which opens a floating
 // option list at runtime); a setting with two options (an Off/On toggle) expands
 // to a `<`/`>` stepper (name + `<` + value + `>` over two regions firing
-// "setting:<key>:prev" / ":next"). The option count is read from the shared
+// its `prev` / `next`). The option count is read from the shared
 // registry in `concinnity_core::settings`, so the row form always matches
 // the setting the engine will apply.
 //
@@ -12,6 +12,7 @@
 // so generated elements stay scoped to its Screen via the build pipeline's
 // `<screen>_*` rule and never collide with hand-authored assets.
 
+use concinnity_core::components::NamedAction;
 use concinnity_core::settings::{SettingKey, SettingKind};
 
 use crate::authoring::registry::RegisteredType;
@@ -21,7 +22,6 @@ use crate::build_only::expand::{asset_name, registered_type, schema_args};
 use crate::build_only::membership::scope_to_screen;
 use crate::build_only::row_setting::row_setting;
 use crate::build_only::ui_spec::{font_sizes, label_value};
-use asset::ui_action;
 use concinnity_core::components::SettingVerb;
 
 // Whether a setting row expands to a dropdown (more than two options, or a
@@ -79,7 +79,9 @@ pub(crate) fn expand_option_selects(assets: &mut Vec<serde_json::Value>) -> Resu
         let font_px = if select.font.is_empty() {
             default_px
         } else {
-            *font_px_by_name.get(&select.font).unwrap_or(&default_px)
+            *font_px_by_name
+                .get(select.font.as_str())
+                .unwrap_or(&default_px)
         };
 
         let mut children = expand_one(&name, &select, setting, font_px);
@@ -175,7 +177,10 @@ fn expand_one(
                 },
                 &value_name,
                 s,
-                &ui_action::setting(setting, SettingVerb::Open),
+                NamedAction::Setting {
+                    key: setting,
+                    verb: SettingVerb::Open,
+                },
             ),
         ];
     }
@@ -243,7 +248,10 @@ fn expand_one(
             },
             &value_name,
             s,
-            &ui_action::setting(setting, SettingVerb::Prev),
+            NamedAction::Setting {
+                key: setting,
+                verb: SettingVerb::Prev,
+            },
         ),
         // Next click region (value + `>`).
         region(
@@ -256,7 +264,10 @@ fn expand_one(
             },
             &value_name,
             s,
-            &ui_action::setting(setting, SettingVerb::Next),
+            NamedAction::Setting {
+                key: setting,
+                verb: SettingVerb::Next,
+            },
         ),
     ]
 }
@@ -276,7 +287,7 @@ fn region(
     rect: Rect,
     value_label: &str,
     s: &OptionSelect,
-    action: &str,
+    action: NamedAction,
 ) -> serde_json::Value {
     spec_to_value(
         &asset::hit_region(name, [rect.x, rect.y, rect.width, rect.height], action)
@@ -346,13 +357,19 @@ mod tests {
         // max(100 + 300*0.42, 100 + 300 - 360) = max(226, 40) = 226.
         let prev = by_name(&assets, "opt_vsync_prev");
         assert_eq!(prev["type"], "HitRegion");
-        assert_eq!(prev["args"]["action"], "setting:vsync:prev");
+        assert_eq!(
+            prev["args"]["action"],
+            serde_json::json!({"setting": {"key": "vsync", "verb": "prev"}})
+        );
         assert_eq!(prev["args"]["label"], "opt_vsync_value");
         assert_eq!(prev["args"]["x"], 226.0);
         assert_eq!(prev["args"]["width"], 40.0);
 
         let next = by_name(&assets, "opt_vsync_next");
-        assert_eq!(next["args"]["action"], "setting:vsync:next");
+        assert_eq!(
+            next["args"]["action"],
+            serde_json::json!({"setting": {"key": "vsync", "verb": "next"}})
+        );
         assert_eq!(next["args"]["label"], "opt_vsync_value");
         // next starts where prev ends (ctrl_x + stepper_width = 266) -> no overlap.
         assert_eq!(next["args"]["x"], 266.0);
@@ -439,7 +456,10 @@ mod tests {
         // A single click region opens the floating list; no prev/next regions.
         let open = by_name(&assets, "opt_wm_open");
         assert_eq!(open["type"], "HitRegion");
-        assert_eq!(open["args"]["action"], "setting:window_mode:open");
+        assert_eq!(
+            open["args"]["action"],
+            serde_json::json!({"setting": {"key": "window_mode", "verb": "open"}})
+        );
         assert_eq!(open["args"]["label"], "opt_wm_value");
         assert!(!assets.iter().any(|v| asset_name(v) == "opt_wm_prev"));
         assert!(!assets.iter().any(|v| asset_name(v) == "opt_wm_next"));
@@ -459,7 +479,10 @@ mod tests {
         })];
         expand_option_selects(&mut assets).unwrap();
         let open = by_name(&assets, "opt_res_open");
-        assert_eq!(open["args"]["action"], "setting:resolution:open");
+        assert_eq!(
+            open["args"]["action"],
+            serde_json::json!({"setting": {"key": "resolution", "verb": "open"}})
+        );
         assert_eq!(by_name(&assets, "opt_res_chevron")["args"]["content"], "v");
         assert!(!assets.iter().any(|v| asset_name(v) == "opt_res_prev"));
     }

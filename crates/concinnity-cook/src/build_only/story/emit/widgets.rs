@@ -1,3 +1,4 @@
+use concinnity_core::components::NamedAction;
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::names::ButtonNames;
@@ -107,7 +108,7 @@ pub(super) fn hit_region(
     name: &str,
     rect: (f32, f32, f32, f32),
     label: Option<&str>,
-    action: &str,
+    action: NamedAction,
 ) -> serde_json::Value {
     hit_region_fit(name, rect, label, action, None)
 }
@@ -145,7 +146,7 @@ pub(super) fn hit_region_fit(
     name: &str,
     rect: (f32, f32, f32, f32),
     label: Option<&str>,
-    action: &str,
+    action: NamedAction,
     fit: Option<&'static str>,
 ) -> serde_json::Value {
     let mut spec = asset::hit_region(name, [rect.0, rect.1, rect.2, rect.3], action);
@@ -169,7 +170,7 @@ pub(super) fn button(
     font: &str,
     text: &str,
     rect: (f32, f32, f32),
-    action: &str,
+    action: NamedAction,
 ) -> Vec<serde_json::Value> {
     let (x, y, w) = rect;
     vec![
@@ -197,7 +198,7 @@ pub(super) fn title_button(
     font: &str,
     text: &str,
     y: f32,
-    action: &str,
+    action: NamedAction,
 ) -> Vec<serde_json::Value> {
     let win_w = UI_REFERENCE_SIZE[0];
     let x = win_w / 2.0 - 120.0;

@@ -11,7 +11,7 @@ use crate::authoring::registry::build_only::{MainMenu, SettingsProfile};
 
 // Settings tabs, left to right: (screen-name suffix, tab label). Each tab is its
 // own Screen; the active tab bakes its own highlight, so switching tabs needs no
-// runtime state, only a screen:show.
+// runtime state, only a `show`.
 const SETTINGS_TABS: [(&str, &str); 3] = [
     ("video", "Video"),
     ("audio", "Audio"),

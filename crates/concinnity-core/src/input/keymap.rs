@@ -41,7 +41,7 @@ impl Bindable {
         Bindable::Interact,
     ];
 
-    /// The settings key string used in `setting:<key>:rebind` actions and the
+    /// The settings key string used in rebind actions and the
     /// engine settings registry.
     pub const fn setting_key(self) -> &'static str {
         match self {

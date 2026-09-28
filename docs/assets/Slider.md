@@ -9,8 +9,8 @@ track.
 left-aligned name, a draggable track with a handle, and a right-aligned
 current value. It expands into a [TextLabel](TextLabel.md) for the name, a
 [TextLabel](TextLabel.md) for the value, two [Sprite](Sprite.md)s (the track and
-the handle), and a [HitRegion](HitRegion.md) covering the track that fires a
-`"setting:<setting>:drag"` action. While the region is pressed the handle
+the handle), and a [HitRegion](HitRegion.md) covering the track whose action
+drags `setting`. While the region is pressed the handle
 follows the cursor and the value updates live.
 
 The `setting` field names an engine setting the runtime knows how to map
@@ -25,14 +25,14 @@ never clash with hand-authored assets.
 
 ## Parameters
 
-- `screen`: A string. [Screen](Screen.md) the generated elements belong to. Empty leaves them screen-less, which draws them with the HUD rather than with a screen. Defaults to `""`.
+- `screen`: A string. [Screen](Screen.md) the generated elements belong to. Empty leaves them screen-less, which draws them with the HUD rather than with a screen.
 - `setting`: A string. Engine setting this row controls (e.g. `"exposure"`). Must be a setting the runtime recognizes as a slider; an unknown key renders but does nothing on drag. Defaults to `""`.
 - `label`: A string. Display name shown at the left of the row. Defaults to `""`.
 - `x`: A float. Left edge of the row in window pixels. Defaults to `0.0`.
 - `y`: A float. Top edge of the row in window pixels. Defaults to `0.0`.
 - `width`: A float. Row width in window pixels (name sits at the left, track and value at the right). Defaults to `360.0`.
 - `height`: A float. Row height in window pixels (the draggable region's height). Defaults to `48.0`.
-- `font`: A string. [Font](Font.md) for the row text. Empty uses the built-in font. Defaults to `""`.
+- `font`: A string. [Font](Font.md) for the row text. Empty uses the built-in font.
 - `font_px`: A float. Pixel size of the row text when it uses the built-in font (that is, when `font` is empty). Ignored when `font` names a [Font](Font.md), which carries its own size. Defaults to `48.0`.
 - `text_color`: An array of 3 floats. Linear-space RGB color of the name text. Defaults to `[0.85, 0.85, 0.85]`.
 - `value_color`: An array of 3 floats. Linear-space RGB color of the value text. Defaults to `[0.85, 0.85, 0.85]`.

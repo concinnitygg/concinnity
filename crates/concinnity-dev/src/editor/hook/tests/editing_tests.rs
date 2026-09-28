@@ -191,6 +191,64 @@ fn edit_rename_to_a_duplicate_is_suffixed() {
     assert_eq!(h.entries[1]["args"]["$id"], "a_1");
 }
 
+fn notices(h: &EditorHook) -> Vec<String> {
+    h.notifier
+        .stack()
+        .cards
+        .into_iter()
+        .map(|c| c.message)
+        .collect()
+}
+
+// A form rename moves what a build-only shorthand names: a Panel's screen
+// follows the Screen, and its title, which only reads the name, stays.
+#[test]
+fn edit_rename_moves_a_build_only_reference() {
+    let mut h = hook(vec![
+        entry("pause", "Screen"),
+        entry_with_args(
+            "card",
+            "Panel",
+            serde_json::json!({"screen": "pause", "title": "pause"}),
+        ),
+    ]);
+    let mut world = world_with_fields();
+    h.form.target = entry_target(&h, 0);
+    h.form.selected_type = Some("Screen".to_string());
+    set_field(&mut world, form_panel::NAME_INPUT, "paused");
+    h.apply_form(FormAction::Confirm, &mut world);
+    assert_eq!(h.entries[0]["args"]["$id"], "paused");
+    assert_eq!(h.entries[1]["args"]["screen"], "paused");
+    assert_eq!(h.entries[1]["args"]["title"], "pause");
+}
+
+// Blanking the `$id` of an entry another names keeps the id and says why,
+// since nothing can name an anonymous entry; an unreferenced one goes
+// anonymous.
+#[test]
+fn blanking_a_referenced_id_keeps_it() {
+    let mut h = hook(vec![
+        entry("pause", "Screen"),
+        entry_with_args("card", "Panel", serde_json::json!({"screen": "pause"})),
+        entry("lone", "Screen"),
+    ]);
+    let mut world = world_with_fields();
+    for at in [0, 2] {
+        h.form.target = entry_target(&h, at);
+        h.form.selected_type = Some("Screen".to_string());
+        set_field(&mut world, form_panel::NAME_INPUT, "");
+        h.apply_form(FormAction::Confirm, &mut world);
+    }
+    assert_eq!(h.entries[0]["args"]["$id"], "pause");
+    assert_eq!(h.entries[1]["args"]["screen"], "pause");
+    assert!(
+        notices(&h)
+            .iter()
+            .any(|n| n == "'pause' keeps its `$id`: 1 reference names it")
+    );
+    assert_eq!(declared_id(&h.entries[2]), None);
+}
+
 #[test]
 fn confirm_add_with_a_blank_id_adds_it_anonymous() {
     let mut h = hook(Vec::new());
@@ -489,11 +547,12 @@ fn add_form_writes_a_nested_object_field() {
     );
 }
 
+// A KeyBinding is a key typed in and an action picked from what the world's
+// Screens let one do.
 #[test]
-fn add_form_writes_string_fields_for_a_new_type() {
-    let mut h = hook(Vec::new());
+fn add_form_writes_a_key_and_a_picked_action_for_a_new_type() {
+    let mut h = hook(vec![entry("pause", "Screen")]);
     let mut world = world_with_fields();
-    // KeyBinding (a newly offered type) is a pair of string fields.
     h.open_form(&mut world, "KeyBinding".to_string(), FormTarget::New);
     let field_pos = |k: &str| {
         h.form
@@ -504,15 +563,24 @@ fn add_form_writes_string_fields_for_a_new_type() {
     };
     let (key_j, action_j) = (field_pos("key"), field_pos("action"));
     assert!(matches!(h.form.fields[key_j].kind, form::FieldKind::Str));
-    set_field(&mut world, form_panel::form_input(key_j), "Space");
-    set_field(&mut world, form_panel::form_input(action_j), "screen:hide");
-    set_field(&mut world, form_panel::NAME_INPUT, "jump_key");
+    let action = &mut h.form.fields[action_j];
+    assert_eq!(action.variants[action.variant_idx], "(none)");
+    action.variant_idx = action
+        .variants
+        .iter()
+        .position(|v| v == "toggle pause")
+        .expect("the Screen is offered");
+    set_field(&mut world, form_panel::form_input(key_j), "Escape");
+    set_field(&mut world, form_panel::NAME_INPUT, "pause_key");
     h.apply_form(FormAction::Confirm, &mut world);
     assert!(!h.form_open());
-    assert_eq!(h.entries.len(), 1);
-    assert_eq!(h.entries[0]["type"], "KeyBinding");
-    assert_eq!(h.entries[0]["args"]["key"], "Space");
-    assert_eq!(h.entries[0]["args"]["action"], "screen:hide");
+    assert_eq!(h.entries.len(), 2);
+    assert_eq!(h.entries[1]["type"], "KeyBinding");
+    assert_eq!(h.entries[1]["args"]["key"], "Escape");
+    assert_eq!(
+        h.entries[1]["args"]["action"],
+        serde_json::json!({"toggle": "pause"})
+    );
 }
 
 #[test]

@@ -114,6 +114,7 @@ fn apply_form_focus_toggle_and_consume() {
         boolval: false,
         variants: Vec::new(),
         variant_idx: 0,
+        choices: Vec::new(),
     }];
     h.apply_form(FormAction::FocusField(0), &mut world);
     assert!(matches!(h.form.focus, FormFocus::Field(0)));

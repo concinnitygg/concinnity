@@ -171,6 +171,7 @@ mod tests {
                 boolval: false,
                 variants: Vec::new(),
                 variant_idx: 0,
+                choices: Vec::new(),
             }],
             scroll: 3,
             focus: FormFocus::Field(1),

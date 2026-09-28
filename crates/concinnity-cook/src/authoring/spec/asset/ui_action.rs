@@ -1,89 +1,63 @@
-// Action text builders for generated HitRegions and KeyBindings. Generated
-// entries are authored-form JSON emitted before names are interned, so targets
-// stay names here and resolve when the args deserialize into a UiAction.
+// Carries a generated action into a spec's args. Generated HitRegions and
+// KeyBindings name their targets by `$id`, resolved when the args deserialize
+// into a `UiAction`.
 
-use concinnity_core::components::{SettingVerb, StoryCommand};
-use concinnity_core::settings::SettingKey;
+use concinnity_core::components::NamedAction;
+use serde_json::Value;
 
-/// Stop the application.
-pub(crate) fn quit() -> String {
-    "quit".to_string()
-}
+use crate::authoring::spec::ArgValue;
 
-/// Show the named screen, replacing the top of the stack.
-pub(crate) fn screen_show(name: &str) -> String {
-    format!("screen:show:{name}")
-}
-
-/// Toggle the named screen.
-pub(crate) fn screen_toggle(name: &str) -> String {
-    format!("screen:toggle:{name}")
-}
-
-/// Close the top screen.
-pub(crate) fn screen_hide() -> String {
-    "screen:hide".to_string()
-}
-
-/// Expand or collapse a settings-screen group.
-pub(crate) fn group_toggle(gid: usize) -> String {
-    format!("group:toggle:{gid}")
-}
-
-/// Drive the story system.
-pub(crate) fn story(cmd: StoryCommand) -> String {
-    match cmd.index() {
-        Some(i) => format!("story:{}:{i}", cmd.verb()),
-        None => format!("story:{}", cmd.verb()),
+impl From<NamedAction> for ArgValue {
+    fn from(action: NamedAction) -> Self {
+        json_arg(serde_json::to_value(action).expect("an action serializes to JSON"))
     }
 }
 
-/// Operate a settings row.
-pub(crate) fn setting(key: SettingKey, verb: SettingVerb) -> String {
-    format!("setting:{}:{}", key.as_str(), verb.as_str())
+fn json_arg(value: Value) -> ArgValue {
+    match value {
+        Value::Null => ArgValue::Null,
+        Value::Bool(b) => ArgValue::Bool(b),
+        Value::Number(n) => match n.as_i64() {
+            Some(i) => ArgValue::Int(i),
+            None => ArgValue::Float(n.as_f64().unwrap_or_default()),
+        },
+        Value::String(s) => ArgValue::Str(s),
+        Value::Array(items) => ArgValue::Array(items.into_iter().map(json_arg).collect()),
+        Value::Object(map) => {
+            ArgValue::Object(map.into_iter().map(|(k, v)| (k, json_arg(v))).collect())
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use concinnity_core::components::{ScreenCommand, UiAction};
+    use concinnity_core::components::{AuthoredAction, ScreenCommand, StoryCommand, UiAction};
     use concinnity_core::ecs::asset_id::AssetId;
-    use concinnity_core::input::keymap::Bindable;
 
     use super::*;
+    use crate::authoring::spec::json::arg_value_to_json;
 
-    fn parse(text: &str) -> UiAction {
-        let resolve = |name: &str| (name == "pause").then_some(AssetId(9));
-        UiAction::parse(text, resolve).unwrap_or_else(|e| panic!("{text}: {e}"))
-    }
-
+    // A generated action reaches the args in its authored form, which reads
+    // back as the runtime action it names.
     #[test]
-    fn target_builders_parse_to_their_named_asset() {
-        assert_eq!(parse(&quit()), UiAction::Quit);
+    fn a_generated_action_reads_back_as_its_runtime_action() {
+        let resolved = |action: NamedAction| {
+            let json = arg_value_to_json(&ArgValue::from(action));
+            let text = json.to_string().replace("\"pause\"", "9");
+            serde_json::from_str::<UiAction>(&text).unwrap_or_else(|e| panic!("{text}: {e}"))
+        };
+        assert_eq!(resolved(AuthoredAction::Quit), UiAction::Quit);
         assert_eq!(
-            parse(&screen_show("pause")),
+            resolved(AuthoredAction::Show("pause".into())),
             UiAction::Screen(ScreenCommand::Show(AssetId(9)))
         );
         assert_eq!(
-            parse(&screen_toggle("pause")),
-            UiAction::Screen(ScreenCommand::Toggle(AssetId(9)))
+            resolved(AuthoredAction::Story(StoryCommand::Choose(2))),
+            UiAction::Story(StoryCommand::Choose(2))
         );
-        assert_eq!(parse(&screen_hide()), UiAction::Screen(ScreenCommand::Hide));
-        assert_eq!(parse(&group_toggle(3)), UiAction::GroupToggle(3));
-    }
-
-    #[test]
-    fn story_builder_parses_every_verb() {
-        for verb in StoryCommand::VERBS {
-            let cmd = StoryCommand::from_verb(verb, Some(2)).unwrap();
-            assert_eq!(parse(&story(cmd.clone())), UiAction::Story(cmd));
-        }
-    }
-
-    #[test]
-    fn setting_builder_parses_every_verb() {
-        let key = SettingKey::KeyRebind(Bindable::Jump);
-        for verb in SettingVerb::ALL {
-            assert_eq!(parse(&setting(key, verb)), UiAction::Setting { key, verb });
-        }
+        assert_eq!(
+            resolved(AuthoredAction::GroupToggle(3)),
+            UiAction::GroupToggle(3)
+        );
     }
 }

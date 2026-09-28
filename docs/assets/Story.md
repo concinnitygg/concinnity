@@ -17,7 +17,7 @@ The story system reads the graph and drives the stage screen named
 `<name>_stage`: it fills the dialogue and name-plate labels (revealing
 text at `text_speed`), swaps the backdrop and portrait sprite textures,
 shows the choice menu when a node ends in one, and plays page audio.
-Clicking the stage (or pressing Space) advances; `story:start` restarts
+Clicking the stage (or pressing Space) advances; `{"story": "start"}` restarts
 from the first node.
 
 ## Parameters

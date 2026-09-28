@@ -42,13 +42,25 @@ pub struct EnumField {
     pub variants: &'static [&'static str],
 }
 
-/// The reference, vocabulary and owned-file fields one schema declares.
+/// One field holding an action: its dotted path, and the names it accepts
+/// beyond the action vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionField {
+    /// The field's authored key, dotted through nested objects.
+    pub path: String,
+    /// Names the field takes besides an action, each written as a bare string.
+    pub extras: &'static [&'static str],
+}
+
+/// The reference, vocabulary, action and owned-file fields one schema declares.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FieldTable {
     /// Every reference field, in declaration order.
     pub refs: Vec<RefField>,
     /// Every closed-vocabulary field, in declaration order.
     pub enums: Vec<EnumField>,
+    /// Every field holding an action, in declaration order.
+    pub actions: Vec<ActionField>,
     /// The dotted path of every field holding a file the asset owns, in
     /// declaration order.
     pub owned_files: Vec<String>,
@@ -121,7 +133,7 @@ impl<T: ReferenceField> ReferenceField for Vec<T> {
     const TARGETS: &'static [&'static str] = T::TARGETS;
 }
 
-fn join(prefix: &str, key: Option<&str>) -> String {
+pub(crate) fn join(prefix: &str, key: Option<&str>) -> String {
     match key {
         None => String::from(prefix),
         Some(key) if prefix.is_empty() => String::from(key),

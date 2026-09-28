@@ -5,8 +5,7 @@
 A Material bundles the surface parameters that control how a [Prop](Prop.md) is
 lit and shaded.
 
-Reference it from a [Prop](Prop.md)'s `material` field. The `material` field takes
-precedence over the older `texture` field.
+Reference it from a [Prop](Prop.md)'s `material` field.
 
 # Shader parameters
 

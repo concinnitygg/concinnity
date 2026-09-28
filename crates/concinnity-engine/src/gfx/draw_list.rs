@@ -1062,7 +1062,7 @@ mod tests {
             pickup: false,
             parent: None,
             scene: None,
-            prefab: String::new(),
+            prefab: Default::default(),
             cull_distance: 0.0,
             is_held: false,
         }

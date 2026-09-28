@@ -6,5 +6,5 @@ One entry in a [MainMenu](MainMenu.md).
 
 ## Parameters
 
-- `label`: A string. Button text. Defaults to `""`.
-- `action`: A string. Action fired on click. See [MainMenu](MainMenu.md) for the vocabulary. Defaults to `""`.
+- `label`: A string. Button text.
+- `action`: A string or single-key object (see [Action](Action.md)). What a click fires: an action, or `"settings"` to open the menu's generated settings screen.

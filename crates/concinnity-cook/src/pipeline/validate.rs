@@ -103,20 +103,20 @@ mod tests {
         // Inline a representative subset of the world so the test stays
         // hermetic (no infra path lookup needed). Covers: an initial Screen,
         // a Sprite under that screen's prefix, a TextLabel under it, a
-        // HitRegion firing screen:show on another Screen, and a KeyBinding to
+        // HitRegion showing another Screen, and a KeyBinding to
         // toggle a third (modal) Screen.
         let world = r#"["GraphicsConfig",{"$id":"gfx"}]
 ["Font",{"$id":"f","size_px":20}]
 ["Screen",{"$id":"title_menu","initial":true}]
 ["Sprite",{"$id":"title_menu_bg","x":0,"y":0,"width":640,"height":360,"tint":[0.1,0.1,0.1,1]}]
 ["TextLabel",{"$id":"title_menu_lbl","font":"f","content":"Start","x":260,"y":160}]
-["HitRegion",{"$id":"title_menu_btn","x":260,"y":156,"width":120,"height":40,"label":"title_menu_lbl","action":"screen:show:vn_page_1"}]
+["HitRegion",{"$id":"title_menu_btn","x":260,"y":156,"width":120,"height":40,"label":"title_menu_lbl","action":{"show": "vn_page_1"}}]
 ["Screen",{"$id":"vn_page_1"}]
 ["TextLabel",{"$id":"vn_page_1_text","font":"f","content":"hello","x":40,"y":40}]
-["HitRegion",{"$id":"vn_page_1_next","x":0,"y":0,"width":640,"height":360,"action":"screen:show:title_menu"}]
+["HitRegion",{"$id":"vn_page_1_next","x":0,"y":0,"width":640,"height":360,"action":{"show": "title_menu"}}]
 ["Screen",{"$id":"pause_menu"}]
 ["Sprite",{"$id":"pause_menu_dim","x":0,"y":0,"width":640,"height":360,"tint":[0,0,0,0.6]}]
-["KeyBinding",{"$id":"esc","key":"Escape","action":"screen:toggle:pause_menu"}]
+["KeyBinding",{"$id":"esc","key":"Escape","action":{"toggle": "pause_menu"}}]
 "#;
         validate_world_jsonl(world, None).expect("visual_novel-shaped world should validate");
     }
@@ -217,19 +217,22 @@ mod tests {
         validate_asset(
             "HitRegion",
             "go",
-            &serde_json::json!({"action": "story:start"}),
+            &serde_json::json!({"action": {"story": "start"}}),
         )
         .expect("a well-formed action validates");
     }
 
-    // A MainMenu item's action lands on its generated region, so that region
-    // is the asset the failure names.
+    // A MainMenu item's action is read with the menu, so the menu and the
+    // item are what the failure names, with what is wrong with the action.
     #[test]
-    fn validate_world_jsonl_reports_a_bad_menu_item_on_its_region() {
-        let world = r#"["MainMenu",{"$id":"m","items":[{"label":"Go","action":"story:dance"}]}]"#;
+    fn validate_world_jsonl_reports_a_bad_menu_item_action() {
+        let world =
+            r#"["MainMenu",{"$id":"m","items":[{"label":"Go","action":{"story":"dance"}}]}]"#;
         let msg = validate_world_jsonl(world, None)
             .expect_err("unknown story verb")
             .to_string();
-        assert!(msg.contains("Asset 'm_btn_0'"), "got: {msg}");
+        for needle in ["MainMenu 'm'", "items[0].action", "dance"] {
+            assert!(msg.contains(needle), "{needle} in: {msg}");
+        }
     }
 }

@@ -2,6 +2,9 @@
 
 use std::vec;
 
+use concinnity_core::components::{AuthoredAction, Font, NamedAction};
+use concinnity_core::ecs::{AssetFields, FieldTable, NameRef};
+
 /// A ready-made menu declared in a single line.
 ///
 /// `MainMenu` is a build-time shorthand. It expands into the assets a menu is
@@ -10,7 +13,7 @@ use std::vec;
 /// optional [KeyBinding](#keybinding) that toggles the menu, and an optional
 /// in-engine mouse cursor [Sprite](#sprite). So `world.jsonl` stays small.
 ///
-/// The bare form gives a centered Return / Settings / Quit menu that starts
+/// The bare form gives a centered Resume / Settings / Quit menu that starts
 /// closed, with Escape opening it, so the scene itself shows first. Set
 /// `"initial": true` to show the menu as soon as the world loads:
 ///
@@ -19,12 +22,8 @@ use std::vec;
 /// performance-stats toggles have chips to drive.
 ///
 /// **Items.** Each item has a `label` (the text) and an `action` fired on
-/// click. `action` takes the same vocabulary as [HitRegion](#hitregion)
-/// (`"quit"`, `"scene:<name>"`, `"screen:show:<name>"`, `"screen:push:<name>"`,
-/// `"screen:toggle:<name>"`, `"screen:hide"`, `"story:<verb>"`) plus two
-/// conveniences resolved against this menu:
-/// - `"return"`: hide this menu (the same as `"screen:hide"`).
-/// - `"settings"`: open a generated settings sub-menu that has a Back button.
+/// click: any [Action](#action) (`"hide"` closes the menu), or `"settings"`
+/// to open a generated settings sub-menu that has a Back button.
 ///
 /// **Generated names** are prefixed with the menu's `name` (`<name>_btn_0`,
 /// `<name>_label_0`, `<name>_cursor`, ...), so they never clash with
@@ -70,7 +69,7 @@ pub struct MainMenu {
     /// Pixels between adjacent items.
     pub row_gap: f32,
     /// [Font](#font) for the item text. Empty uses the built-in font.
-    pub font: String,
+    pub font: NameRef<Font>,
     /// Pixel size of the item text when this menu emits its own built-in font
     /// (that is, when `font` is empty). Ignored when `font` names a
     /// [Font](#font), which carries its own size. In reference-space pixels.
@@ -100,12 +99,12 @@ pub struct MainMenu {
     /// visual-novel story, say), dropping the Controls tab and every
     /// scene-render group.
     pub settings_profile: SettingsProfile,
-    /// Action fired by the settings screen's Back button, overriding the
-    /// default (which returns to this menu). Setting it also generates the
+    /// What the settings screen's Back button fires, overriding the default
+    /// (which returns to this menu). Setting it also generates the
     /// settings screen even when no item uses the `"settings"` convenience, so
     /// a caller that opens settings by its own action (a story, say) still gets
-    /// the screen. Empty keeps the default Back-to-menu behavior.
-    pub settings_back_action: String,
+    /// the screen. Unset keeps the default Back-to-menu behavior.
+    pub settings_back_action: Option<NamedAction>,
 }
 
 /// Which settings screen a [MainMenu](#mainmenu)'s `"settings"` item builds.
@@ -135,33 +134,72 @@ pub enum SettingsProfile {
 }
 
 /// One entry in a [MainMenu](#mainmenu).
-#[derive(
-    Debug, Clone, Default, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields,
-)]
-#[serde(default)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
 pub struct MainMenuItem {
     /// Button text.
     pub label: String,
-    /// Action fired on click. See [MainMenu](#mainmenu) for the vocabulary.
-    pub action: String,
+    /// What a click fires: an action, or `"settings"` to open the menu's
+    /// generated settings screen.
+    pub action: MenuItemAction,
+}
+
+/// What a [MainMenu](#mainmenu) item does when clicked.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MenuItemAction {
+    /// Open the menu's generated settings screen, which has a Back button.
+    Settings,
+    /// Fire an action.
+    #[serde(untagged)]
+    Action(NamedAction),
+}
+
+// Hand-written so a malformed action reports what the action vocabulary says
+// is wrong with it, rather than that it matched no variant.
+impl<'de> serde::Deserialize<'de> for MenuItemAction {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(d)?;
+        if value == "settings" {
+            return Ok(MenuItemAction::Settings);
+        }
+        NamedAction::deserialize(value)
+            .map(MenuItemAction::Action)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl AssetFields for MenuItemAction {
+    fn collect_fields(prefix: &str, out: &mut FieldTable) {
+        NamedAction::collect_action_fields(prefix, &["settings"], out);
+    }
+}
+
+#[cfg(feature = "schema")]
+impl concinnity_core::ecs::schema::Described for MenuItemAction {
+    const TYPE: concinnity_core::ecs::schema::FieldType =
+        <NamedAction as concinnity_core::ecs::schema::Described>::TYPE;
+}
+
+impl MainMenuItem {
+    /// An item labeled `label` that fires `action`.
+    pub fn new(label: &str, action: NamedAction) -> Self {
+        Self {
+            label: label.to_string(),
+            action: MenuItemAction::Action(action),
+        }
+    }
 }
 
 impl Default for MainMenu {
     fn default() -> Self {
         Self {
             items: vec![
-                MainMenuItem {
-                    label: "Return".to_string(),
-                    action: "return".to_string(),
-                },
+                MainMenuItem::new("Resume", AuthoredAction::Hide),
                 MainMenuItem {
                     label: "Settings".to_string(),
-                    action: "settings".to_string(),
+                    action: MenuItemAction::Settings,
                 },
-                MainMenuItem {
-                    label: "Quit".to_string(),
-                    action: "quit".to_string(),
-                },
+                MainMenuItem::new("Quit", AuthoredAction::Quit),
             ],
             title: String::new(),
             initial: false,
@@ -173,7 +211,7 @@ impl Default for MainMenu {
             button_width: 360.0,
             button_height: 60.0,
             row_gap: 14.0,
-            font: String::new(),
+            font: NameRef::default(),
             font_px: 48.0,
             text_color: [0.85, 0.85, 0.85],
             text_scale: 1.1,
@@ -183,7 +221,7 @@ impl Default for MainMenu {
             cursor_color: [1.0, 1.0, 1.0, 1.0],
             cursor_size: 22.0,
             settings_profile: SettingsProfile::Full,
-            settings_back_action: String::new(),
+            settings_back_action: None,
         }
     }
 }
@@ -192,14 +230,25 @@ impl Default for MainMenu {
 mod tests {
     use super::*;
 
+    fn fires(action: NamedAction) -> MenuItemAction {
+        MenuItemAction::Action(action)
+    }
+
     #[test]
     fn the_default_menu_can_resume_configure_and_quit() {
         // The engine never injects a MainMenu, so a world that declares one with
         // no items still gets a usable pause menu out of the three defaults.
         let m = MainMenu::default();
-        let actions: Vec<&str> = m.items.iter().map(|i| i.action.as_str()).collect();
-        assert_eq!(actions, ["return", "settings", "quit"]);
-        assert_eq!(m.items[0].label, "Return");
+        let actions: Vec<&MenuItemAction> = m.items.iter().map(|i| &i.action).collect();
+        assert_eq!(
+            actions,
+            [
+                &fires(AuthoredAction::Hide),
+                &MenuItemAction::Settings,
+                &fires(AuthoredAction::Quit)
+            ]
+        );
+        assert_eq!(m.items[0].label, "Resume");
         assert_eq!(m.toggle_key, "Escape");
         assert_eq!(m.settings_profile, SettingsProfile::Full);
         // A pause menu is opened by its key, not shown at startup.
@@ -211,13 +260,18 @@ mod tests {
     #[test]
     fn an_authored_item_list_replaces_the_defaults_wholesale() {
         let m: MainMenu = serde_json::from_str(
-            r#"{"title":"Ash","initial":true,"items":[{"label":"Play","action":"start"}],
+            r#"{"title":"Ash","initial":true,"items":[{"label":"Play","action":{"story":"start"}}],
                 "settings_profile":"minimal","toggle_key":"Tab"}"#,
         )
         .unwrap();
         assert_eq!(m.items.len(), 1);
         assert_eq!(m.items[0].label, "Play");
-        assert_eq!(m.items[0].action, "start");
+        assert_eq!(
+            m.items[0].action,
+            fires(AuthoredAction::Story(
+                concinnity_core::components::StoryCommand::Start
+            ))
+        );
         assert_eq!(m.title, "Ash");
         assert!(m.initial);
         assert_eq!(m.settings_profile, SettingsProfile::Minimal);
@@ -227,11 +281,18 @@ mod tests {
         assert_eq!(m.button_width, 360.0);
     }
 
+    // An item's action is any action, or the menu's own `"settings"`.
     #[test]
-    fn a_blank_item_carries_neither_label_nor_action() {
-        let item = MainMenuItem::default();
-        assert!(item.label.is_empty());
-        assert!(item.action.is_empty());
+    fn an_item_action_reads_settings_or_any_action() {
+        let read = |json: serde_json::Value| serde_json::from_value::<MenuItemAction>(json);
+        assert_eq!(read("settings".into()).unwrap(), MenuItemAction::Settings);
+        assert_eq!(read("hide".into()).unwrap(), fires(AuthoredAction::Hide));
+        assert_eq!(
+            read(serde_json::json!({"scene": "level"})).unwrap(),
+            fires(AuthoredAction::Scene("level".into()))
+        );
+        assert!(read("return".into()).is_err());
+        assert!(serde_json::from_str::<MainMenuItem>(r#"{"label":"Play"}"#).is_err());
     }
 
     #[test]
@@ -248,21 +309,30 @@ mod tests {
     }
 
     #[test]
-    fn an_authored_menu_round_trips_through_postcard() {
-        let m: MainMenu = serde_json::from_str(
-            r#"{"items":[{"label":"Play","action":"start"},{"label":"Quit","action":"quit"}],
-                "dim":[0,0,0,0.7],"font":"body","font_px":32,"hover_scale":1.2,
-                "settings_back_action":"pause"}"#,
-        )
-        .unwrap();
-        let bytes = postcard::to_allocvec(&m).unwrap();
-        let back: MainMenu = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.items.len(), 2);
-        assert_eq!(back.items[1].action, "quit");
+    fn an_authored_menu_round_trips_through_json() {
+        let json = serde_json::json!({
+            "items": [
+                {"label": "Play", "action": {"story": "start"}},
+                {"label": "Options", "action": "settings"},
+                {"label": "Quit", "action": "quit"},
+            ],
+            "dim": [0, 0, 0, 0.7], "font": "body", "font_px": 32, "hover_scale": 1.2,
+            "settings_back_action": {"story": "pause"},
+        });
+        let m: MainMenu = serde_json::from_value(json).unwrap();
+        let back: MainMenu = serde_json::from_value(serde_json::to_value(&m).unwrap()).unwrap();
+        assert_eq!(back.items.len(), 3);
+        assert_eq!(back.items[1].action, MenuItemAction::Settings);
+        assert_eq!(back.items[2].action, fires(AuthoredAction::Quit));
         assert_eq!(back.dim, [0.0, 0.0, 0.0, 0.7]);
         assert_eq!(back.font, "body");
         assert_eq!(back.font_px, 32.0);
         assert_eq!(back.hover_scale, 1.2);
-        assert_eq!(back.settings_back_action, "pause");
+        assert_eq!(
+            back.settings_back_action,
+            Some(AuthoredAction::Story(
+                concinnity_core::components::StoryCommand::TogglePause
+            ))
+        );
     }
 }

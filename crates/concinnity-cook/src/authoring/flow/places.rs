@@ -1,6 +1,7 @@
 // The places a world can be in, read off its authored entries.
 
 use crate::authoring::registry::RegisteredType;
+use crate::authoring::registry::build_only::MainMenu;
 use crate::authoring::world::WorldJsonlAsset;
 use crate::build_only::main_menu::{generates_settings, settings_entry_screen};
 
@@ -68,17 +69,8 @@ fn settings_screen(asset: &WorldJsonlAsset) -> Option<Place> {
     if asset.asset_type != RegisteredType::MainMenu {
         return None;
     }
-    let items = asset.args.get("items").and_then(|v| v.as_array());
-    let actions = items
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get("action")?.as_str());
-    let back = asset
-        .args
-        .get("settings_back_action")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    generates_settings(actions, back).then(|| Place {
+    let menu = serde_json::from_value::<MainMenu>(asset.args.clone()).ok()?;
+    generates_settings(&menu).then(|| Place {
         id: settings_entry_screen(&asset.id),
         kind: PlaceKind::Screen,
         declared_by: RegisteredType::MainMenu,
@@ -136,7 +128,7 @@ mod tests {
         let menu = places(&[asset(
             RegisteredType::MainMenu,
             "main",
-            json!({"initial": true}),
+            json!({"initial": true, "items": []}),
         )]);
         let screen = places(&[asset(
             RegisteredType::Screen,

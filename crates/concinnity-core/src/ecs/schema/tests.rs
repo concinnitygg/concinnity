@@ -77,7 +77,7 @@ struct Unserialized {
 fn fields(schema: &TypeSchema) -> &'static [FieldSchema] {
     match schema.body {
         Body::Fields(fields) => fields,
-        Body::Values(_) => panic!("{} is a struct", schema.name),
+        Body::Values(_) | Body::Variants(_) => panic!("{} is a struct", schema.name),
     }
 }
 

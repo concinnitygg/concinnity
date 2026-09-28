@@ -174,8 +174,8 @@ fn key_from_parts(
 // Collect (path, content-hash) for every source file the args reference.
 // Walks the args JSON for string leaves and resolves each one to a file using
 // the same lookup rules the asset compilers use: a bare filename is searched
-// under the build's asset search root, a relative or absolute path is used
-// directly, and `artifacts_dir` is consulted when set. Strings that do not
+// under the build's asset search root and a relative or absolute path is used
+// directly. Strings that do not
 // resolve to a file (asset names, generator keywords, colors) contribute
 // nothing.
 fn referenced_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> Vec<(String, [u8; 32])> {
@@ -219,13 +219,6 @@ fn resolve_source(s: &str, ctx: &BuildCtx<'_>) -> Option<String> {
     if let Some(p) = ctx.assets_dir.and_then(|dir| find_in(dir, s)) {
         return Some(p);
     }
-    // Account artifact directory, when the build supplied one.
-    if let Some(dir) = ctx.artifacts_dir {
-        let p = format!("{dir}/{s}");
-        if Path::new(&p).is_file() {
-            return Some(p);
-        }
-    }
     None
 }
 
@@ -240,7 +233,6 @@ mod tests {
             name: "test",
             platform: Platform::Metal,
             assets_dir: None,
-            artifacts_dir: None,
             all_assets: &[],
         }
     }
@@ -553,34 +545,8 @@ mod tests {
         assert_eq!(out, vec!["x".to_string(), "y".to_string()]);
     }
 
-    #[test]
-    fn referenced_files_resolve_through_the_artifacts_dir() {
-        // A bare filename that exists neither directly nor under
-        // The assets dir still resolves when the build supplied an
-        // account artifacts directory.
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("fx.hdr"), b"pixels").unwrap();
-        let artifacts = dir.path().to_str().unwrap().to_string();
-        let artifact_ctx = BuildCtx {
-            name: "test",
-            platform: Platform::Metal,
-            assets_dir: None,
-            artifacts_dir: Some(&artifacts),
-            all_assets: &[],
-        };
-
-        // Nested placement also exercises the recursive JSON string walk.
-        let args = json!({"maps": [{"source": "fx.hdr"}]});
-        let files = referenced_files(&args, &artifact_ctx);
-        assert_eq!(files.len(), 1);
-        assert!(files[0].0.ends_with("fx.hdr"));
-
-        // The same reference without an artifacts dir resolves nothing.
-        assert!(referenced_files(&args, &ctx()).is_empty());
-    }
-
-    // A bare filename that exists neither directly nor in the artifacts dir is
-    // searched recursively under the build's asset search root.
+    // A bare filename that does not exist directly is searched recursively
+    // under the build's asset search root, including inside nested args.
     #[test]
     fn resolve_source_finds_a_bare_filename_under_the_assets_tree() {
         let dir = tempfile::tempdir().unwrap();
@@ -591,7 +557,6 @@ mod tests {
             name: "test",
             platform: Platform::Metal,
             assets_dir: Some(dir.path()),
-            artifacts_dir: None,
             all_assets: &[],
         };
 
@@ -600,39 +565,27 @@ mod tests {
         assert_eq!(resolve_source("missing.hdr", &assets_ctx), None);
         // Without a search root the same bare filename resolves nothing.
         assert_eq!(resolve_source("sky.hdr", &ctx()), None);
-    }
 
-    // An artifacts dir that does not hold the file contributes nothing, so the
-    // lookup falls through to no resolution rather than a bogus path.
-    #[test]
-    fn resolve_source_falls_through_an_artifacts_dir_without_the_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let artifacts = dir.path().to_str().unwrap().to_string();
-        let artifact_ctx = BuildCtx {
-            name: "test",
-            platform: Platform::Metal,
-            assets_dir: None,
-            artifacts_dir: Some(&artifacts),
-            all_assets: &[],
-        };
-        assert_eq!(resolve_source("absent.hdr", &artifact_ctx), None);
+        let args = json!({"maps": [{"source": "sky.hdr"}]});
+        let files = referenced_files(&args, &assets_ctx);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].0.ends_with("sky.hdr"));
+        assert!(referenced_files(&args, &ctx()).is_empty());
     }
 
     #[test]
     fn resolve_source_skips_non_file_looking_strings() {
         // No extension and no separator: never probed, even when a file of
-        // that exact name exists in the artifacts dir.
+        // that exact name exists under the asset search root.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("chrome"), b"x").unwrap();
-        let artifacts = dir.path().to_str().unwrap().to_string();
-        let artifact_ctx = BuildCtx {
+        let assets_ctx = BuildCtx {
             name: "test",
             platform: Platform::Metal,
-            assets_dir: None,
-            artifacts_dir: Some(&artifacts),
+            assets_dir: Some(dir.path()),
             all_assets: &[],
         };
-        assert_eq!(resolve_source("chrome", &artifact_ctx), None);
+        assert_eq!(resolve_source("chrome", &assets_ctx), None);
     }
 
     #[test]

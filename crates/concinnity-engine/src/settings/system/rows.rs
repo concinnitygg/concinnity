@@ -363,9 +363,9 @@ mod tests {
         }
     }
 
-    fn region(action: &str, label: Option<u32>) -> HitRegion {
+    fn region(action: serde_json::Value, label: Option<u32>) -> HitRegion {
         HitRegion {
-            action: Some(UiAction::parse(action, |_| None).unwrap()),
+            action: Some(serde_json::from_value(action).unwrap()),
             label: label.map(AssetId).map(Ref::new),
             ..Default::default()
         }
@@ -465,10 +465,19 @@ mod tests {
         for id in [1, 2, 3, 4, 5, 20] {
             world.push_identified(AssetId(id), label([id as f32 / 100.0; 3]));
         }
-        world.push(region("setting:shadow_map_size:next", Some(3)));
-        world.push(region("setting:vsync:next", Some(20)));
-        world.push(region("quit", Some(1)));
-        world.push(region("setting:shadow_map_size:prev", None));
+        world.push(region(
+            serde_json::json!({"setting": {"key": "shadow_map_size", "verb": "next"}}),
+            Some(3),
+        ));
+        world.push(region(
+            serde_json::json!({"setting": {"key": "vsync", "verb": "next"}}),
+            Some(20),
+        ));
+        world.push(region(serde_json::json!("quit"), Some(1)));
+        world.push(region(
+            serde_json::json!({"setting": {"key": "shadow_map_size", "verb": "prev"}}),
+            None,
+        ));
         world.push(ScrollPanel {
             rows: vec![
                 ScrollRow {
@@ -504,7 +513,10 @@ mod tests {
     fn capture_row_labels_without_a_matching_key_captures_nothing() {
         let mut world = TestWorld::new();
         world.push_identified(AssetId(1), label([1.0; 3]));
-        world.push(region("setting:shadow_map_size:next", Some(1)));
+        world.push(region(
+            serde_json::json!({"setting": {"key": "shadow_map_size", "verb": "next"}}),
+            Some(1),
+        ));
         let mut ctx = world.ctx();
 
         assert!(capture_row_labels(&mut ctx, &[SettingKey::Resolution]).is_empty());
@@ -518,7 +530,10 @@ mod tests {
         for (perf_stats, expected) in [(false, DISABLED_ROW_COLOR), (true, authored)] {
             let mut world = TestWorld::new();
             world.push_identified(AssetId(1), label(authored));
-            world.push(region("setting:show_fps:next", Some(1)));
+            world.push(region(
+                serde_json::json!({"setting": {"key": "show_fps", "verb": "next"}}),
+                Some(1),
+            ));
             let mut state = SettingsState::for_tests();
             state.perf_stats = perf_stats;
             let mut ctx = world.ctx();
@@ -540,7 +555,10 @@ mod tests {
         ] {
             let mut world = TestWorld::new();
             world.push_identified(AssetId(1), label(authored));
-            world.push(region("setting:resolution:next", Some(1)));
+            world.push(region(
+                serde_json::json!({"setting": {"key": "resolution", "verb": "next"}}),
+                Some(1),
+            ));
             let mut state = SettingsState::for_tests();
             state.window_args.mode = mode;
             let mut ctx = world.ctx();
@@ -560,9 +578,18 @@ mod tests {
     #[test]
     fn init_cycle_value_labels_maps_each_cycle_key_to_its_label() {
         let mut world = TestWorld::new();
-        world.push(region("setting:vsync:next", Some(1)));
-        world.push(region("setting:vsync:prev", Some(1)));
-        world.push(region("setting:exposure:drag", Some(2)));
+        world.push(region(
+            serde_json::json!({"setting": {"key": "vsync", "verb": "next"}}),
+            Some(1),
+        ));
+        world.push(region(
+            serde_json::json!({"setting": {"key": "vsync", "verb": "prev"}}),
+            Some(1),
+        ));
+        world.push(region(
+            serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}}),
+            Some(2),
+        ));
         let mut state = SettingsState::for_tests();
         let mut ctx = world.ctx();
 

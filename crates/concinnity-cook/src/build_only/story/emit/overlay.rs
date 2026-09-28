@@ -1,10 +1,10 @@
+use concinnity_core::components::NamedAction;
 use concinnity_core::components::StoryCommand;
 use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::choices::{CHOICE_BOX_COLOR, CHOICE_BOX_RADIUS};
 use super::names::StoryNames;
 use super::widgets::{LabelStyle, hidden_label, hit_region, label, rounded_sprite};
-use crate::authoring::spec::asset::ui_action;
 use crate::build_only::ui_spec::sprite;
 
 // Slot rows the save / load overlay shows at once. The story scrolls this
@@ -71,7 +71,7 @@ pub(super) fn emit_overlay(names: &StoryNames) -> Vec<serde_json::Value> {
             &row.button.region,
             (280.0, y, win_w - 560.0, 56.0),
             Some(&row.button.label),
-            &ui_action::story(StoryCommand::Slot(i)),
+            NamedAction::Story(StoryCommand::Slot(i)),
         ));
     }
     out
@@ -90,7 +90,10 @@ mod tests {
         assert_eq!(regions.len(), VISIBLE_SLOTS);
         for (i, region) in regions.iter().enumerate() {
             assert_eq!(region["args"]["$id"], format!("s_stage_slot{}_btn", i));
-            assert_eq!(region["args"]["action"], format!("story:slot:{}", i));
+            assert_eq!(
+                region["args"]["action"],
+                serde_json::json!({"story": {"slot": i}})
+            );
         }
     }
 }

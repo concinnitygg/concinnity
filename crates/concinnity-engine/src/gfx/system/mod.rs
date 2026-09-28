@@ -176,7 +176,7 @@ pub struct GraphicsSystem {
 
 // One key-rebind row's runtime bookkeeping: the action it rebinds and the value
 // `TextLabel` showing its bound key. Built at init (`init_rebind_rows`) from the
-// row's `setting:key_*:rebind` HitRegion (`action` -> `Bindable`, `label`) and
+// row's `key_*` rebind HitRegion (`action` -> `Bindable`, `label`) and
 // handed to SettingsState, which drives the live rebind drain.
 pub(crate) struct RebindViz {
     pub(crate) action: keymap::Bindable,
@@ -184,7 +184,7 @@ pub(crate) struct RebindViz {
 }
 
 // One gamepad-rebind row's runtime bookkeeping, mirroring `RebindViz`: built at
-// init (`init_rebind_rows`) from the row's `setting:pad_*:rebind` HitRegion
+// init (`init_rebind_rows`) from the row's `pad_*` rebind HitRegion
 // and handed to SettingsState for the button-rebind drain.
 pub(crate) struct PadRebindViz {
     pub(crate) action: GamepadAction,
@@ -194,7 +194,7 @@ pub(crate) struct PadRebindViz {
 // One slider row's runtime bookkeeping: the engine setting it controls, the
 // track geometry it maps a fraction onto, and the handle Sprite + value
 // TextLabel it drives. Built at init (`init_sliders`) from the row's
-// `setting:<key>:drag` HitRegion (track `x`/`width`, `label`, `drag_handle`) and
+// drag HitRegion (track `x`/`width`, `label`, `drag_handle`) and
 // the handle Sprite's width, then handed to SettingsState for the slider drain.
 pub(crate) struct SliderViz {
     pub(crate) key: SettingKey,

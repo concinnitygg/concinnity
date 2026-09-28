@@ -47,7 +47,7 @@ pub fn build_loaded(
     platform: Platform,
 ) -> std::io::Result<()> {
     let assets_dir = tree.assets_dir();
-    let result = build_compiled(loaded.assets, Some(&assets_dir), None, platform)?;
+    let result = build_compiled(loaded.assets, Some(&assets_dir), platform)?;
 
     let pack_result = write_build_outputs(tree, &result, &loaded.injected, &loaded.shadowed)?;
     for (blob_idx, path) in pack_result.blob_paths.iter().enumerate() {
@@ -139,17 +139,14 @@ pub fn write_build_outputs(
 /// Run the full build pipeline on an in-memory JSONL string without writing any
 /// blobs. Loads, expands, and validates the world (crate::build_only::prepare_world),
 /// then compiles it. `assets_dir` is the asset search root a bare `source`
-/// filename is searched under; `artifacts_dir` is an optional directory
-/// consulted when resolving bare shader filenames not found there, so pass the
-/// account's artifact directory to compile user-written shaders.
+/// filename is searched under.
 pub fn build_pipeline_from_str(
     content: &str,
     assets_dir: Option<&Path>,
-    artifacts_dir: Option<&str>,
     platform: Platform,
 ) -> std::io::Result<PipelineResult> {
     let loaded = crate::build_only::prepare_world(content, assets_dir).map_err(errors_to_io)?;
-    build_compiled(loaded.assets, assets_dir, artifacts_dir, platform)
+    build_compiled(loaded.assets, assets_dir, platform)
 }
 
 /// A progress report from the compile pipeline: the stage's name and its
@@ -173,10 +170,9 @@ pub struct BuildProgress {
 pub fn build_compiled(
     assets: Vec<WorldJsonlAsset>,
     assets_dir: Option<&Path>,
-    artifacts_dir: Option<&str>,
     platform: Platform,
 ) -> std::io::Result<PipelineResult> {
-    build_compiled_with_progress(assets, assets_dir, artifacts_dir, platform, None)
+    build_compiled_with_progress(assets, assets_dir, platform, None)
 }
 
 /// [`build_compiled`] with a progress callback. The callback fires from the
@@ -185,7 +181,6 @@ pub fn build_compiled(
 pub fn build_compiled_with_progress(
     mut assets: Vec<WorldJsonlAsset>,
     assets_dir: Option<&Path>,
-    artifacts_dir: Option<&str>,
     platform: Platform,
     progress: Option<&(dyn Fn(BuildProgress) + Sync)>,
 ) -> std::io::Result<PipelineResult> {
@@ -204,7 +199,7 @@ pub fn build_compiled_with_progress(
     // means no work). On a miss, the recorded key is used when the compile
     // step stores the freshly produced payload, so the next build's probe
     // can re-use it.
-    let mesh_cache = probe_mesh_payload_cache(&assets, assets_dir, artifacts_dir, platform);
+    let mesh_cache = probe_mesh_payload_cache(&assets, assets_dir, platform);
 
     // Expand any glTF-sourced SkinnedMesh and Mesh assets into inline geometry
     // before anything else looks at their args. Animations expand after the
@@ -288,7 +283,6 @@ pub fn build_compiled_with_progress(
             mesh_source_handles: &resource_handles,
             max_blob_bytes: crate::blob::DEFAULT_MAX_BLOB_BYTES,
             assets_dir,
-            artifacts_dir,
             platform,
             mesh_cache: &mesh_cache,
             progress,
@@ -370,8 +364,7 @@ mod tests {
             r#"["Prop",{"$id":"day_crate","mesh":"box","scene":"day"}]"#,
             "\n",
         );
-        let result =
-            build_pipeline_from_str(world, None, None, Platform::Metal).expect("build pipeline");
+        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build pipeline");
 
         // The Prop def's identity is the interned id, not a name string.
         let prop = result
@@ -401,8 +394,7 @@ mod tests {
             r#"["Prop",{"mesh":"box"}]"#,
             "\n",
         );
-        let result =
-            build_pipeline_from_str(world, None, None, Platform::Metal).expect("build pipeline");
+        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build pipeline");
         assert_eq!(result.names[..4], ["box", "Prop#0", "named", "Prop#1"]);
         let ids: Vec<Option<AssetId>> = result.defs[..4].iter().map(|d| d.name).collect();
         let positions: Vec<Option<AssetId>> = (0..4).map(|i| Some(AssetId(i))).collect();
@@ -421,7 +413,7 @@ mod tests {
             r#"["Prop",{"mesh":"ProceduralMesh#0"}]"#,
             "\n",
         );
-        let err = build_pipeline_from_str(world, None, None, Platform::Metal)
+        let err = build_pipeline_from_str(world, None, Platform::Metal)
             .err()
             .expect("the reference does not resolve");
         assert!(
@@ -435,8 +427,7 @@ mod tests {
     #[test]
     fn an_anonymous_main_menu_expands_under_its_label() {
         let world = r#"["MainMenu",{"toggle_key":""}]"#;
-        let result =
-            build_pipeline_from_str(world, None, None, Platform::Metal).expect("build pipeline");
+        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build pipeline");
         assert!(
             result.names.iter().any(|n| n == "MainMenu#0"),
             "{:?}",
@@ -462,8 +453,7 @@ mod tests {
             r#"["PropBody",{"$id":"crate_body","prop_name":"crate_a"}]"#,
             "\n",
         );
-        let result =
-            build_pipeline_from_str(world, None, None, Platform::Metal).expect("build pipeline");
+        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build pipeline");
 
         assert!(
             !result.names.iter().any(|n| n == "physics_config"),
@@ -487,8 +477,7 @@ mod tests {
             r#"["EngineDefaults",{"$id":"defaults","sky":false}]"#,
             "\n",
         );
-        let result =
-            build_pipeline_from_str(world, None, None, Platform::Metal).expect("build pipeline");
+        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build pipeline");
 
         let index = result
             .names
@@ -512,7 +501,7 @@ mod tests {
             r#"["Screen",{"$id":"pause"}]"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
+        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build");
 
         assert_eq!(result.resource_locks.len(), result.resources.len());
         let font = result
@@ -651,7 +640,7 @@ mod tests {
 
     #[test]
     fn build_pipeline_from_str_rejects_malformed_jsonl() {
-        let Err(err) = build_pipeline_from_str("{not json\n", None, None, Platform::Metal) else {
+        let Err(err) = build_pipeline_from_str("{not json\n", None, Platform::Metal) else {
             panic!("malformed line must not build");
         };
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
@@ -660,7 +649,7 @@ mod tests {
     #[test]
     fn build_pipeline_from_str_reports_unknown_asset_types() {
         let world = r#"["NotAType",{"$id":"mystery"}]"#;
-        let Err(err) = build_pipeline_from_str(world, None, None, Platform::Metal) else {
+        let Err(err) = build_pipeline_from_str(world, None, Platform::Metal) else {
             panic!("unknown type must not build");
         };
         assert!(
@@ -678,7 +667,7 @@ mod tests {
             RegisteredType::LightRig,
             serde_json::json!({}),
         )];
-        let Err(err) = build_compiled(assets, None, None, Platform::Metal) else {
+        let Err(err) = build_compiled(assets, None, Platform::Metal) else {
             panic!("unknown type must not compile");
         };
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
@@ -694,7 +683,7 @@ mod tests {
             RegisteredType::ProceduralMesh,
             serde_json::json!({"generator": "not_a_generator"}),
         )];
-        let Err(err) = build_compiled(assets, None, None, Platform::Metal) else {
+        let Err(err) = build_compiled(assets, None, Platform::Metal) else {
             panic!("an uncompilable payload must not build");
         };
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
@@ -753,7 +742,7 @@ mod tests {
                 }),
             ),
         ];
-        let result = build_compiled(assets, None, None, Platform::Metal).expect("build");
+        let result = build_compiled(assets, None, Platform::Metal).expect("build");
 
         assert_eq!(result.texture_sources.len(), 2);
         assert_eq!(
@@ -834,7 +823,7 @@ mod tests {
                 serde_json::json!({"generator": "box"}),
             ),
         ];
-        let result = build_compiled(assets, None, None, Platform::Metal).expect("build");
+        let result = build_compiled(assets, None, Platform::Metal).expect("build");
 
         assert_eq!(result.resources.len(), 1);
         let material = &result.resources[0];
@@ -868,7 +857,7 @@ mod tests {
                 serde_json::json!({"path": png, "kind": "png"}),
             ),
         ];
-        let result = build_compiled(assets, None, None, Platform::Metal).expect("build");
+        let result = build_compiled(assets, None, Platform::Metal).expect("build");
 
         assert_eq!(result.names, vec!["model".to_string(), "icon".to_string()]);
         let mesh_payload = result.defs[0]
@@ -881,19 +870,19 @@ mod tests {
             "a png File produces no blob payload"
         );
     }
-    // `screen:toggle:<name>` action targets resolve to interned ids while the
+    // A `toggle` action's target resolves to interned ids while the
     // args deserialize.
     #[test]
     fn build_pipeline_resolves_screen_action_refs() {
         let world = concat!(
             r#"["Screen",{"$id":"pause_menu"}]"#,
             "\n",
-            r#"["HitRegion",{"$id":"btn","x":0,"y":0,"width":10,"height":10,"action":"screen:toggle:pause_menu"}]"#,
+            r#"["HitRegion",{"$id":"btn","x":0,"y":0,"width":10,"height":10,"action":{"toggle":"pause_menu"}}]"#,
             "\n",
-            r#"["KeyBinding",{"$id":"esc","key":"Escape","action":"screen:toggle:pause_menu"}]"#,
+            r#"["KeyBinding",{"$id":"esc","key":"Escape","action":{"toggle":"pause_menu"}}]"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
+        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build");
         // pause_menu interned id = 0 (first declared name).
         let btn = result
             .defs
@@ -924,12 +913,12 @@ mod tests {
             "\n",
             r#"["TextLabel",{"$id":"title","font":"f","content":"x","x":0,"y":0,"screen":"pause_menu"}]"#,
             "\n",
-            r#"["HitRegion",{"$id":"btn","x":0,"y":0,"width":10,"height":10,"action":"screen:hide","screen":"pause_menu"}]"#,
+            r#"["HitRegion",{"$id":"btn","x":0,"y":0,"width":10,"height":10,"action":"hide","screen":"pause_menu"}]"#,
             "\n",
             r#"["Font",{"$id":"f","size_px":16}]"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
+        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build");
         let def = |id: u32| {
             result
                 .defs
@@ -968,7 +957,7 @@ mod tests {
             r#"["Sprite",{"$id":"pause_menu_dim","x":0,"y":0,"width":10,"height":10}]"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
+        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build");
         let dim = result
             .defs
             .iter()
@@ -993,7 +982,7 @@ mod tests {
             r#"["Prop",{"$id":"day_crate","mesh":"box"}]"#,
             "\n",
         );
-        let result = build_pipeline_from_str(world, None, None, Platform::Metal).expect("build");
+        let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build");
         let prop = result
             .defs
             .iter()

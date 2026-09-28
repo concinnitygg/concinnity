@@ -14,15 +14,6 @@ use alloc::string::String;
 /// so typing cannot trigger actions; a [Screen](#screen)'s `toggle_key` stays
 /// live.
 ///
-/// The action vocabulary is the same as [HitRegion](#hitregion)'s:
-/// - `"quit"`:                 stop the application
-/// - `"scene:<name>"`:         jump to the named [Scene](#scene)
-/// - `"screen:show:<name>"`:   show the named [Screen](#screen), replacing the top of the stack
-/// - `"screen:push:<name>"`:   open the named [Screen](#screen) on top of what is showing
-/// - `"screen:toggle:<name>"`: toggle the named [Screen](#screen)
-/// - `"screen:hide"`:          close the top [Screen](#screen)
-/// - `"story:<verb>"`:         drive the story
-///
 /// InputKey names are case-sensitive canonical names (e.g. `"Escape"`, `"Space"`,
 /// `"Enter"`).
 ///
@@ -40,8 +31,7 @@ use alloc::string::String;
 pub struct KeyBinding {
     /// The key name to bind (e.g. `"Escape"`).
     pub key: String,
-    /// The action to fire when the key is pressed. Empty fires nothing.
-    #[serde(with = "crate::components::ui_action::optional")]
+    /// What a press of the key fires. Unset fires nothing.
     pub action: Option<UiAction>,
     /// [Screen](#screen) this binding is scoped to: the binding only fires
     /// while that screen is on top of the stack. Unset, the binding is global.
@@ -65,9 +55,8 @@ mod tests {
 
     #[test]
     fn a_screen_scoped_binding_parses_and_round_trips_through_postcard() {
-        let b: KeyBinding = crate::test_support::from_json(
-            r#"{"key":"Escape","action":"screen:hide","screen":"menu"}"#,
-        );
+        let b: KeyBinding =
+            crate::test_support::from_json(r#"{"key":"Escape","action":"hide","screen":"menu"}"#);
         assert_eq!(b.key, "Escape");
         assert_eq!(b.action, Some(UiAction::Screen(ScreenCommand::Hide)));
         assert_eq!(b.screen, Some(Ref::new(AssetId(4))));

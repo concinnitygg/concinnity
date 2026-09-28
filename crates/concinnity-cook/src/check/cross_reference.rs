@@ -27,6 +27,7 @@ pub(crate) fn cross_refs_for(
     name: &str,
     args: &serde_json::Value,
 ) -> Vec<CrossRef> {
+    use crate::authoring::registry::build_only::Prefab;
     use concinnity_core::components::{
         AnimationGraph, Behavior, Camera3D, InstancedProp, Model, PhysicsJoint, Prop, VoxelChunk,
         VoxelWorld,
@@ -41,6 +42,7 @@ pub(crate) fn cross_refs_for(
         RegisteredType::VoxelChunk => VoxelChunk::cross_refs(name, args),
         RegisteredType::VoxelWorld => VoxelWorld::cross_refs(name, args),
         RegisteredType::PhysicsJoint => PhysicsJoint::cross_refs(name, args),
+        RegisteredType::Prefab => Prefab::cross_refs(name, args),
         _ => Vec::new(),
     }
 }

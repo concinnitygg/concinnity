@@ -1,7 +1,7 @@
 //! The typed vocabulary of every user-facing setting: cycle rows, sliders, and
 //! the keyboard and gamepad rebind rows. The snake_case strings a world authors
-//! and the `setting:<key>:<verb>` action grammar carries are parsed into a
-//! [`SettingKey`] once, at the edge that reads them.
+//! (and a settings row's action carries) are parsed into a [`SettingKey`] once,
+//! at the edge that reads them.
 
 use crate::components::GamepadAction;
 use crate::input::keymap::Bindable;
@@ -52,7 +52,7 @@ macro_rules! setting_keys {
                 SettingKey::PadRebind(GamepadAction::Interact),
             ];
 
-            /// The snake_case key string worlds and `setting:*` actions use.
+            /// The snake_case key string worlds and settings-row actions use.
             pub const fn as_str(self) -> &'static str {
                 match self {
                     $(SettingKey::$cycle => $cycle_str,)*
@@ -230,6 +230,20 @@ impl SettingKey {
     }
 }
 
+impl serde::Serialize for SettingKey {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SettingKey {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let key = alloc::string::String::deserialize(d)?;
+        SettingKey::parse(&key)
+            .ok_or_else(|| serde::de::Error::custom(format_args!("unknown setting {key:?}")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,7 +252,11 @@ mod tests {
     fn every_key_round_trips_through_its_string() {
         for key in SettingKey::ALL {
             assert_eq!(SettingKey::parse(key.as_str()), Some(key), "{key:?}");
+            let json = serde_json::to_value(key).unwrap();
+            assert_eq!(json, key.as_str());
+            assert_eq!(serde_json::from_value::<SettingKey>(json).unwrap(), key);
         }
+        assert!(serde_json::from_value::<SettingKey>("nope".into()).is_err());
     }
 
     #[test]

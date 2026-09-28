@@ -70,7 +70,7 @@ fn menu_world() -> Vec<serde_json::Value> {
         entry_with_args(
             "main",
             "MainMenu",
-            json!({"initial": true, "items": [{"label": "Start", "action": "scene:bistro"}]}),
+            json!({"initial": true, "items": [{"label": "Start", "action": {"scene": "bistro"}}]}),
         ),
     ]
 }
@@ -260,7 +260,7 @@ fn a_click_on_a_place_the_world_does_not_declare_selects_nothing() {
     let (mut h, mut world) = map_session(vec![entry_with_args(
         "main",
         "MainMenu",
-        json!({"initial": true, "items": [{"label": "Start", "action": "scene:nowhere"}]}),
+        json!({"initial": true, "items": [{"label": "Start", "action": {"scene": "nowhere"}}]}),
     )]);
     assert!(click_card(&mut h, &mut world, "nowhere"));
     assert!(h.selection.is_empty(), "{:?}", selected(&h));

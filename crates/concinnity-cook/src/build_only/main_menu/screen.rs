@@ -6,6 +6,7 @@ use super::super::ui_spec::{centered_label, sprite};
 use super::{TOP_MARGIN_FRAC, cursor_sprite};
 use crate::authoring::registry::build_only::MainMenu;
 use crate::authoring::spec::{asset, spec_to_value};
+use concinnity_core::components::NamedAction;
 
 // Window dimensions and font pixel size used to lay out a menu screen.
 #[derive(Clone, Copy)]
@@ -20,7 +21,7 @@ pub(super) struct MenuMetrics {
 pub(super) fn emit_menu_screen(
     screen: &str,
     title: &str,
-    items: &[(String, String)],
+    items: &[(String, NamedAction)],
     style: &MainMenu,
     font: &str,
     metrics: MenuMetrics,

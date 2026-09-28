@@ -25,9 +25,9 @@ use std::collections::HashSet;
 use super::expand::{asset_name, registered_type, schema_args};
 use super::ui_spec::font_sizes;
 use crate::authoring::registry::RegisteredType;
-use crate::authoring::registry::build_only::MainMenu;
+use crate::authoring::registry::build_only::{MainMenu, MenuItemAction};
 use crate::authoring::spec::{asset, spec_to_value};
-use asset::ui_action;
+use concinnity_core::components::{AuthoredAction, NamedAction};
 
 // Top margin of a centered menu as a fraction of the reference height. The menu
 // is top-aligned (not vertically centered) so the heading and tab bar hold a
@@ -40,30 +40,23 @@ pub(crate) fn settings_entry_screen(menu_name: &str) -> String {
     format!("{menu_name}_settings_video")
 }
 
-/// Whether an item's action opens the menu's generated settings screen.
-pub(crate) fn opens_settings(action: &str) -> bool {
-    action.trim().eq_ignore_ascii_case("settings")
-}
-
-/// The action an item fires, with this menu's conveniences resolved against it:
-/// `"return"` / `"close"` close the menu, `"settings"` opens the settings
-/// screen the menu generates. Anything else is already an action.
-pub(crate) fn item_action(menu_name: &str, action: &str) -> String {
-    match action.trim().to_lowercase().as_str() {
-        "return" | "close" => ui_action::screen_hide(),
-        "settings" => ui_action::screen_show(&settings_entry_screen(menu_name)),
-        _ => action.to_string(),
+/// The action an item fires: `"settings"` resolved to the settings screen the
+/// menu generates.
+pub(crate) fn item_action(menu_name: &str, action: &MenuItemAction) -> NamedAction {
+    match action {
+        MenuItemAction::Settings => AuthoredAction::Show(settings_entry_screen(menu_name).into()),
+        MenuItemAction::Action(action) => action.clone(),
     }
 }
 
 /// Whether a menu generates a settings screen: an item opens one, or a Back
 /// override is set for a caller that opens it by its own action (a story pause
 /// menu, say).
-pub(crate) fn generates_settings<'a>(
-    mut item_actions: impl Iterator<Item = &'a str>,
-    settings_back_action: &str,
-) -> bool {
-    item_actions.any(opens_settings) || !settings_back_action.is_empty()
+pub(crate) fn generates_settings(menu: &MainMenu) -> bool {
+    menu.items
+        .iter()
+        .any(|item| item.action == MenuItemAction::Settings)
+        || menu.settings_back_action.is_some()
 }
 
 // An RGB accent lifted to an opaque RGBA fill: the active-tab underline marker
@@ -127,7 +120,9 @@ pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(
         let font_px = if menu.font.is_empty() {
             menu.font_px
         } else {
-            *font_px_by_name.get(&menu.font).unwrap_or(&menu.font_px)
+            *font_px_by_name
+                .get(menu.font.as_str())
+                .unwrap_or(&menu.font_px)
         };
 
         for entry in expand_one(&menu_name, &menu, win_w, win_h, font_px) {
@@ -158,10 +153,7 @@ fn expand_one(
     font_px: f32,
 ) -> Vec<serde_json::Value> {
     let mut out = Vec::new();
-    let wants_settings = generates_settings(
-        menu.items.iter().map(|item| item.action.as_str()),
-        &menu.settings_back_action,
-    );
+    let wants_settings = generates_settings(menu);
 
     // Resolve the font. Use the user's font when set; otherwise emit a font for
     // this menu at `font_px` and reference it explicitly, because the row
@@ -173,11 +165,11 @@ fn expand_one(
         out.push(spec_to_value(&asset::font(&name, font_px as u32)));
         name
     } else {
-        menu.font.clone()
+        menu.font.to_string()
     };
 
     // Resolve the per-menu convenience actions against this menu's name.
-    let items: Vec<(String, String)> = menu
+    let items: Vec<(String, NamedAction)> = menu
         .items
         .iter()
         .map(|item| (item.label.clone(), item_action(menu_name, &item.action)))
@@ -203,7 +195,7 @@ fn expand_one(
             "args": {
                 "$id": format!("{}_toggle", menu_name),
                 "key": menu.toggle_key,
-                "action": ui_action::screen_toggle(menu_name)
+                "action": NamedAction::Toggle(menu_name.into())
             }
         }));
     }

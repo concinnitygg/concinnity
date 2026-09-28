@@ -288,7 +288,7 @@ mod tests {
             asset(
                 RegisteredType::MainMenu,
                 "main",
-                json!({"initial": true, "items": [{"label": "Start", "action": "scene:bistro"}]}),
+                json!({"initial": true, "items": [{"label": "Start", "action": {"scene": "bistro"}}]}),
             ),
         ]);
         let mut world = injected_world();
@@ -418,7 +418,7 @@ mod tests {
             asset(
                 RegisteredType::MainMenu,
                 "main",
-                json!({"initial": true, "items": [{"label": "Start", "action": "scene:bistro"}]}),
+                json!({"initial": true, "items": [{"label": "Start", "action": {"scene": "bistro"}}]}),
             ),
         ]);
         let mut world = injected_world();

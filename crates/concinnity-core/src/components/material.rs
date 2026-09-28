@@ -9,8 +9,7 @@ use crate::gfx::render_types::MATERIAL_PARAM_COUNT;
 /// A Material bundles the surface parameters that control how a [Prop](#prop) is
 /// lit and shaded.
 ///
-/// Reference it from a [Prop](#prop)'s `material` field. The `material` field takes
-/// precedence over the older `texture` field.
+/// Reference it from a [Prop](#prop)'s `material` field.
 ///
 /// ```rust
 /// # use concinnity_core::components::Material;

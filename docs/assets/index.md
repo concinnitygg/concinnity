@@ -86,6 +86,7 @@
 ## Reference types
 
 - [AaMode](AaMode.md) - Anti-aliasing mode for `PostProcessConfig.aa_mode`. `Off` runs no edge smoothing; `Fxaa` (default) applies the composite's single-frame edge filter, which is nearly free; `Taa` adds a temporal pass that jitters the projection and reprojects detail across frames for the cleanest edges, at the cost of a velocity pre-pass and a per-frame history buffer.
+- [Action](Action.md) - What a [HitRegion](HitRegion.md) click or a [KeyBinding](KeyBinding.md) press does.
 - [AnimationCondition](AnimationCondition.md) - One transition condition, `parameter <op> value`. All of a transition's conditions must pass for it to fire.
 - [AnimationIkChain](AnimationIkChain.md) - One two-bone IK chain, pinning the chain's end joint (typically a foot) to the ground the physics scene finds beneath it.
 - [AnimationParam](AnimationParam.md) - A named float parameter driving a graph's transitions. Gameplay systems write parameter values at runtime; transitions compare against them. Flag-like parameters use 0 and 1.
@@ -115,10 +116,10 @@
 - [MainMenuItem](MainMenuItem.md) - One entry in a [MainMenu](MainMenu.md).
 - [MorphDelta](MorphDelta.md) - One morph-target vertex delta: offsets added to the bind-pose position and normal, scaled by the target's weight at runtime.
 - [MorphKey](MorphKey.md) - One morph-weight keyframe of an [Animation](Animation.md): per-target weights at one sample time.
-- [PaletteEntry](PaletteEntry.md) - One entry in a [MaterialPalette](MaterialPalette.md). Each carries an `alias` (the suffix of the expanded [Material](Material.md) name) plus the Material fields the expansion fills in. Names in `albedo` / `normal_map` are unresolved [Texture](Texture.md) references, resolved on the expanded Material.
+- [PaletteEntry](PaletteEntry.md) - One entry in a [MaterialPalette](MaterialPalette.md). Each carries an `alias` (the suffix of the expanded [Material](Material.md) name) plus the Material fields the expansion fills in. The [Texture](Texture.md)s named by `albedo` / `normal_map` resolve on the expanded Material.
 - [PanelSection](PanelSection.md) - One panel section: a caption over the rows of the listed regions.
 - [PhysicsJointKind](PhysicsJointKind.md) - The constraint shape a `PhysicsJoint` declares.
-- [PrefabEntry](PrefabEntry.md) - One entry in a [Prefab](Prefab.md)'s `props` list. The fields consulted depend on `kind`: a `prop` uses the render / collision / transform fields, a `point_light` uses the `light_*` fields, and a `prefab` uses `prefab`. Names in `model` / `mesh` / `material` / `texture` / `parent` / `prefab` are unresolved references to other assets, resolved when the entry expands.
+- [PrefabEntry](PrefabEntry.md) - One entry in a [Prefab](Prefab.md)'s `props` list. The fields consulted depend on `kind`: a `prop` uses the render / collision / transform fields, a `point_light` uses the `light_*` fields, and a `prefab` uses `prefab`. The assets named by `model` / `mesh` / `material` / `parent` / `prefab` resolve when the entry expands.
 - [PrefabKind](PrefabKind.md) - Which kind of asset a [PrefabEntry](PrefabEntry.md) expands into.
 - [PropCollider](PropCollider.md) - Collision volume attached to a [Prop](Prop.md).
 - [PropColliderShape](PropColliderShape.md) - The collision volume a [PropCollider](PropCollider.md)'s `shape` names. The single accepted vocabulary: the build rejects an authored name this does not recognize, and the runtime resolves the same name through it.
@@ -140,6 +141,7 @@
 - [SpriteFit](SpriteFit.md) - How a screen-owned overlay element (a [Sprite](Sprite.md), [TextLabel](TextLabel.md), or [HitRegion](HitRegion.md)) maps from the 1280x720 reference canvas to the live window when their aspect ratios differ.
 - [SsgiResolution](SsgiResolution.md) - Internal render resolution of the SSGI gather pass (only meaningful when `indirect_lighting` is `ssgi`). The gather is the expensive part (a hemisphere ray-march per pixel), and its composite is a depth-aware bilateral filter that upsamples a lower-resolution gather back to full resolution at little visible cost. `half` (the default) gathers at a quarter of the pixels for a large saving; `full` keeps the gather at native resolution; `quarter` is the cheapest, for low-end GPUs or debugging.
 - [StoryChoice](StoryChoice.md) - One option in a [StoryNode](StoryNode.md)'s choice menu.
+- [StoryCommand](StoryCommand.md) - What an [Action](Action.md) does to the story. An index-carrying command is an object with its name as the only key, e.g. `{"choose": 1}`.
 - [StoryCompareOp](StoryCompareOp.md) - A comparison operator in a [Story](Story.md) condition. An unset variable reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.
 - [StoryCondition](StoryCondition.md) - A condition on a [StoryChoice](StoryChoice.md).
 - [StoryGate](StoryGate.md) - One conditional jump in a [Story](Story.md)'s script.

@@ -1,9 +1,9 @@
+use concinnity_core::components::NamedAction;
 use concinnity_core::components::StoryCommand;
 
 use super::names::StoryNames;
 use super::stage::DIALOG_BOX;
 use super::widgets::{hidden_label, hit_region_fit};
-use crate::authoring::spec::asset::ui_action;
 
 // The quick row: small always-clickable controls along the dialog box's
 // bottom edge (Log / Auto / Skip / Save). The story system fills each label's
@@ -35,7 +35,7 @@ pub(super) fn emit_quick_row(names: &StoryNames) -> Vec<serde_json::Value> {
             &button.region,
             (x, quick_y, quick_w, 30.0),
             Some(&button.label),
-            &ui_action::story(action),
+            NamedAction::Story(action),
             Some("bottom"),
         ));
     }
@@ -60,11 +60,16 @@ mod tests {
         assert!(regions.iter().all(|r| r["args"]["fit"] == "bottom"));
         let actions: Vec<_> = regions
             .iter()
-            .map(|r| r["args"]["action"].as_str().unwrap())
+            .map(|r| r["args"]["action"].clone())
             .collect();
         assert_eq!(
             actions,
-            ["story:log", "story:auto", "story:skip", "story:save"]
+            [
+                serde_json::json!({"story": "log"}),
+                serde_json::json!({"story": "auto"}),
+                serde_json::json!({"story": "skip"}),
+                serde_json::json!({"story": "save"})
+            ]
         );
         assert_eq!(regions[0]["args"]["label"], "s_stage_qlog_lbl");
     }

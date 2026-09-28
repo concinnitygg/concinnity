@@ -1,5 +1,7 @@
 //! Named light-grouping schema.
 
+use concinnity_core::ecs::{NameRef, RefTarget};
+
 /// A named grouping of lights.
 ///
 /// Use `preset` to expand a built-in setup into named
@@ -24,10 +26,19 @@ pub struct LightRig {
     /// Name of a built-in or file-backed preset (e.g. "rig_outdoor_sun_fill").
     /// When set, `lights` is ignored.
     pub preset: String,
-    /// Names of existing [DirectionalLight](#directionallight) or
+    /// Existing [DirectionalLight](#directionallight) or
     /// [PointLight](#pointlight) assets to include in this rig. Ignored when
     /// `preset` is set.
-    pub lights: Vec<String>,
+    pub lights: Vec<NameRef<RigLight>>,
+}
+
+/// What a [LightRig](#lightrig)'s `lights` may name: a
+/// [DirectionalLight](#directionallight) or a [PointLight](#pointlight).
+#[derive(Debug, Clone, Copy)]
+pub struct RigLight;
+
+impl RefTarget for RigLight {
+    const TYPES: &'static [&'static str] = &["DirectionalLight", "PointLight"];
 }
 
 #[cfg(test)]

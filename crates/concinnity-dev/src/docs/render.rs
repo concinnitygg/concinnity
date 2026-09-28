@@ -30,6 +30,9 @@ pub(super) enum FieldType {
     // own docs there), by name. Rendered as a string that links to its page,
     // not as an object.
     NamedEnum(String),
+    // A documented tagged union with its own page: each value is a bare name,
+    // or an object with the name as its only key.
+    Tagged(String),
     // `Some(n)` for a fixed-size `[T; n]` array, `None` for a variable `Vec<T>`.
     Array {
         elem: Box<FieldType>,
@@ -95,6 +98,10 @@ fn elem_plural(t: &FieldType) -> String {
         FieldType::Object => "objects".to_string(),
         FieldType::Named(name) => format!("[{name}]({}) objects", doc_link(name)),
         FieldType::NamedEnum(name) => format!("strings (see [{name}]({}))", doc_link(name)),
+        FieldType::Tagged(name) => format!(
+            "strings or single-key objects (see [{name}]({}))",
+            doc_link(name)
+        ),
         FieldType::Array { elem, len } => match len {
             Some(n) => format!("arrays of {n} {}", elem_plural(elem)),
             None => format!("arrays of {}", elem_plural(elem)),
@@ -114,6 +121,10 @@ pub(super) fn type_phrase(t: &FieldType) -> String {
         FieldType::Object => "An object".to_string(),
         FieldType::Named(name) => format!("A [{name}]({}) object", doc_link(name)),
         FieldType::NamedEnum(name) => format!("A string (see [{name}]({}))", doc_link(name)),
+        FieldType::Tagged(name) => format!(
+            "A string or single-key object (see [{name}]({}))",
+            doc_link(name)
+        ),
         FieldType::Array { elem, len } => match len {
             Some(n) => format!("An array of {n} {}", elem_plural(elem)),
             None => format!("An array of {}", elem_plural(elem)),

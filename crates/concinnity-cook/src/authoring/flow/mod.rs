@@ -16,7 +16,7 @@ mod action;
 mod edges;
 mod places;
 
-pub use action::{Move, parse_action};
+pub use action::{Move, read_action};
 pub use edges::{FlowEdge, flow_edges};
 pub use places::{Place, PlaceKind, places};
 
@@ -108,7 +108,7 @@ mod tests {
                 RegisteredType::MainMenu,
                 "menu",
                 json!({"initial": true, "items": [
-                    {"label": "Start", "action": "scene:bistro"},
+                    {"label": "Start", "action": {"scene": "bistro"}},
                     {"label": "Quit", "action": "quit"},
                 ]}),
             ),
@@ -147,7 +147,7 @@ mod tests {
         let graph = flow_graph(&[asset(
             RegisteredType::MainMenu,
             "menu",
-            json!({"items": [{"label": "Start", "action": "scene:typo"}]}),
+            json!({"items": [{"label": "Start", "action": {"scene": "typo"}}]}),
         )]);
         assert_eq!(graph.edges[0].action.target(), Some("typo"));
         assert_eq!(graph.destination(&graph.edges[0]), None);
@@ -226,7 +226,7 @@ mod tests {
             asset(
                 RegisteredType::HitRegion,
                 "play",
-                json!({"screen": "pause", "action": "scene:level"}),
+                json!({"screen": "pause", "action": {"scene": "level"}}),
             ),
         ]);
         // Twice through one body is one behavior, and the region drawing its
@@ -246,12 +246,12 @@ mod tests {
             asset(
                 RegisteredType::HitRegion,
                 "resume",
-                json!({"screen": "pause", "action": "scene:level"}),
+                json!({"screen": "pause", "action": {"scene": "level"}}),
             ),
             asset(
                 RegisteredType::KeyBinding,
                 "esc",
-                json!({"key": "Escape", "action": "screen:toggle:pause"}),
+                json!({"key": "Escape", "action": {"toggle": "pause"}}),
             ),
         ]);
         let reached: Vec<&str> = graph

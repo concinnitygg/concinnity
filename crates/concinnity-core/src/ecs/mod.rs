@@ -36,6 +36,7 @@ pub mod asset_fields;
 pub mod asset_id;
 pub mod handle;
 pub mod locator;
+pub mod name_ref;
 pub mod reference;
 pub mod resolver;
 #[cfg(feature = "schema")]
@@ -96,8 +97,9 @@ pub use component::{
 };
 
 // Typed asset references and the authoring tables derived from field types.
-pub use asset_fields::{AssetFields, EnumField, FieldTable, RefField, ReferenceField};
+pub use asset_fields::{ActionField, AssetFields, EnumField, FieldTable, RefField, ReferenceField};
 pub use concinnity_derive::AssetFields;
+pub use name_ref::NameRef;
 pub use reference::{AnyAsset, Ref, RefTarget, de_opt_ref};
 
 // Systems' view of the world during a tick.

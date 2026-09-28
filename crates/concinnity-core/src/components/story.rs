@@ -26,7 +26,7 @@ use alloc::vec::Vec;
 /// `<name>_stage`: it fills the dialogue and name-plate labels (revealing
 /// text at `text_speed`), swaps the backdrop and portrait sprite textures,
 /// shows the choice menu when a node ends in one, and plays page audio.
-/// Clicking the stage (or pressing Space) advances; `story:start` restarts
+/// Clicking the stage (or pressing Space) advances; `{"story": "start"}` restarts
 /// from the first node.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]

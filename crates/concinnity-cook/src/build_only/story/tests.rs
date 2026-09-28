@@ -46,8 +46,8 @@ fn find<'a>(entries: &'a [serde_json::Value], name: &str) -> &'a serde_json::Val
         .unwrap_or_else(|| panic!("missing entry '{}'", name))
 }
 
-fn action(entry: &serde_json::Value) -> &str {
-    entry["args"]["action"].as_str().unwrap_or("")
+fn action(entry: &serde_json::Value) -> serde_json::Value {
+    entry["args"]["action"].clone()
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn emits_the_compiled_graph_and_stage() {
     assert_eq!(title["args"]["initial"], true);
     assert_eq!(
         action(find(&entries, "story_title_start_btn")),
-        "story:start"
+        serde_json::json!({"story": "start"})
     );
 
     // The compiled graph takes the import's own name. Speakers resolve
@@ -167,13 +167,13 @@ fn emits_the_compiled_graph_and_stage() {
     );
     assert_eq!(
         action(find(&entries, "story_stage_advance")),
-        "story:advance"
+        serde_json::json!({"story": "advance"})
     );
     // Space and Enter both advance the dialogue.
     assert_eq!(find(&entries, "story_advance_key")["args"]["key"], "Space");
     assert_eq!(
         find(&entries, "story_advance_key")["args"]["action"],
-        "story:advance"
+        serde_json::json!({"story": "advance"})
     );
     assert_eq!(
         find(&entries, "story_advance_key_enter")["args"]["key"],
@@ -181,10 +181,10 @@ fn emits_the_compiled_graph_and_stage() {
     );
     assert_eq!(
         find(&entries, "story_advance_key_enter")["args"]["action"],
-        "story:advance"
+        serde_json::json!({"story": "advance"})
     );
     let opt0 = find(&entries, "story_stage_opt0_btn");
-    assert_eq!(action(opt0), "story:choose:0");
+    assert_eq!(action(opt0), serde_json::json!({"story": {"choose": 0}}));
     assert_eq!(
         find(&entries, "story_stage_opt0_lbl")["args"]["visible"],
         false
@@ -220,35 +220,41 @@ fn emits_the_compiled_graph_and_stage() {
     // exist and start hidden; the title screen offers Load.
     assert_eq!(
         action(find(&entries, "story_stage_qauto_btn")),
-        "story:auto"
+        serde_json::json!({"story": "auto"})
     );
-    assert_eq!(action(find(&entries, "story_stage_qlog_btn")), "story:log");
+    assert_eq!(
+        action(find(&entries, "story_stage_qlog_btn")),
+        serde_json::json!({"story": "log"})
+    );
     assert_eq!(
         action(find(&entries, "story_stage_qskip_btn")),
-        "story:skip"
+        serde_json::json!({"story": "skip"})
     );
     assert_eq!(
         action(find(&entries, "story_stage_qsave_btn")),
-        "story:save"
+        serde_json::json!({"story": "save"})
     );
     assert_eq!(find(&entries, "story_stage_marker")["args"]["tint"][3], 0.0);
     assert_eq!(find(&entries, "story_stage_dim")["args"]["tint"][3], 0.0);
     assert_eq!(find(&entries, "story_stage_history")["args"]["content"], "");
     assert_eq!(
         action(find(&entries, "story_stage_slot2_btn")),
-        "story:slot:2"
+        serde_json::json!({"story": {"slot": 2}})
     );
     assert_eq!(
         find(&entries, "story_stage_slot0_box")["args"]["tint"][3],
         0.0
     );
-    assert_eq!(action(find(&entries, "story_title_load_btn")), "story:load");
+    assert_eq!(
+        action(find(&entries, "story_title_load_btn")),
+        serde_json::json!({"story": "load"})
+    );
     // Five slot rows are emitted (the story scrolls this window over more
     // logical slots); each row's action carries its row index.
     assert_eq!(scaffold["slot_labels"].as_array().unwrap().len(), 5);
     assert_eq!(
         action(find(&entries, "story_stage_slot4_btn")),
-        "story:slot:4"
+        serde_json::json!({"story": {"slot": 4}})
     );
     assert_eq!(scaffold["advance_marker"], "story_stage_marker");
     assert_eq!(scaffold["title"], "story_title");
@@ -274,7 +280,7 @@ fn emits_the_compiled_graph_and_stage() {
     // The ending returns to the title screen.
     assert_eq!(
         action(find(&entries, "story_ending_back_btn")),
-        "screen:show:story_title"
+        serde_json::json!({"show": "story_title"})
     );
 }
 
@@ -285,7 +291,7 @@ fn no_title_screen_makes_the_stage_initial() {
     assert!(!entries.iter().any(|e| asset_name(e) == "story_title"));
     assert_eq!(find(&entries, "story_stage")["args"]["initial"], true);
     let back = find(&entries, "story_ending_back_btn");
-    assert_eq!(action(back), "story:start");
+    assert_eq!(action(back), serde_json::json!({"story": "start"}));
     assert_eq!(
         find(&entries, "story_ending_back_lbl")["args"]["content"],
         "Restart"
@@ -333,7 +339,10 @@ fn dialog_is_bottom_anchored_and_title_buttons_follow() {
     // the story) and its label is registered in the scaffold for the runtime
     // title-menu layout.
     let settings = find(&entries, "story_title_settings_btn");
-    assert_eq!(settings["args"]["action"], "story:settings");
+    assert_eq!(
+        settings["args"]["action"],
+        serde_json::json!({"story": "settings"})
+    );
     assert_eq!(settings["args"]["label"], "story_title_settings_lbl");
     assert_eq!(scaffold["settings_label"], "story_title_settings_lbl");
 }

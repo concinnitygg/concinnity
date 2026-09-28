@@ -1,5 +1,8 @@
 //! Settings-slider row schema.
 
+use concinnity_core::components::{Font, Screen};
+use concinnity_core::ecs::NameRef;
+
 /// A settings row that sets a continuous value by dragging a handle along a
 /// track.
 ///
@@ -7,8 +10,8 @@
 /// left-aligned name, a draggable track with a handle, and a right-aligned
 /// current value. It expands into a [TextLabel](#textlabel) for the name, a
 /// [TextLabel](#textlabel) for the value, two [Sprite](#sprite)s (the track and
-/// the handle), and a [HitRegion](#hitregion) covering the track that fires a
-/// `"setting:<setting>:drag"` action. While the region is pressed the handle
+/// the handle), and a [HitRegion](#hitregion) covering the track whose action
+/// drags `setting`. While the region is pressed the handle
 /// follows the cursor and the value updates live.
 ///
 /// The `setting` field names an engine setting the runtime knows how to map
@@ -34,7 +37,7 @@
 pub struct Slider {
     /// [Screen](#screen) the generated elements belong to. Empty leaves them
     /// screen-less, which draws them with the HUD rather than with a screen.
-    pub screen: String,
+    pub screen: NameRef<Screen>,
     /// Engine setting this row controls (e.g. `"exposure"`). Must be a setting
     /// the runtime recognizes as a slider; an unknown key renders but does
     /// nothing on drag.
@@ -51,7 +54,7 @@ pub struct Slider {
     /// Row height in window pixels (the draggable region's height).
     pub height: f32,
     /// [Font](#font) for the row text. Empty uses the built-in font.
-    pub font: String,
+    pub font: NameRef<Font>,
     /// Pixel size of the row text when it uses the built-in font (that is, when
     /// `font` is empty). Ignored when `font` names a [Font](#font), which
     /// carries its own size.
@@ -71,14 +74,14 @@ pub struct Slider {
 impl Default for Slider {
     fn default() -> Self {
         Self {
-            screen: String::new(),
+            screen: NameRef::default(),
             setting: String::new(),
             label: String::new(),
             x: 0.0,
             y: 0.0,
             width: 360.0,
             height: 48.0,
-            font: String::new(),
+            font: NameRef::default(),
             font_px: 48.0,
             text_color: [0.85, 0.85, 0.85],
             value_color: [0.85, 0.85, 0.85],

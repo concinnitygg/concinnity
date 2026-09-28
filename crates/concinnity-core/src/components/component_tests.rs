@@ -115,7 +115,7 @@ mod key_binding {
 
     #[test]
     fn deserializes_escape_to_view_toggle() {
-        let json = r#"{"key":"Escape","action":"screen:toggle:pause_menu"}"#;
+        let json = r#"{"key":"Escape","action":{"toggle":"pause_menu"}}"#;
         let kb: KeyBinding = crate::test_support::from_json(json);
         assert_eq!(kb.key, "Escape");
         assert_eq!(

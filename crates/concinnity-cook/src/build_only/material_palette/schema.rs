@@ -1,5 +1,8 @@
 //! Material-palette schema: a named set of Material entries with short aliases.
 
+use concinnity_core::components::Texture;
+use concinnity_core::ecs::NameRef;
+
 /// A named set of [Material](#material) entries with short aliases.
 ///
 /// Expands into [Material](#material) assets named `<palette_name>_<alias>`.
@@ -18,19 +21,19 @@ pub struct MaterialPalette {
 
 /// One entry in a [MaterialPalette]. Each carries an `alias` (the suffix of the
 /// expanded [Material](#material) name) plus the Material fields the expansion
-/// fills in. Names in `albedo` / `normal_map` are unresolved [Texture](#texture)
-/// references, resolved on the expanded Material.
+/// fills in. The [Texture](#texture)s named by `albedo` / `normal_map` resolve
+/// on the expanded Material.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
 #[serde(default)]
 pub struct PaletteEntry {
     /// Alias suffix; the expanded material is named `<palette>_<alias>`.
     pub alias: String,
-    /// [Texture](#texture) name for the material's albedo.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub albedo: String,
-    /// [Texture](#texture) name for the material's normal map.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub normal_map: String,
+    /// [Texture](#texture) for the material's albedo.
+    #[serde(skip_serializing_if = "NameRef::is_empty")]
+    pub albedo: NameRef<Texture>,
+    /// [Texture](#texture) for the material's normal map.
+    #[serde(skip_serializing_if = "NameRef::is_empty")]
+    pub normal_map: NameRef<Texture>,
     /// Surface roughness in [0, 1].
     pub roughness: f32,
     /// Metallic factor in [0, 1].
@@ -45,8 +48,8 @@ impl Default for PaletteEntry {
     fn default() -> Self {
         Self {
             alias: String::from("surface"),
-            albedo: String::new(),
-            normal_map: String::new(),
+            albedo: NameRef::default(),
+            normal_map: NameRef::default(),
             roughness: 0.8,
             metallic: 0.0,
             tint: [1.0, 1.0, 1.0],

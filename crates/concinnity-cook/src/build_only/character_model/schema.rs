@@ -1,8 +1,10 @@
 //! Character-model schema: a body conforming to a CharacterSchema.
 
 use concinnity_core::components::CharacterCapsule;
-use concinnity_core::ecs::MaterialHandle;
 use concinnity_core::ecs::de_opt_material_handle;
+use concinnity_core::ecs::{MaterialHandle, NameRef};
+
+use super::character_schema::CharacterSchema;
 
 /// A character body that conforms to a [CharacterSchema](#characterschema).
 ///
@@ -31,7 +33,7 @@ use concinnity_core::ecs::de_opt_material_handle;
 pub struct CharacterModel {
     /// The [CharacterSchema](#characterschema) the source conforms to, by
     /// asset name or the reserved `builtin:humanoid`.
-    pub schema: String,
+    pub schema: NameRef<CharacterSchema>,
     /// Path to the `.glb` / `.gltf` body.
     pub source: String,
     /// Which skinned mesh of `source` to import, in file order.
@@ -62,7 +64,7 @@ pub struct CharacterModel {
 impl Default for CharacterModel {
     fn default() -> Self {
         Self {
-            schema: String::from("builtin:humanoid"),
+            schema: NameRef::from("builtin:humanoid"),
             source: String::new(),
             skin_index: 0,
             material: None,

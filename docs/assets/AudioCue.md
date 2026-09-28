@@ -5,7 +5,7 @@
 Plays audio when a [Screen](Screen.md) is shown.
 
 A cue links a [Screen](Screen.md) to an [AudioClip](AudioClip.md): whenever UI
-navigation makes the screen active (a `screen:show` or `screen:toggle` action, a
+navigation makes the screen active (a `show` or `toggle` action, a
 [KeyBinding](KeyBinding.md), dismissing an overlay back to it, or being the
 world's initial screen), the clip plays. Cues play flat on the main mix with
 no 3D position; use an [AudioEmitter](AudioEmitter.md) for positional sound.

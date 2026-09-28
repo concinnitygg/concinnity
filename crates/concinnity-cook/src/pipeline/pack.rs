@@ -49,7 +49,6 @@ pub(in crate::pipeline) struct MeshCacheEntry {
 pub(in crate::pipeline) fn probe_mesh_payload_cache(
     assets: &[WorldJsonlAsset],
     assets_dir: Option<&Path>,
-    artifacts_dir: Option<&str>,
     platform: concinnity_core::platform::Platform,
 ) -> std::collections::HashMap<String, MeshCacheEntry> {
     let mut out = std::collections::HashMap::new();
@@ -75,7 +74,6 @@ pub(in crate::pipeline) fn probe_mesh_payload_cache(
             name: asset.id.as_str(),
             platform,
             assets_dir,
-            artifacts_dir,
             all_assets: &empty,
         };
         let discriminant = RESOURCE_CACHE_DISC_BASE + job_resource_kind(rt) as u8;
@@ -177,7 +175,6 @@ pub(in crate::pipeline) struct PackContext<'a> {
     pub(in crate::pipeline) mesh_source_handles: &'a concinnity_core::resource::ResourceHandles,
     pub(in crate::pipeline) max_blob_bytes: u64,
     pub(in crate::pipeline) assets_dir: Option<&'a Path>,
-    pub(in crate::pipeline) artifacts_dir: Option<&'a str>,
     pub(in crate::pipeline) platform: concinnity_core::platform::Platform,
     pub(in crate::pipeline) mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
     pub(in crate::pipeline) progress: Option<&'a (dyn Fn(BuildProgress) + Sync)>,
@@ -198,7 +195,6 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         mesh_source_handles,
         max_blob_bytes,
         assets_dir,
-        artifacts_dir,
         platform,
         mesh_cache,
         progress,
@@ -269,7 +265,6 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
                     name: name.as_str(),
                     platform,
                     assets_dir,
-                    artifacts_dir,
                     all_assets: assets,
                 };
                 let build = build_asset(ct).ok_or_else(|| {
@@ -325,7 +320,6 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
             name: asset.id.as_str(),
             platform,
             assets_dir,
-            artifacts_dir,
             all_assets: assets,
         };
         let extra_data = rt.compile_data(&asset.id, &asset.args)?.unwrap_or_default();
@@ -545,12 +539,8 @@ mod tests {
                 serde_json::json!({"generator": "box"}),
             ),
         ];
-        let probed = probe_mesh_payload_cache(
-            &assets,
-            None,
-            None,
-            concinnity_core::platform::Platform::Metal,
-        );
+        let probed =
+            probe_mesh_payload_cache(&assets, None, concinnity_core::platform::Platform::Metal);
 
         let mut names: Vec<&str> = probed.keys().map(|s| s.as_str()).collect();
         names.sort_unstable();
@@ -579,12 +569,8 @@ mod tests {
                 serde_json::json!({"source": "x.glb"}),
             ),
         ];
-        let probed = probe_mesh_payload_cache(
-            &assets,
-            None,
-            None,
-            concinnity_core::platform::Platform::Metal,
-        );
+        let probed =
+            probe_mesh_payload_cache(&assets, None, concinnity_core::platform::Platform::Metal);
         assert_eq!(probed.len(), 1);
         assert!(probed.contains_key("m"));
     }
@@ -648,7 +634,6 @@ mod tests {
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1024,
                 assets_dir: None,
-                artifacts_dir: None,
                 mesh_cache: &cache,
                 progress: None,
             },
@@ -735,7 +720,6 @@ mod tests {
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1 << 20,
                 assets_dir: None,
-                artifacts_dir: None,
                 mesh_cache: &cache,
                 progress: None,
             },
@@ -777,7 +761,6 @@ mod tests {
                 mesh_source_handles: &handles,
                 max_blob_bytes: 1 << 20,
                 assets_dir: None,
-                artifacts_dir: None,
                 mesh_cache: &Default::default(),
                 progress: None,
             },
@@ -831,7 +814,6 @@ mod tests {
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1 << 20,
                 assets_dir: None,
-                artifacts_dir: None,
                 mesh_cache: &cache,
                 progress: None,
             },
@@ -875,7 +857,6 @@ mod tests {
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1024,
                 assets_dir: None,
-                artifacts_dir: None,
                 mesh_cache: &Default::default(),
                 progress: None,
             },
@@ -923,7 +904,6 @@ mod tests {
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 1024,
                 assets_dir: None,
-                artifacts_dir: None,
                 mesh_cache: &Default::default(),
                 progress: None,
             },
@@ -976,7 +956,6 @@ mod tests {
                 mesh_source_handles: &Default::default(),
                 max_blob_bytes: 8,
                 assets_dir: None,
-                artifacts_dir: None,
                 mesh_cache: &cache,
                 progress: None,
             },

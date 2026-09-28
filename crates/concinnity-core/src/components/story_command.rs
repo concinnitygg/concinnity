@@ -3,7 +3,11 @@
 /// a Space press, a choice button, a Start / Restart button). The story system
 /// reads these and moves through the story graph. World authors never declare
 /// this type directly.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// An action names one by its verb (`"advance"`), or by an object for the two
+/// that carry an index (`{"choose": 1}`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StoryCommand {
     /// Reset to the first node and show the stage.
     Start,
@@ -15,29 +19,37 @@ pub enum StoryCommand {
     /// Pick the current choice menu's option by index.
     Choose(usize),
     /// Toggle auto-advance (pages turn on their own once revealed).
+    #[serde(rename = "auto")]
     ToggleAuto,
     /// Toggle fast-forward (instant reveal, rapid page turns; stops at menus).
+    #[serde(rename = "skip")]
     ToggleSkip,
     /// Toggle the dialogue-history overlay.
+    #[serde(rename = "log")]
     ToggleLog,
     /// Open the slot overlay in save mode.
+    #[serde(rename = "save")]
     OpenSave,
     /// Open the slot overlay in load mode.
+    #[serde(rename = "load")]
     OpenLoad,
     /// Pick a slot in the open slot overlay.
     Slot(usize),
     /// Toggle the pause menu over the stage: show it from the stage (or close an
     /// open overlay first), and return to the stage when it is up.
+    #[serde(rename = "pause")]
     TogglePause,
     /// Open the settings screen, remembering the menu that opened it so it can be
     /// returned to.
+    #[serde(rename = "settings")]
     OpenSettings,
     /// Close the settings screen, returning to whichever menu opened it.
+    #[serde(rename = "settings_back")]
     CloseSettings,
 }
 
 impl StoryCommand {
-    /// Every verb a `story:<verb>` action names, one per command.
+    /// Every command's verb, one per command.
     pub const VERBS: [&'static str; 13] = [
         "start",
         "continue",
@@ -113,6 +125,22 @@ mod tests {
             let cmd = StoryCommand::from_verb(verb, Some(2)).unwrap();
             assert_eq!(cmd.verb(), verb);
             assert_eq!(StoryCommand::from_verb(cmd.verb(), cmd.index()), Some(cmd));
+        }
+    }
+
+    // The authored form names each command by its verb, with the index as
+    // the value for the two that carry one.
+    #[test]
+    fn the_authored_form_is_the_verb() {
+        for verb in StoryCommand::VERBS {
+            let cmd = StoryCommand::from_verb(verb, Some(3)).unwrap();
+            let json = serde_json::to_value(&cmd).unwrap();
+            let expected = match cmd.index() {
+                Some(i) => serde_json::json!({ verb: i }),
+                None => serde_json::json!(verb),
+            };
+            assert_eq!(json, expected);
+            assert_eq!(serde_json::from_value::<StoryCommand>(json).unwrap(), cmd);
         }
     }
 

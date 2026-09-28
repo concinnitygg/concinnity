@@ -1,38 +1,25 @@
 //! The action vocabulary a HitRegion click or KeyBinding press fires.
 
-use core::fmt;
+use serde::de::{self, Deserializer};
+use serde::{Deserialize, Serialize, Serializer};
 
-use serde::de::{self, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-use crate::components::{ScreenCommand, StoryCommand};
+use crate::components::{AuthoredAction, Scene, Screen, ScreenCommand, StoryCommand};
+use crate::ecs::Ref;
+use crate::ecs::asset_fields::{AssetFields, FieldTable};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::resolver::resolve_name;
 use crate::settings::SettingKey;
 
 /// What a [HitRegion](#hitregion) click or a [KeyBinding](#keybinding) press
-/// does.
+/// does, with its targets resolved to asset ids.
 ///
-/// Authored as text:
-/// - `"quit"`: stop the application
-/// - `"scene:<name>"`: jump to the named [Scene](#scene)
-/// - `"screen:show:<name>"`: show the named [Screen](#screen), replacing the top of the stack
-/// - `"screen:push:<name>"`: open the named [Screen](#screen) on top of what is showing
-/// - `"screen:toggle:<name>"`: close the named [Screen](#screen) if it is on top, open it otherwise
-/// - `"screen:hide"`: close the top [Screen](#screen)
-/// - `"story:<verb>"`: drive the story (`start`, `continue`, `advance`,
-///   `choose:<i>`, `slot:<i>`, `auto`, `skip`, `log`, `save`, `load`, `pause`,
-///   `settings`, `settings_back`)
-///
-/// A target may also be an already-resolved integer id. Generated menus also
-/// emit `"group:toggle:<i>"` and `"setting:<key>:<verb>"` actions.
+/// Authored as an [`AuthoredAction`], whose [Scene](#scene) and
+/// [Screen](#screen) names resolve to ids as it deserializes.
 ///
 /// ```rust
 /// # use concinnity_core::components::{ScreenCommand, UiAction};
 /// # use concinnity_core::ecs::asset_id::AssetId;
-/// let action = UiAction::parse("screen:toggle:7", |_| None).unwrap();
+/// let action: UiAction = serde_json::from_value(serde_json::json!({"toggle": 7})).unwrap();
 /// assert_eq!(action, UiAction::Screen(ScreenCommand::Toggle(AssetId(7))));
-/// assert_eq!(action.to_string(), "screen:toggle:7");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiAction {
@@ -80,7 +67,7 @@ impl SettingVerb {
         SettingVerb::Open,
     ];
 
-    /// The verb as it appears in a `setting:<key>:<verb>` action.
+    /// The verb as a settings row's action writes it.
     pub const fn as_str(self) -> &'static str {
         match self {
             SettingVerb::Next => "next",
@@ -94,129 +81,6 @@ impl SettingVerb {
     /// The verb named by `text`, or `None`.
     pub fn parse(text: &str) -> Option<SettingVerb> {
         Self::ALL.into_iter().find(|v| v.as_str() == text)
-    }
-}
-
-/// Why action text failed to parse.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UiActionError {
-    /// The text names no action.
-    Unknown,
-    /// A scene or screen action has no target.
-    MissingTarget,
-    /// A target name could not be resolved to an asset id.
-    UnresolvedTarget,
-    /// `screen:clear`, which only the engine sends.
-    EngineOnly,
-    /// A story or group index is missing or not a non-negative integer.
-    BadIndex,
-    /// A `story:` verb that names no story command.
-    UnknownStoryVerb,
-    /// A `setting:` key that names no setting.
-    UnknownSettingKey,
-    /// A `setting:` verb that is missing or unknown.
-    UnknownSettingVerb,
-}
-
-impl fmt::Display for UiActionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            UiActionError::Unknown => "unknown action",
-            UiActionError::MissingTarget => "missing target",
-            UiActionError::UnresolvedTarget => "unresolved target name",
-            UiActionError::EngineOnly => "screen:clear is sent only by the engine",
-            UiActionError::BadIndex => "missing or invalid index",
-            UiActionError::UnknownStoryVerb => "unknown story verb",
-            UiActionError::UnknownSettingKey => "unknown setting key",
-            UiActionError::UnknownSettingVerb => "missing or unknown setting verb",
-        })
-    }
-}
-
-impl UiAction {
-    /// Parse action text. A scene or screen target is an integer id or a name
-    /// passed to `resolve`.
-    pub fn parse(
-        text: &str,
-        resolve: impl Fn(&str) -> Option<AssetId>,
-    ) -> Result<UiAction, UiActionError> {
-        let target = |name: &str| -> Result<AssetId, UiActionError> {
-            if name.is_empty() {
-                Err(UiActionError::MissingTarget)
-            } else if let Ok(id) = name.parse::<u32>() {
-                Ok(AssetId(id))
-            } else {
-                resolve(name).ok_or(UiActionError::UnresolvedTarget)
-            }
-        };
-        let index = |i: &str| i.parse::<usize>().map_err(|_| UiActionError::BadIndex);
-
-        if text == "quit" {
-            return Ok(UiAction::Quit);
-        }
-        let (kind, rest) = text.split_once(':').ok_or(UiActionError::Unknown)?;
-        match kind {
-            "scene" => target(rest).map(UiAction::Scene),
-            "screen" => {
-                let (verb, name) = rest.split_once(':').unwrap_or((rest, ""));
-                let cmd = match verb {
-                    "hide" if name.is_empty() && !rest.ends_with(':') => ScreenCommand::Hide,
-                    "show" => ScreenCommand::Show(target(name)?),
-                    "push" => ScreenCommand::Push(target(name)?),
-                    "toggle" => ScreenCommand::Toggle(target(name)?),
-                    "clear" => return Err(UiActionError::EngineOnly),
-                    _ => return Err(UiActionError::Unknown),
-                };
-                Ok(UiAction::Screen(cmd))
-            }
-            "group" => match rest.split_once(':') {
-                Some(("toggle", i)) => index(i).map(UiAction::GroupToggle),
-                _ => Err(UiActionError::Unknown),
-            },
-            "story" => {
-                let (verb, i) = match rest.split_once(':') {
-                    Some((verb, i)) => (verb, Some(index(i)?)),
-                    None => (rest, None),
-                };
-                if !StoryCommand::VERBS.contains(&verb) {
-                    return Err(UiActionError::UnknownStoryVerb);
-                }
-                StoryCommand::from_verb(verb, i)
-                    .map(UiAction::Story)
-                    .ok_or(UiActionError::BadIndex)
-            }
-            "setting" => {
-                let (key, verb) = rest
-                    .rsplit_once(':')
-                    .ok_or(UiActionError::UnknownSettingVerb)?;
-                let key = SettingKey::parse(key).ok_or(UiActionError::UnknownSettingKey)?;
-                let verb = SettingVerb::parse(verb).ok_or(UiActionError::UnknownSettingVerb)?;
-                Ok(UiAction::Setting { key, verb })
-            }
-            _ => Err(UiActionError::Unknown),
-        }
-    }
-}
-
-impl fmt::Display for UiAction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            UiAction::Quit => f.write_str("quit"),
-            UiAction::Scene(id) => write!(f, "scene:{}", id.0),
-            UiAction::Screen(ScreenCommand::Show(id)) => write!(f, "screen:show:{}", id.0),
-            UiAction::Screen(ScreenCommand::Push(id)) => write!(f, "screen:push:{}", id.0),
-            UiAction::Screen(ScreenCommand::Toggle(id)) => write!(f, "screen:toggle:{}", id.0),
-            UiAction::Screen(ScreenCommand::Hide) => f.write_str("screen:hide"),
-            UiAction::Screen(ScreenCommand::Clear) => f.write_str("screen:clear"),
-            UiAction::GroupToggle(i) => write!(f, "group:toggle:{i}"),
-            UiAction::Story(cmd) => match cmd.index() {
-                Some(i) => write!(f, "story:{}:{i}", cmd.verb()),
-                None => write!(f, "story:{}", cmd.verb()),
-            },
-            UiAction::Setting { key, verb } => {
-                write!(f, "setting:{}:{}", key.as_str(), verb.as_str())
-            }
-        }
     }
 }
 
@@ -278,41 +142,84 @@ impl Encoded {
     }
 }
 
-impl Serialize for UiAction {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::Error;
-        if matches!(self, UiAction::Screen(ScreenCommand::Clear)) {
-            return Err(S::Error::custom(UiActionError::EngineOnly));
-        }
-        if s.is_human_readable() {
-            s.collect_str(self)
-        } else {
-            Encoded::encode(self)
-                .ok_or_else(|| S::Error::custom("action payload out of range"))?
-                .serialize(s)
+// The authored form with its targets resolved: how a `UiAction` reads and
+// writes as text.
+type Resolved = AuthoredAction<Ref<Scene>, Ref<Screen>>;
+
+impl From<Resolved> for UiAction {
+    fn from(action: Resolved) -> Self {
+        match action {
+            AuthoredAction::Quit => UiAction::Quit,
+            AuthoredAction::Scene(scene) => UiAction::Scene(scene.id()),
+            AuthoredAction::Show(screen) => UiAction::Screen(ScreenCommand::Show(screen.id())),
+            AuthoredAction::Push(screen) => UiAction::Screen(ScreenCommand::Push(screen.id())),
+            AuthoredAction::Toggle(screen) => UiAction::Screen(ScreenCommand::Toggle(screen.id())),
+            AuthoredAction::Hide => UiAction::Screen(ScreenCommand::Hide),
+            AuthoredAction::Story(cmd) => UiAction::Story(cmd),
+            AuthoredAction::GroupToggle(i) => UiAction::GroupToggle(i),
+            AuthoredAction::Setting { key, verb } => UiAction::Setting { key, verb },
         }
     }
 }
 
-struct TextVisitor;
-
-impl Visitor<'_> for TextVisitor {
-    type Value = UiAction;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("an action string")
+impl UiAction {
+    // The authored form, or `None` for `Screen(Clear)`, which only the engine
+    // sends.
+    fn authored(&self) -> Option<Resolved> {
+        Some(match self {
+            UiAction::Quit => AuthoredAction::Quit,
+            UiAction::Scene(id) => AuthoredAction::Scene(Ref::new(*id)),
+            UiAction::Screen(ScreenCommand::Show(id)) => AuthoredAction::Show(Ref::new(*id)),
+            UiAction::Screen(ScreenCommand::Push(id)) => AuthoredAction::Push(Ref::new(*id)),
+            UiAction::Screen(ScreenCommand::Toggle(id)) => AuthoredAction::Toggle(Ref::new(*id)),
+            UiAction::Screen(ScreenCommand::Hide) => AuthoredAction::Hide,
+            UiAction::Screen(ScreenCommand::Clear) => return None,
+            UiAction::Story(cmd) => AuthoredAction::Story(cmd.clone()),
+            UiAction::GroupToggle(i) => AuthoredAction::GroupToggle(*i),
+            UiAction::Setting { key, verb } => AuthoredAction::Setting {
+                key: *key,
+                verb: *verb,
+            },
+        })
     }
+}
 
-    fn visit_str<E: de::Error>(self, v: &str) -> Result<UiAction, E> {
-        UiAction::parse(v, |name| resolve_name(name).map(AssetId))
-            .map_err(|e| E::custom(format_args!("invalid action {v:?}: {e}")))
+impl AssetFields for UiAction {
+    fn collect_fields(prefix: &str, out: &mut FieldTable) {
+        Resolved::collect_fields(prefix, out);
+    }
+}
+
+impl Serialize for SettingVerb {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for SettingVerb {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let verb = alloc::string::String::deserialize(d)?;
+        SettingVerb::parse(&verb)
+            .ok_or_else(|| de::Error::custom(format_args!("unknown setting verb {verb:?}")))
+    }
+}
+
+impl Serialize for UiAction {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::Error;
+        let engine_only = || S::Error::custom("screen clear is sent only by the engine");
+        if s.is_human_readable() {
+            self.authored().ok_or_else(engine_only)?.serialize(s)
+        } else {
+            Encoded::encode(self).ok_or_else(engine_only)?.serialize(s)
+        }
     }
 }
 
 impl<'de> Deserialize<'de> for UiAction {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         if d.is_human_readable() {
-            d.deserialize_str(TextVisitor)
+            Resolved::deserialize(d).map(UiAction::from)
         } else {
             Encoded::deserialize(d)?
                 .decode()
@@ -321,68 +228,12 @@ impl<'de> Deserialize<'de> for UiAction {
     }
 }
 
-/// `serde` `with` helpers for an optional action field.
-///
-/// In text form an empty string or null reads as `None`, and `None` writes as
-/// an empty string. Apply with `#[serde(default, with =
-/// "concinnity_core::components::ui_action::optional")]`.
-pub mod optional {
-    use super::*;
-
-    /// Serialize an optional action.
-    pub fn serialize<S: Serializer>(action: &Option<UiAction>, s: S) -> Result<S::Ok, S::Error> {
-        match action {
-            Some(action) if s.is_human_readable() => action.serialize(s),
-            None if s.is_human_readable() => s.serialize_str(""),
-            action => action.serialize(s),
-        }
-    }
-
-    /// Deserialize an optional action.
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<UiAction>, D::Error> {
-        if !d.is_human_readable() {
-            return Option::<UiAction>::deserialize(d);
-        }
-
-        struct OptVisitor;
-
-        impl Visitor<'_> for OptVisitor {
-            type Value = Option<UiAction>;
-
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("an action string or null")
-            }
-
-            fn visit_unit<E: de::Error>(self) -> Result<Option<UiAction>, E> {
-                Ok(None)
-            }
-            fn visit_none<E: de::Error>(self) -> Result<Option<UiAction>, E> {
-                Ok(None)
-            }
-            fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<UiAction>, E> {
-                if v.is_empty() {
-                    Ok(None)
-                } else {
-                    TextVisitor.visit_str(v).map(Some)
-                }
-            }
-        }
-
-        d.deserialize_any(OptVisitor)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use alloc::string::ToString;
     use alloc::vec;
     use alloc::vec::Vec;
 
     use super::*;
-
-    fn stub(name: &str) -> Option<AssetId> {
-        (name != "missing").then_some(AssetId(name.len() as u32))
-    }
 
     fn every_action() -> Vec<UiAction> {
         let mut all = vec![
@@ -408,16 +259,16 @@ mod tests {
     }
 
     #[test]
-    fn display_round_trips_through_parse_for_every_variant() {
-        for action in every_action() {
-            let text = action.to_string();
-            assert_eq!(UiAction::parse(&text, stub), Ok(action), "{text}");
-        }
-    }
-
-    #[test]
-    fn every_action_round_trips_through_postcard() {
+    fn every_action_round_trips_through_json_and_postcard() {
         let all = every_action();
+        for action in &all {
+            let json = serde_json::to_value(action).unwrap();
+            assert_eq!(
+                &serde_json::from_value::<UiAction>(json.clone()).unwrap(),
+                action,
+                "{json}"
+            );
+        }
         let bytes = postcard::to_allocvec(&all).unwrap();
         let back: Vec<UiAction> = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back, all);
@@ -426,40 +277,18 @@ mod tests {
     #[test]
     fn a_target_name_resolves_through_the_installed_resolver() {
         crate::test_support::install_resolvers();
-        let action: UiAction = serde_json::from_str("\"screen:push:pause\"").unwrap();
+        let action: UiAction =
+            serde_json::from_value(serde_json::json!({"push": "pause"})).unwrap();
         assert_eq!(action, UiAction::Screen(ScreenCommand::Push(AssetId(5))));
-        assert_eq!(serde_json::to_string(&action).unwrap(), "\"screen:push:5\"");
         assert_eq!(
-            UiAction::parse("scene:missing", stub),
-            Err(UiActionError::UnresolvedTarget)
+            serde_json::to_value(&action).unwrap(),
+            serde_json::json!({"push": 5})
         );
     }
 
     #[test]
-    fn malformed_actions_are_rejected() {
-        let cases = [
-            ("setting::next", UiActionError::UnknownSettingKey),
-            ("setting:vsync", UiActionError::UnknownSettingVerb),
-            ("setting:vsync:spin", UiActionError::UnknownSettingVerb),
-            ("story:choose", UiActionError::BadIndex),
-            ("story:choose:x", UiActionError::BadIndex),
-            ("story:dance", UiActionError::UnknownStoryVerb),
-            ("screen:show:", UiActionError::MissingTarget),
-            ("screen:hide:", UiActionError::Unknown),
-            ("screen:clear", UiActionError::EngineOnly),
-            ("group:toggle:-1", UiActionError::BadIndex),
-            ("teleport", UiActionError::Unknown),
-            ("", UiActionError::Unknown),
-        ];
-        for (text, err) in cases {
-            assert_eq!(UiAction::parse(text, stub), Err(err), "{text}");
-        }
-    }
-
-    #[test]
-    fn clear_displays_but_never_serializes() {
+    fn clear_never_serializes() {
         let clear = UiAction::Screen(ScreenCommand::Clear);
-        assert_eq!(clear.to_string(), "screen:clear");
         assert!(serde_json::to_string(&clear).is_err());
         assert!(postcard::to_allocvec(&clear).is_err());
     }
@@ -470,27 +299,20 @@ mod tests {
         assert!(postcard::from_bytes::<UiAction>(&[7, 13, 0]).is_err());
     }
 
-    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-    struct Holder {
-        #[serde(default, with = "optional")]
-        action: Option<UiAction>,
-    }
-
     #[test]
-    fn optional_text_reads_empty_null_and_missing_as_none() {
-        for json in [r#"{"action":""}"#, r#"{"action":null}"#, "{}"] {
-            let h: Holder = serde_json::from_str(json).unwrap();
-            assert_eq!(h.action, None, "{json}");
+    fn an_optional_action_reads_null_and_missing_as_none() {
+        #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+        struct Holder {
+            #[serde(default)]
+            action: Option<UiAction>,
         }
-        let none = Holder { action: None };
-        assert_eq!(serde_json::to_string(&none).unwrap(), r#"{"action":""}"#);
-        let quit: Holder = serde_json::from_str(r#"{"action":"quit"}"#).unwrap();
-        assert_eq!(quit.action, Some(UiAction::Quit));
-        assert!(serde_json::from_str::<Holder>(r#"{"action":"teleport"}"#).is_err());
-    }
-
-    #[test]
-    fn optional_round_trips_through_postcard() {
+        for json in [r#"{"action":null}"#, "{}"] {
+            assert_eq!(
+                serde_json::from_str::<Holder>(json).unwrap().action,
+                None,
+                "{json}"
+            );
+        }
         for action in [None, Some(UiAction::GroupToggle(4))] {
             let h = Holder { action };
             let bytes = postcard::to_allocvec(&h).unwrap();

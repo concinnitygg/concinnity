@@ -132,7 +132,10 @@ fn a_story_world_gets_a_pause_menu() {
     // The story system drives the pause: no MainMenu screen toggle, and Back
     // routes through the story so it returns to whichever menu opened it.
     assert_eq!(menu["args"]["toggle_key"], "");
-    assert_eq!(menu["args"]["settings_back_action"], "story:settings_back");
+    assert_eq!(
+        menu["args"]["settings_back_action"],
+        serde_json::json!({"story": "settings_back"})
+    );
     // Translucent backdrop, not the opaque MainMenu default.
     let alpha = menu["args"]["dim"][3].as_f64().unwrap();
     assert!(
@@ -141,19 +144,16 @@ fn a_story_world_gets_a_pause_menu() {
     );
 
     let items = menu["args"]["items"].as_array().unwrap();
-    let actions: Vec<&str> = items
-        .iter()
-        .map(|i| i["action"].as_str().unwrap())
-        .collect();
+    let actions: Vec<&serde_json::Value> = items.iter().map(|i| &i["action"]).collect();
     for action in [
-        "story:pause",
-        "story:save",
-        "story:load",
-        "story:settings",
-        "screen:show:tale_title",
-        "quit",
+        serde_json::json!({"story": "pause"}),
+        serde_json::json!({"story": "save"}),
+        serde_json::json!({"story": "load"}),
+        serde_json::json!({"story": "settings"}),
+        serde_json::json!({"show": "tale_title"}),
+        serde_json::json!("quit"),
     ] {
-        assert!(actions.contains(&action), "missing pause action {action}");
+        assert!(actions.contains(&&action), "missing pause action {action}");
     }
     // Main Menu sits above Quit, and Quit is last.
     let labels: Vec<&str> = items.iter().map(|i| i["label"].as_str().unwrap()).collect();
@@ -171,7 +171,7 @@ fn a_story_world_gets_a_pause_menu() {
         })
         .expect("Escape binding injected");
     assert_eq!(key["args"]["key"], "Escape");
-    assert_eq!(key["args"]["action"], "story:pause");
+    assert_eq!(key["args"]["action"], serde_json::json!({"story": "pause"}));
 
     // The Story scaffold points at the pause + settings screens.
     let story = assets
