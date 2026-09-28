@@ -34,6 +34,9 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
         Ok(s) => s,
         Err(poisoned) => poisoned.into_inner(),
     };
+    // Runtime commands block on the engine after the snapshot lock is dropped,
+    // so they push through a handle taken out from under it.
+    let queue = state.commands.clone();
 
     let body = match cmd.as_str() {
         "ping" => serde_json::json!({ "ok": true, "pong": true }),
@@ -258,103 +261,103 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
             // Drop the snapshot lock before blocking on the engine reply:
             // the main thread will need to acquire it for the next tick.
             drop(state);
-            return handle_decal_add(text);
+            return handle_decal_add(&queue, text);
         }
         "decal-remove" => {
             drop(state);
-            return handle_decal_remove(text);
+            return handle_decal_remove(&queue, text);
         }
         "emitter-add" => {
             drop(state);
-            return handle_emitter_add(text);
+            return handle_emitter_add(&queue, text);
         }
         "emitter-remove" => {
             drop(state);
-            return handle_emitter_remove(text);
+            return handle_emitter_remove(&queue, text);
         }
         "anim-crossfade" => {
             // The handler needs the names table to resolve the target
             // SkinnedMesh, so capture it before dropping the snapshot lock.
             let names = std::sync::Arc::clone(&state.names);
             drop(state);
-            return handle_anim_crossfade(text, &names);
+            return handle_anim_crossfade(&queue, text, &names);
         }
         "anim-param" => {
             let names = std::sync::Arc::clone(&state.names);
             drop(state);
-            return handle_anim_param(text, &names);
+            return handle_anim_param(&queue, text, &names);
         }
         "anim-state" => {
             let names = std::sync::Arc::clone(&state.names);
             drop(state);
-            return handle_anim_state(text, &names);
+            return handle_anim_state(&queue, text, &names);
         }
         "screenshot" => {
             // Drop the snapshot lock before blocking on the engine reply: the
             // render thread needs it for the next tick (which performs the
             // capture).
             drop(state);
-            return handle_screenshot(text);
+            return handle_screenshot(&queue, text);
         }
         "cull-status" => {
             // Same as screenshot: the readback happens on the render thread and
             // idles the device, so release the snapshot lock before blocking.
             drop(state);
-            return handle_cull_status();
+            return handle_cull_status(&queue);
         }
         "camera-set" => {
             // Runtime mutation: drop the snapshot lock before blocking on the
             // engine reply, like the spawn commands above.
             drop(state);
-            return handle_camera_set(text);
+            return handle_camera_set(&queue, text);
         }
         "quality-set" => {
             // Runtime mutation (live quality toggle): drop the snapshot lock
             // before blocking on the engine reply, like the spawn commands above.
             drop(state);
-            return handle_quality_set(text);
+            return handle_quality_set(&queue, text);
         }
         "rebind" => {
             // Runtime mutation (live key rebind): drop the snapshot lock before
             // blocking on the engine reply, like the spawn commands above.
             drop(state);
-            return handle_rebind(text);
+            return handle_rebind(&queue, text);
         }
         "camera-move" => {
             // Sustained-motion mutation: same drop-then-block shape as
             // camera-set. The reply fires when the motion is accepted, not when
             // it finishes, so even a long move stays inside the reply timeout.
             drop(state);
-            return handle_camera_move(text);
+            return handle_camera_move(&queue, text);
         }
         "camera-stop" => {
             drop(state);
-            return handle_camera_stop();
+            return handle_camera_stop(&queue);
         }
         "despawn" => {
             // Runtime mutation (remove an authored placement): drop the snapshot
             // lock before blocking on the engine reply, like the camera / quality
             // commands above.
             drop(state);
-            return handle_despawn(text);
+            return handle_despawn(&queue, text);
         }
         "reparent" => {
             // Runtime mutation (move an authored placement under a new parent):
             // drop the snapshot lock before blocking, like `despawn` above.
             drop(state);
-            return handle_reparent(text);
+            return handle_reparent(&queue, text);
         }
         "spawn" => {
             // Runtime mutation (instantiate a copy of an authored placement):
             // drop the snapshot lock before blocking, like `despawn` above.
             drop(state);
-            return handle_spawn(text);
+            return handle_spawn(&queue, text);
         }
         "story" => {
             // Runtime mutation (drive the story system): drop the snapshot
             // lock before blocking, like `despawn` above.
             drop(state);
-            return handle_story(text);
+            return handle_story(&queue, text);
         }
         // The catalog is the verb table, so an unknown verb answers with what
         // the server does accept.
@@ -711,8 +714,7 @@ mod tests {
     // Each runtime-mutation command forwards to a handler in `super::commands`.
     // A payload that fails the handler's own parse / validation returns an
     // error reply before anything is enqueued, so these exercise the dispatch
-    // forwarding arm (and the handler's rejection path) without a live engine
-    // or the process-global command queue.
+    // forwarding arm (and the handler's rejection path) without a live engine.
     #[test]
     fn runtime_mutation_commands_forward_and_reject_bad_input() {
         let cases = [
@@ -747,24 +749,23 @@ mod tests {
     }
 
     // `camera-stop` carries no payload to fail on, so it always forwards to the
-    // engine. Drive the process-global queue in a worker while the dispatcher
-    // blocks so the forwarding arm's reply lands without the engine timeout.
+    // engine. Drive the snapshot's queue while the dispatcher blocks in a worker
+    // so the forwarding arm's reply lands without the engine timeout.
     #[test]
     fn camera_stop_forwards_and_reports_stopped() {
-        use crate::debug::runtime_spawn::{self, RuntimeCommand, WorldCommand};
-        let _guard = crate::test_support::lock();
-        let worker = std::thread::spawn(|| {
-            let shared = Arc::new(Mutex::new(DebugState::default()));
-            handle_request(r#"{"cmd":"camera-stop"}"#, &shared)
-        });
+        use crate::debug::runtime_spawn::{RuntimeCommand, WorldCommand};
+        let shared = Arc::new(Mutex::new(DebugState::default()));
+        let queue = shared.lock().unwrap().commands.clone();
+        let worker =
+            std::thread::spawn(move || handle_request(r#"{"cmd":"camera-stop"}"#, &shared));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            for cmd in runtime_spawn::drain() {
+            for cmd in queue.drain() {
                 match cmd {
                     RuntimeCommand::World(WorldCommand::CameraStop { reply }) => {
                         let _ = reply.send(Ok(()));
                     }
-                    other => runtime_spawn::enqueue(other),
+                    _ => panic!("unexpected runtime command"),
                 }
             }
             if worker.is_finished() {

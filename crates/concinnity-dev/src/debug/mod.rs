@@ -32,14 +32,17 @@
 //! `anim-crossfade` re-weights the clip bucket for one SkinnedMesh (looked
 //! up by asset name) and ramps the live blend toward the new weights over
 //! `duration_secs`. The weight vector must match the target's clip count.
-//! The handler queues the command on `concinnity_engine::animation::runtime_queue` and
-//! blocks on a one-shot reply channel that `AnimationSystem::step` fulfils
-//! on the next frame. `duration_secs == 0` snaps immediately.
+//! The handler queues the command on the server's runtime queue and blocks on a
+//! one-shot reply channel the per-frame debug drive fulfils through
+//! `AnimationSystem::crossfade` on the next frame. `duration_secs == 0` snaps
+//! immediately. `anim-param` and `anim-state` take the same path through
+//! `AnimationSystem::set_param` and `AnimationSystem::graph_state`.
 //!
 //! `decal-add` / `decal-remove` / `emitter-add` / `emitter-remove` are the
-//! runtime spawn/despawn entry points. The handler queues the command on
-//! [`self::runtime_spawn`] and blocks on a one-shot reply channel that the
-//! per-frame debug drive fulfils on the next frame (~16 ms at 60 Hz). On
+//! runtime spawn/despawn entry points. The handler queues the command on the
+//! server's [`self::runtime_spawn::RuntimeQueue`] and blocks on a one-shot
+//! reply channel that the per-frame debug drive fulfils on the next frame
+//! (~16 ms at 60 Hz). On
 //! success `decal-add` and `emitter-add` return `{"ok":true,"id":N}` where
 //! `N` is the stable slot index to feed back into the matching `remove`. The
 //! field shapes mirror the `Decal` / `ParticleEmitter` asset args.
@@ -47,8 +50,8 @@
 //! `camera-get` is a read-only snapshot (like `state` / `profile`): it reports
 //! the active `Camera3D`'s `position`, `yaw`, `pitch`, `fov_y_degrees`, `near`,
 //! and `far` from the per-tick snapshot. `camera-set` is a runtime mutation
-//! (like `decal-add` / `screenshot`): it queues a new pose on
-//! [`self::runtime_spawn`], blocks on a one-shot reply, and the per-frame debug
+//! (like `decal-add` / `screenshot`): it queues a new pose on the runtime
+//! queue, blocks on a one-shot reply, and the per-frame debug
 //! drive writes `position` / `yaw` / `pitch` (and `fov_y_degrees` when present)
 //! onto the active camera and zeroes the controller velocity so a free-fly
 //! camera does not drift the teleport away. Used to benchmark a fixed, repeatable
@@ -102,13 +105,15 @@
 //   dispatch  the socket-free `handle_request` command dispatcher (testable)
 //   state     the shared world-snapshot data model (testable)
 //   commands  spawn / crossfade command handlers + request bodies
+//   anim_command  the anim-* verbs as queued commands + their dispatch
 //   hot_reload  asset / shader / world.jsonl reload machinery
-//   runtime_spawn  decal / emitter / screenshot spawn queue + dispatch
+//   runtime_spawn  the runtime command queue + decal / emitter / camera dispatch
 //
 // The `wire` submodule holds everything that can only run against a live socket
 // and a live engine. It is excluded from coverage like the per-backend GPU
 // directories; the logic it wraps lives in `dispatch` / `state` and in
 // `crate::mcp`, which are unit-tested without a running process.
+mod anim_command;
 pub(crate) mod catalog;
 mod commands;
 pub(crate) mod dispatch;

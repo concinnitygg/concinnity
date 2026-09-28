@@ -17,8 +17,10 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::debug::anim_command;
+use crate::debug::hot_reload;
+use crate::debug::runtime_spawn::{self, RuntimeQueue};
 use crate::debug::state::{AssetEntry, CameraSnapshot, DebugState};
-use crate::debug::{hot_reload, runtime_spawn};
 use crate::debug_hook::DebugHook;
 use crate::mcp::AppServer;
 
@@ -34,6 +36,8 @@ const SNAPSHOT_INTERVAL: u64 = 30;
 // `Box<dyn DebugHook>` and ticks it each frame.
 pub(crate) struct DebugServer {
     shared: Arc<Mutex<DebugState>>,
+    // The snapshot's runtime command queue, drained every tick.
+    commands: RuntimeQueue,
     frame: u64,
     // The asset / shader / world.jsonl reload drive. The server owns the
     // session's one driver so the `reload-assets` command can reach its
@@ -51,7 +55,9 @@ impl DebugServer {
     // Binds `127.0.0.1` only: the debug surface is never exposed off-box.
     pub(crate) fn start(port: u16) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
-        let shared = Arc::new(Mutex::new(DebugState::default()));
+        let state = DebugState::default();
+        let commands = state.commands.clone();
+        let shared = Arc::new(Mutex::new(state));
 
         let shared_for_thread = Arc::clone(&shared);
         std::thread::Builder::new()
@@ -61,6 +67,7 @@ impl DebugServer {
         tracing::info!("debug server listening on http://127.0.0.1:{port}/mcp");
         Ok(Self {
             shared,
+            commands,
             frame: 0,
             reload: hot_reload::HotReloadDriver::new(),
             camera_motion: None,
@@ -88,36 +95,40 @@ impl DebugServer {
 }
 
 impl DebugServer {
-    // Apply the debug runtime commands once per frame: decal / emitter
-    // spawn against the backend, plus the deferred ECS-side commands and the
-    // per-frame camera-move advance. The asset / shader / world.jsonl reload
-    // passes live on `self.reload`, driven separately by `tick`.
+    // Apply the debug runtime commands once per frame: backend commands
+    // against the parked backend, animation commands against the
+    // `AnimationSystem`, then the deferred ECS-side commands and the per-frame
+    // camera-move advance. The asset / shader / world.jsonl reload passes live
+    // on `self.reload`, driven separately by `tick`.
     fn drive_runtime_commands(&mut self, world: &mut World) {
-        // World commands mutate the ECS or this server's motion slot, so they
-        // cannot be applied inside the backend borrow below. Collect them here
-        // and apply them once that borrow ends.
-        let mut deferred: Vec<runtime_spawn::WorldCommand> = Vec::new();
+        // Anim and world commands need the world itself, so they are applied
+        // once the backend borrow ends. Backend commands wait on the queue
+        // until a backend is parked.
+        let drained = self.commands.drain_by_target();
         let handoff = concinnity_engine::ecs::render_handoff(world);
-        if let Some(backend) = handoff.backend {
-            // Backend commands are independent of the hot-reload state,
-            // available in any `cn debug` world.
-            for cmd in runtime_spawn::drain() {
-                match cmd {
-                    runtime_spawn::RuntimeCommand::Backend(cmd) => {
-                        runtime_spawn::dispatch_runtime_spawn(cmd, handoff.texture_slots, backend);
-                    }
-                    runtime_spawn::RuntimeCommand::World(cmd) => deferred.push(cmd),
+        match handoff.backend {
+            Some(backend) => {
+                for cmd in drained.backend {
+                    runtime_spawn::dispatch_runtime_spawn(cmd, handoff.texture_slots, backend);
+                }
+            }
+            None => {
+                for cmd in drained.backend {
+                    self.commands.enqueue(cmd);
                 }
             }
         }
-        if let Some(anim) = concinnity_engine::ecs::animation_system_mut(world) {
-            anim.apply_runtime_commands();
+        for cmd in drained.anim {
+            anim_command::dispatch_anim_command(
+                cmd,
+                concinnity_engine::ecs::animation_system_mut(world),
+            );
         }
 
         // tick() runs before the world step, so the Camera3DSystem step this
         // frame sees a new pose, and a freshly installed camera-move also steps
         // this same frame just below.
-        for cmd in deferred {
+        for cmd in drained.world {
             runtime_spawn::dispatch_world_command(cmd, world, &mut self.camera_motion);
         }
 

@@ -7,8 +7,8 @@
 //! modes: `Flat` blends every clip by a live weight vector (startup fade-in +
 //! runtime crossfades; see `flat`), while `Graph` walks a compiled animation
 //! state machine whose transitions are driven by the target's `AnimationParams`
-//! component (see `graph`). Runtime debug commands for both modes are drained
-//! in `commands`.
+//! component (see `graph`). Name-addressed runtime control for both modes
+//! lives in `commands`.
 
 mod commands;
 mod flat;
@@ -16,9 +16,10 @@ mod graph;
 mod ik;
 mod morph;
 mod root;
-pub mod runtime_queue;
 #[cfg(test)]
 mod tests;
+
+pub use commands::GraphStateReport;
 
 use concinnity_core::animation::anim_graph;
 use concinnity_core::animation::pose_blend::PoseBlend;
@@ -325,10 +326,6 @@ impl System for AnimationSystem {
             .max(0.0);
         self.clip_secs += dt;
         let t = self.clip_secs;
-
-        // Runtime commands (the `anim-crossfade` / `anim-param` / `anim-state`
-        // debug tool calls) are drained from the editor's `DebugHook::tick` via
-        // `apply_runtime_commands`, not here.
 
         // Advance each bucket's driver before sampling: flat buckets move
         // their weight transitions, graph buckets sync `AnimationParams` and step

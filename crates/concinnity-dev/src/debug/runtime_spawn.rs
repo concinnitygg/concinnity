@@ -1,7 +1,7 @@
 //! Runtime decal / emitter / screenshot spawn queue + dispatch (`cn debug`
 //! only). Both halves live here so the engine never compiles them:
 //!
-//!   queue     a process-wide command queue the debug tool calls push onto
+//!   queue     the debug server's `RuntimeQueue` the debug tool calls push onto
 //!             (`enqueue`) and the per-frame debug drive drains (`drain`).
 //!   dispatch  `dispatch_runtime_spawn` applies a `BackendCommand` against the live
 //!             backend + the init-captured texture-name table, and
@@ -34,13 +34,16 @@ use concinnity_core::settings::SettingKey;
 use concinnity_engine::controller::camera::Camera3DSystem;
 use concinnity_engine::gfx::system::parked::TextureNameSlots;
 use concinnity_host::thread::asset_id;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+use super::anim_command::AnimCommand;
 
 // A runtime decal-spawn request. `texture` is the world.jsonl name of the
 // Texture asset to project; `None` (or an unresolvable name) falls back to
 // the renderer's white slot 0 so the tint still stamps. Geometry is the
 // same TRS triple the [`concinnity_core::components::Decal`] component carries.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct DecalSpawnArgs {
     pub texture: Option<String>,
     pub position: [f32; 3],
@@ -64,7 +67,8 @@ impl Default for DecalSpawnArgs {
 // A runtime emitter-spawn request. Same field shape as the
 // [`concinnity_core::components::ParticleEmitter`] asset; the engine clamps + normalizes
 // via [`concinnity_core::render::particles::build_particle_records`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct EmitterSpawnArgs {
     pub texture: Option<String>,
     pub position: [f32; 3],
@@ -109,23 +113,13 @@ impl Default for EmitterSpawnArgs {
 // `pitch` are radians (the controller's own convention); `fov_y_degrees` is
 // `None` to leave the field untouched. Applied against the live ECS, not the
 // backend, so it carries no texture/slot fields.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct CameraSetArgs {
     pub position: [f32; 3],
     pub yaw: f32,
     pub pitch: f32,
     pub fov_y_degrees: Option<f32>,
-}
-
-impl Default for CameraSetArgs {
-    fn default() -> Self {
-        Self {
-            position: [0.0, 0.0, 0.0],
-            yaw: 0.0,
-            pitch: 0.0,
-            fov_y_degrees: None,
-        }
-    }
 }
 
 // A runtime camera-move request: a per-frame pose delta applied to the active
@@ -136,7 +130,8 @@ impl Default for CameraSetArgs {
 // per-frame radian deltas. `frames == 0` holds the motion indefinitely until a
 // `camera-stop` command clears it; `frames > 0` applies it for exactly that
 // many frames then auto-stops.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct CameraMoveArgs {
     pub forward: f32,
     pub right: f32,
@@ -144,19 +139,6 @@ pub(crate) struct CameraMoveArgs {
     pub yaw: f32,
     pub pitch: f32,
     pub frames: u32,
-}
-
-impl Default for CameraMoveArgs {
-    fn default() -> Self {
-        Self {
-            forward: 0.0,
-            right: 0.0,
-            up: 0.0,
-            yaw: 0.0,
-            pitch: 0.0,
-            frames: 0,
-        }
-    }
 }
 
 // An in-progress camera-move the per-frame debug drive applies to the active
@@ -328,6 +310,7 @@ pub(crate) enum WorldCommand {
 pub(crate) enum RuntimeCommand {
     Backend(BackendCommand),
     World(WorldCommand),
+    Anim(AnimCommand),
 }
 
 impl From<BackendCommand> for RuntimeCommand {
@@ -342,29 +325,57 @@ impl From<WorldCommand> for RuntimeCommand {
     }
 }
 
-static QUEUE: Mutex<Vec<RuntimeCommand>> = Mutex::new(Vec::new());
-
-// Push a command onto the runtime-spawn queue. Returns immediately; the
-// caller blocks on its own reply receiver to get the result. A poisoned
-// mutex is recovered and used regardless (an unrelated panic in another
-// thread must not silently drop spawn commands).
-pub(crate) fn enqueue(cmd: impl Into<RuntimeCommand>) {
-    let mut q = match QUEUE.lock() {
-        Ok(g) => g,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    q.push(cmd.into());
+impl From<AnimCommand> for RuntimeCommand {
+    fn from(cmd: AnimCommand) -> Self {
+        Self::Anim(cmd)
+    }
 }
 
-// Take every queued command. Called by the `cn debug` drive
-// (`DebugHook::tick`) at frame start. The returned `Vec` is the live list:
-// the queue is reset to empty.
-pub(crate) fn drain() -> Vec<RuntimeCommand> {
-    let mut q = match QUEUE.lock() {
-        Ok(g) => g,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    std::mem::take(&mut *q)
+// One tick's drained commands, grouped by what the per-frame drive applies
+// them to.
+#[derive(Default)]
+pub(crate) struct DrainedCommands {
+    pub backend: Vec<BackendCommand>,
+    pub world: Vec<WorldCommand>,
+    pub anim: Vec<AnimCommand>,
+}
+
+// The debug server's command queue: the tool-call handlers push onto a clone
+// off the engine thread, and the per-frame debug drive drains it. A poisoned
+// mutex is recovered and used regardless, so an unrelated panic in another
+// thread cannot silently drop commands.
+#[derive(Clone, Default)]
+pub(crate) struct RuntimeQueue(Arc<Mutex<Vec<RuntimeCommand>>>);
+
+impl RuntimeQueue {
+    pub(crate) fn enqueue(&self, cmd: impl Into<RuntimeCommand>) {
+        self.commands().push(cmd.into());
+    }
+
+    // Take every queued command, leaving the queue empty.
+    pub(crate) fn drain(&self) -> Vec<RuntimeCommand> {
+        std::mem::take(&mut *self.commands())
+    }
+
+    // Take every queued command, grouped by what applies it, each group in
+    // queue order.
+    pub(crate) fn drain_by_target(&self) -> DrainedCommands {
+        let mut drained = DrainedCommands::default();
+        for cmd in self.drain() {
+            match cmd {
+                RuntimeCommand::Backend(cmd) => drained.backend.push(cmd),
+                RuntimeCommand::World(cmd) => drained.world.push(cmd),
+                RuntimeCommand::Anim(cmd) => drained.anim.push(cmd),
+            }
+        }
+        drained
+    }
+
+    fn commands(&self) -> std::sync::MutexGuard<'_, Vec<RuntimeCommand>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
 // Process one runtime-spawn command (drained from the debug command queue)
@@ -685,33 +696,90 @@ mod tests {
 
     #[test]
     fn enqueue_drain_round_trip() {
-        // The command queue is a process-global static; serialize against the
-        // other queue tests so a concurrent drain cannot steal our commands.
-        let _guard = test_support::lock();
-        // Drain any leftovers from a panicked earlier test in this process.
-        let _ = drain();
+        let queue = RuntimeQueue::default();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
-        enqueue(BackendCommand::DecalRemove { id: 7, reply: tx });
-        let cmds = drain();
+        queue.enqueue(BackendCommand::DecalRemove { id: 7, reply: tx });
+        let cmds = queue.drain();
         assert_eq!(cmds.len(), 1);
         match cmds.into_iter().next().unwrap() {
             RuntimeCommand::Backend(BackendCommand::DecalRemove { id, .. }) => assert_eq!(id, 7),
             _ => panic!("wrong variant"),
         }
         // Second drain is empty.
-        assert!(drain().is_empty());
+        assert!(queue.drain().is_empty());
+    }
+
+    // A clone is a handle to the same queue: the server's drain sees what a
+    // handler pushed through its own clone.
+    #[test]
+    fn a_cloned_queue_shares_its_commands() {
+        let queue = RuntimeQueue::default();
+        let handle = queue.clone();
+        let (tx, _rx) = std::sync::mpsc::sync_channel(1);
+        handle.enqueue(WorldCommand::CameraStop { reply: tx });
+        assert_eq!(queue.drain().len(), 1);
+        assert!(handle.drain().is_empty());
+    }
+
+    // A drain groups commands by target and keeps each group in queue order.
+    #[test]
+    fn drain_by_target_groups_in_queue_order() {
+        let queue = RuntimeQueue::default();
+        let (tx, _rx) = std::sync::mpsc::sync_channel(4);
+        let (atx, _arx) = std::sync::mpsc::sync_channel(1);
+        queue.enqueue(BackendCommand::DecalRemove {
+            id: 1,
+            reply: tx.clone(),
+        });
+        queue.enqueue(WorldCommand::CameraStop { reply: tx.clone() });
+        queue.enqueue(AnimCommand::QueryState {
+            target: AssetId(3),
+            reply: atx,
+        });
+        queue.enqueue(BackendCommand::DecalRemove { id: 2, reply: tx });
+
+        let drained = queue.drain_by_target();
+        let ids: Vec<usize> = drained
+            .backend
+            .iter()
+            .map(|cmd| match cmd {
+                BackendCommand::DecalRemove { id, .. } => *id,
+                _ => panic!("wrong variant"),
+            })
+            .collect();
+        assert_eq!(ids, vec![1, 2]);
+        assert_eq!(drained.world.len(), 1);
+        assert_eq!(drained.anim.len(), 1);
+        assert!(queue.drain().is_empty());
+    }
+
+    // A poisoned queue is recovered rather than swallowing commands: an
+    // unrelated panic must not silently break runtime control.
+    #[test]
+    fn a_poisoned_queue_still_enqueues_and_drains() {
+        let queue = RuntimeQueue::default();
+        let poisoner = queue.clone();
+        let _ = std::thread::spawn(move || {
+            let _held = poisoner.0.lock().unwrap();
+            panic!("poison");
+        })
+        .join();
+        assert!(queue.0.is_poisoned());
+
+        let (tx, _rx) = std::sync::mpsc::sync_channel(1);
+        queue.enqueue(WorldCommand::CameraStop { reply: tx });
+        assert_eq!(queue.drain().len(), 1);
     }
 
     #[test]
     fn despawn_enqueue_drain_round_trip() {
-        let _guard = test_support::lock();
-        let _ = drain();
+        let queue = RuntimeQueue::default();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
-        enqueue(WorldCommand::Despawn {
+        queue.enqueue(WorldCommand::Despawn {
             name: "crate_a".to_string(),
             reply: tx,
         });
-        let cmds = drain();
+        let cmds = queue.drain();
         assert_eq!(cmds.len(), 1);
         match cmds.into_iter().next().unwrap() {
             RuntimeCommand::World(WorldCommand::Despawn { name, .. }) => {
@@ -719,20 +787,19 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
-        assert!(drain().is_empty());
+        assert!(queue.drain().is_empty());
     }
 
     #[test]
     fn reparent_enqueue_drain_round_trip() {
-        let _guard = test_support::lock();
-        let _ = drain();
+        let queue = RuntimeQueue::default();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
-        enqueue(WorldCommand::Reparent {
+        queue.enqueue(WorldCommand::Reparent {
             child: "box_a".to_string(),
             parent: Some("frame".to_string()),
             reply: tx,
         });
-        let cmds = drain();
+        let cmds = queue.drain();
         assert_eq!(cmds.len(), 1);
         match cmds.into_iter().next().unwrap() {
             RuntimeCommand::World(WorldCommand::Reparent { child, parent, .. }) => {
@@ -741,7 +808,7 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
-        assert!(drain().is_empty());
+        assert!(queue.drain().is_empty());
     }
 
     #[test]
@@ -771,10 +838,9 @@ mod tests {
 
     #[test]
     fn camera_set_enqueue_drain_round_trip() {
-        let _guard = test_support::lock();
-        let _ = drain();
+        let queue = RuntimeQueue::default();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
-        enqueue(WorldCommand::CameraSet {
+        queue.enqueue(WorldCommand::CameraSet {
             args: CameraSetArgs {
                 position: [1.0, 2.0, 3.0],
                 yaw: 0.5,
@@ -783,7 +849,7 @@ mod tests {
             },
             reply: tx,
         });
-        let cmds = drain();
+        let cmds = queue.drain();
         assert_eq!(cmds.len(), 1);
         match cmds.into_iter().next().unwrap() {
             RuntimeCommand::World(WorldCommand::CameraSet { args, .. }) => {
@@ -792,7 +858,7 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
-        assert!(drain().is_empty());
+        assert!(queue.drain().is_empty());
     }
 
     // A world with a controlled Camera3D builds a Camera3DSystem at `start`;
@@ -980,10 +1046,9 @@ mod tests {
 
     #[test]
     fn camera_move_enqueue_drain_round_trip() {
-        let _guard = test_support::lock();
-        let _ = drain();
+        let queue = RuntimeQueue::default();
         let (tx, _rx) = std::sync::mpsc::sync_channel(1);
-        enqueue(WorldCommand::CameraMove {
+        queue.enqueue(WorldCommand::CameraMove {
             args: CameraMoveArgs {
                 forward: 1.5,
                 frames: 30,
@@ -992,8 +1057,8 @@ mod tests {
             reply: tx,
         });
         let (stx, _srx) = std::sync::mpsc::sync_channel(1);
-        enqueue(WorldCommand::CameraStop { reply: stx });
-        let cmds = drain();
+        queue.enqueue(WorldCommand::CameraStop { reply: stx });
+        let cmds = queue.drain();
         assert_eq!(cmds.len(), 2);
         let mut it = cmds.into_iter();
         match it.next().unwrap() {
@@ -1007,7 +1072,7 @@ mod tests {
             it.next().unwrap(),
             RuntimeCommand::World(WorldCommand::CameraStop { .. })
         ));
-        assert!(drain().is_empty());
+        assert!(queue.drain().is_empty());
     }
 
     // apply_camera_move_step advances the active camera and refreshes its view

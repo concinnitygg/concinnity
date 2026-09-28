@@ -1,62 +1,67 @@
-//! Runtime debug-command drain: `anim-crossfade` (flat buckets), `anim-param`
-//! and `anim-state` (graph buckets). Commands arrive on the process-wide
-//! `super::runtime_queue` queue from the debug endpoint and each carries
-//! a reply channel answered synchronously here. The drain is driven from the
-//! editor's per-frame `DebugHook::tick` (not from `step`) so an MCP client
-//! blocked on a reply is never starved while a menu pauses playback.
+//! Name-addressed runtime animation control: crossfade a flat bucket, write a
+//! graph parameter, and report a graph's live state. Each call addresses a
+//! mesh by its interned name id and applies against the system's own clip
+//! clock, so it can be made between steps from outside the pipeline.
 
 use concinnity_core::animation::anim_graph::normalized_time;
 use concinnity_core::ecs::SkinnedMeshHandle;
+use concinnity_core::ecs::asset_id::AssetId;
 
 use super::flat::Transition;
 use super::graph::GraphTarget;
-use super::runtime_queue::{AnimCommand, GraphStateReport};
 use super::{AnimationSystem, TargetMode};
 
+/// Snapshot of a graph target's live state. Parameter values are as of the
+/// last completed animation step, so a pending [`AnimationSystem::set_param`]
+/// write shows up after the next step.
+#[derive(Debug, Clone)]
+pub struct GraphStateReport {
+    /// Name of the state the target is in.
+    pub state: String,
+    /// The state's clock, in seconds.
+    pub clock_secs: f32,
+    /// Name of the state being faded out of, when a fade is in flight.
+    pub fading_from: Option<String>,
+    /// Fade progress in `[0, 1]`, when a fade is in flight.
+    pub fade_progress: Option<f32>,
+    /// One weight per blendspace member (point / grid order); None when the
+    /// active state plays a single clip.
+    pub blend_weights: Option<Vec<f32>>,
+    /// Every graph parameter with its value, as of the last step.
+    pub params: Vec<(String, f32)>,
+}
+
 impl AnimationSystem {
-    /// Drain pending runtime commands against the system's own clip clock, so
-    /// the dev tooling crate's debug drive can apply commands from outside the
-    /// per-system step. The library never calls this; `step` runs after the
-    /// hook on the same frame and advances that clock from where a command
-    /// anchored its transition.
-    pub fn apply_runtime_commands(&mut self) {
-        self.drain_runtime_commands(self.clip_secs);
+    /// Crossfade the flat clip weights of the `SkinnedMesh` named `target`
+    /// to `weights` (one per registered clip) over `duration_secs`, starting
+    /// at the current clip clock. A zero duration snaps on the next step.
+    /// Fails when the target is unknown, graph-driven, or the weight count
+    /// misses its clips.
+    pub fn crossfade(
+        &mut self,
+        target: AssetId,
+        weights: Vec<f32>,
+        duration_secs: f32,
+    ) -> Result<(), String> {
+        let target = self.name_index.get(target);
+        self.apply_crossfade(target, weights, duration_secs, self.clip_secs)
     }
 
-    // Drain pending runtime commands and apply them. Commands run in queue
-    // order, so a later command for the same target supersedes an earlier
-    // one; a command that does not fit its target's mode fails without
-    // touching anything.
-    fn drain_runtime_commands(&mut self, now_secs: f32) {
-        // Commands address a mesh by its interned NAME id (the debug endpoint
-        // resolves the typed name against the interner); the buckets are keyed
-        // by handle, so translate through the name index captured at init.
-        for cmd in super::runtime_queue::drain() {
-            match cmd {
-                AnimCommand::Crossfade { req, reply } => {
-                    let target = self.name_index.get(req.target);
-                    let _ = reply.send(self.apply_crossfade(
-                        target,
-                        req.weights,
-                        req.duration_secs,
-                        now_secs,
-                    ));
-                }
-                AnimCommand::SetParam { req, reply } => {
-                    let target = self.name_index.get(req.target);
-                    let _ = reply.send(self.queue_param(target, &req.name, req.value));
-                }
-                AnimCommand::QueryState { target, reply } => {
-                    let target = self.name_index.get(target);
-                    let _ = reply.send(self.graph_report(target));
-                }
-            }
-        }
+    /// Write the graph parameter `name` on the `SkinnedMesh` named `target`.
+    /// The value lands in the target's `AnimationParams` on the next step.
+    pub fn set_param(&mut self, target: AssetId, name: &str, value: f32) -> Result<(), String> {
+        let target = self.name_index.get(target);
+        self.queue_param(target, name, value)
+    }
+
+    /// Report the live graph state of the `SkinnedMesh` named `target`.
+    pub fn graph_state(&mut self, target: AssetId) -> Result<GraphStateReport, String> {
+        let target = self.name_index.get(target);
+        self.graph_report(target)
     }
 
     // Set up a weight ramp on a flat bucket from its current weights to
-    // `weights` over `duration_secs`. `pub(super)` so tests can drive it
-    // without the process-wide command queue.
+    // `weights` over `duration_secs`, anchored at `now_secs`.
     pub(super) fn apply_crossfade(
         &mut self,
         target: SkinnedMeshHandle,
@@ -94,7 +99,6 @@ impl AnimationSystem {
 
     // Queue a parameter write on a graph bucket; it lands in the target's
     // `AnimationParams` component at the top of the next animation step.
-    // `pub(super)` for queue-free tests, like `apply_crossfade`.
     pub(super) fn queue_param(
         &mut self,
         target: SkinnedMeshHandle,
@@ -111,8 +115,7 @@ impl AnimationSystem {
         Ok(())
     }
 
-    // Snapshot a graph bucket's live state for the `anim-state` command.
-    // Parameter values are as of the last completed step. Also serves tests.
+    // Snapshot a graph bucket's live state.
     pub(super) fn graph_report(
         &mut self,
         target: SkinnedMeshHandle,
@@ -165,12 +168,10 @@ mod tests {
     use super::super::TargetState;
     use super::super::flat::{ClipEntry, FlatState};
     use super::*;
-    use crate::animation::runtime_queue::{CrossfadeRequest, SetParamRequest};
     use crate::gfx::skinned_mesh_map::SkinnedMeshNameIndex;
     use concinnity_core::animation::anim_graph::GraphCursor;
     use concinnity_core::animation::skeleton::AnimationClip;
     use concinnity_core::components::AnimationGraph;
-    use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_host::thread::asset_id;
 
     const TARGET: SkinnedMeshHandle = SkinnedMeshHandle(1);
@@ -271,17 +272,6 @@ mod tests {
         };
         let params = g.params.clone();
         g.cursor.advance(&g.graph, &params, dt);
-    }
-
-    // The command queue is process-wide: `drain` takes everything on it, so the
-    // tests that drive it serialize on a shared lock rather than stealing each
-    // other's commands. Any leftovers from a panicking earlier test are not ours.
-    fn queue_guard() -> std::sync::MutexGuard<'static, ()> {
-        let g = crate::animation::runtime_queue::TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _ = crate::animation::runtime_queue::drain();
-        g
     }
 
     // A crossfade on a target with no clips registered names the command that
@@ -445,117 +435,44 @@ mod tests {
         assert!(report.fade_progress.is_none());
     }
 
-    // Commands address a mesh by its interned NAME id; the drain translates it
-    // through the index captured at init and applies the crossfade against the
-    // clock it was handed, answering the caller's reply channel.
+    // A crossfade addresses a mesh by its interned name id, translated through
+    // the index captured at init.
     #[test]
-    fn drain_applies_a_crossfade_addressed_by_name() {
-        let _guard = queue_guard();
+    fn crossfade_translates_the_name_to_its_bucket() {
         let mut sys = flat_system(2);
         sys.name_index = name_index();
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        crate::animation::runtime_queue::enqueue(AnimCommand::Crossfade {
-            req: CrossfadeRequest {
-                target: NAME,
-                weights: vec![0.0, 1.0],
-                duration_secs: 0.25,
-            },
-            reply: tx,
-        });
-        sys.drain_runtime_commands(2.0);
-
-        assert_eq!(rx.try_recv().unwrap(), Ok(()));
+        sys.crossfade(NAME, vec![0.0, 1.0], 0.25).unwrap();
         let tr = transition(&mut sys).expect("the named target's bucket ramped");
         assert_eq!(tr.target_weights, vec![0.0, 1.0]);
-        assert_eq!(tr.start_secs, 2.0, "the drain's clock anchors the ramp");
+        assert_eq!(tr.duration_secs, 0.25);
     }
 
-    // A parameter write and a state query take the same name translation, and
-    // each reply is answered synchronously by the drain.
+    // A crossfade starts at the clip clock `step` has reached, so it ramps
+    // from the current moment rather than from zero.
     #[test]
-    fn drain_answers_param_writes_and_state_queries() {
-        let _guard = queue_guard();
-        let mut sys = graph_system(0.0);
-        sys.name_index = name_index();
-        let (param_tx, param_rx) = std::sync::mpsc::sync_channel(1);
-        crate::animation::runtime_queue::enqueue(AnimCommand::SetParam {
-            req: SetParamRequest {
-                target: NAME,
-                name: "speed".to_string(),
-                value: 4.0,
-            },
-            reply: param_tx,
-        });
-        let (query_tx, query_rx) = std::sync::mpsc::sync_channel(1);
-        crate::animation::runtime_queue::enqueue(AnimCommand::QueryState {
-            target: NAME,
-            reply: query_tx,
-        });
-        sys.drain_runtime_commands(0.0);
-
-        assert_eq!(param_rx.try_recv().unwrap(), Ok(()));
-        assert_eq!(query_rx.try_recv().unwrap().unwrap().state, "idle");
-    }
-
-    // A command for a mesh the index does not know still gets its reply: the
-    // failure is reported, never dropped on the floor.
-    #[test]
-    fn drain_replies_to_a_command_it_cannot_apply() {
-        let _guard = queue_guard();
-        let mut sys = AnimationSystem::new();
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        crate::animation::runtime_queue::enqueue(AnimCommand::QueryState {
-            target: NAME,
-            reply: tx,
-        });
-        sys.drain_runtime_commands(0.0);
-        assert!(rx.try_recv().unwrap().is_err());
-    }
-
-    // The hook drive answers whatever is queued, so an MCP client blocked on a
-    // reply is never starved by a paused world.
-    #[test]
-    fn apply_runtime_commands_answers_the_queue() {
-        let _guard = queue_guard();
-        let mut sys = graph_system(0.0);
-        sys.name_index = name_index();
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        crate::animation::runtime_queue::enqueue(AnimCommand::QueryState {
-            target: NAME,
-            reply: tx,
-        });
-        sys.apply_runtime_commands();
-        assert_eq!(rx.try_recv().unwrap().unwrap().state, "idle");
-    }
-
-    // A crossfade applied by the hook drive starts at the clip clock `step`
-    // has reached, so it ramps from the current moment rather than from zero.
-    #[test]
-    fn apply_runtime_commands_anchors_at_the_clip_clock() {
-        let _guard = queue_guard();
+    fn crossfade_anchors_at_the_clip_clock() {
         let mut sys = flat_system(2);
         sys.name_index = name_index();
         sys.clip_secs = 7.5;
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        crate::animation::runtime_queue::enqueue(AnimCommand::Crossfade {
-            req: CrossfadeRequest {
-                target: NAME,
-                weights: vec![0.0, 1.0],
-                duration_secs: 1.0,
-            },
-            reply: tx,
-        });
-        sys.apply_runtime_commands();
-        assert_eq!(rx.try_recv().unwrap(), Ok(()));
+        sys.crossfade(NAME, vec![0.0, 1.0], 1.0).unwrap();
         assert_eq!(transition(&mut sys).unwrap().start_secs, 7.5);
     }
 
-    // An empty queue is a no-op the drive can call every frame.
+    // A parameter write and a state query take the same name translation.
     #[test]
-    fn draining_an_empty_queue_changes_nothing() {
-        let _guard = queue_guard();
-        let mut sys = flat_system(1);
-        sys.drain_runtime_commands(1.0);
-        assert!(transition(&mut sys).is_none());
+    fn set_param_and_graph_state_translate_the_name() {
+        let mut sys = graph_system(0.0);
+        sys.name_index = name_index();
+        sys.set_param(NAME, "speed", 4.0).unwrap();
+        assert_eq!(sys.graph_state(NAME).unwrap().state, "idle");
+    }
+
+    // A name the index does not know is reported, never silently ignored.
+    #[test]
+    fn an_unknown_name_is_an_error() {
+        let mut sys = AnimationSystem::new();
+        assert!(sys.crossfade(NAME, vec![1.0], 0.0).is_err());
+        assert!(sys.set_param(NAME, "speed", 1.0).is_err());
+        assert!(sys.graph_state(NAME).is_err());
     }
 }

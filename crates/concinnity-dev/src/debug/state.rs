@@ -9,6 +9,8 @@ use concinnity_engine::shutdown::ShutdownToken;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use super::runtime_spawn::RuntimeQueue;
+
 // The world snapshot rebuilt by `tick`. The asset/system lists are not cheap
 // to rebuild, so they refresh on an interval while `frame` advances every tick.
 #[derive(Default)]
@@ -69,6 +71,9 @@ pub(crate) struct DebugState {
     // `streaming` query. `None` until StreamingSystem publishes its first sample
     // (or when the valve is inert: no `MemoryBudget` / RSS available).
     pub(super) streaming_pressure: Option<PressureSnapshot>,
+    // Runtime commands the tool-call handlers push and the per-frame debug
+    // drive applies. Handlers clone it out before dropping the snapshot lock.
+    pub(super) commands: RuntimeQueue,
 }
 
 // A read-only snapshot of the process thread + memory budgets (see
