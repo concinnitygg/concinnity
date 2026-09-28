@@ -3,6 +3,7 @@
 //! bind, and the render graph's transient pool.
 
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::heap_layout::{DSV_MAIN_DEPTH_SLOT, RtvHeapLayout};
@@ -15,7 +16,7 @@ use crate::directx::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_resolve_target, create_main_depth_texture,
     write_hdr_srv,
 };
-use crate::directx::transient_pool::{TransientResourcePool, transient_slots};
+use crate::directx::transient_pool::TransientResourcePool;
 
 pub(super) struct TargetInputs<'a> {
     pub(super) descriptors: &'a DxDescriptors,
@@ -139,9 +140,12 @@ pub(super) fn build_targets(
     let transient_pool = TransientResourcePool::build(
         hw.alloc.device(),
         hw.alloc.queue(),
-        &transient_slots(
-            features.ssao_enabled,
-            features.gbuffer_enabled,
+        &plan_pool_slots(
+            PoolGates {
+                ssao: features.ssao_enabled,
+                bloom: true,
+                gbuffer: features.gbuffer_enabled,
+            },
             (render_w, render_h),
             (width, height),
         )?,

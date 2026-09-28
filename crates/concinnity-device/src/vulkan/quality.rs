@@ -28,6 +28,7 @@ use concinnity_core::gfx::auto_exposure;
 use concinnity_core::render::backend::QualitySettings;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::rt_reflections;
+use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::context::VkContext;
 
@@ -95,12 +96,17 @@ impl VkContext {
                     queue: self.hw.graphics_queue,
                 },
                 self.frames_in_flight,
-                &super::transient_pool::transient_slots(
-                    self.ssao.is_some(),
-                    self.post_process.bloom_intensity > 0.0,
-                    true,
-                    self.targets.render_extent,
-                    self.swapchain.extent,
+                &plan_pool_slots(
+                    PoolGates {
+                        ssao: self.ssao.is_some(),
+                        bloom: self.post_process.bloom_intensity > 0.0,
+                        gbuffer: true,
+                    },
+                    (
+                        self.targets.render_extent.width,
+                        self.targets.render_extent.height,
+                    ),
+                    (self.swapchain.extent.width, self.swapchain.extent.height),
                 )?,
             )?;
             let pooled = self
@@ -219,12 +225,17 @@ impl VkContext {
                     queue: self.hw.graphics_queue,
                 },
                 self.frames_in_flight,
-                &super::transient_pool::transient_slots(
-                    true,
-                    self.post_process.bloom_intensity > 0.0,
-                    self.gbuffer.is_some(),
-                    self.targets.render_extent,
-                    self.swapchain.extent,
+                &plan_pool_slots(
+                    PoolGates {
+                        ssao: true,
+                        bloom: self.post_process.bloom_intensity > 0.0,
+                        gbuffer: self.gbuffer.is_some(),
+                    },
+                    (
+                        self.targets.render_extent.width,
+                        self.targets.render_extent.height,
+                    ),
+                    (self.swapchain.extent.width, self.swapchain.extent.height),
                 )?,
             )?;
             let settings = q.ssao.expect("desired_ssao implies ssao settings");

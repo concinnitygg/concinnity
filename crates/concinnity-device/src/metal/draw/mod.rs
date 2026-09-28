@@ -756,9 +756,12 @@ impl MtlContext {
         if render_changed || bloom_changed {
             self.targets.transient_pool.rebuild(
                 &self.hw.device,
-                &super::transient_pool::transient_slots(
-                    self.ssao.settings.is_some(),
-                    needs_gbuffer,
+                &render_graph::plan_pool_slots(
+                    render_graph::PoolGates {
+                        ssao: self.ssao.settings.is_some(),
+                        bloom: true,
+                        gbuffer: needs_gbuffer,
+                    },
                     (render_w, render_h),
                     (want_w, want_h),
                 )?,

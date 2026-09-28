@@ -3,6 +3,7 @@
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::{Features, InitGpu};
 use crate::vulkan::context::{HDR_FORMAT, SwapchainState, VkTargets};
@@ -75,12 +76,14 @@ pub(super) fn build_render_targets(
             queue: hw.graphics_queue,
         },
         frames,
-        &crate::vulkan::transient_pool::transient_slots(
-            ssao_enabled,
-            features.bloom_on,
-            features.gbuffer_enabled,
-            render_extent,
-            swapchain.extent,
+        &plan_pool_slots(
+            PoolGates {
+                ssao: ssao_enabled,
+                bloom: features.bloom_on,
+                gbuffer: features.gbuffer_enabled,
+            },
+            (render_extent.width, render_extent.height),
+            (swapchain.extent.width, swapchain.extent.height),
         )?,
     )?;
     Ok(VkTargets {

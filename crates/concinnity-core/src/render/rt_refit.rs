@@ -14,7 +14,7 @@
 //! cadence is unit-testable without a GPU.
 //!
 //! Consumed by the DirectX + Vulkan backends. The Metal backend keeps its own
-//! equivalent copy (metal/rt_ring.rs), the same split `rt_topology` already has.
+//! equivalent copy (metal/rt_ring.rs).
 
 use alloc::vec::Vec;
 

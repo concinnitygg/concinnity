@@ -28,6 +28,7 @@ use concinnity_core::gfx::auto_exposure;
 use concinnity_core::render::backend::QualitySettings;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::rt_reflections;
+use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::context::DxContext;
@@ -393,9 +394,12 @@ impl DxContext {
         self.targets.transient_pool.rebuild(
             &self.hw.device,
             &self.hw.command_queue,
-            &super::transient_pool::transient_slots(
-                ssao_enabled,
-                gbuffer_enabled,
+            &plan_pool_slots(
+                PoolGates {
+                    ssao: ssao_enabled,
+                    bloom: true,
+                    gbuffer: gbuffer_enabled,
+                },
                 (
                     self.targets.extent.render_width,
                     self.targets.extent.render_height,

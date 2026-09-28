@@ -4,6 +4,7 @@
 use ash::vk;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::hdr_output;
+use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::allocator::DeviceAllocator;
 use super::context::*;
@@ -211,12 +212,14 @@ impl VkContext {
                 queue: self.hw.graphics_queue,
             },
             self.frames_in_flight,
-            &super::transient_pool::transient_slots(
-                self.ssao.is_some(),
-                self.post_process.bloom_intensity > 0.0,
-                self.gbuffer.is_some(),
-                render_ext,
-                ext,
+            &plan_pool_slots(
+                PoolGates {
+                    ssao: self.ssao.is_some(),
+                    bloom: self.post_process.bloom_intensity > 0.0,
+                    gbuffer: self.gbuffer.is_some(),
+                },
+                (render_ext.width, render_ext.height),
+                (ext.width, ext.height),
             )?,
         )?;
         let bloom_top_pairs = self

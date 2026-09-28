@@ -43,7 +43,7 @@ use concinnity_core::render::rt_geom::{
     cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry,
 };
 use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedRefit, SkinnedShape};
-use concinnity_core::render::rt_topology::{GeomSig, plan_topology_refresh};
+use concinnity_core::render::rt_topology::{GeomSig, participates_in_bvh, plan_topology_refresh};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
@@ -855,17 +855,6 @@ pub(super) fn build_rt_skin_pipeline(
     hot_reload: bool,
 ) -> RenderResult<SkinPipeline> {
     build_skin_pipeline(device, hot_reload)
-}
-
-// Whether a draw object contributes geometry to the BVH. When the Layer 2
-// see-through path is enabled, see-through glass meshes are left out: they trace
-// their own per-pixel reflection in the transparent pass, and excluding them
-// means glass neither reflects glass nor self-hits. Off keeps every transparent
-// mesh IN the BVH so Layer 1 opaque glass reflects and is reflected like any
-// other surface. Driven by `seethrough_meshes_enabled` (opt-in per
-// `Material::see_through`), not a global flag.
-fn participates_in_bvh(o: &DrawObject, exclude_seethrough: bool) -> bool {
-    o.resident && o.index_count >= 3 && !(exclude_seethrough && o.material.see_through != 0)
 }
 
 // Geometry + counts the RT acceleration-structure build reads.

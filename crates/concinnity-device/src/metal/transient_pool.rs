@@ -36,7 +36,7 @@
 use super::error::allocation_failed;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::{
-    PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture, plan_pool_slots,
+    PixelFormat, TextureUsage, TransientSlot, TransientTexture,
 };
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -258,33 +258,6 @@ fn texture_usage(usage: TextureUsage) -> MTLTextureUsage {
     MTLTextureUsage(bits)
 }
 
-// The alias-slot list for the transients the pool manages this build. The
-// grouping, the pooled label set and each member's shape all come from the
-// shared planner, so nothing here can disagree with the graph or with another
-// backend.
-//
-// Bloom is always managed: Metal toggles it per frame off `bloom_intensity`
-// while the composite binds mip 0 unconditionally, so a pool built at init /
-// resize cannot gate on it and the heap must cover the frames where it is live.
-// DirectX does the same; Vulkan rebuilds on the flag and passes it through.
-pub(super) fn transient_slots(
-    ssao_enabled: bool,
-    gbuffer_enabled: bool,
-    render_extent: (u32, u32),
-    output_extent: (u32, u32),
-) -> RenderResult<Vec<TransientSlot>> {
-    plan_pool_slots(
-        PoolGates {
-            ssao: ssao_enabled,
-            bloom: true,
-            gbuffer: gbuffer_enabled,
-        },
-        render_extent,
-        output_extent,
-    )
-    .map_err(RenderError::Other)
-}
-
 impl MtlContext {
     // The texture the main pass and the bindless argument buffer sample for
     // ambient occlusion: the pooled `ao_output` (SSAO's blurred occlusion) when
@@ -326,78 +299,7 @@ impl MtlContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::render_graph;
-
-    // `transient_slots` is pure CPU (it builds slot descriptions; no device), so
-    // the planner-routed grouping is testable headlessly.
-
-    #[test]
-    fn the_late_bloom_target_aliases_an_early_one() {
-        // The pool's whole saving, in the configuration a real session runs:
-        // SSAO on implies the G-buffer pre-pass is on, so both gates are true
-        // here. `bloom_top` is the only genuinely late member (Bloom ->
-        // Composite), so it is the one that can reuse an earlier member's
-        // memory; everything else is live across most of the frame and needs
-        // its own heap. A plan where `bloom_top` sits alone means the aliasing
-        // stopped working -- which is exactly what happened on Metal between
-        // pooling the G-buffer on the explicit backends and pooling it here.
-        let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
-        let shared: Vec<Vec<&str>> = slots
-            .iter()
-            .map(|s| s.labels())
-            .filter(|l| l.len() > 1)
-            .collect();
-        assert!(
-            shared.iter().any(|l| l.contains(&"bloom_top")),
-            "bloom_top should reuse an earlier member's heap: {:?}",
-            slots.iter().map(|s| s.labels()).collect::<Vec<_>>()
-        );
-        // Whatever it pairs with must start first: members are kept in the
-        // planner's lifetime-start order, which is the order they reuse the heap.
-        let pair = shared
-            .iter()
-            .find(|l| l.contains(&"bloom_top"))
-            .expect("checked above");
-        assert_ne!(pair[0], "bloom_top", "{pair:?}");
-    }
-
-    #[test]
-    fn the_gbuffer_color_targets_are_pooled_and_depth_is_not() {
-        let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
-        let labels: Vec<&str> = slots.iter().flat_map(|s| s.labels()).collect();
-        for want in [
-            "gbuffer_normal_depth",
-            "gbuffer_roughness",
-            "gbuffer_velocity",
-        ] {
-            assert!(labels.contains(&want), "{want} pooled: {labels:?}");
-        }
-        assert!(
-            !labels.contains(&"gbuffer_depth"),
-            "gbuffer_depth must stay feature-owned: {labels:?}"
-        );
-    }
-
-    #[test]
-    fn the_gbuffer_gate_is_what_places_them() {
-        // The pre-pass exists only where the backend built its targets, so
-        // `planning_inputs` cannot force it on and the pool must follow the
-        // build. Without the gate the pre-pass node is absent and none of its
-        // targets are placed -- which would leave every consumer reading a
-        // label the pool never created, and the pre-pass encoder erroring out.
-        let slots = transient_slots(true, false, (1024, 768), (1024, 768)).expect("plans");
-        let labels: Vec<&str> = slots.iter().flat_map(|s| s.labels()).collect();
-        assert!(!labels.contains(&"gbuffer_normal_depth"), "{labels:?}");
-    }
-
-    #[test]
-    fn bloom_top_alone_is_unshared() {
-        // Nothing else managed: `bloom_top` sits in its own single-member slot.
-        let slots = transient_slots(false, false, (1024, 768), (1024, 768)).expect("plans");
-        assert_eq!(slots.len(), 1);
-        assert_eq!(slots[0].members.len(), 1);
-        assert_eq!(slots[0].members[0].label, "bloom_top");
-    }
+    use concinnity_core::render::render_graph::{self, PoolGates, plan_pool_slots};
 
     #[test]
     fn translated_descriptors_match_the_feature_formats() {
@@ -405,7 +307,12 @@ mod tests {
         // the *translation*: the descriptor the pool creates must still be the
         // one each feature's own constant describes, or the pool silently
         // mis-backs the texture that feature binds.
-        let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
+        let gates = PoolGates {
+            ssao: true,
+            bloom: true,
+            gbuffer: true,
+        };
+        let slots = plan_pool_slots(gates, (1024, 768), (1024, 768)).expect("plans");
         let member = |label: &str| {
             slots
                 .iter()

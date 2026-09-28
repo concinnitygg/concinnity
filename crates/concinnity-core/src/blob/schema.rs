@@ -101,6 +101,14 @@ pub struct ResourceRecord {
     pub data_bytes: Vec<u8>,
 }
 
+impl ResourceRecord {
+    /// The compiled bytes this record accounts for: its inline data bytes plus
+    /// the length of the payload it references.
+    pub fn compiled_len(&self) -> u64 {
+        self.data_bytes.len() as u64 + self.payload.as_ref().map_or(0, |p| p.len)
+    }
+}
+
 /// A verified summary of the blob's shape, produced by cook from the final
 /// record streams and carried alongside them in the metadata block. The runtime
 /// trusts it (debug builds re-derive and assert it matches): the per-type
@@ -315,6 +323,29 @@ mod tests {
             let back: ResourceRecord = postcard::from_bytes(&bytes).expect("deserialize");
             assert_eq!(back, rec);
         }
+    }
+
+    #[test]
+    fn compiled_len_counts_data_bytes_or_the_payload_length() {
+        let data_res = ResourceRecord {
+            resource_kind: ResourceKind::Material,
+            handle: 0,
+            payload: None,
+            data_bytes: vec![1, 2, 3],
+        };
+        assert_eq!(data_res.compiled_len(), 3);
+
+        let payload_res = ResourceRecord {
+            resource_kind: ResourceKind::Mesh,
+            handle: 1,
+            payload: Some(PayloadLocator {
+                blob_index: 2,
+                offset: 64,
+                len: 4096,
+            }),
+            data_bytes: Vec::new(),
+        };
+        assert_eq!(payload_res.compiled_len(), 4096);
     }
 
     // The manifest is a pure function of the record streams: per-type counts

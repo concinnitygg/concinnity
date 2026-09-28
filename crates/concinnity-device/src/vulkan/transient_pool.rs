@@ -21,9 +21,9 @@
 //! otherwise and the consumer falls back exactly as it did before.
 
 use ash::vk;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::render_graph::{
-    PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture, plan_pool_slots,
+    PixelFormat, TextureUsage, TransientSlot, TransientTexture,
 };
 use std::collections::HashMap;
 
@@ -447,109 +447,22 @@ pub(in crate::vulkan) fn sample_count(samples: u32) -> vk::SampleCountFlags {
     }
 }
 
-// The alias-slot list for the transients the pool manages this build. The
-// grouping, the pooled label set and each member's shape all come from the
-// shared planner, so nothing here can disagree with the graph or with another
-// backend.
-//
-// Unlike Metal and DirectX (where `bloom_top` is managed unconditionally
-// because bloom toggles per frame), Vulkan rebuilds on the flag, so the real
-// value goes through.
-pub(super) fn transient_slots(
-    ssao_enabled: bool,
-    bloom_enabled: bool,
-    gbuffer_enabled: bool,
-    render_extent: vk::Extent2D,
-    output_extent: vk::Extent2D,
-) -> RenderResult<Vec<TransientSlot>> {
-    plan_pool_slots(
-        PoolGates {
-            ssao: ssao_enabled,
-            bloom: bloom_enabled,
-            gbuffer: gbuffer_enabled,
-        },
-        (render_extent.width, render_extent.height),
-        (output_extent.width, output_extent.height),
-    )
-    .map_err(RenderError::Other)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // `transient_slots` is pure CPU (it builds slot descriptions; no device), so
-    // the planner-routed grouping is testable headlessly.
-
-    fn extent(width: u32, height: u32) -> vk::Extent2D {
-        vk::Extent2D { width, height }
-    }
-
-    #[test]
-    fn the_late_bloom_target_aliases_an_early_one() {
-        // The pool's whole saving, in the configuration a real session runs:
-        // SSAO on implies the G-buffer pre-pass is on, so all three gates are
-        // true here. `bloom_top` is the only genuinely late member (Bloom ->
-        // Composite), so it is the one that can reuse an earlier member's
-        // allocation; everything else is live across most of the frame and needs
-        // its own. Mirrors the DirectX test.
-        let slots =
-            transient_slots(true, true, true, extent(1024, 768), extent(1024, 768)).expect("plans");
-        let shared: Vec<Vec<&str>> = slots
-            .iter()
-            .map(|s| s.labels())
-            .filter(|l| l.len() > 1)
-            .collect();
-        assert!(
-            shared.iter().any(|l| l.contains(&"bloom_top")),
-            "bloom_top should reuse an earlier member's allocation: {:?}",
-            slots.iter().map(|s| s.labels()).collect::<Vec<_>>()
-        );
-        // Whatever it pairs with must start first: the pool's predecessor wiring
-        // depends on lifetime-start order.
-        let pair = shared
-            .iter()
-            .find(|l| l.contains(&"bloom_top"))
-            .expect("checked above");
-        assert_ne!(pair[0], "bloom_top", "{pair:?}");
-    }
-
-    #[test]
-    fn ao_output_alone_is_unshared() {
-        // SSAO on, bloom off: `ao_output` is the only managed transient, so it
-        // sits in its own single-member slot (no aliasing barriers).
-        let slots = transient_slots(true, false, false, extent(1024, 768), extent(1024, 768))
-            .expect("plans");
-        assert_eq!(slots.len(), 1);
-        assert_eq!(slots[0].members.len(), 1);
-        assert_eq!(slots[0].members[0].label, "ao_output");
-    }
-
-    #[test]
-    fn bloom_top_alone_is_unshared() {
-        // Bloom on, SSAO off: `bloom_top` is the only managed transient.
-        let slots = transient_slots(false, true, false, extent(1024, 768), extent(1024, 768))
-            .expect("plans");
-        assert_eq!(slots.len(), 1);
-        assert_eq!(slots[0].members.len(), 1);
-        assert_eq!(slots[0].members[0].label, "bloom_top");
-    }
-
-    #[test]
-    fn nothing_managed_yields_no_slots() {
-        // Neither feature on: the pool manages nothing, so there are no slots.
-        let slots = transient_slots(false, false, false, extent(1024, 768), extent(1024, 768))
-            .expect("plans");
-        assert!(slots.is_empty());
-    }
+    use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 
     #[test]
     fn translated_images_match_the_feature_formats() {
         // The graph is the single source of the shape now, so what this pins is
         // the *translation*: a divergence from each feature's own constant
         // would silently mis-back the image that feature binds.
-        let slots = transient_slots(true, true, true, extent(1024, 768), extent(1920, 1080))
-            .expect("plans");
+        let gates = PoolGates {
+            ssao: true,
+            bloom: true,
+            gbuffer: true,
+        };
+        let slots = plan_pool_slots(gates, (1024, 768), (1920, 1080)).expect("plans");
         let member = |label: &str| {
             slots
                 .iter()
@@ -602,35 +515,6 @@ mod tests {
                 "{label}"
             );
         }
-    }
-
-    #[test]
-    fn the_gbuffer_gate_places_its_color_channels() {
-        // The pre-pass exists only where the backend built its targets, so
-        // `planning_inputs` cannot force it on and the pool follows the build
-        // gate. Off, none of the channels are placed -- and the pre-pass
-        // framebuffers would have nothing to attach, which is why init derives
-        // the gate once and uses it for both.
-        let off = transient_slots(true, true, false, extent(1024, 768), extent(1024, 768))
-            .expect("plans");
-        let off_labels: Vec<&str> = off.iter().flat_map(|s| s.labels()).collect();
-        assert!(
-            !off_labels.contains(&"gbuffer_normal_depth"),
-            "{off_labels:?}"
-        );
-
-        let on =
-            transient_slots(true, true, true, extent(1024, 768), extent(1024, 768)).expect("plans");
-        let on_labels: Vec<&str> = on.iter().flat_map(|s| s.labels()).collect();
-        for want in [
-            "gbuffer_normal_depth",
-            "gbuffer_roughness",
-            "gbuffer_velocity",
-        ] {
-            assert!(on_labels.contains(&want), "{want}: {on_labels:?}");
-        }
-        // `gbuffer_depth` stays feature-owned on both explicit backends.
-        assert!(!on_labels.contains(&"gbuffer_depth"), "{on_labels:?}");
     }
 
     #[test]

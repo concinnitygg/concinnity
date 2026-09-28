@@ -45,6 +45,7 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
 use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_core::render::rt_geom::{cluster_geom_entry, geom_entry, skinned_geom_entry};
+use concinnity_core::render::rt_topology::{GeomSig, participates_in_bvh, plan_topology_refresh};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSArray;
@@ -126,91 +127,6 @@ pub(crate) struct RtPipelines {
     // BVH can trace. Consumed each frame by `rebuild_rt_accel` to pose skinned
     // geometry before the skinned BLAS build.
     pub skin: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
-}
-
-// Identifies the geometry a draw-object BLAS traces, on the shared
-// vertex/index buffers. Two draw objects with the same signature trace identical
-// geometry, so a topology refresh can reuse the existing BLAS instead of
-// building a new one. Sound because the shared buffer *objects* are stable once
-// streaming is set up (`add_chunk_mesh` / `remove_chunk_mesh` write regions in
-// place; a buffer swap goes through a full rebuild, not this path). A streamed
-// mesh returns on whatever slice the sub-allocator hands out, so the signature
-// moves with it and the BLAS is rebuilt rather than wrongly reused.
-// `base_vertex` + `index_offset` + `index_count` are exactly the inputs
-// `prim_desc_for` uses; `vertex_offset` is carried too so a static draw (whose
-// `base_vertex` is 0) still distinguishes distinct vertex regions.
-//
-// The slice location alone is not enough: an asset hot-reload rewrites a slot's
-// bytes in place at unchanged offsets, which leaves every field above equal.
-// `generation` (the draw object's `geometry_generation`) moves on each such
-// rewrite so the stale BLAS is rebuilt instead of reused. Mirrors
-// `concinnity_core::render::rt_topology::GeomSig`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) struct GeomSig {
-    base_vertex: i32,
-    vertex_offset: usize,
-    index_offset: usize,
-    index_count: usize,
-    generation: u32,
-}
-
-impl GeomSig {
-    fn of(obj: &DrawObject) -> Self {
-        Self {
-            base_vertex: obj.base_vertex,
-            vertex_offset: obj.vertex_offset,
-            index_offset: obj.index_offset,
-            index_count: obj.index_count,
-            generation: obj.geometry_generation,
-        }
-    }
-}
-
-// Per-new-slot decision for a topology refresh of the draw-object BLAS head.
-struct TopologyPlan {
-    // `reuse[j] == Some(k)`: new draw slot `j` reuses the old draw BLAS at index
-    // `k` (its geometry is unchanged). `None`: build a fresh BLAS for slot `j`.
-    reuse: Vec<Option<usize>>,
-    // Old draw BLAS indices no longer referenced by any new slot -- retire them.
-    retire: Vec<usize>,
-}
-
-// Decide, for the draw-object BLAS head only, which BLAS to reuse, which to
-// build, and which to retire when the participating draw set changes. Matches
-// old and new slots by `draw.objects` index AND geometry signature: a slot whose
-// geometry moved (a chunk slot recycled for a different chunk) does not match, so
-// it rebuilds. Pure so it is unit-testable without Metal.
-fn plan_topology_refresh(
-    old_indices: &[usize],
-    old_sigs: &[GeomSig],
-    new_indices: &[usize],
-    new_sigs: &[GeomSig],
-) -> TopologyPlan {
-    use std::collections::HashMap;
-    // draw.objects index -> (position in the old draw BLAS head, its signature).
-    // `object_indices` entries are unique (one per draw slot), so this is 1:1.
-    let mut by_idx: HashMap<usize, (usize, GeomSig)> = HashMap::with_capacity(old_indices.len());
-    for (k, (&idx, &sig)) in old_indices.iter().zip(old_sigs).enumerate() {
-        by_idx.insert(idx, (k, sig));
-    }
-    let mut used = vec![false; old_indices.len()];
-    let mut reuse = Vec::with_capacity(new_indices.len());
-    for (&idx, &sig) in new_indices.iter().zip(new_sigs) {
-        match by_idx.get(&idx) {
-            Some(&(k, old_sig)) if old_sig == sig && !used[k] => {
-                used[k] = true;
-                reuse.push(Some(k));
-            }
-            _ => reuse.push(None),
-        }
-    }
-    let retire = used
-        .iter()
-        .enumerate()
-        .filter(|&(_, &u)| !u)
-        .map(|(k, _)| k)
-        .collect();
-    TopologyPlan { reuse, retire }
 }
 
 // The acceleration structures + geometry table for hardware ray tracing. Held
@@ -907,19 +823,12 @@ pub(crate) fn build_rt_accel(
         clusters,
     } = scene;
     let RtTextureCounts { albedo_count } = texture_counts;
-    // Only resident draw objects with real triangles take part. When the Layer 2
-    // see-through path is enabled, see-through glass meshes are excluded (they
-    // route through the transparent pass with their own per-pixel trace, so glass
-    // does not reflect glass and the trace never self-hits); otherwise (Layer 1)
-    // they stay in so opaque glass reflects + is reflected normally. Track the
-    // participating indices into `draw.objects` so a per-frame update re-reads
-    // transforms in BLAS-build order.
+    // Track the participating indices into `draw.objects` so a per-frame update
+    // re-reads transforms in BLAS-build order.
     let object_indices: Vec<usize> = draw_objects
         .iter()
         .enumerate()
-        .filter(|(_, o)| {
-            o.resident && o.index_count >= 3 && !(exclude_seethrough && o.material.see_through != 0)
-        })
+        .filter(|(_, o)| participates_in_bvh(o, exclude_seethrough))
         .map(|(i, _)| i)
         .collect();
     // Instanced clusters that carry real geometry and at least one instance.
@@ -1410,11 +1319,7 @@ impl RtAccelData {
         let new_indices: Vec<usize> = draw_objects
             .iter()
             .enumerate()
-            .filter(|(_, o)| {
-                o.resident
-                    && o.index_count >= 3
-                    && !(exclude_seethrough && o.material.see_through != 0)
-            })
+            .filter(|(_, o)| participates_in_bvh(o, exclude_seethrough))
             .map(|(i, _)| i)
             .collect();
         let new_sigs: Vec<GeomSig> = new_indices
@@ -2048,77 +1953,6 @@ mod tests {
             (p.columns[3].x, p.columns[3].y, p.columns[3].z),
             (5.0, 6.0, 7.0)
         );
-    }
-
-    // A distinct geometry signature keyed off `tag` (used as the index offset),
-    // so two slots with different tags never compare equal.
-    fn sig(tag: usize) -> GeomSig {
-        GeomSig {
-            base_vertex: tag as i32,
-            vertex_offset: tag * 100,
-            index_offset: tag,
-            index_count: 3,
-            generation: 0,
-        }
-    }
-
-    #[test]
-    fn topology_plan_reuses_an_unchanged_set() {
-        let old_i = [2usize, 5, 7];
-        let old_s = [sig(2), sig(5), sig(7)];
-        let plan = plan_topology_refresh(&old_i, &old_s, &old_i, &old_s);
-        assert_eq!(plan.reuse, vec![Some(0), Some(1), Some(2)]);
-        assert!(plan.retire.is_empty());
-    }
-
-    #[test]
-    fn topology_plan_builds_only_the_added_slot() {
-        let old_i = [2usize, 5];
-        let old_s = [sig(2), sig(5)];
-        let new_i = [2usize, 5, 9];
-        let new_s = [sig(2), sig(5), sig(9)];
-        let plan = plan_topology_refresh(&old_i, &old_s, &new_i, &new_s);
-        // The two existing slots reuse; the new one (9) builds fresh.
-        assert_eq!(plan.reuse, vec![Some(0), Some(1), None]);
-        assert!(plan.retire.is_empty());
-    }
-
-    #[test]
-    fn topology_plan_retires_a_removed_slot() {
-        let old_i = [2usize, 5, 7];
-        let old_s = [sig(2), sig(5), sig(7)];
-        let new_i = [2usize, 7];
-        let new_s = [sig(2), sig(7)];
-        let plan = plan_topology_refresh(&old_i, &old_s, &new_i, &new_s);
-        assert_eq!(plan.reuse, vec![Some(0), Some(2)]);
-        assert_eq!(plan.retire, vec![1]); // slot 5's old BLAS is orphaned
-    }
-
-    #[test]
-    fn topology_plan_rebuilds_a_recycled_slot_whose_geometry_moved() {
-        // Same draw index, different geometry signature: a chunk slot recycled for
-        // a different chunk. The old BLAS must NOT be reused; it is retired and a
-        // fresh one is built.
-        let old_i = [5usize];
-        let old_s = [sig(5)];
-        let new_i = [5usize];
-        let new_s = [sig(8)]; // moved geometry under the same draw index
-        let plan = plan_topology_refresh(&old_i, &old_s, &new_i, &new_s);
-        assert_eq!(plan.reuse, vec![None]);
-        assert_eq!(plan.retire, vec![0]);
-    }
-
-    #[test]
-    fn topology_plan_reuses_across_reorder_by_index() {
-        // The participating set is the same but its order changed; each slot still
-        // reuses its BLAS by draw index (the reuse points at the old position).
-        let old_i = [2usize, 5];
-        let old_s = [sig(2), sig(5)];
-        let new_i = [5usize, 2];
-        let new_s = [sig(5), sig(2)];
-        let plan = plan_topology_refresh(&old_i, &old_s, &new_i, &new_s);
-        assert_eq!(plan.reuse, vec![Some(1), Some(0)]);
-        assert!(plan.retire.is_empty());
     }
 
     #[test]

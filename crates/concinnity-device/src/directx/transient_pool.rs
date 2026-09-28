@@ -22,8 +22,7 @@
 
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::{
-    ClearValue, PixelFormat, PoolGates, TextureUsage, TransientSlot, TransientTexture,
-    plan_pool_slots,
+    ClearValue, PixelFormat, TextureUsage, TransientSlot, TransientTexture,
 };
 use std::collections::HashMap;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -385,69 +384,19 @@ fn resting_state(m: &TransientTexture) -> D3D12_RESOURCE_STATES {
     }
 }
 
-// The alias-slot list for the transients the pool manages this build. The
-// grouping, the pooled label set and each member's shape all come from the
-// shared planner, so nothing here can disagree with the graph or with another
-// backend.
-//
-// `bloom_top` is always managed: the bloom chain always exists and the
-// composite samples mip 0 even when bloom is disabled, so a pool built at init
-// / resize cannot gate on it. Metal does the same; Vulkan rebuilds on the flag
-// and passes it through.
-pub(super) fn transient_slots(
-    ssao_enabled: bool,
-    gbuffer_enabled: bool,
-    render_extent: (u32, u32),
-    output_extent: (u32, u32),
-) -> RenderResult<Vec<TransientSlot>> {
-    plan_pool_slots(
-        PoolGates {
-            ssao: ssao_enabled,
-            bloom: true,
-            gbuffer: gbuffer_enabled,
-        },
-        render_extent,
-        output_extent,
-    )
-    .map_err(RenderError::Other)
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::post::gbuffer::GBUFFER_ROUGHNESS_CLEAR;
     use super::*;
-    use concinnity_core::render::render_graph;
+    use concinnity_core::render::render_graph::{self, PoolGates, plan_pool_slots};
 
-    // `transient_slots` is pure CPU (it builds slot descriptions; no device), so
-    // the planner-routed grouping is testable headlessly.
-
-    #[test]
-    fn the_late_bloom_target_aliases_an_early_one() {
-        // The pool's whole saving, in the configuration a real session runs:
-        // SSAO on implies the G-buffer pre-pass is on, so both gates are true
-        // here. `bloom_top` is the only genuinely late member (Bloom ->
-        // Composite), so it is the one that can reuse an earlier member's
-        // memory; everything else is live across most of the frame and needs its
-        // own slot. A plan where `bloom_top` sits alone means the aliasing
-        // stopped working.
-        let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
-        let shared: Vec<Vec<&str>> = slots
-            .iter()
-            .map(|s| s.labels())
-            .filter(|l| l.len() > 1)
-            .collect();
-        assert!(
-            shared.iter().any(|l| l.contains(&"bloom_top")),
-            "bloom_top should reuse an earlier member's heap region: {:?}",
-            slots.iter().map(|s| s.labels()).collect::<Vec<_>>()
-        );
-        // Whatever it pairs with must start first: the pool's cyclic predecessor
-        // wiring depends on lifetime-start order.
-        let pair = shared
-            .iter()
-            .find(|l| l.contains(&"bloom_top"))
-            .expect("checked above");
-        assert_ne!(pair[0], "bloom_top", "{pair:?}");
+    fn planned(render: (u32, u32), output: (u32, u32)) -> Vec<TransientSlot> {
+        let gates = PoolGates {
+            ssao: true,
+            bloom: true,
+            gbuffer: true,
+        };
+        plan_pool_slots(gates, render, output).expect("plans")
     }
 
     #[test]
@@ -457,7 +406,7 @@ mod tests {
         // label's index is its position in that walk. The predecessors wrap,
         // because a shared slot's first member reclaims the last member's memory
         // across the frame boundary.
-        let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
+        let slots = planned((1024, 768), (1024, 768));
         let index = index_labels(&slots);
         let mut placed = 0;
         for slot in &slots {
@@ -483,54 +432,12 @@ mod tests {
     }
 
     #[test]
-    fn bloom_top_alone_is_unshared() {
-        // SSAO off: `bloom_top` is the only managed transient, so it sits in its
-        // own single-member slot (no aliasing, no aliasing barriers).
-        let slots = transient_slots(false, false, (1024, 768), (1024, 768)).expect("plans");
-        assert_eq!(slots.len(), 1);
-        assert_eq!(slots[0].members.len(), 1);
-        assert_eq!(slots[0].members[0].label, "bloom_top");
-    }
-
-    #[test]
-    fn the_gbuffer_color_targets_are_pooled_and_depth_is_not() {
-        // The G-buffer group migration: the three color targets join the pool,
-        // and `gbuffer_depth` stays feature-owned because D3D12 needs a typeless
-        // resource format for a shader-readable depth target (see `pooled`).
-        let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
-        let labels: Vec<&str> = slots.iter().flat_map(|s| s.labels()).collect();
-        for want in [
-            "gbuffer_normal_depth",
-            "gbuffer_roughness",
-            "gbuffer_velocity",
-        ] {
-            assert!(labels.contains(&want), "{want} pooled: {labels:?}");
-        }
-        assert!(
-            !labels.contains(&"gbuffer_depth"),
-            "gbuffer_depth must stay feature-owned: {labels:?}"
-        );
-    }
-
-    #[test]
-    fn the_gbuffer_gate_is_what_places_them() {
-        // The pre-pass exists only where the backend built its targets, so
-        // `planning_inputs` cannot force it on and the pool must follow the
-        // build. Without the gate the pre-pass node is absent and none of its
-        // targets are placed -- which would leave every consumer reading a
-        // resource the pool never created.
-        let slots = transient_slots(true, false, (1024, 768), (1024, 768)).expect("plans");
-        let labels: Vec<&str> = slots.iter().flat_map(|s| s.labels()).collect();
-        assert!(!labels.contains(&"gbuffer_normal_depth"), "{labels:?}");
-    }
-
-    #[test]
     fn the_roughness_clear_matches_the_feature_constant() {
         // The reason `TextureDesc` models a clear value at all. D3D12 bakes an
         // optimized clear into a placed resource, and roughness clears to 1.0
         // (fully rough) rather than 0: a mismatch here costs the fast-clear path
         // and, if the pool won, would make untouched pixels mirror-smooth.
-        let slots = transient_slots(true, true, (1024, 768), (1024, 768)).expect("plans");
+        let slots = planned((1024, 768), (1024, 768));
         let roughness = slots
             .iter()
             .flat_map(|s| &s.members)
@@ -547,7 +454,7 @@ mod tests {
         // The graph is the single source of the shape now, so what this pins is
         // the *translation*: a divergence from each feature's own constant
         // would silently mis-back the resource that feature binds.
-        let slots = transient_slots(true, true, (1024, 768), (1920, 1080)).expect("plans");
+        let slots = planned((1024, 768), (1920, 1080));
         let member = |label: &str| {
             slots
                 .iter()

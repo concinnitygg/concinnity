@@ -4,17 +4,24 @@
 //! back in line with the current set without rebuilding every BLAS: reuse every
 //! BLAS whose geometry slice is unchanged, build only the new ones, and retire
 //! the orphans. This module owns only the pure decision (which slot reuses which
-//! old BLAS, which are orphaned); the actual GPU allocation / build / retire is
-//! per-backend (directx/raytrace.rs, vulkan/raytrace.rs). Split out so the plan
-//! is unit-testable without a GPU.
-//!
-//! Consumed by the DirectX + Vulkan backends. The Metal backend predates this
-//! module and keeps its own equivalent copy (metal/raytrace.rs); a future
-//! cleanup could converge it here once Metal can be rebuilt alongside.
+//! old BLAS, which are orphaned) and which draws take part at all; the actual GPU
+//! allocation / build / retire is per-backend. Split out so the plan is
+//! unit-testable without a GPU.
 
 use crate::gfx::render_types::DrawObject;
 use alloc::vec;
 use alloc::vec::Vec;
+
+/// Whether a draw object contributes geometry to the BVH: it must be resident
+/// and carry at least one triangle. With `exclude_seethrough` (the see-through
+/// mesh path, opted into per `Material::see_through`), see-through meshes are
+/// left out too: they trace their own per-pixel reflection in the transparent
+/// pass, so excluding them means glass neither reflects glass nor self-hits.
+/// Without it every transparent mesh stays in, so opaque glass reflects and is
+/// reflected like any other surface.
+pub fn participates_in_bvh(o: &DrawObject, exclude_seethrough: bool) -> bool {
+    o.resident && o.index_count >= 3 && !(exclude_seethrough && o.material.see_through != 0)
+}
 
 /// Identifies the geometry a draw-object BLAS traces, on the shared
 /// vertex/index buffers. Two draw objects with the same signature trace
@@ -177,11 +184,8 @@ mod tests {
         assert_eq!(plan.retire, vec![0]);
     }
 
-    #[test]
-    fn geom_sig_tracks_the_draw_object_generation() {
-        // A draw object whose slice never moves: only an in-place rewrite of
-        // its bytes (the generation bump) may change its signature.
-        let mut obj = DrawObject {
+    fn draw_object() -> DrawObject {
+        DrawObject {
             vertex_offset: 256,
             vertex_count: 8,
             index_offset: 12,
@@ -199,7 +203,14 @@ mod tests {
             bb_max: [1.0; 3],
             cull_distance: 0.0,
             lod_alternates: Vec::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn geom_sig_tracks_the_draw_object_generation() {
+        // A draw object whose slice never moves: only an in-place rewrite of
+        // its bytes (the generation bump) may change its signature.
+        let mut obj = draw_object();
         let before = GeomSig::of(&obj);
         assert_eq!(before, GeomSig::of(&obj));
         obj.geometry_generation += 1;
@@ -217,5 +228,30 @@ mod tests {
         let plan = plan_topology_refresh(&old_i, &old_s, &new_i, &new_s);
         assert_eq!(plan.reuse, vec![Some(1), Some(0)]);
         assert!(plan.retire.is_empty());
+    }
+
+    #[test]
+    fn bvh_participation_needs_residency_and_a_triangle() {
+        assert!(participates_in_bvh(&draw_object(), true));
+
+        let evicted = DrawObject {
+            resident: false,
+            ..draw_object()
+        };
+        assert!(!participates_in_bvh(&evicted, false));
+
+        let degenerate = DrawObject {
+            index_count: 2,
+            ..draw_object()
+        };
+        assert!(!participates_in_bvh(&degenerate, false));
+    }
+
+    #[test]
+    fn see_through_meshes_leave_the_bvh_only_when_excluded() {
+        let mut glass = draw_object();
+        glass.material.see_through = 1;
+        assert!(participates_in_bvh(&glass, false));
+        assert!(!participates_in_bvh(&glass, true));
     }
 }

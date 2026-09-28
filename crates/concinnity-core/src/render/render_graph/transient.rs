@@ -34,7 +34,7 @@ use super::alias::plan_aliasing_for;
 use super::compile::CompiledGraph;
 use super::frame::FrameGraphInputs;
 use super::types::{ClearValue, PixelFormat, TextureUsage};
-use alloc::string::String;
+use crate::render::error::{RenderError, RenderResult};
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
@@ -228,7 +228,7 @@ pub fn plan_pool_slots(
     gates: PoolGates,
     render_extent: (u32, u32),
     output_extent: (u32, u32),
-) -> Result<Vec<TransientSlot>, String> {
+) -> RenderResult<Vec<TransientSlot>> {
     let mut build = FrameGraphInputs::all_off();
     build.hdr_width = render_extent.0;
     build.hdr_height = render_extent.1;
@@ -241,8 +241,9 @@ pub fn plan_pool_slots(
     // label the pool never created.
     build.gbuffer_prepass_enabled = gates.gbuffer;
     build.velocity_enabled = gates.gbuffer;
-    plan_transient_slots(&build, &pooled, output_extent.0, output_extent.1)
-        .ok_or_else(|| "transient pool: the planning frame graph failed to compile".to_string())
+    plan_transient_slots(&build, &pooled, output_extent.0, output_extent.1).ok_or_else(|| {
+        RenderError::Other("transient pool: the planning frame graph failed to compile".to_string())
+    })
 }
 
 // One graph resource as the pool must create it.
@@ -472,6 +473,17 @@ mod tests {
     }
 
     #[test]
+    fn bloom_off_leaves_ao_output_alone_in_its_slot() {
+        // Vulkan rebuilds on the bloom flag, so a pool without `bloom_top` is
+        // reachable there: `ao_output` then shares with nothing.
+        let slots =
+            plan_transient_slots(&build_inputs_with(true, false, false), &pooled, 1920, 1080)
+                .expect("planning graph compiles");
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].labels(), vec!["ao_output"]);
+    }
+
+    #[test]
     fn nothing_pooled_when_neither_feature_is_built() {
         let slots =
             plan_transient_slots(&build_inputs_with(false, false, false), &pooled, 1920, 1080)
@@ -503,6 +515,42 @@ mod tests {
         ] {
             assert!(on_labels.contains(&want), "{want}: {on_labels:?}");
         }
+    }
+
+    const ALL_GATES: PoolGates = PoolGates {
+        ssao: true,
+        bloom: true,
+        gbuffer: true,
+    };
+
+    #[test]
+    fn gbuffer_depth_is_not_pooled_with_the_gbuffer_gate_on() {
+        // D3D12 needs a typeless resource format for a shader-readable depth
+        // target, so the depth sibling stays feature-owned (see `pooled`).
+        let slots = plan_pool_slots(ALL_GATES, (1024, 768), (1024, 768)).expect("plans");
+        let labels: Vec<&str> = slots.iter().flat_map(|s| s.labels()).collect();
+        assert!(labels.contains(&"gbuffer_normal_depth"), "{labels:?}");
+        assert!(!labels.contains(&"gbuffer_depth"), "{labels:?}");
+    }
+
+    #[test]
+    fn bloom_top_reuses_a_member_placed_before_it() {
+        // `bloom_top` is the only genuinely late member (Bloom -> Composite), so
+        // it is the one that reclaims an earlier member's memory. Its partner
+        // must start first: a pool's cyclic predecessor wiring follows
+        // lifetime-start order.
+        let slots = plan_pool_slots(ALL_GATES, (1024, 768), (1024, 768)).expect("plans");
+        let pair = slots
+            .iter()
+            .map(|s| s.labels())
+            .find(|l| l.len() > 1 && l.contains(&"bloom_top"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "bloom_top should share a slot: {:?}",
+                    slots.iter().map(|s| s.labels()).collect::<Vec<_>>()
+                )
+            });
+        assert_ne!(pair[0], "bloom_top", "{pair:?}");
     }
 
     #[test]

@@ -114,10 +114,10 @@ fn log_resource_footprint(records: &[ResourceRecord]) {
     if records.is_empty() {
         return;
     }
-    let total: u64 = records
+    let total = records
         .iter()
-        .map(|r| r.data_bytes.len() as u64 + r.payload.as_ref().map_or(0, |p| p.len))
-        .sum();
+        .map(ResourceRecord::compiled_len)
+        .sum::<u64>();
     tracing::info!(
         "Resource tables: {} record(s), {} MiB compiled",
         records.len(),

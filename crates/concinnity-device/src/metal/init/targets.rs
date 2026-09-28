@@ -3,6 +3,7 @@
 //! whose top mip lives in that pool.
 
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
 
@@ -10,7 +11,7 @@ use super::{Features, InitGpu, pipelines};
 use crate::metal::context::MtlTargets;
 use crate::metal::post::create_bloom_targets;
 use crate::metal::texture::create_hdr_targets;
-use crate::metal::transient_pool::{TransientTexturePool, transient_slots};
+use crate::metal::transient_pool::TransientTexturePool;
 
 pub(super) fn build_targets(gpu: &InitGpu<'_>, features: &Features) -> RenderResult<MtlTargets> {
     let device = &*gpu.hw.device;
@@ -61,6 +62,14 @@ pub(in crate::metal) fn build_transient_pool(
 ) -> RenderResult<TransientTexturePool> {
     TransientTexturePool::build(
         device,
-        &transient_slots(ssao_enabled, gbuffer_enabled, render, output)?,
+        &plan_pool_slots(
+            PoolGates {
+                ssao: ssao_enabled,
+                bloom: true,
+                gbuffer: gbuffer_enabled,
+            },
+            render,
+            output,
+        )?,
     )
 }

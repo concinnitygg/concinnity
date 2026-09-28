@@ -16,6 +16,7 @@
 //! originally-allocated slot.
 
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 
@@ -282,9 +283,12 @@ impl DxContext {
         self.targets.transient_pool.rebuild(
             &self.hw.device,
             &self.hw.command_queue,
-            &super::transient_pool::transient_slots(
-                ssao_enabled,
-                gbuffer_enabled,
+            &plan_pool_slots(
+                PoolGates {
+                    ssao: ssao_enabled,
+                    bloom: true,
+                    gbuffer: gbuffer_enabled,
+                },
                 (render_w, render_h),
                 (new_w, new_h),
             )?,
