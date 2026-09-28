@@ -393,20 +393,6 @@ fn create_compute_pipeline(
 }
 
 impl VkContext {
-    // Build the per-frame compute params for the auto-exposure kernels. The
-    // log-luminance range and the precomputed `bins / range` scale match the
-    // `gfx::auto_exposure::LUM_LOG2_*` constants exactly.
-    fn auto_exposure_params(&self) -> AutoExposureParams {
-        use concinnity_core::gfx::auto_exposure::{LUM_LOG2_MAX, LUM_LOG2_MIN};
-        let range = LUM_LOG2_MAX - LUM_LOG2_MIN;
-        AutoExposureParams {
-            lum_log2_min: LUM_LOG2_MIN,
-            lum_log2_range: range,
-            lum_to_bin_scale: HISTOGRAM_BINS as f32 / range,
-            _pad: 0.0,
-        }
-    }
-
     // Step the auto-exposure EMA from a previous frame's GPU measurement,
     // then push the new exposure multiplier into `self.post_process.exposure`.
     // A no-op when auto-exposure is disabled: the static authored EV then
@@ -466,7 +452,7 @@ impl VkContext {
         let Some(resources) = self.auto_exposure.resources.as_ref() else {
             return;
         };
-        let params = self.auto_exposure_params();
+        let params = AutoExposureParams::HISTOGRAM;
         let extent = self.targets.render_extent;
         if extent.width == 0 || extent.height == 0 {
             return;

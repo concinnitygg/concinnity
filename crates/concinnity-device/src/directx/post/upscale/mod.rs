@@ -13,7 +13,6 @@
 //! trait; only the inner vendor evaluate differs.
 
 use concinnity_core::components::UpscalerBackend;
-use concinnity_core::gfx::jitter;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -198,14 +197,6 @@ fn write_output_srv(device: &ID3D12Device, res: &ID3D12Resource, cpu: D3D12_CPU_
     unsafe { device.CreateShaderResourceView(res, Some(&desc), cpu) };
 }
 
-// Sub-pixel jitter shared by the DLSS + XeSS backends (FSR queries its own
-// FFX-prescribed sequence instead). A 16-phase Halton-2/3 sequence in
-// [-0.5, 0.5] render-pixel units; the same value jitters the camera projection
-// (see `draw_frame`) so the rasterized scene and the upscale agree.
-pub(super) fn halton_jitter_offset(frame_index: u32) -> [f32; 2] {
-    jitter::offset(frame_index)
-}
-
 // Backend selection
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -360,19 +351,6 @@ mod tests {
         assert_eq!(resolved(B::Dlss, true, true, true), ResolvedBackend::Dlss);
         assert_eq!(resolved(B::Xess, true, true, true), ResolvedBackend::Xess);
         assert_eq!(resolved(B::Fsr3, true, true, true), ResolvedBackend::Fsr3);
-    }
-
-    #[test]
-    fn halton_jitter_is_centered_and_bounded() {
-        for f in 0..64u32 {
-            let [x, y] = halton_jitter_offset(f);
-            assert!((-0.5..0.5).contains(&x), "x={x} out of range");
-            assert!((-0.5..0.5).contains(&y), "y={y} out of range");
-        }
-        // radical_inverse(1, 2) = 0.5 -> offset 0.0; (1,3) = 1/3 -> -1/6.
-        let [x, y] = halton_jitter_offset(0);
-        assert!((x - 0.0).abs() < 1e-6);
-        assert!((y - (1.0 / 3.0 - 0.5)).abs() < 1e-6);
     }
 
     #[test]

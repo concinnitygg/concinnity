@@ -21,6 +21,8 @@
 )]
 
 use ash::vk;
+use concinnity_core::components::UpscaleQuality;
+use concinnity_core::gfx::jitter;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
@@ -333,21 +335,17 @@ impl XessApi {
     }
 }
 
-// Map the engine's per-axis render-to-output ratio to the nearest XeSS quality
-// preset. The preset is a hint for XeSS's internal model selection; the actual
-// render dims are `output * scale` (passed via `inputWidth/Height`). Pure; unit
-// tested. Mirrors `directx::post::upscale::xess::quality_from_scale`.
-fn quality_from_scale(scale: f32) -> i32 {
-    if scale >= 0.99 {
-        XESS_QUALITY_SETTING_AA
-    } else if scale >= 0.62 {
-        XESS_QUALITY_SETTING_QUALITY
-    } else if scale >= 0.55 {
-        XESS_QUALITY_SETTING_BALANCED
-    } else if scale >= 0.42 {
-        XESS_QUALITY_SETTING_PERFORMANCE
-    } else {
-        XESS_QUALITY_SETTING_ULTRA_PERFORMANCE
+// The XeSS quality preset for the nearest engine preset: native anti-aliasing
+// at native resolution. The preset is a hint for XeSS's internal model
+// selection; the actual render dims are `output * scale` (passed via
+// `inputWidth/Height`).
+fn xess_quality(q: Option<UpscaleQuality>) -> i32 {
+    match q {
+        None => XESS_QUALITY_SETTING_AA,
+        Some(UpscaleQuality::Quality) => XESS_QUALITY_SETTING_QUALITY,
+        Some(UpscaleQuality::Balanced) => XESS_QUALITY_SETTING_BALANCED,
+        Some(UpscaleQuality::Performance) => XESS_QUALITY_SETTING_PERFORMANCE,
+        Some(UpscaleQuality::UltraPerformance) => XESS_QUALITY_SETTING_ULTRA_PERFORMANCE,
     }
 }
 
@@ -456,7 +454,7 @@ impl XessUpscaler {
                 x: output_width,
                 y: output_height,
             },
-            quality_setting: quality_from_scale(scale),
+            quality_setting: xess_quality(UpscaleQuality::nearest(scale)),
             init_flags,
             creation_node_mask: 0,
             visible_node_mask: 0,
@@ -561,7 +559,7 @@ impl VkUpscaleBackend for XessUpscaler {
     // XeSS prescribes no jitter sequence; the engine's Halton-2/3 (shared with
     // the camera projection) drives both. XeSS wants the offset in [-0.5, 0.5].
     fn jitter_offset(&self, frame_index: u32) -> [f32; 2] {
-        super::halton_jitter_offset(frame_index)
+        jitter::offset(frame_index)
     }
 
     fn dispatch(
@@ -678,17 +676,5 @@ mod tests {
         assert_eq!(offset_of!(xess_vk_execute_params_t, input_width), 304);
         assert_eq!(offset_of!(xess_vk_execute_params_t, input_color_base), 312);
         assert_eq!(offset_of!(xess_vk_execute_params_t, output_color_base), 352);
-    }
-
-    #[test]
-    fn xess_quality_mapping_is_monotonic_by_scale() {
-        assert_eq!(quality_from_scale(1.0), XESS_QUALITY_SETTING_AA);
-        assert_eq!(quality_from_scale(2.0 / 3.0), XESS_QUALITY_SETTING_QUALITY);
-        assert_eq!(quality_from_scale(0.587), XESS_QUALITY_SETTING_BALANCED);
-        assert_eq!(quality_from_scale(0.5), XESS_QUALITY_SETTING_PERFORMANCE);
-        assert_eq!(
-            quality_from_scale(1.0 / 3.0),
-            XESS_QUALITY_SETTING_ULTRA_PERFORMANCE
-        );
     }
 }

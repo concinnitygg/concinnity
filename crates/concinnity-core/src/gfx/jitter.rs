@@ -38,7 +38,19 @@ pub fn radical_inverse(mut index: u32, base: u32) -> f32 {
 /// assert_eq!(offset(0), offset(16), "the cycle repeats every 16 frames");
 /// ```
 pub fn offset(frame_index: u32) -> [f32; 2] {
-    let idx = (frame_index % 16) + 1;
+    offset_in_cycle(frame_index, 16)
+}
+
+/// The frame's jitter offset in `[-0.5, 0.5]` render-pixel units, from a
+/// Halton (2, 3) cycle of `cycle` frames. The sequence skips index 0, which
+/// would sit on the pixel corner.
+///
+/// ```
+/// # use concinnity_core::gfx::jitter::offset_in_cycle;
+/// assert_eq!(offset_in_cycle(0, 8), offset_in_cycle(8, 8));
+/// ```
+pub fn offset_in_cycle(frame_index: u32, cycle: u32) -> [f32; 2] {
+    let idx = (frame_index % cycle) + 1;
     [radical_inverse(idx, 2) - 0.5, radical_inverse(idx, 3) - 0.5]
 }
 
@@ -79,5 +91,19 @@ mod tests {
         }
         assert_eq!(offset(0), offset(16));
         assert_eq!(offset(7), offset(23));
+    }
+
+    #[test]
+    fn an_eight_frame_cycle_stays_within_the_pixel_and_repeats() {
+        for frame in 0..32 {
+            let [x, y] = offset_in_cycle(frame, 8);
+            assert!((-0.5..0.5).contains(&x), "frame {frame} x = {x}");
+            assert!((-0.5..0.5).contains(&y), "frame {frame} y = {y}");
+            assert_eq!(offset_in_cycle(frame, 8), offset_in_cycle(frame + 8, 8));
+        }
+        // Index 1: radical_inverse(1, 2) = 0.5 and radical_inverse(1, 3) = 1/3.
+        let [x, y] = offset(0);
+        assert!(x.abs() < 1e-6, "{x}");
+        assert!((y - (1.0 / 3.0 - 0.5)).abs() < 1e-6, "{y}");
     }
 }

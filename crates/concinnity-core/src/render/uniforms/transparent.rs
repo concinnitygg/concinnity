@@ -2,6 +2,8 @@
 //! per-record tunables of its producers -- glass panes, see-through glass
 //! meshes, and water surfaces.
 
+use crate::components::{GlassPanel, WaterSurface, WaterWave};
+
 /// Per-frame view inputs shared by every draw in the transparent pass (water,
 /// glass), bound once for the whole pass. Matches `TransparentView` in
 /// `shaders/glass.hlsl` and `shaders/water.hlsl`. 240 bytes.
@@ -62,6 +64,29 @@ pub struct GlassParams {
     pub planar: f32,
 }
 
+impl GlassParams {
+    /// The `planar` lane: 1 selects the pane's planar reflection, 0 keeps the
+    /// probe / sky path.
+    pub fn planar_lane(mirrored: bool) -> f32 {
+        if mirrored { 1.0 } else { 0.0 }
+    }
+
+    /// The per-panel block for an authored panel. `planar` is whether the pane
+    /// holds a planar reflection slot, see [`GlassParams::planar_lane`].
+    pub fn from_panel(panel: &GlassPanel, planar: bool) -> Self {
+        let n = panel.normal; // already unit-length from GlassPanel::from_args
+        Self {
+            center: [panel.center[0], panel.center[1], panel.center[2], 0.0],
+            normal: [n[0], n[1], n[2], 0.0],
+            tint: [panel.tint[0], panel.tint[1], panel.tint[2], 0.0],
+            opacity: panel.opacity,
+            refraction_strength: panel.refraction_strength,
+            fresnel_power: panel.fresnel_power,
+            planar: Self::planar_lane(planar),
+        }
+    }
+}
+
 /// Per-draw tunables for a see-through glass MESH: a `Material` flagged
 /// `see_through` on an RT-capable device, drawn in the transparent pass instead
 /// of the opaque one. Unlike `GlassParams` (a pre-baked world-space pane), a
@@ -86,9 +111,9 @@ pub struct GlassMeshParams {
     pub prefilter_mip_count: f32,
 }
 
-/// Maximum waves summed per `WaterParams`. Mirrors `MAX_WATER_WAVES` in
-/// `shaders/water.hlsl` and in the `WaterSurface` asset.
-pub const WATER_MAX_WAVES: usize = 4;
+/// Maximum waves summed per `WaterParams`: the `WaterSurface` asset's limit.
+/// Mirrors `MAX_WATER_WAVES` in `shaders/water.hlsl`.
+pub const WATER_MAX_WAVES: usize = crate::components::MAX_WATER_WAVES;
 
 /// One Gerstner wave coefficient set, packed into two `float4` lanes so the
 /// layout is identical on every target. Matches `WaterWave` in
@@ -100,6 +125,16 @@ pub struct WaterWaveGpu {
     pub dir_amp_wave: [f32; 4],
     /// `[speed, steepness, _, _]`.
     pub speed_steep_pad: [f32; 4],
+}
+
+impl WaterWaveGpu {
+    /// The shader-side lanes for one authored wave.
+    pub fn from_wave(w: &WaterWave) -> Self {
+        Self {
+            dir_amp_wave: [w.direction[0], w.direction[1], w.amplitude, w.wavelength],
+            speed_steep_pad: [w.speed, w.steepness, 0.0, 0.0],
+        }
+    }
 }
 
 /// Per-surface tunables for a `WaterSurface`, uploaded once per surface. The
@@ -161,11 +196,47 @@ impl WaterParams {
             (roughness.max(0.0) * PLANAR_DISTORTION_PER_ROUGHNESS).min(PLANAR_DISTORTION_MAX);
         [1.0, distortion, 0.0, 0.0]
     }
+
+    /// The per-surface block for an authored surface, keeping at most
+    /// [`WATER_MAX_WAVES`] of its waves. `planar` is whether the surface holds
+    /// a planar reflection slot, see [`WaterParams::planar_lane`].
+    pub fn from_surface(surface: &WaterSurface, planar: bool) -> Self {
+        let mut waves = [WaterWaveGpu::default(); WATER_MAX_WAVES];
+        for (slot, src) in waves.iter_mut().zip(surface.waves.iter()) {
+            *slot = WaterWaveGpu::from_wave(src);
+        }
+        Self {
+            center: [surface.center[0], surface.center[1], surface.center[2], 0.0],
+            deep_color: [
+                surface.deep_color[0],
+                surface.deep_color[1],
+                surface.deep_color[2],
+                0.0,
+            ],
+            shallow_color: [
+                surface.shallow_color[0],
+                surface.shallow_color[1],
+                surface.shallow_color[2],
+                0.0,
+            ],
+            depth_falloff: surface.depth_falloff_meters,
+            foam_width: surface.foam_width_meters,
+            foam_intensity: surface.foam_intensity,
+            fresnel_power: surface.fresnel_power,
+            roughness: surface.roughness,
+            refraction_strength: surface.refraction_strength,
+            wave_count: surface.waves.len().min(WATER_MAX_WAVES) as u32,
+            _pad: 0.0,
+            waves,
+            planar: Self::planar_lane(surface.roughness, planar),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
     use core::mem::{offset_of, size_of};
 
     // Every backend binds this block under the same layout, so it is checked
@@ -256,5 +327,88 @@ mod tests {
         assert_eq!(offset_of!(WaterParams, waves), 80);
         assert_eq!(offset_of!(WaterParams, planar), 208);
         assert_eq!(size_of::<WaterWaveGpu>(), 32);
+    }
+
+    #[test]
+    fn from_wave_packs_the_lanes() {
+        let w = WaterWave {
+            amplitude: 0.25,
+            wavelength: 3.0,
+            speed: 1.5,
+            direction: [0.6, -0.8],
+            steepness: 0.4,
+        };
+        let g = WaterWaveGpu::from_wave(&w);
+        assert_eq!(g.dir_amp_wave, [0.6, -0.8, 0.25, 3.0]);
+        assert_eq!(g.speed_steep_pad, [1.5, 0.4, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn from_surface_maps_fields() {
+        let surface = WaterSurface {
+            center: [1.0, 2.0, 3.0],
+            deep_color: [0.02, 0.05, 0.12],
+            shallow_color: [0.1, 0.3, 0.4],
+            depth_falloff_meters: 3.0,
+            foam_width_meters: 0.2,
+            foam_intensity: 0.5,
+            fresnel_power: 4.0,
+            roughness: 0.08,
+            refraction_strength: 0.05,
+            waves: vec![WaterWave::default(), WaterWave::default()],
+            ..Default::default()
+        };
+        let p = WaterParams::from_surface(&surface, true);
+        assert_eq!(p.center, [1.0, 2.0, 3.0, 0.0]);
+        assert_eq!(p.deep_color, [0.02, 0.05, 0.12, 0.0]);
+        assert_eq!(p.shallow_color, [0.1, 0.3, 0.4, 0.0]);
+        assert_eq!(p.depth_falloff, 3.0);
+        assert_eq!(p.foam_width, 0.2);
+        assert_eq!(p.foam_intensity, 0.5);
+        assert_eq!(p.fresnel_power, 4.0);
+        assert_eq!(p.roughness, 0.08);
+        assert_eq!(p.refraction_strength, 0.05);
+        assert_eq!(p.wave_count, 2);
+        assert_eq!(p.planar, WaterParams::planar_lane(0.08, true));
+        assert!(p.planar[0] > 0.5 && p.planar[1] > 0.0);
+        // A slotless surface keeps the probe / sky path.
+        assert_eq!(WaterParams::from_surface(&surface, false).planar, [0.0; 4]);
+    }
+
+    // More authored waves than the shader's array can hold must clamp rather
+    // than overflow the fixed lane count.
+    #[test]
+    fn from_surface_clamps_the_wave_count() {
+        let surface = WaterSurface {
+            waves: vec![WaterWave::default(); WATER_MAX_WAVES + 3],
+            ..Default::default()
+        };
+        assert_eq!(
+            WaterParams::from_surface(&surface, false).wave_count,
+            WATER_MAX_WAVES as u32
+        );
+    }
+
+    #[test]
+    fn from_panel_maps_fields() {
+        let panel = GlassPanel {
+            center: [1.0, 2.0, 3.0],
+            normal: [0.0, 0.0, 1.0],
+            tint: [0.6, 0.85, 0.9],
+            opacity: 0.45,
+            refraction_strength: 0.04,
+            fresnel_power: 4.0,
+            ..Default::default()
+        };
+        let p = GlassParams::from_panel(&panel, true);
+        assert_eq!(p.center, [1.0, 2.0, 3.0, 0.0]);
+        assert_eq!(p.normal, [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(p.tint, [0.6, 0.85, 0.9, 0.0]);
+        assert_eq!(p.opacity, 0.45);
+        assert_eq!(p.refraction_strength, 0.04);
+        assert_eq!(p.fresnel_power, 4.0);
+        assert_eq!(p.planar, 1.0);
+        // A slotless pane keeps the probe / sky path.
+        assert_eq!(GlassParams::from_panel(&panel, false).planar, 0.0);
     }
 }

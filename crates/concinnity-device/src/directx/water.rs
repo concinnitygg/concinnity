@@ -11,18 +11,12 @@
 //! `builtin_shaders`; the ray-traced fragment needs shader model 6.5 for its
 //! inline ray query, the base pair 6.0.
 
-use concinnity_core::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
+use concinnity_core::components::WaterSurface;
 use concinnity_core::geometry::water_grid::build_water_grid;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::uniforms::WaterParams;
 use windows::Win32::Graphics::Direct3D12::*;
-// `WaterParams` / `WaterWaveGpu` (the per-surface cbuffer and its wave lanes)
-// are GPU-free layout structs that live in `core::render`; re-export them so
-// `crate::directx::water::WaterParams` is unchanged for the
-// `water_params_from` path.
-pub(in crate::directx) use concinnity_core::render::uniforms::{
-    WATER_MAX_WAVES, WaterParams, WaterWaveGpu,
-};
 
 use super::allocator::DeviceAllocator;
 use crate::directx::builtin_shaders;
@@ -31,50 +25,6 @@ use crate::directx::context::dump_on_err;
 use crate::directx::transparent::{
     RecordUpload, TransparentProducer, TransparentRecord, create_transparent_pso,
 };
-
-// The shader-side wave lane for one authored wave. Pure; unit tested.
-fn wave_to_gpu(w: &WaterWave) -> WaterWaveGpu {
-    WaterWaveGpu {
-        dir_amp_wave: [w.direction[0], w.direction[1], w.amplitude, w.wavelength],
-        speed_steep_pad: [w.speed, w.steepness, 0.0, 0.0],
-    }
-}
-
-// Build the per-surface `WaterParams` from an authored surface. `planar` is the
-// mirror lane with its ripple offset scaled by the surface's roughness when the
-// surface has a planar reflection slot, and zeroed otherwise, which is what
-// selects the sharp mirror render over the probe / sky cube. Pure; unit tested. Mirrors `metal::water::water_params_from`.
-fn water_params_from(surface: &WaterSurface, planar: bool) -> WaterParams {
-    let mut waves = [WaterWaveGpu::default(); WATER_MAX_WAVES];
-    for (slot, src) in waves.iter_mut().zip(surface.waves.iter()) {
-        *slot = wave_to_gpu(src);
-    }
-    WaterParams {
-        center: [surface.center[0], surface.center[1], surface.center[2], 0.0],
-        deep_color: [
-            surface.deep_color[0],
-            surface.deep_color[1],
-            surface.deep_color[2],
-            0.0,
-        ],
-        shallow_color: [
-            surface.shallow_color[0],
-            surface.shallow_color[1],
-            surface.shallow_color[2],
-            0.0,
-        ],
-        depth_falloff: surface.depth_falloff_meters,
-        foam_width: surface.foam_width_meters,
-        foam_intensity: surface.foam_intensity,
-        fresnel_power: surface.fresnel_power,
-        roughness: surface.roughness,
-        refraction_strength: surface.refraction_strength,
-        wave_count: surface.waves.len().min(MAX_WATER_WAVES) as u32,
-        _pad: 0.0,
-        waves,
-        planar: WaterParams::planar_lane(surface.roughness, planar),
-    }
-}
 
 // Compile the water vertex + fragment shaders. The fragment comes in an MSAA
 // pair, which keeps its depth SRV declaration in sync with the resource's sample
@@ -209,7 +159,7 @@ pub(in crate::directx) fn build_water_producer(
             })
             .collect();
 
-        let params = water_params_from(surface, planar_slot.is_some());
+        let params = WaterParams::from_surface(surface, planar_slot.is_some());
         records.push(TransparentRecord::upload(
             alloc,
             RecordUpload {
@@ -256,8 +206,6 @@ fn build_water_rt_pipelines(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // The `WaterParams` / `WaterWaveGpu` layout tests live with the structs in
     // `concinnity_core::render::uniforms`, and are checked against the compiled shader
     // by `shader_layout`.
@@ -287,65 +235,5 @@ mod tests {
             super::compile_water_rt_shaders(msaa, false)
                 .unwrap_or_else(|e| panic!("water_rt shaders (msaa={msaa}) must compile: {e}"));
         }
-    }
-
-    #[test]
-    fn wave_to_gpu_packs_the_lanes() {
-        let w = WaterWave {
-            amplitude: 0.25,
-            wavelength: 3.0,
-            speed: 1.5,
-            direction: [0.6, -0.8],
-            steepness: 0.4,
-        };
-        let g = wave_to_gpu(&w);
-        assert_eq!(g.dir_amp_wave, [0.6, -0.8, 0.25, 3.0]);
-        assert_eq!(g.speed_steep_pad, [1.5, 0.4, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn water_params_from_maps_fields() {
-        let surface = WaterSurface {
-            center: [1.0, 2.0, 3.0],
-            deep_color: [0.02, 0.05, 0.12],
-            shallow_color: [0.1, 0.3, 0.4],
-            depth_falloff_meters: 3.0,
-            foam_width_meters: 0.2,
-            foam_intensity: 0.5,
-            fresnel_power: 4.0,
-            roughness: 0.08,
-            refraction_strength: 0.05,
-            waves: vec![WaterWave::default(), WaterWave::default()],
-            ..Default::default()
-        };
-        let p = water_params_from(&surface, true);
-        assert_eq!(p.center, [1.0, 2.0, 3.0, 0.0]);
-        assert_eq!(p.deep_color, [0.02, 0.05, 0.12, 0.0]);
-        assert_eq!(p.shallow_color, [0.1, 0.3, 0.4, 0.0]);
-        assert_eq!(p.depth_falloff, 3.0);
-        assert_eq!(p.foam_width, 0.2);
-        assert_eq!(p.foam_intensity, 0.5);
-        assert_eq!(p.fresnel_power, 4.0);
-        assert_eq!(p.roughness, 0.08);
-        assert_eq!(p.refraction_strength, 0.05);
-        assert_eq!(p.wave_count, 2);
-        assert_eq!(p.planar, WaterParams::planar_lane(0.08, true));
-        assert!(p.planar[0] > 0.5 && p.planar[1] > 0.0);
-        // A slotless surface keeps the probe / sky path.
-        assert_eq!(water_params_from(&surface, false).planar, [0.0; 4]);
-    }
-
-    // More authored waves than the shader's array can hold must clamp rather
-    // than overflow the fixed lane count.
-    #[test]
-    fn water_params_clamps_the_wave_count() {
-        let surface = WaterSurface {
-            waves: vec![WaterWave::default(); MAX_WATER_WAVES + 3],
-            ..Default::default()
-        };
-        assert_eq!(
-            water_params_from(&surface, false).wave_count,
-            MAX_WATER_WAVES as u32
-        );
     }
 }

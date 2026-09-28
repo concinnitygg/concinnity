@@ -55,21 +55,6 @@ pub(in crate::metal) struct GlassPanelRecord {
     pub(in crate::metal) planar_slot: Option<usize>,
 }
 
-fn glass_params_from(panel: &GlassPanel) -> GlassParams {
-    let n = panel.normal; // already unit-length from GlassPanel::from_args
-    GlassParams {
-        center: [panel.center[0], panel.center[1], panel.center[2], 0.0],
-        normal: [n[0], n[1], n[2], 0.0],
-        tint: [panel.tint[0], panel.tint[1], panel.tint[2], 0.0],
-        opacity: panel.opacity,
-        refraction_strength: panel.refraction_strength,
-        fresnel_power: panel.fresnel_power,
-        // Off by default; `collect_glass_transparent_draws` sets it when the
-        // planar pass ran this frame and the pane has a slot.
-        planar: 0.0,
-    }
-}
-
 // Build the GPU record for one `GlassPanel`: generate the quad, upload it, and
 // snapshot the per-panel uniforms.
 pub(in crate::metal) fn build_glass_panel_record(
@@ -119,7 +104,7 @@ pub(in crate::metal) fn build_glass_panel_record(
         vertex_buffer: vb,
         index_buffer: ib,
         index_count: idxs.len() as u32,
-        params: glass_params_from(panel),
+        params: GlassParams::from_panel(panel, false),
         visible: panel.visible,
         center: panel.center,
         // Patched after `assign_planar_slots` runs over all reflectors in init.
@@ -456,7 +441,7 @@ impl MtlContext {
                     .planar_slot
                     .and_then(|s| planar_set.and_then(|set| set.targets.get(s)))
             {
-                params.planar = 1.0;
+                params.planar = GlassParams::planar_lane(true);
                 fragment_textures.push((
                     super::transparent::GLASS_PLANAR_TEXTURE_INDEX,
                     targets.resolve.clone(),

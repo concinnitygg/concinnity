@@ -1,6 +1,8 @@
 //! The small parameter blocks the fullscreen post passes and the two compute
 //! helpers that feed them take.
 
+use crate::gfx::auto_exposure::{HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN};
+
 /// Input to the TAA resolve fragment shader. Matches `TaaParams` in
 /// `shaders/taa.hlsl`. 4 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
@@ -25,6 +27,17 @@ pub struct AutoExposureParams {
     pub lum_to_bin_scale: f32,
     /// Padding so the field layout matches the shader-side struct.
     pub _pad: f32,
+}
+
+impl AutoExposureParams {
+    /// The mapping for the histogram the engine builds: `HISTOGRAM_BINS` bins
+    /// spanning `LUM_LOG2_MIN..LUM_LOG2_MAX`.
+    pub const HISTOGRAM: Self = Self {
+        lum_log2_min: LUM_LOG2_MIN,
+        lum_log2_range: LUM_LOG2_MAX - LUM_LOG2_MIN,
+        lum_to_bin_scale: HISTOGRAM_BINS as f32 / (LUM_LOG2_MAX - LUM_LOG2_MIN),
+        _pad: 0.0,
+    };
 }
 
 /// Per-dispatch params for the Hi-Z build kernels: four tightly-packed uints.
@@ -80,5 +93,24 @@ mod tests {
         assert_eq!(offset_of!(HizSpdParams, base_height), 4);
         assert_eq!(offset_of!(HizSpdParams, level_count), 8);
         assert_eq!(offset_of!(HizSpdParams, sample_count), 12);
+    }
+
+    #[test]
+    fn auto_exposure_params_layout_matches_shader() {
+        assert_eq!(size_of::<AutoExposureParams>(), 16);
+        assert_eq!(offset_of!(AutoExposureParams, lum_log2_min), 0);
+        assert_eq!(offset_of!(AutoExposureParams, lum_log2_range), 4);
+        assert_eq!(offset_of!(AutoExposureParams, lum_to_bin_scale), 8);
+        assert_eq!(offset_of!(AutoExposureParams, _pad), 12);
+    }
+
+    // The scale maps the whole log-luminance span onto exactly the bin count.
+    #[test]
+    fn histogram_params_span_the_bins() {
+        let p = AutoExposureParams::HISTOGRAM;
+        assert_eq!(p.lum_log2_min, LUM_LOG2_MIN);
+        assert_eq!(p.lum_log2_range, LUM_LOG2_MAX - LUM_LOG2_MIN);
+        let bins = p.lum_to_bin_scale * p.lum_log2_range;
+        assert!((bins - HISTOGRAM_BINS as f32).abs() < 1e-4, "{bins}");
     }
 }

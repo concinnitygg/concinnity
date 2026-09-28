@@ -19,11 +19,8 @@ use concinnity_core::components::GlassPanel;
 use concinnity_core::geometry::glass_quad::build_glass_quad;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::uniforms::GlassParams;
 use windows::Win32::Graphics::Direct3D12::*;
-// `GlassParams` (the per-panel cbuffer) is a GPU-free layout struct that lives
-// in `core::render`; re-export it so `crate::directx::glass::GlassParams` is
-// unchanged for the `glass_params_from` path.
-pub(in crate::directx) use concinnity_core::render::uniforms::GlassParams;
 
 use super::allocator::DeviceAllocator;
 use crate::directx::builtin_shaders;
@@ -33,21 +30,6 @@ use crate::directx::transparent::{
     GlassMeshProducer, RecordUpload, TracedGlassPsos, TransparentProducer, TransparentRecord,
     create_glass_reflection_pso, create_transparent_pso,
 };
-
-// Build the per-panel `GlassParams` from an authored panel. Pure; unit
-// tested. Mirrors `metal::glass::glass_params_from`.
-fn glass_params_from(panel: &GlassPanel, planar: f32) -> GlassParams {
-    let n = panel.normal; // already unit-length from GlassPanel::from_args
-    GlassParams {
-        center: [panel.center[0], panel.center[1], panel.center[2], 0.0],
-        normal: [n[0], n[1], n[2], 0.0],
-        tint: [panel.tint[0], panel.tint[1], panel.tint[2], 0.0],
-        opacity: panel.opacity,
-        refraction_strength: panel.refraction_strength,
-        fresnel_power: panel.fresnel_power,
-        planar,
-    }
-}
 
 // Compile the glass vertex + fragment shaders. The fragment comes in an MSAA
 // pair, which keeps its depth SRV declaration in sync with the resource's
@@ -185,7 +167,7 @@ pub(in crate::directx) fn build_glass_producer(
 
         // Bake the planar flag: the pane samples the sharp mirror render only
         // when it was assigned a planar slot.
-        let params = glass_params_from(panel, if planar_slot.is_some() { 1.0 } else { 0.0 });
+        let params = GlassParams::from_panel(panel, planar_slot.is_some());
         records.push(TransparentRecord::upload(
             alloc,
             RecordUpload {
@@ -316,8 +298,6 @@ pub(in crate::directx) fn build_glass_mesh_producer(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // The `TransparentView` / `GlassParams` layout tests live with the structs
     // in `concinnity_core::render::uniforms`, and are checked against the compiled
     // shader by `shader_layout`.
@@ -364,28 +344,5 @@ mod tests {
             super::compile_glass_mesh_shaders(msaa, false)
                 .unwrap_or_else(|e| panic!("glass_mesh shaders (msaa={msaa}) must compile: {e}"));
         }
-    }
-
-    #[test]
-    fn glass_params_from_maps_fields() {
-        let panel = GlassPanel {
-            center: [1.0, 2.0, 3.0],
-            normal: [0.0, 0.0, 1.0],
-            tint: [0.6, 0.85, 0.9],
-            opacity: 0.45,
-            refraction_strength: 0.04,
-            fresnel_power: 4.0,
-            ..Default::default()
-        };
-        let p = glass_params_from(&panel, 1.0);
-        assert_eq!(p.center, [1.0, 2.0, 3.0, 0.0]);
-        assert_eq!(p.normal, [0.0, 0.0, 1.0, 0.0]);
-        assert_eq!(p.tint, [0.6, 0.85, 0.9, 0.0]);
-        assert_eq!(p.opacity, 0.45);
-        assert_eq!(p.refraction_strength, 0.04);
-        assert_eq!(p.fresnel_power, 4.0);
-        assert_eq!(p.planar, 1.0);
-        // A slotless pane gets planar = 0.0 (probe/sky fallback path).
-        assert_eq!(glass_params_from(&panel, 0.0).planar, 0.0);
     }
 }

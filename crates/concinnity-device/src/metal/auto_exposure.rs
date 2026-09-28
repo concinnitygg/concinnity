@@ -62,20 +62,6 @@ pub(crate) struct AutoExposureGpu {
 }
 
 impl MtlContext {
-    // Build the per-frame compute params for the auto-exposure kernels. The
-    // log-luminance range and the precomputed `bins / range` scale match the
-    // `gfx::auto_exposure::LUM_LOG2_*` constants exactly.
-    fn auto_exposure_params(&self) -> AutoExposureParams {
-        use concinnity_core::gfx::auto_exposure::{HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN};
-        let range = LUM_LOG2_MAX - LUM_LOG2_MIN;
-        AutoExposureParams {
-            lum_log2_min: LUM_LOG2_MIN,
-            lum_log2_range: range,
-            lum_to_bin_scale: HISTOGRAM_BINS as f32 / range,
-            _pad: 0.0,
-        }
-    }
-
     // Step the auto-exposure EMA from the previous frame's GPU measurement,
     // then push the new exposure multiplier into `self.post_process.exposure`.
     // A no-op when auto-exposure is disabled: the static authored EV then
@@ -147,7 +133,7 @@ impl MtlContext {
             return Ok(0);
         };
 
-        let params = self.auto_exposure_params();
+        let params = AutoExposureParams::HISTOGRAM;
         let hdr_tex: &ProtocolObject<dyn objc2_metal::MTLTexture> =
             self.targets.hdr.hdr_resolve.as_ref();
         let tex_w = hdr_tex.width();

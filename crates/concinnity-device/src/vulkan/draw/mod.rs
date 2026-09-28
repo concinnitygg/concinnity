@@ -784,9 +784,9 @@ impl VkContext {
             p[2][1] -= jy_px * 2.0 / extent.height.max(1) as f32;
             p
         } else if let Some(taa_frame) = self.taa.as_ref().map(|t| t.taa_frame) {
-            let idx = taa_frame % 8 + 1;
-            let jx = (jitter::radical_inverse(idx, 2) - 0.5) * 2.0 / extent.width.max(1) as f32;
-            let jy = (jitter::radical_inverse(idx, 3) - 0.5) * 2.0 / extent.height.max(1) as f32;
+            let [jx_px, jy_px] = jitter::offset_in_cycle(taa_frame, 8);
+            let jx = jx_px * 2.0 / extent.width.max(1) as f32;
+            let jy = jy_px * 2.0 / extent.height.max(1) as f32;
             let mut p = proj;
             p[2][0] -= jx;
             p[2][1] -= jy;

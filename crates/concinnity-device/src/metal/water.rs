@@ -29,14 +29,12 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::{MAX_WATER_WAVES, WaterSurface, WaterWave};
+use concinnity_core::components::WaterSurface;
 use concinnity_core::geometry::water_grid::build_water_grid;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::transparent;
-use concinnity_core::render::uniforms::{
-    TransparentView, WATER_MAX_WAVES, WaterParams, WaterWaveGpu,
-};
+use concinnity_core::render::uniforms::{TransparentView, WaterParams};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLRenderPipelineState, MTLResourceOptions};
@@ -117,55 +115,12 @@ pub(in crate::metal) fn build_water_surface_record(
         vertex_buffer: vb,
         index_buffer: ib,
         index_count: idxs.len() as u32,
-        params: water_params_from(surface),
+        params: WaterParams::from_surface(surface, false),
         visible: surface.visible,
         center: surface.center,
         // Patched after `assign_planar_slots` runs over all reflectors in init.
         planar_slot: None,
     })
-}
-
-// Build the per-surface `WaterParams` from an authored surface. `planar` starts
-// zeroed and `collect_water_transparent_draws` patches it on the frames the
-// planar pass ran. Pure; unit tested. Mirrors `directx::water::water_params_from`.
-fn water_params_from(surface: &WaterSurface) -> WaterParams {
-    let mut waves = [WaterWaveGpu::default(); WATER_MAX_WAVES];
-    for (slot, src) in waves.iter_mut().zip(surface.waves.iter()) {
-        *slot = wave_to_gpu(src);
-    }
-    WaterParams {
-        center: [surface.center[0], surface.center[1], surface.center[2], 0.0],
-        deep_color: [
-            surface.deep_color[0],
-            surface.deep_color[1],
-            surface.deep_color[2],
-            0.0,
-        ],
-        shallow_color: [
-            surface.shallow_color[0],
-            surface.shallow_color[1],
-            surface.shallow_color[2],
-            0.0,
-        ],
-        depth_falloff: surface.depth_falloff_meters,
-        foam_width: surface.foam_width_meters,
-        foam_intensity: surface.foam_intensity,
-        fresnel_power: surface.fresnel_power,
-        roughness: surface.roughness,
-        refraction_strength: surface.refraction_strength,
-        wave_count: surface.waves.len().min(MAX_WATER_WAVES) as u32,
-        _pad: 0.0,
-        waves,
-        planar: [0.0; 4],
-    }
-}
-
-// The shader-side wave lane for one authored wave. Pure; unit tested.
-fn wave_to_gpu(w: &WaterWave) -> WaterWaveGpu {
-    WaterWaveGpu {
-        dir_amp_wave: [w.direction[0], w.direction[1], w.amplitude, w.wavelength],
-        speed_steep_pad: [w.speed, w.steepness, 0.0, 0.0],
-    }
 }
 
 impl MtlContext {
@@ -316,71 +271,4 @@ fn build_water_pipeline_with(
         builtin_shaders::entry_function(device, &builtin_shaders::WATER_VERT, hot_reload)?;
     let frag_fn = builtin_shaders::entry_function(device, fragment, hot_reload)?;
     build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // The `WaterParams` / `WaterWaveGpu` layout tests live with the structs in
-    // `concinnity_core::render::uniforms`, and are checked against the compiled shader
-    // by `shader_layout`.
-
-    #[test]
-    fn wave_to_gpu_packs_the_lanes() {
-        let w = WaterWave {
-            amplitude: 0.25,
-            wavelength: 3.0,
-            speed: 1.5,
-            direction: [0.6, -0.8],
-            steepness: 0.4,
-        };
-        let g = wave_to_gpu(&w);
-        assert_eq!(g.dir_amp_wave, [0.6, -0.8, 0.25, 3.0]);
-        assert_eq!(g.speed_steep_pad, [1.5, 0.4, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn water_params_from_maps_fields() {
-        let surface = WaterSurface {
-            center: [1.0, 2.0, 3.0],
-            deep_color: [0.02, 0.05, 0.12],
-            shallow_color: [0.1, 0.3, 0.4],
-            depth_falloff_meters: 3.0,
-            foam_width_meters: 0.2,
-            foam_intensity: 0.5,
-            fresnel_power: 4.0,
-            roughness: 0.08,
-            refraction_strength: 0.05,
-            waves: vec![WaterWave::default(), WaterWave::default()],
-            ..Default::default()
-        };
-        let p = water_params_from(&surface);
-        assert_eq!(p.center, [1.0, 2.0, 3.0, 0.0]);
-        assert_eq!(p.deep_color, [0.02, 0.05, 0.12, 0.0]);
-        assert_eq!(p.shallow_color, [0.1, 0.3, 0.4, 0.0]);
-        assert_eq!(p.depth_falloff, 3.0);
-        assert_eq!(p.foam_width, 0.2);
-        assert_eq!(p.foam_intensity, 0.5);
-        assert_eq!(p.fresnel_power, 4.0);
-        assert_eq!(p.roughness, 0.08);
-        assert_eq!(p.refraction_strength, 0.05);
-        assert_eq!(p.wave_count, 2);
-        // Planar is off until the encoder sees a live planar pass.
-        assert_eq!(p.planar, [0.0; 4]);
-    }
-
-    // More authored waves than the shader's array can hold must clamp rather
-    // than overflow the fixed lane count.
-    #[test]
-    fn water_params_clamps_the_wave_count() {
-        let surface = WaterSurface {
-            waves: vec![WaterWave::default(); MAX_WATER_WAVES + 3],
-            ..Default::default()
-        };
-        assert_eq!(
-            water_params_from(&surface).wave_count,
-            MAX_WATER_WAVES as u32
-        );
-    }
 }

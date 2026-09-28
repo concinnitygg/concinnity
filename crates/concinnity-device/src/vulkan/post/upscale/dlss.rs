@@ -19,6 +19,8 @@
 //! Validated against NGX SDK 1.5.0 by the constant + layout asserts in the tests.
 
 use ash::vk;
+use concinnity_core::components::UpscaleQuality;
+use concinnity_core::gfx::jitter;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
@@ -325,20 +327,15 @@ pub(super) fn required_extensions() -> Option<(Vec<CString>, Vec<CString>)> {
     Some((inst, dev))
 }
 
-// Map the engine's per-axis render-to-output ratio to the nearest DLSS
-// performance/quality preset. Pure; unit tested. Mirrors
-// `directx::post::upscale::dlss::perf_quality_from_scale`.
-fn perf_quality_from_scale(scale: f32) -> i32 {
-    if scale >= 0.99 {
-        PERF_DLAA
-    } else if scale >= 0.62 {
-        PERF_MAX_QUALITY
-    } else if scale >= 0.55 {
-        PERF_BALANCED
-    } else if scale >= 0.42 {
-        PERF_MAX_PERF
-    } else {
-        PERF_ULTRA_PERFORMANCE
+// The DLSS performance/quality preset for the nearest engine preset: DLAA at
+// native resolution.
+fn dlss_perf_quality(q: Option<UpscaleQuality>) -> i32 {
+    match q {
+        None => PERF_DLAA,
+        Some(UpscaleQuality::Quality) => PERF_MAX_QUALITY,
+        Some(UpscaleQuality::Balanced) => PERF_BALANCED,
+        Some(UpscaleQuality::Performance) => PERF_MAX_PERF,
+        Some(UpscaleQuality::UltraPerformance) => PERF_ULTRA_PERFORMANCE,
     }
 }
 
@@ -469,7 +466,7 @@ impl DlssUpscaler {
             NVSDK_NGX_Parameter_SetI(
                 params,
                 P_PERF_QUALITY.as_ptr(),
-                perf_quality_from_scale(scale),
+                dlss_perf_quality(UpscaleQuality::nearest(scale)),
             );
             NVSDK_NGX_Parameter_SetI(params, P_CREATE_FLAGS.as_ptr(), DLSS_FLAG_IS_HDR);
             NVSDK_NGX_Parameter_SetI(params, P_ENABLE_OUTPUT_SUBRECTS.as_ptr(), 0);
@@ -620,7 +617,7 @@ impl VkUpscaleBackend for DlssUpscaler {
     // DLSS prescribes no jitter sequence; the engine's Halton-2/3 (shared with
     // the camera projection) drives both.
     fn jitter_offset(&self, frame_index: u32) -> [f32; 2] {
-        super::halton_jitter_offset(frame_index)
+        jitter::offset(frame_index)
     }
 
     fn dispatch(
@@ -795,14 +792,5 @@ mod tests {
         assert_eq!(PERF_ULTRA_PERFORMANCE, 3);
         assert_eq!(PERF_DLAA, 5);
         assert_eq!(DLSS_FLAG_IS_HDR, 1);
-    }
-
-    #[test]
-    fn dlss_perf_quality_mapping_by_scale() {
-        assert_eq!(perf_quality_from_scale(1.0), PERF_DLAA);
-        assert_eq!(perf_quality_from_scale(2.0 / 3.0), PERF_MAX_QUALITY);
-        assert_eq!(perf_quality_from_scale(0.587), PERF_BALANCED);
-        assert_eq!(perf_quality_from_scale(0.5), PERF_MAX_PERF);
-        assert_eq!(perf_quality_from_scale(1.0 / 3.0), PERF_ULTRA_PERFORMANCE);
     }
 }

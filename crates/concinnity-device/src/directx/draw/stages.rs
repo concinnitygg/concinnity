@@ -596,9 +596,9 @@ impl DxContext {
                 p
             }
             (None, Some(taa)) => {
-                let idx = taa.frame.get() % 8 + 1;
-                let jx = (jitter::radical_inverse(idx, 2) - 0.5) * 2.0 / width.max(1) as f32;
-                let jy = (jitter::radical_inverse(idx, 3) - 0.5) * 2.0 / height.max(1) as f32;
+                let [jx_px, jy_px] = jitter::offset_in_cycle(taa.frame.get(), 8);
+                let jx = jx_px * 2.0 / width.max(1) as f32;
+                let jy = jy_px * 2.0 / height.max(1) as f32;
                 let mut p = proj;
                 p[2][0] -= jx;
                 p[2][1] -= jy;

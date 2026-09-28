@@ -22,7 +22,6 @@
 
 use ash::vk;
 use concinnity_core::components::UpscalerBackend;
-use concinnity_core::gfx::jitter;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char};
@@ -148,14 +147,6 @@ pub(super) fn resolve_render_dims(
 pub(super) fn frame_delta_ms(prev: &Cell<f32>, now: f32) -> f32 {
     let last = prev.replace(now);
     ((now - last) * 1000.0).clamp(1.0, 100.0)
-}
-
-// Sub-pixel jitter shared by the DLSS + XeSS backends (FSR queries its own
-// FFX-prescribed sequence instead). A 16-phase Halton-2/3 sequence in
-// [-0.5, 0.5] render-pixel units; the same value jitters the camera projection
-// (see `draw.rs`) so the rasterized scene and the upscale agree.
-pub(super) fn halton_jitter_offset(frame_index: u32) -> [f32; 2] {
-    jitter::offset(frame_index)
 }
 
 // How a backend's vendor dispatch writes its output image: the stages and
@@ -880,19 +871,6 @@ mod tests {
             resolved(B::Fsr3, false, false, false),
             ResolvedBackend::Native
         );
-    }
-
-    #[test]
-    fn halton_jitter_is_centered_and_bounded() {
-        for f in 0..64u32 {
-            let [x, y] = halton_jitter_offset(f);
-            assert!((-0.5..0.5).contains(&x), "x={x} out of range");
-            assert!((-0.5..0.5).contains(&y), "y={y} out of range");
-        }
-        // radical_inverse(1, 2) = 0.5 -> offset 0.0; (1,3) = 1/3 -> -1/6.
-        let [x, y] = halton_jitter_offset(0);
-        assert!((x - 0.0).abs() < 1e-6);
-        assert!((y - (1.0 / 3.0 - 0.5)).abs() < 1e-6);
     }
 
     #[test]

@@ -217,6 +217,22 @@ impl UpscaleQuality {
             UpscaleQuality::UltraPerformance => 1.0 / 3.0,
         }
     }
+
+    /// The preset nearest a per-axis render-to-output ratio, or `None` for a
+    /// native-resolution ratio, where an upscaler only anti-aliases.
+    pub fn nearest(scale: f32) -> Option<Self> {
+        if scale >= 0.99 {
+            None
+        } else if scale >= 0.62 {
+            Some(UpscaleQuality::Quality)
+        } else if scale >= 0.55 {
+            Some(UpscaleQuality::Balanced)
+        } else if scale >= 0.42 {
+            Some(UpscaleQuality::Performance)
+        } else {
+            Some(UpscaleQuality::UltraPerformance)
+        }
+    }
 }
 
 /// Upscaler backend selector for `PostProcessConfig.temporal_upscaling`.
@@ -490,6 +506,19 @@ impl Default for PostProcessConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nearest_inverts_each_preset_scale() {
+        for q in [
+            UpscaleQuality::Quality,
+            UpscaleQuality::Balanced,
+            UpscaleQuality::Performance,
+            UpscaleQuality::UltraPerformance,
+        ] {
+            assert_eq!(UpscaleQuality::nearest(q.scale()), Some(q));
+        }
+        assert_eq!(UpscaleQuality::nearest(1.0), None);
+    }
 
     #[test]
     fn defaults_author_the_capable_hardware_look() {

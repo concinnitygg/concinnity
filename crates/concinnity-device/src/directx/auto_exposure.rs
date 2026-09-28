@@ -10,6 +10,7 @@
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::uniforms::AutoExposureParams;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -46,18 +47,6 @@ pub(in crate::directx) fn compile_auto_exposure_shaders(
     let build_cs = builtin_shaders::AUTO_EXPOSURE_BUILD.compile(hot_reload)?;
     let average_cs = builtin_shaders::AUTO_EXPOSURE_AVERAGE.compile(hot_reload)?;
     Ok((build_cs, average_cs))
-}
-
-// Inputs to the auto-exposure compute kernels (root constants at b0).
-// Mirrors `concinnity_core::render::uniforms::AutoExposureParams` and the `cbuffer` in the HLSL.
-// 16 bytes.
-#[derive(Copy, Clone, bytemuck::NoUninit)]
-#[repr(C)]
-struct AutoExposureParams {
-    lum_log2_min: f32,
-    lum_log2_range: f32,
-    lum_to_bin_scale: f32,
-    _pad: f32,
 }
 
 // Pair of compute pipelines + GPU buffers + per-frame readback driving the
@@ -308,20 +297,6 @@ pub(in crate::directx) fn create_compute_pso(
 }
 
 impl DxContext {
-    // Build the per-frame compute params. The log-luminance range and the
-    // precomputed `bins / range` scale match the `gfx::auto_exposure::LUM_LOG2_*`
-    // constants exactly.
-    fn auto_exposure_params(&self) -> AutoExposureParams {
-        use concinnity_core::gfx::auto_exposure::{LUM_LOG2_MAX, LUM_LOG2_MIN};
-        let range = LUM_LOG2_MAX - LUM_LOG2_MIN;
-        AutoExposureParams {
-            lum_log2_min: LUM_LOG2_MIN,
-            lum_log2_range: range,
-            lum_to_bin_scale: HISTOGRAM_BINS as f32 / range,
-            _pad: 0.0,
-        }
-    }
-
     // Step the auto-exposure EMA from a previous frame's GPU measurement, then
     // push the new exposure multiplier into `self.post_process.exposure`.
     // A no-op when auto-exposure is disabled: the static authored EV then
@@ -396,7 +371,7 @@ impl DxContext {
             return;
         };
 
-        let params = self.auto_exposure_params();
+        let params = AutoExposureParams::HISTOGRAM;
         let source = self.auto_exposure_source();
 
         // The build kernel needs the HDR scene readable in a compute (i.e.
