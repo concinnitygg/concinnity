@@ -737,7 +737,10 @@ fn persisted_settings_override_authored_config() {
 
     assert!(!gs.failed);
     let live = settings_state(&world);
-    assert_eq!(live.fps_cap, 30, "persisted cap overrides the world's 0");
+    assert_eq!(
+        live.graphics.fps_cap, 30,
+        "persisted cap overrides the world's 0"
+    );
     assert_eq!(live.quality_preset, QualityPreset::Custom);
     let s = lock(&state);
     let init = s.init.as_ref().unwrap();
@@ -764,10 +767,10 @@ fn low_preset_ceiling_clamps_quality_knobs() {
     assert_eq!(init.shadows.cadence.cascades, 2);
     assert_eq!(init.anisotropy, 4);
     let live = settings_state(&world);
-    assert_eq!(live.authored_shadow_map_size, 4096);
-    assert_eq!(live.authored_shadow_distance, 80);
-    assert_eq!(live.authored_shadow_cascades, 4);
-    assert_eq!(live.authored_anisotropy, 16);
+    assert_eq!(live.authored.shadow_map_size, 4096);
+    assert_eq!(live.authored.shadow_cadence.distance, 80);
+    assert_eq!(live.authored.shadow_cadence.cascades, 4);
+    assert_eq!(live.authored.anisotropy, 16);
 }
 
 #[test]
@@ -2124,47 +2127,56 @@ fn persisted_post_process_overrides_win_over_authored_config() {
 
     let live = settings_state(&world);
     // Toggles.
-    assert!(live.post_config.ssao);
-    assert!(live.post_config.ssr);
-    assert!(live.post_config.ray_traced_reflections);
-    assert_eq!(live.post_config.indirect_lighting, IndirectLighting::Ssgi);
-    assert!(live.post_config.auto_exposure);
-    // Cycles.
-    assert_eq!(live.post_config.aa_mode, AaMode::Taa);
-    assert_eq!(live.post_config.ssgi_resolution, SsgiResolution::Full);
-    assert_eq!(live.post_config.ssgi_rays, 16);
-    assert_eq!(live.post_config.ssgi_steps, 24);
+    assert!(live.graphics.quality.post_config.ssao);
+    assert!(live.graphics.quality.post_config.ssr);
+    assert!(live.graphics.quality.post_config.ray_traced_reflections);
     assert_eq!(
-        live.post_config.reflection_blur_resolution,
+        live.graphics.quality.post_config.indirect_lighting,
+        IndirectLighting::Ssgi
+    );
+    assert!(live.graphics.quality.post_config.auto_exposure);
+    // Cycles.
+    assert_eq!(live.graphics.quality.post_config.aa_mode, AaMode::Taa);
+    assert_eq!(
+        live.graphics.quality.post_config.ssgi_resolution,
+        SsgiResolution::Full
+    );
+    assert_eq!(live.graphics.quality.post_config.ssgi_rays, 16);
+    assert_eq!(live.graphics.quality.post_config.ssgi_steps, 24);
+    assert_eq!(
+        live.graphics.quality.post_config.reflection_blur_resolution,
         ReflectionBlurResolution::Full
     );
     // Sub-quality sliders.
-    assert_eq!(live.post_config.ssao_radius, 0.9);
-    assert_eq!(live.post_config.ssao_intensity, 2.0);
-    assert_eq!(live.post_config.ssr_intensity, 0.4);
-    assert_eq!(live.post_config.ssr_max_distance, 20.0);
-    assert_eq!(live.post_config.ssgi_intensity, 1.5);
-    assert_eq!(live.post_config.ssgi_max_distance, 4.0);
-    assert_eq!(live.post_config.auto_exposure_min_ev, -4.0);
-    assert_eq!(live.post_config.auto_exposure_max_ev, 4.0);
-    assert_eq!(live.post_config.auto_exposure_speed, 3.0);
+    assert_eq!(live.graphics.quality.post_config.ssao_radius, 0.9);
+    assert_eq!(live.graphics.quality.post_config.ssao_intensity, 2.0);
+    assert_eq!(live.graphics.quality.post_config.ssr_intensity, 0.4);
+    assert_eq!(live.graphics.quality.post_config.ssr_max_distance, 20.0);
+    assert_eq!(live.graphics.quality.post_config.ssgi_intensity, 1.5);
+    assert_eq!(live.graphics.quality.post_config.ssgi_max_distance, 4.0);
+    assert_eq!(live.graphics.quality.post_config.auto_exposure_min_ev, -4.0);
+    assert_eq!(live.graphics.quality.post_config.auto_exposure_max_ev, 4.0);
+    assert_eq!(live.graphics.quality.post_config.auto_exposure_speed, 3.0);
     // Post-process params: exposure is stored as EV and applied as 2^EV.
     assert_eq!(
-        live.post_process.exposure, 4.0,
+        live.graphics.post_process.exposure, 4.0,
         "2^2 EV, not the authored -3"
     );
-    assert_eq!(live.post_process.bloom_intensity, 0.25);
-    assert_eq!(live.post_process.bloom_threshold, 1.5);
-    assert_eq!(live.post_process.bloom_knee, 0.2);
-    assert_eq!(live.post_process.vignette, 0.4);
-    assert_eq!(live.post_process.lut_strength, 0.3);
-    assert_eq!(live.ambient_intensity, 2.0);
+    assert_eq!(live.graphics.post_process.bloom_intensity, 0.25);
+    assert_eq!(live.graphics.post_process.bloom_threshold, 1.5);
+    assert_eq!(live.graphics.post_process.bloom_knee, 0.2);
+    assert_eq!(live.graphics.post_process.vignette, 0.4);
+    assert_eq!(live.graphics.post_process.lut_strength, 0.3);
+    assert_eq!(live.graphics.ambient_intensity, 2.0);
     // The composite FXAA flag follows the final AA mode, not the authored one.
-    assert_eq!(live.post_process.fxaa, 1.0, "TAA keeps the FXAA cleanup");
+    assert_eq!(
+        live.graphics.post_process.fxaa, 1.0,
+        "TAA keeps the FXAA cleanup"
+    );
     // The world's pristine config is kept as the baseline a live preset change
     // re-clamps from, untouched by the overrides.
-    assert_eq!(live.authored_post_config.aa_mode, AaMode::Off);
-    assert!(!live.authored_post_config.ssao);
+    assert_eq!(live.authored.post_config.aa_mode, AaMode::Off);
+    assert!(!live.authored.post_config.ssao);
 }
 
 // A weak-tier ceiling forces the world's authored effects off -- but only where
@@ -2201,18 +2213,21 @@ fn low_preset_forces_authored_effects_off_but_keeps_the_baseline() {
     }
 
     let live = settings_state(&world);
-    assert!(!live.post_config.ssao);
-    assert!(!live.post_config.ssr);
-    assert!(!live.post_config.ray_traced_reflections);
-    assert_eq!(live.post_config.indirect_lighting, IndirectLighting::Ibl);
-    assert_ne!(live.post_config.aa_mode, AaMode::Taa);
+    assert!(!live.graphics.quality.post_config.ssao);
+    assert!(!live.graphics.quality.post_config.ssr);
+    assert!(!live.graphics.quality.post_config.ray_traced_reflections);
+    assert_eq!(
+        live.graphics.quality.post_config.indirect_lighting,
+        IndirectLighting::Ibl
+    );
+    assert_ne!(live.graphics.quality.post_config.aa_mode, AaMode::Taa);
     // Auto-exposure is cheap enough that even the weakest ceiling permits it, so
     // the world's authored choice stands.
-    assert!(live.post_config.auto_exposure);
+    assert!(live.graphics.quality.post_config.auto_exposure);
     // The authored baseline survives the clamp, so an up-shift restores it.
-    assert!(live.authored_post_config.ssao);
-    assert!(live.authored_post_config.ssr);
-    assert_eq!(live.authored_post_config.aa_mode, AaMode::Taa);
+    assert!(live.authored.post_config.ssao);
+    assert!(live.authored.post_config.ssr);
+    assert_eq!(live.authored.post_config.aa_mode, AaMode::Taa);
 }
 
 // An explicit per-row override beats the preset ceiling: the user asked for this
@@ -2238,14 +2253,17 @@ fn an_explicit_override_survives_the_preset_ceiling() {
     assert!(!gs.failed);
 
     let live = settings_state(&world);
-    assert!(live.post_config.ssao, "the explicit SSAO choice wins");
+    assert!(
+        live.graphics.quality.post_config.ssao,
+        "the explicit SSAO choice wins"
+    );
     assert_eq!(
-        live.post_config.aa_mode,
+        live.graphics.quality.post_config.aa_mode,
         AaMode::Taa,
         "explicit AA mode wins"
     );
     assert!(
-        !live.post_config.ssr,
+        !live.graphics.quality.post_config.ssr,
         "a row the user never touched still clamps under the ceiling"
     );
 }
@@ -2400,9 +2418,12 @@ fn a_high_ceiling_never_enables_what_the_world_turned_off() {
 
     let live = settings_state(&world);
     assert_eq!(live.quality_preset, QualityPreset::Ultra);
-    assert!(!live.post_config.ssao, "a feature turned off stays off");
-    assert!(!live.post_config.ssr);
-    assert!(!live.post_config.ray_traced_reflections);
+    assert!(
+        !live.graphics.quality.post_config.ssao,
+        "a feature turned off stays off"
+    );
+    assert!(!live.graphics.quality.post_config.ssr);
+    assert!(!live.graphics.quality.post_config.ray_traced_reflections);
 }
 
 // The other direction: a world that authors nothing takes the schema defaults,
@@ -2416,10 +2437,10 @@ fn the_top_tier_runs_the_default_stack_for_a_world_that_authors_nothing() {
     init_graphics(&mut world, hooks);
 
     let live = settings_state(&world);
-    assert!(live.post_config.ssao);
-    assert!(live.post_config.ssr);
-    assert!(live.post_config.ray_traced_reflections);
-    assert_eq!(live.post_config.aa_mode, AaMode::Taa);
+    assert!(live.graphics.quality.post_config.ssao);
+    assert!(live.graphics.quality.post_config.ssr);
+    assert!(live.graphics.quality.post_config.ray_traced_reflections);
+    assert_eq!(live.graphics.quality.post_config.aa_mode, AaMode::Taa);
 }
 
 // And the tier below it clamps that same default stack down, which is how a
@@ -2433,11 +2454,14 @@ fn a_low_tier_clamps_the_default_stack_off() {
     init_graphics(&mut world, hooks);
 
     let live = settings_state(&world);
-    assert!(!live.post_config.ssao);
-    assert!(!live.post_config.ssr);
-    assert!(!live.post_config.ray_traced_reflections);
-    assert_eq!(live.post_config.indirect_lighting, IndirectLighting::Ibl);
-    assert_eq!(live.post_config.aa_mode, AaMode::Fxaa);
+    assert!(!live.graphics.quality.post_config.ssao);
+    assert!(!live.graphics.quality.post_config.ssr);
+    assert!(!live.graphics.quality.post_config.ray_traced_reflections);
+    assert_eq!(
+        live.graphics.quality.post_config.indirect_lighting,
+        IndirectLighting::Ibl
+    );
+    assert_eq!(live.graphics.quality.post_config.aa_mode, AaMode::Fxaa);
 }
 
 // Under `Auto` the ceiling re-resolves from the detected tier each launch: a
@@ -2523,17 +2547,20 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
     }
 
     let live = settings_state(&world);
-    assert_eq!(live.render_scale, UpscaleQuality::Performance);
-    assert_eq!(live.upscale_backend, UpscalerBackend::Fsr3);
-    assert!(live.temporal_upscaling);
-    assert!(live.hdr_display);
-    assert!(live.hdr_pq);
-    assert!(live.occlusion_two_pass);
-    assert_eq!(live.texture_cap, 192);
-    assert_eq!(live.texture_budget, 8);
-    assert!(!live.perf_stats);
-    assert!(!live.show_fps);
-    assert!(!live.show_vram);
+    assert_eq!(
+        live.graphics.quality.render_scale,
+        UpscaleQuality::Performance
+    );
+    assert_eq!(live.graphics.upscale_backend, UpscalerBackend::Fsr3);
+    assert!(live.graphics.temporal_upscaling);
+    assert!(live.graphics.hdr_display);
+    assert!(live.graphics.hdr_pq);
+    assert!(live.graphics.occlusion_two_pass);
+    assert_eq!(live.graphics.texture_cap, 192);
+    assert_eq!(live.graphics.texture_budget, 8);
+    assert!(!live.graphics.perf_stats);
+    assert!(!live.graphics.show_fps);
+    assert!(!live.graphics.show_vram);
     assert_eq!(live.window_args.mode, WindowMode::Fullscreen);
     assert_eq!(
         live.resolution,

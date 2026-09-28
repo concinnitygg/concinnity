@@ -21,25 +21,20 @@
 //! `PipelineContext` are never borrowed together.
 
 use concinnity_core::components::GamepadMap;
-use concinnity_core::components::GraphicsConfig;
-use concinnity_core::components::PostProcessConfig;
 use concinnity_core::components::SceneCommand;
-use concinnity_core::components::ShadowUpdate;
-use concinnity_core::components::UpscaleQuality;
-use concinnity_core::components::UpscalerBackend;
 use concinnity_core::components::Window;
 use concinnity_core::components::WindowMode;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{EventCursor, HudPrefs, PipelineContext, StepResult, System};
-use concinnity_core::gfx::render_types;
 use concinnity_core::input::keymap;
 use concinnity_core::render::backend;
-use concinnity_core::render::backend_init::ShadowCadence;
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot;
 use concinnity_core::settings::SettingKey;
 use concinnity_core::window::display_mode;
+
+use crate::gfx::render_config::{GraphicsBaseline, ResolvedGraphics};
 
 mod apply;
 mod quality;
@@ -67,48 +62,16 @@ pub(crate) struct SettingsState {
     // Cycle rows' setting key -> value-label id, captured at init, so a change
     // can relabel a row other than the one clicked.
     pub(crate) cycle_value_labels: std::collections::HashMap<SettingKey, AssetId>,
-    // Live post-process parameters (bloom / exposure / vignette / LUT blend),
-    // the source of truth for slider settings.
-    pub(crate) post_process: render_types::PostProcessTunables,
-    // The world's resolved PostProcessConfig with the user's persisted
-    // quality-toggle overrides applied: the source of truth for the
-    // Quality-group toggles and cycle knobs.
-    pub(crate) post_config: PostProcessConfig,
-    // The authored baseline a live preset change re-clamps from.
-    pub(crate) authored_post_config: PostProcessConfig,
-    // Live ambient (IBL) light scale (lives in the backend's LightUniforms,
-    // so it takes a dedicated setter).
-    pub(crate) ambient_intensity: f32,
+    // The world's authored graphics values a preset change or authoring edit
+    // re-resolves from, and the live resolved values the rows display and cycle.
+    pub(crate) authored: GraphicsBaseline,
+    pub(crate) graphics: ResolvedGraphics,
     // The live master "Graphics Quality" preset; an explicit per-row change
     // flips it to Custom.
     pub(crate) quality_preset: crate::gfx::quality_preset::QualityPreset,
     pub(crate) gpu_profile: backend::GpuProfile,
-    // Restart-required display state (persist + relabel only).
-    pub(crate) render_scale: UpscaleQuality,
-    pub(crate) upscale_backend: UpscalerBackend,
-    pub(crate) temporal_upscaling: bool,
-    pub(crate) hdr_display: bool,
-    pub(crate) hdr_pq: bool,
-    // Shadow knobs (live) and their authored baselines.
-    pub(crate) shadow_map_size: u32,
-    pub(crate) shadow_update: ShadowUpdate,
-    pub(crate) shadow_distance: u32,
-    pub(crate) shadow_cascades: u32,
-    pub(crate) anisotropy: u32,
-    pub(crate) authored_shadow_map_size: u32,
-    pub(crate) authored_shadow_update: ShadowUpdate,
-    pub(crate) authored_shadow_distance: u32,
-    pub(crate) authored_shadow_cascades: u32,
-    pub(crate) authored_anisotropy: u32,
-    pub(crate) vsync: bool,
-    // Frame-rate cap; a change republishes the `FrameRateCap` resource the
-    // runtime-level pacer reads.
-    pub(crate) fps_cap: u32,
-    // Stats-HUD display toggles + the captured sub-row labels the master
+    // The captured stats sub-row labels the "Display performance stats" master
     // toggle grays.
-    pub(crate) perf_stats: bool,
-    pub(crate) show_fps: bool,
-    pub(crate) show_vram: bool,
     pub(crate) perf_sub_row_labels: Vec<(AssetId, [f32; 3])>,
     // Window mode + authored size (the windowed size restored on mode return).
     pub(crate) window_args: Window,
@@ -119,11 +82,6 @@ pub(crate) struct SettingsState {
     pub(crate) resolution: Option<display_mode::DisplayMode>,
     pub(crate) current_mode: Option<display_mode::DisplayMode>,
     pub(crate) resolution_row_labels: Vec<(AssetId, [f32; 3])>,
-    // System / streaming restart rows (persist + display only).
-    pub(crate) frames_in_flight: usize,
-    pub(crate) occlusion_two_pass: bool,
-    pub(crate) texture_cap: u32,
-    pub(crate) texture_budget: u32,
     // The persisted graphics overrides as they stood at init, the fallback for
     // `persisted_graphics` until a settings change loads `settings_cache`.
     pub(crate) persisted_graphics: crate::config::GraphicsSettings,
@@ -204,12 +162,9 @@ impl System for SettingsSystem {
 }
 
 impl SettingsState {
-    // The state before init resolves anything: the `GraphicsConfig` schema
-    // defaults, every stats readout shown, the `Auto` preset, and no rows
-    // captured. Init overwrites some fields only when the world or the persisted
-    // store supplies a value, so these seeds are what an unconfigured world runs.
+    // The state before init resolves anything: an unconfigured world's graphics,
+    // the `Auto` preset, and no rows captured.
     pub(crate) fn new() -> Self {
-        let gfx = GraphicsConfig::default();
         Self {
             keymap: keymap::KeyMap::default(),
             rebind_rows: Vec::new(),
@@ -217,42 +172,16 @@ impl SettingsState {
             pad_rebind_rows: Vec::new(),
             sliders: Vec::new(),
             cycle_value_labels: std::collections::HashMap::new(),
-            post_process: render_types::PostProcessTunables::DEFAULT,
-            post_config: PostProcessConfig::default(),
-            authored_post_config: PostProcessConfig::default(),
-            ambient_intensity: 1.0,
+            authored: GraphicsBaseline::default(),
+            graphics: ResolvedGraphics::default(),
             quality_preset: crate::gfx::quality_preset::QualityPreset::Auto,
             gpu_profile: backend::GpuProfile::UNKNOWN,
-            render_scale: UpscaleQuality::default(),
-            upscale_backend: UpscalerBackend::default(),
-            temporal_upscaling: false,
-            hdr_display: false,
-            hdr_pq: false,
-            shadow_map_size: gfx.shadow_map_size,
-            shadow_update: gfx.shadow_update,
-            shadow_distance: gfx.shadow_distance,
-            shadow_cascades: gfx.shadow_cascades,
-            anisotropy: gfx.anisotropy,
-            authored_shadow_map_size: gfx.shadow_map_size,
-            authored_shadow_update: gfx.shadow_update,
-            authored_shadow_distance: gfx.shadow_distance,
-            authored_shadow_cascades: gfx.shadow_cascades,
-            authored_anisotropy: gfx.anisotropy,
-            vsync: gfx.vsync,
-            fps_cap: gfx.fps_cap,
-            perf_stats: true,
-            show_fps: true,
-            show_vram: true,
             perf_sub_row_labels: Vec::new(),
             window_args: Window::default(),
             display_modes: Vec::new(),
             resolution: None,
             current_mode: None,
             resolution_row_labels: Vec::new(),
-            frames_in_flight: gfx.frames_in_flight as usize,
-            occlusion_two_pass: PostProcessConfig::default().occlusion_two_pass,
-            texture_cap: 96,
-            texture_budget: 4,
             persisted_graphics: crate::config::GraphicsSettings::default(),
             fog_built: false,
             settings_cache: None,
@@ -269,27 +198,30 @@ impl SettingsState {
     // they exercise.
     #[cfg(test)]
     pub(crate) fn for_tests() -> Self {
-        Self {
+        let shadow_cadence = concinnity_core::render::backend_init::ShadowCadence {
+            update: Default::default(),
+            distance: 200,
+            cascades: 4,
+        };
+        let mut state = Self {
             quality_preset: crate::gfx::quality_preset::QualityPreset::Custom,
-            shadow_map_size: 2048,
-            shadow_update: Default::default(),
-            shadow_distance: 200,
-            shadow_cascades: 4,
-            anisotropy: 8,
-            authored_shadow_map_size: 2048,
-            authored_shadow_update: Default::default(),
-            authored_shadow_distance: 200,
-            authored_shadow_cascades: 4,
-            authored_anisotropy: 8,
-            vsync: true,
-            fps_cap: 0,
-            frames_in_flight: 2,
-            occlusion_two_pass: false,
-            texture_cap: 0,
-            texture_budget: 0,
             fog_built: true,
             ..Self::new()
-        }
+        };
+        state.authored.shadow_map_size = 2048;
+        state.authored.shadow_cadence = shadow_cadence;
+        state.authored.anisotropy = 8;
+        let g = &mut state.graphics;
+        g.quality.shadow_map_size = 2048;
+        g.quality.shadow_cadence = shadow_cadence;
+        g.quality.anisotropy = 8;
+        g.vsync = true;
+        g.fps_cap = 0;
+        g.frames_in_flight = 2;
+        g.occlusion_two_pass = false;
+        g.texture_cap = 0;
+        g.texture_budget = 0;
+        state
     }
 
     // The persisted graphics overrides in force: the in-memory store once a
@@ -304,15 +236,6 @@ impl SettingsState {
     // The active quality preset's performance ceiling on this GPU.
     pub(crate) fn ceiling(&self) -> crate::gfx::quality_preset::QualityCeiling {
         crate::gfx::quality_preset::resolve_ceiling(self.quality_preset, &self.gpu_profile)
-    }
-
-    // The live cascade schedule the backend reads each frame.
-    pub(crate) fn shadow_cadence(&self) -> ShadowCadence {
-        ShadowCadence {
-            update: self.shadow_update,
-            distance: self.shadow_distance,
-            cascades: self.shadow_cascades,
-        }
     }
 
     // Apply any imperative scene jumps sent by UiInputSystem last tick, copied
@@ -383,8 +306,8 @@ impl SettingsState {
         // change -- steady-state frames skip the HashSet allocation the
         // disabled-rows set would otherwise churn every frame.
         let prefs = HudPrefs {
-            show_fps: self.perf_stats && self.show_fps,
-            show_vram: self.perf_stats && self.show_vram,
+            show_fps: self.graphics.perf_stats && self.graphics.show_fps,
+            show_vram: self.graphics.perf_stats && self.graphics.show_vram,
         };
         if self.published_hud_prefs != Some(prefs) {
             ctx.insert_resource(prefs);
@@ -395,10 +318,10 @@ impl SettingsState {
         // the window, borderless covers the display), so it is inert in the other
         // modes. The disabled-rows set is fully determined by these two inputs.
         let is_fullscreen = self.window_args.mode == WindowMode::Fullscreen;
-        let inputs = (self.perf_stats, is_fullscreen);
+        let inputs = (self.graphics.perf_stats, is_fullscreen);
         if self.published_disabled_inputs != Some(inputs) {
             let mut disabled_rows = std::collections::HashSet::new();
-            if !self.perf_stats {
+            if !self.graphics.perf_stats {
                 disabled_rows.extend([SettingKey::ShowFps, SettingKey::ShowVram]);
             }
             if !is_fullscreen {

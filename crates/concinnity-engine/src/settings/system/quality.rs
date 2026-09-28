@@ -13,6 +13,7 @@ use super::apply::RowOptions;
 use super::rows::{set_cached_row_label, set_label_content};
 use crate::config::Settings;
 use crate::gfx::quality_preset;
+use crate::gfx::render_config;
 use crate::gfx::system as gsys;
 use crate::settings;
 use crate::settings::SettingKey;
@@ -21,9 +22,10 @@ use crate::settings::quality_rows::{QUALITY_CYCLES, QUALITY_TOGGLES, QualityCycl
 impl SettingsState {
     // A preset is a performance ceiling over the world's authored look (it never
     // enables a feature the world did not author), so picking a tier or Auto
-    // clears the per-row quality overrides and re-derives the toggles, knobs, and
-    // render scale from the world's authored config under the new ceiling. Custom
-    // resolves to the no-op ceiling (the world's look). See gfx/quality_preset.rs.
+    // clears the per-row quality overrides and re-resolves the preset-governed
+    // group from the world's baseline under the new ceiling, exactly as the next
+    // launch will. Custom resolves to the no-op ceiling (the world's look). See
+    // gfx/quality_preset.rs.
     pub(super) fn apply_quality_preset(
         &mut self,
         ctx: &mut PipelineContext,
@@ -38,48 +40,6 @@ impl SettingsState {
         self.quality_preset = preset;
         let ceiling = quality_preset::resolve_ceiling(preset, &self.gpu_profile);
 
-        // Re-derive the live quality toggles from the world baseline under the
-        // new ceiling (force off where disallowed; never turn on), then clamp
-        // every cycle knob (the overrides are cleared).
-        self.post_config = self.authored_post_config.clone();
-        for row in &QUALITY_TOGGLES {
-            if !(row.allowed)(&ceiling) {
-                (row.set)(&mut self.post_config, false);
-            }
-        }
-        for row in &QUALITY_CYCLES {
-            (row.clamp)(&mut self.post_config, &ceiling);
-        }
-        // The composite FXAA flag rides PostProcessParams, so refresh it from the
-        // re-derived AA mode before the push below.
-        self.post_process.fxaa = self.post_config.aa_mode.fxaa_flag();
-        let quality = gsys::derive_quality_settings(&self.post_config);
-        record_quality_apply(ops, quality);
-        // Auto-exposure may have flipped off; re-push the static post-process
-        // params so exposure reverts.
-        let params = self.post_process;
-        ops.record(move |backend| backend.update_post_process(params));
-        // Restart-required: the render scale only updates the row label (the
-        // upscaler and targets are sized at init).
-        self.render_scale = quality_preset::more_aggressive_upscale(
-            self.authored_post_config.upscale_quality,
-            ceiling.min_upscale,
-        );
-        // Re-derive the shadow knobs from the authored baselines. The cadence,
-        // distance, and cascade count are live; the resolution and anisotropy are
-        // restart-required, so they only relabel.
-        self.shadow_map_size = self.authored_shadow_map_size.min(ceiling.shadow_map_size);
-        self.shadow_update =
-            quality_preset::clamp_shadow_update(self.authored_shadow_update, &ceiling);
-        self.shadow_distance = self.authored_shadow_distance.min(ceiling.shadow_distance);
-        self.shadow_cascades = self.authored_shadow_cascades.min(ceiling.shadow_cascades);
-        let cadence = self.shadow_cadence();
-        ops.record(move |backend| backend.set_shadow_cadence(cadence));
-        self.anisotropy = self.authored_anisotropy.min(ceiling.anisotropy);
-
-        // Persist the preset and drop the per-row quality overrides, so the next
-        // launch re-resolves them from the world and ceiling exactly as this live
-        // re-derive did.
         cfg.graphics.quality_preset = Some(preset);
         for row in &QUALITY_TOGGLES {
             *(row.persisted.get_mut)(&mut cfg.graphics) = None;
@@ -93,6 +53,22 @@ impl SettingsState {
         cfg.graphics.shadow_cascades = None;
         cfg.graphics.anisotropy = None;
         cfg.graphics.render_scale = None;
+        self.graphics.set_quality(render_config::resolve_quality(
+            &self.authored,
+            &cfg.graphics,
+            &ceiling,
+        ));
+
+        let quality = gsys::derive_quality_settings(&self.graphics.quality.post_config);
+        record_quality_apply(ops, quality);
+        // Auto-exposure may have flipped off; re-push the static post-process
+        // params so exposure reverts. The fxaa flag rides along.
+        let params = self.graphics.post_process;
+        ops.record(move |backend| backend.update_post_process(params));
+        // The render scale, shadow resolution, and anisotropy are
+        // restart-required, so they only relabel.
+        let cadence = self.graphics.quality.shadow_cadence;
+        ops.record(move |backend| backend.set_shadow_cadence(cadence));
 
         self.relabel_preset_dependents(ctx);
         // The master row's own label carries the Auto(tier) suffix.
@@ -108,37 +84,41 @@ impl SettingsState {
     // cannot be re-queried here.
     fn relabel_preset_dependents(&self, ctx: &mut PipelineContext) {
         for row in &QUALITY_TOGGLES {
-            let on = (row.get)(&self.post_config);
+            let on = (row.get)(&self.graphics.quality.post_config);
             self.relabel_option(ctx, row.key, on as usize);
         }
         self.relabel_option(
             ctx,
             SettingKey::RenderScale,
-            settings::render_scale_index(self.render_scale),
+            settings::render_scale_index(self.graphics.quality.render_scale),
         );
         for row in &QUALITY_CYCLES {
-            self.relabel_option(ctx, row.key, (row.index)(&self.post_config));
+            self.relabel_option(
+                ctx,
+                row.key,
+                (row.index)(&self.graphics.quality.post_config),
+            );
         }
         for (key, idx) in [
             (
                 SettingKey::ShadowMapSize,
-                settings::shadow_resolution_index(self.shadow_map_size),
+                settings::shadow_resolution_index(self.graphics.quality.shadow_map_size),
             ),
             (
                 SettingKey::ShadowUpdate,
-                settings::shadow_update_index(self.shadow_update),
+                settings::shadow_update_index(self.graphics.quality.shadow_cadence.update),
             ),
             (
                 SettingKey::ShadowDistance,
-                settings::shadow_distance_index(self.shadow_distance),
+                settings::shadow_distance_index(self.graphics.quality.shadow_cadence.distance),
             ),
             (
                 SettingKey::ShadowCascades,
-                settings::shadow_cascades_index(self.shadow_cascades),
+                settings::shadow_cascades_index(self.graphics.quality.shadow_cadence.cascades),
             ),
             (
                 SettingKey::Anisotropy,
-                settings::anisotropy_index(self.anisotropy),
+                settings::anisotropy_index(self.graphics.quality.anisotropy),
             ),
         ] {
             self.relabel_option(ctx, key, idx);
@@ -164,20 +144,20 @@ impl SettingsState {
         opts: RowOptions,
         op: SettingOp,
     ) -> &'static str {
-        let cur = (row.get)(&self.post_config);
+        let cur = (row.get)(&self.graphics.quality.post_config);
         let next = settings::cycle(cur as usize, opts.len(), op);
         let on = next == 1;
-        (row.set)(&mut self.post_config, on);
+        (row.set)(&mut self.graphics.quality.post_config, on);
         *(row.persisted.get_mut)(&mut cfg.graphics) = Some(on);
         self.opt_out_of_preset(ctx, cfg);
-        let quality = gsys::derive_quality_settings(&self.post_config);
+        let quality = gsys::derive_quality_settings(&self.graphics.quality.post_config);
         record_quality_apply(ops, quality);
         // Auto-exposure overwrites the backend's live exposure each frame while
         // it runs, so its copy freezes at the last adapted value once toggled
         // off. Re-push the static params (the authored / slider EV) so exposure
         // reverts; on a toggle-on the AE loop overwrites it next frame.
         if row.key == SettingKey::AutoExposure {
-            let params = self.post_process;
+            let params = self.graphics.post_process;
             ops.record(move |backend| backend.update_post_process(params));
         }
         opts[next]
@@ -195,18 +175,18 @@ impl SettingsState {
         opts: RowOptions,
         op: SettingOp,
     ) -> &'static str {
-        let cur = (row.index)(&self.post_config);
+        let cur = (row.index)(&self.graphics.quality.post_config);
         let next = settings::cycle(cur, opts.len(), op);
-        (row.set)(&mut self.post_config, next);
-        (row.persist)(&self.post_config, &mut cfg.graphics);
+        (row.set)(&mut self.graphics.quality.post_config, next);
+        (row.persist)(&self.graphics.quality.post_config, &mut cfg.graphics);
         self.opt_out_of_preset(ctx, cfg);
-        let quality = gsys::derive_quality_settings(&self.post_config);
+        let quality = gsys::derive_quality_settings(&self.graphics.quality.post_config);
         record_quality_apply(ops, quality);
         // The AA mode also drives the composite FXAA flag, which rides
         // PostProcessParams rather than the rebuild above.
         if row.key == SettingKey::AaMode {
-            self.post_process.fxaa = self.post_config.aa_mode.fxaa_flag();
-            let params = self.post_process;
+            self.graphics.post_process.fxaa = self.graphics.quality.post_config.aa_mode.fxaa_flag();
+            let params = self.graphics.post_process;
             ops.record(move |backend| backend.update_post_process(params));
         }
         opts[next]
