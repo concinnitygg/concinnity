@@ -1,21 +1,26 @@
 use super::*;
 use crate::debug::hot_reload::pending::PendingShaders;
-use concinnity_cook::compile::program::{CompileFailure, EntryFailure, Severity};
+use concinnity_cook::compile::program::{CompileFailure, Diagnostic, EntryFailure, Severity};
 use concinnity_cook::compile::shader::CompiledShader;
-use concinnity_core::components::ShaderStage;
+use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_core::components::{ShaderPrograms, ShaderStage};
+use concinnity_core::render::backend::PreparedPipelines;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
 use concinnity_engine::gfx::system::shader_sources::ShaderFile;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-// A backend that records every Shader update, reports the buckets in
-// `resident` as installed, and rejects every build when `reject` is set.
+// A backend that records every Shader update with the pipeline it was handed,
+// reports the buckets in `resident` as installed, and rejects every build when
+// `reject` is set.
 #[derive(Default)]
 struct ShaderBackend {
     resident: HashSet<u32>,
     reject: bool,
     updates: Vec<(u32, String)>,
+    prepared: Vec<Option<FakePipeline>>,
 }
 
 impl LiveEdit for ShaderBackend {
@@ -23,8 +28,11 @@ impl LiveEdit for ShaderBackend {
         &mut self,
         bucket: u32,
         programs: &ShaderPrograms,
+        prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
         self.updates.push((bucket, programs.fragment.text.clone()));
+        self.prepared
+            .push(prepared.and_then(PreparedPipelines::downcast::<FakePipeline>));
         if self.reject {
             return Err(RenderError::ShaderCompile("pipeline build failed".into()));
         }
@@ -34,6 +42,44 @@ impl LiveEdit for ShaderBackend {
             PipelineSwap::NotResident
         })
     }
+}
+
+// What the fake builder builds: the bucket and fragment text it was built from.
+#[derive(Debug, PartialEq, Eq)]
+struct FakePipeline(u32, String);
+
+// Stands in for a backend's builder, refusing every build when `reject` is set.
+struct FakeBuilder {
+    reject: bool,
+}
+
+impl PipelineBuilder for FakeBuilder {
+    fn world_shader(
+        &self,
+        bucket: u32,
+        programs: &ShaderPrograms,
+    ) -> RenderResult<PreparedPipelines> {
+        if self.reject {
+            return Err(RenderError::ShaderCompile("pipeline state failed".into()));
+        }
+        Ok(PreparedPipelines::new(FakePipeline(
+            bucket,
+            programs.fragment.text.clone(),
+        )))
+    }
+
+    fn sdf_volume(
+        &self,
+        _: &SdfPrograms,
+        _: VolumeFlags,
+        _: &str,
+    ) -> RenderResult<PreparedPipelines> {
+        unreachable!("a Shader reload builds no volume")
+    }
+}
+
+fn builder(reject: bool) -> Option<Arc<dyn PipelineBuilder>> {
+    Some(Arc::new(FakeBuilder { reject }))
 }
 
 // Stands in for dxc: a fragment containing "error" fails with an error on its
@@ -201,10 +247,12 @@ fn a_request_rebuilds_just_the_named_shader() {
         ..Default::default()
     };
     f.write("water.hlsl", "water v2");
-    assert!(f.reload.request(&pending(&[2])).is_empty());
+    assert!(f.reload.request(&pending(&[2]), None).is_empty());
     let reports = poll_for(&mut f.reload, &mut backend, 1);
     assert_eq!(outcomes(&reports), [("shader2", "swapped")]);
     assert_eq!(backend.updates, [(1, "water v2".to_string())]);
+    // Without a builder the swap is handed nothing and builds for itself.
+    assert_eq!(backend.prepared, [None]);
     // The edit is also kept for the next install of the bucket.
     assert_eq!(f.overrides.get(1).unwrap().fragment.text, "water v2");
 }
@@ -216,7 +264,7 @@ fn the_world_default_swaps_without_an_override() {
     let mut f = Fixture::new();
     let mut backend = ShaderBackend::default();
     f.write("lit.hlsl", "lit v2");
-    f.reload.request(&pending(&[1]));
+    f.reload.request(&pending(&[1]), None);
     let reports = poll_for(&mut f.reload, &mut backend, 1);
     assert_eq!(outcomes(&reports), [("shader1", "swapped")]);
     assert_eq!(backend.updates, [(0, "lit v2".to_string())]);
@@ -230,7 +278,7 @@ fn a_non_resident_shader_is_kept_for_its_scene_load() {
     let mut f = Fixture::new();
     let mut backend = ShaderBackend::default();
     f.write("cave.hlsl", "cave v2");
-    f.reload.request(&pending(&[3]));
+    f.reload.request(&pending(&[3]), None);
     let reports = poll_for(&mut f.reload, &mut backend, 1);
     assert_eq!(outcomes(&reports), [("shader3", "applies on load")]);
     assert_eq!(f.overrides.get(2).unwrap().fragment.text, "cave v2");
@@ -246,7 +294,7 @@ fn a_shared_file_reloads_every_shader_reading_it() {
         ..Default::default()
     };
     f.write("sway.hlsl", "sway v2");
-    f.reload.request(&pending(&[2, 3]));
+    f.reload.request(&pending(&[2, 3]), None);
     let reports = poll_for(&mut f.reload, &mut backend, 2);
     assert_eq!(
         outcomes(&reports),
@@ -269,10 +317,13 @@ fn a_shared_file_reloads_every_shader_reading_it() {
 fn a_request_for_all_reaches_every_shader() {
     let mut f = Fixture::new();
     let mut backend = ShaderBackend::default();
-    f.reload.request(&PendingShaders {
-        all: true,
-        ids: Default::default(),
-    });
+    f.reload.request(
+        &PendingShaders {
+            all: true,
+            ids: Default::default(),
+        },
+        None,
+    );
     assert_eq!(poll_for(&mut f.reload, &mut backend, 3).len(), 3);
 }
 
@@ -286,10 +337,10 @@ fn a_compile_error_leaves_the_pipeline_and_the_override_alone() {
         ..Default::default()
     };
     f.write("water.hlsl", "water v2");
-    f.reload.request(&pending(&[2]));
+    f.reload.request(&pending(&[2]), None);
     poll_for(&mut f.reload, &mut backend, 1);
     f.write("water.hlsl", "water error");
-    f.reload.request(&pending(&[2]));
+    f.reload.request(&pending(&[2]), None);
     let reports = poll_for(&mut f.reload, &mut backend, 1);
     let [
         ReloadReport {
@@ -316,7 +367,7 @@ fn a_rejected_pipeline_is_not_kept_as_an_override() {
         reject: true,
         ..Default::default()
     };
-    f.reload.request(&pending(&[2]));
+    f.reload.request(&pending(&[2]), None);
     let reports = poll_for(&mut f.reload, &mut backend, 1);
     assert!(matches!(
         reports[0].outcome,
@@ -332,13 +383,60 @@ fn a_rejected_pipeline_is_not_kept_as_an_override() {
     assert!(f.overrides.get(1).is_none());
 }
 
+// With a builder, the worker builds each Shader's pipeline from the compile it
+// just ran, for the Shader's own bucket, and the swap is handed that pipeline.
+#[test]
+fn a_worker_built_pipeline_reaches_the_swap() {
+    let mut f = Fixture::new();
+    let mut backend = ShaderBackend {
+        resident: [1].into(),
+        ..Default::default()
+    };
+    f.write("lit.hlsl", "lit v2");
+    f.write("water.hlsl", "water v2");
+    f.reload.request(&pending(&[1, 2]), builder(false));
+    let reports = poll_for(&mut f.reload, &mut backend, 2);
+    assert_eq!(
+        outcomes(&reports),
+        [("shader1", "swapped"), ("shader2", "swapped")]
+    );
+    let mut prepared: Vec<FakePipeline> = backend.prepared.into_iter().flatten().collect();
+    prepared.sort_by_key(|p| p.0);
+    assert_eq!(
+        prepared,
+        [
+            FakePipeline(0, "lit v2".to_string()),
+            FakePipeline(1, "water v2".to_string())
+        ]
+    );
+}
+
+// A pipeline the builder refuses fails the reload on the worker: nothing
+// reaches the backend and the edit is not kept for a later install.
+#[test]
+fn a_pipeline_the_builder_refuses_is_never_swapped() {
+    let mut f = Fixture::new();
+    let mut backend = ShaderBackend {
+        resident: [1].into(),
+        ..Default::default()
+    };
+    f.reload.request(&pending(&[2]), builder(true));
+    let reports = poll_for(&mut f.reload, &mut backend, 1);
+    assert!(matches!(
+        &reports[0].outcome,
+        ReloadOutcome::Failed(ReloadFailure::Rejected(e)) if e.contains("pipeline state failed")
+    ));
+    assert!(backend.updates.is_empty());
+    assert!(f.overrides.get(1).is_none());
+}
+
 // A file that cannot be read fails the request at once, with no compile.
 #[test]
 fn an_unreadable_file_fails_before_compiling() {
     let mut f = Fixture::new();
     let mut backend = ShaderBackend::default();
     std::fs::remove_file(f.dir.path().join("water.hlsl")).unwrap();
-    let reports = f.reload.request(&pending(&[2]));
+    let reports = f.reload.request(&pending(&[2]), None);
     assert!(matches!(
         &reports[..],
         [ReloadReport { subject, outcome: ReloadOutcome::Failed(ReloadFailure::Unstarted(e)) }]
@@ -360,10 +458,13 @@ fn an_empty_catalog_reloads_nothing() {
     let mut backend = ShaderBackend::default();
     assert!(
         reload
-            .request(&PendingShaders {
-                all: true,
-                ids: Default::default()
-            })
+            .request(
+                &PendingShaders {
+                    all: true,
+                    ids: Default::default()
+                },
+                None
+            )
             .is_empty()
     );
     assert!(reload.poll(&mut backend).is_empty());

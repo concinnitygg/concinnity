@@ -344,7 +344,7 @@ pub(super) struct MeshPipelineTargets<'a> {
 // The main-pass targets a material-referenced world shader's bucket pipeline is
 // built against. Every bucket shares the bindless pipeline layout and render
 // pass; only the stage SPIR-V differs.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub(super) struct BucketPipelineTargets {
     pub render_pass: vk::RenderPass,
     pub layout: vk::PipelineLayout,
@@ -366,13 +366,38 @@ pub(super) fn build_bucket_pipeline(
     shader: backend_init::WorldShader<'_>,
     engine_default: &(Vec<u8>, Vec<u8>),
 ) -> RenderResult<OwnedPipeline> {
-    let (vert_spv, frag_spv) = match shader.programs {
-        Some(programs) => (
-            world_entry(programs, "vertex_main_bindless", targets.hot_reload)?,
-            world_entry(programs, "fragment_main_bindless", targets.hot_reload)?,
+    match shader.programs {
+        Some(programs) => build_world_shader_pipeline(device, targets, bucket, programs),
+        None => create_bucket_pipeline(
+            device,
+            targets,
+            bucket,
+            &engine_default.0,
+            &engine_default.1,
         ),
-        None => (engine_default.0.clone(), engine_default.1.clone()),
-    };
+    }
+}
+
+// Build a world Shader's bindless main-pass pipeline for bucket `bucket` from
+// its own compiled stages.
+pub(super) fn build_world_shader_pipeline(
+    device: &VkDevice,
+    targets: BucketPipelineTargets,
+    bucket: usize,
+    programs: &concinnity_core::components::ShaderPrograms,
+) -> RenderResult<OwnedPipeline> {
+    let vert_spv = world_entry(programs, "vertex_main_bindless", targets.hot_reload)?;
+    let frag_spv = world_entry(programs, "fragment_main_bindless", targets.hot_reload)?;
+    create_bucket_pipeline(device, targets, bucket, &vert_spv, &frag_spv)
+}
+
+fn create_bucket_pipeline(
+    device: &VkDevice,
+    targets: BucketPipelineTargets,
+    bucket: usize,
+    vert_spv: &[u8],
+    frag_spv: &[u8],
+) -> RenderResult<OwnedPipeline> {
     if vert_spv.is_empty() || frag_spv.is_empty() {
         return Err(RenderError::Other(format!(
             "shader bucket {bucket} carries no SPIR-V stages"
@@ -383,8 +408,8 @@ pub(super) fn build_bucket_pipeline(
         MeshPipelineTargets {
             render_pass: targets.render_pass,
             layout: targets.layout,
-            vert_spv: &vert_spv,
-            frag_spv: &frag_spv,
+            vert_spv,
+            frag_spv,
         },
         targets.msaa_samples,
         targets.swapchain_format,

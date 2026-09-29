@@ -6,14 +6,16 @@
 // those scenes pin and unpin, so the pipeline build lands behind the loading
 // screen rather than on the frame that first draws the material.
 
-use concinnity_core::render::backend::PipelineSwap;
+use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLRenderPipelineState;
+use std::sync::Arc;
 
 use super::MtlContext;
 use super::init::pipelines::{build_bucket_pipeline, make_vertex_descriptor};
+use super::pipeline_builder::{MtlPipelineBuilder, PipelineTargets, world_shader_for};
 
 impl MtlContext {
     // Build the bindless main-pass pipeline for one shader bucket. Replaces
@@ -38,25 +40,48 @@ impl MtlContext {
         Ok(())
     }
 
-    // Rebuild one world Shader's pipeline from hot-reloaded programs. Bucket 0
-    // is the main pipeline; another bucket is rebuilt only while installed, and
-    // `install_world_shader` builds before it replaces, so a failed build leaves
-    // the live pipeline bound.
+    // Rebuild one world Shader's pipeline from hot-reloaded programs, or swap
+    // in `prepared` when it was built for this context's targets. Bucket 0 is
+    // the main pipeline; another bucket is rebuilt only while installed, and
+    // the replacement is built before it replaces, so a failed build leaves the
+    // live pipeline bound.
     pub(super) fn update_world_shader(
         &mut self,
         bucket: u32,
         programs: &concinnity_core::components::ShaderPrograms,
+        prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
+        let prepared = world_shader_for(prepared, self.pipeline_targets());
         if bucket == 0 {
-            self.update_default_world_shader(programs)?;
+            self.update_default_world_shader(programs, prepared)?;
             return Ok(PipelineSwap::Swapped);
         }
-        self.world_pipeline_slot(bucket)?;
+        let slot = self.world_pipeline_slot(bucket)?;
         if !self.world_shader_resident(bucket as usize) {
             return Ok(PipelineSwap::NotResident);
         }
-        self.install_world_shader(bucket, programs)?;
+        match prepared {
+            Some(pso) => self.cull.world_pipelines[slot] = Some(pso),
+            None => self.install_world_shader(bucket, programs)?,
+        }
         Ok(PipelineSwap::Swapped)
+    }
+
+    // What this context's world Shader and volume pipelines are built against.
+    pub(super) fn pipeline_targets(&self) -> PipelineTargets {
+        PipelineTargets {
+            sample_count: self.targets.hdr.sample_count,
+            hot_reload: self.hot_reload.enabled,
+        }
+    }
+
+    // A builder for this context's world Shader and volume pipelines, for a
+    // hot-reload worker.
+    pub(super) fn pipeline_builder(&self) -> Arc<dyn PipelineBuilder> {
+        Arc::new(MtlPipelineBuilder {
+            device: self.hw.device.clone(),
+            targets: self.pipeline_targets(),
+        })
     }
 
     // Release one bucket's pipeline. A Metal command buffer retains the

@@ -30,7 +30,7 @@ use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::platform::Platform;
 use concinnity_core::render::backend_init::SdfVolumeSource;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::raymarch::Family;
+use concinnity_core::render::shader_programs::raymarch::{Family, VolumeFlags};
 use concinnity_core::transform::mat4_inverse;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -41,7 +41,7 @@ use super::texture::{
     GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
     one_shot_submit, transition_image_layout_range,
 };
-use crate::shader::raymarch_source::{VolumeFlags, family_artifacts};
+use crate::shader::raymarch_source::family_artifacts;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout,
     VkDevice,
@@ -890,10 +890,10 @@ fn create_snapshot(
     Ok(GpuImage::from_pooled(pooled, view))
 }
 
-// What a volume's pipelines are built against: the device, the pass's render
-// passes and layouts, and the target configuration the pass was built with.
-struct VolumePipelineTargets<'a> {
-    device: &'a VkDevice,
+// What a volume's pipelines are built against: the pass's render passes and
+// layouts, and the target configuration the pass was built with.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::vulkan) struct VolumePipelineTargets {
     render_pass: vk::RenderPass,
     layout: vk::PipelineLayout,
     shadow_render_pass: vk::RenderPass,
@@ -904,7 +904,7 @@ struct VolumePipelineTargets<'a> {
 
 // Every pipeline one volume draws with: its own, and its shadow caster when it
 // casts one.
-struct VolumePipelines {
+pub(in crate::vulkan) struct VolumePipelines {
     pipeline: OwnedPipeline,
     shadow_pipeline: Option<OwnedPipeline>,
 }
@@ -913,8 +913,9 @@ struct VolumePipelines {
 // medium authors `sampleVolume` and renders alpha-blended without a depth
 // write; a surface volume authors `map` and `shade` and sphere-traces an opaque
 // surface.
-fn build_volume_pipelines(
-    t: &VolumePipelineTargets<'_>,
+pub(in crate::vulkan) fn build_volume_pipelines(
+    device: &VkDevice,
+    t: &VolumePipelineTargets,
     programs: &SdfPrograms,
     flags: VolumeFlags,
     label: &str,
@@ -932,7 +933,7 @@ fn build_volume_pipelines(
         create_pipeline
     };
     let pipeline = create(
-        t.device,
+        device,
         t.render_pass,
         t.layout,
         t.msaa_samples,
@@ -948,7 +949,7 @@ fn build_volume_pipelines(
             label,
         )?;
         Some(create_shadow_pipeline(
-            t.device,
+            device,
             t.shadow_render_pass,
             t.shadow_layout,
             &sh_vert,
@@ -1003,6 +1004,24 @@ pub(in crate::vulkan) struct RaymarchSharedBindings<'a> {
 }
 
 impl RaymarchResources {
+    // What this pass's volume pipelines are built against. The shadow render
+    // pass is the engine's, which the raymarch pass does not own.
+    pub(in crate::vulkan) fn volume_targets(
+        &self,
+        shadow_render_pass: vk::RenderPass,
+        msaa_samples: vk::SampleCountFlags,
+        hot_reload: bool,
+    ) -> VolumePipelineTargets {
+        VolumePipelineTargets {
+            render_pass: self.render_pass.handle(),
+            layout: self.pipeline_layout.handle(),
+            shadow_render_pass,
+            shadow_layout: self.shadow_pipeline_layout.handle(),
+            msaa_samples,
+            hot_reload,
+        }
+    }
+
     // Build every raymarch resource + the per-volume records. Returns
     // `Ok(None)` when `sdf_volumes` is empty so the engine omits the pass.
     pub(in crate::vulkan) fn try_new(
@@ -1170,8 +1189,8 @@ impl RaymarchResources {
                 pipeline,
                 shadow_pipeline,
             } = build_volume_pipelines(
+                device,
                 &VolumePipelineTargets {
-                    device,
                     render_pass: render_pass.handle(),
                     layout: pipeline_layout.handle(),
                     shadow_render_pass,

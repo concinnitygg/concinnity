@@ -124,8 +124,8 @@ impl LiveEdit for DxContext {
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()>;
         fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()>;
         fn update_mesh_geometry(&mut self, draw_idx: DrawIndex, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> RenderResult<()>;
-        fn update_world_shader(&mut self, bucket: u32, programs: &concinnity_core::components::ShaderPrograms) -> RenderResult<concinnity_core::render::backend::PipelineSwap>;
-        fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &concinnity_core::components::sdf_programs::SdfPrograms) -> RenderResult<concinnity_core::render::backend::PipelineSwap>;
+        fn update_world_shader(&mut self, bucket: u32, programs: &concinnity_core::components::ShaderPrograms, prepared: Option<concinnity_core::render::backend::PreparedPipelines>) -> RenderResult<concinnity_core::render::backend::PipelineSwap>;
+        fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &concinnity_core::components::sdf_programs::SdfPrograms, prepared: Option<concinnity_core::render::backend::PreparedPipelines>) -> RenderResult<concinnity_core::render::backend::PipelineSwap>;
         fn update_skinned_mesh_geometry(&mut self, skinned_index: SkinnedIndex, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
         fn update_skinned_skeleton(&mut self, skinned_index: SkinnedIndex, new_joint_count: usize) -> RenderResult<()>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> RenderResult<Vec<backend::SkinnedSlotLayout>>;
@@ -159,6 +159,11 @@ impl LiveEdit for DxContext {
             .objects
             .get(draw_idx.index())
             .map(|o| o.lod_alternates.iter().map(|s| s.index_count).collect())
+    }
+
+    fn pipeline_builder(&self) -> Option<std::sync::Arc<dyn backend::PipelineBuilder>> {
+        debug_assert_main_thread("pipeline_builder");
+        Some(DxContext::pipeline_builder(self))
     }
 
     fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {

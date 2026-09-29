@@ -344,17 +344,24 @@ pub(crate) fn run_frame(
 
     // World Shader and SdfVolume field reload: start a compile for every
     // subject a save touched, then swap in whichever compiles have finished.
-    // The compile runs on a worker and the backend builds before it swaps, so
-    // neither a slow compile nor a typo stalls or breaks the live frame.
+    // The compile and the pipeline build run on a worker and a failed build is
+    // never swapped in, so neither a slow compile nor a typo stalls or breaks
+    // the live frame.
     let pending_shaders = super::pending::take_pending_shaders();
     let mut reload_reports = Vec::new();
     if !pending_shaders.is_empty() {
-        reload_reports = state.shaders.request(&pending_shaders);
+        reload_reports = state
+            .shaders
+            .request(&pending_shaders, backend.pipeline_builder());
     }
     reload_reports.extend(state.shaders.poll(backend));
     let pending_volumes = super::pending::take_pending_sdf_volumes();
     if !pending_volumes.is_empty() {
-        reload_reports.extend(state.sdf_fields.request(&pending_volumes));
+        reload_reports.extend(
+            state
+                .sdf_fields
+                .request(&pending_volumes, backend.pipeline_builder()),
+        );
     }
     reload_reports.extend(state.sdf_fields.poll(backend));
     super::report::report(&reload_reports, notify);

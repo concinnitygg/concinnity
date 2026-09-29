@@ -365,6 +365,7 @@ impl VkContext {
             particle: Default::default(),
             auto_exposure: world_fx.auto_exposure,
             hot_reload: HotReloadState::new(hot_reload),
+            pipeline_gate: Default::default(),
             world_shader: world_programs.cloned(),
             frame_stats: Default::default(),
             draw_calls_accum: Default::default(),

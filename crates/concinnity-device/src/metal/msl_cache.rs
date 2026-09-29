@@ -76,12 +76,6 @@ fn metallib_bytes(
     crate::shader::builtin::fetch(label, source, embedded, key.as_ref(), compile)
 }
 
-// Compile a cooked MSL artifact's metallib into the cache without a device, so
-// a later `cooked_function` of the same artifact loads it instead of compiling.
-pub(super) fn warm_cooked(msl: &[u8], label: &str) -> RenderResult<()> {
-    metallib_bytes(msl_text(msl, label)?, label, None).map(drop)
-}
-
 fn msl_text<'a>(msl: &'a [u8], label: &str) -> RenderResult<&'a str> {
     std::str::from_utf8(msl)
         .map_err(|e| RenderError::ShaderCompile(format!("{label}: artifact is not MSL text: {e}")))

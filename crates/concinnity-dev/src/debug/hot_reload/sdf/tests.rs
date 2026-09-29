@@ -1,19 +1,24 @@
 use super::*;
 use crate::debug::hot_reload::report::SubjectKind;
-use concinnity_cook::compile::program::{CompileFailure, EntryFailure, Severity};
+use concinnity_cook::compile::program::{CompileFailure, Diagnostic, EntryFailure, Severity};
 use concinnity_cook::compile::sdf_field::CompiledField;
+use concinnity_core::components::ShaderPrograms;
+use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
 use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Duration;
 
-// A backend that records every volume swap, holds the volumes in `resident`,
-// and rejects every build when `reject` is set.
+// A backend that records every volume swap with the pipelines it was handed,
+// holds the volumes in `resident`, and rejects every build when `reject` is
+// set.
 #[derive(Default)]
 struct VolumeBackend {
     resident: HashSet<usize>,
     reject: bool,
     swaps: Vec<(usize, String)>,
+    prepared: Vec<(usize, Option<FakePipelines>)>,
 }
 
 impl LiveEdit for VolumeBackend {
@@ -21,16 +26,57 @@ impl LiveEdit for VolumeBackend {
         &mut self,
         volume: usize,
         programs: &SdfPrograms,
+        prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
         if !self.resident.contains(&volume) {
             return Ok(PipelineSwap::NotResident);
         }
         self.swaps.push((volume, programs.field.text.clone()));
+        self.prepared.push((
+            volume,
+            prepared.and_then(PreparedPipelines::downcast::<FakePipelines>),
+        ));
         if self.reject {
             return Err(RenderError::ShaderCompile("pipeline build failed".into()));
         }
         Ok(PipelineSwap::Swapped)
     }
+}
+
+// What the fake builder builds: the volume it was labeled for, the flags and
+// the field text.
+#[derive(Debug, PartialEq, Eq)]
+struct FakePipelines(String, VolumeFlags, String);
+
+// Stands in for a backend's builder, refusing every build when `reject` is set.
+struct FakeBuilder {
+    reject: bool,
+}
+
+impl PipelineBuilder for FakeBuilder {
+    fn world_shader(&self, _: u32, _: &ShaderPrograms) -> RenderResult<PreparedPipelines> {
+        unreachable!("an SdfVolume reload builds no world Shader")
+    }
+
+    fn sdf_volume(
+        &self,
+        programs: &SdfPrograms,
+        flags: VolumeFlags,
+        label: &str,
+    ) -> RenderResult<PreparedPipelines> {
+        if self.reject {
+            return Err(RenderError::ShaderCompile("pipeline state failed".into()));
+        }
+        Ok(PreparedPipelines::new(FakePipelines(
+            label.to_string(),
+            flags,
+            programs.field.text.clone(),
+        )))
+    }
+}
+
+fn builder(reject: bool) -> Option<Arc<dyn PipelineBuilder>> {
+    Some(Arc::new(FakeBuilder { reject }))
 }
 
 // Stands in for dxc and records each compile as (name, flags). A field
@@ -178,7 +224,7 @@ fn a_shared_field_compiles_once_per_flag_set_and_swaps_every_volume() {
     f.write("cloud.hlsl", "cloud v2");
     assert!(
         f.reload
-            .request(&pending(&["cloud_a", "cloud_b", "cloud_caster"]))
+            .request(&pending(&["cloud_a", "cloud_b", "cloud_caster"]), None)
             .is_empty()
     );
     let reports = poll_for(&mut f.reload, &mut backend, 3);
@@ -211,10 +257,12 @@ fn a_request_compiles_just_the_named_volumes() {
     let mut f = Fixture::new();
     let mut backend = backend(&[0, 1, 2, 3]);
     f.write("blob.hlsl", "blob v2");
-    f.reload.request(&pending(&["blob"]));
+    f.reload.request(&pending(&["blob"]), None);
     let reports = poll_for(&mut f.reload, &mut backend, 1);
     assert_eq!(outcomes(&reports), [("blob", "swapped")]);
     assert_eq!(backend.swaps, [(3, "blob v2".to_string())]);
+    // Without a builder the swap is handed nothing and builds for itself.
+    assert_eq!(backend.prepared, [(3, None)]);
     assert_eq!(f.compiles(), [("blob".to_string(), false, false)]);
 }
 
@@ -224,7 +272,7 @@ fn a_request_compiles_just_the_named_volumes() {
 fn a_volume_the_backend_does_not_hold_applies_on_load() {
     let mut f = Fixture::new();
     let mut backend = backend(&[3]);
-    f.reload.request(&pending(&["lost"]));
+    f.reload.request(&pending(&["lost"]), None);
     let reports = poll_for(&mut f.reload, &mut backend, 1);
     assert_eq!(outcomes(&reports), [("lost", "applies on load")]);
     assert!(backend.swaps.is_empty());
@@ -235,10 +283,13 @@ fn a_volume_the_backend_does_not_hold_applies_on_load() {
 fn a_request_for_all_reaches_every_volume() {
     let mut f = Fixture::new();
     let mut backend = backend(&[0, 1, 2, 3]);
-    f.reload.request(&PendingSdfVolumes {
-        all: true,
-        ids: Default::default(),
-    });
+    f.reload.request(
+        &PendingSdfVolumes {
+            all: true,
+            ids: Default::default(),
+        },
+        None,
+    );
     assert_eq!(poll_for(&mut f.reload, &mut backend, 5).len(), 5);
     assert_eq!(f.compiles().len(), 4, "one per field and flag set");
 }
@@ -250,7 +301,7 @@ fn a_compile_error_keeps_every_volume_as_it_was() {
     let mut f = Fixture::new();
     let mut backend = backend(&[0, 1]);
     f.write("cloud.hlsl", "cloud error");
-    f.reload.request(&pending(&["cloud_a", "cloud_b"]));
+    f.reload.request(&pending(&["cloud_a", "cloud_b"]), None);
     let reports = poll_for(&mut f.reload, &mut backend, 2);
     assert_eq!(
         outcomes(&reports),
@@ -272,12 +323,69 @@ fn a_rejected_pipeline_is_reported() {
         reject: true,
         ..backend(&[3])
     };
-    f.reload.request(&pending(&["blob"]));
+    f.reload.request(&pending(&["blob"]), None);
     let reports = poll_for(&mut f.reload, &mut backend, 1);
     assert!(matches!(
         &reports[0].outcome,
         ReloadOutcome::Failed(ReloadFailure::Rejected(e)) if e.contains("pipeline build failed")
     ));
+}
+
+// With a builder, the worker builds each volume of a group its own pipelines
+// from the group's one compile, under the volume's name and the group's flags,
+// and each swap is handed its volume's.
+#[test]
+fn every_volume_of_a_group_is_handed_its_own_worker_built_pipelines() {
+    let mut f = Fixture::new();
+    let mut backend = backend(&[0, 1, 2]);
+    f.write("cloud.hlsl", "cloud v2");
+    f.reload.request(
+        &pending(&["cloud_a", "cloud_b", "cloud_caster"]),
+        builder(false),
+    );
+    let reports = poll_for(&mut f.reload, &mut backend, 3);
+    assert_eq!(outcomes(&reports).len(), 3);
+    assert_eq!(f.compiles().len(), 2, "one per flag set");
+    backend.prepared.sort_by_key(|p| p.0);
+    let built = |name: &str, cast_shadows| {
+        let flags = VolumeFlags {
+            volumetric: false,
+            cast_shadows,
+        };
+        Some(FakePipelines(
+            name.to_string(),
+            flags,
+            "cloud v2".to_string(),
+        ))
+    };
+    assert_eq!(
+        backend.prepared,
+        [
+            (0, built("cloud_a", false)),
+            (1, built("cloud_b", false)),
+            (2, built("cloud_caster", true))
+        ]
+    );
+}
+
+// Pipelines the builder refuses fail every volume of the group on the worker,
+// and none reaches the backend.
+#[test]
+fn pipelines_the_builder_refuses_are_never_swapped() {
+    let mut f = Fixture::new();
+    let mut backend = backend(&[0, 1]);
+    f.reload
+        .request(&pending(&["cloud_a", "cloud_b"]), builder(true));
+    let reports = poll_for(&mut f.reload, &mut backend, 2);
+    assert_eq!(
+        outcomes(&reports),
+        [("cloud_a", "failed"), ("cloud_b", "failed")]
+    );
+    assert!(matches!(
+        &reports[0].outcome,
+        ReloadOutcome::Failed(ReloadFailure::Rejected(e)) if e.contains("pipeline state failed")
+    ));
+    assert!(backend.swaps.is_empty());
 }
 
 // A field that cannot be read fails every volume of its group at once, with
@@ -287,7 +395,7 @@ fn an_unreadable_field_fails_before_compiling() {
     let mut f = Fixture::new();
     let mut backend = backend(&[0, 1]);
     std::fs::remove_file(f.dir.path().join("cloud.hlsl")).unwrap();
-    let reports = f.reload.request(&pending(&["cloud_a", "cloud_b"]));
+    let reports = f.reload.request(&pending(&["cloud_a", "cloud_b"]), None);
     assert_eq!(
         outcomes(&reports),
         [("cloud_a", "failed"), ("cloud_b", "failed")]
@@ -330,10 +438,13 @@ fn an_empty_catalog_reloads_nothing() {
     let mut backend = VolumeBackend::default();
     assert!(
         reload
-            .request(&PendingSdfVolumes {
-                all: true,
-                ids: Default::default()
-            })
+            .request(
+                &PendingSdfVolumes {
+                    all: true,
+                    ids: Default::default()
+                },
+                None
+            )
             .is_empty()
     );
     assert!(reload.poll(&mut backend).is_empty());

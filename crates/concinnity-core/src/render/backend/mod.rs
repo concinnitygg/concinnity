@@ -25,6 +25,8 @@ mod effects;
 // Rewriting a built world's GPU content: the hot-reload rebuilders and the
 // editor's live previews.
 mod live_edit;
+// Building replacement pipelines on a thread other than the frame thread.
+mod pipeline_builder;
 // What the backend reports about itself: capabilities, GPU class, counters,
 // and the CPU-side readbacks.
 mod probe;
@@ -43,6 +45,7 @@ pub use effects::SceneEffects;
 pub use live_edit::{
     DrawGeometryUpdate, LiveEdit, PipelineSwap, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
+pub use pipeline_builder::{PipelineBuilder, PreparedPipelines};
 pub use probe::{
     BackendProbe, DeviceCapabilities, GpuClassInput, GpuProfile, GpuTier, GpuVendor,
     apple_family_from_device_name, classify_tier,
@@ -314,6 +317,8 @@ mod tests {
         // No geometry-size introspection for the reload size check.
         assert!(backend.draw_geometry_size(DrawIndex(0)).is_none());
         assert!(backend.draw_lod_index_counts(DrawIndex(0)).is_none());
+        // No off-thread pipeline builds: a reload's swap builds for itself.
+        assert!(backend.pipeline_builder().is_none());
     }
 
     #[test]
@@ -424,7 +429,7 @@ mod tests {
             ),
             (
                 "update_world_shader",
-                op(backend.update_world_shader(0, &ShaderPrograms::default())),
+                op(backend.update_world_shader(0, &ShaderPrograms::default(), None)),
             ),
             (
                 "reload_world",

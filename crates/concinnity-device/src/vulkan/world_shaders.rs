@@ -12,13 +12,15 @@
 // Mirrors `metal/world_shaders.rs` and `directx/world_shaders.rs`.
 
 use ash::vk;
-use concinnity_core::render::backend::PipelineSwap;
+use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::context::VkContext;
 use super::pipeline::{BucketPipelineTargets, build_bucket_pipeline};
 use crate::vulkan::owned::OwnedPipeline;
+use crate::vulkan::pipeline_builder::{VkPipelineBuilder, world_shader_for};
+use std::sync::Arc;
 
 impl VkContext {
     // Build the bindless main-pass pipeline for one shader bucket. Replaces
@@ -29,55 +31,87 @@ impl VkContext {
         bucket: u32,
         shader: backend_init::WorldShader<'_>,
     ) -> RenderResult<()> {
-        let slot = self.world_pipeline_slot(bucket)?;
-        let layout = self.cull.bindless_pipeline_layout.as_ref().ok_or_else(|| {
+        self.world_pipeline_slot(bucket)?;
+        let targets = self.bucket_pipeline_targets().ok_or_else(|| {
             RenderError::Other("shader buckets need the bindless main pass".to_string())
         })?;
         let pipeline = build_bucket_pipeline(
             &self.hw.device,
-            BucketPipelineTargets {
-                render_pass: self.targets.main_render_pass.handle(),
-                layout: layout.handle(),
-                msaa_samples: self.targets.msaa_samples,
-                swapchain_format: self.swapchain.format,
-                hot_reload: self.hot_reload.enabled,
-            },
+            targets,
             bucket as usize,
             shader,
             &self.cull.bindless_main_spv,
         )?;
-        // A re-pin over a slot that still holds a pipeline has the same in-flight
-        // hazard as an evict, so retire the old one the same way.
+        self.replace_world_pipeline(bucket, pipeline)
+    }
+
+    // Put `pipeline` in `bucket`'s slot. A re-pin over a slot that still holds
+    // a pipeline has the same in-flight hazard as an evict, so the old one
+    // retires the same way.
+    fn replace_world_pipeline(&mut self, bucket: u32, pipeline: OwnedPipeline) -> RenderResult<()> {
+        let slot = self.world_pipeline_slot(bucket)?;
         self.evict_world_shader(bucket);
         self.cull.world_pipelines[slot] = Some(pipeline);
         Ok(())
     }
 
-    // Rebuild one world Shader's pipeline from hot-reloaded programs. Bucket 0
-    // is the main pass's pipeline; another bucket is rebuilt only while
-    // installed, and `install_world_shader` builds before it retires the old
-    // pipeline, so a failed build leaves the live one bound.
+    // Rebuild one world Shader's pipeline from hot-reloaded programs, or swap
+    // in `prepared` when it was built for this context's targets. Bucket 0 is
+    // the main pass's pipeline; another bucket is rebuilt only while
+    // installed, and the replacement is built before the old pipeline retires,
+    // so a failed build leaves the live one bound.
     pub(in crate::vulkan) fn update_world_shader(
         &mut self,
         bucket: u32,
         programs: &concinnity_core::components::ShaderPrograms,
+        prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
+        let prepared = self
+            .bucket_pipeline_targets()
+            .and_then(|targets| world_shader_for(prepared, &self.pipeline_gate, targets));
         if bucket == 0 {
-            self.update_default_world_shader(programs)?;
+            self.update_default_world_shader(programs, prepared)?;
             return Ok(PipelineSwap::Swapped);
         }
         self.world_pipeline_slot(bucket)?;
         if !self.world_shader_resident(bucket as usize) {
             return Ok(PipelineSwap::NotResident);
         }
-        self.install_world_shader(
-            bucket,
-            backend_init::WorldShader {
-                programs: Some(programs),
-                deferred: false,
-            },
-        )?;
+        match prepared {
+            Some(pipeline) => self.replace_world_pipeline(bucket, pipeline)?,
+            None => self.install_world_shader(
+                bucket,
+                backend_init::WorldShader {
+                    programs: Some(programs),
+                    deferred: false,
+                },
+            )?,
+        }
         Ok(PipelineSwap::Swapped)
+    }
+
+    // What every bucket's pipeline is built against here, or `None` when the
+    // GPU-driven main pass is not live.
+    pub(in crate::vulkan) fn bucket_pipeline_targets(&self) -> Option<BucketPipelineTargets> {
+        let layout = self.cull.bindless_pipeline_layout.as_ref()?;
+        Some(BucketPipelineTargets {
+            render_pass: self.targets.main_render_pass.handle(),
+            layout: layout.handle(),
+            msaa_samples: self.targets.msaa_samples,
+            swapchain_format: self.swapchain.format,
+            hot_reload: self.hot_reload.enabled,
+        })
+    }
+
+    // A builder for this context's world Shader and volume pipelines, for a
+    // hot-reload worker.
+    pub(in crate::vulkan) fn pipeline_builder(&self) -> Arc<dyn PipelineBuilder> {
+        Arc::new(VkPipelineBuilder {
+            device: self.hw.device.clone(),
+            gate: self.pipeline_gate.clone(),
+            world: self.bucket_pipeline_targets(),
+            volumes: self.volume_pipeline_targets(),
+        })
     }
 
     // Release one bucket's pipeline. A Vulkan pipeline may not be destroyed while

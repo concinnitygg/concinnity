@@ -37,56 +37,6 @@ pub fn probe_gpu_profile() -> Option<backend::GpuProfile> {
     }
 }
 
-/// Do the device-free part of building a world Shader's pipeline ahead of time,
-/// on the calling thread, so a later `update_world_shader` or install of the
-/// same programs spends less time on the render thread. Metal compiles and
-/// caches each entry's metallib; DirectX and Vulkan have nothing to do ahead of
-/// pipeline creation. `hot_reload` is the flag the backend was built with,
-/// which decides the source text and so what is cached. A failure only means
-/// the pipeline build does the work itself.
-pub fn warm_world_shader(
-    programs: &concinnity_core::components::ShaderPrograms,
-    hot_reload: bool,
-) -> RenderResult<()> {
-    #[cfg(backend_metal)]
-    {
-        crate::metal::warm_world_shader(programs, hot_reload)
-    }
-    #[cfg(not(backend_metal))]
-    {
-        let _ = (programs, hot_reload);
-        Ok(())
-    }
-}
-
-/// Do the device-free part of building a raymarched volume's pipelines ahead of
-/// time, on the calling thread, so a later `replace_sdf_volume_pipelines` with
-/// the same programs spends less time on the render thread. Metal compiles and
-/// caches the metallib of every entry a volume with these flags draws with;
-/// DirectX and Vulkan have nothing to do ahead of pipeline creation.
-/// `hot_reload` is the flag the backend was built with. A failure only means
-/// the pipeline build does the work itself.
-pub fn warm_sdf_field(
-    programs: &concinnity_core::components::sdf_programs::SdfPrograms,
-    volumetric: bool,
-    cast_shadows: bool,
-    hot_reload: bool,
-) -> RenderResult<()> {
-    #[cfg(backend_metal)]
-    {
-        let flags = crate::shader::raymarch_source::VolumeFlags {
-            volumetric,
-            cast_shadows,
-        };
-        crate::metal::warm_sdf_field(programs, flags, hot_reload)
-    }
-    #[cfg(not(backend_metal))]
-    {
-        let _ = (programs, volumetric, cast_shadows, hot_reload);
-        Ok(())
-    }
-}
-
 /// Route the assembled `BackendInit` to the backend selected at compile time.
 /// Construction inputs are documented on `BackendInit` itself.
 pub fn init_backend(

@@ -15,9 +15,9 @@ use std::sync::atomic::Ordering;
 use super::auto_exposure::{AutoExposureResources, compile_auto_exposure_shaders};
 use super::context::VkContext;
 use super::pipeline::{
-    BucketPipelineTargets, build_bucket_pipeline, compile_bindless_shaders,
-    compile_composite_shaders, compile_cull_shader, compile_cull_shader_phase2,
-    compile_text_shaders, create_composite_pipeline, create_cull_pipeline, create_text_pipeline,
+    build_bucket_pipeline, compile_bindless_shaders, compile_composite_shaders,
+    compile_cull_shader, compile_cull_shader_phase2, compile_text_shaders,
+    create_composite_pipeline, create_cull_pipeline, create_text_pipeline,
 };
 use super::post::bloom::{compile_bloom_shaders, create_bloom_pipeline};
 use super::post::ssao::rebuild_ssao_pipelines;
@@ -398,16 +398,20 @@ impl VkContext {
 
     // Rebuild bucket 0 of the GPU-driven main pass from the world default
     // Shader's freshly compiled programs and hot-swap it, for
-    // `update_world_shader`. Mirrors the rebuild-then-swap safety pattern of
-    // `reload_shaders`: the replacement is constructed first and the swap only
-    // runs when the build succeeds, so a typo in a shader edit leaves the live
-    // pipeline untouched and the session keeps rendering.
+    // `update_world_shader`, or swap in `prepared` when a worker already built
+    // it. Mirrors the rebuild-then-swap safety pattern of `reload_shaders`: the
+    // replacement is constructed first and the swap only runs when the build
+    // succeeds, so a typo in a shader edit leaves the live pipeline untouched
+    // and the session keeps rendering.
     pub(in crate::vulkan) fn update_default_world_shader(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
+        prepared: Option<crate::vulkan::owned::OwnedPipeline>,
     ) -> RenderResult<()> {
-        let new_main =
-            self.build_world_main_pipeline(Some(programs), &self.cull.bindless_main_spv)?;
+        let new_main = match prepared {
+            Some(pipeline) => pipeline,
+            None => self.build_world_main_pipeline(Some(programs), &self.cull.bindless_main_spv)?,
+        };
         // Drain the GPU before destroying the displaced pipeline so no in-flight
         // command buffer still references it: the debug hot-reload drive does
         // not `wait_idle` for us, unlike the built-in `reload_shaders` path the
@@ -428,18 +432,12 @@ impl VkContext {
         world: Option<&concinnity_core::components::ShaderPrograms>,
         engine_pair: &(Vec<u8>, Vec<u8>),
     ) -> RenderResult<crate::vulkan::owned::OwnedPipeline> {
-        let layout = self.cull.bindless_pipeline_layout.as_ref().ok_or_else(|| {
+        let targets = self.bucket_pipeline_targets().ok_or_else(|| {
             RenderError::Other("the GPU-driven main pass is not live".to_string())
         })?;
         build_bucket_pipeline(
             &self.hw.device,
-            BucketPipelineTargets {
-                render_pass: self.targets.main_render_pass.handle(),
-                layout: layout.handle(),
-                msaa_samples: self.targets.msaa_samples,
-                swapchain_format: self.swapchain.format,
-                hot_reload: self.hot_reload.enabled,
-            },
+            targets,
             0,
             backend_init::WorldShader {
                 programs: world,

@@ -522,15 +522,19 @@ fn swap_ssao_pipelines(
 impl DxContext {
     // Rebuild bucket 0 of the GPU-driven main pass from the world default
     // Shader's freshly compiled programs and hot-swap it, for
-    // `update_world_shader`. The replacement is built first; a compile /
-    // PSO-create failure early-returns with the live pipeline untouched,
-    // mirroring `reload_shaders`.
+    // `update_world_shader`, or swap in `prepared` when a worker already built
+    // it. The replacement is built first; a compile / PSO-create failure
+    // early-returns with the live pipeline untouched, mirroring
+    // `reload_shaders`.
     pub(in crate::directx) fn update_default_world_shader(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
+        prepared: Option<ID3D12PipelineState>,
     ) -> RenderResult<()> {
-        let new_main =
-            self.build_world_main_pso(Some(programs), &self.cull.bindless_main_shaders)?;
+        let new_main = match prepared {
+            Some(pso) => pso,
+            None => self.build_world_main_pso(Some(programs), &self.cull.bindless_main_shaders)?,
+        };
         // Drain the GPU before the swap releases the displaced PSO: a command
         // list does not keep one alive, and the debug reload drive does not
         // wait for us.

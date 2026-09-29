@@ -32,6 +32,7 @@ mod owned;
 mod parallel_encoder;
 mod particle;
 mod pipeline;
+mod pipeline_builder;
 mod pipeline_cache;
 mod planar;
 mod post;

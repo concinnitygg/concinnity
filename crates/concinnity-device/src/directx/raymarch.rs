@@ -43,7 +43,7 @@ use concinnity_core::gfx::render_types::LightUniforms;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::backend_init::SdfVolumeSource;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::raymarch::Family;
+use concinnity_core::render::shader_programs::raymarch::{Family, VolumeFlags};
 use std::ffi::c_void;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -66,7 +66,7 @@ use crate::directx::root_constants::RootConstants;
 use crate::directx::texture::{
     HDR_FORMAT, create_fallback_white_resource, create_hdr_resolve_target, transition_barrier,
 };
-use crate::shader::raymarch_source::{VolumeFlags, family_artifacts};
+use crate::shader::raymarch_source::family_artifacts;
 
 mod swap;
 

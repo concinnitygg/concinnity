@@ -28,6 +28,7 @@ mod material_params;
 mod parallel_encoder;
 mod particle;
 mod pipeline;
+mod pipeline_builder;
 mod planar;
 mod post;
 mod probe;

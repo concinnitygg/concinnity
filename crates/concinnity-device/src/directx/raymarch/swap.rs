@@ -6,23 +6,27 @@
 // queue for it costs nothing that matters.
 
 use concinnity_core::components::sdf_programs::SdfPrograms;
-use concinnity_core::render::backend::PipelineSwap;
+use concinnity_core::render::backend::{PipelineSwap, PreparedPipelines};
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
 
 use super::{VolumePsoTargets, VolumePsos, build_volume_psos};
 use crate::directx::context::DxContext;
-use crate::shader::raymarch_source::{self, VolumeFlags};
+use crate::directx::pipeline_builder::volume_for;
+use crate::shader::raymarch_source;
 
 impl DxContext {
-    // Rebuild every PSO volume `volume` draws with from `programs`. Both are
-    // built before either replaces the live one, so a failed build leaves the
-    // volume drawing as it was.
+    // Rebuild every PSO volume `volume` draws with from `programs`, or swap in
+    // `prepared` when it was built for this volume against this context's
+    // targets. Both are built before either replaces the live one, so a failed
+    // build leaves the volume drawing as it was.
     pub(in crate::directx) fn replace_sdf_volume_pipelines(
         &mut self,
         volume: usize,
         programs: &SdfPrograms,
+        prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
-        let Some(rm) = self.raymarch.as_ref() else {
+        let (Some(rm), Some(targets)) = (self.raymarch.as_ref(), self.volume_pso_targets()) else {
             return Ok(PipelineSwap::NotResident);
         };
         let Some(record) = rm.volumes.get(volume) else {
@@ -32,19 +36,22 @@ impl DxContext {
             volumetric: record.volumetric,
             cast_shadows: record.cast_shadows,
         };
-        let VolumePsos { pso, shadow_pso } = build_volume_psos(
-            &VolumePsoTargets {
-                device: &self.hw.device,
-                info_queue: self.hw.info_queue.as_ref(),
-                root_sig: &rm.root_sig,
-                shadow_root_sig: &rm.shadow_root_sig,
-                msaa_samples: self.targets.hdr.msaa_samples,
-                hot_reload: self.hot_reload.enabled,
-            },
-            programs,
-            flags,
-            &record.label,
-        )?;
+        let VolumePsos { pso, shadow_pso } = match volume_for(prepared, &targets, flags) {
+            Some(psos) => psos,
+            None => build_volume_psos(
+                &VolumePsoTargets {
+                    device: &self.hw.device,
+                    info_queue: self.hw.info_queue.as_ref(),
+                    root_sig: &rm.root_sig,
+                    shadow_root_sig: &rm.shadow_root_sig,
+                    msaa_samples: self.targets.hdr.msaa_samples,
+                    hot_reload: self.hot_reload.enabled,
+                },
+                programs,
+                flags,
+                &record.label,
+            )?,
+        };
         self.wait_idle();
         let Some(record) = self
             .raymarch

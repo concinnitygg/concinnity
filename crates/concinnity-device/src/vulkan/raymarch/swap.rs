@@ -6,45 +6,44 @@
 // nothing that matters.
 
 use concinnity_core::components::sdf_programs::SdfPrograms;
-use concinnity_core::render::backend::PipelineSwap;
+use concinnity_core::render::backend::{PipelineSwap, PreparedPipelines};
 use concinnity_core::render::error::RenderResult;
 
 use super::{VolumePipelineTargets, VolumePipelines, build_volume_pipelines};
 use crate::shader::raymarch_source;
 use crate::vulkan::context::VkContext;
+use crate::vulkan::pipeline_builder::volume_for;
 
 impl VkContext {
-    // Rebuild every pipeline volume `volume` draws with from `programs`. Both
-    // are built before either replaces the live one, so a failed build leaves
-    // the volume drawing as it was.
+    // Rebuild every pipeline volume `volume` draws with from `programs`, or
+    // swap in `prepared` when it was built for this volume against this
+    // context's targets. Both are built before either replaces the live one,
+    // so a failed build leaves the volume drawing as it was.
     pub(in crate::vulkan) fn replace_sdf_volume_pipelines(
         &mut self,
         volume: usize,
         programs: &SdfPrograms,
+        prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
-        let Some(rm) = self.raymarch.as_ref() else {
+        let Some(targets) = self.volume_pipeline_targets() else {
             return Ok(PipelineSwap::NotResident);
         };
-        let Some(record) = rm.volumes.get(volume) else {
+        let Some(record) = self.raymarch.as_ref().and_then(|rm| rm.volumes.get(volume)) else {
             return Ok(PipelineSwap::NotResident);
         };
         let VolumePipelines {
             pipeline,
             shadow_pipeline,
-        } = build_volume_pipelines(
-            &VolumePipelineTargets {
-                device: &self.hw.device,
-                render_pass: rm.render_pass.handle(),
-                layout: rm.pipeline_layout.handle(),
-                shadow_render_pass: self.shadow.render_pass.handle(),
-                shadow_layout: rm.shadow_pipeline_layout.handle(),
-                msaa_samples: self.targets.msaa_samples,
-                hot_reload: self.hot_reload.enabled,
-            },
-            programs,
-            record.flags,
-            &record.label,
-        )?;
+        } = match volume_for(prepared, &self.pipeline_gate, targets, record.flags) {
+            Some(pipelines) => pipelines,
+            None => build_volume_pipelines(
+                &self.hw.device,
+                &targets,
+                programs,
+                record.flags,
+                &record.label,
+            )?,
+        };
         // Idle first: the old pipelines retire as they drop, and the retire
         // queue only covers the frames-in-flight window, which this
         // out-of-frame path does not tick.
@@ -60,5 +59,16 @@ impl VkContext {
         }
         self.hw.device.reclaim_idle();
         Ok(PipelineSwap::Swapped)
+    }
+
+    // What a volume's pipelines are built against here, or `None` when the
+    // world has no raymarch pass.
+    pub(in crate::vulkan) fn volume_pipeline_targets(&self) -> Option<VolumePipelineTargets> {
+        let rm = self.raymarch.as_ref()?;
+        Some(rm.volume_targets(
+            self.shadow.render_pass.handle(),
+            self.targets.msaa_samples,
+            self.hot_reload.enabled,
+        ))
     }
 }

@@ -2,6 +2,7 @@
 
 use concinnity_cook::compile::shader::CompiledShader;
 use concinnity_core::components::{ShaderSource, ShaderStage};
+use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
 use concinnity_core::render::shader_programs::surface::Sources;
 use concinnity_engine::gfx::system::shader_sources::ShaderSourceEntry;
 
@@ -48,26 +49,37 @@ impl ShaderTexts {
     }
 }
 
-// Compile `texts` exactly as `cn build` would for this host's backend, then do
-// the device-free part of the pipeline build so the swap on the frame thread
-// is short.
+// Compile `texts` exactly as `cn build` would for this host's backend.
 pub(in crate::debug::hot_reload) fn compile(name: &str, texts: &ShaderTexts) -> CompileResult {
     // Inside the bounded job pool, so the compile's rayon fan-out over the
     // programs does not claim every core the frame loop also needs.
-    let compiled = concinnity_host::thread::jobs::pool().install(|| {
+    Ok(concinnity_host::thread::jobs::pool().install(|| {
         concinnity_cook::compile::shader::compile_world_shader(
             name,
             &texts.sources(),
             crate::cook_platform(),
         )
-    })?;
-    // A Shader catalog is only captured in a dev-loop session, whose backend is
-    // always built with hot reload on.
-    if let Err(e) = concinnity_engine::warm_world_shader(&compiled.programs, true) {
-        tracing::warn!(
-            "Shader hot-reload: '{name}' could not be prepared off the frame thread ({e}); \
-             the swap will build it"
-        );
-    }
-    Ok(compiled)
+    })?)
+}
+
+// A compile, with the pipeline the backend's builder made from it.
+pub(in crate::debug::hot_reload) struct Rebuilt {
+    pub compiled: CompiledShader,
+    pub prepared: Option<PreparedPipelines>,
+}
+
+pub(in crate::debug::hot_reload) type RebuildResult = Result<Rebuilt, ReloadFailure>;
+
+// Build bucket `bucket`'s pipeline from `compiled` through `builder`, so the
+// swap on the frame thread does not. Without a builder the swap builds it.
+pub(in crate::debug::hot_reload) fn prepare(
+    compiled: CompiledShader,
+    builder: Option<&dyn PipelineBuilder>,
+    bucket: u32,
+) -> RebuildResult {
+    let prepared = builder
+        .map(|b| b.world_shader(bucket, &compiled.programs))
+        .transpose()
+        .map_err(|e| ReloadFailure::Rejected(e.to_string()))?;
+    Ok(Rebuilt { compiled, prepared })
 }

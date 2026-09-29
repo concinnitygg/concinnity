@@ -1,9 +1,12 @@
 //! An SdfVolume's field as a save left it, the key a compile of it runs under,
-//! and the compile a worker runs.
+//! and the compile and pipeline builds a worker runs.
 
 use concinnity_cook::compile::sdf_field::CompiledField;
 use concinnity_core::components::ShaderSource;
+use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
+use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
 use concinnity_engine::gfx::system::sdf_field_sources::SdfFieldEntry;
+use std::collections::HashMap;
 
 use crate::debug::hot_reload::report::ReloadFailure;
 
@@ -26,6 +29,13 @@ impl FieldKey {
             cast_shadows: entry.cast_shadows,
         }
     }
+
+    pub(in crate::debug::hot_reload) fn flags(&self) -> VolumeFlags {
+        VolumeFlags {
+            volumetric: self.volumetric,
+            cast_shadows: self.cast_shadows,
+        }
+    }
 }
 
 // Read the field at `path`, under that path, which is the path its diagnostics
@@ -39,9 +49,7 @@ pub(in crate::debug::hot_reload) fn read_field(path: &str) -> Result<ShaderSourc
         .map_err(|e| e.to_string())
 }
 
-// Compile `field` exactly as `cn build` would for this host's backend, then do
-// the device-free part of the pipeline build so the swap on the frame thread
-// is short.
+// Compile `field` exactly as `cn build` would for this host's backend.
 pub(in crate::debug::hot_reload) fn compile(
     name: &str,
     key: &FieldKey,
@@ -49,7 +57,7 @@ pub(in crate::debug::hot_reload) fn compile(
 ) -> FieldResult {
     // Inside the bounded job pool, so the compile's rayon fan-out over the
     // entries does not claim every core the frame loop also needs.
-    let compiled = concinnity_host::thread::jobs::pool().install(|| {
+    Ok(concinnity_host::thread::jobs::pool().install(|| {
         concinnity_cook::compile::sdf_field::compile_sdf_field(
             name,
             field.as_file(),
@@ -57,19 +65,36 @@ pub(in crate::debug::hot_reload) fn compile(
             key.volumetric,
             key.cast_shadows,
         )
-    })?;
-    // A field catalog is only captured in a dev-loop session, whose backend is
-    // always built with hot reload on.
-    if let Err(e) = concinnity_engine::warm_sdf_field(
-        &compiled.programs,
-        key.volumetric,
-        key.cast_shadows,
-        true,
-    ) {
-        tracing::warn!(
-            "SdfVolume hot-reload: '{name}' could not be prepared off the frame thread ({e}); \
-             the swap will build it"
-        );
+    })?)
+}
+
+// A compile, with the pipelines the backend's builder made from it for each
+// volume of the group, by the volume's position in the backend.
+pub(in crate::debug::hot_reload) struct Rebuilt {
+    pub compiled: CompiledField,
+    pub prepared: HashMap<usize, PreparedPipelines>,
+}
+
+pub(in crate::debug::hot_reload) type RebuildResult = Result<Rebuilt, ReloadFailure>;
+
+// Build every pipeline each of `volumes` draws with from `compiled` through
+// `builder`, so the swap on the frame thread does not. Each volume gets its
+// own, since a swap takes its pipelines by value. Without a builder the swap
+// builds them.
+pub(in crate::debug::hot_reload) fn prepare(
+    compiled: CompiledField,
+    builder: Option<&dyn PipelineBuilder>,
+    key: &FieldKey,
+    volumes: &[(usize, String)],
+) -> RebuildResult {
+    let mut prepared = HashMap::new();
+    if let Some(builder) = builder {
+        for (volume, name) in volumes {
+            let pipelines = builder
+                .sdf_volume(&compiled.programs, key.flags(), name)
+                .map_err(|e| ReloadFailure::Rejected(e.to_string()))?;
+            prepared.insert(*volume, pipelines);
+        }
     }
-    Ok(compiled)
+    Ok(Rebuilt { compiled, prepared })
 }

@@ -10,8 +10,10 @@ use crate::components::ShaderPrograms;
 use crate::components::sdf_programs::SdfPrograms;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::{DrawIndex, MATERIAL_PARAM_COUNT, MaterialUniforms, SkinnedIndex};
+use crate::render::backend::{PipelineBuilder, PreparedPipelines};
 use crate::render::backend_init::{BackendInit, SwapchainConfig};
 use crate::render::error::{RenderError, RenderResult};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 /// What a pipeline rebuild from fresh programs did
@@ -299,12 +301,16 @@ pub trait LiveEdit {
     /// swaps when the build succeeds, so a compile error never overwrites a live
     /// pipeline. A bucket whose pipeline is not installed (its scene is not
     /// loaded) builds nothing and reports [`PipelineSwap::NotResident`].
+    /// `prepared` is the pipeline a [`Self::pipeline_builder`] already built
+    /// from `programs`; the backend swaps it in rather than building, unless it
+    /// was built against targets the backend no longer draws into.
     fn update_world_shader(
         &mut self,
         bucket: u32,
         programs: &ShaderPrograms,
+        prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
-        let _ = (bucket, programs);
+        let _ = (bucket, programs, prepared);
         Err(RenderError::Unsupported {
             op: "update_world_shader",
         })
@@ -320,15 +326,28 @@ pub trait LiveEdit {
     /// with. Every replacement is built before any is swapped in, so a failed
     /// build leaves the live pipelines drawing. A volume the backend holds no
     /// pipelines for builds nothing and reports [`PipelineSwap::NotResident`].
+    /// `prepared` is what a [`Self::pipeline_builder`] already built from
+    /// `programs`, taken on the same terms as in [`Self::update_world_shader`]
+    /// and also only when it was built for the volume's own flags.
     fn replace_sdf_volume_pipelines(
         &mut self,
         volume: usize,
         programs: &SdfPrograms,
+        prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
-        let _ = (volume, programs);
+        let _ = (volume, programs, prepared);
         Err(RenderError::Unsupported {
             op: "replace_sdf_volume_pipelines",
         })
+    }
+
+    /// A builder that creates world Shader and SdfVolume pipelines against this
+    /// backend's device on another thread, so a hot reload's worker can hand
+    /// [`Self::update_world_shader`] and [`Self::replace_sdf_volume_pipelines`]
+    /// a finished pipeline. Default `None`: the swap builds on the calling
+    /// thread.
+    fn pipeline_builder(&self) -> Option<Arc<dyn PipelineBuilder>> {
+        None
     }
 
     /// The swapchain-level configuration this live backend can hot-swap a world

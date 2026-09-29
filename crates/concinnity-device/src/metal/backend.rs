@@ -154,10 +154,14 @@ impl LiveEdit for MtlContext {
         fn set_draw_material(&mut self, draw_idx: DrawIndex, material: MaterialUniforms, texture_slot: usize, normal_map_slot: usize);
         fn set_draw_cull_distance(&mut self, draw_idx: DrawIndex, cull_distance: f32);
         fn set_material_params(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]);
-        fn update_world_shader(&mut self, bucket: u32, programs: &concinnity_core::components::ShaderPrograms) -> RenderResult<backend::PipelineSwap>;
-        fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &concinnity_core::components::sdf_programs::SdfPrograms) -> RenderResult<backend::PipelineSwap>;
+        fn update_world_shader(&mut self, bucket: u32, programs: &concinnity_core::components::ShaderPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
+        fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &concinnity_core::components::sdf_programs::SdfPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
         fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()>;
         fn rebuild_static_geometry(&mut self, changes: Vec<backend::DrawGeometryUpdate>) -> RenderResult<()>;
+    }
+
+    fn pipeline_builder(&self) -> Option<std::sync::Arc<dyn backend::PipelineBuilder>> {
+        Some(MtlContext::pipeline_builder(self))
     }
 
     fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {

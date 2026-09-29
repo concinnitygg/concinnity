@@ -688,16 +688,43 @@ pub(in crate::directx) fn build_bucket_pipeline(
     bucket: usize,
     shader: backend_init::WorldShader<'_>,
 ) -> RenderResult<ID3D12PipelineState> {
-    let (vs, ps) = match shader.programs {
-        Some(programs) => (
-            world_entry(programs, "vertex_main_bindless", targets.hot_reload)?,
-            world_entry(programs, "fragment_main_bindless", targets.hot_reload)?,
+    match shader.programs {
+        Some(programs) => {
+            build_world_shader_pso(device, info_queue, targets.world(), bucket, programs)
+        }
+        None => create_bucket_pso(
+            device,
+            info_queue,
+            targets.world(),
+            bucket,
+            &targets.engine_default.vs,
+            &targets.engine_default.ps,
         ),
-        None => (
-            targets.engine_default.vs.clone(),
-            targets.engine_default.ps.clone(),
-        ),
-    };
+    }
+}
+
+// Build a world Shader's bindless main-pass pipeline for bucket `bucket` from
+// its own compiled stages.
+pub(in crate::directx) fn build_world_shader_pso(
+    device: &ID3D12Device,
+    info_queue: Option<&ID3D12InfoQueue>,
+    targets: WorldPsoTargets<'_>,
+    bucket: usize,
+    programs: &concinnity_core::components::ShaderPrograms,
+) -> RenderResult<ID3D12PipelineState> {
+    let vs = world_entry(programs, "vertex_main_bindless", targets.hot_reload)?;
+    let ps = world_entry(programs, "fragment_main_bindless", targets.hot_reload)?;
+    create_bucket_pso(device, info_queue, targets, bucket, &vs, &ps)
+}
+
+fn create_bucket_pso(
+    device: &ID3D12Device,
+    info_queue: Option<&ID3D12InfoQueue>,
+    targets: WorldPsoTargets<'_>,
+    bucket: usize,
+    vs: &[u8],
+    ps: &[u8],
+) -> RenderResult<ID3D12PipelineState> {
     if vs.is_empty() || ps.is_empty() {
         return Err(RenderError::ShaderCompile(format!(
             "shader bucket {bucket} carries no vertex/fragment bytecode"
@@ -708,8 +735,8 @@ pub(in crate::directx) fn build_bucket_pipeline(
         create_main_pso(
             device,
             targets.root_sig,
-            &vs,
-            &ps,
+            vs,
+            ps,
             HDR_FORMAT,
             targets.msaa_samples,
         ),
@@ -725,6 +752,24 @@ pub(in crate::directx) struct BucketPipelineTargets<'a> {
     pub root_sig: &'a ID3D12RootSignature,
     pub msaa_samples: u32,
     pub engine_default: &'a BindlessMainShaders,
+    pub hot_reload: bool,
+}
+
+impl<'a> BucketPipelineTargets<'a> {
+    fn world(self) -> WorldPsoTargets<'a> {
+        WorldPsoTargets {
+            root_sig: self.root_sig,
+            msaa_samples: self.msaa_samples,
+            hot_reload: self.hot_reload,
+        }
+    }
+}
+
+// What a world Shader's own pipeline is built against.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct WorldPsoTargets<'a> {
+    pub root_sig: &'a ID3D12RootSignature,
+    pub msaa_samples: u32,
     pub hot_reload: bool,
 }
 

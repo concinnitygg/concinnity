@@ -30,7 +30,7 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::LightUniforms;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::raymarch::Family;
+use concinnity_core::render::shader_programs::raymarch::{Family, VolumeFlags};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
@@ -54,11 +54,8 @@ use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
 use super::error::allocation_failed;
 use super::scoped_encoder::ScopedEncoder;
-use crate::shader::raymarch_source::VolumeFlags;
 
 mod swap;
-
-pub(crate) use swap::warm_sdf_field;
 
 // Metal buffer index for the proxy cube's vertex stream.
 //

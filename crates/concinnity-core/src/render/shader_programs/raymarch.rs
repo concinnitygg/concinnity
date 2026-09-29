@@ -7,6 +7,7 @@
 
 use alloc::string::String;
 
+use crate::components::SdfVolume;
 use crate::platform::Platform;
 use crate::render::shader_source::{self, SourceFile, Splice};
 
@@ -111,6 +112,36 @@ pub fn programs(volumetric: bool, cast_shadows: bool) -> impl Iterator<Item = &'
     families(volumetric, cast_shadows).flat_map(|f| ALL.iter().filter(move |p| p.family == f))
 }
 
+/// The flags that decide which pipelines a volume draws with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VolumeFlags {
+    /// The volume is a participating medium rather than a surface.
+    pub volumetric: bool,
+    /// The volume asks for a shadow caster.
+    pub cast_shadows: bool,
+}
+
+impl VolumeFlags {
+    /// The flags `volume` declares.
+    pub fn of(volume: &SdfVolume) -> Self {
+        Self {
+            volumetric: volume.volumetric,
+            cast_shadows: volume.cast_shadows,
+        }
+    }
+
+    /// Whether the volume draws a shadow caster. A medium never does, whatever
+    /// its asset says.
+    pub fn casts(self) -> bool {
+        self.families().any(|f| f == Family::Shadow)
+    }
+
+    /// Every family the volume draws with.
+    pub fn families(self) -> impl Iterator<Item = Family> {
+        families(self.volumetric, self.cast_shadows)
+    }
+}
+
 /// The exact source text one family compiles for one host, with `field` spliced
 /// in as the world's distance field. The field is fenced by `#line` directives
 /// naming its path, so a compiler reports its lines against the author's file.
@@ -146,6 +177,26 @@ mod tests {
 
     fn field(text: &str) -> SourceFile<'_> {
         SourceFile { path: PATH, text }
+    }
+
+    // A medium never casts, so a volumetric volume that also sets
+    // `cast_shadows` builds no caster.
+    #[test]
+    fn only_a_casting_surface_volume_draws_a_shadow_caster() {
+        let flags = |volumetric, cast_shadows| VolumeFlags {
+            volumetric,
+            cast_shadows,
+        };
+        assert!(flags(false, true).casts());
+        assert!(!flags(false, false).casts());
+        assert!(!flags(true, true).casts());
+        let families: Vec<Family> = flags(true, true).families().collect();
+        assert_eq!(families, [Family::Volumetric]);
+        let volume = SdfVolume {
+            cast_shadows: true,
+            ..SdfVolume::default()
+        };
+        assert_eq!(VolumeFlags::of(&volume), flags(false, true));
     }
 
     #[test]

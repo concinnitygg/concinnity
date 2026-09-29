@@ -11,7 +11,6 @@
 // checkout, digests differently, and recompiles. A machine with no compiler
 // says so, naming the volume, rather than drawing nothing.
 
-use concinnity_core::components::SdfVolume;
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::error::RenderResult;
@@ -34,33 +33,6 @@ pub(crate) fn decode(payload: &[u8], label: &str) -> Result<SdfPrograms, String>
 /// all opaque skips an encoder and its barriers outright.
 pub(crate) fn taps_scene(programs: &SdfPrograms) -> bool {
     raymarch::field_taps_scene(&programs.field.text)
-}
-
-/// The flags that decide which pipelines a volume draws with, as it was built.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct VolumeFlags {
-    pub volumetric: bool,
-    pub cast_shadows: bool,
-}
-
-impl VolumeFlags {
-    pub(crate) fn of(volume: &SdfVolume) -> Self {
-        Self {
-            volumetric: volume.volumetric,
-            cast_shadows: volume.cast_shadows,
-        }
-    }
-
-    /// Whether the volume draws a shadow caster. A medium never does, whatever
-    /// its asset says.
-    pub(crate) fn casts(self) -> bool {
-        self.families().any(|f| f == Family::Shadow)
-    }
-
-    /// Every family the volume draws with.
-    pub(crate) fn families(self) -> impl Iterator<Item = Family> {
-        raymarch::families(self.volumetric, self.cast_shadows)
-    }
 }
 
 /// Which artifact a host wants. Every artifact holds one entry point, which is
@@ -300,26 +272,6 @@ mod tests {
         assert!(!taps_scene(&programs), "'{}' calls nothing", FIELD.text);
         programs.field.text = SURFACE_FIELD.to_string();
         assert!(taps_scene(&programs), "the surface field calls the tap");
-    }
-
-    // A medium never casts, so a volumetric volume that also sets
-    // `cast_shadows` builds no caster and warms none.
-    #[test]
-    fn only_a_casting_surface_volume_draws_a_shadow_caster() {
-        let flags = |volumetric, cast_shadows| VolumeFlags {
-            volumetric,
-            cast_shadows,
-        };
-        assert!(flags(false, true).casts());
-        assert!(!flags(false, false).casts());
-        assert!(!flags(true, true).casts());
-        let families: Vec<Family> = flags(true, true).families().collect();
-        assert_eq!(families, [Family::Volumetric]);
-        let volume = SdfVolume {
-            cast_shadows: true,
-            ..SdfVolume::default()
-        };
-        assert_eq!(VolumeFlags::of(&volume), flags(false, true));
     }
 
     // A payload that does not decode names the volume, which is the only thing

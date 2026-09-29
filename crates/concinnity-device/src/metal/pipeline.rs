@@ -97,30 +97,6 @@ pub(super) fn world_function(
     super::msl_cache::cooked_function(device, &msl, entry, &world_label(entry))
 }
 
-// Compile the metallibs a world Shader's pipeline loads into the shader cache,
-// so the pipeline build that follows loads them rather than compiling on the
-// render thread. Needs no device, so it runs on any thread.
-pub(crate) fn warm_world_shader(
-    programs: &concinnity_core::components::ShaderPrograms,
-    hot_reload: bool,
-) -> RenderResult<()> {
-    warm_world_entries(programs, hot_reload, super::msl_cache::warm_cooked)
-}
-
-fn warm_world_entries(
-    programs: &concinnity_core::components::ShaderPrograms,
-    hot_reload: bool,
-    mut warm: impl FnMut(&[u8], &str) -> RenderResult<()>,
-) -> RenderResult<()> {
-    for entry in [WORLD_VERTEX_ENTRY, WORLD_FRAGMENT_ENTRY] {
-        warm(
-            &world_msl(programs, entry, hot_reload)?,
-            &world_label(entry),
-        )?;
-    }
-    Ok(())
-}
-
 // Load a MTLLibrary from raw .metallib bytes via a DispatchData.
 pub(super) fn load_library(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
@@ -241,78 +217,6 @@ pub(super) fn build_post_pipeline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::compiled_programs::CompiledProgram;
-    use concinnity_core::components::{ShaderPrograms, ShaderSource};
-    use concinnity_core::platform::Platform;
-    use concinnity_core::render::shader_programs::surface;
-    use concinnity_core::render::shader_source::source_digest;
-
-    const SHADE: &str = "float4 shade(VertexOut v, GpuObjectData od) { return (float4)(1.0); }";
-
-    // A Shader whose cooked MSL for both pipeline entries matches this build's
-    // templates, so reading it compiles nothing.
-    fn cooked() -> ShaderPrograms {
-        let mut cooked = ShaderPrograms {
-            name: "wall".to_string(),
-            vertex: None,
-            fragment: ShaderSource {
-                path: "shaders/wall.hlsl".to_string(),
-                text: SHADE.to_string(),
-            },
-            programs: Vec::new(),
-        };
-        cooked.programs = [WORLD_VERTEX_ENTRY, WORLD_FRAGMENT_ENTRY]
-            .into_iter()
-            .map(|entry| {
-                let program = surface::program(entry).unwrap();
-                CompiledProgram {
-                    entry: entry.to_string(),
-                    source_digest: source_digest(&surface::source(
-                        program,
-                        Platform::Metal,
-                        &cooked.sources(),
-                    )),
-                    artifact: format!("// msl for {entry}").into_bytes(),
-                }
-            })
-            .collect();
-        cooked
-    }
-
-    // The warm caches exactly the MSL the pipeline build then looks up, for
-    // both entries it builds from, so the build is a cache hit. The cache key
-    // is `metallib_key(text, "main")` on both paths, so the text is the key.
-    #[test]
-    fn the_warm_caches_what_the_pipeline_build_loads() {
-        let programs = cooked();
-        let mut warmed = Vec::new();
-        warm_world_entries(&programs, false, |msl, label| {
-            warmed.push((msl.to_vec(), label.to_string()));
-            Ok(())
-        })
-        .unwrap();
-        let looked_up: Vec<(Vec<u8>, String)> = [WORLD_VERTEX_ENTRY, WORLD_FRAGMENT_ENTRY]
-            .into_iter()
-            .map(|entry| {
-                (
-                    world_msl(&programs, entry, false).unwrap().into_owned(),
-                    world_label(entry),
-                )
-            })
-            .collect();
-        assert_eq!(warmed, looked_up);
-        assert_eq!(warmed[0].0, b"// msl for vertex_main_bindless");
-    }
-
-    // A failed warm stops at the entry that failed and reports it.
-    #[test]
-    fn a_failed_warm_reports_the_failure() {
-        let err = warm_world_entries(&cooked(), false, |_, label| {
-            Err(RenderError::ShaderCompile(label.to_string()))
-        })
-        .unwrap_err();
-        assert!(err.to_string().contains(WORLD_VERTEX_ENTRY), "{err}");
-    }
 
     #[test]
     fn embedded_cull_encode_holds_its_kernel() {

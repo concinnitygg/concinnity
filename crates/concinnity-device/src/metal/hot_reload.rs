@@ -10,7 +10,10 @@
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::render::error::RenderResult;
 use objc2::rc::Retained;
-use objc2_metal::{MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
+use objc2::runtime::ProtocolObject;
+use objc2_metal::{
+    MTLRenderPipelineState, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
+};
 use std::sync::atomic::Ordering;
 
 use super::auto_exposure::build_auto_exposure_pipelines;
@@ -380,76 +383,36 @@ impl MtlContext {
     }
 
     // Rebuild the main pipeline from the world default Shader's freshly
-    // compiled payload, for [`Self::update_world_shader`] on bucket 0. Mirrors
-    // the rebuild-then-swap safety pattern of [`Self::reload_shaders`]: every
-    // replacement is constructed into a temporary first, and the swap only
-    // runs when every build succeeds, so a typo in a shader edit leaves the
-    // live pipelines untouched and the session keeps rendering.
+    // compiled payload, for [`Self::update_world_shader`] on bucket 0, or swap
+    // in `prepared` when a worker already built it. The replacement is built
+    // before the swap, so a typo in a shader edit leaves the live pipeline
+    // untouched and the session keeps rendering.
     //
     // Every draw a world Shader reaches goes through the GPU-driven pass, so
-    // this is the one pipeline it owns. The shadow and G-buffer pipelines
-    // compile from engine-internal source and are covered by
+    // this is the one pipeline it owns. The cull ICBs inherit the render
+    // encoder's pipeline state, so they need no re-encode. The shadow, G-buffer
+    // and cull pipelines compile from engine-internal source and are covered by
     // [`Self::reload_shaders`].
     pub(super) fn update_default_world_shader(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
+        prepared: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     ) -> RenderResult<()> {
-        let world = Some(programs);
-
-        // Build everything into temporaries first. Any `?` early-return
-        // leaves the live pipelines untouched, mirroring `reload_shaders`.
-        // A scene-less world never built a main pipeline; there is nothing
-        // for the fresh world-shader programs to replace.
-        let vert_desc = make_vertex_descriptor();
-        let new_main = if self.cull.main_pipeline.is_some() {
-            let hr = self.hot_reload.enabled;
-            let device = &self.hw.device;
-            let pipeline =
-                build_main_pipeline(device, &vert_desc, world, hr, self.targets.hdr.sample_count)?;
-            let cull = build_cull_pipeline(device, hr)?;
-            // The engine sampler block rides the fresh fragment's encoder; built
-            // here (still before the swap) so a failure leaves the live state
-            // untouched.
-            let sampler_args = build_bindless_sampler_args(
-                device,
-                hr,
-                &self.scene.sampler,
-                &self.shadow.sampler,
-                &self.scene.cube_sampler,
-            )?;
-            Some((pipeline, cull, sampler_args))
-        } else {
-            None
-        };
-
-        // All builds succeeded: swap into the live context. After this
-        // point the next frame's draw calls bind the freshly compiled
-        // pipelines.
-        if let Some((pipeline, cull, sampler_args)) = new_main {
+        // A scene-less world never built a main pipeline; there is nothing for
+        // the fresh world-shader programs to replace.
+        if self.cull.main_pipeline.is_some() {
+            let pipeline = match prepared {
+                Some(pipeline) => pipeline,
+                None => build_main_pipeline(
+                    &self.hw.device,
+                    &make_vertex_descriptor(),
+                    Some(programs),
+                    self.hot_reload.enabled,
+                    self.targets.hdr.sample_count,
+                )?,
+            };
             self.cull.main_pipeline = Some(pipeline);
-            // Swap the cull state with the pipeline; `two_pass_occlusion` keeps
-            // its init-time resolution.
-            self.cull.pipeline = Some(cull.decide);
-            self.cull.pipeline_phase2 = Some(cull.decide_phase2);
-            self.cull.encode_pipeline = Some(cull.encode);
-            self.cull.icb_arg_encoder = Some(cull.icb_arg_encoder);
-            self.arg_buffers.bindless_sampler_args = Some(sampler_args);
-            // Force fresh ICBs on the next frame so every argument buffer is
-            // re-encoded with the new encoder. Matches the `cull` swap in
-            // `reload_shaders`; the status buffers and phase-2 ICB rebuild
-            // alongside.
-            self.cull.icbs = Vec::new();
-            self.cull.icb_arg_buffer = None;
-            self.cull.icb_capacity = 0;
-            self.cull.icbs_2 = Vec::new();
-            self.cull.icb_2_arg_buffer = None;
-            self.cull.status_buffer = None;
-            self.cull.shadow_icb = None;
-            self.cull.shadow_icb_arg_buffer = None;
-            self.cull.shadow_status = None;
-            self.cull.shadow_icb_capacity = 0;
         }
-
         self.world_shader = Some(programs.clone());
         Ok(())
     }

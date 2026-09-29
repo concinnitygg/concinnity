@@ -1377,6 +1377,9 @@ pub(crate) struct VkContext {
 
     // Built-in shader hot reload. See [`HotReloadState`].
     pub(super) hot_reload: HotReloadState,
+    // Closed before teardown, so no pipeline builder handed out by this
+    // context builds against a handle it has destroyed.
+    pub(super) pipeline_gate: crate::vulkan::pipeline_builder::PipelineGate,
     // The world default Shader's compiled programs, `None` for the engine's
     // own. Kept past init so the built-in shader reload rebuilds bucket 0 from
     // the world's pair rather than the engine's.
@@ -2242,6 +2245,7 @@ impl VkContext {
 
 impl Drop for VkContext {
     fn drop(&mut self) {
+        self.pipeline_gate.close();
         self.wait_idle();
 
         // No-op on the outgoing context of a `reload_world`, which already
