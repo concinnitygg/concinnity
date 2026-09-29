@@ -4,7 +4,7 @@ use concinnity_cook::compile::shader::CompiledShader;
 use concinnity_core::components::{ShaderSource, ShaderStage};
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
 use concinnity_core::render::shader_programs::surface::Sources;
-use concinnity_engine::gfx::system::shader_sources::ShaderSourceEntry;
+use concinnity_engine::live_edit::shader_sources::ShaderSourceEntry;
 
 use crate::debug::hot_reload::report::ReloadFailure;
 

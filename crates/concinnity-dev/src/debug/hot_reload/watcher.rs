@@ -4,7 +4,7 @@
 
 use concinnity_cook::authoring::world::parse_entry;
 use concinnity_cook::build_only::include::resolve_includes;
-use concinnity_engine::gfx::system::hot_reload_sources::*;
+use concinnity_engine::live_edit::hot_reload_sources::*;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

@@ -2,7 +2,7 @@
 //! is data the running world re-reads each frame: the sun is packed into the
 //! renderer's light uniforms at load and the fog / shadow / post-process assets
 //! are consumed there outright, so writing their columns would apply nothing.
-//! The engine's `gfx::lighting_preview` seam is what actually reaches the
+//! The engine's `live_edit::lighting_preview` seam is what actually reaches the
 //! renderer; this module decides whether an edit can go through it and bakes the
 //! component it takes.
 //!
@@ -15,7 +15,7 @@ use concinnity_core::components::DirectionalLight;
 use concinnity_core::ecs::ComponentAsset;
 use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::World;
-use concinnity_engine::gfx::lighting_preview;
+use concinnity_engine::live_edit::lighting_preview;
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 

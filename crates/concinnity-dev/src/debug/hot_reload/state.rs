@@ -9,8 +9,8 @@ use concinnity_core::components::Story;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::render_types::SkinnedIndex;
 use concinnity_core::render::backend::RenderBackend;
-use concinnity_engine::gfx::system::hot_reload_sources::*;
-use concinnity_engine::gfx::system::parked::PushedFogSettings;
+use concinnity_engine::live_edit::hot_reload_sources::*;
+use concinnity_engine::live_edit::parked::PushedFogSettings;
 use std::sync::{Arc, Mutex};
 
 use super::decode::{poll_pending_assets, poll_pending_envmap, reload_assets};
@@ -295,7 +295,7 @@ pub(crate) struct FrameHotReloadEffects {
 // Run every asset / shader / world.jsonl reload pass for one frame and return
 // the ECS side-effects. `state` is the debug-owned reload catalog +
 // in-flight handles; `backend` and `fog` are the world's parked backend and the
-// fog it last pushed (see `concinnity_engine::ecs::render_handoff`).
+// fog it last pushed (see `concinnity_engine::live_edit::render_handoff`).
 // This is the per-frame entry point the `FrameHook::tick` drive calls; it
 // holds the logic that previously sat at the top of `GraphicsSystem::run_step`,
 // minus the ECS mutation: the caller applies that from the returned

@@ -6,7 +6,7 @@
 //! build time, so a hot-reloaded clip is byte-identical to a fresh `cn build`.
 
 use concinnity_core::animation::skeleton::{AnimationClip, JointTrack, Keyframe};
-use concinnity_engine::animation::AnimationSystem;
+use concinnity_engine::AnimationSystem;
 use std::collections::HashMap;
 
 use super::signals::ReloadSignals;

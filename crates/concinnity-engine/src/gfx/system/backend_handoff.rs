@@ -37,7 +37,7 @@ impl GraphicsSystem {
     ) -> RenderResult<Box<dyn RenderBackend>> {
         let reuse_backend = match ctx
             .resources
-            .remove::<crate::ecs::PendingBackend>()
+            .remove::<crate::live_edit::PendingBackend>()
             .map(|p| p.0)
         {
             Some(backend) if backend.hot_swap_config() == Some(backend_init.swapchain_config()) => {

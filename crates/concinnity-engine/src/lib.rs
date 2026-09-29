@@ -6,11 +6,10 @@
 //! Win32) in concinnity-device; this crate drives them through a
 //! `Box<dyn RenderBackend>` from `concinnity_device::init_backend` and never
 //! names a concrete backend. Depends on concinnity-core and concinnity-device
-//! (no concinnity-cook, no image decoders). The editor crate (concinnity-dev)
-//! drives this crate's `Runtime` / renderer through the public API widened here;
-//! the modules the editor reaches into are `pub` so it can name their paths,
-//! but individual internals stay
-//! `pub(crate)` unless the editor specifically needs them.
+//! (no concinnity-cook, no image decoders). A host that edits a running world
+//! (the editor crate, concinnity-dev) does it through [`live_edit`], the one
+//! contract for live editing; everything else it drives is the ordinary host
+//! API.
 pub mod blob;
 pub mod ecs;
 mod heap;
@@ -51,11 +50,12 @@ mod device;
 /// Whether this build links a rendering backend. A build with no backend
 /// feature has none, so the only loop that can run a world is a headless one.
 pub use device::AVAILABLE as HAS_RENDER_BACKEND;
-/// Skeletal animation playback. Internal system, constructed by `World::start`
-/// when the world declares any `Animation`; produces per-frame skinning matrices.
-/// `pub` so the editor crate can drive the clip hot-reload through the
-/// `AnimationSystem` setter API.
-pub mod animation;
+// Skeletal animation playback. Internal system, constructed by `World::start`
+// when the world declares any `Animation`; produces per-frame skinning matrices.
+pub(crate) mod animation;
+// Name-addressed control of a running world's animation between steps, reached
+// through `ecs::animation_system_mut`.
+pub use animation::{AnimationSystem, GraphStateReport};
 pub(crate) mod cbor_file;
 pub(crate) mod config;
 /// Camera controllers: the internal systems that turn input into camera and
@@ -76,6 +76,7 @@ pub mod frame_report;
 pub mod gfx;
 pub(crate) mod hud;
 pub(crate) mod input;
+pub mod live_edit;
 // The rigid-body simulation driver: builds a `concinnity_core::physics::Simulation`
 // from the world's physics content and steps it on the fixed tick.
 pub(crate) mod physics;

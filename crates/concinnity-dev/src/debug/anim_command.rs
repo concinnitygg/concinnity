@@ -4,7 +4,7 @@
 //! `AnimationSystem`'s name-addressed methods and answers its reply channel.
 
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_engine::animation::{AnimationSystem, GraphStateReport};
+use concinnity_engine::{AnimationSystem, GraphStateReport};
 use std::sync::mpsc::SyncSender;
 
 // One animation command. `target` is the interned name id of the

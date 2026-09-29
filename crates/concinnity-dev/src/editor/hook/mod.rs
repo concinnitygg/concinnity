@@ -39,7 +39,7 @@ use concinnity_core::ecs::{
     World, WorldLines,
 };
 use concinnity_engine::app::runtime::Runtime;
-use concinnity_engine::ecs::PendingBackend;
+use concinnity_engine::live_edit::PendingBackend;
 use concinnity_engine::shutdown::ShutdownToken;
 
 use super::asset_handle::AssetHandle;
@@ -1087,7 +1087,8 @@ impl EditorHook {
             .world_mut()
             .insert_resource(MenuOverride(Some(!self.sim.playing())));
 
-        let Some(backend) = concinnity_engine::ecs::take_render_backend(runtime.world_mut()) else {
+        let Some(backend) = concinnity_engine::live_edit::take_render_backend(runtime.world_mut())
+        else {
             return;
         };
         staged.world_mut().insert_resource(PendingBackend(backend));

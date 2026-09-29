@@ -534,7 +534,7 @@ fn pending_backend_reuses_instance_and_ends_with_new_world() {
     let mut world_b = titled_scene("world B").build();
     world_b
         .resources
-        .insert(crate::ecs::PendingBackend(backend_a));
+        .insert(crate::live_edit::PendingBackend(backend_a));
     let gs_b = init_graphics(&mut world_b, hooks_b);
 
     assert!(!gs_b.failed);
@@ -574,7 +574,7 @@ fn pending_backend_swapchain_change_forces_full_rebuild() {
     let mut world = scene_builder().build();
     world
         .resources
-        .insert(crate::ecs::PendingBackend(Box::new(transplant)));
+        .insert(crate::live_edit::PendingBackend(Box::new(transplant)));
     let gs = init_graphics(&mut world, hooks_b);
 
     assert!(!gs.failed);
@@ -615,7 +615,7 @@ fn pending_backend_hdr_change_forces_full_rebuild() {
     let mut world = scene_builder().build();
     world
         .resources
-        .insert(crate::ecs::PendingBackend(Box::new(transplant)));
+        .insert(crate::live_edit::PendingBackend(Box::new(transplant)));
     let gs = init_graphics(&mut world, hooks_b);
 
     assert!(!gs.failed);
@@ -649,7 +649,7 @@ fn reload_world_failure_marks_graphics_failed() {
     let mut world_b = scene_builder().build();
     world_b
         .resources
-        .insert(crate::ecs::PendingBackend(backend_a));
+        .insert(crate::live_edit::PendingBackend(backend_a));
     let gs_b = init_graphics(&mut world_b, hooks_b);
 
     assert!(gs_b.failed, "a failed reload marks the system failed");

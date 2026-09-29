@@ -6,7 +6,7 @@
 
 use concinnity_core::components::{CharacterCapsule, CharacterShape, FrameInput};
 use concinnity_core::ecs::World;
-use concinnity_engine::gfx::shape_preview;
+use concinnity_engine::live_edit::shape_preview;
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::EditorHook;

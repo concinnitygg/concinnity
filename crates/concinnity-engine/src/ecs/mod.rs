@@ -55,19 +55,9 @@ pub use registry::SYSTEMS;
 // What stays client-side is the content only a renderer-bearing runtime has:
 // the resources below, and the queries over them in `world_queries`.
 pub use world_queries::{
-    RenderHandoff, animation_system_mut, gpu_profile, memory_budget, memory_drift, render_handoff,
-    renders, state_tree, streaming_pressure, streaming_stats, take_hot_reload_sources,
-    take_render_backend, thread_budget,
+    animation_system_mut, gpu_profile, memory_budget, memory_drift, renders, state_tree,
+    streaming_pressure, streaming_stats, take_render_backend, thread_budget,
 };
-
-/// A render backend transplanted out of a previous world, carried into a freshly
-/// built world so its GraphicsSystem reuses the live GPU device + window instead
-/// of constructing a new one. Published by the `cn editor` live SAVE swap between
-/// building the post-edit world and starting it; GraphicsSystem `run_init` takes
-/// it and calls `RenderBackend::reload_world` (reusing the window) instead of
-/// `init_backend`, so a save applies without recreating the OS window. A shipped
-/// runtime never publishes it; it exists only on the editor's live-update path.
-pub struct PendingBackend(pub Box<dyn backend::RenderBackend>);
 
 /// Why the renderer could not be built, left by GraphicsSystem's init for
 /// `Runtime::start` to pick up and report.
@@ -173,13 +163,13 @@ impl PipelinedFrames {
     }
 }
 
-/// The world's live render backend, parked here between system steps.
-/// GraphicsSystem's init builds it and parks it; each system that drives the
-/// GPU (GraphicsSystem's frame encode, InputSystem's poll) takes it out at the
-/// top of its step and puts it back before returning, so the backend and the
-/// `PipelineContext` are never borrowed together. `None` while a step has it
-/// taken, or once the editor's live SAVE transplanted it out.
-pub struct ActiveRenderBackend(pub Option<Box<dyn backend::RenderBackend>>);
+// The world's live render backend, parked here between system steps.
+// GraphicsSystem's init builds it and parks it; each system that drives the
+// GPU (GraphicsSystem's frame encode, InputSystem's poll) takes it out at the
+// top of its step and puts it back before returning, so the backend and the
+// `PipelineContext` are never borrowed together. `None` while a step has it
+// taken, or once a live edit transplanted it out.
+pub(crate) struct ActiveRenderBackend(pub Option<Box<dyn backend::RenderBackend>>);
 
 impl ActiveRenderBackend {
     // Take the parked backend for the duration of one system step.

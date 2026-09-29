@@ -2,10 +2,10 @@
 //! (`cn debug` and `cn editor`). Moved out of the library into the binary
 //! tree: the watcher, off-thread decode, and the reload passes are driven once
 //! per frame from a `FrameHook::tick` (see `driver::HotReloadDriver`). The
-//! passive source catalogs these consume are captured at
-//! `GraphicsSystem::init` and live in the library
-//! (`concinnity_engine::gfx::system::hot_reload_sources`); the per-frame backend
-//! and pushed fog come from `concinnity_engine::ecs::render_handoff`.
+//! passive source catalogs these consume are captured by graphics init and
+//! reached through the engine's live-edit contract
+//! (`concinnity_engine::live_edit::hot_reload_sources`); the per-frame backend
+//! and pushed fog come from `concinnity_engine::live_edit::render_handoff`.
 //!
 //! Split by responsibility:
 //!   driver     `HotReloadDriver`, the per-frame drive + ECS effect apply

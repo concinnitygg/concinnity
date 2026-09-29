@@ -24,7 +24,7 @@ use concinnity_core::components::{
     Transform, VolumetricFog,
 };
 use concinnity_core::ecs::{ComponentAsset, Entity, World};
-use concinnity_engine::gfx::shape_preview;
+use concinnity_engine::live_edit::shape_preview;
 pub(crate) use diff::{args_changes, same_assets};
 use serde_json::Value;
 use std::collections::BTreeMap;

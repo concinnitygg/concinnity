@@ -70,7 +70,7 @@ struct PickCandidate {
 }
 
 /// Drives the render backend: builds it at init, submits a frame per step.
-pub struct GraphicsSystem {
+pub(crate) struct GraphicsSystem {
     // Where this world reads its source assets and writes its settings, or
     // `None` for a world with no state tree.
     state: Option<StateTree>,
@@ -219,7 +219,7 @@ impl GraphicsSystem {
     /// Fresh renderer driver with no backend yet, reading and writing under
     /// `tree`. Config (frames-in-flight, clear color, `max_frames`, shadow-map
     /// size) is read from the world's `GraphicsConfig` in [`System::init`].
-    pub fn new(tree: Option<&StateTree>) -> Self {
+    pub(crate) fn new(tree: Option<&StateTree>) -> Self {
         // The schema's own defaults, so a world with no GraphicsConfig sees the
         // same values as one that declares an all-default component.
         let gfx = GraphicsConfig::default();

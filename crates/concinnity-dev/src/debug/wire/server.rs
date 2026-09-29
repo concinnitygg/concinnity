@@ -9,7 +9,6 @@
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::World;
-use concinnity_engine::ecs::ActiveRenderBackend;
 use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_host::thread::asset_id;
 use std::io::BufReader;
@@ -105,7 +104,7 @@ impl DebugServer {
         // once the backend borrow ends. Backend commands wait on the queue
         // until a backend is parked.
         let drained = self.commands.drain_by_target();
-        let handoff = concinnity_engine::ecs::render_handoff(world);
+        let handoff = concinnity_engine::live_edit::render_handoff(world);
         match handoff.backend {
             Some(backend) => {
                 for cmd in drained.backend {
@@ -196,10 +195,7 @@ impl FrameHook for DebugServer {
         // the `reload-shaders` command can fire the flag. The backend sits in
         // the world's parked slot between ticks.
         if state.shader_reload.is_none()
-            && let Some(flag) = world
-                .resource::<ActiveRenderBackend>()
-                .and_then(|slot| slot.0.as_ref())
-                .and_then(|backend| backend.shader_reload_flag())
+            && let Some(flag) = concinnity_engine::live_edit::shader_reload_flag(world)
         {
             state.shader_reload = Some(flag);
         }

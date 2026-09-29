@@ -12,7 +12,7 @@ use concinnity_cook::authoring::world::replace_args;
 use concinnity_cook::compile::character::builtin_schema;
 use concinnity_core::components::CharacterCapsule;
 use concinnity_core::ecs::World;
-use concinnity_engine::gfx::shape_preview::{self, ShapeTarget};
+use concinnity_engine::live_edit::shape_preview::{self, ShapeTarget};
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::{EditorHook, declared_id, entry_type, scroll_step, short_status};

@@ -11,7 +11,7 @@ use concinnity_core::components::VolumetricFog;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::render::backend;
 use concinnity_core::render::volumetric_fog;
-use concinnity_engine::gfx::system::hot_reload_sources::*;
+use concinnity_engine::live_edit::hot_reload_sources::*;
 use concinnity_host::thread::asset_id;
 
 // Per-reload tally for the volumetric-fog path. Counts are surfaced separately

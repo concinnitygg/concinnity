@@ -2,7 +2,7 @@
 //! consumed at load, one level further out than the placement fields beside
 //! them: the draw list bakes them into the GPU draw object and the entity keeps
 //! only the handle, so there is no live column to write. The engine's
-//! `gfx::draw_preview` seam is what reaches the draw slots; this module decides
+//! `live_edit::draw_preview` seam is what reaches the draw slots; this module decides
 //! whether an edit can go through it.
 //!
 //! A material the running world never loaded is left to the build, the way a
@@ -11,7 +11,7 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::ecs::{Entity, World};
-use concinnity_engine::gfx::draw_preview::{self, DrawMaterial};
+use concinnity_engine::live_edit::draw_preview::{self, DrawMaterial};
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 

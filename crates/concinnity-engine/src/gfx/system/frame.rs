@@ -511,7 +511,7 @@ impl GraphicsSystem {
             && self.pushed_sky_angle != Some(sky.angle_deg)
         {
             self.pushed_sky_angle = Some(sky.angle_deg);
-            directional = Some(crate::gfx::lighting_preview::lights_under_sky(
+            directional = Some(super::scene_lights::lights_under_sky(
                 ctx.query::<DirectionalLight>(),
                 &sky,
             ));

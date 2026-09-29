@@ -16,7 +16,7 @@ use concinnity_core::components::ShaderSource;
 use concinnity_core::render::backend::{
     LiveEdit, PipelineBuilder, PipelineSwap, PreparedPipelines,
 };
-use concinnity_engine::gfx::system::sdf_field_sources::{SdfFieldEntry, SdfFieldMap};
+use concinnity_engine::live_edit::sdf_field_sources::{SdfFieldEntry, SdfFieldMap};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;

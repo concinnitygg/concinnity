@@ -13,8 +13,8 @@ mod tests;
 
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::backend::{LiveEdit, PipelineBuilder, PipelineSwap};
-use concinnity_engine::gfx::system::parked::ShaderOverrides;
-use concinnity_engine::gfx::system::shader_sources::{ShaderSourceEntry, ShaderSourceMap};
+use concinnity_engine::live_edit::parked::ShaderOverrides;
+use concinnity_engine::live_edit::shader_sources::{ShaderSourceEntry, ShaderSourceMap};
 use std::sync::Arc;
 use std::time::Instant;
 

@@ -17,8 +17,8 @@ use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::volumetric_fog;
-use concinnity_engine::gfx::system;
-use concinnity_engine::gfx::system::hot_reload_sources::*;
+use concinnity_engine::live_edit;
+use concinnity_engine::live_edit::hot_reload_sources::*;
 use notify::{Event, EventKind};
 use std::path::PathBuf;
 
@@ -630,7 +630,7 @@ fn state_with_only_shaders_still_spawns_a_watcher() {
     // A world whose only reloadable sources are Shader files (no textures, no
     // meshes, no LUTs, no IBL, no world.jsonl) still wants the watcher alive
     // so a shader save triggers the recompile.
-    use concinnity_engine::gfx::system::shader_sources::{
+    use concinnity_engine::live_edit::shader_sources::{
         ShaderFile, ShaderSourceEntry, ShaderSourceMap,
     };
     let path = concinnity_host::scratch::path("asset_hot_reload_shader_only.hlsl")
@@ -2194,7 +2194,7 @@ fn drive_run_frame(
     Option<volumetric_fog::FogSettings>,
 ) {
     let mut backend = RecordingBackend::default();
-    let mut fog = system::parked::PushedFogSettings(None);
+    let mut fog = live_edit::parked::PushedFogSettings(None);
     let effects = run_frame(state, &mut backend, &mut fog, None);
     (effects, backend, fog.0)
 }

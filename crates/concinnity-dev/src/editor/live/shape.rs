@@ -1,7 +1,7 @@
 //! A CharacterShape edit. GraphicsSystem resolves every shape once at load, so
 //! overwriting the component alone would change nothing; the running world is
 //! re-seeded through the same narrow seam a slider drag already uses
-//! (`gfx::shape_preview`), which re-resolves the shape against each live
+//! (`live_edit::shape_preview`), which re-resolves the shape against each live
 //! `SkeletonPose` and sizes the rig capsule from the authored one through the
 //! new proportions.
 //!
@@ -12,7 +12,7 @@
 
 use concinnity_core::components::{CharacterCapsule, CharacterShape};
 use concinnity_core::ecs::{SkinnedMeshHandle, World};
-use concinnity_engine::gfx::shape_preview;
+use concinnity_engine::live_edit::shape_preview;
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 

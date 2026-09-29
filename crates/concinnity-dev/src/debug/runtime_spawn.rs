@@ -32,7 +32,7 @@ use concinnity_core::render::decal;
 use concinnity_core::render::particles;
 use concinnity_core::settings::SettingKey;
 use concinnity_engine::controller::camera::Camera3DSystem;
-use concinnity_engine::gfx::system::parked::TextureNameSlots;
+use concinnity_engine::live_edit::parked::TextureNameSlots;
 use concinnity_host::thread::asset_id;
 use std::sync::{Arc, Mutex};
 

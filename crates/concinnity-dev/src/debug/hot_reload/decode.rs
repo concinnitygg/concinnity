@@ -6,7 +6,7 @@
 use concinnity_core::components::build_skeleton_from_joint_defs;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend;
-use concinnity_engine::gfx::system::hot_reload_sources::*;
+use concinnity_engine::live_edit::hot_reload_sources::*;
 use concinnity_host::thread::jobs::pool;
 
 use super::state::*;

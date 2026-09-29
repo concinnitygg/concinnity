@@ -10,7 +10,7 @@ use concinnity_core::components::SkeletonPose;
 use concinnity_core::components::StoryReload;
 use concinnity_core::ecs::World;
 use concinnity_core::gfx::render_types::SkinnedIndex;
-use concinnity_engine::gfx::system;
+use concinnity_engine::live_edit;
 use std::sync::Arc;
 
 use super::report::ReloadReports;
@@ -80,7 +80,7 @@ impl HotReloadDriver {
     // Rebuild the reload state from a freshly captured source catalog.
     // Dropping the previous state stops its watcher and abandons any
     // in-flight decode aimed at the replaced world's slots.
-    pub(crate) fn arm(&mut self, sources: system::hot_reload_sources::HotReloadSources) {
+    pub(crate) fn arm(&mut self, sources: live_edit::hot_reload_sources::HotReloadSources) {
         let world_jsonl_path = self.world_path.as_ref().map(WorldPathHandle::get);
         let state =
             AssetHotReloadState::from_sources(sources, world_jsonl_path, Arc::clone(&self.signals));
@@ -95,7 +95,7 @@ impl HotReloadDriver {
     // is a cheap no-op.
     pub(crate) fn drive(&mut self, world: &mut World) {
         // Arm (or re-arm after a world rebuild) from the init-parked sources.
-        if let Some(sources) = concinnity_engine::ecs::take_hot_reload_sources(world) {
+        if let Some(sources) = concinnity_engine::live_edit::take_hot_reload_sources(world) {
             self.arm(sources);
         }
         if let Some(anim) = concinnity_engine::ecs::animation_system_mut(world) {
@@ -104,7 +104,7 @@ impl HotReloadDriver {
         let Some(state) = self.state.as_mut() else {
             return;
         };
-        let handoff = concinnity_engine::ecs::render_handoff(world);
+        let handoff = concinnity_engine::live_edit::render_handoff(world);
         let (Some(backend), Some(fog)) = (handoff.backend, handoff.fog) else {
             return;
         };

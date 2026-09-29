@@ -12,8 +12,6 @@ use crate::app::budget::{MemoryBudget, ThreadBudget};
 use crate::app::mem_drift::MemoryDrift;
 use crate::ecs::ActiveRenderBackend;
 use crate::gfx::streaming::system::{StreamingPressure, StreamingState, StreamingStats};
-use crate::gfx::system::hot_reload_sources::HotReloadSources;
-use crate::gfx::system::parked::{PushedFogSettings, TextureNameSlots};
 
 /// Whether the world runs with a renderer: the run mode `Runtime::start`
 /// resolved and published, or a constructed `GraphicsSystem` for a world
@@ -84,45 +82,14 @@ pub fn memory_budget(world: &World) -> Option<MemoryBudget> {
 }
 
 /// Take the live render backend out of the world's parked slot, leaving the
-/// world backend-less. The `cn editor` live SAVE swap transplants it into the
-/// rebuilt world (via a `PendingBackend` resource) so the edit applies without
-/// recreating the OS window / re-initializing the GPU device. `None` when the
-/// world never built a backend (or it was already yielded).
+/// world backend-less. A host hands it to a rebuilt world as a
+/// [`PendingBackend`](crate::live_edit::PendingBackend), so the rebuild keeps
+/// the OS window and GPU device. `None` when the world never built a backend
+/// (or it was already yielded).
 pub fn take_render_backend(world: &mut World) -> Option<Box<dyn RenderBackend>> {
     world
         .resource_mut::<ActiveRenderBackend>()
         .and_then(|slot| slot.0.take())
-}
-
-/// Disjoint borrows of the parked render backend and the init-captured state the
-/// `cn debug` drives edit the running world through. Each is `None` when init did
-/// not park it; the backend also while a step has it taken, which is never the
-/// case between ticks, where the drives run.
-pub struct RenderHandoff<'a> {
-    /// The live render backend.
-    pub backend: Option<&'a mut (dyn RenderBackend + 'static)>,
-    /// The fog settings last pushed to the backend.
-    pub fog: Option<&'a mut PushedFogSettings>,
-    /// The texture-name map, parked only under hot-reload capture.
-    pub texture_slots: Option<&'a TextureNameSlots>,
-}
-
-/// Borrow the parked backend and the state beside it at once.
-pub fn render_handoff(world: &mut World) -> RenderHandoff<'_> {
-    let (_, resources) = world.systems_and_resources();
-    let (backend, fog, texture_slots) =
-        resources.get_disjoint_mut::<ActiveRenderBackend, PushedFogSettings, TextureNameSlots>();
-    RenderHandoff {
-        backend: backend.and_then(|slot| slot.0.as_deref_mut()),
-        fog,
-        texture_slots: texture_slots.map(|slots| &*slots),
-    }
-}
-
-/// Take the hot-reload source catalogs graphics init parked, leaving none behind.
-/// `None` under `cn run`, or when no file-backed asset or world.jsonl was declared.
-pub fn take_hot_reload_sources(world: &mut World) -> Option<HotReloadSources> {
-    world.remove_resource::<HotReloadSources>()
 }
 
 /// The world's AnimationSystem, when one was built.
@@ -163,46 +130,12 @@ mod tests {
         assert!(streaming_pressure(&world).is_none());
     }
 
-    // A world that never built a backend has none to yield, and the handoff
-    // borrow reports every parked piece absent.
+    // A world that never built a backend has none to yield, and one that built
+    // no AnimationSystem has none to lend.
     #[test]
-    fn render_backend_accessors_without_a_backend() {
+    fn world_accessors_without_their_systems() {
         let mut world = World::new();
         assert!(take_render_backend(&mut world).is_none());
-        assert!(take_hot_reload_sources(&mut world).is_none());
         assert!(animation_system_mut(&mut world).is_none());
-
-        let handoff = render_handoff(&mut world);
-        assert!(handoff.backend.is_none());
-        assert!(handoff.fog.is_none());
-        assert!(handoff.texture_slots.is_none());
-    }
-
-    // The handoff reaches the parked fog and texture-name map together, and the
-    // source catalogs are taken exactly once.
-    #[test]
-    fn render_handoff_borrows_the_parked_state_together() {
-        let mut world = World::new();
-        world.insert_resource(PushedFogSettings(None));
-        world.insert_resource(TextureNameSlots(
-            [(concinnity_core::ecs::asset_id::AssetId(3), 7)].into(),
-        ));
-        world.insert_resource(HotReloadSources::default());
-
-        let handoff = render_handoff(&mut world);
-        assert!(handoff.backend.is_none());
-        let slots = handoff.texture_slots.expect("texture-name map parked");
-        assert_eq!(slots.0.len(), 1);
-        let fog = concinnity_core::render::volumetric_fog::resolve_asset(
-            &concinnity_core::components::VolumetricFog {
-                enabled: true,
-                ..Default::default()
-            },
-        );
-        handoff.fog.expect("fog parked").0 = fog;
-        assert!(world.resource::<PushedFogSettings>().unwrap().0.is_some());
-
-        assert!(take_hot_reload_sources(&mut world).is_some());
-        assert!(take_hot_reload_sources(&mut world).is_none());
     }
 }
