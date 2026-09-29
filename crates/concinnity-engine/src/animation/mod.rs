@@ -307,7 +307,7 @@ impl System for AnimationSystem {
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         // Asset hot-reload of file-backed clips (`cn debug` only) is driven
-        // from the binary's `DebugHook::tick` via `reload_clips_if_pending`,
+        // from the binary's per-frame hook via `reload_clips_if_pending`,
         // not here. `cn run` has no debug hook, so this step is reload-free.
 
         // Freeze while a menu is open: skip all sampling so animation stops

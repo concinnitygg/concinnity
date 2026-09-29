@@ -1,5 +1,5 @@
 //! The interpreted (`cn debug`) run path: compiles world.jsonl fully in memory
-//! and drives the system loop with the per-frame debug hook. The production
+//! and drives the system loop with a per-frame hook. The production
 //! `cn run` path (compiled-blob playback) lives in the runtime crate's `app::run`.
 
 use concinnity_cook::authoring::world::find_world_jsonl;
@@ -7,7 +7,7 @@ use concinnity_engine::app::run::LaunchRequest;
 use concinnity_engine::app::runtime::Runtime;
 
 use crate::debug::hot_reload::WorldPathHandle;
-use crate::debug_hook::DebugHook;
+use crate::frame_hook::FrameHook;
 
 /// The `cn debug` server path: start the localhost debug server on `port`,
 /// then run interpreted with it as the per-frame hook. This is the entry point
@@ -15,14 +15,14 @@ use crate::debug_hook::DebugHook;
 pub fn run_debug(launch: LaunchRequest, json_path: Option<&str>, port: u16) -> std::io::Result<()> {
     concinnity_engine::app::run::init_logging();
     let world_path = resolve_world_path(json_path)?;
-    let debug_hook: Box<dyn DebugHook> = match crate::debug::DebugServer::start(port) {
+    let hook: Box<dyn FrameHook> = match crate::debug::DebugServer::start(port) {
         Ok(srv) => Box::new(srv.with_world_path(WorldPathHandle::new(world_path.as_str()))),
         Err(e) => {
             eprintln!("error: could not start debug server: {e}");
             return Err(e);
         }
     };
-    run_interpreted(launch, &world_path, Some(debug_hook))
+    run_interpreted(launch, &world_path, Some(hook))
 }
 
 // The world an interpreted run should load: the `-f` path when the caller gave
@@ -50,7 +50,7 @@ fn resolve_world_path(json_path: Option<&str>) -> std::io::Result<String> {
 pub(crate) fn run_interpreted(
     launch: LaunchRequest,
     json_path: &str,
-    debug: Option<Box<dyn DebugHook>>,
+    hook: Option<Box<dyn FrameHook>>,
 ) -> std::io::Result<()> {
     let mut runtime = crate::project::runtime().with_launch(launch);
     *runtime.world_mut() = crate::authoring::build_world_from_path(json_path).map_err(|e| {
@@ -58,25 +58,25 @@ pub(crate) fn run_interpreted(
         e
     })?;
 
-    start_app(runtime, debug)
+    start_app(runtime, hook)
 }
 
 // Shared startup and loop entry once the Runtime's world is populated. The world
 // loop itself (and the platform event-pump + window activation) is the shared
 // `concinnity_engine::app::runloop` driver; the interpreted path's only
-// addition is ticking the debug hook each frame.
+// addition is ticking the frame hook each frame.
 pub(crate) fn start_app(
     mut runtime: Runtime,
-    mut debug: Option<Box<dyn DebugHook>>,
+    mut hook: Option<Box<dyn FrameHook>>,
 ) -> std::io::Result<()> {
     use concinnity_engine::app::runloop;
 
     let shutdown = runtime.shutdown_token();
     runloop::install_ctrlc_handler(&runtime);
 
-    // Hand the shutdown token to the debug hook so a debug client can request
-    // a clean exit (the `shutdown` debug tool call). No-op when no hook is present.
-    if let Some(hook) = debug.as_mut() {
+    // Hand the shutdown token to the hook so a debug client can request a clean
+    // exit (the `shutdown` debug tool call). No-op when no hook is present.
+    if let Some(hook) = hook.as_mut() {
         hook.attach_shutdown(shutdown.clone());
     }
 
@@ -100,11 +100,11 @@ pub(crate) fn start_app(
         return Err(std::io::Error::other(format!("failed to start app: {e}")));
     }
 
-    // The interpreted path ticks its debug hook each frame before the world step.
+    // The interpreted path ticks its hook each frame before the world step.
     // After the tick (which sees only `&mut World`), the hook is given the whole
     // Runtime so it can apply a pending world swap (the `cn editor` live SAVE).
     let on_tick = |runtime: &mut Runtime| {
-        if let Some(hook) = debug.as_deref_mut() {
+        if let Some(hook) = hook.as_deref_mut() {
             hook.tick(runtime.world_mut());
             hook.apply_world_swap(runtime);
         }

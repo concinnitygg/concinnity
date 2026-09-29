@@ -15,12 +15,12 @@ use super::fixtures::{
     behavior, behavior_session, close_rect_of, entry, hook, seed_tree, select_behavior, set_input,
     title_rect_of, world_with_fields, world_with_input,
 };
-use crate::debug_hook::DebugHook;
 use crate::editor::behavior;
 use crate::editor::behavior::panel::{BehaviorAction, ViewMode};
 use crate::editor::hook::{Drag, FormTarget};
 use crate::editor::hud;
 use crate::editor::inject;
+use crate::frame_hook::FrameHook;
 
 use crate::editor::panels::form_panel;
 

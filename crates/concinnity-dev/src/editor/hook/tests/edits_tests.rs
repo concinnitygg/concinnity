@@ -13,8 +13,8 @@ use concinnity_core::components::TextLabel;
 use concinnity_core::ecs::World;
 
 use super::fixtures::{entry, hook, set_field, world_with_fields, world_with_input};
-use crate::debug_hook::DebugHook;
 use crate::editor::hook::{EditorHook, FormTarget};
+use crate::frame_hook::FrameHook;
 
 use crate::editor::hud::HudAction;
 

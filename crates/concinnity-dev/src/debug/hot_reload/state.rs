@@ -11,7 +11,6 @@ use concinnity_core::gfx::render_types::SkinnedIndex;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_engine::gfx::system::hot_reload_sources::*;
 use concinnity_engine::gfx::system::parked::PushedFogSettings;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::decode::{poll_pending_assets, poll_pending_envmap, reload_assets};
@@ -19,6 +18,7 @@ use super::passes::{reload_procedural_meshes, reload_stories, reload_volumetric_
 use super::report::ReloadReport;
 use super::sdf::SdfReload;
 use super::shader::ShaderReload;
+use super::signals::ReloadSignals;
 use super::watcher::spawn_watcher;
 
 // A worker result still in flight: the receiving end of the channel a
@@ -94,9 +94,7 @@ pub(crate) struct DecodedAssetBatch {
 }
 
 // Shared `cn debug`-only state: the source map, the optional LUT entry, the
-// atomic the engine polls at frame start, and the live watcher handle. The
-// watcher pushes events straight into the atomic; `GraphicsSystem` reads +
-// clears it each step.
+// reload signals `run_frame` takes at frame start, and the live watcher handle.
 pub(crate) struct AssetHotReloadState {
     pub map: TextureSourceMap,
     // Singleton `ColorLut`, when the world declared one with a `source` path.
@@ -115,8 +113,8 @@ pub(crate) struct AssetHotReloadState {
     // changes before pushing to the backend.
     pub skinned_meshes: SkinnedMeshSourceMap,
     // `ProceduralMesh` assets whose generator args can be re-applied from a
-    // live `world.jsonl`. No file watcher: the trigger is the same
-    // `PENDING_WORLD` flag the Prop-diff path consumes.
+    // live `world.jsonl`. No file watcher of their own: the trigger is the
+    // world.jsonl reload signal.
     pub procedural_meshes: ProceduralMeshSourceMap,
     // Every world `Shader`'s files, the compiles in flight, and the overrides
     // shared with the streaming pump. The asset watcher marks the Shaders a
@@ -132,10 +130,9 @@ pub(crate) struct AssetHotReloadState {
     // `world.jsonl` reload pass re-reads from disk. `None` when init came
     // from a stream / blob and no on-disk path exists to watch.
     pub world_jsonl_path: Option<String>,
-    // Flipped to `true` by either the `notify` watcher or the
-    // `reload-assets` debug tool call. The next `GraphicsSystem::step` consumes
-    // it and runs [`reload_assets`].
-    pub pending: Arc<AtomicBool>,
+    // The driver's reload signals, raised by the `notify` watcher and the
+    // `reload-assets` debug tool call and taken by [`run_frame`].
+    pub signals: Arc<ReloadSignals>,
     // In-flight EnvironmentMap convolution. `Some(receiver)` while a
     // worker thread is computing the irradiance + prefilter payload;
     // [`poll_pending_envmap`] picks the result up on a later frame and
@@ -212,7 +209,7 @@ impl std::fmt::Debug for AssetHotReloadState {
             .field("shaders", &self.shaders.catalog.len())
             .field("sdf_fields", &self.sdf_fields.catalog.len())
             .field("world_jsonl_path", &self.world_jsonl_path)
-            .field("pending", &self.pending.load(Ordering::Relaxed))
+            .field("signals", &self.signals)
             .field("env_map_inflight", &env_inflight)
             .field("asset_batch_inflight", &batch_inflight)
             .field("watcher", &self.watcher.is_some())
@@ -223,20 +220,20 @@ impl std::fmt::Debug for AssetHotReloadState {
 impl AssetHotReloadState {
     // Build the state from the init-captured [`HotReloadSources`] bundle and
     // the host's world.jsonl path, and (best-effort) spawn the `notify` watcher
-    // over every unique parent directory of those paths. Watcher creation is best-effort:
-    // a missing path or notify error logs and continues; the
-    // `reload-assets` debug tool call still works on the same flag. The `cn debug`
-    // drive calls this on its first tick after taking the sources off the
-    // `GraphicsSystem`.
+    // over every unique parent directory of those paths, raising `signals`.
+    // Watcher creation is best-effort: a missing path or notify error logs and
+    // continues; the `reload-assets` debug tool call still raises the same
+    // signals. The driver calls this on each tick that finds freshly parked
+    // sources.
     pub(crate) fn from_sources(
         sources: HotReloadSources,
         world_jsonl_path: Option<String>,
+        signals: Arc<ReloadSignals>,
     ) -> Self {
-        let pending = Arc::new(AtomicBool::new(false));
         let watcher = if sources.is_empty() && world_jsonl_path.is_none() {
             None
         } else {
-            spawn_watcher(&sources, world_jsonl_path.as_deref(), Arc::clone(&pending))
+            spawn_watcher(&sources, world_jsonl_path.as_deref(), Arc::clone(&signals))
         };
         let HotReloadSources {
             map,
@@ -259,7 +256,7 @@ impl AssetHotReloadState {
             shaders: ShaderReload::new(shaders, shader_overrides),
             sdf_fields: SdfReload::new(sdf_fields),
             world_jsonl_path,
-            pending,
+            signals,
             env_map_inflight: Mutex::new(None),
             asset_batch_inflight: Mutex::new(None),
             story_snapshots: std::collections::HashMap::new(),
@@ -275,17 +272,6 @@ impl AssetHotReloadState {
     pub(crate) fn drain_pending_skeleton_updates(&mut self) -> Vec<PendingSkeletonUpdate> {
         std::mem::take(&mut self.pending_skeleton_updates)
     }
-
-    // Cheap atomic load; called at the top of `GraphicsSystem::step`.
-    pub(crate) fn reload_requested(&self) -> bool {
-        self.pending.load(Ordering::SeqCst)
-    }
-
-    // Clear the flag after a reload pass (success or failure) so a bad source
-    // file does not loop forever.
-    pub(crate) fn clear_flag(&self) {
-        self.pending.store(false, Ordering::SeqCst);
-    }
 }
 
 // ECS-side effects a single hot-reload pass produced that the caller must
@@ -294,7 +280,7 @@ impl AssetHotReloadState {
 // a world.jsonl reload added that must enter the ECS so subsequent systems
 // see them. Returned by [`run_frame`] instead of applied in place because the
 // reload passes hold the backend + Prop-tracking borrow and have no `World`
-// access: the `DebugHook::tick` drive applies these once the
+// access: the `FrameHook::tick` drive applies these once the
 // system borrow is released.
 pub(crate) struct FrameHotReloadEffects {
     pub skeleton_updates: Vec<PendingSkeletonUpdate>,
@@ -310,7 +296,7 @@ pub(crate) struct FrameHotReloadEffects {
 // the ECS side-effects. `state` is the debug-owned reload catalog +
 // in-flight handles; `backend` and `fog` are the world's parked backend and the
 // fog it last pushed (see `concinnity_engine::ecs::render_handoff`).
-// This is the per-frame entry point the `DebugHook::tick` drive calls; it
+// This is the per-frame entry point the `FrameHook::tick` drive calls; it
 // holds the logic that previously sat at the top of `GraphicsSystem::run_step`,
 // minus the ECS mutation: the caller applies that from the returned
 // `FrameHotReloadEffects` once the system borrow is released.
@@ -335,8 +321,9 @@ pub(crate) fn run_frame(
     // Skeleton-shape changes queued by `poll_pending_assets` are applied to the
     // ECS-owned `SkeletonPose` components by the caller.
     effects.skeleton_updates = state.drain_pending_skeleton_updates();
-    if state.reload_requested() {
-        state.clear_flag();
+    // Taken before the pass (success or failure) so a bad source file does not
+    // loop forever.
+    if state.signals.take_assets() {
         // Spawns up to two worker threads (asset decode + envmap convolution);
         // results land on a later frame via the poll calls above.
         reload_assets(state);
@@ -347,7 +334,7 @@ pub(crate) fn run_frame(
     // The compile and the pipeline build run on a worker and a failed build is
     // never swapped in, so neither a slow compile nor a typo stalls or breaks
     // the live frame.
-    let pending_shaders = super::pending::take_pending_shaders();
+    let pending_shaders = state.signals.take_shaders();
     let mut reload_reports = Vec::new();
     if !pending_shaders.is_empty() {
         reload_reports = state
@@ -355,7 +342,7 @@ pub(crate) fn run_frame(
             .request(&pending_shaders, backend.pipeline_builder());
     }
     reload_reports.extend(state.shaders.poll(backend));
-    let pending_volumes = super::pending::take_pending_sdf_volumes();
+    let pending_volumes = state.signals.take_sdf_volumes();
     if !pending_volumes.is_empty() {
         reload_reports.extend(
             state
@@ -370,7 +357,7 @@ pub(crate) fn run_frame(
     // Markdown story reload poll: re-expand the world's StoryImports and
     // queue every changed graph for the story system. Cheap when the flag is
     // unset.
-    if super::pending::take_pending_stories() {
+    if state.signals.take_stories() {
         let path = state.world_jsonl_path.clone();
         if let Some(path) = path {
             effects.story_updates = reload_stories(&path, &mut state.story_snapshots);
@@ -393,7 +380,7 @@ pub(crate) fn run_frame(
     // re-apply VolumetricFog. Cheap when the flag is unset. (Prop diffing was
     // dropped with the positional render path; reworking it onto the per-entity
     // components is future work.)
-    if super::pending::take_pending_world() {
+    if state.signals.take_world() {
         let path = state.world_jsonl_path.clone();
         if let Some(path) = path {
             let pm_result = reload_procedural_meshes(&path, &mut state.procedural_meshes, backend);

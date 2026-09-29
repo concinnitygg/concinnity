@@ -1,5 +1,5 @@
 //! Tests that touch process-global state -- the session's open project and the
-//! debug/hot-reload statics -- must not run concurrently, because Cargo runs a
+//! asset-name interner -- must not run concurrently, because Cargo runs a
 //! binary's tests in parallel threads within one process.
 //!
 //! The guard is the workspace's one process-global lock, shared with every

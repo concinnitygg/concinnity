@@ -14,7 +14,7 @@ use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::World;
 use concinnity_host::thread::asset_id;
 
-use crate::debug_hook::DebugHook;
+use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{

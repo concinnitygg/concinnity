@@ -15,7 +15,6 @@ use super::commands::{
     handle_quality_set, handle_rebind, handle_reparent, handle_screenshot, handle_spawn,
     handle_story,
 };
-use super::hot_reload;
 use super::state::DebugState;
 
 #[derive(serde::Deserialize)]
@@ -235,22 +234,15 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
             }
         }
         "reload-assets" => {
-            match &state.asset_reload {
-                Some(flag) => {
-                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                    // AnimationSystem, the GraphicsSystem world-reload pass,
-                    // and the world Shader reload pass each
-                    // listen on their own sibling flags. Fire all four here
-                    // so a single tool call reloads every hot-reloadable
-                    // surface in one shot.
-                    hot_reload::set_pending_animations();
-                    hot_reload::set_pending_world();
-                    hot_reload::mark_all_shaders_pending();
+            match &state.reload {
+                Some(signals) => {
+                    // One tool call reloads every hot-reloadable surface.
+                    signals.request_all();
                     serde_json::json!({ "ok": true, "reload_queued": true })
                 }
-                // `tick` captures the flag once `GraphicsSystem` exposes it,
-                // so a `None` here means `cn run`, an all-procedural world,
-                // or `tick` has not yet seen GraphicsSystem.
+                // `tick` captures the signals once the reload driver is armed,
+                // so a `None` here means `cn run` or a world whose graphics
+                // init has not parked its reload sources yet.
                 None => serde_json::json!({
                     "ok": false,
                     "error": "asset hot-reload not available (cn debug only; no file-backed textures captured yet)",
@@ -375,6 +367,7 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::debug::hot_reload::ReloadSignals;
     use crate::debug::state::{AssetEntry, CameraSnapshot};
     use concinnity_core::profile::RenderStats;
     use concinnity_engine::gfx::streaming::system::StreamingStats;
@@ -659,35 +652,22 @@ mod tests {
     }
 
     #[test]
-    fn reload_assets_queues_the_flag_and_raises_sibling_reloads() {
-        // The handler flips the primary asset flag AND raises the process-global
-        // sibling reload flags; serialize on the shared lock and drain those
-        // flags so the side effects do not leak into other tests.
-        let _guard = crate::test_support::lock();
-        hot_reload::take_pending_world();
-        hot_reload::take_pending_shaders();
-        hot_reload::take_pending_sdf_volumes();
-        hot_reload::take_pending_stories();
-        hot_reload::take_pending_animations();
-
-        let flag = Arc::new(AtomicBool::new(false));
+    fn reload_assets_requests_every_reload() {
+        let signals = Arc::new(ReloadSignals::default());
         let st = DebugState {
-            asset_reload: Some(Arc::clone(&flag)),
+            reload: Some(Arc::clone(&signals)),
             ..Default::default()
         };
         let r = reply(r#"{"cmd":"reload-assets"}"#, st);
         assert_eq!(r["ok"], true);
         assert_eq!(r["reload_queued"], true);
-        assert!(flag.load(Ordering::SeqCst));
-        // The world, Shader, SdfVolume field, and animation reload surfaces
-        // were signaled; drain them so they do not leak.
-        assert!(hot_reload::take_pending_world());
-        assert!(hot_reload::take_pending_shaders().all);
-        assert!(hot_reload::take_pending_sdf_volumes().all);
-        assert!(hot_reload::take_pending_animations());
-        // Stories reload only on their own `.md` watch, so reload-assets leaves
-        // that flag clear.
-        assert!(!hot_reload::take_pending_stories());
+        assert!(signals.take_assets());
+        assert!(signals.take_world());
+        assert!(signals.take_shaders().all);
+        assert!(signals.take_sdf_volumes().all);
+        assert!(signals.take_animations());
+        // Stories reload only on their own `.md` watch.
+        assert!(!signals.take_stories());
     }
 
     #[test]

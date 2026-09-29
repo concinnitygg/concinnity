@@ -123,7 +123,7 @@ use concinnity_engine::app::runtime::Runtime;
 use concinnity_engine::shutdown::ShutdownToken;
 use hook::EditorHook;
 
-use crate::debug_hook::DebugHook;
+use crate::frame_hook::FrameHook;
 
 // A minimal renderable world: a lone Window, which the cook pipeline expands
 // into default shaders around. Booted in memory when there is nothing
@@ -174,7 +174,7 @@ pub fn run_editor(
     boot_world(&mut runtime, &entries)?;
 
     // Inject the editor HUD elements before start (this also drops the world's
-    // DebugHud, whose F1 role the editor takes over); the editor's DebugHook
+    // DebugHud, whose F1 role the editor takes over); the editor's FrameHook
     // tick drives them each frame.
     inject::editor_hud(runtime.world_mut());
 
@@ -189,7 +189,7 @@ pub fn run_editor(
     if pick_a_world {
         editor_hook = editor_hook.with_start_screen(previewing);
     }
-    let hook: Box<dyn DebugHook> = match debug_port {
+    let hook: Box<dyn FrameHook> = match debug_port {
         Some(port) => {
             let server = crate::debug::DebugServer::start(port)?
                 .with_notifier(editor_hook.notifier())
@@ -281,16 +281,16 @@ fn seeded_content(base: &str) -> String {
 // Fan a single per-frame drive out to several hooks. Lets the editor run its own
 // hook and the debug server side by side without either owning the other.
 struct MultiHook {
-    hooks: Vec<Box<dyn DebugHook>>,
+    hooks: Vec<Box<dyn FrameHook>>,
 }
 
 impl MultiHook {
-    fn boxed(hooks: Vec<Box<dyn DebugHook>>) -> Box<dyn DebugHook> {
+    fn boxed(hooks: Vec<Box<dyn FrameHook>>) -> Box<dyn FrameHook> {
         Box::new(Self { hooks })
     }
 }
 
-impl DebugHook for MultiHook {
+impl FrameHook for MultiHook {
     fn tick(&mut self, world: &mut World) {
         for hook in &mut self.hooks {
             hook.tick(world);

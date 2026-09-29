@@ -9,6 +9,7 @@ use concinnity_engine::shutdown::ShutdownToken;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use super::hot_reload::ReloadSignals;
 use super::runtime_spawn::RuntimeQueue;
 
 // The world snapshot rebuilt by `tick`. The asset/system lists are not cheap
@@ -46,7 +47,7 @@ pub(crate) struct DebugState {
     pub(super) profile_frame_allocs: Option<u32>,
     // Render-backend stats from the most recent frame, for `profile`.
     pub(super) profile_render: profile::RenderStats,
-    // Runtime shutdown token, set once via `DebugHook::attach_shutdown`. The
+    // Runtime shutdown token, set once via `FrameHook::attach_shutdown`. The
     // `shutdown` command cancels it to exit the engine cleanly.
     pub(super) shutdown_token: Option<ShutdownToken>,
     // Shared shader-reload flag captured from the active graphics backend.
@@ -55,11 +56,9 @@ pub(crate) struct DebugState {
     // `reload-shaders` command flips this to `true` and the backend polls it
     // at the top of `draw_frame`.
     pub(super) shader_reload: Option<Arc<AtomicBool>>,
-    // Shared asset-reload flag captured from `GraphicsSystem`. `Some` once
-    // `tick` has seen a `cn debug` world with at least one file-backed
-    // `Texture`; `None` otherwise. The `reload-assets` command flips it; the
-    // engine consumes it at the top of `GraphicsSystem::step`.
-    pub(super) asset_reload: Option<Arc<AtomicBool>>,
+    // The hot-reload driver's signals, captured once `tick` has armed it.
+    // The `reload-assets` command raises them; the driver takes them each frame.
+    pub(super) reload: Option<Arc<ReloadSignals>>,
     // Active-camera pose, refreshed every tick for the `camera-get` query.
     // `None` until the first tick that finds a `Camera3D` (a world with no
     // camera never sets it).

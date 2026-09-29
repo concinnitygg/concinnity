@@ -12,12 +12,12 @@ use concinnity_core::ecs::World;
 use concinnity_core::gfx::render_types::SkinnedIndex;
 use concinnity_engine::gfx::system;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use super::report::ReloadReports;
+use super::signals::ReloadSignals;
 use super::state::{AssetHotReloadState, FrameHotReloadEffects, run_frame};
 use super::world_path::WorldPathHandle;
-use crate::debug_hook::DebugHook;
+use crate::frame_hook::FrameHook;
 
 pub(crate) struct HotReloadDriver {
     // Reload catalog + filesystem watcher + in-flight decode handles. Armed
@@ -26,6 +26,9 @@ pub(crate) struct HotReloadDriver {
     // live preview rebuild re-runs init), so the catalog never goes stale
     // against the current backend slots.
     pub(super) state: Option<AssetHotReloadState>,
+    // The reload requests every armed state's watcher and the `reload-assets`
+    // tool call raise. One per driver, kept across re-arms.
+    signals: Arc<ReloadSignals>,
     // The editor's toast queue, when driving inside an editor session: the
     // reload passes report apply results through it. `None` under a bare
     // `cn debug`, which has no toast surface.
@@ -42,6 +45,7 @@ impl HotReloadDriver {
     pub(crate) fn new() -> Self {
         Self {
             state: None,
+            signals: Arc::default(),
             notifier: None,
             world_path: None,
             reload_reports: None,
@@ -67,11 +71,10 @@ impl HotReloadDriver {
         self
     }
 
-    // The shared "reload requested" flag of the armed state, for the
-    // `reload-assets` debug tool call. `None` until a tick arms the state; the
-    // caller must re-query after ticks since a re-arm swaps the flag.
-    pub(crate) fn pending(&self) -> Option<Arc<AtomicBool>> {
-        self.state.as_ref().map(|s| Arc::clone(&s.pending))
+    // The driver's reload signals, for the `reload-assets` debug tool call.
+    // `None` until a tick arms the state; the same signals across re-arms.
+    pub(crate) fn signals(&self) -> Option<Arc<ReloadSignals>> {
+        self.state.as_ref().map(|_| Arc::clone(&self.signals))
     }
 
     // Rebuild the reload state from a freshly captured source catalog.
@@ -79,7 +82,8 @@ impl HotReloadDriver {
     // in-flight decode aimed at the replaced world's slots.
     pub(crate) fn arm(&mut self, sources: system::hot_reload_sources::HotReloadSources) {
         let world_jsonl_path = self.world_path.as_ref().map(WorldPathHandle::get);
-        let state = AssetHotReloadState::from_sources(sources, world_jsonl_path);
+        let state =
+            AssetHotReloadState::from_sources(sources, world_jsonl_path, Arc::clone(&self.signals));
         if let Some(reports) = &self.reload_reports {
             reports.arm(state.shaders.subjects().chain(state.sdf_fields.subjects()));
         }
@@ -95,7 +99,7 @@ impl HotReloadDriver {
             self.arm(sources);
         }
         if let Some(anim) = concinnity_engine::ecs::animation_system_mut(world) {
-            super::animation::reload_clips_if_pending(anim);
+            super::animation::reload_clips_if_pending(anim, &self.signals);
         }
         let Some(state) = self.state.as_mut() else {
             return;
@@ -112,7 +116,7 @@ impl HotReloadDriver {
     }
 }
 
-impl DebugHook for HotReloadDriver {
+impl FrameHook for HotReloadDriver {
     fn tick(&mut self, world: &mut World) {
         self.drive(world);
     }

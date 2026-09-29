@@ -7,7 +7,7 @@ use concinnity_core::components::FrameInput;
 use concinnity_core::components::Sprite;
 use concinnity_core::ecs::World;
 
-use crate::debug_hook::DebugHook;
+use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::tests::fixtures::hook;
 

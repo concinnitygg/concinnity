@@ -13,8 +13,8 @@ use concinnity_core::ecs::World;
 use super::fixtures::{
     click_row, entry, entry_with_args, hook, row_of, seed_tree, set_field, world_with_fields,
 };
-use crate::debug_hook::DebugHook;
 use crate::editor::hook::{EditorHook, FormTarget, declared_id, visible_slot};
+use crate::frame_hook::FrameHook;
 
 use crate::editor::inject;
 

@@ -1,7 +1,7 @@
 //! The shared render/event loop that drives a live `Runtime`. Both the compiled
 //! `cn run` runtime (`run::start_runtime`) and the interpreted `cn debug` path
 //! (in the editor crate) pump the same loop; the only difference is the per-tick
-//! hook the debug path threads through to run its DebugHook. Keeping the platform
+//! hook the debug path threads through to run its frame hook. Keeping the platform
 //! event-pump and window-activation glue in one place means it is not duplicated
 //! per entry point.
 //!
@@ -49,7 +49,7 @@ pub fn activate_app_macos() {
 /// the pending AppKit/CoreFoundation events so the window stays responsive and
 /// Metal drawable callbacks fire; run the per-tick `on_tick` hook; then step the
 /// world, stopping on Stop/Done. `on_tick` is where the interpreted debug path
-/// ticks its DebugHook; the runtime passes a no-op.
+/// ticks its frame hook; the runtime passes a no-op.
 ///
 /// `pump_events` is only meaningful on macOS (it gates the Cocoa pump): the
 /// caller sets it from whether the world actually renders, so a headless macOS

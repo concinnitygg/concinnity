@@ -11,9 +11,9 @@ use concinnity_host::thread::asset_id;
 use std::collections::BTreeSet;
 
 use super::fixtures::{click_at, entry, hook, pick_world, release_at, set_input};
-use crate::debug_hook::DebugHook;
 use crate::editor::hook::FormTarget;
 use crate::editor::hook::pick::{camera_ray, ray_hits};
+use crate::frame_hook::FrameHook;
 
 use crate::editor::panels::asset_tree::{self, TreeGroup};
 

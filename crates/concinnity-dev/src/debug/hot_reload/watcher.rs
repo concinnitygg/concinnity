@@ -1,6 +1,6 @@
 //! Filesystem watcher: subscribes to the parent directories of every captured
-//! source path and flips the shared atomic on a relevant change. Mirrors the
-//! per-backend shader watcher.
+//! source path and raises the matching reload signal on a relevant change.
+//! Mirrors the per-backend shader watcher.
 
 use concinnity_cook::authoring::world::parse_entry;
 use concinnity_cook::build_only::include::resolve_includes;
@@ -8,9 +8,10 @@ use concinnity_engine::gfx::system::hot_reload_sources::*;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use super::signals::ReloadSignals;
 
 // Spawn the watcher. Mirrors the shader-watcher pattern in
 // `concinnity_device::metal::hot_reload`: 150 ms debounce, only
@@ -18,7 +19,7 @@ use std::time::{Duration, Instant};
 pub(super) fn spawn_watcher(
     sources: &HotReloadSources,
     world_jsonl_path: Option<&str>,
-    flag: Arc<AtomicBool>,
+    signals: Arc<ReloadSignals>,
 ) -> Option<notify::RecommendedWatcher> {
     // Procedural meshes are generated, not sourced from a file, so they have no
     // directory to watch.
@@ -63,8 +64,8 @@ pub(super) fn spawn_watcher(
                     shaders.len(),
                     volumes.len()
                 );
-                super::pending::mark_shaders_pending(shaders);
-                super::pending::mark_sdf_volumes_pending(volumes);
+                signals.mark_shaders(shaders);
+                signals.mark_sdf_volumes(volumes);
             }
             return;
         }
@@ -81,7 +82,7 @@ pub(super) fn spawn_watcher(
             "asset hot-reload: detected change to {:?}, scheduling {kind:?} reload",
             event.paths
         );
-        signal(kind, &flag);
+        signal(kind, &signals);
     }) {
         Ok(w) => w,
         Err(e) => {
@@ -208,17 +209,16 @@ pub(super) fn classify_event(event: &Event) -> Option<ReloadKind> {
     })
 }
 
-// Raise the pending flag for `kind`. Separate from `classify_event` because
-// these are process-global statics: the routing above is what a test drives.
-fn signal(kind: ReloadKind, flag: &AtomicBool) {
+// Raise the reload signal for `kind`.
+pub(super) fn signal(kind: ReloadKind, signals: &ReloadSignals) {
     match kind {
         // Routed in the watcher closure, which knows the saved paths.
         ReloadKind::Shaders => {}
-        ReloadKind::World => super::set_pending_world(),
-        ReloadKind::Stories => super::set_pending_stories(),
+        ReloadKind::World => signals.request_world(),
+        ReloadKind::Stories => signals.request_stories(),
         ReloadKind::Assets => {
-            flag.store(true, Ordering::SeqCst);
-            super::set_pending_animations();
+            signals.request_assets();
+            signals.request_animations();
         }
     }
 }

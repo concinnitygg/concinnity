@@ -23,8 +23,8 @@ use std::time::Instant;
 
 use super::compile_queue::CompileQueue;
 use super::files::FileIndex;
-use super::pending::PendingSdfVolumes;
 use super::report::{ReloadFailure, ReloadOutcome, ReloadReport, ReloadSubject};
+use super::signals::PendingSdfVolumes;
 use compile::{FieldKey, FieldResult, RebuildResult, Rebuilt, read_field};
 
 // Compiles one field for a group of volumes, named by the first; the cook's

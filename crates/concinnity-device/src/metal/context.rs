@@ -1473,7 +1473,7 @@ impl MtlContext {
     // Metal keeps the underlying pool + counter buffers alive until any
     // in-flight command buffer referencing them completes, so this is safe
     // to call mid-frame between encode passes (a debug tool call runs in
-    // the `DebugHook::tick` window before the world step). Returns an error
+    // the per-frame hook window before the world step). Returns an error
     // when the index is out of range or already tombstoned.
     pub(crate) fn remove_emitter(&mut self, emitter_id: usize) -> error::RenderResult<()> {
         let rec_slot = self.particle.records.get_mut(emitter_id).ok_or_else(|| {

@@ -1,4 +1,4 @@
-//! The editor's per-frame drive. Implements the run loop's `DebugHook` seam: each
+//! The editor's per-frame drive. Implements the run loop's `FrameHook` seam: each
 //! frame it hit-tests the editor HUD's controls against the live input, mutates
 //! the working authored entry list, persists on SAVE, drives the world's cursor /
 //! freeze state, and re-anchors + recolors the HUD. This is the whole editor: it
@@ -71,8 +71,8 @@ use super::viewport::snap;
 use super::widget;
 use super::worlds;
 use crate::debug::hot_reload::WorldPathHandle;
-use crate::debug_hook::DebugHook;
 use crate::editor::text_area::clipboard::InternalClipboard;
+use crate::frame_hook::FrameHook;
 use edit::behavior_state::BehaviorState;
 use edit::console_state::ConsoleState;
 use edit::map_state::MapState;
@@ -724,7 +724,7 @@ impl EditorHook {
     }
 }
 
-impl DebugHook for EditorHook {
+impl FrameHook for EditorHook {
     fn attach_shutdown(&mut self, shutdown: ShutdownToken) {
         self.shutdown = Some(shutdown);
     }

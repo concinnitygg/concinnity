@@ -15,7 +15,6 @@ use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
 use super::fixtures::{hook, set_input, world_with_input};
-use crate::debug_hook::DebugHook;
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::edit::shaders_state::SourceState;
 use crate::editor::hud::{self, HudAction};
@@ -24,6 +23,7 @@ use crate::editor::panels::shader_source::SourceKey;
 use crate::editor::panels::template_panel::{self, TemplateAction};
 use crate::editor::panels::{list_panel, template, view};
 use crate::editor::{inject, widget};
+use crate::frame_hook::FrameHook;
 use crate::test_support::isolate_state_dir;
 
 fn empty_hook() -> EditorHook {

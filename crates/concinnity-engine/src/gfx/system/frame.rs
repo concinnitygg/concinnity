@@ -307,7 +307,7 @@ impl GraphicsSystem {
 
         // Runtime decal / emitter spawn and asset / shader / world.jsonl
         // hot-reload (`cn debug` only) are driven from the binary's
-        // `DebugHook::tick` between world steps, not here. `cn run` has no
+        // per-frame hook between world steps, not here. `cn run` has no
         // debug hook, so this per-frame path never touches them.
 
         // Lifetime/Spawner ticks and the spawn / despawn / reparent drains run

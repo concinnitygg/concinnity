@@ -1,5 +1,5 @@
 use super::*;
-use crate::debug::hot_reload::pending::PendingShaders;
+use crate::debug::hot_reload::signals::PendingShaders;
 use concinnity_cook::compile::program::{CompileFailure, Diagnostic, EntryFailure, Severity};
 use concinnity_cook::compile::shader::CompiledShader;
 use concinnity_core::components::sdf_programs::SdfPrograms;

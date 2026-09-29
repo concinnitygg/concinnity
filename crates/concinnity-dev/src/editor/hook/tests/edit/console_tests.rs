@@ -11,7 +11,6 @@ use concinnity_core::components::{
 };
 use concinnity_core::ecs::World;
 
-use crate::debug_hook::DebugHook;
 use crate::editor::hook::tests::fixtures::select;
 use crate::editor::hook::tests::fixtures::{entry, hook, world_with_fields, world_with_input};
 use crate::editor::hook::{EditorHook, declared_id, entry_type};
@@ -19,6 +18,7 @@ use crate::editor::panels::console;
 use crate::editor::panels::console_panel::{self, ConsoleAction};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::widget;
+use crate::frame_hook::FrameHook;
 use crate::test_support::isolate_state_dir;
 use std::sync::atomic::Ordering;
 

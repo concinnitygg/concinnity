@@ -20,8 +20,8 @@ use std::time::Instant;
 
 use super::compile_queue::CompileQueue;
 use super::files::FileIndex;
-use super::pending::PendingShaders;
 use super::report::{ReloadFailure, ReloadOutcome, ReloadReport, ReloadSubject};
+use super::signals::PendingShaders;
 use compile::{CompileResult, RebuildResult, Rebuilt, ShaderTexts};
 
 // Compiles a Shader's texts; the cook's compile outside tests.

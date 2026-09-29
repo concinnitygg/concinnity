@@ -5,7 +5,6 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::{FrameInput, Sprite, TextLabel};
 use concinnity_core::ecs::World;
 
-use crate::debug_hook::DebugHook;
 use crate::editor::hook::tests::fixtures::VP;
 use crate::editor::hook::{EditorHook, TOP_BAR_LAYER};
 use crate::editor::hud;
@@ -15,6 +14,7 @@ use crate::editor::panels::asset_tree::{self, TreeGroup};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::toast_overlay;
 use crate::editor::widget;
+use crate::frame_hook::FrameHook;
 
 fn hook() -> EditorHook {
     EditorHook::new("unused.jsonl".to_string(), Vec::new())

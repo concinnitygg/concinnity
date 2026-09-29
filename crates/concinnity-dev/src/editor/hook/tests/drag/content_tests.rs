@@ -7,7 +7,7 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::Transform;
 use concinnity_host::thread::asset_id;
 
-use crate::debug_hook::DebugHook;
+use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::drag::content::{drag_has_effect, placement_args};
 use crate::editor::hook::tests::fixtures::{click_at, drag_input, hook, pick_world, set_input};

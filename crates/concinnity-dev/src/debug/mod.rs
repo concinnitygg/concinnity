@@ -2,9 +2,9 @@
 //! `lib.rs`.
 //!
 //! `cn debug` starts a localhost MCP server (see `crate::mcp`). The engine
-//! stays debug-agnostic: the only coupling is the `DebugHook` trait, which the
+//! stays debug-agnostic: the only coupling is the `FrameHook` trait, which the
 //! run loop invokes once per frame on the main thread (see
-//! `crate::debug_hook`). `DebugServer::tick` snapshots the live world into
+//! `crate::frame_hook`). `DebugServer::tick` snapshots the live world into
 //! shared state; the server thread answers client queries from that snapshot.
 //!
 //! `self::catalog` is the authoritative verb table: every command's description,

@@ -117,6 +117,7 @@ fn state_with_only_environment_map_still_spawns_a_watcher() {
             ..Default::default()
         },
         None,
+        Default::default(),
     );
     assert!(state.environment_map.is_some());
     let captured = state.environment_map.as_ref().unwrap();
@@ -129,7 +130,8 @@ fn state_with_only_environment_map_still_spawns_a_watcher() {
 fn fully_empty_state_skips_watcher_creation() {
     // No textures, no LUT, no EnvironmentMap, no meshes, no skinned, no
     // world path → nothing to watch.
-    let state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     assert!(state.environment_map.is_none());
     assert!(state.color_lut.is_none());
     assert!(state.map.is_empty());
@@ -201,6 +203,7 @@ fn state_with_only_meshes_still_spawns_a_watcher() {
             ..Default::default()
         },
         None,
+        Default::default(),
     );
     assert_eq!(state.meshes.len(), 1);
     assert_eq!(state.meshes.entries[0].draw_indices, vec![DrawIndex(0)]);
@@ -252,6 +255,7 @@ fn state_with_only_skinned_still_spawns_a_watcher() {
             ..Default::default()
         },
         None,
+        Default::default(),
     );
     assert_eq!(state.skinned_meshes.len(), 1);
     assert_eq!(state.skinned_meshes.entries[0].joint_count, 2);
@@ -264,8 +268,11 @@ fn state_with_only_world_jsonl_still_spawns_a_watcher() {
     let world_path = concinnity_host::scratch::path("world_only.jsonl")
         .to_string_lossy()
         .into_owned();
-    let state =
-        AssetHotReloadState::from_sources(HotReloadSources::default(), Some(world_path.clone()));
+    let state = AssetHotReloadState::from_sources(
+        HotReloadSources::default(),
+        Some(world_path.clone()),
+        Default::default(),
+    );
     assert_eq!(state.world_jsonl_path.as_deref(), Some(world_path.as_str()));
 }
 
@@ -335,7 +342,8 @@ fn fresh_state_has_no_envmap_in_flight() {
     // The off-thread envmap convolution slot must start empty; a
     // non-`None` value at construction would skip the very first reload
     // request a `reload_assets` pass made.
-    let state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let slot = state.env_map_inflight.lock().expect("lock");
     assert!(slot.is_none());
 }
@@ -345,7 +353,8 @@ fn fresh_state_has_no_asset_batch_in_flight() {
     // Same invariant as the envmap slot: a non-`None` value at
     // construction would make the very first `reload_assets` think a
     // worker was already running and skip the spawn.
-    let state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let slot = state.asset_batch_inflight.lock().expect("lock");
     assert!(slot.is_none());
 }
@@ -422,7 +431,8 @@ fn drain_pending_skeleton_updates_clears_the_queue() {
     // The render thread polls + drains in one step; a second drain on
     // the same frame must return nothing so a successful apply does not
     // double-write the SkeletonPose components.
-    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     state.pending_skeleton_updates.push(PendingSkeletonUpdate {
         skinned_index: SkinnedIndex(0),
         new_skeleton: skeleton::Skeleton::new(Vec::new()),
@@ -500,8 +510,8 @@ fn procedural_mesh_reload_result_default_is_all_zero() {
 #[test]
 fn state_with_only_procedural_meshes_still_spawns_a_watcher() {
     // ProceduralMesh entries on their own (no textures, no LUTs, no meshes)
-    // need to keep the watcher alive: their trigger is the `PENDING_WORLD`
-    // flag flipped from the world.jsonl watcher. Without a world_jsonl_path
+    // need to keep the watcher alive: their trigger is the world.jsonl reload
+    // signal the watcher raises. Without a world_jsonl_path
     // there is nothing to subscribe to, so we declare one here.
     let world_path = concinnity_host::scratch::path("asset_hot_reload_proc_only_world.jsonl")
         .to_string_lossy()
@@ -518,6 +528,7 @@ fn state_with_only_procedural_meshes_still_spawns_a_watcher() {
             ..Default::default()
         },
         Some(world_path),
+        Default::default(),
     );
     assert_eq!(state.procedural_meshes.len(), 1);
     assert_eq!(state.procedural_meshes.entries[0].name, "box_mesh");
@@ -642,6 +653,7 @@ fn state_with_only_shaders_still_spawns_a_watcher() {
             ..Default::default()
         },
         None,
+        Default::default(),
     );
     assert_eq!(state.shaders.catalog.len(), 1);
     assert_eq!(state.shaders.catalog.entries[0].name, "lit");
@@ -1088,7 +1100,8 @@ fn decode_asset_batch_counts_a_missing_skinned_source_as_a_failure() {
 
 #[test]
 fn reload_assets_with_no_sources_spawns_nothing() {
-    let state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     reload_assets(&state);
     assert!(state.asset_batch_inflight.lock().unwrap().is_none());
     assert!(state.env_map_inflight.lock().unwrap().is_none());
@@ -1104,6 +1117,7 @@ fn reload_assets_skips_the_spawn_while_a_batch_is_in_flight() {
             ..Default::default()
         },
         None,
+        Default::default(),
     );
     // Simulate a still-running worker: a receiver with a live sender and no
     // payload yet.
@@ -1132,6 +1146,7 @@ fn reload_assets_spawns_a_decode_worker_for_a_lut_source() {
             ..Default::default()
         },
         None,
+        Default::default(),
     );
     reload_assets(&state);
     let rx = state
@@ -1152,14 +1167,16 @@ fn reload_assets_spawns_a_decode_worker_for_a_lut_source() {
 
 #[test]
 fn poll_pending_assets_with_nothing_in_flight_returns_false() {
-    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let mut backend = RecordingBackend::default();
     assert!(!poll_pending_assets(&mut state, &mut backend));
 }
 
 #[test]
 fn poll_pending_assets_keeps_waiting_while_the_worker_runs() {
-    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let (_tx, rx) = std::sync::mpsc::channel::<DecodedAssetBatch>();
     *state.asset_batch_inflight.lock().unwrap() = Some(rx);
     let mut backend = RecordingBackend::default();
@@ -1170,7 +1187,8 @@ fn poll_pending_assets_keeps_waiting_while_the_worker_runs() {
 
 #[test]
 fn poll_pending_assets_clears_the_slot_when_the_worker_disconnects() {
-    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let (tx, rx) = std::sync::mpsc::channel::<DecodedAssetBatch>();
     drop(tx);
     *state.asset_batch_inflight.lock().unwrap() = Some(rx);
@@ -1181,7 +1199,8 @@ fn poll_pending_assets_clears_the_slot_when_the_worker_disconnects() {
 
 #[test]
 fn poll_pending_assets_reloads_every_texture_through_the_shared_pool() {
-    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     // Albedo and normal maps share one pool, so both reload through
     // `update_texture_slot` at their own pool slot (no separate normal path).
     let batch = DecodedAssetBatch {
@@ -1212,7 +1231,8 @@ fn poll_pending_assets_reloads_every_texture_through_the_shared_pool() {
 
 #[test]
 fn poll_pending_assets_survives_a_backend_texture_rejection() {
-    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let batch = DecodedAssetBatch {
         textures: vec![DecodedTexture {
             slot: 0,
@@ -1235,7 +1255,8 @@ fn poll_pending_assets_survives_a_backend_texture_rejection() {
 
 #[test]
 fn poll_pending_assets_applies_a_color_lut() {
-    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let batch = DecodedAssetBatch {
         color_lut: Some(DecodedColorLut {
             size: 2,
@@ -1265,6 +1286,7 @@ fn one_mesh_state(draw_indices: Vec<DrawIndex>) -> AssetHotReloadState {
             ..Default::default()
         },
         None,
+        Default::default(),
     )
 }
 
@@ -1312,7 +1334,8 @@ fn poll_pending_assets_rebuilds_a_size_changed_mesh() {
 
 #[test]
 fn poll_pending_assets_skips_an_out_of_range_mesh_entry() {
-    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let batch = DecodedAssetBatch {
         meshes: vec![decoded_mesh(7, 3)],
         ..Default::default()
@@ -1333,6 +1356,7 @@ fn one_skinned_state(entry: SkinnedMeshSourceEntry) -> AssetHotReloadState {
             ..Default::default()
         },
         None,
+        Default::default(),
     )
 }
 
@@ -1453,7 +1477,8 @@ fn poll_pending_assets_failed_joint_resize_keeps_the_old_count() {
 
 #[test]
 fn poll_pending_envmap_with_nothing_in_flight_returns_false() {
-    let state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let mut backend = RecordingBackend::default();
     assert!(!poll_pending_envmap(&state, &mut backend));
     assert_eq!(backend.env_updates, 0);
@@ -1461,7 +1486,8 @@ fn poll_pending_envmap_with_nothing_in_flight_returns_false() {
 
 #[test]
 fn poll_pending_envmap_keeps_waiting_while_the_worker_runs() {
-    let state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let (_tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
     *state.env_map_inflight.lock().unwrap() = Some(rx);
     let mut backend = RecordingBackend::default();
@@ -1471,7 +1497,8 @@ fn poll_pending_envmap_keeps_waiting_while_the_worker_runs() {
 
 #[test]
 fn poll_pending_envmap_applies_a_successful_payload() {
-    let state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(Ok(vec![1u8, 2, 3])).unwrap();
     *state.env_map_inflight.lock().unwrap() = Some(rx);
@@ -1483,7 +1510,8 @@ fn poll_pending_envmap_applies_a_successful_payload() {
 
 #[test]
 fn poll_pending_envmap_consumes_a_failed_convolution_without_a_backend_call() {
-    let state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(Err("bad hdr".to_string())).unwrap();
     *state.env_map_inflight.lock().unwrap() = Some(rx);
@@ -1495,7 +1523,8 @@ fn poll_pending_envmap_consumes_a_failed_convolution_without_a_backend_call() {
 
 #[test]
 fn poll_pending_envmap_clears_the_slot_when_the_worker_disconnects() {
-    let state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
     drop(tx);
     *state.env_map_inflight.lock().unwrap() = Some(rx);
@@ -1507,7 +1536,8 @@ fn poll_pending_envmap_clears_the_slot_when_the_worker_disconnects() {
 
 #[test]
 fn poll_pending_envmap_survives_a_backend_rejection() {
-    let state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(Ok(vec![9u8; 4])).unwrap();
     *state.env_map_inflight.lock().unwrap() = Some(rx);
@@ -1540,6 +1570,7 @@ fn reload_assets_spawns_an_envmap_worker() {
             ..Default::default()
         },
         None,
+        Default::default(),
     );
     reload_assets(&state);
     // The convolution worker was scheduled onto its own slot. Drain the parked
@@ -1557,7 +1588,8 @@ fn reload_assets_spawns_an_envmap_worker() {
 
 #[test]
 fn poll_pending_assets_survives_a_color_lut_rejection() {
-    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let batch = DecodedAssetBatch {
         color_lut: Some(DecodedColorLut {
             size: 2,
@@ -1907,18 +1939,6 @@ fn reload_stories_ignores_worlds_without_stories() {
 // AssetHotReloadState
 
 #[test]
-fn state_reload_flag_round_trips() {
-    let state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
-    assert!(!state.reload_requested());
-    state
-        .pending
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    assert!(state.reload_requested());
-    state.clear_flag();
-    assert!(!state.reload_requested());
-}
-
-#[test]
 fn state_debug_format_summarises_the_catalog() {
     let mut map = TextureSourceMap::new();
     map.push_texture("standalone.png".to_string(), 0, 0);
@@ -1928,18 +1948,20 @@ fn state_debug_format_summarises_the_catalog() {
             ..Default::default()
         },
         None,
+        Default::default(),
     );
     let dump = format!("{state:?}");
     assert!(dump.contains("AssetHotReloadState"));
     assert!(dump.contains("entries: 1"));
-    assert!(dump.contains("pending: false"));
+    assert!(dump.contains("assets: false"));
     assert!(dump.contains("env_map_inflight: false"));
     assert!(dump.contains("asset_batch_inflight: false"));
 }
 
 #[test]
 fn fresh_state_starts_with_empty_story_snapshots() {
-    let state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     assert!(state.story_snapshots.is_empty());
     assert!(state.world_jsonl_path.is_none());
 }
@@ -1984,6 +2006,28 @@ fn uppercase_texture_extension_still_matches() {
 }
 
 #[test]
+fn signal_raises_only_the_pass_each_kind_serves() {
+    let signals = super::signals::ReloadSignals::default();
+    signal(ReloadKind::Shaders, &signals);
+    assert!(signals.take_shaders().is_empty());
+    assert!(!signals.take_assets());
+
+    signal(ReloadKind::World, &signals);
+    assert!(signals.take_world());
+    assert!(!signals.take_assets());
+
+    signal(ReloadKind::Stories, &signals);
+    assert!(signals.take_stories());
+    assert!(!signals.take_world());
+
+    signal(ReloadKind::Assets, &signals);
+    assert!(signals.take_assets());
+    assert!(signals.take_animations());
+    assert!(!signals.take_world());
+    assert!(!signals.take_stories());
+}
+
+#[test]
 fn spawn_watcher_returns_none_when_no_directory_is_watchable() {
     let dir = tempfile::tempdir().unwrap();
     let mut meshes = MeshSourceMap::new();
@@ -2003,8 +2047,7 @@ fn spawn_watcher_returns_none_when_no_directory_is_watchable() {
         meshes,
         ..Default::default()
     };
-    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    assert!(spawn_watcher(&sources, None, flag).is_none());
+    assert!(spawn_watcher(&sources, None, Default::default()).is_none());
 }
 
 #[test]
@@ -2020,10 +2063,7 @@ fn spawn_watcher_subscribes_to_an_existing_source_directory() {
         map,
         ..Default::default()
     };
-    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    // No file is ever written into the watched directory, so the closure
-    // never fires and the process-global pending flags stay untouched.
-    assert!(spawn_watcher(&sources, None, flag).is_some());
+    assert!(spawn_watcher(&sources, None, Default::default()).is_some());
 }
 
 #[test]
@@ -2124,6 +2164,7 @@ fn reload_assets_skips_the_envmap_spawn_while_a_convolution_is_in_flight() {
             ..Default::default()
         },
         None,
+        Default::default(),
     );
     // Simulate a still-running convolution: a receiver whose sender is alive and
     // has sent nothing yet.
@@ -2141,16 +2182,6 @@ fn reload_assets_skips_the_envmap_spawn_while_a_convolution_is_in_flight() {
 }
 
 // run_frame (the per-frame reload entry, driven over a RecordingBackend)
-
-// Reset the process-global reload flags so a run_frame test starts from a known
-// state regardless of what ran before it. Callers hold `test_support::lock()`
-// for the whole test so this is race-free.
-fn clear_pending_flags() {
-    super::pending::take_pending_world();
-    super::pending::take_pending_shaders();
-    super::pending::take_pending_sdf_volumes();
-    super::pending::take_pending_stories();
-}
 
 // Drive one `run_frame` over a fresh RecordingBackend with no fog pushed,
 // returning the effects, the backend (so callers can assert which dispatches
@@ -2170,9 +2201,8 @@ fn drive_run_frame(
 
 #[test]
 fn run_frame_with_no_pending_flags_returns_empty_effects() {
-    let _guard = crate::test_support::lock();
-    clear_pending_flags();
-    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
     let (effects, backend, last_fog) = drive_run_frame(&mut state);
     assert!(effects.skeleton_updates.is_empty());
     assert!(effects.story_updates.is_empty());
@@ -2184,15 +2214,12 @@ fn run_frame_with_no_pending_flags_returns_empty_effects() {
 
 #[test]
 fn run_frame_consumes_the_state_reload_flag_without_spawning_on_an_empty_catalog() {
-    let _guard = crate::test_support::lock();
-    clear_pending_flags();
-    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
-    state
-        .pending
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+    state.signals.request_assets();
     let (effects, _backend, _last_fog) = drive_run_frame(&mut state);
     // The flag was consumed and, with no file-backed sources, no worker spawned.
-    assert!(!state.reload_requested());
+    assert!(!state.signals.take_assets());
     assert!(state.asset_batch_inflight.lock().unwrap().is_none());
     assert!(state.env_map_inflight.lock().unwrap().is_none());
     assert!(effects.story_updates.is_empty());
@@ -2200,21 +2227,19 @@ fn run_frame_consumes_the_state_reload_flag_without_spawning_on_an_empty_catalog
 
 #[test]
 fn run_frame_consumes_the_pending_shader_set() {
-    let _guard = crate::test_support::lock();
-    clear_pending_flags();
-    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), None);
-    super::pending::mark_all_shaders_pending();
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), None, Default::default());
+    state.signals.request_all();
     let _ = drive_run_frame(&mut state);
     // run_frame took both sets; the empty catalogs made the passes a no-op,
     // but the consumption is the observable that they ran.
-    assert!(super::pending::take_pending_shaders().is_empty());
-    assert!(super::pending::take_pending_sdf_volumes().is_empty());
+    assert!(state.signals.take_shaders().is_empty());
+    assert!(state.signals.take_sdf_volumes().is_empty());
 }
 
 #[test]
 fn run_frame_reloads_stories_when_the_story_flag_is_set() {
     let _guard = crate::test_support::lock();
-    clear_pending_flags();
     let dir = tempfile::tempdir().unwrap();
     let md = dir.path().join("tale.md");
     std::fs::write(
@@ -2234,32 +2259,35 @@ fn run_frame_reloads_stories_when_the_story_flag_is_set() {
     let mut state = AssetHotReloadState::from_sources(
         HotReloadSources::default(),
         Some(world.to_string_lossy().into_owned()),
+        Default::default(),
     );
-    super::pending::set_pending_stories();
+    state.signals.request_stories();
     let (effects, _backend, _last_fog) = drive_run_frame(&mut state);
     assert_eq!(effects.story_updates.len(), 1);
     assert_eq!(effects.story_updates[0].title, "Tale");
     // The flag was consumed by the pass.
-    assert!(!super::pending::take_pending_stories());
+    assert!(!state.signals.take_stories());
 }
 
 #[test]
 fn run_frame_reloads_world_assets_when_the_world_flag_is_set() {
-    let _guard = crate::test_support::lock();
-    clear_pending_flags();
     let dir = tempfile::tempdir().unwrap();
     let world = write_world_line(
         dir.path(),
         r#"["VolumetricFog",{"$id":"fog","enabled":true,"density":0.5}]"#,
     );
-    let mut state = AssetHotReloadState::from_sources(HotReloadSources::default(), Some(world));
-    super::pending::set_pending_world();
+    let mut state = AssetHotReloadState::from_sources(
+        HotReloadSources::default(),
+        Some(world),
+        Default::default(),
+    );
+    state.signals.request_world();
     let (_effects, backend, last_fog) = drive_run_frame(&mut state);
     // The world.jsonl pass applied the enabled fog exactly once and recorded it
     // into the caller's dedupe bookkeeping.
     assert_eq!(backend.fog_updates, 1);
     assert!(last_fog.is_some());
-    assert!(!super::pending::take_pending_world());
+    assert!(!state.signals.take_world());
 }
 
 // -- driver -------------------------------------------------------------
@@ -2272,19 +2300,25 @@ fn driver_on_a_world_without_graphics_stays_unarmed() {
     let mut driver = HotReloadDriver::new();
     let mut world = World::new();
     driver.drive(&mut world);
-    assert!(driver.pending().is_none());
+    assert!(driver.signals().is_none());
 }
 
 #[test]
-fn driver_rearm_swaps_the_pending_flag() {
-    // A world rebuild re-captures sources; arming again must hand out a fresh
-    // flag (the server refreshes its shared copy every tick for this reason).
+fn driver_rearm_keeps_its_signals() {
+    // A world rebuild re-captures sources; the new watcher raises the same
+    // signals, so the server's one-time capture stays live.
     let mut driver = HotReloadDriver::new();
     driver.arm(HotReloadSources::default());
-    let first = driver.pending().expect("armed driver exposes a flag");
+    let first = driver.signals().expect("armed driver exposes its signals");
     driver.arm(HotReloadSources::default());
-    let second = driver.pending().expect("re-armed driver exposes a flag");
-    assert!(!std::sync::Arc::ptr_eq(&first, &second));
+    let second = driver
+        .signals()
+        .expect("re-armed driver exposes its signals");
+    assert!(std::sync::Arc::ptr_eq(&first, &second));
+    assert!(std::sync::Arc::ptr_eq(
+        &first,
+        &driver.state.as_ref().unwrap().signals
+    ));
 }
 
 fn armed_world_path(driver: &HotReloadDriver) -> Option<String> {
@@ -2341,7 +2375,7 @@ fn armed_driver_survives_a_drive_over_an_empty_world() {
     driver.arm(HotReloadSources::default());
     let mut world = World::new();
     driver.drive(&mut world);
-    assert!(driver.pending().is_some());
+    assert!(driver.signals().is_some());
 }
 
 #[test]

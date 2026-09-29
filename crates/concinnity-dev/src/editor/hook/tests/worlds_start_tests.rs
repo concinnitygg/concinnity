@@ -11,7 +11,6 @@ use super::fixtures::{
     VP, hook_at, open_project, press_modal, prop_entry, set_world_name, world_names,
     world_row_index, world_with_name_field, write_world,
 };
-use crate::debug_hook::DebugHook;
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::selected;
 use crate::editor::hud;
@@ -20,6 +19,7 @@ use crate::editor::modal;
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::widget;
 use crate::editor::worlds::{self, WorldRow, WorldsAction};
+use crate::frame_hook::FrameHook;
 
 // A start-screen session over `dir`'s worlds, showing `previewing` (by name).
 // Mirrors what `run_editor` builds -- the session's own path is the

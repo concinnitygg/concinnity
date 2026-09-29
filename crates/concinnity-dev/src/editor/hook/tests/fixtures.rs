@@ -19,10 +19,10 @@ use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 
-use crate::debug_hook::DebugHook;
 use crate::editor::behavior;
 use crate::editor::behavior::panel::BehaviorAction;
 use crate::editor::hook::{EditorHook, FormTarget, declared_id, entry_type};
+use crate::frame_hook::FrameHook;
 
 use crate::editor::panels::asset_tree::{self, TreeGroup};
 

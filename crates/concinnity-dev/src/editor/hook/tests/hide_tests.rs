@@ -8,7 +8,7 @@ use concinnity_host::thread::asset_id;
 
 use super::fixtures::{entry, hook, row_of, seed_tree, world_with_input};
 
-use crate::debug_hook::DebugHook;
+use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::tests::fixtures::select;
 use crate::editor::panels::assets_panel::PanelAction;

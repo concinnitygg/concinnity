@@ -48,7 +48,7 @@ impl BuiltSystem {
     }
 
     /// Mutably borrow the system as `S`, or `None` when it is a different
-    /// system. The `DebugHook::tick` drive reaches the GraphicsSystem's
+    /// system. The dev tooling's per-frame hook reaches the GraphicsSystem's
     /// hot-reload bookkeeping and the AnimationSystem's clip table through
     /// this, from outside the per-system step.
     pub fn downcast_mut<S: System>(&mut self) -> Option<&mut S> {

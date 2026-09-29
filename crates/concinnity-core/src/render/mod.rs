@@ -16,7 +16,7 @@
 //! with simulation systems queueing their GPU mutations as [`ops`] so the
 //! submit path replays them in record order. The dev tooling
 //! (concinnity-dev) is the third: asset hot-reload and the debug verbs call
-//! the backend directly from `DebugHook::tick` on the render thread, outside
+//! the backend directly from its per-frame hook on the render thread, outside
 //! that ordering guarantee, because they run between frames rather than inside
 //! one.
 

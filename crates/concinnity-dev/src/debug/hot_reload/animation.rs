@@ -9,11 +9,13 @@ use concinnity_core::animation::skeleton::{AnimationClip, JointTrack, Keyframe};
 use concinnity_engine::animation::AnimationSystem;
 use std::collections::HashMap;
 
+use super::signals::ReloadSignals;
+
 // Re-import every file-backed clip when an asset-source change is pending.
-// Driven by the debug server's per-frame tick. No-op when no file-backed clips
+// Driven by the hot-reload driver each frame. No-op when no file-backed clips
 // were captured or no source change is pending.
-pub(crate) fn reload_clips_if_pending(anim: &mut AnimationSystem) {
-    if anim.reload_entries().is_empty() || !super::pending::take_pending_animations() {
+pub(crate) fn reload_clips_if_pending(anim: &mut AnimationSystem, signals: &ReloadSignals) {
+    if anim.reload_entries().is_empty() || !signals.take_animations() {
         return;
     }
     reload_clips(anim);
@@ -296,15 +298,15 @@ mod tests {
 
     #[test]
     fn reload_if_pending_gates_on_entries_and_the_flag() {
-        use super::super::pending::{set_pending_animations, take_pending_animations};
         let _guard = test_support::lock();
+        let signals = ReloadSignals::default();
 
         // No entries: the early-out fires before the flag is consumed.
         let mut empty = AnimationSystem::new();
-        set_pending_animations();
-        reload_clips_if_pending(&mut empty);
+        signals.request_animations();
+        reload_clips_if_pending(&mut empty, &signals);
         assert!(
-            take_pending_animations(),
+            signals.take_animations(),
             "empty catalog must not consume the pending flag"
         );
 
@@ -313,16 +315,16 @@ mod tests {
         let source = write_fixture(&dir);
         let mut world = world_with_reload_entry(&source, "wave");
         with_anim(&mut world, |anim| {
-            reload_clips_if_pending(anim);
+            reload_clips_if_pending(anim, &signals);
         });
 
         // Entries present and the flag raised: the reload consumes it.
-        set_pending_animations();
+        signals.request_animations();
         with_anim(&mut world, |anim| {
-            reload_clips_if_pending(anim);
+            reload_clips_if_pending(anim, &signals);
         });
         assert!(
-            !take_pending_animations(),
+            !signals.take_animations(),
             "a reload pass must consume the pending flag"
         );
     }

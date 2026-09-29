@@ -4,7 +4,7 @@
 //! written back to the user's world.jsonl or blobs (the SAVE path serializes the
 //! authored entry list, not the live world). The elements are plain `Sprite` /
 //! `TextLabel` / `TextInput` components at reserved ids; the editor's
-//! `DebugHook` tick drives them each frame (see `hud.rs` / `assets_panel.rs`). No
+//! `FrameHook` tick drives them each frame (see `hud.rs` / `assets_panel.rs`). No
 //! editor-specific component or system is involved, so nothing here reaches the
 //! shipped runtime. (The two `TextInput` fields do bring in the engine's general
 //! text-input system, which is real runtime code, not editor-only.)

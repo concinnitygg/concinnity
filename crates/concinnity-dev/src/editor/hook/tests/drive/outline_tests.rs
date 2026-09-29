@@ -6,7 +6,7 @@ use concinnity_core::components::TriggerVolume;
 use concinnity_core::ecs::WorldLines;
 use concinnity_host::thread::asset_id;
 
-use crate::debug_hook::DebugHook;
+use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::tests::fixtures::{click_at, hook, pick_world, release_at};
 

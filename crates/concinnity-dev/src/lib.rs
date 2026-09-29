@@ -21,8 +21,8 @@ mod authoring;
 // The in-engine editor HUD, the localhost debug server, the MCP transport it
 // speaks, and the interpreted run loop.
 mod debug;
-mod debug_hook;
 mod editor;
+mod frame_hook;
 mod mcp;
 mod run;
 

@@ -8,7 +8,7 @@ use concinnity_core::components::FrameInput;
 
 use super::fixtures::{entry, hook, set_input, world_with_fields, world_with_input};
 
-use crate::debug_hook::DebugHook;
+use crate::frame_hook::FrameHook;
 
 use crate::editor::panels::form::{self, FormField};
 use crate::editor::panels::form_panel::{FormAction, FormFocus};

@@ -1,4 +1,4 @@
-//! The localhost debug listener: `DebugServer` (the `DebugHook` the run loop
+//! The localhost debug listener: `DebugServer` (the `FrameHook` the run loop
 //! ticks), the accept / per-connection threads, and the per-frame drive of the
 //! runtime commands plus the owned hot-reload driver. Each connection is handed
 //! to `crate::mcp::AppServer`, which parses the HTTP request and answers the
@@ -21,7 +21,7 @@ use crate::debug::anim_command;
 use crate::debug::hot_reload;
 use crate::debug::runtime_spawn::{self, RuntimeQueue};
 use crate::debug::state::{AssetEntry, CameraSnapshot, DebugState};
-use crate::debug_hook::DebugHook;
+use crate::frame_hook::FrameHook;
 use crate::mcp::AppServer;
 
 // Bound each connection's reads so a client that opens a socket and stalls
@@ -32,8 +32,8 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
 // counter still advances every tick; only the heavier lists are throttled.
 const SNAPSHOT_INTERVAL: u64 = 30;
 
-// A running debug server. Implements `DebugHook`, so the run loop owns it as
-// `Box<dyn DebugHook>` and ticks it each frame.
+// A running debug server. Implements `FrameHook`, so the run loop owns it as
+// `Box<dyn FrameHook>` and ticks it each frame.
 pub(crate) struct DebugServer {
     shared: Arc<Mutex<DebugState>>,
     // The snapshot's runtime command queue, drained every tick.
@@ -144,7 +144,7 @@ impl DebugServer {
     }
 }
 
-impl DebugHook for DebugServer {
+impl FrameHook for DebugServer {
     fn tick(&mut self, world: &mut World) {
         self.frame += 1;
 
@@ -203,12 +203,10 @@ impl DebugHook for DebugServer {
         {
             state.shader_reload = Some(flag);
         }
-        // The asset-reload flag lives on the reload driver's state, not on
-        // `GraphicsSystem`. Refresh the `pending` Arc every tick so the
-        // `reload-assets` command thread flips the current flag even after a
-        // world rebuild re-armed the driver with a fresh one.
-        if let Some(pending) = self.reload.pending() {
-            state.asset_reload = Some(pending);
+        // The reload driver keeps one set of signals across re-arms, so the
+        // `reload-assets` command captures them once the driver is armed.
+        if state.reload.is_none() {
+            state.reload = self.reload.signals();
         }
 
         // The profiler snapshot is small (one entry per system + a handful of

@@ -11,9 +11,9 @@ use concinnity_core::components::TextInput;
 use concinnity_core::ecs::World;
 
 use super::fixtures::{entry, hook, world_with_input};
-use crate::debug_hook::DebugHook;
 use crate::editor::behavior;
 use crate::editor::hook::declared_id;
+use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::tests::fixtures::{select, selected};
 use crate::editor::panels::registry::{self, PanelKey};

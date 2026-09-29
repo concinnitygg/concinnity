@@ -1,15 +1,13 @@
-//! Per-frame injection point for the debug subsystem.
+//! The per-frame seam a dev session's run loop ticks on the main thread.
 //!
-//! The run loop (`crate::run`) owns the world loop but knows nothing about
-//! debugging. A `DebugHook` is an optional per-frame callback it invokes on the
-//! main thread; the only implementation is `crate::debug::DebugServer`. The
-//! trait stays `pub(crate)` so it is not part of any public surface.
+//! Implemented by the editor's `EditorHook`, the debug server, and the
+//! hot-reload driver; the editor's `MultiHook` runs several in order.
 
 use concinnity_core::ecs::World;
 use concinnity_engine::app::runtime::Runtime;
 use concinnity_engine::shutdown::ShutdownToken;
 
-pub(crate) trait DebugHook: Send {
+pub(crate) trait FrameHook: Send {
     // Called once per frame on the main thread, just before the world step.
     // Receives the live world so the hook can inspect (and later mutate) it.
     fn tick(&mut self, world: &mut World);
