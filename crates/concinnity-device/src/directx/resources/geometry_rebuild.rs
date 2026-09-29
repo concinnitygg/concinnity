@@ -127,7 +127,6 @@ impl DxContext {
         // and ship the rebuilt contents in a single one-shot submit. The new
         // resources start in COMMON; CopyBufferRegion promotes them to
         // COPY_DEST implicitly, then a barrier puts each into its read state.
-        let new_vertex_count = new_vertices.len();
         let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
         let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
         let new_vbuf = self.hw.alloc.alloc_buffer(
@@ -194,11 +193,9 @@ impl DxContext {
         // The RT acceleration structure was built against the buffers just
         // dropped and the per-draw offsets just rewritten, so its BLAS hold the
         // old geometry and its geometry table would address the new buffers at
-        // old offsets. Rebuild it over the fresh layout. The static vertex count
-        // (which bounds each BLAS's vertex range) moved with the rebuild, so it
-        // is refreshed first. `wait_idle` above plus the one-shot fence waits
-        // leave the GPU quiet, so the synchronous rebuild is safe here.
-        self.rt.static_vertex_count = new_vertex_count;
+        // old offsets. Rebuild it over the fresh layout. `wait_idle` above plus
+        // the one-shot fence waits leave the GPU quiet, so the synchronous
+        // rebuild is safe here.
         if self.rt.accel.is_some() {
             self.rebuild_rt_accel();
         }

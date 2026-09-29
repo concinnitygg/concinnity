@@ -881,6 +881,7 @@ impl VkContext {
         // Read before `rt_accel` is taken: `seethrough_meshes_enabled` borrows
         // `self.transparent`, which the block below holds `&self` across.
         let exclude_seethrough = self.seethrough_meshes_enabled();
+        let shared = super::super::raytrace::SharedGeometry::of(&self.geometry);
 
         // Take `rt_accel` out so its `&mut` borrow does not overlap the shared
         // `&self` reads (`skinned_draw_objects` / `draw_objects`) the inputs need;
@@ -914,6 +915,7 @@ impl VkContext {
                         exclude_seethrough,
                     },
                     frame_idx,
+                    shared,
                     skinned,
                 },
             );

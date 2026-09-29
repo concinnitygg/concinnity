@@ -26,6 +26,7 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 
 use self::heap_layout::{RtvHeapLayout, SrvHeapParams};
 use super::context::*;
+use super::geometry_upload::GeometryUploads;
 use super::hot_reload::HotReloadState;
 use super::post::bloom::bloom_mip_count;
 use super::resources::skinning::SkinnedState;
@@ -410,6 +411,7 @@ impl DxContext {
             descriptors,
             mesh_stream: Default::default(),
             chunk_stream: Default::default(),
+            geometry_uploads: std::cell::RefCell::new(GeometryUploads::new(FRAMES)),
             skinned: SkinnedState::new(),
             uniforms,
             light_cull,

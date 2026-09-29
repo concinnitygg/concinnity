@@ -66,7 +66,6 @@ impl VkContext {
 
         // Allocate new DEVICE_LOCAL buffers + ship the rebuilt contents
         // through staging (write_geometry_region's one-shot pattern).
-        let new_vertex_count = new_vertices.len();
         let new_v_bytes = std::mem::size_of_val(new_vertices.as_slice()) as u64;
         let new_i_bytes = std::mem::size_of_val(new_indices.as_slice()) as u64;
         let shared = super::shared_geometry_usage(self.hw.rt_capable);
@@ -100,9 +99,6 @@ impl VkContext {
         // The RT acceleration structure was built against the buffers just
         // destroyed and the per-draw offsets just rewritten. Rebuild it over the
         // fresh layout and re-point the passes that read the buffers directly.
-        // The static vertex count (which bounds each BLAS's vertex range) moved
-        // with the rebuild, so it is refreshed first.
-        self.rt.static_vertex_count = new_vertex_count;
         if self.rt.accel.is_some() {
             self.rebuild_rt_accel()?;
         }

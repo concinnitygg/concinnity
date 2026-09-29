@@ -16,6 +16,7 @@ mod descriptor_slot;
 mod draw;
 mod error;
 mod fog;
+mod geometry_upload;
 mod glass;
 mod gpu_profile;
 mod graph_exec;

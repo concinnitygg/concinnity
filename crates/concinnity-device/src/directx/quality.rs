@@ -323,11 +323,9 @@ impl DxContext {
         let hot_reload = self.hot_reload.enabled;
         let mut accel = match super::raytrace::build_rt_accel(super::raytrace::RtInitGeometry {
             alloc: &self.hw.alloc,
-            vertex_buffer: &self.scene.geometry.vertex_buffer,
-            index_buffer: &self.scene.geometry.index_buffer,
+            shared: super::raytrace::SharedGeometry::of(&self.scene.geometry),
             draw_objects: &self.draw.objects,
             clusters: &self.instanced.clusters,
-            total_vertices: self.rt.static_vertex_count,
             albedo_count: self.scene.textures.len() as u32,
             exclude_seethrough: self.seethrough_meshes_enabled(),
         }) {

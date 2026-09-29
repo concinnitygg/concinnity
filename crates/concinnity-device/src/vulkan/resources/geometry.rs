@@ -1,7 +1,8 @@
-//! Streamed-mesh upload + eviction for VkContext, plus the shared
-//! `write_geometry_region` helper that copies a sub-region into the static
-//! vertex / index buffers via a host-visible staging buffer + one-shot command
-//! buffer. Used by mesh streaming (here), chunk streaming, and skinned upload.
+//! Streamed-mesh upload + eviction for VkContext. Writes into the shared
+//! vertex / index buffers are staged and copied by the next geometry submit
+//! (see `geometry_upload`), so none waits on the GPU. Also the blocking
+//! `write_geometry_region` helper, which copies into a buffer through its own
+//! one-shot submit, for the init and rebuild paths that write fresh buffers.
 
 use ash::vk;
 use concinnity_core::gfx::mesh_payload::Vertex;
@@ -10,9 +11,23 @@ use concinnity_core::render::error;
 use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::super::context::*;
+use super::super::geometry_upload::GeometryTarget;
 use super::super::texture;
 
 impl VkContext {
+    // Stage `data` for the shared `target` buffer at byte `offset`. It lands
+    // after every earlier read of the buffer and before any later one.
+    pub(in crate::vulkan) fn stage_geometry(
+        &self,
+        target: GeometryTarget,
+        offset: usize,
+        data: &[u8],
+    ) -> RenderResult<()> {
+        self.geometry_uploads
+            .borrow_mut()
+            .stage(&self.hw.alloc, target, offset as u64, data)
+    }
+
     // Copy `data` into a sub-region of a DEVICE_LOCAL geometry buffer.
     //
     // `dest` is the vertex or index buffer (both created with `TRANSFER_DST`).
@@ -63,6 +78,8 @@ impl VkContext {
 
     // Upload a streamed mesh's geometry into the shared vertex and index
     // buffers, place it via the sub-allocators, and mark the draw resident.
+    // `frame` reclaims deferred frees that have retired by then, so no
+    // in-flight frame reads the chosen region while the staged copy lands.
     pub(crate) fn upload_mesh(
         &mut self,
         draw_idx: DrawIndex,
@@ -106,18 +123,14 @@ impl VkContext {
             || format!("upload_mesh: draw {draw_idx}"),
         )?;
 
-        self.wait_idle();
-
-        let vert_bytes = bytemuck::cast_slice(vertices);
-        self.write_geometry_region(
-            self.geometry.vertex_buffer.buffer(),
-            v_off as u64,
-            vert_bytes,
+        self.stage_geometry(
+            GeometryTarget::Vertex,
+            v_off,
+            bytemuck::cast_slice(vertices),
         )?;
         let base = (v_off / std::mem::size_of::<Vertex>()) as u32;
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
-        let idx_bytes = bytemuck::cast_slice(&rebased);
-        self.write_geometry_region(self.geometry.index_buffer.buffer(), i_off as u64, idx_bytes)?;
+        self.stage_geometry(GeometryTarget::Index, i_off, bytemuck::cast_slice(&rebased))?;
 
         let obj = &mut self.draw.objects[draw_idx.index()];
         obj.vertex_offset = v_off;
@@ -136,8 +149,8 @@ impl VkContext {
     // slot's `vertex_count` / `index_count` exactly; size-changing reloads
     // route through `rebuild_static_geometry` instead. LOD alternates are
     // uploaded into their existing per-LOD slices the same way LOD0 is.
-    // `wait_idle` first guarantees no in-flight command buffer reads the
-    // region we're about to overwrite. Mirrors
+    // In-flight frames still read the regions; the staged copy waits for their
+    // reads on the GPU rather than on the CPU. Mirrors
     // `DxContext::update_mesh_geometry`. Reached only through the bin's
     // `cn debug` runtime-mutation path (dead in the FFI lib, live in the bin).
     pub(crate) fn update_mesh_geometry(
@@ -199,35 +212,38 @@ impl VkContext {
             }
         }
 
-        let v_off = obj.vertex_offset as u64;
-        let i_off_bytes = (obj.index_offset * std::mem::size_of::<u32>()) as u64;
+        let v_off = obj.vertex_offset;
+        let i_off_bytes = obj.index_offset * std::mem::size_of::<u32>();
         // Static draws keep indices absolute (base_vertex == 0), so rebase
         // mesh-relative u16 indices onto the slot's vertex_offset and widen
         // to u32 before writing, matching the shared u32 index buffer.
         let base = (obj.vertex_offset / std::mem::size_of::<Vertex>()) as u32;
-        let lod_byte_offsets: Vec<u64> = obj
+        let lod_byte_offsets: Vec<usize> = obj
             .lod_alternates
             .iter()
-            .map(|s| (s.index_offset * std::mem::size_of::<u32>()) as u64)
+            .map(|s| s.index_offset * std::mem::size_of::<u32>())
             .collect();
 
-        self.wait_idle();
-
-        let vert_bytes = bytemuck::cast_slice(vertices);
-        self.write_geometry_region(self.geometry.vertex_buffer.buffer(), v_off, vert_bytes)?;
+        self.stage_geometry(
+            GeometryTarget::Vertex,
+            v_off,
+            bytemuck::cast_slice(vertices),
+        )?;
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
-        let idx_bytes = bytemuck::cast_slice(&rebased);
-        self.write_geometry_region(self.geometry.index_buffer.buffer(), i_off_bytes, idx_bytes)?;
+        self.stage_geometry(
+            GeometryTarget::Index,
+            i_off_bytes,
+            bytemuck::cast_slice(&rebased),
+        )?;
         // LOD alternates were laid out at init alongside LOD0 in the same
         // shared IB; each alternate shares LOD0's vertex region, so rebase
         // onto the same `base`.
         for ((_, alt_idx), &alt_off_bytes) in lod_alternates.iter().zip(lod_byte_offsets.iter()) {
             let alt_rebased: Vec<u32> = alt_idx.iter().map(|&i| u32::from(i) + base).collect();
-            let alt_bytes = bytemuck::cast_slice(&alt_rebased);
-            self.write_geometry_region(
-                self.geometry.index_buffer.buffer(),
+            self.stage_geometry(
+                GeometryTarget::Index,
                 alt_off_bytes,
-                alt_bytes,
+                bytemuck::cast_slice(&alt_rebased),
             )?;
         }
         // Refresh per-LOD switch distances so JSON-side tweaks to
@@ -297,5 +313,12 @@ impl VkContext {
         self.geometry.mesh_vtx_alloc.reclaim(0);
         self.geometry.mesh_idx_alloc.free(idx_offset, idx_bytes, 0);
         self.geometry.mesh_idx_alloc.reclaim(0);
+        if let Err(e) = self
+            .geometry_uploads
+            .get_mut()
+            .reserve(&self.hw.alloc, vtx_bytes + idx_bytes)
+        {
+            tracing::warn!("mesh streaming: geometry staging reserve failed: {e}");
+        }
     }
 }

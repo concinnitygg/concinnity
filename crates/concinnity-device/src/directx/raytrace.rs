@@ -43,14 +43,16 @@ use concinnity_core::render::rt_geom::{
     cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry,
 };
 use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedRefit, SkinnedShape};
-use concinnity_core::render::rt_topology::{GeomSig, participates_in_bvh, plan_topology_refresh};
+use concinnity_core::render::rt_topology::{
+    GeomSig, blas_vertex_count, participates_in_bvh, plan_topology_refresh,
+};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
-use super::context::FRAMES;
+use super::context::{DxGeometry, FRAMES};
 use super::error::{map_hresult, map_pso_hresult};
 use super::texture::{create_uav_buffer, transition_barrier};
 use crate::directx::builtin_shaders::CompileProgram;
@@ -153,6 +155,50 @@ fn triangle_geometry(
                 },
             },
         },
+    }
+}
+
+// The shared static vertex / index buffers every draw-object and cluster BLAS is
+// built over, read from the live `DxGeometry` at each build: chunk streaming and
+// geometry rebuilds replace both buffers, so an address or vertex count captured
+// earlier can point at a released heap or bound streamed geometry short.
+#[derive(Clone, Copy)]
+pub(super) struct SharedGeometry {
+    vertex_gva: u64,
+    index_gva: u64,
+    // Vertices the vertex buffer holds, streaming headroom included.
+    vertex_count: u64,
+}
+
+impl SharedGeometry {
+    pub(super) fn of(geometry: &DxGeometry) -> Self {
+        Self {
+            vertex_gva: com::gpu_va(&geometry.vertex_buffer),
+            index_gva: com::gpu_va(&geometry.index_buffer),
+            vertex_count: u64::from(geometry.vertex_buffer_view.SizeInBytes) / VERTEX_STRIDE,
+        }
+    }
+
+    // The BLAS geometry for one draw object's slice. Its indices are offset by
+    // `base_vertex`, which folds into the vertex start address.
+    fn draw_geometry(&self, obj: &DrawObject) -> D3D12_RAYTRACING_GEOMETRY_DESC {
+        let base_vertex = u64::try_from(obj.base_vertex).unwrap_or(0);
+        triangle_geometry(
+            self.vertex_gva + base_vertex * VERTEX_STRIDE,
+            blas_vertex_count(obj.base_vertex, self.vertex_count),
+            self.index_gva + obj.index_offset as u64 * 4,
+            obj.index_count as u32,
+        )
+    }
+
+    // The BLAS geometry for one instanced cluster (absolute indices).
+    fn cluster_geometry(&self, cluster: &InstancedCluster) -> D3D12_RAYTRACING_GEOMETRY_DESC {
+        triangle_geometry(
+            self.vertex_gva,
+            blas_vertex_count(0, self.vertex_count),
+            self.index_gva + cluster.index_offset as u64 * 4,
+            cluster.index_count as u32,
+        )
     }
 }
 
@@ -789,16 +835,6 @@ pub(super) struct RtAccelData {
     // recompute each geometry's albedo / normal pool indices (the flat-normal
     // fallback sits at `albedo_count`) without re-querying the descriptor pools.
     albedo_count: u32,
-    // Shared vertex buffer's vertex count, so an incremental topology refresh can
-    // bound a freshly-built BLAS's `VertexCount` exactly as `build_rt_accel` does
-    // (`total_vertices - base_vertex`), without re-threading it from the context.
-    total_vertices: u32,
-    // GPU virtual addresses of the shared static vertex / index buffers, so a
-    // topology refresh can build a fresh draw BLAS over a slice of them. Stable
-    // for the buffers' lifetime (the persistent static BLAS already bake this
-    // assumption), so they are cached here rather than re-threaded each frame.
-    vbuf_gva: u64,
-    ibuf_gva: u64,
 
     // Deferred-free pool for the rare incremental-topology-refresh orphans +
     // build scratch, drained by `dynamic_update` once `frame_counter` passes each
@@ -863,16 +899,12 @@ pub(super) struct RtInitGeometry<'a> {
     // Placement pool the build allocates through; also carries the device and
     // the command queue the build records and fences on.
     pub alloc: &'a DeviceAllocator,
-    // Shared static vertex buffer (positions at VERTEX_STRIDE).
-    pub vertex_buffer: &'a ID3D12Resource,
-    // Shared static u32 index buffer.
-    pub index_buffer: &'a ID3D12Resource,
+    // The shared vertex / index buffers the draw and cluster BLAS read.
+    pub shared: SharedGeometry,
     // Every participating draw object (filtered by residency + index count inside).
     pub draw_objects: &'a [DrawObject],
     // Every participating instanced cluster.
     pub clusters: &'a [InstancedCluster],
-    // Shared vertex buffer's vertex count (bounds each geometry's VertexCount).
-    pub total_vertices: usize,
     // Real-texture count in the shared pool (resolves per-object pool indices;
     // the flat-normal fallback sits at this index).
     pub albedo_count: u32,
@@ -888,6 +920,8 @@ pub(super) struct RtDynamicInputs<'a> {
     pub skinned: Option<SkinnedRtInputs<'a>>,
     // Index into the per-frame ring (frame_idx % FRAMES).
     pub frame_idx: usize,
+    // The live shared buffers a topology refresh builds new draw BLAS over.
+    pub shared: SharedGeometry,
     // Set when the participating draw set changed since the last update.
     pub topology_dirty: bool,
     // Leave see-through glass meshes out of the BVH (see `participates_in_bvh`).
@@ -901,18 +935,15 @@ pub(super) struct RtDynamicInputs<'a> {
 // frame traces them). Returns `Ok(None)` when there is no resident triangle
 // geometry to trace: the caller then leaves RT disabled and falls back to SSR.
 //
-// `total_vertices` is the shared vertex buffer's vertex count (used to bound
-// each geometry's `VertexCount`); `albedo_count` is the shared pool's
-// real-texture count, used to resolve each geometry's albedo / normal pool
-// indices (the flat-normal fallback sits at `albedo_count`) for the RT hit shader.
+// `albedo_count` is the shared pool's real-texture count, used to resolve each
+// geometry's albedo / normal pool indices (the flat-normal fallback sits at
+// `albedo_count`) for the RT hit shader.
 pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<RtAccelData>> {
     let RtInitGeometry {
         alloc,
-        vertex_buffer,
-        index_buffer,
+        shared,
         draw_objects,
         clusters,
-        total_vertices,
         albedo_count,
         exclude_seethrough,
     } = geometry;
@@ -939,31 +970,12 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
         return Ok(None);
     }
 
-    let vbuf_gva = com::gpu_va(vertex_buffer);
-    let ibuf_gva = com::gpu_va(index_buffer);
-
     // One geometry desc per BLAS: participating objects first, then clusters.
-    let mut geo_descs: Vec<D3D12_RAYTRACING_GEOMETRY_DESC> =
-        Vec::with_capacity(object_indices.len() + cluster_list.len());
-    for &i in &object_indices {
-        let obj = &draw_objects[i];
-        let base_vertex = obj.base_vertex as u64;
-        let vcount = (total_vertices as u64).saturating_sub(base_vertex) as u32;
-        geo_descs.push(triangle_geometry(
-            vbuf_gva + base_vertex * VERTEX_STRIDE,
-            vcount,
-            ibuf_gva + obj.index_offset as u64 * 4,
-            obj.index_count as u32,
-        ));
-    }
-    for (_, c) in &cluster_list {
-        geo_descs.push(triangle_geometry(
-            vbuf_gva,
-            total_vertices as u32,
-            ibuf_gva + c.index_offset as u64 * 4,
-            c.index_count as u32,
-        ));
-    }
+    let geo_descs: Vec<D3D12_RAYTRACING_GEOMETRY_DESC> = object_indices
+        .iter()
+        .map(|&i| shared.draw_geometry(&draw_objects[i]))
+        .chain(cluster_list.iter().map(|(_, c)| shared.cluster_geometry(c)))
+        .collect();
 
     // Size + allocate each BLAS; track the largest scratch requirement.
     let mut blas: Vec<ID3D12Resource> = Vec::with_capacity(geo_descs.len());
@@ -1103,9 +1115,6 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
         skinned_indices,
         has_skinned: false,
         albedo_count,
-        total_vertices: total_vertices as u32,
-        vbuf_gva,
-        ibuf_gva,
     }))
 }
 
@@ -1172,6 +1181,16 @@ where
     Ok(())
 }
 
+// What one incremental topology refresh needs beyond the allocator, the command
+// list and the draw list: the buffers new draw BLAS are built over, the BVH
+// membership rule, and the update counter its orphans are retired against.
+#[derive(Clone, Copy)]
+struct TopologyRefresh {
+    shared: SharedGeometry,
+    exclude_seethrough: bool,
+    now: u64,
+}
+
 impl RtAccelData {
     // Per-frame dynamic update, recorded onto `cmd` (the frame's "start" cmd
     // list, submitted before every per-pass trace on the serial DIRECT queue).
@@ -1215,6 +1234,7 @@ impl RtAccelData {
             mode,
             skinned,
             frame_idx,
+            shared,
             topology_dirty,
             exclude_seethrough,
         } = inputs;
@@ -1255,9 +1275,12 @@ impl RtAccelData {
         // the static TLAS FIRST (before the transform path re-reads `object_indices`).
         // The refresh always rebuilds a static TLAS; on the skinned path
         // `rebuild_skinned` below then overlays the skinned tail on top.
-        if topology_dirty
-            && let Err(e) = self.refresh_topology(alloc, cmd, draw_objects, exclude_seethrough, now)
-        {
+        let refresh = TopologyRefresh {
+            shared,
+            exclude_seethrough,
+            now,
+        };
+        if topology_dirty && let Err(e) = self.refresh_topology(alloc, cmd, draw_objects, refresh) {
             tracing::warn!("RT topology refresh failed (keeping live BVH): {e}");
         }
 
@@ -1339,9 +1362,13 @@ impl RtAccelData {
         alloc: &DeviceAllocator,
         cmd: &ID3D12GraphicsCommandList,
         draw_objects: &[DrawObject],
-        exclude_seethrough: bool,
-        now: u64,
+        refresh: TopologyRefresh,
     ) -> RenderResult<()> {
+        let TopologyRefresh {
+            shared,
+            exclude_seethrough,
+            now,
+        } = refresh;
         let device = alloc.device();
         let device5: ID3D12Device5 = device
             .cast()
@@ -1406,15 +1433,7 @@ impl RtAccelData {
             match reuse {
                 Some(k) => new_draw_blas.push(self.blas[*k].clone()),
                 None => {
-                    let obj = &draw_objects[new_indices[j]];
-                    let base_vertex = obj.base_vertex as u64;
-                    let vcount = (self.total_vertices as u64).saturating_sub(base_vertex) as u32;
-                    let geo = triangle_geometry(
-                        self.vbuf_gva + base_vertex * VERTEX_STRIDE,
-                        vcount,
-                        self.ibuf_gva + obj.index_offset as u64 * 4,
-                        obj.index_count as u32,
-                    );
+                    let geo = shared.draw_geometry(&draw_objects[new_indices[j]]);
                     let info = prebuild_info(&device5, &blas_inputs(&geo));
                     let blas = create_as_buffer(device, info.ResultDataMaxSizeInBytes)?;
                     max_scratch = max_scratch.max(info.ScratchDataSizeInBytes);
@@ -2172,6 +2191,7 @@ impl super::context::DxContext {
 
         // Read before `rt.accel` is borrowed mutably below.
         let exclude_seethrough = self.seethrough_meshes_enabled();
+        let shared = SharedGeometry::of(&self.scene.geometry);
 
         let Some(accel) = self.rt.accel.as_mut() else {
             return;
@@ -2190,6 +2210,7 @@ impl super::context::DxContext {
                 mode: self.rt.dynamic_mode,
                 skinned,
                 frame_idx,
+                shared,
                 topology_dirty,
                 exclude_seethrough,
             },
@@ -2226,11 +2247,9 @@ impl super::context::DxContext {
         let hot_reload = self.hot_reload.enabled;
         let mut accel = match build_rt_accel(RtInitGeometry {
             alloc: &self.hw.alloc,
-            vertex_buffer: &self.scene.geometry.vertex_buffer,
-            index_buffer: &self.scene.geometry.index_buffer,
+            shared: SharedGeometry::of(&self.scene.geometry),
             draw_objects: &self.draw.objects,
             clusters: &self.instanced.clusters,
-            total_vertices: self.rt.static_vertex_count,
             albedo_count: self.scene.textures.len() as u32,
             exclude_seethrough: self.seethrough_meshes_enabled(),
         }) {

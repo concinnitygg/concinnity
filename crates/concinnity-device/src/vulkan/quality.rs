@@ -319,12 +319,10 @@ impl VkContext {
             self.commands.command_pool,
             self.hw.graphics_queue,
             crate::vulkan::raytrace::RtSceneGeometry {
-                vertex_buffer: self.geometry.vertex_buffer.buffer(),
-                index_buffer: self.geometry.index_buffer.buffer(),
+                shared: crate::vulkan::raytrace::SharedGeometry::of(&self.geometry),
                 draw_objects: &self.draw.objects,
                 clusters: &self.instanced.clusters,
                 albedo_count: self.scene.textures.len(),
-                total_vertices: self.rt.static_vertex_count,
                 exclude_seethrough: self.seethrough_meshes_enabled(),
             },
             self.frames_in_flight,

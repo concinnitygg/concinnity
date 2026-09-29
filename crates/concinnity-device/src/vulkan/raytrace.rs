@@ -63,10 +63,13 @@ use concinnity_core::render::rt_geom::{
     cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry,
 };
 use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedRefit, SkinnedShape};
-use concinnity_core::render::rt_topology::{GeomSig, participates_in_bvh, plan_topology_refresh};
+use concinnity_core::render::rt_topology::{
+    GeomSig, blas_vertex_count, participates_in_bvh, plan_topology_refresh,
+};
 use concinnity_core::render::uniforms::SkinParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
+use super::context::VkGeometry;
 use super::pipeline::{SHADER_ENTRY, spv_module};
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
@@ -627,14 +630,6 @@ pub(super) struct RtAccelData {
     // Shared-pool real-texture count for the geometry-table pool indices on a
     // rebuild (the flat-normal fallback sits at this index).
     albedo_count: usize,
-    // Shared static vertex / index buffer device addresses + vertex count, so an
-    // incremental topology refresh can build a fresh draw BLAS over a slice of the
-    // shared buffers (bounding its `max_vertex` exactly as `build_rt_accel` does)
-    // without re-threading them from the context. Stable for the buffers'
-    // lifetime, which the persistent static BLAS already assume.
-    vbuf_addr: u64,
-    ibuf_addr: u64,
-    total_vertices: usize,
 
     // Deferred-free pool (for the draw BLAS a topology refresh orphans) + the
     // monotonic per-update counter that drives it. Every per-frame resource is
@@ -724,6 +719,68 @@ struct BlasParams {
     max_vertex: u32,
     index_byte_offset: u32,
     primitive_count: u32,
+}
+
+// The shared static vertex / index buffers every draw-object and cluster BLAS is
+// built over, read from the live `VkGeometry` at each build: chunk streaming and
+// geometry rebuilds replace both buffers, so an address or vertex count captured
+// earlier can name a destroyed buffer or bound streamed geometry short.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct SharedGeometry {
+    vertex_buffer: vk::Buffer,
+    index_buffer: vk::Buffer,
+    // Vertices the vertex buffer holds, streaming headroom included.
+    vertex_count: u64,
+}
+
+impl SharedGeometry {
+    pub(in crate::vulkan) fn of(geometry: &VkGeometry) -> Self {
+        Self {
+            vertex_buffer: geometry.vertex_buffer.buffer(),
+            index_buffer: geometry.index_buffer.buffer(),
+            vertex_count: geometry.vertex_buffer_bytes / VERTEX_STRIDE,
+        }
+    }
+
+    fn addresses(&self, device: &VkDevice) -> SharedAddresses {
+        SharedAddresses {
+            vertex: buffer_address(device, self.vertex_buffer),
+            index: buffer_address(device, self.index_buffer),
+            vertex_count: self.vertex_count,
+        }
+    }
+}
+
+// `SharedGeometry` resolved to device addresses for one build.
+#[derive(Clone, Copy)]
+struct SharedAddresses {
+    vertex: u64,
+    index: u64,
+    vertex_count: u64,
+}
+
+impl SharedAddresses {
+    // The BLAS parameters for one draw object's slice. Its indices are offset by
+    // `base_vertex`, which folds into the vertex address.
+    fn draw_params(&self, obj: &DrawObject) -> BlasParams {
+        let base_vertex = u64::try_from(obj.base_vertex).unwrap_or(0);
+        BlasParams {
+            vertex_address: self.vertex + base_vertex * VERTEX_STRIDE,
+            max_vertex: blas_vertex_count(obj.base_vertex, self.vertex_count).saturating_sub(1),
+            index_byte_offset: obj.index_offset as u32 * 4,
+            primitive_count: (obj.index_count / 3) as u32,
+        }
+    }
+
+    // The BLAS parameters for one instanced cluster (absolute indices).
+    fn cluster_params(&self, cluster: &InstancedCluster) -> BlasParams {
+        BlasParams {
+            vertex_address: self.vertex,
+            max_vertex: blas_vertex_count(0, self.vertex_count).saturating_sub(1),
+            index_byte_offset: cluster.index_offset as u32 * 4,
+            primitive_count: (cluster.index_count / 3) as u32,
+        }
+    }
 }
 
 fn blas_geometry(p: &BlasParams, index_address: u64) -> vk::AccelerationStructureGeometryKHR<'_> {
@@ -1120,10 +1177,8 @@ pub(in crate::vulkan) struct RtDeviceCtx<'a> {
 // objects + instanced clusters, and the pool counts the geometry-table indices
 // offset against. Borrowed for the duration of the build.
 pub(in crate::vulkan) struct RtSceneGeometry<'a> {
-    // The shared static vertex buffer the BLAS reads positions from.
-    pub(in crate::vulkan) vertex_buffer: vk::Buffer,
-    // The shared static u32 index buffer the BLAS reads triangles from.
-    pub(in crate::vulkan) index_buffer: vk::Buffer,
+    // The shared vertex / index buffers the draw and cluster BLAS read.
+    pub(in crate::vulkan) shared: SharedGeometry,
     // Every draw object; the resident, real-triangle ones participate.
     pub(in crate::vulkan) draw_objects: &'a [DrawObject],
     // Every instanced cluster; the non-empty, real-triangle ones participate.
@@ -1131,9 +1186,6 @@ pub(in crate::vulkan) struct RtSceneGeometry<'a> {
     // The shared pool's real-texture count (resolves each geometry's albedo /
     // normal indices; the flat-normal fallback sits at this index).
     pub(in crate::vulkan) albedo_count: usize,
-    // The shared vertex buffer's vertex count (used to bound each geometry's
-    // `max_vertex`).
-    pub(in crate::vulkan) total_vertices: usize,
     // Leave see-through glass meshes out of the BVH (see `participates_in_bvh`).
     pub(in crate::vulkan) exclude_seethrough: bool,
 }
@@ -1158,12 +1210,10 @@ pub(super) fn build_rt_accel(
         pd,
     } = ctx;
     let RtSceneGeometry {
-        vertex_buffer,
-        index_buffer,
+        shared,
         draw_objects,
         clusters,
         albedo_count,
-        total_vertices,
         exclude_seethrough,
     } = geometry;
     let as_loader = ash::khr::acceleration_structure::Device::new(instance, device);
@@ -1185,34 +1235,18 @@ pub(super) fn build_rt_accel(
         return Ok(None);
     }
 
-    let vbuf_addr = buffer_address(device, vertex_buffer);
-    let ibuf_addr = buffer_address(device, index_buffer);
+    let shared = shared.addresses(device);
+    let ibuf_addr = shared.index;
 
     // One BLAS-build params entry per participating object first, then clusters.
     // Each object folds its base_vertex into the vertex device address + uses its
     // mesh-relative indices (the shader adds base_vertex back via the geom table),
     // mirroring the DirectX vertex-address fold.
-    let mut params: Vec<BlasParams> = Vec::with_capacity(object_indices.len() + cluster_list.len());
-    for &i in &object_indices {
-        let obj = &draw_objects[i];
-        let base_vertex = obj.base_vertex as u64;
-        params.push(BlasParams {
-            vertex_address: vbuf_addr + base_vertex * VERTEX_STRIDE,
-            max_vertex: (total_vertices as u64)
-                .saturating_sub(base_vertex)
-                .saturating_sub(1) as u32,
-            index_byte_offset: obj.index_offset as u32 * 4,
-            primitive_count: (obj.index_count / 3) as u32,
-        });
-    }
-    for (_, c) in &cluster_list {
-        params.push(BlasParams {
-            vertex_address: vbuf_addr,
-            max_vertex: (total_vertices as u64).saturating_sub(1) as u32,
-            index_byte_offset: c.index_offset as u32 * 4,
-            primitive_count: (c.index_count / 3) as u32,
-        });
-    }
+    let params: Vec<BlasParams> = object_indices
+        .iter()
+        .map(|&i| shared.draw_params(&draw_objects[i]))
+        .chain(cluster_list.iter().map(|(_, c)| shared.cluster_params(c)))
+        .collect();
 
     // Size + allocate each BLAS; track the largest scratch requirement.
     let mut blas: Vec<AccelBuffer> = Vec::with_capacity(params.len());
@@ -1447,9 +1481,6 @@ pub(super) fn build_rt_accel(
         cluster_instances,
         cluster_geom,
         albedo_count,
-        vbuf_addr,
-        ibuf_addr,
-        total_vertices,
         retire: Vec::new(),
         frame_counter: 0,
         static_ring,
@@ -1487,17 +1518,20 @@ pub(in crate::vulkan) struct RtDynamicInputs<'a> {
     pub policy: RtRebuildPolicy,
     // Index into the per-frame ring (the frame's `frame_idx`).
     pub frame_idx: usize,
+    // The live shared buffers a topology refresh builds new draw BLAS over.
+    pub shared: SharedGeometry,
     // Per-frame joint palettes + the shared skinned buffers; `None` skips the
     // skinned path (the static path runs).
     pub skinned: Option<SkinnedRtInputs<'a>>,
 }
 
 // What one incremental topology refresh needs beyond the device context, the
-// command buffer and the draw list: the BVH membership rule, which per-frame
-// scratch slot its builds record over, and the update counter its orphaned BLAS
-// are retired against.
+// command buffer and the draw list: the buffers new draw BLAS are built over, the
+// BVH membership rule, which per-frame scratch slot its builds record over, and
+// the update counter its orphaned BLAS are retired against.
 #[derive(Clone, Copy)]
 struct TopologyRefresh {
+    shared: SharedGeometry,
     exclude_seethrough: bool,
     frame_idx: usize,
     now: u64,
@@ -1546,6 +1580,7 @@ impl RtAccelData {
                     exclude_seethrough,
                 },
             frame_idx,
+            shared,
             skinned,
         } = inputs;
         self.frame_counter += 1;
@@ -1585,6 +1620,7 @@ impl RtAccelData {
         // The refresh always rebuilds a static TLAS; on the skinned path
         // `rebuild_skinned` below then overlays the skinned tail on top.
         let refresh = TopologyRefresh {
+            shared,
             exclude_seethrough,
             frame_idx,
             now,
@@ -1704,6 +1740,7 @@ impl RtAccelData {
         slot: &mut StaticFrameRing,
     ) -> RenderResult<()> {
         let TopologyRefresh {
+            shared,
             exclude_seethrough,
             frame_idx,
             now,
@@ -1714,6 +1751,7 @@ impl RtAccelData {
             device,
             pd,
         } = ctx;
+        let shared = shared.addresses(device);
         // Current participating draw set (same predicate as `build_rt_accel`).
         let new_indices: Vec<usize> = draw_objects
             .iter()
@@ -1777,17 +1815,8 @@ impl RtAccelData {
             match reuse {
                 Some(k) => new_addrs[j] = self.blas_addresses[*k],
                 None => {
-                    let obj = &draw_objects[new_indices[j]];
-                    let base_vertex = obj.base_vertex as u64;
-                    let p = BlasParams {
-                        vertex_address: self.vbuf_addr + base_vertex * VERTEX_STRIDE,
-                        max_vertex: (self.total_vertices as u64)
-                            .saturating_sub(base_vertex)
-                            .saturating_sub(1) as u32,
-                        index_byte_offset: obj.index_offset as u32 * 4,
-                        primitive_count: (obj.index_count / 3) as u32,
-                    };
-                    let geo = blas_geometry(&p, self.ibuf_addr);
+                    let p = shared.draw_params(&draw_objects[new_indices[j]]);
+                    let geo = blas_geometry(&p, shared.index);
                     let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
                         .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
                         .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
@@ -1899,7 +1928,7 @@ impl RtAccelData {
         // Record the fresh draw-BLAS builds (build-barrier-serialized over the one
         // scratch slot they share), then the TLAS build, on `cmd`. Infallible from here on.
         for (p, j) in &fresh_params {
-            let geo = blas_geometry(p, self.ibuf_addr);
+            let geo = blas_geometry(p, shared.index);
             let mut bi = vk::AccelerationStructureBuildGeometryInfoKHR::default()
                 .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
                 .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
@@ -2824,12 +2853,10 @@ impl super::context::VkContext {
             self.commands.command_pool,
             self.hw.graphics_queue,
             RtSceneGeometry {
-                vertex_buffer: self.geometry.vertex_buffer.buffer(),
-                index_buffer: self.geometry.index_buffer.buffer(),
+                shared: SharedGeometry::of(&self.geometry),
                 draw_objects: &self.draw.objects,
                 clusters: &self.instanced.clusters,
                 albedo_count: self.scene.textures.len(),
-                total_vertices: self.rt.static_vertex_count,
                 exclude_seethrough: self.seethrough_meshes_enabled(),
             },
             self.frames_in_flight,
@@ -2852,20 +2879,9 @@ impl super::context::VkContext {
             rt.destroy(&self.hw.device);
         }
 
-        // The resolve + glass sets bind the shared vertex / index buffers
-        // directly (the trace fetches attributes at hit points), so they must
-        // follow the swap even when the BVH itself was dropped.
-        let device = self.hw.device.clone();
-        let (vertex_buffer, index_buffer) = (
-            self.geometry.vertex_buffer.buffer(),
-            self.geometry.index_buffer.buffer(),
-        );
-        if let Some(rt) = self.rt_reflections.as_ref() {
-            rt.rewire_geometry(&device, vertex_buffer, index_buffer);
-        }
-        if let Some(transparent) = self.transparent.as_ref() {
-            transparent.wire_rt_geometry(&device, vertex_buffer, index_buffer);
-        }
+        // The resolve + glass sets must follow the swap even when the BVH itself
+        // was dropped.
+        self.rewire_shared_geometry_readers();
 
         // Without RT, an authored SSR resolve keeps feeding the composite and every
         // reader stays wired to it. Otherwise the composite goes, and the scene
@@ -2874,6 +2890,23 @@ impl super::context::VkContext {
             self.rebuild_swapchain()?;
         }
         Ok(())
+    }
+
+    // Re-point the RT resolve + glass sets at the current shared vertex / index
+    // buffers. Both bind them directly (the trace fetches attributes at hit
+    // points), so every path that replaces the buffers calls this, or the sets
+    // keep descriptors on destroyed buffers.
+    pub(in crate::vulkan) fn rewire_shared_geometry_readers(&self) {
+        let (vertex_buffer, index_buffer) = (
+            self.geometry.vertex_buffer.buffer(),
+            self.geometry.index_buffer.buffer(),
+        );
+        if let Some(rt) = self.rt_reflections.as_ref() {
+            rt.rewire_geometry(&self.hw.device, vertex_buffer, index_buffer);
+        }
+        if let Some(transparent) = self.transparent.as_ref() {
+            transparent.wire_rt_geometry(&self.hw.device, vertex_buffer, index_buffer);
+        }
     }
 
     // Build the GPU-driven main-pass skinning resources: the `rt_skin` compute

@@ -30,6 +30,7 @@ use concinnity_core::window::display_mode;
 
 use super::allocator::PooledBuffer;
 use super::draw::*;
+use super::geometry_upload::{CopySubmit, GeometryDest, GeometryUploads};
 use super::post::*;
 use super::texture::*;
 use crate::vulkan::owned::{
@@ -1090,12 +1091,6 @@ pub(super) struct VkRayTracing {
     // only the new ones -- rather than ignoring it (the `Auto` dirty check only
     // watches transforms of the prior set) or rebuilding every BLAS.
     pub(super) topology_dirty: bool,
-    // Total static vertices uploaded at init (the shared VB element count). The
-    // acceleration-structure build needs it to size the hit-shader vertex SSBO;
-    // there is no separate count field, so it is captured here for a live RT
-    // build. Static-geometry rebuilds are not reflected (a pre-existing RT
-    // topology limitation).
-    pub(super) static_vertex_count: usize,
 }
 
 // The device layer every per-world resource is built on: instance, device,
@@ -1414,6 +1409,9 @@ pub(crate) struct VkContext {
     // material slots it samples. See `VkChunkStream`.
     pub(super) chunk_stream: VkChunkStream,
 
+    // Geometry writes staged for the next copy submit. See [`GeometryUploads`].
+    pub(super) geometry_uploads: core::cell::RefCell<GeometryUploads>,
+
     // Skinned (skeletally animated) mesh rendering. See `VkSkinned`.
     pub(super) skinned: VkSkinned,
 
@@ -1543,6 +1541,8 @@ impl VkContext {
 
         let frame = self.current_frame;
         let mut gpu_wait = self.wait_frame_slot(frame)?;
+        // Staged geometry writes go ahead of everything this frame submits.
+        self.flush_geometry_uploads()?;
         self.service_background_work(elapsed, frame);
         let timings = self.read_gpu_timings(frame);
         self.begin_frame_stats(&gpu_wait, timings);
@@ -1714,7 +1714,28 @@ impl VkContext {
         self.window_mut().poll()
     }
 
+    // Submit every staged geometry write. Submission order puts the copies
+    // ahead of any later submission, so nothing waits on them.
+    pub(super) fn flush_geometry_uploads(&self) -> error::RenderResult<()> {
+        self.geometry_uploads.borrow_mut().flush(
+            &self.hw.device,
+            CopySubmit {
+                command_pool: self.commands.command_pool,
+                queue: self.hw.graphics_queue,
+            },
+            GeometryDest {
+                vertex: self.geometry.vertex_buffer.buffer(),
+                index: self.geometry.index_buffer.buffer(),
+            },
+        )
+    }
+
     pub(crate) fn wait_idle(&self) {
+        // Staged geometry writes count as submitted work, so an idle device has
+        // applied them.
+        if let Err(e) = self.flush_geometry_uploads() {
+            tracing::error!("geometry upload submit failed: {e}");
+        }
         // SAFETY: a wait on this device's own queues; it takes no borrowed state.
         let _ = unsafe { self.hw.device.device_wait_idle() };
     }
@@ -2061,6 +2082,10 @@ impl VkContext {
 
         // Sync (per-frame-in-flight semaphores + fences).
         self.frame_sync.destroy(device);
+
+        // Staged geometry writes: the ring retires through the allocator, and
+        // the copy command buffers go with the pool below.
+        self.geometry_uploads.get_mut().destroy();
 
         // Command pools (each frees the buffers allocated from it).
         self.commands.destroy(device);

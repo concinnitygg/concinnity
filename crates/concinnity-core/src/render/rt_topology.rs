@@ -23,6 +23,18 @@ pub fn participates_in_bvh(o: &DrawObject, exclude_seethrough: bool) -> bool {
     o.resident && o.index_count >= 3 && !(exclude_seethrough && o.material.see_through != 0)
 }
 
+/// How many vertices a BLAS over the shared vertex buffer may address from
+/// `base_vertex`: everything from the base to the end of the buffer, whose
+/// current size is `shared_vertex_count` vertices (streaming headroom included).
+/// The count must come from the live buffer, not the build-time geometry, since
+/// streamed geometry lives past it; a bound short of the indices a BLAS reads is
+/// undefined behavior on every API. Zero when the base lies at or past the end.
+pub fn blas_vertex_count(base_vertex: i32, shared_vertex_count: u64) -> u32 {
+    let base = u64::try_from(base_vertex).unwrap_or(0);
+    let count = shared_vertex_count.saturating_sub(base);
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
 /// Identifies the geometry a draw-object BLAS traces, on the shared
 /// vertex/index buffers. Two draw objects with the same signature trace
 /// identical geometry, so a topology refresh can reuse the existing BLAS instead
@@ -253,5 +265,25 @@ mod tests {
         glass.material.see_through = 1;
         assert!(participates_in_bvh(&glass, false));
         assert!(!participates_in_bvh(&glass, true));
+    }
+
+    #[test]
+    fn blas_vertex_count_spans_from_the_base_to_the_buffer_end() {
+        // Static geometry indexes the whole buffer from vertex 0.
+        assert_eq!(blas_vertex_count(0, 1000), 1000);
+        // A streamed chunk past the build-time geometry reaches the buffer end.
+        assert_eq!(blas_vertex_count(600, 1000), 400);
+        // A world with no build-time geometry still bounds its chunks by the
+        // grown buffer, never by the zero vertices it started with.
+        assert_eq!(blas_vertex_count(0, 580_000), 580_000);
+        assert_eq!(blas_vertex_count(4096, 580_000), 575_904);
+    }
+
+    #[test]
+    fn blas_vertex_count_is_zero_at_or_past_the_end_and_clamps_to_u32() {
+        assert_eq!(blas_vertex_count(1000, 1000), 0);
+        assert_eq!(blas_vertex_count(1200, 1000), 0);
+        assert_eq!(blas_vertex_count(-5, 10), 10);
+        assert_eq!(blas_vertex_count(0, u64::MAX), u32::MAX);
     }
 }

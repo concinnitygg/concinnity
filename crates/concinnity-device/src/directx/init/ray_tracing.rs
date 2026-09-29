@@ -112,11 +112,9 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRa
     let accel = if reflections.is_some() {
         match raytrace::build_rt_accel(raytrace::RtInitGeometry {
             alloc: &hw.alloc,
-            vertex_buffer: &scene.geometry.vertex_buffer,
-            index_buffer: &scene.geometry.index_buffer,
+            shared: raytrace::SharedGeometry::of(&scene.geometry),
             draw_objects: &world.draw_objects,
             clusters: &world.instanced_clusters,
-            total_vertices: world.vertices.len(),
             albedo_count: scene.textures.len() as u32,
             // Exclude the meshes the transparent pass will reroute. Decided
             // here rather than through `seethrough_meshes_enabled` because
@@ -147,6 +145,5 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRa
         dynamic_mode: post.rt_dynamic,
         skinned_geometry: post.rt_skinned_geometry,
         topology_dirty: false,
-        static_vertex_count: world.vertices.len(),
     }
 }

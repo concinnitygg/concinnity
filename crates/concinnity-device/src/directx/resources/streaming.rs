@@ -11,6 +11,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::super::com;
 use super::super::context::*;
+use super::super::geometry_upload::GeometryTarget;
 use super::super::texture::*;
 
 // Byte-range sub-allocators for the headroom region appended to the shared
@@ -116,6 +117,10 @@ impl DxContext {
         self.scene.geometry.vertex_buffer = new_vbuf;
         self.scene.geometry.index_buffer = new_ibuf;
 
+        self.geometry_uploads
+            .get_mut()
+            .reserve(&self.hw.alloc, (chunk_vtx_bytes + chunk_idx_bytes) as u64)?;
+
         // Seed the chunk allocators with the appended headroom. retire_frame 0:
         // nothing has been drawn, so the space is reusable immediately.
         self.chunk_stream
@@ -134,9 +139,8 @@ impl DxContext {
     // window already bounds the resident chunk count. Indices stay
     // mesh-relative (0-based) and the draw passes the vertex region's base as
     // `base_vertex`, so a chunk placed past the 65 535-vertex `u16` index
-    // range still renders. `frame` reclaims retired deferred frees first.
-    // `wait_idle` runs before the geometry copy so the whole-resource
-    // COPY_DEST transition races no in-flight command list.
+    // range still renders. `frame` reclaims retired deferred frees first, so no
+    // in-flight frame reads the chosen region while the staged copy lands.
     pub(crate) fn add_chunk_mesh(
         &mut self,
         mesh: ChunkMesh<'_>,
@@ -171,27 +175,16 @@ impl DxContext {
             || "add_chunk_mesh".to_string(),
         )?;
 
-        self.wait_idle();
-
-        // Vertices and indices both copy verbatim: the indices stay 0-based and
-        // the draw fixes them up with `base_vertex`.
-        let vert_bytes = bytemuck::cast_slice(vertices);
-        self.write_geometry_region(
-            &self.scene.geometry.vertex_buffer,
-            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-            v_off as u64,
-            vert_bytes,
+        // Vertices copy verbatim. Chunk indices stay mesh-relative; the draw
+        // fixes them up with `base_vertex`. Widen u16 → u32 to match the static
+        // IB's stride.
+        self.stage_geometry(
+            GeometryTarget::Vertex,
+            v_off,
+            bytemuck::cast_slice(vertices),
         )?;
-        // Chunk indices stay mesh-relative; the draw fixes them up with
-        // `base_vertex`. Widen u16 → u32 to match the static IB's stride.
         let widened: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
-        let idx_bytes = bytemuck::cast_slice(&widened);
-        self.write_geometry_region(
-            &self.scene.geometry.index_buffer,
-            D3D12_RESOURCE_STATE_INDEX_BUFFER,
-            i_off as u64,
-            idx_bytes,
-        )?;
+        self.stage_geometry(GeometryTarget::Index, i_off, bytemuck::cast_slice(&widened))?;
 
         // v_off is a multiple of size_of::<Vertex>() (the headroom start and
         // every alloc are), so the base is an exact vertex index.

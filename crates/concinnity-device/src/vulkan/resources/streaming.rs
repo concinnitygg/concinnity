@@ -11,6 +11,7 @@ use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
 
 use super::super::context::*;
+use super::super::geometry_upload::GeometryTarget;
 use super::super::texture;
 
 impl VkContext {
@@ -73,6 +74,11 @@ impl VkContext {
         self.geometry.index_buffer = new_ibuf;
         self.geometry.vertex_buffer_bytes = new_v;
         self.geometry.index_buffer_bytes = new_i;
+        self.rewire_shared_geometry_readers();
+
+        self.geometry_uploads
+            .get_mut()
+            .reserve(&self.hw.alloc, (chunk_vtx_bytes + chunk_idx_bytes) as u64)?;
 
         self.chunk_stream
             .vtx_alloc
@@ -85,7 +91,9 @@ impl VkContext {
     }
 
     // Place one streamed chunk's geometry in the chunk headroom region and
-    // write its `DrawObject` at the engine-allocated destination slot.
+    // write its `DrawObject` at the engine-allocated destination slot. `frame`
+    // reclaims retired deferred frees first, so no in-flight frame reads the
+    // chosen region while the staged copy lands.
     pub(crate) fn add_chunk_mesh(
         &mut self,
         mesh: ChunkMesh<'_>,
@@ -118,17 +126,13 @@ impl VkContext {
             || "add_chunk_mesh".to_string(),
         )?;
 
-        self.wait_idle();
-
-        let vert_bytes = bytemuck::cast_slice(vertices);
-        self.write_geometry_region(
-            self.geometry.vertex_buffer.buffer(),
-            v_off as u64,
-            vert_bytes,
+        self.stage_geometry(
+            GeometryTarget::Vertex,
+            v_off,
+            bytemuck::cast_slice(vertices),
         )?;
         let widened: Vec<u32> = indices.iter().map(|&i| u32::from(i)).collect();
-        let idx_bytes = bytemuck::cast_slice(&widened);
-        self.write_geometry_region(self.geometry.index_buffer.buffer(), i_off as u64, idx_bytes)?;
+        self.stage_geometry(GeometryTarget::Index, i_off, bytemuck::cast_slice(&widened))?;
 
         let base_vertex = (v_off / std::mem::size_of::<Vertex>()) as i32;
         let obj = DrawObject {

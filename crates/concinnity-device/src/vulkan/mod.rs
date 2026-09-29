@@ -16,6 +16,7 @@ mod device;
 mod draw;
 mod error;
 mod fog;
+mod geometry_upload;
 mod glass;
 mod global_set;
 mod gpu_profile;
@@ -47,6 +48,8 @@ mod render_pass;
 mod resources;
 mod screenshot;
 mod swapchain;
+#[cfg(test)]
+mod test_gpu;
 mod texture;
 mod transient_pool;
 mod transparent;

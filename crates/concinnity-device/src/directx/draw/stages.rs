@@ -105,6 +105,8 @@ impl DxContext {
         // could still reference a range freed `FRAMES + 1` ticks ago, so those
         // bytes become placeable again here.
         self.hw.alloc.begin_frame();
+        // Same tick for the staged geometry writes' ring and copy lists.
+        self.geometry_uploads.get_mut().begin_frame();
 
         // Periodic footprint readout, for measuring the pool under streaming
         // churn at scale. Inert unless debug logging is enabled.

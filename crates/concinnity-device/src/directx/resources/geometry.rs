@@ -1,7 +1,8 @@
 //! Streamed-mesh upload + eviction for DxContext: placement in the shared
 //! vertex / index buffers through the mesh sub-allocators, in-place per-slot
 //! geometry replacement for hot-reload, and the init-time seeding of the
-//! streaming headroom.
+//! streaming headroom. Writes into the shared buffers are staged and copied by
+//! the next geometry submit (see `geometry_upload`), so none waits on the GPU.
 
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::DrawIndex;
@@ -9,6 +10,7 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::super::context::*;
+use super::super::geometry_upload::GeometryTarget;
 use super::super::texture::{one_shot_submit, transition_barrier};
 use crate::directx::error::map_hresult;
 
@@ -26,6 +28,19 @@ pub(in crate::directx) struct MeshStreamState {
 }
 
 impl DxContext {
+    // Stage `data` for the shared `target` buffer at byte `offset`. It lands
+    // after every earlier read of the buffer and before any later one.
+    pub(in crate::directx) fn stage_geometry(
+        &self,
+        target: GeometryTarget,
+        offset: usize,
+        data: &[u8],
+    ) -> RenderResult<()> {
+        self.geometry_uploads
+            .borrow_mut()
+            .stage(&self.hw.alloc, target, offset as u64, data)
+    }
+
     // Copy `data` into a sub-region of a DEFAULT-heap geometry buffer.
     //
     // `dest` is a buffer currently in `usage_state` (the vertex or index
@@ -82,9 +97,8 @@ impl DxContext {
     //
     // `indices` are mesh-relative (0-based); they are rebased onto the chosen
     // vertex region before upload, so the D3D12 draw can keep a 0 base-vertex.
-    // `frame` reclaims deferred frees that have retired by then. `wait_idle`
-    // runs first so the whole-resource COPY_DEST transition races no in-flight
-    // command list (see `write_geometry_region`).
+    // `frame` reclaims deferred frees that have retired by then, so no
+    // in-flight frame reads the chosen region while the staged copy lands.
     pub(crate) fn upload_mesh(
         &mut self,
         draw_idx: DrawIndex,
@@ -135,29 +149,19 @@ impl DxContext {
             || format!("upload_mesh: draw {draw_idx}"),
         )?;
 
-        self.wait_idle();
-
         // Vertices copy verbatim. Indices are mesh-relative, so rebase them to
         // the vertex region the allocator chose: v_off is always a multiple of
         // size_of::<Vertex>() (every seed region and allocation is), so the
         // base is an exact vertex index.
-        let vert_bytes = bytemuck::cast_slice(vertices);
-        self.write_geometry_region(
-            &self.scene.geometry.vertex_buffer,
-            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-            v_off as u64,
-            vert_bytes,
+        self.stage_geometry(
+            GeometryTarget::Vertex,
+            v_off,
+            bytemuck::cast_slice(vertices),
         )?;
         let base = (v_off / std::mem::size_of::<Vertex>()) as u32;
         // Widen u16 → u32 while rebasing onto the chosen vertex region.
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
-        let idx_bytes = bytemuck::cast_slice(&rebased);
-        self.write_geometry_region(
-            &self.scene.geometry.index_buffer,
-            D3D12_RESOURCE_STATE_INDEX_BUFFER,
-            i_off as u64,
-            idx_bytes,
-        )?;
+        self.stage_geometry(GeometryTarget::Index, i_off, bytemuck::cast_slice(&rebased))?;
 
         let obj = &mut self.draw.objects[draw_idx.index()];
         obj.vertex_offset = v_off;
@@ -177,10 +181,9 @@ impl DxContext {
     // `lod_alternates` is written to the matching slot's pre-allocated LOD
     // region; LOD counts and per-LOD index counts must match init-time too.
     // Per-LOD `switch_distance`s are re-stored so JSON-side tweaks to
-    // `lod_distances` propagate without a process restart. `wait_idle` is
-    // folded into each `write_geometry_region` call (the whole-resource
-    // COPY_DEST transition needs no in-flight command list referencing the
-    // buffer). Mirrors `MtlContext::update_mesh_geometry`.
+    // `lod_distances` propagate without a process restart. The writes are
+    // staged: the copy's COPY_DEST transition orders it after every earlier
+    // read of the buffers. Mirrors `MtlContext::update_mesh_geometry`.
     pub(crate) fn update_mesh_geometry(
         &mut self,
         draw_idx: DrawIndex,
@@ -239,8 +242,8 @@ impl DxContext {
                 )));
             }
         }
-        let v_off = obj.vertex_offset as u64;
-        let i_off_bytes = (obj.index_offset * std::mem::size_of::<u32>()) as u64;
+        let v_off = obj.vertex_offset;
+        let i_off_bytes = obj.index_offset * std::mem::size_of::<u32>();
         // Static draws keep indices absolute (base_vertex == 0), so rebase
         // mesh-relative u16 indices onto the slot's vertex_offset and widen to
         // u32 before writing, matching the shared u32 index buffer and the
@@ -248,28 +251,22 @@ impl DxContext {
         // size_of::<Vertex>() (every region build_draw_list emits starts on a
         // vertex boundary).
         let base = (obj.vertex_offset / std::mem::size_of::<Vertex>()) as u32;
-        let lod_byte_offsets: Vec<u64> = obj
+        let lod_byte_offsets: Vec<usize> = obj
             .lod_alternates
             .iter()
-            .map(|s| (s.index_offset * std::mem::size_of::<u32>()) as u64)
+            .map(|s| s.index_offset * std::mem::size_of::<u32>())
             .collect();
 
-        self.wait_idle();
-
-        let vert_bytes = bytemuck::cast_slice(vertices);
-        self.write_geometry_region(
-            &self.scene.geometry.vertex_buffer,
-            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+        self.stage_geometry(
+            GeometryTarget::Vertex,
             v_off,
-            vert_bytes,
+            bytemuck::cast_slice(vertices),
         )?;
         let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
-        let idx_bytes = bytemuck::cast_slice(&rebased);
-        self.write_geometry_region(
-            &self.scene.geometry.index_buffer,
-            D3D12_RESOURCE_STATE_INDEX_BUFFER,
+        self.stage_geometry(
+            GeometryTarget::Index,
             i_off_bytes,
-            idx_bytes,
+            bytemuck::cast_slice(&rebased),
         )?;
         // LOD alternate slots were laid out at init alongside LOD0 in the
         // same shared index buffer. Each alternate shares LOD0's vertex
@@ -277,12 +274,10 @@ impl DxContext {
         // same `base`.
         for ((_, alt_idx), &alt_off_bytes) in lod_alternates.iter().zip(lod_byte_offsets.iter()) {
             let alt_rebased: Vec<u32> = alt_idx.iter().map(|&i| u32::from(i) + base).collect();
-            let alt_bytes = bytemuck::cast_slice(&alt_rebased);
-            self.write_geometry_region(
-                &self.scene.geometry.index_buffer,
-                D3D12_RESOURCE_STATE_INDEX_BUFFER,
+            self.stage_geometry(
+                GeometryTarget::Index,
                 alt_off_bytes,
-                alt_bytes,
+                bytemuck::cast_slice(&alt_rebased),
             )?;
         }
         // Refresh the per-LOD switch distances so JSON-side tweaks to
@@ -356,5 +351,12 @@ impl DxContext {
         self.mesh_stream.vtx_alloc.reclaim(0);
         self.mesh_stream.idx_alloc.free(idx_offset, idx_bytes, 0);
         self.mesh_stream.idx_alloc.reclaim(0);
+        if let Err(e) = self
+            .geometry_uploads
+            .get_mut()
+            .reserve(&self.hw.alloc, vtx_bytes + idx_bytes)
+        {
+            tracing::warn!("mesh streaming: geometry staging reserve failed: {e}");
+        }
     }
 }

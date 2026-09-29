@@ -22,6 +22,7 @@ use concinnity_core::render::backend_init::{BackendInit, PostSettings, WorldShad
 use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::context::*;
+use super::geometry_upload::GeometryUploads;
 use super::texture::GpuUploadContext;
 use crate::vulkan::global_set::GlobalBindings;
 
@@ -373,6 +374,7 @@ impl VkContext {
             instanced: VkInstanced::new(world.instanced_clusters),
             geometry,
             chunk_stream: Default::default(),
+            geometry_uploads: core::cell::RefCell::new(GeometryUploads::new(frames)),
             skinned: VkSkinned::new(),
             uniforms,
             frame_sync,

@@ -37,6 +37,7 @@ use super::draw::main::InstanceBucketLayout;
 use super::draw::shadow::ShadowState;
 use super::draw::spot_shadow::SpotShadowState;
 use super::fog::*;
+use super::geometry_upload::{GeometryDest, GeometryUploads};
 use super::hot_reload::HotReloadState;
 use super::particle::ParticleState;
 use super::post::bloom::BloomState;
@@ -703,11 +704,6 @@ pub(super) struct DxRayTracing {
     // building only the new ones -- rather than ignoring it (the `Auto` dirty
     // check only watches transforms of the prior set) or rebuilding every BLAS.
     pub topology_dirty: bool,
-    // Total static vertices uploaded at init (the shared VB element count); the
-    // acceleration-structure build needs it to size the hit-shader vertex SSBO.
-    // Static-geometry rebuilds are not reflected (a pre-existing RT topology
-    // limitation).
-    pub static_vertex_count: usize,
 }
 
 // The device layer every per-world resource is built on: device, queue,
@@ -819,6 +815,9 @@ pub(crate) struct DxContext {
     // Chunk-streaming byte-range sub-allocators + slot recycling. See
     // [`ChunkStreamState`].
     pub(super) chunk_stream: ChunkStreamState,
+
+    // Geometry writes staged for the next copy submit. See [`GeometryUploads`].
+    pub(super) geometry_uploads: RefCell<GeometryUploads>,
 
     // Skinned (skeletally animated) mesh rendering. All `None` / empty until
     // `upload_skinned` runs.
@@ -1064,6 +1063,8 @@ impl DxContext {
         let frame = self.current_frame;
 
         let gpu_wait = self.wait_frame_slot(frame)?;
+        // Staged geometry writes go ahead of everything this frame submits.
+        self.flush_geometry_uploads()?;
         self.service_background_work(elapsed, near, far, frame);
         let timings = self.read_gpu_timings(frame);
         self.begin_frame_stats(&gpu_wait, timings);
@@ -1452,7 +1453,25 @@ impl DxContext {
         )
     }
 
+    // Submit every staged geometry write. Queue order puts the copies ahead of
+    // any later submission, so nothing waits on them.
+    pub(super) fn flush_geometry_uploads(&self) -> error::RenderResult<()> {
+        self.geometry_uploads.borrow_mut().flush(
+            &self.hw.device,
+            &self.hw.command_queue,
+            &GeometryDest {
+                vertex: &self.scene.geometry.vertex_buffer,
+                index: &self.scene.geometry.index_buffer,
+            },
+        )
+    }
+
     pub(crate) fn wait_idle(&self) {
+        // Staged geometry writes count as submitted work, so an idle GPU has
+        // applied them.
+        if let Err(e) = self.flush_geometry_uploads() {
+            tracing::error!("geometry upload submit failed: {e}");
+        }
         // Signal a new fence value and wait until the GPU reaches it.
         let val = self.frame_sync.next_fence_value.get();
         self.frame_sync.next_fence_value.set(val + 1);

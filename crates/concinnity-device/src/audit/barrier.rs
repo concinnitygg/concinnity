@@ -122,6 +122,14 @@ const AUDITS: &[BackendAudit] = &[
             // graph derives it from the pool read the draw declares.
             ("particle.rs", "cmd_pipeline_barrier", 2, Reason::IntraPass),
             ("texture.rs", "cmd_pipeline_barrier", 1, Reason::Upload),
+            // The staged geometry copies' submit: a write-after-read barrier
+            // ahead of the copies and a visibility barrier after them.
+            (
+                "geometry_upload.rs",
+                "cmd_pipeline_barrier",
+                2,
+                Reason::Upload,
+            ),
             // The probe cube array's one transition into the layout it keeps,
             // on a one-shot submit when the array is allocated.
             ("probe_set.rs", "cmd_pipeline_barrier", 1, Reason::Upload),
@@ -310,6 +318,9 @@ const AUDITS: &[BackendAudit] = &[
                 Reason::IntraPass,
             ),
             ("allocator.rs", ".ResourceBarrier(", 1, Reason::Upload),
+            // The staged geometry copies' submit brackets the shared buffers in
+            // COPY_DEST; its test reads a destination back through the same pair.
+            ("geometry_upload.rs", ".ResourceBarrier(", 4, Reason::Upload),
             (
                 "resources/geometry.rs",
                 ".ResourceBarrier(",
