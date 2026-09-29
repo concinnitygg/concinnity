@@ -1,12 +1,13 @@
-//! Building a world's replacement pipelines away from the frame thread.
+//! Building a world's pipelines away from the frame thread.
 //!
 //! Creating a pipeline is where a driver turns shader code into GPU machine
 //! code, which costs tens to hundreds of milliseconds for a world Shader. A
 //! [`PipelineBuilder`] does that on whichever thread calls it, against the live
 //! device, and hands back [`PreparedPipelines`] for
+//! [`DrawStreaming::install_world_shader`](super::DrawStreaming::install_world_shader),
 //! [`LiveEdit::update_world_shader`](super::LiveEdit::update_world_shader) or
 //! [`LiveEdit::replace_sdf_volume_pipelines`](super::LiveEdit::replace_sdf_volume_pipelines)
-//! to swap in without building.
+//! to install without building.
 
 use alloc::boxed::Box;
 use core::any::Any;
@@ -43,7 +44,7 @@ impl fmt::Debug for PreparedPipelines {
 /// from any thread.
 ///
 /// A builder captures what pipeline creation reads when
-/// [`LiveEdit::pipeline_builder`](super::LiveEdit::pipeline_builder) hands it
+/// [`DrawStreaming::pipeline_builder`](super::DrawStreaming::pipeline_builder) hands it
 /// out. The backend checks what it built against at swap time, and builds the
 /// pipeline itself when the two no longer match.
 pub trait PipelineBuilder: Send + Sync {

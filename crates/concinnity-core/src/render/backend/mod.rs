@@ -371,13 +371,7 @@ mod tests {
         // A bucket with no per-bucket pipeline to build is resident as-is.
         assert!(
             backend
-                .install_world_shader(
-                    1,
-                    crate::render::backend_init::WorldShader {
-                        programs: None,
-                        deferred: false,
-                    }
-                )
+                .install_world_shader(1, &crate::components::ShaderPrograms::default(), None)
                 .is_ok()
         );
     }

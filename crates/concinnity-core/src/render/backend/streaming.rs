@@ -10,10 +10,12 @@
 //! image carries its GPU format and mip chain: RGBA8 regenerates mips on
 //! upload, block-compressed formats upload their chain verbatim.
 
+use crate::components::ShaderPrograms;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{DrawIndex, MaterialUniforms};
-use crate::render::backend_init::WorldShader;
+use crate::render::backend::{PipelineBuilder, PreparedPipelines};
 use crate::render::error::{RenderError, RenderResult};
+use alloc::sync::Arc;
 
 /// One streamed chunk's geometry plus placement, supplied to
 /// [`DrawStreaming::add_chunk_mesh`]. `frame` reclaims retired deferred frees
@@ -134,18 +136,26 @@ pub trait DrawStreaming {
         })
     }
 
-    /// Build the render pipeline for one shader bucket from its compiled stage
-    /// bytes, making draws that carry that bucket renderable. Called by the
-    /// streaming pump when a scene that exclusively owns the bucket's `Shader`
-    /// pins: init skipped the build, so this is where the cost lands (behind
-    /// the loading screen, since the bucket counts as scene-resident content).
-    /// Bucket 0 is the world default program and is never installed this way.
+    /// Make one shader bucket's draws renderable by installing its main-pass
+    /// pipeline, built from `programs`. Called by the streaming pump when a
+    /// scene that exclusively owns the bucket's `Shader` pins; init skipped the
+    /// build. `prepared` is the pipeline a [`Self::pipeline_builder`] already
+    /// built from `programs` on a worker: the backend installs it as is, or
+    /// builds on the calling thread when there is none or it was built against
+    /// targets the backend no longer draws into. Replaces whatever the bucket
+    /// holds. Bucket 0 is the world default program and is never installed this
+    /// way.
     ///
     /// Default no-op-with-Ok: a backend that renders every draw with the world
     /// default program has no per-bucket pipeline to build, and the bucket is
     /// resident as far as scene loading is concerned.
-    fn install_world_shader(&mut self, bucket: u32, shader: WorldShader<'_>) -> RenderResult<()> {
-        let _ = (bucket, shader);
+    fn install_world_shader(
+        &mut self,
+        bucket: u32,
+        programs: &ShaderPrograms,
+        prepared: Option<PreparedPipelines>,
+    ) -> RenderResult<()> {
+        let _ = (bucket, programs, prepared);
         Ok(())
     }
 
@@ -155,5 +165,13 @@ pub trait DrawStreaming {
     /// Default no-op, for the same reason as above.
     fn evict_world_shader(&mut self, bucket: u32) {
         let _ = bucket;
+    }
+
+    /// A builder that creates world Shader and SdfVolume pipelines against this
+    /// backend's device on another thread, so a scene's bucket install and a
+    /// hot reload's swap receive a finished pipeline instead of building one on
+    /// the frame thread. Default `None`: the install builds for itself.
+    fn pipeline_builder(&self) -> Option<Arc<dyn PipelineBuilder>> {
+        None
     }
 }

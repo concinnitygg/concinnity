@@ -68,13 +68,13 @@ impl DrawStreaming for VkContext {
         fn evict_world_shader(&mut self, bucket: u32);
     }
 
-    fn install_world_shader(
-        &mut self,
-        bucket: u32,
-        shader: backend_init::WorldShader<'_>,
-    ) -> RenderResult<()> {
-        debug_assert_main_thread("install_world_shader");
-        VkContext::install_world_shader(self, bucket, shader)
+    forward! { assert = debug_assert_main_thread;
+        fn install_world_shader(&mut self, bucket: u32, programs: &concinnity_core::components::ShaderPrograms, prepared: Option<concinnity_core::render::backend::PreparedPipelines>) -> RenderResult<()>;
+    }
+
+    fn pipeline_builder(&self) -> Option<std::sync::Arc<dyn backend::PipelineBuilder>> {
+        debug_assert_main_thread("pipeline_builder");
+        Some(VkContext::pipeline_builder(self))
     }
 }
 
@@ -133,10 +133,6 @@ impl LiveEdit for VkContext {
         fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()>;
         fn rebuild_static_geometry(&mut self, changes: Vec<backend::DrawGeometryUpdate>) -> RenderResult<()>;
         fn set_material_params(&mut self, row: u32, params: [f32; concinnity_core::gfx::render_types::MATERIAL_PARAM_COUNT]);
-    }
-
-    fn pipeline_builder(&self) -> Option<std::sync::Arc<dyn backend::PipelineBuilder>> {
-        Some(VkContext::pipeline_builder(self))
     }
 
     fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {

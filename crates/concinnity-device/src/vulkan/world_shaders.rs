@@ -3,8 +3,7 @@
 // Init builds a pipeline for every world Shader whose payload it decoded and
 // leaves a `None` in `world_pipelines` for each one it deferred (a Shader owned
 // by a scene other than the start scene). The streaming pump calls in here as
-// those scenes pin and unpin, so the pipeline build lands behind the loading
-// screen rather than on the frame that first draws the material.
+// those scenes pin and unpin, handing over a pipeline its worker already built.
 //
 // The bucket regions of the GPU-culled command buffer are issued here too: the
 // cull kernel wrote every record's command into exactly one region, so each
@@ -13,44 +12,37 @@
 
 use ash::vk;
 use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
-use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::context::VkContext;
-use super::pipeline::{BucketPipelineTargets, build_bucket_pipeline};
+use super::pipeline::{BucketPipelineTargets, build_world_shader_pipeline};
 use crate::vulkan::owned::OwnedPipeline;
 use crate::vulkan::pipeline_builder::{VkPipelineBuilder, world_shader_for};
 use std::sync::Arc;
 
 impl VkContext {
-    // Build the bindless main-pass pipeline for one shader bucket. Replaces
+    // Install one shader bucket's bindless main-pass pipeline: `prepared` when
+    // it was built for this context's targets, else one built here. Replaces
     // whatever the bucket currently holds, so a re-pin after an eviction
-    // rebuilds cleanly.
+    // installs cleanly.
     pub(in crate::vulkan) fn install_world_shader(
         &mut self,
         bucket: u32,
-        shader: backend_init::WorldShader<'_>,
+        programs: &concinnity_core::components::ShaderPrograms,
+        prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
-        self.world_pipeline_slot(bucket)?;
+        let slot = self.world_pipeline_slot(bucket)?;
         let targets = self.bucket_pipeline_targets().ok_or_else(|| {
             RenderError::Other("shader buckets need the bindless main pass".to_string())
         })?;
-        let pipeline = build_bucket_pipeline(
-            &self.hw.device,
-            targets,
-            bucket as usize,
-            shader,
-            &self.cull.bindless_main_spv,
-        )?;
-        self.replace_world_pipeline(bucket, pipeline)
-    }
-
-    // Put `pipeline` in `bucket`'s slot. A re-pin over a slot that still holds
-    // a pipeline has the same in-flight hazard as an evict, so the old one
-    // retires the same way.
-    fn replace_world_pipeline(&mut self, bucket: u32, pipeline: OwnedPipeline) -> RenderResult<()> {
-        let slot = self.world_pipeline_slot(bucket)?;
-        self.evict_world_shader(bucket);
+        let pipeline = match world_shader_for(prepared, &self.pipeline_gate, targets) {
+            Some(pipeline) => pipeline,
+            None => {
+                build_world_shader_pipeline(&self.hw.device, targets, bucket as usize, programs)?
+            }
+        };
+        // The displaced pipeline drops into the device's retire queue, which
+        // holds it until every frame in flight that recorded against it retires.
         self.cull.world_pipelines[slot] = Some(pipeline);
         Ok(())
     }
@@ -66,10 +58,10 @@ impl VkContext {
         programs: &concinnity_core::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
-        let prepared = self
-            .bucket_pipeline_targets()
-            .and_then(|targets| world_shader_for(prepared, &self.pipeline_gate, targets));
         if bucket == 0 {
+            let prepared = self
+                .bucket_pipeline_targets()
+                .and_then(|targets| world_shader_for(prepared, &self.pipeline_gate, targets));
             self.update_default_world_shader(programs, prepared)?;
             return Ok(PipelineSwap::Swapped);
         }
@@ -77,16 +69,7 @@ impl VkContext {
         if !self.world_shader_resident(bucket as usize) {
             return Ok(PipelineSwap::NotResident);
         }
-        match prepared {
-            Some(pipeline) => self.replace_world_pipeline(bucket, pipeline)?,
-            None => self.install_world_shader(
-                bucket,
-                backend_init::WorldShader {
-                    programs: Some(programs),
-                    deferred: false,
-                },
-            )?,
-        }
+        self.install_world_shader(bucket, programs, prepared)?;
         Ok(PipelineSwap::Swapped)
     }
 
@@ -104,7 +87,7 @@ impl VkContext {
     }
 
     // A builder for this context's world Shader and volume pipelines, for a
-    // hot-reload worker.
+    // streaming or hot-reload worker.
     pub(in crate::vulkan) fn pipeline_builder(&self) -> Arc<dyn PipelineBuilder> {
         Arc::new(VkPipelineBuilder {
             device: self.hw.device.clone(),
@@ -114,26 +97,13 @@ impl VkContext {
         })
     }
 
-    // Release one bucket's pipeline. A Vulkan pipeline may not be destroyed while
-    // a submitted command buffer still references it, so the in-flight frames have
-    // to finish first. An evict only happens when a scene unpins, which is already
-    // a loading-screen stall, so waiting here costs nothing a player sees.
+    // Release one bucket's pipeline. It drops into the device's retire queue,
+    // which destroys it only once every frame in flight that recorded against
+    // it has retired.
     pub(in crate::vulkan) fn evict_world_shader(&mut self, bucket: u32) {
-        let Ok(slot) = self.world_pipeline_slot(bucket) else {
-            return;
-        };
-        if self.cull.world_pipelines[slot].is_none() {
-            return;
+        if let Ok(slot) = self.world_pipeline_slot(bucket) {
+            self.cull.world_pipelines[slot] = None;
         }
-        // Idle first: the pipeline is retired as the slot's `Option` drops, and
-        // the retire queue only guarantees the frames-in-flight window, which
-        // this out-of-frame path does not tick.
-        // SAFETY: a wait on this device's own queues; it takes no borrowed state.
-        unsafe {
-            let _ = self.hw.device.device_wait_idle();
-        }
-        self.cull.world_pipelines[slot] = None;
-        self.hw.device.reclaim_idle();
     }
 
     // Whether a bucket's draws can render this frame: bucket 0 is the world

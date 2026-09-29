@@ -19,7 +19,7 @@ use concinnity_core::render::backend::{
 use concinnity_core::render::backend_init;
 use concinnity_core::render::decal;
 use concinnity_core::render::draw_slot;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::particles;
 use concinnity_core::render::reflection_probe;
 use concinnity_core::render::volumetric_fog;
@@ -95,16 +95,13 @@ impl DrawStreaming for MtlContext {
         fn setup_chunk_streaming(&mut self, chunk_vtx_bytes: usize, chunk_idx_bytes: usize) -> RenderResult<()>;
     }
 
-    fn install_world_shader(
-        &mut self,
-        bucket: u32,
-        shader: backend_init::WorldShader<'_>,
-    ) -> RenderResult<()> {
-        debug_assert_main_thread("install_world_shader");
-        let programs = shader.programs.ok_or_else(|| {
-            RenderError::ShaderCompile("shader bucket carries no programs".into())
-        })?;
-        MtlContext::install_world_shader(self, bucket, programs)
+    forward! { assert = debug_assert_main_thread;
+        fn install_world_shader(&mut self, bucket: u32, programs: &concinnity_core::components::ShaderPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<()>;
+    }
+
+    fn pipeline_builder(&self) -> Option<std::sync::Arc<dyn backend::PipelineBuilder>> {
+        debug_assert_main_thread("pipeline_builder");
+        Some(MtlContext::pipeline_builder(self))
     }
 }
 
@@ -158,10 +155,6 @@ impl LiveEdit for MtlContext {
         fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &concinnity_core::components::sdf_programs::SdfPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
         fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()>;
         fn rebuild_static_geometry(&mut self, changes: Vec<backend::DrawGeometryUpdate>) -> RenderResult<()>;
-    }
-
-    fn pipeline_builder(&self) -> Option<std::sync::Arc<dyn backend::PipelineBuilder>> {
-        Some(MtlContext::pipeline_builder(self))
     }
 
     fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {

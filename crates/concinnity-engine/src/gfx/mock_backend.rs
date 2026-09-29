@@ -162,11 +162,14 @@ pub(crate) enum Call {
         params: [f32; render_types::MATERIAL_PARAM_COUNT],
     },
     SetFade(f32),
-    // A shader bucket's pipeline installed, with the name its programs carry.
+    // A shader bucket's pipeline installed, with the name its programs carry
+    // and the name the prepared pipeline it was handed was built from.
     InstallWorldShader {
         bucket: u32,
-        name: Option<String>,
+        name: String,
+        prepared: Option<String>,
     },
+    EvictWorldShader(u32),
 }
 
 // Shared mutable state behind the mock: the ordered call log, the captured
@@ -207,7 +210,14 @@ pub(crate) struct MockState {
     // rows the device cannot honor. Set before `init_graphics` to stand in for
     // a device missing a feature.
     pub caps: DeviceCapabilities,
+    // Handed out by `pipeline_builder`; `None` stands in for a backend that
+    // builds every install itself.
+    pub(crate) pipeline_builder: Option<Arc<dyn backend::PipelineBuilder>>,
 }
+
+// A pipeline a test's builder prepares: the name of the programs it was built
+// from.
+pub(crate) struct MockPipeline(pub String);
 
 impl Default for MockState {
     fn default() -> Self {
@@ -227,6 +237,7 @@ impl Default for MockState {
             logical_size: (1280.0, 720.0),
             top_inset: 0.0,
             caps: DeviceCapabilities::ALL,
+            pipeline_builder: None,
         }
     }
 }
@@ -473,13 +484,25 @@ impl DrawStreaming for MockBackend {
     fn install_world_shader(
         &mut self,
         bucket: u32,
-        shader: concinnity_core::render::backend_init::WorldShader<'_>,
+        programs: &concinnity_core::components::ShaderPrograms,
+        prepared: Option<backend::PreparedPipelines>,
     ) -> RenderResult<()> {
         self.record(Call::InstallWorldShader {
             bucket,
-            name: shader.programs.map(|p| p.name.clone()),
+            name: programs.name.clone(),
+            prepared: prepared
+                .and_then(backend::PreparedPipelines::downcast::<MockPipeline>)
+                .map(|p| p.0),
         });
         Ok(())
+    }
+
+    fn evict_world_shader(&mut self, bucket: u32) {
+        self.record(Call::EvictWorldShader(bucket));
+    }
+
+    fn pipeline_builder(&self) -> Option<Arc<dyn backend::PipelineBuilder>> {
+        self.state.lock().unwrap().pipeline_builder.clone()
     }
 
     fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()> {

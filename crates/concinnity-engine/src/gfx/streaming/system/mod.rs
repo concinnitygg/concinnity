@@ -26,7 +26,6 @@ use concinnity_core::gfx::chunk_coord;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_core::render::backend::ChunkMesh;
-use concinnity_core::render::backend_init;
 use concinnity_core::render::error;
 use concinnity_core::render::ops::{OpFailure, RenderOps};
 use concinnity_core::render::scene_flow;
@@ -139,8 +138,8 @@ pub(crate) struct StreamingState {
     // Infinite voxel-world chunk streaming. `Some` only when a `VoxelWorld` was
     // declared.
     pub(crate) chunk_stream: Option<ChunkStreamState>,
-    // Deferred shader-bucket pipelines, warmed one per frame as their scene
-    // pins. `Some` only when init deferred at least one bucket.
+    // Deferred shader-bucket pipelines, built off the frame thread as their
+    // scene pins. `Some` only when init deferred at least one bucket.
     pub(crate) shader_warmup: Option<crate::gfx::streaming::shader::ShaderWarmup>,
     // Scene-pinned residency over the texture/mesh pools. `Some` only when the
     // world declares scenes and at least one pool streams; unpinned scenes'
@@ -355,70 +354,18 @@ impl System for StreamingSystem {
 }
 
 impl StreamingState {
-    // Apply this frame's pending shader-bucket work: build the pipeline for
-    // one bucket whose scene just pinned, or release one whose scene unpinned.
-    //
-    // A bucket that cannot be installed (unreadable payload, a shader missing
-    // the bindless entry points) is recorded resident anyway after the error:
-    // its draws stay skipped, but the owning scene finishes loading instead of
-    // holding its loading screen open forever on work that will never succeed.
+    // Record this frame's shader-bucket work (see `ShaderWarmup::pump`),
+    // mirroring each residency change onto the scene that owns the bucket.
     fn drive_shader_warmup(&mut self, ops: &mut RenderOps) {
         let Some(warmup) = self.shader_warmup.as_mut() else {
             return;
         };
-        let Some((bucket, want_resident)) = warmup.next_pending() else {
-            return;
-        };
-        let resident = if want_resident {
-            match warmup.load(bucket) {
-                Ok(install) => {
-                    // The payload is in hand; the recorded install is what
-                    // ends the deferral. Pipeline creation is device work, so
-                    // it runs (and is timed) at replay beside the draw.
-                    ops.record(move |backend| {
-                        let programs = install.programs();
-                        let shader = backend_init::WorldShader {
-                            programs: Some(&*programs),
-                            deferred: false,
-                        };
-                        let started = std::time::Instant::now();
-                        match backend.install_world_shader(bucket, shader) {
-                            // The elapsed time is the frame cost this warmup
-                            // keeps out of gameplay.
-                            Ok(()) => tracing::info!(
-                                "StreamingSystem: shader bucket {} pipeline ready ({:.1} ms)",
-                                bucket,
-                                started.elapsed().as_secs_f32() * 1000.0
-                            ),
-                            Err(e) => tracing::error!(
-                                "StreamingSystem: shader bucket {} pipeline build failed: {}",
-                                bucket,
-                                e
-                            ),
-                        }
-                    });
-                }
-                Err(e) => tracing::error!(
-                    "StreamingSystem: shader bucket {} payload unreadable: {}",
-                    bucket,
-                    e
-                ),
+        let residency = &mut self.scene_residency;
+        warmup.pump(ops, |bucket, resident| {
+            if let Some(residency) = residency.as_mut() {
+                residency.note_resident((CHANNEL_SHADER, bucket), resident);
             }
-            true
-        } else {
-            ops.record(move |backend| {
-                backend.evict_world_shader(bucket);
-                tracing::info!(
-                    "StreamingSystem: shader bucket {} pipeline released",
-                    bucket
-                );
-            });
-            false
-        };
-        warmup.note_resident(bucket, resident);
-        if let Some(residency) = self.scene_residency.as_mut() {
-            residency.note_resident((CHANNEL_SHADER, bucket), resident);
-        }
+        });
     }
 
     // Roll back the recorded ops that failed at the previous frame's replay:
@@ -515,10 +462,8 @@ impl StreamingState {
             }
         }
 
-        // Warm (or release) one shader bucket's pipeline per frame, so a
-        // scene owning several shaders spreads the device work over the
-        // frames its loading screen is already up rather than stalling one of
-        // them.
+        // Start building (or release) the shader buckets whose scene pin
+        // changed, and install the builds that finished.
         self.drive_shader_warmup(ops);
 
         // A pinned scene mid-load keeps the pools dispatching even while the
@@ -1148,46 +1093,67 @@ mod tests {
         out
     }
 
-    // A hot-reloaded edit that lands after a scene's shader install was
-    // recorded, but before the op queue replays it, is what the install builds.
+    // A pinned scene owning a shader bucket keeps loading until the bucket's
+    // off-thread build comes back and its install is recorded.
     #[test]
-    fn a_recorded_shader_install_builds_an_edit_made_before_replay() {
+    fn a_pinned_scene_loads_once_its_shader_bucket_is_installed() {
         use crate::gfx::streaming::shader::{DeferredBucket, ShaderPayloadSource, ShaderWarmup};
-        use crate::gfx::system::parked::ShaderOverrides;
         use concinnity_core::components::ShaderPrograms;
 
         let cooked = ShaderPrograms {
             name: "cooked".into(),
             ..Default::default()
         };
-        let overrides = ShaderOverrides::default();
-        let mut warmup = ShaderWarmup::new(
+        let scene = AssetId(81);
+        let mut state = empty_state();
+        state.shader_warmup = Some(ShaderWarmup::new(
             vec![DeferredBucket {
                 bucket: 1,
                 source: ShaderPayloadSource::Bytes(cooked.encode().unwrap()),
             }],
-            Some(overrides.clone()),
-        );
-        warmup.set_blocked(1, false);
-        let mut state = empty_state();
-        state.shader_warmup = Some(warmup);
-
-        let mut ops = RenderOps::default();
-        state.drive_shader_warmup(&mut ops);
-        overrides.set(
-            1,
-            Arc::new(ShaderPrograms {
-                name: "edited".into(),
-                ..Default::default()
-            }),
-        );
+            None,
+        ));
+        state.scene_residency = Some(SceneResidency::new(vec![(
+            scene,
+            vec![(CHANNEL_SHADER, 1)],
+        )]));
         let (recorded, mut backend) = recording_backend();
-        ops.replay(&mut backend);
+        let pins = [scene];
+        drive_once(
+            &mut state,
+            &mut backend,
+            [0.0; 3],
+            IDENTITY4,
+            false,
+            Some(&pins),
+        );
+        let loading = |s: &StreamingState| s.scene_residency.as_ref().unwrap().any_loading();
+        assert!(
+            loading(&state),
+            "the dispatch alone does not load the scene"
+        );
+
+        for _ in 0..MAX_DRIVE_SPINS {
+            if !loading(&state) {
+                break;
+            }
+            drive_once(
+                &mut state,
+                &mut backend,
+                [0.0; 3],
+                IDENTITY4,
+                false,
+                Some(&pins),
+            );
+            std::thread::yield_now();
+        }
+        assert!(!loading(&state));
         assert_eq!(
             recorded.lock().unwrap().calls,
             [Call::InstallWorldShader {
                 bucket: 1,
-                name: Some("edited".into()),
+                name: "cooked".into(),
+                prepared: None,
             }]
         );
     }

@@ -40,7 +40,8 @@
 //! allocator rather than folding it into a caller's command list means no call
 //! site has to know whether the range it got was fresh; the submit costs nothing
 //! in steady state, since a pool only recycles once a lease has dropped and its
-//! retire frame has passed.
+//! retire frame has passed. The same tick releases objects a caller retired,
+//! such as a pipeline state a scene unload replaced.
 //!
 //! The `Rc` behind the leases is main-thread state. `DxContext` is `Send` and
 //! the parallel encoder hands workers a `&DxContext`, but a worker only ever
@@ -54,6 +55,7 @@ use std::ops::Deref;
 use std::rc::{Rc, Weak};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
+use windows::core::IUnknown;
 
 use crate::suballoc::block_alloc::{BlockAllocator, Placement};
 
@@ -187,25 +189,20 @@ fn round_up(value: u64, granularity: u64) -> u64 {
     value.div_ceil(granularity).saturating_mul(granularity)
 }
 
-// A one-shot list submitted by the allocator itself, held until the GPU has
-// provably retired it. Never read; dropping the entry releases the handles.
-struct ParkedList {
+// COM objects held until the GPU has provably retired every command list that
+// could name them. Never read; dropping the entry releases the handles.
+struct Parked {
     #[expect(
         dead_code,
-        reason = "held until the GPU retires the list; dropping the entry releases the handle"
+        reason = "held until the GPU retires the lists naming it; dropping the entry releases it"
     )]
-    allocator: ID3D12CommandAllocator,
-    #[expect(
-        dead_code,
-        reason = "held until the GPU retires the list; dropping the entry releases the handle"
-    )]
-    cmd: ID3D12GraphicsCommandList,
+    objects: Vec<IUnknown>,
     retire_at: u64,
 }
 
 struct Inner {
     pools: HashMap<PoolKey, Pool>,
-    parked: Vec<ParkedList>,
+    parked: Vec<Parked>,
     // Monotonic frame tick driving the deferred frees. Not the frame-in-flight
     // index, which wraps.
     frame: u64,
@@ -422,8 +419,8 @@ impl DeviceAllocator {
     }
 
     // Advance the frame tick, make retired frees placeable again, release any
-    // heap that now holds nothing, and drop the activation lists the GPU has
-    // finished with.
+    // heap that now holds nothing, and drop the activation lists and retired
+    // objects the GPU has finished with.
     pub(super) fn begin_frame(&self) {
         let mut inner = self.inner.borrow_mut();
         inner.frame += 1;
@@ -589,14 +586,21 @@ impl DeviceAllocator {
             super::texture::one_shot_submit_nowait(&self.device, &self.queue, |cmd| unsafe {
                 cmd.ResourceBarrier(&[super::texture::aliasing_barrier(resource)]);
             })?;
+        self.park(vec![allocator.into(), cmd.into()]);
+        Ok(())
+    }
+
+    // Hold `object` until no in-flight command list can still name it. A D3D12
+    // command list does not keep the pipeline states it recorded alive, so a
+    // replaced one is released through here rather than dropped.
+    pub(super) fn retire(&self, object: impl Into<IUnknown>) {
+        self.park(vec![object.into()]);
+    }
+
+    fn park(&self, objects: Vec<IUnknown>) {
         let mut inner = self.inner.borrow_mut();
         let retire_at = inner.frame + inner.retire_depth;
-        inner.parked.push(ParkedList {
-            allocator,
-            cmd,
-            retire_at,
-        });
-        Ok(())
+        inner.parked.push(Parked { objects, retire_at });
     }
 
     fn lease(&self, reservation: Reservation) -> Lease {
@@ -970,6 +974,29 @@ mod tests {
         // check the contents rather than just the offsets.
         assert!(read(&a).iter().all(|&x| x == 0xAA));
         assert!(read(&b).iter().all(|&x| x == 0x55));
+    }
+
+    #[test]
+    fn a_retired_object_is_held_until_its_retire_frame() {
+        let Some(alloc) = allocator() else {
+            return;
+        };
+        // SAFETY: the device is live for the call and the new COM object lands in a binding that
+        // owns it.
+        let object: ID3D12CommandAllocator = unsafe {
+            alloc
+                .device()
+                .CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
+        }
+        .expect("command allocator");
+        alloc.retire(object);
+        // Three frames in flight: held for four ticks, released on the fourth.
+        for _ in 0..3 {
+            alloc.begin_frame();
+            assert_eq!(alloc.inner.borrow().parked.len(), 1);
+        }
+        alloc.begin_frame();
+        assert!(alloc.inner.borrow().parked.is_empty());
     }
 
     #[test]

@@ -71,13 +71,13 @@ impl DrawStreaming for DxContext {
         fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>, dst: draw_slot::SlotAlloc) -> RenderResult<()>;
     }
 
-    fn install_world_shader(
-        &mut self,
-        bucket: u32,
-        shader: backend_init::WorldShader<'_>,
-    ) -> RenderResult<()> {
-        debug_assert_main_thread("install_world_shader");
-        DxContext::install_world_shader(self, bucket, shader)
+    forward! { assert = debug_assert_main_thread;
+        fn install_world_shader(&mut self, bucket: u32, programs: &concinnity_core::components::ShaderPrograms, prepared: Option<concinnity_core::render::backend::PreparedPipelines>) -> RenderResult<()>;
+    }
+
+    fn pipeline_builder(&self) -> Option<std::sync::Arc<dyn backend::PipelineBuilder>> {
+        debug_assert_main_thread("pipeline_builder");
+        Some(DxContext::pipeline_builder(self))
     }
 }
 
@@ -159,11 +159,6 @@ impl LiveEdit for DxContext {
             .objects
             .get(draw_idx.index())
             .map(|o| o.lod_alternates.iter().map(|s| s.index_count).collect())
-    }
-
-    fn pipeline_builder(&self) -> Option<std::sync::Arc<dyn backend::PipelineBuilder>> {
-        debug_assert_main_thread("pipeline_builder");
-        Some(DxContext::pipeline_builder(self))
     }
 
     fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
