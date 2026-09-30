@@ -411,7 +411,6 @@ pub(super) struct WindowState {
     // Metal-only: the drawable and its render-pass descriptor come from here,
     // which is why the shared window layer keeps only the NSView upcast.
     pub view: Retained<MTKView>,
-    pub was_visible: bool,
 }
 
 impl Drop for WindowState {
@@ -1494,19 +1493,7 @@ impl MtlContext {
 
     // Returns true if the window has been closed by the user.
     pub(crate) fn window_closed(&self) -> bool {
-        if self.window().appkit.closed() {
-            return true;
-        }
-        // Detect close via the red-X button: NSWindow.close() hides the window
-        // without posting an ApplicationDefined event, so window_closed never
-        // becomes true through the event pump alone. Guard with was_visible so
-        // we don't misfire before the first frame appears.
-        self.window().was_visible
-            && self
-                .window()
-                .appkit
-                .window()
-                .is_some_and(|w| !w.isVisible())
+        self.window().appkit.closed()
     }
 
     // Block until the GPU has finished all in-flight work.

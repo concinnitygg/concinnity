@@ -61,7 +61,7 @@ impl AppKitVkWindow {
         view.setLayer(Some(&layer));
         view.setWantsLayer(true);
         window.setContentView(Some(&view));
-        let (delegate, fullscreen) = window_delegate::attach_fullscreen_delegate(mtm, &window);
+        let (delegate, signals) = window_delegate::attach_window_delegate(mtm, &window);
         NSApplication::sharedApplication(mtm).activate();
         window.makeKeyAndOrderFront(None);
 
@@ -73,7 +73,7 @@ impl AppKitVkWindow {
                 // The Vulkan path is always the windowed CLI path; the embedded
                 // host-owned-view mode is Metal only.
                 pump_events: true,
-                fullscreen,
+                signals,
                 window_delegate: Some(delegate),
             }),
             layer,

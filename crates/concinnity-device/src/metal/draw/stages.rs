@@ -185,7 +185,6 @@ impl MtlContext {
         self.diagnostics.frame_stats.gpu_wait_us = gpu_wait.micros();
         // drawable not yet available -- skip this frame silently
         let drawable = drawable?;
-        self.window_mut().was_visible = true;
 
         // This frame's transient-buffer ring slot. The fence guarantees the
         // frame that last used `frame_ring_index - frames_in_flight` has retired

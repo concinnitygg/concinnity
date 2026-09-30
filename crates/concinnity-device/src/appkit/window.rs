@@ -25,6 +25,7 @@ use super::chrome::{
 };
 use super::display_mode::{self, FullscreenDisplayMode};
 use super::input::{KeyState, event_mods, key_from_mac, printable_char};
+use super::window_delegate::WindowSignals;
 
 unsafe extern "C" {
     // Moves the OS cursor without generating a mouse-moved event.
@@ -48,7 +49,6 @@ pub(crate) struct AppKitWindow {
     // restyles the window every time the settings menu cycles back to Windowed
     // and has to reinstate the authored chrome, not a standard title bar.
     title_bar: bool,
-    window_closed: bool,
     // Whether the frame loop should pump NSEvents and honor cursor capture.
     // True for windowed mode and for the blocking-in-view play path; false
     // for the preview (which lets the host own input dispatch).
@@ -65,16 +65,14 @@ pub(crate) struct AppKitWindow {
     // Camera3D world). When set, Escape routes to the ECS and clicks never
     // recapture; GraphicsSystem drives capture from the active menu instead.
     menu_mode: bool,
-    // Authoritative native-fullscreen state, kept in sync by `window_delegate`
-    // (the NSWindow `FullScreen` style-mask bit lags the animated transition).
-    // Read by `set_window_mode` / `set_window_size`; an `AtomicBool` because the
-    // delegate stores into it from AppKit's notification callbacks. Always
-    // false in embedded mode (no NSWindow to go fullscreen).
-    fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    // NSWindowDelegate that tracks the fullscreen transition. None in embedded
-    // mode. Retained here because NSWindow holds its delegate as a zeroing weak
-    // reference, so dropping this would detach the delegate; the field is never
-    // read directly (the delegate communicates through `fullscreen`).
+    // Authoritative native-fullscreen and close state, kept in sync by
+    // `window_delegate` (the NSWindow `FullScreen` style-mask bit lags the
+    // animated transition, and `isVisible` also clears on hide and minimize).
+    // Never set in embedded mode, where the host owns the window.
+    signals: std::sync::Arc<WindowSignals>,
+    // NSWindowDelegate that feeds `signals`. None in embedded mode. Retained
+    // here because NSWindow holds its delegate as a zeroing weak reference, so
+    // dropping this would detach the delegate.
     _window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
     // Holds the display to the user's chosen mode while the window is in
     // native fullscreen; restores the desktop mode on exit / drop. Reconciled
@@ -96,7 +94,7 @@ pub(crate) struct AppKitWindowParts {
     pub view: Retained<NSView>,
     pub title_bar: bool,
     pub pump_events: bool,
-    pub fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub signals: std::sync::Arc<WindowSignals>,
     pub(crate) window_delegate: Option<Retained<super::window_delegate::WindowDelegate>>,
 }
 
@@ -107,20 +105,19 @@ impl AppKitWindow {
             view,
             title_bar,
             pump_events,
-            fullscreen,
+            signals,
             window_delegate,
         } = parts;
         Self {
             window,
             view,
             title_bar,
-            window_closed: false,
             pump_events,
             cursor_captured: false,
             recapture_on_click: false,
             ui_cursor_hidden: false,
             menu_mode: false,
-            fullscreen,
+            signals,
             _window_delegate: window_delegate,
             fullscreen_display: FullscreenDisplayMode::new(),
             keys: KeyState::default(),
@@ -155,7 +152,7 @@ impl AppKitWindow {
 
     // Whether native fullscreen is active, as tracked by the window delegate.
     pub(crate) fn is_fullscreen(&self) -> bool {
-        self.fullscreen.load(std::sync::atomic::Ordering::Relaxed)
+        self.signals.is_fullscreen()
     }
 
     // The overlay coordinate space on macOS: the view's size in points, the same
@@ -186,9 +183,10 @@ impl AppKitWindow {
         ((content_h - laid_out_h) as f32).max(0.0)
     }
 
-    // Whether a window-close event has been seen.
+    // Whether the window has closed. Hiding the app or minimizing the window
+    // leaves it open.
     pub(crate) fn closed(&self) -> bool {
-        self.window_closed
+        self.signals.closed()
     }
 
     // Hold the display at the chosen fullscreen mode, or restore the desktop
@@ -381,16 +379,14 @@ impl AppKitWindow {
         // windowWillEnter/ExitFullScreen). This does not lag the way the
         // style-mask bit does, so stepping the Window Mode row faster than the
         // ~1s native-fullscreen animation no longer toggles the wrong way.
-        let is_fullscreen = self.fullscreen.load(std::sync::atomic::Ordering::Relaxed);
+        let is_fullscreen = self.is_fullscreen();
         // Record the intended fullscreen state synchronously so a second step
         // issued before the delegate callback lands still decides correctly;
         // the delegate's did-callbacks reconcile this with reality at the end
         // of the transition (and capture OS-driven toggles like the green
         // traffic-light button).
-        self.fullscreen.store(
-            matches!(mode, WindowMode::Fullscreen),
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        self.signals
+            .set_fullscreen(matches!(mode, WindowMode::Fullscreen));
         match mode {
             WindowMode::Windowed => {
                 if is_fullscreen {
@@ -636,9 +632,6 @@ impl AppKitWindow {
                         self.keys.scroll_delta -= event.scrollingDeltaY() as f32;
                     }
                     ns_app.sendEvent(&event);
-                }
-                NSEventType::ApplicationDefined => {
-                    self.window_closed = true;
                 }
                 _ => {
                     ns_app.sendEvent(&event);

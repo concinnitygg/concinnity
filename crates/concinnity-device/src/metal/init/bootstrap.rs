@@ -30,11 +30,11 @@ pub(crate) struct WindowSetup {
     pub pump_events: bool,
     pub initial_w: u32,
     pub initial_h: u32,
-    // Shared native-fullscreen flag, kept in sync by `window_delegate`. False
+    // Fullscreen and close state, kept in sync by `window_delegate`. Never set
     // in embedded mode (no NSWindow).
-    pub fullscreen: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    // NSWindowDelegate tracking the fullscreen transition; None in embedded
-    // mode. The caller stores it so the window's weak delegate stays attached.
+    pub signals: std::sync::Arc<crate::appkit::window_delegate::WindowSignals>,
+    // NSWindowDelegate feeding `signals`; None in embedded mode. The caller
+    // stores it so the window's weak delegate stays attached.
     pub window_delegate: Option<Retained<crate::appkit::window_delegate::WindowDelegate>>,
     // Resolved swapchain color-output mode. `Sdr` when the world did not
     // request HDR or the active display lacks EDR headroom; `Hdr` when the
@@ -117,7 +117,7 @@ pub(super) fn setup(
                 pump_events,
                 initial_w,
                 initial_h,
-                fullscreen,
+                signals,
                 window_delegate,
                 hdr_mode,
             } = setup_window_and_view(mtm, &device, config, hdr)?;
@@ -138,11 +138,10 @@ pub(super) fn setup(
                     view: Retained::into_super(mtk_view.clone()),
                     title_bar,
                     pump_events,
-                    fullscreen,
+                    signals,
                     window_delegate,
                 }),
                 view: mtk_view,
-                was_visible: false,
             };
             let hw = MtlHardware {
                 device,
@@ -198,7 +197,7 @@ pub(crate) fn setup_window_and_view(
     // the host asks, since the host usually dispatches input itself.
     let embedded = config.embedded;
     let pump_events = embedded.is_none_or(|s| s.pump_events);
-    let (window, mtk_view, fullscreen, window_delegate) = if let Some(surface) = embedded {
+    let (window, mtk_view, signals, window_delegate) = if let Some(surface) = embedded {
         // Embedded mode: attach an MTKView as a subview of the host's NSView.
         // SAFETY: `EmbeddedSurface` requires the host to keep its view alive for
         // the world's lifetime, which covers this borrow, and `surface.view` is
@@ -212,14 +211,9 @@ pub(crate) fn setup_window_and_view(
                 | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
         parent.addSubview(&mtk_view);
-        // No NSWindow we own in embedded mode, so no fullscreen delegate; the
-        // flag stays false (set_window_mode is a no-op without self.window).
-        (
-            None,
-            mtk_view,
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            None,
-        )
+        // No NSWindow we own in embedded mode, so no delegate; the signals stay
+        // unset (set_window_mode is a no-op without self.window).
+        (None, mtk_view, std::sync::Arc::default(), None)
     } else {
         // Windowed mode: create a new NSWindow containing the MTKView.
         let window = crate::appkit::chrome::create_window(
@@ -235,14 +229,13 @@ pub(crate) fn setup_window_and_view(
             MTKView::initWithFrame_device(MTKView::alloc(mtm), content_rect, Some(device));
         configure_mtk_view(&mtk_view, hdr_mode, config.capture_enabled);
         window.setContentView(Some(&mtk_view));
-        // Track native-fullscreen state authoritatively (the style-mask bit
-        // lags the animated transition) so the settings menu's Window Mode row
-        // never toggles the wrong way.
-        let (delegate, fullscreen) =
-            crate::appkit::window_delegate::attach_fullscreen_delegate(mtm, &window);
+        // Track native fullscreen (the style-mask bit lags the animated
+        // transition) and the window's close through its delegate.
+        let (delegate, signals) =
+            crate::appkit::window_delegate::attach_window_delegate(mtm, &window);
         NSApplication::sharedApplication(mtm).activate();
         window.makeKeyAndOrderFront(None);
-        (Some(window), mtk_view, fullscreen, Some(delegate))
+        (Some(window), mtk_view, signals, Some(delegate))
     };
 
     let drawable = mtk_view.drawableSize();
@@ -254,7 +247,7 @@ pub(crate) fn setup_window_and_view(
         pump_events,
         initial_w,
         initial_h,
-        fullscreen,
+        signals,
         window_delegate,
         hdr_mode,
     })
