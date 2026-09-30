@@ -10,7 +10,7 @@
 // buffer stays untouched and a LOD swap is a pure
 // `(index_offset, index_count)` change.
 
-use crate::math::sqrt;
+use crate::math::vec3::length;
 use alloc::collections::{BTreeSet, BinaryHeap};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -65,7 +65,7 @@ pub fn decimate_by_qem(
         let p1 = positions[i1];
         let p2 = positions[i2];
         let n = face_normal_unnormalized(p0, p1, p2);
-        let mag = sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        let mag = length(n);
         if mag < 1e-12 {
             continue;
         }

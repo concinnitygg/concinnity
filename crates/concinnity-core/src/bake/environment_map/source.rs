@@ -13,7 +13,8 @@ use super::{
     DEFAULT_IRRADIANCE_PHI_SAMPLES, DEFAULT_IRRADIANCE_THETA_SAMPLES, max_mip_count,
     prefilter_roughness, serialize_payload,
 };
-use crate::math::{acos, atan2, exp, floor, powi, sqrt};
+use crate::math::vec3::normalize_clamped;
+use crate::math::{acos, atan2, exp, floor, powi};
 
 /// An equirectangular radiance image: linear RGB rows, top-down.
 #[derive(Debug, Clone)]
@@ -63,16 +64,7 @@ fn face_uv_to_dir(face: usize, u: f32, v: f32) -> [f32; 3] {
         5 => [-u, -v, -1.0],
         _ => unreachable!("invalid cube face index {}", face),
     };
-    normalize3(d)
-}
-
-fn normalize3(v: [f32; 3]) -> [f32; 3] {
-    let l = length(v).max(1e-20);
-    [v[0] / l, v[1] / l, v[2] / l]
-}
-
-fn length(v: [f32; 3]) -> f32 {
-    sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+    normalize_clamped(d, 1e-20)
 }
 
 fn sample_equirect(hdr: &HdrImage, dir: [f32; 3]) -> [f32; 3] {

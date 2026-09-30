@@ -123,9 +123,7 @@ const SPIRV_MAGIC: u32 = 0x0723_0203;
 
 #[test]
 fn the_vulkan_leg_emits_a_spirv_module_for_each_stage() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     for entry in ["probe_vertex", "probe_fragment"] {
         let bytes = compile(entry, HlslTarget::Spirv);
         let magic = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
@@ -137,9 +135,7 @@ fn the_vulkan_leg_emits_a_spirv_module_for_each_stage() {
 // only an entry point compiles.
 #[test]
 fn a_profile_is_not_needed_to_compile_either_stage() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     assert_eq!(
         concinnity_shader::stage_of(SOURCE, "probe_vertex"),
         Ok(concinnity_shader::Stage::Vertex)
@@ -152,9 +148,7 @@ fn a_profile_is_not_needed_to_compile_either_stage() {
 
 #[test]
 fn an_entry_point_the_source_does_not_declare_fails_the_compile() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let work = concinnity_testing::TempTree::new();
     let err = concinnity_shader::compile(&job("no_such_entry", HlslTarget::Spirv), work.path())
         .unwrap_err();
@@ -171,9 +165,7 @@ fn misspelled_vk_source() -> String {
 // one included, so a strict compile fails naming it.
 #[test]
 fn a_misspelled_vk_attribute_fails_a_strict_compile_on_every_leg() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let source = misspelled_vk_source();
     let work = concinnity_testing::TempTree::new();
     let targets = [
@@ -194,9 +186,7 @@ fn a_misspelled_vk_attribute_fails_a_strict_compile_on_every_leg() {
 // clean compile reports none.
 #[test]
 fn a_reported_warning_rides_beside_the_artifact() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let work = concinnity_testing::TempTree::new();
     let source = misspelled_vk_source();
     let warned = concinnity_shader::compile_with_warnings(
@@ -221,9 +211,7 @@ fn a_reported_warning_rides_beside_the_artifact() {
 // compiles strictly, and one it does not know fails before dxc runs.
 #[test]
 fn engine_attributes_compile_strictly_and_an_unknown_one_is_refused() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let spirv = compile_from(ARGUMENT_BUFFER_SOURCE, "pool_fragment", HlslTarget::Spirv);
     assert!(!spirv.is_empty());
     let unknown =
@@ -259,9 +247,7 @@ fn a_combined_image_sampler_is_refused_before_dxc_runs() {
 // signature on its own; the MSL leg links by attribute and may drop it.
 #[test]
 fn a_vulkan_fragment_keeps_the_varyings_it_never_reads() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let names = |target| {
         let bytes = compile("probe_fragment", target);
         let has = |name: &[u8]| bytes.windows(name.len()).any(|w| w == name);
@@ -292,9 +278,7 @@ mod msl {
     // the `register()`, not the SPIR-V binding and not the emitter's own count.
     #[test]
     fn every_resource_lands_on_the_index_its_register_names() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let vertex = text("probe_vertex");
         assert!(vertex.contains("uni [[buffer(1)]]"), "{vertex}");
         let fragment = text("probe_fragment");
@@ -309,9 +293,7 @@ mod msl {
     // the one the program table asks for.
     #[test]
     fn the_emitted_entry_point_keeps_its_own_name() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         assert!(text("probe_fragment").contains("fragment probe_fragment_out probe_fragment("));
         assert!(text("probe_vertex").contains("vertex probe_vertex_out probe_vertex("));
     }
@@ -320,9 +302,7 @@ mod msl {
     // same emitter with the same naming.
     #[test]
     fn the_two_stages_agree_on_the_varying_attribute() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         assert!(text("probe_vertex").contains("out_var_TEXCOORD0 [[user(locn0)]]"));
         assert!(text("probe_fragment").contains("in_var_TEXCOORD0 [[user(locn0)]]"));
     }
@@ -332,9 +312,7 @@ mod msl {
     // ignores it; this is the step that reads it.
     #[test]
     fn a_declared_set_rides_one_argument_buffer_at_the_index_it_names() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let msl = argument_buffer_text();
         assert!(msl.contains("spvDescriptorSet2 [[buffer(11)]]"), "{msl}");
         assert!(
@@ -348,9 +326,7 @@ mod msl {
     // encoders' backs.
     #[test]
     fn the_sets_that_declared_nothing_stay_discrete() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let msl = argument_buffer_text();
         assert!(msl.contains("atlas [[texture(2)]]"), "{msl}");
         assert!(msl.contains("atlas_sampler [[sampler(3)]]"), "{msl}");
@@ -375,9 +351,7 @@ mod msl {
     // wrong offset.
     #[test]
     fn an_argument_buffer_declares_the_members_its_entry_never_reads() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let msl = late_member_text("late_fragment");
         for member in ["first [[id(4)]]", "middle [[id(5)]]", "last [[id(9)]]"] {
             assert!(msl.contains(member), "no `{member}`: {msl}");
@@ -388,9 +362,7 @@ mod msl {
     // would fill.
     #[test]
     fn an_unread_discrete_resource_stays_off_the_signature() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let msl = late_member_text("late_fragment");
         for unread in ["tint", "atlas"] {
             assert!(!msl.contains(unread), "{unread}: {msl}");
@@ -401,9 +373,7 @@ mod msl {
     // all, however many members the fragment beside it declares.
     #[test]
     fn an_unread_argument_buffer_stays_off_the_signature() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let msl = late_member_text("late_vertex");
         assert!(!msl.contains("spvDescriptorSet1"), "{msl}");
     }

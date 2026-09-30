@@ -41,8 +41,7 @@ pub use super::physics_config::PhysicsConfig;
 pub use super::physics_joint::{PhysicsJoint, PhysicsJointKind};
 pub use super::point_light::PointLight;
 pub use super::post_process_config::{
-    AaMode, IndirectLighting, PostProcessConfig, ReflectionBlurResolution, RtReflectionResolution,
-    SsgiResolution, UpscaleQuality, UpscalerBackend,
+    AaMode, IndirectLighting, PassResolution, PostProcessConfig, UpscaleQuality, UpscalerBackend,
 };
 pub use super::procedural_mesh::ProceduralMesh;
 pub use super::prop::{Prop, PropCollider, PropColliderShape};

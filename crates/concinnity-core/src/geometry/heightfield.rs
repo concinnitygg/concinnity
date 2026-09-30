@@ -1,19 +1,18 @@
 // Subdivided terrain grid driven by a grayscale heightmap image.
 //
-// Sibling of terrain.rs. Same XZ grid + smooth-normal pass; the only difference
-// is the height function: instead of three octaves of LCG-hash noise, this
+// Same XZ grid + smooth-normal pass as terrain.rs; the only difference is the
+// height function: instead of three octaves of LCG-hash noise, this
 // generator samples pre-decoded heightmap pixels and maps the red channel
 // through the configured elevation range. Image decoding is the caller's
 // problem (the cook crate's, in practice) -- this crate links no image decoders.
 
 use alloc::format;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 
 use super::Vert;
+use super::grid::Grid;
 use crate::math::floor;
-use crate::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
 
 /// The field a heightmap image displaces: grid extents, resolution, and the
 /// elevation range the red channel maps into.
@@ -63,72 +62,13 @@ pub fn build_heightfield_from_pixels(
         ));
     }
 
-    let cols = subdivisions + 1;
-    let rows = subdivisions + 1;
-
-    if cols * rows > 65536 {
-        return Err(format!(
-            "heightfield subdivisions {} produces {} vertices, exceeding the u16 limit; use subdivisions ≤ 255",
-            subdivisions,
-            cols * rows
-        ));
-    }
-
-    let color = [0.55f32, 0.62, 0.42];
-
-    // Pre-sample the heightmap to per-vertex Y. Bilinear filter so the mesh
-    // doesn't inherit the heightmap's pixel grid when subdivisions and image
-    // resolution differ.
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(cols * rows);
-    for row in 0..rows {
-        for col in 0..cols {
-            let s = col as f32 / subdivisions as f32;
-            let t = row as f32 / subdivisions as f32;
-            let x = -half_width + s * half_width * 2.0;
-            let z = -half_depth + t * half_depth * 2.0;
-            let y = sample_height_bilinear(rgba, img_w, img_h, s, t, elevation_min, elevation_max);
-            positions.push([x, y, z]);
-        }
-    }
-
-    let mut normals: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; cols * rows];
-    for row in 0..subdivisions {
-        for col in 0..subdivisions {
-            let tl = row * cols + col;
-            let tr = tl + 1;
-            let bl = tl + cols;
-            let br = bl + 1;
-            let n1 = vec3_face_normal(positions[tl], positions[bl], positions[tr]);
-            vec3_add(&mut normals[tl], n1);
-            vec3_add(&mut normals[bl], n1);
-            vec3_add(&mut normals[tr], n1);
-            let n2 = vec3_face_normal(positions[tr], positions[bl], positions[br]);
-            vec3_add(&mut normals[tr], n2);
-            vec3_add(&mut normals[bl], n2);
-            vec3_add(&mut normals[br], n2);
-        }
-    }
-
-    let mut idxs: Vec<u16> = Vec::with_capacity(subdivisions * subdivisions * 6);
-    let mut verts: Vec<Vert> = Vec::with_capacity(cols * rows);
-
-    for i in 0..cols * rows {
-        let [x, y, z] = positions[i];
-        let normal = vec3_normalize(normals[i]);
-        verts.push(([x, y, z], normal, color, [x, z]));
-    }
-
-    for row in 0..subdivisions {
-        for col in 0..subdivisions {
-            let tl = (row * cols + col) as u16;
-            let tr = tl + 1;
-            let bl = tl + cols as u16;
-            let br = bl + 1;
-            idxs.extend_from_slice(&[tl, bl, tr, tr, bl, br]);
-        }
-    }
-
-    Ok((verts, idxs))
+    // Bilinear filter so the mesh doesn't inherit the heightmap's pixel grid
+    // when subdivisions and image resolution differ.
+    let grid = Grid::new("heightfield", half_width, half_depth, subdivisions)?;
+    let verts = grid.displaced([0.55, 0.62, 0.42], |p| {
+        sample_height_bilinear(rgba, img_w, img_h, p.s, p.t, elevation_min, elevation_max)
+    });
+    Ok((verts, grid.indices()))
 }
 
 // Bilinear-sample the heightmap's red channel at normalized UV (s, t) in [0,1]

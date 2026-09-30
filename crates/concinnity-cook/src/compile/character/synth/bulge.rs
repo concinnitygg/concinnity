@@ -4,11 +4,12 @@
 
 use concinnity_core::math::vec3;
 
-use super::{SynthInput, unit};
+use super::SynthInput;
+use concinnity_core::math::vec3::try_normalize;
 
 pub(crate) fn displace(input: &SynthInput) -> Vec<[f32; 3]> {
     let p = input.params;
-    let dir = unit(p.direction);
+    let dir = try_normalize(p.direction, 1e-6);
     let sigma = p.sigma.max(1e-3);
     input
         .vertices
@@ -19,7 +20,7 @@ pub(crate) fn displace(input: &SynthInput) -> Vec<[f32; 3]> {
                 let frame = &input.frames[j];
                 let t = frame.along(v.pos);
                 let g = (-(t - p.along).powi(2) / (2.0 * sigma * sigma)).exp();
-                let Some(radial) = unit(frame.radial(v.pos)) else {
+                let Some(radial) = try_normalize(frame.radial(v.pos), 1e-6) else {
                     continue;
                 };
                 let (push, facing) = match dir {

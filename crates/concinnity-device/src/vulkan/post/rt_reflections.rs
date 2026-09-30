@@ -1084,9 +1084,7 @@ mod tests {
     // `rt_params_layout_*` / `rt_geom_entry_*` tests in gfx::render_types.
     #[test]
     fn rt_reflections_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let shaders = super::compile_rt_shaders(false, 4).expect("rt shaders compile");
         assert!(super::is_spirv(&shaders.vs));
         assert!(super::is_spirv(&shaders.flat_fs));

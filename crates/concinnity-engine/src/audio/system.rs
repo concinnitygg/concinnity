@@ -477,13 +477,13 @@ impl System for AudioSystem {
 #[cfg(test)]
 mod tests {
     use concinnity_core::ecs::Ref;
-    // These tests drive AudioSystem::init / step against a hand-built
-    // PipelineContext and an in-memory blob, so no audio playback happens
-    // (init may still probe for a device on a dev machine; every assertion
-    // here is engine-independent). They assert on the state the system
-    // tracks: cue bindings, queued-clip and match counters, emitter bindings,
-    // and the occlusion probes. The gate/schedule tests (which need a whole
-    // world) live in the engine's `ecs/schedule.rs`.
+    // These tests drive AudioSystem::init / step against a World over an
+    // in-memory blob, so no audio playback happens (init may still probe for a
+    // device on a dev machine; every assertion here is engine-independent).
+    // They assert on the state the system tracks: cue bindings, queued-clip and
+    // match counters, emitter bindings, and the occlusion probes. The
+    // gate/schedule tests (which need a whole world) live in the engine's
+    // `ecs/schedule.rs`.
     use super::{AudioSystem, EmitterBinding};
     use crate::audio::occlusion::OcclusionSmoother;
     use crate::audio::{AudioVolumes, EmitterId};
@@ -493,93 +493,53 @@ mod tests {
     };
     use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_core::ecs::{
-        Arena, AudioClipHandle, ComponentSlot, ComponentStorage, Entity, FrameContext,
-        PayloadLocator, PipelineContext, ResourceKind, ResourceRecord, Resources, StepResult,
-        System,
+        AudioClipHandle, PayloadLocator, ResourceKind, ResourceRecord, StepResult, System, World,
     };
-    use concinnity_core::profile::FrameProfile;
     use concinnity_core::resource::AudioClipTable;
     use concinnity_host::store::blob::BlobData;
 
-    // Accumulates audio components + one blob section serving every payload
-    // locator handed out, plus the audio-clip resource records, then seals into a
-    // context-owning world whose `AudioClipTable` is built from those records --
-    // exactly as the runtime loads the blob's resource stream.
-    struct AudioWorld {
-        components: ComponentStorage,
+    // Accumulates one blob section serving every clip payload handed out, plus
+    // the audio-clip resource records, then seals into a world whose
+    // `AudioClipTable` is built from those records -- exactly as the runtime
+    // loads the blob's resource stream.
+    struct AudioClips {
         section: Vec<u8>,
         // The audio-clip resource records, in handle order (a clip added Nth is
         // handle N). Sealed into the world's `AudioClipTable`.
         clips: Vec<ResourceRecord>,
     }
 
-    struct SealedAudio {
-        components: ComponentStorage,
-        blob: BlobData,
-        profile: FrameProfile,
-        resources: Resources,
-        scratch: Arena,
-    }
-
-    impl AudioWorld {
+    impl AudioClips {
         fn new() -> Self {
             Self {
-                components: ComponentStorage::default(),
                 section: Vec::new(),
                 clips: Vec::new(),
             }
-        }
-
-        fn payload(&mut self, bytes: &[u8]) -> PayloadLocator {
-            let offset = self.section.len() as u64;
-            self.section.extend_from_slice(bytes);
-            PayloadLocator {
-                blob_index: 0,
-                offset,
-                len: bytes.len() as u64,
-            }
-        }
-
-        fn push<C: ComponentSlot>(&mut self, c: C) -> Entity {
-            self.components.push_typed(c)
         }
 
         // Add an audio clip whose payload is `bytes`, returning its handle (its
         // record order, which the table indexes by).
         fn clip(&mut self, bytes: &[u8]) -> AudioClipHandle {
             let handle = AudioClipHandle(self.clips.len() as u32);
-            let locator = self.payload(bytes);
+            let offset = self.section.len() as u64;
+            self.section.extend_from_slice(bytes);
             self.clips.push(ResourceRecord {
                 resource_kind: ResourceKind::AudioClip,
                 handle: handle.0,
-                payload: Some(locator),
+                payload: Some(PayloadLocator {
+                    blob_index: 0,
+                    offset,
+                    len: bytes.len() as u64,
+                }),
                 data_bytes: Vec::new(),
             });
             handle
         }
 
-        fn seal(mut self) -> SealedAudio {
-            let mut resources = Resources::new();
-            resources.insert(AudioClipTable::from_records(&mut self.clips));
-            SealedAudio {
-                components: self.components,
-                blob: BlobData::new(vec![Some(self.section)]),
-                profile: FrameProfile::default(),
-                resources,
-                scratch: Arena::with_capacity(64 * 1024),
-            }
-        }
-    }
-
-    impl SealedAudio {
-        fn ctx(&mut self) -> PipelineContext<'_> {
-            PipelineContext {
-                components: &mut self.components,
-                blob: &mut self.blob,
-                profile: &mut self.profile,
-                resources: &mut self.resources,
-                frame: FrameContext::new(&self.scratch),
-            }
+        fn seal(mut self) -> World {
+            let mut world = World::from_payloads(Box::new(BlobData::new(vec![Some(self.section)])));
+            world.insert_resource(AudioClipTable::from_records(&mut self.clips));
+            world
         }
     }
 
@@ -590,19 +550,19 @@ mod tests {
     fn init_binds_cue_and_queues_its_clip() {
         let screen = AssetId(90);
 
-        let mut w = AudioWorld::new();
-        let clip = w.clip(b"cue-clip-bytes");
-        w.push(AudioCue {
+        let mut clips = AudioClips::new();
+        let clip = clips.clip(b"cue-clip-bytes");
+        let mut world = clips.seal();
+        world.push(AudioCue {
             screen: Some(Ref::new(screen)),
             clip: Some(clip),
             kind: CueKind::Music,
             volume: 0.7,
             ..Default::default()
         });
-        let mut sealed = w.seal();
 
         let mut sys = AudioSystem::new(AudioVolumes::default());
-        sys.init(&mut sealed.ctx());
+        sys.init(&mut world.context());
 
         let bindings = sys.cues.get(&screen).expect("cue bound to its screen");
         assert_eq!(bindings.len(), 1);
@@ -623,9 +583,10 @@ mod tests {
     fn init_respects_authored_cue_bus_and_priority() {
         let screen = AssetId(90);
 
-        let mut w = AudioWorld::new();
-        let clip = w.clip(b"line-bytes");
-        w.push(AudioCue {
+        let mut clips = AudioClips::new();
+        let clip = clips.clip(b"line-bytes");
+        let mut world = clips.seal();
+        world.push(AudioCue {
             screen: Some(Ref::new(screen)),
             clip: Some(clip),
             kind: CueKind::Sound,
@@ -633,10 +594,9 @@ mod tests {
             priority: 4,
             ..Default::default()
         });
-        let mut sealed = w.seal();
 
         let mut sys = AudioSystem::new(AudioVolumes::default());
-        sys.init(&mut sealed.ctx());
+        sys.init(&mut world.context());
 
         let bindings = sys.cues.get(&screen).expect("cue bound");
         assert_eq!(bindings[0].bus, AudioBus::Voice);
@@ -647,16 +607,15 @@ mod tests {
     // clip is queued.
     #[test]
     fn init_ignores_cue_without_clip() {
-        let mut w = AudioWorld::new();
-        w.push(AudioCue {
+        let mut world = AudioClips::new().seal();
+        world.push(AudioCue {
             screen: Some(Ref::new(AssetId(90))),
             clip: None,
             ..Default::default()
         });
-        let mut sealed = w.seal();
 
         let mut sys = AudioSystem::new(AudioVolumes::default());
-        sys.init(&mut sealed.ctx());
+        sys.init(&mut world.context());
 
         assert!(sys.cues.is_empty());
         assert_eq!(sys.clips_queued(), 0);
@@ -669,19 +628,19 @@ mod tests {
     fn init_queues_story_clips_without_duplicates() {
         let screen = AssetId(90);
 
-        let mut w = AudioWorld::new();
-        let cue_clip = w.clip(b"cue-audio");
-        let page_clip = w.clip(b"story-page-audio");
-        w.push(AudioCue {
+        let mut clips = AudioClips::new();
+        let cue_clip = clips.clip(b"cue-audio");
+        let page_clip = clips.clip(b"story-page-audio");
+        let mut world = clips.seal();
+        world.push(AudioCue {
             screen: Some(Ref::new(screen)),
             clip: Some(cue_clip),
             ..Default::default()
         });
-        w.push(Story::default());
-        let mut sealed = w.seal();
+        world.push(Story::default());
 
         let mut sys = AudioSystem::new(AudioVolumes::default());
-        sys.init(&mut sealed.ctx());
+        sys.init(&mut world.context());
 
         let _ = page_clip;
         assert_eq!(sys.clips_queued(), 2, "both clips queued, neither twice");
@@ -691,24 +650,24 @@ mod tests {
     // attaches one occlusion probe to each emitter's own entity, aimed at it.
     #[test]
     fn init_binds_emitters_and_publishes_occlusion_probes() {
-        let mut w = AudioWorld::new();
-        let clip = w.clip(b"loop-bytes");
-        let entity = w.push(AudioEmitter {
+        let mut clips = AudioClips::new();
+        let clip = clips.clip(b"loop-bytes");
+        let mut world = clips.seal();
+        let entity = world.push(AudioEmitter {
             clip: Some(clip),
             position: [3.0, 1.0, -2.0],
             ..Default::default()
         });
-        let mut sealed = w.seal();
 
         let mut sys = AudioSystem::new(AudioVolumes::default());
-        sys.init(&mut sealed.ctx());
+        sys.init(&mut world.context());
 
         assert_eq!(sys.emitters.len(), 1);
         let binding = sys.emitters.get(&entity).expect("binding keyed by entity");
         assert_eq!(binding.position, [3.0, 1.0, -2.0]);
         assert_eq!(sys.clips_queued(), 1);
 
-        let ctx = sealed.ctx();
+        let ctx = world.context();
         let probe = ctx
             .get::<AudioOcclusionProbe>(entity)
             .expect("probe rides the emitter's entity");
@@ -721,59 +680,59 @@ mod tests {
     // a binding whose entity despawns is reaped (probe and all).
     #[test]
     fn step_adopts_new_emitters_and_reaps_despawned_ones() {
-        let mut w = AudioWorld::new();
-        let clip = w.clip(b"loop-bytes");
-        let first = w.push(AudioEmitter {
+        let mut clips = AudioClips::new();
+        let clip = clips.clip(b"loop-bytes");
+        let mut world = clips.seal();
+        let first = world.push(AudioEmitter {
             clip: Some(clip),
             position: [1.0, 0.0, 0.0],
             ..Default::default()
         });
-        let mut sealed = w.seal();
 
         let mut sys = AudioSystem::new(AudioVolumes::default());
-        sys.init(&mut sealed.ctx());
+        sys.init(&mut world.context());
         assert_eq!(sys.emitters.len(), 1);
 
         // A second emitter appears at runtime; the next step binds it and
         // attaches its probe.
         let second = {
-            let ctx = sealed.ctx();
+            let ctx = world.context();
             ctx.components.push_typed(AudioEmitter {
                 clip: Some(clip),
                 position: [7.0, 0.0, 0.0],
                 ..Default::default()
             })
         };
-        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.step(&mut world.context()), StepResult::Continue);
         assert_eq!(sys.emitters.len(), 2);
         assert_eq!(
             sys.emitters.get(&second).map(|b| b.position),
             Some([7.0, 0.0, 0.0])
         );
         assert!(
-            sealed.ctx().get::<AudioOcclusionProbe>(second).is_some(),
+            world.context().get::<AudioOcclusionProbe>(second).is_some(),
             "adopted emitter got its probe"
         );
 
         // The first emitter despawns; its binding is reaped and it is not
         // re-adopted.
-        sealed.ctx().despawn(first);
-        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        world.context().despawn(first);
+        assert_eq!(sys.step(&mut world.context()), StepResult::Continue);
         assert_eq!(sys.emitters.len(), 1);
         assert!(sys.emitters.contains_key(&second), "survivor kept");
-        assert_eq!(sealed.ctx().query::<AudioOcclusionProbe>().count(), 1);
+        assert_eq!(world.context().query::<AudioOcclusionProbe>().count(), 1);
     }
 
     // A contact whose body carries an impact clip plays it; bodies without
     // dynamics or without a clip are silent. The counter is the observable.
     #[test]
     fn step_plays_impact_clips_from_contacts() {
-        let mut w = AudioWorld::new();
-        let clip = w.clip(b"thud-bytes");
-        let mut sealed = w.seal();
+        let mut clips = AudioClips::new();
+        let clip = clips.clip(b"thud-bytes");
+        let mut world = clips.seal();
 
         let (crate_entity, bare_entity) = {
-            let mut ctx = sealed.ctx();
+            let mut ctx = world.context();
             let crate_entity = ctx.components.spawn();
             ctx.insert(
                 crate_entity,
@@ -788,11 +747,11 @@ mod tests {
         };
 
         let mut sys = AudioSystem::new(AudioVolumes::default());
-        sys.init(&mut sealed.ctx());
+        sys.init(&mut world.context());
         assert_eq!(sys.clips_queued(), 1, "impact clip queued up front");
 
         {
-            let mut ctx = sealed.ctx();
+            let mut ctx = world.context();
             let events = ctx.events_mut::<ContactEvent>();
             // Both sides resolve: only the crate has a clip.
             events.send(ContactEvent {
@@ -811,7 +770,7 @@ mod tests {
                 impulse: 6.0,
             });
         }
-        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.step(&mut world.context()), StepResult::Continue);
         assert_eq!(sys.impacts_played(), 1, "one clip-carrying side played");
     }
 
@@ -820,21 +779,21 @@ mod tests {
     // the probe's ray endpoints each step.
     #[test]
     fn step_smooths_probe_answers_and_refreshes_endpoints() {
-        let mut w = AudioWorld::new();
-        let clip = w.clip(b"loop-bytes");
-        w.push(AudioEmitter {
+        let mut clips = AudioClips::new();
+        let clip = clips.clip(b"loop-bytes");
+        let mut world = clips.seal();
+        world.push(AudioEmitter {
             clip: Some(clip),
             position: [5.0, 0.0, 0.0],
             ..Default::default()
         });
-        let mut sealed = w.seal();
 
         let mut sys = AudioSystem::new(AudioVolumes::default());
-        sys.init(&mut sealed.ctx());
+        sys.init(&mut world.context());
 
         // Physics answered: the segment is blocked.
         {
-            let mut ctx = sealed.ctx();
+            let mut ctx = world.context();
             for probe in ctx.query_mut::<AudioOcclusionProbe>() {
                 probe.blocked = Some(true);
             }
@@ -847,19 +806,19 @@ mod tests {
                 .occlusion
                 .current()
         };
-        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.step(&mut world.context()), StepResult::Continue);
         let after_one = occlusion_of(&sys);
         assert!(
             after_one > 0.0 && after_one < 0.5,
             "one tick moves partway: {after_one}"
         );
         for _ in 0..120 {
-            sys.step(&mut sealed.ctx());
+            sys.step(&mut world.context());
         }
         assert!(occlusion_of(&sys) > 0.9, "settles blocked");
 
         // The ray endpoints track the listener and emitter for next frame.
-        let ctx = sealed.ctx();
+        let ctx = world.context();
         let probe = ctx.query::<AudioOcclusionProbe>().next().unwrap();
         assert_eq!(probe.from, [0.0; 3], "no camera: listener at origin");
         assert_eq!(probe.to, [5.0, 0.0, 0.0]);
@@ -871,44 +830,44 @@ mod tests {
     fn step_fires_cued_view_across_both_kinds() {
         let screen = AssetId(90);
 
-        let mut w = AudioWorld::new();
-        let music_clip = w.clip(b"music");
-        let sound_clip = w.clip(b"sound");
-        w.push(AudioCue {
+        let mut clips = AudioClips::new();
+        let music_clip = clips.clip(b"music");
+        let sound_clip = clips.clip(b"sound");
+        let mut world = clips.seal();
+        world.push(AudioCue {
             screen: Some(Ref::new(screen)),
             clip: Some(music_clip),
             kind: CueKind::Music,
             volume: 1.0,
             ..Default::default()
         });
-        w.push(AudioCue {
+        world.push(AudioCue {
             screen: Some(Ref::new(screen)),
             clip: Some(sound_clip),
             kind: CueKind::Sound,
             volume: 1.0,
             ..Default::default()
         });
-        let mut sealed = w.seal();
 
         let mut sys = AudioSystem::new(AudioVolumes::default());
-        sys.init(&mut sealed.ctx());
+        sys.init(&mut world.context());
         assert_eq!(sys.cues.get(&screen).map(Vec::len), Some(2));
 
         {
-            let mut ctx = sealed.ctx();
+            let mut ctx = world.context();
             ctx.events_mut::<ScreenShown>().send(ScreenShown { screen });
         }
-        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.step(&mut world.context()), StepResult::Continue);
         assert_eq!(sys.cues_matched, 2, "both the screen's cues matched");
 
         // A screen with no cue leaves the counter untouched.
         {
-            let mut ctx = sealed.ctx();
+            let mut ctx = world.context();
             ctx.events_mut::<ScreenShown>().send(ScreenShown {
                 screen: AssetId(999),
             });
         }
-        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.step(&mut world.context()), StepResult::Continue);
         assert_eq!(sys.cues_matched, 2);
     }
 
@@ -916,16 +875,16 @@ mod tests {
     // same tick it is sent.
     #[test]
     fn step_plays_direct_play_cue_requests() {
-        let mut w = AudioWorld::new();
-        let clip = w.clip(b"page-audio");
-        w.push(Story::default());
-        let mut sealed = w.seal();
+        let mut clips = AudioClips::new();
+        let clip = clips.clip(b"page-audio");
+        let mut world = clips.seal();
+        world.push(Story::default());
 
         let mut sys = AudioSystem::new(AudioVolumes::default());
-        sys.init(&mut sealed.ctx());
+        sys.init(&mut world.context());
 
         {
-            let mut ctx = sealed.ctx();
+            let mut ctx = world.context();
             let events = ctx.events_mut::<PlayCue>();
             events.send(PlayCue {
                 clip,
@@ -940,7 +899,7 @@ mod tests {
                 priority: 2,
             });
         }
-        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.step(&mut world.context()), StepResult::Continue);
         assert_eq!(sys.cues_matched, 2, "both direct requests fired");
     }
 
@@ -951,9 +910,9 @@ mod tests {
     fn step_follows_prop_emitter_and_moves_listener() {
         let prop = AssetId(200);
 
-        let mut sealed = AudioWorld::new().seal();
+        let mut world = AudioClips::new().seal();
         let entity = {
-            let mut ctx = sealed.ctx();
+            let mut ctx = world.context();
             ctx.push(Camera3D::bake(Default::default()));
             let e = ctx.components.spawn();
             ctx.insert(
@@ -967,13 +926,13 @@ mod tests {
             ctx.identify(e, prop);
             e
         };
-        assert!(sealed.ctx().get::<Transform>(entity).is_some());
+        assert!(world.context().get::<Transform>(entity).is_some());
 
         let mut sys = AudioSystem::new(AudioVolumes::default());
         // A live emitter that follows the prop, seeded directly (a real
         // emitter needs a device, which the headless test has no access to).
         // Keyed by a spare entity standing in for the emitter's own.
-        let emitter_entity = sealed.ctx().components.spawn();
+        let emitter_entity = world.context().components.spawn();
         sys.emitters.insert(
             emitter_entity,
             EmitterBinding {
@@ -984,7 +943,7 @@ mod tests {
             },
         );
 
-        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.step(&mut world.context()), StepResult::Continue);
         assert_eq!(
             sys.emitters[&emitter_entity].position,
             [3.0, 4.0, 5.0],
@@ -998,9 +957,9 @@ mod tests {
     // init leaves every stage at unity.
     #[test]
     fn audio_command_applies_volumes_live_per_target() {
-        let mut sealed = AudioWorld::new().seal();
+        let mut world = AudioClips::new().seal();
         let mut sys = AudioSystem::new(AudioVolumes::default());
-        sys.init(&mut sealed.ctx());
+        sys.init(&mut world.context());
         // Init applied unity everywhere (no persisted volumes handed in).
         assert_eq!(sys.engine.last_volume(AudioTarget::Master), 1.0);
         assert_eq!(sys.engine.last_volume(AudioTarget::Voice), 1.0);
@@ -1008,7 +967,7 @@ mod tests {
         // GraphicsSystem would send these when volume rows are cycled; the
         // audio system reads them this same tick.
         {
-            let mut ctx = sealed.ctx();
+            let mut ctx = world.context();
             let events = ctx.events_mut::<AudioCommand>();
             events.send(AudioCommand {
                 target: AudioTarget::Master,
@@ -1019,7 +978,7 @@ mod tests {
                 gain: 0.25,
             });
         }
-        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.step(&mut world.context()), StepResult::Continue);
         assert_eq!(sys.engine.last_volume(AudioTarget::Master), 0.5);
         assert_eq!(sys.engine.last_volume(AudioTarget::Music), 0.25);
         assert_eq!(sys.engine.last_volume(AudioTarget::Sfx), 1.0, "untouched");
@@ -1029,12 +988,12 @@ mod tests {
     // double-cycle) are all read in order; the last one sent wins.
     #[test]
     fn audio_command_last_write_wins_per_tick() {
-        let mut sealed = AudioWorld::new().seal();
+        let mut world = AudioClips::new().seal();
         let mut sys = AudioSystem::new(AudioVolumes::default());
-        sys.init(&mut sealed.ctx());
+        sys.init(&mut world.context());
 
         {
-            let mut ctx = sealed.ctx();
+            let mut ctx = world.context();
             let events = ctx.events_mut::<AudioCommand>();
             events.send(AudioCommand {
                 target: AudioTarget::Master,
@@ -1045,7 +1004,7 @@ mod tests {
                 gain: 0.25,
             });
         }
-        assert_eq!(sys.step(&mut sealed.ctx()), StepResult::Continue);
+        assert_eq!(sys.step(&mut world.context()), StepResult::Continue);
         assert_eq!(sys.engine.last_volume(AudioTarget::Master), 0.25);
     }
 
@@ -1053,14 +1012,14 @@ mod tests {
     // at init (the settings-menu volumes, resolved by the engine's gate).
     #[test]
     fn init_applies_persisted_volumes() {
-        let mut sealed = AudioWorld::new().seal();
+        let mut world = AudioClips::new().seal();
         let mut sys = AudioSystem::new(AudioVolumes {
             master: Some(0.5),
             music: Some(0.75),
             sfx: None,
             voice: Some(0.25),
         });
-        sys.init(&mut sealed.ctx());
+        sys.init(&mut world.context());
         assert_eq!(sys.engine.last_volume(AudioTarget::Master), 0.5);
         assert_eq!(sys.engine.last_volume(AudioTarget::Music), 0.75);
         assert_eq!(

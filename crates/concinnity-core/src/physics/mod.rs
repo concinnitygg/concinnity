@@ -63,8 +63,6 @@ mod types;
 #[cfg(test)]
 mod bench;
 #[cfg(test)]
-mod test_world;
-#[cfg(test)]
 mod tests;
 
 pub use budget::{PhysicsBudget, PhysicsCounts};

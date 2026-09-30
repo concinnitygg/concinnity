@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 use crate::math::{ceil, floor, powf, sqrt};
 
-use crate::math::vec3::{cross, dot, length};
+use crate::math::vec3::{add, cross, dot, normalize_or};
 
 use super::mesh_payload::Vertex;
 
@@ -32,19 +32,14 @@ pub struct RasterImage {
     pub rgba: Vec<u8>,
 }
 
-fn normalize(v: [f32; 3]) -> [f32; 3] {
-    let len = length(v);
-    if len <= 0.0 || !len.is_finite() {
-        return [0.0, 0.0, 1.0];
-    }
-    [v[0] / len, v[1] / len, v[2] / len]
-}
+// Where a degenerate direction points instead.
+const FALLBACK_DIR: [f32; 3] = [0.0, 0.0, 1.0];
 
 // The orthographic camera basis for the fixed view: right / up in the image
 // plane, forward toward the subject.
 fn camera_basis() -> ([f32; 3], [f32; 3], [f32; 3]) {
-    let fwd = normalize(VIEW_DIR);
-    let right = normalize(cross([0.0, 1.0, 0.0], fwd));
+    let fwd = normalize_or(VIEW_DIR, 0.0, FALLBACK_DIR);
+    let right = normalize_or(cross([0.0, 1.0, 0.0], fwd), 0.0, FALLBACK_DIR);
     let up = cross(fwd, right);
     (right, up, fwd)
 }
@@ -134,7 +129,7 @@ pub fn shade_parts(parts: &[MeshPart], size: u32) -> RasterImage {
     }
     let half = size as f32 * 0.5;
     let scale = half * FIT / extent;
-    let light = normalize(LIGHT_DIR);
+    let light = normalize_or(LIGHT_DIR, 0.0, FALLBACK_DIR);
     let mut depth = vec![f32::NEG_INFINITY; (size * size) as usize];
     for part in parts {
         // Image coordinates: x right, y down.
@@ -208,11 +203,15 @@ fn fill_triangle(
                 continue;
             }
             depth[idx] = -z;
-            let normal = normalize([
-                w0 * n[0][0] + w1 * n[1][0] + w2 * n[2][0],
-                w0 * n[0][1] + w1 * n[1][1] + w2 * n[2][1],
-                w0 * n[0][2] + w1 * n[1][2] + w2 * n[2][2],
-            ]);
+            let normal = normalize_or(
+                [
+                    w0 * n[0][0] + w1 * n[1][0] + w2 * n[2][0],
+                    w0 * n[0][1] + w1 * n[1][1] + w2 * n[2][1],
+                    w0 * n[0][2] + w1 * n[1][2] + w2 * n[2][2],
+                ],
+                0.0,
+                FALLBACK_DIR,
+            );
             // Two-sided: a flipped normal shades like its front face.
             let diff = dot(normal, light).abs().clamp(0.0, 1.0);
             let shade = AMBIENT + DIFFUSE * diff;
@@ -237,9 +236,9 @@ pub fn shade_sphere(size: u32, albedo: [f32; 3], roughness: f32, metallic: f32) 
     if size == 0 {
         return img;
     }
-    let light = normalize([0.45, 0.65, 0.6]);
+    let light = normalize_or([0.45, 0.65, 0.6], 0.0, FALLBACK_DIR);
     let view = [0.0, 0.0, 1.0];
-    let h = normalize([light[0] + view[0], light[1] + view[1], light[2] + view[2]]);
+    let h = normalize_or(add(light, view), 0.0, FALLBACK_DIR);
     let rough = roughness.clamp(0.05, 1.0);
     let metal = metallic.clamp(0.0, 1.0);
     let shininess = 2.0 / (rough * rough) - 1.0;

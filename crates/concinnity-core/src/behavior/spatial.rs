@@ -12,12 +12,13 @@
 
 use crate::behavior::position;
 use crate::ecs::{ComponentStorage, Entity};
+use crate::math::vec3::length_sq;
 
 /// Squared distance between two points, for comparisons that never need the
 /// root.
 fn distance_sq(a: [f32; 3], b: [f32; 3]) -> f32 {
     let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+    length_sq(d)
 }
 
 /// The candidate nearest `point`, skipping `exclude` and anything that says

@@ -16,10 +16,10 @@
 //! still costs.
 
 use concinnity_core::components::{GlobalTransform, Parent, Prop, Transform};
-use concinnity_core::ecs::Entity;
+use concinnity_core::ecs::{Entity, World};
 use concinnity_core::transform::propagation::{TransformCache, propagate_transforms_cached};
 
-use super::{BenchWorld, bench};
+use super::bench;
 
 const FLAT: usize = 10_000;
 const CHAINS: usize = 1_250;
@@ -34,30 +34,28 @@ fn transform_at(i: usize) -> Transform {
 }
 
 // An entity carrying the three components propagation reads and writes.
-fn spawn(world: &mut BenchWorld, i: usize, parent: Option<Entity>) -> Entity {
-    let entity = world.components.push_typed(Prop::default());
-    world.components.insert_typed(entity, transform_at(i));
-    world
-        .components
-        .insert_typed(entity, GlobalTransform::default());
+fn spawn(world: &mut World, i: usize, parent: Option<Entity>) -> Entity {
+    let entity = world.push(Prop::default());
+    world.insert(entity, transform_at(i));
+    world.insert(entity, GlobalTransform::default());
     if let Some(p) = parent {
-        world.components.insert_typed(entity, Parent(p));
+        world.insert(entity, Parent(p));
     }
     entity
 }
 
 // `count` unparented entities: the flat case, where every entity is a root and
 // the hierarchy walk is one level deep.
-fn flat_world(count: usize) -> (BenchWorld, Vec<Entity>) {
-    let mut world = BenchWorld::new();
+fn flat_world(count: usize) -> (World, Vec<Entity>) {
+    let mut world = World::new();
     let entities = (0..count).map(|i| spawn(&mut world, i, None)).collect();
     (world, entities)
 }
 
 // `chains` chains of `depth` entities, each link parented to the one above, so
 // resolving a leaf composes `depth` matrices.
-fn chained_world(chains: usize, depth: usize) -> (BenchWorld, Vec<Entity>) {
-    let mut world = BenchWorld::new();
+fn chained_world(chains: usize, depth: usize) -> (World, Vec<Entity>) {
+    let mut world = World::new();
     let mut entities = Vec::with_capacity(chains * depth);
     for c in 0..chains {
         let mut parent = None;
@@ -81,9 +79,9 @@ fn transform_propagation() {
     {
         let (mut world, _) = flat_world(FLAT);
         let mut cache = TransformCache::default();
-        propagate_transforms_cached(&mut world.ctx(), &mut cache);
+        propagate_transforms_cached(&mut world.context(), &mut cache);
         bench("cached_static/10k", FLAT as u64, || {
-            propagate_transforms_cached(&mut world.ctx(), &mut cache);
+            propagate_transforms_cached(&mut world.context(), &mut cache);
         });
     }
 
@@ -94,10 +92,10 @@ fn transform_propagation() {
         let mut cache = TransformCache::default();
         let first = entities[0];
         bench("dirty_flat/10k", FLAT as u64, || {
-            if let Some(t) = world.ctx().get_mut::<Transform>(first) {
+            if let Some(t) = world.context().get_mut::<Transform>(first) {
                 t.position[1] += 0.001;
             }
-            propagate_transforms_cached(&mut world.ctx(), &mut cache);
+            propagate_transforms_cached(&mut world.context(), &mut cache);
         });
     }
 
@@ -113,10 +111,10 @@ fn transform_propagation() {
             &format!("dirty_chains_depth{CHAIN_DEPTH}/10k"),
             count,
             || {
-                if let Some(t) = world.ctx().get_mut::<Transform>(leaf) {
+                if let Some(t) = world.context().get_mut::<Transform>(leaf) {
                     t.position[1] += 0.001;
                 }
-                propagate_transforms_cached(&mut world.ctx(), &mut cache);
+                propagate_transforms_cached(&mut world.context(), &mut cache);
             },
         );
     }
@@ -132,10 +130,10 @@ fn transform_propagation() {
             &format!("dirty_chain_root_depth{CHAIN_DEPTH}/10k"),
             count,
             || {
-                if let Some(t) = world.ctx().get_mut::<Transform>(root) {
+                if let Some(t) = world.context().get_mut::<Transform>(root) {
                     t.position[1] += 0.001;
                 }
-                propagate_transforms_cached(&mut world.ctx(), &mut cache);
+                propagate_transforms_cached(&mut world.context(), &mut cache);
             },
         );
     }
@@ -149,11 +147,11 @@ fn transform_propagation() {
         let moved: Vec<Entity> = entities.iter().step_by(4).copied().collect();
         bench("dirty_quarter_flat/10k", FLAT as u64, || {
             for &e in &moved {
-                if let Some(t) = world.ctx().get_mut::<Transform>(e) {
+                if let Some(t) = world.context().get_mut::<Transform>(e) {
                     t.position[1] += 0.001;
                 }
             }
-            propagate_transforms_cached(&mut world.ctx(), &mut cache);
+            propagate_transforms_cached(&mut world.context(), &mut cache);
         });
     }
 
@@ -164,8 +162,8 @@ fn transform_propagation() {
         let (mut world, _) = flat_world(FLAT);
         let mut cache = TransformCache::default();
         bench("full_resolve_flat/10k", FLAT as u64, || {
-            world.ctx().query_slice_mut::<Transform>()[0].position[1] += 0.001;
-            propagate_transforms_cached(&mut world.ctx(), &mut cache);
+            world.context().query_slice_mut::<Transform>()[0].position[1] += 0.001;
+            propagate_transforms_cached(&mut world.context(), &mut cache);
         });
     }
 
@@ -177,8 +175,8 @@ fn transform_propagation() {
             &format!("full_resolve_chains_depth{CHAIN_DEPTH}/10k"),
             count,
             || {
-                world.ctx().query_slice_mut::<Transform>()[0].position[1] += 0.001;
-                propagate_transforms_cached(&mut world.ctx(), &mut cache);
+                world.context().query_slice_mut::<Transform>()[0].position[1] += 0.001;
+                propagate_transforms_cached(&mut world.context(), &mut cache);
             },
         );
     }

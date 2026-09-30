@@ -95,29 +95,13 @@ pub(super) fn despawn_subtree(
 mod tests {
     use super::*;
     use concinnity_core::components::{Parent, Transform};
-    use concinnity_core::ecs::Arena;
-    use concinnity_core::ecs::FrameContext;
     use concinnity_core::ecs::SkinnedMeshHandle;
-    use concinnity_core::ecs::{ComponentStorage, Resources};
-    use concinnity_core::profile::FrameProfile;
-    use concinnity_host::store::blob::BlobData;
+    use concinnity_core::ecs::World;
 
-    // Build an isolated PipelineContext over fresh storage, like the draw_list
+    // Build an isolated PipelineContext over a fresh world, like the draw_list
     // tests, so a despawn cascade can be exercised without a backend.
     fn run<R>(body: impl FnOnce(&mut PipelineContext) -> R) -> R {
-        let mut components = ComponentStorage::default();
-        let mut blob = BlobData::empty();
-        let mut profile = FrameProfile::default();
-        let mut resources = Resources::new();
-        let scratch = Arena::with_capacity(64 * 1024);
-        let mut ctx = PipelineContext {
-            components: &mut components,
-            blob: &mut blob,
-            profile: &mut profile,
-            resources: &mut resources,
-            frame: FrameContext::new(&scratch),
-        };
-        body(&mut ctx)
+        body(&mut World::new().context())
     }
 
     #[test]

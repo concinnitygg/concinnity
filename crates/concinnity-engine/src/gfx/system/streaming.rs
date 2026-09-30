@@ -697,66 +697,24 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+    use crate::ecs::{BlobMeshBounds, BlobSceneGroups};
     use crate::gfx::mock_backend::{Call, MockState, recording_backend};
-    use concinnity_core::ecs::Arena;
-    use concinnity_core::ecs::ComponentStorage;
-    use concinnity_core::ecs::FrameContext;
     use concinnity_core::ecs::MeshBoundsRecord;
-    use concinnity_core::ecs::Resources;
     use concinnity_core::ecs::SceneGroup;
+    use concinnity_core::ecs::World;
     use concinnity_core::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
-    use concinnity_core::profile;
-    use concinnity_host::store::blob::BlobData;
 
     const MIB: u64 = 1024 * 1024;
 
-    // Owns the storage a PipelineContext borrows from, for the boot-set
-    // deferral tests: the declared Scenes plus the blob's baked scene groups
-    // and mesh-bounds records.
-    struct ResidencyWorld {
-        components: ComponentStorage,
-        blob: BlobData,
-        profile: profile::FrameProfile,
-        resources: Resources,
-        scratch: Arena,
-    }
-
-    impl ResidencyWorld {
-        // `scenes` are pushed in declaration order, so the first is the start
-        // scene the deferral spares.
-        fn new(scenes: &[AssetId]) -> Self {
-            let mut world = Self {
-                components: ComponentStorage::default(),
-                blob: BlobData::empty(),
-                profile: Default::default(),
-                resources: Resources::new(),
-                scratch: Arena::with_capacity(64 * 1024),
-            };
-            for &id in scenes {
-                world.ctx().push_identified(id, Scene { camera_shot: None });
-            }
-            world
+    // The declared Scenes of a boot-set deferral test. `scenes` are pushed in
+    // declaration order, so the first is the start scene the deferral spares;
+    // a test adds the blob's baked scene groups and mesh-bounds records itself.
+    fn residency_world(scenes: &[AssetId]) -> World {
+        let mut world = World::new();
+        for &id in scenes {
+            world.push_identified(id, Scene { camera_shot: None });
         }
-
-        fn with_groups(mut self, groups: Vec<SceneGroup>) -> Self {
-            self.resources.insert(crate::ecs::BlobSceneGroups(groups));
-            self
-        }
-
-        fn with_mesh_bounds(mut self, records: Vec<MeshBoundsRecord>) -> Self {
-            self.resources.insert(crate::ecs::BlobMeshBounds(records));
-            self
-        }
-
-        fn ctx(&mut self) -> PipelineContext<'_> {
-            PipelineContext {
-                components: &mut self.components,
-                blob: &mut self.blob,
-                profile: &mut self.profile,
-                resources: &mut self.resources,
-                frame: FrameContext::new(&self.scratch),
-            }
-        }
+        world
     }
 
     fn group(
@@ -794,15 +752,16 @@ mod tests {
     // eagerly.
     #[test]
     fn texture_deferral_spares_the_start_scene() {
-        let mut world = ResidencyWorld::new(&[START, LATER]).with_groups(vec![
+        let mut world = residency_world(&[START, LATER]);
+        world.insert_resource(BlobSceneGroups(vec![
             group(START, vec![(TEXTURE_KIND, 0)], Vec::new()),
             group(
                 LATER,
                 vec![(TEXTURE_KIND, 1), (TEXTURE_KIND, 2)],
                 Vec::new(),
             ),
-        ]);
-        let deferred = deferred_texture_slots(&world.ctx(), true, 8);
+        ]));
+        let deferred = deferred_texture_slots(&world.context(), true, 8);
         assert_eq!(deferred, std::collections::HashSet::from([1, 2]));
     }
 
@@ -810,12 +769,13 @@ mod tests {
     // slot count, is not a texture slot this path can defer.
     #[test]
     fn texture_deferral_ignores_other_kinds_and_out_of_range_handles() {
-        let mut world = ResidencyWorld::new(&[START, LATER]).with_groups(vec![group(
+        let mut world = residency_world(&[START, LATER]);
+        world.insert_resource(BlobSceneGroups(vec![group(
             LATER,
             vec![(TEXTURE_KIND, 1), (MESH_KIND, 2), (TEXTURE_KIND, 9)],
             Vec::new(),
-        )]);
-        let deferred = deferred_texture_slots(&world.ctx(), true, 3);
+        )]));
+        let deferred = deferred_texture_slots(&world.context(), true, 3);
         assert_eq!(deferred, std::collections::HashSet::from([1]));
     }
 
@@ -826,14 +786,16 @@ mod tests {
     fn texture_deferral_is_empty_without_streaming_scenes_or_groups() {
         let groups = vec![group(LATER, vec![(TEXTURE_KIND, 1)], Vec::new())];
 
-        let mut unstreamed = ResidencyWorld::new(&[START, LATER]).with_groups(groups.clone());
-        assert!(deferred_texture_slots(&unstreamed.ctx(), false, 8).is_empty());
+        let mut unstreamed = residency_world(&[START, LATER]);
+        unstreamed.insert_resource(BlobSceneGroups(groups.clone()));
+        assert!(deferred_texture_slots(&unstreamed.context(), false, 8).is_empty());
 
-        let mut sceneless = ResidencyWorld::new(&[]).with_groups(groups);
-        assert!(deferred_texture_slots(&sceneless.ctx(), true, 8).is_empty());
+        let mut sceneless = residency_world(&[]);
+        sceneless.insert_resource(BlobSceneGroups(groups));
+        assert!(deferred_texture_slots(&sceneless.context(), true, 8).is_empty());
 
-        let mut ungrouped = ResidencyWorld::new(&[START, LATER]);
-        assert!(deferred_texture_slots(&ungrouped.ctx(), true, 8).is_empty());
+        let mut ungrouped = residency_world(&[START, LATER]);
+        assert!(deferred_texture_slots(&ungrouped.context(), true, 8).is_empty());
     }
 
     // Mesh deferral mirrors the texture path over both mesh-source forms
@@ -844,18 +806,21 @@ mod tests {
     fn mesh_deferral_marks_later_scene_sources_and_keeps_every_baked_record() {
         let start_def = AssetId(20);
         let later_def = AssetId(21);
-        let mut world = ResidencyWorld::new(&[START, LATER])
-            .with_groups(vec![
-                group(START, vec![(MESH_KIND, 0)], vec![start_def]),
-                group(
-                    LATER,
-                    vec![(MESH_KIND, 1), (TEXTURE_KIND, 5)],
-                    vec![later_def],
-                ),
-            ])
-            .with_mesh_bounds(vec![bounds_record(0, 24, 36), bounds_record(1, 8, 12)]);
+        let mut world = residency_world(&[START, LATER]);
+        world.insert_resource(BlobSceneGroups(vec![
+            group(START, vec![(MESH_KIND, 0)], vec![start_def]),
+            group(
+                LATER,
+                vec![(MESH_KIND, 1), (TEXTURE_KIND, 5)],
+                vec![later_def],
+            ),
+        ]));
+        world.insert_resource(BlobMeshBounds(vec![
+            bounds_record(0, 24, 36),
+            bounds_record(1, 8, 12),
+        ]));
 
-        let sources = deferred_mesh_sources(&world.ctx(), true);
+        let sources = deferred_mesh_sources(&world.context(), true);
         assert_eq!(sources.by_handle, std::collections::HashSet::from([1]));
         assert_eq!(
             sources.by_def,
@@ -876,17 +841,18 @@ mod tests {
     fn mesh_deferral_is_empty_without_streaming_or_baked_bounds() {
         let groups = vec![group(LATER, vec![(MESH_KIND, 1)], Vec::new())];
 
-        let mut unstreamed = ResidencyWorld::new(&[START, LATER])
-            .with_groups(groups.clone())
-            .with_mesh_bounds(vec![bounds_record(1, 8, 12)]);
+        let mut unstreamed = residency_world(&[START, LATER]);
+        unstreamed.insert_resource(BlobSceneGroups(groups.clone()));
+        unstreamed.insert_resource(BlobMeshBounds(vec![bounds_record(1, 8, 12)]));
         assert!(
-            deferred_mesh_sources(&unstreamed.ctx(), false)
+            deferred_mesh_sources(&unstreamed.context(), false)
                 .by_handle
                 .is_empty()
         );
 
-        let mut unbaked = ResidencyWorld::new(&[START, LATER]).with_groups(groups);
-        let sources = deferred_mesh_sources(&unbaked.ctx(), true);
+        let mut unbaked = residency_world(&[START, LATER]);
+        unbaked.insert_resource(BlobSceneGroups(groups));
+        let sources = deferred_mesh_sources(&unbaked.context(), true);
         assert!(sources.by_handle.is_empty());
         assert!(sources.counts.is_empty());
     }
@@ -902,22 +868,24 @@ mod tests {
         const OTHER_DEF: AssetId = AssetId(22);
         let shaders = [Some(DEFAULT_SHADER), Some(SCENE_SHADER)];
 
-        let mut world = ResidencyWorld::new(&[START, LATER]).with_groups(vec![
+        let mut world = residency_world(&[START, LATER]);
+        world.insert_resource(BlobSceneGroups(vec![
             group(START, Vec::new(), vec![DEFAULT_SHADER]),
             group(LATER, Vec::new(), vec![SCENE_SHADER, OTHER_DEF]),
-        ]);
+        ]));
         assert_eq!(
-            deferred_shader_buckets(&world.ctx(), true, &shaders),
+            deferred_shader_buckets(&world.context(), true, &shaders),
             vec![(1, LATER)]
         );
 
         // A world default the start scene happens to own stays eager.
-        let mut owned_default = ResidencyWorld::new(&[START, LATER]).with_groups(vec![group(
+        let mut owned_default = residency_world(&[START, LATER]);
+        owned_default.insert_resource(BlobSceneGroups(vec![group(
             LATER,
             Vec::new(),
             vec![DEFAULT_SHADER],
-        )]);
-        assert!(deferred_shader_buckets(&owned_default.ctx(), true, &shaders).is_empty());
+        )]));
+        assert!(deferred_shader_buckets(&owned_default.context(), true, &shaders).is_empty());
     }
 
     // Same gates as the texture and mesh paths: without streaming there is no
@@ -928,14 +896,16 @@ mod tests {
         let shaders = [Some(AssetId(20)), Some(AssetId(21))];
         let groups = vec![group(LATER, Vec::new(), vec![AssetId(21)])];
 
-        let mut unstreamed = ResidencyWorld::new(&[START, LATER]).with_groups(groups.clone());
-        assert!(deferred_shader_buckets(&unstreamed.ctx(), false, &shaders).is_empty());
+        let mut unstreamed = residency_world(&[START, LATER]);
+        unstreamed.insert_resource(BlobSceneGroups(groups.clone()));
+        assert!(deferred_shader_buckets(&unstreamed.context(), false, &shaders).is_empty());
 
-        let mut sceneless = ResidencyWorld::new(&[]).with_groups(groups);
-        assert!(deferred_shader_buckets(&sceneless.ctx(), true, &shaders).is_empty());
+        let mut sceneless = residency_world(&[]);
+        sceneless.insert_resource(BlobSceneGroups(groups));
+        assert!(deferred_shader_buckets(&sceneless.context(), true, &shaders).is_empty());
 
-        let mut ungrouped = ResidencyWorld::new(&[START, LATER]);
-        assert!(deferred_shader_buckets(&ungrouped.ctx(), true, &shaders).is_empty());
+        let mut ungrouped = residency_world(&[START, LATER]);
+        assert!(deferred_shader_buckets(&ungrouped.context(), true, &shaders).is_empty());
     }
 
     // A GraphicsSystem carrying the recording backend, as init has it while the

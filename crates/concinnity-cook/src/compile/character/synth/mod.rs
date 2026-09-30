@@ -107,12 +107,6 @@ pub(crate) fn polarized(
     }
 }
 
-// Unit vector, or `None` for a zero vector.
-pub(crate) fn unit(v: [f32; 3]) -> Option<[f32; 3]> {
-    let len = vec3::length(v);
-    (len > 1e-6).then(|| vec3::scale(v, 1.0 / len))
-}
-
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
@@ -295,7 +289,5 @@ mod tests {
         let uni = polarized("cap", KeyPolarity::Unipolar, &fx.input(), disp);
         assert_eq!(uni.len(), 1);
         assert_eq!(uni[0].0, "cap");
-        assert!(unit([0.0; 3]).is_none());
-        assert_eq!(unit([0.0, 3.0, 0.0]), Some([0.0, 1.0, 0.0]));
     }
 }

@@ -9,8 +9,8 @@
 //! they have to agree: a shadow cascade's ortho and a probe face's perspective
 //! are sampled by the same shaders as the main camera's.
 
-use crate::math::vec3::{cross, dot, sub};
-use crate::math::{sqrt, tan};
+use crate::math::tan;
+use crate::math::vec3::{cross, dot, normalize_clamped, sub};
 use crate::transform::Mat4;
 
 // Floor applied to the half-FOV tangent. A zero or near-zero vertical FOV would
@@ -64,18 +64,9 @@ pub fn view_from_basis(eye: [f32; 3], right: [f32; 3], up: [f32; 3], forward: [f
 /// World-to-view for a camera at `eye` aimed at `center`, with `up` resolving
 /// the roll.
 pub fn look_at(eye: [f32; 3], center: [f32; 3], up: [f32; 3]) -> Mat4 {
-    let f = normalize3(sub(center, eye));
-    let r = normalize3(cross(f, up));
+    let f = normalize_clamped(sub(center, eye), 1e-6);
+    let r = normalize_clamped(cross(f, up), 1e-6);
     view_from_basis(eye, r, cross(r, f), f)
-}
-
-/// Unit-length `v`, with the length floored so a degenerate input yields a huge
-/// but finite vector rather than NaNs in a view basis. Distinct from
-/// [`crate::math::vec3::vec3_normalize`], which substitutes a fallback axis
-/// instead: a basis wants the direction it was given, however short.
-pub fn normalize3(v: [f32; 3]) -> [f32; 3] {
-    let len = sqrt(dot(v, v)).max(1e-6);
-    [v[0] / len, v[1] / len, v[2] / len]
 }
 
 /// An axis not parallel to `dir`, for building a [`look_at`] basis. Cone and
@@ -199,8 +190,8 @@ mod tests {
         let eye = [3.0, -1.5, 2.0];
         let center = [0.4, 0.9, -2.0];
         let up = [0.0, 1.0, 0.0];
-        let f = normalize3(sub(center, eye));
-        let r = normalize3(cross(f, up));
+        let f = normalize_clamped(sub(center, eye), 1e-6);
+        let r = normalize_clamped(cross(f, up), 1e-6);
         assert_eq!(
             look_at(eye, center, up),
             view_from_basis(eye, r, cross(r, f), f)
@@ -216,13 +207,17 @@ mod tests {
         assert_eq!(up_for([1.0, 0.0, 0.0]), [0.0, 1.0, 0.0]);
         // The chosen up is never parallel to the axis.
         for dir in [[0.0, -1.0, 0.0], [0.3, -0.9, 0.2], [1.0, 0.0, 0.0]] {
-            let d = normalize3(dir);
+            let d = normalize_clamped(dir, 1e-6);
             assert!(dot(d, up_for(d)).abs() < 0.999);
         }
     }
 
     #[test]
     fn a_degenerate_direction_stays_finite() {
-        assert!(normalize3([0.0; 3]).iter().all(|v| v.is_finite()));
+        assert!(
+            normalize_clamped([0.0; 3], 1e-6)
+                .iter()
+                .all(|v| v.is_finite())
+        );
     }
 }

@@ -10,10 +10,7 @@
 //! reached by clamping, not by opting in. This keeps the per-field `None = use the world's value` contract: the
 //! only thing persisted is the one preset marker, not a bake of every field.
 
-use concinnity_core::components::{
-    AaMode, ReflectionBlurResolution, RtReflectionResolution, ShadowUpdate, SsgiResolution,
-    UpscaleQuality,
-};
+use concinnity_core::components::{AaMode, PassResolution, ShadowUpdate, UpscaleQuality};
 use concinnity_core::render::backend::{GpuProfile, GpuTier};
 use concinnity_core::render::planar_reflection;
 use serde::{Deserialize, Serialize};
@@ -69,18 +66,18 @@ pub(crate) struct QualityCeiling {
     // resolution / smaller count of the world's choice and the cap. The
     // no-ceiling values are the engine maxima (`Full`, 32, 64), so a world's
     // authored value always stands under them.
-    pub(crate) ssgi_resolution: SsgiResolution,
+    pub(crate) ssgi_resolution: PassResolution,
     pub(crate) ssgi_rays: u32,
     pub(crate) ssgi_steps: u32,
     // Cap on the roughness-aware reflection blur resolution (only bites where
     // `ssr` or `ray_traced_reflections` is permitted): the finest blur the tier
     // allows, clamping the world's choice coarser. The no-ceiling value is `Full`
     // (finest), so a world's authored value always stands under it.
-    pub(crate) reflection_blur_resolution: ReflectionBlurResolution,
+    pub(crate) reflection_blur_resolution: PassResolution,
     // Cap on the ray-traced reflection trace resolution (only bites where
     // `ray_traced_reflections` is permitted), clamping the world's choice
     // coarser. The no-ceiling value is `Full`.
-    pub(crate) rt_reflection_resolution: RtReflectionResolution,
+    pub(crate) rt_reflection_resolution: PassResolution,
     // Cap on the shadow-map cascade resolution in texels (restart-required): the
     // effective size is the smaller of the world's choice and this cap. The
     // no-ceiling value is `u32::MAX`, so a world's authored size always stands.
@@ -115,17 +112,6 @@ pub(crate) struct QualityCeiling {
     pub(crate) planar_reflection_planes: u32,
 }
 
-// The coarser (higher render-resolution divisor) of two SSGI resolutions, the
-// resolution analogue of `more_aggressive_upscale`. Used to clamp a world's
-// gather resolution under a ceiling without ever making it finer.
-pub(crate) fn coarser_ssgi_resolution(a: SsgiResolution, b: SsgiResolution) -> SsgiResolution {
-    if a.scale_divisor() >= b.scale_divisor() {
-        a
-    } else {
-        b
-    }
-}
-
 // The authored anti-aliasing mode clamped under a ceiling: the cheaper of the
 // world's mode and the cap, by the ascending-cost rank `aa_mode_index` defines
 // (Off < FXAA < TAA). Never makes AA more aggressive than the world authored.
@@ -138,31 +124,6 @@ pub(crate) fn clamp_aa_mode(authored: AaMode, cap: AaMode) -> AaMode {
     }
 }
 
-// The coarser of two reflection-blur resolutions (the SSGI helper's sibling for
-// the reflection blur enum).
-pub(crate) fn coarser_reflection_blur(
-    a: ReflectionBlurResolution,
-    b: ReflectionBlurResolution,
-) -> ReflectionBlurResolution {
-    if a.scale_divisor() >= b.scale_divisor() {
-        a
-    } else {
-        b
-    }
-}
-
-// The coarser of two ray-traced reflection trace resolutions.
-pub(crate) fn coarser_rt_reflection_resolution(
-    a: RtReflectionResolution,
-    b: RtReflectionResolution,
-) -> RtReflectionResolution {
-    if a.scale_divisor() >= b.scale_divisor() {
-        a
-    } else {
-        b
-    }
-}
-
 // No ceiling: everything permitted, no forced upscaling. The resolved ceiling
 // for `Custom` alone -- every `Auto` tier, unclassified hardware included,
 // resolves to a named tier.
@@ -170,12 +131,12 @@ pub(crate) fn coarser_rt_reflection_resolution(
 // no SSGI ceiling: `Full` gather resolution, and the upper clamp bounds the
 // gather honors (rays <= 32, steps <= 64). A world's authored value always
 // stands under these.
-const SSGI_RES_MAX: SsgiResolution = SsgiResolution::Full;
+const SSGI_RES_MAX: PassResolution = PassResolution::Full;
 const SSGI_RAYS_MAX: u32 = 32;
 const SSGI_STEPS_MAX: u32 = 64;
 // `Full` (finest) is the no-cap reflection-blur resolution: a world's choice
 // always stands coarser-or-equal under it.
-const REFLECTION_BLUR_MAX: ReflectionBlurResolution = ReflectionBlurResolution::Full;
+const REFLECTION_BLUR_MAX: PassResolution = PassResolution::Full;
 // `u32::MAX` is the no-cap shadow-map resolution: a world's authored size always
 // stands smaller-or-equal under it.
 const SHADOW_SIZE_MAX: u32 = u32::MAX;
@@ -221,7 +182,7 @@ const NONE: QualityCeiling = QualityCeiling {
     ssgi_rays: SSGI_RAYS_MAX,
     ssgi_steps: SSGI_STEPS_MAX,
     reflection_blur_resolution: REFLECTION_BLUR_MAX,
-    rt_reflection_resolution: RtReflectionResolution::Full,
+    rt_reflection_resolution: PassResolution::Full,
     shadow_map_size: SHADOW_SIZE_MAX,
     allow_every_frame_shadows: true,
     anisotropy: ANISO_MAX,
@@ -238,11 +199,11 @@ const LOW: QualityCeiling = QualityCeiling {
     ssgi: false,
     auto_exposure: true,
     min_upscale: UpscaleQuality::Performance,
-    ssgi_resolution: SsgiResolution::Quarter,
+    ssgi_resolution: PassResolution::Quarter,
     ssgi_rays: 4,
     ssgi_steps: 8,
-    reflection_blur_resolution: ReflectionBlurResolution::Quarter,
-    rt_reflection_resolution: RtReflectionResolution::Quarter,
+    reflection_blur_resolution: PassResolution::Quarter,
+    rt_reflection_resolution: PassResolution::Quarter,
     shadow_map_size: 1024,
     allow_every_frame_shadows: false,
     anisotropy: 4,
@@ -261,11 +222,11 @@ const MEDIUM: QualityCeiling = QualityCeiling {
     ssgi: false,
     auto_exposure: true,
     min_upscale: UpscaleQuality::Balanced,
-    ssgi_resolution: SsgiResolution::Half,
+    ssgi_resolution: PassResolution::Half,
     ssgi_rays: 8,
     ssgi_steps: 12,
-    reflection_blur_resolution: ReflectionBlurResolution::Half,
-    rt_reflection_resolution: RtReflectionResolution::Half,
+    reflection_blur_resolution: PassResolution::Half,
+    rt_reflection_resolution: PassResolution::Half,
     shadow_map_size: 2048,
     allow_every_frame_shadows: false,
     anisotropy: 8,
@@ -283,11 +244,11 @@ const HIGH: QualityCeiling = QualityCeiling {
     ssgi: true,
     auto_exposure: true,
     min_upscale: UpscaleQuality::Quality,
-    ssgi_resolution: SsgiResolution::Half,
+    ssgi_resolution: PassResolution::Half,
     ssgi_rays: 8,
     ssgi_steps: 12,
-    reflection_blur_resolution: ReflectionBlurResolution::Half,
-    rt_reflection_resolution: RtReflectionResolution::Half,
+    reflection_blur_resolution: PassResolution::Half,
+    rt_reflection_resolution: PassResolution::Half,
     shadow_map_size: 4096,
     allow_every_frame_shadows: false,
     anisotropy: 16,
@@ -310,7 +271,7 @@ const ULTRA: QualityCeiling = QualityCeiling {
     ssgi_rays: SSGI_RAYS_MAX,
     ssgi_steps: SSGI_STEPS_MAX,
     reflection_blur_resolution: REFLECTION_BLUR_MAX,
-    rt_reflection_resolution: RtReflectionResolution::Full,
+    rt_reflection_resolution: PassResolution::Full,
     shadow_map_size: SHADOW_SIZE_MAX,
     allow_every_frame_shadows: true,
     anisotropy: ANISO_MAX,
@@ -525,25 +486,16 @@ mod tests {
             // higher tier never permits fewer rays / steps or a coarser gather.
             assert!(lo.ssgi_rays <= hi.ssgi_rays, "ssgi_rays cap dropped");
             assert!(lo.ssgi_steps <= hi.ssgi_steps, "ssgi_steps cap dropped");
-            assert_eq!(
-                coarser_ssgi_resolution(lo.ssgi_resolution, hi.ssgi_resolution),
-                lo.ssgi_resolution,
+            assert!(
+                lo.ssgi_resolution >= hi.ssgi_resolution,
                 "a higher tier permitted a coarser SSGI gather"
             );
-            assert_eq!(
-                coarser_reflection_blur(
-                    lo.reflection_blur_resolution,
-                    hi.reflection_blur_resolution
-                ),
-                lo.reflection_blur_resolution,
+            assert!(
+                lo.reflection_blur_resolution >= hi.reflection_blur_resolution,
                 "a higher tier permitted a coarser reflection blur"
             );
-            assert_eq!(
-                coarser_rt_reflection_resolution(
-                    lo.rt_reflection_resolution,
-                    hi.rt_reflection_resolution
-                ),
-                lo.rt_reflection_resolution,
+            assert!(
+                lo.rt_reflection_resolution >= hi.rt_reflection_resolution,
                 "a higher tier permitted a coarser ray-traced reflection trace"
             );
             // The shadow caps rise (or hold) with the tier: a higher tier never
@@ -645,23 +597,23 @@ mod tests {
         // stands under them.
         assert_eq!(NONE.ssgi_rays, 32);
         assert_eq!(NONE.ssgi_steps, 64);
-        assert_eq!(NONE.ssgi_resolution, SsgiResolution::Full);
-        // The coarser-resolution helper picks the higher divisor (lower quality),
-        // and an equal input is returned as-is.
+        assert_eq!(NONE.ssgi_resolution, PassResolution::Full);
+        // The coarser resolution is the higher divisor (lower quality), and an
+        // equal input is returned as-is.
         assert_eq!(
-            coarser_ssgi_resolution(SsgiResolution::Full, SsgiResolution::Quarter),
-            SsgiResolution::Quarter
+            PassResolution::Full.max(PassResolution::Quarter),
+            PassResolution::Quarter
         );
         assert_eq!(
-            coarser_ssgi_resolution(SsgiResolution::Half, SsgiResolution::Half),
-            SsgiResolution::Half
+            PassResolution::Half.max(PassResolution::Half),
+            PassResolution::Half
         );
         // Ultra imposes the maxima (no clamp); Low caps hard.
         let ultra = resolve_ceiling(QualityPreset::Ultra, &GpuProfile::UNKNOWN);
         assert_eq!(ultra.ssgi_rays, 32);
         let low = resolve_ceiling(QualityPreset::Low, &GpuProfile::UNKNOWN);
         assert_eq!(low.ssgi_rays, 4);
-        assert_eq!(low.ssgi_resolution, SsgiResolution::Quarter);
+        assert_eq!(low.ssgi_resolution, PassResolution::Quarter);
     }
 
     #[test]

@@ -454,9 +454,7 @@ fn an_empty_catalog_reloads_nothing() {
 // its error at the line it is on, under the path the catalog resolved.
 #[test]
 fn a_real_compile_error_names_the_catalogs_path_and_line() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("broken.hlsl");
     std::fs::write(

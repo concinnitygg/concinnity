@@ -446,42 +446,9 @@ mod tests {
     use alloc::vec;
 
     use crate::components::Children;
-    use crate::ecs::{Arena, ComponentStorage, FrameContext, NoPayloads, Resources};
-    use crate::profile::FrameProfile;
+    use crate::ecs::World;
 
     const IDENTITY4: WorldMatrix = IDENTITY;
-
-    // The pieces a PipelineContext borrows, owned so a test can build one
-    // context and hold it for the whole body.
-    struct TestWorld {
-        components: ComponentStorage,
-        blob: NoPayloads,
-        profile: FrameProfile,
-        resources: Resources,
-        scratch: Arena,
-    }
-
-    impl TestWorld {
-        fn new() -> TestWorld {
-            TestWorld {
-                components: ComponentStorage::default(),
-                blob: NoPayloads,
-                profile: FrameProfile::default(),
-                resources: Resources::new(),
-                scratch: Arena::with_capacity(64 * 1024),
-            }
-        }
-
-        fn ctx(&mut self) -> PipelineContext<'_> {
-            PipelineContext {
-                components: &mut self.components,
-                blob: &mut self.blob,
-                profile: &mut self.profile,
-                resources: &mut self.resources,
-                frame: FrameContext::new(&self.scratch),
-            }
-        }
-    }
 
     fn translate(x: f32) -> Transform {
         Transform {
@@ -535,8 +502,8 @@ mod tests {
             scale: [2.0, 2.0, 2.0],
         };
 
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let parent_e = spawn(&mut ctx, parent_t, None);
         let child_e = spawn(&mut ctx, child_t, Some(parent_e));
 
@@ -569,8 +536,8 @@ mod tests {
             scale: [2.0, 2.0, 2.0],
         };
 
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let parent_e = spawn(&mut ctx, parent_t, None);
         let child_e = spawn(&mut ctx, child_t, Some(parent_e));
 
@@ -588,8 +555,8 @@ mod tests {
     // frames where no Transform / Parent changed, and recomputes once one does.
     #[test]
     fn cached_propagation_skips_until_a_transform_changes() {
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let t0 = translate(1.0);
         let e = spawn(&mut ctx, t0, None);
 
@@ -626,8 +593,8 @@ mod tests {
     // GlobalTransform recomposes against the new ancestor world matrix.
     #[test]
     fn moving_a_root_recomposes_its_whole_subtree() {
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let links = chain(&mut ctx, 4);
 
         let mut cache = TransformCache::default();
@@ -651,8 +618,8 @@ mod tests {
     // not rewritten, so a deliberately corrupted sibling stays corrupted.
     #[test]
     fn an_untouched_subtree_is_not_rewritten() {
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let root_a = spawn(&mut ctx, translate(1.0), None);
         let child_a = spawn(&mut ctx, translate(2.0), Some(root_a));
         let root_b = spawn(&mut ctx, translate(3.0), None);
@@ -686,8 +653,8 @@ mod tests {
     // not the stale one it would read if the walks ran deepest-first.
     #[test]
     fn a_dirty_ancestor_and_descendant_resolve_against_the_new_parent() {
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let links = chain(&mut ctx, 3);
 
         let mut cache = TransformCache::default();
@@ -714,8 +681,8 @@ mod tests {
     // and the new entity is picked up.
     #[test]
     fn a_spawned_entity_forces_a_full_resolve() {
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let root = spawn(&mut ctx, translate(1.0), None);
 
         let mut cache = TransformCache::default();
@@ -735,8 +702,8 @@ mod tests {
     // frees the row must not leave the survivors pointing at the wrong slots.
     #[test]
     fn a_despawned_entity_leaves_the_survivors_correct() {
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let root = spawn(&mut ctx, translate(1.0), None);
         let doomed = spawn(&mut ctx, translate(2.0), Some(root));
         let kept = spawn(&mut ctx, translate(3.0), Some(root));
@@ -761,8 +728,8 @@ mod tests {
     // fall back and pick up every entity's new value.
     #[test]
     fn a_whole_column_write_falls_back_to_a_full_resolve() {
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let root = spawn(&mut ctx, translate(1.0), None);
         let child = spawn(&mut ctx, translate(2.0), Some(root));
 
@@ -790,8 +757,8 @@ mod tests {
     // subtree walks and full-resolves, which must reach every one of them.
     #[test]
     fn a_dirty_set_past_the_budget_falls_back_and_still_resolves() {
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let entities: Vec<Entity> = (0..16)
             .map(|i| spawn(&mut ctx, translate(i as f32), None))
             .collect();
@@ -819,8 +786,8 @@ mod tests {
     // against, so the child resolves as a root.
     #[test]
     fn a_parent_without_a_transform_leaves_the_child_a_root() {
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let bare = ctx.components.spawn();
         ctx.insert(bare, Children(crate::memory::InlineVec::new()));
         let child = spawn(&mut ctx, translate(4.0), Some(bare));
@@ -833,8 +800,8 @@ mod tests {
     // fall back to their own local matrix rather than looping forever.
     #[test]
     fn resolve_world_matrices_breaks_parent_cycle() {
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let a_t = translate(1.0);
         let b_t = Transform {
             position: [0.0, 2.0, 0.0],
@@ -862,8 +829,8 @@ mod tests {
     // against a matrix that was never resolved.
     #[test]
     fn an_entity_below_a_cycle_falls_back_to_its_local() {
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let a = spawn(&mut ctx, translate(1.0), None);
         let b = spawn(&mut ctx, translate(2.0), Some(a));
         ctx.insert(a, Parent(b));
@@ -884,8 +851,8 @@ mod tests {
     fn a_very_deep_chain_resolves_iteratively() {
         const DEPTH: usize = 20_000;
 
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let mut links = Vec::with_capacity(DEPTH);
         let mut parent = None;
         for _ in 0..DEPTH {
@@ -903,8 +870,8 @@ mod tests {
     fn reparent_recomposes_child_world_matrix_and_relists() {
         let (a_t, b_t, child_t) = (translate(10.0), translate(-5.0), translate(1.0));
 
-        let mut world = TestWorld::new();
-        let mut ctx = world.ctx();
+        let mut world = World::new();
+        let mut ctx = world.context();
         let a = spawn(&mut ctx, a_t, None);
         let b = spawn(&mut ctx, b_t, None);
         let child = spawn(&mut ctx, child_t, None);

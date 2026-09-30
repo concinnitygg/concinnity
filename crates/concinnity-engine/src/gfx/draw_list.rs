@@ -1036,15 +1036,11 @@ mod tests {
     use super::*;
     use concinnity_core::components::InstanceTransform;
     use concinnity_core::components::Prop;
-    use concinnity_core::ecs::Arena;
     use concinnity_core::ecs::ComponentSlot;
-    use concinnity_core::ecs::ComponentStorage;
-    use concinnity_core::ecs::FrameContext;
     use concinnity_core::ecs::Ref;
-    use concinnity_core::ecs::Resources;
     use concinnity_core::ecs::TextureHandle;
+    use concinnity_core::ecs::World;
     use concinnity_core::gfx::render_types::NO_ALBEDO_SLOT;
-    use concinnity_core::profile;
     use concinnity_core::resource::ResourceEntry;
     use concinnity_host::store::blob::BlobData;
 
@@ -1253,9 +1249,6 @@ mod tests {
     #[test]
     fn decomposed_renderable_item_matches_a_mesh_prop() {
         use concinnity_core::components::{Collider, MeshRenderer, Pickup, PropCollider};
-        use concinnity_core::ecs::{ComponentStorage, PipelineContext, Resources};
-        use concinnity_core::profile::FrameProfile;
-        use concinnity_host::store::blob::BlobData;
 
         let mut prop = make_prop([0.0; 3]);
         prop.mesh = Some(MeshHandle(10));
@@ -1264,18 +1257,8 @@ mod tests {
         prop.pickup = true;
         prop.collider = Some(PropCollider::default());
 
-        let mut components = ComponentStorage::default();
-        let mut blob = BlobData::empty();
-        let mut profile = FrameProfile::default();
-        let mut resources = Resources::new();
-        let scratch = Arena::with_capacity(64 * 1024);
-        let mut ctx = PipelineContext {
-            components: &mut components,
-            blob: &mut blob,
-            profile: &mut profile,
-            resources: &mut resources,
-            frame: FrameContext::new(&scratch),
-        };
+        let mut world = World::new();
+        let mut ctx = world.context();
 
         let e = ctx.components.spawn();
         ctx.insert(
@@ -1694,28 +1677,21 @@ mod tests {
 
     // Accumulates components + a single blob section so load_mesh_geometry /
     // load_room_geometry can decode in-memory payloads, mirroring the
-    // GraphicsSystem WorldBuilder precedent.
+    // GraphicsSystem WorldBuilder precedent. The components are added once the
+    // section is sealed into the world's payload store.
     struct BlobWorld {
-        components: ComponentStorage,
         section: Vec<u8>,
-        // Entities to identify once the world is sealed with its resources.
-        ids: Vec<(Entity, AssetId)>,
+        pending: Vec<PendingAdd>,
     }
 
-    struct SealedWorld {
-        components: ComponentStorage,
-        blob: BlobData,
-        profile: profile::FrameProfile,
-        resources: Resources,
-        scratch: Arena,
-    }
+    // A component add held until `seal` has built the world it goes into.
+    type PendingAdd = Box<dyn FnOnce(&mut World)>;
 
     impl BlobWorld {
         fn new() -> Self {
             Self {
-                components: ComponentStorage::default(),
                 section: Vec::new(),
-                ids: Vec::new(),
+                pending: Vec::new(),
             }
         }
 
@@ -1730,53 +1706,38 @@ mod tests {
         }
 
         fn push<C: ComponentSlot>(&mut self, c: C) {
-            self.components.push_typed(c);
+            self.pending.push(Box::new(move |world| {
+                world.push(c);
+            }));
         }
 
         fn push_identified<C: ComponentSlot>(&mut self, id: AssetId, c: C) {
-            let entity = self.components.push_typed(c);
-            self.ids.push((entity, id));
+            self.pending.push(Box::new(move |world| {
+                world.push_identified(id, c);
+            }));
         }
 
-        fn seal(self) -> SealedWorld {
-            let mut world = SealedWorld {
-                components: self.components,
-                blob: BlobData::new(vec![Some(self.section)]),
-                profile: profile::FrameProfile::default(),
-                resources: Resources::new(),
-                scratch: Arena::with_capacity(64 * 1024),
-            };
-            for (entity, id) in self.ids {
-                world.ctx().identify(entity, id);
+        fn seal(self) -> World {
+            let mut world = World::from_payloads(Box::new(BlobData::new(vec![Some(self.section)])));
+            for add in self.pending {
+                add(&mut world);
             }
             world
         }
     }
 
-    impl SealedWorld {
-        fn ctx(&mut self) -> PipelineContext<'_> {
-            PipelineContext {
-                components: &mut self.components,
-                blob: &mut self.blob,
-                profile: &mut self.profile,
-                resources: &mut self.resources,
-                frame: FrameContext::new(&self.scratch),
-            }
-        }
-
-        // Install a `MeshTable` with one entry per locator (handle == index),
-        // standing in for the blob resource stream a real build provides.
-        fn with_mesh_table(mut self, locators: Vec<Option<PayloadLocator>>) -> SealedWorld {
-            let entries = locators
-                .into_iter()
-                .map(|payload| ResourceEntry {
-                    payload,
-                    data_bytes: Vec::new(),
-                })
-                .collect();
-            self.resources.insert(MeshTable(entries));
-            self
-        }
+    // Install a `MeshTable` with one entry per locator (handle == index),
+    // standing in for the blob resource stream a real build provides.
+    fn with_mesh_table(mut world: World, locators: Vec<Option<PayloadLocator>>) -> World {
+        let entries = locators
+            .into_iter()
+            .map(|payload| ResourceEntry {
+                payload,
+                data_bytes: Vec::new(),
+            })
+            .collect();
+        world.insert_resource(MeshTable(entries));
+        world
     }
 
     // A single-triangle static mesh payload in the compiled format.
@@ -1799,8 +1760,8 @@ mod tests {
     fn load_mesh_geometry_decodes_in_memory_mesh() {
         let mut b = BlobWorld::new();
         let loc = b.payload(&tri_payload());
-        let mut world = b.seal().with_mesh_table(vec![Some(loc)]);
-        let mut ctx = world.ctx();
+        let mut world = with_mesh_table(b.seal(), vec![Some(loc)]);
+        let mut ctx = world.context();
 
         let MeshGeometry {
             meshes: geometry,
@@ -1831,8 +1792,8 @@ mod tests {
     fn load_mesh_geometry_defers_scene_owned_mesh_with_baked_bounds() {
         let mut b = BlobWorld::new();
         let loc = b.payload(&tri_payload());
-        let mut world = b.seal().with_mesh_table(vec![Some(loc)]);
-        let mut ctx = world.ctx();
+        let mut world = with_mesh_table(b.seal(), vec![Some(loc)]);
+        let mut ctx = world.context();
 
         let mut deferred = DeferredMeshSources::default();
         deferred.by_handle.insert(0);
@@ -1863,8 +1824,8 @@ mod tests {
     fn load_mesh_geometry_decodes_eagerly_without_baked_bounds() {
         let mut b = BlobWorld::new();
         let loc = b.payload(&tri_payload());
-        let mut world = b.seal().with_mesh_table(vec![Some(loc)]);
-        let mut ctx = world.ctx();
+        let mut world = with_mesh_table(b.seal(), vec![Some(loc)]);
+        let mut ctx = world.context();
 
         let mut deferred = DeferredMeshSources::default();
         deferred.by_handle.insert(0);
@@ -1893,7 +1854,7 @@ mod tests {
             },
         );
         let mut world = b.seal();
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
 
         let MeshGeometry {
             meshes: geometry,
@@ -1930,11 +1891,11 @@ mod tests {
                 ..Default::default()
             },
         );
-        let mut world = b.seal().with_mesh_table(vec![Some(compiled)]);
+        let mut world = with_mesh_table(b.seal(), vec![Some(compiled)]);
         let mut payloads = concinnity_core::resource::RuntimeMeshPayloads::default();
         payloads.push(AssetId(3), tri_payload());
-        world.resources.insert(payloads);
-        let mut ctx = world.ctx();
+        world.insert_resource(payloads);
+        let mut ctx = world.context();
 
         let MeshGeometry {
             meshes: geometry,
@@ -1966,15 +1927,15 @@ mod tests {
             },
         );
         let mut world = b.seal();
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         assert!(load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).is_none());
     }
 
     // A Mesh with no compiled payload aborts the whole load.
     #[test]
     fn load_mesh_geometry_missing_locator_returns_none() {
-        let mut world = BlobWorld::new().seal().with_mesh_table(vec![None]);
-        let mut ctx = world.ctx();
+        let mut world = with_mesh_table(BlobWorld::new().seal(), vec![None]);
+        let mut ctx = world.context();
         assert!(load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).is_none());
     }
 
@@ -1984,8 +1945,8 @@ mod tests {
         let mut b = BlobWorld::new();
         // Claims one vertex but carries no vertex bytes.
         let loc = b.payload(&1u32.to_le_bytes());
-        let mut world = b.seal().with_mesh_table(vec![Some(loc)]);
-        let mut ctx = world.ctx();
+        let mut world = with_mesh_table(b.seal(), vec![Some(loc)]);
+        let mut ctx = world.context();
         assert!(load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).is_none());
     }
 
@@ -1993,7 +1954,7 @@ mod tests {
     #[test]
     fn load_mesh_geometry_empty_world_is_ok_and_empty() {
         let mut world = BlobWorld::new().seal();
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         let MeshGeometry {
             meshes: geometry,
             sources,
@@ -2028,7 +1989,7 @@ mod tests {
         let mut b = BlobWorld::new();
         let loc = b.payload(&tri_payload());
         let mut world = b.seal();
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         let mut deferred = DeferredMeshSources::default();
         deferred.counts.insert(0, (3, 3));
         let bounds = ([-1.0; 3], [1.0; 3]);
@@ -2068,7 +2029,7 @@ mod tests {
         let loc = b.payload(&tri_payload());
         b.push(test_room(Some(loc)));
         let mut world = b.seal();
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
 
         let (room_geometry, blob_indices) = load_room_geometry(&mut ctx).expect("decoded");
         assert_eq!(room_geometry.len(), 1);
@@ -2084,7 +2045,7 @@ mod tests {
         let mut b = BlobWorld::new();
         b.push(test_room(None));
         let mut world = b.seal();
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         assert!(load_room_geometry(&mut ctx).is_none());
     }
 
@@ -2093,26 +2054,13 @@ mod tests {
     #[test]
     fn decomposed_renderable_item_matches_a_model_prop() {
         use concinnity_core::components::ModelRenderer;
-        use concinnity_core::ecs::{ComponentStorage, PipelineContext, Resources};
-        use concinnity_core::profile::FrameProfile;
-        use concinnity_host::store::blob::BlobData;
 
         let mut prop = make_prop([0.0; 3]);
         prop.model = Some(Ref::new(AssetId(100)));
         prop.cull_distance = 30.0;
 
-        let mut components = ComponentStorage::default();
-        let mut blob = BlobData::empty();
-        let mut profile = FrameProfile::default();
-        let mut resources = Resources::new();
-        let scratch = Arena::with_capacity(64 * 1024);
-        let mut ctx = PipelineContext {
-            components: &mut components,
-            blob: &mut blob,
-            profile: &mut profile,
-            resources: &mut resources,
-            frame: FrameContext::new(&scratch),
-        };
+        let mut world = World::new();
+        let mut ctx = world.context();
 
         let e = ctx.components.spawn();
         ctx.insert(

@@ -12,6 +12,7 @@
 use crate::bake::environment_map as em;
 use crate::gfx::cubemap::FACE_BASIS;
 use crate::gfx::projection::{perspective_rh, view_from_basis};
+use crate::math::vec3::dot;
 use crate::math::{ceil, floor, powi, round, sqrt};
 use crate::render::uniforms::ProbePrefilterParams;
 use crate::transform::mat4_mul;
@@ -493,7 +494,7 @@ fn solid_from_aabbs(
 // axis projects everything to 0 and never separates, which is the correct no-op.
 fn tri_box_overlap(box_c: [f32; 3], box_h: [f32; 3], tri: &[[f32; 3]; 3]) -> bool {
     let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let dot = |a: [f32; 3], b: [f32; 3]| dot(a, b);
     let cross = |a: [f32; 3], b: [f32; 3]| {
         [
             a[1] * b[2] - a[2] * b[1],

@@ -2,7 +2,7 @@
 //! crate (concinnity_core::components::file).
 
 use crate::components::Vocabulary;
-use crate::ecs::{Component, PayloadLocator};
+use crate::ecs::PayloadLocator;
 use alloc::string::String;
 
 /// The category of file content, inferred from the extension when not supplied.
@@ -196,18 +196,6 @@ impl File {
             kind,
             locator: None,
         }
-    }
-}
-
-impl Component for File {
-    const NAME: &'static str = "File";
-
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::AssetError> {
-        crate::ecs::decode_baked(bytes)
-    }
-
-    fn inject_locator(&mut self, locator: PayloadLocator) {
-        self.locator = Some(locator);
     }
 }
 

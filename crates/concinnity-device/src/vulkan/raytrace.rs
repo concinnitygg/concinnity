@@ -3282,9 +3282,7 @@ mod tests {
 
     #[test]
     fn rt_skin_kernel_compiles() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         // The skin compute kernel compiles to SPIR-V. Its payload offsets and
         // the `SkinParams` block are checked against the Rust mirrors in
         // `shader_layout`, on all three targets rather than this one.

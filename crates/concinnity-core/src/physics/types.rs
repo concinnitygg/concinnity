@@ -38,3 +38,16 @@ pub struct DynamicParams {
     /// Linear velocity damping (air drag).
     pub linear_damping: f32,
 }
+
+/// A 1 kg body with moderate friction, no bounce, full gravity, and no drag.
+impl Default for DynamicParams {
+    fn default() -> Self {
+        Self {
+            mass: 1.0,
+            friction: 0.5,
+            restitution: 0.0,
+            gravity_scale: 1.0,
+            linear_damping: 0.0,
+        }
+    }
+}

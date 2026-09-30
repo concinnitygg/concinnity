@@ -2,8 +2,8 @@
 //! component (with its spawn accumulator) they bake into.
 
 use crate::components::Prop;
+use crate::ecs::Ref;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Component, Ref};
 
 /// Periodically instantiates copies of an existing placement at this entity's
 /// position.
@@ -93,13 +93,5 @@ impl Spawner {
             elapsed: 0.0,
             count: 0,
         }
-    }
-}
-
-impl Component for Spawner {
-    const NAME: &'static str = "Spawner";
-
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::AssetError> {
-        crate::ecs::decode_baked(bytes)
     }
 }

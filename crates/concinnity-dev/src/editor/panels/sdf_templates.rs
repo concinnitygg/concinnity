@@ -162,9 +162,7 @@ mod tests {
     // own form can turn shadows on.
     #[test]
     fn every_surface_starter_compiles_with_its_shadow() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         for t in SURFACE {
             compiles_clean(t.text, false, true);
         }
@@ -172,9 +170,7 @@ mod tests {
 
     #[test]
     fn every_volumetric_starter_compiles() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         for t in VOLUMETRIC {
             compiles_clean(t.text, true, false);
         }

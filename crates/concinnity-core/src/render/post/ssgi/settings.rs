@@ -145,7 +145,7 @@ impl SsgiSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::SsgiResolution;
+    use crate::components::PassResolution;
     use crate::gfx::camera::MIN_ASPECT;
 
     #[test]
@@ -179,7 +179,7 @@ mod tests {
     fn from_config_carries_resolution_and_counts() {
         let cfg = PostProcessConfig {
             indirect_lighting: IndirectLighting::Ssgi,
-            ssgi_resolution: SsgiResolution::Quarter,
+            ssgi_resolution: PassResolution::Quarter,
             ssgi_rays: 4,
             ssgi_steps: 20,
             ..Default::default()

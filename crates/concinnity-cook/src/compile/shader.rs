@@ -164,9 +164,7 @@ mod tests {
     // the engine's own projection for the vertex hook.
     #[test]
     fn a_fragment_only_shader_compiles_every_program_of_its_host() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let sources = fragment_only(SHADE);
         for platform in Platform::ALL {
             let compiled = compile_world_shader("magenta", &sources, platform)
@@ -190,9 +188,7 @@ mod tests {
     // A vertex file replaces the engine's projection in every vertex variant.
     #[test]
     fn a_vertex_file_compiles_into_every_vertex_variant() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let sources = with_vertex(TRANSFORM, SHADE);
         for platform in Platform::ALL {
             let programs = compile_world_shader("sway", &sources, platform)
@@ -214,9 +210,7 @@ mod tests {
     // between two compiles of the same files has stamped that directory in.
     #[test]
     fn a_shader_payload_is_the_same_on_every_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let sources = with_vertex(TRANSFORM, SHADE);
         for platform in Platform::ALL {
             let compile = || {
@@ -232,9 +226,7 @@ mod tests {
     // under another path compiles to the same bytes.
     #[test]
     fn the_path_does_not_reach_the_artifact() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let elsewhere = Sources {
             vertex: None,
             fragment: SourceFile {
@@ -264,9 +256,7 @@ mod tests {
     // of that file, once, although every entry compiled it.
     #[test]
     fn an_error_names_the_authors_file_and_line() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let broken = "// a comment\n\
                       float4 shade(VertexOut v, GpuObjectData od)\n\
                       {\n\
@@ -296,9 +286,7 @@ mod tests {
     // number independently of it.
     #[test]
     fn an_error_in_the_vertex_file_names_the_vertex_file() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let vertex = "VertexOut transform(float4x4 model, float3 pos, float3 normal,\n\
                       \x20   float3 tangent, float3 color, float2 uv)\n\
                       {\n\
@@ -317,9 +305,7 @@ mod tests {
     // once.
     #[test]
     fn a_warning_is_returned_at_the_authors_line() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let warns = "float4 shade(VertexOut v, GpuObjectData od)\n\
                      {\n\
                      \x20   int truncated = 3.5;\n\
@@ -339,9 +325,7 @@ mod tests {
     // at build time rather than at a renderer's init.
     #[test]
     fn a_fragment_without_the_hook_fails_naming_it() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let err = compile_world_shader(
             "empty",
             &fragment_only("// nothing here\n"),
@@ -358,9 +342,7 @@ mod tests {
     // declaration; the compile fails and the message says which function.
     #[test]
     fn a_hook_with_the_wrong_signature_fails() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let sources = fragment_only("float4 shade(VertexOut v) { return float4(1.0); }\n");
         let err = compile_world_shader("wrong", &sources, Platform::Metal).unwrap_err();
         assert!(err.to_string().contains("shade"), "got: {err}");

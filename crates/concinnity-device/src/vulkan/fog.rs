@@ -1069,9 +1069,7 @@ mod tests {
 
     #[test]
     fn fog_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         // Compile the rewritten froxel-sampling fragment shader (both MSAA
         // modes) + the froxel compute kernel so a GLSL regression fails the
         // test suite without needing a GPU. Mirrors the cull-shader compile

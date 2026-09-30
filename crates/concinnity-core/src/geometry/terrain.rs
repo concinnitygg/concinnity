@@ -1,17 +1,17 @@
 // Subdivided terrain grid with deterministic height displacement.
 //
-// The grid spans [-half_width, half_width] x [-half_depth, half_depth] with
-// (subdivisions+1)^2 vertices. Heights are computed by three octaves of value
-// noise driven by lcg_hash so output is identical across builds. Smooth vertex
-// normals are computed by accumulating face normals from all sharing triangles.
+// Heights are three octaves of bilinear value noise over the grid lattice, so
+// the output is identical across builds. The physics heightfield collider
+// samples the same function, so the collided surface matches the rendered one
+// vertex for vertex.
 
-use alloc::format;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 
 use super::Vert;
-use crate::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
+use super::grid::Grid;
+use crate::math::floor;
+use crate::math::noise::lattice_value;
 
 /// Build a displaced terrain grid. `subdivisions` is the grid resolution per
 /// axis (clamped to 4..=255); `amplitude` is the peak height above the base
@@ -22,95 +22,41 @@ pub fn build_terrain(
     subdivisions: u32,
     amplitude: f32,
 ) -> Result<(Vec<Vert>, Vec<u16>), String> {
-    let subdivisions = subdivisions.clamp(4, 255) as usize;
-
-    let cols = subdivisions + 1;
-    let rows = subdivisions + 1;
-
-    if cols * rows > 65536 {
-        return Err(format!(
-            "terrain subdivisions {} produces {} vertices, exceeding the u16 limit; use subdivisions ≤ 255",
-            subdivisions,
-            cols * rows
-        ));
-    }
-
-    let color = [0.55f32, 0.62, 0.42];
-
-    // pass 1: compute all positions
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(cols * rows);
-    for row in 0..rows {
-        for col in 0..cols {
-            let s = col as f32 / subdivisions as f32;
-            let t = row as f32 / subdivisions as f32;
-            let x = -half_width + s * half_width * 2.0;
-            let z = -half_depth + t * half_depth * 2.0;
-            let y = terrain_height(col as u32, row as u32, subdivisions as u32, amplitude);
-            positions.push([x, y, z]);
-        }
-    }
-
-    // pass 2: accumulate face normals at each vertex
-    let mut normals: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; cols * rows];
-    for row in 0..subdivisions {
-        for col in 0..subdivisions {
-            let tl = row * cols + col;
-            let tr = tl + 1;
-            let bl = tl + cols;
-            let br = bl + 1;
-            let n1 = vec3_face_normal(positions[tl], positions[bl], positions[tr]);
-            vec3_add(&mut normals[tl], n1);
-            vec3_add(&mut normals[bl], n1);
-            vec3_add(&mut normals[tr], n1);
-            let n2 = vec3_face_normal(positions[tr], positions[bl], positions[br]);
-            vec3_add(&mut normals[tr], n2);
-            vec3_add(&mut normals[bl], n2);
-            vec3_add(&mut normals[br], n2);
-        }
-    }
-
-    let mut idxs: Vec<u16> = Vec::with_capacity(subdivisions * subdivisions * 6);
-    let mut verts: Vec<Vert> = Vec::with_capacity(cols * rows);
-
-    for i in 0..cols * rows {
-        let [x, y, z] = positions[i];
-        let normal = vec3_normalize(normals[i]);
-        verts.push(([x, y, z], normal, color, [x, z]));
-    }
-
-    for row in 0..subdivisions {
-        for col in 0..subdivisions {
-            let tl = (row * cols + col) as u16;
-            let tr = tl + 1;
-            let bl = tl + cols as u16;
-            let br = bl + 1;
-            idxs.extend_from_slice(&[tl, bl, tr, tr, bl, br]);
-        }
-    }
-
-    Ok((verts, idxs))
+    let subdivisions = terrain_subdivisions(subdivisions);
+    let grid = Grid::new("terrain", half_width, half_depth, subdivisions as usize)?;
+    let verts = grid.displaced([0.55, 0.62, 0.42], |p| {
+        terrain_height(p.col as f32, p.row as f32, subdivisions, amplitude)
+    });
+    Ok((verts, grid.indices()))
 }
 
-// Returns the Y displacement for lattice position (col, row).
-// Three octaves of deterministic value noise give coarse hills, medium bumps,
-// and fine surface variation.
-fn terrain_height(col: u32, row: u32, subdivisions: u32, amplitude: f32) -> f32 {
-    let octaves: &[(u32, f32)] = &[(1, 1.00), (3, 0.40), (9, 0.15)];
+// The grid resolution a terrain authored with `subdivisions` is built at.
+pub(crate) fn terrain_subdivisions(subdivisions: u32) -> u32 {
+    subdivisions.clamp(4, 255)
+}
+
+// The Y displacement at fractional lattice position (col, row), each in
+// [0, subdivisions]. Three octaves of bilinear value noise give coarse hills,
+// medium bumps, and fine surface variation.
+pub(crate) fn terrain_height(col: f32, row: f32, subdivisions: u32, amplitude: f32) -> f32 {
+    const OCTAVES: [(u32, f32); 3] = [(1, 1.00), (3, 0.40), (9, 0.15)];
 
     let mut sum = 0.0f32;
     let mut weight_sum = 0.0f32;
 
-    for &(divisor, weight) in octaves {
-        let scale = (subdivisions / divisor).max(1);
-        let gx = col / scale;
-        let gy = row / scale;
-        let fx = (col % scale) as f32 / scale as f32;
-        let fy = (row % scale) as f32 / scale as f32;
+    for (divisor, weight) in OCTAVES {
+        let scale = (subdivisions / divisor).max(1) as f32;
+        let gs = col / scale;
+        let gt = row / scale;
+        let gx = floor(gs) as u32;
+        let gy = floor(gt) as u32;
+        let fx = gs - gx as f32;
+        let fy = gt - gy as f32;
 
-        let h00 = lattice_val(gx, gy);
-        let h10 = lattice_val(gx + 1, gy);
-        let h01 = lattice_val(gx, gy + 1);
-        let h11 = lattice_val(gx + 1, gy + 1);
+        let h00 = lattice_value(gx, gy);
+        let h10 = lattice_value(gx + 1, gy);
+        let h01 = lattice_value(gx, gy + 1);
+        let h11 = lattice_value(gx + 1, gy + 1);
         let top = h00 + (h10 - h00) * fx;
         let bot = h01 + (h11 - h01) * fx;
         sum += (top + (bot - top) * fy) * weight;
@@ -119,17 +65,6 @@ fn terrain_height(col: u32, row: u32, subdivisions: u32, amplitude: f32) -> f32 
 
     let normalized = sum / weight_sum;
     (normalized - 0.05).max(0.0) * amplitude
-}
-
-fn lattice_val(x: u32, y: u32) -> f32 {
-    let h = lcg_hash(x.wrapping_mul(1619).wrapping_add(y.wrapping_mul(31337)));
-    (h & 0xFF) as f32 / 255.0
-}
-
-fn lcg_hash(mut v: u32) -> u32 {
-    v = v.wrapping_mul(1664525).wrapping_add(1013904223);
-    v ^= v >> 16;
-    v
 }
 
 #[cfg(test)]
@@ -179,26 +114,47 @@ mod tests {
 
     #[test]
     fn terrain_height_is_deterministic_and_scales_with_amplitude() {
-        let a = terrain_height(3, 7, 32, 4.0);
-        assert_eq!(a, terrain_height(3, 7, 32, 4.0));
-        assert!((terrain_height(3, 7, 32, 8.0) - a * 2.0).abs() < 1e-5);
+        let a = terrain_height(3.0, 7.0, 32, 4.0);
+        assert_eq!(a, terrain_height(3.0, 7.0, 32, 4.0));
+        assert!((terrain_height(3.0, 7.0, 32, 8.0) - a * 2.0).abs() < 1e-5);
         // The noise is floored at the base plane, never negative.
         for col in 0..32u32 {
             for row in 0..32u32 {
-                assert!(terrain_height(col, row, 32, 4.0) >= 0.0);
+                assert!(terrain_height(col as f32, row as f32, 32, 4.0) >= 0.0);
             }
         }
     }
 
     #[test]
-    fn lattice_values_are_normalized_and_position_dependent() {
-        for x in 0..16u32 {
-            for y in 0..16u32 {
-                let v = lattice_val(x, y);
-                assert!((0.0..=1.0).contains(&v), "lattice_val({x},{y}) = {v}");
-            }
+    fn flat_terrain_is_zero_height() {
+        assert_eq!(terrain_height(16.0, 16.0, 32, 0.0), 0.0);
+        assert_eq!(terrain_height(21.0, 13.5, 32, 0.0), 0.0);
+    }
+
+    #[test]
+    fn terrain_height_is_continuous_and_bounded() {
+        // Height never exceeds the amplitude and neighboring samples are close.
+        let mut prev = terrain_height(0.0, 16.0, 32, 4.0);
+        let mut col = 0.0;
+        while col <= 32.0 {
+            let h = terrain_height(col, 16.0, 32, 4.0);
+            assert!(
+                (0.0..=4.0).contains(&h),
+                "height {h} out of range at col={col}"
+            );
+            assert!((h - prev).abs() < 1.0, "terrain jumped at col={col}");
+            prev = h;
+            col += 0.25;
         }
-        assert_ne!(lattice_val(0, 0), lattice_val(1, 0));
-        assert_ne!(lcg_hash(0), lcg_hash(1));
+    }
+
+    // Between two lattice points the height is the bilinear blend of theirs,
+    // so a fractional sample lands between its neighbors.
+    #[test]
+    fn a_fractional_sample_lies_between_its_lattice_neighbors() {
+        let lo = terrain_height(5.0, 9.0, 32, 4.0);
+        let hi = terrain_height(6.0, 9.0, 32, 4.0);
+        let mid = terrain_height(5.5, 9.0, 32, 4.0);
+        assert!(mid >= lo.min(hi) - 1e-6 && mid <= lo.max(hi) + 1e-6);
     }
 }

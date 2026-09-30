@@ -25,8 +25,9 @@
 //! still counts and classifies those files, which is what keeps a new barrier in
 //! one of them from passing unnoticed.
 
+use concinnity_testing::source::relative_rust_sources;
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const VULKAN_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/vulkan");
 const DIRECTX_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/directx");
@@ -145,29 +146,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ("directx", "post/bloom.rs", "bloom.mips"),
 ];
 
-// Every `.rs` file under `dir`, recursively, as a path relative to `dir`.
-fn rust_sources(dir: &Path, prefix: &str, out: &mut Vec<(String, PathBuf)>) {
-    let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
-    for entry in entries {
-        let path = entry.expect("dir entry").path();
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .expect("utf-8 file name")
-            .to_string();
-        let rel = if prefix.is_empty() {
-            name.clone()
-        } else {
-            format!("{prefix}/{name}")
-        };
-        if path.is_dir() {
-            rust_sources(&path, &rel, out);
-        } else if name.ends_with(".rs") {
-            out.push((rel, path));
-        }
-    }
-}
-
 // Source with line comments removed, so a field named in prose is not a hit.
 fn code_only(source: &str) -> String {
     source
@@ -207,8 +185,7 @@ fn barrier_targets<'a>(code: &'a str, markers: &[&str]) -> Vec<&'a str> {
 // Every (file, field) pair where a barrier outside the executor targets a
 // registry-resolved resource.
 fn double_driven(registry: &BackendRegistry) -> BTreeSet<(String, &'static str)> {
-    let mut files = Vec::new();
-    rust_sources(Path::new(registry.root), "", &mut files);
+    let files = relative_rust_sources(Path::new(registry.root));
     let mut found = BTreeSet::new();
     for (rel, path) in files {
         if rel == EXECUTOR {
@@ -282,8 +259,7 @@ mod tests {
         // Every label must still be resolved by the executor, and every target
         // token must still name something in the backend.
         for registry in REGISTRIES {
-            let mut files = Vec::new();
-            rust_sources(Path::new(registry.root), "", &mut files);
+            let files = relative_rust_sources(Path::new(registry.root));
             let all: String = squeeze(
                 &files
                     .iter()

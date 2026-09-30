@@ -181,9 +181,7 @@ mod tests {
     // still carries the MSL a Metal player loads without a compiler of its own.
     #[test]
     fn an_msl_artifact_compiles_on_every_host() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let dir = tempfile::tempdir().unwrap();
         let msl = compile(&job(PIXEL), Platform::Metal, dir.path()).expect("MSL off any host");
         let text = String::from_utf8(msl.artifact).expect("MSL is text");
@@ -210,9 +208,7 @@ mod tests {
     // and a failure names every entry that failed, with the caller's hint.
     #[test]
     fn programs_come_back_in_job_order_and_a_failure_names_every_failed_entry() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let other = PIXEL.replace("1.0", "0.5");
         let jobs = [job(PIXEL), job(&other)];
         let compiled = compile_all(

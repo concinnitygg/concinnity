@@ -1,7 +1,8 @@
 //! Nothing passed to cargo may change which lines of this crate compile, apart
 //! from the development tiers (`detail` and `debug_assertions`, both about
-//! cost, and `schema`, the authored schema's description for authoring tools),
-//! none of which is about platform.
+//! cost, `schema`, the authored schema's description for authoring tools, and
+//! `test-support`, scaffolding for other crates' tests), none of which is about
+//! platform.
 //!
 //! The crate is the leaf every other one depends on, so a configuration axis
 //! here recompiles the foundation differently for anyone whose graph enables it.
@@ -66,8 +67,8 @@ fn no_source_reads_the_target_or_a_backend() {
 }
 
 // The features a development build turns on: per-size-class allocation
-// histograms, and the authored schema's static description.
-const DEVELOPMENT_TIERS: &[&str] = &["detail", "schema"];
+// histograms, the authored schema's static description, and test scaffolding.
+const DEVELOPMENT_TIERS: &[&str] = &["detail", "schema", "test-support"];
 
 #[test]
 fn development_tiers_are_the_only_feature_gates() {
@@ -95,7 +96,7 @@ fn development_tiers_are_the_only_feature_gates() {
     }
     assert!(
         offenders.is_empty(),
-        "`detail` and `schema` are the crate's only feature gates; found:\n{}",
+        "`detail`, `schema` and `test-support` are the crate's only feature gates; found:\n{}",
         offenders.join("\n")
     );
 }

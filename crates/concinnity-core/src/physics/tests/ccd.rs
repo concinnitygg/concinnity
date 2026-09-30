@@ -15,14 +15,14 @@
 //! elsewhere, on the same reasoning the settling suite uses: a sleeping body
 //! cannot tunnel either.
 
+use super::fixtures::TICK;
+use crate::math::vec3::length;
 use crate::physics::{
     BodyHandle, CharacterMoveInput, ColliderShape, DynamicParams, JointSpec, LayerMask, SimConfig,
     Simulation,
 };
 use alloc::vec;
 use alloc::vec::Vec;
-
-const TICK: f32 = 1.0 / 60.0;
 
 /// A slab a tenth of a unit thick, its faces at `y = +/- 0.05`. Thinner than
 /// anything thrown at it below travels in a tick, which is the whole point.
@@ -61,19 +61,18 @@ fn config(ccd: bool) -> SimConfig {
     }
 }
 
-fn params(gravity_scale: f32) -> DynamicParams {
-    DynamicParams {
-        mass: 1.0,
-        friction: 0.5,
-        restitution: 0.0,
-        gravity_scale,
-        linear_damping: 0.0,
-    }
-}
-
 fn spawn(sim: &mut Simulation, shape: &ColliderShape, at: [f32; 3], gravity: f32) -> BodyHandle {
-    sim.add_dynamic(shape, at, [0.0; 3], params(gravity), LayerMask::ALL)
-        .expect("room for a body")
+    sim.add_dynamic(
+        shape,
+        at,
+        [0.0; 3],
+        DynamicParams {
+            gravity_scale: gravity,
+            ..Default::default()
+        },
+        LayerMask::ALL,
+    )
+    .expect("room for a body")
 }
 
 fn slab_world(ccd: bool) -> Simulation {
@@ -555,7 +554,7 @@ fn a_jointed_body_stopped_by_the_sweep_does_not_fight_the_joint() {
                 &ARM,
                 [0.0, -1.0, 0.0],
                 [0.0; 3],
-                params(1.0),
+                DynamicParams::default(),
                 LayerMask::ALL,
             )
             .expect("room for the arm");
@@ -571,13 +570,13 @@ fn a_jointed_body_stopped_by_the_sweep_does_not_fight_the_joint() {
             swept += sim.swept_body_count();
             let at = sim.body_pose(arm).expect("live").0;
             let v = sim.linear_velocity(arm).expect("live");
-            let speed = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            let speed = length(v);
             assert!(
                 speed < 60.0,
                 "the joint gained speed rather than bleeding it: {speed} on tick {tick}"
             );
             furthest = furthest.max(at[0]);
-            stretched = stretched.max((at[0] * at[0] + at[1] * at[1] + at[2] * at[2]).sqrt());
+            stretched = stretched.max(length(at));
         }
         assert_eq!(sim.ccd_overflows(), 0, "the sweep was declined");
         (furthest, stretched, swept)

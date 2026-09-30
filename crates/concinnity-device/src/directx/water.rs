@@ -215,9 +215,7 @@ mod tests {
     // only as an init failure on a GPU host.
     #[test]
     fn water_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         for msaa in [1u32, 4] {
             super::compile_water_shaders(msaa, false)
                 .unwrap_or_else(|e| panic!("water shaders (msaa={msaa}) must compile: {e}"));
@@ -228,9 +226,7 @@ mod tests {
     // traversal fragment and the shader model 6.5 the ray query needs.
     #[test]
     fn water_rt_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         for msaa in [1u32, 4] {
             super::compile_water_rt_shaders(msaa, false)
                 .unwrap_or_else(|e| panic!("water_rt shaders (msaa={msaa}) must compile: {e}"));

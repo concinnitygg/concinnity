@@ -7,7 +7,7 @@
 //! culling (a few extra draws), false negatives are not, so the test treats
 //! the box as visible whenever it overlaps any plane.
 
-use crate::math::sqrt;
+use crate::math::vec3::length;
 
 /// One frustum plane in clip space.
 #[derive(Copy, Clone, Debug)]
@@ -81,7 +81,7 @@ impl Frustum {
 }
 
 fn normalize_plane(p: [f32; 4]) -> Plane {
-    let len = sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+    let len = length([p[0], p[1], p[2]]);
     let inv = if len > 1e-6 { 1.0 / len } else { 1.0 };
     Plane {
         normal: [p[0] * inv, p[1] * inv, p[2] * inv],

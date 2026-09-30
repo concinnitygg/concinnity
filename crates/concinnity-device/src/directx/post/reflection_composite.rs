@@ -409,9 +409,7 @@ mod tests {
     // dxc.
     #[test]
     fn reflection_composite_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         super::compile_refl_composite_shaders(false)
             .expect("reflection composite shaders must compile");
     }

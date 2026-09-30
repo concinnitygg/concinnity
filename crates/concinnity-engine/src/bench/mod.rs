@@ -23,46 +23,11 @@ pub(crate) mod alloc_budget;
 pub(crate) mod extraction;
 pub(crate) mod transforms;
 
-use concinnity_core::ecs::{Arena, ComponentStorage, FrameContext, PipelineContext, Resources};
-use concinnity_core::profile::FrameProfile;
-use concinnity_host::store::blob::BlobData;
 use std::time::Instant;
 
 // One measured pass runs at least this long before its time is trusted.
 const TARGET_NS: u128 = 200_000_000;
 const MAX_ITERS: u64 = 1 << 20;
-
-// The hand-assembled world the benches drive: a component storage plus the
-// other four pieces a `PipelineContext` borrows.
-pub(crate) struct BenchWorld {
-    pub components: ComponentStorage,
-    blob: BlobData,
-    profile: FrameProfile,
-    resources: Resources,
-    scratch: Arena,
-}
-
-impl BenchWorld {
-    pub(crate) fn new() -> BenchWorld {
-        BenchWorld {
-            components: ComponentStorage::default(),
-            blob: BlobData::empty(),
-            profile: FrameProfile::default(),
-            resources: Resources::default(),
-            scratch: Arena::with_capacity(1 << 20),
-        }
-    }
-
-    pub(crate) fn ctx(&mut self) -> PipelineContext<'_> {
-        PipelineContext {
-            components: &mut self.components,
-            blob: &mut self.blob,
-            profile: &mut self.profile,
-            resources: &mut self.resources,
-            frame: FrameContext::new(&self.scratch),
-        }
-    }
-}
 
 // Time `body` over a calibrated iteration count and report its per-item cost
 // beside the allocations one item causes. `items` is how many units of work one

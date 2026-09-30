@@ -12,14 +12,14 @@
 //! reports its crossings, and where it lands says whether the region held it
 //! up.
 
+use super::fixtures::{TICK, add_floor, sim};
 use crate::physics::{
-    BodyHandle, CharacterMoveInput, ColliderShape, DynamicParams, LayerMask, SensorCrossing,
-    ShapeCast, SimConfig, Simulation,
+    CharacterMoveInput, ColliderShape, DynamicParams, LayerMask, SensorCrossing, ShapeCast,
+    Simulation,
 };
 use alloc::vec;
 use alloc::vec::Vec;
 
-const TICK: f32 = 1.0 / 60.0;
 const BALL: ColliderShape = ColliderShape::Ball { radius: 0.25 };
 const REGION: ColliderShape = ColliderShape::Cuboid {
     half_extents: [1.0, 1.0, 1.0],
@@ -28,34 +28,6 @@ const CAPSULE: ColliderShape = ColliderShape::Capsule {
     half_height: 0.6,
     radius: 0.3,
 };
-
-fn params() -> DynamicParams {
-    DynamicParams {
-        mass: 1.0,
-        friction: 0.5,
-        restitution: 0.0,
-        gravity_scale: 1.0,
-        linear_damping: 0.0,
-    }
-}
-
-fn sim(capacity: usize) -> Simulation {
-    Simulation::new(SimConfig::default(), capacity)
-}
-
-/// A floor whose top surface is exactly `y = 0`.
-fn add_floor(sim: &mut Simulation) -> BodyHandle {
-    sim.add_fixed(
-        &ColliderShape::Cuboid {
-            half_extents: [20.0, 1.0, 20.0],
-        },
-        [0.0, -1.0, 0.0],
-        [0.0; 3],
-        0.8,
-        LayerMask::ALL,
-    )
-    .expect("room for the floor")
-}
 
 /// Step `ticks` times, collecting every crossing recorded along the way.
 fn run(sim: &mut Simulation, ticks: usize) -> Vec<SensorCrossing> {
@@ -76,7 +48,13 @@ fn a_body_falling_through_a_region_reports_going_in_and_coming_out() {
     sim.add_sensor(&REGION, [0.0, 2.0, 0.0], [0.0; 3], 7, LayerMask::ALL)
         .expect("room for the region");
     let ball = sim
-        .add_dynamic(&BALL, [0.0, 6.0, 0.0], [0.0; 3], params(), LayerMask::ALL)
+        .add_dynamic(
+            &BALL,
+            [0.0, 6.0, 0.0],
+            [0.0; 3],
+            DynamicParams::default(),
+            LayerMask::ALL,
+        )
         .expect("room for the ball");
 
     let crossings = run(&mut sim, 300);
@@ -96,8 +74,14 @@ fn a_body_resting_inside_a_region_reports_once() {
     // The region covers where the ball comes to rest.
     sim.add_sensor(&REGION, [0.0, 1.0, 0.0], [0.0; 3], 3, LayerMask::ALL)
         .expect("room for the region");
-    sim.add_dynamic(&BALL, [0.0, 3.0, 0.0], [0.0; 3], params(), LayerMask::ALL)
-        .expect("room for the ball");
+    sim.add_dynamic(
+        &BALL,
+        [0.0, 3.0, 0.0],
+        [0.0; 3],
+        DynamicParams::default(),
+        LayerMask::ALL,
+    )
+    .expect("room for the ball");
 
     let crossings = run(&mut sim, 600);
     assert_eq!(crossings.len(), 1, "{crossings:?}");
@@ -187,7 +171,7 @@ fn a_body_removed_while_inside_leaves_without_naming_itself() {
             [0.0; 3],
             DynamicParams {
                 gravity_scale: 0.0,
-                ..params()
+                ..Default::default()
             },
             LayerMask::ALL,
         )
@@ -228,7 +212,13 @@ fn a_region_changes_nothing_about_how_the_world_moves() {
             .expect("room for the region");
         }
         let ball = sim
-            .add_dynamic(&BALL, [0.0, 6.0, 0.0], [0.0; 3], params(), LayerMask::ALL)
+            .add_dynamic(
+                &BALL,
+                [0.0, 6.0, 0.0],
+                [0.0; 3],
+                DynamicParams::default(),
+                LayerMask::ALL,
+            )
             .expect("room for the ball");
         let mut path = Vec::new();
         for _ in 0..240 {
@@ -339,7 +329,7 @@ fn a_region_only_sees_the_layers_it_interacts_with() {
         [0.0; 3],
         DynamicParams {
             gravity_scale: 0.0,
-            ..params()
+            ..Default::default()
         },
         second,
     )
@@ -353,7 +343,7 @@ fn a_region_only_sees_the_layers_it_interacts_with() {
             [0.0; 3],
             DynamicParams {
                 gravity_scale: 0.0,
-                ..params()
+                ..Default::default()
             },
             first,
         )
@@ -370,8 +360,14 @@ fn crossings_wait_in_the_queue_until_they_are_drained() {
     let mut sim = sim(2);
     sim.add_sensor(&REGION, [0.0, 2.0, 0.0], [0.0; 3], 6, LayerMask::ALL)
         .expect("room for the region");
-    sim.add_dynamic(&BALL, [0.0, 6.0, 0.0], [0.0; 3], params(), LayerMask::ALL)
-        .expect("room for the ball");
+    sim.add_dynamic(
+        &BALL,
+        [0.0, 6.0, 0.0],
+        [0.0; 3],
+        DynamicParams::default(),
+        LayerMask::ALL,
+    )
+    .expect("room for the ball");
 
     for _ in 0..300 {
         sim.step(TICK);
@@ -392,8 +388,14 @@ fn draining_crossings_reallocates_neither_side() {
     let mut sim = sim(4);
     sim.add_sensor(&REGION, [0.0, 2.0, 0.0], [0.0; 3], 1, LayerMask::ALL)
         .expect("room for the region");
-    sim.add_dynamic(&BALL, [0.0, 6.0, 0.0], [0.0; 3], params(), LayerMask::ALL)
-        .expect("room for the ball");
+    sim.add_dynamic(
+        &BALL,
+        [0.0, 6.0, 0.0],
+        [0.0; 3],
+        DynamicParams::default(),
+        LayerMask::ALL,
+    )
+    .expect("room for the ball");
 
     let mut out = Vec::with_capacity(8);
     let capacity = out.capacity();
@@ -424,8 +426,14 @@ fn two_identical_runs_report_the_same_crossings() {
             .expect("room for the region");
         }
         for x in [-3.0f32, 0.0] {
-            sim.add_dynamic(&BALL, [x, 6.0, 0.0], [0.0; 3], params(), LayerMask::ALL)
-                .expect("room for the ball");
+            sim.add_dynamic(
+                &BALL,
+                [x, 6.0, 0.0],
+                [0.0; 3],
+                DynamicParams::default(),
+                LayerMask::ALL,
+            )
+            .expect("room for the ball");
         }
         run(&mut sim, 240)
             .into_iter()
@@ -460,7 +468,7 @@ fn a_world_past_its_reservation_declines_and_counts() {
         [0.0; 3],
         DynamicParams {
             gravity_scale: 0.0,
-            ..params()
+            ..Default::default()
         },
         LayerMask::ALL,
     )

@@ -925,9 +925,7 @@ mod tests {
     // valid SPIR-V from the embedded source.
     #[test]
     fn shadow_bindless_vs_compiles() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let vs = compile_shadow_bindless_vs(false).expect("shadow bindless VS compiles");
         assert!(is_spirv(&vs), "shadow bindless VS is valid SPIR-V");
     }
@@ -937,9 +935,7 @@ mod tests {
     // neither the pool nor the probe set takes a count.
     #[test]
     fn bindless_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let (vs, fs) = compile_bindless_shaders(false).expect("bindless shaders compile");
         assert!(is_spirv(&vs), "bindless vertex is valid SPIR-V");
         assert!(is_spirv(&fs), "bindless fragment is valid SPIR-V");
@@ -958,9 +954,7 @@ mod tests {
     // compile branch of `surface_source`, which is also what a stale cook does.
     #[test]
     fn a_world_shader_compiles_its_own_bindless_pair() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let programs = concinnity_core::components::ShaderPrograms {
             name: "wall".to_string(),
             vertex: None,

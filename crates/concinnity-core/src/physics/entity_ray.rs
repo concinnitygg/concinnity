@@ -11,7 +11,7 @@
 
 use crate::components::{Collider, Transform};
 use crate::ecs::{ComponentStorage, Entity};
-use crate::math::sqrt;
+use crate::math::vec3::length;
 use crate::physics::convert::collider_shape;
 use crate::physics::sim::ray_hit_distance;
 
@@ -32,7 +32,7 @@ pub(crate) fn nearest_hit(
     if !(distance.is_finite() && distance > 0.0) {
         return None;
     }
-    let length = sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+    let length = length(dir);
     if !(length.is_finite() && length > 0.0) {
         return None;
     }

@@ -146,11 +146,7 @@ pub(super) fn step_target(
 mod tests {
     use super::*;
     use concinnity_core::animation::skeleton;
-    use concinnity_core::ecs::Arena;
-    use concinnity_core::ecs::FrameContext;
-    use concinnity_core::ecs::{ComponentSlot, ComponentStorage, Resources};
-    use concinnity_core::profile::FrameProfile;
-    use concinnity_host::store::blob::BlobData;
+    use concinnity_core::ecs::World;
     use concinnity_host::thread::asset_id;
     use concinnity_host::thread::asset_id::intern;
 
@@ -192,46 +188,6 @@ mod tests {
         SkinnedMeshHandle(intern(name).0)
     }
 
-    // Owns the storage a PipelineContext borrows from. Graph install reads no
-    // payloads, so the blob stays empty.
-    struct TestWorld {
-        components: ComponentStorage,
-        blob: BlobData,
-        profile: FrameProfile,
-        resources: Resources,
-        scratch: Arena,
-    }
-
-    impl TestWorld {
-        fn new() -> Self {
-            Self {
-                components: ComponentStorage::default(),
-                blob: BlobData::new(vec![Some(Vec::new())]),
-                profile: FrameProfile::default(),
-                resources: Resources::new(),
-                scratch: Arena::with_capacity(64 * 1024),
-            }
-        }
-
-        fn push<C: ComponentSlot>(&mut self, c: C) {
-            self.components.push_typed(c);
-        }
-
-        fn ctx(&mut self) -> PipelineContext<'_> {
-            PipelineContext {
-                components: &mut self.components,
-                blob: &mut self.blob,
-                profile: &mut self.profile,
-                resources: &mut self.resources,
-                frame: FrameContext::new(&self.scratch),
-            }
-        }
-
-        fn count<C: ComponentSlot>(&mut self) -> usize {
-            self.ctx().query::<C>().count()
-        }
-    }
-
     fn is_graph(targets: &BTreeMap<SkinnedMeshHandle, TargetState>, t: SkinnedMeshHandle) -> bool {
         matches!(targets[&t].mode, TargetMode::Graph(_))
     }
@@ -255,11 +211,11 @@ mod tests {
     // bucket keeps whatever drive it had.
     #[test]
     fn install_graphs_ignores_a_graph_with_no_target() {
-        let mut w = TestWorld::new();
+        let mut w = World::new();
         w.push(AnimationGraph::default());
         let mut targets = BTreeMap::new();
         assert_eq!(
-            install_graphs(&mut targets, &mut w.ctx(), &HashMap::new()),
+            install_graphs(&mut targets, &mut w.context(), &HashMap::new()),
             0
         );
     }
@@ -269,15 +225,19 @@ mod tests {
     #[test]
     fn install_graphs_ignores_a_graph_whose_target_has_no_clips() {
         let target = handle("gi_no_clips");
-        let mut w = TestWorld::new();
+        let mut w = World::new();
         w.push(parse(graph_json("gi_no_clips", "gi_missing_clip")));
         let mut targets = BTreeMap::new();
         assert_eq!(
-            install_graphs(&mut targets, &mut w.ctx(), &HashMap::new()),
+            install_graphs(&mut targets, &mut w.context(), &HashMap::new()),
             0
         );
         assert!(!targets.contains_key(&target));
-        assert_eq!(w.count::<AnimationParams>(), 0, "no params published");
+        assert_eq!(
+            w.query::<AnimationParams>().count(),
+            0,
+            "no params published"
+        );
     }
 
     // A graph the blob and clip list disagree on (here: an unresolvable clip
@@ -286,19 +246,19 @@ mod tests {
     #[test]
     fn install_graphs_falls_back_to_the_blend_when_compile_fails() {
         let target = handle("gi_bad_compile");
-        let mut w = TestWorld::new();
+        let mut w = World::new();
         w.push(parse(graph_json("gi_bad_compile", "gi_unresolvable")));
         let mut targets = flat_bucket(target);
         // An empty slot map resolves no clip, so the compile fails.
         assert_eq!(
-            install_graphs(&mut targets, &mut w.ctx(), &HashMap::new()),
+            install_graphs(&mut targets, &mut w.context(), &HashMap::new()),
             0
         );
         assert!(
             !is_graph(&targets, target),
             "the bucket keeps its flat drive"
         );
-        assert_eq!(w.count::<AnimationParams>(), 0);
+        assert_eq!(w.query::<AnimationParams>().count(), 0);
     }
 
     // A graph claiming a clip that belongs to a different target cannot resolve
@@ -307,12 +267,12 @@ mod tests {
     fn install_graphs_rejects_a_clip_owned_by_another_target() {
         let target = handle("gi_owner");
         let clip = intern("gi_owned_clip");
-        let mut w = TestWorld::new();
+        let mut w = World::new();
         w.push(parse(graph_json("gi_owner", "gi_owned_clip")));
         let mut targets = flat_bucket(target);
         // The clip exists, but in someone else's bucket.
         let slots = HashMap::from([(clip, (handle("gi_stranger"), 0))]);
-        assert_eq!(install_graphs(&mut targets, &mut w.ctx(), &slots), 0);
+        assert_eq!(install_graphs(&mut targets, &mut w.context(), &slots), 0);
         assert!(!is_graph(&targets, target));
     }
 
@@ -322,14 +282,14 @@ mod tests {
     fn install_graphs_takes_the_bucket_and_seeds_params() {
         let target = handle("gi_ok");
         let clip = intern("gi_ok_clip");
-        let mut w = TestWorld::new();
+        let mut w = World::new();
         w.push(parse(graph_json("gi_ok", "gi_ok_clip")));
         let mut targets = flat_bucket(target);
         let slots = HashMap::from([(clip, (target, 0usize))]);
-        assert_eq!(install_graphs(&mut targets, &mut w.ctx(), &slots), 1);
+        assert_eq!(install_graphs(&mut targets, &mut w.context(), &slots), 1);
         assert!(is_graph(&targets, target));
 
-        let ctx = w.ctx();
+        let ctx = w.context();
         let params: Vec<&AnimationParams> = ctx.query::<AnimationParams>().collect();
         assert_eq!(params.len(), 1);
         assert_eq!(params[0].target, target);
@@ -338,7 +298,11 @@ mod tests {
             vec![1.5],
             "seeded from the declared default"
         );
-        assert_eq!(w.count::<GroundProbes>(), 0, "no chains, no probe exchange");
+        assert_eq!(
+            w.query::<GroundProbes>().count(),
+            0,
+            "no chains, no probe exchange"
+        );
     }
 
     // IK chains resolve joint names against the target's skeleton. Without a
@@ -351,17 +315,17 @@ mod tests {
         let mut v = graph_json("gi_no_skel", "gi_no_skel_clip");
         v["ik_chains"] = serde_json::json!([{"joints": ["hip", "knee", "foot"],
                                              "pole": [0.0, 0.0, 1.0]}]);
-        let mut w = TestWorld::new();
+        let mut w = World::new();
         w.push(parse(v));
         let mut targets = flat_bucket(target);
         let slots = HashMap::from([(clip, (target, 0usize))]);
-        assert_eq!(install_graphs(&mut targets, &mut w.ctx(), &slots), 1);
+        assert_eq!(install_graphs(&mut targets, &mut w.context(), &slots), 1);
 
         let TargetMode::Graph(g) = &targets[&target].mode else {
             panic!("graph installed");
         };
         assert!(g.chains.is_empty(), "IK disabled without a skeleton");
-        assert_eq!(w.count::<GroundProbes>(), 0);
+        assert_eq!(w.query::<GroundProbes>().count(), 0);
     }
 
     // A graph bucket parked at its initial state, for driving `step_target`.
@@ -385,15 +349,15 @@ mod tests {
     #[test]
     fn step_target_flushes_queued_writes_into_the_component() {
         let target = handle("gs_component");
-        let mut w = TestWorld::new();
+        let mut w = World::new();
         w.push(AnimationParams::new(target, vec![0.0]));
         let mut g = graph_target("gs_component");
         g.pending.push((0, 3.0));
 
-        step_target(&mut g, target, &mut w.ctx(), 0.1);
+        step_target(&mut g, target, &mut w.context(), 0.1);
         assert!(g.pending.is_empty(), "the queue drains");
         assert_eq!(g.params, vec![3.0], "snapshot taken from the component");
-        let ctx = w.ctx();
+        let ctx = w.context();
         let params: Vec<&AnimationParams> = ctx.query::<AnimationParams>().collect();
         assert_eq!(params[0].values, vec![3.0], "the write landed in the store");
     }
@@ -403,13 +367,13 @@ mod tests {
     #[test]
     fn step_target_keeps_applying_writes_without_the_component() {
         let target = handle("gs_orphan");
-        let mut w = TestWorld::new();
+        let mut w = World::new();
         let mut g = graph_target("gs_orphan");
         g.pending.push((0, 4.0));
         // An out-of-range index is dropped rather than panicking.
         g.pending.push((9, 1.0));
 
-        step_target(&mut g, target, &mut w.ctx(), 0.1);
+        step_target(&mut g, target, &mut w.context(), 0.1);
         assert!(g.pending.is_empty());
         assert_eq!(g.params, vec![4.0], "the snapshot took the write");
     }
@@ -418,14 +382,14 @@ mod tests {
     #[test]
     fn step_target_ignores_another_targets_params() {
         let target = handle("gs_mine");
-        let mut w = TestWorld::new();
+        let mut w = World::new();
         w.push(AnimationParams::new(handle("gs_theirs"), vec![9.0]));
         let mut g = graph_target("gs_mine");
         g.pending.push((0, 2.0));
 
-        step_target(&mut g, target, &mut w.ctx(), 0.1);
+        step_target(&mut g, target, &mut w.context(), 0.1);
         assert_eq!(g.params, vec![2.0], "the stranger's values are not read");
-        let ctx = w.ctx();
+        let ctx = w.context();
         let params: Vec<&AnimationParams> = ctx.query::<AnimationParams>().collect();
         assert_eq!(params[0].values, vec![9.0], "and are not written either");
     }

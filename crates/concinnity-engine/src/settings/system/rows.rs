@@ -277,14 +277,8 @@ impl SettingsState {
 mod tests {
     use super::*;
     use concinnity_core::components::ScrollRow;
-    use concinnity_core::ecs::Arena;
-    use concinnity_core::ecs::ComponentSlot;
-    use concinnity_core::ecs::ComponentStorage;
-    use concinnity_core::ecs::FrameContext;
     use concinnity_core::ecs::Ref;
-    use concinnity_core::ecs::Resources;
-    use concinnity_core::profile;
-    use concinnity_host::store::blob::BlobData;
+    use concinnity_core::ecs::World;
     use std::collections::HashSet;
 
     // A gated value label pulls in every element of the scroll row that holds
@@ -316,46 +310,6 @@ mod tests {
         assert_eq!(expand_dim_set(&gated, &[]), gated);
     }
 
-    // Owns the storage a PipelineContext borrows from. The helpers under test
-    // only touch components, so the blob / profile / resources stay empty.
-    struct TestWorld {
-        components: ComponentStorage,
-        blob: BlobData,
-        profile: profile::FrameProfile,
-        resources: Resources,
-        scratch: Arena,
-    }
-
-    impl TestWorld {
-        fn new() -> Self {
-            Self {
-                components: ComponentStorage::default(),
-                blob: BlobData::new(vec![Some(Vec::new())]),
-                profile: profile::FrameProfile::default(),
-                resources: Resources::new(),
-                scratch: Arena::with_capacity(64 * 1024),
-            }
-        }
-
-        fn push<C: ComponentSlot>(&mut self, c: C) {
-            self.components.push_typed(c);
-        }
-
-        fn push_identified<C: ComponentSlot>(&mut self, id: AssetId, c: C) {
-            self.ctx().push_identified(id, c);
-        }
-
-        fn ctx(&mut self) -> PipelineContext<'_> {
-            PipelineContext {
-                components: &mut self.components,
-                blob: &mut self.blob,
-                profile: &mut self.profile,
-                resources: &mut self.resources,
-                frame: FrameContext::new(&self.scratch),
-            }
-        }
-    }
-
     fn label(color: [f32; 3]) -> TextLabel {
         TextLabel {
             color,
@@ -375,10 +329,10 @@ mod tests {
     // alone; an id with no label is a no-op rather than a panic.
     #[test]
     fn set_label_content_writes_only_the_matching_label() {
-        let mut world = TestWorld::new();
+        let mut world = World::new();
         world.push_identified(AssetId(1), label([1.0; 3]));
         world.push_identified(AssetId(2), label([1.0; 3]));
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
 
         set_label_content(&mut ctx, AssetId(2), "High");
         let contents: Vec<&str> = ctx
@@ -399,7 +353,7 @@ mod tests {
     // no-op.
     #[test]
     fn set_sprite_x_moves_only_the_matching_sprite() {
-        let mut world = TestWorld::new();
+        let mut world = World::new();
         world.push_identified(
             AssetId(1),
             Sprite {
@@ -414,7 +368,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
 
         set_sprite_x(&mut ctx, AssetId(2), 42.0);
         assert_eq!(
@@ -435,11 +389,11 @@ mod tests {
     #[test]
     fn set_rows_grayed_grays_then_restores_authored_colors() {
         let authored = [[0.9, 0.9, 0.9], [0.2, 0.6, 1.0]];
-        let mut world = TestWorld::new();
+        let mut world = World::new();
         world.push_identified(AssetId(1), label(authored[0]));
         world.push_identified(AssetId(2), label(authored[1]));
         let rows = [(AssetId(1), authored[0]), (AssetId(2), authored[1])];
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
 
         set_rows_grayed(&mut ctx, &rows, true);
         assert!(
@@ -461,7 +415,7 @@ mod tests {
     // no label, and non-setting actions.
     #[test]
     fn capture_row_labels_returns_a_matching_rows_labels_and_colors() {
-        let mut world = TestWorld::new();
+        let mut world = World::new();
         for id in [1, 2, 3, 4, 5, 20] {
             world.push_identified(AssetId(id), label([id as f32 / 100.0; 3]));
         }
@@ -497,7 +451,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
 
         let captured = capture_row_labels(&mut ctx, &[SettingKey::ShadowMapSize]);
         let expected: Vec<(AssetId, [f32; 3])> = [1, 2, 3, 4, 5]
@@ -511,13 +465,13 @@ mod tests {
     // menu simply has no gray-out set.
     #[test]
     fn capture_row_labels_without_a_matching_key_captures_nothing() {
-        let mut world = TestWorld::new();
+        let mut world = World::new();
         world.push_identified(AssetId(1), label([1.0; 3]));
         world.push(region(
             serde_json::json!({"setting": {"key": "shadow_map_size", "verb": "next"}}),
             Some(1),
         ));
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
 
         assert!(capture_row_labels(&mut ctx, &[SettingKey::Resolution]).is_empty());
     }
@@ -528,7 +482,7 @@ mod tests {
     fn capture_perf_sub_rows_applies_the_initial_gray() {
         let authored = [0.8, 0.8, 0.8];
         for (perf_stats, expected) in [(false, DISABLED_ROW_COLOR), (true, authored)] {
-            let mut world = TestWorld::new();
+            let mut world = World::new();
             world.push_identified(AssetId(1), label(authored));
             world.push(region(
                 serde_json::json!({"setting": {"key": "show_fps", "verb": "next"}}),
@@ -536,7 +490,7 @@ mod tests {
             ));
             let mut state = SettingsState::for_tests();
             state.graphics.perf_stats = perf_stats;
-            let mut ctx = world.ctx();
+            let mut ctx = world.context();
 
             state.capture_perf_sub_rows(&mut ctx);
             assert_eq!(state.perf_sub_row_labels, [(AssetId(1), authored)]);
@@ -553,7 +507,7 @@ mod tests {
             (WindowMode::Borderless, DISABLED_ROW_COLOR),
             (WindowMode::Fullscreen, authored),
         ] {
-            let mut world = TestWorld::new();
+            let mut world = World::new();
             world.push_identified(AssetId(1), label(authored));
             world.push(region(
                 serde_json::json!({"setting": {"key": "resolution", "verb": "next"}}),
@@ -561,7 +515,7 @@ mod tests {
             ));
             let mut state = SettingsState::for_tests();
             state.window_args.mode = mode;
-            let mut ctx = world.ctx();
+            let mut ctx = world.context();
 
             state.capture_resolution_row(&mut ctx);
             assert_eq!(state.resolution_row_labels, [(AssetId(1), authored)]);
@@ -577,7 +531,7 @@ mod tests {
     // rows are not cycle rows.
     #[test]
     fn init_cycle_value_labels_maps_each_cycle_key_to_its_label() {
-        let mut world = TestWorld::new();
+        let mut world = World::new();
         world.push(region(
             serde_json::json!({"setting": {"key": "vsync", "verb": "next"}}),
             Some(1),
@@ -591,7 +545,7 @@ mod tests {
             Some(2),
         ));
         let mut state = SettingsState::for_tests();
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
 
         state.init_cycle_value_labels(&mut ctx);
         assert_eq!(state.cycle_value_labels.len(), 1);

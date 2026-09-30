@@ -8,11 +8,11 @@
 
 use concinnity_core::animation::skeleton;
 use concinnity_core::components::{GlobalTransform, Prop, RenderHandle, SkeletonPose};
-use concinnity_core::ecs::{Entity, SkinnedMeshHandle};
+use concinnity_core::ecs::{Entity, SkinnedMeshHandle, World};
 use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::render::snapshot::RenderSnapshot;
 
-use super::{BenchWorld, bench};
+use super::bench;
 use crate::gfx::system::GraphicsSystem;
 
 const SMALL: usize = 100;
@@ -31,15 +31,13 @@ fn model_at(i: usize) -> [[f32; 4]; 4] {
 // `count` entities each holding one draw slot, with GlobalTransform authored
 // directly so the propagation pass (benched on its own in `transforms`) stays
 // out of the measurement.
-fn draw_world(count: usize) -> (BenchWorld, Vec<Entity>) {
-    let mut world = BenchWorld::new();
+fn draw_world(count: usize) -> (World, Vec<Entity>) {
+    let mut world = World::new();
     let entities = (0..count)
         .map(|i| {
-            let entity = world.components.push_typed(Prop::default());
-            world
-                .components
-                .insert_typed(entity, GlobalTransform(model_at(i)));
-            world.components.insert_typed(
+            let entity = world.push(Prop::default());
+            world.insert(entity, GlobalTransform(model_at(i)));
+            world.insert(
                 entity,
                 RenderHandle {
                     draws: [DrawIndex::from_usize(i)].into(),
@@ -52,11 +50,11 @@ fn draw_world(count: usize) -> (BenchWorld, Vec<Entity>) {
 }
 
 // `count` skinned poses at a production joint count.
-fn pose_world(count: usize) -> BenchWorld {
-    let mut world = BenchWorld::new();
+fn pose_world(count: usize) -> World {
+    let mut world = World::new();
     for i in 0..count {
-        let entity = world.components.push_typed(Prop::default());
-        world.components.insert_typed(
+        let entity = world.push(Prop::default());
+        world.insert(
             entity,
             SkeletonPose {
                 mesh_id: SkinnedMeshHandle(i as u32),
@@ -86,9 +84,9 @@ fn render_extraction() {
         let (mut world, _) = draw_world(count);
         let mut gs = GraphicsSystem::new(None);
         let mut snap = RenderSnapshot::default();
-        gs.extract(&mut world.ctx(), &mut snap);
+        gs.extract(&mut world.context(), &mut snap);
         bench(name, count as u64, || {
-            gs.extract(&mut world.ctx(), &mut snap);
+            gs.extract(&mut world.context(), &mut snap);
         });
     }
 
@@ -99,14 +97,14 @@ fn render_extraction() {
         let (mut world, _) = draw_world(count);
         let mut gs = GraphicsSystem::new(None);
         let mut snap = RenderSnapshot::default();
-        gs.extract(&mut world.ctx(), &mut snap);
+        gs.extract(&mut world.context(), &mut snap);
         let mut pass = 0.0f32;
         bench(name, count as u64, || {
             pass += 0.001;
-            for g in world.ctx().query_slice_mut::<GlobalTransform>() {
+            for g in world.context().query_slice_mut::<GlobalTransform>() {
                 g.0[3][1] = pass;
             }
-            gs.extract(&mut world.ctx(), &mut snap);
+            gs.extract(&mut world.context(), &mut snap);
         });
     }
 
@@ -116,15 +114,15 @@ fn render_extraction() {
         let mut world = pose_world(SMALL);
         let mut gs = GraphicsSystem::new(None);
         let mut snap = RenderSnapshot::default();
-        gs.extract(&mut world.ctx(), &mut snap);
+        gs.extract(&mut world.context(), &mut snap);
         bench(
             &format!("extract_poses_{JOINTS}j/100"),
             SMALL as u64,
             || {
-                for pose in world.ctx().query_mut::<SkeletonPose>() {
+                for pose in world.context().query_mut::<SkeletonPose>() {
                     pose.updated = true;
                 }
-                gs.extract(&mut world.ctx(), &mut snap);
+                gs.extract(&mut world.context(), &mut snap);
             },
         );
     }

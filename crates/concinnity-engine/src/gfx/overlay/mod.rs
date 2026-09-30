@@ -391,16 +391,12 @@ impl OverlaySystem {
 mod tests {
     use super::*;
     use concinnity_core::components::{SpriteFit, TextAlign};
-    use concinnity_core::ecs::Arena;
-    use concinnity_core::ecs::FrameContext;
     use concinnity_core::ecs::Ref;
     use concinnity_core::ecs::{
-        ComponentSlot, ComponentStorage, CursorState, DropdownView, FontHandle, HudLayers,
-        MenuOverride, OpenDropdown, Resources, ScreenStack,
+        CursorState, DropdownView, FontHandle, HudLayers, MenuOverride, OpenDropdown, ScreenStack,
+        World,
     };
     use concinnity_core::gfx::font;
-    use concinnity_core::profile::FrameProfile;
-    use concinnity_host::store::blob::BlobData;
 
     const FONT: FontHandle = FontHandle(0);
     const SCREEN: AssetId = AssetId(50);
@@ -540,47 +536,11 @@ mod tests {
         }
     }
 
-    // Owns the storage a PipelineContext borrows from. The overlay build reads
-    // no payloads, so the blob stays empty.
-    struct TestWorld {
-        components: ComponentStorage,
-        blob: BlobData,
-        profile: FrameProfile,
-        resources: Resources,
-        scratch: Arena,
-    }
-
-    impl TestWorld {
-        fn new() -> Self {
-            Self {
-                components: ComponentStorage::default(),
-                blob: BlobData::new(vec![Some(Vec::new())]),
-                profile: FrameProfile::default(),
-                resources: Resources::new(),
-                scratch: Arena::with_capacity(64 * 1024),
-            }
-        }
-
-        fn push_as<C: ComponentSlot>(&mut self, id: AssetId, c: C) {
-            self.ctx().push_identified(id, c);
-        }
-
-        fn ctx(&mut self) -> PipelineContext<'_> {
-            PipelineContext {
-                components: &mut self.components,
-                blob: &mut self.blob,
-                profile: &mut self.profile,
-                resources: &mut self.resources,
-                frame: FrameContext::new(&self.scratch),
-            }
-        }
-
-        // Build one frame at an explicit `elapsed`, so the caret blink is driven
-        // by the test rather than the wall clock.
-        fn build(&mut self, elapsed: f32) -> OverlayFrame {
-            let a = assets();
-            OverlaySystem::new().build_frame(&mut self.ctx(), &a, elapsed)
-        }
+    // Build one frame at an explicit `elapsed`, so the caret blink is driven by
+    // the test rather than the wall clock.
+    fn build(w: &mut World, elapsed: f32) -> OverlayFrame {
+        let a = assets();
+        OverlaySystem::new().build_frame(&mut w.context(), &a, elapsed)
     }
 
     // The x span of a call's quad, for reading a backdrop's mapped rect back out.
@@ -596,27 +556,27 @@ mod tests {
     // no frame and no menu state are published.
     #[test]
     fn step_without_overlay_assets_publishes_nothing() {
-        let mut w = TestWorld::new();
-        w.push_as(AssetId(1), sprite());
+        let mut w = World::new();
+        w.push_identified(AssetId(1), sprite());
         let mut sys = OverlaySystem::new();
-        sys.step(&mut w.ctx());
-        assert!(w.resources.get::<OverlayFrame>().is_none());
-        assert!(w.resources.get::<MenuActive>().is_none());
+        sys.step(&mut w.context());
+        assert!(w.resource::<OverlayFrame>().is_none());
+        assert!(w.resource::<MenuActive>().is_none());
     }
 
     // A step publishes the frame plus the menu state for the systems behind it,
     // and parks the assets back for the next tick.
     #[test]
     fn step_publishes_the_frame_and_parks_the_assets_back() {
-        let mut w = TestWorld::new();
-        w.push_as(AssetId(1), sprite());
-        w.resources.insert(assets());
+        let mut w = World::new();
+        w.push_identified(AssetId(1), sprite());
+        w.insert_resource(assets());
         let mut sys = OverlaySystem::new();
-        sys.step(&mut w.ctx());
-        assert_eq!(w.resources.get::<OverlayFrame>().unwrap().calls.len(), 1);
-        assert!(!w.resources.get::<MenuActive>().unwrap().0);
+        sys.step(&mut w.context());
+        assert_eq!(w.resource::<OverlayFrame>().unwrap().calls.len(), 1);
+        assert!(!w.resource::<MenuActive>().unwrap().0);
         assert!(
-            w.resources.get::<OverlayAssets>().is_some(),
+            w.resource::<OverlayAssets>().is_some(),
             "the assets go back for the next build"
         );
     }
@@ -626,25 +586,25 @@ mod tests {
     // visible behind its panels.
     #[test]
     fn step_menu_override_shadows_the_menu_state_but_not_world_hidden() {
-        let mut w = TestWorld::new();
-        w.resources.insert(assets());
-        w.resources.insert(MenuOverride(Some(true)));
+        let mut w = World::new();
+        w.insert_resource(assets());
+        w.insert_resource(MenuOverride(Some(true)));
         let mut sys = OverlaySystem::new();
-        sys.step(&mut w.ctx());
-        assert!(w.resources.get::<OverlayFrame>().unwrap().menu_active);
-        assert!(w.resources.get::<MenuActive>().unwrap().0);
+        sys.step(&mut w.context());
+        assert!(w.resource::<OverlayFrame>().unwrap().menu_active);
+        assert!(w.resource::<MenuActive>().unwrap().0);
 
         // A world whose own menu pauses and fully covers the scene, forced off:
         // the menu state follows the override while world_hidden keeps tracking
         // what is actually drawn.
-        let mut w = TestWorld::new();
-        w.push_as(AssetId(1), backdrop());
-        w.resources.insert(assets());
-        w.resources.insert(screen_stack(0));
-        w.resources.insert(MenuOverride(Some(false)));
+        let mut w = World::new();
+        w.push_identified(AssetId(1), backdrop());
+        w.insert_resource(assets());
+        w.insert_resource(screen_stack(0));
+        w.insert_resource(MenuOverride(Some(false)));
         let mut sys = OverlaySystem::new();
-        sys.step(&mut w.ctx());
-        let frame = w.resources.get::<OverlayFrame>().unwrap();
+        sys.step(&mut w.context());
+        let frame = w.resource::<OverlayFrame>().unwrap();
         assert!(!frame.menu_active);
         assert!(frame.world_hidden);
     }
@@ -652,13 +612,13 @@ mod tests {
     // `MenuOverride(None)` leaves the world's own menu logic in charge.
     #[test]
     fn step_menu_override_of_none_defers_to_the_world() {
-        let mut w = TestWorld::new();
-        w.resources.insert(assets());
-        w.resources.insert(screen_stack(0));
-        w.resources.insert(MenuOverride(None));
+        let mut w = World::new();
+        w.insert_resource(assets());
+        w.insert_resource(screen_stack(0));
+        w.insert_resource(MenuOverride(None));
         let mut sys = OverlaySystem::new();
-        sys.step(&mut w.ctx());
-        assert!(w.resources.get::<OverlayFrame>().unwrap().menu_active);
+        sys.step(&mut w.context());
+        assert!(w.resource::<OverlayFrame>().unwrap().menu_active);
     }
 
     // The build measures against the viewport InputSystem last sampled, falling
@@ -666,16 +626,16 @@ mod tests {
     // stretches to exactly that, so its quad reads the viewport back out.
     #[test]
     fn viewport_follows_frame_input_and_falls_back_to_the_init_size() {
-        let mut w = TestWorld::new();
-        w.push_as(AssetId(1), backdrop());
-        let frame = w.build(0.0);
+        let mut w = World::new();
+        w.push_identified(AssetId(1), backdrop());
+        let frame = build(&mut w, 0.0);
         assert_eq!(x_span(&frame.calls[0]), (0.0, REF_W));
 
-        w.resources.insert(FrameInput {
+        w.insert_resource(FrameInput {
             viewport: [800.0, 600.0],
             ..Default::default()
         });
-        let frame = w.build(0.0);
+        let frame = build(&mut w, 0.0);
         assert_eq!(x_span(&frame.calls[0]), (0.0, 800.0));
     }
 
@@ -684,32 +644,32 @@ mod tests {
     // screen's whole content lifts above the layer-0 HUD.
     #[test]
     fn screen_layers_spread_onto_the_elements_the_screen_owns() {
-        let mut w = TestWorld::new();
-        w.push_as(AssetId(1), label("hud"));
-        w.push_as(
+        let mut w = World::new();
+        w.push_identified(AssetId(1), label("hud"));
+        w.push_identified(
             AssetId(2),
             Sprite {
                 screen: Some(Ref::new(SCREEN)),
                 ..sprite()
             },
         );
-        w.push_as(
+        w.push_identified(
             AssetId(3),
             TextLabel {
                 screen: Some(Ref::new(SCREEN)),
                 ..label("menu")
             },
         );
-        w.push_as(
+        w.push_identified(
             AssetId(4),
             TextInput {
                 screen: Some(Ref::new(SCREEN)),
                 ..text_input()
             },
         );
-        w.resources.insert(screen_stack(7));
+        w.insert_resource(screen_stack(7));
 
-        let frame = w.build(0.0);
+        let frame = build(&mut w, 0.0);
         // The HUD label is layer 0 and sorts first; everything the screen owns
         // takes its layer.
         assert_eq!(frame.calls[0].layer, 0);
@@ -724,17 +684,17 @@ mod tests {
     // an element pointing at a screen that is not in the stack does too.
     #[test]
     fn elements_outside_the_active_stack_stay_at_layer_zero() {
-        let mut w = TestWorld::new();
-        w.push_as(AssetId(1), sprite());
-        w.push_as(
+        let mut w = World::new();
+        w.push_identified(AssetId(1), sprite());
+        w.push_identified(
             AssetId(2),
             Sprite {
                 screen: Some(Ref::new(AssetId(99))),
                 ..sprite()
             },
         );
-        w.resources.insert(screen_stack(7));
-        let frame = w.build(0.0);
+        w.insert_resource(screen_stack(7));
+        let frame = build(&mut w, 0.0);
         assert!(frame.calls.iter().all(|c| c.layer == 0));
     }
 
@@ -743,23 +703,22 @@ mod tests {
     // order.
     #[test]
     fn editor_layer_overrides_lift_elements_above_screen_layers() {
-        let mut w = TestWorld::new();
-        w.push_as(
+        let mut w = World::new();
+        w.push_identified(
             AssetId(1),
             Sprite {
                 screen: Some(Ref::new(SCREEN)),
                 ..sprite()
             },
         );
-        w.push_as(AssetId(2), sprite());
-        w.resources.insert(screen_stack(7));
-        w.resources
-            .insert(HudLayers(std::collections::BTreeMap::from([(
-                AssetId(2),
-                3,
-            )])));
+        w.push_identified(AssetId(2), sprite());
+        w.insert_resource(screen_stack(7));
+        w.insert_resource(HudLayers(std::collections::BTreeMap::from([(
+            AssetId(2),
+            3,
+        )])));
 
-        let frame = w.build(0.0);
+        let frame = build(&mut w, 0.0);
         // The screen sprite sorts below the editor panel, which sits in the
         // reserved band regardless of the screen's own layer.
         assert_eq!(frame.calls[0].layer, 7);
@@ -771,20 +730,19 @@ mod tests {
     // growing a fresh one.
     #[test]
     fn a_recycled_draw_list_backs_the_next_build() {
-        let mut w = TestWorld::new();
-        w.push_as(AssetId(1), sprite());
+        let mut w = World::new();
+        w.push_identified(AssetId(1), sprite());
         let a = assets();
         let mut sys = OverlaySystem::new();
-        let frame = sys.build_frame(&mut w.ctx(), &a, 0.0);
+        let frame = sys.build_frame(&mut w.context(), &a, 0.0);
         assert_eq!(frame.calls.len(), 1);
         let spent_ptr = frame.calls.as_ptr();
-        w.resources.insert(OverlayRecycle(frame.calls));
-        let frame = sys.build_frame(&mut w.ctx(), &a, 0.0);
+        w.insert_resource(OverlayRecycle(frame.calls));
+        let frame = sys.build_frame(&mut w.context(), &a, 0.0);
         assert_eq!(frame.calls.as_ptr(), spent_ptr, "list backing reused");
         assert_eq!(frame.calls.len(), 1);
         assert!(
-            w.resources
-                .get::<OverlayRecycle>()
+            w.resource::<OverlayRecycle>()
                 .is_none_or(|r| r.0.is_empty()),
             "the spent list was consumed"
         );
@@ -794,10 +752,10 @@ mod tests {
     // sort is skipped and draw order stays pure insertion order.
     #[test]
     fn draw_order_is_insertion_order_without_any_layers() {
-        let mut w = TestWorld::new();
-        w.push_as(AssetId(1), sprite());
-        w.push_as(AssetId(2), label("hud"));
-        let frame = w.build(0.0);
+        let mut w = World::new();
+        w.push_identified(AssetId(1), sprite());
+        w.push_identified(AssetId(2), label("hud"));
+        let frame = build(&mut w, 0.0);
         assert!(frame.calls.iter().all(|c| c.layer == 0));
         // Sprites first, then text: the label's call follows the sprite's.
         assert_eq!(frame.calls.len(), 2);
@@ -807,11 +765,11 @@ mod tests {
     // escapes the scroll band's scissor even though the rows behind it clip.
     #[test]
     fn open_dropdown_draws_unclipped_over_the_menu() {
-        let mut w = TestWorld::new();
-        let before = w.build(0.0).calls.len();
+        let mut w = World::new();
+        let before = build(&mut w, 0.0).calls.len();
 
-        w.resources.insert(OpenDropdown(Some(dropdown_view())));
-        let frame = w.build(0.0);
+        w.insert_resource(OpenDropdown(Some(dropdown_view())));
+        let frame = build(&mut w, 0.0);
         assert!(frame.calls.len() > before, "the list added draw calls");
         assert!(
             frame.calls.iter().all(|c| c.clip_rect.is_none()),
@@ -824,29 +782,29 @@ mod tests {
     // row cards, which drew it correctly but invisibly.
     #[test]
     fn open_dropdown_sorts_above_the_menus_row_cards() {
-        let mut w = TestWorld::new();
+        let mut w = World::new();
         // The menu behind the list: an opaque full-canvas dim and a row card,
         // both owned by the active screen.
-        w.push_as(AssetId(1), backdrop());
-        w.push_as(
+        w.push_identified(AssetId(1), backdrop());
+        w.push_identified(
             AssetId(2),
             Sprite {
                 screen: Some(Ref::new(SCREEN)),
                 ..sprite()
             },
         );
-        w.push_as(
+        w.push_identified(
             AssetId(3),
             TextLabel {
                 screen: Some(Ref::new(SCREEN)),
                 ..label("Window Mode")
             },
         );
-        w.resources.insert(screen_stack(7));
-        let menu = w.build(0.0).calls.len();
+        w.insert_resource(screen_stack(7));
+        let menu = build(&mut w, 0.0).calls.len();
 
-        w.resources.insert(OpenDropdown(Some(dropdown_view())));
-        let frame = w.build(0.0);
+        w.insert_resource(OpenDropdown(Some(dropdown_view())));
+        let frame = build(&mut w, 0.0);
         assert!(frame.calls.len() > menu, "the list added draw calls");
         // The menu's own calls keep their screen layer and the list's tail sits
         // above every one of them.
@@ -868,17 +826,16 @@ mod tests {
     // to draw on top of it.
     #[test]
     fn open_dropdown_sorts_above_the_editor_layer_band() {
-        let mut w = TestWorld::new();
-        w.push_as(AssetId(2), sprite());
-        w.resources
-            .insert(HudLayers(std::collections::BTreeMap::from([(
-                AssetId(2),
-                3,
-            )])));
-        let panel = w.build(0.0).calls.len();
+        let mut w = World::new();
+        w.push_identified(AssetId(2), sprite());
+        w.insert_resource(HudLayers(std::collections::BTreeMap::from([(
+            AssetId(2),
+            3,
+        )])));
+        let panel = build(&mut w, 0.0).calls.len();
 
-        w.resources.insert(OpenDropdown(Some(dropdown_view())));
-        let frame = w.build(0.0);
+        w.insert_resource(OpenDropdown(Some(dropdown_view())));
+        let frame = build(&mut w, 0.0);
         let (below, list) = frame.calls.split_at(panel);
         assert!(below.iter().all(|c| c.layer == HUD_OVERRIDE_LAYER_BASE + 3));
         assert!(list.iter().all(|c| c.layer == DROPDOWN_LAYER));
@@ -887,9 +844,9 @@ mod tests {
     // A closed dropdown synthesizes nothing.
     #[test]
     fn closed_dropdown_builds_no_list() {
-        let mut w = TestWorld::new();
-        w.resources.insert(OpenDropdown(None));
-        assert!(w.build(0.0).calls.is_empty());
+        let mut w = World::new();
+        w.insert_resource(OpenDropdown(None));
+        assert!(build(&mut w, 0.0).calls.is_empty());
     }
 
     // A field's synthesized box / text / caret carry no asset id of their own, so
@@ -897,15 +854,14 @@ mod tests {
     // a focused panel's fields would drop below it.
     #[test]
     fn text_input_calls_take_the_fields_own_layer() {
-        let mut w = TestWorld::new();
-        w.push_as(AssetId(4), text_input());
-        w.push_as(AssetId(1), sprite());
-        w.resources
-            .insert(HudLayers(std::collections::BTreeMap::from([(
-                AssetId(4),
-                2,
-            )])));
-        let frame = w.build(0.0);
+        let mut w = World::new();
+        w.push_identified(AssetId(4), text_input());
+        w.push_identified(AssetId(1), sprite());
+        w.insert_resource(HudLayers(std::collections::BTreeMap::from([(
+            AssetId(4),
+            2,
+        )])));
+        let frame = build(&mut w, 0.0);
         let field_layer = HUD_OVERRIDE_LAYER_BASE + 2;
         assert!(
             frame.calls.iter().any(|c| c.layer == field_layer),
@@ -924,19 +880,19 @@ mod tests {
     // gone on the second, so a focused field's caret does not sit solid.
     #[test]
     fn the_caret_draws_only_on_the_visible_half_of_the_blink() {
-        let mut w = TestWorld::new();
-        w.push_as(
+        let mut w = World::new();
+        w.push_identified(
             AssetId(4),
             TextInput {
                 focused: true,
                 ..text_input()
             },
         );
-        let visible = w.build(0.0).calls.len();
-        let dark = w.build(0.6).calls.len();
+        let visible = build(&mut w, 0.0).calls.len();
+        let dark = build(&mut w, 0.6).calls.len();
         assert_eq!(visible, dark + 1, "the caret is the one call that drops");
         // The period wraps, so the next cycle's first half draws it again.
-        assert_eq!(w.build(1.06).calls.len(), visible);
+        assert_eq!(build(&mut w, 1.06).calls.len(), visible);
     }
 
     // The step's blink clock accumulates frame time: a frame into the dark half
@@ -944,20 +900,20 @@ mod tests {
     // draws it again.
     #[test]
     fn the_step_blinks_the_caret_by_frame_time() {
-        let mut w = TestWorld::new();
-        w.push_as(
+        let mut w = World::new();
+        w.push_identified(
             AssetId(4),
             TextInput {
                 focused: true,
                 ..text_input()
             },
         );
-        w.resources.insert(assets());
+        w.insert_resource(assets());
         let mut sys = OverlaySystem::new();
-        let mut step = |w: &mut TestWorld, dt: f32| {
-            w.resources.insert(FrameTime { dt, elapsed: 0.0 });
-            sys.step(&mut w.ctx());
-            w.resources.get::<OverlayFrame>().unwrap().calls.len()
+        let mut step = |w: &mut World, dt: f32| {
+            w.insert_resource(FrameTime { dt, elapsed: 0.0 });
+            sys.step(&mut w.context());
+            w.resource::<OverlayFrame>().unwrap().calls.len()
         };
         let visible = step(&mut w, 0.0);
         assert_eq!(step(&mut w, 0.6), visible - 1, "the dark half");
@@ -967,8 +923,8 @@ mod tests {
     // A hidden field builds nothing at all.
     #[test]
     fn hidden_text_inputs_build_no_overlay() {
-        let mut w = TestWorld::new();
-        w.push_as(
+        let mut w = World::new();
+        w.push_identified(
             AssetId(4),
             TextInput {
                 visible: false,
@@ -976,22 +932,22 @@ mod tests {
                 ..text_input()
             },
         );
-        assert!(w.build(0.0).calls.is_empty());
+        assert!(build(&mut w, 0.0).calls.is_empty());
     }
 
     // The in-engine arrow draws for a visible, opaque follow_cursor sprite, and
     // is drawn last so it sits over everything.
     #[test]
     fn an_opaque_follow_cursor_sprite_draws_the_ui_arrow() {
-        let mut w = TestWorld::new();
-        w.push_as(
+        let mut w = World::new();
+        w.push_identified(
             AssetId(1),
             Sprite {
                 follow_cursor: true,
                 ..sprite()
             },
         );
-        let frame = w.build(0.0);
+        let frame = build(&mut w, 0.0);
         assert!(frame.want_ui_cursor);
         assert!(!frame.calls.is_empty(), "the arrow was shaped");
     }
@@ -1001,25 +957,24 @@ mod tests {
     // would sort under the opaque menu backdrop it points at.
     #[test]
     fn the_ui_arrow_sorts_above_screen_editor_and_dropdown_layers() {
-        let mut w = TestWorld::new();
-        w.push_as(AssetId(1), backdrop());
-        w.push_as(AssetId(2), sprite());
-        w.push_as(
+        let mut w = World::new();
+        w.push_identified(AssetId(1), backdrop());
+        w.push_identified(AssetId(2), sprite());
+        w.push_identified(
             AssetId(3),
             Sprite {
                 follow_cursor: true,
                 ..sprite()
             },
         );
-        w.resources.insert(screen_stack(7));
-        w.resources.insert(OpenDropdown(Some(dropdown_view())));
-        w.resources
-            .insert(HudLayers(std::collections::BTreeMap::from([(
-                AssetId(2),
-                3,
-            )])));
+        w.insert_resource(screen_stack(7));
+        w.insert_resource(OpenDropdown(Some(dropdown_view())));
+        w.insert_resource(HudLayers(std::collections::BTreeMap::from([(
+            AssetId(2),
+            3,
+        )])));
 
-        let frame = w.build(0.0);
+        let frame = build(&mut w, 0.0);
         let layers: Vec<i32> = frame.calls.iter().map(|c| c.layer).collect();
         let cursor = *layers.last().expect("the arrow was shaped");
         assert!(
@@ -1032,8 +987,8 @@ mod tests {
     // cursor stays in charge.
     #[test]
     fn a_transparent_or_hidden_cursor_sprite_draws_no_arrow() {
-        let mut w = TestWorld::new();
-        w.push_as(
+        let mut w = World::new();
+        w.push_identified(
             AssetId(1),
             Sprite {
                 follow_cursor: true,
@@ -1041,7 +996,7 @@ mod tests {
                 ..sprite()
             },
         );
-        w.push_as(
+        w.push_identified(
             AssetId(2),
             Sprite {
                 follow_cursor: true,
@@ -1049,7 +1004,7 @@ mod tests {
                 ..sprite()
             },
         );
-        let frame = w.build(0.0);
+        let frame = build(&mut w, 0.0);
         assert!(!frame.want_ui_cursor);
         assert!(frame.calls.is_empty());
     }
@@ -1058,19 +1013,19 @@ mod tests {
     // lingering at the edge.
     #[test]
     fn the_ui_arrow_hides_when_the_real_cursor_leaves_the_window() {
-        let mut w = TestWorld::new();
-        w.push_as(
+        let mut w = World::new();
+        w.push_identified(
             AssetId(1),
             Sprite {
                 follow_cursor: true,
                 ..sprite()
             },
         );
-        w.resources.insert(CursorState {
+        w.insert_resource(CursorState {
             pos: (10.0, 10.0),
             outside_window: true,
         });
-        let frame = w.build(0.0);
+        let frame = build(&mut w, 0.0);
         assert!(!frame.want_ui_cursor);
         assert!(frame.calls.is_empty(), "the arrow is not shaped either");
     }
@@ -1079,62 +1034,62 @@ mod tests {
     // passthrough overlay shows without pausing.
     #[test]
     fn menu_active_follows_the_stacks_pauses_world() {
-        let mut w = TestWorld::new();
-        assert!(!w.build(0.0).menu_active, "no stack, no menu");
+        let mut w = World::new();
+        assert!(!build(&mut w, 0.0).menu_active, "no stack, no menu");
 
-        w.resources.insert(screen_stack(0));
-        assert!(w.build(0.0).menu_active);
+        w.insert_resource(screen_stack(0));
+        assert!(build(&mut w, 0.0).menu_active);
 
-        w.resources.insert(ScreenStack {
+        w.insert_resource(ScreenStack {
             pauses_world: false,
             ..screen_stack(0)
         });
-        assert!(!w.build(0.0).menu_active);
+        assert!(!build(&mut w, 0.0).menu_active);
     }
 
     // The world render is skipped only when a paused menu is backed by an opaque
     // full-canvas backdrop: nothing of the scene would be visible anyway.
     #[test]
     fn world_hidden_needs_a_paused_menu_behind_an_opaque_backdrop() {
-        let mut w = TestWorld::new();
-        w.push_as(AssetId(1), backdrop());
-        w.resources.insert(screen_stack(0));
-        assert!(w.build(0.0).world_hidden);
+        let mut w = World::new();
+        w.push_identified(AssetId(1), backdrop());
+        w.insert_resource(screen_stack(0));
+        assert!(build(&mut w, 0.0).world_hidden);
     }
 
     // A translucent dim keeps the world faintly visible, so it does not qualify;
     // neither does a backdrop that does not span the canvas.
     #[test]
     fn a_translucent_or_partial_backdrop_keeps_the_world_rendering() {
-        let mut w = TestWorld::new();
-        w.push_as(
+        let mut w = World::new();
+        w.push_identified(
             AssetId(1),
             Sprite {
                 tint: [0.0, 0.0, 0.0, 0.5],
                 ..backdrop()
             },
         );
-        w.resources.insert(screen_stack(0));
-        assert!(!w.build(0.0).world_hidden);
+        w.insert_resource(screen_stack(0));
+        assert!(!build(&mut w, 0.0).world_hidden);
 
-        let mut w = TestWorld::new();
-        w.push_as(
+        let mut w = World::new();
+        w.push_identified(
             AssetId(1),
             Sprite {
                 width: REF_W / 2.0,
                 ..backdrop()
             },
         );
-        w.resources.insert(screen_stack(0));
-        assert!(!w.build(0.0).world_hidden);
+        w.insert_resource(screen_stack(0));
+        assert!(!build(&mut w, 0.0).world_hidden);
     }
 
     // An opaque backdrop with no menu pausing behind it is just scene art: the
     // world still renders.
     #[test]
     fn an_opaque_backdrop_without_a_paused_menu_keeps_the_world_rendering() {
-        let mut w = TestWorld::new();
-        w.push_as(AssetId(1), backdrop());
-        assert!(!w.build(0.0).world_hidden);
+        let mut w = World::new();
+        w.push_identified(AssetId(1), backdrop());
+        assert!(!build(&mut w, 0.0).world_hidden);
     }
 }

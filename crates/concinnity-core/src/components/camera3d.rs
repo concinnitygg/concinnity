@@ -2,7 +2,6 @@
 //! this file, alongside the runtime component they bake into.
 
 use crate::components::Vocabulary;
-use crate::ecs::Component;
 use crate::ecs::SkinnedMeshHandle;
 use crate::ecs::de_opt_skinned_mesh_handle;
 use alloc::string::{String, ToString};
@@ -329,14 +328,6 @@ impl Camera3D {
             interact_requested: false,
             controller: args.controller,
         }
-    }
-}
-
-impl Component for Camera3D {
-    const NAME: &'static str = "Camera3D";
-
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::AssetError> {
-        crate::ecs::decode_baked(bytes)
     }
 }
 

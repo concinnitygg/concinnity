@@ -6,37 +6,20 @@
 //! two cells without being caught by the edge they share, and the probes an
 //! animation or a camera fires at it.
 
+use super::fixtures::{TICK, awake, drop_ball, position, step_for};
 use crate::physics::{
     BodyHandle, CharacterMoveInput, ColliderShape, DynamicParams, GRAVITY, LayerMask, ShapeCast,
-    SimConfig, Simulation,
+    Simulation,
 };
 use alloc::vec;
 use alloc::vec::Vec;
 
-const TICK: f32 = 1.0 / 60.0;
 /// The terrain fixtures are twenty units square.
 const EXTENT: f32 = 20.0;
 const HALF_HEIGHT: f32 = 0.6;
 const RADIUS: f32 = 0.3;
 /// Distance from a character capsule's center to the ground it stands on.
 const STAND: f32 = HALF_HEIGHT + RADIUS;
-
-fn params(friction: f32) -> DynamicParams {
-    DynamicParams {
-        mass: 1.0,
-        friction,
-        restitution: 0.0,
-        gravity_scale: 1.0,
-        linear_damping: 0.0,
-    }
-}
-
-fn awake() -> SimConfig {
-    SimConfig {
-        allow_sleep: false,
-        ..SimConfig::default()
-    }
-}
 
 /// A world whose only fixed body is a height grid built from `height`, with
 /// the handle naming that grid.
@@ -77,33 +60,19 @@ fn slope(capacity: usize) -> (Simulation, BodyHandle) {
     terrain(9, capacity, |x, _| -x * 0.25)
 }
 
-fn drop_ball(sim: &mut Simulation, pos: [f32; 3], friction: f32) -> BodyHandle {
-    sim.add_dynamic(
-        &ColliderShape::Ball { radius: 0.5 },
-        pos,
-        [0.0; 3],
-        params(friction),
-        LayerMask::ALL,
-    )
-    .expect("room for the ball")
-}
-
-fn step_for(sim: &mut Simulation, ticks: usize) {
-    for _ in 0..ticks {
-        sim.step(TICK);
-    }
-}
-
-fn position(sim: &Simulation, handle: BodyHandle) -> [f32; 3] {
-    sim.body_pose(handle).expect("a live body").0
-}
-
 // The first thing terrain has to do, and the one that fails quietly: hold a
 // body up without letting it settle a millimeter lower every second.
 #[test]
 fn a_body_rests_on_flat_terrain_without_sinking() {
     let (mut sim, _ground) = flat(2);
-    let ball = drop_ball(&mut sim, [1.3, 3.0, -2.1], 0.6);
+    let ball = drop_ball(
+        &mut sim,
+        [1.3, 3.0, -2.1],
+        DynamicParams {
+            friction: 0.6,
+            ..Default::default()
+        },
+    );
     step_for(&mut sim, 300);
 
     let landed = position(&sim, ball);
@@ -138,7 +107,10 @@ fn a_box_rests_flat_on_terrain_rather_than_tipping() {
             },
             [-1.0, 2.0, 1.7],
             [0.0; 3],
-            params(0.6),
+            DynamicParams {
+                friction: 0.6,
+                ..Default::default()
+            },
             LayerMask::ALL,
         )
         .expect("room for the box");
@@ -155,7 +127,14 @@ fn a_box_rests_flat_on_terrain_rather_than_tipping() {
 fn a_body_rolls_downhill_on_sloping_terrain() {
     let (mut sim, _ground) = slope(2);
     // A frictionless ball on a one-in-four slope has to run downhill.
-    let ball = drop_ball(&mut sim, [-4.0, 2.0, 0.0], 0.0);
+    let ball = drop_ball(
+        &mut sim,
+        [-4.0, 2.0, 0.0],
+        DynamicParams {
+            friction: 0.0,
+            ..Default::default()
+        },
+    );
     step_for(&mut sim, 30);
     let start = position(&sim, ball);
     step_for(&mut sim, 180);
@@ -395,7 +374,14 @@ fn a_grid_that_names_no_surface_is_refused_rather_than_built() {
 #[test]
 fn removing_the_terrain_lets_what_was_standing_on_it_fall() {
     let (mut sim, ground) = flat(2);
-    let ball = drop_ball(&mut sim, [0.0, 2.0, 0.0], 0.6);
+    let ball = drop_ball(
+        &mut sim,
+        [0.0, 2.0, 0.0],
+        DynamicParams {
+            friction: 0.6,
+            ..Default::default()
+        },
+    );
     step_for(&mut sim, 240);
     let resting = position(&sim, ball);
     assert!((resting[1] - 0.5).abs() < 0.02, "{resting:?}");
@@ -415,7 +401,14 @@ fn removing_the_terrain_lets_what_was_standing_on_it_fall() {
 fn a_terrain_scene_runs_identically_twice() {
     let run = || {
         let (mut sim, _ground) = slope(3);
-        let ball = drop_ball(&mut sim, [-3.0, 2.0, 0.7], 0.4);
+        let ball = drop_ball(
+            &mut sim,
+            [-3.0, 2.0, 0.7],
+            DynamicParams {
+                friction: 0.4,
+                ..Default::default()
+            },
+        );
         let cube = sim
             .add_dynamic(
                 &ColliderShape::Cuboid {
@@ -423,7 +416,7 @@ fn a_terrain_scene_runs_identically_twice() {
                 },
                 [1.0, 2.0, -1.1],
                 [0.0, 25.0, 0.0],
-                params(0.5),
+                DynamicParams::default(),
                 LayerMask::ALL,
             )
             .expect("room for the box");
@@ -442,7 +435,14 @@ fn a_terrain_scene_runs_identically_twice() {
 /// way round.
 fn terrain_added_last(capacity: usize) -> (Simulation, BodyHandle) {
     let mut sim = Simulation::new(awake(), capacity + 1);
-    let ball = drop_ball(&mut sim, [1.3, 3.0, -2.1], 0.6);
+    let ball = drop_ball(
+        &mut sim,
+        [1.3, 3.0, -2.1],
+        DynamicParams {
+            friction: 0.6,
+            ..Default::default()
+        },
+    );
     let side = 9;
     let heights = vec![0.0f32; side * side];
     sim.add_heightfield(
@@ -465,7 +465,14 @@ fn terrain_added_last(capacity: usize) -> (Simulation, BodyHandle) {
 #[test]
 fn a_body_rests_the_same_whichever_order_the_terrain_was_added_in() {
     let (mut first, _ground) = flat(2);
-    let ball = drop_ball(&mut first, [1.3, 3.0, -2.1], 0.6);
+    let ball = drop_ball(
+        &mut first,
+        [1.3, 3.0, -2.1],
+        DynamicParams {
+            friction: 0.6,
+            ..Default::default()
+        },
+    );
     step_for(&mut first, 300);
     let terrain_first = position(&first, ball);
 
@@ -504,7 +511,14 @@ fn two_height_grids_in_one_world_never_collide_with_each_other() {
     )
     .expect("room for the second grid");
 
-    let ball = drop_ball(&mut sim, [1.3, 3.0, -2.1], 0.6);
+    let ball = drop_ball(
+        &mut sim,
+        [1.3, 3.0, -2.1],
+        DynamicParams {
+            friction: 0.6,
+            ..Default::default()
+        },
+    );
     step_for(&mut sim, 300);
 
     let landed = position(&sim, ball);

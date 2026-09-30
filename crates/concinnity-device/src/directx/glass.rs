@@ -309,9 +309,7 @@ mod tests {
     // its own error and this skips rather than failing.
     #[test]
     fn glass_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         for msaa in [1u32, 4] {
             super::compile_glass_shaders(msaa, false)
                 .unwrap_or_else(|e| panic!("glass shaders (msaa={msaa}) must compile: {e}"));
@@ -324,9 +322,7 @@ mod tests {
     // `compile_glass_rt_shaders`.
     #[test]
     fn glass_rt_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         for msaa in [1u32, 4] {
             super::compile_glass_rt_shaders(msaa, false)
                 .unwrap_or_else(|e| panic!("glass_rt shaders (msaa={msaa}) must compile: {e}"));
@@ -337,9 +333,7 @@ mod tests {
     // applies the model matrix) and whose fragments carry the same SM 6.5 trace.
     #[test]
     fn glass_mesh_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         for msaa in [1u32, 4] {
             super::compile_glass_mesh_shaders(msaa, false)
                 .unwrap_or_else(|e| panic!("glass_mesh shaders (msaa={msaa}) must compile: {e}"));

@@ -67,14 +67,14 @@ macro_rules! for_each_component {
             stored: {
                 Window            => $crate::components::Window { gen, external, singleton, renders, consumed },
                 GraphicsConfig    => $crate::components::GraphicsConfig { gen, external, singleton, renders, consumed },
-                Shader            => $crate::components::Shader { manual, external, compiled, consumed },
-                Camera3D          => $crate::components::Camera3D { manual, external, useful_blank, live, args: Camera3D },
-                CameraTrack       => $crate::components::CameraTrack { manual, external, singleton, args: CameraTrack },
+                Shader            => $crate::components::Shader { gen, external, compiled, consumed },
+                Camera3D          => $crate::components::Camera3D { gen, external, useful_blank, live, args: Camera3D },
+                CameraTrack       => $crate::components::CameraTrack { gen, external, singleton, args: CameraTrack },
                 FrameInput        => $crate::components::FrameInput { gen, runtime },
                 Prop              => $crate::components::Prop { gen, external, renders, validate: prop, consumed: PropInstance },
                 RigidBody         => $crate::components::RigidBody { gen, external, validate: rigid_body },
                 PropBody          => $crate::components::PropBody { gen, external, consumed },
-                Room              => $crate::components::Room { manual, external, compiled, useful_blank, args: Room, consumed },
+                Room              => $crate::components::Room { gen, external, compiled, useful_blank, args: Room, consumed },
                 DirectionalLight  => $crate::components::DirectionalLight { gen, external, useful_blank, validate: directional_light },
                 PointLight        => $crate::components::PointLight { gen, external, useful_blank, validate: point_light },
                 SpotLight         => $crate::components::SpotLight { gen, external, useful_blank, validate: spot_light },
@@ -84,11 +84,11 @@ macro_rules! for_each_component {
                 Scene             => $crate::components::Scene { gen, external, consumed },
                 TextLabel         => $crate::components::TextLabel { gen, external, useful_blank, renders, live },
                 HitRegion         => $crate::components::HitRegion { gen, external, useful_blank, consumed },
-                File              => $crate::components::File { manual, external, compiled, args: File, consumed },
+                File              => $crate::components::File { gen, external, compiled, args: File, consumed },
                 BlockType         => $crate::components::BlockType { gen, external, useful_blank, consumed },
                 VoxelChunk        => $crate::components::VoxelChunk { gen, external, compiled, validate: voxel_chunk, consumed },
                 InstancedProp     => $crate::components::InstancedProp { gen, external, renders, validate: instanced_prop, consumed },
-                PostProcessConfig => $crate::components::PostProcessConfig { manual, external, singleton, consumed },
+                PostProcessConfig => $crate::components::PostProcessConfig { gen, external, singleton, consumed },
                 Animation         => $crate::components::Animation { gen, external, consumed },
                 SkeletonPose      => $crate::components::SkeletonPose { runtime, build: skeleton_pose },
                 StreamingConfig   => $crate::components::StreamingConfig { gen, external, singleton, consumed },
@@ -102,7 +102,7 @@ macro_rules! for_each_component {
                 PhysicsJoint             => $crate::components::PhysicsJoint { gen, external, consumed },
                 ParticleEmitter   => $crate::components::ParticleEmitter { gen, external, useful_blank, validate: particle_emitter, consumed },
                 WaterSurface      => $crate::components::WaterSurface { gen, external, useful_blank, renders, validate: water_surface, consumed },
-                SdfVolume         => $crate::components::SdfVolume { manual, external, compiled, renders, validate: sdf_volume, consumed },
+                SdfVolume         => $crate::components::SdfVolume { gen, external, compiled, renders, validate: sdf_volume, consumed },
                 GlassPanel        => $crate::components::GlassPanel { gen, external, useful_blank, validate: glass_panel, consumed },
                 LayoutContainer   => $crate::components::LayoutContainer { gen, external, renders, live },
                 PhysicsConfig     => $crate::components::PhysicsConfig { gen, external, singleton },
@@ -126,11 +126,11 @@ macro_rules! for_each_component {
                 RenderHandle      => $crate::components::RenderHandle { runtime },
                 Held              => $crate::components::Held { runtime },
                 Lifetime          => $crate::components::Lifetime { runtime },
-                Spawner           => $crate::components::Spawner { manual, external, args: Spawner },
+                Spawner           => $crate::components::Spawner { gen, external, args: Spawner },
                 DebugHud          => $crate::components::DebugHud { gen, external, renders },
                 AudioCue          => $crate::components::AudioCue { gen, external, useful_blank },
                 Story             => $crate::components::Story { gen, external },
-                AppConfig         => $crate::components::AppConfig { manual, external, singleton, args: AppConfig },
+                AppConfig         => $crate::components::AppConfig { gen, external, singleton, args: AppConfig },
                 AnimationGraph         => $crate::components::AnimationGraph { gen, external, consumed },
                 AnimationParams        => $crate::components::AnimationParams { runtime, build: anim_params },
                 CharacterRig      => $crate::components::CharacterRig { runtime, build: character_rig },
@@ -176,15 +176,12 @@ crate::for_each_component!(define_components);
 // Generate the trivial `impl Component` blocks from the shared component list.
 //
 // The runtime trait is small: a NAME, a `from_baked` blob loader, and the
-// optional payload injection hook. Most components are pure data
-// whose impl is mechanical, generated here from each list entry's compact
-// `{ ... }` metadata block. Entries whose impl is bespoke mark themselves
-// `manual` and keep their impl; their trailing flags (origin, args type)
-// are authoring metadata consumed only by the build-side registry in
-// concinnity-cook.
+// optional payload injection hook. Every stored component is pure data whose
+// impl is mechanical, generated here from each list entry's compact `{ ... }`
+// metadata block. Flags that only describe authoring are consumed by the
+// build-side registry in concinnity-cook.
 //
 // Metadata grammar (inside the braces):
-//   manual, <flags...>          -- skip; the impl is hand-written elsewhere
 //   gen, <flags...>             -- generated impl:
 //     external | runtime        -- the authoring origin (world-side only)
 //     compiled                  -- an `inject_locator` that stores into
@@ -229,9 +226,6 @@ macro_rules! cn_impl_components {
         $( cn_impl_components!(@one $variant $ty { $($meta)* }); )+
     };
 
-    // Bespoke impls opt out here; trailing flags are world-side metadata.
-    (@one $variant:ident $ty:path { manual $($rest:tt)* }) => {};
-
     // Generated impls: seed an empty method accumulator, then consume the flag
     // list one token at a time. Only `compiled` contributes runtime
     // code; the authoring flags are consumed (and used) by the world registry.
@@ -262,6 +256,9 @@ macro_rules! cn_impl_components {
     (@munch $variant:ident $ty:path [$($body:tt)*] , consumed: $surviving:ident $($rest:tt)*) => {
         cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
     };
+    (@munch $variant:ident $ty:path [$($body:tt)*] , args: $args:ident $($rest:tt)*) => {
+        cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
+    };
     (@munch $variant:ident $ty:path [$($body:tt)*] , $flag:ident $($rest:tt)*) => {
         cn_impl_components!(@munch $variant $ty [$($body)*] $($rest)*);
     };
@@ -279,11 +276,9 @@ macro_rules! cn_impl_components {
     };
 }
 
-// The generated trivial `impl Component` blocks: one per list entry marked
-// `gen`, expanded from its metadata. Entries marked `manual` keep the
-// hand-written impl in their own `components` module. Emitted here (rather than
-// in `components`) so the macro is in textual scope, alongside
-// `define_components`.
+// The generated `impl Component` blocks: one per list entry marked `gen`,
+// expanded from its metadata. Emitted here (rather than in `components`) so the
+// macro is in textual scope, alongside `define_components`.
 crate::for_each_component!(cn_impl_components);
 
 // Every registered type is a reference target under its registry name, so a

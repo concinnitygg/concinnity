@@ -574,8 +574,7 @@ pub trait Authored: serde::Serialize {
 }
 
 // Runtime-only entries are never authored, so they get no impl; every other
-// entry (including the `manual` ones, whose hand-written `Component` impl is
-// unrelated to authoring) resolves its authored type through `__meta_args_ty`.
+// entry resolves its authored type through `__meta_args_ty`.
 macro_rules! __authored_component {
     (
         stored: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? },

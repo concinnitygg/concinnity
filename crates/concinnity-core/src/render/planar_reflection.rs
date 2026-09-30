@@ -12,7 +12,7 @@
 //! `[nx, ny, nz, d]` with `n` unit-length, satisfying `n . p + d = 0` for points
 //! on it; `n . p + d > 0` is the side the normal points toward.
 
-use crate::math::sqrt;
+use crate::math::vec3::{dot, length};
 use crate::transform::{Mat4, mat4_inverse, mat4_mul};
 use alloc::vec::Vec;
 
@@ -56,7 +56,7 @@ fn dot4(a: Vec4, b: Vec4) -> f32 {
 // Normalize a plane so its normal is unit length (scaling d to match). A zero
 // normal is returned unchanged (degenerate, callers guard separately).
 pub(crate) fn normalize_plane(plane: Vec4) -> Vec4 {
-    let len = sqrt(plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]);
+    let len = length([plane[0], plane[1], plane[2]]);
     if len < 1e-12 {
         return plane;
     }
@@ -200,7 +200,7 @@ pub fn assign_planar_slots(planes: &[Vec4], max_slots: usize) -> PlanarAssignmen
     let mut slots: Vec<Option<usize>> = Vec::with_capacity(planes.len());
     for &raw in planes {
         let p = normalize_plane(raw);
-        let nlen = sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+        let nlen = length([p[0], p[1], p[2]]);
         if nlen < 1e-6 {
             // Degenerate normal: no usable plane, fall back to the probe cube.
             slots.push(None);
@@ -208,7 +208,7 @@ pub fn assign_planar_slots(planes: &[Vec4], max_slots: usize) -> PlanarAssignmen
         }
         let mut found = None;
         for (i, r) in representatives.iter().enumerate() {
-            let d = p[0] * r[0] + p[1] * r[1] + p[2] * r[2];
+            let d = dot([p[0], p[1], p[2]], [r[0], r[1], r[2]]);
             if d.abs() >= NORMAL_DOT_EPS {
                 // Align the representative to p's sign, then the two are the same
                 // surface iff their plane constants match.

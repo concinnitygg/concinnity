@@ -4,23 +4,16 @@
 //! line.
 
 use crate::components::{GlassPanel, InstancedProp, RectAreaLight, SpotLight};
-use crate::math::{cos, sqrt};
+use crate::math::cos;
+use crate::math::vec3::normalize_or;
 
 /// Widest half-angle a spot cone may open to. Past this the cone degenerates
 /// toward a hemisphere and the clustered sphere bound stops being useful.
 pub const SPOT_MAX_ANGLE_DEG: f32 = 89.9;
 
-// `v` scaled to unit length, or `fallback` when it is too short to have a
-// direction. The one degenerate-direction policy behind every authored
-// normal / direction field below.
-fn normalize_or(v: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
-    let len = sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-    if len < 1e-6 {
-        fallback
-    } else {
-        [v[0] / len, v[1] / len, v[2] / len]
-    }
-}
+// The length below which an authored normal / direction field has no
+// direction and takes its fallback.
+const MIN_DIRECTION_LEN: f32 = 1e-6;
 
 impl InstancedProp {
     /// Column-major model matrix for the i-th instance, or `None` when the
@@ -40,7 +33,7 @@ impl SpotLight {
     /// Unit-length cone axis, falling back to straight down when the authored
     /// `direction` is degenerate.
     pub fn unit_direction(&self) -> [f32; 3] {
-        normalize_or(self.direction, [0.0, -1.0, 0.0])
+        normalize_or(self.direction, MIN_DIRECTION_LEN, [0.0, -1.0, 0.0])
     }
 
     /// Cosine of the inner half-angle: the widest angle still at full brightness.
@@ -59,7 +52,7 @@ impl GlassPanel {
     /// `normal` is degenerate. The build-time quad generator and the runtime
     /// shader both rely on a usable normal.
     pub fn unit_normal(&self) -> [f32; 3] {
-        normalize_or(self.normal, [0.0, 0.0, 1.0])
+        normalize_or(self.normal, MIN_DIRECTION_LEN, [0.0, 0.0, 1.0])
     }
 }
 
@@ -67,7 +60,7 @@ impl RectAreaLight {
     /// Unit-length emission direction, falling back to straight down when the
     /// authored `normal` is degenerate (the panel default emits downward).
     pub fn unit_normal(&self) -> [f32; 3] {
-        normalize_or(self.normal, [0.0, -1.0, 0.0])
+        normalize_or(self.normal, MIN_DIRECTION_LEN, [0.0, -1.0, 0.0])
     }
 }
 

@@ -179,9 +179,9 @@ mod tests {
 
     #[test]
     fn from_config_carries_trace_resolution_and_shadows() {
-        use crate::components::RtReflectionResolution;
+        use crate::components::PassResolution;
         let cfg = PostProcessConfig {
-            rt_reflection_resolution: RtReflectionResolution::Quarter,
+            rt_reflection_resolution: PassResolution::Quarter,
             rt_reflection_shadows: false,
             ..Default::default()
         };

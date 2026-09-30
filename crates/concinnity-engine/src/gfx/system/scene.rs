@@ -85,11 +85,7 @@ impl GraphicsSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::Arena;
-    use concinnity_core::ecs::FrameContext;
-    use concinnity_core::ecs::{ComponentStorage, Resources};
-    use concinnity_core::profile::FrameProfile;
-    use concinnity_host::store::blob::BlobData;
+    use concinnity_core::ecs::World;
 
     // Collect the snapshot's pairs for assertions.
     fn snapshot_pairs(ctx: &PipelineContext) -> (Vec<Vec<DrawIndex>>, Vec<Option<AssetId>>) {
@@ -108,18 +104,8 @@ mod tests {
     // entities are always visible.
     #[test]
     fn snapshot_pairs_each_entity_draws_with_its_scene() {
-        let mut components = ComponentStorage::default();
-        let mut blob = BlobData::empty();
-        let mut profile = FrameProfile::default();
-        let mut resources = Resources::new();
-        let scratch = Arena::with_capacity(64 * 1024);
-        let mut ctx = PipelineContext {
-            components: &mut components,
-            blob: &mut blob,
-            profile: &mut profile,
-            resources: &mut resources,
-            frame: FrameContext::new(&scratch),
-        };
+        let mut world = World::new();
+        let mut ctx = world.context();
 
         // Entity in scene 7 with two draw slots.
         let a = ctx.components.spawn();
@@ -166,18 +152,8 @@ mod tests {
     // relights slots a hide request turned off.
     #[test]
     fn snapshot_blanks_hidden_entities_draws() {
-        let mut components = ComponentStorage::default();
-        let mut blob = BlobData::empty();
-        let mut profile = FrameProfile::default();
-        let mut resources = Resources::new();
-        let scratch = Arena::with_capacity(64 * 1024);
-        let mut ctx = PipelineContext {
-            components: &mut components,
-            blob: &mut blob,
-            profile: &mut profile,
-            resources: &mut resources,
-            frame: FrameContext::new(&scratch),
-        };
+        let mut world = World::new();
+        let mut ctx = world.context();
 
         let a = ctx.components.spawn();
         ctx.insert(
@@ -204,18 +180,8 @@ mod tests {
     // (it is not in the render set), so it never appears in the snapshot.
     #[test]
     fn snapshot_skips_scene_members_without_a_render_handle() {
-        let mut components = ComponentStorage::default();
-        let mut blob = BlobData::empty();
-        let mut profile = FrameProfile::default();
-        let mut resources = Resources::new();
-        let scratch = Arena::with_capacity(64 * 1024);
-        let mut ctx = PipelineContext {
-            components: &mut components,
-            blob: &mut blob,
-            profile: &mut profile,
-            resources: &mut resources,
-            frame: FrameContext::new(&scratch),
-        };
+        let mut world = World::new();
+        let mut ctx = world.context();
 
         let only_scene = ctx.components.spawn();
         ctx.insert(only_scene, SceneMember(AssetId(7)));

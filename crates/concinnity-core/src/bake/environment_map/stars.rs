@@ -7,6 +7,7 @@
 //! the background sits low enough that the map lights a scene only as a cold
 //! fill.
 
+use crate::math::vec3::dot;
 use alloc::vec::Vec;
 use core::f32::consts::PI;
 
@@ -130,7 +131,7 @@ fn splat(pixels: &mut [[f32; 3]], dir: [f32; 3], color: [f32; 3], u: f32, v: f32
         let (st, ct) = sin_cos(row_theta(row as u32));
         for col in (center_x - half_x)..=(center_x + half_x) {
             let d = direction((col as f32 + 0.5) / WIDTH as f32, st, ct);
-            let dot = d[0] * dir[0] + d[1] * dir[1] + d[2] * dir[2];
+            let dot = dot(d, dir);
             let falloff = exp(-2.0 * (1.0 - dot).max(0.0) * inv_sigma2);
             if falloff < STAR_CUTOFF {
                 continue;

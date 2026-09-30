@@ -10,12 +10,13 @@
 //! the vertical velocity, adds a tick of gravity to it, asks for the move, and
 //! zeroes the fall on landing.
 
+use super::fixtures::{TICK, add_floor};
+use crate::math::vec3::length;
 use crate::physics::{
     BodyHandle, CharacterCapsule, CharacterMove, CharacterMoveInput, ColliderShape, GRAVITY,
     LayerMask, Simulation,
 };
 
-const TICK: f32 = 1.0 / 60.0;
 const HALF_HEIGHT: f32 = 0.6;
 const RADIUS: f32 = 0.3;
 /// Distance from the capsule's center to the ground it stands on.
@@ -27,11 +28,6 @@ fn scene(capacity: usize) -> Simulation {
     let mut sim = Simulation::with_capacity(capacity + 1);
     sim.configure_character(45.0, 0.3, true);
     sim
-}
-
-/// A floor whose top surface is exactly `y = 0`.
-fn add_floor(sim: &mut Simulation) {
-    add_box(sim, [20.0, 0.5, 20.0], [0.0, -0.5, 0.0], [0.0; 3]);
 }
 
 fn add_box(sim: &mut Simulation, half_extents: [f32; 3], pos: [f32; 3], euler_deg: [f32; 3]) {
@@ -492,7 +488,7 @@ fn a_wedge_ends_the_move_instead_of_circling_inside_it() {
         mover.center[1] - jammed[1],
         mover.center[2] - jammed[2],
     ];
-    let drift = (moved[0] * moved[0] + moved[1] * moved[1] + moved[2] * moved[2]).sqrt();
+    let drift = length(moved);
     assert!(drift < 0.01, "still creeping {drift} into the wedge");
     assert!(mover.x().abs() < 0.35, "squeezed sideways to {}", mover.x());
     assert!(mover.grounded, "it never left the floor");

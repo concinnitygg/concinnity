@@ -289,25 +289,11 @@ impl SpawnSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::{Arena, ComponentStorage, FrameContext, Resources};
-    use concinnity_core::profile::FrameProfile;
-    use concinnity_host::store::blob::BlobData;
+    use concinnity_core::ecs::World;
 
-    // Build an isolated PipelineContext over fresh storage, with no backend.
+    // Build an isolated PipelineContext over a fresh world, with no backend.
     fn run<R>(body: impl FnOnce(&mut PipelineContext) -> R) -> R {
-        let mut components = ComponentStorage::default();
-        let mut blob = BlobData::empty();
-        let mut profile = FrameProfile::default();
-        let mut resources = Resources::new();
-        let scratch = Arena::with_capacity(64 * 1024);
-        let mut ctx = PipelineContext {
-            components: &mut components,
-            blob: &mut blob,
-            profile: &mut profile,
-            resources: &mut resources,
-            frame: FrameContext::new(&scratch),
-        };
-        body(&mut ctx)
+        body(&mut World::new().context())
     }
 
     #[test]

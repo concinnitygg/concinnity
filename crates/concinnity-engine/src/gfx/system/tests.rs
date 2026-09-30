@@ -1,9 +1,8 @@
 // GraphicsSystem unit tests: drive run_init and run_step against the
-// recording mock backend (gfx::mock_backend), a hand-assembled
-// PipelineContext, and an in-memory blob. No GPU device is created and the
-// on-disk settings store is never read or written: the injection seam
-// (GraphicsSystem::test_hooks) supplies the settings, the GPU profile, and
-// the backend factory.
+// recording mock backend (gfx::mock_backend) and a World over an in-memory
+// blob. No GPU device is created and the on-disk settings store is never read
+// or written: the injection seam (GraphicsSystem::test_hooks) supplies the
+// settings, the GPU profile, and the backend factory.
 
 use concinnity_core::bake::texture;
 use concinnity_core::components::AaMode;
@@ -29,10 +28,8 @@ use concinnity_core::components::{
     ReparentRequest, Scene, SceneCommand, Shader, SpawnRequest, Sprite, StreamingConfig, TextLabel,
     Window,
 };
-use concinnity_core::ecs::Arena;
 use concinnity_core::ecs::Entity;
 use concinnity_core::ecs::FontHandle;
-use concinnity_core::ecs::FrameContext;
 use concinnity_core::ecs::FrameRateCap;
 use concinnity_core::ecs::GpuMemoryPressure;
 use concinnity_core::ecs::HiddenAssets;
@@ -44,14 +41,10 @@ use concinnity_core::ecs::PickIndex;
 use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::ScreenStack;
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{
-    ComponentSlot, ComponentStorage, PayloadLocator, PipelineContext, Resources, StepResult,
-    TextureHandle,
-};
+use concinnity_core::ecs::{ComponentSlot, PayloadLocator, StepResult, TextureHandle, World};
 use concinnity_core::gfx::chunk_coord;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
-use concinnity_core::profile::FrameProfile;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::{GpuProfile, GpuTier, GpuVendor};
 use concinnity_core::render::backend_init;
@@ -84,32 +77,15 @@ const TEX: AssetId = AssetId(2);
 const MAT: AssetId = AssetId(3);
 const PROP: AssetId = AssetId(4);
 
-// Owns the storage a PipelineContext borrows from, plus the in-memory blob
-// serving every payload locator the builder handed out.
-struct TestWorld {
-    components: ComponentStorage,
-    blob: BlobData,
-    profile: FrameProfile,
-    resources: Resources,
-    scratch: Arena,
-}
+// A component add held until `build` has made the world it goes into.
+type PendingAdd = Box<dyn FnOnce(&mut World)>;
 
-impl TestWorld {
-    fn ctx(&mut self) -> PipelineContext<'_> {
-        PipelineContext {
-            components: &mut self.components,
-            blob: &mut self.blob,
-            profile: &mut self.profile,
-            resources: &mut self.resources,
-            frame: FrameContext::new(&self.scratch),
-        }
-    }
-}
-
-// Accumulates components and payload bytes, then seals into a TestWorld whose
-// single in-memory blob section serves every locator it handed out.
+// Accumulates components and payload bytes, then seals into a World whose
+// single in-memory blob section serves every locator it handed out. The
+// components are added once the section is sealed into the world's payload
+// store.
 struct WorldBuilder {
-    components: ComponentStorage,
+    pending: Vec<PendingAdd>,
     section: Vec<u8>,
     texture_records: Vec<concinnity_core::ecs::ResourceRecord>,
     // Material data-resource records; each `push_textured_quad` bakes one Material
@@ -125,14 +101,12 @@ struct WorldBuilder {
     color_lut_records: Vec<concinnity_core::ecs::ResourceRecord>,
     env_map_records: Vec<concinnity_core::ecs::ResourceRecord>,
     skinned_records: Vec<concinnity_core::ecs::ResourceRecord>,
-    // Entities to identify once `build` has the resources to index them in.
-    ids: Vec<(Entity, AssetId)>,
 }
 
 impl WorldBuilder {
     fn new() -> Self {
         Self {
-            components: ComponentStorage::default(),
+            pending: Vec::new(),
             section: Vec::new(),
             texture_records: Vec::new(),
             material_records: Vec::new(),
@@ -141,7 +115,6 @@ impl WorldBuilder {
             color_lut_records: Vec::new(),
             env_map_records: Vec::new(),
             skinned_records: Vec::new(),
-            ids: Vec::new(),
         }
     }
 
@@ -156,12 +129,15 @@ impl WorldBuilder {
     }
 
     fn push<C: ComponentSlot>(&mut self, c: C) {
-        self.components.push_typed(c);
+        self.pending.push(Box::new(move |world| {
+            world.push(c);
+        }));
     }
 
     fn push_identified<C: ComponentSlot>(&mut self, id: AssetId, c: C) {
-        let entity = self.components.push_typed(c);
-        self.ids.push((entity, id));
+        self.pending.push(Box::new(move |world| {
+            world.push_identified(id, c);
+        }));
     }
 
     // One Shader whose payload carries the given compiled programs, one per
@@ -250,26 +226,19 @@ impl WorldBuilder {
         );
     }
 
-    fn build(mut self) -> TestWorld {
-        let mut resources = Resources::new();
+    fn build(mut self) -> World {
+        let mut world = World::from_payloads(Box::new(BlobData::new(vec![Some(self.section)])));
         // The renderer reads the shared texture pool from this table, exactly as
         // the runtime does after loading the blob's resource stream.
-        resources.insert(TextureTable::from_records(&mut self.texture_records));
-        resources.insert(MaterialTable::from_records(&mut self.material_records));
-        resources.insert(MeshTable::from_records(&mut self.mesh_records));
-        resources.insert(FontTable::from_records(&mut self.font_records));
-        resources.insert(ColorLutTable::from_records(&mut self.color_lut_records));
-        resources.insert(EnvironmentMapTable::from_records(&mut self.env_map_records));
-        resources.insert(SkinnedMeshTable::from_records(&mut self.skinned_records));
-        let mut world = TestWorld {
-            components: self.components,
-            blob: BlobData::new(vec![Some(self.section)]),
-            profile: FrameProfile::default(),
-            resources,
-            scratch: Arena::with_capacity(64 * 1024),
-        };
-        for (entity, id) in self.ids {
-            world.ctx().identify(entity, id);
+        world.insert_resource(TextureTable::from_records(&mut self.texture_records));
+        world.insert_resource(MaterialTable::from_records(&mut self.material_records));
+        world.insert_resource(MeshTable::from_records(&mut self.mesh_records));
+        world.insert_resource(FontTable::from_records(&mut self.font_records));
+        world.insert_resource(ColorLutTable::from_records(&mut self.color_lut_records));
+        world.insert_resource(EnvironmentMapTable::from_records(&mut self.env_map_records));
+        world.insert_resource(SkinnedMeshTable::from_records(&mut self.skinned_records));
+        for add in self.pending {
+            add(&mut world);
         }
         world
     }
@@ -333,10 +302,10 @@ fn titled_scene(title: &str) -> WorldBuilder {
 // Run the same pre-init pass World::start performs (Prop decomposition),
 // then GraphicsSystem init with the injected hooks. A successful init parks
 // the built backend in the world's `ActiveRenderBackend` slot.
-fn init_graphics(world: &mut TestWorld, hooks: TestHooks) -> GraphicsSystem {
+fn init_graphics(world: &mut World, hooks: TestHooks) -> GraphicsSystem {
     let mut gs = GraphicsSystem::new(None);
     gs.test_hooks = Some(hooks);
-    let mut ctx = world.ctx();
+    let mut ctx = world.context();
     crate::ecs::decompose::run(&mut ctx);
     gs.run_init(&mut ctx);
     gs
@@ -354,7 +323,7 @@ fn a_first_launch_persists_the_auto_preset_into_the_state_tree() {
     let mut gs = GraphicsSystem::new(Some(&tree));
     gs.test_hooks = Some(hooks);
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         crate::ecs::decompose::run(&mut ctx);
         gs.run_init(&mut ctx);
     }
@@ -368,10 +337,9 @@ fn a_first_launch_persists_the_auto_preset_into_the_state_tree() {
 }
 
 // Whether the world's parked backend slot currently holds a backend.
-fn backend_parked(world: &TestWorld) -> bool {
+fn backend_parked(world: &World) -> bool {
     world
-        .resources
-        .get::<crate::ecs::ActiveRenderBackend>()
+        .resource::<crate::ecs::ActiveRenderBackend>()
         .is_some_and(|slot| slot.0.is_some())
 }
 
@@ -384,9 +352,9 @@ fn backend_parked(world: &TestWorld) -> bool {
 // streaming / input instances per step mirror persistent ones here: each reads
 // its persistent state / cursors from parked resources, and these tests never
 // leave a drained event in retention across a second step.
-fn step(gs: &mut GraphicsSystem, world: &mut TestWorld) -> StepResult {
+fn step(gs: &mut GraphicsSystem, world: &mut World) -> StepResult {
     use concinnity_core::ecs::System;
-    let mut ctx = world.ctx();
+    let mut ctx = world.context();
     crate::gfx::overlay::OverlaySystem::new().step(&mut ctx);
     crate::spawn::SpawnSystem::new().step(&mut ctx);
     crate::settings::system::SettingsSystem::new().step(&mut ctx);
@@ -445,7 +413,7 @@ fn init_builds_draw_list_and_render_handles() {
     drop(s);
 
     // The prop entity received its GPU handle + init world matrix.
-    let ctx = world.ctx();
+    let ctx = world.context();
     let handles: Vec<Vec<DrawIndex>> = ctx
         .query::<RenderHandle>()
         .map(|h| h.draws.to_vec())
@@ -483,8 +451,7 @@ fn init_parks_overlay_assets_with_the_hud_chips() {
     assert!(!gs.failed, "init must succeed");
 
     let overlay = world
-        .resources
-        .get::<OverlayAssets>()
+        .resource::<OverlayAssets>()
         .expect("OverlayAssets parked at init");
     assert_eq!(
         overlay.stat_hud_chips,
@@ -507,11 +474,11 @@ fn take_backend_yields_the_backend_once() {
     let mut world = scene_builder().build();
     let _gs = init_graphics(&mut world, hooks);
     assert!(
-        crate::ecs::ActiveRenderBackend::take(&mut world.resources).is_some(),
+        crate::ecs::ActiveRenderBackend::take(world.context().resources).is_some(),
         "the built backend is taken"
     );
     assert!(
-        crate::ecs::ActiveRenderBackend::take(&mut world.resources).is_none(),
+        crate::ecs::ActiveRenderBackend::take(world.context().resources).is_none(),
         "and only once"
     );
 }
@@ -526,15 +493,13 @@ fn pending_backend_reuses_instance_and_ends_with_new_world() {
     let (state_a, hooks_a) = recording_hooks();
     let mut world_a = titled_scene("world A").build();
     let _gs_a = init_graphics(&mut world_a, hooks_a);
-    let backend_a = crate::ecs::ActiveRenderBackend::take(&mut world_a.resources)
+    let backend_a = crate::ecs::ActiveRenderBackend::take(world_a.context().resources)
         .expect("world A built a backend");
 
     // Transplant it into world B (a different world, same swapchain config).
     let (state_b, hooks_b) = recording_hooks();
     let mut world_b = titled_scene("world B").build();
-    world_b
-        .resources
-        .insert(crate::live_edit::PendingBackend(backend_a));
+    world_b.insert_resource(crate::live_edit::PendingBackend(backend_a));
     let gs_b = init_graphics(&mut world_b, hooks_b);
 
     assert!(!gs_b.failed);
@@ -572,9 +537,7 @@ fn pending_backend_swapchain_change_forces_full_rebuild() {
     );
     let (state_b, hooks_b) = recording_hooks();
     let mut world = scene_builder().build();
-    world
-        .resources
-        .insert(crate::live_edit::PendingBackend(Box::new(transplant)));
+    world.insert_resource(crate::live_edit::PendingBackend(Box::new(transplant)));
     let gs = init_graphics(&mut world, hooks_b);
 
     assert!(!gs.failed);
@@ -613,9 +576,7 @@ fn pending_backend_hdr_change_forces_full_rebuild() {
     );
     let (state_b, hooks_b) = recording_hooks();
     let mut world = scene_builder().build();
-    world
-        .resources
-        .insert(crate::live_edit::PendingBackend(Box::new(transplant)));
+    world.insert_resource(crate::live_edit::PendingBackend(Box::new(transplant)));
     let gs = init_graphics(&mut world, hooks_b);
 
     assert!(!gs.failed);
@@ -639,7 +600,7 @@ fn reload_world_failure_marks_graphics_failed() {
     let (state_a, hooks_a) = recording_hooks();
     let mut world_a = scene_builder().build();
     let _gs_a = init_graphics(&mut world_a, hooks_a);
-    let backend_a = crate::ecs::ActiveRenderBackend::take(&mut world_a.resources).unwrap();
+    let backend_a = crate::ecs::ActiveRenderBackend::take(world_a.context().resources).unwrap();
     state_a.lock().unwrap().fail_reload = Some(error::RenderError::DeviceLost {
         reason: error::DeviceLostReason::Removed,
         detail: "boom".to_string(),
@@ -647,9 +608,7 @@ fn reload_world_failure_marks_graphics_failed() {
 
     let (_state_b, hooks_b) = recording_hooks();
     let mut world_b = scene_builder().build();
-    world_b
-        .resources
-        .insert(crate::live_edit::PendingBackend(backend_a));
+    world_b.insert_resource(crate::live_edit::PendingBackend(backend_a));
     let gs_b = init_graphics(&mut world_b, hooks_b);
 
     assert!(gs_b.failed, "a failed reload marks the system failed");
@@ -690,7 +649,7 @@ fn menu_driven_init_skips_the_first_person_cursor_grab() {
     // A plain first-person world (Camera3D, no HitRegion / KeyBinding) -- the same
     // world that grabs at startup above -- but with a driver already in control.
     let mut world = scene_builder().build();
-    world.resources.insert(MenuOverride(Some(true)));
+    world.insert_resource(MenuOverride(Some(true)));
     let _gs = init_graphics(&mut world, hooks);
 
     let s = lock(&state);
@@ -890,7 +849,7 @@ fn first_declared_scene_applies_start_visibility() {
     {
         // Assign scenes on the two props before decomposition maps them to
         // SceneMember components.
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         let first = ctx.entity_of(PROP).expect("the first prop is identified");
         for (entity, prop) in ctx.query_mut_with_entity::<Prop>() {
             prop.scene = Some(if entity == first {
@@ -921,7 +880,7 @@ fn first_declared_scene_applies_start_visibility() {
 
     // An imperative jump to scene B flips both.
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         ctx.events_mut::<SceneCommand>().send(SceneCommand {
             scene: scene_b,
             transition: concinnity_core::components::SceneTransition::Cut,
@@ -950,16 +909,19 @@ fn jump_to_undeclared_scene_warns_and_changes_nothing() {
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
     world
-        .ctx()
+        .context()
         .push_identified(AssetId(20), Scene { camera_shot: None });
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
     lock(&state).visibility.clear();
 
-    world.ctx().events_mut::<SceneCommand>().send(SceneCommand {
-        scene: AssetId(99),
-        transition: concinnity_core::components::SceneTransition::Cut,
-    });
+    world
+        .context()
+        .events_mut::<SceneCommand>()
+        .send(SceneCommand {
+            scene: AssetId(99),
+            transition: concinnity_core::components::SceneTransition::Cut,
+        });
     let captured = Captured::default();
     let writer = captured.clone();
     let subscriber = tracing_subscriber::fmt()
@@ -991,8 +953,7 @@ fn extract_hands_the_spent_overlay_list_back() {
         assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
         assert!(
             world
-                .resources
-                .get::<crate::gfx::overlay::OverlayRecycle>()
+                .resource::<crate::gfx::overlay::OverlayRecycle>()
                 .is_some(),
             "extraction returned the spent draw list"
         );
@@ -1028,7 +989,7 @@ fn frame_steps_draw_and_publish_input() {
 
     // The polled input snapshot is republished as the FrameInput component +
     // resource for the camera / UI systems.
-    let ctx = world.ctx();
+    let ctx = world.context();
     let inputs: Vec<&FrameInput> = ctx.query::<FrameInput>().collect();
     assert_eq!(inputs.len(), 1, "previous snapshot drained, one deposited");
     let res = ctx.resource::<FrameInput>().expect("resource published");
@@ -1055,7 +1016,7 @@ fn camera_state_reaches_the_backend_each_frame() {
         [-7.0, -8.0, -9.0, 1.0],
     ];
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         let cam = ctx.query_mut::<Camera3D>().next().unwrap();
         cam.position = [7.0, 8.0, 9.0];
         cam.view_matrix = moved_view;
@@ -1080,7 +1041,7 @@ fn transform_edit_pushes_new_model_matrix() {
     let mut gs = init_graphics(&mut world, hooks);
 
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         let t = ctx.query_mut::<Transform>().next().unwrap();
         t.position = [10.0, 20.0, 30.0];
     }
@@ -1127,7 +1088,7 @@ fn model_matrices_push_only_on_change() {
 
     // A move sends exactly one update carrying the new matrix.
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         let t = ctx.query_mut::<Transform>().next().unwrap();
         t.position = [4.0, 5.0, 6.0];
     }
@@ -1173,7 +1134,7 @@ fn opaque_menu_backdrop_hides_world_and_freezes_gameplay_input() {
     let mut world = b.build();
     // The active-screen state UiInputSystem publishes when a world-pausing
     // screen (id 41) is open; the overlay derives menu_active from it.
-    world.ctx().insert_resource(ScreenStack {
+    world.context().insert_resource(ScreenStack {
         layers: [(AssetId(41), 1)].into_iter().collect(),
         pauses_world: true,
         captures_input: true,
@@ -1196,7 +1157,7 @@ fn opaque_menu_backdrop_hides_world_and_freezes_gameplay_input() {
         assert!(s.saw(&Call::SetCameraCapture(false)));
     }
     {
-        let ctx = world.ctx();
+        let ctx = world.context();
         // The runtime-level pacer clamps from this same resource next step.
         assert!(ctx.resource::<MenuActive>().unwrap().0);
         let input = ctx.resource::<FrameInput>().unwrap();
@@ -1206,7 +1167,7 @@ fn opaque_menu_backdrop_hides_world_and_freezes_gameplay_input() {
     // Dimming the backdrop below full alpha keeps the menu active but the
     // world visible again.
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         let sprite = ctx.query_mut::<Sprite>().next().unwrap();
         sprite.tint[3] = 0.5;
     }
@@ -1232,7 +1193,7 @@ fn menu_override_true_forces_cursor_free_and_freezes_input() {
     // A plain camera world starts in first-person capture, menu mode off.
     assert!(lock(&state).saw(&Call::SetMenuMode(false)));
 
-    world.resources.insert(MenuOverride(Some(true)));
+    world.insert_resource(MenuOverride(Some(true)));
     lock(&state).next_input.forward = true;
     step(&mut gs, &mut world);
 
@@ -1246,7 +1207,7 @@ fn menu_override_true_forces_cursor_free_and_freezes_input() {
         "override releases the cursor"
     );
     drop(s);
-    let ctx = world.ctx();
+    let ctx = world.context();
     assert!(
         ctx.resource::<MenuActive>().unwrap().0,
         "freeze resource set"
@@ -1266,7 +1227,7 @@ fn menu_override_false_captures_cursor_and_runs_input() {
     let mut world = scene_builder().build();
     let mut gs = init_graphics(&mut world, hooks);
 
-    world.resources.insert(MenuOverride(Some(false)));
+    world.insert_resource(MenuOverride(Some(false)));
     lock(&state).next_input.forward = true;
     step(&mut gs, &mut world);
 
@@ -1276,7 +1237,7 @@ fn menu_override_false_captures_cursor_and_runs_input() {
         "override captures the cursor"
     );
     drop(s);
-    let ctx = world.ctx();
+    let ctx = world.context();
     assert!(!ctx.resource::<MenuActive>().unwrap().0, "not frozen");
     assert!(
         ctx.resource::<FrameInput>().unwrap().forward,
@@ -1374,7 +1335,7 @@ fn out_of_device_memory_publishes_pressure_and_continues() {
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     let pressure = *world
-        .ctx()
+        .context()
         .resource::<GpuMemoryPressure>()
         .expect("pressure resource published");
     assert_eq!(pressure.events, 2);
@@ -1427,7 +1388,7 @@ fn pipelined_max_frames_counts_frames_sent() {
     let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel(0);
     let (_feedback_tx, feedback_rx) = std::sync::mpsc::channel();
     world
-        .ctx()
+        .context()
         .insert_resource(crate::ecs::PipelinedFrames(Some(
             crate::ecs::PipelineChannels {
                 snapshot_tx,
@@ -1443,7 +1404,9 @@ fn pipelined_max_frames_counts_frames_sent() {
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     assert_eq!(step(&mut gs, &mut world), StepResult::Stop);
 
-    world.ctx().remove_resource::<crate::ecs::PipelinedFrames>();
+    world
+        .context()
+        .remove_resource::<crate::ecs::PipelinedFrames>();
     assert_eq!(drain.join().expect("drain thread"), 3);
 }
 
@@ -1454,7 +1417,7 @@ fn spawn_request_clones_template_draw_slot() {
     let mut gs = init_graphics(&mut world, hooks);
 
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         ctx.events_mut::<SpawnRequest>().send(SpawnRequest {
             template: PROP,
             name: Some(AssetId(900)),
@@ -1472,7 +1435,7 @@ fn spawn_request_clones_template_draw_slot() {
         src: DrawIndex(0),
         new_idx: DrawIndex(1)
     }));
-    let ctx = world.ctx();
+    let ctx = world.context();
     let mut handles: Vec<Vec<DrawIndex>> = ctx
         .query::<RenderHandle>()
         .map(|h| h.draws.to_vec())
@@ -1494,7 +1457,7 @@ fn visibility_request_switches_slots_and_hidden_tag() {
     let mut gs = init_graphics(&mut world, hooks);
 
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         ctx.events_mut::<VisibilityRequest>()
             .send(VisibilityRequest {
                 target: PROP.into(),
@@ -1507,13 +1470,13 @@ fn visibility_request_switches_slots_and_hidden_tag() {
         visible: false
     }));
     assert_eq!(
-        world.ctx().query::<Hidden>().count(),
+        world.context().query::<Hidden>().count(),
         1,
         "hide tags the entity"
     );
 
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         ctx.events_mut::<VisibilityRequest>()
             .send(VisibilityRequest {
                 target: PROP.into(),
@@ -1526,7 +1489,7 @@ fn visibility_request_switches_slots_and_hidden_tag() {
         visible: true
     }));
     assert_eq!(
-        world.ctx().query::<Hidden>().count(),
+        world.context().query::<Hidden>().count(),
         0,
         "show clears the tag"
     );
@@ -1539,7 +1502,7 @@ fn despawn_request_retires_draw_slots() {
     let mut gs = init_graphics(&mut world, hooks);
 
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         ctx.events_mut::<DespawnRequest>().send(DespawnRequest {
             target: PROP.into(),
         });
@@ -1547,7 +1510,7 @@ fn despawn_request_retires_draw_slots() {
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
 
     assert!(lock(&state).saw(&Call::RetireDrawObject(DrawIndex(0))));
-    let ctx = world.ctx();
+    let ctx = world.context();
     assert_eq!(
         ctx.query::<RenderHandle>().count(),
         0,
@@ -1558,10 +1521,9 @@ fn despawn_request_retires_draw_slots() {
 // The streaming pools graphics init builds are parked in the `StreamingState`
 // resource (StreamingSystem drives them each frame). Read its per-pool stats
 // for the streaming assertions.
-fn streaming_stats(world: &TestWorld) -> crate::gfx::streaming::system::StreamingStats {
+fn streaming_stats(world: &World) -> crate::gfx::streaming::system::StreamingStats {
     world
-        .resources
-        .get::<crate::gfx::streaming::system::StreamingState>()
+        .resource::<crate::gfx::streaming::system::StreamingState>()
         .expect("StreamingState parked at init")
         .streaming_stats()
 }
@@ -1698,7 +1660,7 @@ fn voxel_world_rebases_the_draw_view_onto_the_chunk_origin() {
         [-40.0, -5.0, 40.0, 1.0],
     ];
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         let cam = ctx.query_mut::<Camera3D>().next().unwrap();
         cam.position = cam_pos;
         cam.view_matrix = view;
@@ -1737,10 +1699,10 @@ fn voxel_world_rebases_the_draw_view_onto_the_chunk_origin() {
 // the churn.
 // One SpawnSystem step followed by a replay of its recorded ops onto the
 // parked backend, so the mock's call log reflects what submission would apply.
-fn spawn_step(spawn: &mut crate::spawn::SpawnSystem, world: &mut TestWorld) {
+fn spawn_step(spawn: &mut crate::spawn::SpawnSystem, world: &mut World) {
     use concinnity_core::ecs::System;
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         spawn.step(&mut ctx);
     }
     replay_pending_ops(world);
@@ -1748,21 +1710,21 @@ fn spawn_step(spawn: &mut crate::spawn::SpawnSystem, world: &mut TestWorld) {
 
 // Replay the recorded op queue onto the parked backend (both restored after),
 // standing in for the submit-path replay in tests that step one system.
-fn replay_pending_ops(world: &mut TestWorld) {
-    let Some(mut queues) = crate::ecs::ActiveRenderQueues::take(&mut world.resources) else {
+fn replay_pending_ops(world: &mut World) {
+    let Some(mut queues) = crate::ecs::ActiveRenderQueues::take(world.context().resources) else {
         return;
     };
-    if let Some(mut backend) = crate::ecs::ActiveRenderBackend::take(&mut world.resources) {
+    if let Some(mut backend) = crate::ecs::ActiveRenderBackend::take(world.context().resources) {
         queues.ops.replay(backend.as_mut());
-        crate::ecs::ActiveRenderBackend::put(&mut world.resources, backend);
+        crate::ecs::ActiveRenderBackend::put(world.context().resources, backend);
     }
-    crate::ecs::ActiveRenderQueues::put(&mut world.resources, queues);
+    crate::ecs::ActiveRenderQueues::put(world.context().resources, queues);
 }
 
 // The entity an asset id resolves to through `EntityById`.
-fn entity_named(world: &mut TestWorld, name: AssetId) -> Entity {
+fn entity_named(world: &mut World, name: AssetId) -> Entity {
     world
-        .ctx()
+        .context()
         .entity_of(name)
         .expect("the id resolves to an entity")
 }
@@ -1775,11 +1737,11 @@ fn spawn_system_without_graphics_leaves_the_churn_pending() {
     let (_state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
     let _gs = init_graphics(&mut world, hooks);
-    crate::ecs::ActiveRenderQueues::take(&mut world.resources)
+    crate::ecs::ActiveRenderQueues::take(world.context().resources)
         .expect("the recording surfaces were published");
 
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         ctx.events_mut::<DespawnRequest>().send(DespawnRequest {
             target: PROP.into(),
         });
@@ -1788,7 +1750,7 @@ fn spawn_system_without_graphics_leaves_the_churn_pending() {
     spawn_step(&mut spawn, &mut world);
 
     assert_eq!(
-        world.ctx().query::<RenderHandle>().count(),
+        world.context().query::<RenderHandle>().count(),
         1,
         "the despawn never ran without the slot allocator to retire into"
     );
@@ -1808,7 +1770,7 @@ fn reparent_request_repoints_the_child_under_the_named_parent() {
     let parent = entity_named(&mut world, PROP);
 
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
             child: OTHER.into(),
             parent: Some(PROP.into()),
@@ -1817,7 +1779,7 @@ fn reparent_request_repoints_the_child_under_the_named_parent() {
     let mut spawn = crate::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
-    let ctx = world.ctx();
+    let ctx = world.context();
     assert_eq!(
         ctx.get::<Parent>(child).map(|p| p.0),
         Some(parent),
@@ -1853,7 +1815,7 @@ fn reparent_request_with_an_unresolved_parent_is_skipped() {
 
     // Park the child under a real parent first, so a wrongful detach shows.
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         propagation::reparent(&mut ctx, child, Some(parent));
         ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
             child: OTHER.into(),
@@ -1864,7 +1826,7 @@ fn reparent_request_with_an_unresolved_parent_is_skipped() {
     spawn_step(&mut spawn, &mut world);
 
     assert_eq!(
-        world.ctx().get::<Parent>(child).map(|p| p.0),
+        world.context().get::<Parent>(child).map(|p| p.0),
         Some(parent),
         "an unresolved parent name never detaches the child to a root"
     );
@@ -1884,7 +1846,7 @@ fn reparent_request_without_a_parent_detaches_the_child() {
     let parent = entity_named(&mut world, PROP);
 
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         propagation::reparent(&mut ctx, child, Some(parent));
         ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
             child: OTHER.into(),
@@ -1894,7 +1856,7 @@ fn reparent_request_without_a_parent_detaches_the_child() {
     let mut spawn = crate::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
-    let ctx = world.ctx();
+    let ctx = world.context();
     assert!(
         ctx.get::<Parent>(child).is_none(),
         "an unnamed parent detaches the child"
@@ -1916,14 +1878,14 @@ fn expired_lifetime_despawns_the_entity_and_retires_its_slot() {
     let mut world = scene_builder().build();
     let _gs = init_graphics(&mut world, hooks);
     let entity = entity_named(&mut world, PROP);
-    world.ctx().insert(entity, Lifetime { remaining: 0.0 });
+    world.context().insert(entity, Lifetime { remaining: 0.0 });
 
     let mut spawn = crate::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
 
     assert!(lock(&state).saw(&Call::RetireDrawObject(DrawIndex(0))));
     assert_eq!(
-        world.ctx().query::<RenderHandle>().count(),
+        world.context().query::<RenderHandle>().count(),
         0,
         "the expired entity is gone"
     );
@@ -1938,7 +1900,7 @@ fn due_spawner_clones_its_template_at_its_own_transform() {
     let mut world = scene_builder().build();
     let _gs = init_graphics(&mut world, hooks);
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         let spawner = ctx.components.spawn();
         ctx.insert(
             spawner,
@@ -1968,7 +1930,7 @@ fn due_spawner_clones_its_template_at_its_own_transform() {
         src: DrawIndex(0),
         new_idx: DrawIndex(1)
     }));
-    let ctx = world.ctx();
+    let ctx = world.context();
     assert_eq!(
         ctx.query::<Lifetime>()
             .map(|l| l.remaining)
@@ -1990,7 +1952,7 @@ fn menu_active_freezes_lifetimes_and_spawners() {
     let _gs = init_graphics(&mut world, hooks);
     let entity = entity_named(&mut world, PROP);
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         ctx.insert(entity, Lifetime { remaining: 0.0 });
         let spawner = ctx.components.spawn();
         ctx.insert(
@@ -2004,7 +1966,7 @@ fn menu_active_freezes_lifetimes_and_spawners() {
             },
         );
     }
-    world.resources.insert(MenuActive(true));
+    world.insert_resource(MenuActive(true));
 
     let mut spawn = crate::spawn::SpawnSystem::new();
     spawn_step(&mut spawn, &mut world);
@@ -2023,13 +1985,13 @@ fn menu_active_freezes_lifetimes_and_spawners() {
         );
     }
     assert_eq!(
-        world.ctx().query::<Spawner>().map(|s| s.count).next(),
+        world.context().query::<Spawner>().map(|s| s.count).next(),
         Some(0),
         "the spawner's clock never advanced"
     );
 
     // Closing the menu resumes the same world clock.
-    world.resources.insert(MenuActive(false));
+    world.insert_resource(MenuActive(false));
     spawn_step(&mut spawn, &mut world);
     assert!(
         lock(&state).saw(&Call::RetireDrawObject(DrawIndex(0))),
@@ -2049,7 +2011,7 @@ fn system_trait_delegates_to_init_and_step() {
         ..GraphicsSystem::new(None)
     };
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         crate::ecs::decompose::run(&mut ctx);
         gs.init(&mut ctx);
     }
@@ -2059,7 +2021,7 @@ fn system_trait_delegates_to_init_and_step() {
     );
 
     let result = {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         gs.step(&mut ctx)
     };
     assert_eq!(result, StepResult::Continue);
@@ -2083,10 +2045,9 @@ fn post_config_scene(cfg: PostProcessConfig) -> WorldBuilder {
 // The resolved settings snapshot init hands to SettingsSystem: the live values
 // every settings row displays and cycles, after the world's config, the
 // persisted overrides, and the preset ceiling have all settled.
-fn settings_state(world: &TestWorld) -> &crate::settings::system::SettingsState {
+fn settings_state(world: &World) -> &crate::settings::system::SettingsState {
     world
-        .resources
-        .get::<crate::settings::system::SettingsSlot>()
+        .resource::<crate::settings::system::SettingsSlot>()
         .expect("SettingsSlot parked at init")
         .0
         .as_ref()
@@ -2109,9 +2070,7 @@ fn profile_at(tier: GpuTier) -> GpuProfile {
 // is no ceiling, so each override stands exactly as stored.
 #[test]
 fn persisted_post_process_overrides_win_over_authored_config() {
-    use concinnity_core::components::{
-        AaMode, IndirectLighting, ReflectionBlurResolution, SsgiResolution,
-    };
+    use concinnity_core::components::{AaMode, IndirectLighting, PassResolution};
 
     let mut settings = crate::config::Settings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Custom);
@@ -2132,10 +2091,10 @@ fn persisted_post_process_overrides_win_over_authored_config() {
     settings.graphics.auto_exposure = Some(true);
     // Cycle dropdowns.
     settings.graphics.aa_mode = Some(AaMode::Taa);
-    settings.graphics.ssgi_resolution = Some(SsgiResolution::Full);
+    settings.graphics.ssgi_resolution = Some(PassResolution::Full);
     settings.graphics.ssgi_rays = Some(16);
     settings.graphics.ssgi_steps = Some(24);
-    settings.graphics.reflection_blur_resolution = Some(ReflectionBlurResolution::Full);
+    settings.graphics.reflection_blur_resolution = Some(PassResolution::Full);
     // Per-feature sub-quality sliders.
     settings.graphics.ssao_radius = Some(0.9);
     settings.graphics.ssao_intensity = Some(2.0);
@@ -2187,13 +2146,13 @@ fn persisted_post_process_overrides_win_over_authored_config() {
     assert_eq!(live.graphics.quality.post_config.aa_mode, AaMode::Taa);
     assert_eq!(
         live.graphics.quality.post_config.ssgi_resolution,
-        SsgiResolution::Full
+        PassResolution::Full
     );
     assert_eq!(live.graphics.quality.post_config.ssgi_rays, 16);
     assert_eq!(live.graphics.quality.post_config.ssgi_steps, 24);
     assert_eq!(
         live.graphics.quality.post_config.reflection_blur_resolution,
-        ReflectionBlurResolution::Full
+        PassResolution::Full
     );
     // Sub-quality sliders.
     assert_eq!(live.graphics.quality.post_config.ssao_radius, 0.9);
@@ -2341,7 +2300,7 @@ fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
 
     let (forced, hooks) = recording_hooks_with(settings, profile_at(GpuTier::MidDiscrete));
     let mut world = post_config_scene(authored).build();
-    world.resources.insert(LaunchRequest {
+    world.insert_resource(LaunchRequest {
         quality_preset: Some(QualityPreset::Ultra),
         ..Default::default()
     });
@@ -2375,7 +2334,7 @@ fn the_ray_tracing_flags_reach_the_backend() {
 
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
-    world.resources.insert(LaunchRequest {
+    world.insert_resource(LaunchRequest {
         rt_dynamic: Some(RtDynamicMode::Rebuild),
         rt_skinned_geometry: Some(false),
         ..Default::default()
@@ -2405,7 +2364,7 @@ fn capture_stays_off_without_a_launch_request() {
 fn a_capture_launch_request_reaches_the_backend() {
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
-    world.resources.insert(LaunchRequest {
+    world.insert_resource(LaunchRequest {
         capture: true,
         ..Default::default()
     });
@@ -2418,7 +2377,7 @@ fn a_capture_launch_request_reaches_the_backend() {
 fn a_dev_loop_launch_arms_frame_capture() {
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
-    world.resources.insert(LaunchRequest {
+    world.insert_resource(LaunchRequest {
         dev_loop: true,
         ..Default::default()
     });
@@ -2437,12 +2396,10 @@ fn an_embedded_surface_resource_reaches_the_backend() {
 
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
-    world
-        .resources
-        .insert(concinnity_core::render::backend_init::EmbeddedSurface {
-            view: std::ptr::NonNull::dangling(),
-            pump_events: false,
-        });
+    world.insert_resource(concinnity_core::render::backend_init::EmbeddedSurface {
+        view: std::ptr::NonNull::dangling(),
+        pump_events: false,
+    });
     init_graphics(&mut world, hooks);
     assert!(lock(&state).init.as_ref().unwrap().embedded_surface);
 }
@@ -2622,14 +2579,13 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
     // rather than publishing an empty dropdown.
     assert!(
         !world
-            .resources
-            .get::<crate::ecs::DisplayModes>()
+            .resource::<crate::ecs::DisplayModes>()
             .expect("mode list published for the dropdown")
             .0
             .is_empty()
     );
     // The resolved cap reaches the runtime-level pacer through its own resource.
-    assert!(world.resources.get::<FrameRateCap>().is_some());
+    assert!(world.resource::<FrameRateCap>().is_some());
 }
 
 // One settings row: the setting-action HitRegion the menu builds plus
@@ -2656,9 +2612,9 @@ fn push_settings_row(b: &mut WorldBuilder, key: &str, verb: &str, label: AssetId
 const LIT: [f32; 3] = [0.9, 0.9, 0.9];
 
 // The content of the TextLabel with `id`.
-fn label_text(world: &mut TestWorld, id: AssetId) -> String {
+fn label_text(world: &mut World, id: AssetId) -> String {
     world
-        .ctx()
+        .context()
         .get_by_id::<TextLabel>(id)
         .expect("label present")
         .content
@@ -2666,9 +2622,9 @@ fn label_text(world: &mut TestWorld, id: AssetId) -> String {
 }
 
 // The color of the TextLabel with `id`.
-fn label_color(world: &mut TestWorld, id: AssetId) -> [f32; 3] {
+fn label_color(world: &mut World, id: AssetId) -> [f32; 3] {
     world
-        .ctx()
+        .context()
         .get_by_id::<TextLabel>(id)
         .expect("label present")
         .color
@@ -2830,9 +2786,9 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
-    let handle_x = |world: &mut TestWorld, id: AssetId| {
+    let handle_x = |world: &mut World, id: AssetId| {
         world
-            .ctx()
+            .context()
             .get_by_id::<Sprite>(id)
             .expect("handle sprite present")
             .x
@@ -3016,8 +2972,7 @@ fn scroll_panel_rows_clip_their_elements_to_the_panel_band() {
     assert!(!gs.failed);
 
     let clips = &world
-        .resources
-        .get::<crate::gfx::overlay::OverlayAssets>()
+        .resource::<crate::gfx::overlay::OverlayAssets>()
         .expect("OverlayAssets parked at init")
         .clip_rects;
     let band = [10.0, 20.0, 300.0, 400.0];
@@ -3095,7 +3050,7 @@ fn a_capability_gated_row_grays_out_its_whole_scroll_row() {
     );
     // A disabled region is dropped by UiInputSystem, so it never hovers or fires.
     let disabled: Vec<bool> = world
-        .ctx()
+        .context()
         .query::<HitRegion>()
         .filter(|r| {
             matches!(
@@ -3240,10 +3195,9 @@ fn text_naming_no_font_falls_back_to_the_built_in_face() {
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
-    let labels: Vec<TextLabel> = world.ctx().query::<TextLabel>().cloned().collect();
+    let labels: Vec<TextLabel> = world.context().query::<TextLabel>().cloned().collect();
     let overlay = world
-        .resources
-        .get::<crate::gfx::overlay::OverlayAssets>()
+        .resource::<crate::gfx::overlay::OverlayAssets>()
         .expect("OverlayAssets parked at init");
     let face = overlay
         .fonts
@@ -3299,8 +3253,7 @@ fn a_world_whose_text_names_its_fonts_registers_no_fallback() {
     assert!(!gs.failed);
 
     let overlay = world
-        .resources
-        .get::<crate::gfx::overlay::OverlayAssets>()
+        .resource::<crate::gfx::overlay::OverlayAssets>()
         .expect("OverlayAssets parked at init");
     assert_eq!(overlay.fonts.len(), 1);
     assert!(overlay.fonts.resolve(None).is_none());
@@ -3350,8 +3303,7 @@ fn fonts_and_sprite_textures_share_the_text_atlas_pool() {
     drop(s);
 
     let overlay = world
-        .resources
-        .get::<crate::gfx::overlay::OverlayAssets>()
+        .resource::<crate::gfx::overlay::OverlayAssets>()
         .expect("OverlayAssets parked at init");
     // A font's handle IS its atlas slot, so the pool's leading slots are the
     // fonts in handle order.
@@ -3394,8 +3346,7 @@ fn a_sprite_with_an_unknown_texture_keeps_its_tint() {
     );
     assert!(
         world
-            .resources
-            .get::<crate::gfx::overlay::OverlayAssets>()
+            .resource::<crate::gfx::overlay::OverlayAssets>()
             .unwrap()
             .sprite_texture_slots
             .is_empty()
@@ -3456,7 +3407,7 @@ fn a_deferred_texture_slot_decodes_to_a_placeholder() {
     let deferred = HashSet::from([1]);
 
     let disk = super::texture_payloads::decode_texture_payloads(
-        &mut world.ctx(),
+        &mut world.context(),
         &locators,
         &deferred,
         true,
@@ -3468,7 +3419,7 @@ fn a_deferred_texture_slot_decodes_to_a_placeholder() {
     assert!(disk.payloads.is_empty());
 
     let ram = super::texture_payloads::decode_texture_payloads(
-        &mut world.ctx(),
+        &mut world.context(),
         &locators,
         &deferred,
         false,
@@ -3551,7 +3502,7 @@ fn volumetric_fog_resolves_into_the_backend_init() {
     );
     // The fog a world reload dedupes against is parked beside the backend,
     // seeded from whatever was passed into the backend constructor.
-    let pushed = world.resources.get::<super::parked::PushedFogSettings>();
+    let pushed = world.resource::<super::parked::PushedFogSettings>();
     assert!(pushed.is_some_and(|fog| fog.0.is_some()));
 }
 
@@ -3573,7 +3524,7 @@ fn disabled_volumetric_fog_skips_the_fog_pass() {
 
     assert!(!gs.failed);
     assert!(!lock(&state).init.as_ref().unwrap().fog);
-    let pushed = world.resources.get::<super::parked::PushedFogSettings>();
+    let pushed = world.resource::<super::parked::PushedFogSettings>();
     assert!(pushed.is_some_and(|fog| fog.0.is_none()));
 }
 
@@ -3602,7 +3553,7 @@ fn declared_reflection_probes_replace_the_auto_seed() {
     // Read, not drained: draining the only component on a probe entity would
     // despawn it, and the editor's billboard drive can only address a live one.
     assert_eq!(
-        world.ctx().query::<ReflectionProbe>().count(),
+        world.context().query::<ReflectionProbe>().count(),
         2,
         "the probes stay resident after their placements reach the backend"
     );
@@ -3644,7 +3595,11 @@ fn instanced_prop_bakes_its_instances_into_one_cluster() {
         "the instances ride the cluster, not one draw object each"
     );
     drop(s);
-    assert_eq!(world.ctx().query::<InstancedProp>().count(), 0, "drained");
+    assert_eq!(
+        world.context().query::<InstancedProp>().count(),
+        0,
+        "drained"
+    );
 }
 
 // The one-shot world FX (decals, emitters, water, glass, SDF volumes) are
@@ -3705,7 +3660,7 @@ fn one_shot_world_fx_are_resolved_and_drained_at_init() {
 
     assert!(!gs.failed, "a payload-less SdfVolume is not fatal");
     assert!(lock(&state).init.is_some());
-    let ctx = world.ctx();
+    let ctx = world.context();
     assert_eq!(ctx.query::<Decal>().count(), 0);
     assert_eq!(ctx.query::<ParticleEmitter>().count(), 0);
     assert_eq!(ctx.query::<WaterSurface>().count(), 0);
@@ -3750,11 +3705,11 @@ fn sdf_volumes_without_a_readable_payload_are_skipped() {
     );
     let mut world = b.build();
 
-    let volumes = super::world_fx::drain_sdf_volumes(&mut world.ctx());
+    let volumes = super::world_fx::drain_sdf_volumes(&mut world.context());
     assert_eq!(volumes.len(), 1);
     assert_eq!(volumes[0].fragment_source, b"sdf-fragment-bytes");
     assert_eq!(volumes[0].label, "glass_orb");
-    assert_eq!(world.ctx().query::<SdfVolume>().count(), 0, "drained");
+    assert_eq!(world.context().query::<SdfVolume>().count(), 0, "drained");
 }
 
 // A backend factory that cannot build (no device, an unsupported surface) leaves
@@ -3941,7 +3896,7 @@ fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
         assert_eq!(s.init.as_ref().unwrap().n_skinned, 2);
     }
 
-    let ctx = world.ctx();
+    let ctx = world.context();
     // One SkeletonPose per mesh, each keyed to its handle and template draw.
     let mut poses: Vec<(u32, SkinnedIndex)> = ctx
         .query::<SkeletonPose>()
@@ -4001,8 +3956,7 @@ fn skinned_instance_reserves_get_their_own_vertex_regions() {
     );
     assert_eq!(
         world
-            .resources
-            .get::<crate::ecs::ActiveRenderQueues>()
+            .resource::<crate::ecs::ActiveRenderQueues>()
             .and_then(|slot| slot.0.as_ref())
             .expect("graphics init publishes the recording surfaces")
             .slots
@@ -4097,8 +4051,8 @@ fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
-    let flag_pose = |world: &mut TestWorld| {
-        let mut ctx = world.ctx();
+    let flag_pose = |world: &mut World| {
+        let mut ctx = world.context();
         let pose = ctx.query_mut::<SkeletonPose>().next().unwrap();
         pose.updated = true;
     };
@@ -4129,7 +4083,7 @@ fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
     // Behind a real menu (the overlay reports it active) even a flagged pose
     // waits: the skinned draw is skipped behind it anyway.
     flag_pose(&mut world);
-    world.resources.insert(ScreenStack {
+    world.insert_resource(ScreenStack {
         pauses_world: true,
         ..Default::default()
     });
@@ -4142,7 +4096,7 @@ fn skinned_poses_upload_when_flagged_and_freeze_behind_a_menu() {
 
     // The editor's freeze keeps the world drawn and reseeds poses live, so
     // its override lets the flagged pose through.
-    world.resources.insert(MenuOverride(Some(true)));
+    world.insert_resource(MenuOverride(Some(true)));
     lock(&state).calls.clear();
     step(&mut gs, &mut world);
     assert!(
@@ -4398,8 +4352,7 @@ fn skinned_lod_alternates_rebase_onto_their_slot_vertex_region() {
     );
     assert_eq!(
         world
-            .resources
-            .get::<crate::ecs::ActiveRenderQueues>()
+            .resource::<crate::ecs::ActiveRenderQueues>()
             .and_then(|slot| slot.0.as_ref())
             .expect("graphics init publishes the recording surfaces")
             .slots
@@ -4433,7 +4386,7 @@ fn a_step_without_a_parked_backend_finishes_the_system() {
     let (_state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
     let mut gs = init_graphics(&mut world, hooks);
-    crate::ecs::ActiveRenderBackend::take(&mut world.resources).expect("backend was parked");
+    crate::ecs::ActiveRenderBackend::take(world.context().resources).expect("backend was parked");
 
     assert_eq!(step(&mut gs, &mut world), StepResult::Done);
 }
@@ -4447,7 +4400,7 @@ fn reparent_request_with_an_unresolved_child_is_skipped() {
     let _gs = init_graphics(&mut world, hooks);
 
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
             child: AssetId(901).into(),
             parent: Some(PROP.into()),
@@ -4459,7 +4412,7 @@ fn reparent_request_with_an_unresolved_child_is_skipped() {
     let child = entity_named(&mut world, PROP);
     assert!(
         world
-            .ctx()
+            .context()
             .get::<Children>(child)
             .is_none_or(|c| c.0.is_empty()),
         "nothing was parented under the named parent"
@@ -4474,7 +4427,7 @@ fn a_spawn_naming_an_unknown_template_is_skipped() {
     let mut world = scene_builder().build();
     let _gs = init_graphics(&mut world, hooks);
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         ctx.events_mut::<SpawnRequest>().send(SpawnRequest {
             template: AssetId(902),
             name: Some(AssetId(903)),
@@ -4504,7 +4457,7 @@ fn a_spawn_naming_an_unknown_template_is_skipped() {
         "an unresolvable template clones nothing"
     );
     assert_eq!(
-        world.ctx().query::<RenderHandle>().count(),
+        world.context().query::<RenderHandle>().count(),
         1,
         "only the original"
     );
@@ -4533,10 +4486,10 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
     );
     let mut world = b.build();
     let _gs = init_graphics(&mut world, hooks);
-    let poses_before = world.ctx().query::<SkeletonPose>().count();
+    let poses_before = world.context().query::<SkeletonPose>().count();
 
     {
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         ctx.events_mut::<SpawnRequest>().send(SpawnRequest {
             template: HERO,
             name: Some(AssetId(905)),
@@ -4567,7 +4520,7 @@ fn a_spawn_naming_a_skinned_template_takes_the_instance_pool_path() {
         "a skinned template never clones a static draw slot"
     );
     assert_eq!(
-        world.ctx().query::<SkeletonPose>().count(),
+        world.context().query::<SkeletonPose>().count(),
         poses_before,
         "an exhausted instance pool spawns nothing rather than growing a buffer"
     );
@@ -4592,12 +4545,13 @@ fn hot_reload_seams_park_the_fog_beside_the_backend() {
     assert!(!gs.failed);
 
     assert!(
-        !world
-            .resources
-            .contains::<super::hot_reload_sources::HotReloadSources>(),
+        world
+            .resource::<super::hot_reload_sources::HotReloadSources>()
+            .is_none(),
         "a plain build captures no source catalog"
     );
-    let (backend, fog, slots) = world.resources.get_disjoint_mut::<
+    let resources = world.context().resources;
+    let (backend, fog, slots) = resources.get_disjoint_mut::<
         crate::ecs::ActiveRenderBackend,
         super::parked::PushedFogSettings,
         super::parked::TextureNameSlots,
@@ -4716,8 +4670,7 @@ fn story_stage_images_are_resident_before_any_sprite_references_them() {
         "every stage image is decoded into the pool ahead of the swap"
     );
     let overlay = world
-        .resources
-        .get::<crate::gfx::overlay::OverlayAssets>()
+        .resource::<crate::gfx::overlay::OverlayAssets>()
         .unwrap();
     for slot in &slots {
         assert!(
@@ -4738,15 +4691,14 @@ fn pick_index_publishes_world_bounds_only_when_opted_in() {
     // Opted in: the quad prop at [1,2,3] indexes with its translated bounds.
     let (_state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
-    world.resources.insert(PickIndex::default());
+    world.insert_resource(PickIndex::default());
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
     assert_eq!(gs.pick_candidates.len(), 1, "one candidate per prop");
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
 
     let index = world
-        .resources
-        .get::<PickIndex>()
+        .resource::<PickIndex>()
         .expect("step publishes the index");
     assert_eq!(index.entries.len(), 1);
     let e = &index.entries[0];
@@ -4762,7 +4714,7 @@ fn pick_index_publishes_world_bounds_only_when_opted_in() {
     assert!(!gs.failed);
     assert!(gs.pick_candidates.is_empty());
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
-    assert!(world.resources.get::<PickIndex>().is_none());
+    assert!(world.resource::<PickIndex>().is_none());
 }
 
 // The editor's per-frame HiddenAssets set collapses a hidden prop's draw slots
@@ -4773,25 +4725,23 @@ fn editor_hidden_collapses_draws_and_skips_the_pick_index() {
     const COLLAPSED: [[f32; 4]; 4] = [[0.0; 4], [0.0; 4], [0.0; 4], [0.0, 0.0, 0.0, 1.0]];
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
-    world.resources.insert(PickIndex::default());
+    world.insert_resource(PickIndex::default());
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
 
-    world
-        .resources
-        .insert(HiddenAssets([PROP].into_iter().collect()));
+    world.insert_resource(HiddenAssets([PROP].into_iter().collect()));
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     {
-        let index = world.resources.get::<PickIndex>().unwrap();
+        let index = world.resource::<PickIndex>().unwrap();
         assert!(index.entries.is_empty(), "a hidden prop is not pickable");
         let s = lock(&state);
         let model = s.models.get(&DrawIndex(0)).expect("slot 0 model pushed");
         assert_eq!(*model, COLLAPSED, "the hidden prop's slot is degenerate");
     }
 
-    world.resources.insert(HiddenAssets::default());
+    world.insert_resource(HiddenAssets::default());
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
-    let index = world.resources.get::<PickIndex>().unwrap();
+    let index = world.resource::<PickIndex>().unwrap();
     assert_eq!(index.entries.len(), 1, "clearing the set restores the prop");
     let s = lock(&state);
     let model = s.models.get(&DrawIndex(0)).unwrap();
@@ -4820,14 +4770,13 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
         4,
     );
     let mut world = b.build();
-    world.resources.insert(PickIndex::default());
+    world.insert_resource(PickIndex::default());
     let mut gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
     assert_eq!(gs.pick_candidates.len(), 2, "the prop and the skinned mesh");
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     let index = world
-        .resources
-        .get::<PickIndex>()
+        .resource::<PickIndex>()
         .expect("step publishes the index");
     let body = index
         .entries
@@ -4838,12 +4787,16 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
 
     // Move the template: the live Transform drives the skinned model push.
     let entity = world
-        .ctx()
+        .context()
         .join2::<SkeletonPose, Transform>()
         .map(|(e, _, _)| e)
         .next()
         .expect("the template pose carries a Transform");
-    world.ctx().get_mut::<Transform>(entity).unwrap().position = [7.0, 0.0, 0.0];
+    world
+        .context()
+        .get_mut::<Transform>(entity)
+        .unwrap()
+        .position = [7.0, 0.0, 0.0];
     assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     assert!(
         lock(&state)
@@ -4852,7 +4805,7 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
             .any(|c| matches!(c, Call::UpdateSkinnedModel(SkinnedIndex(0)))),
         "the moved template reaches the backend"
     );
-    let index = world.resources.get::<PickIndex>().unwrap();
+    let index = world.resource::<PickIndex>().unwrap();
     let body = index.entries.iter().find(|e| e.asset_id == BODY).unwrap();
     assert!(body.bb_min[0] >= 7.0, "the index follows the move");
 
@@ -4864,7 +4817,10 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
     let gs = init_graphics(&mut world, hooks);
     assert!(!gs.failed);
     assert!(gs.pick_candidates.is_empty());
-    assert_eq!(world.ctx().join2::<SkeletonPose, Transform>().count(), 0);
+    assert_eq!(
+        world.context().join2::<SkeletonPose, Transform>().count(),
+        0
+    );
 }
 
 // A test action from its text form, with integer targets.

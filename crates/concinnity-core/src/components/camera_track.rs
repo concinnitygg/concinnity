@@ -297,14 +297,6 @@ pub(crate) fn travel_seconds(leg: &CameraTravel) -> f32 {
     }
 }
 
-impl crate::ecs::Component for CameraTrack {
-    const NAME: &'static str = "CameraTrack";
-
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::AssetError> {
-        crate::ecs::decode_baked(bytes)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

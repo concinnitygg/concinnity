@@ -152,13 +152,9 @@ fn position_chip_strip(
 mod tests {
     use super::*;
     use concinnity_core::components::{Justify, LayoutRow, SpriteFit, TextAlign};
-    use concinnity_core::ecs::Arena;
-    use concinnity_core::ecs::FrameContext;
     use concinnity_core::ecs::Ref;
-    use concinnity_core::ecs::{ComponentSlot, ComponentStorage, FontHandle, Resources};
+    use concinnity_core::ecs::{FontHandle, World};
     use concinnity_core::gfx::font;
-    use concinnity_core::profile::FrameProfile;
-    use concinnity_host::store::blob::BlobData;
 
     const FONT: FontHandle = FontHandle(0);
     // An authored position no layout pass should ever produce, so an untouched
@@ -231,60 +227,19 @@ mod tests {
         }
     }
 
-    // Owns the storage a PipelineContext borrows from. Label placement reads no
-    // payloads, so the blob and resources stay empty.
-    struct TestWorld {
-        components: ComponentStorage,
-        blob: BlobData,
-        profile: FrameProfile,
-        resources: Resources,
-        scratch: Arena,
-    }
-
-    impl TestWorld {
-        fn new() -> Self {
-            Self {
-                components: ComponentStorage::default(),
-                blob: BlobData::new(vec![Some(Vec::new())]),
-                profile: FrameProfile::default(),
-                resources: Resources::new(),
-                scratch: Arena::with_capacity(64 * 1024),
-            }
-        }
-
-        fn push<C: ComponentSlot>(&mut self, c: C) {
-            self.components.push_typed(c);
-        }
-
-        fn label(&mut self, id: AssetId, label: TextLabel) {
-            self.ctx().push_identified(id, label);
-        }
-
-        fn ctx(&mut self) -> PipelineContext<'_> {
-            PipelineContext {
-                components: &mut self.components,
-                blob: &mut self.blob,
-                profile: &mut self.profile,
-                resources: &mut self.resources,
-                frame: FrameContext::new(&self.scratch),
-            }
-        }
-
-        fn label_at(&mut self, id: AssetId) -> (f32, f32) {
-            let ctx = self.ctx();
-            let l = ctx.get_by_id::<TextLabel>(id).expect("label pushed");
-            (l.x, l.y)
-        }
+    fn label_at(w: &World, id: AssetId) -> (f32, f32) {
+        let l = w.get_by_id::<TextLabel>(id).expect("label pushed");
+        (l.x, l.y)
     }
 
     // Rows lay out left to right from the container origin and stack downward;
     // the resolved origin is written back into each label.
     #[test]
     fn apply_label_layout_places_rows_from_the_container_origin() {
-        let mut w = TestWorld::new();
-        w.label(AssetId(1), chip("aa"));
-        w.label(AssetId(2), chip("aaaa"));
-        w.label(AssetId(3), chip("aaaaaa"));
+        let mut w = World::new();
+        w.push_identified(AssetId(1), chip("aa"));
+        w.push_identified(AssetId(2), chip("aaaa"));
+        w.push_identified(AssetId(3), chip("aaaaaa"));
         w.push(LayoutContainer {
             x: 100.0,
             y: 50.0,
@@ -292,48 +247,48 @@ mod tests {
             ..Default::default()
         });
         apply_label_layout(
-            &mut w.ctx(),
+            &mut w.context(),
             &loaded_fonts(),
             &mut LabelLayoutScratch::default(),
         );
-        assert_eq!(w.label_at(AssetId(1)), (100.0, 48.0));
+        assert_eq!(label_at(&w, AssetId(1)), (100.0, 48.0));
         // The second chip clears the first's 20px box plus the 6px column gap.
-        assert_eq!(w.label_at(AssetId(2)), (126.0, 48.0));
+        assert_eq!(label_at(&w, AssetId(2)), (126.0, 48.0));
         // Row two drops by the first row's box height (12) plus the row gap.
-        assert_eq!(w.label_at(AssetId(3)), (100.0, 66.0));
+        assert_eq!(label_at(&w, AssetId(3)), (100.0, 66.0));
     }
 
     // A container that is not visible leaves its labels where they are.
     #[test]
     fn apply_label_layout_ignores_hidden_containers() {
-        let mut w = TestWorld::new();
-        w.label(AssetId(1), chip("aa"));
+        let mut w = World::new();
+        w.push_identified(AssetId(1), chip("aa"));
         w.push(LayoutContainer {
             rows: vec![row(&[AssetId(1)])],
             visible: false,
             ..Default::default()
         });
         apply_label_layout(
-            &mut w.ctx(),
+            &mut w.context(),
             &loaded_fonts(),
             &mut LabelLayoutScratch::default(),
         );
-        assert_eq!(w.label_at(AssetId(1)), (SENTINEL, SENTINEL));
+        assert_eq!(label_at(&w, AssetId(1)), (SENTINEL, SENTINEL));
     }
 
     // A label that cannot be measured is dropped from the layout: it reserves no
     // width and keeps its own position, so its row neighbors close the gap.
     #[test]
     fn apply_label_layout_drops_labels_it_cannot_measure() {
-        let mut w = TestWorld::new();
-        w.label(AssetId(1), chip("aa"));
+        let mut w = World::new();
+        w.push_identified(AssetId(1), chip("aa"));
         let mut hidden = chip("aaaa");
         hidden.visible = false;
-        w.label(AssetId(2), hidden);
+        w.push_identified(AssetId(2), hidden);
         let mut orphan = chip("aaaa");
         orphan.font = Some(FontHandle(99));
-        w.label(AssetId(3), orphan);
-        w.label(AssetId(4), chip("aaaaaa"));
+        w.push_identified(AssetId(3), orphan);
+        w.push_identified(AssetId(4), chip("aaaaaa"));
         w.push(LayoutContainer {
             x: 100.0,
             y: 50.0,
@@ -341,15 +296,15 @@ mod tests {
             ..Default::default()
         });
         apply_label_layout(
-            &mut w.ctx(),
+            &mut w.context(),
             &loaded_fonts(),
             &mut LabelLayoutScratch::default(),
         );
-        assert_eq!(w.label_at(AssetId(1)), (100.0, 48.0));
+        assert_eq!(label_at(&w, AssetId(1)), (100.0, 48.0));
         // The last chip packs against the first, as if the two dropped ones were absent.
-        assert_eq!(w.label_at(AssetId(4)), (126.0, 48.0));
-        assert_eq!(w.label_at(AssetId(2)), (SENTINEL, SENTINEL));
-        assert_eq!(w.label_at(AssetId(3)), (SENTINEL, SENTINEL));
+        assert_eq!(label_at(&w, AssetId(4)), (126.0, 48.0));
+        assert_eq!(label_at(&w, AssetId(2)), (SENTINEL, SENTINEL));
+        assert_eq!(label_at(&w, AssetId(3)), (SENTINEL, SENTINEL));
     }
 
     // A reused scratch never leaks placements from an earlier frame: a label
@@ -357,8 +312,8 @@ mod tests {
     // frame's placement.
     #[test]
     fn apply_label_layout_reuses_scratch_without_stale_placements() {
-        let mut w = TestWorld::new();
-        w.label(AssetId(1), chip("aa"));
+        let mut w = World::new();
+        w.push_identified(AssetId(1), chip("aa"));
         w.push(LayoutContainer {
             x: 100.0,
             y: 50.0,
@@ -366,37 +321,37 @@ mod tests {
             ..Default::default()
         });
         let mut scratch = LabelLayoutScratch::default();
-        apply_label_layout(&mut w.ctx(), &loaded_fonts(), &mut scratch);
-        assert_eq!(w.label_at(AssetId(1)), (100.0, 48.0));
+        apply_label_layout(&mut w.context(), &loaded_fonts(), &mut scratch);
+        assert_eq!(label_at(&w, AssetId(1)), (100.0, 48.0));
 
-        for c in w.ctx().query_mut::<LayoutContainer>() {
+        for c in w.context().query_mut::<LayoutContainer>() {
             c.rows.clear();
         }
-        for l in w.ctx().query_mut::<TextLabel>() {
+        for l in w.context().query_mut::<TextLabel>() {
             l.x = SENTINEL;
             l.y = SENTINEL;
         }
-        apply_label_layout(&mut w.ctx(), &loaded_fonts(), &mut scratch);
-        assert_eq!(w.label_at(AssetId(1)), (SENTINEL, SENTINEL));
+        apply_label_layout(&mut w.context(), &loaded_fonts(), &mut scratch);
+        assert_eq!(label_at(&w, AssetId(1)), (SENTINEL, SENTINEL));
     }
 
     // Chips anchor flush with the window's right margin, stacked downward in id
     // order, so a wider chip still lines its right edge up with the rest.
     #[test]
     fn position_debug_hud_right_anchors_chips_top_down() {
-        let mut w = TestWorld::new();
-        w.label(AssetId(1), chip("aa"));
-        w.label(AssetId(2), chip("aaaa"));
+        let mut w = World::new();
+        w.push_identified(AssetId(1), chip("aa"));
+        w.push_identified(AssetId(2), chip("aaaa"));
         position_debug_hud(
-            &mut w.ctx(),
+            &mut w.context(),
             &[AssetId(1), AssetId(2)],
             &loaded_fonts(),
             1000.0,
         );
-        assert_eq!(w.label_at(AssetId(1)), (970.0, 8.0));
+        assert_eq!(label_at(&w, AssetId(1)), (970.0, 8.0));
         // Twice as wide, so it starts further left but ends on the same edge, one
         // box height (12) plus the gap (6) below.
-        assert_eq!(w.label_at(AssetId(2)), (950.0, 26.0));
+        assert_eq!(label_at(&w, AssetId(2)), (950.0, 26.0));
     }
 
     // A blank chip (a hidden readout, or a stat the backend cannot supply) and one
@@ -404,88 +359,88 @@ mod tests {
     // do not shift.
     #[test]
     fn position_debug_hud_skips_chips_it_cannot_measure() {
-        let mut w = TestWorld::new();
-        w.label(AssetId(1), chip("aa"));
-        w.label(AssetId(2), chip(""));
+        let mut w = World::new();
+        w.push_identified(AssetId(1), chip("aa"));
+        w.push_identified(AssetId(2), chip(""));
         let mut orphan = chip("aaaa");
         orphan.font = Some(FontHandle(99));
-        w.label(AssetId(3), orphan);
-        w.label(AssetId(4), chip("aaaa"));
+        w.push_identified(AssetId(3), orphan);
+        w.push_identified(AssetId(4), chip("aaaa"));
         position_debug_hud(
-            &mut w.ctx(),
+            &mut w.context(),
             &[AssetId(1), AssetId(2), AssetId(3), AssetId(4)],
             &loaded_fonts(),
             1000.0,
         );
         // The last chip lands where it would with only the first chip above it.
-        assert_eq!(w.label_at(AssetId(4)), (950.0, 26.0));
-        assert_eq!(w.label_at(AssetId(2)), (SENTINEL, SENTINEL));
-        assert_eq!(w.label_at(AssetId(3)), (SENTINEL, SENTINEL));
+        assert_eq!(label_at(&w, AssetId(4)), (950.0, 26.0));
+        assert_eq!(label_at(&w, AssetId(2)), (SENTINEL, SENTINEL));
+        assert_eq!(label_at(&w, AssetId(3)), (SENTINEL, SENTINEL));
     }
 
     // A chip wider than the window stops at the left margin instead of running off
     // the left edge.
     #[test]
     fn position_debug_hud_clamps_a_chip_wider_than_the_window() {
-        let mut w = TestWorld::new();
-        w.label(AssetId(1), chip("aa"));
-        position_debug_hud(&mut w.ctx(), &[AssetId(1)], &loaded_fonts(), 15.0);
-        assert_eq!(w.label_at(AssetId(1)).0, 10.0);
+        let mut w = World::new();
+        w.push_identified(AssetId(1), chip("aa"));
+        position_debug_hud(&mut w.context(), &[AssetId(1)], &loaded_fonts(), 15.0);
+        assert_eq!(label_at(&w, AssetId(1)).0, 10.0);
     }
 
     // With no chips or no window there is nothing to anchor against.
     #[test]
     fn position_debug_hud_ignores_an_empty_chip_list_or_window() {
-        let mut w = TestWorld::new();
-        w.label(AssetId(1), chip("aa"));
-        position_debug_hud(&mut w.ctx(), &[], &loaded_fonts(), 1000.0);
-        assert_eq!(w.label_at(AssetId(1)), (SENTINEL, SENTINEL));
-        position_debug_hud(&mut w.ctx(), &[AssetId(1)], &loaded_fonts(), 0.0);
-        assert_eq!(w.label_at(AssetId(1)), (SENTINEL, SENTINEL));
+        let mut w = World::new();
+        w.push_identified(AssetId(1), chip("aa"));
+        position_debug_hud(&mut w.context(), &[], &loaded_fonts(), 1000.0);
+        assert_eq!(label_at(&w, AssetId(1)), (SENTINEL, SENTINEL));
+        position_debug_hud(&mut w.context(), &[AssetId(1)], &loaded_fonts(), 0.0);
+        assert_eq!(label_at(&w, AssetId(1)), (SENTINEL, SENTINEL));
     }
 
     // Chips pack into a strip from the top-left, each box's left edge at the
     // running x (so the text origin is inset by the chip's own padding).
     #[test]
     fn position_stat_hud_packs_chips_left_to_right() {
-        let mut w = TestWorld::new();
+        let mut w = World::new();
         let mut first = chip("aa");
         first.padding = 4.0;
         let mut second = chip("aaaa");
         second.padding = 4.0;
-        w.label(AssetId(1), first);
-        w.label(AssetId(2), second);
-        position_stat_hud(&mut w.ctx(), &[AssetId(1), AssetId(2)], &loaded_fonts());
+        w.push_identified(AssetId(1), first);
+        w.push_identified(AssetId(2), second);
+        position_stat_hud(&mut w.context(), &[AssetId(1), AssetId(2)], &loaded_fonts());
         // Box 1 at the margin, its origin 4px in.
-        assert_eq!(w.label_at(AssetId(1)), (14.0, 12.0));
+        assert_eq!(label_at(&w, AssetId(1)), (14.0, 12.0));
         // Box 2 clears box 1 (28px wide) plus the 4px gap.
-        assert_eq!(w.label_at(AssetId(2)), (46.0, 12.0));
+        assert_eq!(label_at(&w, AssetId(2)), (46.0, 12.0));
     }
 
     // A blank chip reserves no width, so the strip stays tight and leaves no hole.
     #[test]
     fn position_stat_hud_skips_blank_chips() {
-        let mut w = TestWorld::new();
-        w.label(AssetId(1), chip("aa"));
-        w.label(AssetId(2), chip(""));
-        w.label(AssetId(3), chip("aaaa"));
+        let mut w = World::new();
+        w.push_identified(AssetId(1), chip("aa"));
+        w.push_identified(AssetId(2), chip(""));
+        w.push_identified(AssetId(3), chip("aaaa"));
         position_stat_hud(
-            &mut w.ctx(),
+            &mut w.context(),
             &[AssetId(1), AssetId(2), AssetId(3)],
             &loaded_fonts(),
         );
-        assert_eq!(w.label_at(AssetId(1)), (10.0, 8.0));
+        assert_eq!(label_at(&w, AssetId(1)), (10.0, 8.0));
         // The third chip lands where the second would have, had it any content.
-        assert_eq!(w.label_at(AssetId(3)), (34.0, 8.0));
-        assert_eq!(w.label_at(AssetId(2)), (SENTINEL, SENTINEL));
+        assert_eq!(label_at(&w, AssetId(3)), (34.0, 8.0));
+        assert_eq!(label_at(&w, AssetId(2)), (SENTINEL, SENTINEL));
     }
 
     // With no chips there is nothing to pack.
     #[test]
     fn position_stat_hud_ignores_an_empty_chip_list() {
-        let mut w = TestWorld::new();
-        w.label(AssetId(1), chip("aa"));
-        position_stat_hud(&mut w.ctx(), &[], &loaded_fonts());
-        assert_eq!(w.label_at(AssetId(1)), (SENTINEL, SENTINEL));
+        let mut w = World::new();
+        w.push_identified(AssetId(1), chip("aa"));
+        position_stat_hud(&mut w.context(), &[], &loaded_fonts());
+        assert_eq!(label_at(&w, AssetId(1)), (SENTINEL, SENTINEL));
     }
 }

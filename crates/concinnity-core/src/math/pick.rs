@@ -2,7 +2,8 @@
 //! ray-vs-AABB intersection test. Consumed by the editor's viewport picking;
 //! nothing here touches a backend or the ECS.
 
-use crate::math::{sqrt, tan};
+use crate::math::tan;
+use crate::math::vec3::length;
 
 /// A world-space ray: `origin` plus a normalized direction.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,7 +51,7 @@ pub fn screen_ray(
         view[1][0] * d[0] + view[1][1] * d[1] + view[1][2] * d[2],
         view[2][0] * d[0] + view[2][1] * d[1] + view[2][2] * d[2],
     ];
-    let len = sqrt(world[0] * world[0] + world[1] * world[1] + world[2] * world[2]);
+    let len = length(world);
     if len <= 0.0 || !len.is_finite() {
         return None;
     }

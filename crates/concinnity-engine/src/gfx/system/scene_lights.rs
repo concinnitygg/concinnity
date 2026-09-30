@@ -41,26 +41,15 @@ pub(super) fn lights_under_sky<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::{Arena, ComponentStorage, FrameContext, Resources};
-    use concinnity_core::profile::FrameProfile;
-    use concinnity_host::store::blob::BlobData;
+    use concinnity_core::ecs::World;
 
     // The lights stay resident after packing, and the ambient reaches the uniforms.
     #[test]
     fn lights_are_packed_without_being_drained() {
-        let mut components = ComponentStorage::default();
-        components.push_typed(PointLight::default());
-        components.push_typed(DirectionalLight::default());
-        let (mut blob, mut profile, mut resources) =
-            (BlobData::empty(), FrameProfile::default(), Resources::new());
-        let scratch = Arena::with_capacity(1024);
-        let ctx = PipelineContext {
-            components: &mut components,
-            blob: &mut blob,
-            profile: &mut profile,
-            resources: &mut resources,
-            frame: FrameContext::new(&scratch),
-        };
+        let mut world = World::new();
+        world.push(PointLight::default());
+        world.push(DirectionalLight::default());
+        let ctx = world.context();
 
         let (data, uniforms) = gather_lights(&ctx, 0.25);
         assert_eq!(data.lights.len(), 1);

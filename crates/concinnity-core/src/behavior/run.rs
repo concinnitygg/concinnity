@@ -6,13 +6,13 @@
 // (an empty query's `first`, an unresolved name, a despawned entity) yields
 // None, and the node holding it is skipped rather than guessing.
 
+use crate::math::vec3::length;
 use alloc::vec::Vec;
 
 use crate::behavior::program::{CExpr, CNode, COp};
 use crate::behavior::value::{Arith, Cmp, Val};
 use crate::components::{PlayCue, SceneTransition, StoryPlayback, Transform};
 use crate::ecs::{Entity, asset_id::AssetId};
-use crate::math::sqrt;
 
 /// What a behavior may read this tick.
 pub struct View<'a> {
@@ -190,7 +190,7 @@ fn eval(expr: &CExpr, view: &View<'_>) -> Option<Val> {
             let a = (view.positions)(eval(a, view)?.as_entity()?)?;
             let b = (view.positions)(eval(b, view)?.as_entity()?)?;
             let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-            Some(Val::Float(sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])))
+            Some(Val::Float(length(d)))
         }
         CExpr::First(slot) => view
             .queries
@@ -233,7 +233,7 @@ fn eval(expr: &CExpr, view: &View<'_>) -> Option<Val> {
         }
         CExpr::Normalize(e) => {
             let v = eval(e, view)?.as_vec3()?;
-            let len = sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            let len = length(v);
             Some(Val::Vec3(if len > f32::EPSILON {
                 [v[0] / len, v[1] / len, v[2] / len]
             } else {

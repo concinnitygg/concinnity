@@ -478,9 +478,7 @@ mod tests {
     // Every post program's fragment, and the shared vertex, compile to SPIR-V.
     #[test]
     fn every_post_program_compiles() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         for program in [
             PostProgram::TaaResolve,
             PostProgram::SsrResolve,

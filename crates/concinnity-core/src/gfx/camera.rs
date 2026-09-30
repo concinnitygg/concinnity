@@ -2,7 +2,7 @@
 //! stateless -- callers own position, yaw, and pitch directly (e.g. on
 //! Camera3D) and pass them in as needed.
 
-use crate::math::vec3::{cross, length};
+use crate::math::vec3::{cross, normalize_or};
 use crate::math::{sin_cos, tan};
 
 // Floor applied to a viewport aspect ratio before it reaches a shader, so a
@@ -33,7 +33,7 @@ pub fn view_matrix(position: [f32; 3], yaw: f32, pitch: f32) -> [[f32; 4]; 4] {
     let (sin_pitch, cos_pitch) = sin_cos(pitch);
 
     let fwd = [-sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch];
-    let right = normalize(cross(fwd, [0.0, 1.0, 0.0]));
+    let right = normalize_or(cross(fwd, [0.0, 1.0, 0.0]), 1e-7, [0.0, 0.0, 1.0]);
     let up = cross(right, fwd);
 
     let [rx, ry, rz] = right;
@@ -52,15 +52,6 @@ pub fn view_matrix(position: [f32; 3], yaw: f32, pitch: f32) -> [[f32; 4]; 4] {
             1.0,
         ],
     ]
-}
-
-fn normalize(v: [f32; 3]) -> [f32; 3] {
-    let len = length(v);
-    if len < 1e-7 {
-        [0.0, 0.0, 1.0]
-    } else {
-        [v[0] / len, v[1] / len, v[2] / len]
-    }
 }
 
 #[cfg(test)]
@@ -109,11 +100,9 @@ mod tests {
     }
 
     #[test]
-    fn normalize_falls_back_for_a_zero_vector() {
-        assert_eq!(normalize([0.0, 0.0, 0.0]), [0.0, 0.0, 1.0]);
-        let n = normalize([3.0, 0.0, 0.0]);
-        assert!((n[0] - 1.0).abs() < 1e-6);
-        assert_eq!([n[1], n[2]], [0.0, 0.0]);
+    fn looking_straight_up_falls_back_to_a_z_right_axis() {
+        let m = view_matrix([0.0; 3], 0.0, core::f32::consts::FRAC_PI_2);
+        assert_eq!([m[0][0], m[1][0], m[2][0]], [0.0, 0.0, 1.0]);
     }
 
     #[test]

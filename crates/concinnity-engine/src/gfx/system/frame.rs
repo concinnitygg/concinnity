@@ -611,53 +611,17 @@ impl GraphicsSystem {
 mod tests {
     use super::*;
     use concinnity_core::animation::skeleton;
-    use concinnity_core::ecs::Arena;
-    use concinnity_core::ecs::FrameContext;
     use concinnity_core::render::feedback;
     use std::collections::HashSet;
 
     use crate::gfx::overlay::OverlayFrame;
     use concinnity_core::components::{GlobalTransform, RenderHandle, SkeletonPose};
-    use concinnity_core::ecs::{ComponentStorage, Resources, SkinnedMeshHandle};
-    use concinnity_core::profile::FrameProfile;
+    use concinnity_core::ecs::{SkinnedMeshHandle, World};
     use concinnity_core::render::snapshot::SceneOp;
-    use concinnity_host::store::blob::BlobData;
 
-    // Owns the storage a PipelineContext borrows from; extraction never reads
-    // the blob, so it stays empty.
-    struct ExtractWorld {
-        components: ComponentStorage,
-        blob: BlobData,
-        profile: FrameProfile,
-        resources: Resources,
-        scratch: Arena,
-    }
-
-    impl ExtractWorld {
-        fn new() -> Self {
-            Self {
-                components: ComponentStorage::default(),
-                blob: BlobData::empty(),
-                profile: FrameProfile::default(),
-                resources: Resources::new(),
-                scratch: Arena::with_capacity(64 * 1024),
-            }
-        }
-
-        fn ctx(&mut self) -> PipelineContext<'_> {
-            PipelineContext {
-                components: &mut self.components,
-                blob: &mut self.blob,
-                profile: &mut self.profile,
-                resources: &mut self.resources,
-                frame: FrameContext::new(&self.scratch),
-            }
-        }
-    }
-
-    fn extract_once(gs: &mut GraphicsSystem, world: &mut ExtractWorld) -> RenderSnapshot {
+    fn extract_once(gs: &mut GraphicsSystem, world: &mut World) -> RenderSnapshot {
         let mut snap = RenderSnapshot::default();
-        gs.extract(&mut world.ctx(), &mut snap);
+        gs.extract(&mut world.context(), &mut snap);
         snap
     }
 
@@ -667,9 +631,9 @@ mod tests {
     fn extraction_carries_the_sky_into_the_frame_and_the_lights() {
         use concinnity_core::sky::SkyOrientation;
 
-        let mut world = ExtractWorld::new();
+        let mut world = World::new();
         {
-            let mut ctx = world.ctx();
+            let mut ctx = world.context();
             ctx.components.push(
                 DirectionalLight {
                     direction: [0.0, 0.0, 1.0],
@@ -723,9 +687,9 @@ mod tests {
     // unchanged frame extracts nothing for the same entity.
     #[test]
     fn extraction_gathers_changed_models_and_gates_repeats() {
-        let mut world = ExtractWorld::new();
+        let mut world = World::new();
         {
-            let mut ctx = world.ctx();
+            let mut ctx = world.context();
             let e = ctx.components.spawn();
             ctx.insert(e, GlobalTransform(translated(2.0)));
             ctx.insert(
@@ -754,9 +718,9 @@ mod tests {
     // along only when present.
     #[test]
     fn extraction_copies_updated_poses_and_clears_the_flag() {
-        let mut world = ExtractWorld::new();
+        let mut world = World::new();
         {
-            let mut ctx = world.ctx();
+            let mut ctx = world.context();
             let e = ctx.components.spawn();
             let mut pose = bare_pose(5, 2);
             pose.morph_weights = vec![0.25, 0.75];
@@ -783,9 +747,9 @@ mod tests {
     // frame scalars + overlay adoption reflect the menu state.
     #[test]
     fn extraction_skips_skinned_families_while_a_menu_is_open() {
-        let mut world = ExtractWorld::new();
+        let mut world = World::new();
         {
-            let mut ctx = world.ctx();
+            let mut ctx = world.context();
             let e = ctx.components.spawn();
             ctx.insert(e, bare_pose(0, 1));
             ctx.insert_resource(OverlayFrame {
@@ -802,8 +766,7 @@ mod tests {
         assert!(snap.frame.world_hidden);
         assert!(snap.ui.cursor_hidden);
         let parked = world
-            .resources
-            .get::<OverlayFrame>()
+            .resource::<OverlayFrame>()
             .expect("the slot stays parked after the take");
         assert!(
             parked.calls.is_empty() && !parked.menu_active && !parked.world_hidden,
@@ -819,9 +782,9 @@ mod tests {
     // absolute Camera3D values; projection parameters come from the camera.
     #[test]
     fn extraction_prefers_the_camera_relative_view() {
-        let mut world = ExtractWorld::new();
+        let mut world = World::new();
         {
-            let mut ctx = world.ctx();
+            let mut ctx = world.context();
             let e = ctx.components.spawn();
             ctx.insert(
                 e,
@@ -857,9 +820,9 @@ mod tests {
     // backend; an idle flow records nothing.
     #[test]
     fn extraction_records_fade_effects_as_scene_ops() {
-        let mut world = ExtractWorld::new();
+        let mut world = World::new();
         {
-            let mut ctx = world.ctx();
+            let mut ctx = world.context();
             ctx.insert_resource(crate::ecs::ActiveSceneFlow::new(Some(
                 scene_flow::SceneFlow {
                     scenes: vec![AssetId(1), AssetId(2)],
@@ -879,7 +842,7 @@ mod tests {
         );
 
         // Clear the fade: nothing is recorded on an idle flow.
-        if let Some(slot) = world.resources.get_mut::<crate::ecs::ActiveSceneFlow>() {
+        if let Some(slot) = world.resource_mut::<crate::ecs::ActiveSceneFlow>() {
             slot.flow.as_mut().unwrap().fade = scene_flow::FadePhase::None;
         }
         let snap = extract_once(&mut gs, &mut world);
@@ -890,13 +853,13 @@ mod tests {
     // shipped runtime, no menu-mode world) both intents stay None.
     #[test]
     fn extraction_resolves_menu_override_into_ui_intents() {
-        let mut world = ExtractWorld::new();
+        let mut world = World::new();
         let mut gs = GraphicsSystem::new(None);
         let snap = extract_once(&mut gs, &mut world);
         assert_eq!(snap.ui.menu_mode, None);
         assert_eq!(snap.ui.camera_capture, None);
 
-        world.resources.insert(MenuOverride(Some(false)));
+        world.insert_resource(MenuOverride(Some(false)));
         let snap = extract_once(&mut gs, &mut world);
         assert_eq!(snap.ui.menu_mode, Some(true));
         assert_eq!(
@@ -911,9 +874,9 @@ mod tests {
     // editor's resources nothing of the sort is extracted.
     #[test]
     fn extraction_applies_editor_hides_and_pick_index_only_when_opted_in() {
-        let mut world = ExtractWorld::new();
+        let mut world = World::new();
         let entity = {
-            let mut ctx = world.ctx();
+            let mut ctx = world.context();
             let e = ctx.components.spawn();
             ctx.insert(e, GlobalTransform(translated(2.0)));
             ctx.insert(
@@ -928,7 +891,7 @@ mod tests {
         let mut gs = GraphicsSystem::new(None);
         let snap = extract_once(&mut gs, &mut world);
         assert_eq!(snap.models, vec![(DrawIndex(9), translated(2.0))]);
-        assert!(world.resources.get::<PickIndex>().is_none());
+        assert!(world.resource::<PickIndex>().is_none());
 
         // The editor opted in and hid the asset: the queued model is
         // overwritten in order and the index excludes it.
@@ -938,11 +901,9 @@ mod tests {
             local_min: [-1.0; 3],
             local_max: [1.0; 3],
         });
-        world
-            .resources
-            .insert(HiddenAssets([AssetId(42)].into_iter().collect()));
+        world.insert_resource(HiddenAssets([AssetId(42)].into_iter().collect()));
         {
-            let mut ctx = world.ctx();
+            let mut ctx = world.context();
             if let Some(g) = ctx.get_mut::<GlobalTransform>(entity) {
                 g.0 = translated(3.0);
             }
@@ -956,7 +917,7 @@ mod tests {
             ],
             "the hide overwrite follows the move so it wins on the backend"
         );
-        let index = world.resources.get::<PickIndex>().unwrap();
+        let index = world.resource::<PickIndex>().unwrap();
         assert!(index.entries.is_empty(), "a hidden asset is not pickable");
     }
 
@@ -965,9 +926,9 @@ mod tests {
     // buffer), and a feedback-flagged stop propagates as StepResult::Stop.
     #[test]
     fn pipelined_step_sends_the_snapshot_and_applies_feedback() {
-        let mut world = ExtractWorld::new();
+        let mut world = World::new();
         {
-            let mut ctx = world.ctx();
+            let mut ctx = world.context();
             let e = ctx.components.spawn();
             ctx.insert(e, GlobalTransform(translated(2.0)));
             ctx.insert(
@@ -979,7 +940,7 @@ mod tests {
         }
         let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel(0);
         let (feedback_tx, feedback_rx) = std::sync::mpsc::channel();
-        world.resources.insert(crate::ecs::PipelinedFrames(Some(
+        world.insert_resource(crate::ecs::PipelinedFrames(Some(
             crate::ecs::PipelineChannels {
                 snapshot_tx,
                 feedback_rx,
@@ -1011,17 +972,17 @@ mod tests {
         let mut gs = GraphicsSystem::new(None);
         // Frame 0: the send completes, but its feedback may or may not have
         // landed yet; either way the step continues.
-        assert_eq!(gs.run_step(&mut world.ctx()), StepResult::Continue);
+        assert_eq!(gs.run_step(&mut world.context()), StepResult::Continue);
         // Frame 1: the rendezvous completing proves feedback 0 arrived; the
         // second feedback carries the stop, applied this frame or next.
-        let mut result = gs.run_step(&mut world.ctx());
+        let mut result = gs.run_step(&mut world.context());
         if result == StepResult::Continue {
-            result = gs.run_step(&mut world.ctx());
+            result = gs.run_step(&mut world.context());
         }
         assert_eq!(result, StepResult::Stop, "the feedback stop propagates");
         consumer.join().expect("the stand-in render half exits");
 
-        let mut ctx = world.ctx();
+        let mut ctx = world.context();
         assert!(
             ctx.resource_mut::<crate::ecs::InputMailbox>()
                 .and_then(|m| m.0.take())
@@ -1038,10 +999,10 @@ mod tests {
     // instead of blocking or panicking.
     #[test]
     fn pipelined_step_stops_when_the_render_half_is_gone() {
-        let mut world = ExtractWorld::new();
+        let mut world = World::new();
         let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel(0);
         let (_feedback_tx, feedback_rx) = std::sync::mpsc::channel();
-        world.resources.insert(crate::ecs::PipelinedFrames(Some(
+        world.insert_resource(crate::ecs::PipelinedFrames(Some(
             crate::ecs::PipelineChannels {
                 snapshot_tx,
                 feedback_rx,
@@ -1049,7 +1010,7 @@ mod tests {
         )));
         drop(snapshot_rx);
         let mut gs = GraphicsSystem::new(None);
-        assert_eq!(gs.run_step(&mut world.ctx()), StepResult::Stop);
+        assert_eq!(gs.run_step(&mut world.context()), StepResult::Stop);
     }
 
     // A gated value label pulls in every element of the scroll row that holds

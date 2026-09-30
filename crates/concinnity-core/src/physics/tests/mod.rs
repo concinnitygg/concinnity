@@ -6,6 +6,7 @@
 mod ccd;
 mod character;
 mod contact_events;
+mod fixtures;
 mod heightfield;
 mod joints;
 mod parallel;

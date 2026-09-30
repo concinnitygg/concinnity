@@ -328,9 +328,7 @@ VolumeSample sampleVolume(float3 p, SdfParams params, float time)
     // proves: each variant reaches only the entries its family declares.
     #[test]
     fn every_raymarch_entry_compiles_on_every_backend() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let work = concinnity_host::scratch::Scratch::dir("raymarch-compile-guard")
             .expect("scratch directory");
         for platform in Platform::ALL {

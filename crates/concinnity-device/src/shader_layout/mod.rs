@@ -49,9 +49,7 @@ use programs::Program;
 // out of a target it cannot build on, which is otherwise indistinguishable from
 // a layout failure.
 fn check(program: &Program, cases: &[Case]) {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let mut drift = Vec::new();
     for target in Platform::ALL {
         if !cases.iter().any(|case| case.targets.contains(&target)) {
@@ -143,9 +141,7 @@ fn main_bindless_layouts_match_the_shader() {
 // parameter nothing fills and sample undefined contents.
 #[test]
 fn the_metal_main_pass_declares_no_discrete_texture_or_sampler() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let msl = programs::msl(&programs::MAIN_BINDLESS_FRAG).unwrap_or_else(|e| panic!("{e}"));
     let signature = msl
         .lines()
@@ -173,9 +169,7 @@ fn the_metal_main_pass_declares_no_discrete_texture_or_sampler() {
 // member has to declare every member, each at that same id.
 #[test]
 fn a_world_fragment_declares_the_whole_argument_buffers() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let msl = |program| programs::msl(program).unwrap_or_else(|e| panic!("{e}"));
     let engine_msl = msl(&programs::MAIN_BINDLESS_FRAG);
     let world_msl = msl(&programs::MAIN_BINDLESS_FRAG_LATE_MEMBER_SHADE);
@@ -210,9 +204,7 @@ fn a_world_fragment_declares_the_whole_argument_buffers() {
 // Metal encoder binds it, from either stage.
 #[test]
 fn a_world_hook_reads_material_params_where_metal_binds_them() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let slot = "material_params_sb [[buffer(16)]]";
     for program in [
         &programs::MAIN_BINDLESS_FRAG_PARAMS_SHADE,

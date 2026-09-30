@@ -26,6 +26,7 @@ use concinnity_core::bake::texture::{
     TextureFormat, TextureImage, TextureMip, downscale_rgba, serialize,
 };
 use concinnity_core::components::Texture;
+use concinnity_core::math::noise::{lattice_hash, lattice_value, lcg_hash};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -535,7 +536,7 @@ fn generate_grass(resolution: u32) -> (u32, u32, Vec<u8>) {
     for cy in 0..num_cells {
         for cx in 0..num_cells {
             // hash the cell position to derive blade properties
-            let h1 = lcg_hash(cx.wrapping_mul(1619).wrapping_add(cy.wrapping_mul(31337)));
+            let h1 = lattice_hash(cx, cy);
             let h2 = lcg_hash(h1);
             let h3 = lcg_hash(h2);
 
@@ -643,10 +644,7 @@ fn smooth_noise(x: u32, y: u32, size: u32) -> u32 {
     let fx = (x % scale) as f32 / scale as f32;
     let fy = (y % scale) as f32 / scale as f32;
 
-    let g = |lx: u32, ly: u32| -> f32 {
-        let h = lcg_hash(lx.wrapping_mul(1619).wrapping_add(ly.wrapping_mul(31337)));
-        (h & 0xFF) as f32
-    };
+    let g = |lx: u32, ly: u32| -> f32 { (lattice_hash(lx, ly) & 0xFF) as f32 };
 
     let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
     let top = lerp(g(gx, gy), g(gx + 1, gy), fx);
@@ -849,10 +847,7 @@ fn generate_plaster(resolution: u32) -> (u32, u32, Vec<u8>) {
             let gy = y / scale;
             let fx = (x % scale) as f32 / scale as f32;
             let fy = (y % scale) as f32 / scale as f32;
-            let g = |lx: u32, ly: u32| -> f32 {
-                let h = lcg_hash(lx.wrapping_mul(1619).wrapping_add(ly.wrapping_mul(31337)));
-                (h & 0xFF) as f32 / 255.0
-            };
+            let g = lattice_value;
             let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
             let coarse = lerp(
                 lerp(g(gx, gy), g(gx + 1, gy), fx),
@@ -879,12 +874,6 @@ fn generate_plaster(resolution: u32) -> (u32, u32, Vec<u8>) {
     }
 
     (size, size, pixels)
-}
-
-fn lcg_hash(mut v: u32) -> u32 {
-    v = v.wrapping_mul(1664525).wrapping_add(1013904223);
-    v ^= v >> 16;
-    v
 }
 
 #[cfg(test)]

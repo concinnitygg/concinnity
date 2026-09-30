@@ -140,10 +140,11 @@ fn add_vals(current: Val, delta: Val) -> Val {
 mod tests {
     use super::*;
     use crate::behavior::SpawnEffect;
-    use crate::behavior::system::test_world::{TestWorld, world_with};
+    use crate::behavior::system::test_world::world_with;
     use crate::components::{
         Behavior, BehaviorLiteral, BehaviorLocal, BehaviorSource, CueKind, PropInstance,
     };
+    use crate::ecs::World;
     use crate::ecs::{AudioClipHandle, EventCursor, System, asset_id::AssetId};
     use alloc::string::String;
     use alloc::vec;
@@ -153,7 +154,7 @@ mod tests {
     // holding one prop, ticked once so the system holds its programs and the
     // instance they run against: instances are created by the tick's resync,
     // not by init, and only a scoped one carries locals.
-    fn started(local: BehaviorLiteral) -> (BehaviorSystem, TestWorld, Entity) {
+    fn started(local: BehaviorLiteral) -> (BehaviorSystem, World, Entity) {
         let mut world = world_with(vec![Behavior {
             on: BehaviorSource::Start,
             scope: vec![String::from("Prop")],
@@ -163,10 +164,10 @@ mod tests {
             }],
             ..Behavior::default()
         }]);
-        let prop = world.components.push_typed(PropInstance);
+        let prop = world.push(PropInstance);
         let mut sys = BehaviorSystem::new();
-        sys.init(&mut world.ctx());
-        sys.tick(&mut world.ctx(), 0.016, 0.016);
+        sys.init(&mut world.context());
+        sys.tick(&mut world.context(), 0.016, 0.016);
         (sys, world, prop)
     }
 
@@ -176,17 +177,17 @@ mod tests {
 
     fn apply(
         sys: &mut BehaviorSystem,
-        world: &mut TestWorld,
+        world: &mut World,
         entity: Entity,
         effects: Vec<Effect>,
     ) -> bool {
-        sys.apply(&mut world.ctx(), 0, Some(entity), effects.into_iter())
+        sys.apply(&mut world.context(), 0, Some(entity), effects.into_iter())
     }
 
-    fn sent<E: 'static>(world: &mut TestWorld) -> usize {
+    fn sent<E: 'static>(world: &mut World) -> usize {
         let mut cursor = EventCursor::default();
         world
-            .ctx()
+            .context()
             .events::<E>()
             .map(|e| e.read(&mut cursor).count())
             .unwrap_or(0)
@@ -216,7 +217,7 @@ mod tests {
 
         // No instance is scoped to the world, so this addresses none of them.
         sys.apply(
-            &mut world.ctx(),
+            &mut world.context(),
             0,
             None,
             [Effect::SetLocal {
@@ -261,7 +262,7 @@ mod tests {
     #[test]
     fn each_request_effect_sends_its_own_event() {
         let (mut sys, mut world, prop) = started(BehaviorLiteral::Int(0));
-        let entity = world.components.push_typed(PropInstance);
+        let entity = world.push(PropInstance);
         let saved = apply(
             &mut sys,
             &mut world,
@@ -312,8 +313,8 @@ mod tests {
     #[test]
     fn a_transform_effect_writes_the_entity_that_carries_one() {
         let (mut sys, mut world, prop) = started(BehaviorLiteral::Int(0));
-        let entity = world.components.push_typed(PropInstance);
-        world.components.insert_typed(entity, Transform::default());
+        let entity = world.push(PropInstance);
+        world.insert(entity, Transform::default());
         let moved = Transform {
             position: [1.0, 2.0, 3.0],
             ..Transform::default()
@@ -328,15 +329,12 @@ mod tests {
             }],
         );
         assert_eq!(
-            world
-                .components
-                .get::<Transform>(entity)
-                .map(|t| t.position),
+            world.get::<Transform>(entity).map(|t| t.position),
             Some([1.0, 2.0, 3.0])
         );
 
         // An entity carrying no transform is left alone rather than gaining one.
-        let bare = world.components.push_typed(PropInstance);
+        let bare = world.push(PropInstance);
         apply(
             &mut sys,
             &mut world,
@@ -346,7 +344,7 @@ mod tests {
                 transform: moved,
             }],
         );
-        assert!(world.components.get::<Transform>(bare).is_none());
+        assert!(world.get::<Transform>(bare).is_none());
     }
 
     // Adding keeps the target's declared type: the delta is read through it

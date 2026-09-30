@@ -11,7 +11,7 @@
 use super::Line;
 use crate::gfx::render_types::LineVertex;
 use crate::math::tan;
-use crate::math::vec3::{cross, dot, length, lerp as lerp3, sub};
+use crate::math::vec3::{cross, dot, lerp as lerp3, sub, try_normalize};
 use alloc::vec::Vec;
 
 // Vertices emitted per expanded segment: two triangles, unindexed.
@@ -61,11 +61,6 @@ impl LineCamera {
     fn usable(&self, tan_half: f32) -> bool {
         self.viewport[0] > 0.0 && self.viewport[1] > 0.0 && tan_half > 0.0 && tan_half.is_finite()
     }
-}
-
-fn normalize(v: [f32; 3]) -> Option<[f32; 3]> {
-    let len = length(v);
-    (len > 1e-6).then(|| [v[0] / len, v[1] / len, v[2] / len])
 }
 
 fn lerp4(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
@@ -154,7 +149,7 @@ pub fn build_vertices_into(
         let Some(seg) = clip_to_near(line, cam) else {
             continue;
         };
-        let Some(dir) = normalize(sub(seg.end, seg.start)) else {
+        let Some(dir) = try_normalize(sub(seg.end, seg.start), 1e-6) else {
             continue;
         };
         let half_px = line.width_px * 0.5;
@@ -164,7 +159,7 @@ pub fn build_vertices_into(
         // fallback (the ribbon is a dot on screen there anyway).
         let corner = |p: [f32; 3], color: [f32; 4], side: f32| {
             let to_eye = sub(p, cam.cam_pos);
-            let normal = normalize(cross(dir, to_eye)).unwrap_or_else(|| cam.right());
+            let normal = try_normalize(cross(dir, to_eye), 1e-6).unwrap_or_else(|| cam.right());
             let half =
                 half_px * cam.world_per_pixel(dot(to_eye, fwd).max(cam.near.max(1e-4)), tan_half);
             LineVertex {

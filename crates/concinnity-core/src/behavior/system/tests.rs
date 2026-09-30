@@ -1,6 +1,5 @@
-// BehaviorSystem unit tests: drive the tick against a hand-assembled
-// PipelineContext with synthetic dt, so timers, delays, and per-entity state
-// are deterministic.
+// BehaviorSystem unit tests: drive the tick against a bare World with
+// synthetic dt, so timers, delays, and per-entity state are deterministic.
 //
 // Persistence is driven through an in-memory store: what these cover is the
 // restore and write-back semantics, which are the same whatever the state is
@@ -23,11 +22,11 @@ use crate::ecs::{
     asset_id::AssetId,
 };
 
-use super::test_world::{TestWorld, world_with};
+use super::test_world::world_with;
 
-fn system(world: &mut TestWorld) -> BehaviorSystem {
+fn system(world: &mut World) -> BehaviorSystem {
     let mut sys = BehaviorSystem::new();
-    sys.init(&mut world.ctx());
+    sys.init(&mut world.context());
     sys
 }
 
@@ -39,19 +38,22 @@ fn entities_matching(ctx: &PipelineContext, tags: &[u8]) -> Vec<Entity> {
     out
 }
 
+// Simulated time accumulated by `tick`, kept in the world it ticks.
+struct Elapsed(f32);
+
 // Drive one tick with an explicit dt.
-fn tick(sys: &mut BehaviorSystem, world: &mut TestWorld, dt: f32) {
-    world.elapsed += dt;
-    let elapsed = world.elapsed;
-    sys.tick(&mut world.ctx(), dt, elapsed);
+fn tick(sys: &mut BehaviorSystem, world: &mut World, dt: f32) {
+    let elapsed = world.remove_resource::<Elapsed>().map_or(0.0, |e| e.0) + dt;
+    world.insert_resource(Elapsed(elapsed));
+    sys.tick(&mut world.context(), dt, elapsed);
 }
 
 // A prop's entity as it exists from the first tick: decomposition drains the
 // authored Prop and leaves the PropInstance marker in its place, which is what
 // a behavior scoped to "Prop" resolves against.
-fn spawn_prop(world: &mut TestWorld, position: [f32; 3]) -> Entity {
-    let entity = world.components.push_typed(PropInstance);
-    world.components.insert_typed(
+fn spawn_prop(world: &mut World, position: [f32; 3]) -> Entity {
+    let entity = world.push(PropInstance);
+    world.insert(
         entity,
         Transform {
             position,
@@ -86,9 +88,9 @@ fn var_val(sys: &BehaviorSystem, name: &str) -> Val {
         .unwrap_or(Val::Int(0))
 }
 
-fn count<E: 'static>(world: &mut TestWorld, cursor: &mut EventCursor) -> usize {
+fn count<E: 'static>(world: &mut World, cursor: &mut EventCursor) -> usize {
     world
-        .ctx()
+        .context()
         .events::<E>()
         .map(|e| e.read(cursor).count())
         .unwrap_or(0)
@@ -193,7 +195,7 @@ fn self_moves_only_its_own_entity() {
     let mut sys = system(&mut world);
 
     tick(&mut sys, &mut world, 0.016);
-    let ctx = world.ctx();
+    let ctx = world.context();
     assert_eq!(ctx.get::<Transform>(a).unwrap().position, [1.0, 0.0, 0.0]);
     assert_eq!(ctx.get::<Transform>(b).unwrap().position, [11.0, 0.0, 0.0]);
 }
@@ -246,7 +248,7 @@ fn for_each_binds_every_queried_entity() {
     let mut sys = system(&mut world);
 
     tick(&mut sys, &mut world, 0.016);
-    let ctx = world.ctx();
+    let ctx = world.context();
     assert_eq!(ctx.get::<Transform>(a).unwrap().position, [5.0, 0.0, 0.0]);
     assert_eq!(ctx.get::<Transform>(b).unwrap().position, [5.0, 0.0, 0.0]);
 }
@@ -281,17 +283,13 @@ fn distance_gates_a_condition() {
     }]);
     let near = spawn_prop(&mut world, [0.0; 3]);
     let far = spawn_prop(&mut world, [100.0, 0.0, 0.0]);
-    world.ctx().identify(far, AssetId(7));
+    world.context().identify(far, AssetId(7));
     let mut sys = system(&mut world);
 
     tick(&mut sys, &mut world, 0.016);
     assert_eq!(var(&sys, "near"), 0, "100 units apart is not near");
 
-    world
-        .components
-        .get_mut::<Transform>(near)
-        .unwrap()
-        .position = [98.0, 0.0, 0.0];
+    world.get_mut::<Transform>(near).unwrap().position = [98.0, 0.0, 0.0];
     tick(&mut sys, &mut world, 0.016);
     assert_eq!(var(&sys, "near"), 1);
 }
@@ -312,7 +310,7 @@ fn despawn_of_self_addresses_the_entity_not_a_name() {
     tick(&mut sys, &mut world, 0.016);
     let mut cursor = EventCursor::default();
     let requests: Vec<EntityTarget> = world
-        .ctx()
+        .context()
         .events::<DespawnRequest>()
         .map(|e| e.read(&mut cursor).map(|r| r.target).collect())
         .unwrap_or_default();
@@ -522,11 +520,9 @@ fn raycast_meets_a_querys_entity_and_never_the_caster() {
 
     // A caster at the origin and a solid box five along +x. Both carry
     // colliders, so a ray that met its own would report a hit at once.
-    let solid = |world: &mut TestWorld, x: f32| {
+    let solid = |world: &mut World, x: f32| {
         let entity = spawn_prop(world, [x, 0.0, 0.0]);
-        world
-            .components
-            .insert_typed(entity, Collider(PropCollider::default()));
+        world.insert(entity, Collider(PropCollider::default()));
         entity
     };
 
@@ -661,7 +657,7 @@ fn instances_track_entities_appearing_and_disappearing() {
     tick(&mut sys, &mut world, 0.016);
     assert_eq!(var(&sys, "runs"), 3, "two entities now match");
 
-    world.components.despawn(first);
+    world.despawn(first);
     tick(&mut sys, &mut world, 0.016);
     assert_eq!(var(&sys, "runs"), 4, "one entity remains");
 }
@@ -702,11 +698,11 @@ fn query_order_is_stable_across_a_removal() {
     let c = spawn_prop(&mut world, [2.0, 0.0, 0.0]);
     let sys = system(&mut world);
 
-    let before = entities_matching(&world.ctx(), &sys.programs[0].queries[0]);
+    let before = entities_matching(&world.context(), &sys.programs[0].queries[0]);
     assert_eq!(before, vec![a, b, c]);
 
-    world.components.despawn(b);
-    let after = entities_matching(&world.ctx(), &sys.programs[0].queries[0]);
+    world.despawn(b);
+    let after = entities_matching(&world.context(), &sys.programs[0].queries[0]);
     assert_eq!(after, vec![a, c], "the survivors keep their relative order");
 }
 
@@ -723,10 +719,10 @@ fn a_query_intersects_every_declared_component() {
     }]);
     let placed = spawn_prop(&mut world, [0.0; 3]);
     // A Prop with no Transform must not match.
-    world.components.push_typed(PropInstance);
+    world.push(PropInstance);
     let sys = system(&mut world);
 
-    let matched = entities_matching(&world.ctx(), &sys.programs[0].queries[0]);
+    let matched = entities_matching(&world.context(), &sys.programs[0].queries[0]);
     assert_eq!(matched, vec![placed]);
 }
 
@@ -825,8 +821,8 @@ fn alive_follows_the_world_not_this_ticks_queries() {
     tick(&mut sys, &mut world, 0.016);
     assert_eq!(var(&sys, "still_here"), 1, "a matched entity is alive");
 
-    world.components.remove_typed::<PropInstance>(entity);
-    world.components.remove_typed::<Transform>(entity);
+    world.context().remove::<PropInstance>(entity);
+    world.context().remove::<Transform>(entity);
     tick(&mut sys, &mut world, 0.016);
     assert_eq!(
         var(&sys, "still_here"),
@@ -834,7 +830,7 @@ fn alive_follows_the_world_not_this_ticks_queries() {
         "leaving every query and losing every component is not death",
     );
 
-    world.components.despawn(entity);
+    world.despawn(entity);
     tick(&mut sys, &mut world, 0.016);
     assert_eq!(var(&sys, "still_here"), 0, "a despawned entity is gone");
 }
@@ -883,7 +879,7 @@ fn a_body_reads_positions_from_before_this_ticks_writes() {
         "the reader saw the position from before the mover wrote",
     );
     assert_eq!(
-        world.ctx().get::<Transform>(entity).unwrap().position,
+        world.context().get::<Transform>(entity).unwrap().position,
         [9.0, 0.0, 0.0],
         "the move still landed",
     );
@@ -929,9 +925,9 @@ impl BehaviorStore for MemoryStore {
     }
 }
 
-fn persisting_system(world: &mut TestWorld, store: &MemoryStore) -> BehaviorSystem {
+fn persisting_system(world: &mut World, store: &MemoryStore) -> BehaviorSystem {
     let mut sys = BehaviorSystem::new().with_store(Box::new(store.clone()));
-    sys.init(&mut world.ctx());
+    sys.init(&mut world.context());
     sys
 }
 
@@ -1007,31 +1003,40 @@ fn enter_fires_on_matching_crossings_only() {
         body: vec![despawn_named(7)],
         ..Default::default()
     }]);
-    let entity = world.components.push_typed(PropInstance);
-    world.ctx().identify(entity, AssetId(7));
+    let entity = world.push(PropInstance);
+    world.context().identify(entity, AssetId(7));
     let mut sys = system(&mut world);
     let mut cursor = EventCursor::default();
 
-    sys.step(&mut world.ctx());
+    sys.step(&mut world.context());
     assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 0);
 
-    world.ctx().events_mut::<VolumeEvent>().send(VolumeEvent {
-        volume: AssetId(5),
-        entered: true,
-    });
-    sys.step(&mut world.ctx());
+    world
+        .context()
+        .events_mut::<VolumeEvent>()
+        .send(VolumeEvent {
+            volume: AssetId(5),
+            entered: true,
+        });
+    sys.step(&mut world.context());
     assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 1);
 
     // An exit of the same volume, or an enter of another, does not.
-    world.ctx().events_mut::<VolumeEvent>().send(VolumeEvent {
-        volume: AssetId(5),
-        entered: false,
-    });
-    world.ctx().events_mut::<VolumeEvent>().send(VolumeEvent {
-        volume: AssetId(6),
-        entered: true,
-    });
-    sys.step(&mut world.ctx());
+    world
+        .context()
+        .events_mut::<VolumeEvent>()
+        .send(VolumeEvent {
+            volume: AssetId(5),
+            entered: false,
+        });
+    world
+        .context()
+        .events_mut::<VolumeEvent>()
+        .send(VolumeEvent {
+            volume: AssetId(6),
+            entered: true,
+        });
+    sys.step(&mut world.context());
     assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 0);
 }
 
@@ -1042,23 +1047,26 @@ fn crossings_survive_a_menu_pause() {
         body: vec![despawn_named(7)],
         ..Default::default()
     }]);
-    let entity = world.components.push_typed(PropInstance);
-    world.ctx().identify(entity, AssetId(7));
+    let entity = world.push(PropInstance);
+    world.context().identify(entity, AssetId(7));
     let mut sys = system(&mut world);
     let mut cursor = EventCursor::default();
 
     // The crossing lands while the menu is open: the paused step drains it but
     // holds it, and the first unpaused step fires it.
-    world.ctx().events_mut::<VolumeEvent>().send(VolumeEvent {
-        volume: AssetId(5),
-        entered: true,
-    });
-    world.ctx().insert_resource(MenuActive(true));
-    sys.step(&mut world.ctx());
+    world
+        .context()
+        .events_mut::<VolumeEvent>()
+        .send(VolumeEvent {
+            volume: AssetId(5),
+            entered: true,
+        });
+    world.context().insert_resource(MenuActive(true));
+    sys.step(&mut world.context());
     assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 0);
 
-    world.ctx().insert_resource(MenuActive(false));
-    sys.step(&mut world.ctx());
+    world.context().insert_resource(MenuActive(false));
+    sys.step(&mut world.context());
     assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 1);
 }
 
@@ -1069,23 +1077,23 @@ fn interact_fires_on_matching_press_only() {
         body: vec![despawn_named(7)],
         ..Default::default()
     }]);
-    let entity = world.components.push_typed(PropInstance);
-    world.ctx().identify(entity, AssetId(7));
+    let entity = world.push(PropInstance);
+    world.context().identify(entity, AssetId(7));
     let mut sys = system(&mut world);
     let mut cursor = EventCursor::default();
 
     world
-        .ctx()
+        .context()
         .events_mut::<InteractEvent>()
         .send(InteractEvent { target: AssetId(9) });
-    sys.step(&mut world.ctx());
+    sys.step(&mut world.context());
     assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 0);
 
     world
-        .ctx()
+        .context()
         .events_mut::<InteractEvent>()
         .send(InteractEvent { target: AssetId(4) });
-    sys.step(&mut world.ctx());
+    sys.step(&mut world.context());
     assert_eq!(count::<DespawnRequest>(&mut world, &mut cursor), 1);
 }
 
@@ -1103,14 +1111,14 @@ fn show_and_hide_send_visibility_requests() {
         ],
         ..Default::default()
     }]);
-    let entity = world.components.push_typed(PropInstance);
-    world.ctx().identify(entity, AssetId(3));
+    let entity = world.push(PropInstance);
+    world.context().identify(entity, AssetId(3));
     let mut sys = system(&mut world);
 
     tick(&mut sys, &mut world, 0.016);
     let mut cursor = EventCursor::default();
     let visible: Vec<bool> = world
-        .ctx()
+        .context()
         .events::<VisibilityRequest>()
         .map(|e| e.read(&mut cursor).map(|r| r.visible).collect())
         .unwrap_or_default();
@@ -1190,19 +1198,18 @@ fn without_a_request_no_trace_is_published() {
     let mut world = world_with(vec![branching_behavior()]);
     let mut sys = system(&mut world);
     tick(&mut sys, &mut world, 0.016);
-    assert!(world.resources.get::<ExecutionTrace>().is_none());
+    assert!(world.resource::<ExecutionTrace>().is_none());
 }
 
 #[test]
 fn tracing_publishes_events_paths_and_values() {
     let mut world = world_with(vec![branching_behavior()]);
-    world.resources.insert(TraceRequest::default());
+    world.insert_resource(TraceRequest::default());
     let mut sys = system(&mut world);
     tick(&mut sys, &mut world, 0.016);
 
     let trace = world
-        .resources
-        .get::<ExecutionTrace>()
+        .resource::<ExecutionTrace>()
         .expect("published while requested");
     assert_eq!(trace.frame, 1);
     let ran = |node| {
@@ -1222,8 +1229,7 @@ fn tracing_publishes_events_paths_and_values() {
 
     // The path table addresses nodes the way the world checker's faults do.
     let paths = world
-        .resources
-        .get::<TracePaths>()
+        .resource::<TracePaths>()
         .expect("published with the first trace");
     let of = |id: usize| &paths.0[0].1[id];
     assert_eq!(of(0), &vec![TraceStep::Field("do"), TraceStep::Index(0)]);
@@ -1243,7 +1249,7 @@ fn tracing_publishes_events_paths_and_values() {
 #[test]
 fn a_breakpoint_reports_a_hit() {
     let mut world = world_with(vec![branching_behavior()]);
-    world.resources.insert(TraceRequest {
+    world.insert_resource(TraceRequest {
         entity: None,
         breakpoints: vec![TraceEvent {
             behavior: AssetId(1),
@@ -1252,7 +1258,7 @@ fn a_breakpoint_reports_a_hit() {
     });
     let mut sys = system(&mut world);
     tick(&mut sys, &mut world, 0.016);
-    let trace = world.resources.get::<ExecutionTrace>().unwrap();
+    let trace = world.resource::<ExecutionTrace>().unwrap();
     assert_eq!(
         trace.hit,
         Some(TraceEvent {
@@ -1280,14 +1286,14 @@ fn tracing_surfaces_the_requested_entitys_locals() {
     };
     let mut world = world_with(vec![scoped]);
     let entity = spawn_prop(&mut world, [0.0; 3]);
-    world.resources.insert(TraceRequest {
+    world.insert_resource(TraceRequest {
         entity: Some(entity.to_bits()),
         breakpoints: Vec::new(),
     });
     let mut sys = system(&mut world);
     tick(&mut sys, &mut world, 0.016);
     tick(&mut sys, &mut world, 0.016);
-    let trace = world.resources.get::<ExecutionTrace>().unwrap();
+    let trace = world.resource::<ExecutionTrace>().unwrap();
     assert_eq!(
         trace.locals,
         vec![(AssetId(1), "count".to_string(), TraceVal::Int(2))]
@@ -1307,12 +1313,12 @@ fn transient_saves_neither_read_nor_write_state() {
     // A transient session over the same store: the save is not restored, and
     // the session's own `save` node writes nothing.
     let mut world2 = world_with(vec![counter_behavior()]);
-    world2.resources.insert(TransientSaves(true));
+    world2.insert_resource(TransientSaves(true));
     let sys2 = persisting_system(&mut world2, &store);
     assert_eq!(var(&sys2, "visits"), 0, "nothing restored at init");
     let untouched = MemoryStore::default();
     let mut world3 = world_with(vec![counter_behavior()]);
-    world3.resources.insert(TransientSaves(true));
+    world3.insert_resource(TransientSaves(true));
     let mut sys3 = persisting_system(&mut world3, &untouched);
     tick(&mut sys3, &mut world3, 0.016);
     assert_eq!(var(&sys3, "visits"), 1, "the once behavior fired fresh");
@@ -1414,9 +1420,9 @@ fn behavior_gates_the_system_and_a_menu_freezes_it() {
 
 // Typed world variables, declared by the world's Variables asset.
 
-fn world_with_vars(behaviors: Vec<Behavior>, vars: Vec<(&str, BehaviorLiteral)>) -> TestWorld {
+fn world_with_vars(behaviors: Vec<Behavior>, vars: Vec<(&str, BehaviorLiteral)>) -> World {
     let mut world = world_with(behaviors);
-    world.components.push_typed(Variables {
+    world.push(Variables {
         vars: vars
             .into_iter()
             .map(|(name, value)| VariableDecl {
@@ -1487,7 +1493,7 @@ fn a_vec3_variable_feeds_a_transform() {
 
     tick(&mut sys, &mut world, 0.016);
     assert_eq!(
-        world.ctx().get::<Transform>(entity).unwrap().position,
+        world.context().get::<Transform>(entity).unwrap().position,
         [1.0, 2.0, 3.0]
     );
 }
@@ -1634,7 +1640,7 @@ fn parallel_eval_matches_serial_state() {
         };
         let mut world = world_with(vec![mover, counter]);
         if parallel {
-            world.resources.insert(ScheduleMode::Parallel);
+            world.insert_resource(ScheduleMode::Parallel);
         }
         for i in 0..150 {
             spawn_prop(&mut world, [i as f32, 0.0, 0.0]);
@@ -1643,13 +1649,13 @@ fn parallel_eval_matches_serial_state() {
         if parallel {
             sys = sys.with_scheduler(Box::new(ThreadedEval));
         }
-        sys.init(&mut world.ctx());
+        sys.init(&mut world.context());
         for _ in 0..5 {
             tick(&mut sys, &mut world, 0.016);
         }
         let vars = vec![var(&sys, "total"), var(&sys, "double")];
         let positions = world
-            .ctx()
+            .context()
             .query::<Transform>()
             .map(|t| t.position)
             .collect();
@@ -1667,8 +1673,8 @@ fn parallel_eval_matches_serial_state() {
 
 // One frame's step, which is where the reseed check lives (`tick` is the
 // per-tick drive below it and never looks at the columns).
-fn step(sys: &mut BehaviorSystem, world: &mut TestWorld) {
-    sys.step(&mut world.ctx());
+fn step(sys: &mut BehaviorSystem, world: &mut World) {
+    sys.step(&mut world.context());
 }
 
 fn counter(var: &str, value: i32) -> Behavior {
@@ -1681,8 +1687,8 @@ fn counter(var: &str, value: i32) -> Behavior {
 
 // Writing the column is what an editing tool does; the whole point is that the
 // running system notices.
-fn edit_behavior(world: &mut TestWorld, at: usize, def: Behavior) {
-    world.components.values_mut::<Behavior>()[at] = def;
+fn edit_behavior(world: &mut World, at: usize, def: Behavior) {
+    world.context().query_slice_mut::<Behavior>()[at] = def;
 }
 
 #[test]
@@ -1767,7 +1773,7 @@ fn an_edited_declaration_reaches_a_running_world() {
     step(&mut sys, &mut world);
     assert_eq!(var(&sys, "score"), 0);
 
-    world.components.values_mut::<Variables>()[0] = Variables {
+    world.context().query_slice_mut::<Variables>()[0] = Variables {
         vars: vec![VariableDecl {
             name: "score".to_string(),
             value: BehaviorLiteral::Int(12),
@@ -1797,7 +1803,7 @@ fn an_untouched_declaration_keeps_its_running_value() {
     step(&mut sys, &mut world);
     assert_eq!(var(&sys, "score"), 2);
 
-    world.components.values_mut::<Variables>()[0] = Variables {
+    world.context().query_slice_mut::<Variables>()[0] = Variables {
         vars: vec![
             VariableDecl {
                 name: "score".to_string(),
@@ -1833,15 +1839,15 @@ fn the_trace_path_table_is_republished_after_an_edit() {
         ..one.clone()
     };
     let mut world = world_with(vec![one]);
-    world.resources.insert(TraceRequest::default());
+    world.insert_resource(TraceRequest::default());
     let mut sys = system(&mut world);
     step(&mut sys, &mut world);
-    assert_eq!(world.resources.get::<TracePaths>().unwrap().0[0].1.len(), 1);
+    assert_eq!(world.resource::<TracePaths>().unwrap().0[0].1.len(), 1);
 
     edit_behavior(&mut world, 0, two);
     step(&mut sys, &mut world);
     assert_eq!(
-        world.resources.get::<TracePaths>().unwrap().0[0].1.len(),
+        world.resource::<TracePaths>().unwrap().0[0].1.len(),
         2,
         "the new body's nodes are addressable"
     );
@@ -1884,12 +1890,12 @@ fn a_pending_run_follows_its_program_or_goes_with_it() {
 fn a_frozen_world_adopts_an_edit_before_it_resumes() {
     let mut world = world_with(vec![counter("n", 1)]);
     let mut sys = system(&mut world);
-    world.resources.insert(MenuActive(true));
+    world.insert_resource(MenuActive(true));
     edit_behavior(&mut world, 0, counter("n", 9));
     step(&mut sys, &mut world);
     assert_eq!(var(&sys, "n"), 0, "a frozen world still fires nothing");
 
-    world.resources.insert(MenuActive(false));
+    world.insert_resource(MenuActive(false));
     step(&mut sys, &mut world);
     assert_eq!(var(&sys, "n"), 9);
 }

@@ -1250,9 +1250,7 @@ mod tests {
     // prev_clip the fragment consumes for the motion vector.
     #[test]
     fn gbuffer_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         super::super::super::builtin_shaders::GBUFFER_PREPASS_VERT_BINDLESS
             .compile(false)
             .expect("gbuffer bindless vertex compiles");

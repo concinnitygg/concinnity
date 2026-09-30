@@ -8,6 +8,7 @@
 //! the same. A second implementation would let those two disagree about what a
 //! rotation means.
 
+use crate::math::vec3::length;
 use crate::math::{atan2, sin_cos, sqrt};
 
 /// Unit quaternion `(x, y, z, w)` representing a rotation.
@@ -36,7 +37,7 @@ fn about_axis(axis: usize, angle_rad: f32) -> Quat {
 /// The rotation quaternion for `angle_rad` about `axis`, which need not be
 /// normalized. An axis too short to have a direction yields the identity.
 pub fn quat_from_axis_angle(axis: [f32; 3], angle_rad: f32) -> Quat {
-    let len = sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+    let len = length(axis);
     if len < 1e-12 {
         return [0.0, 0.0, 0.0, 1.0];
     }

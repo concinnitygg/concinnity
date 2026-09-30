@@ -1,50 +1,17 @@
-// The hand-assembled world the unit tests and the benchmarks drive: a
-// component storage plus the four other pieces a `PipelineContext` borrows.
-//
-// Building the context directly is what lets a test hand the tick an explicit
-// dt, which is what makes timers, delays, and cooldowns deterministic.
+// The world the unit tests and the benchmarks drive: no compiled blob and no
+// renderer behind it, with each behavior pushed exactly as a load would.
 
 use alloc::vec::Vec;
 
 use crate::components::Behavior;
+use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Arena, ComponentStorage, FrameContext, NoPayloads, PipelineContext, Resources};
-use crate::profile::FrameProfile;
 
-pub(super) struct TestWorld {
-    pub(super) components: ComponentStorage,
-    blob: NoPayloads,
-    profile: FrameProfile,
-    pub(super) resources: Resources,
-    scratch: Arena,
-    // Simulated time accumulated by the tests' `tick` helper.
-    pub(super) elapsed: f32,
-}
-
-impl TestWorld {
-    pub(super) fn ctx(&mut self) -> PipelineContext<'_> {
-        PipelineContext {
-            components: &mut self.components,
-            blob: &mut self.blob,
-            profile: &mut self.profile,
-            resources: &mut self.resources,
-            frame: FrameContext::new(&self.scratch),
-        }
-    }
-}
-
-pub(super) fn world_with(behaviors: Vec<Behavior>) -> TestWorld {
-    let mut world = TestWorld {
-        components: ComponentStorage::default(),
-        blob: NoPayloads,
-        profile: FrameProfile::default(),
-        resources: Resources::default(),
-        scratch: Arena::with_capacity(64 * 1024),
-        elapsed: 0.0,
-    };
+pub(super) fn world_with(behaviors: Vec<Behavior>) -> World {
+    let mut world = World::new();
     // Each behavior is identified by its position, from 1.
     for (b, id) in behaviors.into_iter().zip(1..) {
-        world.ctx().push_identified(AssetId(id), b);
+        world.push_identified(AssetId(id), b);
     }
     world
 }

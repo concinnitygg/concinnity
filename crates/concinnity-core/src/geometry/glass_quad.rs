@@ -7,20 +7,11 @@
 //! (constant) panel normal; the fragment shader flips it toward the viewer so
 //! the panel is two-sided.
 
-use crate::math::vec3::{cross, length};
+use crate::math::vec3::{cross, normalize_or};
 use alloc::vec;
 use alloc::vec::Vec;
 
 type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
-
-fn normalize(v: [f32; 3]) -> [f32; 3] {
-    let len = length(v);
-    if len < 1e-6 {
-        [0.0, 0.0, 1.0]
-    } else {
-        [v[0] / len, v[1] / len, v[2] / len]
-    }
-}
 
 /// Build the quad geometry for one glass panel. Returns 4 vertices (in the
 /// shared `(pos, normal, color, uv)` layout the mesh builders use) and 6
@@ -36,7 +27,7 @@ pub fn plane_basis(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     } else {
         [0.0, 1.0, 0.0]
     };
-    let tangent = normalize(cross(up_ref, n));
+    let tangent = normalize_or(cross(up_ref, n), 1e-6, [0.0, 0.0, 1.0]);
     let bitangent = cross(n, tangent); // already unit
     (tangent, bitangent)
 }
@@ -47,7 +38,7 @@ pub fn build_glass_quad(
     normal: [f32; 3],
     half_size: [f32; 2],
 ) -> (Verts, Vec<u16>) {
-    let n = normalize(normal);
+    let n = normalize_or(normal, 1e-6, [0.0, 0.0, 1.0]);
     let hw = half_size[0].max(1e-3);
     let hh = half_size[1].max(1e-3);
 

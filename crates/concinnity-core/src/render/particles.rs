@@ -6,7 +6,8 @@
 
 use crate::components::ParticleEmitter;
 use crate::gfx::render_types::ParticleParams;
-use crate::math::{cos, floor, sqrt};
+use crate::math::vec3::{length, normalize_or};
+use crate::math::{cos, floor};
 use alloc::vec::Vec;
 
 /// Upper bound on the per-emitter pool the backend will allocate. Each slot
@@ -78,10 +79,7 @@ impl ParticleEmitterRecord {
     /// refinement; this version is correct (never false-cull) and cheap.
     pub fn aabb(&self) -> ([f32; 3], [f32; 3]) {
         let speed_reach = self.speed_max * self.lifetime_max;
-        let gx = self.gravity[0];
-        let gy = self.gravity[1];
-        let gz = self.gravity[2];
-        let g_mag = sqrt(gx * gx + gy * gy + gz * gz);
+        let g_mag = length(self.gravity);
         let g_drift = 0.5 * g_mag * self.lifetime_max * self.lifetime_max;
         let max_size = self.size_start.max(self.size_end);
         // The billboard quad is a square of side `size`, viewed any way; the
@@ -151,7 +149,9 @@ pub fn build_particle_records(
                 slot
             }
         };
-        let direction = normalize_direction(e.direction);
+        // A zero / non-finite direction falls back to world-up so the cone
+        // still has a well-defined axis.
+        let direction = normalize_or(e.direction, 1e-6, [0.0, 1.0, 0.0]);
         let spread_cos = cos(e.spread_deg.clamp(0.0, 180.0).to_radians());
         let lifetime_min = e.lifetime_min.max(MIN_LIFETIME);
         let lifetime_max = e.lifetime_max.max(lifetime_min);
@@ -176,18 +176,6 @@ pub fn build_particle_records(
         });
     }
     out
-}
-
-fn normalize_direction(d: [f32; 3]) -> [f32; 3] {
-    let len = sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-    if !len.is_finite() || len < 1e-6 {
-        // A zero / non-finite direction falls back to world-up so the cone
-        // still has a well-defined axis. The asset-side default is `[0, 1, 0]`,
-        // so this only matters for hand-built records or pathological JSON.
-        [0.0, 1.0, 0.0]
-    } else {
-        [d[0] / len, d[1] / len, d[2] / len]
-    }
 }
 
 fn sanitized_color(c: [f32; 4]) -> [f32; 4] {
@@ -282,8 +270,7 @@ mod tests {
         };
         let recs = build_particle_records(&[&e], 0);
         let d = recs[0].direction;
-        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        assert!((len - 1.0).abs() < 1e-5);
+        assert!((length(d) - 1.0).abs() < 1e-5);
     }
 
     #[test]

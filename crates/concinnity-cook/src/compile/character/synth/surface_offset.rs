@@ -5,8 +5,9 @@
 
 use concinnity_core::math::vec3;
 
-use super::{SynthInput, unit};
+use super::SynthInput;
 use crate::compile::character::frame::region_weight;
+use concinnity_core::math::vec3::try_normalize;
 
 // Smooth window weight of `t` inside `span`: 1 inside, ramping to 0 over
 // `falloff` at each end.
@@ -19,7 +20,7 @@ pub(crate) fn window(t: f32, span: [f32; 2], falloff: f32) -> f32 {
 
 pub(crate) fn displace(input: &SynthInput) -> Vec<[f32; 3]> {
     let p = input.params;
-    let dir = unit(p.direction);
+    let dir = try_normalize(p.direction, 1e-6);
     let frame = &input.frames[input.primary];
     input
         .vertices

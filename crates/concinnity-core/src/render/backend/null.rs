@@ -1,26 +1,18 @@
-//! A do-nothing `RenderBackend` for driving the debug dispatch and reload
-//! passes without a GPU. It implements the required methods only, so every
-//! optional hook (runtime decals and emitters, screenshot, cull readback,
-//! pipeline rebuilds) reports the trait default's `Err`.
+//! A backend that draws nothing: the smallest valid bodies for the required
+//! methods and no optional family overridden, so every provided method runs its
+//! default. Lets code that drives a `RenderBackend` be exercised without a GPU.
 
-use concinnity_core::bake::texture::TextureImage;
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::render::backend;
-use concinnity_core::render::draw_slot;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::scene_flow;
+use super::*;
 
-pub(crate) struct StubBackend;
+/// A `RenderBackend` that accepts every call and draws nothing.
+pub struct NullBackend;
 
-impl scene_flow::SceneControl for StubBackend {
+impl SceneControl for NullBackend {
     fn update_visibility(&mut self, _draw_idx: DrawIndex, _visible: bool) {}
     fn set_fade(&mut self, _fade: f32) {}
 }
 
-impl backend::RenderBackend for StubBackend {
+impl RenderBackend for NullBackend {
     fn window_closed(&mut self) -> bool {
         false
     }
@@ -29,7 +21,7 @@ impl backend::RenderBackend for StubBackend {
         InputSnapshot::default()
     }
     fn wait_idle(&self) {}
-    fn draw_frame(&mut self, _params: backend::FrameParams<'_>) -> RenderResult<()> {
+    fn draw_frame(&mut self, _params: FrameParams<'_>) -> RenderResult<()> {
         Ok(())
     }
     fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
@@ -37,23 +29,27 @@ impl backend::RenderBackend for StubBackend {
     fn retire_draw_object(&mut self, _draw_idx: DrawIndex) {}
 }
 
-impl backend::SkinnedDraws for StubBackend {
+impl SkinnedDraws for NullBackend {
     fn upload_skinned(
         &mut self,
-        _vertices: &[mesh_payload::SkinnedVertex],
+        _vertices: &[crate::gfx::mesh_payload::SkinnedVertex],
         _indices: &[u32],
-        _draw_objects: Vec<render_types::SkinnedDrawObject>,
+        _draw_objects: alloc::vec::Vec<crate::gfx::render_types::SkinnedDrawObject>,
     ) -> RenderResult<()> {
         Ok(())
     }
     fn update_skinned_pose(&mut self, _skinned_index: SkinnedIndex, _matrices: &[[[f32; 4]; 4]]) {}
 }
 
-impl backend::DrawStreaming for StubBackend {
+impl DrawStreaming for NullBackend {
     fn evict_texture_slot(&mut self, _slot: usize) -> RenderResult<()> {
         Ok(())
     }
-    fn update_texture_slot(&mut self, _slot: usize, _image: &TextureImage) -> RenderResult<()> {
+    fn update_texture_slot(
+        &mut self,
+        _slot: usize,
+        _image: &crate::bake::texture::TextureImage,
+    ) -> RenderResult<()> {
         Ok(())
     }
     fn evict_mesh(&mut self, _draw_idx: DrawIndex, _retire_frame: u64) -> RenderResult<()> {
@@ -62,7 +58,7 @@ impl backend::DrawStreaming for StubBackend {
     fn upload_mesh(
         &mut self,
         _draw_idx: DrawIndex,
-        _verts: &[mesh_payload::Vertex],
+        _verts: &[crate::gfx::mesh_payload::Vertex],
         _idxs: &[u16],
         _frame: u64,
     ) -> RenderResult<()> {
@@ -77,8 +73,8 @@ impl backend::DrawStreaming for StubBackend {
     }
     fn add_chunk_mesh(
         &mut self,
-        _mesh: backend::ChunkMesh<'_>,
-        _slot: draw_slot::SlotAlloc,
+        _mesh: ChunkMesh<'_>,
+        _dst: crate::render::draw_slot::SlotAlloc,
     ) -> RenderResult<()> {
         Ok(())
     }
@@ -90,16 +86,12 @@ impl backend::DrawStreaming for StubBackend {
     }
 }
 
-impl backend::WindowControl for StubBackend {}
-
-impl backend::RenderTuning for StubBackend {}
-
-impl backend::LiveEdit for StubBackend {}
-
-impl backend::SceneEffects for StubBackend {}
-
-impl backend::BackendProbe for StubBackend {
-    fn capabilities(&self) -> backend::DeviceCapabilities {
-        backend::DeviceCapabilities::ALL
+impl BackendProbe for NullBackend {
+    fn capabilities(&self) -> DeviceCapabilities {
+        DeviceCapabilities::ALL
     }
 }
+impl LiveEdit for NullBackend {}
+impl RenderTuning for NullBackend {}
+impl SceneEffects for NullBackend {}
+impl WindowControl for NullBackend {}

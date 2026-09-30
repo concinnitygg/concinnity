@@ -919,15 +919,11 @@ mod tests {
     use crate::gfx::streaming::mesh::{DecodedMesh, MeshPayloadSource, MeshStreamer};
     use crate::gfx::streaming::texture::{DecodedTexture, PayloadSource, TextureStreamer};
     use concinnity_core::bake::texture;
-    use concinnity_core::ecs::Arena;
-    use concinnity_core::ecs::FrameContext;
-    use concinnity_core::ecs::{ComponentStorage, Resources};
+    use concinnity_core::ecs::World;
     use concinnity_core::gfx::chunk_coord::ChunkCoord;
     use concinnity_core::gfx::mesh_payload::Vertex;
-    use concinnity_core::profile::FrameProfile;
     use concinnity_core::render::chunk_window::ChunkDetail;
     use concinnity_core::render::ops::ReplayOutcome;
-    use concinnity_host::store::blob::BlobData;
     use pressure::StreamPressureStage;
     use std::sync::Arc;
 
@@ -1178,70 +1174,39 @@ mod tests {
         panic!("streaming never reached the expected state");
     }
 
-    // Owns the storage a PipelineContext borrows from, for the `step` tests.
-    struct StepWorld {
-        components: ComponentStorage,
-        blob: BlobData,
-        profile: FrameProfile,
-        resources: Resources,
-        scratch: Arena,
+    // A world with a camera the step will read the absolute view + position from.
+    fn world_with_camera(position: [f32; 3], view_matrix: [[f32; 4]; 4]) -> World {
+        let mut w = World::new();
+        w.push(Camera3D {
+            position,
+            view_matrix,
+            ..Camera3D::bake(Default::default())
+        });
+        w
     }
 
-    impl StepWorld {
-        fn new() -> Self {
-            Self {
-                components: ComponentStorage::default(),
-                blob: BlobData::empty(),
-                profile: FrameProfile::default(),
-                resources: Resources::new(),
-                scratch: Arena::with_capacity(64 * 1024),
-            }
-        }
+    // Publish the op queue + slot allocator the step takes and reparks (the
+    // pair graphics init publishes in production).
+    fn park_render_queues(w: &mut World) {
+        w.insert_resource(crate::ecs::ActiveRenderQueues(Some(
+            crate::ecs::RenderQueues {
+                ops: Default::default(),
+                slots: RenderSlots::new(0, true, &[]),
+            },
+        )));
+    }
 
-        // Place a camera the step will read the absolute view + position from.
-        fn with_camera(mut self, position: [f32; 3], view_matrix: [[f32; 4]; 4]) -> Self {
-            self.components.push_typed(Camera3D {
-                position,
-                view_matrix,
-                ..Camera3D::bake(Default::default())
-            });
-            self
-        }
+    fn step_streaming(w: &mut World) -> StepResult {
+        StreamingSystem::new().step(&mut w.context())
+    }
 
-        // Publish the op queue + slot allocator the step takes and reparks
-        // (the pair graphics init publishes in production).
-        fn park_render_queues(&mut self) {
-            self.resources.insert(crate::ecs::ActiveRenderQueues(Some(
-                crate::ecs::RenderQueues {
-                    ops: Default::default(),
-                    slots: RenderSlots::new(0, true, &[]),
-                },
-            )));
-        }
+    fn camera_view(w: &World) -> CameraRelativeView {
+        *w.resource::<CameraRelativeView>()
+            .expect("camera-relative view published")
+    }
 
-        fn step(&mut self) -> StepResult {
-            let mut ctx = PipelineContext {
-                components: &mut self.components,
-                blob: &mut self.blob,
-                profile: &mut self.profile,
-                resources: &mut self.resources,
-                frame: FrameContext::new(&self.scratch),
-            };
-            StreamingSystem::new().step(&mut ctx)
-        }
-
-        fn view(&self) -> CameraRelativeView {
-            *self
-                .resources
-                .get::<CameraRelativeView>()
-                .expect("camera-relative view published")
-        }
-
-        fn parked_state(&self) -> &StreamingState {
-            self.resources
-                .get::<StreamingState>()
-                .expect("state parked again")
-        }
+    fn parked_state(w: &World) -> &StreamingState {
+        w.resource::<StreamingState>().expect("state parked again")
     }
 
     #[test]
@@ -1909,9 +1874,9 @@ mod tests {
 
     #[test]
     fn a_step_without_parked_state_publishes_no_view() {
-        let mut w = StepWorld::new();
-        assert_eq!(w.step(), StepResult::Continue);
-        assert!(w.resources.get::<CameraRelativeView>().is_none());
+        let mut w = World::new();
+        assert_eq!(step_streaming(&mut w), StepResult::Continue);
+        assert!(w.resource::<CameraRelativeView>().is_none());
     }
 
     // Init succeeded but the backend is gone: the draw still needs a view, so
@@ -1919,43 +1884,42 @@ mod tests {
     #[test]
     fn a_step_without_a_backend_still_publishes_the_absolute_view() {
         let view = translation_view(-1.0, -2.0, -3.0);
-        let mut w = StepWorld::new().with_camera([1.0, 2.0, 3.0], view);
-        w.resources.insert(empty_state());
+        let mut w = world_with_camera([1.0, 2.0, 3.0], view);
+        w.insert_resource(empty_state());
 
-        assert_eq!(w.step(), StepResult::Continue);
-        assert_eq!(w.view().cam_pos, [1.0, 2.0, 3.0]);
-        assert_eq!(w.view().view, view);
-        assert_eq!(w.parked_state().frame_count, 0, "no frame was driven");
+        assert_eq!(step_streaming(&mut w), StepResult::Continue);
+        assert_eq!(camera_view(&w).cam_pos, [1.0, 2.0, 3.0]);
+        assert_eq!(camera_view(&w).view, view);
+        assert_eq!(parked_state(&w).frame_count, 0, "no frame was driven");
     }
 
     #[test]
     fn a_step_without_a_camera_publishes_the_identity_view() {
-        let mut w = StepWorld::new();
-        w.resources.insert(empty_state());
-        w.park_render_queues();
+        let mut w = World::new();
+        w.insert_resource(empty_state());
+        park_render_queues(&mut w);
 
-        w.step();
-        assert_eq!(w.view().view, IDENTITY4);
-        assert_eq!(w.view().cam_pos, [0.0; 3]);
+        step_streaming(&mut w);
+        assert_eq!(camera_view(&w).view, IDENTITY4);
+        assert_eq!(camera_view(&w).cam_pos, [0.0; 3]);
     }
 
     // The op queue + slot allocator are taken for the step and parked again
     // for the systems that follow, and the frame clock ticks once per step.
     #[test]
     fn a_step_drives_the_pools_and_reparks_the_queues() {
-        let mut w = StepWorld::new().with_camera([0.0; 3], IDENTITY4);
-        w.resources.insert(pooled_state(8));
-        w.park_render_queues();
+        let mut w = world_with_camera([0.0; 3], IDENTITY4);
+        w.insert_resource(pooled_state(8));
+        park_render_queues(&mut w);
 
-        w.step();
+        step_streaming(&mut w);
         assert!(
-            w.resources
-                .get::<crate::ecs::ActiveRenderQueues>()
+            w.resource::<crate::ecs::ActiveRenderQueues>()
                 .is_some_and(|slot| slot.0.is_some())
         );
-        assert_eq!(w.parked_state().frame_count, 1);
+        assert_eq!(parked_state(&w).frame_count, 1);
         assert!(
-            w.parked_state()
+            parked_state(&w)
                 .texture_streamer
                 .as_ref()
                 .unwrap()
@@ -1970,65 +1934,63 @@ mod tests {
     // opaque menu, and GraphicsSystem still finds the frame later this tick.
     #[test]
     fn an_opaque_overlay_suspends_streaming_without_consuming_the_frame() {
-        let mut w = StepWorld::new().with_camera([0.0; 3], IDENTITY4);
-        w.resources.insert(pooled_state(8));
-        w.park_render_queues();
-        w.resources.insert(OverlayFrame {
+        let mut w = world_with_camera([0.0; 3], IDENTITY4);
+        w.insert_resource(pooled_state(8));
+        park_render_queues(&mut w);
+        w.insert_resource(OverlayFrame {
             world_hidden: true,
             ..Default::default()
         });
 
-        w.step();
+        step_streaming(&mut w);
         assert_eq!(
-            w.parked_state().texture_streamer.as_ref().unwrap().stats(),
+            parked_state(&w).texture_streamer.as_ref().unwrap().stats(),
             (0, 0, 2)
         );
-        assert!(w.resources.get::<OverlayFrame>().is_some());
+        assert!(w.resource::<OverlayFrame>().is_some());
     }
 
     // RSS is a syscall, so the valve only samples on its throttled cadence.
     #[test]
     fn ram_pressure_is_sampled_only_on_the_throttled_cadence() {
-        let mut w = StepWorld::new();
+        let mut w = World::new();
         let mut state = empty_state();
         state.frame_count = 1;
-        w.resources.insert(state);
+        w.insert_resource(state);
         // A 1 MiB ceiling is under any real process RSS, so a sample that ran
         // would certainly engage the valve.
-        w.resources
-            .insert(crate::app::budget::MemoryBudget::compute(None, 1));
+        w.insert_resource(crate::app::budget::MemoryBudget::compute(None, 1));
 
-        w.step();
-        assert!(w.resources.get::<StreamingPressure>().is_none());
+        step_streaming(&mut w);
+        assert!(w.resource::<StreamingPressure>().is_none());
     }
 
     // No published ceiling means no valve: streaming stays on its byte-budget
     // policy and nothing is reported.
     #[test]
     fn ram_pressure_is_not_sampled_without_a_memory_budget() {
-        let mut w = StepWorld::new();
-        w.resources.insert(empty_state());
-        w.step();
-        assert!(w.resources.get::<StreamingPressure>().is_none());
+        let mut w = World::new();
+        w.insert_resource(empty_state());
+        step_streaming(&mut w);
+        assert!(w.resource::<StreamingPressure>().is_none());
     }
 
     #[test]
     fn an_rss_sample_over_the_memory_budget_publishes_engaged_pressure() {
-        let mut w = StepWorld::new();
-        w.resources.insert(empty_state());
-        w.resources
-            .insert(crate::app::budget::MemoryBudget::compute(None, 1));
+        let mut w = World::new();
+        w.insert_resource(empty_state());
+        w.insert_resource(crate::app::budget::MemoryBudget::compute(None, 1));
 
-        w.step();
+        step_streaming(&mut w);
         // The valve is inert (and publishes nothing) where RSS cannot be read.
         match crate::app::sysmem::process_resident_bytes() {
             Some(_) => {
-                let p = w.resources.get::<StreamingPressure>().expect("published");
+                let p = w.resource::<StreamingPressure>().expect("published");
                 assert!(p.under_pressure);
                 assert_eq!(p.budget_bytes, 1024 * 1024);
-                assert_ne!(w.parked_state().pressure_stage, StreamPressureStage::None);
+                assert_ne!(parked_state(&w).pressure_stage, StreamPressureStage::None);
             }
-            None => assert!(w.resources.get::<StreamingPressure>().is_none()),
+            None => assert!(w.resource::<StreamingPressure>().is_none()),
         }
     }
 }

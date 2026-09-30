@@ -19,11 +19,11 @@ use std::println;
 
 use super::BehaviorSystem;
 use super::eval::Snapshot;
-use super::test_world::{TestWorld, world_with};
+use super::test_world::world_with;
 use crate::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, PropInstance, Transform,
 };
-use crate::ecs::System;
+use crate::ecs::{System, World};
 use crate::test_support::{Pace, bench};
 
 const BEHAVIORS: usize = 256;
@@ -57,11 +57,11 @@ fn counter(i: usize) -> Behavior {
 
 // `behaviors` tick behaviors over a world padded to `props` entities, each
 // carrying a Transform (what `gather` would have been scanning).
-fn padded_world(behaviors: usize, props: usize) -> TestWorld {
+fn padded_world(behaviors: usize, props: usize) -> World {
     let mut world = world_with((0..behaviors).map(counter).collect::<Vec<_>>());
     for i in 0..props {
-        let entity = world.components.push_typed(PropInstance);
-        world.components.insert_typed(
+        let entity = world.push(PropInstance);
+        world.insert(
             entity,
             Transform {
                 position: [i as f32, 0.0, 0.0],
@@ -73,9 +73,9 @@ fn padded_world(behaviors: usize, props: usize) -> TestWorld {
     world
 }
 
-fn started(world: &mut TestWorld) -> BehaviorSystem {
+fn started(world: &mut World) -> BehaviorSystem {
     let mut sys = BehaviorSystem::new();
-    sys.init(&mut world.ctx());
+    sys.init(&mut world.context());
     sys
 }
 
@@ -97,7 +97,7 @@ fn run(pace: Pace) {
             behaviors as u64,
             || {
                 elapsed += 0.016;
-                sys.tick(&mut world.ctx(), 0.016, elapsed);
+                sys.tick(&mut world.context(), 0.016, elapsed);
             },
         );
     }
@@ -112,7 +112,7 @@ fn run(pace: Pace) {
             pace,
             &format!("gather_world{label}"),
             behaviors as u64,
-            || sys.gather(&world.ctx(), &mut snapshot),
+            || sys.gather(&world.context(), &mut snapshot),
         );
     }
 }

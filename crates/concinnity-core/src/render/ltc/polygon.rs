@@ -11,18 +11,9 @@
 //! covers, in [0, 1]: 1 means the polygon fills the hemisphere. Multiply by a
 //! light's radiance to get outgoing radiance.
 
-use crate::math::vec3::{cross, dot, length, sub};
+use crate::math::vec3::{cross, dot, normalize_or, sub};
 
 type Vec3 = [f32; 3];
-
-fn normalize(v: Vec3) -> Vec3 {
-    let len = length(v);
-    if len < 1.0e-9 {
-        [0.0, 0.0, 1.0]
-    } else {
-        [v[0] / len, v[1] / len, v[2] / len]
-    }
-}
 
 // Clip a quad against the horizon plane `z = 0`, keeping the part above it.
 //
@@ -84,7 +75,7 @@ pub(crate) fn integrate_clamped_cosine(quad: &[Vec3; 4], two_sided: bool) -> f32
         return 0.0;
     }
     for v in clipped.iter_mut().take(n) {
-        *v = normalize(*v);
+        *v = normalize_or(*v, 1.0e-9, [0.0, 0.0, 1.0]);
     }
 
     let mut sum = 0.0;
@@ -116,11 +107,15 @@ pub(crate) fn evaluate(
     corners: &[Vec3; 4],
     two_sided: bool,
 ) -> f32 {
-    let t1 = normalize([
-        v[0] - n[0] * dot(v, n),
-        v[1] - n[1] * dot(v, n),
-        v[2] - n[2] * dot(v, n),
-    ]);
+    let t1 = normalize_or(
+        [
+            v[0] - n[0] * dot(v, n),
+            v[1] - n[1] * dot(v, n),
+            v[2] - n[2] * dot(v, n),
+        ],
+        1.0e-9,
+        [0.0, 0.0, 1.0],
+    );
     let t2 = cross(n, t1);
 
     let mut quad = [[0.0_f32; 3]; 4];
@@ -327,7 +322,7 @@ mod tests {
     #[test]
     fn evaluate_transforms_into_the_shading_frame() {
         let n = [0.0, 0.0, 1.0];
-        let v = normalize([0.3, 0.0, 1.0]);
+        let v = normalize_or([0.3, 0.0, 1.0], 1.0e-9, [0.0, 0.0, 1.0]);
         let p = [0.0, 0.0, 0.0];
         let overhead = facing_quad([0.0, 0.0, 3.0], 1.0);
         let direct = integrate_clamped_cosine(&overhead, true);

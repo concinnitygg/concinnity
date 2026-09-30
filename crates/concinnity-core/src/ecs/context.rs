@@ -326,52 +326,13 @@ impl<'a> PipelineContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::{BlobAssetDef, ComponentAsset, ComponentTag, EventCursor};
+    use crate::ecs::{BlobAssetDef, ComponentAsset, ComponentTag, EventCursor, World};
     use alloc::vec;
-
-    // A payload store holding nothing: every read errors, releases are no-ops.
-    // Lets the ECS tests exercise the context's payload forwarding without
-    // depending on the concrete `BlobData` (which lives host-side).
-    struct EmptyStore;
-
-    impl PayloadStore for EmptyStore {
-        fn read(&mut self, _locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
-            Err(PayloadError::NoPayloads)
-        }
-        fn release(&mut self, _blob_index: u32) {}
-        fn disk_backed(&self) -> bool {
-            false
-        }
-    }
-
-    // A standalone PipelineContext over empty storage, for exercising the
-    // resource and event surfaces without a running world.
-    fn parts() -> (
-        ComponentStorage,
-        EmptyStore,
-        FrameProfile,
-        Resources,
-        crate::memory::Arena,
-    ) {
-        (
-            ComponentStorage::default(),
-            EmptyStore,
-            FrameProfile::default(),
-            Resources::new(),
-            crate::memory::Arena::with_capacity(64 * 1024),
-        )
-    }
 
     #[test]
     fn resources_round_trip_through_context() {
-        let (mut c, mut b, mut p, mut r, scratch) = parts();
-        let mut ctx = PipelineContext {
-            components: &mut c,
-            blob: &mut b,
-            profile: &mut p,
-            resources: &mut r,
-            frame: FrameContext::new(&scratch),
-        };
+        let mut world = World::new();
+        let mut ctx = world.context();
         assert!(ctx.resource::<u32>().is_none());
         assert_eq!(ctx.insert_resource(7u32), None);
         assert_eq!(ctx.resource::<u32>(), Some(&7));
@@ -383,14 +344,8 @@ mod tests {
 
     #[test]
     fn events_round_trip_through_context() {
-        let (mut c, mut b, mut p, mut r, scratch) = parts();
-        let mut ctx = PipelineContext {
-            components: &mut c,
-            blob: &mut b,
-            profile: &mut p,
-            resources: &mut r,
-            frame: FrameContext::new(&scratch),
-        };
+        let mut world = World::new();
+        let mut ctx = world.context();
         assert!(ctx.events::<u32>().is_none());
         ctx.events_mut::<u32>().send(1);
         ctx.events_mut::<u32>().send(2);
@@ -451,14 +406,8 @@ mod tests {
     #[test]
     fn context_component_ops_cover_the_entity_lifecycle() {
         use crate::components::{GlobalTransform, Transform};
-        let (mut c, mut b, mut p, mut r, scratch) = parts();
-        let mut ctx = PipelineContext {
-            components: &mut c,
-            blob: &mut b,
-            profile: &mut p,
-            resources: &mut r,
-            frame: FrameContext::new(&scratch),
-        };
+        let mut world = World::new();
+        let mut ctx = world.context();
 
         ctx.push(Transform::default());
         let e = ctx.push(Transform::default());
@@ -494,14 +443,8 @@ mod tests {
 
     #[test]
     fn read_payload_and_release_forward_to_the_store() {
-        let (mut c, mut b, mut p, mut r, scratch) = parts();
-        let mut ctx = PipelineContext {
-            components: &mut c,
-            blob: &mut b,
-            profile: &mut p,
-            resources: &mut r,
-            frame: FrameContext::new(&scratch),
-        };
+        let mut world = World::new();
+        let mut ctx = world.context();
         let loc = PayloadLocator {
             blob_index: 0,
             offset: 0,

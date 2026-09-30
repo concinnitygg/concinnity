@@ -853,15 +853,42 @@ mod tests {
     use crate::components::{
         CameraController, CharacterRig, FollowController, ProceduralMesh, PropCollider,
     };
+    use crate::components::{Collider, Pickup, PropColliderShape};
     use crate::ecs::SkinnedMeshHandle;
+    use crate::ecs::World;
     use crate::physics::LayerMask;
     use crate::physics::budget::{record_of, scan_counts};
-    use crate::physics::test_world::TestWorld;
+    use alloc::string::String;
+
+    // Push a decomposed prop (Transform + Collider, plus the Pickup tag when
+    // asked) exactly as the load-time decomposition would, and identify it as
+    // `id` so joints can resolve it.
+    fn spawn_prop(world: &mut World, id: AssetId, position: [f32; 3], pickup: bool) -> Entity {
+        let entity = world.push(Transform {
+            position,
+            ..Default::default()
+        });
+        world.insert(
+            entity,
+            Collider(PropCollider {
+                shape: PropColliderShape::Ball,
+                half_extents: [0.5; 3],
+                radius: 0.5,
+                half_height: 0.0,
+                layer: String::new(),
+            }),
+        );
+        if pickup {
+            world.insert(entity, Pickup);
+        }
+        world.identify(entity, id);
+        entity
+    }
 
     // Make a spawned prop dynamic, exactly as the load-time PropBody
     // decomposition would.
-    fn make_dynamic(world: &mut TestWorld, entity: Entity) {
-        world.components.insert_typed(entity, ball_dynamics());
+    fn make_dynamic(world: &mut World, entity: Entity) {
+        world.insert(entity, ball_dynamics());
     }
 
     fn controlled_camera() -> Camera3D {
@@ -888,7 +915,7 @@ mod tests {
     #[test]
     fn third_person_camera_gets_no_player_capsule() {
         // Third-person (follow) camera: a virtual orbit, so no player capsule.
-        let mut world = TestWorld::new();
+        let mut world = World::new();
         let mut camera = controlled_camera();
         camera.controller = Some(CameraController {
             follow: Some(FollowController {
@@ -897,16 +924,16 @@ mod tests {
             }),
             ..CameraController::default()
         });
-        world.components.push_typed(camera);
+        world.push(camera);
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
         assert!(physics.player.is_none(), "no capsule for the orbit camera");
 
         // First-person camera keeps its capsule.
-        let mut world = TestWorld::new();
-        world.components.push_typed(controlled_camera());
+        let mut world = World::new();
+        world.push(controlled_camera());
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
         assert!(
             physics.player.is_some(),
             "first-person camera keeps its capsule"
@@ -938,17 +965,17 @@ mod tests {
     #[test]
     fn dynamic_prop_writes_transform() {
         let id = AssetId(1);
-        let mut world = TestWorld::new();
-        let entity = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
+        let mut world = World::new();
+        let entity = spawn_prop(&mut world, id, [0.0, 5.0, 0.0], false);
         make_dynamic(&mut world, entity);
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
         for _ in 0..10 {
-            physics.step(&mut world.ctx());
+            physics.step(&mut world.context());
         }
 
-        let transform_y = world.components.get::<Transform>(entity).unwrap().position[1];
+        let transform_y = world.get::<Transform>(entity).unwrap().position[1];
         assert!(
             transform_y < 5.0,
             "the simulated pose falls the Transform (y={transform_y})"
@@ -962,30 +989,30 @@ mod tests {
     #[test]
     fn menu_active_freezes_then_resumes_physics() {
         let id = AssetId(1);
-        let mut world = TestWorld::new();
-        let entity = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
+        let mut world = World::new();
+        let entity = spawn_prop(&mut world, id, [0.0, 5.0, 0.0], false);
         make_dynamic(&mut world, entity);
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
 
         // Paused: the body stays put however many frames pass.
-        world.resources.insert(MenuActive(true));
+        world.insert_resource(MenuActive(true));
         for _ in 0..5 {
-            physics.step(&mut world.ctx());
+            physics.step(&mut world.context());
         }
-        let y_paused = world.components.get::<Transform>(entity).unwrap().position[1];
+        let y_paused = world.get::<Transform>(entity).unwrap().position[1];
         assert!(
             (y_paused - 5.0).abs() < 1e-3,
             "the body must not fall while a menu is active (y={y_paused})"
         );
 
         // Resumed: the body falls again.
-        world.resources.insert(MenuActive(false));
+        world.insert_resource(MenuActive(false));
         for _ in 0..5 {
-            physics.step(&mut world.ctx());
+            physics.step(&mut world.context());
         }
-        let y_resumed = world.components.get::<Transform>(entity).unwrap().position[1];
+        let y_resumed = world.get::<Transform>(entity).unwrap().position[1];
         assert!(
             y_resumed < y_paused - 1e-3,
             "the body must fall once the menu closes (y={y_resumed})"
@@ -998,38 +1025,38 @@ mod tests {
     #[test]
     fn zero_tick_frames_blend_between_the_last_two_ticks() {
         let id = AssetId(1);
-        let mut world = TestWorld::new();
-        let entity = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
+        let mut world = World::new();
+        let entity = spawn_prop(&mut world, id, [0.0, 5.0, 0.0], false);
         make_dynamic(&mut world, entity);
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
 
         let tick = |ticks, alpha| SimTiming {
             ticks,
             tick_dt: SimTiming::TICK_DT,
             alpha,
         };
-        world.resources.insert(tick(1, 1.0));
-        physics.step(&mut world.ctx());
-        let y_prev = world.components.get::<Transform>(entity).unwrap().position[1];
-        physics.step(&mut world.ctx());
-        let y_curr = world.components.get::<Transform>(entity).unwrap().position[1];
+        world.insert_resource(tick(1, 1.0));
+        physics.step(&mut world.context());
+        let y_prev = world.get::<Transform>(entity).unwrap().position[1];
+        physics.step(&mut world.context());
+        let y_curr = world.get::<Transform>(entity).unwrap().position[1];
         assert!(y_curr < y_prev, "the body falls tick over tick");
 
         // No tick, alpha 0: the write-back returns to the previous tick's pose.
-        world.resources.insert(tick(0, 0.0));
-        physics.step(&mut world.ctx());
-        let y_alpha0 = world.components.get::<Transform>(entity).unwrap().position[1];
+        world.insert_resource(tick(0, 0.0));
+        physics.step(&mut world.context());
+        let y_alpha0 = world.get::<Transform>(entity).unwrap().position[1];
         assert!(
             (y_alpha0 - y_prev).abs() < 1e-6,
             "alpha 0 samples the previous tick"
         );
 
         // No tick, alpha 0.5: halfway between the two ticks.
-        world.resources.insert(tick(0, 0.5));
-        physics.step(&mut world.ctx());
-        let y_mid = world.components.get::<Transform>(entity).unwrap().position[1];
+        world.insert_resource(tick(0, 0.5));
+        physics.step(&mut world.context());
+        let y_mid = world.get::<Transform>(entity).unwrap().position[1];
         let expected = (y_prev + y_curr) * 0.5;
         assert!(
             (y_mid - expected).abs() < 1e-6,
@@ -1044,21 +1071,21 @@ mod tests {
     fn tick_grouping_does_not_change_the_outcome() {
         let run = |frames: &[u32]| -> ([f32; 3], [f32; 3]) {
             let id = AssetId(1);
-            let mut world = TestWorld::new();
-            let entity = world.spawn_prop(id, [0.3, 5.0, 0.1], false);
+            let mut world = World::new();
+            let entity = spawn_prop(&mut world, id, [0.3, 5.0, 0.1], false);
             make_dynamic(&mut world, entity);
 
             let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-            physics.init(&mut world.ctx());
+            physics.init(&mut world.context());
             for &ticks in frames {
-                world.resources.insert(SimTiming {
+                world.insert_resource(SimTiming {
                     ticks,
                     tick_dt: SimTiming::TICK_DT,
                     alpha: 1.0,
                 });
-                physics.step(&mut world.ctx());
+                physics.step(&mut world.context());
             }
-            let t = world.components.get::<Transform>(entity).unwrap();
+            let t = world.get::<Transform>(entity).unwrap();
             (t.position, t.rotation_deg)
         };
 
@@ -1078,28 +1105,28 @@ mod tests {
     #[test]
     fn despawning_a_prop_reaps_its_physics_body() {
         let id = AssetId(1);
-        let mut world = TestWorld::new();
-        let ball = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
+        let mut world = World::new();
+        let ball = spawn_prop(&mut world, id, [0.0, 5.0, 0.0], false);
         make_dynamic(&mut world, ball);
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
 
         // Settle so the body is live and falling.
         for _ in 0..2 {
-            physics.step(&mut world.ctx());
+            physics.step(&mut world.context());
         }
         let before = physics.physics_body_count();
 
         // Despawn the ball (stand-in for GraphicsSystem) and step: PhysicsSystem
         // reaps the orphaned body.
-        world.components.despawn(ball);
-        physics.step(&mut world.ctx());
+        world.despawn(ball);
+        physics.step(&mut world.context());
         let after = physics.physics_body_count();
         assert_eq!(after, before - 1, "the despawned prop's body was removed");
 
         // The sim keeps running cleanly with the body gone (no further removals).
-        physics.step(&mut world.ctx());
+        physics.step(&mut world.context());
         assert_eq!(
             physics.physics_body_count(),
             after,
@@ -1111,20 +1138,18 @@ mod tests {
     #[test]
     fn pickup_sets_held_tag() {
         let id = AssetId(1);
-        let mut world = TestWorld::new();
-        let carriable = world.spawn_prop(id, [0.0, 1.0, -2.0], true);
+        let mut world = World::new();
+        let carriable = spawn_prop(&mut world, id, [0.0, 1.0, -2.0], true);
         make_dynamic(&mut world, carriable);
-        world
-            .components
-            .push_typed(interacting_camera([0.0, 1.0, 0.0]));
+        world.push(interacting_camera([0.0, 1.0, 0.0]));
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
 
-        physics.step(&mut world.ctx());
+        physics.step(&mut world.context());
 
         assert_eq!(
-            world.ctx().query::<Held>().count(),
+            world.context().query::<Held>().count(),
             1,
             "pickup inserts the Held tag on the entity"
         );
@@ -1136,31 +1161,31 @@ mod tests {
     // once at init and a spawn past the reservation is refused.
     #[test]
     fn runtime_spawned_prop_gets_a_body_and_falls() {
-        let mut world = TestWorld::new();
+        let mut world = World::new();
         let mut physics = PhysicsSystem::new(PhysicsConfig {
             spawn_headroom: 1,
             ..PhysicsConfig::default()
         });
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
         let baseline = physics.physics_body_count();
 
-        let spawned = world.spawn_prop(AssetId(7), [0.0, 5.0, 0.0], false);
+        let spawned = spawn_prop(&mut world, AssetId(7), [0.0, 5.0, 0.0], false);
         make_dynamic(&mut world, spawned);
-        physics.step(&mut world.ctx());
+        physics.step(&mut world.context());
         assert_eq!(
             physics.physics_body_count(),
             baseline + 1,
             "the spawned entity got a body on its first step"
         );
         for _ in 0..30 {
-            physics.step(&mut world.ctx());
+            physics.step(&mut world.context());
         }
-        let y = world.components.get::<Transform>(spawned).unwrap().position[1];
+        let y = world.get::<Transform>(spawned).unwrap().position[1];
         assert!(y < 4.5, "the spawned body falls (y = {y})");
         for _ in 0..300 {
-            physics.step(&mut world.ctx());
+            physics.step(&mut world.context());
         }
-        let y = world.components.get::<Transform>(spawned).unwrap().position[1];
+        let y = world.get::<Transform>(spawned).unwrap().position[1];
         assert!(
             (y - 0.5).abs() < 0.1,
             "the spawned ball rests on the flat floor (y = {y})"
@@ -1172,25 +1197,24 @@ mod tests {
     // there, at rest, and the pose written back is the one that was asked for.
     #[test]
     fn an_externally_written_transform_moves_a_tracked_prop() {
-        let mut world = TestWorld::new();
-        let ball = world.spawn_prop(AssetId(1), [0.0, 5.0, 0.0], false);
+        let mut world = World::new();
+        let ball = spawn_prop(&mut world, AssetId(1), [0.0, 5.0, 0.0], false);
         make_dynamic(&mut world, ball);
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
         for _ in 0..30 {
-            physics.step(&mut world.ctx());
+            physics.step(&mut world.context());
         }
-        let fallen = world.components.get::<Transform>(ball).unwrap().position;
+        let fallen = world.get::<Transform>(ball).unwrap().position;
         assert!(fallen[1] < 4.5, "it was falling first (y = {})", fallen[1]);
 
         world
-            .components
             .get_mut::<Transform>(ball)
             .expect("the prop has a transform")
             .position = [2.0, 12.0, -1.0];
-        physics.step(&mut world.ctx());
+        physics.step(&mut world.context());
 
-        let landed = world.components.get::<Transform>(ball).unwrap().position;
+        let landed = world.get::<Transform>(ball).unwrap().position;
         assert!((landed[0] - 2.0).abs() < 1.0e-4, "x = {}", landed[0]);
         assert!((landed[2] + 1.0).abs() < 1.0e-4, "z = {}", landed[2]);
         // A tick of fall from rest is about 0.006; the speed it had built up
@@ -1203,22 +1227,22 @@ mod tests {
     // any number of rounds.
     #[test]
     fn spawn_despawn_respawn_cycle_is_leak_free() {
-        let mut world = TestWorld::new();
+        let mut world = World::new();
         let mut physics = PhysicsSystem::new(PhysicsConfig {
             spawn_headroom: 1,
             ..PhysicsConfig::default()
         });
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
         let bodies = physics.physics_body_count();
         let colliders = physics.physics_collider_count();
 
         for round in 0..3 {
-            let spawned = world.spawn_prop(AssetId(100 + round), [0.0, 3.0, 0.0], false);
+            let spawned = spawn_prop(&mut world, AssetId(100 + round), [0.0, 3.0, 0.0], false);
             make_dynamic(&mut world, spawned);
-            physics.step(&mut world.ctx());
+            physics.step(&mut world.context());
             assert_eq!(physics.physics_body_count(), bodies + 1, "round {round}");
-            world.components.despawn(spawned);
-            physics.step(&mut world.ctx());
+            world.despawn(spawned);
+            physics.step(&mut world.context());
             assert_eq!(
                 physics.physics_body_count(),
                 bodies,
@@ -1236,23 +1260,21 @@ mod tests {
     // passes the init assert, and reserves the cap that budget implies.
     #[test]
     fn a_shipped_budget_matching_the_world_is_adopted() {
-        let mut world = TestWorld::new();
-        let entity = world.spawn_prop(AssetId(1), [0.0, 3.0, 0.0], false);
+        let mut world = World::new();
+        let entity = spawn_prop(&mut world, AssetId(1), [0.0, 3.0, 0.0], false);
         make_dynamic(&mut world, entity);
-        world.components.push_typed(controlled_camera());
+        world.push(controlled_camera());
 
         // The record cook would have written for this world: one dynamic prop,
         // the floor, the player capsule, and room for two spawns.
-        let counts = scan_counts(&world.ctx());
+        let counts = scan_counts(&world.context());
         let budget = PhysicsBudget::derive(&counts, 2);
         assert_eq!(budget.dynamic, 1);
         assert_eq!(budget.kinematic, 1, "the first-person camera capsule");
-        world
-            .resources
-            .insert(WorldPhysicsBudget(record_of(&budget)));
+        world.insert_resource(WorldPhysicsBudget(record_of(&budget)));
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
         assert_eq!(physics.body_cap, budget.body_cap());
         assert_eq!(
             physics.physics_body_count(),
@@ -1270,15 +1292,15 @@ mod tests {
     // naming the knob to raise.
     #[test]
     fn a_world_without_a_shipped_budget_reserves_from_what_it_holds() {
-        let mut world = TestWorld::new();
-        let entity = world.spawn_prop(AssetId(1), [0.0, 3.0, 0.0], false);
+        let mut world = World::new();
+        let entity = spawn_prop(&mut world, AssetId(1), [0.0, 3.0, 0.0], false);
         make_dynamic(&mut world, entity);
 
         let mut physics = PhysicsSystem::new(PhysicsConfig {
             spawn_headroom: 4,
             ..PhysicsConfig::default()
         });
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
 
         assert_eq!(
             physics.physics_body_count(),
@@ -1293,41 +1315,35 @@ mod tests {
     // rather than re-refusing it.
     #[test]
     fn a_spawn_past_the_shipped_budget_is_refused() {
-        let mut world = TestWorld::new();
-        let authored = world.spawn_prop(AssetId(1), [0.0, 3.0, 0.0], false);
+        let mut world = World::new();
+        let authored = spawn_prop(&mut world, AssetId(1), [0.0, 3.0, 0.0], false);
         make_dynamic(&mut world, authored);
 
         // A budget with no headroom: the floor and the one authored prop.
-        let counts = scan_counts(&world.ctx());
+        let counts = scan_counts(&world.context());
         let budget = PhysicsBudget::derive(&counts, 0);
-        world
-            .resources
-            .insert(WorldPhysicsBudget(record_of(&budget)));
+        world.insert_resource(WorldPhysicsBudget(record_of(&budget)));
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
         let full = physics.physics_body_count();
         assert_eq!(full, budget.body_cap() as usize, "the budget is spent");
 
-        let spawned = world.spawn_prop(AssetId(2), [0.0, 6.0, 0.0], false);
+        let spawned = spawn_prop(&mut world, AssetId(2), [0.0, 6.0, 0.0], false);
         make_dynamic(&mut world, spawned);
-        physics.step(&mut world.ctx());
+        physics.step(&mut world.context());
         assert_eq!(physics.physics_body_count(), full, "no body was built");
         assert!(physics.props.is_refused(spawned));
 
         // Stepping on keeps the refusal: the entity is skipped, not retried,
         // and the authored prop carries on simulating.
         for _ in 0..10 {
-            physics.step(&mut world.ctx());
+            physics.step(&mut world.context());
         }
         assert_eq!(physics.physics_body_count(), full);
-        let refused_y = world.components.get::<Transform>(spawned).unwrap().position[1];
+        let refused_y = world.get::<Transform>(spawned).unwrap().position[1];
         assert_eq!(refused_y, 6.0, "a refused prop is not simulated at all");
-        let live_y = world
-            .components
-            .get::<Transform>(authored)
-            .unwrap()
-            .position[1];
+        let live_y = world.get::<Transform>(authored).unwrap().position[1];
         assert!(live_y < 3.0, "the authored prop still falls");
     }
 
@@ -1346,8 +1362,8 @@ mod tests {
             [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let mut world = TestWorld::new();
-        world.components.push_typed(CharacterRig::new(
+        let mut world = World::new();
+        world.push(CharacterRig::new(
             SkinnedMeshHandle(1),
             crate::gfx::render_types::SkinnedIndex(0),
             identity,
@@ -1356,10 +1372,10 @@ mod tests {
         ));
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
-        let rig_y = |world: &mut TestWorld| {
+        physics.init(&mut world.context());
+        let rig_y = |world: &mut World| {
             world
-                .ctx()
+                .context()
                 .query::<CharacterRig>()
                 .next()
                 .expect("the rig is there")
@@ -1372,11 +1388,11 @@ mod tests {
         );
 
         for _ in 0..30 {
-            physics.step(&mut world.ctx());
+            physics.step(&mut world.context());
         }
         let settled = rig_y(&mut world);
         for _ in 0..300 {
-            physics.step(&mut world.ctx());
+            physics.step(&mut world.context());
         }
         let held = rig_y(&mut world);
 
@@ -1395,18 +1411,18 @@ mod tests {
     #[test]
     fn contact_event_fires_on_impact_and_not_at_rest() {
         let id = AssetId(1);
-        let mut world = TestWorld::new();
-        let entity = world.spawn_prop(id, [0.0, 5.0, 0.0], false);
+        let mut world = World::new();
+        let entity = spawn_prop(&mut world, id, [0.0, 5.0, 0.0], false);
         make_dynamic(&mut world, entity);
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
 
         let mut cursor = EventCursor::default();
         let mut impacts: Vec<ContactEvent> = Vec::new();
         for _ in 0..120 {
-            physics.step(&mut world.ctx());
-            let ctx = world.ctx();
+            physics.step(&mut world.context());
+            let ctx = world.context();
             if let Some(events) = ctx.events::<ContactEvent>() {
                 impacts.extend(events.read(&mut cursor).copied());
             }
@@ -1423,8 +1439,8 @@ mod tests {
 
         // Settled: hundreds of resting ticks publish nothing further.
         for _ in 0..300 {
-            physics.step(&mut world.ctx());
-            let ctx = world.ctx();
+            physics.step(&mut world.context());
+            let ctx = world.context();
             if let Some(events) = ctx.events::<ContactEvent>() {
                 assert_eq!(
                     events.read(&mut cursor).count(),
@@ -1440,8 +1456,8 @@ mod tests {
     #[test]
     fn a_trigger_volume_reports_a_prop_crossing_it() {
         let volume_id = AssetId(9);
-        let mut world = TestWorld::new();
-        world.ctx().push_identified(
+        let mut world = World::new();
+        world.context().push_identified(
             volume_id,
             TriggerVolume {
                 position: [0.0, 3.0, 0.0],
@@ -1454,17 +1470,17 @@ mod tests {
                 detects: TriggerFilter::Props,
             },
         );
-        let ball = world.spawn_prop(AssetId(1), [0.0, 6.0, 0.0], false);
+        let ball = spawn_prop(&mut world, AssetId(1), [0.0, 6.0, 0.0], false);
         make_dynamic(&mut world, ball);
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
 
         let mut cursor = EventCursor::default();
         let mut crossings: Vec<VolumeEvent> = Vec::new();
         for _ in 0..180 {
-            physics.step(&mut world.ctx());
-            let ctx = world.ctx();
+            physics.step(&mut world.context());
+            let ctx = world.context();
             if let Some(events) = ctx.events::<VolumeEvent>() {
                 crossings.extend(events.read(&mut cursor).copied());
             }
@@ -1481,10 +1497,10 @@ mod tests {
     #[test]
     fn a_world_anchored_joint_holds_its_prop_up() {
         let bob_id = AssetId(1);
-        let mut world = TestWorld::new();
-        let bob = world.spawn_prop(bob_id, [1.0, 4.0, 0.0], false);
+        let mut world = World::new();
+        let bob = spawn_prop(&mut world, bob_id, [1.0, 4.0, 0.0], false);
         make_dynamic(&mut world, bob);
-        world.components.push_typed(PhysicsJoint {
+        world.push(PhysicsJoint {
             kind: crate::components::PhysicsJointKind::Spherical,
             body_a: Some(Ref::new(bob_id)),
             body_b: None,
@@ -1495,12 +1511,12 @@ mod tests {
         });
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
         for _ in 0..240 {
-            physics.step(&mut world.ctx());
+            physics.step(&mut world.context());
         }
 
-        let position = world.components.get::<Transform>(bob).unwrap().position;
+        let position = world.get::<Transform>(bob).unwrap().position;
         let reach =
             ((position[0]).powi(2) + (position[1] - 4.0).powi(2) + (position[2]).powi(2)).sqrt();
         assert!(
@@ -1523,22 +1539,17 @@ mod tests {
             ..PhysicsConfig::default()
         };
 
-        let mut world = TestWorld::new();
-        let entity = world.spawn_prop(AssetId(1), [0.0, 2.0, 0.0], false);
+        let mut world = World::new();
+        let entity = spawn_prop(&mut world, AssetId(1), [0.0, 2.0, 0.0], false);
         make_dynamic(&mut world, entity);
-        world
-            .components
-            .get_mut::<Collider>(entity)
-            .unwrap()
-            .0
-            .layer = "ghost".to_string();
+        world.get_mut::<Collider>(entity).unwrap().0.layer = "ghost".to_string();
 
         let mut physics = PhysicsSystem::new(config);
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
         for _ in 0..240 {
-            physics.step(&mut world.ctx());
+            physics.step(&mut world.context());
         }
-        let y = world.components.get::<Transform>(entity).unwrap().position[1];
+        let y = world.get::<Transform>(entity).unwrap().position[1];
         assert!(
             y < -10.0,
             "the ghost-layer prop fell through the floor (y = {y})"
@@ -1568,10 +1579,10 @@ mod tests {
     // varies with position, rather than the flat slab a bare config gets.
     #[test]
     fn authored_subdivisions_build_a_noise_floor_instead_of_a_slab() {
-        let mut world = TestWorld::new();
+        let mut world = World::new();
         let mut physics = PhysicsSystem::new(terrain_config());
         assert!(physics.terrain.is_some(), "the config authored a terrain");
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
 
         let a = floor_height(&physics, 0.0, 0.0).expect("the ray meets the floor");
         let b = floor_height(&physics, 12.0, -7.0).expect("the ray meets the floor");
@@ -1580,10 +1591,10 @@ mod tests {
 
     #[test]
     fn no_subdivisions_leaves_a_level_slab() {
-        let mut world = TestWorld::new();
+        let mut world = World::new();
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
         assert!(physics.terrain.is_none());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
 
         let a = floor_height(&physics, 0.0, 0.0).expect("the ray meets the floor");
         let b = floor_height(&physics, 12.0, -7.0).expect("the ray meets the floor");
@@ -1616,14 +1627,14 @@ mod tests {
         ];
 
         for (what, mesh) in cases {
-            let mut world = TestWorld::new();
+            let mut world = World::new();
             if let Some(mesh) = mesh {
-                world.ctx().push_identified(AssetId(7), mesh);
+                world.context().push_identified(AssetId(7), mesh);
             }
             let mut config = terrain_config();
             config.terrain_mesh = Some(Ref::new(AssetId(7)));
             let mut physics = PhysicsSystem::new(config);
-            physics.init(&mut world.ctx());
+            physics.init(&mut world.context());
             assert!(
                 floor_height(&physics, 0.0, 0.0).is_some(),
                 "{what}: the world was left with no floor at all"
@@ -1638,8 +1649,8 @@ mod tests {
     // RigidBody, which is what gates the next jump.
     #[test]
     fn a_grounded_player_jumps_and_lands() {
-        let mut world = TestWorld::new();
-        world.components.push_typed(RigidBody {
+        let mut world = World::new();
+        world.push(RigidBody {
             gravity_scale: 1.0,
             capsule_radius: 0.3,
             capsule_height: 1.8,
@@ -1648,16 +1659,16 @@ mod tests {
         });
         let mut camera = controlled_camera();
         camera.jump_requested = true;
-        world.components.push_typed(camera);
+        world.push(camera);
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
         assert!(
             physics.player.as_ref().expect("a capsule").has_gravity,
             "a RigidBody in the world is what makes the capsule fall"
         );
 
-        physics.step(&mut world.ctx());
+        physics.step(&mut world.context());
         let launched = physics.player.as_ref().expect("a capsule").vy;
         assert!(
             launched > 0.0,
@@ -1665,11 +1676,11 @@ mod tests {
         );
 
         // Stop asking, and let it come back down.
-        for camera in world.ctx().query_mut::<Camera3D>() {
+        for camera in world.context().query_mut::<Camera3D>() {
             camera.jump_requested = false;
         }
         for _ in 0..240 {
-            physics.step(&mut world.ctx());
+            physics.step(&mut world.context());
         }
 
         let player = physics.player.as_ref().expect("a capsule");
@@ -1677,7 +1688,7 @@ mod tests {
         assert_eq!(player.vy, 0.0, "landing clears the downward velocity");
         assert!(
             world
-                .ctx()
+                .context()
                 .query::<RigidBody>()
                 .all(|body| body.is_grounded),
             "the grounded state that gates the next jump was not published"
@@ -1690,25 +1701,23 @@ mod tests {
     #[test]
     fn interacting_twice_picks_up_then_throws_the_prop() {
         let id = AssetId(1);
-        let mut world = TestWorld::new();
-        let carriable = world.spawn_prop(id, [0.0, 1.0, -2.0], true);
+        let mut world = World::new();
+        let carriable = spawn_prop(&mut world, id, [0.0, 1.0, -2.0], true);
         make_dynamic(&mut world, carriable);
-        world
-            .components
-            .push_typed(interacting_camera([0.0, 1.0, 0.0]));
+        world.push(interacting_camera([0.0, 1.0, 0.0]));
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
 
-        physics.step(&mut world.ctx());
-        assert_eq!(world.ctx().query::<Held>().count(), 1, "picked up");
+        physics.step(&mut world.context());
+        assert_eq!(world.context().query::<Held>().count(), 1, "picked up");
         assert!(physics.held.is_some());
 
         // The camera is still asking, so the next step is the drop.
-        physics.step(&mut world.ctx());
+        physics.step(&mut world.context());
         assert!(physics.held.is_none(), "the prop was not released");
         assert_eq!(
-            world.ctx().query::<Held>().count(),
+            world.context().query::<Held>().count(),
             0,
             "the Held tag outlived the throw"
         );
@@ -1718,8 +1727,8 @@ mod tests {
     // falling prop, and report the crossings `steps` steps produce.
     fn crossings_through(detects: TriggerFilter, steps: usize) -> Vec<VolumeEvent> {
         let volume_id = AssetId(9);
-        let mut world = TestWorld::new();
-        world.ctx().push_identified(
+        let mut world = World::new();
+        world.context().push_identified(
             volume_id,
             TriggerVolume {
                 position: [0.0, 3.0, 0.0],
@@ -1732,17 +1741,17 @@ mod tests {
                 detects,
             },
         );
-        let ball = world.spawn_prop(AssetId(1), [0.0, 6.0, 0.0], false);
+        let ball = spawn_prop(&mut world, AssetId(1), [0.0, 6.0, 0.0], false);
         make_dynamic(&mut world, ball);
 
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        physics.init(&mut world.ctx());
+        physics.init(&mut world.context());
 
         let mut cursor = EventCursor::default();
         let mut crossings = Vec::new();
         for _ in 0..steps {
-            physics.step(&mut world.ctx());
-            let ctx = world.ctx();
+            physics.step(&mut world.context());
+            let ctx = world.context();
             if let Some(events) = ctx.events::<VolumeEvent>() {
                 crossings.extend(events.read(&mut cursor).copied());
             }

@@ -36,6 +36,24 @@ pub fn rust_sources(dirs: &[PathBuf], skip_file: &str) -> Vec<PathBuf> {
     files
 }
 
+/// Every `.rs` file under `dir`, as [`rust_sources`] walks it, paired with its
+/// path relative to `dir` joined with `/` on every host.
+pub fn relative_rust_sources(dir: &Path) -> Vec<(String, PathBuf)> {
+    rust_sources(&[dir.to_path_buf()], "")
+        .into_iter()
+        .map(|path| {
+            let rel = path
+                .strip_prefix(dir)
+                .expect("a walked file lies under its root")
+                .components()
+                .map(|c| c.as_os_str().to_str().expect("utf-8 file name"))
+                .collect::<Vec<_>>()
+                .join("/");
+            (rel, path)
+        })
+        .collect()
+}
+
 fn collect(dir: &Path, skip_file: &str, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -231,6 +249,24 @@ pub fn fn_bodies(text: &str) -> Vec<FnBody> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relative_sources_name_nested_files_with_forward_slashes() {
+        let tree = crate::TempTree::new();
+        tree.write("top.rs", "");
+        tree.write("nested/deeper/inner.rs", "");
+        tree.write("notes.txt", "");
+        tree.write("target/built.rs", "");
+        let mut found: Vec<String> = relative_rust_sources(tree.path())
+            .into_iter()
+            .map(|(rel, path)| {
+                assert!(path.ends_with(&rel), "{rel} vs {}", path.display());
+                rel
+            })
+            .collect();
+        found.sort();
+        assert_eq!(found, ["nested/deeper/inner.rs", "top.rs"]);
+    }
 
     #[test]
     fn a_brace_in_a_string_does_not_open_a_block() {

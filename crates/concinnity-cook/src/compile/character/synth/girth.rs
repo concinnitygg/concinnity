@@ -4,7 +4,8 @@
 
 use concinnity_core::math::vec3;
 
-use super::{SynthInput, unit};
+use super::SynthInput;
+use concinnity_core::math::vec3::try_normalize;
 
 pub(crate) fn displace(input: &SynthInput) -> Vec<[f32; 3]> {
     input
@@ -13,7 +14,7 @@ pub(crate) fn displace(input: &SynthInput) -> Vec<[f32; 3]> {
         .map(|v| {
             let mut d = [0.0_f32; 3];
             for (j, w) in input.region_influences(v) {
-                if let Some(r) = unit(input.frames[j].radial(v.pos)) {
+                if let Some(r) = try_normalize(input.frames[j].radial(v.pos), 1e-6) {
                     vec3::vec3_add(&mut d, vec3::scale(r, w * input.params.amplitude));
                 }
             }

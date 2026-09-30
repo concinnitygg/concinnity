@@ -22,9 +22,9 @@
 //! all use RH view matrices with [0, 1] depth in their orthographic
 //! projections, so the same VPs are valid for every backend's shadow sampling.
 
-use crate::gfx::projection::{look_at, normalize3, ortho_rh};
+use crate::gfx::projection::{look_at, ortho_rh};
 use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
-use crate::math::vec3::{add, cross, dot, scale, sub};
+use crate::math::vec3::{add, cross, dot, length_sq, normalize_clamped, scale, sub};
 use crate::math::{powf, round, sqrt, tan};
 use crate::transform::IDENTITY;
 use crate::transform::mat4_mul;
@@ -98,7 +98,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         *split = SPLIT_LAMBDA * log + (1.0 - SPLIT_LAMBDA) * lin;
     }
 
-    let l_to = normalize3(light_dir_to_source);
+    let l_to = normalize_clamped(light_dir_to_source, 1e-6);
 
     // Camera basis from view matrix (column-major; look_at fills row 0 = right,
     // row 1 = up, row 2 = -forward into view[*][0], view[*][1], view[*][2]).
@@ -145,7 +145,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         let mut r2 = 0.0_f32;
         for c in &corners {
             let d = sub(*c, center);
-            let dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+            let dd = length_sq(d);
             if dd > r2 {
                 r2 = dd;
             }
@@ -162,7 +162,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         // Light-space basis matching `look_at` below: f points from the light
         // toward the scene, r and u span the shadow texel grid.
         let f = scale(l_to, -1.0);
-        let r = normalize3(cross(f, up_l));
+        let r = normalize_clamped(cross(f, up_l), 1e-6);
         let u = cross(r, f);
 
         // Texel-grid snap. Quantize the cascade center along the light's right

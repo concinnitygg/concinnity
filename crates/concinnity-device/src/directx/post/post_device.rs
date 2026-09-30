@@ -435,9 +435,7 @@ mod tests {
     // init failure on the GPU host. Skipped on a host without dxc.
     #[test]
     fn every_post_program_compiles() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         for program in [
             PostProgram::TaaResolve,
             PostProgram::SsrResolve,

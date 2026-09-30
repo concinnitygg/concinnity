@@ -316,9 +316,7 @@ mod tests {
     // init failure on a GPU host.
     #[test]
     fn glass_mesh_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         for msaa in [false, true] {
             super::compile_glass_mesh_shaders(false, msaa, 16)
                 .unwrap_or_else(|e| panic!("glass_mesh shaders (msaa={msaa}) must compile: {e}"));
@@ -330,9 +328,7 @@ mod tests {
     // guards.
     #[test]
     fn glass_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         super::compile_glass_shaders(false, true).expect("glass compiles (msaa)");
         super::compile_glass_shaders(false, false).expect("glass compiles (no msaa)");
     }
@@ -346,9 +342,7 @@ mod tests {
     // in gfx::render_types.
     #[test]
     fn glass_rt_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         for &msaa in &[true, false] {
             let shaders =
                 super::compile_glass_rt_shaders(false, msaa, 4).expect("glass rt shaders compile");

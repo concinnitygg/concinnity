@@ -1,11 +1,10 @@
 //! The SdfVolume asset: the authored schema (the struct, its `Default`,
-//! `cone_ratio`, and `SDF_PARAMS_LEN`), the `Component` impl, the blob-residency
-//! helper the engine init uses, and the runtime step-count clamp bounds. The
+//! `cone_ratio`, and `SDF_PARAMS_LEN`), the blob-residency helper the engine
+//! init uses, and the runtime step-count clamp bounds. The
 //! JSON-args source selection, validation, and the bake-time clamp live in
 //! concinnity-cook (`authoring::source_args`, `check::sdf_volume`,
 //! `authoring::validate::sdf_volume`).
 
-use crate::ecs::Component;
 use crate::ecs::PayloadLocator;
 use alloc::string::String;
 
@@ -246,18 +245,6 @@ pub const SDF_MAX_STEPS_CEILING: u32 = 256;
 /// Lower bound on the per-volume cone-march step count. Below this the
 /// march doesn't have enough budget to converge on anything interesting.
 pub const SDF_MAX_STEPS_FLOOR: u32 = 8;
-
-impl Component for SdfVolume {
-    const NAME: &'static str = "SdfVolume";
-
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::AssetError> {
-        crate::ecs::decode_baked(bytes)
-    }
-
-    fn inject_locator(&mut self, locator: PayloadLocator) {
-        self.locator = Some(locator);
-    }
-}
 
 /// Blob indices that hold an `SdfVolume` fragment-shader payload.
 ///

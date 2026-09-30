@@ -3,7 +3,6 @@
 //! metadata (name, id, version, author, icon) is read at build / export time
 //! from the authored world, so it never ships in the blob.
 
-use crate::ecs::Component;
 use alloc::string::{String, ToString};
 
 /// Names, identifies, and sizes the application.
@@ -165,13 +164,5 @@ impl AppConfig {
             job_threads: args.job_threads,
             headless: args.headless,
         }
-    }
-}
-
-impl Component for AppConfig {
-    const NAME: &'static str = "AppConfig";
-
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::AssetError> {
-        crate::ecs::decode_baked(bytes)
     }
 }

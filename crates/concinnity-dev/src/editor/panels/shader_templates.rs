@@ -133,9 +133,7 @@ mod tests {
 
     #[test]
     fn every_fragment_starter_compiles() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         for t in FRAGMENT {
             compiles_clean(t.text, None);
         }
@@ -143,9 +141,7 @@ mod tests {
 
     #[test]
     fn every_vertex_starter_compiles_beside_the_first_fragment() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         for t in VERTEX {
             compiles_clean(FRAGMENT[0].text, Some(t.text));
         }

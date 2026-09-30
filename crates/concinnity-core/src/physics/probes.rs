@@ -4,11 +4,11 @@
 // writer (the probing systems run after physics), which is invisible at
 // frame rates.
 
+use crate::math::vec3::length;
 use crate::physics::{LayerMask, Simulation};
 
 use crate::components::{AudioOcclusionProbe, CameraProbe, GroundProbes};
 use crate::ecs::PipelineContext;
-use crate::math::sqrt;
 
 use super::rig::RigPhysics;
 
@@ -52,7 +52,7 @@ pub(crate) fn step_probes(
             probe.desired[1] - probe.pivot[1],
             probe.desired[2] - probe.pivot[2],
         ];
-        let dist = sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+        let dist = length(dir);
         probe.clearance = world
             .raycast(probe.pivot, dir, dist, handle_of(probe.target), mask)
             .map(|hit| (hit.distance - CAMERA_MARGIN).max(CAMERA_MIN_DISTANCE));
@@ -67,7 +67,7 @@ pub(crate) fn step_probes(
             probe.to[1] - probe.from[1],
             probe.to[2] - probe.from[2],
         ];
-        let dist = sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+        let dist = length(dir);
         probe.blocked = Some(world.raycast(probe.from, dir, dist, None, mask).is_some());
     }
 }
@@ -79,7 +79,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use super::super::test_world::TestWorld;
+    use crate::ecs::World;
 
     // An audio occlusion probe reads blocked when a wall interrupts its
     // segment, clear when nothing does, and clear on a degenerate
@@ -101,17 +101,17 @@ mod tests {
             .expect("room in the pool");
         world.step(1.0 / 60.0);
 
-        let mut w = TestWorld::new();
+        let mut w = World::new();
         let probe = |to: [f32; 3]| AudioOcclusionProbe {
             from: [0.0; 3],
             to,
             blocked: None,
         };
-        w.components.push_typed(probe([10.0, 0.0, 0.0]));
-        w.components.push_typed(probe([0.0, 0.0, 10.0]));
-        w.components.push_typed(probe([0.0; 3]));
+        w.push(probe([10.0, 0.0, 0.0]));
+        w.push(probe([0.0, 0.0, 10.0]));
+        w.push(probe([0.0; 3]));
 
-        let mut ctx = w.ctx();
+        let mut ctx = w.context();
         step_probes(&world, &mut ctx, &[], LayerMask::ALL);
 
         let answers: Vec<Option<bool>> = ctx

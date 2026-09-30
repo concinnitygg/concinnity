@@ -15,47 +15,17 @@
 //! surface a body is actually resting on, and a stack riding a platform must
 //! still be riding it a few seconds later.
 
+use super::fixtures::{TICK, add_floor, awake};
+use crate::math::vec3::length;
 use crate::physics::{
     BodyHandle, ColliderShape, DynamicParams, LayerMask, ShapeCast, SimConfig, Simulation,
 };
 use alloc::vec::Vec;
 
-const TICK: f32 = 1.0 / 60.0;
 const CUBE_HALF: f32 = 0.5;
 const CUBE: ColliderShape = ColliderShape::Cuboid {
     half_extents: [CUBE_HALF, CUBE_HALF, CUBE_HALF],
 };
-
-fn params(friction: f32, restitution: f32) -> DynamicParams {
-    DynamicParams {
-        mass: 1.0,
-        friction,
-        restitution,
-        gravity_scale: 1.0,
-        linear_damping: 0.0,
-    }
-}
-
-fn awake_config() -> SimConfig {
-    SimConfig {
-        allow_sleep: false,
-        ..SimConfig::default()
-    }
-}
-
-/// A floor whose top surface is exactly `y = 0`.
-fn add_floor(sim: &mut Simulation) {
-    sim.add_fixed(
-        &ColliderShape::Cuboid {
-            half_extents: [20.0, 1.0, 20.0],
-        },
-        [0.0, -1.0, 0.0],
-        [0.0; 3],
-        0.8,
-        LayerMask::ALL,
-    )
-    .expect("room for the floor");
-}
 
 /// A column of `count` cubes resting on a floor, one cube apart.
 fn stack(count: usize, config: SimConfig) -> (Simulation, Vec<BodyHandle>) {
@@ -67,7 +37,10 @@ fn stack(count: usize, config: SimConfig) -> (Simulation, Vec<BodyHandle>) {
                 &CUBE,
                 [0.0, CUBE_HALF + level as f32, 0.0],
                 [0.0; 3],
-                params(0.6, 0.0),
+                DynamicParams {
+                    friction: 0.6,
+                    ..Default::default()
+                },
                 LayerMask::ALL,
             )
             .expect("room for a cube")
@@ -110,7 +83,7 @@ fn largest_tick_move(sim: &mut Simulation, handles: &[BodyHandle], ticks: usize)
 // creeps a tenth of a millimeter look identical; two hundred do not.
 #[test]
 fn a_settled_body_does_not_creep() {
-    let (mut sim, handles) = stack(1, awake_config());
+    let (mut sim, handles) = stack(1, awake());
     settle(&mut sim, 300);
     let moved = largest_tick_move(&mut sim, &handles, 120);
     assert!(
@@ -121,7 +94,7 @@ fn a_settled_body_does_not_creep() {
 
 #[test]
 fn a_settled_stack_does_not_creep() {
-    let (mut sim, handles) = stack(8, awake_config());
+    let (mut sim, handles) = stack(8, awake());
     settle(&mut sim, 600);
     let moved = largest_tick_move(&mut sim, &handles, 120);
     assert!(
@@ -135,7 +108,7 @@ fn a_settled_stack_does_not_creep() {
 // step ends up through the floor.
 #[test]
 fn a_settled_body_does_not_sink_through_the_floor() {
-    let (mut sim, handles) = stack(1, awake_config());
+    let (mut sim, handles) = stack(1, awake());
     settle(&mut sim, 120);
     let early = positions(&sim, &handles)[0][1];
     settle(&mut sim, 600);
@@ -156,7 +129,7 @@ fn a_settled_body_does_not_sink_through_the_floor() {
 
 #[test]
 fn a_settled_stack_does_not_sink_through_the_floor() {
-    let (mut sim, handles) = stack(8, awake_config());
+    let (mut sim, handles) = stack(8, awake());
     settle(&mut sim, 600);
     let early = positions(&sim, &handles);
     settle(&mut sim, 600);
@@ -186,7 +159,7 @@ fn a_settled_stack_does_not_sink_through_the_floor() {
 // first time anything disturbs the stack.
 #[test]
 fn a_settled_stack_does_not_gain_energy() {
-    let (mut sim, _handles) = stack(8, awake_config());
+    let (mut sim, _handles) = stack(8, awake());
     settle(&mut sim, 600);
     let settled = sim.total_energy();
     let mut peak = settled;
@@ -203,7 +176,7 @@ fn a_settled_stack_does_not_gain_energy() {
 
 #[test]
 fn an_eight_high_stack_is_still_standing_after_ten_seconds() {
-    let (mut sim, handles) = stack(8, awake_config());
+    let (mut sim, handles) = stack(8, awake());
     settle(&mut sim, 600);
     for (level, position) in positions(&sim, &handles).iter().enumerate() {
         let expected = CUBE_HALF + level as f32;
@@ -224,7 +197,7 @@ fn an_eight_high_stack_is_still_standing_after_ten_seconds() {
 #[test]
 fn the_same_stack_settles_identically_twice() {
     let run = || {
-        let (mut sim, handles) = stack(8, awake_config());
+        let (mut sim, handles) = stack(8, awake());
         settle(&mut sim, 600);
         positions(&sim, &handles)
             .iter()
@@ -273,7 +246,7 @@ fn a_sleeping_stack_wakes_when_something_lands_on_it() {
 #[test]
 fn a_box_holds_on_a_shallow_slope_and_slides_on_a_steep_one() {
     let slide = |slope_deg: f32, friction: f32| -> f32 {
-        let mut sim = Simulation::new(awake_config(), 2);
+        let mut sim = Simulation::new(awake(), 2);
         sim.add_fixed(
             &ColliderShape::Cuboid {
                 half_extents: [20.0, 0.5, 20.0],
@@ -291,7 +264,10 @@ fn a_box_holds_on_a_shallow_slope_and_slides_on_a_steep_one() {
                 },
                 [0.0, 1.2, 0.0],
                 [0.0, 0.0, slope_deg],
-                params(friction, 0.0),
+                DynamicParams {
+                    friction,
+                    ..Default::default()
+                },
                 LayerMask::ALL,
             )
             .expect("room");
@@ -319,14 +295,18 @@ fn a_box_holds_on_a_shallow_slope_and_slides_on_a_steep_one() {
 // them. A solver that returns more than it took never stops bouncing.
 #[test]
 fn a_bouncing_ball_loses_height_every_bounce_and_comes_to_rest() {
-    let mut sim = Simulation::new(awake_config(), 2);
+    let mut sim = Simulation::new(awake(), 2);
     add_floor(&mut sim);
     let ball = sim
         .add_dynamic(
             &ColliderShape::Ball { radius: 0.5 },
             [0.0, 5.0, 0.0],
             [0.0; 3],
-            params(0.3, 0.8),
+            DynamicParams {
+                friction: 0.3,
+                restitution: 0.8,
+                ..Default::default()
+            },
             LayerMask::ALL,
         )
         .expect("room");
@@ -375,7 +355,7 @@ fn a_resting_box_driven_hard_into_the_floor_stays_on_it() {
         let mut sim = Simulation::new(
             SimConfig {
                 ccd_enabled: false,
-                ..awake_config()
+                ..awake()
             },
             2,
         );
@@ -388,7 +368,7 @@ fn a_resting_box_driven_hard_into_the_floor_stays_on_it() {
                 },
                 [0.0, half, 0.0],
                 [0.0; 3],
-                params(0.5, 0.0),
+                DynamicParams::default(),
                 LayerMask::ALL,
             )
             .expect("room");
@@ -401,8 +381,7 @@ fn a_resting_box_driven_hard_into_the_floor_stays_on_it() {
             sim.step(TICK);
             highest = highest.max(sim.body_pose(box_body).expect("live").0[1]);
             let spin = sim.angular_velocity(box_body).expect("live");
-            fastest_spin = fastest_spin
-                .max((spin[0] * spin[0] + spin[1] * spin[1] + spin[2] * spin[2]).sqrt());
+            fastest_spin = fastest_spin.max(length(spin));
         }
         (
             highest,
@@ -452,7 +431,7 @@ fn every_shape_pair_holds_the_other_off_rather_than_passing_through() {
     ];
     for (lower_name, lower, lower_inradius) in shapes {
         for (upper_name, upper, upper_inradius) in shapes {
-            let mut sim = Simulation::new(awake_config(), 3);
+            let mut sim = Simulation::new(awake(), 3);
             add_floor(&mut sim);
             let base = sim
                 .add_fixed(&lower, [0.0, 1.0, 0.0], [0.0; 3], 0.8, LayerMask::ALL)
@@ -462,7 +441,10 @@ fn every_shape_pair_holds_the_other_off_rather_than_passing_through() {
                     &upper,
                     [0.0, 3.0, 0.0],
                     [0.0; 3],
-                    params(0.8, 0.0),
+                    DynamicParams {
+                        friction: 0.8,
+                        ..Default::default()
+                    },
                     LayerMask::ALL,
                 )
                 .expect("room");
@@ -496,7 +478,7 @@ fn every_shape_pair_holds_the_other_off_rather_than_passing_through() {
 // it rocks end over end instead of lying still.
 #[test]
 fn a_capsule_lying_on_a_floor_comes_to_rest() {
-    let mut sim = Simulation::new(awake_config(), 2);
+    let mut sim = Simulation::new(awake(), 2);
     add_floor(&mut sim);
     let capsule = sim
         .add_dynamic(
@@ -506,7 +488,10 @@ fn a_capsule_lying_on_a_floor_comes_to_rest() {
             },
             [0.0, 1.5, 0.0],
             [0.0, 0.0, 90.0],
-            params(0.6, 0.0),
+            DynamicParams {
+                friction: 0.6,
+                ..Default::default()
+            },
             LayerMask::ALL,
         )
         .expect("room");
@@ -542,7 +527,7 @@ fn removing_a_body_from_under_a_stack_lets_the_rest_fall_and_settle() {
 // not.
 #[test]
 fn a_ray_lands_on_the_surface_the_stack_settled_at() {
-    let (mut sim, handles) = stack(4, awake_config());
+    let (mut sim, handles) = stack(4, awake());
     settle(&mut sim, 600);
     for (level, &handle) in handles.iter().enumerate() {
         let resting = sim.body_pose(handle).expect("live").0;
@@ -612,7 +597,10 @@ fn a_stack_rides_a_moving_platform_without_being_left_behind() {
                 &CUBE,
                 [0.0, 1.0 + level as f32, 0.0],
                 [0.0; 3],
-                params(0.9, 0.0),
+                DynamicParams {
+                    friction: 0.9,
+                    ..Default::default()
+                },
                 LayerMask::ALL,
             )
             .expect("room for a rider")

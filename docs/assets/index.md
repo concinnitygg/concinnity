@@ -118,15 +118,14 @@
 - [MorphKey](MorphKey.md) - One morph-weight keyframe of an [Animation](Animation.md): per-target weights at one sample time.
 - [PaletteEntry](PaletteEntry.md) - One entry in a [MaterialPalette](MaterialPalette.md). Each carries an `alias` (the suffix of the expanded [Material](Material.md) name) plus the Material fields the expansion fills in. The [Texture](Texture.md)s named by `albedo` / `normal_map` resolve on the expanded Material.
 - [PanelSection](PanelSection.md) - One panel section: a caption over the rows of the listed regions.
+- [PassResolution](PassResolution.md) - Internal resolution a screen-space pass renders at before its result is upsampled to native. `half` (the default) shades a quarter of the pixels; `full` keeps the pass at native resolution; `quarter` is the cheapest.
 - [PhysicsJointKind](PhysicsJointKind.md) - The constraint shape a `PhysicsJoint` declares.
 - [PrefabEntry](PrefabEntry.md) - One entry in a [Prefab](Prefab.md)'s `props` list. The fields consulted depend on `kind`: a `prop` uses the render / collision / transform fields, a `point_light` uses the `light_*` fields, and a `prefab` uses `prefab`. The assets named by `model` / `mesh` / `material` / `parent` / `prefab` resolve when the entry expands.
 - [PrefabKind](PrefabKind.md) - Which kind of asset a [PrefabEntry](PrefabEntry.md) expands into.
 - [PropCollider](PropCollider.md) - Collision volume attached to a [Prop](Prop.md).
 - [PropColliderShape](PropColliderShape.md) - The collision volume a [PropCollider](PropCollider.md)'s `shape` names. The single accepted vocabulary: the build rejects an authored name this does not recognize, and the runtime resolves the same name through it.
 - [ProportionGroup](ProportionGroup.md) - A proportion slider: one value in `[-1, 1]` written as a scale and / or length change on every listed joint.
-- [ReflectionBlurResolution](ReflectionBlurResolution.md) - Internal render resolution of the roughness-aware reflection blur (only meaningful when `ssr` or `ray_traced_reflections` is on). The blur is the expensive multi-tap part of the reflection composite and is low-frequency (a widening glossy cone), so running it at a fraction of the pixels and bilinearly upsampling is visually free. `half` (the default) blurs at a quarter of the pixels; `full` keeps it at native resolution; `quarter` is the cheapest. Mirrors stay sharp regardless: the composite lerps in the full-resolution reflection for low roughness.
 - [Rolloff](Rolloff.md) - How an [AudioEmitter](AudioEmitter.md)'s volume falls with distance.
-- [RtReflectionResolution](RtReflectionResolution.md) - Internal resolution of the ray-traced reflection trace (only meaningful when `ray_traced_reflections` is on). Tracing is the expensive part of ray-traced reflections, so `half` (the default) casts rays for a quarter of the pixels and the reflection composite upsamples them with a depth- and normal-aware filter that keeps edges from bleeding. `full` traces every pixel; `quarter` is the cheapest.
 - [SchemaJoint](SchemaJoint.md) - One joint the schema expects in a conforming skeleton.
 - [SchemaKey](SchemaKey.md) - One shape key the schema knows, authored on the source or synthesized.
 - [SchemaRegion](SchemaRegion.md) - A named group of joints. A vertex belongs to a region by the skin weight it gives the region's joints.
@@ -139,7 +138,6 @@
 - [ShapeSlider](ShapeSlider.md) - One named shape value in `[-1, 1]`.
 - [SkinnedVertexData](SkinnedVertexData.md) - One vertex of a skinned mesh. Beyond position / color / uv it carries up to four joint bindings: `joints[k]` indexes the skeleton, `weights[k]` is its blend weight. Weights are normalized at build time.
 - [SpriteFit](SpriteFit.md) - How a screen-owned overlay element (a [Sprite](Sprite.md), [TextLabel](TextLabel.md), or [HitRegion](HitRegion.md)) maps from the 1280x720 reference canvas to the live window when their aspect ratios differ.
-- [SsgiResolution](SsgiResolution.md) - Internal render resolution of the SSGI gather pass (only meaningful when `indirect_lighting` is `ssgi`). The gather is the expensive part (a hemisphere ray-march per pixel), and its composite is a depth-aware bilateral filter that upsamples a lower-resolution gather back to full resolution at little visible cost. `half` (the default) gathers at a quarter of the pixels for a large saving; `full` keeps the gather at native resolution; `quarter` is the cheapest, for low-end GPUs or debugging.
 - [StoryChoice](StoryChoice.md) - One option in a [StoryNode](StoryNode.md)'s choice menu.
 - [StoryCommand](StoryCommand.md) - What an [Action](Action.md) does to the story. An index-carrying command is an object with its name as the only key, e.g. `{"choose": 1}`.
 - [StoryCompareOp](StoryCompareOp.md) - A comparison operator in a [Story](Story.md) condition. An unset variable reads as `0`, so a plain flag test is `Ne 0` and its negation `Eq 0`.

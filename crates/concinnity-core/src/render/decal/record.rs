@@ -4,7 +4,7 @@
 //! back through the inverse and tests it against that box.
 
 use crate::components::Decal;
-use crate::math::sqrt;
+use crate::math::vec3::length;
 use crate::transform::trs_matrix;
 use alloc::vec::Vec;
 
@@ -65,9 +65,9 @@ pub fn invert_decal_model(model: [[f32; 4]; 4]) -> Option<[[f32; 4]; 4]> {
     let col0 = [model[0][0], model[0][1], model[0][2]];
     let col1 = [model[1][0], model[1][1], model[1][2]];
     let col2 = [model[2][0], model[2][1], model[2][2]];
-    let s0 = sqrt(col0[0] * col0[0] + col0[1] * col0[1] + col0[2] * col0[2]);
-    let s1 = sqrt(col1[0] * col1[0] + col1[1] * col1[1] + col1[2] * col1[2]);
-    let s2 = sqrt(col2[0] * col2[0] + col2[1] * col2[1] + col2[2] * col2[2]);
+    let s0 = length(col0);
+    let s1 = length(col1);
+    let s2 = length(col2);
     if !(s0.is_finite() && s1.is_finite() && s2.is_finite()) || s0 == 0.0 || s1 == 0.0 || s2 == 0.0
     {
         return None;

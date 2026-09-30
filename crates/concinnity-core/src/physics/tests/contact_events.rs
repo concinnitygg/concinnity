@@ -12,41 +12,13 @@
 //! stopping it costs its mass times that; a solver whose reported impulse is
 //! not near that figure is reporting something other than what it did.
 
-use crate::physics::{ColliderShape, ContactHit, DynamicParams, LayerMask, SimConfig, Simulation};
+use super::fixtures::{TICK, add_floor, drop_ball, sim};
+use crate::physics::{ColliderShape, ContactHit, DynamicParams, LayerMask, Simulation};
 use alloc::vec;
 use alloc::vec::Vec;
 
-const TICK: f32 = 1.0 / 60.0;
 const GRAVITY: f32 = crate::physics::GRAVITY;
 const BALL: ColliderShape = ColliderShape::Ball { radius: 0.5 };
-
-fn params(mass: f32) -> DynamicParams {
-    DynamicParams {
-        mass,
-        friction: 0.5,
-        restitution: 0.0,
-        gravity_scale: 1.0,
-        linear_damping: 0.0,
-    }
-}
-
-fn sim(capacity: usize) -> Simulation {
-    Simulation::new(SimConfig::default(), capacity)
-}
-
-/// A floor whose top surface is exactly `y = 0`.
-fn add_floor(sim: &mut Simulation) {
-    sim.add_fixed(
-        &ColliderShape::Cuboid {
-            half_extents: [20.0, 1.0, 20.0],
-        },
-        [0.0, -1.0, 0.0],
-        [0.0; 3],
-        0.8,
-        LayerMask::ALL,
-    )
-    .expect("room for the floor");
-}
 
 /// Step `ticks` times, collecting every hit recorded along the way.
 fn run(sim: &mut Simulation, ticks: usize) -> Vec<ContactHit> {
@@ -71,25 +43,25 @@ fn run(sim: &mut Simulation, ticks: usize) -> Vec<ContactHit> {
 
 /// A ball dropped from `height` onto a floor, with the impulse gate set to
 /// `min_impulse`.
-fn drop_ball(min_impulse: f32, height: f32, mass: f32) -> (Simulation, Vec<ContactHit>) {
+fn dropped_ball(min_impulse: f32, height: f32, mass: f32) -> (Simulation, Vec<ContactHit>) {
     let mut sim = sim(2);
     sim.set_contact_min_impulse(min_impulse, TICK);
     add_floor(&mut sim);
-    sim.add_dynamic(
-        &BALL,
+    drop_ball(
+        &mut sim,
         [0.0, height + 0.5, 0.0],
-        [0.0; 3],
-        params(mass),
-        LayerMask::ALL,
-    )
-    .expect("room for the ball");
+        DynamicParams {
+            mass,
+            ..Default::default()
+        },
+    );
     let hits = run(&mut sim, 180);
     (sim, hits)
 }
 
 #[test]
 fn a_landing_reports_a_hit_and_the_rest_that_follows_does_not() {
-    let (mut sim, hits) = drop_ball(1.0, 5.0, 1.0);
+    let (mut sim, hits) = dropped_ball(1.0, 5.0, 1.0);
     assert!(!hits.is_empty(), "the landing has to be reported");
     assert!(hits.iter().all(|h| h.a.index() == 0 && h.b.index() == 1));
 
@@ -101,7 +73,7 @@ fn a_landing_reports_a_hit_and_the_rest_that_follows_does_not() {
 // and the point is where to put them.
 #[test]
 fn the_hit_describes_the_collision_it_came_from() {
-    let (_, hits) = drop_ball(1.0, 5.0, 1.0);
+    let (_, hits) = dropped_ball(1.0, 5.0, 1.0);
     let landing = hits.first().expect("the landing is reported");
     // The floor is the lower slot, so the normal points up out of it.
     assert!(landing.normal[1] > 0.99, "{:?}", landing.normal);
@@ -120,7 +92,7 @@ fn the_hit_describes_the_collision_it_came_from() {
 #[test]
 fn the_impulse_is_the_momentum_the_landing_took_out() {
     for (mass, height) in [(1.0f32, 5.0f32), (4.0, 5.0), (1.0, 1.25)] {
-        let (_, hits) = drop_ball(0.5, height, mass);
+        let (_, hits) = dropped_ball(0.5, height, mass);
         let total: f32 = hits.iter().map(|h| h.impulse).sum();
         let expected = mass * (2.0 * GRAVITY * height).sqrt();
         assert!(
@@ -134,14 +106,14 @@ fn the_impulse_is_the_momentum_the_landing_took_out() {
 // lower one reports.
 #[test]
 fn raising_the_threshold_silences_a_weaker_landing() {
-    let (_, gentle) = drop_ball(0.2, 0.2, 1.0);
+    let (_, gentle) = dropped_ball(0.2, 0.2, 1.0);
     assert!(!gentle.is_empty(), "a short drop is reported at 0.2");
 
-    let (_, guarded) = drop_ball(5.0, 0.2, 1.0);
+    let (_, guarded) = dropped_ball(5.0, 0.2, 1.0);
     assert!(guarded.is_empty(), "{guarded:?}");
 
     // The same threshold still lets a real fall through.
-    let (_, hard) = drop_ball(5.0, 5.0, 1.0);
+    let (_, hard) = dropped_ball(5.0, 5.0, 1.0);
     assert!(!hard.is_empty(), "a five meter drop passes 5");
 }
 
@@ -188,7 +160,7 @@ fn a_driven_body_pressing_on_a_dynamic_one_reports() {
         &BALL,
         [0.0, 0.5, 0.0],
         [0.0; 3],
-        params(1.0),
+        DynamicParams::default(),
         LayerMask::ALL,
     )
     .expect("room for the ball");
@@ -228,7 +200,7 @@ fn a_landing_on_terrain_reports_one_hit_per_step() {
         &BALL,
         [1.0, 5.5, -2.0],
         [0.0; 3],
-        params(1.0),
+        DynamicParams::default(),
         LayerMask::ALL,
     )
     .expect("room for the ball");
@@ -256,7 +228,7 @@ fn two_identical_runs_report_the_same_hits() {
                 &BALL,
                 [x, 4.0 + x.abs() * 0.25, 0.0],
                 [0.0; 3],
-                params(1.0),
+                DynamicParams::default(),
                 LayerMask::ALL,
             )
             .expect("room for the ball");
@@ -292,7 +264,7 @@ fn hits_wait_in_the_queue_until_they_are_drained() {
             &BALL,
             [x, 0.6 + x * 0.05, 0.0],
             [0.0; 3],
-            params(1.0),
+            DynamicParams::default(),
             LayerMask::ALL,
         )
         .expect("room for the ball");
@@ -323,7 +295,7 @@ fn draining_hits_reallocates_neither_side() {
         &BALL,
         [0.0, 5.5, 0.0],
         [0.0; 3],
-        params(1.0),
+        DynamicParams::default(),
         LayerMask::ALL,
     )
     .expect("room for the ball");
@@ -354,7 +326,7 @@ fn a_zero_threshold_still_needs_load() {
         [0.0; 3],
         DynamicParams {
             gravity_scale: 0.0,
-            ..params(1.0)
+            ..Default::default()
         },
         LayerMask::ALL,
     )

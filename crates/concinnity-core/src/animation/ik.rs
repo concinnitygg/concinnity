@@ -4,34 +4,20 @@
 //! blending and before `skinning_matrices`, so the solve composes with any
 //! animation. Pure math, no ECS or backend types.
 
-use crate::math::vec3::{add, cross, dot, length, scale, sub};
-use crate::math::{acos, atan2, sin_cos};
+use crate::math::vec3::{add, cross, dot, length, scale, sub, try_normalize};
+use crate::math::{acos, atan2, quat_from_axis_angle};
 use alloc::vec::Vec;
 
 use crate::animation::skeleton::Skeleton;
-use crate::transform::{Mat4, mat4_affine_inverse, mat4_mul};
+use crate::transform::{Mat3, Mat4, mat4_affine_inverse, mat4_mul, quat_to_mat3};
 
 type Vec3 = [f32; 3];
-type Mat3 = [[f32; 3]; 3];
 
 const EPS: f32 = 1.0e-5;
 
-fn normalize(v: Vec3) -> Option<Vec3> {
-    let len = length(v);
-    (len > EPS).then(|| scale(v, 1.0 / len))
-}
-
-// Rodrigues rotation: column-major 3x3 rotating about the unit `axis` by
-// `angle` radians.
+// Column-major 3x3 rotating about the unit `axis` by `angle` radians.
 fn rotate_about(axis: Vec3, angle: f32) -> Mat3 {
-    let (s, c) = sin_cos(angle);
-    let t = 1.0 - c;
-    let [x, y, z] = axis;
-    [
-        [t * x * x + c, t * x * y + s * z, t * x * z - s * y],
-        [t * x * y - s * z, t * y * y + c, t * y * z + s * x],
-        [t * x * z + s * y, t * y * z - s * x, t * z * z + c],
-    ]
+    quat_to_mat3(quat_from_axis_angle(axis, angle))
 }
 
 const MAT3_IDENTITY: Mat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
@@ -40,12 +26,12 @@ const MAT3_IDENTITY: Mat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 // not be unit length). Identity when either is degenerate or they already
 // align; a half-turn about any perpendicular when they oppose.
 fn from_to(a: Vec3, b: Vec3) -> Mat3 {
-    let (Some(a), Some(b)) = (normalize(a), normalize(b)) else {
+    let (Some(a), Some(b)) = (try_normalize(a, EPS), try_normalize(b, EPS)) else {
         return MAT3_IDENTITY;
     };
     let c = cross(a, b);
     let angle = atan2(length(c), dot(a, b));
-    match normalize(c) {
+    match try_normalize(c, EPS) {
         Some(axis) => rotate_about(axis, angle),
         // Parallel or anti-parallel: no rotation, or a half-turn about any
         // axis perpendicular to `a`.
@@ -61,7 +47,7 @@ fn any_perpendicular(v: Vec3) -> Vec3 {
     } else {
         cross(v, [0.0, 1.0, 0.0])
     };
-    normalize(candidate).unwrap_or([0.0, 0.0, 1.0])
+    try_normalize(candidate, EPS).unwrap_or([0.0, 0.0, 1.0])
 }
 
 fn mat3_apply(m: Mat3, v: Vec3) -> Vec3 {
@@ -120,8 +106,8 @@ pub struct TwoBoneChain {
 // target for the end joint, return the delta rotations to apply about the
 // root and mid joint origins (in the same space as the positions). The
 // target is reach-clamped, so an out-of-range target straightens the chain
-// toward it. `None` when the chain is degenerate (zero-length bones or a
-// target on top of the root).
+// toward it. `None` when the chain is degenerate (zero-length or non-finite
+// bones, or a target on top of the root).
 pub(crate) fn solve_two_bone(
     root: Vec3,
     mid: Vec3,
@@ -133,7 +119,7 @@ pub(crate) fn solve_two_bone(
     let lower = sub(end, mid);
     let a = length(upper);
     let b = length(lower);
-    if a <= EPS || b <= EPS {
+    if !(a > EPS && b > EPS && (a + b).is_finite()) {
         return None;
     }
     let to_target = sub(target, root);
@@ -144,16 +130,16 @@ pub(crate) fn solve_two_bone(
     let t_dir = scale(to_target, 1.0 / dist);
     let t = dist.clamp((a - b).abs() + 1.0e-4, a + b - 1.0e-4);
 
-    let u = normalize(sub(root, mid)).expect("a > EPS");
-    let v = normalize(lower).expect("b > EPS");
+    let u = try_normalize(sub(root, mid), EPS)?;
+    let v = try_normalize(lower, EPS)?;
 
     // Bend axis: the current bend plane's normal. A straight chain has no
     // bend plane; fall back to an axis perpendicular to the bone line and
     // as close to the pole plane as possible (the signed-angle math below
     // requires the axis to be perpendicular to both bones, and for a
     // straight chain u = -v).
-    let axis = normalize(cross(upper, lower))
-        .or_else(|| normalize(cross(v, pole)))
+    let axis = try_normalize(cross(upper, lower), EPS)
+        .or_else(|| try_normalize(cross(v, pole), EPS))
         .unwrap_or_else(|| any_perpendicular(v));
 
     // Interior knee angle from the law of cosines, then rotate the lower
@@ -177,7 +163,10 @@ pub(crate) fn solve_two_bone(
     let mid_aimed = mat3_apply(r_aim, upper);
     let bend_current = sub(mid_aimed, scale(t_dir, dot(mid_aimed, t_dir)));
     let bend_pole = sub(pole, scale(t_dir, dot(pole, t_dir)));
-    let r_root = match (normalize(bend_current), normalize(bend_pole)) {
+    let r_root = match (
+        try_normalize(bend_current, EPS),
+        try_normalize(bend_pole, EPS),
+    ) {
         (Some(c), Some(p)) => {
             let twist = atan2(dot(cross(c, p), t_dir), dot(c, p));
             mat3_mul(rotate_about(t_dir, twist), r_aim)
@@ -319,6 +308,15 @@ mod tests {
         let len = |a: [f32; 3], b: [f32; 3]| length(sub(a, b));
         assert!((len(hip, knee) - 1.0).abs() < 1e-3);
         assert!((len(knee, foot) - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_non_finite_bone_is_degenerate() {
+        let pole = [0.0, 0.0, 1.0];
+        for bad in [f32::NAN, f32::INFINITY] {
+            let mid = [0.0, bad, 0.0];
+            assert!(solve_two_bone([0.0; 3], mid, [1.0, 0.0, 0.0], [0.5; 3], pole).is_none());
+        }
     }
 
     #[test]

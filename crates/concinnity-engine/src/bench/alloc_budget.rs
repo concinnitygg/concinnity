@@ -21,7 +21,6 @@ use concinnity_core::ecs::World;
 use concinnity_core::gfx::render_types::DrawIndex;
 use concinnity_core::render::snapshot::RenderSnapshot;
 
-use super::BenchWorld;
 use crate::ecs::SYSTEMS;
 use crate::gfx::system::GraphicsSystem;
 
@@ -128,13 +127,11 @@ fn static_world_frame_allocs_stay_pinned() {
 // extraction microbench prints this as a column; this is the loud version.
 #[test]
 fn static_extraction_allocates_nothing() {
-    let mut world = BenchWorld::new();
+    let mut world = World::new();
     for i in 0..100u32 {
-        let entity = world.components.push_typed(Prop::default());
-        world
-            .components
-            .insert_typed(entity, GlobalTransform(glam_identity_at(i)));
-        world.components.insert_typed(
+        let entity = world.push(Prop::default());
+        world.insert(entity, GlobalTransform(glam_identity_at(i)));
+        world.insert(
             entity,
             RenderHandle {
                 draws: [DrawIndex(i)].into(),
@@ -144,11 +141,11 @@ fn static_extraction_allocates_nothing() {
     let mut gs = GraphicsSystem::new(None);
     let mut snap = RenderSnapshot::default();
     for _ in 0..WARMUP_FRAMES {
-        gs.extract(&mut world.ctx(), &mut snap);
+        gs.extract(&mut world.context(), &mut snap);
     }
 
     let min = quietest_frame(0, || {
-        gs.extract(&mut world.ctx(), &mut snap);
+        gs.extract(&mut world.context(), &mut snap);
     });
     assert_eq!(
         min, 0,

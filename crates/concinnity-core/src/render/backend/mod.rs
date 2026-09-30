@@ -25,6 +25,8 @@ mod effects;
 // Rewriting a built world's GPU content: the hot-reload rebuilders and the
 // editor's live previews.
 mod live_edit;
+#[cfg(any(test, feature = "test-support"))]
+mod null;
 // Building replacement pipelines on a thread other than the frame thread.
 mod pipeline_builder;
 // What the backend reports about itself: capabilities, GPU class, counters,
@@ -45,6 +47,8 @@ pub use effects::SceneEffects;
 pub use live_edit::{
     DrawGeometryUpdate, LiveEdit, PipelineSwap, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use null::NullBackend;
 pub use pipeline_builder::{PipelineBuilder, PreparedPipelines};
 pub use probe::{
     BackendProbe, DeviceCapabilities, GpuClassInput, GpuProfile, GpuTier, GpuVendor,
@@ -145,123 +149,9 @@ pub trait RenderBackend:
     fn retire_draw_object(&mut self, draw_idx: DrawIndex);
 }
 
-// A do-nothing backend used to exercise the provided (default) method bodies
-// of every family without a GPU: the smallest valid bodies for the required
-// methods, no defaults overridden. The empty impl blocks are the point of the
-// split -- they are how a backend says it has none of that family. Shared by
-// this module's tests and the ops tests.
-#[cfg(test)]
-pub(crate) mod test_stub {
-    use super::*;
-
-    pub(crate) struct StubBackend;
-
-    impl SceneControl for StubBackend {
-        fn update_visibility(&mut self, _draw_idx: DrawIndex, _visible: bool) {}
-        fn set_fade(&mut self, _fade: f32) {}
-    }
-
-    impl RenderBackend for StubBackend {
-        fn window_closed(&mut self) -> bool {
-            false
-        }
-        fn request_cursor_capture(&mut self) {}
-        fn take_input(&mut self) -> InputSnapshot {
-            InputSnapshot::default()
-        }
-        fn wait_idle(&self) {}
-        fn draw_frame(&mut self, _params: FrameParams<'_>) -> RenderResult<()> {
-            Ok(())
-        }
-        fn update_view(&mut self, _matrix: [[f32; 4]; 4]) {}
-        fn update_models(&mut self, _updates: &[(DrawIndex, [[f32; 4]; 4])]) {}
-        fn retire_draw_object(&mut self, _draw_idx: DrawIndex) {}
-    }
-
-    impl SkinnedDraws for StubBackend {
-        fn upload_skinned(
-            &mut self,
-            _vertices: &[crate::gfx::mesh_payload::SkinnedVertex],
-            _indices: &[u32],
-            _draw_objects: alloc::vec::Vec<crate::gfx::render_types::SkinnedDrawObject>,
-        ) -> RenderResult<()> {
-            Ok(())
-        }
-        fn update_skinned_pose(
-            &mut self,
-            _skinned_index: SkinnedIndex,
-            _matrices: &[[[f32; 4]; 4]],
-        ) {
-        }
-    }
-
-    impl DrawStreaming for StubBackend {
-        fn evict_texture_slot(&mut self, _slot: usize) -> RenderResult<()> {
-            Ok(())
-        }
-        fn update_texture_slot(
-            &mut self,
-            _slot: usize,
-            _image: &crate::bake::texture::TextureImage,
-        ) -> RenderResult<()> {
-            Ok(())
-        }
-        fn evict_mesh(&mut self, _draw_idx: DrawIndex, _retire_frame: u64) -> RenderResult<()> {
-            Ok(())
-        }
-        fn upload_mesh(
-            &mut self,
-            _draw_idx: DrawIndex,
-            _verts: &[crate::gfx::mesh_payload::Vertex],
-            _idxs: &[u16],
-            _frame: u64,
-        ) -> RenderResult<()> {
-            Ok(())
-        }
-        fn setup_chunk_streaming(
-            &mut self,
-            _chunk_vtx_bytes: usize,
-            _chunk_idx_bytes: usize,
-        ) -> RenderResult<()> {
-            Ok(())
-        }
-        fn add_chunk_mesh(
-            &mut self,
-            _mesh: ChunkMesh<'_>,
-            _dst: crate::render::draw_slot::SlotAlloc,
-        ) -> RenderResult<()> {
-            Ok(())
-        }
-        fn remove_chunk_mesh(
-            &mut self,
-            _draw_idx: DrawIndex,
-            _retire_frame: u64,
-        ) -> RenderResult<()> {
-            Ok(())
-        }
-        fn set_chunk_model(
-            &mut self,
-            _draw_idx: DrawIndex,
-            _model: [[f32; 4]; 4],
-        ) -> RenderResult<()> {
-            Ok(())
-        }
-    }
-
-    impl BackendProbe for StubBackend {
-        fn capabilities(&self) -> super::DeviceCapabilities {
-            super::DeviceCapabilities::ALL
-        }
-    }
-    impl LiveEdit for StubBackend {}
-    impl RenderTuning for StubBackend {}
-    impl SceneEffects for StubBackend {}
-    impl WindowControl for StubBackend {}
-}
-
 #[cfg(test)]
 mod tests {
-    use super::test_stub::StubBackend;
+    use super::NullBackend;
     use super::*;
 
     use crate::components::ShaderPrograms;
@@ -296,7 +186,7 @@ mod tests {
 
     #[test]
     fn default_query_methods_report_conservative_values() {
-        let backend = StubBackend;
+        let backend = NullBackend;
         // Quality auto-config fails safe: the unknown/conservative profile.
         assert_eq!(backend.gpu_profile().tier, GpuTier::Unknown);
         assert_eq!(backend.gpu_profile().vendor, GpuVendor::Other);
@@ -323,7 +213,7 @@ mod tests {
 
     #[test]
     fn default_mutators_are_noops_and_fallible_hooks_report_defaults() {
-        let mut backend = StubBackend;
+        let mut backend = NullBackend;
 
         // Runtime skinned-spawn fallbacks: nothing to reveal or hide.
         backend.reveal_skinned_instance(SkinnedIndex(0), IDENTITY);
@@ -390,7 +280,7 @@ mod tests {
             }
         }
 
-        let mut backend = StubBackend;
+        let mut backend = NullBackend;
         let window = crate::components::Window::default();
         let cases = [
             (

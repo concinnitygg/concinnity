@@ -8,33 +8,15 @@
 //! of it -- islands, sleeping, and what a removed body owes the joints it was
 //! in.
 
+use super::fixtures::{TICK, awake, position, step_for};
 use crate::physics::{
-    BodyHandle, ColliderShape, DynamicParams, GRAVITY, JointMotor, JointSpec, LayerMask, SimConfig,
-    Simulation,
+    BodyHandle, ColliderShape, DynamicParams, GRAVITY, JointMotor, JointSpec, LayerMask, Simulation,
 };
 
-const TICK: f32 = 1.0 / 60.0;
 const ARM: ColliderShape = ColliderShape::Cuboid {
     half_extents: [0.15, 0.15, 0.15],
 };
 const POST: ColliderShape = ColliderShape::Ball { radius: 0.05 };
-
-fn params(damping: f32, gravity_scale: f32) -> DynamicParams {
-    DynamicParams {
-        mass: 1.0,
-        friction: 0.5,
-        restitution: 0.0,
-        gravity_scale,
-        linear_damping: damping,
-    }
-}
-
-fn awake() -> SimConfig {
-    SimConfig {
-        allow_sleep: false,
-        ..SimConfig::default()
-    }
-}
 
 fn add_post(sim: &mut Simulation, pos: [f32; 3]) -> BodyHandle {
     sim.add_fixed(&POST, pos, [0.0; 3], 0.5, LayerMask::ALL)
@@ -44,16 +26,6 @@ fn add_post(sim: &mut Simulation, pos: [f32; 3]) -> BodyHandle {
 fn add_arm(sim: &mut Simulation, pos: [f32; 3], params: DynamicParams) -> BodyHandle {
     sim.add_dynamic(&ARM, pos, [0.0; 3], params, LayerMask::ALL)
         .expect("room for the arm")
-}
-
-fn step_for(sim: &mut Simulation, ticks: usize) {
-    for _ in 0..ticks {
-        sim.step(TICK);
-    }
-}
-
-fn position(sim: &Simulation, handle: BodyHandle) -> [f32; 3] {
-    sim.body_pose(handle).expect("a live body").0
 }
 
 /// How far a body is from a point.
@@ -68,7 +40,7 @@ fn reach(from: [f32; 3], to: [f32; 3]) -> f32 {
 fn thrown(spec: JointSpec, speed: f32) -> (Simulation, BodyHandle) {
     let mut sim = Simulation::new(awake(), 2);
     let post = add_post(&mut sim, [0.0, 0.0, 0.0]);
-    let arm = add_arm(&mut sim, [0.0, -1.0, 0.0], params(0.0, 1.0));
+    let arm = add_arm(&mut sim, [0.0, -1.0, 0.0], DynamicParams::default());
     assert!(sim.add_joint(post, arm, [0.0; 3], [0.0, 1.0, 0.0], spec));
     sim.set_linear_velocity(arm, [speed, 0.0, 0.0]);
     (sim, arm)
@@ -82,7 +54,14 @@ const THROWN: [f32; 4] = [5.0, 10.0, 20.0, 40.0];
 fn pendulum(spec: JointSpec, gravity_scale: f32) -> (Simulation, BodyHandle, BodyHandle) {
     let mut sim = Simulation::new(awake(), 2);
     let post = add_post(&mut sim, [0.0, 0.0, 0.0]);
-    let arm = add_arm(&mut sim, [1.0, 0.0, 0.0], params(0.0, gravity_scale));
+    let arm = add_arm(
+        &mut sim,
+        [1.0, 0.0, 0.0],
+        DynamicParams {
+            gravity_scale,
+            ..Default::default()
+        },
+    );
     assert!(sim.add_joint(post, arm, [0.0; 3], [-1.0, 0.0, 0.0], spec));
     (sim, post, arm)
 }
@@ -261,8 +240,8 @@ fn a_fixed_joint_holds_two_bodies_through_a_landing() {
         LayerMask::ALL,
     )
     .expect("room for the floor");
-    let left = add_arm(&mut sim, [-0.2, 3.0, 0.0], params(0.0, 1.0));
-    let right = add_arm(&mut sim, [0.2, 3.0, 0.0], params(0.0, 1.0));
+    let left = add_arm(&mut sim, [-0.2, 3.0, 0.0], DynamicParams::default());
+    let right = add_arm(&mut sim, [0.2, 3.0, 0.0], DynamicParams::default());
     assert!(sim.add_joint(
         left,
         right,
@@ -326,7 +305,14 @@ fn slider(
 ) -> (Simulation, BodyHandle) {
     let mut sim = Simulation::new(awake(), 2);
     let post = add_post(&mut sim, [0.0, 5.0, 0.0]);
-    let carriage = add_arm(&mut sim, [0.0, 4.0, 0.0], params(0.0, gravity_scale));
+    let carriage = add_arm(
+        &mut sim,
+        [0.0, 4.0, 0.0],
+        DynamicParams {
+            gravity_scale,
+            ..Default::default()
+        },
+    );
     assert!(sim.add_joint(
         post,
         carriage,
@@ -511,7 +497,14 @@ fn a_thrown_slider_is_pulled_back_onto_its_rail() {
     for speed in THROWN {
         let mut sim = Simulation::new(awake(), 2);
         let post = add_post(&mut sim, [0.0, 5.0, 0.0]);
-        let carriage = add_arm(&mut sim, [0.0, 4.0, 0.0], params(0.0, 0.0));
+        let carriage = add_arm(
+            &mut sim,
+            [0.0, 4.0, 0.0],
+            DynamicParams {
+                gravity_scale: 0.0,
+                ..Default::default()
+            },
+        );
         assert!(sim.add_joint(
             post,
             carriage,
@@ -573,7 +566,7 @@ fn removing_a_jointed_body_takes_the_joint_with_it() {
 fn degenerate_joints_are_repaired_or_refused_rather_than_breaking_the_step() {
     let mut sim = Simulation::new(awake(), 3);
     let post = add_post(&mut sim, [0.0, 0.0, 0.0]);
-    let arm = add_arm(&mut sim, [1.0, 0.0, 0.0], params(0.0, 1.0));
+    let arm = add_arm(&mut sim, [1.0, 0.0, 0.0], DynamicParams::default());
 
     assert!(
         !sim.add_joint(arm, arm, [0.0; 3], [0.0; 3], JointSpec::Fixed),
@@ -637,8 +630,8 @@ fn a_jointed_pair_settles_and_wakes_as_one_island() {
     )
     .expect("room for the floor");
     // Far enough apart that nothing but the joint connects them.
-    let near = add_arm(&mut sim, [0.0, 0.15, 0.0], params(0.0, 1.0));
-    let far = add_arm(&mut sim, [4.0, 0.15, 0.0], params(0.0, 1.0));
+    let near = add_arm(&mut sim, [0.0, 0.15, 0.0], DynamicParams::default());
+    let far = add_arm(&mut sim, [4.0, 0.15, 0.0], DynamicParams::default());
     assert!(sim.add_joint(near, far, [4.0, 0.0, 0.0], [0.0; 3], JointSpec::Fixed));
 
     step_for(&mut sim, 600);
@@ -660,7 +653,7 @@ fn a_jointed_pair_settles_and_wakes_as_one_island() {
 fn a_motor_driven_island_never_falls_asleep() {
     let mut sim = Simulation::with_capacity(2);
     let post = add_post(&mut sim, [0.0, 0.0, 0.0]);
-    let arm = add_arm(&mut sim, [1.0, 0.0, 0.0], params(0.0, 1.0));
+    let arm = add_arm(&mut sim, [1.0, 0.0, 0.0], DynamicParams::default());
     // A ceiling well under what the arm's weight asks for: the motor stalls,
     // so nothing is moving and only the motor keeps the island awake.
     assert!(sim.add_joint(
@@ -688,7 +681,14 @@ fn a_motor_driven_island_never_falls_asleep() {
     // makes the check above about the motor rather than about the arm.
     let mut idle = Simulation::with_capacity(2);
     let post = add_post(&mut idle, [0.0, 0.0, 0.0]);
-    let arm = add_arm(&mut idle, [1.0, 0.0, 0.0], params(1.5, 1.0));
+    let arm = add_arm(
+        &mut idle,
+        [1.0, 0.0, 0.0],
+        DynamicParams {
+            linear_damping: 1.5,
+            ..Default::default()
+        },
+    );
     assert!(idle.add_joint(post, arm, [0.0; 3], [-1.0, 0.0, 0.0], hinge(None, None)));
     step_for(&mut idle, 900);
     assert_eq!(idle.is_sleeping(arm), Some(true));

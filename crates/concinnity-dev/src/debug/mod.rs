@@ -121,8 +121,6 @@ pub(crate) mod hot_reload;
 mod memory;
 mod runtime_spawn;
 pub(crate) mod state;
-#[cfg(test)]
-pub(crate) mod test_backend;
 mod wire;
 
 pub(crate) use wire::DebugServer;

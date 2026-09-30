@@ -13,8 +13,9 @@
 //! classified here; removing one fails until the count is corrected, so the table
 //! cannot drift out of date while still passing.
 
+use concinnity_testing::source::relative_rust_sources;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const VULKAN_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/vulkan");
 const DIRECTX_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/directx");
@@ -383,29 +384,6 @@ const AUDITS: &[BackendAudit] = &[
     },
 ];
 
-// Every `.rs` file under `dir`, recursively, as a path relative to `dir`.
-fn rust_sources(dir: &Path, prefix: &str, out: &mut Vec<(String, PathBuf)>) {
-    let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
-    for entry in entries {
-        let path = entry.expect("dir entry").path();
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .expect("utf-8 file name")
-            .to_string();
-        let rel = if prefix.is_empty() {
-            name.clone()
-        } else {
-            format!("{prefix}/{name}")
-        };
-        if path.is_dir() {
-            rust_sources(&path, &rel, out);
-        } else if name.ends_with(".rs") {
-            out.push((rel, path));
-        }
-    }
-}
-
 // Occurrences of `call` in `source`, ignoring line comments so a barrier named in
 // prose does not read as a call site.
 fn call_sites(source: &str, call: &str) -> usize {
@@ -418,8 +396,7 @@ fn call_sites(source: &str, call: &str) -> usize {
 
 // The counted sites per (file, call) for one backend, omitting empty pairs.
 fn scan(audit: &BackendAudit) -> BTreeMap<(String, &'static str), usize> {
-    let mut files = Vec::new();
-    rust_sources(Path::new(audit.root), "", &mut files);
+    let files = relative_rust_sources(Path::new(audit.root));
     let mut found = BTreeMap::new();
     for (rel, path) in files {
         let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {rel}: {e}"));

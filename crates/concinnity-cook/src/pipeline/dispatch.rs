@@ -415,9 +415,7 @@ mod tests {
     #[test]
     fn compile_entry_sdf_volume_compiles_the_declared_field() {
         use concinnity_core::components::sdf_programs::SdfPrograms;
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         let dir = tempfile::tempdir().expect("tempdir");
         let field = dir.path().join("blob.hlsl");
         std::fs::write(

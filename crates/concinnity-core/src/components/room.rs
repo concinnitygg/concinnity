@@ -1,9 +1,9 @@
 //! The `Room` asset: the authored args a world declares, and the runtime
 //! component they bake into.
 
+use crate::ecs::PayloadLocator;
 use crate::ecs::TextureHandle;
 use crate::ecs::de_opt_texture_handle;
-use crate::ecs::{Component, PayloadLocator};
 use alloc::vec::Vec;
 
 /// A self-contained room (floor, ceiling, four walls), with optional texturing.
@@ -186,18 +186,6 @@ impl Room {
             ceiling_texture: args.ceiling_texture,
             locator: None,
         }
-    }
-}
-
-impl Component for Room {
-    const NAME: &'static str = "Room";
-
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::AssetError> {
-        crate::ecs::decode_baked(bytes)
-    }
-
-    fn inject_locator(&mut self, locator: PayloadLocator) {
-        self.locator = Some(locator);
     }
 }
 

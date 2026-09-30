@@ -1,9 +1,8 @@
 //! The PostProcessConfig asset: the authored schema (the struct, its enums and
-//! their `Default`), the `Component` impl, and the methods that resolve the
-//! authored tunables into the renderer's clamped `gfx` settings.
+//! their `Default`) and the methods that resolve the authored tunables into the
+//! renderer's clamped `gfx` settings.
 
 use crate::components::Vocabulary;
-use crate::ecs::Component;
 use crate::gfx::render_types::PostProcessTunables;
 use crate::math::exp2;
 
@@ -93,7 +92,7 @@ pub struct PostProcessConfig {
     /// normal-aware filter; `full` traces every pixel for the sharpest mirrors;
     /// `quarter` is the cheapest. Only matters when `ray_traced_reflections` is
     /// on.
-    pub rt_reflection_resolution: RtReflectionResolution,
+    pub rt_reflection_resolution: PassResolution,
     /// Whether surfaces seen in a ray-traced reflection are shadowed from the
     /// sun. Each reflected hit then casts a second ray toward the sun, which
     /// roughly doubles the trace cost; off lights every reflected surface as if
@@ -106,7 +105,7 @@ pub struct PostProcessConfig {
     /// mirror surfaces stay sharp at any setting (the composite keeps the sharp
     /// reflection for low roughness). Only matters when `ssr` or
     /// `ray_traced_reflections` is on.
-    pub reflection_blur_resolution: ReflectionBlurResolution,
+    pub reflection_blur_resolution: PassResolution,
     /// Indirect-diffuse lighting source. `ibl` uses the environment map's
     /// ambient alone. `ssgi` (default) adds a screen-space global-illumination
     /// pass on top, so nearby lit surfaces bleed color onto one another; the
@@ -133,7 +132,7 @@ pub struct PostProcessConfig {
     /// Internal resolution of the SSGI gather. `half` (default) trades a little
     /// sharpness for a large performance saving; `full` is native; `quarter` is
     /// the cheapest. Only matters when `indirect_lighting` is `ssgi`.
-    pub ssgi_resolution: SsgiResolution,
+    pub ssgi_resolution: PassResolution,
     /// Hemisphere rays cast per pixel by the SSGI gather, clamped to `[1, 32]`.
     /// More rays reduce noise at a higher cost. Only matters when
     /// `indirect_lighting` is `ssgi`.
@@ -351,105 +350,35 @@ pub enum IndirectLighting {
     Ssgi,
 }
 
-/// Internal render resolution of the SSGI gather pass (only meaningful when
-/// `indirect_lighting` is `ssgi`). The gather is the expensive part (a
-/// hemisphere ray-march per pixel), and its composite is a depth-aware
-/// bilateral filter that upsamples a lower-resolution gather back to full
-/// resolution at little visible cost. `half` (the default) gathers at a quarter
-/// of the pixels for a large saving; `full` keeps the gather at native
-/// resolution; `quarter` is the cheapest, for low-end GPUs or debugging.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// Internal resolution a screen-space pass renders at before its result is
+/// upsampled to native. `half` (the default) shades a quarter of the pixels;
+/// `full` keeps the pass at native resolution; `quarter` is the cheapest.
+// Variants are ordered finest first, so the coarser of two is their `max`.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default, Vocabulary)]
-pub enum SsgiResolution {
-    /// Gather at native resolution.
+pub enum PassResolution {
+    /// Native resolution.
     #[vocab("full")]
     Full,
-    /// Gather at half resolution per axis.
+    /// Half resolution per axis.
     #[default]
     #[vocab("half")]
     Half,
-    /// Gather at quarter resolution per axis.
+    /// Quarter resolution per axis.
     #[vocab("quarter")]
     Quarter,
 }
 
-impl SsgiResolution {
-    /// Per-axis render-resolution divisor the gather target is scaled by.
+impl PassResolution {
+    /// Per-axis render-resolution divisor the pass target is scaled by.
     pub fn scale_divisor(self) -> u32 {
         match self {
-            SsgiResolution::Full => 1,
-            SsgiResolution::Half => 2,
-            SsgiResolution::Quarter => 4,
-        }
-    }
-}
-
-/// Internal resolution of the ray-traced reflection trace (only meaningful when
-/// `ray_traced_reflections` is on). Tracing is the expensive part of ray-traced
-/// reflections, so `half` (the default) casts rays for a quarter of the pixels
-/// and the reflection composite upsamples them with a depth- and normal-aware
-/// filter that keeps edges from bleeding. `full` traces every pixel; `quarter`
-/// is the cheapest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(Default, Vocabulary)]
-pub enum RtReflectionResolution {
-    /// Trace at native resolution.
-    #[vocab("full")]
-    Full,
-    /// Trace at half resolution per axis.
-    #[default]
-    #[vocab("half")]
-    Half,
-    /// Trace at quarter resolution per axis.
-    #[vocab("quarter")]
-    Quarter,
-}
-
-impl RtReflectionResolution {
-    /// Per-axis render-resolution divisor the trace target is scaled by.
-    pub fn scale_divisor(self) -> u32 {
-        match self {
-            RtReflectionResolution::Full => 1,
-            RtReflectionResolution::Half => 2,
-            RtReflectionResolution::Quarter => 4,
-        }
-    }
-}
-
-/// Internal render resolution of the roughness-aware reflection blur (only
-/// meaningful when `ssr` or `ray_traced_reflections` is on). The blur is the
-/// expensive multi-tap part of the reflection composite and is low-frequency
-/// (a widening glossy cone), so running it at a fraction of the pixels and
-/// bilinearly upsampling is visually free. `half` (the default) blurs at a
-/// quarter of the pixels; `full` keeps it at native resolution; `quarter` is
-/// the cheapest. Mirrors stay sharp regardless: the composite lerps in the
-/// full-resolution reflection for low roughness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(Default, Vocabulary)]
-pub enum ReflectionBlurResolution {
-    /// Blur at native resolution.
-    #[vocab("full")]
-    Full,
-    /// Blur at half resolution per axis.
-    #[default]
-    #[vocab("half")]
-    Half,
-    /// Blur at quarter resolution per axis.
-    #[vocab("quarter")]
-    Quarter,
-}
-
-impl ReflectionBlurResolution {
-    /// Per-axis render-resolution divisor the reflection blur target is scaled
-    /// by.
-    pub fn scale_divisor(self) -> u32 {
-        match self {
-            ReflectionBlurResolution::Full => 1,
-            ReflectionBlurResolution::Half => 2,
-            ReflectionBlurResolution::Quarter => 4,
+            PassResolution::Full => 1,
+            PassResolution::Half => 2,
+            PassResolution::Quarter => 4,
         }
     }
 }
@@ -479,14 +408,14 @@ impl Default for PostProcessConfig {
             ssr_intensity: 0.7,
             ssr_max_distance: 40.0,
             ray_traced_reflections: true,
-            rt_reflection_resolution: RtReflectionResolution::default(),
+            rt_reflection_resolution: PassResolution::default(),
             rt_reflection_shadows: true,
-            reflection_blur_resolution: ReflectionBlurResolution::default(),
+            reflection_blur_resolution: PassResolution::default(),
             indirect_lighting: IndirectLighting::Ssgi,
             ambient_intensity: 1.0,
             ssgi_intensity: 0.5,
             ssgi_max_distance: 8.0,
-            ssgi_resolution: SsgiResolution::default(),
+            ssgi_resolution: PassResolution::default(),
             ssgi_rays: DEFAULT_SSGI_RAYS,
             ssgi_steps: DEFAULT_SSGI_STEPS,
             auto_exposure: false,
@@ -555,8 +484,8 @@ mod tests {
         let c = PostProcessConfig::default();
         assert_eq!(c.upscale_quality, UpscaleQuality::Quality);
         assert_eq!(c.upscale_backend, UpscalerBackend::Auto);
-        assert_eq!(c.ssgi_resolution, SsgiResolution::Half);
-        assert_eq!(c.reflection_blur_resolution, ReflectionBlurResolution::Half);
+        assert_eq!(c.ssgi_resolution, PassResolution::Half);
+        assert_eq!(c.reflection_blur_resolution, PassResolution::Half);
         assert_eq!(AaMode::default(), AaMode::Fxaa);
         assert_eq!(IndirectLighting::default(), IndirectLighting::Ibl);
         // The two enum `Default`s the config deliberately does not use: the
@@ -598,12 +527,24 @@ mod tests {
 
     #[test]
     fn half_and_quarter_resolutions_divide_the_target() {
-        assert_eq!(SsgiResolution::Full.scale_divisor(), 1);
-        assert_eq!(SsgiResolution::Half.scale_divisor(), 2);
-        assert_eq!(SsgiResolution::Quarter.scale_divisor(), 4);
-        assert_eq!(ReflectionBlurResolution::Full.scale_divisor(), 1);
-        assert_eq!(ReflectionBlurResolution::Half.scale_divisor(), 2);
-        assert_eq!(ReflectionBlurResolution::Quarter.scale_divisor(), 4);
+        assert_eq!(PassResolution::Full.scale_divisor(), 1);
+        assert_eq!(PassResolution::Half.scale_divisor(), 2);
+        assert_eq!(PassResolution::Quarter.scale_divisor(), 4);
+        assert_eq!(PassResolution::default(), PassResolution::Half);
+    }
+
+    #[test]
+    fn the_coarser_resolution_is_the_max() {
+        assert!(PassResolution::ALL.windows(2).all(|w| w[0] < w[1]));
+        assert!(
+            PassResolution::ALL
+                .windows(2)
+                .all(|w| w[0].scale_divisor() < w[1].scale_divisor())
+        );
+        assert_eq!(
+            PassResolution::Full.max(PassResolution::Quarter),
+            PassResolution::Quarter
+        );
     }
 
     #[test]
@@ -635,12 +576,12 @@ mod tests {
             IndirectLighting::Ssgi
         );
         assert_eq!(
-            serde_json::from_str::<SsgiResolution>(r#""quarter""#).unwrap(),
-            SsgiResolution::Quarter
+            serde_json::from_str::<PassResolution>(r#""quarter""#).unwrap(),
+            PassResolution::Quarter
         );
         assert_eq!(
-            serde_json::from_str::<ReflectionBlurResolution>(r#""full""#).unwrap(),
-            ReflectionBlurResolution::Full
+            serde_json::from_str::<PassResolution>(r#""full""#).unwrap(),
+            PassResolution::Full
         );
     }
 
@@ -729,20 +670,10 @@ impl PostProcessConfig {
     }
 }
 
-impl Component for PostProcessConfig {
-    const NAME: &'static str = "PostProcessConfig";
-
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::AssetError> {
-        crate::ecs::decode_baked(bytes)
-    }
-}
-
 #[cfg(test)]
 mod runtime_tests {
     use super::*;
-    use crate::components::{
-        AaMode, ReflectionBlurResolution, SsgiResolution, UpscaleQuality, UpscalerBackend,
-    };
+    use crate::components::{AaMode, PassResolution, UpscaleQuality, UpscalerBackend};
     use alloc::format;
 
     #[test]
@@ -938,17 +869,9 @@ mod runtime_tests {
         assert_eq!(cfg.ssgi_max_distance, 8.0);
         // The gather defaults to half resolution with the historical 8x12
         // ray/step counts.
-        assert_eq!(cfg.ssgi_resolution, SsgiResolution::Half);
+        assert_eq!(cfg.ssgi_resolution, PassResolution::Half);
         assert_eq!(cfg.ssgi_rays, 8);
         assert_eq!(cfg.ssgi_steps, 12);
-    }
-
-    #[test]
-    fn ssgi_resolution_maps_to_a_per_axis_divisor() {
-        assert_eq!(SsgiResolution::Full.scale_divisor(), 1);
-        assert_eq!(SsgiResolution::Half.scale_divisor(), 2);
-        assert_eq!(SsgiResolution::Quarter.scale_divisor(), 4);
-        assert_eq!(SsgiResolution::default(), SsgiResolution::Half);
     }
 
     #[test]
@@ -957,13 +880,13 @@ mod runtime_tests {
             r#"{"indirect_lighting":"ssgi","ssgi_resolution":"full","ssgi_rays":16,"ssgi_steps":8}"#,
         )
         .expect("parse");
-        assert_eq!(cfg.ssgi_resolution, SsgiResolution::Full);
+        assert_eq!(cfg.ssgi_resolution, PassResolution::Full);
         assert_eq!(cfg.ssgi_rays, 16);
         assert_eq!(cfg.ssgi_steps, 8);
         // Omitting them falls back to the half-resolution 8x12 defaults.
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"indirect_lighting":"ssgi"}"#).expect("parse");
-        assert_eq!(cfg.ssgi_resolution, SsgiResolution::Half);
+        assert_eq!(cfg.ssgi_resolution, PassResolution::Half);
         assert_eq!(cfg.ssgi_rays, 8);
         assert_eq!(cfg.ssgi_steps, 12);
     }
@@ -971,11 +894,8 @@ mod runtime_tests {
     #[test]
     fn rt_reflection_scaling_defaults_to_half_with_shadows() {
         let cfg = PostProcessConfig::default();
-        assert_eq!(cfg.rt_reflection_resolution, RtReflectionResolution::Half);
+        assert_eq!(cfg.rt_reflection_resolution, PassResolution::Half);
         assert!(cfg.rt_reflection_shadows);
-        assert_eq!(RtReflectionResolution::Full.scale_divisor(), 1);
-        assert_eq!(RtReflectionResolution::Half.scale_divisor(), 2);
-        assert_eq!(RtReflectionResolution::Quarter.scale_divisor(), 4);
     }
 
     #[test]
@@ -984,32 +904,15 @@ mod runtime_tests {
             r#"{"ray_traced_reflections":true,"rt_reflection_resolution":"quarter","rt_reflection_shadows":false}"#,
         )
         .expect("parse");
-        assert_eq!(
-            cfg.rt_reflection_resolution,
-            RtReflectionResolution::Quarter
-        );
+        assert_eq!(cfg.rt_reflection_resolution, PassResolution::Quarter);
         assert!(!cfg.rt_reflection_shadows);
     }
 
     #[test]
     fn reflection_blur_resolution_defaults_to_half() {
         let cfg = PostProcessConfig::default();
-        assert_eq!(
-            cfg.reflection_blur_resolution,
-            ReflectionBlurResolution::Half
-        );
+        assert_eq!(cfg.reflection_blur_resolution, PassResolution::Half);
         assert_eq!(cfg.reflection_blur_divisor(), 2);
-    }
-
-    #[test]
-    fn reflection_blur_resolution_maps_to_a_per_axis_divisor() {
-        assert_eq!(ReflectionBlurResolution::Full.scale_divisor(), 1);
-        assert_eq!(ReflectionBlurResolution::Half.scale_divisor(), 2);
-        assert_eq!(ReflectionBlurResolution::Quarter.scale_divisor(), 4);
-        assert_eq!(
-            ReflectionBlurResolution::default(),
-            ReflectionBlurResolution::Half
-        );
     }
 
     #[test]
@@ -1017,17 +920,11 @@ mod runtime_tests {
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"ssr":true,"reflection_blur_resolution":"quarter"}"#)
                 .expect("parse");
-        assert_eq!(
-            cfg.reflection_blur_resolution,
-            ReflectionBlurResolution::Quarter
-        );
+        assert_eq!(cfg.reflection_blur_resolution, PassResolution::Quarter);
         assert_eq!(cfg.reflection_blur_divisor(), 4);
         // Omitting the field falls back to the half-resolution default.
         let cfg: PostProcessConfig = serde_json::from_str(r#"{"ssr":true}"#).expect("parse");
-        assert_eq!(
-            cfg.reflection_blur_resolution,
-            ReflectionBlurResolution::Half
-        );
+        assert_eq!(cfg.reflection_blur_resolution, PassResolution::Half);
         assert_eq!(cfg.reflection_blur_divisor(), 2);
     }
 

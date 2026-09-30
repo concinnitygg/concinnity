@@ -1,9 +1,8 @@
 //! The Shader asset: the authored schema (Shader, ShaderStage, and the
-//! ShaderPrograms container the cook fills), and the `Component` impl. The
-//! compile lives in concinnity-cook (`compile::shader`); which programs a
-//! world shader compiles to is `render::shader_programs::surface`.
+//! ShaderPrograms container the cook fills). The compile lives in
+//! concinnity-cook (`compile::shader`); which programs a world shader compiles
+//! to is `render::shader_programs::surface`.
 
-use crate::ecs::Component;
 use crate::ecs::PayloadLocator;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -259,21 +258,10 @@ impl ShaderPrograms {
     }
 }
 
-impl Component for Shader {
-    const NAME: &'static str = "Shader";
-
-    fn from_baked(bytes: &[u8]) -> Result<Self, crate::error::AssetError> {
-        crate::ecs::decode_baked(bytes)
-    }
-
-    fn inject_locator(&mut self, locator: PayloadLocator) {
-        self.locator = Some(locator);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ecs::Component;
     use alloc::string::ToString;
     use alloc::vec;
 
@@ -356,8 +344,7 @@ mod tests {
         assert!(ShaderPrograms::decode(&[0xff, 0xff, 0xff]).is_err());
     }
 
-    // Shader keeps a hand-written Component impl rather than the generated
-    // one, so its payload injection is its own code.
+    // The generated impl of a `compiled` type stores its payload locator.
     #[test]
     fn a_shader_takes_its_payload_on_load() {
         let bytes = postcard::to_allocvec(&Shader::default()).expect("a shader encodes");

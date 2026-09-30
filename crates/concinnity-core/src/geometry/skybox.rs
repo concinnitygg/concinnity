@@ -94,6 +94,7 @@ pub fn build_skybox(size: f32) -> (Vec<Vert>, Vec<u16>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::vec3::{dot, length_sq};
 
     #[test]
     fn skybox_is_six_quads_at_the_requested_half_extent() {
@@ -112,7 +113,7 @@ mod tests {
     fn skybox_normals_face_the_interior() {
         let (verts, _) = build_skybox(4.0);
         for (pos, normal, ..) in &verts {
-            let dot = pos[0] * normal[0] + pos[1] * normal[1] + pos[2] * normal[2];
+            let dot = dot(*pos, *normal);
             assert_eq!(dot, -4.0, "normal {normal:?} is not inward at {pos:?}");
         }
     }
@@ -140,7 +141,7 @@ mod tests {
         assert_eq!(tangents.len(), verts.len());
         for t in &tangents {
             assert!(t.iter().all(|c| c.is_finite()), "non-finite tangent {t:?}");
-            let len_sq = t[0] * t[0] + t[1] * t[1] + t[2] * t[2];
+            let len_sq = length_sq(*t);
             assert!(
                 (len_sq - 1.0).abs() < 1e-5,
                 "tangent {t:?} is not unit length"

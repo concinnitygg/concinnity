@@ -13,6 +13,7 @@ use crate::components::{
 };
 use crate::math::sqrt;
 use crate::math::vec3;
+use crate::math::vec3::length;
 
 /// Normalize an authored volume for the runtime: clamp the raymarch knobs to
 /// sane bounds and force shadows off for translucent volumetrics, which write
@@ -66,7 +67,7 @@ pub fn rect_area_light(mut args: RectAreaLight) -> RectAreaLight {
     // A degenerate normal would collapse the panel's tangent frame; a zero
     // half-extent would collapse its area and divide by zero in the integrator.
     let n = args.normal;
-    let len = sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    let len = length(n);
     args.normal = if len < 1e-6 {
         [0.0, 0.0, 1.0]
     } else {

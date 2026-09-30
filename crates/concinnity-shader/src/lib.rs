@@ -207,6 +207,18 @@ pub fn dxc_available() -> bool {
     dxc_path().is_some()
 }
 
+/// Return from the enclosing function when no dxc resolves, so a test that
+/// compiles HLSL passes vacuously on a host without the toolchain.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! require_dxc {
+    () => {
+        if !$crate::dxc_available() {
+            return;
+        }
+    };
+}
+
 /// Why no candidate answered, or `None` when one did.
 #[must_use]
 pub fn unavailable_reason() -> Option<&'static str> {

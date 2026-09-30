@@ -211,9 +211,7 @@ mod tests {
     // regression fails the suite without a GPU.
     #[test]
     fn water_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         super::compile_water_shaders(false, true).expect("water compiles (msaa)");
         super::compile_water_shaders(false, false).expect("water compiles (no msaa)");
     }
@@ -224,9 +222,7 @@ mod tests {
     // `RT_TEXTURED` split) fails the suite without a GPU.
     #[test]
     fn water_rt_shaders_compile() {
-        if !concinnity_shader::dxc_available() {
-            return;
-        }
+        concinnity_shader::require_dxc!();
         for &msaa in &[true, false] {
             let shaders =
                 super::compile_water_rt_shaders(false, msaa, 4).expect("water rt shaders compile");

@@ -148,6 +148,7 @@ pub fn build_room_geometry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::vec3::{dot, length};
 
     fn bounds(verts: &[Vert]) -> ([f32; 3], [f32; 3]) {
         let mut mn = [f32::INFINITY; 3];
@@ -178,10 +179,9 @@ mod tests {
         // for an origin-centered box means normal . position is negative.
         let (verts, _) = build_room_geometry(3.0, 4.0, -1.0, 1.0);
         for (pos, normal, ..) in &verts {
-            let len =
-                (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+            let len = length(*normal);
             assert!((len - 1.0).abs() < 1e-6, "normal {normal:?} is not unit");
-            let dot = pos[0] * normal[0] + pos[1] * normal[1] + pos[2] * normal[2];
+            let dot = dot(*pos, *normal);
             assert!(dot < 0.0, "normal {normal:?} is not inward at {pos:?}");
         }
     }

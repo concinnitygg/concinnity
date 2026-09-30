@@ -688,11 +688,11 @@ mod tests {
     }
 
     use super::*;
-    use crate::debug::test_backend::StubBackend;
     use crate::test_support;
     use concinnity_core::components::Camera3D;
     use concinnity_core::ecs::EventCursor;
     use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_core::render::backend::NullBackend;
 
     #[test]
     fn enqueue_drain_round_trip() {
@@ -1137,7 +1137,7 @@ mod tests {
     #[test]
     fn backend_dispatch_decal_add_builds_record_then_surfaces_backend_err() {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let mut backend = StubBackend;
+        let mut backend = NullBackend;
         dispatch_runtime_spawn(
             BackendCommand::DecalAdd {
                 args: DecalSpawnArgs::default(),
@@ -1155,7 +1155,7 @@ mod tests {
     #[test]
     fn backend_dispatch_decal_add_rejects_degenerate_size() {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let mut backend = StubBackend;
+        let mut backend = NullBackend;
         dispatch_runtime_spawn(
             BackendCommand::DecalAdd {
                 args: DecalSpawnArgs {
@@ -1174,7 +1174,7 @@ mod tests {
     #[test]
     fn backend_dispatch_decal_remove_surfaces_backend_err() {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let mut backend = StubBackend;
+        let mut backend = NullBackend;
         dispatch_runtime_spawn(
             BackendCommand::DecalRemove { id: 3, reply: tx },
             None,
@@ -1208,7 +1208,7 @@ mod tests {
         ];
         for args in configs {
             let (tx, rx) = std::sync::mpsc::sync_channel(1);
-            let mut backend = StubBackend;
+            let mut backend = NullBackend;
             dispatch_runtime_spawn(
                 BackendCommand::EmitterAdd { args, reply: tx },
                 None,
@@ -1222,7 +1222,7 @@ mod tests {
     #[test]
     fn backend_dispatch_emitter_remove_surfaces_backend_err() {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let mut backend = StubBackend;
+        let mut backend = NullBackend;
         dispatch_runtime_spawn(
             BackendCommand::EmitterRemove { id: 5, reply: tx },
             None,
@@ -1235,7 +1235,7 @@ mod tests {
     #[test]
     fn backend_dispatch_screenshot_surfaces_backend_err() {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let mut backend = StubBackend;
+        let mut backend = NullBackend;
         dispatch_runtime_spawn(
             BackendCommand::Screenshot {
                 path: "shot.png".to_string(),
@@ -1251,7 +1251,7 @@ mod tests {
     #[test]
     fn backend_dispatch_cull_status_surfaces_backend_err() {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let mut backend = StubBackend;
+        let mut backend = NullBackend;
         dispatch_runtime_spawn(BackendCommand::CullStatus { reply: tx }, None, &mut backend);
         let err = rx.recv().unwrap().unwrap_err();
         assert!(

@@ -15,6 +15,7 @@
 mod chunk_gen;
 mod extrude;
 pub mod glass_quad;
+mod grid;
 mod heightfield;
 mod primitives;
 mod room;
@@ -29,8 +30,9 @@ pub use primitives::{build_box, build_cylinder, build_plane, build_sphere};
 pub use room::build_room_geometry;
 pub use skybox::build_skybox;
 pub use terrain::build_terrain;
+pub(crate) use terrain::{terrain_height, terrain_subdivisions};
 
-use crate::math::vec3::{vec3_add, vec3_normalize};
+use crate::math::vec3::{cross, dot, scale, sub, vec3_add, vec3_normalize};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
@@ -297,8 +299,8 @@ pub fn compute_tangents(vertices: &[Vert], indices: &[u16]) -> Vec<[f32; 3]> {
         let (pb, _, _, uvb) = vertices[ib];
         let (pc, _, _, uvc) = vertices[ic];
 
-        let e1 = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
-        let e2 = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
+        let e1 = sub(pb, pa);
+        let e2 = sub(pc, pa);
         let du1 = uvb[0] - uva[0];
         let dv1 = uvb[1] - uva[1];
         let du2 = uvc[0] - uva[0];
@@ -324,15 +326,7 @@ pub fn compute_tangents(vertices: &[Vert], indices: &[u16]) -> Vec<[f32; 3]> {
     vertices
         .iter()
         .zip(accum)
-        .map(|((_, normal, _, _), raw)| {
-            let dot = raw[0] * normal[0] + raw[1] * normal[1] + raw[2] * normal[2];
-            let t = [
-                raw[0] - dot * normal[0],
-                raw[1] - dot * normal[1],
-                raw[2] - dot * normal[2],
-            ];
-            vec3_normalize(t)
-        })
+        .map(|((_, normal, _, _), raw)| vec3_normalize(sub(raw, scale(*normal, dot(raw, *normal)))))
         .collect()
 }
 
@@ -345,17 +339,13 @@ fn arbitrary_tangent(normal: [f32; 3]) -> [f32; 3] {
     } else {
         [0.0, 0.0, 1.0]
     };
-    let t = [
-        up[1] * normal[2] - up[2] * normal[1],
-        up[2] * normal[0] - up[0] * normal[2],
-        up[0] * normal[1] - up[1] * normal[0],
-    ];
-    vec3_normalize(t)
+    vec3_normalize(cross(up, normal))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::vec3::{dot, length};
     use alloc::string::ToString;
 
     // A flat coarse height grid of `(nx+1)*(nz+1)` corners all at height `h`.
@@ -430,10 +420,9 @@ mod tests {
         ];
         let tangents = compute_tangents(&verts, &[0, 1, 2]);
         for (t, v) in tangents.iter().zip(&verts) {
-            let len = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt();
+            let len = length(*t);
             assert!((len - 1.0).abs() < 1e-5);
-            let dot = t[0] * v.1[0] + t[1] * v.1[1] + t[2] * v.1[2];
-            assert!(dot.abs() < 1e-5);
+            assert!(dot(*t, v.1).abs() < 1e-5);
         }
     }
 
@@ -454,9 +443,9 @@ mod tests {
             [0.6, 0.5, 0.3],
         ] {
             let t = arbitrary_tangent(normal);
-            let len = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt();
+            let len = length(t);
             assert!((len - 1.0).abs() < 1e-5, "normal {normal:?}");
-            let dot = t[0] * normal[0] + t[1] * normal[1] + t[2] * normal[2];
+            let dot = dot(t, normal);
             assert!(dot.abs() < 1e-5, "normal {normal:?}");
         }
     }

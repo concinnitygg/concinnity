@@ -12,13 +12,13 @@
 //! One thread per work unit rather than a pool: it maximizes the interleaving
 //! and it is what makes this file worth running under a thread sanitizer.
 
+use super::fixtures::TICK;
 use crate::physics::{
     BodyHandle, ColliderShape, DynamicParams, Fanout, JointMotor, JointSpec, LayerMask, SimConfig,
     Simulation,
 };
 use alloc::vec::Vec;
 
-const TICK: f32 = 1.0 / 60.0;
 const WORKERS: usize = 8;
 const CUBE: ColliderShape = ColliderShape::Cuboid {
     half_extents: [0.4, 0.4, 0.4],
@@ -50,13 +50,12 @@ impl Fanout for Threads {
     }
 }
 
-fn params(restitution: f32, damping: f32) -> DynamicParams {
+fn cube_params(restitution: f32, damping: f32) -> DynamicParams {
     DynamicParams {
-        mass: 1.0,
         friction: 0.4,
         restitution,
-        gravity_scale: 1.0,
         linear_damping: damping,
+        ..Default::default()
     }
 }
 
@@ -132,7 +131,7 @@ fn stacked(bodies: usize, restitution: f32, damping: f32) -> (Simulation, Vec<Bo
                     (column / per_row) as f32 * 2.0,
                 ],
                 [0.0; 3],
-                params(restitution, damping),
+                cube_params(restitution, damping),
                 LayerMask::ALL,
             )
             .expect("room for a body")
@@ -170,7 +169,7 @@ fn jointed(chains: usize, links: usize) -> (Simulation, Vec<BodyHandle>) {
                     &CUBE,
                     [(link + 1) as f32 * 0.9, 8.0, z],
                     [0.0; 3],
-                    params(0.0, 0.0),
+                    cube_params(0.0, 0.0),
                     LayerMask::ALL,
                 )
                 .expect("room for a link");
@@ -233,7 +232,7 @@ fn terrain(bodies: usize) -> (Simulation, Vec<BodyHandle>) {
                     (i / per_row) as f32 * 1.5 - 40.0,
                 ],
                 [0.0; 3],
-                params(0.0, 0.5),
+                cube_params(0.0, 0.5),
                 LayerMask::ALL,
             )
             .expect("room for a body")
@@ -278,7 +277,7 @@ fn hail(bodies: usize) -> (Simulation, Vec<BodyHandle>) {
                 &ColliderShape::Ball { radius: 0.1 },
                 [x, 40.0 + (i % 4) as f32 * 0.5, z],
                 [0.0; 3],
-                params(0.0, 0.0),
+                cube_params(0.0, 0.0),
                 LayerMask::ALL,
             )
             .expect("room for a body");

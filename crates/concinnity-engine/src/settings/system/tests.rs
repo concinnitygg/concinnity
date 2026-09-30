@@ -1,8 +1,8 @@
 // SettingsSystem unit tests: drive the SettingCommand drain against the
-// recording mock backend (gfx::mock_backend) and a hand-assembled
-// PipelineContext. No GPU device is created and the on-disk settings store is
-// never read or written: the state is seeded with an in-memory settings cache
-// and a writer whose sink captures the persisted snapshots instead.
+// recording mock backend (gfx::mock_backend) and a bare World. No GPU device
+// is created and the on-disk settings store is never read or written: the
+// state is seeded with an in-memory settings cache and a writer whose sink
+// captures the persisted snapshots instead.
 
 use concinnity_core::components::AaMode;
 use concinnity_core::components::GamepadAction;
@@ -14,18 +14,13 @@ use concinnity_core::components::{
     ShadowUpdate, Sprite, TextLabel, WindowMode,
 };
 use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{
-    Arena, ComponentStorage, FrameContext, FrameRateCap, HudPrefs, PipelineContext, Resources,
-    StepResult, System,
-};
+use concinnity_core::ecs::{FrameRateCap, HudPrefs, StepResult, System, World};
 use concinnity_core::gfx::render_types;
 use concinnity_core::input::keymap::{Bindable, KeyMap};
-use concinnity_core::profile::FrameProfile;
 use concinnity_core::render::backend::{GpuProfile, GpuVendor};
 use concinnity_core::render::backend_init::ShadowCadence;
 use concinnity_core::render::ops;
 use concinnity_core::window::display_mode::DisplayMode;
-use concinnity_host::store::blob::BlobData;
 use std::sync::{Arc, Mutex};
 
 use super::SettingsState;
@@ -54,28 +49,6 @@ const PAD_VICTIM_LABEL: AssetId = AssetId(10);
 // The authored color the fixture's gray-able rows start at, so a restore is
 // distinguishable from a gray.
 const LIT: [f32; 3] = [1.0, 1.0, 1.0];
-
-// Owns the storage a PipelineContext borrows from. Held separately from the
-// state + backend so all three can be borrowed at once in `apply`.
-struct World {
-    components: ComponentStorage,
-    blob: BlobData,
-    profile: FrameProfile,
-    resources: Resources,
-    scratch: Arena,
-}
-
-impl World {
-    fn ctx(&mut self) -> PipelineContext<'_> {
-        PipelineContext {
-            components: &mut self.components,
-            blob: &mut self.blob,
-            profile: &mut self.profile,
-            resources: &mut self.resources,
-            frame: FrameContext::new(&self.scratch),
-        }
-    }
-}
 
 struct Fixture {
     world: World,
@@ -197,20 +170,14 @@ impl Fixture {
         };
 
         let mut fixture = Fixture {
-            world: World {
-                components: ComponentStorage::default(),
-                blob: BlobData::new(vec![Some(Vec::new())]),
-                profile: FrameProfile::default(),
-                resources: Resources::new(),
-                scratch: Arena::with_capacity(64 * 1024),
-            },
+            world: World::new(),
             state,
             backend,
             calls,
             saved,
         };
         {
-            let mut ctx = fixture.world.ctx();
+            let mut ctx = fixture.world.context();
             for (id, content) in [
                 (VALUE_LABEL, "value"),
                 (QUALITY_LABEL, "quality"),
@@ -246,13 +213,13 @@ impl Fixture {
     // onto the mock backend so the call assertions keep working.
     fn apply(&mut self, cmds: Vec<SettingCommand>) {
         {
-            let mut ctx = self.world.ctx();
+            let mut ctx = self.world.context();
             let events = ctx.events_mut::<SettingCommand>();
             for cmd in cmds {
                 events.send(cmd);
             }
         }
-        let mut ctx = self.world.ctx();
+        let mut ctx = self.world.context();
         let mut ops = ops::RenderOps::default();
         self.state.apply_setting_commands(&mut ctx, &mut ops);
         ops.replay(&mut self.backend);
@@ -277,7 +244,7 @@ impl Fixture {
 
     fn label(&mut self, id: AssetId) -> String {
         self.world
-            .ctx()
+            .context()
             .get_by_id::<TextLabel>(id)
             .map(|l| l.content.clone())
             .expect("label present")
@@ -285,7 +252,7 @@ impl Fixture {
 
     fn label_color(&mut self, id: AssetId) -> [f32; 3] {
         self.world
-            .ctx()
+            .context()
             .get_by_id::<TextLabel>(id)
             .map(|l| l.color)
             .expect("label present")
@@ -294,7 +261,7 @@ impl Fixture {
     // Every ControlsCommand the drain has sent, oldest first.
     fn sent_controls(&mut self) -> Vec<ControlsCommand> {
         self.world
-            .ctx()
+            .context()
             .events::<ControlsCommand>()
             .map(|e| e.read(&mut Default::default()).cloned().collect())
             .unwrap_or_default()
@@ -472,7 +439,7 @@ fn slider_moves_the_handle_along_its_track() {
 
     let handle_x = f
         .world
-        .ctx()
+        .context()
         .get_by_id::<Sprite>(HANDLE)
         .map(|s| s.x)
         .expect("handle present");
@@ -488,7 +455,7 @@ fn slider_clamps_an_out_of_range_fraction() {
 
     let handle_x = f
         .world
-        .ctx()
+        .context()
         .get_by_id::<Sprite>(HANDLE)
         .map(|s| s.x)
         .expect("handle present");
@@ -503,7 +470,7 @@ fn slider_steps_by_next_and_prev() {
     let mut f = Fixture::new();
     let handle_x = |f: &mut Fixture| {
         f.world
-            .ctx()
+            .context()
             .get_by_id::<Sprite>(HANDLE)
             .map(|s| s.x)
             .expect("handle present")
@@ -638,7 +605,7 @@ fn mouse_sensitivity_slider_sends_a_controls_command() {
 
     let sent: Vec<ControlsCommand> = f
         .world
-        .ctx()
+        .context()
         .events::<ControlsCommand>()
         .map(|e| e.read(&mut Default::default()).cloned().collect())
         .unwrap_or_default();
@@ -666,7 +633,7 @@ fn fov_slider_sends_a_controls_command() {
 
     let sent: Vec<ControlsCommand> = f
         .world
-        .ctx()
+        .context()
         .events::<ControlsCommand>()
         .map(|e| e.read(&mut Default::default()).cloned().collect())
         .unwrap_or_default();
@@ -770,7 +737,7 @@ fn fps_cap_publishes_the_frame_rate_cap_resource() {
 
     let published = f
         .world
-        .ctx()
+        .context()
         .resource::<FrameRateCap>()
         .map(|c| c.0)
         .expect("cap published");
@@ -792,7 +759,7 @@ fn volume_rows_send_targeted_audio_commands() {
 
     let sent: Vec<AudioCommand> = f
         .world
-        .ctx()
+        .context()
         .events::<AudioCommand>()
         .map(|e| e.read(&mut Default::default()).cloned().collect())
         .unwrap_or_default();
@@ -1277,14 +1244,14 @@ fn hud_prefs_publish_under_the_master_toggle() {
     f.state.graphics.show_fps = true;
     f.state.graphics.show_vram = true;
 
-    f.state.publish_hud_state(&mut f.world.ctx());
-    let prefs = *f.world.ctx().resource::<HudPrefs>().unwrap();
+    f.state.publish_hud_state(&mut f.world.context());
+    let prefs = *f.world.context().resource::<HudPrefs>().unwrap();
     assert!(prefs.show_fps);
     assert!(prefs.show_vram);
 
     f.state.graphics.perf_stats = false;
-    f.state.publish_hud_state(&mut f.world.ctx());
-    let prefs = *f.world.ctx().resource::<HudPrefs>().unwrap();
+    f.state.publish_hud_state(&mut f.world.context());
+    let prefs = *f.world.context().resource::<HudPrefs>().unwrap();
     assert!(!prefs.show_fps, "the master gates the sub-readout");
     assert!(!prefs.show_vram);
 }
@@ -1296,10 +1263,10 @@ fn hud_prefs_publish_under_the_master_toggle() {
 fn disabled_rows_publish_alongside_the_gray_out() {
     let mut f = Fixture::new();
     f.state.window_args.mode = WindowMode::Fullscreen;
-    f.state.publish_hud_state(&mut f.world.ctx());
+    f.state.publish_hud_state(&mut f.world.context());
     let rows = f
         .world
-        .ctx()
+        .context()
         .resource::<crate::ecs::DisabledSettingRows>()
         .map(|r| r.0.clone())
         .unwrap();
@@ -1307,10 +1274,10 @@ fn disabled_rows_publish_alongside_the_gray_out() {
 
     f.state.graphics.perf_stats = false;
     f.state.window_args.mode = WindowMode::Windowed;
-    f.state.publish_hud_state(&mut f.world.ctx());
+    f.state.publish_hud_state(&mut f.world.context());
     let rows = f
         .world
-        .ctx()
+        .context()
         .resource::<crate::ecs::DisabledSettingRows>()
         .map(|r| r.0.clone())
         .unwrap();
@@ -1326,9 +1293,9 @@ fn step_without_a_parked_state_is_a_noop() {
     let mut f = Fixture::new();
     let mut sys = super::SettingsSystem::new();
 
-    assert_eq!(sys.step(&mut f.world.ctx()), StepResult::Continue);
+    assert_eq!(sys.step(&mut f.world.context()), StepResult::Continue);
     assert!(
-        f.world.ctx().resource::<HudPrefs>().is_none(),
+        f.world.context().resource::<HudPrefs>().is_none(),
         "nothing published without a state"
     );
 }
@@ -1339,14 +1306,12 @@ fn step_without_a_parked_state_is_a_noop() {
 fn step_without_a_backend_puts_the_state_back() {
     let mut f = Fixture::new();
     let mut sys = super::SettingsSystem::new();
-    f.world.resources.insert(super::SettingsSlot(Some(f.state)));
+    f.world.insert_resource(super::SettingsSlot(Some(f.state)));
 
-    assert_eq!(sys.step(&mut f.world.ctx()), StepResult::Continue);
+    assert_eq!(sys.step(&mut f.world.context()), StepResult::Continue);
     assert!(
         f.world
-            .ctx()
-            .resources
-            .get_mut::<super::SettingsSlot>()
+            .resource::<super::SettingsSlot>()
             .is_some_and(|slot| slot.0.is_some()),
         "the state is parked again for the next tick"
     );
@@ -1360,31 +1325,27 @@ fn step_drains_into_the_op_queue_and_reparks() {
     let mut f = Fixture::new();
     let mut sys = super::SettingsSystem::new();
     {
-        let mut ctx = f.world.ctx();
+        let mut ctx = f.world.context();
         ctx.events_mut::<SettingCommand>()
             .send(cycle(SettingKey::Vsync, SettingOp::Next));
     }
-    f.world
-        .resources
-        .insert(crate::ecs::ActiveRenderQueues(Some(
-            crate::ecs::RenderQueues {
-                ops: Default::default(),
-                slots: crate::gfx::render_slots::RenderSlots::new(0, true, &[]),
-            },
-        )));
-    f.world.resources.insert(super::SettingsSlot(Some(f.state)));
+    f.world.insert_resource(crate::ecs::ActiveRenderQueues(Some(
+        crate::ecs::RenderQueues {
+            ops: Default::default(),
+            slots: crate::gfx::render_slots::RenderSlots::new(0, true, &[]),
+        },
+    )));
+    f.world.insert_resource(super::SettingsSlot(Some(f.state)));
 
-    assert_eq!(sys.step(&mut f.world.ctx()), StepResult::Continue);
+    assert_eq!(sys.step(&mut f.world.context()), StepResult::Continue);
 
-    assert!(f.world.ctx().resource::<HudPrefs>().is_some());
+    assert!(f.world.context().resource::<HudPrefs>().is_some());
     assert!(
         f.world
-            .ctx()
-            .resources
-            .get_mut::<super::SettingsSlot>()
+            .resource::<super::SettingsSlot>()
             .is_some_and(|slot| slot.0.is_some())
     );
-    let mut queues = crate::ecs::ActiveRenderQueues::take(&mut f.world.resources)
+    let mut queues = crate::ecs::ActiveRenderQueues::take(f.world.context().resources)
         .expect("the op queue is parked again");
     queues.ops.replay(&mut f.backend);
     assert!(

@@ -25,6 +25,8 @@ include = [
 detail = []
 # The authored schema's static description, rustdoc included, for authoring tools.
 schema = ["dep:erased-serde"]
+# A do-nothing `RenderBackend` for other crates' tests.
+test-support = []
 
 [dependencies]
 

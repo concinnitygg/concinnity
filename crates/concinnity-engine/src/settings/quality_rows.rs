@@ -6,10 +6,7 @@ use concinnity_core::components::{IndirectLighting, PostProcessConfig};
 
 use super::{Lens, SettingKey};
 use crate::config::GraphicsSettings;
-use crate::gfx::quality_preset::{
-    QualityCeiling, clamp_aa_mode, coarser_reflection_blur, coarser_rt_reflection_resolution,
-    coarser_ssgi_resolution,
-};
+use crate::gfx::quality_preset::{QualityCeiling, clamp_aa_mode};
 
 // An Off/On quality feature. `allowed` is whether the ceiling permits it on.
 pub(crate) struct QualityToggle {
@@ -104,12 +101,9 @@ pub(crate) static QUALITY_CYCLES: [QualityCycle; 6] = [
     cycle!(
         SsgiResolution,
         ssgi_resolution,
-        super::ssgi_resolution_index,
-        super::ssgi_resolution_at,
-        |cfg, ceiling| {
-            cfg.ssgi_resolution =
-                coarser_ssgi_resolution(cfg.ssgi_resolution, ceiling.ssgi_resolution)
-        }
+        super::pass_resolution_index,
+        super::pass_resolution_at,
+        |cfg, ceiling| cfg.ssgi_resolution = cfg.ssgi_resolution.max(ceiling.ssgi_resolution)
     ),
     cycle!(
         SsgiRays,
@@ -128,25 +122,23 @@ pub(crate) static QUALITY_CYCLES: [QualityCycle; 6] = [
     cycle!(
         RtReflectionResolution,
         rt_reflection_resolution,
-        super::rt_reflection_resolution_index,
-        super::rt_reflection_resolution_at,
+        super::pass_resolution_index,
+        super::pass_resolution_at,
         |cfg, ceiling| {
-            cfg.rt_reflection_resolution = coarser_rt_reflection_resolution(
-                cfg.rt_reflection_resolution,
-                ceiling.rt_reflection_resolution,
-            )
+            cfg.rt_reflection_resolution = cfg
+                .rt_reflection_resolution
+                .max(ceiling.rt_reflection_resolution)
         }
     ),
     cycle!(
         ReflectionBlurResolution,
         reflection_blur_resolution,
-        super::reflection_blur_index,
-        super::reflection_blur_at,
+        super::pass_resolution_index,
+        super::pass_resolution_at,
         |cfg, ceiling| {
-            cfg.reflection_blur_resolution = coarser_reflection_blur(
-                cfg.reflection_blur_resolution,
-                ceiling.reflection_blur_resolution,
-            )
+            cfg.reflection_blur_resolution = cfg
+                .reflection_blur_resolution
+                .max(ceiling.reflection_blur_resolution)
         }
     ),
 ];
@@ -166,7 +158,7 @@ mod tests {
     use super::*;
     use crate::gfx::quality_preset::{QualityPreset, resolve_ceiling};
     use crate::gfx::render_config::overlay_quality_overrides;
-    use concinnity_core::components::{AaMode, ReflectionBlurResolution, SsgiResolution};
+    use concinnity_core::components::{AaMode, PassResolution};
     use concinnity_core::render::backend::{GpuProfile, GpuTier};
 
     fn low_ceiling() -> QualityCeiling {
@@ -257,10 +249,10 @@ mod tests {
         let ceiling = low_ceiling();
         let mut cfg = PostProcessConfig {
             aa_mode: AaMode::Taa,
-            ssgi_resolution: SsgiResolution::Full,
+            ssgi_resolution: PassResolution::Full,
             ssgi_rays: 32,
             ssgi_steps: 48,
-            reflection_blur_resolution: ReflectionBlurResolution::Full,
+            reflection_blur_resolution: PassResolution::Full,
             ..Default::default()
         };
         for row in &QUALITY_CYCLES {

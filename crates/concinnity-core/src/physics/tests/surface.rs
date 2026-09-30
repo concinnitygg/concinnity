@@ -8,6 +8,7 @@
 //! each answer should be is checked elsewhere, and what is checked here is
 //! that the whole surface answers at all.
 
+use super::fixtures::TICK;
 use crate::physics::{
     CharacterMoveInput, ColliderShape, DynamicParams, LayerMask, PhysicsBudget, PhysicsCounts,
     SimConfig, Simulation,
@@ -15,7 +16,6 @@ use crate::physics::{
 use alloc::vec::Vec;
 
 const G: f32 = 20.0;
-const TICK: f32 = 1.0 / 60.0;
 
 // Room for the floor, the falling ball, and the character capsule.
 fn budget() -> PhysicsBudget {

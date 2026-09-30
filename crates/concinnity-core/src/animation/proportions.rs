@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use crate::components::JointProportion;
 
 use crate::animation::skeleton::Skeleton;
+use crate::math::vec3::try_normalize;
 use crate::transform::Mat4;
 
 // One child pushed along its bind direction by the parent's `length`.
@@ -47,7 +48,7 @@ impl ProportionLayer {
                     .enumerate()
                     .filter(|(_, j)| j.parent == Some(joint))
                     .filter_map(|(child, j)| {
-                        let dir = normalize(j.bind.translation)?;
+                        let dir = try_normalize(j.bind.translation, 1e-6)?;
                         Some(ChildOffset {
                             child,
                             offset: crate::math::vec3::scale(dir, p.length),
@@ -122,11 +123,6 @@ impl ProportionLayer {
 
 fn top(world: &[Mat4]) -> f32 {
     world.iter().map(|m| m[3][1]).fold(0.0, f32::max)
-}
-
-fn normalize(v: [f32; 3]) -> Option<[f32; 3]> {
-    let len = crate::math::vec3::length(v);
-    (len > 1e-6).then(|| crate::math::vec3::scale(v, 1.0 / len))
 }
 
 #[cfg(test)]

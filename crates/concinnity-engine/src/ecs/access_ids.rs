@@ -262,41 +262,8 @@ mod tests {
         use super::super::*;
         use concinnity_core::components::Sprite;
         use concinnity_core::components::TextLabel;
-        use concinnity_core::ecs::Arena;
         use concinnity_core::ecs::access_check::set_active;
-        use concinnity_core::ecs::{
-            Access, ComponentStorage, FrameContext, PipelineContext, Resources,
-        };
-        use concinnity_core::profile::FrameProfile;
-        use concinnity_host::store::blob::BlobData;
-
-        struct Parts {
-            components: ComponentStorage,
-            blob: BlobData,
-            profile: FrameProfile,
-            resources: Resources,
-            scratch: Arena,
-        }
-
-        fn parts() -> Parts {
-            Parts {
-                components: ComponentStorage::default(),
-                blob: BlobData::empty(),
-                profile: FrameProfile::default(),
-                resources: Resources::default(),
-                scratch: Arena::with_capacity(0),
-            }
-        }
-
-        fn ctx(p: &mut Parts) -> PipelineContext<'_> {
-            PipelineContext {
-                components: &mut p.components,
-                blob: &mut p.blob,
-                profile: &mut p.profile,
-                resources: &mut p.resources,
-                frame: FrameContext::new(&p.scratch),
-            }
-        }
+        use concinnity_core::ecs::{Access, World};
 
         #[test]
         #[should_panic(expected = "Sprite without declaring it")]
@@ -306,8 +273,8 @@ mod tests {
                 Access::new().writes_components(component_mask![TextLabel]),
                 "TestSystem",
             )));
-            let mut p = parts();
-            let _ = ctx(&mut p).query::<Sprite>().count();
+            let mut world = World::new();
+            let _ = world.context().query::<Sprite>().count();
         }
 
         #[test]
@@ -315,8 +282,8 @@ mod tests {
         fn undeclared_structural_change_panics() {
             install_hook();
             set_active(Some((Access::new(), "TestSystem")));
-            let mut p = parts();
-            ctx(&mut p).push(TextLabel::default());
+            let mut world = World::new();
+            world.context().push(TextLabel::default());
         }
 
         #[test]
@@ -325,14 +292,14 @@ mod tests {
             install_hook();
             set_active(Some((Access::new(), "TestSystem")));
             struct Unregistered;
-            let mut p = parts();
-            let _ = ctx(&mut p).resource::<Unregistered>();
+            let mut world = World::new();
+            let _ = world.context().resource::<Unregistered>();
         }
 
         #[test]
         fn declared_touches_pass_and_exclusive_passes_everything() {
             install_hook();
-            let mut p = parts();
+            let mut world = World::new();
             set_active(Some((
                 Access::new()
                     .writes_components(component_mask![TextLabel])
@@ -340,14 +307,14 @@ mod tests {
                 "TestSystem",
             )));
             {
-                let mut c = ctx(&mut p);
+                let mut c = world.context();
                 let _ = c.query::<TextLabel>().count();
                 let _ = c.query_mut::<TextLabel>().count();
                 let _ = c.resource::<MenuActive>();
             }
             set_active(Some((Access::new().exclusive(), "TestSystem")));
             {
-                let mut c = ctx(&mut p);
+                let mut c = world.context();
                 c.push(TextLabel::default());
                 let _ = c.query::<Sprite>().count();
             }

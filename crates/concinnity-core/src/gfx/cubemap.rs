@@ -9,7 +9,7 @@
 //! and the basis derived from it sit together and are pinned against each other
 //! by a test below.
 
-use crate::gfx::projection::normalize3;
+use crate::math::vec3::normalize_clamped;
 
 /// Direction a face texel at `(u, v)` in `[-1, 1]` looks along, not normalized.
 ///
@@ -32,7 +32,7 @@ pub fn face_dir(face: usize, u: f32, v: f32) -> [f32; 3] {
 pub fn texel_dir(face: usize, x: u32, y: u32, face_size: u32) -> [f32; 3] {
     let u = (x as f32 + 0.5) / face_size as f32 * 2.0 - 1.0;
     let v = (y as f32 + 0.5) / face_size as f32 * 2.0 - 1.0;
-    normalize3(face_dir(face, u, v))
+    normalize_clamped(face_dir(face, u, v), 1e-6)
 }
 
 /// Per-face camera basis `[right, up, forward]` in world space, derived so that
@@ -50,6 +50,7 @@ pub const FACE_BASIS: [[[f32; 3]; 3]; 6] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::vec3::{dot, length};
 
     // The two tables are one convention written twice, so derive each face
     // direction from its basis and require the table to agree: a texel at
@@ -102,7 +103,7 @@ mod tests {
     fn a_center_texel_leans_along_its_face_axis() {
         for (face, axis) in AXES.iter().enumerate() {
             let d = texel_dir(face, 4, 4, 8);
-            let along = d[0] * axis[0] + d[1] * axis[1] + d[2] * axis[2];
+            let along = dot(d, *axis);
             assert!(
                 along > 0.9,
                 "face {face}: {d:?} projects {along} onto {axis:?}"
@@ -116,7 +117,7 @@ mod tests {
             for y in 0..4 {
                 for x in 0..4 {
                     let d = texel_dir(face, x, y, 4);
-                    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                    let len = length(d);
                     assert!((len - 1.0).abs() < 1e-5, "face {face} ({x},{y}) len {len}");
                 }
             }

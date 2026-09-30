@@ -15,8 +15,8 @@ pub(crate) mod quality_rows;
 // field) lives in SettingsSystem's drain, keyed by the same `SettingKey`.
 
 use concinnity_core::components::{
-    AaMode, ControlsCommand, PostProcessConfig, ReflectionBlurResolution, RtReflectionResolution,
-    SettingOp, ShadowUpdate, SsgiResolution, UpscaleQuality, UpscalerBackend, WindowMode,
+    AaMode, ControlsCommand, PassResolution, PostProcessConfig, SettingOp, ShadowUpdate,
+    UpscaleQuality, UpscalerBackend, WindowMode,
 };
 use concinnity_core::gfx::render_types::PostProcessTunables;
 use concinnity_core::render::backend;
@@ -175,21 +175,13 @@ pub(crate) fn aa_mode_index(mode: AaMode) -> usize {
     }
 }
 
-// SSGI gather resolution for an option index, and the index for a resolution.
-// Order matches SSGI_RESOLUTION_OPTIONS (finest first).
-pub(crate) fn ssgi_resolution_at(index: usize) -> SsgiResolution {
-    match index {
-        0 => SsgiResolution::Full,
-        2 => SsgiResolution::Quarter,
-        _ => SsgiResolution::Half,
-    }
+// Pass resolution for an option index, and the index for a resolution. Order
+// matches PASS_RESOLUTION_OPTIONS (finest first).
+pub(crate) fn pass_resolution_at(index: usize) -> PassResolution {
+    PassResolution::ALL.get(index).copied().unwrap_or_default()
 }
-pub(crate) fn ssgi_resolution_index(res: SsgiResolution) -> usize {
-    match res {
-        SsgiResolution::Full => 0,
-        SsgiResolution::Half => 1,
-        SsgiResolution::Quarter => 2,
-    }
+pub(crate) fn pass_resolution_index(res: PassResolution) -> usize {
+    res as usize
 }
 
 // SSGI ray / step counts for an option index, and the menu index nearest an
@@ -217,41 +209,6 @@ fn nearest_count_index(levels: &[u32], count: u32) -> usize {
         .min_by_key(|&(_, &v)| v.abs_diff(count))
         .map(|(i, _)| i)
         .unwrap_or(0)
-}
-
-// Ray-traced reflection trace resolution for an option index, and the index
-// for a resolution. Order matches RT_REFLECTION_RESOLUTION_OPTIONS (finest
-// first).
-pub(crate) fn rt_reflection_resolution_at(index: usize) -> RtReflectionResolution {
-    match index {
-        0 => RtReflectionResolution::Full,
-        2 => RtReflectionResolution::Quarter,
-        _ => RtReflectionResolution::Half,
-    }
-}
-pub(crate) fn rt_reflection_resolution_index(res: RtReflectionResolution) -> usize {
-    match res {
-        RtReflectionResolution::Full => 0,
-        RtReflectionResolution::Half => 1,
-        RtReflectionResolution::Quarter => 2,
-    }
-}
-
-// Reflection blur resolution for an option index, and the index for a
-// resolution. Order matches REFLECTION_BLUR_OPTIONS (finest first).
-pub(crate) fn reflection_blur_at(index: usize) -> ReflectionBlurResolution {
-    match index {
-        0 => ReflectionBlurResolution::Full,
-        2 => ReflectionBlurResolution::Quarter,
-        _ => ReflectionBlurResolution::Half,
-    }
-}
-pub(crate) fn reflection_blur_index(res: ReflectionBlurResolution) -> usize {
-    match res {
-        ReflectionBlurResolution::Full => 0,
-        ReflectionBlurResolution::Half => 1,
-        ReflectionBlurResolution::Quarter => 2,
-    }
 }
 
 // Shadow-map resolution (texels) for an option index, and the menu index nearest
@@ -1057,15 +1014,28 @@ mod tests {
     }
 
     #[test]
-    fn ssgi_sub_quality_round_trips_and_snaps() {
-        // Resolution round-trips across every option.
-        for r in [
-            SsgiResolution::Full,
-            SsgiResolution::Half,
-            SsgiResolution::Quarter,
-        ] {
-            assert_eq!(ssgi_resolution_at(ssgi_resolution_index(r)), r);
+    fn pass_resolution_round_trips_every_option() {
+        for &r in PassResolution::ALL {
+            assert_eq!(pass_resolution_at(pass_resolution_index(r)), r);
         }
+        assert_eq!(
+            pass_resolution_at(PassResolution::ALL.len()),
+            PassResolution::Half
+        );
+        for key in [
+            SettingKey::SsgiResolution,
+            SettingKey::RtReflectionResolution,
+            SettingKey::ReflectionBlurResolution,
+        ] {
+            assert_eq!(
+                options(key).map(|o| o.len()),
+                Some(PassResolution::ALL.len())
+            );
+        }
+    }
+
+    #[test]
+    fn ssgi_sub_quality_round_trips_and_snaps() {
         // Ray / step levels round-trip on their preset values.
         for i in 0..SSGI_RAYS_COUNTS.len() {
             assert_eq!(ssgi_rays_index(ssgi_rays_at(i)), i);
@@ -1089,39 +1059,13 @@ mod tests {
     }
 
     #[test]
-    fn rt_reflection_resolution_round_trips() {
-        for r in [
-            RtReflectionResolution::Full,
-            RtReflectionResolution::Half,
-            RtReflectionResolution::Quarter,
-        ] {
-            assert_eq!(
-                rt_reflection_resolution_at(rt_reflection_resolution_index(r)),
-                r
-            );
-        }
-        assert_eq!(
-            options(SettingKey::RtReflectionResolution).map(|o| o.len()),
-            Some(3)
-        );
+    fn rt_reflection_resolution_is_a_quality_cycle() {
         assert!(quality_rows::quality_cycle(SettingKey::RtReflectionResolution).is_some());
         assert!(quality_rows::quality_toggle(SettingKey::RtReflectionShadows).is_some());
     }
 
     #[test]
-    fn reflection_blur_round_trips() {
-        for r in [
-            ReflectionBlurResolution::Full,
-            ReflectionBlurResolution::Half,
-            ReflectionBlurResolution::Quarter,
-        ] {
-            assert_eq!(reflection_blur_at(reflection_blur_index(r)), r);
-        }
-        // It is registered as a cycle row + a governed cycle quality knob.
-        assert_eq!(
-            options(SettingKey::ReflectionBlurResolution).map(|o| o.len()),
-            Some(3)
-        );
+    fn reflection_blur_is_a_quality_cycle() {
         assert!(quality_rows::quality_cycle(SettingKey::ReflectionBlurResolution).is_some());
     }
 

@@ -31,9 +31,7 @@ fn failure(err: ProgramError) -> CompileFailure {
 // on Windows or Linux still gives a Metal player its field without a compiler.
 #[test]
 fn every_host_cooks_one_artifact_per_entry_for_every_target() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let text = surface();
     for platform in Platform::ALL {
         let compiled = compile_sdf_field("blob", field(&text), platform, false, true)
@@ -73,9 +71,7 @@ fn every_host_cooks_one_artifact_per_entry_for_every_target() {
 // between two compiles of the same field has stamped that directory in.
 #[test]
 fn a_volume_payload_is_the_same_on_every_compile() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let text = surface();
     for platform in [Platform::Metal, Platform::Vulkan] {
         let compile = || {
@@ -91,9 +87,7 @@ fn a_volume_payload_is_the_same_on_every_compile() {
 // under another path compiles to the same bytes on every host.
 #[test]
 fn the_path_does_not_reach_the_artifact() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let text = surface();
     let elsewhere = SourceFile {
         path: r"C:\worlds\lake\shaders\blob.hlsl",
@@ -121,9 +115,7 @@ fn the_path_does_not_reach_the_artifact() {
 // file, once, although every entry compiled it.
 #[test]
 fn an_error_names_the_authors_file_and_line() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let broken = format!(
         "// a comment\n\
          float map(float3 p, SdfParams q, float t)\n\
@@ -155,9 +147,7 @@ fn an_error_names_the_authors_file_and_line() {
 // the author's line, with the declaration it clashes with as the note beneath.
 #[test]
 fn a_return_type_mismatch_names_the_authors_line_and_notes_the_template() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let wrong = format!("{SHADE}float3 map(float3 p, SdfParams q, float t) {{ return 1.0; }}\n");
     let failed = failure(
         compile_sdf_field("blob", field(&wrong), Platform::DirectX, false, false).unwrap_err(),
@@ -181,9 +171,7 @@ fn a_return_type_mismatch_names_the_authors_line_and_notes_the_template() {
 // the compiler point back into the field.
 #[test]
 fn a_template_error_notes_the_authors_line() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let clash = format!(
         "{}// the proxy helper, again\nfloat3 proxy_world_pos(float3 pos) {{ return pos; }}\n",
         surface()
@@ -206,9 +194,7 @@ fn a_template_error_notes_the_authors_line() {
 // function, and the message says what the field must define.
 #[test]
 fn a_missing_function_fails_naming_what_the_field_must_define() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let err = compile_sdf_field("blob", field(MAP), Platform::Vulkan, false, false).unwrap_err();
     let message = err.to_string();
     assert!(
@@ -222,9 +208,7 @@ fn a_missing_function_fails_naming_what_the_field_must_define() {
 // A warning fails nothing and comes back located in the author's field, once.
 #[test]
 fn a_warning_is_returned_at_the_authors_line() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let warns = format!(
         "float map(float3 p, SdfParams q, float t)\n\
          {{\n\
@@ -246,9 +230,7 @@ fn a_warning_is_returned_at_the_authors_line() {
 // the volume also asks to cast.
 #[test]
 fn a_volumetric_field_compiles_the_medium_pair() {
-    if !concinnity_shader::dxc_available() {
-        return;
-    }
+    concinnity_shader::require_dxc!();
     let medium = "VolumeSample sampleVolume(float3 p, SdfParams q, float t)\n\
                   {\n\
                   \x20   VolumeSample vs;\n\

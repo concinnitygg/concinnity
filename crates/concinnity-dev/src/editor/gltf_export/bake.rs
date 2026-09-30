@@ -31,15 +31,6 @@ fn transform_direction(m: &Mat4, d: [f32; 3]) -> [f32; 3] {
     out
 }
 
-fn normalized(v: [f32; 3]) -> [f32; 3] {
-    let len = vec3::length(v);
-    if len > 1e-6 {
-        vec3::scale(v, 1.0 / len)
-    } else {
-        v
-    }
-}
-
 // Fold `shape` into `mesh` in place: morphs into the vertices, proportions
 // into the bind pose. The morph target set is consumed.
 pub(crate) fn bake_shape(mesh: &mut ExportMesh, shape: &CharacterShape) {
@@ -60,7 +51,7 @@ pub(crate) fn bake_shape(mesh: &mut ExportMesh, shape: &CharacterShape) {
         }
     }
     for nrm in &mut mesh.normals {
-        *nrm = normalized(*nrm);
+        *nrm = vec3::try_normalize(*nrm, 1e-6).unwrap_or(*nrm);
     }
     mesh.morph_target_names = Vec::new();
     mesh.morph_deltas = Vec::new();
@@ -100,7 +91,7 @@ pub(crate) fn bake_shape(mesh: &mut ExportMesh, shape: &CharacterShape) {
         }
         mesh.positions[v] = pos;
         if let Some(slot) = mesh.normals.get_mut(v) {
-            *slot = normalized(nrm);
+            *slot = vec3::try_normalize(nrm, 1e-6).unwrap_or(nrm);
         }
     }
     mesh.skeleton = mesh

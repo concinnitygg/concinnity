@@ -11,7 +11,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::gfx::cubemap;
-use crate::math::vec3::{cross as cross3, dot as dot3, length};
+use crate::math::vec3::{cross as cross3, dot as dot3, normalize_clamped};
 
 /// Default azimuthal samples per irradiance texel.
 pub const DEFAULT_IRRADIANCE_PHI_SAMPLES: u32 = 64;
@@ -75,11 +75,6 @@ fn sample_cube(faces: &[Vec<f32>; 6], face_size: u32, dir: [f32; 3]) -> [f32; 3]
     ]
 }
 
-fn normalize3(v: [f32; 3]) -> [f32; 3] {
-    let l = length(v).max(1e-20);
-    [v[0] / l, v[1] / l, v[2] / l]
-}
-
 // Build an orthonormal basis around `n` (N = up axis). Returns (tangent, bitangent).
 fn make_tbn(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     let up = if n[2].abs() < 0.999 {
@@ -87,7 +82,7 @@ fn make_tbn(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     } else {
         [1.0, 0.0, 0.0]
     };
-    let t = normalize3(cross3(up, n));
+    let t = normalize_clamped(cross3(up, n), 1e-20);
     let b = cross3(n, t);
     (t, b)
 }
@@ -122,11 +117,14 @@ fn importance_sample_ggx(
     let sin_theta = sqrt((1.0 - cos_theta * cos_theta).max(0.0));
     let (sin_phi, cos_phi) = sin_cos(phi);
     let h_local = [sin_theta * cos_phi, sin_theta * sin_phi, cos_theta];
-    normalize3([
-        t[0] * h_local[0] + b[0] * h_local[1] + n[0] * h_local[2],
-        t[1] * h_local[0] + b[1] * h_local[1] + n[1] * h_local[2],
-        t[2] * h_local[0] + b[2] * h_local[1] + n[2] * h_local[2],
-    ])
+    normalize_clamped(
+        [
+            t[0] * h_local[0] + b[0] * h_local[1] + n[0] * h_local[2],
+            t[1] * h_local[0] + b[1] * h_local[1] + n[1] * h_local[2],
+            t[2] * h_local[0] + b[2] * h_local[1] + n[2] * h_local[2],
+        ],
+        1e-20,
+    )
 }
 
 // Cap a sampled radiance so a single very bright source texel (a sun disk, a
@@ -334,7 +332,11 @@ impl<'a> CubeBake<'a> {
                         tan[1] * l_local[0] + bit[1] * l_local[1] + n[1] * l_local[2],
                         tan[2] * l_local[0] + bit[2] * l_local[1] + n[2] * l_local[2],
                     ];
-                    let env = sample_cube(self.source, self.source_face_size, normalize3(dir));
+                    let env = sample_cube(
+                        self.source,
+                        self.source_face_size,
+                        normalize_clamped(dir, 1e-20),
+                    );
                     // cos(θ) for the Lambert cosine, sin(θ) for the spherical
                     // area element. Both already in [0, 1] for the hemisphere.
                     let w = cos_theta * sin_theta;
@@ -368,11 +370,14 @@ impl<'a> CubeBake<'a> {
                 if ndh <= 0.0 {
                     continue;
                 }
-                let l = normalize3([
-                    2.0 * ndh * h[0] - n[0],
-                    2.0 * ndh * h[1] - n[1],
-                    2.0 * ndh * h[2] - n[2],
-                ]);
+                let l = normalize_clamped(
+                    [
+                        2.0 * ndh * h[0] - n[0],
+                        2.0 * ndh * h[1] - n[1],
+                        2.0 * ndh * h[2] - n[2],
+                    ],
+                    1e-20,
+                );
                 let ndl = dot3(n, l).max(0.0);
                 if ndl > 0.0 {
                     let env =

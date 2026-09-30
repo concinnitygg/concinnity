@@ -55,47 +55,16 @@ fn offset(p: [f32; 3], by: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::Arena;
-    use concinnity_core::ecs::FrameContext;
-    use concinnity_core::ecs::{ComponentStorage, PipelineContext, Resources};
+    use concinnity_core::ecs::{PipelineContext, World};
     use concinnity_core::gfx::camera;
-    use concinnity_core::profile::FrameProfile;
-    use concinnity_host::store::blob::BlobData;
 
-    // Owns the storage a PipelineContext borrows from; the build reads only the
-    // WorldLines resource, so the components / blob stay empty.
-    struct TestWorld {
-        components: ComponentStorage,
-        blob: BlobData,
-        profile: FrameProfile,
-        resources: Resources,
-        scratch: Arena,
-    }
-
-    impl TestWorld {
-        fn new(lines: Vec<Line>) -> Self {
-            let mut resources = Resources::new();
-            if !lines.is_empty() {
-                resources.insert(WorldLines(lines));
-            }
-            Self {
-                components: ComponentStorage::default(),
-                blob: BlobData::new(vec![Some(Vec::new())]),
-                profile: FrameProfile::default(),
-                resources,
-                scratch: Arena::with_capacity(64 * 1024),
-            }
+    // A world publishing `lines`; the build reads only the WorldLines resource.
+    fn world_with(lines: Vec<Line>) -> World {
+        let mut world = World::new();
+        if !lines.is_empty() {
+            world.insert_resource(WorldLines(lines));
         }
-
-        fn ctx(&mut self) -> PipelineContext<'_> {
-            PipelineContext {
-                components: &mut self.components,
-                blob: &mut self.blob,
-                profile: &mut self.profile,
-                resources: &mut self.resources,
-                frame: FrameContext::new(&self.scratch),
-            }
-        }
+        world
     }
 
     fn frame(rebase: [f32; 3]) -> LineFrame {
@@ -128,14 +97,14 @@ mod tests {
 
     #[test]
     fn no_published_lines_means_no_geometry() {
-        let mut w = TestWorld::new(Vec::new());
-        assert!(build(&w.ctx(), frame([0.0; 3])).is_empty());
+        let mut w = world_with(Vec::new());
+        assert!(build(&w.context(), frame([0.0; 3])).is_empty());
     }
 
     #[test]
     fn published_lines_expand_to_ribbons() {
-        let mut w = TestWorld::new(vec![axis_line()]);
-        assert_eq!(build(&w.ctx(), frame([0.0; 3])).len(), 6);
+        let mut w = world_with(vec![axis_line()]);
+        assert_eq!(build(&w.context(), frame([0.0; 3])).len(), 6);
     }
 
     #[test]
@@ -143,9 +112,9 @@ mod tests {
         // The renderer draws a streaming voxel world relative to its chunk
         // origin, so an authored line must move by the same offset or it would
         // sit at the wrong place in the frame.
-        let mut w = TestWorld::new(vec![axis_line()]);
-        let plain = build(&w.ctx(), frame([0.0; 3]));
-        let shifted = build(&w.ctx(), frame([5.0, 0.0, 0.0]));
+        let mut w = world_with(vec![axis_line()]);
+        let plain = build(&w.context(), frame([0.0; 3]));
+        let shifted = build(&w.context(), frame([5.0, 0.0, 0.0]));
         assert_eq!(plain.len(), shifted.len());
         // Compare ribbon centers: the two corners straddle the line, so their
         // midpoint is the segment endpoint itself (the corner offsets rotate

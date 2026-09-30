@@ -127,7 +127,7 @@ mod tests {
             });
         }
         assert_eq!(ops.len(), 3);
-        let mut backend = crate::render::backend::test_stub::StubBackend;
+        let mut backend = crate::render::backend::NullBackend;
         let outcome = ops.replay(&mut backend);
         let order: Vec<usize> = outcome
             .failures
@@ -149,7 +149,7 @@ mod tests {
         b.record_with(|_, out| out.failures.push(OpFailure::MeshUpload { stream_id: 2 }));
         a.drain_into(&mut b);
         assert!(a.is_empty());
-        let mut backend = crate::render::backend::test_stub::StubBackend;
+        let mut backend = crate::render::backend::NullBackend;
         let outcome = b.replay(&mut backend);
         assert_eq!(
             outcome.failures,

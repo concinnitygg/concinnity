@@ -10,9 +10,10 @@
 //!   half_depth    -- half extent along Z    (default 10.0)
 //!   subdivisions  -- grid resolution per axis (default 64, clamped 8..=255)
 
-use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+
+use super::grid::Grid;
 
 type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
 
@@ -24,42 +25,14 @@ pub fn build_water_grid(
 ) -> Result<(Verts, Vec<u16>), String> {
     let subdivisions = subdivisions.clamp(8, 255) as usize;
 
-    let cols = subdivisions + 1;
-    let rows = subdivisions + 1;
-
-    if cols * rows > 65536 {
-        return Err(format!(
-            "water_grid subdivisions {} produces {} vertices, exceeding the u16 limit; use subdivisions ≤ 255",
-            subdivisions,
-            cols * rows
-        ));
-    }
-
+    let grid = Grid::new("water_grid", half_width, half_depth, subdivisions)?;
     let normal = [0.0f32, 1.0, 0.0];
     let color = [1.0f32, 1.0, 1.0];
-    let mut verts: Verts = Vec::with_capacity(cols * rows);
-    for row in 0..rows {
-        for col in 0..cols {
-            let s = col as f32 / subdivisions as f32;
-            let t = row as f32 / subdivisions as f32;
-            let x = -half_width + s * half_width * 2.0;
-            let z = -half_depth + t * half_depth * 2.0;
-            verts.push(([x, 0.0, z], normal, color, [s, t]));
-        }
-    }
-
-    let mut idxs: Vec<u16> = Vec::with_capacity(subdivisions * subdivisions * 6);
-    for row in 0..subdivisions {
-        for col in 0..subdivisions {
-            let tl = (row * cols + col) as u16;
-            let tr = tl + 1;
-            let bl = tl + cols as u16;
-            let br = bl + 1;
-            idxs.extend_from_slice(&[tl, bl, tr, tr, bl, br]);
-        }
-    }
-
-    Ok((verts, idxs))
+    let verts: Verts = grid
+        .points()
+        .map(|p| ([p.x, 0.0, p.z], normal, color, [p.s, p.t]))
+        .collect();
+    Ok((verts, grid.indices()))
 }
 
 #[cfg(test)]
