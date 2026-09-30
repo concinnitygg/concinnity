@@ -11,6 +11,7 @@ use concinnity_core::components::GlassPanel;
 use concinnity_core::geometry::glass_quad::build_glass_quad;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::transparent;
 use concinnity_core::render::uniforms::{GlassMeshParams, GlassParams, TransparentView};
 use objc2::rc::Retained;
@@ -383,7 +384,7 @@ impl MtlContext {
     // Contribute one [`TransparentDraw`] per visible glass panel. The shared
     // transparent encoder owns sorting + the scene-copy snapshot; each draw
     // binds the snapshot (refraction source) at texture(0) and the resolved
-    // depth at texture(1). When `planar_live` and the pane has a planar slot, the
+    // depth at texture(1). When `mirrors` rendered the pane's planar slot, the
     // draw also binds its slot's resolve at texture(11) and flips `params.planar`
     // so the shader samples the sharp planar reflection instead of the probe cube;
     // slotless panes (budget overflow, logged at init) keep the probe path.
@@ -391,7 +392,7 @@ impl MtlContext {
         &self,
         view: &TransparentView,
         bindless: bool,
-        planar_live: bool,
+        mirrors: &PlanarFramePlan,
         out: &mut Vec<TransparentDraw>,
     ) {
         // Pipeline selection (matched by `encode_transparent`'s binding):
@@ -432,11 +433,10 @@ impl MtlContext {
                 (0, self.targets.hdr.transparent_scene_copy.clone()),
                 (1, self.targets.hdr.depth_resolve.clone()),
             ];
-            // Select the sharp planar reflection when the planar pass ran this
-            // frame and this pane was assigned a slot; bind that slot's resolve at
-            // the planar slot (overriding the global default). Otherwise the shader
-            // keeps the probe / sky path.
-            if planar_live
+            // Select the sharp planar reflection when this frame rendered the
+            // pane's slot; bind that slot's resolve at the planar slot (overriding
+            // the global default). Otherwise the shader keeps the probe / sky path.
+            if mirrors.samples_mirror(panel.planar_slot)
                 && let Some(targets) = panel
                     .planar_slot
                     .and_then(|s| planar_set.and_then(|set| set.targets.get(s)))

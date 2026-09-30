@@ -20,7 +20,6 @@ use objc2_metal::{
 use crate::metal::builtin_shaders::{FULLSCREEN_VERT, ShaderProgram, entry_function};
 use crate::metal::context::MtlContext;
 use crate::metal::encode::RenderEncode;
-use crate::metal::pass_timing::PassId;
 
 // Blend configuration for a fullscreen pass's single color attachment.
 #[derive(Clone, Copy)]
@@ -117,20 +116,7 @@ pub(in crate::metal) fn set_fragment_sampler_range(
     }
 }
 
-// Where a fullscreen pass sits within an effect's GPU-timing span. Most
-// effects are a single encoder (`Whole`); bloom and SSGI span several, so they
-// mark the start sample on the first encoder and the end sample on the last.
-#[derive(Clone, Copy)]
-pub(crate) enum PassTimer {
-    // Record no timing sample on this pass.
-    None,
-    // The effect's only encoder: record both its start and end samples here.
-    Whole(PassId),
-    // The first encoder of a multi-encoder effect: record the start sample.
-    First(PassId),
-    // The last encoder of a multi-encoder effect: record the end sample.
-    Last(PassId),
-}
+pub(crate) use crate::metal::pass_timing::PassTimer;
 
 // The per-pass setup a fullscreen-triangle encode needs: the color target it
 // writes, that attachment's load action, where the pass sits in the GPU-timing
@@ -176,12 +162,7 @@ pub(in crate::metal) fn encode_fullscreen_pass(
         ca.setStoreAction(MTLStoreAction::Store);
     }
     if let Some(t) = timing {
-        match timer {
-            PassTimer::None => {}
-            PassTimer::Whole(id) => t.attach_render(&desc, id),
-            PassTimer::First(id) => t.attach_render_first(&desc, id),
-            PassTimer::Last(id) => t.attach_render_last(&desc, id),
-        }
+        t.attach_render_timer(&desc, timer);
     }
     let enc = cmd_buf
         .renderCommandEncoderWithDescriptor(&desc)

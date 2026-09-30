@@ -6,7 +6,8 @@
 //! the same struct; each reads the fields its feature set consumes.
 
 use crate::components::{
-    GlassPanel, SdfVolume, ShaderPrograms, ShadowUpdate, UpscalerBackend, WaterSurface, Window,
+    GlassPanel, PassResolution, SdfVolume, ShaderPrograms, ShadowUpdate, UpscalerBackend,
+    WaterSurface, Window,
 };
 use crate::gfx::auto_exposure::AutoExposureSettings;
 use crate::gfx::mesh_payload::Vertex;
@@ -261,9 +262,8 @@ pub struct BackendInit<'a> {
     pub shadows: ShadowParams,
     /// Scene-sampler max anisotropy, clamped to the GPU's range at init.
     pub anisotropy: u32,
-    /// Distinct planar-reflection plane budget from the quality preset / GPU
-    /// tier ceiling; reflectors past it fall back to the probe cube.
-    pub planar_planes: usize,
+    /// Planar-reflection limits from the quality preset / GPU tier ceiling.
+    pub planar: PlanarBudget,
     /// Post-process and display settings.
     pub post: PostSettings,
     /// World-authored effect content.
@@ -271,6 +271,25 @@ pub struct BackendInit<'a> {
     /// Derived by `resolve_requirements()`; the conservative default assumes a
     /// full scene so a caller that skips resolution never under-allocates.
     pub requirements: RenderRequirements,
+}
+
+/// How much planar reflection a backend allocates for: the number of distinct
+/// mirror planes, and each mirror target's resolution relative to the render
+/// resolution. Fixed at init, since the mirror targets are allocated there.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct PlanarBudget {
+    /// Distinct mirror planes; reflectors past it fall back to the probe cube.
+    pub planes: usize,
+    /// Mirror target resolution relative to the render resolution.
+    pub resolution: PassResolution,
+}
+
+impl PlanarBudget {
+    /// No mirror planes at all.
+    pub const NONE: PlanarBudget = PlanarBudget {
+        planes: 0,
+        resolution: PassResolution::Full,
+    };
 }
 
 /// The swapchain-level configuration a backend bakes into its window / surface
@@ -377,7 +396,7 @@ impl<'a> BackendInit<'a> {
                 },
             },
             anisotropy: 1,
-            planar_planes: 0,
+            planar: PlanarBudget::NONE,
             post: PostSettings {
                 post_process: PostProcessTunables::DEFAULT,
                 taa_enabled: false,
@@ -438,7 +457,7 @@ impl<'a> BackendInit<'a> {
                 &mut self.shadows,
                 &mut self.post,
                 &mut self.fx,
-                &mut self.planar_planes,
+                &mut self.planar,
             );
         }
         self.requirements = req;
@@ -452,7 +471,7 @@ fn trim_scene_features(
     shadows: &mut ShadowParams,
     post: &mut PostSettings,
     fx: &mut WorldFx,
-    planar_planes: &mut usize,
+    planar: &mut PlanarBudget,
 ) {
     shadows.map_size = 0;
     post.taa_enabled = false;
@@ -464,7 +483,7 @@ fn trim_scene_features(
     post.temporal_upscaling = false;
     post.occlusion_two_pass = false;
     fx.fog = None;
-    *planar_planes = 0;
+    planar.planes = 0;
 }
 
 #[cfg(test)]
@@ -545,7 +564,7 @@ mod tests {
         assert_eq!(init.shadows.map_size, 0);
         assert!(!init.post.taa_enabled);
         assert!(init.post.ssao.is_none());
-        assert_eq!(init.planar_planes, 0);
+        assert_eq!(init.planar.planes, 0);
     }
 
     #[test]
@@ -585,7 +604,10 @@ mod tests {
         };
         let mut post = full_post();
         let mut fx = empty_fx();
-        let mut planar = 3usize;
+        let mut planar = PlanarBudget {
+            planes: 3,
+            resolution: PassResolution::Half,
+        };
         trim_scene_features(&mut shadows, &mut post, &mut fx, &mut planar);
         assert_eq!(shadows.map_size, 0);
         assert!(!post.taa_enabled);
@@ -593,7 +615,7 @@ mod tests {
         assert!(!post.temporal_upscaling);
         assert!(!post.occlusion_two_pass);
         assert!(fx.fog.is_none());
-        assert_eq!(planar, 0);
+        assert_eq!(planar.planes, 0);
     }
 
     #[test]

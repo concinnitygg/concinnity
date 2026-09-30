@@ -1,30 +1,31 @@
-//! Planar reflection for flat glass panes on the Vulkan backend. Each frame the
-//! scene is rendered a second time from the camera reflected across each pane's
-//! plane (mirror view + oblique near-plane clip so geometry behind the plane
-//! never leaks in) into a render-resolution target; the pane's fragment shader
-//! then samples that target projectively for a sharp, scene-correct reflection
-//! instead of the box-projected probe cube.
+//! Planar reflection for flat reflectors (glass panes + water surfaces) on the
+//! Vulkan backend. The scene is rendered a second time from the camera reflected
+//! across each reflector plane (mirror view + oblique near-plane clip so geometry
+//! behind the plane never leaks in) into a mirror target; the reflector's
+//! fragment shader then samples that target projectively for a sharp,
+//! scene-correct reflection instead of the box-projected probe cube.
 //!
-//! GLSL/Vulkan port of src/directx/planar.rs (itself a port of src/metal/planar.rs),
-//! One mirror render per DISTINCT
-//! plane: near-coplanar panes (one wall of windows) share a render, and panes past
-//! the budget (MAX_PLANAR_PLANES) fall back to the probe cube. The plane -> slot
-//! grouping + the mirror matrices come from the pure, unit-tested
-//! gfx::planar_reflection.
+//! One mirror render per DISTINCT plane: near-coplanar reflectors (one wall of
+//! windows) share a render, and reflectors past the budget (MAX_PLANAR_PLANES)
+//! fall back to the probe cube. The layout, the per-frame plan and the mirror
+//! matrices come from the pure, unit-tested `planar_reflection`.
 //!
-//! Each plane gets a DEDICATED reflected-frustum cull (the shared probe-bake
-//! encode_probe_cull): the GPU cull re-runs against the reflected-camera frustum
-//! into that plane's own indirect buffer, reading the FRAME's camera-independent
-//! object + draw-args SSBOs. So geometry visible only in the reflection (behind /
-//! beside the main camera) is captured, not just the main camera's visible set; the
-//! reflected view-proj's oblique near-plane clip also rejects geometry behind the
-//! reflector. The face render then draws that indirect. Like the probe capture, the
-//! skinned tail is not drawn into a mirror (static + instance + chunk only).
+//! A reflector reads its mirror only at its own screen pixels, so each frame's
+//! `PlanarFramePlan` crops every mirror render to the rectangle its reflectors
+//! cover and skips a plane whose reflectors are all off screen. Each rendered
+//! plane gets a DEDICATED reflected-frustum cull (the shared probe-bake
+//! encode_probe_cull), narrowed to that rectangle: the GPU cull re-runs against
+//! it into that plane's own indirect buffer, reading the FRAME's
+//! camera-independent object + draw-args SSBOs. So geometry visible only in the
+//! reflection (behind / beside the main camera) is captured; the reflected
+//! view-proj's oblique near-plane clip also rejects geometry behind the
+//! reflector. The face render then draws that indirect. Like the probe capture,
+//! the skinned tail is not drawn into a mirror (static + instance + chunk only).
 
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::planar_reflection;
+use concinnity_core::render::planar_reflection::{self, PlanarReflectors};
 use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
 
@@ -33,8 +34,12 @@ use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{PoolSizes, global_set};
 use super::draw::ViewUniforms;
 use super::global_set::{GlobalBindings, GlobalSetContents};
+use super::graph_exec::GraphFrameParams;
+use super::probe::FaceArea;
 use super::resources::{alloc_descriptor_sets, write_storage_buffer};
-use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
+use super::texture::{
+    GpuImage, ImageSpec, create_image, create_image_view, one_shot_submit, transition_image_layout,
+};
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, OwnedRenderPass, VkDevice};
 
 // The engine capacity ceiling for distinct reflection planes: the count the
@@ -50,25 +55,18 @@ pub(in crate::vulkan) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_PL
 const PLANAR_CLIP_BIAS: f32 = 0.02;
 const PLANAR_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
-// World-space plane [nx, ny, nz, d] (unit normal, n . p + d = 0 on the surface)
-// for a glass pane with unit normal through center. Pure; unit tested. The init
-// path feeds these to assign_planar_slots.
-pub(in crate::vulkan) fn pane_plane(normal: [f32; 3], center: [f32; 3]) -> [f32; 4] {
-    [
-        normal[0],
-        normal[1],
-        normal[2],
-        -(normal[0] * center[0] + normal[1] * center[1] + normal[2] * center[2]),
-    ]
-}
+// Texels a mirror's crop is grown by on every side, covering the bilinear
+// footprint of the reflector's lookup.
+const PLANAR_CROP_MARGIN: u32 = 2;
 
 // The set of distinct reflection planes for the world, each rendering its mirror
 // into the shared color + depth then resolving into its own shader-readable
-// target. A pane samples the target of the slot it was assigned at init (see
-// gfx::planar_reflection::assign_planar_slots). Recreated on resize alongside the
-// HDR targets; the planes + slot assignment are fixed at init.
+// target. A reflector samples the target of the slot it was assigned at init.
+// The targets are recreated on resize alongside the HDR targets; the layout is
+// fixed at init. `width` x `height` is the mirror target size, the render
+// resolution scaled by the layout's mirror resolution.
 pub(in crate::vulkan) struct PlanarReflectionSet {
-    planes: Vec<[f32; 4]>,
+    layout: PlanarReflectors,
     frames: usize,
     sample_count: vk::SampleCountFlags,
     width: u32,
@@ -136,12 +134,15 @@ unsafe impl Send for PlanarReflectionSet {}
 // SAFETY: as for `Send` above.
 unsafe impl Sync for PlanarReflectionSet {}
 
-// The GPU allocation context threaded through every planar create call: the
-// instance + logical device + physical device create_image / create_buffer need.
+// The GPU context threaded through every planar create call: the allocator and
+// device create_image / create_buffer need, and the queue the fresh mirror
+// targets are moved to their resting layout on.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct PlanarDevice<'a> {
     pub(in crate::vulkan) alloc: &'a DeviceAllocator,
     pub(in crate::vulkan) device: &'a VkDevice,
+    pub(in crate::vulkan) command_pool: vk::CommandPool,
+    pub(in crate::vulkan) queue: vk::Queue,
 }
 
 // Render dimensions for the shared color + depth + per-plane targets: the MSAA
@@ -160,7 +161,12 @@ fn create_targets(
     gpu: PlanarDevice<'_>,
     dims: PlanarTargetDims,
 ) -> RenderResult<(Option<GpuImage>, GpuImage, Vec<GpuImage>)> {
-    let PlanarDevice { alloc, device } = gpu;
+    let PlanarDevice {
+        alloc,
+        device,
+        command_pool,
+        queue,
+    } = gpu;
     let PlanarTargetDims {
         sample_count,
         width,
@@ -230,6 +236,21 @@ fn create_targets(
         let view = create_image_view(device, img, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
         targets.push(GpuImage::from_pooled(pooled, view));
     }
+    // Every target rests readable from the start: a reflector binds its mirror
+    // on frames the plane is culled, and a plane culled since creation has not
+    // been through the render pass that would otherwise leave it readable.
+    one_shot_submit(device, command_pool, queue, |cmd| {
+        for target in &targets {
+            transition_image_layout(
+                device,
+                cmd,
+                target.image,
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::ImageAspectFlags::COLOR,
+            );
+        }
+    })?;
     Ok((color, depth, targets))
 }
 
@@ -292,7 +313,8 @@ fn create_framebuffers(
 }
 
 // The frame-independent render config for a planar set: how many frames the ring
-// buffers double-buffer over, the MSAA sample count, and the render dimensions.
+// buffers double-buffer over, the MSAA sample count, and the render resolution
+// the mirror targets are scaled from.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct PlanarConfig {
     pub(in crate::vulkan) frames: usize,
@@ -335,19 +357,20 @@ impl PlanarReflectionSet {
     pub(in crate::vulkan) fn new(
         gpu: PlanarDevice<'_>,
         config: PlanarConfig,
-        planes: &[[f32; 4]],
+        reflectors: PlanarReflectors,
         main_render_pass: &OwnedRenderPass,
         globals: PlanarGlobalSet<'_>,
         cull: PlanarCullSources<'_>,
     ) -> RenderResult<Self> {
-        let PlanarDevice { alloc, device } = gpu;
+        let PlanarDevice { alloc, device, .. } = gpu;
         let PlanarConfig {
             frames,
             sample_count,
-            width,
-            height,
+            width: render_w,
+            height: render_h,
         } = config;
-        let plane_count = planes.len();
+        let (width, height) = reflectors.target_size(render_w, render_h);
+        let plane_count = reflectors.planes().len();
         let (color, depth, targets) = create_targets(
             gpu,
             PlanarTargetDims {
@@ -476,7 +499,7 @@ impl PlanarReflectionSet {
         };
 
         Ok(Self {
-            planes: planes.to_vec(),
+            layout: reflectors,
             frames,
             sample_count,
             width,
@@ -497,9 +520,19 @@ impl PlanarReflectionSet {
         })
     }
 
-    // Number of distinct reflector planes (mirror renders per frame).
+    // Number of distinct reflector planes (at most one mirror render each per
+    // frame).
     pub(in crate::vulkan) fn plane_count(&self) -> usize {
-        self.planes.len()
+        self.layout.planes().len()
+    }
+
+    // This frame's mirror work under the (jittered) `view_proj` the reflectors
+    // are rasterized with.
+    pub(in crate::vulkan) fn frame_plan(
+        &self,
+        view_proj: [[f32; 4]; 4],
+    ) -> planar_reflection::PlanarFramePlan {
+        self.layout.frame_plan(view_proj)
     }
 
     // Rewrite binding `binding` of every (plane, frame) global set from what it
@@ -535,27 +568,28 @@ impl PlanarReflectionSet {
         }
     }
 
-    // Recreate the shared color + depth + per-plane targets + framebuffers at new
-    // render dimensions. The view UBO ring + global sets + pool survive (the global
-    // sets reference only the unchanged shared lighting / env bindings + the
-    // per-(plane, frame) view UBOs). The targets move, so the caller must re-point
-    // the glass pass's per-pane planar binding afterward.
+    // Recreate the shared color + depth + per-plane targets + framebuffers for a
+    // new render resolution. The view UBO ring + global sets + pool survive (the
+    // global sets reference only the unchanged shared lighting / env bindings +
+    // the per-(plane, frame) view UBOs). The targets move, so the caller must
+    // re-point the transparent pass's per-record planar binding afterward.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        alloc: &DeviceAllocator,
-        device: &VkDevice,
-        width: u32,
-        height: u32,
+        gpu: PlanarDevice<'_>,
+        render_w: u32,
+        render_h: u32,
     ) -> RenderResult<()> {
+        let device = gpu.device;
+        let (width, height) = self.layout.target_size(render_w, render_h);
         // Build the new targets + framebuffers first, then retire the old ones, so
         // a failure leaves the existing set intact.
         let (color, depth, targets) = create_targets(
-            PlanarDevice { alloc, device },
+            gpu,
             PlanarTargetDims {
                 sample_count: self.sample_count,
                 width,
                 height,
-                plane_count: self.planes.len(),
+                plane_count: self.layout.planes().len(),
             },
         )?;
         let framebuffers = create_framebuffers(
@@ -597,54 +631,60 @@ impl PlanarReflectionSet {
 }
 
 impl VkContext {
-    // Render the scene reflected across each plane in the planar set into that
-    // plane's target. A no-op when no set exists. For each plane: write the
+    // Render the scene reflected across every plane the frame's plan keeps into
+    // that plane's target, cropped to the plan's rectangle. A no-op when no set
+    // exists or no reflector is on screen. For each kept plane: write the
     // reflected ViewUniforms into this (plane, frame) ring slot, run the dedicated
-    // reflected-frustum cull into the plane's indirect, then render the culled set
-    // from the reflected view through the shared bindless encode_main_into_face into
-    // the plane's framebuffer. Encoded on `cmd` at the
-    // head of the transparent pass, before the glass draws sample the targets;
-    // same-cmd-buffer ordering retires each target before its glass sample. Each
-    // plane is oriented toward the camera so the oblique near-plane clip keeps the
-    // camera's side.
+    // reflected-frustum cull (narrowed to the crop) into the plane's indirect,
+    // then render the culled set from the reflected view through the shared
+    // bindless encode_main_into_face into the plane's framebuffer, limited to the
+    // crop. Each plane is oriented toward the camera so the oblique near-plane
+    // clip keeps the camera's side. `Transparent` samples the targets later in
+    // the same submission.
     pub(in crate::vulkan) fn encode_planar_reflections(
         &self,
         cmd: vk::CommandBuffer,
-        frame_idx: usize,
-        vp_mat: [[f32; 4]; 4],
-        cam_pos: [f32; 3],
-        elapsed: f32,
+        params: &GraphFrameParams<'_>,
     ) -> RenderResult<()> {
         let Some(set) = self.planar_reflection.as_ref() else {
             return Ok(());
         };
-        let Some(&bindless_set) = self.cull.bindless_sets.get(frame_idx) else {
+        let Some(&bindless_set) = self.cull.bindless_sets.get(params.frame_idx) else {
             return Ok(());
         };
+        let crops =
+            params
+                .planar
+                .crops(set.plane_count(), set.width, set.height, PLANAR_CROP_MARGIN);
+        let crops = crops.as_slice();
+        if crops.is_empty() {
+            return Ok(());
+        }
 
         // Recover the (jittered) projection from this frame's view-projection so the
         // mirror render shares the main camera's projection + jitter, keeping the
         // reflection aligned with the reflective fragment's screen-space sample.
-        let proj = mat4_mul(vp_mat, mat4_inverse(self.view.matrix));
+        let proj = mat4_mul(params.vp_mat, mat4_inverse(self.view.matrix));
         let prefilter_mip_count = self.scene.prefilter_mip_count as f32;
         let extent = vk::Extent2D {
             width: set.width,
             height: set.height,
         };
 
-        for slot in 0..set.plane_count() {
-            let oriented = planar_reflection::orient_plane_toward(set.planes[slot], cam_pos);
+        for &(slot, crop) in crops {
+            let oriented =
+                planar_reflection::orient_plane_toward(set.layout.planes()[slot], params.cam_pos);
             let m = planar_reflection::planar_matrices(
                 self.view.matrix,
                 proj,
-                cam_pos,
+                params.cam_pos,
                 oriented,
                 PLANAR_CLIP_BIAS,
             );
             let view = ViewUniforms {
                 vp: m.view_proj,
                 view: m.view,
-                elapsed,
+                elapsed: params.elapsed,
                 // No reflection composite runs over the mirror render, so the
                 // forward probe specular is its only reflection source; the EMPTY
                 // ProbeSet then leaves it on the sky path.
@@ -653,17 +693,22 @@ impl VkContext {
                 prefilter_mip_count,
                 // A mirror render is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
-                _end_pad: 0.0,
+                ambient_occlusion: 0.0,
                 sky_rot: self.view.sky_rot,
             };
-            let ring = slot * set.frames + frame_idx;
+            let ring = slot * set.frames + params.frame_idx;
             set.view_bufs[ring].write_val(0, &view);
             // Reflected-frustum cull (compute, outside any render pass) into this
             // plane's indirect, reading the frame's camera-independent object set so
-            // geometry visible only in the reflection is captured. The oblique clip
-            // already rides the view-proj, so the extracted frustum also rejects
-            // geometry behind the reflector.
-            let frustum = Frustum::from_view_projection(m.view_proj);
+            // geometry visible only in the reflection is captured. The frustum is
+            // narrowed to the crop, and the oblique clip rides the view-proj, so it
+            // also rejects geometry that cannot reach the crop or sits behind the
+            // reflector.
+            let frustum = Frustum::from_view_projection(crop.crop_view_projection(
+                m.view_proj,
+                set.width,
+                set.height,
+            ));
             self.encode_probe_cull(cmd, set.cull_sets[ring], set.hiz_set, &frustum, m.eye);
             // Order the previous mirror render's attachment writes before this one's
             // layout transition. `main_render_pass` declares both attachments
@@ -706,31 +751,43 @@ impl VkContext {
             self.encode_main_into_face(
                 cmd,
                 set.framebuffers[slot].handle(),
-                extent,
+                FaceArea {
+                    extent,
+                    render_area: vk::Rect2D {
+                        offset: vk::Offset2D {
+                            x: crop.x as i32,
+                            y: crop.y as i32,
+                        },
+                        extent: vk::Extent2D {
+                            width: crop.width,
+                            height: crop.height,
+                        },
+                    },
+                },
                 set.global_sets[ring],
                 bindless_set,
                 set.cull_indirect_bufs[ring].buffer(),
             );
         }
 
-        // Make every freshly rendered target visible to the glass fragment read.
-        // The main render pass leaves them in SHADER_READ_ONLY (final layout) but
-        // adds no output-side dependency, so order the color writes before the
-        // sample explicitly. Layout is unchanged (SHADER_READ_ONLY -> same).
-        // One barrier per plane, and the plane count is capped at
+        // Make every freshly rendered target visible to the transparent fragment
+        // read. The main render pass leaves them in SHADER_READ_ONLY (final layout)
+        // but adds no output-side dependency, so order the color writes before the
+        // sample explicitly. Layout is unchanged (SHADER_READ_ONLY -> same). One
+        // barrier per rendered plane, and the plane count is capped at
         // `MAX_PLANAR_PLANES` where the set is built, so this fits on the stack.
         let mut barriers = [vk::ImageMemoryBarrier::default(); MAX_PLANAR_PLANES];
-        debug_assert!(set.targets.len() <= MAX_PLANAR_PLANES);
-        let n = set.targets.len().min(MAX_PLANAR_PLANES);
-        for (slot, t) in set.targets.iter().take(n).enumerate() {
-            barriers[slot] = vk::ImageMemoryBarrier::default()
+        debug_assert!(crops.len() <= MAX_PLANAR_PLANES);
+        let n = crops.len().min(MAX_PLANAR_PLANES);
+        for (barrier, &(slot, _)) in barriers.iter_mut().zip(crops) {
+            *barrier = vk::ImageMemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
                 .dst_access_mask(vk::AccessFlags::SHADER_READ)
                 .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(t.image)
+                .image(set.targets[slot].image)
                 .subresource_range(vk::ImageSubresourceRange {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     base_mip_level: 0,
@@ -759,26 +816,6 @@ impl VkContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pane_plane_passes_through_center_with_unit_normal() {
-        // A pane facing +z through (1, 2, 3): the plane constant places the center
-        // on the surface (n . c + d == 0), and the normal is carried unchanged.
-        let p = pane_plane([0.0, 0.0, 1.0], [1.0, 2.0, 3.0]);
-        assert_eq!([p[0], p[1], p[2]], [0.0, 0.0, 1.0]);
-        let signed = p[0] * 1.0 + p[1] * 2.0 + p[2] * 3.0 + p[3];
-        assert!(signed.abs() < 1e-5, "center lies on the plane");
-    }
-
-    #[test]
-    fn pane_plane_offset_is_negative_normal_dot_center() {
-        // Tilted normal: d == -(n . c).
-        let n = [0.6, 0.0, 0.8];
-        let c = [2.0, 5.0, -1.0];
-        let p = pane_plane(n, c);
-        let expect_d = -(n[0] * c[0] + n[1] * c[1] + n[2] * c[2]);
-        assert!((p[3] - expect_d).abs() < 1e-5);
-    }
 
     #[test]
     fn planar_capacity_is_four() {

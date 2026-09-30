@@ -6,12 +6,12 @@
 use concinnity_core::components::{GlassPanel, WaterSurface};
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::render_types::{DrawObject, LightUniforms, NUM_SHADOW_CASCADES};
-use concinnity_core::render::backend_init::{PostSettings, SdfVolumeSource, WorldFx};
+use concinnity_core::render::backend_init::{PlanarBudget, PostSettings, SdfVolumeSource, WorldFx};
 use concinnity_core::render::decal::{self, DecalRecord};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use concinnity_core::render::particles::{self, ParticleEmitterRecord};
-use concinnity_core::render::planar_reflection::{self, PlanarAssignment};
+use concinnity_core::render::planar_reflection::PlanarReflectors;
 use concinnity_core::render::post::ssao::SsaoSettings;
 use concinnity_core::render::volumetric_fog::FogSettings;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -576,22 +576,16 @@ pub(super) fn build_raymarch(
 //
 // Water first, then glass, matching the Metal backend, so the two slot
 // ranges are `[..water_surfaces.len()]` and the rest.
-pub(super) fn plan_planar(fx: &WorldFx, planar_planes: usize) -> PlanarAssignment {
-    let planar_panes: Vec<[f32; 4]> = fx
-        .water_surfaces
-        .iter()
-        // A water surface's rest plane: horizontal at the surface base height.
-        .map(|s| [0.0, 1.0, 0.0, -s.center[1]])
-        .chain(
-            fx.glass_panels
-                .iter()
-                .map(|p| crate::directx::planar::pane_plane(p.normal, p.center)),
-        )
-        .collect();
-    // Cap at the capacity ceiling the reserved planar resolve SRVs are sized to,
-    // so a stale/over-large preset value can never over-allocate.
-    let planar_budget = planar_planes.min(crate::directx::planar::MAX_PLANAR_PLANES);
-    planar_reflection::assign_planar_slots(&planar_panes, planar_budget)
+pub(super) fn plan_planar(fx: &WorldFx, budget: PlanarBudget) -> PlanarReflectors {
+    let planar = PlanarReflectors::plan(&fx.water_surfaces, &fx.glass_panels, budget);
+    if planar.overflow() > 0 {
+        tracing::warn!(
+            "planar reflection: {} reflector plane(s) exceed the budget and fall back \
+             to the box-projected probe cube",
+            planar.overflow()
+        );
+    }
+    planar
 }
 
 // One mirror-render resolve per distinct reflector plane (the
@@ -605,18 +599,18 @@ pub(super) fn build_planar_reflection(
     gpu: &InitGpu<'_>,
     descriptors: &DxDescriptors,
     targets: &DxTargets,
-    planar: &PlanarAssignment,
+    planar: PlanarReflectors,
     n_cull: usize,
     clear_color: [f32; 4],
 ) -> RenderResult<Option<PlanarReflectionSet>> {
     let planar_resolve_srv_base_slot = descriptors.layout.planar_resolve_srv_base_slot;
-    let planar_reflection = if planar.representatives.is_empty() {
+    let planar_reflection = if planar.planes().is_empty() {
         None
     } else {
-        let resolve_srv_cpu: Vec<_> = (0..planar.representatives.len())
+        let resolve_srv_cpu: Vec<_> = (0..planar.planes().len())
             .map(|i| descriptors.slot_cpu(planar_resolve_srv_base_slot + i))
             .collect();
-        let resolve_srv_gpu: Vec<_> = (0..planar.representatives.len())
+        let resolve_srv_gpu: Vec<_> = (0..planar.planes().len())
             .map(|i| descriptors.slot_gpu(planar_resolve_srv_base_slot + i))
             .collect();
         Some(PlanarReflectionSet::new(
@@ -627,7 +621,7 @@ pub(super) fn build_planar_reflection(
                 height: targets.extent.render_height,
                 n_cull,
             },
-            &planar.representatives,
+            planar,
             crate::directx::planar::PlanarTargets {
                 resolve_srv_cpu: &resolve_srv_cpu,
                 resolve_srv_gpu: &resolve_srv_gpu,
@@ -644,7 +638,7 @@ pub(super) struct TransparentInputs<'a> {
     pub(super) reflection_slots: crate::directx::transparent::GlassReflectionSlots,
     // Per-axis divisor of the glass reflection pre-pass; 1 traces in place.
     pub(super) reflection_divisor: u32,
-    pub(super) planar: &'a PlanarAssignment,
+    pub(super) planar_slots: &'a [Option<usize>],
     pub(super) glass_panels: &'a [GlassPanel],
     pub(super) water_surfaces: &'a [WaterSurface],
     pub(super) draw_objects: &'a [DrawObject],
@@ -656,7 +650,7 @@ pub(super) struct TransparentInputs<'a> {
 // DXR-capable GPU, since its producer is ray-traced only and a pane-less,
 // water-less world would otherwise build the whole pass for a producer that
 // cannot exist. Shares the main-depth SRV with the decal pass; the scene-copy
-// snapshot uses its own reserved heap slot. `planar.slots` gives each
+// snapshot uses its own reserved heap slot. `planar_slots` gives each
 // reflector its planar resolve slot (or `None` -> probe-cube fallback),
 // numbered water first to match `plan_planar`.
 pub(super) fn build_transparent(
@@ -668,7 +662,7 @@ pub(super) fn build_transparent(
         targets,
         reflection_slots,
         reflection_divisor,
-        planar,
+        planar_slots,
         glass_panels,
         water_surfaces,
         draw_objects,
@@ -694,7 +688,7 @@ pub(super) fn build_transparent(
             None
         } else {
             let (water_planar_slots, glass_planar_slots) =
-                planar.slots.split_at(water_surfaces.len());
+                planar_slots.split_at(water_surfaces.len());
             Some(TransparentResources::new(
                 crate::directx::transparent::TransparentDeviceCtx { alloc: &hw.alloc },
                 crate::directx::transparent::TransparentBuildConfig {

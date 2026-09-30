@@ -552,8 +552,12 @@ impl VkContext {
         // new target views.
         if let Some(mut planar) = self.planar_reflection.take() {
             planar.rebuild(
-                &self.hw.alloc,
-                &self.hw.device,
+                crate::vulkan::planar::PlanarDevice {
+                    alloc: &self.hw.alloc,
+                    device: &self.hw.device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.hw.graphics_queue,
+                },
                 render_ext.width,
                 render_ext.height,
             )?;

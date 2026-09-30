@@ -278,6 +278,25 @@ impl PassTimingResources {
     pub(super) fn attach_compute(&self, desc: &MTLComputePassDescriptor, pass: PassId) {
         self.mark_attached(pass);
         let (start, end) = slot_pair(pass);
+        self.sample_compute(desc, start, end);
+    }
+
+    // Attach the FIRST encoder of a multi-encoder pass that opens with a
+    // compute encoder. Mirrors [`attach_render_first`].
+    pub(super) fn attach_compute_first(&self, desc: &MTLComputePassDescriptor, pass: PassId) {
+        self.mark_attached(pass);
+        let (start, _) = slot_pair(pass);
+        self.sample_compute(desc, start, NO_SAMPLE);
+    }
+
+    // Attach the LAST encoder of a multi-encoder pass that closes with a
+    // compute encoder. Mirrors [`attach_render_last`].
+    pub(super) fn attach_compute_last(&self, desc: &MTLComputePassDescriptor, pass: PassId) {
+        let (_, end) = slot_pair(pass);
+        self.sample_compute(desc, NO_SAMPLE, end);
+    }
+
+    fn sample_compute(&self, desc: &MTLComputePassDescriptor, start: usize, end: usize) {
         // SAFETY: see `attach_render`.
         unsafe {
             let arr = desc.sampleBufferAttachments();
@@ -285,6 +304,53 @@ impl PassTimingResources {
             entry.setSampleBuffer(Some(self.active()));
             entry.setStartOfEncoderSampleIndex(start);
             entry.setEndOfEncoderSampleIndex(end);
+        }
+    }
+
+    // Attach a render encoder at `timer`'s place in its pass's span.
+    pub(super) fn attach_render_timer(&self, desc: &MTLRenderPassDescriptor, timer: PassTimer) {
+        match timer {
+            PassTimer::None => {}
+            PassTimer::Whole(id) => self.attach_render(desc, id),
+            PassTimer::First(id) => self.attach_render_first(desc, id),
+            PassTimer::Last(id) => self.attach_render_last(desc, id),
+        }
+    }
+
+    // Attach a compute encoder at `timer`'s place in its pass's span.
+    pub(super) fn attach_compute_timer(&self, desc: &MTLComputePassDescriptor, timer: PassTimer) {
+        match timer {
+            PassTimer::None => {}
+            PassTimer::Whole(id) => self.attach_compute(desc, id),
+            PassTimer::First(id) => self.attach_compute_first(desc, id),
+            PassTimer::Last(id) => self.attach_compute_last(desc, id),
+        }
+    }
+}
+
+// Where an encoder sits within a pass's GPU-timing span. Most passes are a
+// single encoder (`Whole`); a pass that spans several marks the start sample on
+// its first encoder and the end sample on its last.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PassTimer {
+    // Record no timing sample on this encoder.
+    None,
+    // The pass's only encoder: record both its start and end samples here.
+    Whole(PassId),
+    // The first encoder of a multi-encoder pass: record the start sample.
+    First(PassId),
+    // The last encoder of a multi-encoder pass: record the end sample.
+    Last(PassId),
+}
+
+impl PassTimer {
+    // The timer for encoder `index` of `count` encoders timed as `pass`.
+    pub(crate) fn span(pass: PassId, index: usize, count: usize) -> PassTimer {
+        match (index == 0, index + 1 == count) {
+            (true, true) => PassTimer::Whole(pass),
+            (true, false) => PassTimer::First(pass),
+            (false, true) => PassTimer::Last(pass),
+            (false, false) => PassTimer::None,
         }
     }
 }
@@ -429,6 +495,22 @@ pub(super) fn frame_span_us(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_span_opens_on_its_first_encoder_and_closes_on_its_last() {
+        let p = PassId::PlanarReflection;
+        assert_eq!(PassTimer::span(p, 0, 1), PassTimer::Whole(p));
+        let four: Vec<_> = (0..4).map(|i| PassTimer::span(p, i, 4)).collect();
+        assert_eq!(
+            four,
+            [
+                PassTimer::First(p),
+                PassTimer::None,
+                PassTimer::None,
+                PassTimer::Last(p)
+            ]
+        );
+    }
 
     // Write one pass's (start, end) nanosecond pair into a synthetic buffer.
     fn write(samples: &mut [u64; SAMPLE_COUNT], pass: PassId, start_ns: u64, end_ns: u64) {

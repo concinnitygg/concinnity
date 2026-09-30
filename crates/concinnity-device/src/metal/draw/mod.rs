@@ -238,6 +238,11 @@ impl MtlContext {
             vp,
             inv_vp,
             frustum: &frustum,
+            planar: self
+                .planar_reflection
+                .as_ref()
+                .map(|set| set.layout.frame_plan(vp))
+                .unwrap_or_default(),
             object_buffer: object_buffer.as_ref(),
             material_params: material_params.as_ref(),
             bindless_tex_args: bindless_tex_args.as_ref(),
@@ -719,18 +724,11 @@ impl MtlContext {
                 self.targets.hdr.sample_count,
             )?;
         }
-        // The planar reflection targets are render-resolution (they re-render the
-        // scene from the mirrored camera at the same resolution the reflectors
-        // sample). The plane set carries over; only the targets are reallocated.
-        if render_changed && let Some(set) = self.planar_reflection.as_ref() {
-            let planes = set.planes.clone();
-            self.planar_reflection = Some(super::planar::create_planar_set(
-                &self.hw.device,
-                render_w,
-                render_h,
-                self.targets.hdr.sample_count,
-                &planes,
-            )?);
+        // The planar mirror targets follow the render resolution (scaled by the
+        // mirror resolution). The layout carries over; only the targets are
+        // reallocated.
+        if render_changed && let Some(set) = self.planar_reflection.as_mut() {
+            set.resize(&self.hw.device, (render_w, render_h))?;
         }
         // The bloom chain reads `scene_color`: at drawable size when the
         // upscaler runs, otherwise at native (= render) resolution. Sized

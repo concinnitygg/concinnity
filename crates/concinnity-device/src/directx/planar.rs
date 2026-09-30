@@ -1,32 +1,35 @@
-//! Planar reflection for flat glass panes on the D3D12 backend. Each frame the
-//! scene is rendered a second time from the camera reflected across each pane's
-//! plane (mirror view + oblique near-plane clip so geometry behind the plane
-//! never leaks in) into a dedicated render-resolution target; the pane's
+//! Planar reflection for flat reflectors (glass panes + water surfaces) on the
+//! D3D12 backend. The scene is rendered a second time from the camera reflected
+//! across each reflector plane (mirror view + oblique near-plane clip so geometry
+//! behind the plane never leaks in) into a mirror target; the reflector's
 //! fragment shader then samples that target projectively for a sharp,
 //! scene-correct reflection instead of the blurry box-projected probe cube.
 //!
-//! Mirrors src/metal/planar.rs. One
-//! mirror render per DISTINCT plane: near-coplanar panes (one wall of windows)
-//! share a render, and panes past the budget (`MAX_PLANAR_PLANES`) fall back to
-//! the probe cube. The plane -> slot grouping + the mirror matrices come from the
-//! pure, unit-tested `gfx::planar_reflection`.
+//! Mirrors src/metal/planar.rs. One mirror render per DISTINCT plane:
+//! near-coplanar reflectors (one wall of windows) share a render, and reflectors
+//! past the budget (`MAX_PLANAR_PLANES`) fall back to the probe cube. The layout,
+//! the per-frame plan and the mirror matrices come from the pure, unit-tested
+//! `planar_reflection`.
 //!
-//! Each plane gets a DEDICATED reflected-frustum mirror cull (`encode_planar_culls`,
-//! mirroring `metal::cull::encode_mirror_cull`): the GPU cull re-runs against the
-//! reflected-camera frustum into that plane's region of a per-frame indirect buffer,
+//! A reflector reads its mirror only at its own screen pixels, so each frame's
+//! `PlanarFramePlan` crops every mirror render to the rectangle its reflectors
+//! cover and skips a plane whose reflectors are all off screen. Each rendered
+//! plane gets a DEDICATED reflected-frustum mirror cull (`encode_planar_culls`,
+//! mirroring `metal::cull::encode_mirror_cull`), narrowed to that rectangle: the
+//! GPU cull re-runs into that plane's region of a per-frame indirect buffer,
 //! reading the frame's camera-independent object + draw-args buffers. So geometry
 //! visible only in the reflection (behind / beside the main camera, outside its
-//! frustum) is captured, not just the main camera's visible set; the reflected
-//! view-proj's oblique near-plane clip also rejects geometry behind the reflector.
-//! The face render then executes that region.
+//! frustum) is captured; the reflected view-proj's oblique near-plane clip also
+//! rejects geometry behind the reflector. The face render then executes that
+//! region.
 //!
 //! V1 scope (documented, matches the probe capture's own simplification): static +
 //! instanced + chunk geometry only -- skinned meshes are not drawn into the mirror
 //! (the bindless face render omits the skinned tail), exactly like the probe capture.
 
-use concinnity_core::gfx::frustum::{Frustum, Plane};
+use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::planar_reflection;
+use concinnity_core::render::planar_reflection::{self, PlanarReflectors};
 use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -35,7 +38,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use super::context::{DxContext, FRAMES, align256};
-use super::cull::INDIRECT_COMMAND_STRIDE;
+use super::cull::{INDIRECT_COMMAND_STRIDE, PlanarCull};
 use super::draw::ViewUniforms;
 use super::error::map_hresult;
 use super::graph_exec::GraphFrameParams;
@@ -58,17 +61,9 @@ pub(in crate::directx) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_P
 // `metal::planar::PLANAR_CLIP_BIAS`.
 const PLANAR_CLIP_BIAS: f32 = 0.02;
 
-// World-space plane `[nx, ny, nz, d]` (unit normal, `n . p + d = 0` on the
-// surface) for a glass pane with unit `normal` through `center`. Pure; unit
-// tested. The init path feeds these to `assign_planar_slots`.
-pub(in crate::directx) fn pane_plane(normal: [f32; 3], center: [f32; 3]) -> [f32; 4] {
-    [
-        normal[0],
-        normal[1],
-        normal[2],
-        -(normal[0] * center[0] + normal[1] * center[1] + normal[2] * center[2]),
-    ]
-}
+// Texels a mirror's crop is grown by on every side, covering the bilinear
+// footprint of the reflector's lookup.
+const PLANAR_CROP_MARGIN: u32 = 2;
 
 // Where a plane's mirror render lands. Multisampled planes share one MSAA color
 // target and resolve out of it a plane at a time, the way the probe shares one
@@ -86,13 +81,17 @@ enum PlanarColor {
 
 // The set of distinct reflection planes for the world, each rendering its mirror
 // into its own shader-readable resolve (directly, or through the shared MSAA
-// color). A pane samples the resolve of the slot it was assigned at init (see
-// `gfx::planar_reflection::assign_planar_slots`). Rebuilt on resize alongside the
-// HDR targets; the planes + slot assignment are fixed at init.
+// color). A reflector samples the resolve of the slot it was assigned at init.
+// The targets are rebuilt on resize alongside the HDR targets; the layout is
+// fixed at init. `width` x `height` is the mirror target size, the render
+// resolution scaled by the layout's mirror resolution.
 pub(in crate::directx) struct PlanarReflectionSet {
-    // Distinct reflector planes (the `assign_planar_slots` representatives), one
-    // per resolve slot. Re-oriented toward the camera per frame.
-    planes: Vec<[f32; 4]>,
+    // The distinct reflector planes (one per resolve slot, re-oriented toward
+    // the camera per frame), the reflector bounds a frame plans from, and the
+    // mirror resolution.
+    layout: PlanarReflectors,
+    width: u32,
+    height: u32,
     sample_count: u32,
     clear_color: [f32; 4],
 
@@ -132,27 +131,24 @@ pub(in crate::directx) struct PlanarReflectionSet {
     n_cull: usize,
 }
 
-// The mapped view-ring pointers are POD raw pointers; the upload buffers stay
-// alive through the `Vec<ID3D12Resource>` field and the pointers are written on
-// the render thread only. Mirrors `GlassResources`.
 // SAFETY: the raw pointers `PlanarReflectionSet` holds are the mappings of upload buffers the
-// struct also owns, so they stay valid for as long as it does. They are only values here: every
-// dereference goes through a `&mut self` method on the context, which the main-thread guard keeps
-// on the render thread.
+// struct also owns, so they stay valid for as long as it does and may move with it.
 unsafe impl Send for PlanarReflectionSet {}
-// SAFETY: sharing `&PlanarReflectionSet` hands out the pointer values but no way to dereference
-// them; every write goes through a `&mut self` method on the context.
+// SAFETY: the only writes through a shared reference are the mirror views, recorded by the one
+// `PlanarReflection` pass a frame encodes (on whichever worker records it). Each write lands in
+// its own `slot * FRAMES + frame` entry, which no other pass touches and which the GPU last read
+// a frames-in-flight fence ago, so no two writers or a writer and the GPU share an entry.
 unsafe impl Sync for PlanarReflectionSet {}
 
-// Render-target build config for the planar set: MSAA sample count, render
-// dimensions, and the mirror-cull record count.
+// Render-target build config for the planar set: MSAA sample count, the render
+// resolution the mirror targets are scaled from, and the mirror-cull record count.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct PlanarConfig {
     // MSAA sample count matching the main pass.
     pub sample_count: u32,
-    // Shared color + depth target width in pixels.
+    // Render width in pixels.
     pub width: u32,
-    // Shared color + depth target height in pixels.
+    // Render height in pixels.
     pub height: u32,
     // Build-time draw-record count (`DxContext::cull_count`): sizes each plane's
     // region of the per-frame mirror-cull indirect buffer.
@@ -174,13 +170,14 @@ impl PlanarReflectionSet {
     // standard pipeline), one resolve per plane with its SRV written into the
     // reserved heap slot, and the per-(plane, frame) reflected-view CBV ring.
     // `resolve_srv_cpu` / `resolve_srv_gpu` are the reserved heap descriptors, one
-    // per plane in `planes`.
+    // per plane in `layout`.
     pub(in crate::directx) fn new(
         alloc: &DeviceAllocator,
         config: PlanarConfig,
-        planes: &[[f32; 4]],
+        layout: PlanarReflectors,
         targets: PlanarTargets,
     ) -> RenderResult<Self> {
+        let planes = layout.planes();
         if planes.len() > MAX_PLANAR_PLANES {
             return Err(RenderError::Other(format!(
                 "planar reflection: {} planes exceeds the {MAX_PLANAR_PLANES}-plane ceiling the \
@@ -191,10 +188,11 @@ impl PlanarReflectionSet {
         let device = alloc.device();
         let PlanarConfig {
             sample_count,
-            width,
-            height,
+            width: render_w,
+            height: render_h,
             n_cull,
         } = config;
+        let (width, height) = layout.target_size(render_w, render_h);
         let PlanarTargets {
             resolve_srv_cpu,
             resolve_srv_gpu,
@@ -276,7 +274,9 @@ impl PlanarReflectionSet {
         }
 
         Ok(Self {
-            planes: planes.to_vec(),
+            layout,
+            width,
+            height,
             sample_count,
             clear_color,
             color,
@@ -298,17 +298,19 @@ impl PlanarReflectionSet {
         })
     }
 
-    // Recreate the depth + per-plane resolves + color attachment(s) at new
-    // render-target dimensions and rewrite the RTV / DSV / resolve SRVs in place.
-    // The descriptor slots do not move, so the glass pass's GPU handles stay valid.
-    // Mirrors the other `resize_to` resources.
+    // Recreate the depth + per-plane resolves + color attachment(s) for a new
+    // render resolution and rewrite the RTV / DSV / resolve SRVs in place. The
+    // descriptor slots do not move, so the transparent pass's GPU handles stay
+    // valid. Mirrors the other `resize_to` resources.
     pub(in crate::directx) fn resize_to(
         &mut self,
         device: &ID3D12Device,
-        width: u32,
-        height: u32,
+        render_w: u32,
+        render_h: u32,
     ) -> RenderResult<()> {
-        let (w, h) = (width.max(1), height.max(1));
+        let (w, h) = self.layout.target_size(render_w, render_h);
+        self.width = w;
+        self.height = h;
         self._depth = create_planar_depth(device, w, h, self.sample_count, self.depth_dsv)?;
         for i in 0..self.resolves.len() {
             let resolve = create_hdr_sampled_target(device, w, h, self.clear_color)?;
@@ -336,9 +338,19 @@ impl PlanarReflectionSet {
         self.resolve_srv_gpu[slot]
     }
 
-    // Number of distinct reflector planes (mirror renders per frame).
+    // Number of distinct reflector planes (at most one mirror render each per
+    // frame).
     pub(in crate::directx) fn plane_count(&self) -> usize {
-        self.planes.len()
+        self.layout.planes().len()
+    }
+
+    // This frame's mirror work under the (jittered) `view_proj` the reflectors
+    // are rasterized with.
+    pub(in crate::directx) fn frame_plan(
+        &self,
+        view_proj: [[f32; 4]; 4],
+    ) -> planar_reflection::PlanarFramePlan {
+        self.layout.frame_plan(view_proj)
     }
 
     // This frame's mirror-cull indirect buffer (the per-plane regions the face
@@ -437,16 +449,17 @@ impl PlanarReflectionSet {
 }
 
 impl DxContext {
-    // Render the scene reflected across each plane in the planar set into that
-    // plane's resolve. A no-op (returns Ok) when no set exists. For each plane: a
-    // dedicated reflected-frustum mirror cull fills the plane's region of this
-    // frame's indirect buffer (reading the frame's camera-independent object +
-    // draw-args), then the bindless face render draws that region from the reflected
-    // view into the shared color + depth, and resolves into the plane's resolve.
-    // Encoded on `cmd` before the transparent pass samples the resolves; same-cmd
-    // -list ordering retires each resolve before its glass sample. Each plane is
-    // oriented toward the camera so the oblique near-plane clip keeps the camera's
-    // side.
+    // Render the scene reflected across every plane the frame's plan keeps into
+    // that plane's resolve, cropped to the plan's rectangle. A no-op (returns Ok)
+    // when no set exists or no reflector is on screen. For each kept plane: a
+    // dedicated reflected-frustum mirror cull (narrowed to the crop) fills the
+    // plane's region of this frame's indirect buffer (reading the frame's
+    // camera-independent object + draw-args), then the bindless face render draws
+    // that region from the reflected view into the plane's color attachment,
+    // limited to the crop, and leaves the plane's resolve shader-readable.
+    // `Transparent` samples the resolves later in the same submission. Each plane
+    // is oriented toward the camera so the oblique near-plane clip keeps the
+    // camera's side.
     pub(in crate::directx) fn encode_planar_reflections(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -455,33 +468,29 @@ impl DxContext {
         let Some(set) = self.planar_reflection.as_ref() else {
             return Ok(());
         };
+        let crops =
+            params
+                .planar
+                .crops(set.plane_count(), set.width, set.height, PLANAR_CROP_MARGIN);
+        let crops = crops.as_slice();
+        if crops.is_empty() {
+            return Ok(());
+        }
 
         // Recover the (jittered) projection from this frame's view-projection so
         // the mirror render shares the main camera's projection + jitter, keeping
         // the reflection aligned with the reflective fragment's screen-space sample.
         let proj = mat4_mul(params.vp_mat, mat4_inverse(self.view.matrix));
         let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
-        let (w, h) = (
-            self.targets.extent.render_width,
-            self.targets.extent.render_height,
-        );
 
-        // Per plane: compute the reflected matrices, write the reflected view CBV,
-        // and collect the reflected frustum + eye for the mirror cull. Inline,
-        // since the set never holds more planes than the engine ceiling; the
-        // filler entries past `plane_count` are never read.
-        const NO_PLANE: (Frustum, [f32; 3]) = (
-            Frustum {
-                planes: [Plane {
-                    normal: [0.0; 3],
-                    d: 0.0,
-                }; 6],
-            },
-            [0.0; 3],
-        );
-        let mut cull_planes = [NO_PLANE; MAX_PLANAR_PLANES];
-        for (slot, cull_plane) in cull_planes.iter_mut().enumerate().take(set.plane_count()) {
-            let oriented = planar_reflection::orient_plane_toward(set.planes[slot], params.cam_pos);
+        // Per kept plane: compute the reflected matrices, write the reflected
+        // view CBV, and collect the cropped reflected frustum + eye for the
+        // mirror cull.
+        let mut culls = [PlanarCull::EMPTY; MAX_PLANAR_PLANES];
+        let mut kept = 0;
+        for &(slot, crop) in crops {
+            let oriented =
+                planar_reflection::orient_plane_toward(set.layout.planes()[slot], params.cam_pos);
             let m = planar_reflection::planar_matrices(
                 self.view.matrix,
                 proj,
@@ -500,7 +509,7 @@ impl DxContext {
                 prefilter_mip_count,
                 // A mirror render is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
-                _end_pad: 0.0,
+                ambient_occlusion: 0.0,
                 sky_rot: self.view.sky_rot,
             };
             let ring = slot * FRAMES + params.frame_idx;
@@ -514,27 +523,39 @@ impl DxContext {
                     std::mem::size_of::<ViewUniforms>(),
                 );
             }
-            *cull_plane = (Frustum::from_view_projection(m.view_proj), m.eye);
+            if let Some(cull) = culls.get_mut(kept) {
+                *cull = PlanarCull {
+                    slot,
+                    frustum: Frustum::from_view_projection(crop.crop_view_projection(
+                        m.view_proj,
+                        set.width,
+                        set.height,
+                    )),
+                    eye: m.eye,
+                };
+                kept += 1;
+            }
         }
 
-        // Reflected-frustum mirror cull into the per-plane regions of this frame's
-        // indirect buffer (one barrier flip around all planes).
+        // Reflected-frustum mirror cull into the kept planes' regions of this
+        // frame's indirect buffer (one barrier flip around all of them).
         self.encode_planar_culls(
             cmd,
             params.frame_idx,
-            &cull_planes[..set.plane_count()],
+            &culls[..kept],
             set.indirect(params.frame_idx),
             set.status_gva(params.frame_idx),
             // Stride regions by the SAME fixed capacity `region_offset` reads with.
             set.n_cull,
         );
 
-        // Per plane: render the culled region from the reflected view into the
-        // plane's color attachment + the shared depth (against the frame's object
-        // buffer), then leave the plane's resolve shader-readable.
+        // Per kept plane: render the culled region from the reflected view into
+        // the plane's color attachment + the shared depth (against the frame's
+        // object buffer), within the crop, then leave the plane's resolve
+        // shader-readable.
         let frame_object_gva = com::gpu_va(&self.cull.object_buffer_resources[params.frame_idx]);
         let indirect = set.indirect(params.frame_idx);
-        for slot in 0..set.plane_count() {
+        for &(slot, crop) in crops {
             let ring = slot * FRAMES + params.frame_idx;
             set.begin_plane(cmd, slot);
             self.encode_main_into_face(
@@ -555,8 +576,9 @@ impl DxContext {
                     material_params_gva: self.material_params_gva(params.frame_idx),
                 },
                 crate::directx::probe::FaceExtent {
-                    width: w,
-                    height: h,
+                    width: set.width,
+                    height: set.height,
+                    area: Some(crop),
                 },
             );
             set.end_plane(cmd, slot);
@@ -728,26 +750,6 @@ fn create_planar_depth(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pane_plane_passes_through_center_with_unit_normal() {
-        // A pane facing +z through (1, 2, 3): the plane constant places the center
-        // on the surface (n . c + d == 0), and the normal is carried unchanged.
-        let p = pane_plane([0.0, 0.0, 1.0], [1.0, 2.0, 3.0]);
-        assert_eq!([p[0], p[1], p[2]], [0.0, 0.0, 1.0]);
-        let signed = p[0] * 1.0 + p[1] * 2.0 + p[2] * 3.0 + p[3];
-        assert!(signed.abs() < 1e-5, "center lies on the plane");
-    }
-
-    #[test]
-    fn pane_plane_offset_is_negative_normal_dot_center() {
-        // Tilted normal: d == -(n . c).
-        let n = [0.6, 0.0, 0.8];
-        let c = [2.0, 5.0, -1.0];
-        let p = pane_plane(n, c);
-        let expect_d = -(n[0] * c[0] + n[1] * c[1] + n[2] * c[2]);
-        assert!((p[3] - expect_d).abs() < 1e-5);
-    }
 
     #[test]
     fn multisampled_planes_share_rtv_slot_zero() {

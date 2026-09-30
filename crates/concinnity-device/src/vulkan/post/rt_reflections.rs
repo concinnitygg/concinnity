@@ -809,11 +809,11 @@ impl VkContext {
     // planar re-render even when a producer's RT pipelines failed to build,
     // leaving its fallback sampling a stale resolve. Mirrors
     // `DxContext::rt_transparent_active`.
-    // True when the transparent pass has to render its planar mirrors this frame.
-    // Water takes the mirror over its own trace wherever it holds a slot (see
-    // `water.hlsl`), so a visible water surface keeps the re-render alive even
-    // while the trace is live; a glass-only world under a live trace skips it as
-    // before. Shared with the other backends through
+    // True when the transparent pass samples planar mirrors, which puts the
+    // `PlanarReflection` node in the graph. Water takes the mirror over its own
+    // trace wherever it holds a slot (see `water.hlsl`), so a visible water
+    // surface keeps the mirrors alive even while the trace is live; a glass-only
+    // world under a live trace skips them. Shared with the other backends through
     // `planar_reflection::planar_pass_needed`.
     pub(in crate::vulkan) fn planar_pass_needed(&self) -> bool {
         planar_reflection::planar_pass_needed(

@@ -399,6 +399,7 @@ impl MtlContext {
             // short-circuits an empty draw list, but gating here keeps the
             // graph builder from inserting the slot at all.
             transparent_enabled: transparent_active,
+            planar_reflection_enabled: self.planar_mirrors_needed(),
             // Lines run only on the frames a system published them (the
             // `cn editor` axes), and only once their pipeline is live: the
             // build above is lazy, so a shipped runtime never compiles it.
@@ -697,7 +698,7 @@ impl MtlContext {
                     let mirror_slots = self
                         .planar_reflection
                         .as_ref()
-                        .map(|s| s.planes.len())
+                        .map(|s| s.layout.planes().len())
                         .unwrap_or(0);
                     self.ensure_mirror_icb_capacity(mirror_slots, self.cull_count())?;
                 }

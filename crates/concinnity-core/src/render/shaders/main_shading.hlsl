@@ -674,9 +674,13 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
 
     // SSAO modulates the indirect (ambient / IBL) term only: direct lighting
     // is unaffected. A 1x1 white view is bound when SSAO is disabled, so this
-    // samples a constant 1.0 then.
-    float2 ssao_uv = screen_xy / ssao_size();
-    ambient *= ssao_sample(ssao_uv);
+    // samples a constant 1.0 then. A probe or mirror face skips it: the
+    // occlusion was computed for the main camera, not the face's viewpoint.
+    if (VIEW.ambient_occlusion > 0.5)
+    {
+        float2 ssao_uv = screen_xy / ssao_size();
+        ambient *= ssao_sample(ssao_uv);
+    }
 
     float3 color = ambient + Lo + emissive;
 

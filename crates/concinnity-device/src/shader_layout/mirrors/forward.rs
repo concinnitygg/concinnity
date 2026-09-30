@@ -21,7 +21,7 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             [cam_pos] => ["cam_x", "cam_y", "cam_z"],
             prefilter_mip_count,
             shade_mode,
-            [_end_pad] => ["_ep1"],
+            ambient_occlusion,
             sky_rot,
         })),
         everywhere(mirror!(LightUniforms => "LightUniforms" {

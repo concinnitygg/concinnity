@@ -5,11 +5,11 @@
 
 use ash::vk;
 use concinnity_core::gfx::auto_exposure;
-use concinnity_core::render::backend_init::{PostSettings, WorldFx};
+use concinnity_core::render::backend_init::{PlanarBudget, PostSettings, WorldFx};
 use concinnity_core::render::decal;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::lights;
-use concinnity_core::render::planar_reflection;
+use concinnity_core::render::planar_reflection::PlanarReflectors;
 
 use super::ray_tracing::RtResources;
 use super::{Features, InitGpu};
@@ -365,7 +365,7 @@ pub(super) struct WorldEffectInputs<'a> {
     pub(super) targets: &'a VkTargets,
     pub(super) descriptors: &'a VkDescriptors,
     pub(super) fx: &'a WorldFx,
-    pub(super) planar_planes: usize,
+    pub(super) planar: PlanarBudget,
     pub(super) cull: &'a VkCull,
     pub(super) n_cull: usize,
     pub(super) rt: &'a RtResources,
@@ -398,7 +398,7 @@ pub(super) fn build_world_effects(
         targets,
         descriptors,
         fx,
-        planar_planes,
+        planar,
         cull,
         n_cull,
         rt,
@@ -505,33 +505,24 @@ pub(super) fn build_world_effects(
     // Planar reflections: group each transparent reflector's world-space plane
     // into a bounded set of distinct planes (near-coplanar reflectors share one
     // mirror render; reflectors past the budget fall back to the probe cube),
-    // then build one render-resolution mirror target per distinct plane. Built
-    // before the transparent pass so each record's planar binding can point at
-    // its plane's target. `slots[i]` is reflector `i`'s target slot (or `None`).
-    //
-    // Water first, then glass, matching the Metal backend, so the two slot
-    // ranges are the leading `water_surfaces.len()` entries and the rest.
-    let planar_reflectors: Vec<[f32; 4]> = fx
-        .water_surfaces
-        .iter()
-        // A water surface's rest plane: horizontal at the surface base height.
-        .map(|s| [0.0, 1.0, 0.0, -s.center[1]])
-        .chain(
-            fx.glass_panels
-                .iter()
-                .map(|p| crate::vulkan::planar::pane_plane(p.normal, p.center)),
-        )
-        .collect();
-    // Cap at the capacity ceiling the reserved planar targets are sized to, so a
-    // stale/over-large preset value can never over-allocate.
-    let planar_budget = planar_planes.min(crate::vulkan::planar::MAX_PLANAR_PLANES);
-    let planar_assignment =
-        planar_reflection::assign_planar_slots(&planar_reflectors, planar_budget);
+    // then build one mirror target per distinct plane. Built before the
+    // transparent pass so each record's planar binding can point at its plane's
+    // target. `slots[i]` is reflector `i`'s target slot (or `None`), water first,
+    // then glass, matching the other backends.
+    let planar = PlanarReflectors::plan(&fx.water_surfaces, &fx.glass_panels, planar);
+    let planar_slots = planar.assignment.slots.clone();
+    if planar.overflow() > 0 {
+        tracing::warn!(
+            "planar reflection: {} reflector plane(s) exceed the budget and fall back \
+             to the box-projected probe cube",
+            planar.overflow()
+        );
+    }
     // The reflected-frustum mirror cull is bindless-only (it needs the GPU cull
     // set layout + the per-frame object/draw-args SSBOs); a non-bindless world
     // has no `cull_set_layout`, so planar is skipped and its panes keep the
     // probe / sky reflection. Mirrors `metal::planar`'s bindless gate.
-    let planar_reflection = if planar_assignment.representatives.is_empty() {
+    let planar_reflection = if planar.planes().is_empty() {
         None
     } else if let Some(csl) = cull.cull_set_layout.as_ref() {
         let cull_sources = crate::vulkan::planar::PlanarCullSources {
@@ -545,14 +536,19 @@ pub(super) fn build_world_effects(
                 .map(|h| (h.read_set_layout.handle(), h.read_set_view())),
         };
         Some(crate::vulkan::planar::PlanarReflectionSet::new(
-            crate::vulkan::planar::PlanarDevice { alloc, device },
+            crate::vulkan::planar::PlanarDevice {
+                alloc,
+                device,
+                command_pool,
+                queue: graphics_queue,
+            },
             crate::vulkan::planar::PlanarConfig {
                 frames,
                 sample_count: msaa_samples,
                 width: render_extent.width,
                 height: render_extent.height,
             },
-            &planar_assignment.representatives,
+            planar,
             &targets.main_render_pass,
             crate::vulkan::planar::PlanarGlobalSet {
                 layout: descriptors.global_set_layout.handle(),
@@ -613,7 +609,7 @@ pub(super) fn build_world_effects(
             }
         });
         let (water_planar_slots, glass_planar_slots) =
-            planar_assignment.slots.split_at(fx.water_surfaces.len());
+            planar_slots.split_at(fx.water_surfaces.len());
         Some(crate::vulkan::transparent::TransparentResources::new(
             crate::vulkan::transparent::TransparentDeviceCtx {
                 alloc,

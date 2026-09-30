@@ -641,6 +641,7 @@ mod tests {
             ("hdr_depth", C::DepthTarget),
             ("hdr_color", C::ColorTarget),
             ("hiz_pyramid", C::StorageImage),
+            ("planar_mirrors", C::ColorTarget),
             // The unified pre-pass's four attachments are four resources, and
             // the depth one is why: it is a different class from its three
             // color siblings, so one handle could not have carried it.

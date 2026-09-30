@@ -20,7 +20,10 @@ struct ViewUniforms
     float prefilter_mip_count;
     // 1.0 while the unlit view mode is active: the surface returns its base
     // color before lighting.
-    float shade_mode; float _ep1;
+    float shade_mode;
+    // 1.0 when the screen-space occlusion describes this view; 0.0 for a probe
+    // or mirror face, which renders another viewpoint.
+    float ambient_occlusion;
     // Rows of the rotation from world space into the environment cubemaps'
     // baked frame; identity when the sky does not turn.
     float4 sky_rot[3];

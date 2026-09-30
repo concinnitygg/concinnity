@@ -85,7 +85,7 @@ use concinnity_core::gfx::render_types::{
     TextDrawCall,
 };
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::planar_reflection;
+use concinnity_core::render::planar_reflection::PlanarFramePlan;
 #[cfg(debug_assertions)]
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{CompiledGraph, PassId, PassQueue};
@@ -149,6 +149,10 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // raymarch / transparent) instead of each re-inverting `vp`.
     pub inv_vp: [[f32; 4]; 4],
     pub frustum: &'a Frustum,
+    // Which planar mirrors this frame renders, and the screen rectangle each
+    // covers; computed once from `vp` so the mirror pass and the transparent
+    // pass that samples it agree.
+    pub planar: PlanarFramePlan,
     pub object_buffer: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     // This frame's copy of the material parameter table; `Some` with
     // `object_buffer`.
@@ -798,25 +802,15 @@ impl MtlContext {
                     sun_dir,
                     sun_color,
                 };
-                // Planar reflection: re-render the scene mirrored across each
-                // distinct reflector plane into its planar target (reusing this
-                // frame's cull ICB + bindless buffers) so a flat reflector samples a
-                // sharp scene reflection instead of the blurry probe cube. A visible
-                // water surface holding a slot always wants it -- water takes the
-                // mirror over its own trace (see `water.hlsl`) -- and so does any
-                // reflector when RT is off; a glass-only world under a live trace
-                // skips it. Encoded before `encode_transparent` on the same command
-                // buffer, which samples the resolves.
-                let planar_live = planar_reflection::planar_pass_needed(
-                    self.planar_reflection
-                        .as_ref()
-                        .is_some_and(|s| !s.targets.is_empty()),
-                    self.water_planar_slot_live(),
-                    self.rt_transparent_active(),
-                );
-                if planar_live {
-                    self.encode_planar_reflections(cmd_buf, params)?;
-                }
+                // The mirrors `PlanarReflection` rendered this frame, if the pass
+                // samples mirrors at all (the same gate that put the node in the
+                // graph). A reflector whose slot was not rendered keeps its probe
+                // path.
+                let mirrors = if self.planar_mirrors_needed() {
+                    params.planar
+                } else {
+                    PlanarFramePlan::default()
+                };
 
                 // Gather every translucent producer's draws, then let the
                 // shared encoder sort them back-to-front and issue them.
@@ -824,13 +818,13 @@ impl MtlContext {
                 self.collect_water_transparent_draws(
                     &view,
                     params.bindless_tex_args.is_some(),
-                    planar_live,
+                    &mirrors,
                     &mut draws,
                 );
                 self.collect_glass_transparent_draws(
                     &view,
                     params.bindless_tex_args.is_some(),
-                    planar_live,
+                    &mirrors,
                     &mut draws,
                 );
                 // Transparent glass MESHES (Layer 2): imported `transparent`
@@ -849,6 +843,13 @@ impl MtlContext {
                     params.rt_reflection_params,
                     params.bindless_tex_args,
                 )?
+            }
+            PassId::PlanarReflection => {
+                // Mirror renders for the flat reflectors in view, each cropped to
+                // the screen rectangle its reflectors cover (see `planar.rs`).
+                // `Transparent` samples them later on the same queue.
+                self.encode_planar_reflections(cmd_buf, params)?;
+                0
             }
             PassId::Raymarch => {
                 let view = self.build_raymarch_view(params);

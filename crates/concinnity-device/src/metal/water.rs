@@ -33,6 +33,7 @@ use concinnity_core::components::WaterSurface;
 use concinnity_core::geometry::water_grid::build_water_grid;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::transparent;
 use concinnity_core::render::uniforms::{TransparentView, WaterParams};
 use objc2::rc::Retained;
@@ -146,7 +147,7 @@ impl MtlContext {
         &self,
         view: &TransparentView,
         bindless: bool,
-        planar_live: bool,
+        mirrors: &PlanarFramePlan,
         out: &mut Vec<TransparentDraw>,
     ) {
         // Pipeline selection (matched by `encode_transparent`'s binding):
@@ -187,11 +188,11 @@ impl MtlContext {
                 (0, self.targets.hdr.transparent_scene_copy.clone()),
                 (1, self.targets.hdr.depth_resolve.clone()),
             ];
-            // Select the sharp planar reflection when the planar pass ran this
-            // frame and this surface was assigned a slot; bind that slot's resolve
-            // at the planar slot. Both fragments honor the flag, so this outranks the
-            // trace as well. Otherwise the shader keeps the trace / probe / sky path.
-            if planar_live
+            // Select the sharp planar reflection when this frame rendered the
+            // surface's slot; bind that slot's resolve at the planar slot. Both
+            // fragments honor the flag, so this outranks the trace as well.
+            // Otherwise the shader keeps the trace / probe / sky path.
+            if mirrors.samples_mirror(surface.planar_slot)
                 && let Some(targets) = surface
                     .planar_slot
                     .and_then(|s| planar_set.and_then(|set| set.targets.get(s)))

@@ -283,12 +283,24 @@ struct CullOutputTarget<'a> {
     status: &'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
 }
 
+// One planar mirror's cull: the frame's object records, the mirror frustum and
+// reflected eye to test them against, the mirror slot whose ICB receives the
+// survivors, and where the dispatch sits in the planar pass's timing span.
+pub(in crate::metal) struct MirrorCull<'a> {
+    pub(in crate::metal) object_buffer: &'a ProtocolObject<dyn objc2_metal::MTLBuffer>,
+    pub(in crate::metal) draw_args_buffer: &'a ProtocolObject<dyn objc2_metal::MTLBuffer>,
+    pub(in crate::metal) frustum: &'a Frustum,
+    pub(in crate::metal) eye: [f32; 3],
+    pub(in crate::metal) slot: usize,
+    pub(in crate::metal) timer: super::pass_timing::PassTimer,
+}
+
 // Per-dispatch cull knobs: whether to consult the Hi-Z pyramid (off for the
-// mirror cull, whose pyramid is the wrong screen space), an optional pass-timing
-// id, and the encoder debug label.
+// mirror cull, whose pyramid is the wrong screen space), where the dispatch sits
+// in a pass's timing span, and the encoder debug label.
 struct CullDispatchOptions<'a> {
     use_hiz: bool,
-    timing: Option<super::pass_timing::PassId>,
+    timing: super::pass_timing::PassTimer,
     label: &'a NSString,
 }
 
@@ -546,7 +558,7 @@ impl MtlContext {
             },
             CullDispatchOptions {
                 use_hiz: true,
-                timing: Some(super::pass_timing::PassId::Cull),
+                timing: super::pass_timing::PassTimer::Whole(super::pass_timing::PassId::Cull),
                 label: ns_string!("cull phase1"),
             },
         )?;
@@ -564,12 +576,16 @@ impl MtlContext {
     pub(in crate::metal) fn encode_mirror_cull(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        object_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
-        draw_args_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
-        frustum: &Frustum,
-        cam_pos: [f32; 3],
-        slot: usize,
+        cull: MirrorCull<'_>,
     ) -> RenderResult<()> {
+        let MirrorCull {
+            object_buffer,
+            draw_args_buffer,
+            frustum,
+            eye,
+            slot,
+            timer,
+        } = cull;
         let (Some(mirror), Some(status)) =
             (self.cull.mirror_slots.get(slot), &self.cull.mirror_status)
         else {
@@ -582,7 +598,10 @@ impl MtlContext {
                 draw_args_buffer,
                 counts: self.draw_record_counts(),
             },
-            CullView { frustum, cam_pos },
+            CullView {
+                frustum,
+                cam_pos: eye,
+            },
             CullOutputTarget {
                 icbs: std::slice::from_ref(&mirror.icb),
                 arg_buf: &mirror.arg_buffer,
@@ -590,7 +609,7 @@ impl MtlContext {
             },
             CullDispatchOptions {
                 use_hiz: false,
-                timing: None,
+                timing: timer,
                 label: ns_string!("mirror cull"),
             },
         )
@@ -679,8 +698,8 @@ impl MtlContext {
         };
 
         let cull_pass_desc = MTLComputePassDescriptor::new();
-        if let (Some(t), Some(id)) = (&self.diagnostics.pass_timing, timing) {
-            t.attach_compute(&cull_pass_desc, id);
+        if let Some(t) = &self.diagnostics.pass_timing {
+            t.attach_compute_timer(&cull_pass_desc, timing);
         }
         let enc = ScopedEncoder::new(
             cmd_buf

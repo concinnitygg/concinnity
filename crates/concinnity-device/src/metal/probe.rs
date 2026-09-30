@@ -563,8 +563,7 @@ impl MtlContext {
                 deformed_skinned: gpu.deformed.as_ref(),
                 counts,
             },
-            // Probe cube bake reuses the main cull ICB (no per-face mirror cull).
-            None,
+            crate::metal::draw::main::FacePass::PROBE,
         )?;
         super::fault_log::attach_fault_logger(&render_cb, "reflection probe face");
         if attach_done {

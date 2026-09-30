@@ -200,6 +200,14 @@ pass_ids! {
     /// both run and this one supersedes it for the next frame. Present whenever
     /// the GPU-cull path built a pyramid (`FrameGraphInputs::hiz_build_enabled`).
     HizFinal => "hiz_final",
+    /// Mirror renders for flat reflectors (water surfaces, glass panes): the
+    /// scene re-rendered from the camera reflected across each distinct
+    /// reflector plane, cropped to the screen rectangle that plane's reflectors
+    /// cover this frame. Writes the mirror targets `Transparent` samples. A plane
+    /// whose reflectors are all off screen renders nothing, so the node costs
+    /// nothing on a frame with no reflector in view. Gated on
+    /// `FrameGraphInputs::planar_reflection_enabled`.
+    PlanarReflection => "planar_reflection",
 }
 
 impl PassId {

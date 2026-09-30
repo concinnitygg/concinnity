@@ -532,7 +532,14 @@ impl VkContext {
         let vp = reflection_probe::face_view_projection(eye, face, PROBE_NEAR, PROBE_FAR);
         let frustum = Frustum::from_view_projection(vp);
         self.encode_probe_cull(cmd, cull_set, hiz_set, &frustum, eye);
-        self.encode_main_into_face(cmd, framebuffer, extent, global_set, bindless_set, indirect);
+        self.encode_main_into_face(
+            cmd,
+            framebuffer,
+            FaceArea::whole(extent),
+            global_set,
+            bindless_set,
+            indirect,
+        );
         // The face color rests in SHADER_READ_ONLY_OPTIMAL after the render pass;
         // flip it to TRANSFER_SRC for the copy into the capture cube. This exact
         // transition is the one the shared layout-transition table omits.
@@ -875,7 +882,7 @@ impl VkContext {
     }
 
     // Render the bindless static + instance + chunk prefix into a probe face (or a
-    // planar mirror plane). A thin sibling of `encode_main_pass`'s bindless branch:
+    // planar mirror plane), limited to `area.render_area`. A thin sibling of `encode_main_pass`'s bindless branch:
     // begins the render pass (reusing `main_render_pass`, render-pass-compatible
     // with the bindless pipeline), binds the caller's face/plane global set (set 0)
     // + bindless set (set 1), and issues one indirect draw of
@@ -885,7 +892,7 @@ impl VkContext {
         &self,
         cmd: vk::CommandBuffer,
         framebuffer: vk::Framebuffer,
-        extent: vk::Extent2D,
+        area: FaceArea,
         global_set: vk::DescriptorSet,
         bindless_set: vk::DescriptorSet,
         indirect: vk::Buffer,
@@ -915,10 +922,14 @@ impl VkContext {
         } else {
             &[clear_color, clear_depth]
         };
+        let FaceArea {
+            extent,
+            render_area,
+        } = area;
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(self.targets.main_render_pass.handle())
             .framebuffer(framebuffer)
-            .render_area(vk::Rect2D::default().extent(extent))
+            .render_area(render_area)
             .clear_values(clears);
         // Negative-height viewport (Y flip), matching the main pass so the captured
         // faces share the cube convention `face_view_projection` was built against.
@@ -930,13 +941,12 @@ impl VkContext {
             min_depth: 0.0,
             max_depth: 1.0,
         };
-        let scissor = vk::Rect2D::default().extent(extent);
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
             device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
             device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
+            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&render_area));
             device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
             device.cmd_bind_index_buffer(
                 cmd,
@@ -961,6 +971,25 @@ impl VkContext {
                 std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
             );
             device.cmd_end_render_pass(cmd);
+        }
+    }
+}
+
+// Where an off-camera render draws in its framebuffer: the full `extent` the
+// viewport maps the projection onto, and the `render_area` (inside it) that is
+// cleared, drawn and stored. Texels outside the area keep whatever they held.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct FaceArea {
+    pub(in crate::vulkan) extent: vk::Extent2D,
+    pub(in crate::vulkan) render_area: vk::Rect2D,
+}
+
+impl FaceArea {
+    // The whole framebuffer.
+    pub(in crate::vulkan) fn whole(extent: vk::Extent2D) -> Self {
+        Self {
+            extent,
+            render_area: vk::Rect2D::default().extent(extent),
         }
     }
 }
@@ -1008,7 +1037,7 @@ impl RenderingBake {
                 prefilter_mip_count: prefilter_mip_count as f32,
                 // A probe capture is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
-                _end_pad: 0.0,
+                ambient_occlusion: 0.0,
                 sky_rot,
             };
             buf.write_val(0, &view);

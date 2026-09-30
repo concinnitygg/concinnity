@@ -419,7 +419,7 @@ impl VkContext {
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2]],
             prefilter_mip_count: self.scene.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
-            _end_pad: 0.0,
+            ambient_occlusion: 1.0,
             sky_rot: self.view.sky_rot,
         };
         self.uniforms.view_ubo_buffers[frame_idx].write_val(0, &view_uni);
@@ -512,6 +512,11 @@ impl VkContext {
             elapsed,
             near,
             far,
+            planar: self
+                .planar_reflection
+                .as_ref()
+                .map(|set| set.frame_plan(vp_mat))
+                .unwrap_or_default(),
         };
         // Each non-composite pass is recorded into its own command buffer
         // (returned here in graph order); Composite + the post-graph work below
@@ -692,6 +697,9 @@ impl VkContext {
             // back-to-front over the post-SSR scene.
             transparent_enabled: self.transparent.as_ref().is_some_and(|t| t.any_visible())
                 || self.mesh_glass_visible(),
+            // Planar mirrors: a node ahead of Transparent whenever it samples
+            // them. Which planes render is decided per frame from the plan.
+            planar_reflection_enabled: self.planar_pass_needed(),
             // Two-pass Hi-Z occlusion: inserts HizBuild -> Cull2 -> Main2 after
             // Main when the world requested `occlusion_two_pass` and the bindless
             // GPU-cull path + phase-2 resources are live. `two_pass_occlusion_active`

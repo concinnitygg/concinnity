@@ -153,6 +153,15 @@ pub struct FrameGraphInputs {
     /// pipeline + descriptor set, the executor receives the sorted list
     /// at encode time.
     pub transparent_enabled: bool,
+    /// `true` when the world has flat reflectors holding mirror slots and the
+    /// transparent pass samples their mirrors this frame (water always does; glass
+    /// only while the per-pixel trace is not live). The graph adds a
+    /// `PlanarReflection` render pass ahead of `Transparent` that writes the
+    /// mirror targets `Transparent` reads. It is a structural gate: whether any
+    /// reflector is on screen is decided when the pass encodes, so looking toward
+    /// or away from a reflector never changes the graph. Only meaningful alongside
+    /// `transparent_enabled`, the mirrors' one consumer.
+    pub planar_reflection_enabled: bool,
     /// `true` when a system submitted world-space lines this frame AND the
     /// backend's line pipeline is live. The graph adds a `Lines` render pass at
     /// the tail of the hdr_resolve RMW chain: it blend-writes the scene color
@@ -272,6 +281,7 @@ impl FrameGraphInputs {
             ssao_enabled: false,
             upscale_enabled: false,
             transparent_enabled: false,
+            planar_reflection_enabled: false,
             lines_enabled: false,
             raymarch_enabled: false,
             two_pass_occlusion_enabled: false,
@@ -310,6 +320,10 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
     ("ssao", |i| i.ssao_enabled = true),
     ("upscale", |i| i.upscale_enabled = true),
     ("transparent", |i| i.transparent_enabled = true),
+    ("planar_reflection", |i| {
+        i.transparent_enabled = true;
+        i.planar_reflection_enabled = true
+    }),
     ("lines", |i| i.lines_enabled = true),
     ("raymarch", |i| i.raymarch_enabled = true),
     ("two_pass_occlusion", |i| {
@@ -775,6 +789,27 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     }
     let hdr_resolve_cur = h;
 
+    // Planar mirrors: the scene re-rendered across each reflector plane, lit like
+    // Main (so after the shadow maps) from the frame's culled geometry (so after
+    // Cull). The mirror targets are encoder-owned, so the import only orders the
+    // mirrors ahead of their one reader, Transparent.
+    let planar_mirrors = if inputs.planar_reflection_enabled && inputs.transparent_enabled {
+        let mirrors = b.import_texture("planar_mirrors", planar_mirrors_desc(inputs));
+        let mut planar = b.add_pass(PassId::PlanarReflection, PassKind::Render);
+        if let Some(h) = shadow_v1 {
+            planar.read_texture(h);
+        }
+        if let Some(h) = spot_shadow_v1 {
+            planar.read_texture(h);
+        }
+        if let Some(h) = draw_args_v1 {
+            planar.read_buffer(h);
+        }
+        Some(planar.write_texture(mirrors))
+    } else {
+        None
+    };
+
     // `scene_pre_taa` is a distinct texture only when a pass writes it:
     // SsrResolve / RtReflections produce it, and Transparent read-modify-writes
     // it. With neither resolve the engine binds the pre-TAA scene name straight
@@ -836,6 +871,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             if let Some(h) = cluster_lists {
                 trans.read_buffer(h);
             }
+            if let Some(h) = planar_mirrors {
+                trans.read_texture(h);
+            }
             // RMW the resolve output. The read declares the sample dependency
             // (translucents sample the resolved scene for refraction); the
             // write produces the blended version downstream passes consume.
@@ -852,6 +890,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         trans.read_texture(depth_cur);
         if let Some(h) = cluster_lists {
             trans.read_buffer(h);
+        }
+        if let Some(h) = planar_mirrors {
+            trans.read_texture(h);
         }
         trans.read_texture(hdr_resolve_cur);
         trans.write_texture(hdr_resolve_cur)
@@ -1159,6 +1200,15 @@ fn bloom_top_desc() -> TextureDesc {
 }
 
 fn hdr_resolve_desc(inputs: &FrameGraphInputs) -> TextureDesc {
+    render_res_2d(
+        inputs,
+        PixelFormat::Rgba16Float,
+        TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
+    )
+}
+
+fn planar_mirrors_desc(inputs: &FrameGraphInputs) -> TextureDesc {
+    // Every plane's mirror under one label, described at render resolution.
     render_res_2d(
         inputs,
         PixelFormat::Rgba16Float,
@@ -1882,6 +1932,49 @@ mod tests {
         let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
         assert!(pos(PassId::SsrResolve) < pos(PassId::Transparent));
         assert!(pos(PassId::Transparent) < pos(PassId::TaaResolve));
+    }
+
+    #[test]
+    fn planar_mirrors_render_after_their_inputs_and_before_transparent() {
+        for ssr in [false, true] {
+            let mut i = all_off();
+            i.bindless_cull_enabled = true;
+            i.shadow_enabled = true;
+            i.shadowed_spot_count = 1;
+            i.ssr_enabled = ssr;
+            i.transparent_enabled = true;
+            i.planar_reflection_enabled = true;
+            let g = build_frame_graph(&i).expect("compiles");
+            let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+            let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+            let planar = pos(PassId::PlanarReflection);
+            assert!(pos(PassId::Cull) < planar, "ssr: {ssr}");
+            assert!(pos(PassId::Shadow) < planar, "ssr: {ssr}");
+            assert!(pos(PassId::SpotShadow) < planar, "ssr: {ssr}");
+            assert!(planar < pos(PassId::Transparent), "ssr: {ssr}");
+            let mirrors = resource_of(&g, "planar_mirrors");
+            assert!(
+                g.passes[pos(PassId::Transparent)]
+                    .reads
+                    .iter()
+                    .any(|r| r.resource_index() == mirrors),
+                "Transparent reads the mirrors (ssr: {ssr})"
+            );
+        }
+    }
+
+    #[test]
+    fn planar_mirrors_need_a_transparent_pass_to_read_them() {
+        let mut i = all_off();
+        i.planar_reflection_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert!(g.passes.iter().all(|p| p.id != PassId::PlanarReflection));
+        assert!(g.resources.iter().all(|r| r.label != "planar_mirrors"));
+
+        i.planar_reflection_enabled = false;
+        i.transparent_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert!(g.passes.iter().all(|p| p.id != PassId::PlanarReflection));
     }
 
     #[test]

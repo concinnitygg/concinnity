@@ -315,7 +315,7 @@ impl DxContext {
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2]],
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
-            _end_pad: 0.0,
+            ambient_occlusion: 1.0,
             sky_rot: self.view.sky_rot,
         };
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
@@ -400,6 +400,11 @@ impl DxContext {
             elapsed,
             near,
             far,
+            planar: self
+                .planar_reflection
+                .as_ref()
+                .map(|set| set.frame_plan(vp_mat))
+                .unwrap_or_default(),
         };
         let pass_cmd_lists = self.execute_graph(&frame_graph, &frame_params)?;
         // Cache the compiled graph under this frame's inputs so the next frame with

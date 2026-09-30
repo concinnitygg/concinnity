@@ -6,11 +6,12 @@
 
 use concinnity_core::components::{GlassPanel, WaterSurface};
 use concinnity_core::gfx::render_types::DrawObject;
+use concinnity_core::render::backend_init::PlanarBudget;
 use concinnity_core::render::backend_init::SdfVolumeSource;
 use concinnity_core::render::decal::{DecalRecord, DecalSet};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::ParticleEmitterRecord;
-use concinnity_core::render::planar_reflection::{self, PlanarAssignment};
+use concinnity_core::render::planar_reflection::PlanarReflectors;
 use concinnity_core::render::volumetric_fog::FogSettings;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -27,7 +28,7 @@ use crate::metal::fog::{
     FogState, build_fog_froxel_pipeline, build_fog_froxel_volume, build_fog_pipeline,
 };
 use crate::metal::particle::{ParticleState, build_emitter_gpu_state, build_particle_pipelines};
-use crate::metal::planar::{MAX_PLANAR_PLANES, PlanarReflectionSet, create_planar_set};
+use crate::metal::planar::{MAX_PLANAR_PLANES, PlanarReflectionSet};
 use crate::metal::{glass, raymarch, raytrace, water};
 
 // Projected-decal pass. The pipeline and unit cube are built only when the
@@ -218,35 +219,19 @@ pub(super) fn build_particles(
 pub(super) fn plan_planar(
     water_surfaces: &[WaterSurface],
     glass_panels: &[GlassPanel],
-    planar_planes: usize,
-) -> PlanarAssignment {
-    let mut planes: Vec<[f32; 4]> = Vec::new();
-    for s in water_surfaces {
-        // Horizontal plane at the surface base height, normal +y.
-        planes.push([0.0, 1.0, 0.0, -s.center[1]]);
-    }
-    for g in glass_panels {
-        // The pane plane: normal (unit from `from_args`) through center,
-        // so `n . p + d = 0` on the pane.
-        let n = g.normal;
-        let d = -(n[0] * g.center[0] + n[1] * g.center[1] + n[2] * g.center[2]);
-        planes.push([n[0], n[1], n[2], d]);
-    }
-    // The budget is capped at the capacity ceiling the mirror targets + ICB
-    // slots are sized to, so a stale/over-large preset value can never
-    // over-allocate.
-    let planar_budget = planar_planes.min(MAX_PLANAR_PLANES);
-    let assignment = planar_reflection::assign_planar_slots(&planes, planar_budget);
-    let overflow = assignment.slots.iter().filter(|s| s.is_none()).count();
+    budget: PlanarBudget,
+) -> PlanarReflectors {
+    let planar = PlanarReflectors::plan(water_surfaces, glass_panels, budget);
+    let overflow = planar.overflow();
     if overflow > 0 {
         tracing::warn!(
             "planar reflection: {} reflector plane(s) exceed the budget of {} \
              and fall back to the box-projected probe cube",
             overflow,
-            planar_budget
+            budget.planes.min(MAX_PLANAR_PLANES)
         );
     }
-    assignment
+    planar
 }
 
 // Transparent water surfaces. Built only when the world declared
@@ -375,23 +360,22 @@ pub(super) fn build_glass(
     })
 }
 
-// The planar mirror targets, one set per assigned plane at the render
-// resolution. Built only when the world has >=1 reflector; the per-frame pass is
-// additionally gated on RT being off.
+// The planar mirror targets, one set per assigned plane at the mirror
+// resolution. Built only when the world has >=1 reflector holding a slot; the
+// per-frame pass is additionally gated on what the transparent pass samples.
 pub(super) fn build_planar_reflection(
     gpu: &InitGpu<'_>,
-    planar: &PlanarAssignment,
+    planar: PlanarReflectors,
     features: &Features,
 ) -> RenderResult<Option<PlanarReflectionSet>> {
-    if planar.representatives.is_empty() {
+    if planar.planes().is_empty() {
         return Ok(None);
     }
-    Ok(Some(create_planar_set(
+    Ok(Some(PlanarReflectionSet::new(
         &gpu.hw.device,
-        features.render.0,
-        features.render.1,
+        planar,
+        features.render,
         features.hdr_samples,
-        &planar.representatives,
     )?))
 }
 

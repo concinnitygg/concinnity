@@ -14,7 +14,7 @@
 //! object id) followed by `D3D12_DRAW_INDEXED_ARGUMENTS`, matching the command
 //! signature built by `create_cull_command_signature`. Mirrors src/metal/cull.rs.
 
-use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::frustum::{Frustum, Plane};
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -322,6 +322,30 @@ pub(in crate::directx) fn create_cull_command_signature(
     sig.ok_or_else(|| {
         RenderError::Other("create cull command signature: returned None".to_string())
     })
+}
+
+// One planar mirror's cull: the slot whose indirect region receives the
+// survivors, and the frustum + reflected eye to test the frame's records
+// against.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct PlanarCull {
+    pub slot: usize,
+    pub frustum: Frustum,
+    pub eye: [f32; 3],
+}
+
+impl PlanarCull {
+    // A placeholder for the unused tail of a fixed-capacity list.
+    pub(in crate::directx) const EMPTY: Self = Self {
+        slot: 0,
+        frustum: Frustum {
+            planes: [Plane {
+                normal: [0.0; 3],
+                d: 0.0,
+            }; 6],
+        },
+        eye: [0.0; 3],
+    };
 }
 
 // Per-frame buffer fill + encoder
@@ -928,8 +952,8 @@ impl DxContext {
     }
 
     // Reflected-frustum mirror cull for the planar reflection pass. For each
-    // `(reflected frustum, reflected eye)` in `planes`, re-runs the GPU cull into
-    // that plane's region of `indirect` (one region of `region_count` commands per
+    // `PlanarCull` in `planes`, re-runs the GPU cull into that plane's region of
+    // `indirect` (one region of `region_count` commands per
     // plane), reading the FRAME's camera-independent object + draw-args buffers --
     // so geometry visible only in the reflection (behind / beside the main camera,
     // outside its frustum) is captured, not just the main camera's visible set. The
@@ -946,7 +970,7 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        planes: &[(Frustum, [f32; 3])],
+        planes: &[PlanarCull],
         indirect: &ID3D12Resource,
         status_gva: u64,
         // Per-plane region stride, in commands: the FIXED build-time record capacity
@@ -1004,10 +1028,15 @@ impl DxContext {
             }
             cmd.SetComputeRootUnorderedAccessView(5, status_gva);
 
-            for (plane_idx, (frustum, eye)) in planes.iter().enumerate() {
+            for &PlanarCull {
+                slot,
+                ref frustum,
+                eye,
+            } in planes
+            {
                 let mut cull_params = CullParams {
                     planes: [[0.0; 4]; 6],
-                    cam_pos: *eye,
+                    cam_pos: eye,
                     object_count: n_cull as u32,
                     // Unused with Hi-Z disabled (the reprojection is never taken).
                     prev_view_proj: [[0.0; 4]; 4],
@@ -1025,12 +1054,12 @@ impl DxContext {
                     cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
                 }
                 cmd.set_compute_root_constants(0, &cull_params);
-                // Plane `plane_idx`'s output region: offset the indirect UAV's GPU
-                // address by `plane_idx * region_count` commands so the kernel's
+                // Plane `slot`'s output region: offset the indirect UAV's GPU
+                // address by `slot * region_count` commands so the kernel's
                 // `commands[i]` write lands in this plane's slice (strided by the
                 // SAME capacity the face render reads with, not the live count).
                 let region_gva =
-                    base_gva + (plane_idx * region_count * INDIRECT_COMMAND_STRIDE as usize) as u64;
+                    base_gva + (slot * region_count * INDIRECT_COMMAND_STRIDE as usize) as u64;
                 cmd.SetComputeRootUnorderedAccessView(4, region_gva);
                 cmd.Dispatch((n_cull as u32).div_ceil(64), 1, 1);
             }

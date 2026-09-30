@@ -1583,7 +1583,7 @@ impl GraphicsSystem {
         // scene-scoped feature before any backend resource is sized), and
         // hand the result to the compile-time-selected backend.
         use concinnity_core::render::backend_init::{
-            BackendInit, MediaPayloads, SceneData, ShadowParams, WorldShader,
+            BackendInit, MediaPayloads, PlanarBudget, SceneData, ShadowParams, WorldShader,
         };
         let mut backend_init = BackendInit {
             window: &settings.window_args,
@@ -1635,7 +1635,10 @@ impl GraphicsSystem {
             anisotropy: settings.graphics.quality.anisotropy,
             // Restart-required: the mirror targets are allocated once at backend
             // init, so the quality ceiling scales the engine capacity here.
-            planar_planes: quality_ceiling.planar_reflection_planes as usize,
+            planar: PlanarBudget {
+                planes: quality_ceiling.planar_reflection_planes as usize,
+                resolution: quality_ceiling.planar_reflection_resolution,
+            },
             post,
             fx,
             requirements: Default::default(),

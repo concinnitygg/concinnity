@@ -167,7 +167,7 @@ impl DxContext {
             shadows,
             // Clamped to the D3D12 1..16 range where the sampler is built.
             anisotropy,
-            planar_planes,
+            planar,
             post,
             fx,
             requirements: _,
@@ -222,7 +222,8 @@ impl DxContext {
             hot_reload,
         };
 
-        let planar = effects::plan_planar(&fx, planar_planes);
+        let planar = effects::plan_planar(&fx, planar);
+        let planar_slots = planar.assignment.slots.clone();
         let bloom_count = bloom_mip_count(output.0, output.1) as usize;
         let rtv = RtvHeapLayout::compute(bloom_count, features.msaa_samples);
         let swapchain = heaps::build_swapchain(&gpu, swapchain, &rtv, vsync)?;
@@ -235,7 +236,7 @@ impl DxContext {
                 gbuffer_srv_extra: heap_layout::GBUFFER_TARGETS,
                 rt_output_srv_extra: heap_layout::RT_OUTPUT_TARGETS,
                 refl_composite_srv_extra: heap_layout::REFL_COMPOSITE_TARGETS,
-                planar_resolve_srv_extra: planar.representatives.len(),
+                planar_resolve_srv_extra: planar.planes().len(),
                 // Albedo and normal maps share ONE handle-indexed pool: the real
                 // textures (a 1x1 white fallback stands in when there are none)
                 // followed by the reserved fallback pair.
@@ -355,7 +356,7 @@ impl DxContext {
             &gpu,
             &descriptors,
             &targets,
-            &planar,
+            planar,
             plan.n_cull,
             clear_color,
         )?;
@@ -366,7 +367,7 @@ impl DxContext {
                 targets: &targets,
                 reflection_slots: quality_slots.glass_reflection,
                 reflection_divisor: post.rt_reflections.map_or(1, |rt| rt.divisor),
-                planar: &planar,
+                planar_slots: &planar_slots,
                 glass_panels: &fx.glass_panels,
                 water_surfaces: &fx.water_surfaces,
                 draw_objects: &world.draw_objects,

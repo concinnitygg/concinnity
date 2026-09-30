@@ -36,6 +36,7 @@ use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{LineVertex, TextDrawCall};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::pass_timing;
+use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{
     BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
@@ -524,6 +525,10 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // DLSS / XeSS ignore it) needs the near + far + FOV to linearize depth for
     // its reprojection.
     pub far: f32,
+    // Which planar mirrors this frame renders, and the screen rectangle each
+    // covers; computed once from `vp_mat` so the mirror pass and the transparent
+    // pass that samples it agree.
+    pub planar: PlanarFramePlan,
 }
 
 impl VkContext {
@@ -1160,6 +1165,13 @@ impl VkContext {
                 let view = self.build_raymarch_view(params.vp_mat, params.cam_pos, params.elapsed);
                 self.encode_raymarch(cmd, params.frame_idx, &view)?;
             }
+            PassId::PlanarReflection => {
+                // Mirror renders for the flat reflectors in view, each cropped to
+                // the screen rectangle its reflectors cover (see `planar.rs`).
+                // Recorded ahead of `Transparent` in the frame's submission, and
+                // closed with the barrier that makes the targets readable there.
+                self.encode_planar_reflections(cmd, params)?;
+            }
             PassId::Transparent => {
                 // Generic translucent pass: draws the world's glass panes and
                 // water surfaces back-to-front over the post-SSR scene. Gated by
@@ -1169,25 +1181,6 @@ impl VkContext {
                 // jittered VP (the matrix the main pass rasterized depth with) so a
                 // record's clip-space depth matches the stored main-depth the
                 // fragment shader tests against.
-                // Planar reflections run inline at the head of the pass (same cmd
-                // buffer -> each plane's mirror target is ready before the
-                // transparent draws sample it). A no-op when the world has no planar
-                // set. `planar_pass_needed` decides: a visible water surface holding
-                // a slot always needs it (water takes the mirror over the trace), and
-                // so does any reflector when the per-pixel trace will not run. Gating
-                // on `rt_transparent_active` (not `rt_reflections_active`) keeps
-                // planar alive when RT is live but a producer's RT pipelines failed to
-                // build, so its probe / planar fallback samples a freshly rendered
-                // resolve. Mirrors DirectX.
-                if self.planar_pass_needed() {
-                    self.encode_planar_reflections(
-                        cmd,
-                        params.frame_idx,
-                        params.vp_mat,
-                        params.cam_pos,
-                        params.elapsed,
-                    )?;
-                }
                 let view =
                     self.build_transparent_view(params.vp_mat, params.cam_pos, params.elapsed);
                 self.encode_transparent(

@@ -36,9 +36,12 @@ pub struct ViewUniforms {
     /// color before lighting. Occupies what was pad space, so the offsets in
     /// the user-shader binding contract are unchanged.
     pub shade_mode: f32,
-    /// End-padding: the shader rounds the block up to a multiple of float4x4's
-    /// 16-byte alignment, so the upload rounds explicitly to match.
-    pub _end_pad: f32,
+    /// 1.0 when the screen-space ambient occlusion describes this view, so the
+    /// indirect term samples it; 0.0 for a probe or mirror face, which renders
+    /// another viewpoint than the one the occlusion was computed for. Occupies
+    /// what was pad space, so the offsets in the user-shader binding contract
+    /// are unchanged.
+    pub ambient_occlusion: f32,
     /// Rows of the rotation that takes a world-space direction into the
     /// environment cubemaps' baked frame: the inverse of the sky's current
     /// rotation (`SkyOrientation::sample_rows`), identity when the world
@@ -85,7 +88,7 @@ mod tests {
         assert_eq!(offset_of!(ViewUniforms, cam_pos), 136);
         assert_eq!(offset_of!(ViewUniforms, prefilter_mip_count), 148);
         assert_eq!(offset_of!(ViewUniforms, shade_mode), 152);
-        assert_eq!(offset_of!(ViewUniforms, _end_pad), 156);
+        assert_eq!(offset_of!(ViewUniforms, ambient_occlusion), 156);
         // A float4 array is 16-byte aligned on every target.
         assert_eq!(offset_of!(ViewUniforms, sky_rot), 160);
         assert_eq!(size_of::<ViewUniforms>() % 16, 0);

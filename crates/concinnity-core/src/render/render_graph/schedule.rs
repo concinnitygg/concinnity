@@ -627,6 +627,32 @@ mod tests {
     }
 
     #[test]
+    fn planar_mirrors_leave_the_compute_passes_after_main_free_to_overlap() {
+        // The mirror renders read only the cull output and the shadow maps, so
+        // the compute passes between Main and the decorations are unordered
+        // against them, and the schedule is free to move them off the graphics
+        // queue.
+        use crate::render::render_graph::frame::{FrameGraphInputs, build_frame_graph};
+
+        let mut inputs = FrameGraphInputs::all_off();
+        inputs.bindless_cull_enabled = true;
+        inputs.two_pass_occlusion_enabled = true;
+        inputs.auto_exposure_enabled = true;
+        inputs.transparent_enabled = true;
+        let queue = |inputs: &FrameGraphInputs, id: PassId| {
+            let g = build_frame_graph(inputs).expect("frame graph compiles");
+            g.passes[g.pass_index(id).expect("present")].queue
+        };
+        for id in [PassId::HizBuild, PassId::Cull2, PassId::AutoExposure] {
+            assert_eq!(queue(&inputs, id), PassQueue::Graphics, "{id:?}");
+        }
+        inputs.planar_reflection_enabled = true;
+        for id in [PassId::HizBuild, PassId::Cull2, PassId::AutoExposure] {
+            assert_eq!(queue(&inputs, id), PassQueue::AsyncCompute, "{id:?}");
+        }
+    }
+
+    #[test]
     fn the_fully_loaded_graph_overlaps_real_work_across_the_two_queues() {
         // Non-vacuity. A schedule that put nothing on the async queue, or that
         // put passes there with no graphics work beside them, would satisfy every
@@ -640,11 +666,14 @@ mod tests {
 
         let mut inputs = FrameGraphInputs::all_off();
         for (name, set) in GATED_FLAGS {
-            // `world_hidden` masks every gated pass off again.
+            // `world_hidden` masks every gated pass off again, and the planar
+            // mirrors are the one render pass unordered against the compute
+            // passes after Main (see the test below).
             if *name != "world_hidden" {
                 set(&mut inputs);
             }
         }
+        inputs.planar_reflection_enabled = false;
         let g = build_frame_graph(&inputs).expect("frame graph compiles");
 
         let async_passes: Vec<PassId> = g

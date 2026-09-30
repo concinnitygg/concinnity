@@ -497,6 +497,9 @@ impl DxContext {
             // Transparent node and the executor draws every record back-to-front
             // over the post-SSR scene.
             transparent_enabled: self.transparent_enabled(),
+            // Planar mirrors: a node ahead of Transparent whenever it samples
+            // them. Which planes render is decided per frame from the plan.
+            planar_reflection_enabled: self.planar_pass_needed(),
             // Raymarched SDF volumes. Gated on the resources existing and a
             // currently visible volume.
             raymarch_enabled: self.raymarch_enabled(),

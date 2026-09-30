@@ -109,6 +109,11 @@ pub(crate) struct QualityCeiling {
     // GPU cost); reflectors past the budget fall back to the box-projected probe
     // cube.
     pub(crate) planar_reflection_planes: u32,
+    // Resolution of each planar mirror render relative to the render resolution
+    // (restart-required, like the plane budget). No world-authored value either:
+    // the no-ceiling value is `Full`, and a lower tier trades mirror sharpness
+    // for a quarter (or less) of the mirror's shading cost.
+    pub(crate) planar_reflection_resolution: PassResolution,
 }
 
 // The authored anti-aliasing mode clamped under a ceiling: the cheaper of the
@@ -185,6 +190,7 @@ const NONE: QualityCeiling = QualityCeiling {
     shadow_distance: SHADOW_DIST_MAX,
     shadow_cascades: SHADOW_CASCADES_MAX,
     planar_reflection_planes: PLANAR_PLANES_MAX,
+    planar_reflection_resolution: PassResolution::Full,
 };
 const LOW: QualityCeiling = QualityCeiling {
     aa_mode: AaMode::Fxaa,
@@ -207,6 +213,7 @@ const LOW: QualityCeiling = QualityCeiling {
     // Integrated / weakest tier: keep only the two most impactful mirror planes
     // (e.g. a floor plus one wall); further reflectors take the probe cube.
     planar_reflection_planes: 2,
+    planar_reflection_resolution: PassResolution::Half,
 };
 const MEDIUM: QualityCeiling = QualityCeiling {
     aa_mode: AaMode::Taa,
@@ -228,6 +235,7 @@ const MEDIUM: QualityCeiling = QualityCeiling {
     shadow_cascades: 3,
     // Entry discrete: one more mirror plane than Low before the probe fallback.
     planar_reflection_planes: 3,
+    planar_reflection_resolution: PassResolution::Half,
 };
 const HIGH: QualityCeiling = QualityCeiling {
     aa_mode: AaMode::Taa,
@@ -250,6 +258,7 @@ const HIGH: QualityCeiling = QualityCeiling {
     // Mid discrete and up run the full mirror-plane budget, matching the flat
     // pre-scaling default, so a capable GPU is never downgraded.
     planar_reflection_planes: PLANAR_PLANES_MAX,
+    planar_reflection_resolution: PassResolution::Full,
 };
 const ULTRA: QualityCeiling = QualityCeiling {
     aa_mode: AaMode::Taa,
@@ -270,6 +279,7 @@ const ULTRA: QualityCeiling = QualityCeiling {
     shadow_distance: SHADOW_DIST_MAX,
     shadow_cascades: SHADOW_CASCADES_MAX,
     planar_reflection_planes: PLANAR_PLANES_MAX,
+    planar_reflection_resolution: PassResolution::Full,
 };
 
 // The active ceiling for the persisted preset and detected GPU. `Auto` maps the
@@ -517,6 +527,10 @@ mod tests {
                 lo.planar_reflection_planes <= hi.planar_reflection_planes,
                 "planar plane budget cap dropped"
             );
+            assert!(
+                lo.planar_reflection_resolution >= hi.planar_reflection_resolution,
+                "a higher tier permitted a coarser planar mirror"
+            );
         }
     }
 
@@ -578,6 +592,30 @@ mod tests {
             assert!(
                 c.planar_reflection_planes < PLANAR_PLANES_MAX,
                 "{preset:?} did not reduce the budget"
+            );
+        }
+    }
+
+    #[test]
+    fn planar_mirrors_render_at_full_resolution_from_high_up() {
+        for preset in [
+            QualityPreset::Custom,
+            QualityPreset::Ultra,
+            QualityPreset::High,
+        ] {
+            let c = resolve_ceiling(preset, &GpuProfile::UNKNOWN);
+            assert_eq!(
+                c.planar_reflection_resolution,
+                PassResolution::Full,
+                "{preset:?}"
+            );
+        }
+        for preset in [QualityPreset::Medium, QualityPreset::Low] {
+            let c = resolve_ceiling(preset, &GpuProfile::UNKNOWN);
+            assert_eq!(
+                c.planar_reflection_resolution,
+                PassResolution::Half,
+                "{preset:?}"
             );
         }
     }

@@ -20,17 +20,19 @@
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::planar_reflection::PixelRect;
 use concinnity_core::render::uniforms::ViewUniforms;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{
     MTLBuffer, MTLClearColor, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLLoadAction,
-    MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLStoreAction,
+    MTLRenderCommandEncoder as _, MTLRenderPassDescriptor, MTLScissorRect, MTLStoreAction,
 };
 
 use crate::metal::context::{BINDLESS_TEXTURE_ARG_BUFFER_INDEX, MtlContext};
 use crate::metal::encode::RenderEncode;
+use crate::metal::pass_timing::PassTimer;
 use crate::metal::scoped_encoder::ScopedEncoder;
 
 // Camera state a main-pass encode builds its ViewUniforms from. `view` is
@@ -74,6 +76,27 @@ pub(in crate::metal) struct FaceTargets<'a> {
     // the cube face it is rendering; the planar mirror's target is a plain 2D
     // texture, so it passes 0.
     pub resolve_slice: usize,
+}
+
+// How one off-camera render into a `FaceTargets` is drawn: the bindless ICB to
+// execute instead of the main cull's (the planar mirror passes its slot's mirror
+// ICB, culled against the reflected frustum; the probe capture reuses the main
+// cull ICB), the texel rectangle the render is clipped to (`None` draws the
+// whole target), and where its encoder sits in a pass's timing span.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct FacePass<'a> {
+    pub icb_override: Option<&'a ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
+    pub scissor: Option<PixelRect>,
+    pub timer: PassTimer,
+}
+
+impl FacePass<'_> {
+    // The whole target through the main cull ICB, untimed: the probe capture.
+    pub(in crate::metal) const PROBE: FacePass<'static> = FacePass {
+        icb_override: None,
+        scissor: None,
+        timer: PassTimer::None,
+    };
 }
 
 impl MtlContext {
@@ -205,7 +228,7 @@ impl MtlContext {
             cam_pos,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
-            _end_pad: 0.0,
+            ambient_occlusion: 1.0,
             sky_rot: self.view.sky_rot,
         };
 
@@ -241,10 +264,7 @@ impl MtlContext {
         face_targets: FaceTargets,
         camera: MainPassCamera,
         gpu: GpuFrameBuffers,
-        // Bindless ICB to execute instead of the main cull's. The planar mirror
-        // render passes its slot's mirror ICB (culled against the reflected
-        // frustum); the probe capture passes `None` (reuses the main cull ICB).
-        icb_override: Option<&ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
+        pass: FacePass<'_>,
     ) -> RenderResult<u32> {
         let FaceTargets {
             color_msaa: face_color_msaa,
@@ -293,6 +313,9 @@ impl MtlContext {
             da.setClearDepth(1.0);
             da.setStoreAction(MTLStoreAction::DontCare);
         }
+        if let Some(t) = &self.diagnostics.pass_timing {
+            t.attach_render_timer(&desc, pass.timer);
+        }
 
         let encoder = ScopedEncoder::new(
             cmd_buf
@@ -302,6 +325,14 @@ impl MtlContext {
                 })?,
             ns_string!("probe face"),
         );
+        if let Some(r) = pass.scissor {
+            encoder.setScissorRect(MTLScissorRect {
+                x: r.x as usize,
+                y: r.y as usize,
+                width: r.width as usize,
+                height: r.height as usize,
+            });
+        }
 
         let view_uniforms = ViewUniforms {
             vp,
@@ -315,14 +346,14 @@ impl MtlContext {
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             // A probe capture is always lit, whatever the viewport shows.
             shade_mode: 0.0,
-            _end_pad: 0.0,
+            ambient_occlusion: 0.0,
             sky_rot: self.view.sky_rot,
         };
 
         // Planar / probe re-render: the main camera's cluster grid does not match
         // this viewpoint, so iterate every local light instead of the clusters.
         self.bind_clusters(&encoder, false);
-        Ok(self.encode_main_geometry_into(&encoder, &view_uniforms, gpu, icb_override))
+        Ok(self.encode_main_geometry_into(&encoder, &view_uniforms, gpu, pass.icb_override))
     }
 
     // Phase-2 main pass for two-pass occlusion (`Main2`). Loads (does not
@@ -414,7 +445,7 @@ impl MtlContext {
             cam_pos,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
-            _end_pad: 0.0,
+            ambient_occlusion: 1.0,
             sky_rot: self.view.sky_rot,
         };
         self.bind_main_pass_shared(&encoder, &view_uniforms);

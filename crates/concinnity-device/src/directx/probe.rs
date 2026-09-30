@@ -40,6 +40,7 @@
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::planar_reflection::PixelRect;
 use concinnity_core::render::reflection_probe::{
     self, BakeAction, BakePhase, BakeSignals, PrefilterPlan,
 };
@@ -152,11 +153,14 @@ pub(in crate::directx) struct IndirectDraw<'a> {
     pub material_params_gva: u64,
 }
 
-// Render-target dimensions for the capture.
+// Render-target dimensions for the capture, and the texel rectangle of them the
+// render is cleared and drawn within (`None` for the whole target). Texels
+// outside the rectangle keep whatever they held.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct FaceExtent {
     pub width: u32,
     pub height: u32,
+    pub area: Option<PixelRect>,
 }
 
 impl DxContext {
@@ -455,7 +459,7 @@ impl DxContext {
                 prefilter_mip_count,
                 // A probe capture is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
-                _end_pad: 0.0,
+                ambient_occlusion: 0.0,
                 sky_rot: self.view.sky_rot,
             };
             let cbv = alloc.alloc_buffer(
@@ -601,6 +605,7 @@ impl DxContext {
             FaceExtent {
                 width: PROBE_FACE_SIZE,
                 height: PROBE_FACE_SIZE,
+                area: None,
             },
         );
 
@@ -902,7 +907,25 @@ impl DxContext {
             object_gva,
             material_params_gva,
         } = draw;
-        let FaceExtent { width, height } = extent;
+        let FaceExtent {
+            width,
+            height,
+            area,
+        } = extent;
+        let scissor = match area {
+            Some(r) => windows::Win32::Foundation::RECT {
+                left: r.x as i32,
+                top: r.y as i32,
+                right: (r.x + r.width) as i32,
+                bottom: (r.y + r.height) as i32,
+            },
+            None => windows::Win32::Foundation::RECT {
+                left: 0,
+                top: 0,
+                right: width as i32,
+                bottom: height as i32,
+            },
+        };
         let bindless_pso = self
             .cull
             .main_bindless_pso
@@ -924,8 +947,8 @@ impl DxContext {
         // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&rtv), false, Some(&dsv));
-            cmd.ClearRenderTargetView(rtv, &self.view.clear_color, None);
-            cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
+            cmd.ClearRenderTargetView(rtv, &self.view.clear_color, Some(&[scissor]));
+            cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, Some(&[scissor]));
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
                 TopLeftY: 0.0,
@@ -935,12 +958,6 @@ impl DxContext {
                 MaxDepth: 1.0,
             };
             cmd.RSSetViewports(&[vp]);
-            let scissor = windows::Win32::Foundation::RECT {
-                left: 0,
-                top: 0,
-                right: width as i32,
-                bottom: height as i32,
-            };
             cmd.RSSetScissorRects(&[scissor]);
 
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);

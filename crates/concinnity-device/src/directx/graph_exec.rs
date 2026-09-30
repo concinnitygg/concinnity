@@ -47,6 +47,7 @@ use concinnity_core::gfx::render_types::{LineVertex, TextDrawCall};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use concinnity_core::render::pass_timing;
+use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{
     BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
@@ -584,6 +585,10 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // Camera far-plane in view units. Consumed by `Upscale` (FSR3
     // dispatch's `cameraFar`).
     pub far: f32,
+    // Which planar mirrors this frame renders, and the screen rectangle each
+    // covers; computed once from `vp_mat` so the mirror pass and the transparent
+    // pass that samples it agree.
+    pub planar: PlanarFramePlan,
 }
 
 impl DxContext {
@@ -1321,26 +1326,19 @@ impl DxContext {
                 // bloom + composite then sample via `scene_srv_for_post`).
                 self.encode_upscale(cmd, params)?;
             }
+            PassId::PlanarReflection => {
+                // Mirror renders for the flat reflectors in view, each cropped to
+                // the screen rectangle its reflectors cover (see `planar.rs`).
+                // Recorded ahead of `Transparent` in the frame's submission, each
+                // plane's resolve left shader-readable for it.
+                self.encode_planar_reflections(cmd, params)?;
+            }
             PassId::Transparent => {
                 // Generic translucent pass: draws the world's glass panes and
                 // water surfaces back-to-front over the post-SSR scene. Gated by
                 // `FrameGraphInputs::transparent_enabled`
                 // (`DxContext::transparent_enabled`), so it only appears when the
                 // world declared a visible `GlassPanel` or `WaterSurface`.
-                //
-                // Planar reflections run inline at the head of the pass (same cmd
-                // list -> the per-plane mirror resolves are ready before the
-                // transparent draws sample them). A no-op when the world has no
-                // planar set. `planar_pass_needed` decides: a visible water
-                // surface holding a slot always needs it (water takes the mirror
-                // over the trace), and so does any reflector when the per-pixel
-                // trace will not run. Gating on `rt_transparent_active` (not
-                // `rt_reflections_active`) keeps planar alive when RT is live but
-                // a producer's RT pipelines failed to build, so its probe/planar
-                // fallback samples a freshly rendered resolve.
-                if self.planar_pass_needed() {
-                    self.encode_planar_reflections(cmd, params)?;
-                }
                 let view = self.build_transparent_view(params);
                 self.encode_transparent(
                     cmd,

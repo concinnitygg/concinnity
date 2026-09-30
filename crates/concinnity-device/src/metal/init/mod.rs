@@ -167,7 +167,7 @@ impl MtlContext {
             area_lights,
             shadows,
             anisotropy,
-            planar_planes,
+            planar,
             post,
             fx,
             requirements,
@@ -253,16 +253,17 @@ impl MtlContext {
         let decal = world_fx::build_decals(&gpu, fx.decals)?;
         let fog = world_fx::build_fog(&gpu, fx.fog)?;
         let particle = world_fx::build_particles(&gpu, fx.particles)?;
-        let planar = world_fx::plan_planar(&fx.water_surfaces, &fx.glass_panels, planar_planes);
+        let planar = world_fx::plan_planar(&fx.water_surfaces, &fx.glass_panels, planar);
         let n_water = fx.water_surfaces.len();
-        let water = world_fx::build_water(&gpu, &fx.water_surfaces, &planar.slots[..n_water])?;
+        let slots = &planar.assignment.slots;
+        let water = world_fx::build_water(&gpu, &fx.water_surfaces, &slots[..n_water])?;
         let glass = world_fx::build_glass(
             &gpu,
             &fx.glass_panels,
-            &planar.slots[n_water..],
+            &slots[n_water..],
             &world.draw_objects,
         )?;
-        let planar_reflection = world_fx::build_planar_reflection(&gpu, &planar, &features)?;
+        let planar_reflection = world_fx::build_planar_reflection(&gpu, planar, &features)?;
         let raymarch = world_fx::build_raymarch(&gpu, &fx.sdf_volumes)?;
 
         let diagnostics = commands::build_diagnostics(&gpu);
