@@ -300,8 +300,8 @@ pub(in crate::metal) fn build_gbuffer(
     })
 }
 
-// SSGI: the shared gather + composite. Built only when SSGI is on; the
-// gather reads the G-buffer the pre-pass fills.
+// SSGI: the shared pyramid, trace and composite. Built only when SSGI is on;
+// the trace reads the G-buffer the pre-pass fills.
 pub(in crate::metal) fn build_ssgi(
     post_device: &MtlPostDevice,
     settings: &EffectSettings,

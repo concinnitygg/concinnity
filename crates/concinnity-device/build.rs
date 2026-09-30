@@ -1052,14 +1052,30 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[],
     },
+    // The SSGI stages read every source but the hit radiance by point load, so
+    // the samplers those sources declare are compiled out and only the scene's
+    // survives.
     MetalAbi {
-        program: &shared::SSGI_GATHER,
+        program: &shared::SSGI_DEPTH,
+        slots: &[&[("params", "buffer(0)"), ("gbuffer", "texture(0)")]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::SSGI_REDUCE,
+        slots: &[&[("finer", "texture(0)")]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::SSGI_TRACE,
         slots: &[&[
             ("params", "buffer(0)"),
             ("scene", "texture(0)"),
             ("scene_samp", "sampler(0)"),
             ("gbuffer", "texture(1)"),
-            ("gbuffer_samp", "sampler(1)"),
+            ("velocity", "texture(2)"),
+            ("pyramid", "texture(3)"),
+            ("prev_pyramid", "texture(4)"),
+            ("history", "texture(5)"),
         ]],
         argument_ids: &[],
     },
@@ -1096,10 +1112,9 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         program: &shared::SSGI_COMPOSITE,
         slots: &[&[
             ("params", "buffer(0)"),
-            ("gi_tex", "texture(0)"),
-            ("gi_samp", "sampler(0)"),
-            ("gbuffer", "texture(1)"),
-            ("gbuffer_samp", "sampler(1)"),
+            ("accum", "texture(0)"),
+            ("pyramid", "texture(1)"),
+            ("gbuffer", "texture(2)"),
         ]],
         argument_ids: &[],
     },

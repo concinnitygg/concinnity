@@ -220,6 +220,14 @@ pub(in crate::metal) struct GbufferGpuBuffers<'a> {
 }
 
 impl MtlContext {
+    // Whether anything reprojects through the pre-pass's motion channel this
+    // frame: TAA, the MetalFX upscaler, or the SSGI accumulation.
+    pub(in crate::metal) fn reads_motion(&self) -> bool {
+        self.taa.enabled
+            || self.upscale.scaler.is_some()
+            || (self.ssgi.pass.is_some() && self.ssgi.settings.is_some_and(|s| s.contributes()))
+    }
+
     // Encode the unified G-buffer pre-pass: one jittered traversal of the cull
     // records writing view-space normal + linear depth at color(0), perceptual
     // roughness at color(1), and screen-space motion at color(2), with a

@@ -166,9 +166,19 @@ impl VkContext {
             ssr.settings = q.ssr;
         }
 
-        // SSGI (samples the unified G-buffer's per-frame normal+depth views).
-        if desired_ssgi && self.ssgi.is_none() {
+        // SSGI (samples the unified G-buffer's per-frame normal+depth views). A
+        // new trace resolution resizes every target, so it rebuilds the pass; the
+        // ray count rides the settings.
+        let ssgi_rescaled = match (q.ssgi, self.ssgi.as_ref()) {
+            (Some(settings), Some(live)) => settings.gi_scale != live.settings.gi_scale,
+            _ => false,
+        };
+        if (desired_ssgi && self.ssgi.is_none()) || ssgi_rescaled {
             let settings = q.ssgi.expect("desired_ssgi implies ssgi settings");
+            if ssgi_rescaled {
+                self.post.cache.forget_views();
+                self.ssgi = None;
+            }
             let ssgi = super::post::ssgi::SsgiResources::new(
                 &self.post_device(0),
                 settings,
@@ -178,6 +188,8 @@ impl VkContext {
         } else if !desired_ssgi && self.ssgi.is_some() {
             self.post.cache.forget_views();
             self.ssgi = None;
+        } else if let (Some(settings), Some(ssgi)) = (q.ssgi, self.ssgi.as_mut()) {
+            ssgi.settings = settings;
         }
 
         // Auto-exposure. When it turns off the static authored EV drives exposure

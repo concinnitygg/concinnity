@@ -16,10 +16,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use windows::Win32::Graphics::Direct3D12::*;
 
-// Post targets the shared passes may hold at once: the temporal resolve's two,
-// the reflection target, the indirect-light gather target, and room for the
-// passes still to follow.
-pub(in crate::directx) const POST_TARGET_SLOTS: usize = 16;
+// Descriptor sets the shared passes may hold at once: one per target, plus one
+// per level of a target with several. The temporal resolve's ring, the
+// reflection target, and the indirect-light trace, accumulation ring and depth
+// pyramids (each level of those addressed alone) take about twenty.
+pub(in crate::directx) const POST_TARGET_SLOTS: usize = 32;
 
 // The occupancy mask is one bit per slot.
 const _: () = assert!(POST_TARGET_SLOTS <= u32::BITS as usize);

@@ -91,9 +91,9 @@ impl MtlContext {
     // the next draw. Only a feature that is currently on has a settings struct to
     // mutate; the rest are skipped (the value still persists for the next launch).
     // SSAO / SSR / auto-exposure settings are fully scalar, so they are replaced
-    // wholesale; SSGI keeps its gather resolution / ray / step counts (those size
-    // the gather target or ride `apply_quality_settings`), so only its scalar
-    // intensity / distance are updated.
+    // wholesale; SSGI's trace resolution and ray count ride
+    // `apply_quality_settings` (the resolution sizes its targets), so only its
+    // scalar intensity / distance are updated.
     pub(crate) fn update_quality_params(&mut self, q: backend::QualitySettings) {
         if let (Some(live), Some(cur)) = (q.ssao, self.ssao.settings.as_mut()) {
             *cur = live;

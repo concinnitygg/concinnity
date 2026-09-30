@@ -269,7 +269,7 @@ impl VkContext {
             concinnity_core::render::post::ssr::build_pipeline(&self.post_device(0))
         );
 
-        // SSGI (only when indirect_lighting: ssgi). Rebuilds gather + composite.
+        // SSGI (only when indirect_lighting: ssgi). Rebuilds its four pipelines.
         let ssgi_rebuilt = rebuild_if_live!(
             self.ssgi.is_some(),
             concinnity_core::render::post::ssgi::build_pipelines(&self.post_device(0))

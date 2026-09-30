@@ -6,7 +6,7 @@
 //!   taa.rs    velocity pre-pass + history-resolve
 //!   ssao.rs   GTAO depth+normal pre-pass + horizon kernel + depth-aware blur
 //!   ssr.rs    depth+normal+roughness pre-pass + fullscreen ray-march resolve
-//!   ssgi.rs   hemisphere-gather + depth-aware blur over the SSR pre-pass G-buffer
+//!   ssgi.rs   the settings + inputs of the shared SSGI trace and composite
 //!
 //! Mirrors src/metal/post/ (same per-effect file shape).
 

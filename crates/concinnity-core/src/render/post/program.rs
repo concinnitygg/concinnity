@@ -18,7 +18,9 @@
 //! so a host cannot invent a binding model the others do not share.
 
 use crate::render::shader_programs::ShaderProgram;
-use crate::render::shader_programs::shared::{SSGI_COMPOSITE, SSGI_GATHER, SSR_RESOLVE, TAA_FRAG};
+use crate::render::shader_programs::shared::{
+    SSGI_COMPOSITE, SSGI_DEPTH, SSGI_REDUCE, SSGI_TRACE, SSR_RESOLVE, TAA_FRAG,
+};
 
 /// A fullscreen post-pass fragment program. The vertex stage is always
 /// `fullscreen_vertex`, which builds its triangle from the vertex id, so a
@@ -31,11 +33,16 @@ pub enum PostProgram {
     /// `ssr_resolve_fragment` from `ssr.hlsl`: the screen-space reflection
     /// ray-march.
     SsrResolve,
-    /// `ssgi_gather_fragment` from `ssgi.hlsl`: the indirect-light hemisphere
-    /// gather.
-    SsgiGather,
-    /// `ssgi_composite_fragment` from `ssgi.hlsl`: the depth-aware blur the
-    /// gathered term is blended into the scene through.
+    /// `ssgi_depth_fragment` from `ssgi.hlsl`: the base level of the
+    /// indirect-light trace's closest-depth pyramid.
+    SsgiDepth,
+    /// `ssgi_reduce_fragment` from `ssgi.hlsl`: one more level of that pyramid.
+    SsgiReduce,
+    /// `ssgi_trace_fragment` from `ssgi.hlsl`: the hemisphere rays traced
+    /// through the pyramid and accumulated over reprojected history.
+    SsgiTrace,
+    /// `ssgi_composite_fragment` from `ssgi.hlsl`: the depth-aware upsample the
+    /// accumulated term is blended into the scene through.
     SsgiComposite,
 }
 
@@ -58,13 +65,25 @@ pub struct PostProgramBindings {
 }
 
 impl PostProgram {
+    /// Every post program, in declaration order.
+    pub const ALL: [PostProgram; 6] = [
+        PostProgram::TaaResolve,
+        PostProgram::SsrResolve,
+        PostProgram::SsgiDepth,
+        PostProgram::SsgiReduce,
+        PostProgram::SsgiTrace,
+        PostProgram::SsgiComposite,
+    ];
+
     /// The pass name a backend reports when this program's pipeline fails to
     /// build.
     pub const fn label(self) -> &'static str {
         match self {
             PostProgram::TaaResolve => "taa resolve",
             PostProgram::SsrResolve => "ssr resolve",
-            PostProgram::SsgiGather => "ssgi gather",
+            PostProgram::SsgiDepth => "ssgi depth",
+            PostProgram::SsgiReduce => "ssgi reduce",
+            PostProgram::SsgiTrace => "ssgi trace",
             PostProgram::SsgiComposite => "ssgi composite",
         }
     }
@@ -74,7 +93,9 @@ impl PostProgram {
         match self {
             PostProgram::TaaResolve => &TAA_FRAG,
             PostProgram::SsrResolve => &SSR_RESOLVE,
-            PostProgram::SsgiGather => &SSGI_GATHER,
+            PostProgram::SsgiDepth => &SSGI_DEPTH,
+            PostProgram::SsgiReduce => &SSGI_REDUCE,
+            PostProgram::SsgiTrace => &SSGI_TRACE,
             PostProgram::SsgiComposite => &SSGI_COMPOSITE,
         }
     }
@@ -94,14 +115,29 @@ impl PostProgram {
                 constants: 144,
                 probes: true,
             },
-            // scene (gather) or gathered term (composite), normal+depth;
-            // `SsgiParams`.
-            PostProgram::SsgiGather | PostProgram::SsgiComposite => PostProgramBindings {
-                textures: 2,
-                constants: 32,
+            // The G-buffer; `SsgiParams`.
+            PostProgram::SsgiDepth => ssgi(1),
+            // The level below; no constants.
+            PostProgram::SsgiReduce => PostProgramBindings {
+                textures: 1,
+                constants: 0,
                 probes: false,
             },
+            // scene, G-buffer, velocity, pyramid, previous pyramid, history;
+            // `SsgiParams`.
+            PostProgram::SsgiTrace => ssgi(6),
+            // accumulation, pyramid, G-buffer; `SsgiParams`.
+            PostProgram::SsgiComposite => ssgi(3),
         }
+    }
+}
+
+// An SSGI program's bindings: `textures` sources and the `SsgiParams` block.
+const fn ssgi(textures: usize) -> PostProgramBindings {
+    PostProgramBindings {
+        textures,
+        constants: core::mem::size_of::<crate::gfx::render_types::SsgiParams>(),
+        probes: false,
     }
 }
 
@@ -115,14 +151,9 @@ mod tests {
 
     // Every program, the source it compiles from, and the defines that select
     // its variant.
-    fn programs() -> [(PostProgram, &'static str, &'static [&'static str]); 4] {
-        [
-            PostProgram::TaaResolve,
-            PostProgram::SsrResolve,
-            PostProgram::SsgiGather,
-            PostProgram::SsgiComposite,
-        ]
-        .map(|p| (p, p.program().file, p.program().gates))
+    fn programs() -> [(PostProgram, &'static str, &'static [&'static str]); PostProgram::ALL.len()]
+    {
+        PostProgram::ALL.map(|p| (p, p.program().file, p.program().gates))
     }
 
     // The source lines a compile with `defines` keeps: `#if defined(..)`,
@@ -353,7 +384,9 @@ mod tests {
         let blocks = [
             (PostProgram::TaaResolve, size_of::<TaaParams>()),
             (PostProgram::SsrResolve, size_of::<SsrParams>()),
-            (PostProgram::SsgiGather, size_of::<SsgiParams>()),
+            (PostProgram::SsgiDepth, size_of::<SsgiParams>()),
+            (PostProgram::SsgiReduce, 0),
+            (PostProgram::SsgiTrace, size_of::<SsgiParams>()),
             (PostProgram::SsgiComposite, size_of::<SsgiParams>()),
         ];
         for (program, size) in blocks {

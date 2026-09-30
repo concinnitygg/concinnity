@@ -58,8 +58,7 @@ pub(crate) fn setting_available(key: SettingKey, caps: &backend::DeviceCapabilit
 // option index (the ordered labels for these live in core's option registry).
 // An authored value off a discrete level snaps to the nearest.
 const FPS_CAP_VALUES: [u32; 6] = [0, 30, 60, 120, 144, 240];
-const SSGI_RAYS_COUNTS: [u32; 4] = [4, 8, 16, 32];
-const SSGI_STEPS_COUNTS: [u32; 4] = [8, 12, 24, 48];
+const SSGI_RAYS_COUNTS: [u32; 3] = [1, 2, 4];
 const SHADOW_RESOLUTION_SIZES: [u32; 4] = [0, 1024, 2048, 4096];
 const SHADOW_DISTANCE_VALUES: [u32; 4] = [40, 80, 160, 320];
 const SHADOW_CASCADES_VALUES: [u32; 3] = [2, 3, 4];
@@ -184,22 +183,14 @@ pub(crate) fn pass_resolution_index(res: PassResolution) -> usize {
     res as usize
 }
 
-// SSGI ray / step counts for an option index, and the menu index nearest an
+// SSGI ray counts for an option index, and the menu index nearest an
 // authored count (the world may author a value off the discrete levels; the row
 // then shows the closest one).
 pub(crate) fn ssgi_rays_at(index: usize) -> u32 {
-    *SSGI_RAYS_COUNTS.get(index).unwrap_or(&SSGI_RAYS_COUNTS[1])
+    *SSGI_RAYS_COUNTS.get(index).unwrap_or(&SSGI_RAYS_COUNTS[0])
 }
 pub(crate) fn ssgi_rays_index(count: u32) -> usize {
     nearest_count_index(&SSGI_RAYS_COUNTS, count)
-}
-pub(crate) fn ssgi_steps_at(index: usize) -> u32 {
-    *SSGI_STEPS_COUNTS
-        .get(index)
-        .unwrap_or(&SSGI_STEPS_COUNTS[1])
-}
-pub(crate) fn ssgi_steps_index(count: u32) -> usize {
-    nearest_count_index(&SSGI_STEPS_COUNTS, count)
 }
 // The index of the level closest to `count` (ties pick the lower level).
 fn nearest_count_index(levels: &[u32], count: u32) -> usize {
@@ -1036,23 +1027,15 @@ mod tests {
 
     #[test]
     fn ssgi_sub_quality_round_trips_and_snaps() {
-        // Ray / step levels round-trip on their preset values.
+        // Ray levels round-trip on their preset values.
         for i in 0..SSGI_RAYS_COUNTS.len() {
             assert_eq!(ssgi_rays_index(ssgi_rays_at(i)), i);
         }
-        for i in 0..SSGI_STEPS_COUNTS.len() {
-            assert_eq!(ssgi_steps_index(ssgi_steps_at(i)), i);
-        }
         // An authored value off the discrete levels snaps to the nearest.
-        assert_eq!(ssgi_rays_index(7), 1); // 7 -> 8
-        assert_eq!(ssgi_rays_index(20), 2); // 20 -> 16
-        assert_eq!(ssgi_steps_index(40), 3); // 40 -> 48
-        // The three SSGI sub-quality keys are cycle rows, not sliders.
-        for key in [
-            SettingKey::SsgiResolution,
-            SettingKey::SsgiRays,
-            SettingKey::SsgiSteps,
-        ] {
+        assert_eq!(ssgi_rays_index(3), 1); // 3 -> 2 (ties pick the lower)
+        assert_eq!(ssgi_rays_index(9), 2); // 9 -> 4
+        // Both SSGI sub-quality keys are cycle rows, not sliders.
+        for key in [SettingKey::SsgiResolution, SettingKey::SsgiRays] {
             assert!(options(key).is_some(), "{key:?} should be a cycle row");
             assert!(slider(key).is_none(), "{key:?} should not be a slider");
         }

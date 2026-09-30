@@ -27,7 +27,7 @@ use crate::metal::pass_timing::PassId;
 pub(crate) enum FullscreenBlend {
     // No blending; the fragment output replaces the destination. Used by every
     // pass that writes a fresh target (SSAO kernel/blur, SSR resolve, TAA
-    // resolve, the SSGI gather, the bloom prefilter/downsample, the composite).
+    // resolve, the SSGI pyramid and trace, the bloom prefilter/downsample, the composite).
     Replace,
     // Additive accumulation (`src·1 + dst·1`). Used where a pass layers an
     // extra term onto content it loaded: the bloom upsample chain and the

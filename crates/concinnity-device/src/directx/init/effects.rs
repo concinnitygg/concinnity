@@ -265,9 +265,9 @@ pub(super) fn build_ssr(
     Ok(ssr)
 }
 
-// SSGI: hemisphere-gather + depth-aware blur over the unified G-buffer
-// pre-pass. The gather target lives in the shared pass; the composite blends
-// straight into the scene.
+// SSGI: a Hi-Z traced, temporally accumulated trace over the unified G-buffer
+// pre-pass. Its pyramids and accumulation live in the shared pass; the
+// composite blends straight into the scene.
 pub(super) fn build_ssgi(
     post_device: &DxPostDevice<'_>,
     targets: &DxTargets,

@@ -748,7 +748,6 @@ fn video_quality_group_holds_render_feature_toggles() {
         "opt_ssgi",
         "opt_ssgi_resolution",
         "opt_ssgi_rays",
-        "opt_ssgi_steps",
         "opt_shadow_map_size",
         "opt_shadow_update",
         "opt_shadow_distance",

@@ -222,12 +222,28 @@ pub static SSR_RESOLVE: ShaderProgram = ShaderProgram {
     gates: &[],
     msaa: false,
 };
-/// `ssgi_gather_fragment` from `ssgi.hlsl`.
-pub static SSGI_GATHER: ShaderProgram = ShaderProgram {
+/// `ssgi_depth_fragment` from `ssgi.hlsl`.
+pub static SSGI_DEPTH: ShaderProgram = ShaderProgram {
     file: "ssgi.hlsl",
-    entry: "ssgi_gather_fragment",
-    label: "ssgi_gather.hlsl",
-    gates: &["SSGI_GATHER"],
+    entry: "ssgi_depth_fragment",
+    label: "ssgi_depth.hlsl",
+    gates: &["SSGI_DEPTH"],
+    msaa: false,
+};
+/// `ssgi_reduce_fragment` from `ssgi.hlsl`.
+pub static SSGI_REDUCE: ShaderProgram = ShaderProgram {
+    file: "ssgi.hlsl",
+    entry: "ssgi_reduce_fragment",
+    label: "ssgi_reduce.hlsl",
+    gates: &["SSGI_REDUCE"],
+    msaa: false,
+};
+/// `ssgi_trace_fragment` from `ssgi.hlsl`.
+pub static SSGI_TRACE: ShaderProgram = ShaderProgram {
+    file: "ssgi.hlsl",
+    entry: "ssgi_trace_fragment",
+    label: "ssgi_trace.hlsl",
+    gates: &["SSGI_TRACE"],
     msaa: false,
 };
 /// `ssgi_composite_fragment` from `ssgi.hlsl`.
@@ -549,7 +565,9 @@ pub static ALL: &[&ShaderProgram] = &[
     &SSAO_KERNEL,
     &SSAO_BLUR,
     &SSR_RESOLVE,
-    &SSGI_GATHER,
+    &SSGI_DEPTH,
+    &SSGI_REDUCE,
+    &SSGI_TRACE,
     &SSGI_COMPOSITE,
     &REFLECTION_BLUR,
     &REFLECTION_COMPOSITE,

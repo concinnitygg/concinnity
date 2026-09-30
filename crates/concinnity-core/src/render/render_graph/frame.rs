@@ -703,7 +703,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         depth_cur = rm.write_texture(depth_cur);
     }
     // SSGI reads the lit scene (its bounce-radiance source) and RMWs the
-    // gathered + denoised indirect term back in. Slots right after Raymarch so
+    // accumulated indirect term back in. Slots right after Raymarch so
     // it can bounce raymarched surfaces too, and before Decals / Fog /
     // Particles so those decorations layer on top of the indirect light.
     // AutoExposure's WAR-read on hdr_resolve_head pins it ahead of SSGI, so the
@@ -712,10 +712,14 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     if inputs.ssgi_enabled {
         let mut ssgi = b.add_pass(PassId::Ssgi, PassKind::Render);
         ssgi.read_texture(h);
-        // The gather is against the pre-pass view normal + linear depth; with
-        // no G-buffer there is nothing to gather against and the encoder skips.
+        // The trace is against the pre-pass view normal + linear depth, and the
+        // accumulation reprojects through its motion vectors; with no G-buffer
+        // there is nothing to trace against and the encoder skips.
         if let Some(g) = ssr_gbuffer_v1 {
             ssgi.read_texture(g);
+        }
+        if let Some(v) = velocity_v1 {
+            ssgi.read_texture(v);
         }
         h = ssgi.write_texture(h);
     }
@@ -2147,6 +2151,34 @@ mod tests {
         assert!(pos(PassId::Ssgi) < pos(PassId::SsrResolve));
         let ssgi = &g.passes[pos(PassId::Ssgi)];
         assert_eq!(ssgi.writes[0].version(), 3);
+    }
+
+    #[test]
+    fn ssgi_reads_the_prepass_normals_and_motion() {
+        // The accumulation reprojects through the pre-pass's motion vectors, so
+        // SSGI reads both of the pre-pass channels it uses, which also pins it
+        // after the pre-pass.
+        let mut i = all_off();
+        i.gbuffer_prepass_enabled = true;
+        i.ssr_prepass_enabled = true;
+        i.velocity_enabled = true;
+        i.ssgi_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+        let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+        let prepass = &g.passes[pos(PassId::GBufferPrepass)];
+        let ssgi = &g.passes[pos(PassId::Ssgi)];
+        let [normal_depth, _roughness, velocity, _depth] = prepass.writes[..] else {
+            panic!("the pre-pass writes four channels");
+        };
+        for channel in [normal_depth, velocity] {
+            assert!(
+                ssgi.reads
+                    .iter()
+                    .any(|r| r.resource_index() == channel.resource_index())
+            );
+        }
+        assert!(pos(PassId::GBufferPrepass) < pos(PassId::Ssgi));
     }
 
     #[test]

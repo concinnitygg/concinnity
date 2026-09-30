@@ -37,7 +37,7 @@ macro_rules! setting_keys {
 
         impl SettingKey {
             /// Every setting: the cycle rows, the sliders, then the rebinds.
-            pub const ALL: [SettingKey; 67] = [
+            pub const ALL: [SettingKey; 66] = [
                 $(SettingKey::$cycle,)*
                 $(SettingKey::$slider,)*
                 SettingKey::KeyRebind(Bindable::Forward),
@@ -101,12 +101,10 @@ setting_keys! {
         VoiceVolume => "voice_volume",
         /// The anti-aliasing mode.
         AaMode => "aa_mode",
-        /// The SSGI gather resolution.
+        /// The SSGI trace resolution.
         SsgiResolution => "ssgi_resolution",
-        /// The SSGI rays per pixel.
+        /// The SSGI rays per pixel per frame.
         SsgiRays => "ssgi_rays",
-        /// The SSGI march steps per ray.
-        SsgiSteps => "ssgi_steps",
         /// The ray-traced reflection trace resolution.
         RtReflectionResolution => "rt_reflection_resolution",
         /// The reflection blur resolution.
@@ -278,7 +276,7 @@ mod tests {
     #[test]
     fn kind_classifies_sliders_rebinds_and_cycles() {
         let count = |kind| SettingKey::ALL.iter().filter(|k| k.kind() == kind).count();
-        assert_eq!(count(SettingKind::Cycle), 37);
+        assert_eq!(count(SettingKind::Cycle), 36);
         assert_eq!(count(SettingKind::Slider), 20);
         assert_eq!(count(SettingKind::KeyRebind), Bindable::ALL.len());
         assert_eq!(count(SettingKind::PadRebind), GamepadAction::ALL.len());

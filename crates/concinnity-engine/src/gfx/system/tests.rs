@@ -2092,8 +2092,7 @@ fn persisted_post_process_overrides_win_over_authored_config() {
     // Cycle dropdowns.
     settings.graphics.aa_mode = Some(AaMode::Taa);
     settings.graphics.ssgi_resolution = Some(PassResolution::Full);
-    settings.graphics.ssgi_rays = Some(16);
-    settings.graphics.ssgi_steps = Some(24);
+    settings.graphics.ssgi_rays = Some(2);
     settings.graphics.reflection_blur_resolution = Some(PassResolution::Full);
     // Per-feature sub-quality sliders.
     settings.graphics.ssao_radius = Some(0.9);
@@ -2148,8 +2147,7 @@ fn persisted_post_process_overrides_win_over_authored_config() {
         live.graphics.quality.post_config.ssgi_resolution,
         PassResolution::Full
     );
-    assert_eq!(live.graphics.quality.post_config.ssgi_rays, 16);
-    assert_eq!(live.graphics.quality.post_config.ssgi_steps, 24);
+    assert_eq!(live.graphics.quality.post_config.ssgi_rays, 2);
     assert_eq!(
         live.graphics.quality.post_config.reflection_blur_resolution,
         PassResolution::Full
@@ -2651,7 +2649,7 @@ fn settings_rows_show_their_live_values_at_init() {
     settings.graphics.texture_cap = Some(384);
     settings.graphics.hdr_display = Some(true);
     settings.graphics.ssao = Some(true);
-    settings.graphics.ssgi_rays = Some(32);
+    settings.graphics.ssgi_rays = Some(4);
 
     // A classified GPU, so the Auto preset resolves to a named tier below.
     let (_state, hooks) = recording_hooks_with(settings, profile_at(GpuTier::MidDiscrete));
@@ -2704,7 +2702,7 @@ fn settings_rows_show_their_live_values_at_init() {
     assert_eq!(label_text(&mut world, AssetId(116)), "3");
     assert_eq!(label_text(&mut world, AssetId(117)), "On", "occlusion");
     assert_eq!(label_text(&mut world, AssetId(119)), "On", "quality toggle");
-    assert_eq!(label_text(&mut world, AssetId(120)), "32", "cycle dropdown");
+    assert_eq!(label_text(&mut world, AssetId(120)), "4", "cycle dropdown");
     assert_eq!(
         label_text(&mut world, AssetId(121)),
         "Auto (High)",

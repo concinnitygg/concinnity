@@ -1298,8 +1298,8 @@ pub(crate) struct VkContext {
     pub(super) reflection_composite: Option<ReflectionCompositeResources>,
 
     // Screen-space global illumination. `Some` only when the world's
-    // `PostProcessConfig` selected `indirect_lighting: ssgi`. The gather +
-    // composite run on the hdr_resolve RMW chain after the main pass, reusing
+    // `PostProcessConfig` selected `indirect_lighting: ssgi`. The pyramid,
+    // trace and composite run on the hdr_resolve RMW chain after the main pass, reusing
     // `ssr`'s pre-pass G-buffer.
     pub(super) ssgi: Option<SsgiResources>,
 
@@ -1906,10 +1906,9 @@ impl VkContext {
     // mutating the stored struct here is picked up on the next frame. Only a
     // feature whose resources are currently live has settings to mutate; the rest
     // are skipped (the value still persists for the next launch). SSAO / SSR /
-    // auto-exposure are fully scalar, so they are replaced wholesale; SSGI keeps
-    // its gather resolution / ray / step counts (those size the gather target or
-    // ride `apply_quality_settings`), so only its scalar intensity / distance are
-    // updated. Auto-exposure settings live flat on the context here
+    // auto-exposure are fully scalar, so they are replaced wholesale; SSGI's trace
+    // resolution sizes its targets and rides `apply_quality_settings` with its ray
+    // count, so only its scalar intensity / distance are updated. Auto-exposure settings live flat on the context here
     // (`auto_exposure.settings`), not inside a resources struct as on Metal.
     pub(crate) fn update_quality_params(&mut self, q: backend::QualitySettings) {
         if let (Some(live), Some(cur)) = (q.ssao, self.ssao.as_mut().map(|s| &mut s.settings)) {
@@ -2153,7 +2152,7 @@ impl VkContext {
             rc.destroy(device);
         }
 
-        // SSGI resources (gather + composite).
+        // SSGI resources (pyramids, accumulation and pipelines).
         self.ssgi = None;
 
         // Unified G-buffer pre-pass resources (per-frame MRT + pipelines + UBOs).

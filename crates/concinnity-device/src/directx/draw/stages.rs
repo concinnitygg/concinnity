@@ -455,7 +455,7 @@ impl DxContext {
             hdr_sample_count: self.targets.hdr.msaa_samples,
             bindless_cull_enabled,
             bloom_enabled: self.post_process.bloom_intensity > 0.0,
-            velocity_enabled: taa_on || upscale_on,
+            velocity_enabled: self.reads_motion(),
             taa_enabled: taa_on,
             // Only the SSR *resolve* is gated here; `self.ssr` is also `Some`
             // for a SSGI-only world (which reuses the pre-pass G-buffer), so

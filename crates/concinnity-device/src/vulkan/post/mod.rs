@@ -6,7 +6,7 @@
 //!   bloom.rs    prefilter + downsample/upsample mip chain
 //!   reflection_composite.rs  roughness blur + composite of the SSR/RT reflection
 //!   ssao.rs     GTAO depth+normal pre-pass + horizon-search kernel + blur
-//!   ssgi.rs     the settings + inputs of the shared SSGI gather and composite
+//!   ssgi.rs     the settings + inputs of the shared SSGI trace and composite
 //!   ssr.rs      the reflection target + inputs of the shared SSR resolve
 //!   taa.rs      the TAA jitter counter + inputs over the shared resolve
 //!

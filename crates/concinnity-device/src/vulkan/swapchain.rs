@@ -348,7 +348,7 @@ impl VkContext {
             self.gbuffer = Some(gb);
         }
 
-        // Rebuild the SSR reflection target and the SSGI gather target at the
+        // Rebuild the SSR reflection target and the SSGI trace targets at the
         // new resolution. Both passes read the rebuilt HDR resolve and G-buffer
         // views per frame, so nothing else needs re-pointing. The bloom
         // prefilter samples the reflection composite output (re-pointed in the

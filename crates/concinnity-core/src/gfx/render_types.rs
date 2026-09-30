@@ -813,33 +813,38 @@ pub struct SsrParams {
     pub sky_rot: [[f32; 4]; 3],
 }
 
-/// Per-frame uniform for the screen-space global-illumination (SSGI) gather +
-/// composite. Carries the clamped authored tunables and the view-ray scale the
-/// gather pass uses to project a view-space ray point back to a screen UV.
-/// Pushed verbatim to the SSGI gather + composite fragment shaders, so the
-/// layout must stay in sync with the `SsgiParams` struct there. 32 bytes.
+/// Per-frame uniform for the screen-space global-illumination (SSGI) passes.
+/// Carries the clamped authored tunables, the view-ray scale the trace uses to
+/// project a view-space ray point back to a screen UV, and the frame state the
+/// accumulation reads. Pushed verbatim to every SSGI fragment that declares
+/// constants, so the layout must stay in sync with the `SsgiParams` struct
+/// there. 48 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SsgiParams {
-    /// Indirect-bounce blend strength; scales the gathered radiance the
+    /// Indirect-bounce blend strength; scales the accumulated radiance the
     /// composite pass adds on top of the existing shading.
     pub intensity: f32,
-    /// Maximum world-space distance a hemisphere ray marches before giving up.
+    /// Maximum view-space distance a hemisphere ray travels before it misses.
     pub max_distance: f32,
     /// `tan(fov_y / 2)`: the vertical view-ray half-extent at unit depth.
     pub tan_half_fov_y: f32,
     /// Viewport aspect ratio (width / height).
     pub aspect: f32,
-    /// World-space length of one ray-march step.
-    pub stride: f32,
     /// View-space depth tolerance for accepting a ray/scene-depth intersection.
     pub thickness: f32,
-    /// Hemisphere rays cast per pixel (carried as f32; the shader reads it as an
-    /// int loop bound). Backends that still bake a compile-time ray count ignore
-    /// this field, so the 32-byte layout is unchanged.
-    pub rays: f32,
-    /// Ray-march samples per ray (same f32-as-int-bound convention as `rays`).
-    pub steps: f32,
+    /// 1.0 when the previous frame's accumulation can be reprojected, else 0.0.
+    pub history_valid: f32,
+    /// Hemisphere rays traced per trace pixel this frame.
+    pub rays: u32,
+    /// The frame counter the ray directions are drawn from.
+    pub frame: u32,
+    /// Levels in the closest-depth pyramid the trace walks.
+    pub levels: u32,
+    /// Render-resolution divisor of the trace.
+    pub gi_scale: u32,
+    /// Tail padding to a 16-byte multiple.
+    pub _pad: [u32; 2],
 }
 
 /// Per-frame uniform for the hardware ray-traced reflection pass. Like
@@ -2049,6 +2054,22 @@ mod tests {
         assert_eq!(offset_of!(SsrParams, inv_view), 32);
         assert_eq!(offset_of!(SsrParams, sky_rot), 96);
         assert_eq!(size_of::<SsrParams>() % 16, 0);
+    }
+
+    #[test]
+    fn ssgi_params_layout_matches_shaders() {
+        assert_eq!(size_of::<SsgiParams>(), 48);
+        assert_eq!(offset_of!(SsgiParams, intensity), 0);
+        assert_eq!(offset_of!(SsgiParams, max_distance), 4);
+        assert_eq!(offset_of!(SsgiParams, tan_half_fov_y), 8);
+        assert_eq!(offset_of!(SsgiParams, aspect), 12);
+        assert_eq!(offset_of!(SsgiParams, thickness), 16);
+        assert_eq!(offset_of!(SsgiParams, history_valid), 20);
+        assert_eq!(offset_of!(SsgiParams, rays), 24);
+        assert_eq!(offset_of!(SsgiParams, frame), 28);
+        assert_eq!(offset_of!(SsgiParams, levels), 32);
+        assert_eq!(offset_of!(SsgiParams, gi_scale), 36);
+        assert_eq!(offset_of!(SsgiParams, _pad), 40);
     }
 
     // The RT kernel's parameter block, with every vec3 padded to a float4.

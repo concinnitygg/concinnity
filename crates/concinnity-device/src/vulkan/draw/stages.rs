@@ -405,6 +405,10 @@ impl VkContext {
             // next frame's history.
             taa.pass.advance();
         }
+        // What the SSGI accumulation wrote this frame is next frame's history.
+        if let Some(ssgi) = &mut self.ssgi {
+            ssgi.advance();
+        }
 
         // Advance the unified G-buffer's velocity-channel temporal state in
         // lockstep with TAA's: this frame's un-jittered VP becomes next frame's

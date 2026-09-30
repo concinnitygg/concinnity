@@ -732,8 +732,8 @@ pub(crate) struct MtlContext {
     // roughness / velocity / sampleable-depth targets plus the static /
     // instanced / skinned pipelines. See [`GBufferState`].
     pub(super) gbuffer: GBufferState,
-    // Screen-space-GI feature state: resolved tunables, the `gi` gather
-    // target, and the gather + composite pipelines. See [`SsgiState`].
+    // Screen-space-GI feature state: resolved tunables and the shared pass
+    // with its pyramids and accumulation. See [`SsgiState`].
     pub(super) ssgi: SsgiState,
     // Hardware-ray-traced-reflection feature state: resolved tunables, the
     // scene acceleration structure, the dynamic-update mode + failure flag, and

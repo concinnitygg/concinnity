@@ -1099,6 +1099,28 @@ pub(super) fn create_rt_target_with_clear(
     format: DXGI_FORMAT,
     clear_color: [f32; 4],
 ) -> RenderResult<ID3D12Resource> {
+    create_rt_resource(device, (width, height, 1), format, clear_color)
+}
+
+// As `create_rt_target`, with `levels` mip levels, each of which a draw can
+// render to through its own RTV.
+pub(super) fn create_rt_chain(
+    device: &ID3D12Device,
+    width: u32,
+    height: u32,
+    format: DXGI_FORMAT,
+    levels: u32,
+) -> RenderResult<ID3D12Resource> {
+    create_rt_resource(device, (width, height, levels), format, [0.0; 4])
+}
+
+// A color render target of `width` x `height` with `levels` mips.
+fn create_rt_resource(
+    device: &ID3D12Device,
+    (width, height, levels): (u32, u32, u32),
+    format: DXGI_FORMAT,
+    clear_color: [f32; 4],
+) -> RenderResult<ID3D12Resource> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
@@ -1112,7 +1134,7 @@ pub(super) fn create_rt_target_with_clear(
         Width: width.max(1) as u64,
         Height: height.max(1),
         DepthOrArraySize: 1,
-        MipLevels: 1,
+        MipLevels: levels.clamp(1, u16::MAX as u32) as u16,
         Format: format,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
@@ -1145,10 +1167,26 @@ pub(super) fn write_format_rtv(
     rtv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     format: DXGI_FORMAT,
 ) {
+    write_level_rtv(device, resource, rtv_cpu, format, 0);
+}
+
+// Write a render-target view of mip `level` of a Texture2D.
+pub(super) fn write_level_rtv(
+    device: &ID3D12Device,
+    resource: &ID3D12Resource,
+    rtv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    format: DXGI_FORMAT,
+    level: u32,
+) {
     let rtv_desc = D3D12_RENDER_TARGET_VIEW_DESC {
         Format: format,
         ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
-        ..Default::default()
+        Anonymous: D3D12_RENDER_TARGET_VIEW_DESC_0 {
+            Texture2D: D3D12_TEX2D_RTV {
+                MipSlice: level,
+                PlaneSlice: 0,
+            },
+        },
     };
     // SAFETY: the view descriptor and the resource it names are live for the call, and the
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
@@ -1162,13 +1200,25 @@ pub(super) fn write_format_srv(
     srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     format: DXGI_FORMAT,
 ) {
+    write_levels_srv(device, resource, srv_cpu, format, (0, 1));
+}
+
+// Write a Texture2D shader-resource view of `count` mip levels from `first`.
+pub(super) fn write_levels_srv(
+    device: &ID3D12Device,
+    resource: &ID3D12Resource,
+    srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    format: DXGI_FORMAT,
+    (first, count): (u32, u32),
+) {
     let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
         Format: format,
         ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
         Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
         Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
             Texture2D: D3D12_TEX2D_SRV {
-                MipLevels: 1,
+                MostDetailedMip: first,
+                MipLevels: count,
                 ..Default::default()
             },
         },
@@ -1185,6 +1235,22 @@ pub(super) fn transition_barrier(
     before: D3D12_RESOURCE_STATES,
     after: D3D12_RESOURCE_STATES,
 ) -> D3D12_RESOURCE_BARRIER {
+    subresource_transition_barrier(
+        resource,
+        D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+        before,
+        after,
+    )
+}
+
+// As `transition_barrier`, for one subresource (a mip level of a single-slice
+// texture) or `D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES`.
+pub(super) fn subresource_transition_barrier(
+    resource: &ID3D12Resource,
+    subresource: u32,
+    before: D3D12_RESOURCE_STATES,
+    after: D3D12_RESOURCE_STATES,
+) -> D3D12_RESOURCE_BARRIER {
     D3D12_RESOURCE_BARRIER {
         Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
         Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
@@ -1195,7 +1261,7 @@ pub(super) fn transition_barrier(
                 pResource: com::borrowed(resource),
                 StateBefore: before,
                 StateAfter: after,
-                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                Subresource: subresource,
             }),
         },
     }

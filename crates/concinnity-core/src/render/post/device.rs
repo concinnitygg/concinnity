@@ -213,12 +213,32 @@ pub trait PostPassDevice {
         extent: PostExtent,
     ) -> RenderResult<Self::Target>;
 
-    /// Bind `target` as a sampled source. A temporal pass reads the slot it
-    /// wrote last frame, so a created target has to be nameable as an input.
+    /// Bind `target` as a sampled source, every mip level of it. A temporal
+    /// pass reads the slot it wrote last frame, so a created target has to be
+    /// nameable as an input.
     fn target_ref<'a>(&self, target: &'a Self::Target) -> Self::TextureRef<'a>;
 
-    /// Name `target` as a draw's color attachment.
+    /// Name `target`'s top mip level as a draw's color attachment.
     fn target_attachment<'a>(&self, target: &'a Self::Target) -> Self::Attachment<'a>;
+
+    /// Bind mip `level` of `target` on its own as a sampled source, so a draw
+    /// can read one level while it writes the next. Fails when the target has
+    /// no such level.
+    fn target_level_ref<'a>(
+        &self,
+        target: &'a Self::Target,
+        level: u32,
+    ) -> RenderResult<Self::TextureRef<'a>>;
+
+    /// Name mip `level` of `target` as a draw's color attachment, sized to that
+    /// level. A [`PostTargetState::Pass`] draw moves only that level into the
+    /// render state and back, so the target's other levels stay readable. Fails
+    /// when the target has no such level.
+    fn target_level_attachment<'a>(
+        &self,
+        target: &'a Self::Target,
+        level: u32,
+    ) -> RenderResult<Self::Attachment<'a>>;
 
     /// Encode one fullscreen draw.
     ///
@@ -226,6 +246,28 @@ pub trait PostPassDevice {
     /// device binds the one the world holds this frame: the probe records and
     /// the cube array together, which no pass chooses between.
     fn encode(&self, rec: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> RenderResult<()>;
+}
+
+/// Whether a target created with `levels` mip levels has a mip `level`: the one
+/// check every backend's level addressing makes before it indexes a view.
+pub fn check_level(label: &str, level: u32, levels: u32) -> RenderResult<()> {
+    if level < levels.max(1) {
+        return Ok(());
+    }
+    Err(RenderError::Other(format!(
+        "{label}: mip level {level} addressed on a target with {levels} level(s)"
+    )))
+}
+
+/// The size of mip `level` of a target whose top level is `extent`: each axis
+/// halved per level and floored at one texel, which is how every backend sizes
+/// a mip chain.
+pub fn level_extent(extent: PostExtent, level: u32) -> PostExtent {
+    let halve = |v: u32| v.checked_shr(level).unwrap_or(0).max(1);
+    PostExtent {
+        width: halve(extent.width),
+        height: halve(extent.height),
+    }
 }
 
 /// Resolve a render-graph texture description's fractional sizes against a
@@ -342,6 +384,47 @@ mod tests {
                 height: 512
             }
         );
+    }
+
+    #[test]
+    fn a_level_halves_each_axis_and_floors_at_one_texel() {
+        let e = PostExtent {
+            width: 1281,
+            height: 720,
+        };
+        assert_eq!(level_extent(e, 0), e);
+        assert_eq!(
+            level_extent(e, 1),
+            PostExtent {
+                width: 640,
+                height: 360
+            }
+        );
+        assert_eq!(
+            level_extent(e, 10),
+            PostExtent {
+                width: 1,
+                height: 1
+            }
+        );
+        // A shift past the width of the type is a one-texel level, not a wrap.
+        assert_eq!(
+            level_extent(e, 40),
+            PostExtent {
+                width: 1,
+                height: 1
+            }
+        );
+    }
+
+    #[test]
+    fn only_a_level_the_target_holds_is_addressable() {
+        assert!(check_level("t", 0, 1).is_ok());
+        assert!(check_level("t", 4, 5).is_ok());
+        assert!(check_level("t", 5, 5).is_err());
+        // A target described with zero levels still has its top one.
+        assert!(check_level("t", 0, 0).is_ok());
+        assert!(check_level("t", 1, 0).is_err());
     }
 
     #[test]

@@ -222,8 +222,8 @@ pub(super) static SSR_RESOLVE: Program = Program {
     splices: &[],
 };
 
-pub(super) static SSGI_GATHER: Program = Program {
-    row: &shared::SSGI_GATHER,
+pub(super) static SSGI_TRACE: Program = Program {
+    row: &shared::SSGI_TRACE,
     splices: &[],
 };
 

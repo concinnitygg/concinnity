@@ -18,7 +18,8 @@
 
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::{
-    PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostTargetState, resolved_texture,
+    PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostTargetState, check_level,
+    level_extent, resolved_texture,
 };
 use concinnity_core::render::post::program::{PostProgram, PostProgramBindings};
 use concinnity_core::render::render_graph::{PixelFormat, TextureDesc};
@@ -37,7 +38,7 @@ use crate::directx::post::descriptors::{PostDescriptors, PostTargetDescriptors};
 use crate::directx::post::fullscreen::FullscreenExtent;
 use crate::directx::root_constants::RootConstants;
 use crate::directx::texture::{
-    create_rt_target, transition_barrier, write_format_rtv, write_format_srv,
+    create_rt_chain, subresource_transition_barrier, write_level_rtv, write_levels_srv,
 };
 use crate::directx::transient_pool::dxgi_format;
 
@@ -68,12 +69,25 @@ impl PostPipeline {
     }
 }
 
-// A persistent post target: the resource, its descriptors, and the extent it was
-// created at.
+// A persistent post target: the resource, its descriptors, and the extent of its
+// top level. `descriptors` samples every level and renders to the top one; a
+// target with several levels also holds a set per level, sampling and
+// rendering to that level alone.
 pub(in crate::directx) struct PostTarget {
     pub(in crate::directx) resource: ID3D12Resource,
     pub(in crate::directx) descriptors: PostTargetDescriptors,
+    label: &'static str,
+    levels: Vec<PostTargetDescriptors>,
+    level_count: u32,
     extent: FullscreenExtent,
+}
+
+impl PostTarget {
+    // Mip `level`'s own descriptors, or the target's when it has one level.
+    fn level(&self, level: u32) -> RenderResult<&PostTargetDescriptors> {
+        check_level(self.label, level, self.level_count)?;
+        Ok(self.levels.get(level as usize).unwrap_or(&self.descriptors))
+    }
 }
 
 impl PostTarget {
@@ -83,11 +97,13 @@ impl PostTarget {
     }
 }
 
-// A draw's color target: the resource (for the transitions of a target its pass
-// owns), the RTV it is written through, and its extent, which is the viewport.
+// A draw's color target: the resource and the subresource it writes (for the
+// transitions of a target its pass owns), the RTV it is written through, and its
+// extent, which is the viewport.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct DxAttachment<'a> {
     pub resource: &'a ID3D12Resource,
+    pub subresource: u32,
     pub rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub extent: FullscreenExtent,
 }
@@ -282,13 +298,32 @@ impl PostPassDevice for DxPostDevice<'_> {
     ) -> RenderResult<Self::Target> {
         let spec = resolved_texture(label, desc, extent);
         let format = dxgi_format(spec.format);
-        let resource = create_rt_target(self.device, spec.width, spec.height, format)?;
+        let level_count = spec.mip_levels.max(1);
+        let resource = create_rt_chain(self.device, spec.width, spec.height, format, level_count)?;
         let descriptors = self.descriptors.allocate()?;
-        write_format_srv(self.device, &resource, descriptors.srv_cpu, format);
-        write_format_rtv(self.device, &resource, descriptors.rtv, format);
+        write_levels_srv(
+            self.device,
+            &resource,
+            descriptors.srv_cpu,
+            format,
+            (0, level_count),
+        );
+        write_level_rtv(self.device, &resource, descriptors.rtv, format, 0);
+        let mut levels = Vec::new();
+        if level_count > 1 {
+            for level in 0..level_count {
+                let d = self.descriptors.allocate()?;
+                write_levels_srv(self.device, &resource, d.srv_cpu, format, (level, 1));
+                write_level_rtv(self.device, &resource, d.rtv, format, level);
+                levels.push(d);
+            }
+        }
         Ok(PostTarget {
             resource,
             descriptors,
+            label,
+            levels,
+            level_count,
             extent: FullscreenExtent {
                 width: spec.width,
                 height: spec.height,
@@ -303,9 +338,43 @@ impl PostPassDevice for DxPostDevice<'_> {
     fn target_attachment<'a>(&self, target: &'a Self::Target) -> Self::Attachment<'a> {
         DxAttachment {
             resource: &target.resource,
+            // The top level is subresource 0 of a single-slice texture.
+            subresource: 0,
             rtv: target.descriptors.rtv,
             extent: target.extent,
         }
+    }
+
+    fn target_level_ref<'a>(
+        &self,
+        target: &'a Self::Target,
+        level: u32,
+    ) -> RenderResult<Self::TextureRef<'a>> {
+        Ok(target.level(level)?.srv_gpu)
+    }
+
+    fn target_level_attachment<'a>(
+        &self,
+        target: &'a Self::Target,
+        level: u32,
+    ) -> RenderResult<Self::Attachment<'a>> {
+        let extent = level_extent(
+            PostExtent {
+                width: target.extent.width,
+                height: target.extent.height,
+            },
+            level,
+        );
+        Ok(DxAttachment {
+            resource: &target.resource,
+            // A single-slice texture's subresources are its mip levels.
+            subresource: level,
+            rtv: target.level(level)?.rtv,
+            extent: FullscreenExtent {
+                width: extent.width,
+                height: extent.height,
+            },
+        })
     }
 
     fn encode(&self, cmd: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> RenderResult<()> {
@@ -333,8 +402,9 @@ impl PostPassDevice for DxPostDevice<'_> {
         // slice these commands name is live for the call.
         unsafe {
             if owns_state {
-                cmd.ResourceBarrier(&[transition_barrier(
+                cmd.ResourceBarrier(&[subresource_transition_barrier(
                     target.resource,
+                    target.subresource,
                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                     D3D12_RESOURCE_STATE_RENDER_TARGET,
                 )]);
@@ -375,8 +445,9 @@ impl PostPassDevice for DxPostDevice<'_> {
             cmd.IASetIndexBuffer(None);
             cmd.DrawInstanced(3, 1, 0, 0);
             if owns_state {
-                cmd.ResourceBarrier(&[transition_barrier(
+                cmd.ResourceBarrier(&[subresource_transition_barrier(
                     target.resource,
+                    target.subresource,
                     D3D12_RESOURCE_STATE_RENDER_TARGET,
                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                 )]);
@@ -417,6 +488,7 @@ impl crate::directx::context::DxContext {
     pub(in crate::directx) fn hdr_scene_attachment(&self) -> DxAttachment<'_> {
         DxAttachment {
             resource: self.hdr_scene_target(),
+            subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
             rtv: self.hdr_scene_rtv(),
             extent: FullscreenExtent {
                 width: self.targets.extent.render_width,
@@ -436,12 +508,7 @@ mod tests {
     #[test]
     fn every_post_program_compiles() {
         concinnity_shader::require_dxc!();
-        for program in [
-            PostProgram::TaaResolve,
-            PostProgram::SsrResolve,
-            PostProgram::SsgiGather,
-            PostProgram::SsgiComposite,
-        ] {
+        for program in PostProgram::ALL {
             compile(program, false).unwrap_or_else(|e| panic!("{program:?}: {e}"));
         }
     }

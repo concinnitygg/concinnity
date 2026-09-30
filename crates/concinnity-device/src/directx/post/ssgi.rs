@@ -1,13 +1,14 @@
 //! DirectX's share of screen-space global illumination, which is its settings,
 //! where the pass reads and writes this frame, and the one resource state the
-//! graph cannot express for it. The gather and composite -- their pipelines, the
-//! reduced gather target and both draws -- are written once in
-//! `concinnity_core::render::post::ssgi` and reach D3D12 through `DxPostDevice`.
+//! graph cannot express for it. Every stage -- the pipelines, the depth
+//! pyramids, the accumulation and all the draws -- is written once in
+//! `concinnity_core::render::post::ssgi` and reaches D3D12 through
+//! `DxPostDevice`.
 
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::ssgi::settings::SsgiSettings;
-use concinnity_core::render::post::ssgi::{SsgiPass, SsgiPipelines};
+use concinnity_core::render::post::ssgi::{SsgiPass, SsgiPipelines, SsgiTraceInputs};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::DxContext;
@@ -23,8 +24,8 @@ pub(in crate::directx) struct SsgiResources {
 }
 
 impl SsgiResources {
-    // Build both pipelines and the gather target for a render resolution of
-    // `width` x `height`.
+    // Build every pipeline and target for a render resolution of `width` x
+    // `height`.
     pub(in crate::directx) fn new(
         device: &DxPostDevice,
         width: u32,
@@ -37,8 +38,8 @@ impl SsgiResources {
         })
     }
 
-    // Recreate the gather target at a new render resolution. The composite reads
-    // its descriptor per frame, so the slot it lands on is free to move.
+    // Recreate the targets at a new render resolution. Every draw reads its
+    // descriptors per frame, so the slots they land on are free to move.
     pub(in crate::directx) fn resize_to(
         &mut self,
         device: &DxPostDevice,
@@ -53,13 +54,18 @@ impl SsgiResources {
     pub(in crate::directx) fn swap_pipelines(&mut self, pipelines: SsgiPipelines<PostPipeline>) {
         self.pass.swap_pipelines(pipelines);
     }
+
+    // Step the accumulation ring once the frame is recorded.
+    pub(in crate::directx) fn advance(&mut self) {
+        self.pass.advance();
+    }
 }
 
 impl DxContext {
-    // Encode the SSGI gather + composite: hemisphere rays marched over the
-    // G-buffer into the reduced gather target, then blurred and added into the
-    // scene spine (`hdr_resolve`, or `hdr_color` with MSAA off). Runs on the
-    // hdr_resolve read-modify-write chain after the main pass.
+    // Encode SSGI: the depth pyramid, the trace over the G-buffer, the
+    // accumulation, and the composite into the scene spine (`hdr_resolve`, or
+    // `hdr_color` with MSAA off). Runs on the hdr_resolve read-modify-write
+    // chain after the main pass.
     pub(in crate::directx) fn encode_ssgi(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -68,16 +74,26 @@ impl DxContext {
         aspect: f32,
     ) {
         let Some(ssgi) = &self.ssgi else { return };
-        // With no G-buffer there is nothing to gather against, so skip rather
+        // With no G-buffer there is nothing to trace against, so skip rather
         // than read a stale descriptor.
         let Some(gbuffer) = &self.gbuffer else { return };
-        let params = ssgi.settings.params(fov_y_radians, aspect);
+        let params = ssgi
+            .settings
+            .params(fov_y_radians, aspect, ssgi.pass.frame());
         let device = self.post_device(frame_idx);
+        let normal_depth = gbuffer.normal_depth_srv_gpu;
+        if let Err(e) = ssgi
+            .pass
+            .encode_pyramid(&device, cmd, normal_depth, &params)
+        {
+            tracing::error!("SSGI: {e}");
+            return;
+        }
 
-        // The gather samples the scene spine while the composite blends into it,
+        // The trace samples the scene spine while the composite blends into it,
         // so this node reads and writes one resource. The graph models that as a
         // single write and leaves the spine in RENDER_TARGET; sampling it needs
-        // the shader-resource state, so borrow it for the gather and hand it
+        // the shader-resource state, so borrow it for the trace and hand it
         // back. Finer than one-state-per-resource, hence inline.
         let borrow = |from, to| {
             // SAFETY: the command list is in the recording state, and the
@@ -90,23 +106,26 @@ impl DxContext {
             D3D12_RESOURCE_STATE_RENDER_TARGET,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         );
-        let gathered = ssgi.pass.encode_gather(
+        let traced = ssgi.pass.encode_trace(
             &device,
             cmd,
-            self.targets.hdr.srv_gpu,
-            gbuffer.normal_depth_srv_gpu,
+            SsgiTraceInputs {
+                scene: self.targets.hdr.srv_gpu,
+                normal_depth,
+                velocity: gbuffer.velocity_srv_gpu,
+            },
             &params,
         );
         borrow(
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_RENDER_TARGET,
         );
-        let result = gathered.and_then(|()| {
+        let result = traced.and_then(|()| {
             ssgi.pass.encode_composite(
                 &device,
                 cmd,
                 self.hdr_scene_attachment(),
-                gbuffer.normal_depth_srv_gpu,
+                normal_depth,
                 &params,
             )
         });

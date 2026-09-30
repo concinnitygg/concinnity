@@ -231,8 +231,8 @@ pub(super) fn build_screen_space(
         None
     };
 
-    // SSGI (screen-space global illumination): the hemisphere-gather +
-    // depth-aware-blur GI pass. Built only when the world selected
+    // SSGI (screen-space global illumination): the Hi-Z traced, temporally
+    // accumulated GI pass. Built only when the world selected
     // `indirect_lighting: ssgi`; it samples the unified pre-pass G-buffer,
     // which SSGI forces on, and each frame's HDR resolve.
     let ssgi = match post.ssgi {

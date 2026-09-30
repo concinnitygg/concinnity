@@ -1,12 +1,11 @@
 //! Screen-space global illumination (SSGI) configuration. Backend-agnostic
 //! resolve of the authored `PostProcessConfig` SSGI fields into clamped
-//! settings, plus the per-frame GPU uniform. SSGI is a refinement of SSR: it
-//! reuses the same depth + normal pre-pass G-buffer and screen-space ray-march,
-//! but integrates bounced radiance over a cosine-weighted hemisphere instead of
-//! along a single reflection vector, and adds the result on top of the IBL
-//! ambient term. The hemisphere gather itself lives in each backend's shader;
-//! this module owns only the parameter math so it can be unit-tested without a
-//! GPU.
+//! settings, plus the per-frame GPU uniform. SSGI reuses the depth + normal
+//! pre-pass G-buffer SSR reads, but integrates bounced radiance over a
+//! cosine-weighted hemisphere instead of along a single reflection vector,
+//! accumulates it over frames, and adds the result on top of the IBL ambient
+//! term. This module owns only the parameter math so it can be unit-tested
+//! without a GPU.
 
 use crate::components::{IndirectLighting, PostProcessConfig};
 use crate::gfx::camera::view_ray_scale;
@@ -18,36 +17,28 @@ use crate::gfx::render_types::SsgiParams;
 // rather than a `[0, 1]` blend: values above 1 exaggerate the bounce.
 const MAX_INTENSITY: f32 = 4.0;
 
-// Smallest usable march distance: a ray shorter than this finds nothing.
+// Smallest usable ray reach: a ray shorter than this finds nothing.
 const MIN_DISTANCE: f32 = 0.5;
-// Largest march distance. SSGI is a near-field effect (the far field is the
-// IBL term's job), so the reach is capped well below SSR's.
+// Largest ray reach. SSGI is a near-field effect (the far field is the IBL
+// term's job), so the reach is capped well below SSR's.
 const MAX_DISTANCE: f32 = 100.0;
 
-// Hemisphere rays cast per pixel, clamped to a sane range. More rays trade
-// performance for a smoother, less noisy gather. The default is the authored
-// `PostProcessConfig.ssgi_rays` default, owned by the schema and
-// re-exported here so the authored default and the runtime clamp path stay a
-// single source of truth.
+// Hemisphere rays traced per pixel each frame. The accumulation averages rays
+// across frames, so more rays per frame buy faster convergence after a
+// disocclusion or a lighting change rather than a smoother steady state. The
+// default is the authored `PostProcessConfig.ssgi_rays` default, owned by the
+// schema.
 #[cfg(test)]
 pub(crate) const DEFAULT_RAYS: u32 = crate::components::DEFAULT_SSGI_RAYS;
 const MIN_RAYS: u32 = 1;
-const MAX_RAYS: u32 = 32;
+/// Most hemisphere rays a pixel may trace per frame.
+pub const MAX_RAYS: u32 = 4;
 
-// Ray-march samples taken per ray. The step length is `max_distance / steps`,
-// so a longer ray spends a longer stride rather than more samples. The default
-// is the authored `PostProcessConfig.ssgi_steps` default, owned by the schema
-// crate and re-exported here.
-#[cfg(test)]
-pub(crate) const DEFAULT_STEPS: u32 = crate::components::DEFAULT_SSGI_STEPS;
-const MIN_STEPS: u32 = 1;
-const MAX_STEPS: u32 = 64;
-
-// View-space intersection tolerance as a multiple of the march stride. A ray
-// point is a hit when it lands behind the scene surface by less than this:
-// wide enough to catch a crossing between two samples, tight enough not to
-// punch through thin geometry.
-const THICKNESS_SCALE: f32 = 2.0;
+// View-space intersection tolerance as a fraction of the ray's reach. A ray is
+// a hit where it passes behind the scene surface by less than this: wide enough
+// that a ray skimming a surface lands on it, tight enough not to catch thin
+// geometry the ray passes behind.
+const THICKNESS_FRACTION: f32 = 1.0 / 6.0;
 
 /// Clamped SSGI tunables resolved from the authored asset fields. Held by the
 /// backend and turned into a per-frame [`SsgiParams`] once the camera is known.
@@ -55,18 +46,28 @@ const THICKNESS_SCALE: f32 = 2.0;
 pub struct SsgiSettings {
     /// Indirect-bounce blend strength multiplier in `[0, MAX_INTENSITY]`.
     pub intensity: f32,
-    /// World-space distance a hemisphere ray marches before giving up.
+    /// View-space distance a hemisphere ray travels before it misses.
     pub max_distance: f32,
-    /// Hemisphere rays cast per pixel, clamped to `[MIN_RAYS, MAX_RAYS]`.
+    /// Hemisphere rays traced per pixel each frame, clamped to
+    /// `[MIN_RAYS, MAX_RAYS]`.
     pub rays: u32,
-    /// Ray-march samples per ray, clamped to `[MIN_STEPS, MAX_STEPS]`.
-    pub steps: u32,
-    /// Render-resolution divisor for the gather target: 1 is full resolution,
-    /// 2 is half (a quarter of the pixels), 4 a quarter. The composite pass is a
-    /// depth-aware bilateral filter, so it upsamples the lower-resolution gather
-    /// back to full resolution for free. Backends that always allocate the
-    /// gather at full resolution treat this as 1.
+    /// Render-resolution divisor for the trace and its accumulation: 1 is full
+    /// resolution, 2 is half (a quarter of the pixels), 4 a quarter. The
+    /// composite is a depth-aware filter, so it upsamples the lower-resolution
+    /// accumulation back to full resolution as it goes.
     pub gi_scale: u32,
+}
+
+/// Where a pass's accumulation stands this frame: the part of the uniform the
+/// settings cannot know.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SsgiFrame {
+    /// The frame counter the ray directions are drawn from.
+    pub frame: u32,
+    /// Whether last frame's accumulation can be reprojected.
+    pub history_valid: bool,
+    /// Levels in the closest-depth pyramid.
+    pub levels: u32,
 }
 
 impl SsgiSettings {
@@ -80,7 +81,6 @@ impl SsgiSettings {
                     cfg.ssgi_intensity,
                     cfg.ssgi_max_distance,
                     cfg.ssgi_rays,
-                    cfg.ssgi_steps,
                     cfg.ssgi_resolution.scale_divisor(),
                 )
             })
@@ -88,24 +88,17 @@ impl SsgiSettings {
     }
 
     /// Clamp the authored tunables into safe ranges.
-    pub fn resolve(
-        intensity: f32,
-        max_distance: f32,
-        rays: u32,
-        steps: u32,
-        gi_scale: u32,
-    ) -> Self {
+    pub fn resolve(intensity: f32, max_distance: f32, rays: u32, gi_scale: u32) -> Self {
         Self {
             intensity: intensity.clamp(0.0, MAX_INTENSITY),
             max_distance: max_distance.clamp(MIN_DISTANCE, MAX_DISTANCE),
             rays: rays.clamp(MIN_RAYS, MAX_RAYS),
-            steps: steps.clamp(MIN_STEPS, MAX_STEPS),
             gi_scale: gi_scale.max(1),
         }
     }
 
-    /// Gather-target dimensions for a given render resolution: the render size
-    /// divided by `gi_scale`, never below 1x1.
+    /// Trace dimensions for a given render resolution: the render size divided
+    /// by `gi_scale`, never below 1x1.
     pub fn gi_dimensions(&self, render_w: u32, render_h: u32) -> (u32, u32) {
         (
             (render_w / self.gi_scale).max(1),
@@ -114,30 +107,33 @@ impl SsgiSettings {
     }
 
     /// Whether the pass can contribute anything to the frame. The composite
-    /// scales the gathered indirect term by `intensity` and blends it additively,
-    /// so a zero intensity adds exactly zero and the whole pass (a hemisphere
-    /// ray-march plus a bilateral upsample) is dead weight. Backends gate
-    /// `FrameGraphInputs::ssgi_enabled` on this so the graph drops the node.
+    /// scales the accumulated indirect term by `intensity` and blends it
+    /// additively, so a zero intensity adds exactly zero and every SSGI draw is
+    /// dead weight. Backends gate `FrameGraphInputs::ssgi_enabled` on this so
+    /// the graph drops the node.
     pub fn contributes(&self) -> bool {
         self.intensity > 0.0
     }
 
-    /// Build the per-frame GPU uniform from these settings and the active
-    /// camera. `fov_y_radians` is the vertical field of view and `aspect` the
-    /// viewport width / height ratio: together they give the view-ray scale
-    /// the gather pass needs to project a view-space ray point to a UV.
-    pub fn params(&self, fov_y_radians: f32, aspect: f32) -> SsgiParams {
-        let stride = self.max_distance / self.steps as f32;
+    /// Build the per-frame GPU uniform from these settings, the active camera,
+    /// and where the pass's accumulation stands. `fov_y_radians` is the
+    /// vertical field of view and `aspect` the viewport width / height ratio:
+    /// together they give the view-ray scale the trace needs to project a
+    /// view-space ray point to a UV.
+    pub fn params(&self, fov_y_radians: f32, aspect: f32, frame: SsgiFrame) -> SsgiParams {
         let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
         SsgiParams {
             intensity: self.intensity,
             max_distance: self.max_distance,
             tan_half_fov_y,
             aspect,
-            stride,
-            thickness: stride * THICKNESS_SCALE,
-            rays: self.rays as f32,
-            steps: self.steps as f32,
+            thickness: self.max_distance * THICKNESS_FRACTION,
+            history_valid: if frame.history_valid { 1.0 } else { 0.0 },
+            rays: self.rays,
+            frame: frame.frame,
+            levels: frame.levels,
+            gi_scale: self.gi_scale,
+            _pad: [0; 2],
         }
     }
 }
@@ -147,6 +143,12 @@ mod tests {
     use super::*;
     use crate::components::PassResolution;
     use crate::gfx::camera::MIN_ASPECT;
+
+    const FRAME: SsgiFrame = SsgiFrame {
+        frame: 7,
+        history_valid: true,
+        levels: 5,
+    };
 
     #[test]
     fn from_config_follows_indirect_lighting() {
@@ -176,17 +178,15 @@ mod tests {
     }
 
     #[test]
-    fn from_config_carries_resolution_and_counts() {
+    fn from_config_carries_resolution_and_rays() {
         let cfg = PostProcessConfig {
             indirect_lighting: IndirectLighting::Ssgi,
             ssgi_resolution: PassResolution::Quarter,
-            ssgi_rays: 4,
-            ssgi_steps: 20,
+            ssgi_rays: 2,
             ..Default::default()
         };
         let s = SsgiSettings::from_config(&cfg).expect("ssgi on");
-        assert_eq!(s.rays, 4);
-        assert_eq!(s.steps, 20);
+        assert_eq!(s.rays, 2);
         assert_eq!(s.gi_scale, 4);
     }
 
@@ -205,11 +205,11 @@ mod tests {
 
     #[test]
     fn resolve_clamps_intensity_and_distance() {
-        let s = SsgiSettings::resolve(9.0, 1.0e6, DEFAULT_RAYS, DEFAULT_STEPS, 1);
+        let s = SsgiSettings::resolve(9.0, 1.0e6, DEFAULT_RAYS, 1);
         assert_eq!(s.intensity, MAX_INTENSITY);
         assert_eq!(s.max_distance, MAX_DISTANCE);
 
-        let s = SsgiSettings::resolve(-2.0, -10.0, DEFAULT_RAYS, DEFAULT_STEPS, 1);
+        let s = SsgiSettings::resolve(-2.0, -10.0, DEFAULT_RAYS, 1);
         assert_eq!(s.intensity, 0.0);
         assert_eq!(s.max_distance, MIN_DISTANCE);
     }
@@ -218,78 +218,79 @@ mod tests {
     fn zero_intensity_does_not_contribute() {
         // A world may author `indirect_lighting: ssgi` and dial the intensity to
         // zero; the settings still resolve, so presence alone cannot gate the pass.
-        let off = SsgiSettings::resolve(0.0, 8.0, DEFAULT_RAYS, DEFAULT_STEPS, 1);
-        assert!(!off.contributes());
-
-        let on = SsgiSettings::resolve(0.05, 8.0, DEFAULT_RAYS, DEFAULT_STEPS, 1);
-        assert!(on.contributes());
-    }
-
-    #[test]
-    fn negative_intensity_clamps_to_no_contribution() {
-        let s = SsgiSettings::resolve(-1.0, 8.0, DEFAULT_RAYS, DEFAULT_STEPS, 1);
-        assert!(!s.contributes());
+        assert!(!SsgiSettings::resolve(0.0, 8.0, DEFAULT_RAYS, 1).contributes());
+        assert!(SsgiSettings::resolve(0.05, 8.0, DEFAULT_RAYS, 1).contributes());
+        assert!(!SsgiSettings::resolve(-1.0, 8.0, DEFAULT_RAYS, 1).contributes());
     }
 
     #[test]
     fn resolve_passes_through_in_range_values() {
-        let s = SsgiSettings::resolve(0.6, 8.0, DEFAULT_RAYS, DEFAULT_STEPS, 2);
+        let s = SsgiSettings::resolve(0.6, 8.0, DEFAULT_RAYS, 2);
         assert_eq!(s.intensity, 0.6);
         assert_eq!(s.max_distance, 8.0);
         assert_eq!(s.rays, DEFAULT_RAYS);
-        assert_eq!(s.steps, DEFAULT_STEPS);
         assert_eq!(s.gi_scale, 2);
     }
 
     #[test]
-    fn resolve_clamps_rays_steps_and_scale() {
-        // Over-range rays / steps clamp to their maxima; a zero scale floors to
-        // full resolution (1).
-        let s = SsgiSettings::resolve(0.6, 8.0, 9999, 9999, 0);
+    fn resolve_clamps_rays_and_scale() {
+        // Over-range rays clamp to the maximum; a zero scale floors to full
+        // resolution (1).
+        let s = SsgiSettings::resolve(0.6, 8.0, 9999, 0);
         assert_eq!(s.rays, MAX_RAYS);
-        assert_eq!(s.steps, MAX_STEPS);
         assert_eq!(s.gi_scale, 1);
-        // Under-range rays / steps clamp to their minima.
-        let s = SsgiSettings::resolve(0.6, 8.0, 0, 0, 4);
+        let s = SsgiSettings::resolve(0.6, 8.0, 0, 4);
         assert_eq!(s.rays, MIN_RAYS);
-        assert_eq!(s.steps, MIN_STEPS);
         assert_eq!(s.gi_scale, 4);
     }
 
     #[test]
+    fn the_default_ray_count_is_in_range() {
+        assert!((MIN_RAYS..=MAX_RAYS).contains(&DEFAULT_RAYS));
+    }
+
+    #[test]
     fn gi_dimensions_divide_by_scale_and_floor_at_one() {
-        let full = SsgiSettings::resolve(0.6, 8.0, DEFAULT_RAYS, DEFAULT_STEPS, 1);
+        let full = SsgiSettings::resolve(0.6, 8.0, DEFAULT_RAYS, 1);
         assert_eq!(full.gi_dimensions(1920, 1080), (1920, 1080));
-        let half = SsgiSettings::resolve(0.6, 8.0, DEFAULT_RAYS, DEFAULT_STEPS, 2);
+        let half = SsgiSettings::resolve(0.6, 8.0, DEFAULT_RAYS, 2);
         assert_eq!(half.gi_dimensions(1920, 1080), (960, 540));
         // A tiny render target never collapses below 1x1.
         assert_eq!(half.gi_dimensions(1, 1), (1, 1));
     }
 
     #[test]
-    fn params_derive_stride_and_thickness_from_configured_steps() {
-        // 12 units over the default 12 steps -> a 1-unit stride.
-        let s = SsgiSettings::resolve(0.6, 12.0, DEFAULT_RAYS, DEFAULT_STEPS, 1);
-        let p = s.params(core::f32::consts::FRAC_PI_2, 1.6);
-        assert!((p.stride - 1.0).abs() < 1.0e-5);
-        assert!((p.thickness - THICKNESS_SCALE).abs() < 1.0e-5);
+    fn params_carry_the_tunables_the_camera_and_the_frame() {
+        let s = SsgiSettings::resolve(0.6, 12.0, 2, 2);
+        let p = s.params(core::f32::consts::FRAC_PI_2, 1.6, FRAME);
+        assert_eq!(p.intensity, 0.6);
+        assert_eq!(p.max_distance, 12.0);
         // A 90-degree vertical FOV has tan(45 deg) == 1.
         assert!((p.tan_half_fov_y - 1.0).abs() < 1.0e-5);
         assert_eq!(p.aspect, 1.6);
-        // The ray / step counts ride along in the uniform for the shader loops.
-        assert_eq!(p.rays, DEFAULT_RAYS as f32);
-        assert_eq!(p.steps, DEFAULT_STEPS as f32);
+        assert!((p.thickness - 2.0).abs() < 1.0e-5);
+        assert_eq!(p.rays, 2);
+        assert_eq!(p.gi_scale, 2);
+        assert_eq!((p.frame, p.levels, p.history_valid), (7, 5, 1.0));
 
-        // Halving the step count doubles the stride (same reach, fewer samples).
-        let s = SsgiSettings::resolve(0.6, 12.0, DEFAULT_RAYS, 6, 1);
-        let p = s.params(core::f32::consts::FRAC_PI_2, 1.6);
-        assert!((p.stride - 2.0).abs() < 1.0e-5);
+        let fresh = SsgiFrame {
+            history_valid: false,
+            ..FRAME
+        };
+        assert_eq!(s.params(1.0, 1.0, fresh).history_valid, 0.0);
+    }
+
+    #[test]
+    fn the_thickness_scales_with_the_reach() {
+        let near = SsgiSettings::resolve(0.6, 6.0, 1, 2).params(1.0, 1.0, FRAME);
+        let far = SsgiSettings::resolve(0.6, 12.0, 1, 2).params(1.0, 1.0, FRAME);
+        assert!((far.thickness - 2.0 * near.thickness).abs() < 1.0e-5);
     }
 
     #[test]
     fn params_floor_a_degenerate_aspect() {
-        let s = SsgiSettings::resolve(0.6, 8.0, DEFAULT_RAYS, DEFAULT_STEPS, 1);
-        let p = s.params(core::f32::consts::FRAC_PI_2, 0.0);
+        let s = SsgiSettings::resolve(0.6, 8.0, DEFAULT_RAYS, 1);
+        let p = s.params(core::f32::consts::FRAC_PI_2, 0.0, FRAME);
         assert!(p.aspect >= MIN_ASPECT);
     }
 }

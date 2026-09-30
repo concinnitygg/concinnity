@@ -1226,7 +1226,7 @@ impl VkContext {
                 // the jittered VP (rasterization, matching the main pass);
                 // `params.cur_vp` is the un-jittered VP the shader uses with the
                 // previous VP for the motion vector. The velocity channel carries
-                // real motion only when a consumer reads it (TAA or FSR active);
+                // real motion only when a consumer reads it (TAA, FSR or SSGI);
                 // otherwise cur == prev and it stays a harmless zero. The merged
                 // buffer is built whenever any of these consumers is on, so a
                 // missing `self.gbuffer` here means the builder emitted this node
@@ -1237,7 +1237,7 @@ impl VkContext {
                             .into(),
                     )
                 })?;
-                let velocity_active = self.taa.is_some() || self.upscale.is_some();
+                let velocity_active = self.reads_motion();
                 self.encode_gbuffer_prepass(
                     gb,
                     cmd,

@@ -276,9 +276,9 @@ const AUDITS: &[BackendAudit] = &[
             // glass reflection layers, private to the node, open for their
             // pre-pass and close for the scene pass to read.
             ("transparent.rs", ".ResourceBarrier(", 4, Reason::IntraPass),
-            // The SSGI gather samples the scene the composite then blends into,
+            // The SSGI trace samples the scene the composite then blends into,
             // so this node reads and writes one resource; the graph models that
-            // as a single write and the gather borrows the read state. One site,
+            // as a single write and the trace borrows the read state. One site,
             // called on the way in and on the way out.
             ("post/ssgi.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
             // The shared post seam's bracket for a target private to its pass

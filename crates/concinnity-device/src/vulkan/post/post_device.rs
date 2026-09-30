@@ -12,7 +12,8 @@
 use ash::vk;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::{
-    PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler, resolved_texture,
+    PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler, check_level,
+    level_extent, resolved_texture,
 };
 use concinnity_core::render::post::program::{PostProgram, PostProgramBindings};
 use concinnity_core::render::render_graph::{PixelFormat, TextureDesc};
@@ -25,7 +26,7 @@ use crate::vulkan::pipeline::GraphicsStages;
 use crate::vulkan::post::pass_cache::PostPassCache;
 use crate::vulkan::post::set_arena::PostSetArena;
 use crate::vulkan::texture::{
-    GpuImage, ImageSpec, create_image, create_image_view, one_shot_submit, transition_image_layout,
+    GpuImage, LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
 };
 use crate::vulkan::transient_pool::{image_format, image_usage, sample_count};
 
@@ -43,12 +44,14 @@ pub(in crate::vulkan) struct PostPipeline {
     bindings: PostProgramBindings,
 }
 
-// A persistent post target: the image, its view, and the extent its
-// framebuffers were sized at.
+// A persistent post target: the image, its view of every mip level, a view of
+// each level alone when it has more than one, and the extent of its top level.
 pub(in crate::vulkan) struct PostTarget {
+    label: &'static str,
     image: GpuImage,
     extent: vk::Extent2D,
     format: PixelFormat,
+    levels: u32,
 }
 
 impl PostTarget {
@@ -56,6 +59,44 @@ impl PostTarget {
     pub(in crate::vulkan) fn view(&self) -> vk::ImageView {
         self.image.view
     }
+
+    // Mip `level` alone: its own view when the target has several, else the
+    // one view.
+    fn level_view(&self, level: u32) -> RenderResult<vk::ImageView> {
+        check_level(self.label, level, self.levels)?;
+        Ok(self
+            .image
+            .aux_views
+            .get(level as usize)
+            .copied()
+            .unwrap_or(self.image.view))
+    }
+}
+
+// A 2D color view of `count` mip levels of `image` from `base`.
+fn level_range_view(
+    device: &VkDevice,
+    image: vk::Image,
+    format: vk::Format,
+    base: u32,
+    count: u32,
+) -> RenderResult<vk::ImageView> {
+    let info = vk::ImageViewCreateInfo::default()
+        .image(image)
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .format(format)
+        .subresource_range(
+            vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(base)
+                .level_count(count)
+                .base_array_layer(0)
+                .layer_count(1),
+        );
+    // SAFETY: the create-info is live for the call and names an image of this
+    // device holding at least `base + count` levels.
+    unsafe { device.create_image_view(&info, None) }
+        .map_err(|e| map_vk_result(e, "post target view"))
 }
 
 // A draw's color target: the view a framebuffer binds, the extent it is sized
@@ -275,51 +316,71 @@ impl PostPassDevice for VkPostDevice<'_> {
         extent: PostExtent,
     ) -> RenderResult<Self::Target> {
         let spec = resolved_texture(label, desc, extent);
-        let pooled = create_image(
-            self.alloc,
-            &ImageSpec {
+        let format = image_format(spec.format);
+        let levels = spec.mip_levels.max(1);
+        let info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .extent(vk::Extent3D {
                 width: spec.width,
                 height: spec.height,
-                format: image_format(spec.format),
-                tiling: vk::ImageTiling::OPTIMAL,
-                usage: image_usage(spec.usage),
-                mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                samples: sample_count(spec.sample_count),
-            },
-        )
-        .map_err(|e| e.context(format_args!("{label} post target")))?;
+                depth: 1,
+            })
+            .mip_levels(levels)
+            .array_layers(1)
+            .format(format)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .usage(image_usage(spec.usage))
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .samples(sample_count(spec.sample_count));
+        let pooled = self
+            .alloc
+            .create_image(&info, vk::MemoryPropertyFlags::DEVICE_LOCAL)
+            .map_err(|e| e.context(format_args!("{label} post target")))?;
         let image = pooled.image();
         // Pre-transitioned so the first frame can sample a slot before anything
         // has rendered into it: a temporal pass binds its history on the very
-        // first draw, gated to ignore what it reads.
+        // first draw, gated to ignore what it reads. Every level rests readable,
+        // and a draw's render pass moves the one level it writes in and out.
         one_shot_submit(
             self.device,
             self.queue.command_pool,
             self.queue.queue,
             |cmd| {
-                transition_image_layout(
+                transition_image_layout_range(
                     self.device,
                     cmd,
                     image,
-                    vk::ImageLayout::UNDEFINED,
-                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    vk::ImageAspectFlags::COLOR,
+                    LayoutTransition {
+                        old_layout: vk::ImageLayout::UNDEFINED,
+                        new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        aspect: vk::ImageAspectFlags::COLOR,
+                    },
+                    SubresourceRange {
+                        base_layer: 0,
+                        layer_count: 1,
+                        base_mip: 0,
+                        mip_count: levels,
+                    },
                 );
             },
         )?;
-        let view = create_image_view(
-            self.device,
-            image,
-            image_format(spec.format),
-            vk::ImageAspectFlags::COLOR,
-        )?;
+        let view = level_range_view(self.device, image, format, 0, levels)?;
+        let mut gpu = GpuImage::from_pooled(pooled, view);
+        if levels > 1 {
+            for level in 0..levels {
+                gpu.push_aux_view(level_range_view(self.device, image, format, level, 1)?);
+            }
+        }
         Ok(PostTarget {
-            image: GpuImage::from_pooled(pooled, view),
+            label,
+            image: gpu,
             extent: vk::Extent2D {
                 width: spec.width,
                 height: spec.height,
             },
             format: spec.format,
+            levels,
         })
     }
 
@@ -329,10 +390,40 @@ impl PostPassDevice for VkPostDevice<'_> {
 
     fn target_attachment<'a>(&self, target: &'a Self::Target) -> Self::Attachment<'a> {
         VkAttachment {
-            view: target.image.view,
+            // The top level alone: a framebuffer attachment is one level.
+            view: target
+                .image
+                .aux_views
+                .first()
+                .copied()
+                .unwrap_or(target.image.view),
             extent: target.extent,
             format: target.format,
         }
+    }
+
+    fn target_level_ref<'a>(
+        &self,
+        target: &'a Self::Target,
+        level: u32,
+    ) -> RenderResult<Self::TextureRef<'a>> {
+        target.level_view(level)
+    }
+
+    fn target_level_attachment<'a>(
+        &self,
+        target: &'a Self::Target,
+        level: u32,
+    ) -> RenderResult<Self::Attachment<'a>> {
+        let extent = level_extent(post_extent(target.extent), level);
+        Ok(VkAttachment {
+            view: target.level_view(level)?,
+            extent: vk::Extent2D {
+                width: extent.width,
+                height: extent.height,
+            },
+            format: target.format,
+        })
     }
 
     fn encode(&self, rec: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> RenderResult<()> {
@@ -479,12 +570,7 @@ mod tests {
     #[test]
     fn every_post_program_compiles() {
         concinnity_shader::require_dxc!();
-        for program in [
-            PostProgram::TaaResolve,
-            PostProgram::SsrResolve,
-            PostProgram::SsgiGather,
-            PostProgram::SsgiComposite,
-        ] {
+        for program in PostProgram::ALL {
             let (vert, frag) =
                 compile(program, false).unwrap_or_else(|e| panic!("{program:?}: {e}"));
             assert!(crate::vulkan::pipeline::is_spirv(&vert));

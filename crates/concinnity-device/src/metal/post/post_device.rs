@@ -9,15 +9,16 @@
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::{
     PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler, PostTiming,
-    resolved_texture,
+    check_level, resolved_texture,
 };
 use concinnity_core::render::post::program::{PostProgram, PostProgramBindings};
 use concinnity_core::render::render_graph::{PixelFormat, TextureDesc};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2_foundation::NSRange;
 use objc2_metal::{
     MTLCommandBuffer, MTLDevice as _, MTLLoadAction, MTLRenderPipelineState, MTLSamplerState,
-    MTLTexture,
+    MTLTexture, MTLTextureType,
 };
 
 use crate::metal::encode::RenderEncode;
@@ -47,6 +48,59 @@ fn probe_slots(sources: usize) -> ProbeSlots {
 pub(crate) struct MtlPostPipeline {
     state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     bindings: PostProgramBindings,
+}
+
+// A persistent post target: the texture, and a single-level view of each of its
+// mip levels when it has more than one.
+pub(crate) struct MtlPostTarget {
+    label: &'static str,
+    texture: Retained<ProtocolObject<dyn MTLTexture>>,
+    levels: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
+}
+
+impl MtlPostTarget {
+    // The whole texture, for a consumer that binds it directly.
+    pub(crate) fn texture(&self) -> &Retained<ProtocolObject<dyn MTLTexture>> {
+        &self.texture
+    }
+
+    // Mip `level` alone.
+    fn level(&self, level: u32) -> RenderResult<&ProtocolObject<dyn MTLTexture>> {
+        let count = (self.levels.len() as u32).max(1);
+        check_level(self.label, level, count)?;
+        Ok(match self.levels.get(level as usize) {
+            Some(view) => view,
+            None => &self.texture,
+        })
+    }
+}
+
+// A single-level view of each of `texture`'s `count` mip levels, or none for a
+// single-level texture, which is its own only level.
+fn level_views(
+    texture: &ProtocolObject<dyn MTLTexture>,
+    label: &'static str,
+    count: u32,
+) -> RenderResult<Vec<Retained<ProtocolObject<dyn MTLTexture>>>> {
+    if count <= 1 {
+        return Ok(Vec::new());
+    }
+    (0..count)
+        .map(|level| {
+            // SAFETY: `level` is below the texture's mip count and the view keeps
+            // the texture's own format, type and single slice, so no
+            // reinterpretation occurs.
+            unsafe {
+                texture.newTextureViewWithPixelFormat_textureType_levels_slices(
+                    texture.pixelFormat(),
+                    MTLTextureType::Type2D,
+                    NSRange::new(level as usize, 1),
+                    NSRange::new(0, 1),
+                )
+            }
+            .ok_or_else(|| allocation_failed(format_args!("the {label} post target level {level}")))
+        })
+        .collect()
 }
 
 // The Metal handles a shared post pass builds and encodes through. Borrowed
@@ -102,7 +156,7 @@ impl MtlPostDevice<'_> {
 impl PostPassDevice for MtlPostDevice<'_> {
     type Recorder = ProtocolObject<dyn MTLCommandBuffer>;
     type Pipeline = MtlPostPipeline;
-    type Target = Retained<ProtocolObject<dyn MTLTexture>>;
+    type Target = MtlPostTarget;
     type TextureRef<'a> = &'a ProtocolObject<dyn MTLTexture>;
     type Attachment<'a> = &'a ProtocolObject<dyn MTLTexture>;
 
@@ -133,17 +187,40 @@ impl PostPassDevice for MtlPostDevice<'_> {
     ) -> RenderResult<Self::Target> {
         let spec = resolved_texture(label, desc, extent);
         let desc = texture_descriptor_for(&spec);
-        self.device
+        let texture = self
+            .device
             .newTextureWithDescriptor(&desc)
-            .ok_or_else(|| allocation_failed(format_args!("the {label} post target")))
+            .ok_or_else(|| allocation_failed(format_args!("the {label} post target")))?;
+        let levels = level_views(&texture, label, spec.mip_levels)?;
+        Ok(MtlPostTarget {
+            label,
+            texture,
+            levels,
+        })
     }
 
     fn target_ref<'a>(&self, target: &'a Self::Target) -> Self::TextureRef<'a> {
-        target.as_ref()
+        &target.texture
     }
 
     fn target_attachment<'a>(&self, target: &'a Self::Target) -> Self::Attachment<'a> {
-        target.as_ref()
+        &target.texture
+    }
+
+    fn target_level_ref<'a>(
+        &self,
+        target: &'a Self::Target,
+        level: u32,
+    ) -> RenderResult<Self::TextureRef<'a>> {
+        target.level(level)
+    }
+
+    fn target_level_attachment<'a>(
+        &self,
+        target: &'a Self::Target,
+        level: u32,
+    ) -> RenderResult<Self::Attachment<'a>> {
+        target.level(level)
     }
 
     fn encode(&self, rec: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> RenderResult<()> {

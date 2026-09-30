@@ -90,7 +90,7 @@ pub(crate) static QUALITY_TOGGLES: [QualityToggle; 6] = [
     toggle!(AutoExposure, auto_exposure),
 ];
 
-pub(crate) static QUALITY_CYCLES: [QualityCycle; 6] = [
+pub(crate) static QUALITY_CYCLES: [QualityCycle; 5] = [
     cycle!(
         AaMode,
         aa_mode,
@@ -111,13 +111,6 @@ pub(crate) static QUALITY_CYCLES: [QualityCycle; 6] = [
         super::ssgi_rays_index,
         super::ssgi_rays_at,
         |cfg, ceiling| cfg.ssgi_rays = cfg.ssgi_rays.min(ceiling.ssgi_rays)
-    ),
-    cycle!(
-        SsgiSteps,
-        ssgi_steps,
-        super::ssgi_steps_index,
-        super::ssgi_steps_at,
-        |cfg, ceiling| cfg.ssgi_steps = cfg.ssgi_steps.min(ceiling.ssgi_steps)
     ),
     cycle!(
         RtReflectionResolution,
@@ -250,8 +243,7 @@ mod tests {
         let mut cfg = PostProcessConfig {
             aa_mode: AaMode::Taa,
             ssgi_resolution: PassResolution::Full,
-            ssgi_rays: 32,
-            ssgi_steps: 48,
+            ssgi_rays: 4,
             reflection_blur_resolution: PassResolution::Full,
             ..Default::default()
         };
@@ -261,7 +253,6 @@ mod tests {
         assert_eq!(cfg.aa_mode, ceiling.aa_mode);
         assert_eq!(cfg.ssgi_resolution, ceiling.ssgi_resolution);
         assert_eq!(cfg.ssgi_rays, ceiling.ssgi_rays);
-        assert_eq!(cfg.ssgi_steps, ceiling.ssgi_steps);
         assert_eq!(
             cfg.reflection_blur_resolution,
             ceiling.reflection_blur_resolution

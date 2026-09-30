@@ -271,7 +271,6 @@ impl SettingsState {
             key @ (K::AaMode
             | K::SsgiResolution
             | K::SsgiRays
-            | K::SsgiSteps
             | K::RtReflectionResolution
             | K::ReflectionBlurResolution) => {
                 quality_cycle(key).map(|row| self.apply_quality_cycle(ctx, ops, cfg, row, opts, op))

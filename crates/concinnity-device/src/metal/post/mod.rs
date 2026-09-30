@@ -5,7 +5,7 @@
 //!   gbuffer.rs unified normal+depth / roughness / velocity G-buffer pre-pass
 //!   ssao.rs   GTAO depth+normal pre-pass + horizon-search kernel + blur
 //!   ssr.rs    reflection targets + composite, and the inputs to the shared resolve
-//!   ssgi.rs   the inputs to the shared gather + composite
+//!   ssgi.rs   the inputs to the shared trace + composite
 //!   taa.rs    the TAA toggle + jitter counter over the shared resolve
 //!   bloom.rs  prefilter + downsample/upsample mip chain
 //!

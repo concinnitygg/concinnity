@@ -826,7 +826,7 @@ impl MtlContext {
                 render_h,
             )?);
         }
-        // The SSGI gather target is render-resolution scaled by `gi_scale`
+        // The SSGI trace targets are render-resolution scaled by `gi_scale`
         // (the composite bilateral-upsamples it back to full resolution).
         if render_changed && let Some(mut ssgi) = self.ssgi.pass.take() {
             let r = ssgi.resize(

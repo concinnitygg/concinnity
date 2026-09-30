@@ -160,9 +160,18 @@ impl DxContext {
             self.ssr = None;
         }
 
-        // SSGI (samples the unified G-buffer; `gbuffer_needed` keeps it alive).
-        if desired_ssgi && self.ssgi.is_none() {
+        // SSGI (samples the unified G-buffer; `gbuffer_needed` keeps it alive). A
+        // new trace resolution resizes every target, so it rebuilds the pass; the
+        // ray count rides the settings.
+        let ssgi_rescaled = match (q.ssgi, self.ssgi.as_ref()) {
+            (Some(settings), Some(live)) => settings.gi_scale != live.settings.gi_scale,
+            _ => false,
+        };
+        if (desired_ssgi && self.ssgi.is_none()) || ssgi_rescaled {
             let settings = q.ssgi.expect("desired_ssgi implies ssgi settings");
+            if ssgi_rescaled {
+                self.ssgi = None;
+            }
             let ssgi = super::post::ssgi::SsgiResources::new(
                 &self.post_device(0),
                 render_w,
@@ -172,6 +181,8 @@ impl DxContext {
             self.ssgi = Some(ssgi);
         } else if !desired_ssgi && self.ssgi.is_some() {
             self.ssgi = None;
+        } else if let (Some(settings), Some(ssgi)) = (q.ssgi, self.ssgi.as_mut()) {
+            ssgi.settings = settings;
         }
 
         // Ray-traced reflections. Turning on builds the scene acceleration

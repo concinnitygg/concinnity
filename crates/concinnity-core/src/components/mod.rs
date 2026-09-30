@@ -365,7 +365,7 @@ pub(crate) fn path_extension(path: &str) -> Option<&str> {
 
 // Bounds and capacities the engine reads off the schema. Not vocabulary: they
 // declare nothing, so they stay out of both namespaces.
-pub use post_process_config::{DEFAULT_SSGI_RAYS, DEFAULT_SSGI_STEPS};
+pub use post_process_config::DEFAULT_SSGI_RAYS;
 #[cfg(test)]
 mod tests {
     // Uniform, low-level checks over the small data-only asset types: their

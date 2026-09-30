@@ -378,7 +378,7 @@ impl DxContext {
             )?;
         }
 
-        // 7-ssgi) SSGI gather target.
+        // 7-ssgi) SSGI pyramids and accumulation.
         if let Some(mut ssgi) = self.ssgi.take() {
             let r = ssgi.resize_to(&self.post_device(0), render_w, render_h);
             self.ssgi = Some(ssgi);

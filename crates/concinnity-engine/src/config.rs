@@ -155,9 +155,9 @@ pub(crate) struct GraphicsSettings {
     pub ssgi: Option<bool>,
     #[serde(default)]
     pub auto_exposure: Option<bool>,
-    // SSGI gather sub-quality: internal resolution, hemisphere rays per pixel,
-    // and ray-march steps per ray (`PostProcessConfig.ssgi_resolution`/`_rays`/
-    // `_steps`). Each `None` uses the world's value. Applied live on Metal (the
+    // SSGI sub-quality: trace resolution and hemisphere rays per pixel per frame
+    // (`PostProcessConfig.ssgi_resolution` / `ssgi_rays`). Each `None` uses the
+    // world's value. Applied live on Metal (the
     // backend rebuilds the SSGI pass in place); persisted + applied at the next
     // launch on backends without a live path. Governed by the quality preset
     // ceiling like the toggles above.
@@ -165,8 +165,6 @@ pub(crate) struct GraphicsSettings {
     pub(crate) ssgi_resolution: Option<PassResolution>,
     #[serde(default)]
     pub(crate) ssgi_rays: Option<u32>,
-    #[serde(default)]
-    pub(crate) ssgi_steps: Option<u32>,
     // Roughness-aware reflection blur resolution
     // (`PostProcessConfig.reflection_blur_resolution`). `None` uses the world's
     // value. Applied live on Metal; governed by the quality preset ceiling like
@@ -363,8 +361,7 @@ mod tests {
                 ssgi: Some(true),
                 auto_exposure: Some(false),
                 ssgi_resolution: Some(PassResolution::Quarter),
-                ssgi_rays: Some(16),
-                ssgi_steps: Some(24),
+                ssgi_rays: Some(2),
                 reflection_blur_resolution: Some(PassResolution::Full),
                 rt_reflection_resolution: Some(PassResolution::Quarter),
                 bloom_knee: Some(0.4),

@@ -375,10 +375,9 @@ impl MtlContext {
             // (its 1x1 bloom targets stay untouched black).
             bloom_enabled: self.post_process.bloom_intensity > 0.0
                 && self.bloom_pipelines.is_some(),
-            // Velocity runs whenever its targets exist: that's TAA on or
-            // the upscaler on. The graph builder adds the Velocity pass
-            // when this flag is true; TaaResolve / Upscale then declare a
-            // read edge on it for ordering.
+            // Velocity runs whenever something reprojects through it: TAA,
+            // the upscaler, or the SSGI accumulation. TaaResolve / Upscale /
+            // Ssgi declare a read edge on it for ordering.
             velocity_enabled: velocity_active,
             taa_enabled: self.taa.enabled,
             ssr_enabled: self.ssr.settings.is_some(),
@@ -423,8 +422,8 @@ impl MtlContext {
             hiz_build_enabled: self.cull.hiz.is_some(),
             // SSGI runs when `indirect_lighting: "ssgi"` resolved settings that
             // contribute: the composite scales by intensity, so zero would pay a
-            // hemisphere ray-march to add nothing. The builder inserts the Ssgi
-            // RMW pass after Raymarch on the hdr_resolve chain; the gather reads
+            // hemisphere trace to add nothing. The builder inserts the Ssgi
+            // RMW pass after Raymarch on the hdr_resolve chain; the trace reads
             // the SSR pre-pass G-buffer (forced on above via
             // `ssr_prepass_enabled`).
             ssgi_enabled: self.ssgi.settings.is_some_and(|s| s.contributes()),
@@ -556,7 +555,7 @@ impl MtlContext {
         }
 
         // Advance temporal state for the next frame whenever the velocity
-        // pre-pass runs: that's TAA *or* the MetalFX upscaler. The
+        // pre-pass runs: TAA, the MetalFX upscaler or SSGI. The
         // un-jittered VP becomes `prev_vp` so the velocity shader can
         // diff against it; the per-object transforms were snapshotted on the
         // GPU by the pre-pass's own history dispatch. TAA-specific bookkeeping
@@ -567,6 +566,10 @@ impl MtlContext {
             if let Some(taa) = self.taa.pass.as_mut() {
                 taa.advance();
             }
+        }
+        // What the SSGI accumulation wrote this frame is next frame's history.
+        if let Some(ssgi) = self.ssgi.pass.as_mut() {
+            ssgi.advance();
         }
     }
 
@@ -647,7 +650,7 @@ impl MtlContext {
         // the ring goes stale, so the draw-args build marks every record
         // `NO_HISTORY` and the tracker re-primes when the pre-pass returns.
         let history_live = !world_hidden
-            && (self.taa.enabled || self.upscale.scaler.is_some())
+            && self.reads_motion()
             && self.gbuffer.targets.is_some()
             && self.gbuffer.bindless_pipeline.is_some();
         let (object_buffer, material_params, cull_draw_args, bindless_tex_args) = if world_hidden {

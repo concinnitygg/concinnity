@@ -95,7 +95,7 @@ const VIDEO_ADVANCED_SLIDERS: [(SettingKey, &str); 8] = [
 // client (`concinnity_engine::settings` + its system) knows each setting's options and
 // applies it live by rebuilding the affected render resources; on backends
 // without a live path the choice persists and applies at the next launch.
-const VIDEO_QUALITY_ROWS: [(SettingKey, &str); 17] = [
+const VIDEO_QUALITY_ROWS: [(SettingKey, &str); 16] = [
     (SettingKey::AaMode, "Anti-Aliasing"),
     (SettingKey::Ssao, "Ambient Occlusion"),
     (SettingKey::Ssr, "Screen-Space Reflections"),
@@ -113,7 +113,6 @@ const VIDEO_QUALITY_ROWS: [(SettingKey, &str); 17] = [
     // toggle. The runtime knows each key's options and applies them live.
     (SettingKey::SsgiResolution, "GI Resolution"),
     (SettingKey::SsgiRays, "GI Rays"),
-    (SettingKey::SsgiSteps, "GI Steps"),
     // Shadow quality: cascade map resolution (restart-required) + re-render
     // cadence (live) + distance (live) + cascade count (live). Preset-governed
     // like the toggles above.

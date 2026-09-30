@@ -6,7 +6,7 @@
 //!   target 2  RG16F    screen-space motion (prev_uv - cur_uv)
 //!
 //! plus a private single-sample depth buffer. Every screen-space consumer (SSR
-//! resolve, SSAO kernel/blur, SSGI gather/composite, TAA resolve, FSR upscaler)
+//! resolve, SSAO kernel/blur, SSGI trace/composite, TAA resolve, FSR upscaler)
 //! reads this one output instead of re-rasterizing, replacing the separate
 //! SSR, SSAO and velocity pre-passes. Rasterization uses the jittered
 //! VP (matching the main pass coverage); the motion vector derives from the
@@ -586,10 +586,18 @@ pub(in crate::directx) struct GbufferPrepassView {
 }
 
 impl DxContext {
+    // Whether anything reprojects through the pre-pass's motion channel this
+    // frame: TAA, the FSR upscaler, or the SSGI accumulation.
+    pub(in crate::directx) fn reads_motion(&self) -> bool {
+        self.taa.is_some()
+            || self.upscale.backend.is_some()
+            || self.ssgi.as_ref().is_some_and(|s| s.settings.contributes())
+    }
+
     // Encode the unified G-buffer pre-pass: one jittered traversal of the cull
     // records into the normal+depth / roughness / velocity MRT.
-    // `velocity_active` is true when a consumer (TAA or FSR) reads motion; when
-    // false, cur == prev so the motion channel is a harmless zero.
+    // `velocity_active` is true when a consumer (TAA, FSR or SSGI) reads motion;
+    // when false, cur == prev so the motion channel is a harmless zero.
     pub(in crate::directx) fn encode_gbuffer_prepass(
         &self,
         cmd: &ID3D12GraphicsCommandList,

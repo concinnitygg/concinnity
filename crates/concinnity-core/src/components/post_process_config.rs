@@ -125,22 +125,19 @@ pub struct PostProcessConfig {
     /// indirect light added on top of the existing shading; 0 makes it a no-op.
     /// Only matters when `indirect_lighting` is `ssgi`.
     pub ssgi_intensity: f32,
-    /// How far the indirect-light gather reaches, in world units. A near-field
+    /// How far the indirect-light rays reach, in world units. A near-field
     /// effect, so it defaults well below `ssr_max_distance`. Only matters when
     /// `indirect_lighting` is `ssgi`.
     pub ssgi_max_distance: f32,
-    /// Internal resolution of the SSGI gather. `half` (default) trades a little
+    /// Internal resolution of the SSGI trace. `half` (default) trades a little
     /// sharpness for a large performance saving; `full` is native; `quarter` is
     /// the cheapest. Only matters when `indirect_lighting` is `ssgi`.
     pub ssgi_resolution: PassResolution,
-    /// Hemisphere rays cast per pixel by the SSGI gather, clamped to `[1, 32]`.
-    /// More rays reduce noise at a higher cost. Only matters when
-    /// `indirect_lighting` is `ssgi`.
+    /// Hemisphere rays traced per pixel each frame, clamped to `[1, 4]`. The
+    /// indirect light is accumulated over frames, so more rays settle it faster
+    /// after the camera reveals new surfaces or the lighting changes, at a
+    /// higher cost. Only matters when `indirect_lighting` is `ssgi`.
     pub ssgi_rays: u32,
-    /// Ray-march samples per SSGI ray, clamped to `[1, 64]`. More samples catch
-    /// finer occlusion at a higher cost. Only matters when `indirect_lighting`
-    /// is `ssgi`.
-    pub ssgi_steps: u32,
     /// Auto-exposure toggle. Adapts exposure each frame toward a balanced
     /// mid-tone. The authored `exposure_ev` then acts as an additive bias in
     /// stops on top of the adapted value.
@@ -383,13 +380,11 @@ impl PassResolution {
     }
 }
 
-/// Default SSGI hemisphere-ray and ray-march-step counts for the authored
-/// `ssgi_rays` / `ssgi_steps` fields. Defined here (the schema default) and
-/// re-exported by `render::post::ssgi::settings` for its runtime clamp path, so
-/// the authored default and the runtime code stay a single source of truth.
-pub const DEFAULT_SSGI_RAYS: u32 = 8;
-/// Default ray-march steps per SSGI ray. See [`DEFAULT_SSGI_RAYS`].
-pub const DEFAULT_SSGI_STEPS: u32 = 12;
+/// Default SSGI hemisphere rays per pixel per frame for the authored
+/// `ssgi_rays` field. Defined here (the schema default) and read by
+/// `render::post::ssgi::settings` for its runtime clamp path, so the authored
+/// default and the runtime code stay a single source of truth.
+pub const DEFAULT_SSGI_RAYS: u32 = 1;
 
 impl Default for PostProcessConfig {
     fn default() -> Self {
@@ -417,7 +412,6 @@ impl Default for PostProcessConfig {
             ssgi_max_distance: 8.0,
             ssgi_resolution: PassResolution::default(),
             ssgi_rays: DEFAULT_SSGI_RAYS,
-            ssgi_steps: DEFAULT_SSGI_STEPS,
             auto_exposure: false,
             auto_exposure_min_ev: -8.0,
             auto_exposure_max_ev: 8.0,
@@ -463,7 +457,6 @@ mod tests {
         assert!(c.occlusion_two_pass);
         assert_eq!(c.indirect_lighting, IndirectLighting::Ssgi);
         assert_eq!(c.ssgi_rays, DEFAULT_SSGI_RAYS);
-        assert_eq!(c.ssgi_steps, DEFAULT_SSGI_STEPS);
     }
 
     #[test]
@@ -867,28 +860,25 @@ mod runtime_tests {
         assert_eq!(cfg.indirect_lighting, IndirectLighting::Ssgi);
         assert_eq!(cfg.ssgi_intensity, 0.5);
         assert_eq!(cfg.ssgi_max_distance, 8.0);
-        // The gather defaults to half resolution with the historical 8x12
-        // ray/step counts.
+        // The trace defaults to half resolution with one ray per pixel per
+        // frame.
         assert_eq!(cfg.ssgi_resolution, PassResolution::Half);
-        assert_eq!(cfg.ssgi_rays, 8);
-        assert_eq!(cfg.ssgi_steps, 12);
+        assert_eq!(cfg.ssgi_rays, 1);
     }
 
     #[test]
     fn ssgi_resolution_and_counts_deserialize_from_jsonl_args() {
         let cfg: PostProcessConfig = serde_json::from_str(
-            r#"{"indirect_lighting":"ssgi","ssgi_resolution":"full","ssgi_rays":16,"ssgi_steps":8}"#,
+            r#"{"indirect_lighting":"ssgi","ssgi_resolution":"full","ssgi_rays":2}"#,
         )
         .expect("parse");
         assert_eq!(cfg.ssgi_resolution, PassResolution::Full);
-        assert_eq!(cfg.ssgi_rays, 16);
-        assert_eq!(cfg.ssgi_steps, 8);
-        // Omitting them falls back to the half-resolution 8x12 defaults.
+        assert_eq!(cfg.ssgi_rays, 2);
+        // Omitting them falls back to the half-resolution, one-ray defaults.
         let cfg: PostProcessConfig =
             serde_json::from_str(r#"{"indirect_lighting":"ssgi"}"#).expect("parse");
         assert_eq!(cfg.ssgi_resolution, PassResolution::Half);
-        assert_eq!(cfg.ssgi_rays, 8);
-        assert_eq!(cfg.ssgi_steps, 12);
+        assert_eq!(cfg.ssgi_rays, 1);
     }
 
     #[test]

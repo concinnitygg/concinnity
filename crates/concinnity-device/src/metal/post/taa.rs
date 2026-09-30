@@ -13,10 +13,10 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTexture;
 
 use crate::metal::context::MtlContext;
-use crate::metal::post::post_device::{MtlPostDevice, MtlPostPipeline};
+use crate::metal::post::post_device::{MtlPostDevice, MtlPostPipeline, MtlPostTarget};
 
 // The shared temporal resolve, holding Metal's own pipeline and target handles.
-pub(crate) type MtlTaaPass = TaaPass<MtlPostPipeline, Retained<ProtocolObject<dyn MTLTexture>>>;
+pub(crate) type MtlTaaPass = TaaPass<MtlPostPipeline, MtlPostTarget>;
 
 // Temporal-anti-aliasing state: whether the effect runs, the shared resolve when
 // it does, and the frame counter driving the Halton projection jitter. The
@@ -38,7 +38,7 @@ impl TaaState {
     // sample as the scene once the resolve has run.
     pub(crate) fn output(&self) -> Option<&Retained<ProtocolObject<dyn MTLTexture>>> {
         let pass = self.pass.as_ref()?;
-        Some(pass.target(pass.ring().write()))
+        Some(pass.target(pass.ring().write()).texture())
     }
 }
 

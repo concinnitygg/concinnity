@@ -201,7 +201,7 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // SSAO kernel + blur params. `Some` only when the `SsaoBlur` pass
     // is in the graph this frame (matches `FrameGraphInputs::ssao_enabled`).
     pub ssao_params: Option<&'a SsaoParams>,
-    // SSGI gather + composite params. `Some` only when the `Ssgi` pass is
+    // SSGI pyramid, trace and composite params. `Some` only when the `Ssgi` pass is
     // in the graph this frame (matches `FrameGraphInputs::ssgi_enabled`).
     pub ssgi_params: Option<&'a SsgiParams>,
     // RT-reflection params (camera + sun + tunables). `Some` only when the

@@ -880,11 +880,19 @@ pub(in crate::vulkan) struct GbufferPrepassView {
 }
 
 impl VkContext {
+    // Whether anything reprojects through the pre-pass's motion channel this
+    // frame: TAA, the FSR upscaler, or the SSGI accumulation.
+    pub(in crate::vulkan) fn reads_motion(&self) -> bool {
+        self.taa.is_some()
+            || self.upscale.is_some()
+            || self.ssgi.as_ref().is_some_and(|s| s.settings.contributes())
+    }
+
     // Encode the unified G-buffer pre-pass: one jittered traversal of the cull
     // records into the per-frame normal+depth / roughness / velocity MRT plus a
     // private depth buffer. Runs
-    // before the main pass. `velocity_active` is true when a consumer (TAA or
-    // FSR) reads motion; when false, prev == cur so the motion channel is a
+    // before the main pass. `velocity_active` is true when a consumer (TAA, FSR
+    // or SSGI) reads motion; when false, prev == cur so the motion channel is a
     // harmless zero. Fuses the former SSR depth+normal and TAA velocity
     // pre-passes.
     //

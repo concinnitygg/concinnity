@@ -81,10 +81,13 @@ pub(in crate::shader_layout) fn ssgi() -> Vec<Case> {
         max_distance,
         tan_half_fov_y,
         aspect,
-        stride,
         thickness,
+        history_valid,
         rays,
-        steps,
+        frame,
+        levels,
+        gi_scale,
+        [_pad] => [],
     }))]
 }
 

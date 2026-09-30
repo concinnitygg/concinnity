@@ -1162,6 +1162,9 @@ impl DxContext {
         if let Some(taa) = self.taa.as_mut() {
             taa.pass.advance();
         }
+        if let Some(ssgi) = self.ssgi.as_mut() {
+            ssgi.advance();
+        }
 
         self.finish_frame_stats();
         self.close_end_list(frame)?;
@@ -1634,10 +1637,9 @@ impl DxContext {
     // mutating the stored struct here is picked up on the next frame. Only a
     // feature whose resources are currently live has settings to mutate; the rest
     // are skipped (the value still persists for the next launch). SSAO / SSR /
-    // auto-exposure are fully scalar, so they are replaced wholesale; SSGI keeps
-    // its gather resolution / ray / step counts (those size the gather target or
-    // ride `apply_quality_settings`), so only its scalar intensity / distance are
-    // updated. The SSR settings live one level deeper than Metal's (inside the
+    // auto-exposure are fully scalar, so they are replaced wholesale; SSGI's trace
+    // resolution sizes its targets and rides `apply_quality_settings` with its ray
+    // count, so only its scalar intensity / distance are updated. The SSR settings live one level deeper than Metal's (inside the
     // optional `resolve` half), so a SSGI-only build with no resolve is skipped.
     pub(crate) fn update_quality_params(&mut self, q: backend::QualitySettings) {
         if let (Some(live), Some(res)) = (q.ssao, self.ssao.resources.as_mut()) {

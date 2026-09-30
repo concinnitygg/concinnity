@@ -14,7 +14,7 @@ use crate::render::render_graph::{PixelFormat, TextureDesc};
 
 use super::device::{
     PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler, PostTargetState,
-    PostTiming, resolve_extent,
+    PostTiming, check_level, resolve_extent,
 };
 use super::program::PostProgram;
 
@@ -23,6 +23,8 @@ use super::program::PostProgram;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MockTexture {
     Target(usize),
+    /// One mip level of one of its own targets.
+    Level(usize, u32),
     External(u32),
 }
 
@@ -52,6 +54,7 @@ pub(crate) struct MockDraw {
 pub(crate) struct MockTarget {
     pub label: &'static str,
     pub extent: PostExtent,
+    pub levels: u32,
 }
 
 #[derive(Default)]
@@ -63,6 +66,12 @@ pub(crate) struct MockDevice {
 impl MockDevice {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    fn level(&self, target: usize, level: u32) -> RenderResult<MockTexture> {
+        let t = &self.targets.borrow()[target];
+        check_level(t.label, level, t.levels)?;
+        Ok(MockTexture::Level(target, level))
     }
 }
 
@@ -96,6 +105,7 @@ impl PostPassDevice for MockDevice {
         targets.push(MockTarget {
             label,
             extent: resolve_extent(desc, extent),
+            levels: desc.mip_levels.max(1),
         });
         Ok(targets.len() - 1)
     }
@@ -106,6 +116,14 @@ impl PostPassDevice for MockDevice {
 
     fn target_attachment(&self, target: &usize) -> MockTexture {
         MockTexture::Target(*target)
+    }
+
+    fn target_level_ref(&self, target: &usize, level: u32) -> RenderResult<MockTexture> {
+        self.level(*target, level)
+    }
+
+    fn target_level_attachment(&self, target: &usize, level: u32) -> RenderResult<MockTexture> {
+        self.level(*target, level)
     }
 
     fn encode(&self, _rec: &(), draw: &PostDraw<'_, '_, Self>) -> RenderResult<()> {

@@ -640,7 +640,7 @@ impl DxContext {
         // re-primes when the pre-pass returns.
         let history = match self.gbuffer.is_some()
             && self.cull.model_history_pso.is_some()
-            && (self.taa.is_some() || self.upscale.backend.is_some())
+            && self.reads_motion()
         {
             true => HistoryMode::Track,
             false => HistoryMode::Stale,

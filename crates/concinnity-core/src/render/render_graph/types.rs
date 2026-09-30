@@ -437,6 +437,8 @@ pub enum PixelFormat {
     R8Unorm,
     /// 32-bit float single channel.
     R32Float,
+    /// 32-bit float RG.
+    Rg32Float,
     /// 32-bit float depth.
     Depth32Float,
     /// Whatever format the swapchain presents.
@@ -449,7 +451,7 @@ impl PixelFormat {
     /// power-of-two formats, so this is one byte count per variant.
     pub(crate) const fn bytes_per_texel(self) -> u32 {
         match self {
-            PixelFormat::Rgba16Float => 8,
+            PixelFormat::Rgba16Float | PixelFormat::Rg32Float => 8,
             PixelFormat::Rgba8Unorm
             | PixelFormat::Rg16Float
             | PixelFormat::R32Float
@@ -673,6 +675,7 @@ mod tests {
         assert_eq!(PixelFormat::Rgba8Unorm.bytes_per_texel(), 4);
         assert_eq!(PixelFormat::Rg16Float.bytes_per_texel(), 4);
         assert_eq!(PixelFormat::R32Float.bytes_per_texel(), 4);
+        assert_eq!(PixelFormat::Rg32Float.bytes_per_texel(), 8);
         assert_eq!(PixelFormat::Depth32Float.bytes_per_texel(), 4);
         assert_eq!(PixelFormat::BgraSwapchain.bytes_per_texel(), 4);
         assert_eq!(PixelFormat::R8Unorm.bytes_per_texel(), 1);

@@ -460,7 +460,7 @@ impl VkContext {
             // the tracker re-primes when the pre-pass returns.
             let history = match self.gbuffer.is_some()
                 && self.cull.model_history.is_some()
-                && (self.taa.is_some() || self.upscale.is_some())
+                && self.reads_motion()
             {
                 true => HistoryMode::Track,
                 false => HistoryMode::Stale,
@@ -649,11 +649,11 @@ impl VkContext {
             bindless_cull_enabled: self.cull.cull_pipeline.is_some() && self.cull_count() > 0,
             auto_exposure_enabled: self.auto_exposure.resources.is_some(),
             bloom_enabled: self.post_process.bloom_intensity > 0.0,
-            // Velocity (motion vectors) runs for TAA *or* temporal upscaling
-            // (FSR consumes them); TAA resources are forced built under
-            // upscaling, so `taa.is_some()` already implies it, but spell out
-            // the upscale case too.
-            velocity_enabled: self.taa.is_some() || self.upscale.is_some(),
+            // Velocity (motion vectors) runs for TAA, temporal upscaling (FSR
+            // consumes them) and the SSGI accumulation; TAA resources are
+            // forced built under upscaling, so `taa.is_some()` already implies
+            // it, but spell out the upscale case too.
+            velocity_enabled: self.reads_motion(),
             // TAA resolve and Upscale are mutually exclusive (both do temporal
             // accumulation and share the graph slot). Drop TAA when upscaling.
             taa_enabled: self.taa.is_some() && self.upscale.is_none(),

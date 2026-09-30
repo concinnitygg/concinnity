@@ -29,12 +29,11 @@ pub const UPSCALE_BACKEND_OPTIONS: [&str; 4] = ["Auto", "FSR 3", "DLSS", "XeSS"]
 // no cap; the rest are target FPS. The client pairs these with the numeric caps.
 pub(crate) const FPS_CAP_OPTIONS: [&str; 6] = ["Unlimited", "30", "60", "120", "144", "240"];
 
-/// Pass resolution options (SSGI gather, ray-traced reflection trace,
+/// Pass resolution options (SSGI trace, ray-traced reflection trace,
 /// reflection blur), finest first, matching `PassResolution::ALL`.
 pub const PASS_RESOLUTION_OPTIONS: [&str; 3] = ["Full", "Half", "Quarter"];
-/// SSGI gather ray and step count options, in cycle order.
-pub(crate) const SSGI_RAYS_OPTIONS: [&str; 4] = ["4", "8", "16", "32"];
-pub(crate) const SSGI_STEPS_OPTIONS: [&str; 4] = ["8", "12", "24", "48"];
+/// SSGI rays-per-pixel options, in cycle order.
+pub(crate) const SSGI_RAYS_OPTIONS: [&str; 3] = ["1", "2", "4"];
 
 /// Anti-aliasing mode options, in cycle order matching the AaMode enum: Off,
 /// FXAA (cheap composite edge filter), TAA (temporal accumulation). Ascending
@@ -96,7 +95,6 @@ pub fn options(key: SettingKey) -> Option<&'static [&'static str]> {
             Some(&PASS_RESOLUTION_OPTIONS)
         }
         K::SsgiRays => Some(&SSGI_RAYS_OPTIONS),
-        K::SsgiSteps => Some(&SSGI_STEPS_OPTIONS),
         K::ShadowMapSize => Some(&SHADOW_RESOLUTION_OPTIONS),
         K::ShadowUpdate => Some(&SHADOW_UPDATE_OPTIONS),
         K::ShadowDistance => Some(&SHADOW_DISTANCE_OPTIONS),

@@ -1,7 +1,8 @@
 //! Vulkan's share of screen-space global illumination, which is its settings and
-//! where the pass reads and writes this frame. The gather and composite -- their
-//! pipelines, the reduced gather target and both draws -- are written once in
-//! `concinnity_core::render::post::ssgi` and reach Vulkan through `VkPostDevice`.
+//! where the pass reads and writes this frame. Every stage -- the pipelines, the
+//! depth pyramids, the accumulation and all the draws -- is written once in
+//! `concinnity_core::render::post::ssgi` and reaches Vulkan through
+//! `VkPostDevice`.
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;
@@ -20,8 +21,7 @@ pub(in crate::vulkan) struct SsgiResources {
 }
 
 impl SsgiResources {
-    // Build both pipelines and the gather target for a render resolution of
-    // `extent`.
+    // Build every pipeline and target for a render resolution of `extent`.
     pub(in crate::vulkan) fn new(
         device: &VkPostDevice,
         settings: SsgiSettings,
@@ -33,8 +33,8 @@ impl SsgiResources {
         })
     }
 
-    // Recreate the gather target at a new render extent. The caller has already
-    // idled the device and dropped the framebuffers naming the old view.
+    // Recreate the targets at a new render extent. The caller has already idled
+    // the device and dropped the framebuffers naming the old views.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         device: &VkPostDevice,
@@ -48,13 +48,17 @@ impl SsgiResources {
     pub(in crate::vulkan) fn swap_pipelines(&mut self, pipelines: SsgiPipelines<PostPipeline>) {
         self.pass.swap_pipelines(pipelines);
     }
+
+    // Step the accumulation ring once the frame is recorded.
+    pub(in crate::vulkan) fn advance(&mut self) {
+        self.pass.advance();
+    }
 }
 
 impl VkContext {
-    // Encode the SSGI gather + composite: hemisphere rays marched over the
-    // G-buffer into the reduced gather target, then blurred and added into this
-    // frame's HDR resolve. Runs on the hdr_resolve read-modify-write chain after
-    // the main pass.
+    // Encode SSGI: the depth pyramid, the trace over the G-buffer, the
+    // accumulation, and the composite into this frame's HDR resolve. Runs on
+    // the hdr_resolve read-modify-write chain after the main pass.
     pub(in crate::vulkan) fn encode_ssgi(
         &self,
         cmd: vk::CommandBuffer,
@@ -63,10 +67,12 @@ impl VkContext {
         aspect: f32,
     ) {
         let Some(ssgi) = &self.ssgi else { return };
-        // With no G-buffer there is nothing to gather against, so skip rather
+        // With no G-buffer there is nothing to trace against, so skip rather
         // than read a stale view.
         let Some(gbuffer) = &self.gbuffer else { return };
-        let params = ssgi.settings.params(fov_y_radians, aspect);
+        let params = ssgi
+            .settings
+            .params(fov_y_radians, aspect, ssgi.pass.frame());
         let device = self.post_device(frame_idx);
         let scene = self.hdr_scene_attachment(frame_idx);
         if let Err(e) = ssgi.pass.encode(
@@ -76,6 +82,7 @@ impl VkContext {
                 scene: scene.view,
                 scene_target: scene,
                 normal_depth: gbuffer.normal_depth_view(frame_idx),
+                velocity: gbuffer.velocity_view(frame_idx),
             },
             &params,
         ) {

@@ -94,7 +94,8 @@ impl MtlContext {
         let ssgi_params = self
             .ssgi
             .settings
-            .map(|settings| settings.params(fov_y_radians, aspect));
+            .zip(self.ssgi.pass.as_ref())
+            .map(|(settings, pass)| settings.params(fov_y_radians, aspect, pass.frame()));
         // RT-reflection params: built only when the acceleration structure is
         // live (so they stay in lockstep with `rt_reflections_enabled`). Carries
         // the camera-to-world transform + sun the kernel shades hits with, like
@@ -201,8 +202,9 @@ impl MtlContext {
         let cluster_params = self.cluster_params;
         let clustered = cluster_params.use_clusters != 0;
         // Velocity (motion vectors in the G-buffer pre-pass) is needed whenever
-        // temporal reconstruction runs: that's TAA or the MetalFX upscaler.
-        let velocity_active = self.taa.enabled || self.upscale.scaler.is_some();
+        // something reprojects: TAA, the MetalFX upscaler, or the SSGI
+        // accumulation.
+        let velocity_active = self.reads_motion();
         let vel_uniforms = if velocity_active {
             Some(VelocityUniforms {
                 jittered_vp: vp,

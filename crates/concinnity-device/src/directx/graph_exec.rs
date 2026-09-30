@@ -1401,9 +1401,8 @@ impl DxContext {
                 // the jittered VP (rasterization, matching the main pass);
                 // `params.cur_vp` is the un-jittered VP the shader uses with the
                 // previous VP for the motion vector. The velocity channel
-                // carries real motion only when a consumer reads it (TAA or
-                // FSR active, i.e. `self.taa.is_some()`); otherwise cur == prev
-                // and it stays a harmless zero.
+                // carries real motion only when a consumer reads it (TAA, FSR
+                // or SSGI); otherwise cur == prev and it stays a harmless zero.
                 self.encode_gbuffer_prepass(
                     cmd,
                     params.frame_idx,
@@ -1411,7 +1410,7 @@ impl DxContext {
                         jittered_vp: params.vp_mat,
                         cur_vp: params.cur_vp,
                     },
-                    self.taa.is_some(),
+                    self.reads_motion(),
                 );
             }
         }
