@@ -1001,6 +1001,25 @@ fn frame_steps_draw_and_publish_input() {
     );
 }
 
+// A serial frame submits on the stepping thread, and the whole submission is
+// the render side's time rather than the graphics system's own.
+#[test]
+fn a_serial_frame_records_its_submission_as_the_render_handoff() {
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    let mut gs = init_graphics(&mut world, hooks);
+    lock(&state).draw_duration = std::time::Duration::from_millis(3);
+    assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+
+    let ctx = world.context();
+    ctx.profile.record_system("GraphicsSystem", 0);
+    ctx.profile.begin_frame();
+    let handoffs = ctx.profile.render_handoffs();
+    assert_eq!(handoffs.len(), 1);
+    assert_eq!(handoffs[0].0, "GraphicsSystem");
+    assert!(handoffs[0].1 >= 3_000, "{} us", handoffs[0].1);
+}
+
 #[test]
 fn camera_state_reaches_the_backend_each_frame() {
     let (state, hooks) = recording_hooks();

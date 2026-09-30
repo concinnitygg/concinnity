@@ -4,6 +4,7 @@
 use concinnity_core::camera_track::CameraTrackStatus;
 use concinnity_core::components::{CameraTrack, FrameReport};
 use concinnity_core::ecs::{PipelineContext, StepResult, System};
+use concinnity_core::profile::RenderStats;
 use std::time::Instant;
 
 use crate::frame_report::reduce::{ReduceOptions, Report};
@@ -19,13 +20,18 @@ const MICROS_PER_MILLI: f32 = 1_000.0;
 /// Records one [`FrameSample`] per frame and prints what the run cost when it
 /// ends.
 ///
-/// Runs in the `Late` phase after every engine system, so the render stats and
-/// system timings it reads belong to the frame it is recording. The report
-/// goes out on the frame the world reports the measurement complete; a run cut
-/// short before that reports on the way out instead, and says so.
+/// Runs in the `Late` phase after every engine system, so the render stats it
+/// reads were published this step. The system timings are not: the profile
+/// rotates them in at the start of the next step, so each frame is held for
+/// one step and recorded with its own timings then. The report goes out on the
+/// frame the world reports the measurement complete, which leaves that last
+/// frame unrecorded; a run cut short before that reports on the way out
+/// instead, and says so.
 #[derive(Debug)]
 pub struct FrameReportSystem {
     run: FrameRun,
+    // The frame the previous step measured, waiting for its system timings.
+    pending: Option<PendingFrame>,
     options: ReduceOptions,
     stop_when_complete: bool,
     // Set once the report has gone out, so the teardown path does not repeat
@@ -39,11 +45,22 @@ pub struct FrameReportSystem {
     started: Option<Instant>,
 }
 
+// What one step knows about its frame before the profile rotates in the
+// step's system timings.
+#[derive(Debug, Clone, Copy)]
+struct PendingFrame {
+    run_seconds: f32,
+    segment: Option<u32>,
+    frame_us: u32,
+    render: RenderStats,
+}
+
 impl FrameReportSystem {
     /// The system for a world's declared report.
     pub fn new(report: &FrameReport) -> Self {
         Self {
             run: FrameRun::default(),
+            pending: None,
             options: ReduceOptions {
                 warmup_seconds: report.warmup_seconds,
                 budget_us: (report.budget_ms * MICROS_PER_MILLI) as u32,
@@ -104,17 +121,25 @@ impl System for FrameReportSystem {
             |s| s.elapsed_seconds,
         );
         let render = ctx.profile.render;
-        let systems = ctx.profile.system_timings();
-
         self.run.capture_pass_names(&render);
-        self.run.capture_system_names(systems);
-        self.run.samples.push(FrameSample::new(
+        let this_frame = PendingFrame {
             run_seconds,
-            status.and_then(|s| s.segment),
+            segment: status.and_then(|s| s.segment),
             frame_us,
-            &render,
-            systems,
-        ));
+            render,
+        };
+        if let Some(frame) = self.pending.replace(this_frame) {
+            let systems = ctx.profile.system_timings();
+            self.run.capture_system_names(systems);
+            self.run.samples.push(FrameSample::new(
+                frame.run_seconds,
+                frame.segment,
+                frame.frame_us,
+                &frame.render,
+                systems,
+                ctx.profile.render_handoffs(),
+            ));
+        }
 
         if status.is_some_and(|s| s.finished) && self.stop_when_complete {
             self.run.completed = true;
@@ -204,13 +229,58 @@ mod tests {
     }
 
     #[test]
-    fn the_first_frame_is_not_recorded_because_it_has_nothing_to_be_timed_against() {
+    fn a_frame_is_recorded_one_step_late_and_the_first_not_at_all() {
+        // The first frame has nothing to be timed against; the second waits a
+        // step for the timings the profile rotates in after it.
         let (mut world, mut camera, mut system) = world_with(track(vec![]));
         system.init(&mut world.context());
+        step(&mut world, &mut camera, &mut system);
         step(&mut world, &mut camera, &mut system);
         assert!(system.run().samples.is_empty());
         step(&mut world, &mut camera, &mut system);
         assert_eq!(system.run().samples.len(), 1);
+        forget_report(system);
+    }
+
+    // One step of the world as the report sees it: the profile rotated, the
+    // graphics system timed with its handoff, this step's render stats
+    // published, then the report system last.
+    fn profiled_step(
+        world: &mut World,
+        system: &mut FrameReportSystem,
+        graphics: (u32, u32),
+        gpu_wait_us: u32,
+    ) {
+        let mut ctx = world.context();
+        ctx.profile.begin_frame();
+        ctx.profile.record_render_handoff(graphics.1);
+        ctx.profile.record_system("GraphicsSystem", graphics.0);
+        ctx.profile.render = RenderStats {
+            gpu_wait_us,
+            ..Default::default()
+        };
+        system.step(&mut ctx);
+    }
+
+    #[test]
+    fn a_frames_wait_and_its_system_timings_come_from_the_same_step() {
+        // The second step waited 30 ms on the GPU and handed off for as long;
+        // the third did neither. Paired a step apart, the wait would read as 30
+        // ms of graphics CPU work in the frame after it.
+        let mut world = World::new();
+        let mut system = FrameReportSystem::new(&FrameReport::default());
+        system.init(&mut world.context());
+        profiled_step(&mut world, &mut system, (500, 0), 0);
+        profiled_step(&mut world, &mut system, (30_400, 30_000), 29_800);
+        profiled_step(&mut world, &mut system, (450, 50), 100);
+        profiled_step(&mut world, &mut system, (450, 50), 100);
+
+        let samples = &system.run().samples;
+        assert_eq!(samples.len(), 2);
+        assert_eq!(samples[0].gpu_wait_us, 29_800);
+        assert_eq!(samples[0].system_us[0], 400);
+        assert_eq!(samples[1].gpu_wait_us, 100);
+        assert_eq!(samples[1].system_us[0], 400);
         forget_report(system);
     }
 
@@ -230,8 +300,9 @@ mod tests {
         let mut world = World::new();
         let mut system = FrameReportSystem::new(&FrameReport::default());
         system.init(&mut world.context());
-        system.step(&mut world.context());
-        system.step(&mut world.context());
+        for _ in 0..3 {
+            system.step(&mut world.context());
+        }
         assert_eq!(system.run().samples.len(), 1);
         assert!(system.run().segments.is_empty());
         assert_eq!(system.run().samples[0].segment, None);
@@ -245,7 +316,7 @@ mod tests {
             world_with(track(vec![leg(60.0, 1.0, "approach")]));
         camera.init(&mut world.context());
         system.init(&mut world.context());
-        for _ in 0..3 {
+        for _ in 0..4 {
             step(&mut world, &mut camera, &mut system);
         }
         let run = system.run();
@@ -294,7 +365,7 @@ mod tests {
         }
         // Still measuring, and the run is not claimed to be a whole one.
         assert!(!system.run().completed);
-        assert!(system.run().samples.len() >= 3);
+        assert!(system.run().samples.len() >= 2);
         forget_report(system);
     }
 

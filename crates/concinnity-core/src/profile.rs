@@ -47,9 +47,16 @@ pub struct RenderStats {
     /// the CPU against GPU retirement, plus the swapchain / drawable acquire.
     /// Backend-agnostic, and part of whatever CPU frame cost the caller timed
     /// around `draw_frame` -- a GPU-bound frame otherwise reports as CPU-bound,
-    /// because the wait is wall time inside the graphics system's own span.
-    /// Subtract it to get the CPU work the frame actually did.
+    /// because the wait is wall time inside the draw call. `render_cpu_us` is
+    /// the same frame's submission with this taken out.
     pub gpu_wait_us: u32,
+    /// Microseconds of CPU work the render side spent submitting this frame:
+    /// replaying its recorded backend effects, updating backend state, and
+    /// recording and submitting the draw, less `gpu_wait_us`. Measured on the
+    /// thread that submits, around the same frame as the wait, so the two
+    /// always describe one frame. Left at zero by the backend itself, which
+    /// cannot see the whole submission.
+    pub render_cpu_us: u32,
     /// Bytes of GPU memory currently allocated by the render device. On
     /// unified-memory hardware (Apple Silicon) this is the device's share of
     /// system memory rather than dedicated VRAM.
@@ -92,6 +99,7 @@ impl Default for RenderStats {
             skinned_pool_free: 0,
             gpu_frame_us: 0,
             gpu_wait_us: 0,
+            render_cpu_us: 0,
             vram_bytes: 0,
             transient_pool_bytes: 0,
             pass_times_us: [("", 0); MAX_PASS_TIMINGS],
@@ -123,6 +131,13 @@ pub struct FrameProfile {
     // Heap allocations counted across the whole most recent frame. `None` in
     // release builds and in binaries without the tracking allocator.
     frame_allocs: Option<u32>,
+    // Render handoff recorded by the step in progress, claimed by that step's
+    // `record_system`.
+    pending_handoff: u32,
+    // Per-system render handoff, rotated with the timings. Only systems that
+    // recorded one appear.
+    last_handoffs: Vec<(&'static str, u32)>,
+    current_handoffs: Vec<(&'static str, u32)>,
     /// Render-backend stats for the most recent drawn frame. Left at the
     /// default when no graphics backend is running.
     pub render: RenderStats,
@@ -137,11 +152,29 @@ impl FrameProfile {
         self.current.clear();
         core::mem::swap(&mut self.last_allocs, &mut self.current_allocs);
         self.current_allocs.clear();
+        core::mem::swap(&mut self.last_handoffs, &mut self.current_handoffs);
+        self.current_handoffs.clear();
+        self.pending_handoff = 0;
     }
 
-    /// Record one system's CPU step time for the in-progress frame.
+    /// Record one system's CPU step time for the in-progress frame. A render
+    /// handoff recorded during that step is attributed to the system here.
     pub fn record_system(&mut self, name: &'static str, micros: u32) {
         self.current.push((name, micros));
+        let handoff = core::mem::take(&mut self.pending_handoff);
+        if handoff > 0 {
+            self.current_handoffs.push((name, handoff));
+        }
+    }
+
+    /// Record time the step in progress spent handing its frame to the
+    /// renderer: the whole submission when it runs on the stepping thread, or
+    /// the wait for the render thread to take the frame when that runs on its
+    /// own. Either way the time belongs to the render side, which reports its
+    /// own CPU work as [`RenderStats::render_cpu_us`], so a reader takes it out
+    /// of the step's span to leave the step's own work.
+    pub fn record_render_handoff(&mut self, micros: u32) {
+        self.pending_handoff = self.pending_handoff.saturating_add(micros);
     }
 
     /// Record the heap allocations counted during one system's step.
@@ -175,6 +208,13 @@ impl FrameProfile {
     pub fn frame_allocs(&self) -> Option<u32> {
         self.frame_allocs
     }
+
+    /// Per-system render handoff from the last fully completed frame, paired
+    /// with that frame's [`system_timings`](Self::system_timings). Only the
+    /// systems that recorded one appear.
+    pub fn render_handoffs(&self) -> &[(&'static str, u32)] {
+        &self.last_handoffs
+    }
 }
 
 #[cfg(test)]
@@ -189,6 +229,33 @@ mod tests {
         assert!(p.system_timings().is_empty());
         p.begin_frame();
         assert_eq!(p.system_timings(), &[("A", 100)]);
+    }
+
+    #[test]
+    fn a_render_handoff_is_attributed_to_the_step_that_recorded_it() {
+        let mut p = FrameProfile::default();
+        p.record_system("A", 10);
+        p.record_render_handoff(300);
+        p.record_render_handoff(200);
+        p.record_system("G", 900);
+        p.record_system("B", 20);
+        assert!(p.render_handoffs().is_empty());
+        p.begin_frame();
+        assert_eq!(p.render_handoffs(), &[("G", 500)]);
+        // A frame that hands nothing off rotates in empty.
+        p.record_system("G", 40);
+        p.begin_frame();
+        assert!(p.render_handoffs().is_empty());
+    }
+
+    #[test]
+    fn a_handoff_no_step_claimed_does_not_leak_into_the_next_frame() {
+        let mut p = FrameProfile::default();
+        p.record_render_handoff(700);
+        p.begin_frame();
+        p.record_system("A", 10);
+        p.begin_frame();
+        assert!(p.render_handoffs().is_empty());
     }
 
     #[test]

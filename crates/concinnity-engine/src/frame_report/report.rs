@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::frame_report::reduce::{Report, SegmentReport};
+use crate::frame_report::reduce::{FrameCost, Report, SegmentReport, SlowFrame};
 
 const MICROS_PER_MILLI: f32 = 1_000.0;
 const BYTES_PER_MIB: f32 = (1 << 20) as f32;
@@ -46,6 +46,7 @@ pub fn to_text(report: &Report) -> String {
         report.overall.draw_calls_mean,
         report.overall.objects_mean,
     );
+    write_slowest(&mut out, &report.slowest);
 
     // The pass block is medians, like the table above it, because a backend
     // that mistimes one frame does it by orders of magnitude. The system block
@@ -68,11 +69,11 @@ pub fn to_text(report: &Report) -> String {
         write_block(
             &mut out,
             &format!(
-                "{} CPU systems, mean {:.2} ms",
+                "{} CPU work, mean {:.2} ms",
                 segment.name,
                 segment.cpu.mean_us as f32 / MICROS_PER_MILLI,
             ),
-            "of system CPU",
+            "of the CPU work",
             segment
                 .systems
                 .iter()
@@ -108,6 +109,48 @@ fn write_block<'a>(
     }
 }
 
+// The slowest frames, each with the costs that say where its time went.
+fn write_slowest(out: &mut String, frames: &[SlowFrame]) {
+    if frames.is_empty() {
+        return;
+    }
+    let ms = |us: u32| us as f32 / MICROS_PER_MILLI;
+    let _ = writeln!(out);
+    let _ = writeln!(out, "slowest frames:");
+    for frame in frames {
+        let _ = writeln!(
+            out,
+            "  {:.2} ms at {:.2} s in {}: cpu {:.2} ms, blocked on GPU {:.2} ms, gpu {:.2} ms",
+            ms(frame.frame_us),
+            frame.run_seconds,
+            frame.segment,
+            ms(frame.cpu_us),
+            ms(frame.gpu_wait_us),
+            ms(frame.gpu_frame_us),
+        );
+        write_costs(out, "cpu", &frame.cpu);
+        write_costs(out, "gpu", &frame.passes);
+    }
+}
+
+// One `label: name ms, name ms` line, or nothing when there are no costs.
+fn write_costs(out: &mut String, label: &str, costs: &[FrameCost]) {
+    if costs.is_empty() {
+        return;
+    }
+    let _ = write!(out, "    {label}:");
+    for (i, cost) in costs.iter().enumerate() {
+        let separator = if i == 0 { "" } else { "," };
+        let _ = write!(
+            out,
+            "{separator} {} {:.2}",
+            cost.name,
+            cost.us as f32 / MICROS_PER_MILLI
+        );
+    }
+    let _ = writeln!(out);
+}
+
 // One line of the summary table.
 fn write_row(out: &mut String, segment: &SegmentReport) {
     let ms = |us: u32| us as f32 / MICROS_PER_MILLI;
@@ -141,6 +184,7 @@ mod tests {
             frame_us,
             gpu_frame_us: frame_us / 2,
             gpu_wait_us: 250,
+            render_cpu_us: 0,
             draw_calls: 64,
             objects: 512,
             vram_bytes: 512 << 20,
@@ -227,6 +271,53 @@ mod tests {
         let text = to_text(&report_of(run));
         let note = text.find("did not finish").expect("the note");
         assert!(note < text.find("segment").expect("the table"), "{text}");
+    }
+
+    #[test]
+    fn the_slowest_frames_are_listed_with_their_breakdown() {
+        let mut hitch = sample(1.0, Some(1), 300_000);
+        hitch.gpu_wait_us = 297_000;
+        hitch.render_cpu_us = 700;
+        hitch.system_us[0] = 1_200;
+        hitch.pass_us[0] = 4_000;
+        let run = FrameRun {
+            samples: vec![sample(0.0, Some(0), 10_000), hitch],
+            segments: vec!["approach".to_string(), "rays".to_string()],
+            pass_names: vec!["main".to_string()],
+            system_names: vec!["PhysicsSystem".to_string()],
+            completed: true,
+        };
+        let text = to_text(&report_of(run));
+        let heading = text.find("slowest frames:").expect("the list");
+        let hitch_line = text
+            .find(
+                "300.00 ms at 1.00 s in rays: cpu 1.90 ms, blocked on GPU 297.00 ms, gpu 150.00 ms",
+            )
+            .expect("the slowest frame, first");
+        assert!(heading < hitch_line, "{text}");
+        assert!(
+            text.contains("    cpu: PhysicsSystem 1.20, render submit 0.70\n"),
+            "{text}"
+        );
+        assert!(text.contains("    gpu: main 4.00\n"), "{text}");
+        assert!(text.contains("10.00 ms at 0.00 s in approach"), "{text}");
+    }
+
+    #[test]
+    fn the_cpu_block_names_the_work_it_shares_out() {
+        let mut only = sample(0.0, Some(0), 10_000);
+        only.system_us[0] = 600;
+        only.render_cpu_us = 400;
+        let run = FrameRun {
+            samples: vec![only],
+            segments: vec!["approach".to_string()],
+            pass_names: Vec::new(),
+            system_names: vec!["PhysicsSystem".to_string()],
+            completed: true,
+        };
+        let text = to_text(&report_of(run));
+        assert!(text.contains("approach CPU work, mean 1.00 ms:"), "{text}");
+        assert!(text.contains("40.0% of the CPU work"), "{text}");
     }
 
     #[test]

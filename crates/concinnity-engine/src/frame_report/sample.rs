@@ -26,6 +26,9 @@ pub struct FrameSample {
     pub gpu_frame_us: u32,
     /// Microseconds the CPU spent blocked on the GPU.
     pub gpu_wait_us: u32,
+    /// Microseconds of CPU work the render side spent submitting the frame,
+    /// its wait on the GPU excluded.
+    pub render_cpu_us: u32,
     /// Geometry draw calls issued.
     pub draw_calls: u32,
     /// Renderable objects in the scene.
@@ -35,27 +38,35 @@ pub struct FrameSample {
     /// Per-pass GPU microseconds, in the backend's slot order. Named by
     /// [`FrameRun::pass_names`], which shares the slot order.
     pub pass_us: [u32; MAX_PASS_TIMINGS],
-    /// Per-system CPU microseconds, in schedule order. Named by
+    /// Per-system CPU microseconds, in schedule order, with the time a system
+    /// spent handing its frame to the renderer taken out: that is the render
+    /// side's, and `render_cpu_us` carries its work. Named by
     /// [`FrameRun::system_names`], which shares the order.
     pub system_us: [u32; MAX_SYSTEM_TIMINGS],
 }
 
 impl FrameSample {
-    /// Fold this frame's render stats and system timings into a sample.
+    /// Fold one frame's render stats and system timings into a sample.
+    /// `handoffs` is the per-system render handoff recorded beside `systems`.
     pub fn new(
         run_seconds: f32,
         segment: Option<u32>,
         frame_us: u32,
         render: &RenderStats,
         systems: &[(&'static str, u32)],
+        handoffs: &[(&'static str, u32)],
     ) -> Self {
         let mut pass_us = [0_u32; MAX_PASS_TIMINGS];
         for (slot, (_, us)) in pass_us.iter_mut().zip(render.pass_times_us.iter()) {
             *slot = *us;
         }
         let mut system_us = [0_u32; MAX_SYSTEM_TIMINGS];
-        for (slot, (_, us)) in system_us.iter_mut().zip(systems.iter()) {
-            *slot = *us;
+        for (slot, (name, us)) in system_us.iter_mut().zip(systems.iter()) {
+            let handoff = handoffs
+                .iter()
+                .find(|(handed, _)| handed == name)
+                .map_or(0, |(_, us)| *us);
+            *slot = us.saturating_sub(handoff);
         }
         Self {
             run_seconds,
@@ -63,6 +74,7 @@ impl FrameSample {
             frame_us,
             gpu_frame_us: render.gpu_frame_us,
             gpu_wait_us: render.gpu_wait_us,
+            render_cpu_us: render.render_cpu_us,
             draw_calls: render.draw_calls,
             objects: render.objects,
             vram_bytes: render.vram_bytes,
@@ -141,6 +153,7 @@ mod tests {
         let mut r = RenderStats {
             gpu_frame_us: 8_000,
             gpu_wait_us: 500,
+            render_cpu_us: 1_200,
             draw_calls: 120,
             objects: 900,
             vram_bytes: 64 << 20,
@@ -160,17 +173,46 @@ mod tests {
             16_000,
             &render_with(&[("main", 4_000)]),
             &[("GraphicsSystem", 700)],
+            &[],
         );
         assert_eq!(s.run_seconds, 1.5);
         assert_eq!(s.segment, Some(2));
         assert_eq!(s.frame_us, 16_000);
         assert_eq!((s.gpu_frame_us, s.gpu_wait_us), (8_000, 500));
+        assert_eq!(s.render_cpu_us, 1_200);
         assert_eq!((s.draw_calls, s.objects), (120, 900));
         assert_eq!(s.vram_bytes, 64 << 20);
         assert_eq!(s.pass_us[0], 4_000);
         assert_eq!(s.pass_us[1], 0);
         assert_eq!(s.system_us[0], 700);
         assert_eq!(s.system_us[1], 0);
+    }
+
+    #[test]
+    fn a_systems_render_handoff_is_taken_out_of_its_own_span_only() {
+        let s = FrameSample::new(
+            0.0,
+            None,
+            16_000,
+            &render_with(&[]),
+            &[("PhysicsSystem", 400), ("GraphicsSystem", 9_000)],
+            &[("GraphicsSystem", 8_700)],
+        );
+        assert_eq!(s.system_us[0], 400);
+        assert_eq!(s.system_us[1], 300);
+    }
+
+    #[test]
+    fn a_handoff_longer_than_its_span_leaves_zero_rather_than_wrapping() {
+        let s = FrameSample::new(
+            0.0,
+            None,
+            16_000,
+            &render_with(&[]),
+            &[("GraphicsSystem", 100)],
+            &[("GraphicsSystem", 900)],
+        );
+        assert_eq!(s.system_us[0], 0);
     }
 
     #[test]

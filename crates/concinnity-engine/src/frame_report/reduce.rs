@@ -22,13 +22,17 @@ const UNATTRIBUTED: &str = "unattributed";
 /// it. Ranking the rest would rank noise.
 const SYSTEM_FLOOR_SHARE: f32 = 0.01;
 
-/// The system whose measured span contains the frame's blocked-on-GPU wait.
-///
-/// That wait is wall time inside the graphics system's own step, so a
-/// GPU-bound frame reports as CPU-bound unless it is subtracted: without this
-/// the graphics system reads as nearly the whole frame on every scene, which
-/// says nothing about either.
-const GPU_WAIT_BEARER: &str = "GraphicsSystem";
+/// The row that stands for the render side's CPU work beside the systems:
+/// replaying the frame's backend effects and recording and submitting its
+/// draw. It runs on the stepping thread or on its own render thread, and in
+/// neither case inside any one system's share.
+const RENDER_SUBMIT: &str = "render submit";
+
+/// How many of the run's slowest frames the report names.
+const SLOW_FRAMES_REPORTED: usize = 3;
+
+/// How many CPU rows, and how many passes, a slow frame lists.
+const SLOW_FRAME_ROWS: usize = 4;
 
 /// What a run is reduced against.
 #[derive(Debug, Clone, Copy)]
@@ -72,21 +76,52 @@ pub struct PassShare {
     pub share: f32,
 }
 
-/// One system's CPU contribution to a segment's frame.
+/// One system's CPU contribution to a segment's frame, or the render side's
+/// under the `render submit` row.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SystemCost {
-    /// The schedule's name for the system.
+    /// The schedule's name for the system, or `render submit`.
     pub name: String,
     /// Mean CPU microseconds the system's step took.
     pub mean_us: u32,
-    /// That mean as a share of everything the segment's systems stepped, in
-    /// `0..=1`.
-    ///
-    /// The denominator is the summed system spans rather than the frame's CPU
-    /// time, so numerator and denominator come from one measurement. The two
-    /// are sampled a frame apart, and a share across that seam can exceed the
-    /// whole.
+    /// That mean as a share of the segment's mean CPU work, in `0..=1`.
     pub share: f32,
+}
+
+/// A named cost within one frame.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FrameCost {
+    /// The system, the `render submit` row, or the pass.
+    pub name: String,
+    /// Microseconds it took in that frame.
+    pub us: u32,
+}
+
+/// One of the run's slowest frames, broken down far enough to say which side
+/// held it up: CPU work in a system or in the render submission, a wait on
+/// the GPU or the display, or neither, which leaves time outside the measured
+/// work.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SlowFrame {
+    /// How far into the run the frame was drawn, in seconds.
+    pub run_seconds: f32,
+    /// The segment it was drawn in.
+    pub segment: String,
+    /// Its wall-clock frame time.
+    pub frame_us: u32,
+    /// The CPU work in it, summed the way the segment table's column is.
+    pub cpu_us: u32,
+    /// Microseconds the render side spent blocked on the GPU and the display.
+    pub gpu_wait_us: u32,
+    /// The GPU time it reported. That is the most recently completed GPU
+    /// frame, which trails the CPU one, so a GPU spike can land on a later
+    /// frame than the wait it caused.
+    pub gpu_frame_us: u32,
+    /// The largest CPU costs, systems and the render submission together,
+    /// largest first. Zero rows are left out.
+    pub cpu: Vec<FrameCost>,
+    /// The largest passes of the GPU frame it reported, largest first.
+    pub passes: Vec<FrameCost>,
 }
 
 /// What one stretch of the run measured.
@@ -99,9 +134,10 @@ pub struct SegmentReport {
     /// Wall-clock frame time, the number a player feels.
     pub frame: Distribution,
     /// The CPU work in that frame: what the tick's systems spent, with the
-    /// blocked-on-GPU wait taken out of the one that carries it. Larger than
-    /// `frame` is impossible; approaching it means the tick, not the device, is
-    /// what sets the frame rate.
+    /// graphics system's handoff to the renderer taken out, plus the render
+    /// side's own submission work. Waits on the GPU are in neither. When the
+    /// render side runs on its own thread the two halves overlap, so this is
+    /// work done rather than a critical path, and it can exceed `frame`.
     ///
     /// A run whose host named no systems falls back to the wall time less the
     /// wait, which is the same quantity measured from the outside.
@@ -119,8 +155,9 @@ pub struct SegmentReport {
     pub vram_peak_bytes: u64,
     /// The passes that owned the GPU frame, largest first.
     pub passes: Vec<PassShare>,
-    /// The systems that owned the CPU frame, largest first. Empty on a stretch
-    /// where no system was a meaningful share of it.
+    /// The systems that owned the CPU frame, and the render submission beside
+    /// them, largest first. Empty on a stretch where none was a meaningful
+    /// share of it.
     pub systems: Vec<SystemCost>,
 }
 
@@ -139,6 +176,9 @@ pub struct Report {
     /// only here belongs to one of them; one that shows only in `overall` is
     /// spread across all of them.
     pub segments: Vec<SegmentReport>,
+    /// The slowest measured frames, slowest first: a hitch the distributions
+    /// can only show as a maximum, named with what it spent.
+    pub slowest: Vec<SlowFrame>,
 }
 
 impl Report {
@@ -169,8 +209,58 @@ impl Report {
             budget_us: options.budget_us,
             overall: summarize("all".to_string(), &measured, run, options),
             segments,
+            slowest: slowest_frames(&measured, run),
         })
     }
+}
+
+// The slowest frames, slowest first; the earlier of two equal ones first.
+fn slowest_frames(measured: &[&FrameSample], run: &FrameRun) -> Vec<SlowFrame> {
+    let mut by_time: Vec<&FrameSample> = measured.to_vec();
+    by_time.sort_by_key(|s| core::cmp::Reverse(s.frame_us));
+    by_time.truncate(SLOW_FRAMES_REPORTED);
+    by_time
+        .into_iter()
+        .map(|sample| SlowFrame {
+            run_seconds: sample.run_seconds,
+            segment: run.segment_name(sample.segment).to_string(),
+            frame_us: sample.frame_us,
+            cpu_us: stepped_us(sample, run),
+            gpu_wait_us: sample.gpu_wait_us,
+            gpu_frame_us: sample.gpu_frame_us,
+            cpu: largest(
+                named_slots(&run.system_names)
+                    .map(|(slot, name)| (name, sample.system_us[slot]))
+                    .chain(core::iter::once((RENDER_SUBMIT, sample.render_cpu_us))),
+            ),
+            passes: largest(
+                named_slots(&run.pass_names).map(|(slot, name)| (name, sample.pass_us[slot])),
+            ),
+        })
+        .collect()
+}
+
+// The nonzero costs, largest first, cut to what a slow frame lists.
+fn largest<'a>(costs: impl Iterator<Item = (&'a str, u32)>) -> Vec<FrameCost> {
+    let mut rows: Vec<FrameCost> = costs
+        .filter(|(_, us)| *us > 0)
+        .map(|(name, us)| FrameCost {
+            name: name.to_string(),
+            us,
+        })
+        .collect();
+    rows.sort_by_key(|row| core::cmp::Reverse(row.us));
+    rows.truncate(SLOW_FRAME_ROWS);
+    rows
+}
+
+// The occupied slots of a name table, with their index.
+fn named_slots(names: &[String]) -> impl Iterator<Item = (usize, &str)> {
+    names
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| !name.is_empty())
+        .map(|(slot, name)| (slot, name.as_str()))
 }
 
 // The segments the measured frames fall in, in the order they were first
@@ -213,9 +303,9 @@ fn summarize(
     }
 }
 
-// What one frame's systems spent between them.
+// What one frame's CPU work came to: its systems and its render submission.
 //
-// Taken from the systems rather than from the wall clock: the wall delta is
+// Taken from the work rather than from the wall clock: the wall delta is
 // measured on the thread that steps the world, while the wait is measured on
 // the one that submits, so subtracting the second from the first reports a
 // tick that outran the device as having done no work at all. A run whose host
@@ -224,40 +314,23 @@ fn stepped_us(sample: &FrameSample, run: &FrameRun) -> u32 {
     if run.system_names.is_empty() {
         return sample.frame_us.saturating_sub(sample.gpu_wait_us);
     }
-    run.system_names
-        .iter()
-        .enumerate()
-        .filter(|(_, name)| !name.is_empty())
-        .map(|(slot, name)| system_us(sample, slot, name))
-        .sum()
+    named_slots(&run.system_names)
+        .map(|(slot, _)| sample.system_us[slot])
+        .fold(sample.render_cpu_us, u32::saturating_add)
 }
 
-// One system's span in one frame. The graphics system's span has the
-// blocked-on-GPU wait taken out of it, or it would dominate every scene by
-// holding time the GPU spent.
-fn system_us(sample: &FrameSample, slot: usize, name: &str) -> u32 {
-    let step = sample.system_us[slot];
-    if name == GPU_WAIT_BEARER {
-        step.saturating_sub(sample.gpu_wait_us)
-    } else {
-        step
-    }
-}
-
-// The systems that owned the frame's CPU work, largest first, measured against
-// that work rather than against wall time. The graphics system's span has the
-// blocked-on-GPU wait taken out of it first, or it would dominate every scene
-// by holding time the GPU spent.
+// The systems and the render submission that owned the frame's CPU work,
+// largest first, measured against that work rather than against wall time.
 fn system_costs(frames: &[&FrameSample], run: &FrameRun) -> Vec<SystemCost> {
-    let means: Vec<(&String, u32)> = run
-        .system_names
-        .iter()
-        .enumerate()
-        .filter(|(_, name)| !name.is_empty())
-        .map(|(slot, name)| {
-            let mean_us = mean_u32(frames.iter().map(|s| system_us(s, slot, name)));
-            (name, mean_us)
-        })
+    if run.system_names.is_empty() {
+        return Vec::new();
+    }
+    let means: Vec<(&str, u32)> = named_slots(&run.system_names)
+        .map(|(slot, name)| (name, mean_u32(frames.iter().map(|s| s.system_us[slot]))))
+        .chain(core::iter::once((
+            RENDER_SUBMIT,
+            mean_u32(frames.iter().map(|s| s.render_cpu_us)),
+        )))
         .collect();
     let stepped: u32 = means.iter().map(|(_, us)| us).sum();
     if stepped == 0 {
@@ -271,7 +344,7 @@ fn system_costs(frames: &[&FrameSample], run: &FrameRun) -> Vec<SystemCost> {
                 return None;
             }
             Some(SystemCost {
-                name: name.clone(),
+                name: name.to_string(),
                 mean_us,
                 share,
             })
@@ -355,6 +428,7 @@ mod tests {
             frame_us,
             gpu_frame_us: frame_us / 2,
             gpu_wait_us: 100,
+            render_cpu_us: 0,
             draw_calls: 50,
             objects: 400,
             vram_bytes: 1 << 20,
@@ -574,27 +648,27 @@ mod tests {
     }
 
     #[test]
-    fn the_graphics_systems_span_has_the_blocked_on_gpu_wait_taken_out_of_it() {
-        // The wait is wall time inside that system's own step. Left in, it
-        // reads as nearly the whole frame on every GPU-bound scene, which says
-        // nothing about either side.
+    fn the_render_submission_is_a_row_of_its_own_beside_the_systems() {
+        // The submission is CPU work no system's share holds: on its own render
+        // thread it is in no system at all, and a system that submits on the
+        // stepping thread has that time taken out of its span.
         let mut only = sample(0.0, Some(0), 10_000);
         only.gpu_wait_us = 9_000;
+        only.render_cpu_us = 500;
         only.system_us[0] = 300;
-        only.system_us[1] = 9_400;
+        only.system_us[1] = 200;
         let mut run = run_of(vec![only]);
         run.system_names = vec!["PhysicsSystem".to_string(), "GraphicsSystem".to_string()];
         let report = Report::of(&run, no_warmup()).expect("measured frames");
 
-        // 700us of CPU work in a 10ms frame: what the two systems stepped,
-        // once the wait is out of the one that carried it.
-        assert_eq!(report.overall.cpu.mean_us, 700);
+        // Neither the wait nor the handoff is in it: 1ms of CPU work in a 10ms
+        // frame.
+        assert_eq!(report.overall.cpu.mean_us, 1_000);
         let systems = &report.overall.systems;
-        assert_eq!(systems[0].name, "GraphicsSystem");
-        assert_eq!(systems[0].mean_us, 400);
-        // A system that never waits keeps its whole span.
-        assert_eq!(systems[1].mean_us, 300);
-        assert!((systems[0].share - 400.0 / 700.0).abs() < 1e-4);
+        assert_eq!(systems[0].name, RENDER_SUBMIT);
+        assert_eq!(systems[0].mean_us, 500);
+        assert!((systems[0].share - 0.5).abs() < 1e-4);
+        assert!((systems.iter().map(|s| s.share).sum::<f32>() - 1.0).abs() < 1e-4);
     }
 
     #[test]
@@ -618,7 +692,7 @@ mod tests {
         let mut busy = sample(0.0, Some(0), 12_000);
         busy.gpu_wait_us = 11_500;
         busy.system_us[0] = 8_000;
-        busy.system_us[1] = 11_800;
+        busy.system_us[1] = 300;
         let mut run = run_of(vec![busy]);
         run.system_names = vec!["BehaviorSystem".to_string(), "GraphicsSystem".to_string()];
         let report = Report::of(&run, no_warmup()).expect("measured frames");
@@ -660,6 +734,107 @@ mod tests {
         run.completed = false;
         let report = Report::of(&run, no_warmup()).expect("measured frames");
         assert!(!report.completed);
+    }
+
+    #[test]
+    fn the_slowest_frames_are_named_slowest_first_and_capped() {
+        let run = run_of(vec![
+            sample(0.0, Some(0), 10_000),
+            sample(1.0, Some(1), 300_000),
+            sample(2.0, Some(0), 12_000),
+            sample(3.0, Some(0), 40_000),
+            sample(4.0, Some(1), 40_000),
+        ]);
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let slowest: Vec<(u32, f32, &str)> = report
+            .slowest
+            .iter()
+            .map(|f| (f.frame_us, f.run_seconds, f.segment.as_str()))
+            .collect();
+        // Equal frames keep the order they were drawn in.
+        assert_eq!(
+            slowest,
+            [
+                (300_000, 1.0, "rays"),
+                (40_000, 3.0, "shadows"),
+                (40_000, 4.0, "rays")
+            ]
+        );
+    }
+
+    #[test]
+    fn warmup_frames_are_never_named_among_the_slowest() {
+        let run = run_of(vec![
+            sample(0.5, Some(0), 90_000),
+            sample(3.0, Some(0), 12_000),
+        ]);
+        let report = Report::of(&run, ReduceOptions::default()).expect("measured frames");
+        assert_eq!(report.slowest.len(), 1);
+        assert_eq!(report.slowest[0].frame_us, 12_000);
+    }
+
+    // A hitch is diagnosable from the report alone when its frame says which
+    // side held it: here a 300 ms wait on the GPU, not CPU work.
+    #[test]
+    fn a_slow_frame_carries_its_own_cpu_wait_and_pass_breakdown() {
+        let mut hitch = sample(0.0, Some(0), 300_000);
+        hitch.gpu_wait_us = 297_000;
+        hitch.gpu_frame_us = 9_000;
+        hitch.render_cpu_us = 700;
+        hitch.system_us[0] = 1_200;
+        hitch.system_us[1] = 0;
+        hitch.system_us[2] = 400;
+        hitch.pass_us[0] = 1_000;
+        hitch.pass_us[1] = 5_000;
+        let mut run = run_of(vec![hitch]);
+        run.system_names = vec![
+            "PhysicsSystem".to_string(),
+            "AudioSystem".to_string(),
+            "GraphicsSystem".to_string(),
+        ];
+        run.pass_names = vec!["shadow".to_string(), "main".to_string(), String::new()];
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+
+        let frame = &report.slowest[0];
+        assert_eq!(frame.frame_us, 300_000);
+        assert_eq!(frame.gpu_wait_us, 297_000);
+        assert_eq!(frame.gpu_frame_us, 9_000);
+        assert_eq!(frame.cpu_us, 2_300);
+        let cpu: Vec<(&str, u32)> = frame.cpu.iter().map(|c| (c.name.as_str(), c.us)).collect();
+        // A system that did nothing this frame is left out.
+        assert_eq!(
+            cpu,
+            [
+                ("PhysicsSystem", 1_200),
+                (RENDER_SUBMIT, 700),
+                ("GraphicsSystem", 400)
+            ]
+        );
+        let passes: Vec<(&str, u32)> = frame
+            .passes
+            .iter()
+            .map(|p| (p.name.as_str(), p.us))
+            .collect();
+        assert_eq!(passes, [("main", 5_000), ("shadow", 1_000)]);
+    }
+
+    #[test]
+    fn a_slow_frame_lists_only_its_largest_costs() {
+        let mut busy = sample(0.0, Some(0), 20_000);
+        let mut run_names = Vec::new();
+        for slot in 0..6 {
+            busy.system_us[slot] = 100 * (slot as u32 + 1);
+            run_names.push(format!("System{slot}"));
+        }
+        let mut run = run_of(vec![busy]);
+        run.system_names = run_names;
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let names: Vec<&str> = report.slowest[0]
+            .cpu
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(names, ["System5", "System4", "System3", "System2"]);
     }
 
     #[test]

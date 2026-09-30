@@ -187,6 +187,10 @@ pub(crate) struct MockState {
     pub window_closed: bool,
     // When set, draw_frame returns this error instead of Ok.
     pub(crate) fail_draw: Option<RenderError>,
+    // How long draw_frame blocks, standing in for the work of a real draw.
+    pub(crate) draw_duration: std::time::Duration,
+    // Returned by render_stats().
+    pub(crate) render_stats: concinnity_core::profile::RenderStats,
     // When set, reload_world returns this error instead of Ok (exercising the
     // hot-swap failure path where GraphicsSystem marks itself failed).
     pub(crate) fail_reload: Option<RenderError>,
@@ -228,6 +232,8 @@ impl Default for MockState {
             visibility: std::collections::HashMap::new(),
             window_closed: false,
             fail_draw: None,
+            draw_duration: std::time::Duration::ZERO,
+            render_stats: concinnity_core::profile::RenderStats::default(),
             fail_reload: None,
             fail_morph_upload: None,
             fail_texture_upload: None,
@@ -418,6 +424,9 @@ impl RenderBackend for MockBackend {
             view_mode: params.view_mode,
             show: params.show,
         });
+        if !s.draw_duration.is_zero() {
+            std::thread::sleep(s.draw_duration);
+        }
         match &s.fail_draw {
             Some(e) => Err(e.clone()),
             None => Ok(()),
@@ -729,5 +738,9 @@ impl SceneEffects for MockBackend {}
 impl BackendProbe for MockBackend {
     fn capabilities(&self) -> DeviceCapabilities {
         self.state.lock().unwrap().caps
+    }
+
+    fn render_stats(&self) -> concinnity_core::profile::RenderStats {
+        self.state.lock().unwrap().render_stats
     }
 }

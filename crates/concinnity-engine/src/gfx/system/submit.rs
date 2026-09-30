@@ -10,6 +10,8 @@ use concinnity_core::render::error;
 use concinnity_core::render::ops::ReplayOutcome;
 use concinnity_core::render::snapshot::{RenderSnapshot, SceneOp};
 
+use std::time::Instant;
+
 use super::frame_policy::{FrameAction, FramePolicy};
 
 // What one frame's submission produced, applied to the world by `run_step`
@@ -43,6 +45,7 @@ pub(crate) fn submit(
     snap: &mut RenderSnapshot,
     backend: &mut dyn RenderBackend,
 ) -> SubmitOutcome {
+    let started = Instant::now();
     // Replay the tick's recorded backend effects first, in record order:
     // spawn slot ops, settings appliers, and streaming uploads all landed
     // before the draw when they ran in-place, and still do here.
@@ -143,12 +146,19 @@ pub(crate) fn submit(
         }
     }
 
+    let mut render_stats = backend.render_stats();
+    render_stats.render_cpu_us = micros_since(started).saturating_sub(render_stats.gpu_wait_us);
     SubmitOutcome {
         result: StepResult::Continue,
-        render_stats: Some(backend.render_stats()),
+        render_stats: Some(render_stats),
         replay,
         device_lost: false,
     }
+}
+
+/// Wall microseconds since `start`, saturating rather than wrapping.
+pub(crate) fn micros_since(start: Instant) -> u32 {
+    start.elapsed().as_micros().min(u32::MAX as u128) as u32
 }
 
 #[cfg(test)]
@@ -178,6 +188,55 @@ mod tests {
             &mut RenderSnapshot::default(),
             &mut backend,
         )
+    }
+
+    // Submit one frame to a backend whose draw takes `draw` and reports
+    // `gpu_wait_us`, returning the frame's render stats and the wall time the
+    // whole call took.
+    fn submit_timed(draw: std::time::Duration, gpu_wait_us: u32) -> (RenderStats, u32) {
+        let (state, mut backend) = recording_backend();
+        {
+            let mut s = state.lock().unwrap();
+            s.draw_duration = draw;
+            s.render_stats.gpu_wait_us = gpu_wait_us;
+        }
+        let started = Instant::now();
+        let outcome = submit(
+            &mut FramePolicy::default(),
+            &mut RenderSnapshot::default(),
+            &mut backend,
+        );
+        let wall = micros_since(started);
+        (outcome.render_stats.expect("a drawn frame"), wall)
+    }
+
+    #[test]
+    fn the_render_cpu_time_covers_the_whole_submission() {
+        let (stats, wall) = submit_timed(std::time::Duration::from_millis(2), 0);
+        assert!(stats.render_cpu_us >= 2_000, "{} us", stats.render_cpu_us);
+        assert!(
+            stats.render_cpu_us <= wall,
+            "{} > {wall}",
+            stats.render_cpu_us
+        );
+    }
+
+    #[test]
+    fn the_render_cpu_time_has_the_same_frames_gpu_wait_taken_out() {
+        // A draw that spent 3 ms blocked on the GPU did no CPU work in them.
+        let (stats, wall) = submit_timed(std::time::Duration::from_millis(3), 3_000);
+        assert_eq!(stats.gpu_wait_us, 3_000);
+        assert!(
+            stats.render_cpu_us <= wall - 3_000,
+            "{} us of {wall}",
+            stats.render_cpu_us
+        );
+    }
+
+    #[test]
+    fn a_wait_longer_than_the_submission_reads_as_no_cpu_work_rather_than_wrapping() {
+        let (stats, _) = submit_timed(std::time::Duration::ZERO, u32::MAX);
+        assert_eq!(stats.render_cpu_us, 0);
     }
 
     #[test]

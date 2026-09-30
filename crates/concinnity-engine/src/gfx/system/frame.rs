@@ -124,8 +124,11 @@ impl GraphicsSystem {
         // gates beside it; its buffers ride along and keep their capacity.
         let mut snapshot = std::mem::take(&mut self.snapshot);
         self.extract(ctx, &mut snapshot);
+        let submitted = std::time::Instant::now();
         let outcome =
             super::submit::submit(&mut self.frame_policy, &mut snapshot, backend.as_mut());
+        ctx.profile
+            .record_render_handoff(super::submit::micros_since(submitted));
         self.snapshot = snapshot;
 
         apply_frame_outcome(
@@ -175,9 +178,14 @@ impl GraphicsSystem {
         };
         let mut snapshot = std::mem::take(&mut self.snapshot);
         self.extract(ctx, &mut snapshot);
+        // The rendezvous blocks until the render thread has finished the frame
+        // before and takes this one, which is render-side time.
+        let sent = std::time::Instant::now();
         if pipe.snapshot_tx.send(snapshot).is_err() {
             return StepResult::Stop;
         }
+        ctx.profile
+            .record_render_handoff(super::submit::micros_since(sent));
         // The rendezvous send completed, so the render half has this snapshot
         // and submits it unconditionally: count the frame here, once per world
         // step, the way the serial path and StreamingSystem's clock do. Counting
@@ -993,6 +1001,36 @@ mod tests {
             ctx.profile.render.draw_calls, 7,
             "the feedback's render stats reached the profile"
         );
+    }
+
+    // The pipelined step's wait for the render thread to take its snapshot is
+    // recorded as render-side time, not as the step's own work.
+    #[test]
+    fn pipelined_step_records_its_wait_on_the_render_thread_as_the_handoff() {
+        let mut world = World::new();
+        let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel(0);
+        let (_feedback_tx, feedback_rx) = std::sync::mpsc::channel();
+        world.insert_resource(crate::ecs::PipelinedFrames(Some(
+            crate::ecs::PipelineChannels {
+                snapshot_tx,
+                feedback_rx,
+            },
+        )));
+        // A render thread still busy with the frame before for 4 ms.
+        let consumer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            snapshot_rx.recv().expect("a snapshot arrives");
+        });
+        let mut gs = GraphicsSystem::new(None);
+        assert_eq!(gs.run_step(&mut world.context()), StepResult::Continue);
+        consumer.join().expect("the stand-in render half exits");
+
+        let ctx = world.context();
+        ctx.profile.record_system("GraphicsSystem", 0);
+        ctx.profile.begin_frame();
+        let handoffs = ctx.profile.render_handoffs();
+        assert_eq!(handoffs.len(), 1);
+        assert!(handoffs[0].1 >= 3_000, "{} us", handoffs[0].1);
     }
 
     // With the render half gone (channel closed), the pipelined step stops
