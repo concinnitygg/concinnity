@@ -1,7 +1,7 @@
 //! The GPU-driven shadow pass: a depth-only bindless pipeline with the cull
 //! command signature rebuilt against its root signature, the frustum-only
 //! shadow cull pipeline, and per-frame indirect buffers carrying one cull
-//! region per cascade.
+//! region per cascade, plus the spot pass's own with one region per slice.
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::RenderResult;
@@ -27,12 +27,14 @@ pub(super) struct ShadowCull {
     pub(super) cull_pso: Option<ID3D12PipelineState>,
     pub(super) indirect_buffers: Vec<ID3D12Resource>,
     pub(super) status_buffers: Vec<ID3D12Resource>,
+    pub(super) spot_indirect_buffers: Vec<ID3D12Resource>,
 }
 
 // GPU-driven shadow pass: a depth-only bindless pipeline + the shared
 // cull command signature rebuilt against its root sig (object id still
 // at root param 0) + per-frame indirect buffers carrying one cull region
-// per cascade (`NUM_SHADOW_CASCADES * n_cull` commands) + a scratch
+// per cascade (`NUM_SHADOW_CASCADES * n_cull` commands), the spot pass's own
+// with one region per slice (`spot_slices * n_cull`) + a scratch
 // cull-status buffer the shadow cull dispatches write but never read.
 // Built only when the compute cull is active and shadows are enabled.
 pub(super) fn build_shadow_cull(
@@ -40,6 +42,7 @@ pub(super) fn build_shadow_cull(
     compute: &ComputeCull,
     plan: &CullPlan,
     shadow_enabled: bool,
+    spot_slices: usize,
 ) -> RenderResult<ShadowCull> {
     let (Some(crs), true) = (compute.root_sig.as_ref(), shadow_enabled) else {
         return Ok(ShadowCull {
@@ -49,6 +52,7 @@ pub(super) fn build_shadow_cull(
             cull_pso: None,
             indirect_buffers: Vec::new(),
             status_buffers: Vec::new(),
+            spot_indirect_buffers: Vec::new(),
         });
     };
     let device = gpu.hw.alloc.device();
@@ -67,9 +71,19 @@ pub(super) fn build_shadow_cull(
     let shadow_indirect_size =
         align256(cascades * (plan.n_cull as u64) * INDIRECT_COMMAND_STRIDE as u64);
     let status_size = status_buffer_size(plan.n_cull);
+    let spot_indirect_size =
+        align256(spot_slices as u64 * (plan.n_cull as u64) * INDIRECT_COMMAND_STRIDE as u64);
     let mut indirect_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
     let mut status_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+    let mut spot_indirect_buffers: Vec<ID3D12Resource> = Vec::new();
     for _ in 0..FRAMES {
+        if spot_indirect_size > 0 {
+            spot_indirect_buffers.push(create_uav_buffer(
+                device,
+                spot_indirect_size,
+                D3D12_RESOURCE_STATE_COMMON,
+            )?);
+        }
         indirect_buffers.push(create_uav_buffer(
             device,
             shadow_indirect_size,
@@ -88,5 +102,6 @@ pub(super) fn build_shadow_cull(
         cull_pso: Some(cull_pso),
         indirect_buffers,
         status_buffers,
+        spot_indirect_buffers,
     })
 }

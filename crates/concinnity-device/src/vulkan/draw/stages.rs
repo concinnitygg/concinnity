@@ -340,7 +340,7 @@ impl VkContext {
         } else {
             extent.width as f32 / extent.height as f32
         };
-        if self.shadow.pipeline.is_some() {
+        if self.shadow.enabled() {
             let fresh = csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
                 view: self.view.matrix,
                 cam_pos,

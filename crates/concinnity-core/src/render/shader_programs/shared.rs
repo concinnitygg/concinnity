@@ -123,22 +123,6 @@ pub static GBUFFER_PREPASS_FRAG_BINDLESS: ShaderProgram = ShaderProgram {
     gates: &["GB_FRAGMENT_BINDLESS"],
     msaa: false,
 };
-/// `shadow_vertex_main` from `shadow.hlsl`.
-pub static SHADOW_VERT: ShaderProgram = ShaderProgram {
-    file: "shadow.hlsl",
-    entry: "shadow_vertex_main",
-    label: "shadow_vert.hlsl",
-    gates: &["SHADOW_STATIC"],
-    msaa: false,
-};
-/// `shadow_vertex_main_skinned` from `shadow.hlsl`.
-pub static SHADOW_VERT_SKINNED: ShaderProgram = ShaderProgram {
-    file: "shadow.hlsl",
-    entry: "shadow_vertex_main_skinned",
-    label: "shadow_vert_skinned.hlsl",
-    gates: &["SHADOW_SKINNED"],
-    msaa: false,
-};
 /// `shadow_vertex_bindless` from `shadow.hlsl`.
 pub static SHADOW_VERT_BINDLESS: ShaderProgram = ShaderProgram {
     file: "shadow.hlsl",
@@ -553,8 +537,6 @@ pub static ALL: &[&ShaderProgram] = &[
     &PROBE_GGX,
     &GBUFFER_PREPASS_VERT_BINDLESS,
     &GBUFFER_PREPASS_FRAG_BINDLESS,
-    &SHADOW_VERT,
-    &SHADOW_VERT_SKINNED,
     &SHADOW_VERT_BINDLESS,
     &FULLSCREEN_VERT,
     &TAA_FRAG,

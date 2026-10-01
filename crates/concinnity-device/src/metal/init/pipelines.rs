@@ -280,30 +280,6 @@ pub(crate) fn build_bucket_pipeline(
         })
 }
 
-// Shadow pipeline: depth-only, no fragment function, no MSAA. Compiled from the
-// engine-internal single source (`shadow.hlsl`, entry `shadow_vertex_main`).
-// Shared by init (one-shot at startup) and the internal-shader hot-reload path
-// (`reload_shaders`) so the two stay consistent.
-pub(crate) fn build_shadow_pipeline(
-    device: &ProtocolObject<dyn MTLDevice>,
-    vert_desc: &MTLVertexDescriptor,
-    hot_reload: bool,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let shadow_fn = super::super::builtin_shaders::entry_function(
-        device,
-        &super::super::builtin_shaders::SHADOW_VERT,
-        hot_reload,
-    )?;
-    let shadow_pipeline_desc = MTLRenderPipelineDescriptor::new();
-    shadow_pipeline_desc.setVertexDescriptor(Some(vert_desc));
-    shadow_pipeline_desc.setVertexFunction(Some(&shadow_fn));
-    shadow_pipeline_desc.setRasterSampleCount(1);
-    shadow_pipeline_desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
-    device
-        .newRenderPipelineStateWithDescriptor_error(&shadow_pipeline_desc)
-        .map_err(|e| RenderError::ShaderCompile(format!("shadow pipeline state: {e:?}")))
-}
-
 // GPU-driven cascaded-shadow render pipeline: depth-only, no
 // fragment, no MSAA, but `supportIndirectCommandBuffers` so each cascade's
 // casters can draw through the shadow ICB the shadow cull's encode dispatch

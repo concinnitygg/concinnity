@@ -5,6 +5,7 @@
 use ash::vk;
 use concinnity_core::components;
 use concinnity_core::gfx::auto_exposure;
+use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::*;
 use concinnity_core::input::keymap::KeyMap;
@@ -57,12 +58,8 @@ pub(super) struct VkShadow {
     pub(super) map_size: u32,
     // One framebuffer per cascade slice. Empty when the shadow pass is disabled.
     pub(super) framebuffers: Vec<OwnedFramebuffer>,
-    pub(super) pipeline: Option<OwnedPipeline>,
-    pub(super) pipeline_layout: Option<OwnedPipelineLayout>,
     pub(super) global_set_layout: OwnedSetLayout,
     pub(super) sampler: OwnedSampler,
-    pub(super) skinned_pipeline: Option<OwnedPipeline>,
-    pub(super) skinned_pipeline_layout: Option<OwnedPipelineLayout>,
     // Per-frame-in-flight `ShadowUniforms` ring, persistently mapped. One slot
     // per frame: a single buffer would let this frame's cascade VPs overwrite
     // memory an in-flight frame is still sampling, which under `Hybrid` pairs a
@@ -88,6 +85,11 @@ pub(super) struct VkShadow {
 }
 
 impl VkShadow {
+    // Whether the world renders cascades at all (`shadow_map_size > 0`).
+    pub(super) fn enabled(&self) -> bool {
+        !self.framebuffers.is_empty()
+    }
+
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`. The per-frame shadow global sets live in `VkDescriptors`.
     pub(super) fn destroy(&mut self, _device: &VkDevice) {
@@ -102,7 +104,7 @@ impl VkShadow {
 // are decided once at init and only the depth contents refresh. A world with no
 // shadowed spot still gets a 1x1 fallback array and a one-element buffer, so
 // the main pass's descriptors are always valid. Reuses the cascade pass's
-// render pass, pipeline, and comparison sampler.
+// render pass, GPU-driven pipeline, and comparison sampler.
 pub(super) struct VkSpotShadow {
     pub(super) map: GpuImage,
     // One framebuffer per shadowed spot; empty when the world has none.
@@ -120,6 +122,8 @@ pub(super) struct VkSpotShadow {
 
     pub(super) sets: Vec<vk::DescriptorSet>,
     pub(super) _descriptor_pool: OwnedDescriptorPool,
+    // Each slice's light frustum, which its GPU cull keeps casters inside.
+    pub(super) frusta: Vec<Frustum>,
     // Round-robin clock + primed set, advanced once per frame in draw_frame.
     pub(super) scheduler: spot_shadow::SpotShadowScheduler,
     // Slices re-rendered this frame (bit `i` = slice `i`).
@@ -138,6 +142,11 @@ impl VkSpotShadow {
     pub(super) fn advance(&mut self, every_frame: bool) {
         let count = self.framebuffers.len();
         self.render_mask = self.scheduler.next_mask(every_frame, count);
+    }
+
+    // Slices that re-render this frame.
+    pub(super) fn refreshed_slices(&self) -> impl Iterator<Item = u32> {
+        spot_shadow::refreshed_slices(self.render_mask, self.count())
     }
 
     // Destroy every owned GPU object. Called from `VkContext::drop` after
@@ -173,12 +182,8 @@ impl VkAreaLight {
 // Skinned (skeletally animated) mesh resources, grouped off the flat `VkContext`
 // field soup. All `None` / empty until `upload_skinned` runs; with no
 // `SkinnedMesh` in the world every skinned pass is skipped. The joint matrices
-// live in per-(frame, object) storage buffers bound through `joint_sets`: set 2
-// for the main pass, set 1 for the shadow pass; the descriptor set layout is
-// identical so one set serves both.
+// live in per-(frame, object) storage buffers the skin fold reads.
 pub(super) struct VkSkinned {
-    pub(super) joint_set_layout: Option<OwnedSetLayout>,
-    pub(super) descriptor_pool: Option<OwnedDescriptorPool>,
     pub(super) vertex_buffer: PooledBuffer,
     pub(super) index_buffer: PooledBuffer,
     // Current byte sizes of the skinned VB / IB. Used by
@@ -189,10 +194,9 @@ pub(super) struct VkSkinned {
     // Per-slot draw objects, joint palettes, and morph weights: the CPU-side
     // records this backend shares with Metal and DirectX.
     pub(super) slots: skinned_slots::SkinnedSlots,
-    // Per-(frame, object) joint storage buffers (host-mapped) + their
-    // descriptor sets. Indexed [frame_idx][skinned_idx].
+    // Per-(frame, object) joint storage buffers (host-mapped). Indexed
+    // [frame_idx][skinned_idx].
     pub(super) joint_buffers: Vec<Vec<PooledBuffer>>,
-    pub(super) joint_sets: Vec<Vec<vk::DescriptorSet>>,
     // GPU-driven main-pass skinning fold. `skin` is the `rt_skin` compute pipeline
     // (reused independently of RT) + its per-(frame, object) descriptor sets,
     // written once in `build_main_skin`. `deformed` is one storage+vertex buffer
@@ -231,15 +235,12 @@ impl VkSkinned {
     // No skinned mesh uploaded yet: `upload_skinned` builds the rest.
     pub(super) fn new() -> Self {
         Self {
-            joint_set_layout: None,
-            descriptor_pool: None,
             vertex_buffer: PooledBuffer::null(),
             vertex_buffer_bytes: 0,
             index_buffer: PooledBuffer::null(),
             index_buffer_bytes: 0,
             slots: skinned_slots::SkinnedSlots::new(),
             joint_buffers: Vec::new(),
-            joint_sets: Vec::new(),
             skin: None,
             deformed: Vec::new(),
             morph_delta_unique: Vec::new(),
@@ -251,8 +252,7 @@ impl VkSkinned {
     }
 
     // Destroy every owned GPU object. Called from `VkContext::drop` after
-    // `wait_idle`. The per-frame `joint_sets` are
-    // freed with `descriptor_pool`, so they are not destroyed here.
+    // `wait_idle`.
     pub(super) fn destroy(&mut self, device: &VkDevice) {
         self.vertex_buffer = PooledBuffer::null();
         self.index_buffer = PooledBuffer::null();
@@ -320,28 +320,20 @@ impl VkDescriptors {
 }
 
 // Instanced-prop clusters. Every instance folds into the GPU-driven cull
-// records, so the only per-instance walk left is the spot shadow pass, which
-// pushes each transform as a root constant. Empty when the world declares no
-// `InstancedProp` clusters. `clusters` holds the declared clusters (each with
-// its per-instance transforms); `lod_buckets` is the per-frame LOD partition.
+// records, so no pass walks the instances on the CPU. Empty when the world
+// declares no `InstancedProp` clusters. `clusters` holds the declared clusters
+// (each with its per-instance transforms).
 pub(super) struct VkInstanced {
     pub(super) clusters: Vec<InstancedCluster>,
     // Whether any cluster declares LOD alternates. False skips the per-frame
     // per-instance LOD patch: without alternates the base slice written into
     // every frame's draw-args buffer at init is right for the world's life.
     pub(super) any_lod: bool,
-    // Per-cluster LOD-bucket partition for the current frame, indexed by
-    // cluster index. Recomputed once per frame by `prepare_instanced_clusters`
-    // (on `&mut self`, before the parallel pass fan-out) and consumed read-only
-    // by the spot shadow pass. Empty until the first frame / when no clusters
-    // are declared.
-    pub(super) lod_buckets: Vec<Vec<InstancedLodBucket>>,
 }
 
 impl VkInstanced {
     pub(super) fn new(clusters: Vec<InstancedCluster>) -> Self {
         Self {
-            lod_buckets: vec![Vec::new(); clusters.len()],
             any_lod: concinnity_core::gfx::lod::any_cluster_has_lod(&clusters),
             clusters,
         }
@@ -467,10 +459,10 @@ pub(super) struct VkCull {
     // jittered VP; the sub-pixel discrepancy is conservative, matching DirectX
     // / Metal which also project through the previous un-jittered VP.
     pub(super) hiz_prev_view_proj: [[f32; 4]; 4],
-    // GPU-driven shadow pass. `shadow_cull_pipeline` is a frustum +
-    // distance only cull kernel (`SHADOW_CULL`, no Hi-Z / status) over a lean
-    // 3-SSBO set (objects + draw-args + this cascade's indirect-command buffer);
-    // one dispatch per re-rendered cascade writes that cascade's indirect buffer.
+    // GPU-driven shadow views. `shadow_cull_pipeline` is a frustum-only cull
+    // kernel (`SHADOW_CULL`, no Hi-Z / status) over a lean 3-SSBO set (objects +
+    // draw-args + this view's indirect-command buffer); one dispatch per
+    // re-rendered cascade or spot slice writes that view's indirect buffer.
     // `shadow_bindless_pipeline` is a depth-only graphics pipeline whose VS reads
     // `model` from the GpuObjectData SSBO (gl_InstanceIndex) and projects through
     // `light_vps[cascade_idx]` (a push constant); each cascade is then issued with
@@ -485,6 +477,12 @@ pub(super) struct VkCull {
     pub(super) shadow_bindless_pipeline: Option<OwnedPipeline>,
     pub(super) shadow_bindless_pipeline_layout: Option<OwnedPipelineLayout>,
     pub(super) shadow_indirect_buffers: Vec<Vec<PooledBuffer>>,
+    // The spot shadow pass's cull sets and indirect buffers, indexed
+    // [frame][slice], written by the same shadow kernel. Their own, so the spot
+    // pass shares no state with the cascade pass. Empty when the world has no
+    // shadowed spot.
+    pub(super) spot_cull_sets: Vec<Vec<vk::DescriptorSet>>,
+    pub(super) spot_indirect_buffers: Vec<Vec<PooledBuffer>>,
     // GPU-driven G-buffer pre-pass. A 3-MRT bindless pipeline whose VS
     // reads `model` + `roughness` from the GpuObjectData SSBO (gl_InstanceIndex)
     // and the previous-frame model from `prev_model_buffers`; the velocity history
@@ -518,9 +516,9 @@ impl VkCull {
         if let Some(hiz) = &mut self.hiz {
             hiz.destroy(device);
         }
-        // GPU-driven shadow pass. The per-(frame, cascade) `shadow_cull_sets`
-        // are freed with the shared descriptor pool, so only the pipelines,
-        // the set layout, and the per-cascade indirect buffers are destroyed.
+        // GPU-driven shadow views. The per-(frame, view) cascade and spot cull
+        // sets are freed with the shared descriptor pool, so only the pipelines,
+        // the set layout, and the per-view indirect buffers are destroyed.
         // GPU-driven G-buffer pre-pass. The per-frame `gbuffer_sets` and the
         // snapshot kernel's sets are freed with the shared descriptor pool, so
         // only the pipelines, layouts, and the per-frame model-history buffers
@@ -532,6 +530,7 @@ impl VkCull {
         self.cull_status_buffers.clear();
         self.indirect_buffers2.clear();
         self.shadow_indirect_buffers.clear();
+        self.spot_indirect_buffers.clear();
         self.prev_model_buffers.clear();
         self.model_history = None;
     }

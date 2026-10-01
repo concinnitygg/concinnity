@@ -346,8 +346,8 @@ impl VkContext {
         self.update_shadow_schedule(extent, cam_pos, fov_y_radians, near, far, frame_idx);
 
         // Push this frame's skinning matrices into the per-frame joint buffers
-        // before the skinned shadow + main passes read them. No-op when no
-        // SkinnedMesh is declared.
+        // before the skin fold reads them. No-op when no SkinnedMesh is
+        // declared.
         self.upload_joint_matrices(frame_idx);
         // Push this frame's morph weights into the per-frame weight buffers the
         // skin fold reads. No-op when no SkinnedMesh carries morph targets.
@@ -646,7 +646,7 @@ impl VkContext {
         //  The flags track whether each pipeline is built: the encoders skip
         //  cheaply when there is nothing live to draw.
         let seed_inputs = FrameGraphInputs {
-            shadow_enabled: self.shadow.pipeline.is_some(),
+            shadow_enabled: self.shadow.enabled(),
             shadow_map_size: self.shadow.map_size,
             hdr_width: extent.width,
             hdr_height: extent.height,

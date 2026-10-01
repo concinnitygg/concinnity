@@ -2,8 +2,7 @@
 //! Draws static objects, instanced clusters, and (when present) skinned
 //! meshes into each slice of the shadow map array. Caller has already
 //! uploaded this frame's `ShadowUniforms` into `shadow_ubo_gva`; this pass
-//! just binds it once per shadow pipeline and pushes the cascade index per
-//! draw. Skipped entirely when no shadow pipeline is configured or the
+//! binds it and sets the cascade index per cascade. Skipped entirely when the
 //! fallback 1x1 shadow array is bound.
 //!
 //! The cascades are GPU-driven: a per-cascade cull dispatch writes one
@@ -11,10 +10,9 @@
 //! `ExecuteIndirect` over the static + skinned records (the same cull buffers the
 //! main pass uses). Everything appearing after init -- streamed chunks and
 //! spawned clones -- folds into those same records, so the whole scene is
-//! covered. Spot slices keep the per-object caster encoders below: the indirect
-//! buffer is laid out per cascade and has no slots for them.
+//! covered. The spot slices draw through the same `draw_shadow_view` from their
+//! own indirect buffer.
 
-use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
 use concinnity_core::render::backend_init::ShadowCadence;
 use concinnity_core::render::shadow_schedule;
@@ -51,35 +49,20 @@ pub(in crate::directx) struct ShadowState {
     // refresh every frame; per-cascade light VPs only when the mask includes
     // that cascade. Uploaded to the per-frame shadow UBO each frame.
     pub uniforms: ShadowUniforms,
-    // Depth-only cascade pipeline, `None` when shadows are disabled; the shadow
-    // passes key off `pso.is_some()`.
-    pub root_sig: Option<ID3D12RootSignature>,
-    pub pso: Option<ID3D12PipelineState>,
 }
 
-// Root constants for the spot caster draws (80 bytes = 20 DWORDs): model matrix
-// + cascade_idx + padding. cascade_idx selects which `ShadowUniforms.light_vps[i]`
-// the shadow vertex shader projects through; every spot slice carries its own
-// matrix in slot 0.
-#[derive(Copy, Clone, bytemuck::NoUninit)]
-#[repr(C)]
-pub(in crate::directx) struct ShadowPush {
-    model: [[f32; 4]; 4],
-    cascade_idx: u32,
-    _pad: [u32; 3],
-}
-
-// Every spot slice carries its own matrix in `light_vps[0]`.
-const SPOT_SLICE_IDX: u32 = 0;
-
-// One spot slice's draw state: the depth-only pipeline to draw with and the
-// uniform buffer holding its light-space matrix. Grouping them keeps the caster
-// sub-encoder's argument list short.
+// One depth-only shadow view to draw from a cull-written indirect region: the
+// target slice, the uniforms holding its light-space matrix, which of their
+// `light_vps` the vertex shader projects through, and where its commands start.
+// A cascade and a spot slice differ only in these.
 #[derive(Clone, Copy)]
-pub(in crate::directx) struct ShadowPassBinding<'a> {
-    pub pso: &'a ID3D12PipelineState,
-    pub root_sig: &'a ID3D12RootSignature,
+pub(in crate::directx) struct ShadowView<'a> {
+    pub dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub ubo_gva: u64,
+    pub vp_index: u32,
+    pub indirect: &'a ID3D12Resource,
+    // First command of this view's region, in commands.
+    pub first_command: usize,
 }
 
 impl DxContext {
@@ -97,11 +80,7 @@ impl DxContext {
         // and the live pass agree on the SDF surface.
         raymarch_view: Option<&crate::directx::raymarch::RaymarchView>,
     ) {
-        // The depth-only pipeline is the spot pass's; its absence still means
-        // shadows are not configured, so there is nothing to render here either.
-        if self.shadow.pso.is_none() {
-            return;
-        }
+        // No cascade DSVs means shadows are not configured.
         if self.shadow.dsvs.is_empty() {
             return;
         }
@@ -119,31 +98,7 @@ impl DxContext {
             self.shadow.render_mask
         };
 
-        // Viewport + scissor + topology are common to the GPU-driven cascade raster
-        // and the raymarched SDF casters.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: sm as f32,
-                Height: sm as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            let scissor = RECT {
-                left: 0,
-                top: 0,
-                right: sm as i32,
-                bottom: sm as i32,
-            };
-            cmd.RSSetScissorRects(&[scissor]);
-            cmd.IASetPrimitiveTopology(
-                windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-            );
-        }
+        self.set_shadow_raster_state(cmd, sm);
 
         // Clear every re-rendered cascade first: with nothing to rasterize the
         // pass is these clears, which is what the raymarched casters below and
@@ -152,23 +107,33 @@ impl DxContext {
             if render_mask & (1u32 << cascade_idx) == 0 {
                 continue;
             }
-            let dsv = self.shadow.dsvs[cascade_idx];
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
-                cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
-            }
+            self.clear_shadow_slice(cmd, self.shadow.dsvs[cascade_idx]);
         }
 
-        if self.cull.shadow_bindless_pso.is_some() && self.cull_count() > 0 {
-            self.encode_shadow_pass_gpu_driven(
-                cmd,
-                frame_idx,
-                shadow_ubo_gva,
-                cam_pos,
-                render_mask,
-            );
+        if let Some(indirect) = self.cull.shadow_indirect_buffers.get(frame_idx)
+            && self.shadow_views_drawable()
+        {
+            // Per-cascade GPU cull -> per-cascade indirect command regions. Runs
+            // as a compute prologue in this (shadow) command list, before any draw.
+            self.encode_shadow_culls(cmd, frame_idx, render_mask, cam_pos);
+            self.bind_shadow_views(cmd, frame_idx);
+            let n_cull = self.cull_count();
+            for cascade_idx in 0..NUM_SHADOW_CASCADES {
+                if render_mask & (1u32 << cascade_idx) == 0 {
+                    continue;
+                }
+                self.draw_shadow_view(
+                    cmd,
+                    frame_idx,
+                    ShadowView {
+                        dsv: self.shadow.dsvs[cascade_idx],
+                        ubo_gva: shadow_ubo_gva,
+                        vp_index: cascade_idx as u32,
+                        indirect,
+                        first_command: cascade_idx * n_cull,
+                    },
+                );
+            }
         }
 
         // Raymarched SDF shadow casters: depth-only draws into the same
@@ -190,253 +155,136 @@ impl DxContext {
         // cross-frame reset (the map rests sampled between frames).
     }
 
-    // GPU-driven shadow raster: per-cascade GPU cull writes one indirect region
-    // per cascade, then each re-rendered cascade is issued with one
-    // `ExecuteIndirect` for the static + instance prefix and (when present) a
-    // second for the skinned tail -- the same two-region split the bindless main
-    // pass uses, but depth-only and through `light_vps[cascade_idx]`. The CPU
-    // never walks the static / instanced / skinned draw lists.
-    fn encode_shadow_pass_gpu_driven(
+    // Viewport + scissor over a square `size` slice, and triangle-list topology.
+    pub(in crate::directx) fn set_shadow_raster_state(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        frame_idx: usize,
-        shadow_ubo_gva: u64,
-        cam_pos: [f32; 3],
-        render_mask: u32,
-    ) {
-        let (Some(sb_pso), Some(sb_root), Some(sb_sig), Some(indirect)) = (
-            self.cull.shadow_bindless_pso.as_ref(),
-            self.cull.shadow_bindless_root_sig.as_ref(),
-            self.cull.shadow_bindless_cmd_sig.as_ref(),
-            self.cull.shadow_indirect_buffers.get(frame_idx),
-        ) else {
-            return;
-        };
-        let n_cull = self.cull_count();
-        let prefix = self.skinned_record_base();
-        let stride = crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize;
-        let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
-
-        // Per-cascade GPU cull -> per-cascade indirect command regions. Runs as a
-        // compute prologue in this (shadow) command list, before any render pass.
-        self.encode_shadow_culls(cmd, frame_idx, render_mask, cam_pos);
-
-        // Static + instance prefix: issue each re-rendered cascade's
-        // `[0, skinned_record_base())` region against the static VB/IB. The
-        // caller has already cleared the depth.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetPipelineState(sb_pso);
-            cmd.SetGraphicsRootSignature(sb_root);
-            cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
-            // [1] shadow UBO (light_vps), [3] this frame's GpuObjectData.
-            cmd.SetGraphicsRootConstantBufferView(1, shadow_ubo_gva);
-            cmd.SetGraphicsRootShaderResourceView(3, object_gva);
-        }
-        for cascade_idx in 0..NUM_SHADOW_CASCADES {
-            if render_mask & (1u32 << cascade_idx) == 0 {
-                continue;
-            }
-            let dsv = self.shadow.dsvs[cascade_idx];
-            let c = cascade_idx as u32;
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
-                // [2] cascade index, constant across this cascade's ExecuteIndirect.
-                cmd.set_graphics_root_constants(2, &c);
-                let byte_off = ((cascade_idx * n_cull) * stride) as u64;
-                cmd.ExecuteIndirect(
-                    sb_sig,
-                    prefix as u32,
-                    indirect,
-                    byte_off,
-                    None::<&ID3D12Resource>,
-                    0,
-                );
-            }
-            self.inc_draw_calls(1);
-        }
-
-        // Skinned tail: a second `ExecuteIndirect` per cascade over the deformed
-        // VB + skinned IB, reading each cascade region from `skinned_record_base()`
-        // on. No depth clear -- appends to the static depth via the LESS test.
-        if self.draw.n_skinned > 0
-            && let Some(deformed_vbv) = self.skinned.deformed_vbvs.get(frame_idx)
-        {
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv]));
-                cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
-            }
-            for cascade_idx in 0..NUM_SHADOW_CASCADES {
-                if render_mask & (1u32 << cascade_idx) == 0 {
-                    continue;
-                }
-                let dsv = self.shadow.dsvs[cascade_idx];
-                let c = cascade_idx as u32;
-                // SAFETY: the command list is in the recording state, and every resource,
-                // descriptor and slice these commands name is live for the call.
-                unsafe {
-                    cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
-                    cmd.set_graphics_root_constants(2, &c);
-                    let byte_off = ((cascade_idx * n_cull + prefix) * stride) as u64;
-                    cmd.ExecuteIndirect(
-                        sb_sig,
-                        self.draw.n_skinned as u32,
-                        indirect,
-                        byte_off,
-                        None::<&ID3D12Resource>,
-                        0,
-                    );
-                }
-                self.inc_draw_calls(1);
-            }
-        }
-    }
-
-    // Static + instanced depth-only casters for one spot slice, drawn into
-    // whichever DSV the caller bound. Binds the pipeline, the shared geometry
-    // buffers, and `bind.ubo_gva`; the caller owns the render target and any
-    // depth clear. The cascades draw indirectly off the cull records instead,
-    // whose per-cascade layout has no slot for a spot slice.
-    pub(in crate::directx) fn encode_shadow_casters_into(
-        &self,
-        cmd: &ID3D12GraphicsCommandList,
-        bind: ShadowPassBinding<'_>,
-        cam_pos: [f32; 3],
+        size: u32,
     ) {
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.SetPipelineState(bind.pso);
-            cmd.SetGraphicsRootSignature(bind.root_sig);
-            cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
-            cmd.SetGraphicsRootConstantBufferView(1, bind.ubo_gva);
-
-            // See-through glass (Layer 2) casts no shadow: it is rerouted out of
-            // every opaque rasterization while RT is live, and the GPU-driven
-            // cascade takes the same decision through the cull kernel's ENABLED
-            // bit. Hoisted out of the loop -- the gate is frame state.
-            let skip_seethrough = self.mesh_glass_active();
-            for obj in &self.draw.objects {
-                // A non-resident streamed mesh has no geometry in the shared
-                // buffers yet -- skip it everywhere.
-                if !obj.visible || !obj.resident {
-                    continue;
-                }
-                if skip_seethrough && obj.material.see_through != 0 {
-                    continue;
-                }
-                let push = ShadowPush {
-                    model: obj.model,
-                    cascade_idx: SPOT_SLICE_IDX,
-                    _pad: [0; 3],
-                };
-                // Pick the LOD by camera distance; the shadow pass uses the same
-                // slice the main pass will, so silhouettes track when the runtime
-                // swaps to a coarser LOD.
-                let d = lod::camera_distance(obj, cam_pos);
-                let (index_offset, index_count) = obj.active_lod(d);
-                cmd.set_graphics_root_constants(0, &push);
-                cmd.DrawIndexedInstanced(
-                    index_count as u32,
-                    1,
-                    index_offset as u32,
-                    obj.base_vertex,
-                    0,
-                );
-                self.inc_draw_calls(1);
-            }
-
-            // Instanced clusters: iterate instances individually (cheap, visually
-            // identical to an instanced shadow shader). Reads the per-cluster LOD
-            // bucket layout cached at the top of record_frame by
-            // `build_instance_upload`, so the shadow pass picks the exact same LOD
-            // slice the main pass is about to draw; cascade-seam silhouettes stay
-            // coherent when the runtime swaps to a coarser LOD.
-            let layouts = self.instanced.bucket_layouts.read().unwrap();
-            for buckets in layouts.iter() {
-                for bucket in buckets.iter() {
-                    for &model in &bucket.instances {
-                        let push = ShadowPush {
-                            model,
-                            cascade_idx: SPOT_SLICE_IDX,
-                            _pad: [0; 3],
-                        };
-                        cmd.set_graphics_root_constants(0, &push);
-                        cmd.DrawIndexedInstanced(
-                            bucket.index_count as u32,
-                            1,
-                            bucket.index_offset as u32,
-                            0,
-                            0,
-                        );
-                        self.inc_draw_calls(1);
-                    }
-                }
-            }
+            cmd.RSSetViewports(&[D3D12_VIEWPORT {
+                TopLeftX: 0.0,
+                TopLeftY: 0.0,
+                Width: size as f32,
+                Height: size as f32,
+                MinDepth: 0.0,
+                MaxDepth: 1.0,
+            }]);
+            cmd.RSSetScissorRects(&[RECT {
+                left: 0,
+                top: 0,
+                right: size as i32,
+                bottom: size as i32,
+            }]);
+            cmd.IASetPrimitiveTopology(
+                windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+            );
         }
     }
 
-    // Skinned depth-only casters for one spot slice, drawn into whichever DSV
-    // the caller bound. Binds the skinned shadow pipeline and the deformed
-    // geometry; no depth clear, so skinned depth appends to whatever
-    // `encode_shadow_casters_into` already laid down. A no-op when the world has
-    // no skinned mesh.
-    pub(in crate::directx) fn encode_shadow_skinned_into(
+    pub(in crate::directx) fn clear_shadow_slice(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        ubo_gva: u64,
+        dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    ) {
+        // SAFETY: the command list is in the recording state, and the DSV names a live slice.
+        unsafe {
+            cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
+            cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
+        }
+    }
+
+    // Whether the GPU-driven shadow path has a pipeline and records to draw.
+    pub(in crate::directx) fn shadow_views_drawable(&self) -> bool {
+        self.cull.shadow_bindless_pso.is_some()
+            && self.cull.shadow_bindless_cmd_sig.is_some()
+            && self.cull_count() > 0
+    }
+
+    // Bind the depth-only bindless shadow pipeline and this frame's object
+    // records, the state every `draw_shadow_view` after it shares.
+    pub(in crate::directx) fn bind_shadow_views(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        cam_pos: [f32; 3],
     ) {
         let (Some(pso), Some(root_sig)) = (
-            self.skinned.shadow_pso.as_ref(),
-            self.skinned.shadow_root_sig.as_ref(),
+            self.cull.shadow_bindless_pso.as_ref(),
+            self.cull.shadow_bindless_root_sig.as_ref(),
         ) else {
             return;
         };
-        if self.skinned.slots.draw_objects.is_empty() {
-            return;
-        }
+        let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
             cmd.SetPipelineState(pso);
             cmd.SetGraphicsRootSignature(root_sig);
-            cmd.IASetPrimitiveTopology(
-                windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-            );
-            cmd.IASetVertexBuffers(0, Some(&[self.skinned.vertex_buffer_view]));
-            cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
-            cmd.SetGraphicsRootConstantBufferView(1, ubo_gva);
+            // [3] this frame's GpuObjectData.
+            cmd.SetGraphicsRootShaderResourceView(3, object_gva);
+        }
+    }
 
-            for (i, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
-                if !obj.visible {
-                    continue;
-                }
-                // Skinned-mesh LOD: pick by camera distance (not light
-                // direction) so the shadow casts match the triangles main will
-                // rasterize. Per-cascade LOD would technically be cheaper for
-                // distant cascades, but matching main keeps cascade seams free
-                // of silhouette swaps. Mirrors Metal.
-                let d = lod::skinned_camera_distance(obj, cam_pos);
-                let (index_offset, index_count) = obj.active_lod(d);
-                let push = ShadowPush {
-                    model: obj.model,
-                    cascade_idx: SPOT_SLICE_IDX,
-                    _pad: [0; 3],
-                };
-                cmd.set_graphics_root_constants(0, &push);
-                cmd.SetGraphicsRootShaderResourceView(2, self.skinned_joint_gva(frame_idx, i));
-                cmd.DrawIndexedInstanced(index_count as u32, 1, index_offset as u32, 0, 0);
-                self.inc_draw_calls(1);
+    // GPU-driven depth-only raster of one shadow view: one `ExecuteIndirect` for
+    // the static + instance prefix of its region and, when present, a second for
+    // the skinned tail -- the same two-region split the bindless main pass uses,
+    // projected through `light_vps[view.vp_index]`. The CPU never walks the
+    // static / instanced / skinned draw lists. The caller has cleared the depth
+    // and bound the pipeline with `bind_shadow_views`.
+    pub(in crate::directx) fn draw_shadow_view(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+        view: ShadowView<'_>,
+    ) {
+        let Some(cmd_sig) = self.cull.shadow_bindless_cmd_sig.as_ref() else {
+            return;
+        };
+        let prefix = self.skinned_record_base();
+        let stride = crate::directx::cull::INDIRECT_COMMAND_STRIDE as u64;
+        let byte_off = |first: usize| first as u64 * stride;
+        // SAFETY: the command list is in the recording state, and every resource, descriptor and
+        // slice these commands name is live for the call.
+        unsafe {
+            cmd.OMSetRenderTargets(0, None, false, Some(&view.dsv));
+            // [1] the view's light_vps, [2] the slot of it this view projects through.
+            cmd.SetGraphicsRootConstantBufferView(1, view.ubo_gva);
+            cmd.set_graphics_root_constants(2, &view.vp_index);
+            cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view]));
+            cmd.IASetIndexBuffer(Some(&self.scene.geometry.index_buffer_view));
+            cmd.ExecuteIndirect(
+                cmd_sig,
+                prefix as u32,
+                view.indirect,
+                byte_off(view.first_command),
+                None::<&ID3D12Resource>,
+                0,
+            );
+        }
+        self.inc_draw_calls(1);
+
+        // Skinned tail over the deformed VB + skinned IB. No depth clear -- it
+        // appends to the static depth via the LESS test.
+        if self.draw.n_skinned > 0
+            && let Some(deformed_vbv) = self.skinned.deformed_vbvs.get(frame_idx)
+        {
+            // SAFETY: the command list is in the recording state, and every resource,
+            // descriptor and slice these commands name is live for the call.
+            unsafe {
+                cmd.IASetVertexBuffers(0, Some(&[*deformed_vbv]));
+                cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
+                cmd.ExecuteIndirect(
+                    cmd_sig,
+                    self.draw.n_skinned as u32,
+                    view.indirect,
+                    byte_off(view.first_command + prefix),
+                    None::<&ID3D12Resource>,
+                    0,
+                );
             }
+            self.inc_draw_calls(1);
         }
     }
 }

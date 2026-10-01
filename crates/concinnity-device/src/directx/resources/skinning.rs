@@ -1,6 +1,6 @@
-//! Skinned-mesh resources for DxContext: the skinned shadow pipeline (built
-//! lazily by `upload_skinned` the first time a SkinnedMesh is uploaded), the
-//! skinned geometry upload, and the per-frame joint / morph-weight uploads.
+//! Skinned-mesh resources for DxContext: the skinned geometry upload (built
+//! lazily by `upload_skinned` the first time a SkinnedMesh is uploaded), and
+//! the per-frame joint / morph-weight uploads.
 //! The per-slot CPU records these uploads read live in `gfx::skinned_slots`.
 
 use concinnity_core::gfx::mesh_payload;
@@ -8,31 +8,21 @@ use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::gfx::render_types::*;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::rt_geom;
-use concinnity_core::render::shadow_bias;
 use concinnity_core::render::skinned_slots;
 use concinnity_core::transform::IDENTITY;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::super::allocator::PooledBuffer;
-use super::super::builtin_shaders;
 use super::super::com;
 use super::super::context::*;
-use super::super::error::{map_hresult, map_pso_hresult};
-use super::super::pipeline::{serialize_and_create_root_sig, skinned_input_layout};
+use super::super::error::map_hresult;
 use super::super::texture::*;
-use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::draw::shadow::ShadowPush;
-use crate::directx::root_constants::root_dwords;
 
 // Skinned (skeletally animated) mesh rendering. All `None` / empty until
 // `upload_skinned` runs; with no `SkinnedMesh` in the world every skinned pass
-// is skipped. The skinned main pass reuses the instanced root signature (its
-// root SRV at t3 carries the per-object joint matrices); the shadow pass uses a
-// dedicated skinned shadow root signature.
+// is skipped. Every pass draws the skin fold's deformed vertices.
 pub(in crate::directx) struct SkinnedState {
-    pub shadow_pso: Option<ID3D12PipelineState>,
-    pub shadow_root_sig: Option<ID3D12RootSignature>,
     // Shared skinned vertex/index buffers. Kept alive for the GPU; referenced
     // through `vertex_buffer_view` / `index_buffer_view`.
     pub vertex_buffer: Option<PooledBuffer>,
@@ -89,8 +79,6 @@ pub(in crate::directx) struct SkinnedState {
 impl SkinnedState {
     pub(in crate::directx) fn new() -> Self {
         Self {
-            shadow_pso: None,
-            shadow_root_sig: None,
             vertex_buffer: None,
             index_buffer: None,
             vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW::default(),
@@ -109,119 +97,8 @@ impl SkinnedState {
         }
     }
 }
-// Skinned shadow pipeline builders
-//
-// These mirror the shadow PSO builder in init/pipelines.rs but use the skinned
-// vertex layout (80-byte SkinnedVertex with joint indices + weights). Skinned
-// main-pass draws ride the GPU-driven pass through the skin fold.
-
-// The depth-only skinned shadow vertex, the engine's own.
-fn compile_skinned_shadow_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    builtin_shaders::SHADOW_VERT_SKINNED.compile(hot_reload)
-}
-
-// Same as the shadow root signature but with one extra root SRV at slot [2]
-// (t0) carrying the per-object joint matrices. Used by the skinned shadow PSO.
-fn create_skinned_shadow_root_signature(
-    device: &ID3D12Device,
-) -> RenderResult<ID3D12RootSignature> {
-    let params = [
-        // [0] Root constants: `ShadowPush` at b0
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: root_dwords::<ShadowPush>(),
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        // [1] Root CBV: shadow UBO (light_vps[4] + cascade_splits) at b1
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        // [2] Root SRV: per-object joint matrices (t0, VS-only)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-    ];
-
-    serialize_and_create_root_sig(device, &params, "skinned shadow root sig")
-}
-
-// Shadow-pass PSO for skinned geometry: the skinned shadow vertex shader
-// (80-byte layout, depth-only). Uses the skinned shadow root signature.
-fn create_skinned_shadow_pso(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
-    vs: &[u8],
-) -> RenderResult<ID3D12PipelineState> {
-    let layout = skinned_input_layout();
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        InputLayout: D3D12_INPUT_LAYOUT_DESC {
-            pInputElementDescs: layout.as_ptr(),
-            NumElements: layout.len() as u32,
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 0,
-        DSVFormat: DXGI_FORMAT_D32_FLOAT,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthBias: shadow_bias::RASTER_CONSTANT as i32,
-            DepthBiasClamp: shadow_bias::RASTER_CLAMP,
-            SlopeScaledDepthBias: shadow_bias::RASTER_SLOPE,
-            DepthClipEnable: true.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: true.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ALL,
-            DepthFunc: D3D12_COMPARISON_FUNC_LESS,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create skinned shadow PSO"))
-}
 impl DxContext {
-    // Upload skinned-mesh geometry, build the skinned shadow pipeline and the
-    // main-pass skin fold.
+    // Upload skinned-mesh geometry and build the skin fold.
     //
     // Called once at init by `GraphicsSystem` when the world declares at least
     // one `SkinnedMesh`. The joint matrices live in per-(frame, object) upload
@@ -244,24 +121,6 @@ impl DxContext {
             )));
         }
         self.wait_idle();
-
-        let skinned_shadow_vs = compile_skinned_shadow_shader(self.hot_reload.enabled)?;
-
-        // Skinned shadow pipeline: built only when the static shadow pass is
-        // active, so a skinned mesh casts a correctly deformed shadow.
-        let (skinned_shadow_root_sig, skinned_shadow_pso) = if self.shadow.pso.is_some() {
-            let sr = dump_on_err(
-                self.hw.info_queue.as_ref(),
-                create_skinned_shadow_root_signature(&self.hw.device),
-            )?;
-            let sp = dump_on_err(
-                self.hw.info_queue.as_ref(),
-                create_skinned_shadow_pso(&self.hw.device, &sr, &skinned_shadow_vs),
-            )?;
-            (Some(sr), Some(sp))
-        } else {
-            (None, None)
-        };
 
         // Shared skinned vertex/index buffers (DEFAULT heap, GPU-copied once).
         let vtx_bytes = bytemuck::cast_slice(vertices);
@@ -348,8 +207,6 @@ impl DxContext {
             .map(|o| vec![IDENTITY; o.joint_count.max(1)])
             .collect();
 
-        self.skinned.shadow_pso = skinned_shadow_pso;
-        self.skinned.shadow_root_sig = skinned_shadow_root_sig;
         self.skinned.vertex_buffer = Some(skinned_vertex_buffer);
         self.skinned.index_buffer = Some(skinned_index_buffer);
         self.skinned.joint_buffers = joint_buffers;
@@ -567,7 +424,7 @@ impl DxContext {
     }
 
     // Copy this frame's skinning matrices into the per-frame joint buffers.
-    // Called from `record_frame` before the skinned shadow + main passes.
+    // Called from `record_frame` before the skin fold reads them.
     pub(in crate::directx) fn upload_joint_matrices(&self, frame_idx: usize) {
         let Some(frame_ptrs) = self.skinned.joint_ptrs.get(frame_idx) else {
             return;

@@ -6,8 +6,7 @@
 //!
 //! Text + composite pipelines live in `directx/pipeline.rs`;
 //! bloom/TAA/SSAO live in `directx/post/`; the GPU-cull compute pipeline lives
-//! in `directx/cull.rs`; the skinned shadow pipeline (built lazily once a
-//! `SkinnedMesh` is uploaded) lives in `directx/resources.rs`.
+//! in `directx/cull.rs`.
 
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -19,10 +18,8 @@ use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::com;
 use crate::directx::context::dump_on_err;
-use crate::directx::draw::shadow::ShadowPush;
 use crate::directx::error::map_pso_hresult;
 use crate::directx::pipeline::{main_input_layout, serialize_and_create_root_sig};
-use crate::directx::root_constants::root_dwords;
 use crate::directx::texture::HDR_FORMAT;
 
 // Shader compilation
@@ -389,38 +386,6 @@ pub(super) fn create_main_bindless_root_signature(
     ];
 
     serialize_and_create_root_sig(device, &params, "main bindless root sig")
-}
-
-pub(in crate::directx) fn create_shadow_root_signature(
-    device: &ID3D12Device,
-) -> RenderResult<ID3D12RootSignature> {
-    let params = [
-        // [0] Root constants: `ShadowPush` at b0
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: root_dwords::<ShadowPush>(),
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        // [1] Root CBV: shadow UBO (light_vps[4] + cascade_splits) at b1
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-    ];
-
-    serialize_and_create_root_sig(device, &params, "shadow root sig")
 }
 
 // Root signature for the GPU-driven shadow pass's depth-only bindless pipeline.

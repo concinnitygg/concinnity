@@ -9,14 +9,6 @@
 //! module per target. The hand-written asserts below stay alongside that
 //! check for the blocks this backend alone binds.
 
-/// Per-draw-call model matrix pushed at buffer(2) before each draw.
-#[derive(Copy, Clone, bytemuck::NoUninit)]
-#[repr(C)]
-pub struct ModelUniforms {
-    /// Model-to-world matrix (column-major).
-    pub model: [[f32; 4]; 4],
-}
-
 /// Per-frame inputs to the GPU-driven cull, pushed inline at buffer(2) of the
 /// encoder both cull dispatches share. Layout (208 bytes) must match the
 /// `CN_BACKEND_METAL` `CullParams` in `cull.hlsl`, which `shader_layout` reflects;
@@ -80,8 +72,30 @@ pub struct EncodeParams {
     /// The `cull_status` value that encodes a draw (`CullStatus::DRAWN` for
     /// every dispatch but phase 2, which encodes `CullStatus::REDRAW`).
     pub draw_status: u32,
+    /// The first region this dispatch covers: its threads start at that
+    /// region's block of the slot grid. See [`EncodeParams::encoded_span`].
+    pub region_base: u32,
     /// Padding to a 16-byte multiple.
-    pub _pad: [u32; 2],
+    pub _pad: u32,
+}
+
+impl EncodeParams {
+    /// The regions a dispatch has to cover to encode every set bit of
+    /// `region_mask` among `region_count`: the first set region and how many
+    /// follow it up to the last one. A mask with no region set covers none.
+    pub fn encoded_span(region_mask: u32, region_count: u32) -> (u32, u32) {
+        let live = if region_count >= u32::BITS {
+            region_mask
+        } else {
+            region_mask & ((1u32 << region_count) - 1)
+        };
+        if live == 0 {
+            return (0, 0);
+        }
+        let first = live.trailing_zeros();
+        let last = u32::BITS - 1 - live.leading_zeros();
+        (first, last - first + 1)
+    }
 }
 
 /// Per-frame uniforms for the TAA velocity pre-pass at buffer(0). Layout must
@@ -132,7 +146,19 @@ mod tests {
         assert_eq!(offset_of!(EncodeParams, skinned_base), 12);
         assert_eq!(offset_of!(EncodeParams, bucket_count), 16);
         assert_eq!(offset_of!(EncodeParams, draw_status), 20);
-        assert_eq!(offset_of!(EncodeParams, _pad), 24);
+        assert_eq!(offset_of!(EncodeParams, region_base), 24);
+        assert_eq!(offset_of!(EncodeParams, _pad), 28);
+    }
+
+    #[test]
+    fn the_encoded_span_runs_from_the_first_set_region_to_the_last() {
+        assert_eq!(EncodeParams::encoded_span(0b0100, 8), (2, 1));
+        assert_eq!(EncodeParams::encoded_span(0b1010, 8), (1, 3));
+        assert_eq!(EncodeParams::encoded_span(u32::MAX, 4), (0, 4));
+        // Bits past the region count name regions that do not exist.
+        assert_eq!(EncodeParams::encoded_span(0b1_0000, 4), (0, 0));
+        assert_eq!(EncodeParams::encoded_span(0, 8), (0, 0));
+        assert_eq!(EncodeParams::encoded_span(1 << 31, 32), (31, 1));
     }
 
     #[test]

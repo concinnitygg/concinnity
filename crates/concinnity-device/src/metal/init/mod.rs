@@ -217,7 +217,7 @@ impl MtlContext {
         )?;
         let targets = targets::build_targets(&gpu, &features)?;
         let light_cull = scene_data::build_light_cull(&gpu)?;
-        let shadow = shadow::build_shadow(&gpu, &vert_desc, &shadows, &light_uniforms)?;
+        let shadow = shadow::build_shadow(&gpu, &shadows, &light_uniforms)?;
         let spot_shadow = shadow::build_spot_shadow(&gpu, &spot_shadows, shadows.map_size)?;
         let cull = cull::build_cull(
             &gpu,
@@ -225,7 +225,7 @@ impl MtlContext {
                 world_shaders: &world_shaders,
                 vert_desc: &vert_desc,
                 features: &features,
-                shadow_enabled: shadow.pipeline_state.is_some(),
+                shadow_enabled: shadow.enabled,
                 occlusion_two_pass: post.occlusion_two_pass,
             },
         )?;

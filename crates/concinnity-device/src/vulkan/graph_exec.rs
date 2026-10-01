@@ -554,13 +554,6 @@ impl VkContext {
         // inert. Mirrors Metal's `prepare_particle_pass` hoist.
         let particle_frame = self.prepare_particle_pass(params.elapsed);
 
-        // Instanced clusters: recompute the per-cluster LOD-bucket partition
-        // and upload the bucket-ordered instance matrices on `&mut self` before
-        // the fan-out, so every instanced pass (Main + the unified G-buffer
-        // pre-pass + Shadow) reads a consistent partition while recording on
-        // worker threads. Inert when no clusters are declared.
-        self.prepare_instanced_clusters(params.cam_pos);
-
         // Point the reflection composite's binding 0 at the resolve that will
         // feed it, on `&mut self` before the fan-out. The view only moves on a
         // resize / quality rebuild, so in the steady state this writes nothing.

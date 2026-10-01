@@ -551,12 +551,12 @@ impl MtlContext {
                     params.cam_pos,
                     self.draw_record_counts(),
                 )?;
-                // GPU-driven cascaded shadow: fill the per-cascade
-                // shadow ICB in this same Cull command buffer (committed before
-                // the Shadow render pass's command buffer), so the cross-command-
-                // buffer FIFO order makes the shadow ICB ready when Shadow reads
-                // it -- the same ordering the main cull -> Main ICB relies on. A
-                // no-op when the shadow-bindless path is inactive.
+                // GPU-driven shadow views: fill the cascade and spot-slice ICBs
+                // in this same Cull command buffer (committed before the Shadow
+                // and SpotShadow render passes' command buffers), so the
+                // cross-command-buffer FIFO order makes them ready when those
+                // passes read them -- the same ordering the main cull -> Main ICB
+                // relies on. A no-op when the shadow-bindless path is inactive.
                 self.encode_shadow_culls(cmd_buf, object_buffer, draw_args_buffer)?;
                 0
             }
@@ -615,9 +615,11 @@ impl MtlContext {
                     raymarch_view.as_ref(),
                 )?
             }
-            PassId::SpotShadow => {
-                self.encode_spot_shadow_pass(cmd_buf, params.skinned_joint_bufs, params.cam_pos)?
-            }
+            PassId::SpotShadow => self.encode_spot_shadow_pass(
+                cmd_buf,
+                params.object_buffer,
+                params.deformed_skinned,
+            )?,
             PassId::Main => self.encode_main_pass(
                 cmd_buf,
                 crate::metal::draw::main::MainPassCamera {

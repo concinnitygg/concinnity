@@ -17,32 +17,6 @@ use ash::vk;
 use super::super::context::VkContext;
 
 impl VkContext {
-    // Recompute every instanced cluster's per-LOD-bucket partition for the
-    // current camera into `instanced.lod_buckets`, which the spot shadow pass
-    // reads. Run on `&mut self` from `execute_graph` before the render-graph
-    // fan-out, mirroring `prepare_particle_pass`. Mirrors
-    // `DxContext::build_instance_upload`.
-    pub(in crate::vulkan) fn prepare_instanced_clusters(&mut self, cam_pos: [f32; 3]) {
-        if self.instanced.clusters.is_empty() {
-            return;
-        }
-        // Re-shape on a runtime cluster-count change (asset hot-reload), then
-        // clear each row in place to reuse its heap allocation.
-        if self.instanced.lod_buckets.len() != self.instanced.clusters.len() {
-            self.instanced
-                .lod_buckets
-                .resize(self.instanced.clusters.len(), Vec::new());
-        }
-        for (cluster_idx, cluster) in self.instanced.clusters.iter().enumerate() {
-            let row = &mut self.instanced.lod_buckets[cluster_idx];
-            row.clear();
-            if cluster.instances.is_empty() {
-                continue;
-            }
-            row.extend(cluster.lod_buckets(cam_pos));
-        }
-    }
-
     // Encode the main HDR scene pass for frame slot `frame_idx` into the
     // multisampled color + depth attachments of `framebuffers[frame_idx]`; the
     // render pass resolves into `hdr_resolve` (the post-stack input) on

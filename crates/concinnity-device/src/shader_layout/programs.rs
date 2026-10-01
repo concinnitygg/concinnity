@@ -151,7 +151,7 @@ pub(super) static GBUFFER_PREPASS_VERT: Program = Program {
 };
 
 pub(super) static SHADOW_VERT: Program = Program {
-    row: &shared::SHADOW_VERT,
+    row: &shared::SHADOW_VERT_BINDLESS,
     splices: &[],
 };
 

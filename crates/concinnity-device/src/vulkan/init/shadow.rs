@@ -1,5 +1,5 @@
-//! Shadows: the cascade shadow map with its render pass, pipeline and uniform
-//! ring, and the spot shadow array that reuses them.
+//! Shadows: the cascade shadow map with its render pass and uniform ring, and
+//! the spot shadow array that reuses them.
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{
@@ -12,26 +12,20 @@ use concinnity_core::render::lights;
 use super::InitGpu;
 use crate::vulkan::context::{VkShadow, VkSpotShadow};
 use crate::vulkan::draw::upload_shadow_uniforms;
-use crate::vulkan::pipeline::{create_shadow_pipeline, resolve_shadow_shader};
 use crate::vulkan::render_pass::create_shadow_render_pass;
 use crate::vulkan::resources::create_descriptor_set_layout;
 use crate::vulkan::swapchain::create_shadow_framebuffers;
 use crate::vulkan::texture::{create_sampler_shadow, create_shadow_map_array};
 
 // Build the cascade shadow state. CSM is gated on `shadow_map_size` (from
-// GraphicsConfig; 0 disables shadows), and the shadow vertex shader is
-// engine-internal. Mirrors the Metal internal-shadow path.
+// GraphicsConfig; 0 disables shadows); the casters draw through the GPU-driven
+// shadow pipeline the cull builds.
 pub(super) fn build_shadow(
     gpu: &InitGpu<'_>,
     shadows: &ShadowParams,
     light_uniforms: &LightUniforms,
 ) -> RenderResult<VkShadow> {
-    let InitGpu {
-        hw,
-        frames,
-        hot_reload,
-        ..
-    } = *gpu;
+    let InitGpu { hw, frames, .. } = *gpu;
     let device = &hw.device;
     // Shadow map: a 4-layer D32_SFLOAT array image, one slice per cascade.
     let map = create_shadow_map_array(&gpu.upload(), shadows.map_size, NUM_SHADOW_CASCADES as u32)?;
@@ -42,32 +36,14 @@ pub(super) fn build_shadow(
         device,
         &crate::vulkan::descriptor_layout::shadow_global_set(),
     )?;
-    let (pipeline, pipeline_layout, framebuffers) = if shadows.map_size > 0
-        && let Ok(Some(shadow_spv)) = resolve_shadow_shader(hot_reload)
-    {
-        let shadow_pc_range = vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::VERTEX)
-            .offset(0)
-            // 64 bytes for model + 16 bytes for cascade_idx + padding.
-            .size(80);
-        let shadow_set_layouts = [global_set_layout.handle()];
-        let layout = device
-            .create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::default()
-                    .set_layouts(&shadow_set_layouts)
-                    .push_constant_ranges(std::slice::from_ref(&shadow_pc_range)),
-            )
-            .map_err(|e| crate::vulkan::error::map_vk_result(e, "shadow pipeline layout"))?;
-        let pl =
-            create_shadow_pipeline(device, render_pass.handle(), layout.handle(), &shadow_spv)?;
-        let fbs = create_shadow_framebuffers(device, render_pass.handle(), &map, shadows.map_size)?;
-        (Some(pl), Some(layout), fbs)
+    // No framebuffers with shadows off: create_shadow_map_array already rests
+    // the (1x1 fallback) shadow_map in SHADER_READ_ONLY, the layout the
+    // main-pass descriptor expects, and with no shadow loop nothing ever moves
+    // it out of that layout.
+    let framebuffers = if shadows.map_size > 0 {
+        create_shadow_framebuffers(device, render_pass.handle(), &map, shadows.map_size)?
     } else {
-        // No shadow pipeline: no transition needed. create_shadow_map_array
-        // already rests the (1x1 fallback) shadow_map in SHADER_READ_ONLY,
-        // the layout the main-pass descriptor expects, and with no shadow
-        // loop nothing ever moves it out of that layout.
-        (None, None, Vec::new())
+        Vec::new()
     };
 
     // Per-frame-in-flight `ShadowUniforms` UBO ring, persistently mapped.
@@ -98,12 +74,8 @@ pub(super) fn build_shadow(
         map,
         map_size: shadows.map_size,
         framebuffers,
-        pipeline,
-        pipeline_layout,
         global_set_layout,
         sampler,
-        skinned_pipeline: None,
-        skinned_pipeline_layout: None,
         ubos,
         uniforms,
         // Per-frame CSM updates use the first directional light's direction;
@@ -116,8 +88,8 @@ pub(super) fn build_shadow(
     })
 }
 
-// Spot shadows reuse the cascade pass's depth-only render pass, pipeline
-// and one-UBO set layout; only the framebuffers, the per-slice
+// Spot shadows reuse the cascade pass's depth-only render pass and one-UBO
+// set layout; only the framebuffers, the per-slice
 // projections, and the per-slice uniform slots are their own. Built even
 // with no shadowed spot (the 1x1 fallback array + a one-element buffer)
 // so the main pass's bindings 12/13 are always valid.

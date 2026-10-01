@@ -1,20 +1,19 @@
 //! Spot shadow pass: one depth-only render per shadow-casting spot light into
 //! its slice of the spot shadow array. Structurally the cascade pass with a
-//! different projection source -- each slice reuses the same depth-only shadow
-//! pipeline and the same static / instanced / skinned caster sub-encoders,
-//! driven by a `ShadowPassBinding` whose uniforms hold that spot's light-space
-//! matrix in slot 0 rather than the CSM cascade set.
+//! different projection source -- each slice is a `ShadowView` drawn by the
+//! same GPU-driven shadow pipeline, whose uniforms hold that spot's
+//! light-space matrix in slot 0 rather than the CSM cascade set.
 //!
 //! Local lights are static, so the matrices are built once at init and only the
 //! depth contents refresh here. `spot_shadow.render_mask` (from
 //! `SpotShadowScheduler`) picks which slices redraw; a skipped slice keeps the
 //! depth it last rendered, which stays correct until a caster moves.
 
+use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::render::spot_shadow;
-use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 
-use super::shadow::ShadowPassBinding;
+use super::shadow::ShadowView;
 use crate::directx::allocator::PooledBuffer;
 use crate::directx::com;
 use crate::directx::context::DxContext;
@@ -43,6 +42,8 @@ pub(in crate::directx) struct SpotShadowState {
     // 256-byte-aligned distance between consecutive slices in `ubo`.
     pub ubo_stride: u64,
     pub slice_size: u32,
+    // Each slice's light frustum, which its GPU cull keeps casters inside.
+    pub frusta: Vec<Frustum>,
     // Round-robin clock + primed set, advanced once per frame in record_frame.
     pub scheduler: spot_shadow::SpotShadowScheduler,
     // Slices re-rendered this frame (bit `i` = slice `i`). Set in record_frame
@@ -64,6 +65,11 @@ impl SpotShadowState {
         self.render_mask = self.scheduler.next_mask(every_frame, count);
     }
 
+    // Slices that re-render this frame.
+    pub(crate) fn refreshed_slices(&self) -> impl Iterator<Item = u32> {
+        spot_shadow::refreshed_slices(self.render_mask, self.count())
+    }
+
     // GPU address of slice `slice`'s baked `ShadowUniforms`.
     pub(crate) fn slice_ubo_gva(&self, slice: u32) -> u64 {
         debug_assert!(slice < self.count());
@@ -73,6 +79,11 @@ impl SpotShadowState {
 }
 
 impl DxContext {
+    // One depth-only render per scheduled spot slice, GPU-driven like the
+    // cascades: a per-slice cull against the spot's light frustum writes the
+    // slice's region of this frame's spot indirect buffer, and the slice draws
+    // that region through the shared bindless shadow pipeline. Slices with no
+    // records still clear, so the main pass samples valid depth.
     // pub(in crate::directx) so the render-graph executor can dispatch this pass.
     pub(in crate::directx) fn encode_spot_shadow_pass(
         &self,
@@ -80,81 +91,35 @@ impl DxContext {
         frame_idx: usize,
         cam_pos: [f32; 3],
     ) {
-        let (Some(shadow_pso), Some(shadow_root_sig)) =
-            (self.shadow.pso.as_ref(), self.shadow.root_sig.as_ref())
-        else {
-            return;
-        };
-        let count = self.spot_shadow.count();
-        if count == 0 {
+        if self.spot_shadow.count() == 0 {
             return;
         }
-
-        let all = if count >= 32 {
-            u32::MAX
-        } else {
-            (1u32 << count) - 1
-        };
-        // Defensive fallback to every slice if no mask was set this frame.
-        let mask = if self.spot_shadow.render_mask == 0 {
-            all
-        } else {
-            self.spot_shadow.render_mask
-        };
-
-        let sz = self.spot_shadow.slice_size;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: sz as f32,
-                Height: sz as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            let scissor = RECT {
-                left: 0,
-                top: 0,
-                right: sz as i32,
-                bottom: sz as i32,
-            };
-            cmd.RSSetScissorRects(&[scissor]);
-            cmd.IASetPrimitiveTopology(
-                windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-            );
+        self.set_shadow_raster_state(cmd, self.spot_shadow.slice_size);
+        for slice in self.spot_shadow.refreshed_slices() {
+            self.clear_shadow_slice(cmd, self.spot_shadow.dsvs[slice as usize]);
         }
 
-        for slice in 0..count {
-            if mask & (1u32 << slice) == 0 {
-                continue;
-            }
-            // Spot casters go through the per-draw CPU encoders
-            // (`encode_shadow_casters_into` / `encode_shadow_skinned_into`): the
-            // shadow ICB the bindless cull fills is laid out per CSM cascade, so it
-            // has no slots for these slices.
-            let ubo_gva = self.spot_shadow.slice_ubo_gva(slice);
-            let dsv = self.spot_shadow.dsvs[slice as usize];
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe {
-                cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
-                cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
-            }
-            self.encode_shadow_casters_into(
+        let Some(indirect) = self.cull.spot_indirect_buffers.get(frame_idx) else {
+            return;
+        };
+        if !self.shadow_views_drawable() {
+            return;
+        }
+        self.encode_spot_culls(cmd, frame_idx, cam_pos);
+        self.bind_shadow_views(cmd, frame_idx);
+        for slice in self.spot_shadow.refreshed_slices() {
+            self.draw_shadow_view(
                 cmd,
-                ShadowPassBinding {
-                    pso: shadow_pso,
-                    root_sig: shadow_root_sig,
-                    ubo_gva,
-                    // The shadow VS indexes `light_vps` by this; the spot
-                    // slice's matrix lives in slot 0.
+                frame_idx,
+                ShadowView {
+                    dsv: self.spot_shadow.dsvs[slice as usize],
+                    ubo_gva: self.spot_shadow.slice_ubo_gva(slice),
+                    // Every spot slice carries its own matrix in `light_vps[0]`.
+                    vp_index: 0,
+                    indirect,
+                    first_command: slice as usize * self.cull.bucket_stride,
                 },
-                cam_pos,
             );
-            self.encode_shadow_skinned_into(cmd, ubo_gva, frame_idx, cam_pos);
         }
     }
 }

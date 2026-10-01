@@ -2,9 +2,10 @@
 //!
 //! Local lights are static, so both the slice each shadowed spot owns and the
 //! matrix it renders with are decided once per scene and never recomputed. Only
-//! the depth contents need refreshing, and only when a caster moves -- that
-//! schedule is `SpotShadowScheduler` below, which mirrors the prime-then-
-//! round-robin policy the CSM cascades use.
+//! the depth contents refresh, on the schedule `SpotShadowScheduler` below
+//! keeps, which mirrors the prime-then-round-robin policy the CSM cascades use.
+//! Each refreshed slice draws only the casters its GPU cull keeps inside
+//! `slice_frustum`.
 //!
 //! A spot's projection is a perspective frustum whose vertical FOV is the full
 //! cone angle (2x the outer half-angle), so the cone inscribes the shadow slice's
@@ -12,6 +13,7 @@
 //! same matrices are valid on all three backends.
 
 use crate::components::SpotLight;
+use crate::gfx::frustum::Frustum;
 use crate::gfx::projection::{look_at, perspective_rh, up_for};
 use crate::gfx::render_types::{MAX_SHADOWED_SPOTS, SpotShadowData};
 use crate::math::vec3::{add, scale};
@@ -144,6 +146,20 @@ fn select_slice_mask(every_frame: bool, clock: u32, primed: u32, shadowed: usize
     (mask, primed | mask)
 }
 
+/// The slices a spot shadow pass re-renders this frame: the set bits of
+/// `mask` below `count`, or every slice when no mask was set.
+pub fn refreshed_slices(mask: u32, count: u32) -> impl Iterator<Item = u32> {
+    let count = count.min(MAX_SHADOWED_SPOTS as u32);
+    let mask = if mask == 0 { u32::MAX } else { mask };
+    (0..count).filter(move |s| mask & (1 << s) != 0)
+}
+
+/// The world-space frustum a slice renders, which is also the volume its GPU
+/// cull keeps casters from.
+pub fn slice_frustum(data: &SpotShadowData) -> Frustum {
+    Frustum::from_view_projection(data.light_vp)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +261,60 @@ mod tests {
         l.range = 0.0;
         let d = spot_shadow_data(&l);
         assert!(d.light_vp.iter().flatten().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn refreshed_slices_follow_the_mask() {
+        let got: Vec<u32> = refreshed_slices(0b1010, 4).collect();
+        assert_eq!(got, vec![1, 3]);
+    }
+
+    // Bits past the slice count name slices that do not exist.
+    #[test]
+    fn refreshed_slices_ignore_bits_past_the_count() {
+        let got: Vec<u32> = refreshed_slices(0b1111_0001, 3).collect();
+        assert_eq!(got, vec![0]);
+    }
+
+    // A pass that runs before any mask was set renders every slice rather than
+    // leaving one unprimed.
+    #[test]
+    fn an_unset_mask_refreshes_every_slice() {
+        let got: Vec<u32> = refreshed_slices(0, 3).collect();
+        assert_eq!(got, vec![0, 1, 2]);
+        assert_eq!(refreshed_slices(0, 0).count(), 0);
+    }
+
+    #[test]
+    fn refreshed_slices_never_pass_the_array_capacity() {
+        let n = refreshed_slices(u32::MAX, 64).count();
+        assert_eq!(n, MAX_SHADOWED_SPOTS);
+    }
+
+    // The cull keeps what lies in the cone and drops what lies behind the bulb
+    // or past the range.
+    #[test]
+    fn a_slice_frustum_keeps_only_what_the_cone_reaches() {
+        let mut l = spot(true);
+        l.position = [0.0, 10.0, 0.0];
+        l.direction = [0.0, -1.0, 0.0];
+        l.outer_angle = 30.0;
+        l.range = 20.0;
+        let f = slice_frustum(&spot_shadow_data(&l));
+        let unit = |c: [f32; 3]| {
+            (
+                [c[0] - 0.5, c[1] - 0.5, c[2] - 0.5],
+                [c[0] + 0.5, c[1] + 0.5, c[2] + 0.5],
+            )
+        };
+        let (lo, hi) = unit([0.0, 0.0, 0.0]);
+        assert!(f.intersects_aabb(lo, hi), "under the bulb");
+        let (lo, hi) = unit([0.0, 15.0, 0.0]);
+        assert!(!f.intersects_aabb(lo, hi), "behind the bulb");
+        let (lo, hi) = unit([0.0, -15.0, 0.0]);
+        assert!(!f.intersects_aabb(lo, hi), "past the range");
+        let (lo, hi) = unit([12.0, 0.0, 0.0]);
+        assert!(!f.intersects_aabb(lo, hi), "outside the cone");
     }
 
     #[test]

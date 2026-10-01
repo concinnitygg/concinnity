@@ -82,8 +82,7 @@ impl DxContext {
     // unified G-buffer pre-pass (static / instanced / skinned), SSAO (kernel,
     // blur), SSR (resolve), TAA (resolve), and bucket 0 of the GPU-driven main
     // pass when it is live (rebuilt from the world default Shader's pair where
-    // the world declares one). The shadow and skinned-shadow PSOs are out of
-    // scope here.
+    // the world declares one). The shadow PSO is out of scope here.
     pub(super) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {
             return Ok(());

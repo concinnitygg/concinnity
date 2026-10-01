@@ -14,22 +14,6 @@ use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::graph_exec::{FrameGpuBuffers, MainPassExtent};
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
 
-// One LOD bucket of an instanced cluster for the current frame. Filled by
-// `build_instance_upload` once at the top of every frame; consumed by the spot
-// shadow pass, which pushes each transform as a root constant.
-#[derive(Clone, Debug)]
-pub(in crate::directx) struct InstanceBucketLayout {
-    // LOD slice's index-buffer offset (in u32 indices). Drives the
-    // `StartIndexLocation` arg of `DrawIndexedInstanced`.
-    pub index_offset: usize,
-    // LOD slice's index count.
-    pub index_count: usize,
-    // Bucket-ordered model matrices, sourced from `InstancedCluster::lod_buckets(cam_pos)`.
-    // Cached here so the spot shadow pass's per-instance iteration can read the
-    // same data without re-bucketing.
-    pub instances: Vec<[[f32; 4]; 4]>,
-}
-
 impl DxContext {
     // Bind the per-scene local-light side tables on whichever root signature is
     // current: the spot shadow projections + depth array, and the area-light
@@ -150,39 +134,6 @@ impl DxContext {
                     ptr.add((skinned_base + k) * stride),
                     stride,
                 );
-            }
-        }
-    }
-
-    // Recompute every instanced cluster's per-LOD-bucket partition for the
-    // current camera into `instanced.bucket_layouts`, which the spot shadow
-    // pass reads. Called once per frame from `record_frame` before
-    // `execute_graph` dispatches any pass.
-    pub(super) fn build_instance_upload(&self, cam_pos: [f32; 3]) {
-        let mut layouts = self.instanced.bucket_layouts.write().unwrap();
-        // Re-shape the outer Vec when cluster count changed (runtime asset
-        // hot-reload), then clear every row in place to reuse heap.
-        if layouts.len() != self.instanced.clusters.len() {
-            layouts.clear();
-            layouts.resize(self.instanced.clusters.len(), Vec::new());
-        } else {
-            for row in layouts.iter_mut() {
-                row.clear();
-            }
-        }
-        for (cluster_idx, cluster) in self.instanced.clusters.iter().enumerate() {
-            if cluster.instances.is_empty() {
-                continue;
-            }
-            let buckets = cluster.lod_buckets(cam_pos);
-            let row = &mut layouts[cluster_idx];
-            row.reserve(buckets.len());
-            for bucket in buckets {
-                row.push(InstanceBucketLayout {
-                    index_offset: bucket.index_offset,
-                    index_count: bucket.index_count,
-                    instances: bucket.instances,
-                });
             }
         }
     }

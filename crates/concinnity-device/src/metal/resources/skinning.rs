@@ -1,4 +1,4 @@
-//! Skinned-mesh GPU resources: pipeline + buffer setup (`upload_skinned`),
+//! Skinned-mesh GPU resources: buffer setup (`upload_skinned`),
 //! per-frame pose updates, hot-reload of skinned geometry, and skeleton
 //! joint-count changes.
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -13,14 +13,9 @@ use concinnity_core::render::skinned_slots::SkinnedSlots;
 use concinnity_core::transform::IDENTITY;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{
-    MTLBuffer as _, MTLComputePipelineState, MTLDevice, MTLPixelFormat,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLResourceOptions, MTLVertexDescriptor,
-    MTLVertexFormat, MTLVertexStepFunction,
-};
+use objc2_metal::{MTLBuffer as _, MTLComputePipelineState, MTLDevice, MTLResourceOptions};
 
 use crate::metal::context::{MtlContext, bytes_of_slice, write_buffer_region, write_buffer_slice};
-use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::error::allocation_failed;
 
 // Upload a skinned index slice, sized by `skinned_index_buffer_bytes` (which
@@ -40,8 +35,8 @@ fn upload_skinned_index_buffer(
     Ok(buffer)
 }
 
-// All skinned-mesh rendering state grouped into one feature unit: the shadow
-// pipeline, the shared skinned vertex / index buffers, the per-mesh draw
+// All skinned-mesh rendering state grouped into one feature unit: the shared
+// skinned vertex / index buffers, the per-mesh draw
 // objects, and the current + previous joint-palette matrices. All `None` /
 // empty until `upload_skinned` runs; with no `SkinnedMesh` in the world the
 // skinned passes are skipped entirely. Skinned geometry draws through the
@@ -49,9 +44,6 @@ fn upload_skinned_index_buffer(
 // skinned main pipeline. (The G-buffer pre-pass skinned pipeline lives on
 // `GBufferState` with its siblings.)
 pub(crate) struct SkinnedState {
-    // Depth-only skinned pipeline for the shadow pass. `None` when shadows are
-    // disabled.
-    pub shadow_pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     // Shared vertex buffer holding every skinned mesh's `SkinnedVertex` data.
     pub vertex_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     // Shared index buffer for skinned geometry.
@@ -94,7 +86,6 @@ pub(crate) struct SkinnedState {
 impl SkinnedState {
     pub(crate) fn new() -> Self {
         Self {
-            shadow_pipeline_state: None,
             vertex_buffer: None,
             index_buffer: None,
             slots: SkinnedSlots::new(),
@@ -115,96 +106,6 @@ pub(crate) struct MorphBinding {
     pub target_count: u32,
 }
 
-// Skinned vertex layout: the 56-byte static attributes (pos / normal /
-// tangent / color / uv) plus `ushort4` joint indices (offset 56) and
-// `float4` weights (offset 64). 80-byte stride; matches `SkinnedVertex` in
-// [`concinnity_core::gfx::mesh_payload`]. Shared between init (one-shot in
-// [`MtlContext::upload_skinned`]) and the hot-reload pipeline rebuild path
-// so both produce byte-for-byte identical descriptors.
-pub(crate) fn make_skinned_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
-    vertex_descriptor(
-        &[
-            VertexAttr {
-                index: 0,
-                format: MTLVertexFormat::Float3,
-                offset: 0,
-                buffer_index: 1,
-            },
-            VertexAttr {
-                index: 1,
-                format: MTLVertexFormat::Float3,
-                offset: 12,
-                buffer_index: 1,
-            },
-            VertexAttr {
-                index: 2,
-                format: MTLVertexFormat::Float3,
-                offset: 24,
-                buffer_index: 1,
-            },
-            VertexAttr {
-                index: 3,
-                format: MTLVertexFormat::Float3,
-                offset: 36,
-                buffer_index: 1,
-            },
-            VertexAttr {
-                index: 4,
-                format: MTLVertexFormat::Float2,
-                offset: 48,
-                buffer_index: 1,
-            },
-            VertexAttr {
-                index: 5,
-                format: MTLVertexFormat::UShort4,
-                offset: 56,
-                buffer_index: 1,
-            },
-            VertexAttr {
-                index: 6,
-                format: MTLVertexFormat::Float4,
-                offset: 64,
-                buffer_index: 1,
-            },
-        ],
-        &[VertexLayout {
-            buffer_index: 1,
-            stride: std::mem::size_of::<SkinnedVertex>(),
-            step: MTLVertexStepFunction::PerVertex,
-        }],
-    )
-}
-
-// Build the skinned shadow pipeline: depth-only, no fragment function, no
-// MSAA, compiled from the engine-internal single source (`shadow.hlsl`, entry
-// `shadow_vertex_main_skinned`). Mirrors
-// [`crate::metal::init::pipelines::build_shadow_pipeline`] but on the 80-byte
-// skinned vertex layout. Shared by [`MtlContext::upload_skinned`] and the
-// internal-shader hot-reload pipeline rebuild path.
-pub(crate) fn build_skinned_shadow_pipeline(
-    device: &ProtocolObject<dyn MTLDevice>,
-    vdesc: &MTLVertexDescriptor,
-    hot_reload: bool,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let shadow_fn = crate::metal::builtin_shaders::entry_function(
-        device,
-        &crate::metal::builtin_shaders::SHADOW_VERT_SKINNED,
-        hot_reload,
-    )?;
-    let sdesc = MTLRenderPipelineDescriptor::new();
-    sdesc.setVertexDescriptor(Some(vdesc));
-    sdesc.setVertexFunction(Some(&shadow_fn));
-    sdesc.setRasterSampleCount(1);
-    sdesc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
-    device
-        .newRenderPipelineStateWithDescriptor_error(&sdesc)
-        .map_err(|e| {
-            RenderError::ShaderCompile(format!(
-                "failed to create skinned shadow pipeline state: {e:?}"
-            ))
-        })
-}
-
 impl MtlContext {
     // Rebuild the shared skinned-mesh vertex + index buffers, swapping in
     // new geometry for the slots named in `changes`. Driven by asset
@@ -217,8 +118,8 @@ impl MtlContext {
     // `StorageModeShared` so the pointers are CPU-readable) and copied
     // with index rebasing. New `MTLBuffer`s are created at the post-rebuild
     // size and swapped in after `wait_idle` so no in-flight command buffer
-    // touches the old resource pair. The skinned pipelines and shadow /
-    // velocity / SSAO / SSR variants are untouched -- only the per-slot
+    // touches the old resource pair. The skinned pipelines and velocity /
+    // SSAO / SSR variants are untouched -- only the per-slot
     // `vertex_base` / `vertex_count` / `index_offset` / `index_count` on
     // each `SkinnedDrawObject` (and the two GPU buffers themselves) move.
     // Skeleton-shape changes (joint-count mismatch) are still rejected one
@@ -516,20 +417,6 @@ impl MtlContext {
             return Ok(());
         }
 
-        let vdesc = make_skinned_vertex_descriptor();
-
-        // Skinned shadow pipeline: built only when the static shadow pass is
-        // active, so a skinned mesh casts a correctly deformed shadow.
-        let skinned_shadow_ps = if self.shadow.pipeline_state.is_some() {
-            Some(build_skinned_shadow_pipeline(
-                &self.hw.device,
-                &vdesc,
-                self.hot_reload.enabled,
-            )?)
-        } else {
-            None
-        };
-
         // SAFETY: the pointer and length describe the live `vertices` allocation, and Metal copies
         // those bytes into the new buffer before the call returns.
         let skinned_vertex_buffer = unsafe {
@@ -597,7 +484,6 @@ impl MtlContext {
             self.draw.n_skinned = draw_objects.len();
         }
 
-        self.skinned.shadow_pipeline_state = skinned_shadow_ps;
         self.skinned.vertex_buffer = Some(skinned_vertex_buffer);
         self.skinned.index_buffer = Some(skinned_index_buffer);
         self.skinned.slots.draw_objects = draw_objects;

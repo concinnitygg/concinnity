@@ -1,5 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::{
     ClusterParams, DrawIndex, DrawObject, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES,
@@ -192,13 +193,13 @@ pub(super) struct ProbeState {
     pub retire_pool: super::frame_rings::RetirePool<super::probe::RetiredBake>,
 }
 
-// Cascaded shadow map resources + the cascade schedule. `pipeline_state` is
-// `None` when no ShadowStage was declared or `map_size == 0`, in which case the
-// shadow pass is skipped; `map` and `sampler` are always present (1x1 fallback
-// reading 1.0 = fully lit when disabled) so fragment shaders can always sample
-// texture(2) / sampler(1). Mirrors `DxContext::shadow`.
+// Cascaded shadow map resources + the cascade schedule. `enabled` is false when
+// `shadow_map_size == 0`, in which case the shadow pass is skipped; `map` and
+// `sampler` are always present (1x1 fallback reading 1.0 = fully lit when
+// disabled) so fragment shaders can always sample texture(2) / sampler(1).
+// Mirrors `DxContext::shadow`.
 pub(super) struct ShadowState {
-    pub pipeline_state: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub enabled: bool,
     // Depth32Float texture array, one slice per cascade.
     pub map: Retained<ProtocolObject<dyn MTLTexture>>,
     // Per-cascade resolution, stored so the shadow pass can size the viewport to
@@ -234,12 +235,21 @@ pub(super) struct SpotShadowState {
     // static). Empty when nothing casts, in which case the pass never runs.
     pub buffer: PooledBuffer,
     pub count: u32,
+    // Each slice's light frustum, which its GPU cull keeps casters inside.
+    pub frusta: Vec<Frustum>,
     // Prime-then-round-robin refresh schedule over the spot slices, the spot
     // analogue of `ShadowState::scheduler`.
     pub scheduler: spot_shadow::SpotShadowScheduler,
     // Which spot slices re-render this frame; set once per frame in draw_frame
     // and read by encode_spot_shadow_pass.
     pub render_mask: u32,
+}
+
+impl SpotShadowState {
+    // Slices that re-render this frame.
+    pub(super) fn refreshed_slices(&self) -> impl Iterator<Item = u32> {
+        spot_shadow::refreshed_slices(self.render_mask, self.count)
+    }
 }
 
 // Per-frame-in-flight transient buffer rings, plus the CPU scratch that fills
@@ -1049,48 +1059,66 @@ impl MtlContext {
         Ok(())
     }
 
-    // Ensure the GPU-driven cascaded-shadow ICB and its status buffer have a
-    // slot for every cascade of every record: `NUM_SHADOW_CASCADES * count`
-    // total (cascade `c`'s live at `[c*count, (c+1)*count)`, the same stride
-    // `encode_shadow_culls` writes at and the shadow render pass executes). A
-    // no-op for non-bindless / no-shadow contexts (no shadow decision pipeline).
-    // Rounded to the next power of two so a streamed chunk growing `cull_count()`
-    // does not rebuild the ICB every frame. Called from `draw_frame` (where
-    // `&mut self` is available) right after `ensure_icb_capacity`, so the encode
-    // pass only ever reads the sized ICB.
+    // Ensure the GPU-driven shadow view ICBs and their status buffers have a
+    // slot for every view of every record: `views * count` per set (view `v`'s
+    // live at `[v*count, (v+1)*count)`, the same stride `encode_shadow_culls`
+    // writes at and the shadow render passes execute), for the cascades and
+    // for the spot slices. A no-op for non-bindless / no-shadow contexts (no
+    // shadow decision pipeline). Rounded to the next power of two so a streamed
+    // chunk growing `cull_count()` does not rebuild an ICB every frame. Called
+    // from `draw_frame` (where `&mut self` is available) right after
+    // `ensure_icb_capacity`, so the encode pass only ever reads sized ICBs.
     pub(super) fn ensure_shadow_icb_capacity(&mut self, count: usize) -> error::RenderResult<()> {
-        let arg_encoder = match (&self.cull.shadow_pipeline, &self.cull.icb_arg_encoder) {
-            (Some(_), Some(e)) => e.clone(),
-            _ => return Ok(()),
+        if self.cull.shadow_pipeline.is_none() {
+            return Ok(());
+        }
+        let mut cascades = std::mem::take(&mut self.cull.shadow_views);
+        let grown = self.grow_shadow_view_icb(&mut cascades, NUM_SHADOW_CASCADES, count);
+        self.cull.shadow_views = cascades;
+        grown?;
+        let mut spots = std::mem::take(&mut self.cull.spot_views);
+        let grown = self.grow_shadow_view_icb(&mut spots, self.spot_shadow.count as usize, count);
+        self.cull.spot_views = spots;
+        grown
+    }
+
+    // Grow one view set's ICB, argument buffer and status buffer to hold
+    // `views * count` command slots. A set with no view stays empty.
+    fn grow_shadow_view_icb(
+        &self,
+        set: &mut crate::metal::cull::ShadowViewIcb,
+        views: usize,
+        count: usize,
+    ) -> error::RenderResult<()> {
+        let Some(arg_encoder) = &self.cull.icb_arg_encoder else {
+            return Ok(());
         };
-        let needed = count.saturating_mul(NUM_SHADOW_CASCADES);
-        if self.cull.shadow_icb.is_some() && needed <= self.cull.shadow_icb_capacity {
+        let needed = count.saturating_mul(views);
+        if needed == 0 || (set.icb.is_some() && needed <= set.capacity) {
             return Ok(());
         }
         let new_cap = needed.next_power_of_two().max(64);
         let icb = self.build_cull_icb(new_cap)?;
-        if self.cull.shadow_icb_arg_buffer.is_none() {
-            let len = arg_encoder.encodedLength().max(16);
-            let buf = self
-                .hw
-                .device
-                .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                .ok_or_else(|| super::error::allocation_failed("shadow ICB argument buffer"))?;
-            self.cull.shadow_icb_arg_buffer = Some(buf);
-        }
-        let arg_buf = self
-            .cull
-            .shadow_icb_arg_buffer
-            .as_ref()
-            .expect("shadow ICB argument buffer was just ensured");
+        let arg_buf = match set.arg_buffer.take() {
+            Some(buf) => buf,
+            None => {
+                let len = arg_encoder.encodedLength().max(16);
+                self.hw
+                    .device
+                    .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
+                    .ok_or_else(|| {
+                        super::error::allocation_failed("shadow view ICB argument buffer")
+                    })?
+            }
+        };
         // SAFETY: the argument buffer was sized to `encodedLength()`, and the ICB
         // is encoded at slot 0 (the single `[[id(0)]]` member of the kernel's
         // `ICBContainer` argument-buffer struct), exactly like the main ICB.
         unsafe {
-            arg_encoder.setArgumentBuffer_offset(Some(arg_buf), 0);
+            arg_encoder.setArgumentBuffer_offset(Some(&arg_buf), 0);
             arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0);
         }
-        // One status word per command slot: each cascade's decision dispatch
+        // One status word per command slot: each view's decision dispatch
         // writes its region, the encode dispatch reads them all back.
         let status = self
             .hw
@@ -1099,10 +1127,11 @@ impl MtlContext {
                 new_cap * std::mem::size_of::<u32>(),
                 MTLResourceOptions::StorageModePrivate,
             )
-            .ok_or_else(|| super::error::allocation_failed("shadow cull status buffer"))?;
-        self.cull.shadow_status = Some(status);
-        self.cull.shadow_icb = Some(icb);
-        self.cull.shadow_icb_capacity = new_cap;
+            .ok_or_else(|| super::error::allocation_failed("shadow view cull status buffer"))?;
+        set.arg_buffer = Some(arg_buf);
+        set.status = Some(status);
+        set.icb = Some(icb);
+        set.capacity = new_cap;
         Ok(())
     }
 

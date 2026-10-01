@@ -296,6 +296,7 @@ impl DxContext {
                 targets: &targets,
                 albedo_count: scene.textures.len(),
                 shadow_enabled: shadow.map_size > 0,
+                spot_slices: spot_shadow.count() as usize,
                 gbuffer_enabled: features.gbuffer_enabled,
                 occlusion_two_pass: post.occlusion_two_pass,
             },

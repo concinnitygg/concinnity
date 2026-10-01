@@ -117,6 +117,8 @@ pub(super) struct CullInputs<'a> {
     pub(super) targets: &'a VkTargets,
     pub(super) scene: &'a VkSceneAssets,
     pub(super) shadow: &'a VkShadow,
+    // Spot shadow slices the world assigned; each gets a cull set and buffer.
+    pub(super) spot_slices: usize,
     pub(super) gbuffer: Option<&'a GbufferResources>,
     pub(super) swapchain_format: vk::Format,
 }
@@ -136,6 +138,7 @@ pub(super) fn build_cull(
         targets,
         scene,
         shadow,
+        spot_slices,
         gbuffer,
         swapchain_format,
     } = inputs;
@@ -167,8 +170,15 @@ pub(super) fn build_cull(
             occlusion_two_pass,
         },
     )?;
-    let shadow_cull =
-        shadow::build_shadow_cull(gpu, &bindless, &compute, shadow, descriptors, plan)?;
+    let shadow_cull = shadow::build_shadow_cull(
+        gpu,
+        &bindless,
+        &compute,
+        shadow,
+        descriptors,
+        plan,
+        spot_slices,
+    )?;
     let gbuffer_pass =
         gbuffer::build_gbuffer_pass(gpu, &bindless, &compute, gbuffer, descriptors, plan)?;
     // The reflection-probe convolution kernels, under the same gate the bake
@@ -226,6 +236,8 @@ pub(super) fn build_cull(
         shadow_bindless_pipeline: shadow_cull.bindless_pipeline,
         shadow_bindless_pipeline_layout: shadow_cull.bindless_pipeline_layout,
         shadow_indirect_buffers: shadow_cull.indirect_buffers,
+        spot_cull_sets: shadow_cull.spot_cull_sets,
+        spot_indirect_buffers: shadow_cull.spot_indirect_buffers,
         gbuffer_bindless_pipeline: gbuffer_pass.pipeline,
         gbuffer_bindless_pipeline_layout: gbuffer_pass.pipeline_layout,
         _gbuffer_set_layout: gbuffer_pass.set_layout,

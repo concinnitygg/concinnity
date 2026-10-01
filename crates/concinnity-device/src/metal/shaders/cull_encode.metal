@@ -26,9 +26,10 @@ constant uint MAX_SHADER_BUCKETS = 8u;
 
 // Mirrors metal::uniforms::EncodeParams (32 B). The slot grid is
 // `region_count * object_count`: one region for the main, phase-2 and mirror
-// culls, one per cascade for the shadow cull, where region `c` is the
-// cascade's block of the shadow ICB and `region_mask` says which cascades were
-// re-culled this frame (the others keep their prior commands).
+// culls, one per shadow view for the shadow culls, where region `c` is the
+// view's block of the shadow ICB and `region_mask` says which views were
+// re-culled this frame (the others keep their prior commands). A dispatch
+// covers the regions from `region_base` on, so it need not span the whole grid.
 struct EncodeParams {
     uint object_count;
     uint region_count;
@@ -36,8 +37,8 @@ struct EncodeParams {
     uint skinned_base;
     uint bucket_count;
     uint draw_status;
+    uint region_base;
     uint _pad0;
-    uint _pad1;
 };
 
 // The per-bucket indirect command buffers, reached through an argument buffer.
@@ -56,16 +57,17 @@ kernel void cull_encode(
     constant EncodeParams  &p                 [[buffer(7)]],
     uint                    tid               [[thread_position_in_grid]]
 ) {
-    if (tid >= p.region_count * p.object_count) {
+    uint slot = p.region_base * p.object_count + tid;
+    if (slot >= p.region_count * p.object_count) {
         return;
     }
-    uint region = tid / p.object_count;
+    uint region = slot / p.object_count;
     if ((p.region_mask & (1u << region)) == 0u) {
         return;
     }
-    uint record = tid - region * p.object_count;
+    uint record = slot - region * p.object_count;
     GpuDrawArgs a = draw_args[record];
-    bool draw = cull_status[tid] == p.draw_status;
+    bool draw = cull_status[slot] == p.draw_status;
     // Every bucket's slot is written each frame: a freed slot can be reused by
     // a record of a different bucket, which would otherwise leave the old
     // bucket's command stale and still executing.
@@ -77,7 +79,7 @@ kernel void cull_encode(
     // draw range. `base_instance` carries the record id into the vertex stage.
     const device uint *ib = record >= p.skinned_base ? skinned_index_buf : index_buf;
     for (uint b = 0u; b < p.bucket_count; ++b) {
-        render_command cmd(icb_c->icbs[b], tid);
+        render_command cmd(icb_c->icbs[b], slot);
         if (b != bucket || !draw) {
             cmd.reset();
             continue;

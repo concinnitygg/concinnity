@@ -2,8 +2,7 @@
 //!   * Root-signature helpers (`serialize_and_create_root_sig`,
 //!     `serialize_desc_and_create`, `root_cbv`, `root_srv`).
 //!   * Vertex input layouts referenced by main + shadow + velocity + SSAO
-//!     pre-pass + text pipelines (`main_input_layout`, `skinned_input_layout`,
-//!     `text_input_layout`).
+//!     pre-pass + text pipelines (`main_input_layout`, `text_input_layout`).
 //!   * The text overlay pipeline (`create_text_root_signature`,
 //!     `create_text_pso`) and the composite (post-process) pipeline
 //!     (`create_composite_root_signature`, `create_composite_pso`).
@@ -166,32 +165,6 @@ pub(super) fn main_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
             InstanceDataStepRate: 0,
         },
     ]
-}
-
-// Vertex input elements for the skinned pass (80-byte SkinnedVertex struct):
-// the 56-byte static attributes plus ushort4 joint indices (offset 56) and
-// float4 blend weights (offset 64).
-pub(super) fn skinned_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
-    let mut layout = main_input_layout();
-    layout.push(D3D12_INPUT_ELEMENT_DESC {
-        SemanticName: windows::core::s!("BLENDINDICES"),
-        SemanticIndex: 0,
-        Format: DXGI_FORMAT_R16G16B16A16_UINT,
-        InputSlot: 0,
-        AlignedByteOffset: 56,
-        InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-        InstanceDataStepRate: 0,
-    });
-    layout.push(D3D12_INPUT_ELEMENT_DESC {
-        SemanticName: windows::core::s!("BLENDWEIGHT"),
-        SemanticIndex: 0,
-        Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
-        InputSlot: 0,
-        AlignedByteOffset: 64,
-        InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-        InstanceDataStepRate: 0,
-    });
-    layout
 }
 
 // Vertex input elements for the text pass (32-byte TextVertex struct), asserted

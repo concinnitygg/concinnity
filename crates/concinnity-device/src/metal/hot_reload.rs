@@ -25,7 +25,7 @@ use super::fog::build_fog_pipeline;
 use super::hiz::build_hiz_pipelines;
 use super::init::pipelines::{
     build_bindless_sampler_args, build_main_pipeline, build_shadow_bindless_pipeline,
-    build_shadow_pipeline, make_vertex_descriptor,
+    make_vertex_descriptor,
 };
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
 use super::post::post_device::MtlPostDevice;
@@ -33,7 +33,6 @@ use super::post::{
     build_bloom_pipelines, build_gbuffer_bindless_pipeline, build_reflection_blur_pipeline,
     build_reflection_composite_pipeline, build_rt_reflection_pipeline, build_ssao_pipeline,
 };
-use super::resources::skinning::{build_skinned_shadow_pipeline, make_skinned_vertex_descriptor};
 use crate::metal::builtin_shaders::{SSAO_BLUR, SSAO_KERNEL};
 
 // Rebuild a built-in pipeline only when it is currently live. Expands to
@@ -120,10 +119,9 @@ impl MtlContext {
     // untouched: a typo in a shader edit won't crash the running session.
     //
     // Covers the main pass and its GPU cull (one builder, since the cull's
-    // argument encoder comes from the pipeline it feeds) and the skinned
-    // G-buffer pre-pass and skinned shadow variants, which compile from the
-    // same single-source files as their static siblings under a different
-    // entry. A world Shader's own pair still wins in the main build, so a save
+    // argument encoder comes from the pipeline it feeds), the skinned G-buffer
+    // pre-pass variant, which compiles from the same single-source file as its
+    // static sibling under a different entry, and the shadow views' pipelines. A world Shader's own pair still wins in the main build, so a save
     // to an engine template never swaps a world's program for the engine's.
     pub(super) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {
@@ -253,32 +251,7 @@ impl MtlContext {
             )
         );
 
-        // The skinned shadow caster rides the 80-byte skinned vertex layout.
-        let skinned_vdesc = if self.skinned.shadow_pipeline_state.is_some() {
-            Some(make_skinned_vertex_descriptor())
-        } else {
-            None
-        };
-
-        // Shadow pass shaders are engine-internal (compiled from
-        // `shadow.metal`), so they rebuild here alongside the other
-        // built-ins rather than in `update_default_world_shader`. The static
-        // shadow pipeline shares the 56-byte static layout; the skinned one
-        // rides the 80-byte skinned layout.
-        let shadow = rebuild_if_live!(
-            self.shadow.pipeline_state.is_some(),
-            build_shadow_pipeline(device, &static_vdesc, hr)
-        );
-        let skinned_shadow = rebuild_if_live!(
-            self.skinned.shadow_pipeline_state.is_some(),
-            build_skinned_shadow_pipeline(
-                device,
-                skinned_vdesc.as_ref().expect("skinned vdesc just built"),
-                hr,
-            )
-        );
-
-        // GPU-driven cascaded-shadow pipelines: the frustum-only shadow
+        // GPU-driven shadow pipelines: the frustum-only shadow
         // decision kernel (from cull.hlsl) + the depth-only bindless shadow
         // render pipeline. Both engine-internal, so they rebuild here. Gated on
         // the live shadow-bindless path.
@@ -321,10 +294,8 @@ impl MtlContext {
             self.cull.icbs_2 = Vec::new();
             self.cull.icb_2_arg_buffer = None;
             self.cull.status_buffer = None;
-            self.cull.shadow_icb = None;
-            self.cull.shadow_icb_arg_buffer = None;
-            self.cull.shadow_status = None;
-            self.cull.shadow_icb_capacity = 0;
+            self.cull.shadow_views = Default::default();
+            self.cull.spot_views = Default::default();
         }
         if let Some((init_pipeline, downsample_pipeline)) = hiz
             && let Some(h) = self.cull.hiz.as_mut()
@@ -366,12 +337,6 @@ impl MtlContext {
         }
         if let Some(p) = rt_reflections_textured {
             self.rt.pipelines.resolve_textured = Some(p);
-        }
-        if let Some(p) = shadow {
-            self.shadow.pipeline_state = Some(p);
-        }
-        if let Some(p) = skinned_shadow {
-            self.skinned.shadow_pipeline_state = Some(p);
         }
         if let Some(p) = shadow_cull {
             self.cull.shadow_pipeline = Some(p);

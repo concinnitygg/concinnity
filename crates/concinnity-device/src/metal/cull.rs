@@ -26,6 +26,27 @@ use super::pipeline::{cull_encode_library, ns_str};
 use super::scoped_encoder::ScopedEncoder;
 use concinnity_core::render::uniforms::metal::*;
 
+// One shadow pass's GPU-driven views: an ICB with one region of `cull_count()`
+// command slots per view (view `v` at base `v * cull_count()`), the argument
+// buffer the encode kernel writes it through, and the status buffer each view's
+// decision dispatch fills. The three grow in lockstep; empty until first sized.
+#[derive(Default)]
+pub(crate) struct ShadowViewIcb {
+    pub icb: Option<Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>>,
+    pub arg_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    pub status: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    // Command capacity of `icb` across every view; 0 until first built.
+    pub capacity: usize,
+}
+
+// The views of one set a frame refreshes, as (region, light frustum) pairs, plus
+// how many regions the set holds and which of them refresh.
+struct ViewSet<'a> {
+    views: &'a [(usize, Frustum)],
+    region_count: usize,
+    region_mask: u32,
+}
+
 // All GPU-driven main pass + cull state grouped into one feature unit: the
 // main and world-shader pipelines the indirect draws execute under, the
 // phase-1 + phase-2 cull pipelines, their indirect command buffers + argument
@@ -99,23 +120,18 @@ pub(crate) struct CullState {
     // `false` on the first frame and after a resize; while false the cull
     // kernel skips the Hi-Z test. Flipped `true` after the first build.
     pub hiz_valid: bool,
-    // GPU-driven cascaded shadow. All `Some` only on the bindless
+    // GPU-driven shadow views. Both pipelines are `Some` only on the bindless
     // path with shadows enabled (`bindless && shadow.map_size > 0`). The
-    // per-cascade CPU loop beside it is what spot shadows drive.
-    // The frustum-only shadow decision kernel
-    // (`shadow_pipeline`) writes each cascade's outcomes into its region of
-    // `shadow_status`, one encode dispatch turns them into commands in one
-    // shadow ICB holding `NUM_SHADOW_CASCADES * cull_count()` slots (cascade `c`
-    // at base `c * cull_count()`), and the depth-only `shadow_bindless_pipeline`
-    // issues each cascade's range. The ICB, its argument buffer and the status
-    // buffer grow in lockstep via `ensure_shadow_icb_capacity`.
+    // frustum-only shadow decision kernel (`shadow_pipeline`) writes each
+    // view's outcomes into its region of a view set's status buffer, one encode
+    // dispatch per set turns them into commands in that set's ICB, and the
+    // depth-only `shadow_bindless_pipeline` issues each view's range.
+    // `shadow_views` holds the cascades, `spot_views` the spot slices: separate
+    // ICBs, so the two shadow passes share no command slots.
     pub shadow_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     pub shadow_bindless_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub shadow_icb: Option<Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>>,
-    pub shadow_icb_arg_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-    pub shadow_status: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-    // Command capacity of `shadow_icb` (across all cascades); 0 until first built.
-    pub shadow_icb_capacity: usize,
+    pub shadow_views: ShadowViewIcb,
+    pub spot_views: ShadowViewIcb,
     // Per-planar-slot mirror cull ICBs. The planar reflection pass re-runs the
     // phase-1 cull kernel with each plane's reflected-camera frustum into its own
     // ICB, so geometry visible only in the reflection (outside the main frustum)
@@ -746,7 +762,8 @@ impl MtlContext {
                 skinned_base: counts.skinned_base as u32,
                 bucket_count: icbs.len() as u32,
                 draw_status: CullStatus::DRAWN,
-                _pad: [0; 2],
+                region_base: 0,
+                _pad: 0,
             },
             CULL_ENCODE_PARAMS_INDEX,
         );
@@ -854,7 +871,8 @@ impl MtlContext {
                 skinned_base,
                 bucket_count: self.cull.icbs_2.len() as u32,
                 draw_status: CullStatus::REDRAW,
-                _pad: [0; 2],
+                region_base: 0,
+                _pad: 0,
             },
             CULL_ENCODE_PARAMS_INDEX,
         );
@@ -862,19 +880,21 @@ impl MtlContext {
         Ok(0)
     }
 
-    // Encode the GPU-driven cascaded-shadow cull: one shadow decision dispatch
-    // per re-rendered cascade (gated by `shadow.render_mask`), each
-    // frustum-testing every record against that cascade's LIGHT frustum into the
-    // cascade's region of `shadow_status` (`cascade_base = c * cull_count()`),
-    // then one encode dispatch over every region turning the refreshed ones into
-    // commands in the shared shadow ICB. Hi-Z + distance are off (frustum only).
-    // A no-op when the shadow-bindless path is inactive or there is no geometry.
+    // Encode the GPU-driven shadow culls: for the cascades and then the spot
+    // slices, one shadow decision dispatch per re-rendered view (gated by
+    // `shadow.render_mask` / `spot_shadow.render_mask`), each frustum-testing
+    // every record against that view's LIGHT frustum into the view's region of
+    // its set's status buffer (`cascade_base = v * cull_count()`), then one
+    // encode dispatch per set turning the refreshed regions into commands in
+    // that set's ICB. Hi-Z + distance are off (frustum only). A no-op when the
+    // shadow-bindless path is inactive or there is no geometry.
     //
     // Runs as a compute prologue in the SAME command buffer as the main `Cull`
     // pass (dispatched right after `encode_cull` from the graph executor's Cull
-    // arm), so the shadow ICB write lands in a command buffer committed before
-    // the `Shadow` render pass's command buffer -- the exact cross-command-buffer
-    // FIFO ordering the main cull -> main ICB already relies on. No explicit
+    // arm), so the ICB writes land in a command buffer committed before the
+    // `Shadow` and `SpotShadow` render passes' command buffers -- the exact
+    // cross-command-buffer FIFO ordering the main cull -> main ICB already
+    // relies on, pinned by both passes' graph edge after Cull. No explicit
     // barrier (Metal has none); residency is declared with `useResource`.
     // pub(in crate::metal) so the graph executor can dispatch it.
     pub(in crate::metal) fn encode_shadow_culls(
@@ -883,30 +903,15 @@ impl MtlContext {
         object_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
         draw_args_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
     ) -> RenderResult<()> {
-        use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
-        use objc2_metal::{MTLComputeCommandEncoder as _, MTLResourceUsage};
-        let (Some(pipeline), Some(encode), Some(icb), Some(arg_buf), Some(status)) = (
-            &self.cull.shadow_pipeline,
-            &self.cull.encode_pipeline,
-            &self.cull.shadow_icb,
-            &self.cull.shadow_icb_arg_buffer,
-            &self.cull.shadow_status,
-        ) else {
+        use concinnity_core::gfx::render_types::{MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES};
+        let Some(pipeline) = &self.cull.shadow_pipeline else {
             return Ok(());
         };
-        let object_count = self.cull_count();
-        if object_count == 0 {
+        if self.cull_count() == 0
+            || (self.cull.shadow_views.icb.is_none() && self.cull.spot_views.icb.is_none())
+        {
             return Ok(());
         }
-        // Same cascade set the shadow render pass refreshes this frame; a skipped
-        // cascade keeps its prior depth slice, so its cull dispatch + ICB region
-        // are left untouched.
-        let all = (1u32 << NUM_SHADOW_CASCADES) - 1;
-        let mask = if self.shadow.render_mask == 0 {
-            all
-        } else {
-            self.shadow.render_mask
-        };
 
         let cull_pass_desc = MTLComputePassDescriptor::new();
         let enc = ScopedEncoder::new(
@@ -917,28 +922,99 @@ impl MtlContext {
                 })?,
             ns_string!("shadow cull"),
         );
-        enc.set_pipeline(pipeline);
         enc.set_buffer(object_buffer, 0, 0);
         enc.set_buffer(draw_args_buffer, 0, 1);
         enc.set_buffer(&self.scene.index_buffer, 0, 3);
-        enc.set_buffer(arg_buf, 0, CULL_ICB_BUFFER_INDEX);
-        enc.set_buffer(status, 0, CULL_STATUS_BUFFER_INDEX);
         // Skinned index buffer at buffer(6); the encode kernel bakes it into
         // the skinned-tail commands exactly like the main cull.
         enc.set_buffer(self.skinned_index_or_placeholder(), 0, 6);
-        // The encode kernel writes draw commands into the shadow ICB through
-        // the argument buffer, so it must be resident for the compute pass.
-        enc.useResource_usage(ProtocolObject::from_ref(&**icb), MTLResourceUsage::Write);
 
-        let skinned_base = self.skinned_record_base() as u32;
-        for c in 0..NUM_SHADOW_CASCADES {
+        // Same cascade set the shadow render pass refreshes this frame; a skipped
+        // cascade keeps its prior depth slice, so its cull dispatch + ICB region
+        // are left untouched.
+        let all = (1u32 << NUM_SHADOW_CASCADES) - 1;
+        let mask = if self.shadow.render_mask == 0 {
+            all
+        } else {
+            self.shadow.render_mask
+        };
+        let mut cascades = [(0, Frustum::from_view_projection(IDENTITY)); NUM_SHADOW_CASCADES];
+        let mut kept = 0;
+        for (c, light_vp) in self.shadow.uniforms.light_vps.iter().enumerate() {
             if mask & (1u32 << c) == 0 {
                 continue;
             }
-            // Cascade light frustum: world-space planes from the cascade's light
-            // view-projection (the caster-extent near push baked into light_vps
-            // survives, so off-screen / tall casters are kept).
-            let frustum = Frustum::from_view_projection(self.shadow.uniforms.light_vps[c]);
+            // The caster-extent near push baked into light_vps survives, so
+            // off-screen / tall casters are kept.
+            cascades[kept] = (c, Frustum::from_view_projection(*light_vp));
+            kept += 1;
+        }
+        self.encode_view_culls(
+            &enc,
+            pipeline,
+            &self.cull.shadow_views,
+            ViewSet {
+                views: &cascades[..kept],
+                region_count: NUM_SHADOW_CASCADES,
+                region_mask: mask,
+            },
+        );
+
+        let mut spots = [(0, Frustum::from_view_projection(IDENTITY)); MAX_SHADOWED_SPOTS];
+        let mut kept = 0;
+        let mut spot_mask = 0u32;
+        for slice in self.spot_shadow.refreshed_slices() {
+            spots[kept] = (slice as usize, self.spot_shadow.frusta[slice as usize]);
+            spot_mask |= 1 << slice;
+            kept += 1;
+        }
+        self.encode_view_culls(
+            &enc,
+            pipeline,
+            &self.cull.spot_views,
+            ViewSet {
+                views: &spots[..kept],
+                region_count: self.spot_shadow.count as usize,
+                region_mask: spot_mask,
+            },
+        );
+        Ok(())
+    }
+
+    // One view set's decision dispatches (one per view, into the view's region
+    // of the set's status buffer) and its single encode dispatch over every
+    // region, writing the refreshed regions' commands into the set's ICB. The
+    // caller has bound the record, index and skinned-index buffers. A no-op for
+    // a set with no ICB or no view to refresh.
+    fn encode_view_culls(
+        &self,
+        enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
+        pipeline: &ProtocolObject<dyn MTLComputePipelineState>,
+        set: &ShadowViewIcb,
+        views: ViewSet<'_>,
+    ) {
+        use objc2_metal::{MTLComputeCommandEncoder as _, MTLResourceUsage};
+        let (Some(encode), Some(icb), Some(arg_buf), Some(status)) = (
+            &self.cull.encode_pipeline,
+            &set.icb,
+            &set.arg_buffer,
+            &set.status,
+        ) else {
+            return;
+        };
+        if views.views.is_empty() {
+            return;
+        }
+        let object_count = self.cull_count();
+        let skinned_base = self.skinned_record_base() as u32;
+        enc.set_pipeline(pipeline);
+        enc.set_buffer(arg_buf, 0, CULL_ICB_BUFFER_INDEX);
+        enc.set_buffer(status, 0, CULL_STATUS_BUFFER_INDEX);
+        // The encode kernel writes draw commands into the ICB through the
+        // argument buffer, so it must be resident for the compute pass.
+        enc.useResource_usage(ProtocolObject::from_ref(&**icb), MTLResourceUsage::Write);
+
+        for (region, frustum) in views.views {
             let mut planes = [[0.0f32; 4]; 6];
             for (i, p) in frustum.planes.iter().enumerate() {
                 planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
@@ -954,30 +1030,35 @@ impl MtlContext {
                 hiz_enabled: 0,
                 object_count: object_count as u32,
                 skinned_base,
-                cascade_base: (c * object_count) as u32,
+                cascade_base: (region * object_count) as u32,
                 // The shadow cull writes one depth-only stream: icbs[0].
                 bucket_count: 1,
             };
             enc.set_value(&cull_uniforms, 2);
-            dispatch_records(&enc, pipeline, object_count);
+            dispatch_records(enc, pipeline, object_count);
         }
-        // One encode dispatch over every cascade region; the mask leaves a
-        // skipped cascade's commands exactly as its last cull left them.
+        // One encode dispatch over the span of refreshed regions; the mask
+        // leaves a skipped region's commands exactly as its last cull left them.
+        let (region_base, span) =
+            EncodeParams::encoded_span(views.region_mask, views.region_count as u32);
+        if span == 0 {
+            return;
+        }
         enc.set_pipeline(encode);
         enc.set_value(
             &EncodeParams {
                 object_count: object_count as u32,
-                region_count: NUM_SHADOW_CASCADES as u32,
-                region_mask: mask,
+                region_count: views.region_count as u32,
+                region_mask: views.region_mask,
                 skinned_base,
                 bucket_count: 1,
                 draw_status: CullStatus::DRAWN,
-                _pad: [0; 2],
+                region_base,
+                _pad: 0,
             },
             CULL_ENCODE_PARAMS_INDEX,
         );
-        dispatch_records(&enc, encode, NUM_SHADOW_CASCADES * object_count);
-        Ok(())
+        dispatch_records(enc, encode, span as usize * object_count);
     }
 
     // The `BindlessTextures` block's members ahead of the pool, with their ids:

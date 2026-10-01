@@ -38,7 +38,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use super::context::{DxContext, FRAMES, align256};
-use super::cull::{INDIRECT_COMMAND_STRIDE, PlanarCull};
+use super::cull::{INDIRECT_COMMAND_STRIDE, RegionCull};
 use super::draw::ViewUniforms;
 use super::error::map_hresult;
 use super::graph_exec::GraphFrameParams;
@@ -486,7 +486,7 @@ impl DxContext {
         // Per kept plane: compute the reflected matrices, write the reflected
         // view CBV, and collect the cropped reflected frustum + eye for the
         // mirror cull.
-        let mut culls = [PlanarCull::EMPTY; MAX_PLANAR_PLANES];
+        let mut culls = [RegionCull::EMPTY; MAX_PLANAR_PLANES];
         let mut kept = 0;
         for &(slot, crop) in crops {
             let oriented =
@@ -524,8 +524,8 @@ impl DxContext {
                 );
             }
             if let Some(cull) = culls.get_mut(kept) {
-                *cull = PlanarCull {
-                    slot,
+                *cull = RegionCull {
+                    region: slot,
                     frustum: Frustum::from_view_projection(crop.crop_view_projection(
                         m.view_proj,
                         set.width,

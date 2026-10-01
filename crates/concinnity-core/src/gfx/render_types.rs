@@ -1,6 +1,5 @@
 //! The `repr(C)` GPU layouts every backend and the render prep share with the shaders.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 /// Capacity of the fixed directional-light array in `LightUniforms`.
@@ -1668,25 +1667,11 @@ pub struct InstancedCluster {
     pub instances: Vec<[[f32; 4]; 4]>,
     /// LOD1..N slices for this cluster's mesh, in ascending `switch_distance`
     /// order. Empty when the mesh declared `lod_levels <= 1`. Each per-instance
-    /// LOD is picked from camera distance to that instance's translation; the
-    /// per-pass draw loop partitions `instances` by their picked LOD and issues
-    /// one `drawIndexedInstanced` per non-empty bucket. The vertex set is
-    /// shared with LOD0 (QEM decimation preserves vertices), so only
-    /// `(index_offset, index_count)` varies per slice.
+    /// LOD is picked from camera distance to that instance's translation and
+    /// written into its cull record (see `lod::for_each_instance_lod`). The
+    /// vertex set is shared with LOD0 (QEM decimation preserves vertices), so
+    /// only `(index_offset, index_count)` varies per slice.
     pub lod_alternates: Vec<LodSlice>,
-}
-
-/// One LOD bucket emitted by [`InstancedCluster::lod_buckets`]: the index
-/// range for that LOD plus the subset of instance matrices that picked it.
-/// Each bucket becomes one `drawIndexedInstanced` call.
-#[derive(Clone, Debug)]
-pub struct InstancedLodBucket {
-    /// First index of the bucket's slice in the shared index buffer.
-    pub index_offset: usize,
-    /// Index count of the bucket's slice.
-    pub index_count: usize,
-    /// Column-major model matrices of the instances in this bucket.
-    pub instances: Vec<[[f32; 4]; 4]>,
 }
 
 impl InstancedCluster {
@@ -1694,99 +1679,6 @@ impl InstancedCluster {
     /// frustum / distance culling.
     pub fn cullable(&self) -> bool {
         crate::gfx::lod::bounds_finite(self.cluster_bb_min, self.cluster_bb_max)
-    }
-
-    /// Partition the cluster's instances into LOD buckets keyed by camera
-    /// distance to each instance's translation. Returns one entry per
-    /// non-empty bucket, in mesh-LOD order (LOD0 first). With no alternates
-    /// every instance lands in a single LOD0 bucket so the caller's loop
-    /// degenerates to a single `drawIndexedInstanced`.
-    ///
-    /// Per-instance distance uses the model-matrix translation rather than
-    /// a transformed-AABB center: close enough for distance-keyed swaps
-    /// without paying the per-instance AABB transform every pass.
-    pub fn lod_buckets(&self, cam_pos: [f32; 3]) -> Vec<InstancedLodBucket> {
-        // Fast path: no alternates → single LOD0 bucket containing every
-        // instance. Cloning is unavoidable since the GPU buffer expects an
-        // owned, contiguous slice.
-        if self.lod_alternates.is_empty() || self.instances.is_empty() {
-            if self.instances.is_empty() {
-                return Vec::new();
-            }
-            return vec![InstancedLodBucket {
-                index_offset: self.index_offset,
-                index_count: self.index_count,
-                instances: self.instances.clone(),
-            }];
-        }
-
-        let n_levels = self.lod_alternates.len() + 1;
-        let mut buckets: Vec<InstancedLodBucket> = Vec::with_capacity(n_levels);
-        buckets.push(InstancedLodBucket {
-            index_offset: self.index_offset,
-            index_count: self.index_count,
-            instances: Vec::new(),
-        });
-        for alt in &self.lod_alternates {
-            buckets.push(InstancedLodBucket {
-                index_offset: alt.index_offset,
-                index_count: alt.index_count,
-                instances: Vec::new(),
-            });
-        }
-
-        for m in &self.instances {
-            let d = crate::gfx::lod::instance_camera_distance(*m, cam_pos);
-            let pick = crate::gfx::lod::pick_lod_level(&self.lod_alternates, d);
-            buckets[pick].instances.push(*m);
-        }
-
-        buckets.retain(|b| !b.instances.is_empty());
-        buckets
-    }
-
-    /// Visit each non-empty LOD bucket for this cluster, calling
-    /// `visit(index_offset, index_count, instances)` once per bucket in
-    /// mesh-LOD order (LOD0 first). Stops and returns the first error a `visit`
-    /// produces.
-    ///
-    /// In the common no-alternates case `instances` borrows `self.instances`
-    /// directly (no allocation, no copy) so a caller that memcpy's the slice
-    /// into a GPU buffer skips the wholesale clone that the owned
-    /// [`lod_buckets`](Self::lod_buckets) makes. Clusters that declared LOD
-    /// alternates still regroup their instances per LOD (a copy that separate
-    /// per-LOD draw calls genuinely require); that path reuses `lod_buckets`.
-    pub fn try_for_each_lod_bucket<E>(
-        &self,
-        cam_pos: [f32; 3],
-        mut visit: impl FnMut(usize, usize, &[[[f32; 4]; 4]]) -> Result<(), E>,
-    ) -> Result<(), E> {
-        if self.instances.is_empty() {
-            return Ok(());
-        }
-        if self.lod_alternates.is_empty() {
-            return visit(self.index_offset, self.index_count, &self.instances);
-        }
-        for b in self.lod_buckets(cam_pos) {
-            visit(b.index_offset, b.index_count, &b.instances)?;
-        }
-        Ok(())
-    }
-
-    /// Infallible [`try_for_each_lod_bucket`](Self::try_for_each_lod_bucket)
-    /// for callers whose per-bucket work cannot fail.
-    pub fn for_each_lod_bucket(
-        &self,
-        cam_pos: [f32; 3],
-        mut visit: impl FnMut(usize, usize, &[[[f32; 4]; 4]]),
-    ) {
-        let _ = self.try_for_each_lod_bucket::<core::convert::Infallible>(
-            cam_pos,
-            |index_offset, index_count, instances| {
-                visit(index_offset, index_count, instances);
-                Ok(())
-            },
-        );
     }
 }
 
@@ -1868,6 +1760,7 @@ impl SkinnedDrawObject {
 mod tests {
     use super::*;
     use crate::test_support::draw_object;
+    use alloc::vec;
     use core::mem::{offset_of, size_of};
 
     // The two reserved entries sit past the real textures in a fixed order, so
@@ -2280,15 +2173,6 @@ mod tests {
         assert_eq!(obj.active_lod(120.0), (300, 3));
     }
 
-    fn sample_instance_translation(x: f32, y: f32, z: f32) -> [[f32; 4]; 4] {
-        [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [x, y, z, 1.0],
-        ]
-    }
-
     fn sample_cluster(
         instances: Vec<[[f32; 4]; 4]>,
         lod_alternates: Vec<LodSlice>,
@@ -2309,180 +2193,6 @@ mod tests {
             instances,
             lod_alternates,
         }
-    }
-
-    #[test]
-    fn lod_buckets_no_alternates_returns_single_lod0_bucket() {
-        let c = sample_cluster(
-            vec![
-                sample_instance_translation(0.0, 0.0, 0.0),
-                sample_instance_translation(50.0, 0.0, 0.0),
-            ],
-            Vec::new(),
-        );
-        let buckets = c.lod_buckets([0.0; 3]);
-        assert_eq!(buckets.len(), 1);
-        assert_eq!(buckets[0].index_offset, 0);
-        assert_eq!(buckets[0].index_count, 60);
-        assert_eq!(buckets[0].instances.len(), 2);
-    }
-
-    #[test]
-    fn lod_buckets_partitions_instances_by_camera_distance() {
-        let c = sample_cluster(
-            vec![
-                sample_instance_translation(0.0, 0.0, 0.0),   // d=0 → LOD0
-                sample_instance_translation(20.0, 0.0, 0.0),  // d=20 → LOD1
-                sample_instance_translation(50.0, 0.0, 0.0),  // d=50 → LOD2
-                sample_instance_translation(120.0, 0.0, 0.0), // d=120 → LOD3
-            ],
-            vec![
-                LodSlice {
-                    index_offset: 100,
-                    index_count: 30,
-                    switch_distance: 10.0,
-                },
-                LodSlice {
-                    index_offset: 200,
-                    index_count: 15,
-                    switch_distance: 25.0,
-                },
-                LodSlice {
-                    index_offset: 300,
-                    index_count: 5,
-                    switch_distance: 60.0,
-                },
-            ],
-        );
-        let buckets = c.lod_buckets([0.0; 3]);
-        // Each LOD got exactly one instance, so all four buckets survive.
-        assert_eq!(buckets.len(), 4);
-        assert_eq!(buckets[0].index_count, 60);
-        assert_eq!(buckets[0].instances.len(), 1);
-        assert_eq!(buckets[1].index_offset, 100);
-        assert_eq!(buckets[1].instances.len(), 1);
-        assert_eq!(buckets[2].index_offset, 200);
-        assert_eq!(buckets[2].instances.len(), 1);
-        assert_eq!(buckets[3].index_offset, 300);
-        assert_eq!(buckets[3].instances.len(), 1);
-    }
-
-    #[test]
-    fn lod_buckets_drops_empty_levels() {
-        // Every instance lands in LOD0; the LOD1 bucket should not be emitted.
-        let c = sample_cluster(
-            vec![sample_instance_translation(0.0, 0.0, 0.0)],
-            vec![LodSlice {
-                index_offset: 100,
-                index_count: 30,
-                switch_distance: 50.0,
-            }],
-        );
-        let buckets = c.lod_buckets([0.0; 3]);
-        assert_eq!(buckets.len(), 1);
-        assert_eq!(buckets[0].index_offset, 0);
-    }
-
-    #[test]
-    fn lod_buckets_empty_instances_returns_no_buckets() {
-        let c = sample_cluster(Vec::new(), Vec::new());
-        assert!(c.lod_buckets([0.0; 3]).is_empty());
-    }
-
-    #[test]
-    fn for_each_lod_bucket_no_alternates_borrows_full_instance_slice() {
-        // The no-alternates fast path must hand the visitor the cluster's own
-        // instance slice in one bucket at the LOD0 range: the zero-copy
-        // contract the GPU upload relies on.
-        let c = sample_cluster(
-            vec![
-                sample_instance_translation(0.0, 0.0, 0.0),
-                sample_instance_translation(50.0, 0.0, 0.0),
-            ],
-            Vec::new(),
-        );
-        let mut seen: Vec<(usize, usize, usize)> = Vec::new();
-        c.for_each_lod_bucket([0.0; 3], |index_offset, index_count, instances| {
-            seen.push((index_offset, index_count, instances.len()));
-            // Same length and contents as the cluster's own instances.
-            assert_eq!(instances, c.instances.as_slice());
-        });
-        assert_eq!(seen, vec![(0, 60, 2)]);
-    }
-
-    #[test]
-    fn for_each_lod_bucket_partitions_like_lod_buckets() {
-        // With alternates, the closure path must visit the same buckets, in the
-        // same order, as the owned `lod_buckets`.
-        let c = sample_cluster(
-            vec![
-                sample_instance_translation(0.0, 0.0, 0.0),
-                sample_instance_translation(20.0, 0.0, 0.0),
-                sample_instance_translation(50.0, 0.0, 0.0),
-            ],
-            vec![
-                LodSlice {
-                    index_offset: 100,
-                    index_count: 30,
-                    switch_distance: 10.0,
-                },
-                LodSlice {
-                    index_offset: 200,
-                    index_count: 15,
-                    switch_distance: 25.0,
-                },
-            ],
-        );
-        let mut seen: Vec<(usize, usize, usize)> = Vec::new();
-        c.for_each_lod_bucket([0.0; 3], |index_offset, index_count, instances| {
-            seen.push((index_offset, index_count, instances.len()));
-        });
-        let owned: Vec<(usize, usize, usize)> = c
-            .lod_buckets([0.0; 3])
-            .iter()
-            .map(|b| (b.index_offset, b.index_count, b.instances.len()))
-            .collect();
-        assert_eq!(seen, owned);
-    }
-
-    #[test]
-    fn for_each_lod_bucket_empty_instances_never_visits() {
-        let c = sample_cluster(Vec::new(), Vec::new());
-        let mut visits = 0;
-        c.for_each_lod_bucket([0.0; 3], |_, _, _| visits += 1);
-        assert_eq!(visits, 0);
-    }
-
-    #[test]
-    fn try_for_each_lod_bucket_stops_on_first_error() {
-        // Three buckets; the visitor fails on the second. Iteration must stop
-        // there (two visits, error returned) rather than continue.
-        let c = sample_cluster(
-            vec![
-                sample_instance_translation(0.0, 0.0, 0.0),
-                sample_instance_translation(20.0, 0.0, 0.0),
-                sample_instance_translation(50.0, 0.0, 0.0),
-            ],
-            vec![
-                LodSlice {
-                    index_offset: 100,
-                    index_count: 30,
-                    switch_distance: 10.0,
-                },
-                LodSlice {
-                    index_offset: 200,
-                    index_count: 15,
-                    switch_distance: 25.0,
-                },
-            ],
-        );
-        let mut visits = 0;
-        let result = c.try_for_each_lod_bucket::<&str>([0.0; 3], |_, _, _| {
-            visits += 1;
-            if visits == 2 { Err("boom") } else { Ok(()) }
-        });
-        assert_eq!(result, Err("boom"));
-        assert_eq!(visits, 2);
     }
 
     #[test]

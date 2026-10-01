@@ -1,5 +1,5 @@
-//! Cascade and spot shadow states: the shadow maps, the cascade pipeline, the
-//! compare sampler, and the static spot projections.
+//! Cascade and spot shadow states: the shadow maps, the compare sampler, and
+//! the static spot projections.
 
 use concinnity_core::gfx::render_types::{
     self, LightUniforms, NUM_SHADOW_CASCADES, SpotShadowData,
@@ -8,42 +8,37 @@ use concinnity_core::render::backend_init::ShadowParams;
 use concinnity_core::render::csm;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
+use concinnity_core::render::spot_shadow;
 use objc2_metal::{
     MTLCompareFunction, MTLDevice as _, MTLResourceOptions, MTLSamplerAddressMode,
-    MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLVertexDescriptor,
+    MTLSamplerDescriptor, MTLSamplerMinMagFilter,
 };
 
-use super::{InitGpu, pipelines};
+use super::InitGpu;
 use crate::metal::context::{ShadowState, SpotShadowState, bytes_of_slice};
 use crate::metal::texture::{create_shadow_map_array, create_shadow_map_fallback};
 
 pub(super) fn build_shadow(
     gpu: &InitGpu<'_>,
-    vert_desc: &MTLVertexDescriptor,
     shadows: &ShadowParams,
     light_uniforms: &LightUniforms,
 ) -> RenderResult<ShadowState> {
     let device = &*gpu.hw.device;
 
-    // shadow pipeline + array map: created only when the map size is > 0.
-    // The fallback 1x1 shadow map (all depth = 1.0 = max = lit) is always
-    // bound so fragment shaders can safely sample texture(2) as a depth array.
-    let (pipeline_state, map, uniforms, map_size) = if shadows.map_size > 0 {
-        let shadow_ps = pipelines::build_shadow_pipeline(device, vert_desc, gpu.hot_reload)?;
+    // The cascade array map exists only when the map size is > 0. The fallback
+    // 1x1 shadow map (all depth = 1.0 = max = lit) is always bound so fragment
+    // shaders can safely sample texture(2) as a depth array.
+    let enabled = shadows.map_size > 0;
+    let (map, map_size) = if enabled {
         // Depth32Float 2D array, NUM_SHADOW_CASCADES layers, GPU-private.
         let shadow_tex =
             create_shadow_map_array(device, shadows.map_size, NUM_SHADOW_CASCADES as u32)?;
-        (
-            Some(shadow_ps),
-            shadow_tex,
-            csm::empty_shadow_uniforms(),
-            shadows.map_size,
-        )
+        (shadow_tex, shadows.map_size)
     } else {
         // 1x1 fallback depth array (value 1.0 = fully lit).
-        let shadow_tex = create_shadow_map_fallback(device)?;
-        (None, shadow_tex, csm::empty_shadow_uniforms(), 1)
+        (create_shadow_map_fallback(device)?, 1)
     };
+    let uniforms = csm::empty_shadow_uniforms();
 
     // compare sampler for PCF: always created so texture(2) / sampler(1) are
     // always bound; LessEqual returns 1.0 (lit) when reference <= stored depth.
@@ -66,7 +61,7 @@ pub(super) fn build_shadow(
     let light_dir = lights::sun_direction(light_uniforms);
 
     Ok(ShadowState {
-        pipeline_state,
+        enabled,
         map,
         map_size,
         cadence: shadows.cadence,
@@ -115,6 +110,10 @@ pub(super) fn build_spot_shadow(
         map,
         buffer,
         count,
+        frusta: spot_shadows
+            .iter()
+            .map(spot_shadow::slice_frustum)
+            .collect(),
         scheduler: Default::default(),
         render_mask: 0,
     })

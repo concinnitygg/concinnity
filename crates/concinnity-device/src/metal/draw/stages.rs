@@ -255,7 +255,7 @@ impl MtlContext {
                 (s.width / s.height) as f32
             }
         };
-        if self.shadow.pipeline_state.is_some() {
+        if self.shadow.enabled {
             let fresh = csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
                 view: self.view.matrix,
                 cam_pos,
@@ -363,7 +363,7 @@ impl MtlContext {
             show,
         } = args;
         let graph_inputs = FrameGraphInputs {
-            shadow_enabled: self.shadow.pipeline_state.is_some(),
+            shadow_enabled: self.shadow.enabled,
             shadow_map_size: self.shadow.map_size,
             hdr_width: self.targets.hdr.width,
             hdr_height: self.targets.hdr.height,
@@ -687,9 +687,10 @@ impl MtlContext {
                 )?;
                 if draw_args.is_some() {
                     self.ensure_icb_capacity(self.cull_count())?;
-                    // GPU-driven cascaded shadow: size the per-cascade
-                    // shadow ICB to NUM_SHADOW_CASCADES * cull_count. A no-op when
-                    // the shadow-bindless path is inactive (no shadow cull encoder).
+                    // GPU-driven shadow views: size the cascade ICB to
+                    // NUM_SHADOW_CASCADES * cull_count and the spot ICB to one
+                    // region per slice. A no-op when the shadow-bindless path is
+                    // inactive (no shadow cull pipeline).
                     self.ensure_shadow_icb_capacity(self.cull_count())?;
                     // Per-planar-slot mirror cull ICBs: one per distinct reflection
                     // plane, each sized to cull_count. A no-op (clears the slots) when

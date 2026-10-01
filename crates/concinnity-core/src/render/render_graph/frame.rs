@@ -595,15 +595,18 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // Spot shadows: one depth-only render per shadowed spot into its slice of
     // the spot shadow array. Like the cascade pass it precedes Main, which
     // samples the array; backend-owned, so the import tracks dependencies only.
+    // Its slices draw from the same cull output the cascades do, so it reads
+    // draw_args for the same edge after Cull.
     let spot_shadow_v1 = if inputs.shadowed_spot_count > 0 {
         let spot_map = b.import_texture(
             "spot_shadow_map",
             spot_shadow_map_desc(inputs.spot_shadow_slice_size, inputs.shadowed_spot_count),
         );
-        Some(
-            b.add_pass(PassId::SpotShadow, PassKind::Render)
-                .write_texture(spot_map),
-        )
+        let mut spot = b.add_pass(PassId::SpotShadow, PassKind::Render);
+        if let Some(h) = draw_args_v1 {
+            spot.read_buffer(h);
+        }
+        Some(spot.write_texture(spot_map))
     } else {
         None
     };
@@ -2416,6 +2419,27 @@ mod tests {
         );
         assert!(
             g.pass_precedes(cull, shadow),
+            "the schedule does not order them"
+        );
+    }
+
+    #[test]
+    fn spot_shadow_orders_after_cull_through_the_draw_args_read() {
+        let mut i = all_off();
+        i.shadowed_spot_count = 3;
+        i.spot_shadow_slice_size = 512;
+        i.bindless_cull_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let cull = g.pass_index(PassId::Cull).expect("Cull is in the graph");
+        let spot = g
+            .pass_index(PassId::SpotShadow)
+            .expect("SpotShadow is in the graph");
+        assert!(
+            g.depends_on(cull, spot),
+            "SpotShadow does not depend on Cull"
+        );
+        assert!(
+            g.pass_precedes(cull, spot),
             "the schedule does not order them"
         );
     }

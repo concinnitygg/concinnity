@@ -262,6 +262,7 @@ impl VkContext {
                 targets: &targets,
                 scene: &scene,
                 shadow: &shadow,
+                spot_slices: spot_shadow.count() as usize,
                 gbuffer: screen.gbuffer.as_ref(),
                 swapchain_format: swapchain.format,
             },

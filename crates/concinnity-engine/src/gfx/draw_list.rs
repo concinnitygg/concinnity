@@ -855,9 +855,9 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             Some(m) if !inst.instances.is_empty() => m.index(),
             _ => continue,
         };
-        // Instanced clusters carry the mesh's LOD alternates and bucket
-        // their per-instance matrices by camera distance at draw time;
-        // see [`InstancedCluster::lod_buckets`].
+        // Instanced clusters carry the mesh's LOD alternates; each instance
+        // picks its slice by camera distance in its cull record (see
+        // `lod::for_each_instance_lod`).
         let (
             vertex_offset,
             vertex_count,

@@ -41,7 +41,8 @@ pub(super) fn build_descriptors(
     bindings: &GlobalBindings<'_>,
 ) -> RenderResult<VkDescriptors> {
     let global_set_layout = create_descriptor_set_layout(&gpu.hw.device, &global_set())?;
-    let descriptor_pool = create_descriptor_pool(gpu, pool, bindings.shadow)?;
+    let shadow_views = render_types::NUM_SHADOW_CASCADES as u32 + bindings.spot_shadow.count();
+    let descriptor_pool = create_descriptor_pool(gpu, pool, bindings.shadow, shadow_views)?;
     let global_sets = write_global_sets(gpu, &global_set_layout, &descriptor_pool, bindings)?;
     let shadow_global_sets = write_shadow_global_sets(gpu, &descriptor_pool, bindings.shadow)?;
     Ok(VkDescriptors {
@@ -59,6 +60,8 @@ fn create_descriptor_pool(
     gpu: &InitGpu<'_>,
     pool: SetPoolInputs<'_>,
     shadow: &VkShadow,
+    // Cascades plus spot slices: each gets a cull set per frame.
+    shadow_views: u32,
 ) -> RenderResult<OwnedDescriptorPool> {
     let InitGpu { hw, frames, .. } = *gpu;
     let SetPoolInputs {
@@ -87,13 +90,14 @@ fn create_descriptor_pool(
     let gbuffer_sets_count = if gbuffer_active { n_frames } else { 0 };
     let history_sets_count = gbuffer_sets_count * n_frames;
 
-    // GPU-driven shadow: one cull set per (frame, cascade), each with 3
-    // STORAGE_BUFFER descriptors (objects + draw-args + that cascade's
-    // indirect-command buffer). Allocated only when the bindless cull path is
-    // active AND shadows are enabled. The depth-only shadow draw reuses the
-    // shadow-global + bindless sets, so it adds no sets here.
-    let shadow_cull_set_count = if bindless_active && shadow.pipeline.is_some() {
-        n_frames * render_types::NUM_SHADOW_CASCADES as u32
+    // GPU-driven shadow: one cull set per (frame, view) over the cascades and
+    // the spot slices, each with 3 STORAGE_BUFFER descriptors (objects +
+    // draw-args + that view's indirect-command buffer). Allocated only when the
+    // bindless cull path is active AND shadows are enabled. The depth-only
+    // shadow draw reuses the shadow-global, spot-slice and bindless sets, so it
+    // adds no sets here.
+    let shadow_cull_set_count = if bindless_active && shadow.enabled() {
+        n_frames * shadow_views
     } else {
         0
     };

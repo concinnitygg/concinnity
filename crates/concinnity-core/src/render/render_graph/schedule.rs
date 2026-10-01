@@ -682,14 +682,13 @@ mod tests {
             .filter(|p| p.queue == PassQueue::AsyncCompute)
             .map(|p| p.id)
             .collect();
-        // The three pre-Main compute passes, plus the two the producer-side
+        // The two pre-Main compute passes, plus the two the producer-side
         // placement freed: FogFroxel taps the shadow map as a continuation
         // reader after Main, and HizFinal reads the final depth after every
         // decoration pass. All are compute passes with real GPU cost, and
         // neither of the latter two could move while its run's transition sat on
         // the run's first reader.
         for id in [
-            PassId::Cull,
             PassId::LightCull,
             PassId::ParticlesSim,
             PassId::FogFroxel,
@@ -702,11 +701,13 @@ mod tests {
         }
         // Every compute pass still on the graphics queue is there because the
         // graph orders it against every render pass, not because of where a
-        // transition sits: HizBuild and Cull2 are the two-phase occlusion cull's
-        // own chain between the pre-pass and Main2, AutoExposure reads the frame
+        // transition sits: every raster pass before Main draws from Cull's
+        // output, HizBuild and Cull2 are the two-phase occlusion cull's own
+        // chain between the pre-pass and Main2, AutoExposure reads the frame
         // Main just wrote and feeds the tonemap, and Upscale sits between the
         // last scene pass and Bloom.
         for id in [
+            PassId::Cull,
             PassId::HizBuild,
             PassId::Cull2,
             PassId::AutoExposure,

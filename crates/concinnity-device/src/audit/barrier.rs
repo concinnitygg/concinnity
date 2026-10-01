@@ -364,7 +364,7 @@ const AUDITS: &[BackendAudit] = &[
                 4,
                 Reason::Ungraphed,
             ),
-            ("cull.rs", ".ResourceBarrier(", 6, Reason::Ungraphed),
+            ("cull.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
             ("planar.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
             // The last `Inline` row on this backend. One of its two barriers is
             // really intra-pass (the G-buffer depth, which the graph does not

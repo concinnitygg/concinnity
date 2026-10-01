@@ -1,5 +1,5 @@
-//! The GPU-driven cascade shadow: the frustum-only decision kernel and the
-//! depth-only bindless shadow pipeline.
+//! The GPU-driven shadow views, cascades and spot slices alike: the
+//! frustum-only decision kernel and the depth-only bindless shadow pipeline.
 
 use concinnity_core::render::error::RenderResult;
 use objc2::rc::Retained;
@@ -17,9 +17,10 @@ pub(super) struct ShadowCull {
 }
 
 // Built only for a scene world with shadows enabled; a UI-only or shadowless
-// world leaves both `None` and renders no cascades. The shadow ICB + its
-// argument buffer are allocated lazily by `ensure_shadow_icb_capacity` (sized
-// to NUM_SHADOW_CASCADES * cull_count once geometry is known).
+// world leaves both `None` and renders no shadow views. The cascade and spot
+// ICBs + their argument buffers are allocated lazily by
+// `ensure_shadow_icb_capacity`, one region per view times `cull_count` once
+// geometry is known.
 pub(super) fn build_shadow_cull(
     gpu: &InitGpu<'_>,
     bindless: &BindlessPass,

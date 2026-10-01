@@ -2,9 +2,8 @@
 //! declared once for every backend.
 //!
 //! The `metal`, `directx` and `vulkan` children are the exception: a block only
-//! one backend binds (Metal's `ModelUniforms`), or one whose shader is still
-//! hand-written per backend (the cull kernel, the per-draw morph kernel, Metal's
-//! water).
+//! one backend binds, or one whose shader is still hand-written per backend
+//! (the cull kernel, the per-draw morph kernel, Metal's water).
 //!
 //! Binding slots are not part of these declarations: the same block lands at a
 //! different index on each backend, so where it binds belongs to the backend

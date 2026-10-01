@@ -9,7 +9,7 @@
 //!                 `add_chunk_mesh`, `remove_chunk_mesh`, `set_chunk_model`)
 //!   skinning.rs   Skinned-mesh upload + per-frame joint upload
 //!                 (`upload_skinned`, `update_skinned_pose`,
-//!                 `upload_joint_matrices`, `skinned_geometry`)
+//!                 `upload_joint_matrices`)
 //!   geometry_rebuild.rs  Size-changing static + skinned VB/IB rebuilds
 //!                 driven by asset hot-reload (`rebuild_static_geometry`,
 //!                 `rebuild_skinned_geometry`)

@@ -20,6 +20,7 @@ use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams};
+use concinnity_core::transform::IDENTITY;
 
 use super::context::VkContext;
 
@@ -222,16 +223,12 @@ impl VkContext {
         }
     }
 
-    // Per-cascade GPU cull for the GPU-driven shadow pass. One dispatch per
-    // re-rendered cascade frustum + distance tests every record (static +
-    // instances + skinned) against that cascade's light frustum (extracted from
-    // `light_vps[c]`; no Hi-Z) and writes the surviving `DrawIndexedIndirectCommand`s
-    // into that cascade's indirect buffer via the per-(frame, cascade) shadow cull
-    // set. Ends with one memory barrier ordering the kernel's writes before the
-    // shadow pass's `cmd_draw_indexed_indirect` reads. Must run outside any render
-    // pass, so the caller dispatches it at the top of `encode_shadow_pass` before
-    // the per-cascade render passes begin. A no-op when the GPU-driven shadow
-    // resources are absent or `cull_count() == 0`. Mirrors
+    // Per-cascade GPU cull for the GPU-driven shadow pass: each re-rendered
+    // cascade's frustum test of every record (static + instances + skinned)
+    // against that cascade's light frustum (extracted from `light_vps[c]`; no
+    // Hi-Z) writes the cascade's indirect buffer through its (frame, cascade)
+    // cull set. Must run outside any render pass, so the caller dispatches it at
+    // the top of `encode_shadow_pass`. Mirrors
     // `directx/cull.rs::encode_shadow_culls`.
     pub(in crate::vulkan) fn encode_shadow_culls(
         &self,
@@ -240,16 +237,71 @@ impl VkContext {
         render_mask: u32,
         cam_pos: [f32; 3],
     ) {
+        let Some(sets) = self.cull.shadow_cull_sets.get(frame_idx) else {
+            return;
+        };
+        let mut views = [(
+            vk::DescriptorSet::null(),
+            Frustum::from_view_projection(IDENTITY),
+        ); render_types::NUM_SHADOW_CASCADES];
+        let mut kept = 0;
+        for (c, &set) in sets.iter().enumerate() {
+            if render_mask & (1u32 << c) == 0 {
+                continue;
+            }
+            views[kept] = (
+                set,
+                Frustum::from_view_projection(self.shadow.uniforms.light_vps[c]),
+            );
+            kept += 1;
+        }
+        self.encode_view_culls(cmd, &views[..kept], cam_pos);
+    }
+
+    // Per-slice GPU cull for the spot shadow pass: the same shadow kernel, each
+    // refreshed slice's casters kept against that spot's light frustum into the
+    // slice's own indirect buffer. The eye stays the camera, so each caster
+    // draws the LOD the main pass does.
+    pub(in crate::vulkan) fn encode_spot_culls(
+        &self,
+        cmd: vk::CommandBuffer,
+        frame_idx: usize,
+        cam_pos: [f32; 3],
+    ) {
+        let Some(sets) = self.cull.spot_cull_sets.get(frame_idx) else {
+            return;
+        };
+        let mut views = [(
+            vk::DescriptorSet::null(),
+            Frustum::from_view_projection(IDENTITY),
+        ); render_types::MAX_SHADOWED_SPOTS];
+        let mut kept = 0;
+        for slice in self.spot_shadow.refreshed_slices() {
+            let slice = slice as usize;
+            views[kept] = (sets[slice], self.spot_shadow.frusta[slice]);
+            kept += 1;
+        }
+        self.encode_view_culls(cmd, &views[..kept], cam_pos);
+    }
+
+    // One shadow-kernel dispatch per view, each testing every record against
+    // the view's frustum and writing the indirect buffer its cull set binds. Ends
+    // with one memory barrier ordering the writes before the shadow draws'
+    // `cmd_draw_indexed_indirect` reads. A no-op when the GPU-driven shadow
+    // resources are absent, `cull_count() == 0`, or no view asked for.
+    fn encode_view_culls(
+        &self,
+        cmd: vk::CommandBuffer,
+        views: &[(vk::DescriptorSet, Frustum)],
+        cam_pos: [f32; 3],
+    ) {
         let (Some(pipeline), Some(layout)) = (
             self.cull.shadow_cull_pipeline.as_ref(),
             self.cull.shadow_cull_pipeline_layout.as_ref(),
         ) else {
             return;
         };
-        let Some(sets) = self.cull.shadow_cull_sets.get(frame_idx) else {
-            return;
-        };
-        if self.cull_count() == 0 {
+        if self.cull_count() == 0 || views.is_empty() {
             return;
         }
         let device = &self.hw.device;
@@ -259,20 +311,13 @@ impl VkContext {
         // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle());
-            // `sets` has one entry per cascade (NUM_SHADOW_CASCADES), allocated in
-            // `init`; iterate it so cascade `c` uses its own output set + frustum.
-            for (c, &set) in sets.iter().enumerate() {
-                if render_mask & (1u32 << c) == 0 {
-                    continue;
-                }
-                let frustum = Frustum::from_view_projection(self.shadow.uniforms.light_vps[c]);
+            for (set, frustum) in views {
                 let mut params = CullParams {
                     planes: [[0.0; 4]; 6],
                     cam_pos,
                     object_count,
-                    // The shadow kernel writes one depth-only stream per cascade
-                    // into that cascade's own indirect buffer, so it never strides
-                    // by bucket.
+                    // The shadow kernel writes one depth-only stream into the
+                    // view's own indirect buffer, so it never strides by bucket.
                     bucket_count: 1,
                     bucket_stride: object_count,
                 };
@@ -288,7 +333,7 @@ impl VkContext {
                     vk::PipelineBindPoint::COMPUTE,
                     layout.handle(),
                     0,
-                    std::slice::from_ref(&set),
+                    std::slice::from_ref(set),
                     &[],
                 );
                 device.cmd_push_constants(
@@ -300,8 +345,6 @@ impl VkContext {
                 );
                 device.cmd_dispatch(cmd, object_count.div_ceil(64), 1, 1);
             }
-            // Order every cascade's indirect-buffer writes before the shadow
-            // pass's `cmd_draw_indexed_indirect` reads.
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
                 .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);

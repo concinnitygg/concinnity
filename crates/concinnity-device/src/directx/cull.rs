@@ -16,7 +16,7 @@
 
 use concinnity_core::gfx::frustum::{Frustum, Plane};
 use concinnity_core::gfx::lod;
-use concinnity_core::gfx::render_types;
+use concinnity_core::gfx::render_types::{self, MAX_SHADOWED_SPOTS};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::uniforms::directx::CullParams;
@@ -105,6 +105,11 @@ pub(in crate::directx) struct CullState {
     pub cull_pso_shadow: Option<ID3D12PipelineState>,
     pub shadow_indirect_buffers: Vec<ID3D12Resource>,
     pub shadow_cull_status_buffers: Vec<ID3D12Resource>,
+    // The spot shadow pass's indirect buffers, one per frame-in-flight with one
+    // region of `bucket_stride` commands per spot slice, written by the same
+    // shadow kernel. Its own buffer, so the spot pass shares no state with the
+    // cascade pass. Empty when the world has no shadowed spot.
+    pub spot_indirect_buffers: Vec<ID3D12Resource>,
     // GPU-driven G-buffer pre-pass. A 3-MRT bindless pipeline whose VS
     // reads `model` + `roughness` from `GpuObjectData[object_id]` (root SRV) and
     // the previous-frame model from the model-history ring below;
@@ -324,20 +329,20 @@ pub(in crate::directx) fn create_cull_command_signature(
     })
 }
 
-// One planar mirror's cull: the slot whose indirect region receives the
-// survivors, and the frustum + reflected eye to test the frame's records
-// against.
+// One cull into a region of an indirect buffer: the region that receives the
+// survivors, the frustum to test the frame's records against, and the eye the
+// kernel picks each record's LOD by (and, for the main kernel, its distance).
 #[derive(Clone, Copy)]
-pub(in crate::directx) struct PlanarCull {
-    pub slot: usize,
+pub(in crate::directx) struct RegionCull {
+    pub region: usize,
     pub frustum: Frustum,
     pub eye: [f32; 3],
 }
 
-impl PlanarCull {
+impl RegionCull {
     // A placeholder for the unused tail of a fixed-capacity list.
     pub(in crate::directx) const EMPTY: Self = Self {
-        slot: 0,
+        region: 0,
         frustum: Frustum {
             planes: [Plane {
                 normal: [0.0; 3],
@@ -346,6 +351,15 @@ impl PlanarCull {
         },
         eye: [0.0; 3],
     };
+}
+
+// The kernel and output buffer a run of region culls shares. Region `r`'s
+// commands start at command `r * region_stride`.
+struct RegionCullPass<'a> {
+    pso: &'a ID3D12PipelineState,
+    indirect: &'a ID3D12Resource,
+    status_gva: u64,
+    region_stride: usize,
 }
 
 // Per-frame buffer fill + encoder
@@ -834,24 +848,16 @@ impl DxContext {
         }
     }
 
-    // Per-cascade GPU cull for the GPU-driven shadow pass. Uses the frustum-only
-    // shadow cull kernel (`cull_pso_shadow` = `main_shadow`): one dispatch per
-    // re-rendered cascade tests every record (static + instances + skinned) against
-    // that cascade's light frustum -- extracted from `light_vps[c]` -- with NO Hi-Z
-    // (sun cascades have no light-space depth pyramid) and NO per-object distance
-    // cull (the cascade frustum already bounds the shadow draw distance; the view
-    // `cull_distance` must not silence shadows). Writes the surviving `ExecuteIndirect`
-    // commands into cascade `c`'s region of this frame's shadow indirect buffer. The region is selected by binding the cull output UAV at a
-    // per-cascade GPU-address offset (`c * cull_count` records), so `commands[i]`
-    // lands at physical index `c*cull_count + i`; the object + draw-args inputs are
-    // the same camera-independent buffers the main cull reads, so only the frustum
-    // + output region differ. Status writes go to a scratch buffer (never read;
-    // the shared `cull_status` is reserved for the phase-2 main cull, which runs
-    // after this pass). The whole indirect buffer flips INDIRECT_ARGUMENT -> UAV
-    // for the dispatches and back; the shadow pass then issues each cascade region
-    // with `ExecuteIndirect`. Skipped cascades (not in `render_mask`) keep their
-    // prior region untouched (and their depth slice is not re-rendered). A no-op
-    // when the GPU-driven shadow resources are absent or `cull_count() == 0`.
+    // Per-cascade GPU cull for the GPU-driven shadow pass, through the
+    // frustum-only shadow kernel (`cull_pso_shadow` = `main_shadow`): each
+    // re-rendered cascade tests every record (static + instances + skinned)
+    // against that cascade's light frustum, with NO Hi-Z (sun cascades have no
+    // light-space depth pyramid) and NO per-object distance cull (the view
+    // `cull_distance` must not silence shadows), into cascade `c`'s region of
+    // this frame's shadow indirect buffer. Skipped cascades (not in
+    // `render_mask`) keep their prior region untouched, as their depth slice is
+    // not re-rendered. A no-op when the GPU-driven shadow resources are absent
+    // or `cull_count() == 0`.
     pub(in crate::directx) fn encode_shadow_culls(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -860,117 +866,96 @@ impl DxContext {
         cam_pos: [f32; 3],
     ) {
         use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
-        let (Some(shadow_cull_pso), Some(cull_root), Some(indirect), Some(status)) = (
+        let (Some(pso), Some(indirect), Some(status)) = (
             self.cull.cull_pso_shadow.as_ref(),
-            self.cull.cull_root_sig.as_ref(),
             self.cull.shadow_indirect_buffers.get(frame_idx),
             self.cull.shadow_cull_status_buffers.get(frame_idx),
         ) else {
             return;
         };
-        let n_cull = self.cull_count();
-        if n_cull == 0 {
-            return;
-        }
-
-        let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
-        let draw_args_gva = com::gpu_va(&self.cull.draw_args_buffer_resources[frame_idx]);
-        let status_gva = com::gpu_va(status);
-        let base_gva = com::gpu_va(indirect);
-
-        // Hi-Z is disabled for the shadow cull (`hiz_enabled = 0`), so the kernel
-        // never samples the pyramid; the descriptor table at root [3] still has to
-        // point at a live descriptor, bound exactly like `encode_cull`.
-        let (hiz_size, hiz_mip_count, hiz_srv) = match self.cull.hiz.as_ref() {
-            Some(h) => (
-                [h.width as f32, h.height as f32],
-                h.mip_count,
-                Some(h.srv_gpu),
-            ),
-            None => ([1.0, 1.0], 1, None),
-        };
-
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[transition_barrier(
-                indirect,
-                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-            )]);
-            cmd.SetComputeRootSignature(cull_root);
-            cmd.SetPipelineState(shadow_cull_pso);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.SetComputeRootShaderResourceView(1, object_gva);
-            cmd.SetComputeRootShaderResourceView(2, draw_args_gva);
-            if let Some(srv) = hiz_srv {
-                cmd.set_compute_srv_table(3, srv);
+        let mut regions = [RegionCull::EMPTY; NUM_SHADOW_CASCADES];
+        let mut kept = 0;
+        for (c, light_vp) in self.shadow.uniforms.light_vps.iter().enumerate() {
+            if render_mask & (1u32 << c) == 0 {
+                continue;
             }
-            cmd.SetComputeRootUnorderedAccessView(5, status_gva);
-
-            for c in 0..NUM_SHADOW_CASCADES {
-                if render_mask & (1u32 << c) == 0 {
-                    continue;
-                }
-                let frustum = Frustum::from_view_projection(self.shadow.uniforms.light_vps[c]);
-                let mut cull_params = CullParams {
-                    planes: [[0.0; 4]; 6],
-                    cam_pos,
-                    object_count: n_cull as u32,
-                    // Unused with Hi-Z disabled (the projection is never taken).
-                    prev_view_proj: [[0.0; 4]; 4],
-                    hiz_size,
-                    hiz_mip_count,
-                    hiz_enabled: 0,
-                    // The shadow kernel writes one depth-only stream at `tid`;
-                    // the cascade offset comes from the bound UAV address below,
-                    // so it never strides by bucket.
-                    bucket_count: 1,
-                    bucket_stride: n_cull as u32,
-                    _pad: [0; 2],
-                };
-                for (i, p) in frustum.planes.iter().enumerate() {
-                    cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
-                }
-                cmd.set_compute_root_constants(0, &cull_params);
-                // Cascade `c`'s output region: offset the indirect UAV's GPU address
-                // by `c * n_cull` commands so the kernel's `commands[i]` write lands
-                // in this cascade's slice. Root UAV GPU addresses only need element
-                // alignment (the stride is a multiple of 4), like the instanced
-                // path's per-bucket root-SRV bumps.
-                let region_gva = base_gva + (c * n_cull * INDIRECT_COMMAND_STRIDE as usize) as u64;
-                cmd.SetComputeRootUnorderedAccessView(4, region_gva);
-                cmd.Dispatch((n_cull as u32).div_ceil(64), 1, 1);
-            }
-
-            cmd.ResourceBarrier(&[transition_barrier(
-                indirect,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
-            )]);
+            regions[kept] = RegionCull {
+                region: c,
+                frustum: Frustum::from_view_projection(*light_vp),
+                eye: cam_pos,
+            };
+            kept += 1;
         }
+        self.encode_region_culls(
+            cmd,
+            frame_idx,
+            RegionCullPass {
+                pso,
+                indirect,
+                status_gva: com::gpu_va(status),
+                // The cascade pass reads each region at `c * cull_count()`.
+                region_stride: self.cull_count(),
+            },
+            &regions[..kept],
+        );
     }
 
-    // Reflected-frustum mirror cull for the planar reflection pass. For each
-    // `PlanarCull` in `planes`, re-runs the GPU cull into that plane's region of
-    // `indirect` (one region of `region_count` commands per
-    // plane), reading the FRAME's camera-independent object + draw-args buffers --
-    // so geometry visible only in the reflection (behind / beside the main camera,
-    // outside its frustum) is captured, not just the main camera's visible set. The
-    // reflected view-proj already carries the oblique near-plane clip, so the
-    // extracted frustum also rejects geometry behind the reflector. Uses the main
-    // single-pass cull kernel (frustum + distance, by the reflected eye) with Hi-Z
-    // OFF (the only pyramid is the main camera's screen space, useless here),
-    // exactly like the probe capture. Status writes go to a scratch buffer (never
-    // read). The whole indirect buffer flips INDIRECT_ARGUMENT -> UAV for the
-    // dispatches and back; the per-plane face render then issues each region with
-    // `ExecuteIndirect`. Mirrors `encode_shadow_culls`. A no-op when the cull path
-    // is inactive or `cull_count() == 0`.
+    // Per-slice GPU cull for the spot shadow pass: the same frustum-only shadow
+    // kernel as the cascades, each refreshed slice's casters kept against that
+    // spot's light frustum into the slice's region of this frame's spot indirect
+    // buffer. The kernel picks no LOD: each caster draws the camera-keyed LOD
+    // the frame's draw args already carry, the one the main pass draws. A no-op
+    // when the GPU-driven shadow path is absent.
+    pub(in crate::directx) fn encode_spot_culls(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+        cam_pos: [f32; 3],
+    ) {
+        let (Some(pso), Some(indirect), Some(status)) = (
+            self.cull.cull_pso_shadow.as_ref(),
+            self.cull.spot_indirect_buffers.get(frame_idx),
+            self.cull.shadow_cull_status_buffers.get(frame_idx),
+        ) else {
+            return;
+        };
+        let mut regions = [RegionCull::EMPTY; MAX_SHADOWED_SPOTS];
+        let mut kept = 0;
+        for slice in self.spot_shadow.refreshed_slices() {
+            regions[kept] = RegionCull {
+                region: slice as usize,
+                frustum: self.spot_shadow.frusta[slice as usize],
+                eye: cam_pos,
+            };
+            kept += 1;
+        }
+        self.encode_region_culls(
+            cmd,
+            frame_idx,
+            RegionCullPass {
+                pso,
+                indirect,
+                status_gva: com::gpu_va(status),
+                region_stride: self.cull.bucket_stride,
+            },
+            &regions[..kept],
+        );
+    }
+
+    // Reflected-frustum mirror cull for the planar reflection pass, into each
+    // kept plane's region of `indirect`. It reads the FRAME's camera-independent
+    // object + draw-args buffers, so geometry visible only in the reflection
+    // (behind / beside the main camera) is captured, not just the main camera's
+    // visible set. The reflected view-proj carries the oblique near-plane clip,
+    // so the extracted frustum also rejects geometry behind the reflector. Uses
+    // the main single-pass cull kernel (frustum + distance, by the reflected
+    // eye) with Hi-Z OFF (the only pyramid is the main camera's screen space),
+    // like the probe capture.
     pub(in crate::directx) fn encode_planar_culls(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        planes: &[PlanarCull],
+        planes: &[RegionCull],
         indirect: &ID3D12Resource,
         status_gva: u64,
         // Per-plane region stride, in commands: the FIXED build-time record capacity
@@ -981,23 +966,53 @@ impl DxContext {
         // fails to build), shifting plane >= 1's read offset off the written region.
         region_count: usize,
     ) {
-        let (Some(cull_pso), Some(cull_root)) = (
-            self.cull.cull_pso.as_ref(),
-            self.cull.cull_root_sig.as_ref(),
-        ) else {
+        let Some(pso) = self.cull.cull_pso.as_ref() else {
+            return;
+        };
+        self.encode_region_culls(
+            cmd,
+            frame_idx,
+            RegionCullPass {
+                pso,
+                indirect,
+                status_gva,
+                region_stride: region_count,
+            },
+            planes,
+        );
+    }
+
+    // One cull dispatch per region in `regions`, each testing every record
+    // against that region's frustum (Hi-Z off) and writing its `ExecuteIndirect`
+    // commands at `region * region_stride` in `pass.indirect`. The object +
+    // draw-args inputs are the frame's camera-independent buffers the main cull
+    // reads, so only the frustum, eye and output region differ per dispatch.
+    // The region is selected by binding the output UAV at that command offset,
+    // and every record lands in region 0 of it (one depth-only or mirror
+    // stream, never strided by shader bucket). The whole indirect buffer flips
+    // INDIRECT_ARGUMENT -> UAV for the dispatches and back once. A no-op when
+    // there is nothing to cull or no region asked for.
+    fn encode_region_culls(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+        pass: RegionCullPass<'_>,
+        regions: &[RegionCull],
+    ) {
+        let Some(cull_root) = self.cull.cull_root_sig.as_ref() else {
             return;
         };
         let n_cull = self.cull_count();
-        if n_cull == 0 || planes.is_empty() {
+        if n_cull == 0 || regions.is_empty() {
             return;
         }
-        // The live count never exceeds the capacity the buffer + reader stride by, so
-        // the kernel's `n_cull` written commands always land within plane's region.
-        debug_assert!(n_cull <= region_count);
+        // The live count never exceeds the region stride the buffer is laid out
+        // with, so every region's commands stay inside it.
+        debug_assert!(n_cull <= pass.region_stride);
 
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
         let draw_args_gva = com::gpu_va(&self.cull.draw_args_buffer_resources[frame_idx]);
-        let base_gva = com::gpu_va(indirect);
+        let base_gva = com::gpu_va(pass.indirect);
 
         // Hi-Z disabled (`hiz_enabled = 0`): the kernel never samples the pyramid,
         // but the descriptor table at root [3] must still point at a live descriptor.
@@ -1014,64 +1029,53 @@ impl DxContext {
         // slice these commands name is live for the call.
         unsafe {
             cmd.ResourceBarrier(&[transition_barrier(
-                indirect,
+                pass.indirect,
                 D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
             )]);
             cmd.SetComputeRootSignature(cull_root);
-            cmd.SetPipelineState(cull_pso);
+            cmd.SetPipelineState(pass.pso);
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
             cmd.SetComputeRootShaderResourceView(1, object_gva);
             cmd.SetComputeRootShaderResourceView(2, draw_args_gva);
             if let Some(srv) = hiz_srv {
                 cmd.set_compute_srv_table(3, srv);
             }
-            cmd.SetComputeRootUnorderedAccessView(5, status_gva);
+            cmd.SetComputeRootUnorderedAccessView(5, pass.status_gva);
 
-            for &PlanarCull {
-                slot,
-                ref frustum,
-                eye,
-            } in planes
-            {
+            for r in regions {
                 let mut cull_params = CullParams {
                     planes: [[0.0; 4]; 6],
-                    cam_pos: eye,
+                    cam_pos: r.eye,
                     object_count: n_cull as u32,
                     // Unused with Hi-Z disabled (the reprojection is never taken).
                     prev_view_proj: [[0.0; 4]; 4],
                     hiz_size,
                     hiz_mip_count,
                     hiz_enabled: 0,
-                    // The mirror renders one command stream under the default
-                    // bindless pipeline, so every record is routed into region 0:
-                    // a bucketed draw appears in the mirror with default shading.
                     bucket_count: 1,
-                    bucket_stride: region_count as u32,
+                    bucket_stride: pass.region_stride as u32,
                     _pad: [0; 2],
                 };
-                for (i, p) in frustum.planes.iter().enumerate() {
+                for (i, p) in r.frustum.planes.iter().enumerate() {
                     cull_params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
                 }
                 cmd.set_compute_root_constants(0, &cull_params);
-                // Plane `slot`'s output region: offset the indirect UAV's GPU
-                // address by `slot * region_count` commands so the kernel's
-                // `commands[i]` write lands in this plane's slice (strided by the
-                // SAME capacity the face render reads with, not the live count).
-                let region_gva =
-                    base_gva + (slot * region_count * INDIRECT_COMMAND_STRIDE as usize) as u64;
+                // Root UAV GPU addresses only need element alignment (the stride is
+                // a multiple of 4), like the instanced path's per-bucket root-SRV bumps.
+                let region_gva = base_gva
+                    + (r.region * pass.region_stride * INDIRECT_COMMAND_STRIDE as usize) as u64;
                 cmd.SetComputeRootUnorderedAccessView(4, region_gva);
                 cmd.Dispatch((n_cull as u32).div_ceil(64), 1, 1);
             }
 
             cmd.ResourceBarrier(&[transition_barrier(
-                indirect,
+                pass.indirect,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                 D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
             )]);
         }
     }
-
     // Dispatch the phase-2 cull compute pass for two-pass occlusion. Runs after
     // the Hi-Z pyramid has been rebuilt mid-frame from phase-1 depth (the
     // `HizBuild` graph node). One thread per build-time object re-tests the

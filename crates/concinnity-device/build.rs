@@ -169,14 +169,6 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         registers: &[],
     },
     DxilAbi {
-        program: &shared::SHADOW_VERT,
-        registers: &[("push", "b0"), ("shadow_cb", "b1")],
-    },
-    DxilAbi {
-        program: &shared::SHADOW_VERT_SKINNED,
-        registers: &[("push", "b0"), ("shadow_cb", "b1"), ("joints", "t0")],
-    },
-    DxilAbi {
         program: &shared::SHADOW_VERT_BINDLESS,
         registers: &[
             ("objid_cb", "b0"),
@@ -774,30 +766,9 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[],
     },
-    // The cascaded shadow pass, one row per variant: depth-only, so every
-    // parameter here is a constant block or the object record, and the split
-    // between buffer(2) and buffer(7) is the one the spot-shadow pass shares.
-    MetalAbi {
-        program: &shared::SHADOW_VERT,
-        slots: &[&[
-            ("shadow_cb", "buffer(0)"),
-            ("model_cb", "buffer(2)"),
-            ("cascade_cb", "buffer(7)"),
-        ]],
-        argument_ids: &[],
-    },
-    MetalAbi {
-        program: &shared::SHADOW_VERT_SKINNED,
-        slots: &[&[
-            ("shadow_cb", "buffer(0)"),
-            ("model_cb", "buffer(2)"),
-            ("cascade_cb", "buffer(7)"),
-            ("joints", "buffer(8)"),
-        ]],
-        argument_ids: &[],
-    },
-    // The GPU-driven variant takes its model out of the object record instead,
-    // so it binds no model block and reads buffer(9) like the pre-pass.
+    // The shadow pass (cascades and spot slices): depth-only, its model out of
+    // the object record at buffer(9) like the pre-pass, its view index at
+    // buffer(7).
     MetalAbi {
         program: &shared::SHADOW_VERT_BINDLESS,
         slots: &[&[

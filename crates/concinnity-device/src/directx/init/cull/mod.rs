@@ -61,6 +61,8 @@ pub(super) struct CullInputs<'a> {
     // Albedo resources at the front of the flat bindless pool.
     pub(super) albedo_count: usize,
     pub(super) shadow_enabled: bool,
+    // Spot shadow slices the world assigned; each gets a cull region.
+    pub(super) spot_slices: usize,
     pub(super) gbuffer_enabled: bool,
     pub(super) occlusion_two_pass: bool,
 }
@@ -74,6 +76,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         targets,
         albedo_count,
         shadow_enabled,
+        spot_slices,
         gbuffer_enabled,
         occlusion_two_pass,
     } = inputs;
@@ -90,7 +93,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     )?;
     let two_pass =
         two_pass::build_two_pass_cull(gpu, &bindless, &compute, plan, occlusion_two_pass)?;
-    let shadow_cull = shadow::build_shadow_cull(gpu, &compute, plan, shadow_enabled)?;
+    let shadow_cull = shadow::build_shadow_cull(gpu, &compute, plan, shadow_enabled, spot_slices)?;
     let gbuffer_pass = gbuffer::build_gbuffer_pass(gpu, &compute, plan, gbuffer_enabled)?;
     write_instance_records(world, plan, albedo_count, &bindless, &compute);
 
@@ -130,6 +133,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         cull_pso_shadow: shadow_cull.cull_pso,
         shadow_indirect_buffers: shadow_cull.indirect_buffers,
         shadow_cull_status_buffers: shadow_cull.status_buffers,
+        spot_indirect_buffers: shadow_cull.spot_indirect_buffers,
         gbuffer_bindless_root_sig: gbuffer_pass.root_sig,
         gbuffer_bindless_pso: gbuffer_pass.pso,
         gbuffer_bindless_cmd_sig: gbuffer_pass.cmd_sig,

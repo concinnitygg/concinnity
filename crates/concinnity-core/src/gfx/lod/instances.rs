@@ -22,8 +22,8 @@ pub fn any_cluster_has_lod(clusters: &[InstancedCluster]) -> bool {
 /// advance `record`.
 ///
 /// Distance is measured from `cam_pos` to the instance's model translation,
-/// matching [`InstancedCluster::lod_buckets`] so the spot caster body and the
-/// GPU-driven passes put an instance at the same level.
+/// the same camera distance every other LOD pick uses, so an instance sits at
+/// one level in every pass.
 pub fn for_each_instance_lod(
     clusters: &[InstancedCluster],
     cam_pos: [f32; 3],

@@ -8,7 +8,7 @@
 
 use concinnity_core::gfx::render_types::{ParticleParams, ShadowPassPush, TextUniforms};
 use concinnity_core::render::uniforms::directx::CullParams as DxCullParams;
-use concinnity_core::render::uniforms::metal::{CullUniforms as MetalCullParams, ModelUniforms};
+use concinnity_core::render::uniforms::metal::CullUniforms as MetalCullParams;
 use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams as VkCullParams};
 use concinnity_core::render::uniforms::{
     DecalParams, DecalView, GBufferView, GpuParticle, LineView, ParticleView, SkinParams,
@@ -32,16 +32,13 @@ pub(in crate::shader_layout) fn gbuffer_vertex() -> Vec<Case> {
 }
 
 pub(in crate::shader_layout) fn shadow() -> Vec<Case> {
-    vec![
-        on(METAL, mirror!(ModelUniforms => "ModelUniforms" { model, })),
-        on(
-            METAL,
-            mirror!(ShadowPassPush => "ShadowPassPush" {
-                cascade_idx,
-                [_pad] => ["_pad0", "_pad1", "_pad2"],
-            }),
-        ),
-    ]
+    vec![on(
+        METAL,
+        mirror!(ShadowPassPush => "ShadowPassPush" {
+            cascade_idx,
+            [_pad] => ["_pad0", "_pad1", "_pad2"],
+        }),
+    )]
 }
 
 pub(in crate::shader_layout) fn decal() -> Vec<Case> {

@@ -8,13 +8,12 @@ use concinnity_core::render::backend_init::ShadowParams;
 use concinnity_core::render::csm;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::lights;
+use concinnity_core::render::spot_shadow;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::heap_layout::{DSV_SHADOW_BASE_SLOT, DSV_SPOT_SHADOW_BASE_SLOT};
-use super::pipelines::{create_shadow_pso, create_shadow_root_signature};
 use super::{InitGpu, heaps};
-use crate::directx::builtin_shaders::{self, CompileProgram};
-use crate::directx::context::{DxDescriptors, DxTargets, align256, dump_on_err};
+use crate::directx::context::{DxDescriptors, DxTargets, align256};
 use crate::directx::draw::shadow::ShadowState;
 use crate::directx::draw::spot_shadow::SpotShadowState;
 use crate::directx::draw::upload_static_records;
@@ -36,9 +35,8 @@ pub(super) fn build_shadow(
     // always passes, so fully lit), declared as Texture2DArray so the shader's
     // binding type stays identical between disabled and enabled cases.
     // CSM is gated on `shadow_map_size` (from GraphicsConfig; 0 disables
-    // shadows). The shadow vertex shader is engine-internal
-    // (`builtin_shaders::SHADOW_VERT`). Mirrors the Metal internal-shadow
-    // path.
+    // shadows). The casters draw through the GPU-driven shadow pipeline the
+    // cull builds.
     let effective_shadow_size = shadows.map_size;
     let (shadow_resource_opt, shadow_dsvs, shadow_srv_gpu) = if effective_shadow_size > 0 {
         let (sm, dsvs) = create_shadow_map_array(
@@ -64,19 +62,6 @@ pub(super) fn build_shadow(
         (Some(fb), Vec::new(), descriptors.slot_gpu(0))
     };
 
-    // Only build the shadow PSO when shadows are enabled; the shadow pass
-    // keys off `shadow.pso.is_some()`, so passing `None` when
-    // `effective_shadow_size == 0` keeps a shadow-disabled world from
-    // rendering into nonexistent cascade DSVs.
-    let shadow_vs = builtin_shaders::SHADOW_VERT.compile(gpu.hot_reload)?;
-    let shadow_vs_for_pso = if effective_shadow_size > 0 {
-        Some(shadow_vs.as_slice())
-    } else {
-        None
-    };
-    let (root_sig, pso) =
-        build_shadow_pipeline(&hw.device, hw.info_queue.as_ref(), shadow_vs_for_pso)?;
-
     Ok(ShadowState {
         resource: shadow_resource_opt,
         dsvs: shadow_dsvs,
@@ -88,23 +73,7 @@ pub(super) fn build_shadow(
         scheduler: Default::default(),
         render_mask: 0,
         uniforms: csm::empty_shadow_uniforms(),
-        root_sig,
-        pso,
     })
-}
-
-fn build_shadow_pipeline(
-    device: &ID3D12Device,
-    info_queue: Option<&ID3D12InfoQueue>,
-    shadow_vs: Option<&[u8]>,
-) -> RenderResult<(Option<ID3D12RootSignature>, Option<ID3D12PipelineState>)> {
-    if let Some(svs) = shadow_vs {
-        let sr = dump_on_err(info_queue, create_shadow_root_signature(device))?;
-        let sp = dump_on_err(info_queue, create_shadow_pso(device, &sr, svs))?;
-        Ok((Some(sr), Some(sp)))
-    } else {
-        Ok((None, None))
-    }
 }
 
 pub(super) fn build_spot_shadow(
@@ -210,6 +179,10 @@ pub(super) fn build_spot_shadow(
         ubo: spot_shadow_ubo,
         ubo_stride: spot_shadow_ubo_stride,
         slice_size: spot_shadow_slice_size,
+        frusta: spot_shadows
+            .iter()
+            .map(spot_shadow::slice_frustum)
+            .collect(),
         scheduler: Default::default(),
         render_mask: 0,
     })

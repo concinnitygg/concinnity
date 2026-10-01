@@ -217,8 +217,8 @@ impl DxContext {
         }
 
         // Push this frame's skinning matrices into the per-frame joint buffers
-        // before the skinned shadow + main passes read them. No-op when no
-        // SkinnedMesh is declared.
+        // before the skin fold reads them. No-op when no SkinnedMesh is
+        // declared.
         self.upload_joint_matrices(frame_idx);
         // Push this frame's morph weights into the per-frame weight buffers the
         // skin fold reads. No-op when no SkinnedMesh carries morph targets.
@@ -236,19 +236,6 @@ impl DxContext {
         // per-object buffer rebuild would feed nothing.
         if !world_hidden && bindless_cull_enabled {
             self.build_object_buffer(frame_idx);
-        }
-
-        // Per-cluster LOD bucketing + instance-buffer upload. Has to
-        // happen BEFORE `execute_graph` because SSAO / SSR / TAA-velocity
-        // pre-passes (which run earlier than main in the graph) read the
-        // same per-frame upload buffer; with LOD bucketing the byte
-        // layout depends on `cam_pos`, so they need the **current**
-        // frame's data, not previous-frame leftovers. No-op when no
-        // instanced cluster declared LOD alternates (every cluster
-        // collapses to a single LOD0 bucket containing all instances,
-        // same byte order as an unbucketed upload).
-        if !world_hidden && !self.instanced.clusters.is_empty() {
-            self.build_instance_upload(cam_pos);
         }
 
         // Clustered binning runs while a local light or a baked probe is live,

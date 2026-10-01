@@ -12,9 +12,9 @@
 //! buffer per cascade and each cascade is issued with one
 //! `cmd_draw_indexed_indirect` (static + instance prefix) + one for the skinned
 //! tail. Streamed chunks and runtime clones ride the same records, so the CPU
-//! never walks a caster list here. Spot slices keep their own per-object encoder
-//! in [`spot_shadow.rs`](spot_shadow.rs): the indirect buffer is laid out per
-//! cascade and has no slots for them.
+//! never walks a caster list here. The spot slices in
+//! [`spot_shadow.rs`](spot_shadow.rs) draw through the same `draw_shadow_view`
+//! from their own indirect buffers.
 //!
 //! The shape mirrors `metal/draw/shadow.rs::encode_shadow_pass`; the
 //! graph executor in [`graph_exec.rs`](graph_exec.rs) dispatches
@@ -26,19 +26,26 @@ use concinnity_core::gfx::render_types;
 use super::super::context::VkContext;
 use crate::vulkan::owned::VkDevice;
 
+// One depth-only shadow view to draw from a cull-written indirect buffer: the
+// set 0 holding its `ShadowUniforms`, which of their `light_vps` the vertex
+// shader projects through, and the buffer its commands live in. A cascade and a
+// spot slice differ only in these.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct ShadowView {
+    pub uniforms_set: vk::DescriptorSet,
+    pub vp_index: u32,
+    pub indirect: vk::Buffer,
+}
+
 impl VkContext {
     // Encode the cascaded-shadow-map render passes for frame slot
     // `frame_idx`: one render pass per cascade slice, drawing every
     // visible static / instanced / skinned caster into the array layer
-    // for that cascade. Ends with a single barrier transitioning every
-    // cascade slice from depth-attachment to shader-read so the main
-    // pass can sample them.
+    // for that cascade.
     //
-    // A no-op when no shadow pipeline is built (geometry-less worlds
-    // or a world that opted out of CSM). The caller must compute +
-    // upload `shadow_uniforms` and `upload_joint_matrices` before this
-    // runs so the shadow vertex shader sees the current cascade VPs
-    // and the skinned caster pass sees the current joint matrices.
+    // A no-op when shadows are off (`shadow_map_size == 0`). The caller must
+    // compute + upload `shadow_uniforms` before this runs so the shadow
+    // vertex shader sees the current cascade VPs.
     pub(in crate::vulkan) fn encode_shadow_pass(
         &self,
         cmd: vk::CommandBuffer,
@@ -46,9 +53,7 @@ impl VkContext {
         cam_pos: [f32; 3],
         elapsed: f32,
     ) {
-        // The depth-only pipeline is the spot pass's; its absence still means
-        // shadows are not configured, so there is nothing to render here either.
-        if self.shadow.pipeline.is_none() {
+        if !self.shadow.enabled() {
             return;
         }
 
@@ -58,19 +63,6 @@ impl VkContext {
         self.upload_raymarch_shadow_view(frame_idx, elapsed);
         let device = self.hw.device.clone();
         let device = &device;
-
-        let sm = self.shadow.map_size;
-        let shadow_extent = vk::Extent2D {
-            width: sm,
-            height: sm,
-        };
-
-        let clear_depth = vk::ClearValue {
-            depth_stencil: vk::ClearDepthStencilValue {
-                depth: 1.0,
-                stencil: 0,
-            },
-        };
 
         // Cascades to re-render this frame; draw_frame computed the mask from the
         // update policy. A skipped cascade's render pass is omitted entirely, so
@@ -87,7 +79,7 @@ impl VkContext {
         // Nothing to cull means nothing to draw: the render passes below still
         // run, so every re-rendered cascade is cleared for the raymarched
         // casters that follow the rasterized ones.
-        let gpu_driven = self.cull.shadow_bindless_pipeline.is_some() && self.cull_count() > 0;
+        let gpu_driven = self.shadow_views_drawable();
 
         // GPU-driven cull prologue: dispatch every re-rendered cascade's cull
         // before opening any render pass (Vulkan disallows compute inside a
@@ -100,33 +92,25 @@ impl VkContext {
             if render_mask & (1u32 << cascade_idx) == 0 {
                 continue;
             }
-            let rp_begin = vk::RenderPassBeginInfo::default()
-                .render_pass(self.shadow.render_pass.handle())
-                .framebuffer(shadow_fb.handle())
-                .render_area(vk::Rect2D::default().extent(shadow_extent))
-                .clear_values(std::slice::from_ref(&clear_depth));
+            self.begin_shadow_slice(cmd, shadow_fb.handle(), self.shadow.map_size);
 
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-
-                // Negative-height viewport: Y-flips NDC so Y-up matches Metal.
-                let vp = vk::Viewport {
-                    x: 0.0,
-                    y: sm as f32,
-                    width: sm as f32,
-                    height: -(sm as f32),
-                    min_depth: 0.0,
-                    max_depth: 1.0,
-                };
-                device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-                let scissor = vk::Rect2D::default().extent(shadow_extent);
-                device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            }
-
-            if gpu_driven {
-                self.encode_shadow_cascade_indirect(device, cmd, frame_idx, cascade_idx);
+            if gpu_driven
+                && let Some(indirect) = self
+                    .cull
+                    .shadow_indirect_buffers
+                    .get(frame_idx)
+                    .and_then(|c| c.get(cascade_idx))
+            {
+                self.draw_shadow_view(
+                    device,
+                    cmd,
+                    frame_idx,
+                    ShadowView {
+                        uniforms_set: self.descriptors.shadow_global_sets[frame_idx],
+                        vp_index: cascade_idx as u32,
+                        indirect: indirect.buffer(),
+                    },
+                );
             }
 
             // Raymarched SDF shadow casters into this cascade's DSV, after the
@@ -148,16 +132,66 @@ impl VkContext {
         // the map rests sampled between frames (no inline reset).
     }
 
-    // GPU-driven cascade body (inside the cascade's render pass): the depth-only
-    // bindless pipeline issues this cascade's static + instance prefix and the
-    // skinned tail with two `cmd_draw_indexed_indirect` calls over the cascade's
-    // cull-written indirect buffer. The CPU never walks the caster lists.
-    fn encode_shadow_cascade_indirect(
+    // Whether the GPU-driven shadow path has a pipeline and records to draw.
+    pub(in crate::vulkan) fn shadow_views_drawable(&self) -> bool {
+        self.cull.shadow_bindless_pipeline.is_some() && self.cull_count() > 0
+    }
+
+    // Open the depth-only shadow render pass on one square `size` slice, which
+    // clears it, with the viewport and scissor over it.
+    pub(in crate::vulkan) fn begin_shadow_slice(
+        &self,
+        cmd: vk::CommandBuffer,
+        framebuffer: vk::Framebuffer,
+        size: u32,
+    ) {
+        let device = &self.hw.device;
+        let extent = vk::Extent2D {
+            width: size,
+            height: size,
+        };
+        let clear_depth = vk::ClearValue {
+            depth_stencil: vk::ClearDepthStencilValue {
+                depth: 1.0,
+                stencil: 0,
+            },
+        };
+        let rp_begin = vk::RenderPassBeginInfo::default()
+            .render_pass(self.shadow.render_pass.handle())
+            .framebuffer(framebuffer)
+            .render_area(vk::Rect2D::default().extent(extent))
+            .clear_values(std::slice::from_ref(&clear_depth));
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+        // these commands name is live for the call.
+        unsafe {
+            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
+            // Negative-height viewport: Y-flips NDC so Y-up matches Metal, and
+            // matches the `-ndc.y` the forward sampler applies.
+            let vp = vk::Viewport {
+                x: 0.0,
+                y: size as f32,
+                width: size as f32,
+                height: -(size as f32),
+                min_depth: 0.0,
+                max_depth: 1.0,
+            };
+            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
+            let scissor = vk::Rect2D::default().extent(extent);
+            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
+        }
+    }
+
+    // GPU-driven body of one shadow view (inside the render pass the caller
+    // opened): the depth-only bindless pipeline issues the view's static +
+    // instance prefix and the skinned tail with two `cmd_draw_indexed_indirect`
+    // calls over its cull-written indirect buffer, projected through
+    // `light_vps[view.vp_index]`. The CPU never walks the caster lists.
+    pub(in crate::vulkan) fn draw_shadow_view(
         &self,
         device: &VkDevice,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
-        cascade_idx: usize,
+        view: ShadowView,
     ) {
         let (Some(sb_pipeline), Some(sb_layout)) = (
             self.cull.shadow_bindless_pipeline.as_ref(),
@@ -165,17 +199,8 @@ impl VkContext {
         ) else {
             return;
         };
-        let Some(indirect) = self
-            .cull
-            .shadow_indirect_buffers
-            .get(frame_idx)
-            .and_then(|c| c.get(cascade_idx).map(|b| b.buffer()))
-        else {
-            return;
-        };
         let stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32;
         let prefix = self.skinned_record_base() as u32;
-        let cascade = cascade_idx as u32;
 
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
@@ -186,10 +211,7 @@ impl VkContext {
                 vk::PipelineBindPoint::GRAPHICS,
                 sb_layout.handle(),
                 0,
-                &[
-                    self.descriptors.shadow_global_sets[frame_idx],
-                    self.cull.bindless_sets[frame_idx],
-                ],
+                &[view.uniforms_set, self.cull.bindless_sets[frame_idx]],
                 &[],
             );
             device.cmd_push_constants(
@@ -197,7 +219,7 @@ impl VkContext {
                 sb_layout.handle(),
                 vk::ShaderStageFlags::VERTEX,
                 0,
-                &cascade.to_ne_bytes(),
+                &view.vp_index.to_ne_bytes(),
             );
 
             // Static + instance prefix against the static VB/IB.
@@ -209,7 +231,7 @@ impl VkContext {
                 vk::IndexType::UINT32,
             );
             if prefix > 0 {
-                device.cmd_draw_indexed_indirect(cmd, indirect, 0, prefix, stride);
+                device.cmd_draw_indexed_indirect(cmd, view.indirect, 0, prefix, stride);
                 self.inc_draw_calls(1);
             }
 
@@ -231,7 +253,7 @@ impl VkContext {
                 );
                 device.cmd_draw_indexed_indirect(
                     cmd,
-                    indirect,
+                    view.indirect,
                     (self.skinned_record_base() * stride as usize) as u64,
                     self.draw.n_skinned as u32,
                     stride,

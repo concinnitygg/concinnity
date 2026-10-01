@@ -1,7 +1,7 @@
 //! Skinned-mesh upload, per-frame joint upload, and helpers for VkContext.
-//! Builds the skinned pipelines + per-(frame, object) joint storage buffers
-//! once at init; per-frame `update_skinned_pose` + `upload_joint_matrices`
-//! keep the matrices fresh from the gameplay-side pose update.
+//! Builds the per-(frame, object) joint storage buffers once at init;
+//! per-frame `update_skinned_pose` + `upload_joint_matrices` keep the matrices
+//! fresh from the gameplay-side pose update.
 
 use ash::vk;
 use concinnity_core::gfx::mesh_payload;
@@ -12,11 +12,9 @@ use concinnity_core::render::rt_geom;
 use concinnity_core::transform::IDENTITY;
 
 use super::super::context::*;
-use super::super::pipeline::{compile_skinned_shadow_shader, create_skinned_shadow_pipeline};
-use super::{alloc_descriptor_sets, create_descriptor_set_layout};
 
 impl VkContext {
-    // Upload skinned-mesh geometry and build the skinned render pipelines.
+    // Upload skinned-mesh geometry and the per-(frame, object) joint buffers.
     pub(crate) fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
@@ -29,47 +27,6 @@ impl VkContext {
         self.wait_idle();
         let frames = self.frames_in_flight.max(1);
         let n = draw_objects.len();
-
-        let skinned_shadow_vs = compile_skinned_shadow_shader(self.hot_reload.enabled)?;
-
-        let joint_set_layout = create_descriptor_set_layout(
-            &self.hw.device,
-            &[(
-                0,
-                vk::DescriptorType::STORAGE_BUFFER,
-                vk::ShaderStageFlags::VERTEX,
-            )],
-        )?;
-
-        let (skinned_shadow_pipeline, skinned_shadow_pipeline_layout) =
-            if self.shadow.pipeline.is_some() {
-                let shadow_global = &self.shadow.global_set_layout;
-                let shadow_pc = vk::PushConstantRange::default()
-                    .stage_flags(vk::ShaderStageFlags::VERTEX)
-                    .offset(0)
-                    .size(80);
-                let shadow_set_layouts = [shadow_global.handle(), joint_set_layout.handle()];
-                let layout = self
-                    .hw
-                    .device
-                    .create_pipeline_layout(
-                        &vk::PipelineLayoutCreateInfo::default()
-                            .set_layouts(&shadow_set_layouts)
-                            .push_constant_ranges(std::slice::from_ref(&shadow_pc)),
-                    )
-                    .map_err(|e| {
-                        crate::vulkan::error::map_vk_result(e, "skinned shadow pipeline layout")
-                    })?;
-                let pipeline = create_skinned_shadow_pipeline(
-                    &self.hw.device,
-                    self.shadow.render_pass.handle(),
-                    layout.handle(),
-                    &skinned_shadow_vs,
-                )?;
-                (Some(pipeline), Some(layout))
-            } else {
-                (None, None)
-            };
 
         let vtx_bytes = bytemuck::cast_slice(vertices);
         let idx_bytes = bytemuck::cast_slice(indices);
@@ -107,26 +64,12 @@ impl VkContext {
         self.write_geometry_region(skinned_vbuf.buffer(), 0, vtx_bytes)?;
         self.write_geometry_region(skinned_ibuf.buffer(), 0, idx_bytes)?;
 
-        let pool_sizes = [vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count((n * frames) as u32)];
-        let pool = self
-            .hw
-            .device
-            .create_descriptor_pool(
-                &vk::DescriptorPoolCreateInfo::default()
-                    .max_sets((n * frames) as u32)
-                    .pool_sizes(&pool_sizes),
-            )
-            .map_err(|e| crate::vulkan::error::map_vk_result(e, "skinned descriptor pool"))?;
-
         // Per-(frame, object) joint storage buffers seeded with identity
         // matrices so any not-yet-overwritten slot reads as identity.
         let joint_buf_bytes = (MAX_JOINTS * std::mem::size_of::<[[f32; 4]; 4]>()) as u64;
         let identity_seed: Vec<[[f32; 4]; 4]> = vec![IDENTITY; MAX_JOINTS];
         let mut joint_buffers: Vec<Vec<super::super::allocator::PooledBuffer>> =
             Vec::with_capacity(frames);
-        let mut joint_sets: Vec<Vec<vk::DescriptorSet>> = Vec::with_capacity(frames);
         for _ in 0..frames {
             let mut bufs: Vec<super::super::allocator::PooledBuffer> = Vec::with_capacity(n);
             for _ in 0..n {
@@ -138,28 +81,7 @@ impl VkContext {
                 buf.write_slice(0, &identity_seed);
                 bufs.push(buf);
             }
-            let layouts: Vec<_> = (0..n).map(|_| joint_set_layout.handle()).collect();
-            let sets = alloc_descriptor_sets(&self.hw.device, pool.handle(), &layouts)?;
-            for (i, &set) in sets.iter().enumerate() {
-                let info = vk::DescriptorBufferInfo::default()
-                    .buffer(bufs[i].buffer())
-                    .offset(0)
-                    .range(vk::WHOLE_SIZE);
-                let write = vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&info));
-                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-                // every set and resource it names belongs to this device.
-                unsafe {
-                    self.hw
-                        .device
-                        .update_descriptor_sets(std::slice::from_ref(&write), &[])
-                };
-            }
             joint_buffers.push(bufs);
-            joint_sets.push(sets);
         }
 
         self.skinned.slots.joint_matrices = draw_objects
@@ -167,16 +89,11 @@ impl VkContext {
             .map(|o| vec![IDENTITY; o.joint_count.max(1)])
             .collect();
 
-        self.shadow.skinned_pipeline = skinned_shadow_pipeline;
-        self.shadow.skinned_pipeline_layout = skinned_shadow_pipeline_layout;
-        self.skinned.joint_set_layout = Some(joint_set_layout);
-        self.skinned.descriptor_pool = Some(pool);
         self.skinned.vertex_buffer = skinned_vbuf;
         self.skinned.vertex_buffer_bytes = vtx_bytes.len() as u64;
         self.skinned.index_buffer = skinned_ibuf;
         self.skinned.index_buffer_bytes = idx_bytes.len() as u64;
         self.skinned.joint_buffers = joint_buffers;
-        self.skinned.joint_sets = joint_sets;
         self.skinned.slots.draw_objects = draw_objects;
         // A whole new skinned set: nothing in the model-history ring was written
         // for these records.
@@ -471,13 +388,5 @@ impl VkContext {
             };
             dst.write_slice(0, w);
         }
-    }
-
-    // Bind the skinned vertex + index buffers for the skinned passes.
-    pub(in crate::vulkan) fn skinned_geometry(&self) -> (vk::Buffer, vk::Buffer) {
-        (
-            self.skinned.vertex_buffer.buffer(),
-            self.skinned.index_buffer.buffer(),
-        )
     }
 }

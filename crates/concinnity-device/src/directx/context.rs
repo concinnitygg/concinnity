@@ -33,7 +33,6 @@ use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::auto_exposure::AutoExposureState;
 use super::cull::CullState;
 use super::decal::*;
-use super::draw::main::InstanceBucketLayout;
 use super::draw::shadow::ShadowState;
 use super::draw::spot_shadow::SpotShadowState;
 use super::fog::*;
@@ -319,32 +318,20 @@ pub(super) struct DxGeometry {
 }
 
 // Instanced-prop clusters, grouped off the flat `DxContext`. Mirrors Vulkan's
-// `VkInstanced`. Every instance folds into the GPU-driven cull records, so the
-// only per-instance walk left is the spot shadow pass.
+// `VkInstanced`. Every instance folds into the GPU-driven cull records, so no
+// pass walks the instances on the CPU.
 pub(super) struct DxInstanced {
     pub clusters: Vec<InstancedCluster>,
     // Whether any cluster declares LOD alternates. False skips the per-frame
     // per-instance LOD patch: without alternates the base slice written into
     // every frame's draw-args buffer at init is right for the world's life.
     pub any_lod: bool,
-    // Per-cluster LOD-bucket layout for the current frame. Filled at the top of
-    // `record_frame` by `build_instance_upload`. `RwLock` (not `RefCell`)
-    // because the parallel-encoding executor fans the passes onto rayon workers
-    // that all `read()` this slice while encoding; the single writer runs on the
-    // main thread before fan-out.
-    pub bucket_layouts: std::sync::RwLock<Vec<Vec<InstanceBucketLayout>>>,
 }
 
 impl DxInstanced {
     pub(super) fn new(clusters: Vec<InstancedCluster>) -> Self {
         Self {
             any_lod: concinnity_core::gfx::lod::any_cluster_has_lod(&clusters),
-            // One outer Vec entry per cluster; populated each frame by
-            // `build_instance_upload` from `lod_buckets(cam_pos)`. The
-            // inner Vec is the bucket order (LOD0 -> LODN) for that
-            // cluster. Empty rows for clusters that never have visible
-            // instances stay empty.
-            bucket_layouts: std::sync::RwLock::new(vec![Vec::new(); clusters.len()]),
             clusters,
         }
     }

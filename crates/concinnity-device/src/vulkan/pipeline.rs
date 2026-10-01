@@ -202,19 +202,6 @@ pub(super) fn world_entry(
         .map(|c| c.into_owned())
 }
 
-// The depth-only skinned shadow vertex, the engine's own: skinned main-pass
-// draws ride the GPU-driven pass through the skin fold.
-pub(super) fn compile_skinned_shadow_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::builtin_shaders::SHADOW_VERT_SKINNED.compile(hot_reload)
-}
-
-// The shadow vertex shader is engine-internal. Whether the shadow pass runs at
-// all is gated by `effective_shadow_size` at the call site, not here.
-pub(super) fn resolve_shadow_shader(hot_reload: bool) -> RenderResult<Option<Vec<u8>>> {
-    let spv = super::builtin_shaders::SHADOW_VERT.compile(hot_reload)?;
-    Ok(Some(spv))
-}
-
 pub(super) fn compile_text_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let vert = super::builtin_shaders::TEXT_VERT.compile(hot_reload)?;
     let frag = super::builtin_shaders::TEXT_FRAG.compile(hot_reload)?;
@@ -262,37 +249,6 @@ fn main_vertex_input() -> (
             .location(4)
             .format(vk::Format::R32G32_SFLOAT)
             .offset(48),
-    ];
-    ([binding], attrs)
-}
-
-// Reduced vertex input for the depth-only skinned shadow pipeline: only the
-// position + joint indices + blend weights the skinned shadow VS consumes
-// (binding stride stays 80, the same SkinnedVertex buffer is bound).
-fn skinned_shadow_vertex_input() -> (
-    [vk::VertexInputBindingDescription; 1],
-    [vk::VertexInputAttributeDescription; 3],
-) {
-    let binding = vk::VertexInputBindingDescription::default()
-        .binding(0)
-        .stride(80)
-        .input_rate(vk::VertexInputRate::VERTEX);
-    let attrs = [
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(0)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(0),
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(5)
-            .format(vk::Format::R16G16B16A16_UINT)
-            .offset(56),
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(6)
-            .format(vk::Format::R32G32B32A32_SFLOAT)
-            .offset(64),
     ];
     ([binding], attrs)
 }
@@ -634,84 +590,6 @@ pub(super) fn create_shadow_pipeline(
     Ok(pipeline)
 }
 
-// Shadow-pass pipeline for skinned geometry: the skinned shadow vertex shader
-// (80-byte layout, depth-only).
-pub(super) fn create_skinned_shadow_pipeline(
-    device: &VkDevice,
-    render_pass: vk::RenderPass,
-    layout: vk::PipelineLayout,
-    vert_spv: &[u8],
-) -> RenderResult<OwnedPipeline> {
-    let vert_mod = spv_module(device, vert_spv)?;
-
-    let stages = [vk::PipelineShaderStageCreateInfo::default()
-        .stage(vk::ShaderStageFlags::VERTEX)
-        .module(vert_mod.handle())
-        .name(SHADER_ENTRY)];
-
-    let (bindings, attrs) = skinned_shadow_vertex_input();
-    let vert_input = vk::PipelineVertexInputStateCreateInfo::default()
-        .vertex_binding_descriptions(&bindings)
-        .vertex_attribute_descriptions(&attrs);
-
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-        .primitive_restart_enable(false);
-
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .depth_clamp_enable(false)
-        .rasterizer_discard_enable(false)
-        .polygon_mode(vk::PolygonMode::FILL)
-        .line_width(1.0)
-        // Match Metal's default + DirectX (no back-face culling) so meshes
-        // with mixed winding (particularly procedural floor / ceiling planes
-        // whose triangles have a -Y normal under the unsigned plane order)
-        // render from both sides. Vulkan's pipeline-default was BACK, which
-        // hid the showcase floor while leaving every solid mesh visible.
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .depth_bias_enable(true)
-        .depth_bias_constant_factor(shadow_bias::RASTER_CONSTANT)
-        .depth_bias_slope_factor(shadow_bias::RASTER_SLOPE)
-        .depth_bias_clamp(device.depth_bias_clamp());
-
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        .sample_shading_enable(false)
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-
-    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(true)
-        .depth_write_enable(true)
-        .depth_compare_op(vk::CompareOp::LESS)
-        .depth_bounds_test_enable(false)
-        .stencil_test_enable(false);
-
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-    let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vert_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth_stencil)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass)
-        .subpass(0);
-
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
-        .map_err(|e| super::error::map_vk_result(e, "create skinned shadow pipeline"))?;
-
-    Ok(pipeline)
-}
-
 pub(super) fn create_text_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,
@@ -871,8 +749,7 @@ pub(super) fn create_composite_pipeline(
 mod tests {
     use super::{
         CompileProgram, compile_bindless_shaders, compile_cull_shader, compile_cull_shader_phase2,
-        compile_shadow_bindless_vs, compile_shadow_cull_shader, compile_skinned_shadow_shader,
-        is_spirv, spirv_words, world_entry,
+        compile_shadow_bindless_vs, compile_shadow_cull_shader, is_spirv, spirv_words, world_entry,
     };
 
     // Whole words become native-endian u32s, matching the raw reinterpretation
@@ -970,7 +847,5 @@ mod tests {
         assert!(is_spirv(&vs) && is_spirv(&fs), "the world's pair compiles");
         let (_, engine_fs) = compile_bindless_shaders(false).unwrap();
         assert_ne!(fs, engine_fs, "the world's fragment is its own program");
-        // The depth-only skinned shadow vertex stays the engine's.
-        assert!(is_spirv(&compile_skinned_shadow_shader(false).unwrap()));
     }
 }
