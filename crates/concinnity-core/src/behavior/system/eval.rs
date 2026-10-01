@@ -8,7 +8,8 @@
 use alloc::vec::Vec;
 
 use super::BehaviorSystem;
-use super::instance::Instance;
+use super::instance::{self, Instance};
+use super::neighbors::Neighbors;
 use crate::behavior::{Effect, Program, Spatial, Val, View, exec, position, spatial};
 use crate::components::Transform;
 use crate::ecs::{ComponentStorage, Entity, EntityById, PipelineContext};
@@ -66,6 +67,8 @@ pub(super) struct EvalCtx<'a> {
     // Resolved once per tick rather than per name lookup.
     pub(super) names: Option<&'a EntityById>,
     pub(super) snapshot: &'a Snapshot,
+    // What answers the spatial questions asked of `snapshot.queries`.
+    pub(super) neighbors: &'a Neighbors,
     pub(super) programs: &'a [Program],
     pub(super) instances: &'a [Vec<Instance>],
     pub(super) vars: &'a [Val],
@@ -90,10 +93,10 @@ pub(super) fn eval_one(
     out: &mut Vec<Effect>,
 ) -> Option<(usize, Vec<u32>)> {
     let (i, entity) = (job.program, job.entity);
-    let locals = ec.instances[i]
-        .iter()
-        .find(|inst| inst.entity == entity)
-        .map(|inst| inst.locals.as_slice())?;
+    let instances = &ec.instances[i];
+    let locals = instances[instance::find(instances, entity)?]
+        .locals
+        .as_slice();
     // A deferred block resumes on the frame its `after` node captured; a whole
     // body starts on a cleared one. Either way the frame is the body's compiled
     // width, so every slot a resumed block reads is in range.
@@ -129,7 +132,7 @@ pub(super) fn eval_one(
         // The behavior's own entity is never an answer: a ray cast from
         // `position(self)` starts inside self's own collider, and an entity is
         // never its own nearest.
-        spatial: &|question| answer(ec.components, question, entity),
+        spatial: &|question| answer(ec, i, question, entity),
         self_entity: entity,
         trace: &mut traced,
     };
@@ -140,25 +143,33 @@ pub(super) fn eval_one(
 // Resolve one spatial question against the world, excluding the running
 // instance's own entity.
 fn answer(
-    components: &ComponentStorage,
+    ec: &EvalCtx<'_>,
+    program: usize,
     question: &Spatial<'_>,
     self_entity: Option<Entity>,
 ) -> Option<Val> {
+    let components = ec.components;
     match *question {
-        Spatial::Nearest { candidates, point } => {
-            spatial::nearest(components, candidates, point, self_entity).map(Val::Entity)
+        Spatial::Nearest {
+            query,
+            candidates,
+            point,
+        } => match ec.neighbors.get(program, query) {
+            Some(index) => index.nearest(components, candidates, point, self_entity),
+            None => spatial::nearest_linear(components, candidates, point, self_entity),
         }
+        .map(Val::Entity),
         Spatial::CountWithin {
+            query,
             candidates,
             point,
             radius,
-        } => Some(Val::Int(spatial::count_within(
-            components,
-            candidates,
-            point,
-            radius,
-            self_entity,
-        ))),
+        } => Some(Val::Int(match ec.neighbors.get(program, query) {
+            Some(index) => index.count_within(components, candidates, point, radius, self_entity),
+            None => {
+                spatial::count_within_linear(components, candidates, point, radius, self_entity)
+            }
+        })),
         Spatial::Raycast {
             candidates,
             from,

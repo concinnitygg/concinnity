@@ -39,7 +39,7 @@ libm = "0.2"
 postcard = { workspace = true, features = ["alloc"] }
 serde = { workspace = true, features = ["alloc", "derive"] }
 serde_bytes = { version = "0.11", default-features = false, features = ["alloc"] }
-spin = { version = "0.12.3", default-features = false, features = ["once"] }
+spin = { version = "0.12.3", default-features = false, features = ["once", "spin_mutex"] }
 thiserror = { workspace = true }
 
 [dev-dependencies]

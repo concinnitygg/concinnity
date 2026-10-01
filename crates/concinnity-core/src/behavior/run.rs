@@ -59,6 +59,8 @@ pub struct View<'a> {
 pub enum Spatial<'a> {
     /// The candidate nearest `point`.
     Nearest {
+        /// The declared query's slot.
+        query: u16,
         /// The query's entities, in the tick's stable order.
         candidates: &'a [Entity],
         /// The point searched around.
@@ -66,6 +68,8 @@ pub enum Spatial<'a> {
     },
     /// How many candidates lie within `radius` of `point`.
     CountWithin {
+        /// The declared query's slot.
+        query: u16,
         /// The query's entities, in the tick's stable order.
         candidates: &'a [Entity],
         /// The point searched around.
@@ -202,13 +206,18 @@ fn eval(expr: &CExpr, view: &View<'_>) -> Option<Val> {
         CExpr::Nearest { query, of } => {
             let candidates = view.queries.get(*query as usize)?;
             let point = point(of, view)?;
-            (view.spatial)(&Spatial::Nearest { candidates, point })
+            (view.spatial)(&Spatial::Nearest {
+                query: *query,
+                candidates,
+                point,
+            })
         }
         CExpr::CountWithin { query, of, radius } => {
             let candidates = view.queries.get(*query as usize)?;
             let point = point(of, view)?;
             let radius = eval(radius, view)?.as_f32()?;
             (view.spatial)(&Spatial::CountWithin {
+                query: *query,
                 candidates,
                 point,
                 radius,
@@ -585,13 +594,14 @@ mod tests {
                 alive: &|e| self.entities.contains(&e),
                 spatial: &|question| {
                     self.asked.borrow_mut().push(match *question {
-                        Spatial::Nearest { candidates, point } => {
-                            SpatialAsk::Nearest(candidates.to_vec(), point)
-                        }
+                        Spatial::Nearest {
+                            candidates, point, ..
+                        } => SpatialAsk::Nearest(candidates.to_vec(), point),
                         Spatial::CountWithin {
                             candidates,
                             point,
                             radius,
+                            ..
                         } => SpatialAsk::CountWithin(candidates.to_vec(), point, radius),
                         Spatial::Raycast {
                             candidates,

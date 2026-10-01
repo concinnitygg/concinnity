@@ -4,7 +4,7 @@
 // sees exactly what the one before it left.
 
 use super::eval::Resume;
-use super::instance::Instance;
+use super::instance::{self, Instance};
 use super::{BehaviorSystem, Deferred};
 use crate::behavior::{Effect, Val};
 use crate::components::{
@@ -119,9 +119,8 @@ impl BehaviorSystem {
     }
 
     fn instance_mut(&mut self, i: usize, entity: Option<Entity>) -> Option<&mut Instance> {
-        self.instances[i]
-            .iter_mut()
-            .find(|inst| inst.entity == entity)
+        let at = instance::find(&self.instances[i], entity)?;
+        self.instances[i].get_mut(at)
     }
 }
 

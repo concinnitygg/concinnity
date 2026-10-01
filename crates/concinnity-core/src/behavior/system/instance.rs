@@ -22,6 +22,15 @@ pub(super) struct Instance {
     pub(super) last_value: Val,
 }
 
+// Where `entity`'s instance sits in one program's list. The tick's resync keeps
+// every list sorted by entity, so this is a search rather than a scan.
+pub(super) fn find(instances: &[Instance], entity: Option<Entity>) -> Option<usize> {
+    let key = entity.map(Entity::to_bits);
+    instances
+        .binary_search_by_key(&key, |inst| inst.entity.map(Entity::to_bits))
+        .ok()
+}
+
 impl Instance {
     pub(super) fn new(entity: Option<Entity>, locals: Vec<Val>, spawned_pending: bool) -> Self {
         Self {

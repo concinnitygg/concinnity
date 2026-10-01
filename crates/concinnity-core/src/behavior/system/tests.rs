@@ -494,6 +494,115 @@ fn count_within_counts_a_querys_entities_around_the_running_one() {
     assert_eq!(var(&sys, "near"), 2);
 }
 
+// A swarm large enough to be answered from a neighbor index lands exactly what
+// the linear scans answer, on the serial path and across workers alike. The
+// props sit on a coarse integer lattice with repeats, so exact ties and
+// coincident candidates are common, and each prop moves onto its nearest, so a
+// different tie-break would show in where it lands.
+#[test]
+fn a_swarm_answers_its_neighbor_questions_as_the_scans_do() {
+    use crate::behavior::position;
+    use crate::behavior::spatial::{count_within_linear, nearest_linear};
+
+    const PROPS: usize = 150;
+    const RADIUS: f32 = 1.5;
+
+    // What the scans answer from the world as it stands: the crowd summed over
+    // every prop, and where each prop's nearest sits, in prop order.
+    fn scanned(world: &mut World, props: &[Entity]) -> (i32, Vec<[f32; 3]>) {
+        let components = world.context().components;
+        let at = |entity| position::of(components, entity).expect("every prop is placed");
+        let crowd = props
+            .iter()
+            .map(|&e| count_within_linear(components, props, at(e), RADIUS, Some(e)))
+            .sum();
+        let nearest = props
+            .iter()
+            .map(|&e| at(nearest_linear(components, props, at(e), Some(e)).expect("not alone")))
+            .collect();
+        (crowd, nearest)
+    }
+
+    fn run(parallel: bool) {
+        let rule = Behavior {
+            on: BehaviorSource::Tick,
+            scope: vec!["Prop".into()],
+            queries: vec![BehaviorQuery {
+                name: "props".into(),
+                has: vec!["Prop".into()],
+            }],
+            body: vec![
+                BehaviorNode::Set {
+                    var: "crowd".into(),
+                    value: BehaviorExpr::CountWithin {
+                        query: "props".into(),
+                        of: Box::new(BehaviorExpr::SelfEntity),
+                        radius: Box::new(BehaviorExpr::Float(RADIUS)),
+                    },
+                    add: true,
+                },
+                BehaviorNode::SetTransform {
+                    entity: BehaviorExpr::SelfEntity,
+                    position: Some(BehaviorExpr::Position(Box::new(BehaviorExpr::Nearest {
+                        query: "props".into(),
+                        of: Box::new(BehaviorExpr::SelfEntity),
+                    }))),
+                    rotation_deg: None,
+                    scale: None,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut world = world_with(vec![rule]);
+        if parallel {
+            world.insert_resource(ScheduleMode::Parallel);
+        }
+        let mut seed = 12_345u64;
+        let mut lattice = || {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((seed >> 33) % 6) as f32
+        };
+        let mut props: Vec<Entity> = (0..PROPS)
+            .map(|_| {
+                let position = [lattice(), lattice(), lattice()];
+                spawn_prop(&mut world, position)
+            })
+            .collect();
+        props.sort_unstable_by_key(|e| e.to_bits());
+
+        let mut sys = BehaviorSystem::new();
+        if parallel {
+            sys = sys.with_scheduler(Box::new(ThreadedEval));
+        }
+        sys.init(&mut world.context());
+        // Twice, so the second tick answers from a tree rebuilt over the
+        // positions the first one moved.
+        let mut crowd = 0;
+        for round in 0..2 {
+            let (counted, nearest) = scanned(&mut world, &props);
+            crowd += counted;
+            tick(&mut sys, &mut world, 0.016);
+            assert_eq!(
+                var(&sys, "crowd"),
+                crowd,
+                "round {round}, parallel: {parallel}"
+            );
+            let components = world.context().components;
+            let landed: Vec<[f32; 3]> = props
+                .iter()
+                .map(|&e| position::of(components, e).expect("every prop is placed"))
+                .collect();
+            assert_eq!(landed, nearest, "round {round}, parallel: {parallel}");
+        }
+        assert!(crowd > 0, "the lattice leaves some prop with company");
+    }
+
+    run(false);
+    run(true);
+}
+
 // A ray is tested against the entities the named query selects, using their
 // colliders, and never meets the entity casting it.
 #[test]

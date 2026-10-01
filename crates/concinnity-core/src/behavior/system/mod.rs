@@ -6,6 +6,7 @@
 //! instance.rs  one behavior's firing state and its clocks
 //! resolve.rs   compiling the source columns, at start and after an edit
 //! eval.rs      the read phase: the tick's view, its buffers, its schedule
+//! neighbors.rs the neighbor indexes, one per distinct declared query
 //! apply.rs     the write phase: effects landing on the world
 //! state.rs     persisted variables and `once` flags, behind a host's store
 //! trace.rs     the execution trace an observer requests
@@ -22,6 +23,7 @@
 mod apply;
 mod eval;
 mod instance;
+mod neighbors;
 mod resolve;
 mod state;
 mod trace;
@@ -38,6 +40,7 @@ use alloc::vec::Vec;
 
 use eval::{EvalCtx, Job, PARALLEL_EVAL_MIN_JOBS, Resume, Snapshot, eval_one};
 use instance::Instance;
+use neighbors::Neighbors;
 use resolve::{Resolved, SourceTicks};
 
 pub use eval::{EvalBucket, EvalScheduler};
@@ -113,6 +116,8 @@ pub struct BehaviorSystem {
     // for their capacity across ticks like the buffers above.
     snapshot: Snapshot,
     tag_scratch: Vec<Entity>,
+    // One index per distinct declared query, rebuilt on demand each tick.
+    neighbors: Neighbors,
 }
 
 /// A run waiting on a clock: a whole body a `delay` postponed, or the block an
@@ -244,6 +249,7 @@ impl BehaviorSystem {
         self.instances = carried.instances;
         self.programs = resolved.programs;
         self.var_table = resolved.var_table;
+        self.neighbors.assign(&self.programs);
         // The node-path table an observer resolves trace events through is a
         // compile product of the programs just replaced.
         self.trace_paths_published = false;
@@ -451,11 +457,13 @@ impl BehaviorSystem {
         produced.clear();
         let mut buckets = core::mem::take(&mut self.eval_buckets);
         let mut serial_bindings = core::mem::take(&mut self.bindings);
+        self.neighbors.reset();
         {
             let ec = EvalCtx {
                 components: ctx.components,
                 names: ctx.resource::<EntityById>(),
                 snapshot: &snapshot,
+                neighbors: &self.neighbors,
                 programs: &self.programs,
                 instances: &self.instances,
                 vars: &self.vars,

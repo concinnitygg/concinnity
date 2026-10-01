@@ -3,9 +3,9 @@
 //!
 //! Three declared rules run against every token once per simulated tick, and
 //! each one searches the world for what is near it. The search is over every
-//! placement in the corridor, so the work is the token count times the world's,
-//! and it lands entirely on the CPU. While the camera is elsewhere the rules
-//! read the clock and stop.
+//! placement in the corridor, so the work is the token count times each token's
+//! neighborhood, and it lands entirely on the CPU. While the camera is elsewhere
+//! the rules read the clock and stop.
 
 use concinnity::components::{
     Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery,

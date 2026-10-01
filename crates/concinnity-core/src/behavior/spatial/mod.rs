@@ -9,6 +9,14 @@
 //
 // Nothing here reads the physics world itself, so a behavior sees no terrain
 // and no heightfield: an entity with no collider cannot be hit.
+//
+// The linear scans here define the answers. `index` reaches the same ones
+// without visiting every candidate, and falls back to these where it cannot.
+
+mod index;
+mod tree;
+
+pub(crate) use index::NeighborIndex;
 
 use crate::behavior::position;
 use crate::ecs::{ComponentStorage, Entity};
@@ -25,7 +33,7 @@ fn distance_sq(a: [f32; 3], b: [f32; 3]) -> f32 {
 /// nowhere it is. Ties go to the earlier entity, and the candidate order is the
 /// query's own stable order, so the answer does not depend on despawns
 /// elsewhere.
-pub(crate) fn nearest(
+pub(crate) fn nearest_linear(
     components: &ComponentStorage,
     candidates: &[Entity],
     point: [f32; 3],
@@ -49,7 +57,7 @@ pub(crate) fn nearest(
 
 /// How many candidates lie within `radius` of `point`, skipping `exclude`. A
 /// negative radius counts nothing.
-pub(crate) fn count_within(
+pub(crate) fn count_within_linear(
     components: &ComponentStorage,
     candidates: &[Entity],
     point: [f32; 3],
@@ -87,7 +95,7 @@ pub(crate) fn raycast(
 
 #[cfg(test)]
 mod tests {
-    use super::{count_within, nearest};
+    use super::{count_within_linear, nearest_linear};
     use crate::components::Transform;
     use crate::ecs::{ComponentStorage, Entity};
 
@@ -109,7 +117,7 @@ mod tests {
         let near = at(&mut components, 1.0);
         let far = at(&mut components, 9.0);
         assert_eq!(
-            nearest(&components, &[far, near], [0.0; 3], None),
+            nearest_linear(&components, &[far, near], [0.0; 3], None),
             Some(near),
             "candidate order does not decide the answer",
         );
@@ -123,7 +131,7 @@ mod tests {
         let me = at(&mut components, 0.0);
         let other = at(&mut components, 5.0);
         assert_eq!(
-            nearest(&components, &[me, other], [0.0; 3], Some(me)),
+            nearest_linear(&components, &[me, other], [0.0; 3], Some(me)),
             Some(other)
         );
     }
@@ -136,7 +144,7 @@ mod tests {
         let bare = components.spawn();
         let placed = at(&mut components, 5.0);
         assert_eq!(
-            nearest(&components, &[bare, placed], [0.0; 3], None),
+            nearest_linear(&components, &[bare, placed], [0.0; 3], None),
             Some(placed)
         );
     }
@@ -160,11 +168,11 @@ mod tests {
         let placed = at(&mut components, 5.0);
 
         assert_eq!(
-            nearest(&components, &[placed, camera], [0.0; 3], None),
+            nearest_linear(&components, &[placed, camera], [0.0; 3], None),
             Some(camera),
         );
         assert_eq!(
-            count_within(&components, &[placed, camera], [0.0; 3], 3.0, None),
+            count_within_linear(&components, &[placed, camera], [0.0; 3], 3.0, None),
             1,
         );
     }
@@ -172,7 +180,7 @@ mod tests {
     #[test]
     fn nearest_of_nothing_is_none() {
         let components = ComponentStorage::default();
-        assert_eq!(nearest(&components, &[], [0.0; 3], None), None);
+        assert_eq!(nearest_linear(&components, &[], [0.0; 3], None), None);
     }
 
     // The radius is inclusive at its edge, and the excluded entity is not
@@ -186,9 +194,18 @@ mod tests {
         let outside = at(&mut components, 6.0);
 
         let all = [me, inside, edge, outside];
-        assert_eq!(count_within(&components, &all, [0.0; 3], 5.0, None), 3);
-        assert_eq!(count_within(&components, &all, [0.0; 3], 5.0, Some(me)), 2);
-        assert_eq!(count_within(&components, &all, [0.0; 3], 0.0, Some(me)), 0);
+        assert_eq!(
+            count_within_linear(&components, &all, [0.0; 3], 5.0, None),
+            3
+        );
+        assert_eq!(
+            count_within_linear(&components, &all, [0.0; 3], 5.0, Some(me)),
+            2
+        );
+        assert_eq!(
+            count_within_linear(&components, &all, [0.0; 3], 0.0, Some(me)),
+            0
+        );
     }
 
     // A radius that is not a real length counts nothing rather than everything.
@@ -197,11 +214,11 @@ mod tests {
         let mut components = ComponentStorage::default();
         let entity = at(&mut components, 1.0);
         assert_eq!(
-            count_within(&components, &[entity], [0.0; 3], -1.0, None),
+            count_within_linear(&components, &[entity], [0.0; 3], -1.0, None),
             0
         );
         assert_eq!(
-            count_within(&components, &[entity], [0.0; 3], f32::NAN, None),
+            count_within_linear(&components, &[entity], [0.0; 3], f32::NAN, None),
             0
         );
     }
