@@ -267,7 +267,7 @@ impl DxContext {
 
         // Skinned tail over the deformed VB + skinned IB. No depth clear -- it
         // appends to the static depth via the LESS test.
-        if self.draw.n_skinned > 0
+        if self.state.draw.n_skinned > 0
             && let Some(deformed_vbv) = self.skinned.deformed_vbvs.get(frame_idx)
         {
             // SAFETY: the command list is in the recording state, and every resource,
@@ -277,7 +277,7 @@ impl DxContext {
                 cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
                 cmd.ExecuteIndirect(
                     cmd_sig,
-                    self.draw.n_skinned as u32,
+                    self.state.draw.n_skinned as u32,
                     view.indirect,
                     byte_off(view.first_command + prefix),
                     None::<&ID3D12Resource>,

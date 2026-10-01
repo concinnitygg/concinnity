@@ -25,7 +25,7 @@
 use concinnity_core::gfx::render_types::{ClusterParams, PostProcessParams};
 use concinnity_core::render::backend_init::{BackendInit, PostSettings};
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::model_history::ModelHistory;
+use concinnity_core::render::scene_state::{DrawList, SceneState};
 use concinnity_core::transform::IDENTITY;
 
 use self::effects::EffectSettings;
@@ -278,14 +278,19 @@ impl MtlContext {
         )?;
         let instanced = cull::build_instanced(world.instanced_clusters, scene.textures.len());
         let rings = commands::build_rings(&gpu, world.material_params);
+        // Every instance is one more cull record after the static objects.
+        let n_instances = instanced.clusters.iter().map(|c| c.instances.len()).sum();
 
         let ctx = Self {
             last_present_texture: None,
             cull,
             arg_buffers,
-            draw: DrawState::new(world.draw_objects, &instanced),
+            state: SceneState::new(
+                DrawList::unreserved(world.draw_objects, n_instances),
+                clear_color,
+            ),
+            graph_cache: None,
             instanced,
-            view: ViewState::new(clear_color),
             scene,
             light_uniforms,
             shadow,
@@ -314,9 +319,7 @@ impl MtlContext {
             hot_reload: HotReloadState::new(hot_reload),
             world_shader: world_shaders[0].programs.cloned(),
             capture,
-            model_history: ModelHistory::new(),
             skinned: SkinnedState::new(),
-            geometry_alloc: GeometryAllocators::default(),
             diagnostics,
             frame_pacing: FrameInFlight::new(frames_in_flight),
             frames_in_flight: frames_in_flight.max(1),

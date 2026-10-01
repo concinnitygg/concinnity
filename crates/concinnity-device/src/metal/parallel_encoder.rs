@@ -58,5 +58,11 @@ pub(super) type ParallelCtxRef<'a> = parallel_ctx::ParallelCtxRef<'a, MtlContext
 // (`diagnostics.frame_stats.draw_calls`, `particle.last_elapsed`, `particle.frame_index`,
 // the per-emitter `spawn_state`) all happen on the main thread before the
 // fan-out, and Apple's Metal device, queue, buffers, textures, and pipeline
-// states are thread-safe for shared read.
+// states are thread-safe for shared read. Two pieces of state are not
+// thread-safe and are never touched from a worker: `state.model_history` is a
+// `RefCell` reached only through `get_mut` from `&mut self` before the fan-out,
+// so a worker must never `borrow`/`borrow_mut` it; and the device allocator's
+// `Rc<RefCell<Inner>>`, which creating, cloning or dropping a pooled resource
+// mutates, so a pass that changes a pooled resource's lifetime must stay off
+// the fan-out.
 unsafe impl parallel_ctx::ParallelEncodeCtx for MtlContext {}

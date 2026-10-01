@@ -46,7 +46,7 @@ impl MtlContext {
         };
 
         let repacked = geometry_repack::repack_static_geometry(
-            &self.draw.objects,
+            &self.state.draw.objects,
             old_v_slice,
             old_i_slice,
             changes,
@@ -81,7 +81,11 @@ impl MtlContext {
             )
             .map_err(|e| e.context("rebuild_static_geometry: index buffer"))?;
 
-        for (layout, obj) in repacked.layouts.into_iter().zip(&mut self.draw.objects) {
+        for (layout, obj) in repacked
+            .layouts
+            .into_iter()
+            .zip(&mut self.state.draw.objects)
+        {
             layout.apply_to(obj);
         }
 

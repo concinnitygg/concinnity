@@ -98,9 +98,9 @@ impl MtlContext {
         // into `diagnostics.frame_stats`, and `render_stats()` reports them (plus the GPU
         // frame time) to the profiler overlay.
         let counts = crate::object_counts::object_counts(
-            self.draw.objects.len(),
+            self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
-            self.skinned.slots.draw_objects.iter().map(|o| o.visible),
+            self.state.skinned.draw_objects.iter().map(|o| o.visible),
         );
         self.diagnostics.frame_stats = profile::RenderStats {
             objects: counts.objects,
@@ -257,7 +257,7 @@ impl MtlContext {
         };
         if self.shadow.enabled {
             let fresh = csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
-                view: self.view.matrix,
+                view: self.state.view.matrix,
                 cam_pos,
                 fov_y_rad: fov_y_radians,
                 aspect: cascade_aspect,
@@ -307,7 +307,7 @@ impl MtlContext {
         // `execute_graph`) can project AABBs through it against the pyramid the
         // mid-frame `HizBuild` rebuilds from this frame's depth. The same value
         // becomes `cull_prev_view_proj` at end-of-frame for next frame's phase 1.
-        self.cull.cur_view_proj = mat4_mul(proj, self.view.matrix);
+        self.cull.cur_view_proj = mat4_mul(proj, self.state.view.matrix);
         // When TAA or the MetalFX upscaler is on, offset the projection by
         // a sub-pixel Halton jitter so the temporal accumulator has fresh
         // sample positions each frame. The jitter is a pure NDC x/y shift,
@@ -333,7 +333,7 @@ impl MtlContext {
         } else {
             proj
         };
-        let vp = mat4_mul(proj_render, self.view.matrix);
+        let vp = mat4_mul(proj_render, self.state.view.matrix);
         // Inverse of the (jittered) view-projection, computed once here and
         // threaded through `GraphFrameParams` to every pass that reconstructs a
         // world-space position from depth (fog, decals, raymarch, transparent),
@@ -561,7 +561,7 @@ impl MtlContext {
         // GPU by the pre-pass's own history dispatch. TAA-specific bookkeeping
         // (history-target ping-pong) only runs when TAA itself is on.
         if velocity_active {
-            self.prev_view_proj = mat4_mul(proj, self.view.matrix);
+            self.prev_view_proj = mat4_mul(proj, self.state.view.matrix);
             self.taa.frame = self.taa.frame.wrapping_add(1);
             if let Some(taa) = self.taa.pass.as_mut() {
                 taa.advance();
@@ -759,7 +759,7 @@ impl MtlContext {
         // (draw.n_skinned > 0, set in upload_skinned under bindless + static geometry);
         // the Cull pass writes it via encode_main_skin and the Main / Main2
         // skinned ICB tail binds it.
-        let deformed_this_frame = if self.draw.n_skinned > 0 {
+        let deformed_this_frame = if self.state.draw.n_skinned > 0 {
             self.skinned.deformed.get(ring_slot).cloned()
         } else {
             None
@@ -767,7 +767,7 @@ impl MtlContext {
         // The previous frame's deformed slot (one behind in the ring), read by
         // the GPU-driven G-buffer skinned tail for per-vertex skin motion. The
         // priming gate (`deformed_primed`) covers the unposed first frame.
-        let deformed_prev_frame = if self.draw.n_skinned > 0 {
+        let deformed_prev_frame = if self.state.draw.n_skinned > 0 {
             let prev_slot = (ring_slot + self.frames_in_flight - 1) % self.frames_in_flight;
             self.skinned.deformed.get(prev_slot).cloned()
         } else {
@@ -785,7 +785,7 @@ impl MtlContext {
             && self.gbuffer.bindless_pipeline.is_some()
         {
             let bytes = self.cull_count() * std::mem::size_of::<[[f32; 4]; 4]>();
-            let prime = self.model_history.take_prime();
+            let prime = self.state.model_history.get_mut().take_prime();
             let read_slot = (ring_slot + self.frames_in_flight - 1) % self.frames_in_flight;
             let mut targets = Vec::new();
             if prime {

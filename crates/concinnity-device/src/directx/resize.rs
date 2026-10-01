@@ -197,7 +197,7 @@ impl DxContext {
             render_h,
             self.targets.hdr.msaa_samples,
             self.targets.hdr.color_rtv,
-            self.view.clear_color,
+            self.state.view.clear_color,
         )?;
         if self.targets.hdr.msaa_samples > 1 {
             let resolve = create_hdr_resolve_target(&self.hw.device, render_w, render_h)?;

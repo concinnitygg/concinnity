@@ -89,7 +89,7 @@ impl VkContext {
         };
         // The view-to-world rotation is the transpose of the view matrix's
         // orthonormal 3x3, embedded in a 4x4.
-        let v = self.view.matrix;
+        let v = self.state.view.matrix;
         let inv_view_rot = [
             [v[0][0], v[1][0], v[2][0], 0.0],
             [v[0][1], v[1][1], v[2][1], 0.0],
@@ -102,7 +102,7 @@ impl VkContext {
             inv_view_rot,
             cam_pos,
             self.scene.prefilter_mip_count as f32,
-            self.view.sky_rot,
+            self.state.view.sky_rot,
         );
         let device = self.post_device(frame_idx);
         let scene =

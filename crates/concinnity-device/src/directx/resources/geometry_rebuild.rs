@@ -108,7 +108,7 @@ impl DxContext {
         let old_indices: Vec<u32> = read_typed_vec(&i_readback, old_i_count)?;
 
         let repacked = geometry_repack::repack_static_geometry(
-            &self.draw.objects,
+            &self.state.draw.objects,
             &old_vertices,
             &old_indices,
             changes,
@@ -174,7 +174,11 @@ impl DxContext {
         // line the old `vertex_buffer` / `index_buffer` resources are
         // unreachable; the next-frame fence wait has already happened, so
         // the COM refcount drop is safe.
-        for (layout, obj) in repacked.layouts.into_iter().zip(&mut self.draw.objects) {
+        for (layout, obj) in repacked
+            .layouts
+            .into_iter()
+            .zip(&mut self.state.draw.objects)
+        {
             layout.apply_to(obj);
         }
         self.scene.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
@@ -301,13 +305,13 @@ impl DxContext {
         let mut new_vertices: Vec<SkinnedVertex> = Vec::new();
         let mut new_indices: Vec<u32> = Vec::new();
         let mut layouts: Vec<backend::SkinnedSlotLayout> =
-            Vec::with_capacity(self.skinned.slots.draw_objects.len());
+            Vec::with_capacity(self.state.skinned.draw_objects.len());
         // Captured per-slot new layout (applied to `skinned_draw_objects`
         // after the read-only walk to avoid aliasing `self`).
         let mut new_per_slot: Vec<(SkinnedIndex, u32, usize, usize, usize)> =
-            Vec::with_capacity(self.skinned.slots.draw_objects.len());
+            Vec::with_capacity(self.state.skinned.draw_objects.len());
 
-        for (i, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
+        for (i, obj) in self.state.skinned.draw_objects.iter().enumerate() {
             let skinned_index = SkinnedIndex::from_usize(i);
             let new_v_base = new_vertices.len() as u32;
             let new_i_off = new_indices.len();
@@ -454,7 +458,7 @@ impl DxContext {
         // Commit: rewrite per-slot layouts, repoint the live views at the
         // new buffers, and drop the old buffer COM references.
         for (skinned_index, v_base, v_count, i_off, i_count) in new_per_slot {
-            let obj = &mut self.skinned.slots.draw_objects[skinned_index.index()];
+            let obj = &mut self.state.skinned.draw_objects[skinned_index.index()];
             obj.vertex_base = v_base;
             obj.vertex_count = v_count;
             obj.index_offset = i_off;

@@ -92,9 +92,9 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
         // fade at buffer(0).
         let composite = render_types::CompositeParams {
             post: self.ctx.post_process,
-            fade: self.ctx.view.scene_fade,
+            fade: self.ctx.state.view.scene_fade,
             view_mode: self.channel_view,
-            far: self.ctx.view.far,
+            far: self.ctx.state.view.far,
         };
         enc.set_fragment_value(&composite, 0);
         // Fullscreen triangle: 3 vertices, no vertex buffer (the shared
@@ -269,8 +269,8 @@ impl MtlContext {
             framebuffer,
             // A G-buffer channel view swaps the fragment onto its visualization
             // branch; Lit / Unlit / Wireframe all take the normal scene path.
-            channel_view: if self.view.mode.is_gbuffer_channel() {
-                self.view.mode as u32
+            channel_view: if self.state.view.mode.is_gbuffer_channel() {
+                self.state.view.mode as u32
             } else {
                 0
             },

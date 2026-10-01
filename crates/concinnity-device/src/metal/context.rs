@@ -3,20 +3,19 @@
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::{
-    ClusterParams, DrawIndex, DrawObject, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES,
-    ShadowUniforms,
+    ClusterParams, DrawIndex, InstancedCluster, LightUniforms, NUM_SHADOW_CASCADES, ShadowUniforms,
 };
 use concinnity_core::profile;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::decal;
-use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::particles;
 use concinnity_core::render::probe_book::ProbeBook;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::scene_flow;
+use concinnity_core::render::scene_state::SceneState;
 use concinnity_core::render::shadow_schedule;
 use concinnity_core::render::spot_shadow;
 use objc2::rc::Retained;
@@ -67,44 +66,6 @@ pub(super) const BINDLESS_TEXTURE_ARG_BUFFER_INDEX: usize = 7;
 // buffer.
 pub(super) const BINDLESS_SAMPLER_ARG_BUFFER_INDEX: usize = 10;
 
-// The scene draw list and the record counts that extend the GPU-driven cull
-// past the static objects.
-pub(super) struct DrawState {
-    // One entry per renderable object.
-    pub objects: Vec<DrawObject>,
-    // The frame graph last compiled, keyed by the `FrameGraphInputs` it was
-    // built from. `build_frame_graph` is a pure function of those inputs (which
-    // change only when a feature toggles or a target resizes), so a frame whose
-    // inputs match the cached key reuses it instead of rebuilding. Taken out
-    // during `execute_graph` (which needs `&mut self`) and put back after, so a
-    // steady scene compiles once.
-    pub graph_cache: Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>,
-    // Total instances across every cluster. Each instance is folded into the
-    // GPU-driven cull buffers as an extra `GpuObjectData` record after the
-    // static objects, so the cull dispatch + indirect draw cover
-    // `cull_count() == objects.len() + draw.n_instances`.
-    pub n_instances: usize,
-    // Skinned draw objects folded into the GPU-driven cull, set by
-    // `upload_skinned`. Each is one extra `GpuObjectData` record after the
-    // static + instance records, so `cull_count()` extends to
-    // `objects.len() + draw.n_instances + draw.n_skinned` and the skinned tail
-    // draws the compute-deformed geometry through the skinned index buffer.
-    pub n_skinned: usize,
-}
-
-impl DrawState {
-    // The draw list with room for the instance records the cull folds in after
-    // it. The skinned count stays 0 until a SkinnedMesh uploads.
-    pub(super) fn new(objects: Vec<DrawObject>, instanced: &InstancedState) -> Self {
-        Self {
-            objects,
-            graph_cache: None,
-            n_instances: instanced.clusters.iter().map(|c| c.instances.len()).sum(),
-            n_skinned: 0,
-        }
-    }
-}
-
 // InstancedProp clusters and the per-instance records they draw through.
 pub(super) struct InstancedState {
     // One entry per cluster. Each issues one drawIndexedInstanced call with all
@@ -123,40 +84,6 @@ pub(super) struct InstancedState {
     // per-instance LOD pass entirely: without alternates the base slice above
     // is the right answer for every instance, for the life of the world.
     pub any_lod: bool,
-}
-
-// The frame's view state, snapped from `FrameParams` at the top of `draw_frame`.
-pub(super) struct ViewState {
-    pub clear_color: [f32; 4],
-    // Scene-transition fade to black in [0, 1], applied in the composite pass.
-    // Backend-owned rather than a `PostProcessParams` field so a settings push
-    // cannot reset an in-flight fade, and kept out of `view.clear_color` so it fades
-    // the whole image, not just the pixels no geometry covers.
-    pub scene_fade: f32,
-    // The viewport view mode: the main passes read it for the wireframe fill
-    // mode and the unlit shade flag, the composite for its channel
-    // visualization.
-    pub mode: concinnity_core::gfx::view_modes::ViewMode,
-    // The frame's camera far plane, for the composite's depth-channel
-    // normalization.
-    pub far: f32,
-    pub matrix: [[f32; 4]; 4],
-    // Rows of the sky's inverse rotation, uploaded into every uniform block
-    // whose pass samples the environment cubemaps.
-    pub sky_rot: [[f32; 4]; 3],
-}
-
-impl ViewState {
-    pub(super) fn new(clear_color: [f32; 4]) -> Self {
-        Self {
-            clear_color,
-            scene_fade: 0.0,
-            mode: Default::default(),
-            far: 1.0,
-            matrix: concinnity_core::transform::IDENTITY,
-            sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
-        }
-    }
 }
 
 // Scene-captured reflection probes: each surface's specular reflection samples
@@ -392,22 +319,6 @@ impl HotReloadState {
                 .then(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
         }
     }
-}
-
-// Byte-range sub-allocators over the shared `vertex_buffer` / `index_buffer`.
-// The mesh pair covers the streamed-mesh regions, seeded at init by evicting
-// every streamed mesh; from then on `upload_mesh` / `evict_mesh` allocate and
-// free byte ranges so a streamed mesh can be placed wherever there is free
-// space. The chunk pair covers the headroom region appended by
-// `setup_chunk_streaming`, disjoint from both the build-time geometry and the
-// mesh allocators so a streamed `VoxelWorld` chunk never collides with static
-// geometry; empty until `setup_chunk_streaming` runs.
-#[derive(Default)]
-pub(super) struct GeometryAllocators {
-    pub mesh_vtx: crate::suballoc::range_alloc::RangeAllocator,
-    pub mesh_idx: crate::suballoc::range_alloc::RangeAllocator,
-    pub chunk_vtx: crate::suballoc::range_alloc::RangeAllocator,
-    pub chunk_idx: crate::suballoc::range_alloc::RangeAllocator,
 }
 
 // The window this context draws into.
@@ -681,12 +592,18 @@ pub(crate) struct MtlContext {
     pub(super) cull: CullState,
     // Argument encoders and their re-encode gates. See [`MtlArgumentBuffers`].
     pub(super) arg_buffers: MtlArgumentBuffers,
-    // Draw list + cull inputs + folded record counts. See [`DrawState`].
-    pub(super) draw: DrawState,
+    // The CPU-side scene: draw list, view, skinned slots, model history and
+    // streamed-geometry placement. See [`SceneState`].
+    pub(super) state: SceneState,
+    // The frame graph last compiled, keyed by the `FrameGraphInputs` it was
+    // built from. `build_frame_graph` is a pure function of those inputs (which
+    // change only when a feature toggles or a target resizes), so a frame whose
+    // inputs match the cached key reuses it instead of rebuilding. Taken out
+    // during `execute_graph` (which needs `&mut self`) and put back after, so a
+    // steady scene compiles once.
+    pub(super) graph_cache: Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>,
     // InstancedProp clusters. See [`InstancedState`].
     pub(super) instanced: InstancedState,
-    // Per-frame view state. See [`ViewState`].
-    pub(super) view: ViewState,
     // Scene assets. See [`MtlSceneAssets`].
     pub(super) scene: MtlSceneAssets,
     // All scene lights packed and pushed to the fragment shader at buffer(4).
@@ -786,15 +703,10 @@ pub(crate) struct MtlContext {
     // blit it back (the view is blit-readable under the same flag). On under
     // the dev loop and `cn run --screenshot`; false in plain production.
     pub(super) capture: bool,
-    // Per-record validity of the GPU-filled model-history ring. A record whose
-    // occupant changed carries `NO_HISTORY` in its draw args, which sends the
-    // G-buffer pre-pass to its current model instead of a stranger's.
-    pub(super) model_history: concinnity_core::render::model_history::ModelHistory,
-    // Skinned-mesh rendering feature state: the main + shadow pipelines, the
-    // shared skinned vertex / index buffers, the per-mesh draw objects, and
-    // the current + previous joint-palette matrices. See [`SkinnedState`].
+    // Skinned-mesh rendering feature state: the shared skinned vertex / index
+    // buffers, the pre-skin pipeline and its deformed buffers, and the morph
+    // bindings. See [`SkinnedState`].
     pub(super) skinned: SkinnedState,
-    pub(super) geometry_alloc: GeometryAllocators,
     pub(super) diagnostics: Diagnostics,
     // Frames-in-flight pacing. `draw_frame` acquires a slot before encoding
     // and the frame command buffer's completion handler releases it once the
@@ -924,7 +836,7 @@ impl MtlContext {
     // shared ICB capacity, and the indirect-draw `NSRange`. Equals
     // `draw.objects.len()` for static-only worlds, so those paths are untouched.
     pub(super) fn cull_count(&self) -> usize {
-        self.draw.objects.len() + self.draw.n_instances + self.draw.n_skinned
+        self.state.draw.objects.len() + self.state.draw.n_instances + self.state.draw.n_skinned
     }
 
     // Index in the unified cull list where the folded skinned records begin
@@ -933,7 +845,7 @@ impl MtlContext {
     // and the main pass binds the deformed vertex buffer for that range. Equals
     // `cull_count()` when no skinned mesh is folded.
     pub(super) fn skinned_record_base(&self) -> usize {
-        self.draw.objects.len() + self.draw.n_instances
+        self.state.draw.objects.len() + self.state.draw.n_instances
     }
 
     // The buffer to bind at the cull kernel's skinned-index slot (buffer 6):
@@ -1284,130 +1196,6 @@ impl MtlContext {
         stats
     }
 
-    // Push a new view matrix; takes effect on the next draw_frame call.
-    pub(crate) fn update_view(&mut self, matrix: [[f32; 4]; 4]) {
-        self.view.matrix = matrix;
-    }
-
-    // Update the model matrices of the given draw objects, one
-    // `(slot, matrix)` entry per changed object. Out-of-range slots have no
-    // effect.
-    pub(crate) fn update_models(&mut self, updates: &[(DrawIndex, [[f32; 4]; 4])]) {
-        for &(index, model) in updates {
-            if let Some(obj) = self.draw.objects.get_mut(index.index()) {
-                obj.model = model;
-            }
-        }
-    }
-
-    // Show or hide a single draw object. Hidden objects are skipped in both
-    // the shadow and main passes. Has no effect if the index is out of range.
-    pub(crate) fn update_visibility(&mut self, index: DrawIndex, visible: bool) {
-        if let Some(obj) = self.draw.objects.get_mut(index.index()) {
-            obj.visible = visible;
-        }
-    }
-
-    // Retire a draw object for a despawned entity: clear `visible` (drops it
-    // from the main / shadow / velocity passes) and `resident` (drops it from
-    // the ray-tracing BLAS / geometry-table rebuild), so it leaves no ghost in
-    // any pass. The geometry buffers stay allocated; the engine's draw-slot
-    // allocator recycles the index. Has no effect if the index is out of range.
-    pub(crate) fn retire_draw_object(&mut self, index: DrawIndex) {
-        if let Some(obj) = self.draw.objects.get_mut(index.index()) {
-            obj.visible = false;
-            obj.resident = false;
-        }
-    }
-
-    // Write a draw object at the destination slot the engine's allocator
-    // chose: overwrite a reused slot in place, or append a new one (the
-    // engine's allocator mirrors this vec's length, so an Append index always
-    // equals it).
-    pub(super) fn place_draw_object(
-        &mut self,
-        obj: DrawObject,
-        dst: draw_slot::SlotAlloc,
-    ) -> DrawIndex {
-        let slot = draw_slot::place_draw_object(&mut self.draw.objects, obj, dst);
-        self.model_history.reoccupy_draw(slot);
-        slot
-    }
-
-    // Set the scene-transition fade for the next draw_frame call. Applied in
-    // the composite pass, so a FadeBlack fades the whole image.
-    pub(crate) fn set_fade(&mut self, fade: f32) {
-        self.view.scene_fade = fade.clamp(0.0, 1.0);
-    }
-
-    // Instantiate a runtime copy of an existing draw object at a new transform:
-    // re-use the source slot's geometry region (vertex/index offsets,
-    // base_vertex, LOD alternates) and copy its texture slots, material, and
-    // cull distance, swapping only the model matrix. Driven by runtime entity
-    // spawn (`SpawnRequest`); the destination slot comes from the engine's
-    // allocator. The copy is marked non-cullable (sentinel AABB), so the GPU
-    // cull admits it every frame like a streamed chunk.
-    pub(crate) fn clone_static_draw_object(
-        &mut self,
-        src_draw_idx: DrawIndex,
-        model: [[f32; 4]; 4],
-        dst: draw_slot::SlotAlloc,
-    ) -> error::RenderResult<()> {
-        let src = self.draw.objects.get(src_draw_idx.index()).ok_or_else(|| {
-            error::RenderError::Other(format!(
-                "clone_static_draw_object: src draw {} out of range",
-                src_draw_idx
-            ))
-        })?;
-        let obj = DrawObject {
-            vertex_offset: src.vertex_offset,
-            vertex_count: src.vertex_count,
-            index_offset: src.index_offset,
-            index_count: src.index_count,
-            base_vertex: src.base_vertex,
-            geometry_generation: src.geometry_generation,
-            model,
-            texture_slot: src.texture_slot,
-            normal_map_slot: src.normal_map_slot,
-            material: src.material,
-            shader_bucket: src.shader_bucket,
-            visible: true,
-            resident: true,
-            bb_min: [f32::NAN; 3],
-            bb_max: [f32::NAN; 3],
-            cull_distance: src.cull_distance,
-            lod_alternates: src.lod_alternates.clone(),
-        };
-        self.place_draw_object(obj, dst);
-        // The cloned prop joins the RT-relevant draw set; the next RT update
-        // folds it into the BVH (it reuses the source mesh's geometry slice, so
-        // only this clone's BLAS is built).
-        self.rt.topology_dirty = true;
-        Ok(())
-    }
-
-    // Rewrite a draw slot's material parameters + texture/normal-map pool
-    // indices in place. Driven by the editor's live draw seam when a Prop edits
-    // its `material` arg. Has no effect if the index is out of range.
-    pub(crate) fn set_draw_material(
-        &mut self,
-        draw_idx: DrawIndex,
-        material: render_types::MaterialUniforms,
-        texture_slot: usize,
-        normal_map_slot: usize,
-    ) {
-        if let Some(obj) = self.draw.objects.get_mut(draw_idx.index()) {
-            obj.material = material;
-            obj.texture_slot = texture_slot;
-            obj.normal_map_slot = normal_map_slot;
-            // A material edit can flip RT participation (`see_through`) and always
-            // changes the geometry-table entry; flag a topology refresh so the
-            // next RT update rebuilds the table (BLAS are reused -- geometry is
-            // unchanged -- so this is cheap).
-            self.rt.topology_dirty = true;
-        }
-    }
-
     // Replace one row of the material parameter table; every ring slot is
     // rewritten as the frames come round to it.
     pub(crate) fn set_material_params(
@@ -1416,15 +1204,6 @@ impl MtlContext {
         params: [f32; render_types::MATERIAL_PARAM_COUNT],
     ) {
         self.rings.material_params.set(row, params);
-    }
-
-    // Rewrite a draw slot's `cull_distance` in place. Driven by the editor's
-    // live draw seam when a Prop edits its `cull_distance` arg. Has no effect
-    // if the index is out of range.
-    pub(crate) fn set_draw_cull_distance(&mut self, draw_idx: DrawIndex, cull_distance: f32) {
-        if let Some(obj) = self.draw.objects.get_mut(draw_idx.index()) {
-            obj.cull_distance = cull_distance.max(0.0);
-        }
     }
 
     // Append a projected-decal record at runtime, returning a stable slot
@@ -1545,11 +1324,11 @@ impl MtlContext {
 
 impl scene_flow::SceneControl for MtlContext {
     fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
-        self.update_visibility(draw_idx, visible);
+        self.state.update_visibility(draw_idx, visible);
     }
 
     fn set_fade(&mut self, fade: f32) {
-        self.set_fade(fade);
+        self.state.set_fade(fade);
     }
 }
 

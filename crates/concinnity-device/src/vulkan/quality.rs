@@ -332,7 +332,7 @@ impl VkContext {
             self.hw.graphics_queue,
             crate::vulkan::raytrace::RtSceneGeometry {
                 shared: crate::vulkan::raytrace::SharedGeometry::of(&self.geometry),
-                draw_objects: &self.draw.objects,
+                draw_objects: &self.state.draw.objects,
                 clusters: &self.instanced.clusters,
                 albedo_count: self.scene.textures.len(),
                 exclude_seethrough: self.seethrough_meshes_enabled(),

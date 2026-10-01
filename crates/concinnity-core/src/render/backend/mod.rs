@@ -16,9 +16,13 @@
 //! defaults to a no-op; a caller that must know whether one lands gates on
 //! [`DeviceCapabilities`] first.
 //!
-//! Implementations are thin forwarders to the inherent methods on `MtlContext`
-//! / `DxContext` / `VkContext`; concinnity-device generates the 1:1 ones from
-//! a shared `forward!` macro, one invocation per family.
+//! Operations that only edit the CPU-side scene are defaulted over
+//! [`SceneHost`], which the families that edit the scene require: the backend
+//! lends its [`SceneState`](crate::render::scene_state::SceneState) and a
+//! geometry writer, and the bookkeeping is written once. Operations that touch the
+//! graphics API are thin forwarders to the inherent methods on `MtlContext` /
+//! `DxContext` / `VkContext`; concinnity-device generates the 1:1 ones from a
+//! shared `forward!` macro, one invocation per family.
 
 // Decals and particle emitters, added and removed while the world runs.
 mod effects;
@@ -32,6 +36,8 @@ mod pipeline_builder;
 // What the backend reports about itself: capabilities, GPU class, counters,
 // and the CPU-side readbacks.
 mod probe;
+// The scene a backend lends to the defaults that only edit it.
+mod scene_host;
 // The skinned draw path, from one upload to each frame's joint palette.
 mod skinned;
 // Slot residency: the mesh, texture and chunk uploads a streaming world
@@ -54,6 +60,7 @@ pub use probe::{
     BackendProbe, DeviceCapabilities, GpuClassInput, GpuProfile, GpuTier, GpuVendor,
     apple_family_from_device_name, classify_tier,
 };
+pub use scene_host::{GeometryEdit, SceneHost};
 pub use skinned::SkinnedDraws;
 pub use streaming::{ChunkMesh, DrawStreaming};
 pub use tuning::{QualitySettings, RenderTuning};
@@ -105,11 +112,13 @@ pub struct FrameParams<'a> {
 /// The per-frame drive: what every graphics backend must implement for a world
 /// to reach the screen.
 ///
-/// Nothing here is defaulted, so a backend missing one of these fails to
-/// compile rather than silently drawing nothing. The optional operation
-/// families are the supertraits, each grouped by domain in its own module.
+/// The window, input and frame are required, so a backend missing one fails
+/// to compile rather than silently drawing nothing. The scene pushes are
+/// defaulted over [`SceneHost`]. The optional operation families are the
+/// supertraits, each grouped by domain in its own module.
 pub trait RenderBackend:
     SceneControl
+    + SceneHost
     + BackendProbe
     + DrawStreaming
     + LiveEdit
@@ -131,14 +140,22 @@ pub trait RenderBackend:
     /// Per-frame drive. See [`FrameParams`] for the inputs.
     fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()>;
     /// Push the camera's view matrix, column-major.
-    fn update_view(&mut self, matrix: [[f32; 4]; 4]);
+    fn update_view(&mut self, matrix: [[f32; 4]; 4]) {
+        if let Some(scene) = self.scene_mut() {
+            scene.update_view(matrix);
+        }
+    }
 
     /// Push this frame's changed model matrices, one `(draw slot, matrix)`
     /// entry per moved draw object, applied in order. Batched so the trait is
     /// crossed once per frame rather than once per entity; the caller sends
     /// only slots whose matrix actually changed. An out-of-range slot is
     /// ignored.
-    fn update_models(&mut self, updates: &[(DrawIndex, [[f32; 4]; 4])]);
+    fn update_models(&mut self, updates: &[(DrawIndex, [[f32; 4]; 4])]) {
+        if let Some(scene) = self.scene_mut() {
+            scene.update_models(updates);
+        }
+    }
 
     /// Retire a draw object: hide it from every pass (main, shadow, velocity)
     /// and exclude it from the ray-tracing acceleration structure, so a
@@ -146,7 +163,11 @@ pub trait RenderBackend:
     /// untouched; the engine's draw-slot allocator returns the index to its
     /// free list so a later `clone_static_draw_object` can recycle it. A no-op
     /// if the index is out of range.
-    fn retire_draw_object(&mut self, draw_idx: DrawIndex);
+    fn retire_draw_object(&mut self, draw_idx: DrawIndex) {
+        if let Some(scene) = self.scene_mut() {
+            scene.retire_draw_object(draw_idx);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -215,7 +236,12 @@ mod tests {
     fn default_mutators_are_noops_and_fallible_hooks_report_defaults() {
         let mut backend = NullBackend;
 
-        // Runtime skinned-spawn fallbacks: nothing to reveal or hide.
+        // Without a scene the frame and skinned pushes have nowhere to land.
+        backend.update_view(IDENTITY);
+        backend.update_models(&[(DrawIndex(0), IDENTITY)]);
+        backend.retire_draw_object(DrawIndex(0));
+        backend.update_skinned_pose(SkinnedIndex(0), &[IDENTITY]);
+        backend.update_morph_weights(SkinnedIndex(0), &[1.0]);
         backend.reveal_skinned_instance(SkinnedIndex(0), IDENTITY);
         backend.retire_skinned_draw_object(SkinnedIndex(0));
         backend.update_skinned_models(&[(SkinnedIndex(0), IDENTITY)]);
@@ -328,6 +354,34 @@ mod tests {
                     IDENTITY,
                     crate::render::draw_slot::SlotAlloc::Append(DrawIndex(0)),
                 )),
+            ),
+            (
+                "upload_mesh",
+                op(backend.upload_mesh(DrawIndex(0), &[], &[], 0)),
+            ),
+            ("evict_mesh", op(backend.evict_mesh(DrawIndex(0), 0))),
+            (
+                "add_chunk_mesh",
+                op(backend.add_chunk_mesh(
+                    ChunkMesh {
+                        verts: &[],
+                        idxs: &[],
+                        model: IDENTITY,
+                        texture_slot: 0,
+                        normal_map_slot: 0,
+                        material: MaterialUniforms::DEFAULT,
+                        frame: 0,
+                    },
+                    crate::render::draw_slot::SlotAlloc::Append(DrawIndex(0)),
+                )),
+            ),
+            (
+                "remove_chunk_mesh",
+                op(backend.remove_chunk_mesh(DrawIndex(0), 0)),
+            ),
+            (
+                "set_chunk_model",
+                op(backend.set_chunk_model(DrawIndex(0), IDENTITY)),
             ),
             ("add_decal", op(backend.add_decal(stub_decal()))),
             ("remove_decal", op(backend.remove_decal(0))),

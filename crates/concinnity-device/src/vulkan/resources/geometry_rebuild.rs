@@ -8,10 +8,10 @@
 //! HOST_VISIBLE staging, the new contents are spliced CPU-side, fresh
 //! DEVICE_LOCAL buffers are allocated at the post-rebuild size, and the
 //! rebuilt data is uploaded via the existing `write_geometry_region` helper.
-//! Streamed-mesh sub-allocators (`mesh_vtx_alloc`, `mesh_idx_alloc`) are
-//! **not** preserved: the rebuilt buffer is sized exactly for the current
-//! draws, so any subsequent `upload_mesh` will fail allocation. `cn debug`-
-//! only by design; matches DirectX + Metal.
+//! The scene's streamed-mesh placement allocators are **not** preserved: the
+//! rebuilt buffer is sized exactly for the current draws, so any subsequent
+//! `upload_mesh` will fail allocation. `cn debug`-only by design; matches
+//! DirectX + Metal.
 
 use ash::vk;
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
@@ -20,6 +20,7 @@ use concinnity_core::render::backend::{
 };
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::geometry_repack;
+use concinnity_core::render::range_alloc::RangeAllocator;
 use concinnity_core::render::rt_geom;
 use std::collections::HashMap;
 
@@ -49,7 +50,7 @@ impl VkContext {
             readback_typed(self, self.geometry.index_buffer.buffer(), old_i_bytes)?;
 
         let repacked = geometry_repack::repack_static_geometry(
-            &self.draw.objects,
+            &self.state.draw.objects,
             &old_vertices,
             &old_indices,
             changes,
@@ -90,9 +91,13 @@ impl VkContext {
         self.geometry.vertex_buffer_bytes = new_v_bytes;
         self.geometry.index_buffer = new_ibuf;
         self.geometry.index_buffer_bytes = new_i_bytes;
-        self.geometry.mesh_vtx_alloc = crate::suballoc::range_alloc::RangeAllocator::new();
-        self.geometry.mesh_idx_alloc = crate::suballoc::range_alloc::RangeAllocator::new();
-        for (layout, obj) in repacked.layouts.into_iter().zip(&mut self.draw.objects) {
+        self.state.placement.mesh_vtx = RangeAllocator::new();
+        self.state.placement.mesh_idx = RangeAllocator::new();
+        for (layout, obj) in repacked
+            .layouts
+            .into_iter()
+            .zip(&mut self.state.draw.objects)
+        {
             layout.apply_to(obj);
         }
 
@@ -154,13 +159,13 @@ impl VkContext {
         let mut new_vertices: Vec<SkinnedVertex> = Vec::new();
         let mut new_indices: Vec<u32> = Vec::new();
         let mut layouts: Vec<SkinnedSlotLayout> =
-            Vec::with_capacity(self.skinned.slots.draw_objects.len());
+            Vec::with_capacity(self.state.skinned.draw_objects.len());
         // Captured per-slot new layout (applied to `skinned_draw_objects`
         // after the read-only walk to avoid aliasing `self`).
         let mut new_per_slot: Vec<(SkinnedIndex, u32, usize, usize, usize)> =
-            Vec::with_capacity(self.skinned.slots.draw_objects.len());
+            Vec::with_capacity(self.state.skinned.draw_objects.len());
 
-        for (i, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
+        for (i, obj) in self.state.skinned.draw_objects.iter().enumerate() {
             let skinned_index = SkinnedIndex::from_usize(i);
             let new_v_base = new_vertices.len() as u32;
             let new_i_off = new_indices.len();
@@ -293,7 +298,7 @@ impl VkContext {
         self.skinned.index_buffer = new_ibuf;
         self.skinned.index_buffer_bytes = new_i_bytes;
         for (skinned_index, v_base, v_count, i_off, i_count) in new_per_slot {
-            let obj = &mut self.skinned.slots.draw_objects[skinned_index.index()];
+            let obj = &mut self.state.skinned.draw_objects[skinned_index.index()];
             obj.vertex_base = v_base;
             obj.vertex_count = v_count;
             obj.index_offset = i_off;

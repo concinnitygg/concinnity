@@ -13,7 +13,8 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::transparent;
-use concinnity_core::render::uniforms::{GlassMeshParams, GlassParams, TransparentView};
+use concinnity_core::render::transparent::SeeThroughMesh;
+use concinnity_core::render::uniforms::{GlassParams, TransparentView};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -30,13 +31,6 @@ use super::error::allocation_failed;
 use super::init::pipelines::make_depth_state;
 use super::texture::upload_texture;
 use super::transparent::{TransparentDraw, bytes_of};
-
-// Refraction offset + Fresnel falloff for a transparent glass MESH. A `Material`
-// carries no glass-specific tunables (unlike a `GlassPanel`), so these match the
-// GlassPanel defaults: a gentle screen-space refraction and a fresnel power of 1
-// (subtle reflection head-on, full mirror at grazing).
-const GLASS_MESH_REFRACTION: f32 = 0.02;
-const GLASS_MESH_FRESNEL_POWER: f32 = 1.0;
 
 // Per-panel GPU state: the static world-space quad VB + IB plus the per-panel
 // uniform block. The quad is pre-transformed at build time, so there is no
@@ -538,7 +532,8 @@ impl MtlContext {
     pub(in crate::metal) fn mesh_glass_visible(&self) -> bool {
         self.mesh_glass_active()
             && self.glass.seethrough_mesh_indices.iter().any(|&i| {
-                self.draw
+                self.state
+                    .draw
                     .objects
                     .get(i)
                     .is_some_and(|o| o.visible && o.resident)
@@ -574,49 +569,31 @@ impl MtlContext {
         };
         let reflection_pipeline = self.glass_reflection_pipeline(traced);
         let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
-        let cam = view.camera_pos;
+        let cam = [view.camera_pos[0], view.camera_pos[1], view.camera_pos[2]];
         for &idx in &self.glass.seethrough_mesh_indices {
-            let Some(obj) = self.draw.objects.get(idx) else {
+            let Some(obj) = self.state.draw.objects.get(idx) else {
                 continue;
             };
             if !obj.visible || !obj.resident {
                 continue;
             }
-            let center = [
-                0.5 * (obj.bb_min[0] + obj.bb_max[0]),
-                0.5 * (obj.bb_min[1] + obj.bb_max[1]),
-                0.5 * (obj.bb_min[2] + obj.bb_max[2]),
-            ];
-            let d = ((center[0] - cam[0]).powi(2)
-                + (center[1] - cam[1]).powi(2)
-                + (center[2] - cam[2]).powi(2))
-            .sqrt();
-            let (index_offset, index_count) = obj.active_lod(d);
-            let t = obj.material.tint;
-            let params = GlassMeshParams {
-                model: obj.model,
-                tint: [t[0], t[1], t[2], 0.0],
-                opacity: obj.material.opacity,
-                refraction_strength: GLASS_MESH_REFRACTION,
-                fresnel_power: GLASS_MESH_FRESNEL_POWER,
-                prefilter_mip_count,
-            };
+            let mesh = SeeThroughMesh::new(obj, cam, prefilter_mip_count);
             out.push(TransparentDraw {
                 pipeline: traced.shade.clone(),
                 reflection_pipeline: reflection_pipeline.clone(),
                 vertex_buffer: self.scene.vertex_buffer.retained(),
                 index_buffer: self.scene.index_buffer.retained(),
-                index_count: index_count as u32,
+                index_count: mesh.index_count as u32,
                 index_type: objc2_metal::MTLIndexType::UInt32,
-                index_offset_bytes: index_offset * std::mem::size_of::<u32>(),
-                base_vertex: obj.base_vertex,
-                params: bytes_of(&params),
+                index_offset_bytes: mesh.index_offset * std::mem::size_of::<u32>(),
+                base_vertex: mesh.base_vertex,
+                params: bytes_of(&mesh.params),
                 fragment_textures: vec![
                     (0, self.targets.hdr.transparent_scene_copy.clone()),
                     (1, self.targets.hdr.depth_resolve.clone()),
                 ],
                 fragment_samplers: vec![(0, self.composite.sampler.clone())],
-                sort_distance: d,
+                sort_distance: mesh.distance,
             });
         }
     }

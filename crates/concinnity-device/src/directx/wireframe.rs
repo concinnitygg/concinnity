@@ -32,7 +32,7 @@ impl DxContext {
     // yet. Called from `draw_frame` before the frame is
     // recorded, so the `&self` pass encoders can just read them.
     pub(super) fn ensure_wireframe_pipelines(&mut self) {
-        if self.view.mode != concinnity_core::gfx::view_modes::ViewMode::Wireframe
+        if self.state.view.mode != concinnity_core::gfx::view_modes::ViewMode::Wireframe
             || self.wireframe.built
         {
             return;
@@ -83,7 +83,12 @@ impl DxContext {
         twin: Option<&'a ID3D12PipelineState>,
     ) -> &'a ID3D12PipelineState {
         match twin {
-            Some(w) if self.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe => w,
+            Some(w)
+                if self.state.view.mode
+                    == concinnity_core::gfx::view_modes::ViewMode::Wireframe =>
+            {
+                w
+            }
             _ => solid,
         }
     }

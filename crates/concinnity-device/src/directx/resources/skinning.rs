@@ -1,14 +1,14 @@
 //! Skinned-mesh resources for DxContext: the skinned geometry upload (built
 //! lazily by `upload_skinned` the first time a SkinnedMesh is uploaded), and
 //! the per-frame joint / morph-weight uploads.
-//! The per-slot CPU records these uploads read live in `gfx::skinned_slots`.
+//! The per-slot CPU records these uploads read live in the scene's
+//! `SkinnedSlots`.
 
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::gfx::render_types::*;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::rt_geom;
-use concinnity_core::render::skinned_slots;
 use concinnity_core::transform::IDENTITY;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -29,12 +29,9 @@ pub(in crate::directx) struct SkinnedState {
     pub index_buffer: Option<PooledBuffer>,
     pub vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
     pub index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
-    // Per-slot draw objects, joint palettes, and morph weights: the CPU-side
-    // records this backend shares with Metal and Vulkan.
-    pub slots: skinned_slots::SkinnedSlots,
     // Per-frame, per-object joint-matrix upload buffers, indexed
     // [frame_idx][skinned_idx]. Each holds MAX_JOINTS float4x4 matrices,
-    // persistently mapped; rewritten each frame from `slots.joint_matrices`.
+    // persistently mapped; rewritten each frame from the scene's joint matrices.
     pub joint_buffers: Vec<Vec<PooledBuffer>>,
     pub joint_ptrs: Vec<Vec<*mut u8>>,
     // GPU-driven main-pass skinning. `skin_pipeline` is the `rt_skin` compute
@@ -50,13 +47,13 @@ pub(in crate::directx) struct SkinnedState {
     pub skin_pipeline: Option<crate::directx::raytrace::SkinPipeline>,
     pub deformed_buffers: Vec<ID3D12Resource>,
     pub deformed_vbvs: Vec<D3D12_VERTEX_BUFFER_VIEW>,
-    // Morph targets, parallel to `slots.draw_objects`. `morph_delta_buffers[i]`
+    // Morph targets, parallel to the scene's skinned slots. `morph_delta_buffers[i]`
     // is the per-mesh packed sparse morph buffer
     // (`PayloadMorphs::packed_words`; instance copies share the
     // template's resource) or `None` for a mesh without morph targets;
     // `morph_target_counts[i]` is its target count (0 = none). The per-frame
     // `morph_weight_buffers` ([frame_idx][skinned_idx], one f32 per target,
-    // persistently mapped) are filled from `slots.morph_weights` by
+    // persistently mapped) are filled from the scene's morph weights by
     // `upload_morph_weights`, and are empty when no skinned object carries
     // morphs.
     pub morph_delta_buffers: Vec<Option<PooledBuffer>>,
@@ -83,7 +80,6 @@ impl SkinnedState {
             index_buffer: None,
             vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW::default(),
             index_buffer_view: D3D12_INDEX_BUFFER_VIEW::default(),
-            slots: skinned_slots::SkinnedSlots::new(),
             joint_buffers: Vec::new(),
             joint_ptrs: Vec::new(),
             skin_pipeline: None,
@@ -202,7 +198,7 @@ impl DxContext {
 
         // Seed each object's joint matrices to identity (bind pose) so the mesh
         // renders undeformed until the first `update_skinned_pose`.
-        self.skinned.slots.joint_matrices = draw_objects
+        self.state.skinned.joint_matrices = draw_objects
             .iter()
             .map(|o| vec![IDENTITY; o.joint_count.max(1)])
             .collect();
@@ -211,17 +207,20 @@ impl DxContext {
         self.skinned.index_buffer = Some(skinned_index_buffer);
         self.skinned.joint_buffers = joint_buffers;
         self.skinned.joint_ptrs = joint_ptrs;
-        self.skinned.slots.draw_objects = draw_objects;
+        self.state.skinned.draw_objects = draw_objects;
         // A whole new skinned set: nothing in the model-history ring was written
         // for these records.
-        self.model_history.borrow_mut().reset(self.cull_count());
+        self.state
+            .model_history
+            .borrow_mut()
+            .reset(self.cull_count());
 
         // Morph targets are attached by a later `upload_skinned_morphs`; until
         // then every object is morphless (a re-upload / hot-reload resets here).
-        let n_objects = self.skinned.slots.draw_objects.len();
+        let n_objects = self.state.skinned.draw_objects.len();
         self.skinned.morph_delta_buffers = (0..n_objects).map(|_| None).collect();
         self.skinned.morph_target_counts = vec![0; n_objects];
-        self.skinned.slots.morph_weights = vec![Vec::new(); n_objects];
+        self.state.skinned.morph_weights = vec![Vec::new(); n_objects];
         self.skinned.morph_weight_buffers = Vec::new();
         self.skinned.morph_weight_ptrs = Vec::new();
 
@@ -231,7 +230,7 @@ impl DxContext {
         // `encode_skin` poses the bind-pose verts into this frame's buffer and
         // the main pass's 2nd ExecuteIndirect draws the skinned records the cull
         // buffers reserved at init via the threaded `n_skinned` capacity.
-        // Setting `self.draw.n_skinned` here engages the fold. Every skinned draw
+        // Setting `self.state.draw.n_skinned` here engages the fold. Every skinned draw
         // rides the GPU-driven pass, so a build failure is a startup error, as
         // on Metal.
         {
@@ -284,7 +283,7 @@ impl DxContext {
             self.skinned
                 .deformed_primed
                 .store(false, std::sync::atomic::Ordering::Relaxed);
-            self.draw.n_skinned = self.skinned.slots.draw_objects.len();
+            self.state.draw.n_skinned = self.state.skinned.draw_objects.len();
         }
 
         Ok(())
@@ -310,8 +309,8 @@ impl DxContext {
         indices: &[u16],
     ) -> RenderResult<()> {
         let obj = self
+            .state
             .skinned
-            .slots
             .draw_objects
             .get(skinned_index.index())
             .ok_or_else(|| {
@@ -383,53 +382,13 @@ impl DxContext {
         Ok(())
     }
 
-    // The CPU-side skinned entry points the `RenderBackend` impl forwards to.
-    // Each is the `SkinnedSlots` operation of the same name; the behavior and
-    // its contract are documented there, once for all three backends.
-    pub(crate) fn update_skinned_skeleton(
-        &mut self,
-        skinned_index: SkinnedIndex,
-        new_joint_count: usize,
-    ) -> RenderResult<()> {
-        self.skinned
-            .slots
-            .update_skeleton(skinned_index, new_joint_count)
-            .map_err(RenderError::Other)
-    }
-
-    pub(crate) fn update_skinned_pose(
-        &mut self,
-        skinned_index: SkinnedIndex,
-        matrices: &[[[f32; 4]; 4]],
-    ) {
-        self.skinned.slots.update_pose(skinned_index, matrices);
-    }
-
-    pub(crate) fn reveal_skinned_instance(
-        &mut self,
-        instance_index: SkinnedIndex,
-        model: [[f32; 4]; 4],
-    ) {
-        self.skinned
-            .slots
-            .reveal(instance_index, model, &mut self.model_history.borrow_mut());
-    }
-
-    pub(crate) fn retire_skinned_draw_object(&mut self, skinned_index: SkinnedIndex) {
-        self.skinned.slots.retire(skinned_index);
-    }
-
-    pub(crate) fn update_skinned_models(&mut self, updates: &[(SkinnedIndex, [[f32; 4]; 4])]) {
-        self.skinned.slots.update_models(updates);
-    }
-
     // Copy this frame's skinning matrices into the per-frame joint buffers.
     // Called from `record_frame` before the skin fold reads them.
     pub(in crate::directx) fn upload_joint_matrices(&self, frame_idx: usize) {
         let Some(frame_ptrs) = self.skinned.joint_ptrs.get(frame_idx) else {
             return;
         };
-        for (i, mats) in self.skinned.slots.joint_matrices.iter().enumerate() {
+        for (i, mats) in self.state.skinned.joint_matrices.iter().enumerate() {
             let Some(&dst) = frame_ptrs.get(i) else {
                 continue;
             };
@@ -462,7 +421,7 @@ impl DxContext {
     ) -> RenderResult<()> {
         use std::collections::HashMap;
 
-        let n = self.skinned.slots.draw_objects.len();
+        let n = self.state.skinned.draw_objects.len();
         let mut delta_buffers: Vec<Option<PooledBuffer>> = Vec::with_capacity(n);
         let mut target_counts: Vec<u32> = Vec::with_capacity(n);
         let mut weights: Vec<Vec<f32>> = Vec::with_capacity(n);
@@ -543,20 +502,10 @@ impl DxContext {
 
         self.skinned.morph_delta_buffers = delta_buffers;
         self.skinned.morph_target_counts = target_counts;
-        self.skinned.slots.morph_weights = weights;
+        self.state.skinned.morph_weights = weights;
         self.skinned.morph_weight_buffers = weight_buffers;
         self.skinned.morph_weight_ptrs = weight_ptrs;
         Ok(())
-    }
-
-    pub(in crate::directx) fn update_morph_weights(
-        &mut self,
-        skinned_index: SkinnedIndex,
-        weights: &[f32],
-    ) {
-        self.skinned
-            .slots
-            .update_morph_weights(skinned_index, weights);
     }
 
     // Copy this frame's morph weights into the per-frame weight buffers. Called
@@ -566,7 +515,7 @@ impl DxContext {
         let Some(frame_ptrs) = self.skinned.morph_weight_ptrs.get(frame_idx) else {
             return;
         };
-        for (i, w) in self.skinned.slots.morph_weights.iter().enumerate() {
+        for (i, w) in self.state.skinned.morph_weights.iter().enumerate() {
             let (Some(&dst), false) = (frame_ptrs.get(i), w.is_empty()) else {
                 continue;
             };

@@ -13,7 +13,7 @@
 use crate::components::ShaderPrograms;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{DrawIndex, MaterialUniforms};
-use crate::render::backend::{PipelineBuilder, PreparedPipelines};
+use crate::render::backend::{PipelineBuilder, PreparedPipelines, SceneHost};
 use crate::render::error::{RenderError, RenderResult};
 use alloc::sync::Arc;
 
@@ -41,11 +41,14 @@ pub struct ChunkMesh<'a> {
 /// Slot residency: the mesh, texture and chunk uploads and evictions a
 /// streaming world drives, plus the world-shader buckets a scene pins.
 ///
-/// The upload and eviction paths are required: a backend that cannot fill a
-/// slot cannot draw a streamed world at all. The runtime clone defaults to
-/// [`RenderError::Unsupported`]; the world-shader buckets default to success,
-/// since a backend without per-bucket pipelines has nothing to install.
-pub trait DrawStreaming {
+/// The texture slots and the chunk headroom are required: a backend that
+/// cannot fill a slot cannot draw a streamed world at all. Placing, evicting,
+/// moving and cloning draws only edit the scene and write geometry bytes, so
+/// they are defaulted over [`SceneHost`] and report
+/// [`RenderError::Unsupported`] without a scene. The world-shader buckets
+/// default to success, since a backend without per-bucket pipelines has
+/// nothing to install.
+pub trait DrawStreaming: SceneHost {
     /// Release a texture slot's image, leaving a 1x1 placeholder in the slot so
     /// a draw still holding the handle has something to sample. `Err` when the
     /// slot is out of range.
@@ -61,7 +64,10 @@ pub trait DrawStreaming {
     /// and mark the draw slot non-resident. The regions are held against
     /// `retire_frame`, so a frame still in flight cannot have them reused
     /// underneath it. `Err` when the slot is out of range.
-    fn evict_mesh(&mut self, draw_idx: DrawIndex, retire_frame: u64) -> RenderResult<()>;
+    fn evict_mesh(&mut self, draw_idx: DrawIndex, retire_frame: u64) -> RenderResult<()> {
+        self.edit_geometry(&mut |scene, writer| scene.evict_mesh(draw_idx, retire_frame, writer))
+            .unwrap_or(Err(RenderError::Unsupported { op: "evict_mesh" }))
+    }
     /// Upload a streamed mesh's geometry into a draw slot.
     fn upload_mesh(
         &mut self,
@@ -69,17 +75,20 @@ pub trait DrawStreaming {
         verts: &[Vertex],
         idxs: &[u16],
         frame: u64,
-    ) -> RenderResult<()>;
+    ) -> RenderResult<()> {
+        self.edit_geometry(&mut |scene, writer| {
+            scene.upload_mesh(draw_idx, verts, idxs, frame, writer)
+        })
+        .unwrap_or(Err(RenderError::Unsupported { op: "upload_mesh" }))
+    }
 
     /// Seed the streamed-mesh sub-allocators with one reserved headroom block
     /// (byte ranges in the shared vertex / index buffers) instead of the
     /// per-mesh build-time regions. Used by the shrinkable-seed path: the
     /// streamed geometry is no longer baked into the buffers at build time, so
     /// the renderer hands the allocators one contiguous block sized to the
-    /// cap-many resident meshes rather than the whole streamed set. Implemented
-    /// on Metal + DirectX + Vulkan. Default no-op: a backend without the
-    /// shrinkable seed keeps freeing each mesh's build-time region in
-    /// `setup_mesh_streaming`.
+    /// cap-many resident meshes rather than the whole streamed set. Without a
+    /// scene there are no allocators to seed, and this does nothing.
     fn seed_mesh_streaming(
         &mut self,
         vtx_offset: u64,
@@ -87,7 +96,10 @@ pub trait DrawStreaming {
         idx_offset: u64,
         idx_bytes: u64,
     ) {
-        let _ = (vtx_offset, vtx_bytes, idx_offset, idx_bytes);
+        let _ = self.edit_geometry(&mut |scene, writer| {
+            scene.seed_mesh_streaming(vtx_offset, vtx_bytes, idx_offset, idx_bytes, writer);
+            Ok(())
+        });
     }
 
     /// Voxel-world chunk streaming: grow the shared geometry buffers by the
@@ -104,11 +116,30 @@ pub trait DrawStreaming {
         &mut self,
         mesh: ChunkMesh<'_>,
         dst: crate::render::draw_slot::SlotAlloc,
-    ) -> RenderResult<()>;
+    ) -> RenderResult<()> {
+        self.edit_geometry(&mut |scene, writer| scene.add_chunk_mesh(mesh, dst, writer))
+            .unwrap_or(Err(RenderError::Unsupported {
+                op: "add_chunk_mesh",
+            }))
+    }
     /// Free a streamed chunk's geometry, retiring it after `retire_frame`.
-    fn remove_chunk_mesh(&mut self, draw_idx: DrawIndex, retire_frame: u64) -> RenderResult<()>;
+    fn remove_chunk_mesh(&mut self, draw_idx: DrawIndex, retire_frame: u64) -> RenderResult<()> {
+        self.edit_geometry(&mut |scene, writer| {
+            scene.remove_chunk_mesh(draw_idx, retire_frame, writer)
+        })
+        .unwrap_or(Err(RenderError::Unsupported {
+            op: "remove_chunk_mesh",
+        }))
+    }
     /// Move a streamed chunk by replacing its placement matrix.
-    fn set_chunk_model(&mut self, draw_idx: DrawIndex, model: [[f32; 4]; 4]) -> RenderResult<()>;
+    fn set_chunk_model(&mut self, draw_idx: DrawIndex, model: [[f32; 4]; 4]) -> RenderResult<()> {
+        match self.scene_mut() {
+            Some(scene) => scene.set_chunk_model(draw_idx, model),
+            None => Err(RenderError::Unsupported {
+                op: "set_chunk_model",
+            }),
+        }
+    }
 
     /// Instantiate a runtime copy of an existing draw object at a new transform:
     /// re-use the source slot's geometry region (`vertex_offset` / `vertex_count`
@@ -122,7 +153,7 @@ pub trait DrawStreaming {
     /// (`SpawnRequest`). The copy is non-cullable (sentinel AABB) and drawn
     /// every frame, since the init-time BVH cannot refit to admit a slot added
     /// at runtime; moving copies (the common case) opt out of the static BVH
-    /// exactly like streamed chunks and held items. Default
+    /// exactly like streamed chunks and held items. Without a scene this is
     /// [`RenderError::Unsupported`], which the spawn path logs and skips.
     fn clone_static_draw_object(
         &mut self,
@@ -130,10 +161,12 @@ pub trait DrawStreaming {
         model: [[f32; 4]; 4],
         dst: crate::render::draw_slot::SlotAlloc,
     ) -> RenderResult<()> {
-        let _ = (src_draw_idx, model, dst);
-        Err(RenderError::Unsupported {
-            op: "clone_static_draw_object",
-        })
+        match self.scene_mut() {
+            Some(scene) => scene.clone_static_draw_object(src_draw_idx, model, dst),
+            None => Err(RenderError::Unsupported {
+                op: "clone_static_draw_object",
+            }),
+        }
     }
 
     /// Make one shader bucket's draws renderable by installing its main-pass

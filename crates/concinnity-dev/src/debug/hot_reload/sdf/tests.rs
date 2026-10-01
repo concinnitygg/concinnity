@@ -5,6 +5,7 @@ use concinnity_cook::compile::sdf_field::CompiledField;
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::scene_state::SceneState;
 use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -19,6 +20,21 @@ struct VolumeBackend {
     reject: bool,
     swaps: Vec<(usize, String)>,
     prepared: Vec<(usize, Option<FakePipelines>)>,
+}
+
+impl concinnity_core::render::backend::SceneHost for VolumeBackend {
+    fn scene(&self) -> Option<&SceneState> {
+        None
+    }
+    fn scene_mut(&mut self) -> Option<&mut SceneState> {
+        None
+    }
+    fn edit_geometry(
+        &mut self,
+        _: concinnity_core::render::backend::GeometryEdit<'_>,
+    ) -> Option<RenderResult<()>> {
+        None
+    }
 }
 
 impl LiveEdit for VolumeBackend {

@@ -115,7 +115,7 @@ impl MtlContext {
 
     // The frame's unlit flag for ViewUniforms, from the viewport view mode.
     fn shade_mode(&self) -> f32 {
-        if self.view.mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {
+        if self.state.view.mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {
             1.0
         } else {
             0.0
@@ -155,7 +155,7 @@ impl MtlContext {
             && object_buffer.is_some()
             && self.cull.pipeline_phase2.is_some();
         let main_pass_desc = MTLRenderPassDescriptor::new();
-        let [r, g, b, a] = self.view.clear_color;
+        let [r, g, b, a] = self.state.view.clear_color;
         // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
         // declares.
         unsafe {
@@ -216,20 +216,20 @@ impl MtlContext {
         );
         // Wireframe view: fill mode is encoder state that indirect commands
         // inherit, so the one call covers the ICB sub-paths too.
-        if self.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
+        if self.state.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
             encoder.setTriangleFillMode(objc2_metal::MTLTriangleFillMode::Lines);
         }
 
         let view_uniforms = ViewUniforms {
             vp,
-            view: self.view.matrix,
+            view: self.state.view.matrix,
             elapsed,
             reflections_enabled: self.reflection_resolve_active(),
             cam_pos,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
             ambient_occlusion: 1.0,
-            sky_rot: self.view.sky_rot,
+            sky_rot: self.state.view.sky_rot,
         };
 
         // While the world is hidden behind an opaque menu, the pass stops at the
@@ -279,7 +279,7 @@ impl MtlContext {
             cam_pos,
         } = camera;
         let desc = MTLRenderPassDescriptor::new();
-        let [r, g, b, a] = self.view.clear_color;
+        let [r, g, b, a] = self.state.view.clear_color;
         // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
         // declares.
         unsafe {
@@ -347,7 +347,7 @@ impl MtlContext {
             // A probe capture is always lit, whatever the viewport shows.
             shade_mode: 0.0,
             ambient_occlusion: 0.0,
-            sky_rot: self.view.sky_rot,
+            sky_rot: self.state.view.sky_rot,
         };
 
         // Planar / probe re-render: the main camera's cluster grid does not match
@@ -433,20 +433,20 @@ impl MtlContext {
                 .ok_or_else(|| RenderError::Other("failed to get render encoder".to_string()))?,
             ns_string!("main2 pass"),
         );
-        if self.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
+        if self.state.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe {
             encoder.setTriangleFillMode(objc2_metal::MTLTriangleFillMode::Lines);
         }
 
         let view_uniforms = ViewUniforms {
             vp,
-            view: self.view.matrix,
+            view: self.state.view.matrix,
             elapsed,
             reflections_enabled: self.reflection_resolve_active(),
             cam_pos,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
             ambient_occlusion: 1.0,
-            sky_rot: self.view.sky_rot,
+            sky_rot: self.state.view.sky_rot,
         };
         self.bind_main_pass_shared(&encoder, &view_uniforms);
         // Main2 is the same main camera as phase 1, so it reads the clusters too.

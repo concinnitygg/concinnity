@@ -199,9 +199,9 @@ impl DxContext {
         // because the encoders run through `&self`); the rest is filled here
         // from context state.
         let counts = crate::object_counts::object_counts(
-            self.draw.objects.len(),
+            self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
-            self.skinned.slots.draw_objects.iter().map(|o| o.visible),
+            self.state.skinned.draw_objects.iter().map(|o| o.visible),
         );
 
         // Reset the parallel-encoder draw-call accumulator so this frame's
@@ -251,7 +251,7 @@ impl DxContext {
             let aspect = self.targets.extent.render_width.max(1) as f32
                 / self.targets.extent.render_height.max(1) as f32;
             let fresh = csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
-                view: self.view.matrix,
+                view: self.state.view.matrix,
                 cam_pos,
                 fov_y_rad: fov_y_radians,
                 aspect,
@@ -553,7 +553,7 @@ impl DxContext {
         // The viewport's view mode + show flags mask the seeded inputs (the
         // per-frame counterpart of the init-time trims); Lit with every flag
         // set is the identity, so a shipped runtime is unaffected.
-        render_graph::apply_view(&seed_inputs, self.view.mode, self.view.show)
+        render_graph::apply_view(&seed_inputs, self.state.view.mode, self.state.view.show)
     }
 
     // Camera projection, jittered for TAA or the upscaler's phase sequence.
@@ -570,7 +570,7 @@ impl DxContext {
         let proj = perspective_rh(fov_y_radians, aspect, near, far);
         // Un-jittered camera VP, fed to the velocity pre-pass so the stored
         // motion vector is free of the sub-pixel projection jitter.
-        let cur_vp = mat4_mul(proj, self.view.matrix);
+        let cur_vp = mat4_mul(proj, self.state.view.matrix);
         // When TAA is on, offset the projection by a sub-pixel Halton jitter so
         // the accumulation has fresh sample positions each frame. The jitter is
         // applied to the z-coefficients of clip x/y, so subtracting it shifts
@@ -611,7 +611,7 @@ impl DxContext {
             }
             (None, None) => proj,
         };
-        let vp_mat = mat4_mul(render_proj, self.view.matrix);
+        let vp_mat = mat4_mul(render_proj, self.state.view.matrix);
         FrameProjection {
             proj,
             cur_vp,

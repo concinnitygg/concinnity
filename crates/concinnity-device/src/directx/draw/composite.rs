@@ -102,9 +102,9 @@ impl fullscreen::CompositeEncoder for DxContext {
             // the Rust struct.
             let composite = CompositeParams {
                 post: self.post_process,
-                fade: self.view.scene_fade,
+                fade: self.state.view.scene_fade,
                 view_mode: args.channel_view,
-                far: self.view.far,
+                far: self.state.view.far,
             };
             cmd.set_graphics_root_constants(2, &composite);
             // Root param [3]: 3D color-grading LUT SRV (t2).
@@ -277,8 +277,8 @@ impl DxContext {
             width,
             height,
             frame_idx,
-            channel_view: if self.view.mode.is_gbuffer_channel() {
-                self.view.mode as u32
+            channel_view: if self.state.view.mode.is_gbuffer_channel() {
+                self.state.view.mode as u32
             } else {
                 0
             },

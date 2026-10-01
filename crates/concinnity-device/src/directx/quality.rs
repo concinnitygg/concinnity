@@ -335,7 +335,7 @@ impl DxContext {
         let mut accel = match super::raytrace::build_rt_accel(super::raytrace::RtInitGeometry {
             alloc: &self.hw.alloc,
             shared: super::raytrace::SharedGeometry::of(&self.scene.geometry),
-            draw_objects: &self.draw.objects,
+            draw_objects: &self.state.draw.objects,
             clusters: &self.instanced.clusters,
             albedo_count: self.scene.textures.len() as u32,
             exclude_seethrough: self.seethrough_meshes_enabled(),

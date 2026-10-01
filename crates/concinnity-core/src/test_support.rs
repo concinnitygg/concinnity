@@ -17,6 +17,7 @@ use std::println;
 use std::time::Instant;
 
 use crate::ecs::asset_id::AssetId;
+use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{DrawObject, MaterialUniforms, SkinnedDrawObject};
 use crate::transform::IDENTITY;
 
@@ -168,6 +169,17 @@ pub(crate) fn draw_object() -> DrawObject {
         bb_max: [1.0, 2.0, 3.0],
         cull_distance: 42.0,
         lod_alternates: Vec::new(),
+    }
+}
+
+// A vertex at the origin with every attribute zeroed.
+pub(crate) fn vertex() -> Vertex {
+    Vertex {
+        pos: [0.0; 3],
+        normal: [0.0; 3],
+        tangent: [0.0; 3],
+        color: [0.0; 3],
+        uv: [0.0; 2],
     }
 }
 

@@ -42,7 +42,7 @@ pub(super) fn plan_cull(world: &SceneData<'_>) -> CullPlan {
     // into their reserved regions. `n_chunk_max` sizes the streamed-chunk window
     // and `clone_reserve` the spawned-clone one; both live in the single
     // runtime reserve between the instances and the skinned tail (see
-    // `DrawState::n_runtime`).
+    // `DrawList::n_runtime`).
     let n_objects = world.draw_objects.len();
     let n_cull =
         n_objects + n_instances + world.n_chunk_max + clone_reserve(n_objects) + world.n_skinned;

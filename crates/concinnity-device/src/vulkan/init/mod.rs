@@ -20,6 +20,7 @@ use ash::vk;
 use concinnity_core::gfx::render_types::PostProcessParams;
 use concinnity_core::render::backend_init::{BackendInit, PostSettings, WorldShader};
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::scene_state::{DrawList, SceneState};
 
 use super::context::*;
 use super::geometry_upload::GeometryUploads;
@@ -355,7 +356,6 @@ impl VkContext {
             reflection_composite: rt.composite,
             ssgi: screen.ssgi,
             gbuffer: screen.gbuffer,
-            model_history: Default::default(),
             rt_reflections: rt.reflections,
             rt: rt.state,
             decal: world_fx.decal,
@@ -374,7 +374,6 @@ impl VkContext {
             descriptors,
             instanced: VkInstanced::new(world.instanced_clusters),
             geometry,
-            chunk_stream: Default::default(),
             geometry_uploads: core::cell::RefCell::new(GeometryUploads::new(frames)),
             skinned: VkSkinned::new(),
             uniforms,
@@ -382,8 +381,16 @@ impl VkContext {
             current_frame: 0,
             frames_in_flight: frames,
             commands,
-            draw: DrawState::new(world.draw_objects, plan.n_instances, world.n_chunk_max),
-            view: ViewState::new(clear_color),
+            state: SceneState::new(
+                DrawList::with_runtime_reserve(
+                    world.draw_objects,
+                    plan.n_instances,
+                    world.n_chunk_max,
+                ),
+                clear_color,
+            ),
+            graph_cache: None,
+            barrier_scratch: None,
             wireframe: Default::default(),
             probe: ProbeState::new(probe_prefilter, probe_gpu),
             stream: StreamState::new(frames),

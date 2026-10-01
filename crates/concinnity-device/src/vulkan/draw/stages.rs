@@ -174,9 +174,9 @@ impl VkContext {
         // the encoders run through `&self`); the rest is filled here from
         // context state.
         let counts = crate::object_counts::object_counts(
-            self.draw.objects.len(),
+            self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
-            self.skinned.slots.draw_objects.iter().map(|o| o.visible),
+            self.state.skinned.draw_objects.iter().map(|o| o.visible),
         );
         let vram_bytes = self.query_vram_bytes();
         let transient_pool_bytes = self.targets.transient_pool.allocated_bytes();
@@ -342,7 +342,7 @@ impl VkContext {
         };
         if self.shadow.enabled() {
             let fresh = csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
-                view: self.view.matrix,
+                view: self.state.view.matrix,
                 cam_pos,
                 fov_y_rad: fov_y_radians,
                 aspect: cascade_aspect,

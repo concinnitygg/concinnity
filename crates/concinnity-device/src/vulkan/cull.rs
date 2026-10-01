@@ -38,7 +38,10 @@ impl VkContext {
     // skinned meshes (or a non-bindless world) the extra terms are 0, leaving it
     // equal to the static `n_objects`. Mirrors `directx/cull.rs::cull_count`.
     pub(in crate::vulkan) fn cull_count(&self) -> usize {
-        self.draw.n_objects + self.draw.n_instances + self.draw.n_runtime + self.draw.n_skinned
+        self.state.draw.n_objects
+            + self.state.draw.n_instances
+            + self.state.draw.n_runtime
+            + self.state.draw.n_skinned
     }
 
     // Buffer index of the first runtime record. The runtime reserve is
@@ -49,7 +52,7 @@ impl VkContext {
     // geometry lives in the shared VB/IB), so this is just the instance tail.
     // Mirrors `directx/cull.rs`.
     pub(in crate::vulkan) fn runtime_record_base(&self) -> usize {
-        self.draw.n_objects + self.draw.n_instances
+        self.state.draw.n_objects + self.state.draw.n_instances
     }
 
     // Buffer index of the first skinned record: the static + instance + runtime
@@ -57,7 +60,7 @@ impl VkContext {
     // `[skinned_record_base(), cull_count())` is the second indirect draw. The
     // runtime reserve sits inside the prefix, so the skinned base is past it.
     pub(in crate::vulkan) fn skinned_record_base(&self) -> usize {
-        self.draw.n_objects + self.draw.n_instances + self.draw.n_runtime
+        self.state.draw.n_objects + self.state.draw.n_instances + self.state.draw.n_runtime
     }
 
     // Shader-bucket regions the cull kernel routes between: the world default
@@ -93,21 +96,22 @@ impl VkContext {
     where
         F: FnMut(usize, usize, &render_types::DrawObject),
     {
-        if self.draw.n_runtime == 0 {
+        if self.state.draw.n_runtime == 0 {
             return 0;
         }
         let mut k = 0;
         for (i, obj) in self
+            .state
             .draw
             .objects
             .iter()
             .enumerate()
-            .skip(self.draw.n_objects)
+            .skip(self.state.draw.n_objects)
         {
             if !obj.resident {
                 continue;
             }
-            if k >= self.draw.n_runtime {
+            if k >= self.state.draw.n_runtime {
                 break;
             }
             emit(k, i, obj);

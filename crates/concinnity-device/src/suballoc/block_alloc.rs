@@ -19,7 +19,7 @@
 //! backend picks its own block size (geometric growth up to a cap), so the pool
 //! only requires that a fresh block cover the request plus its alignment slack.
 
-use super::range_alloc::RangeAllocator;
+use concinnity_core::render::range_alloc::RangeAllocator;
 
 // Where a resource was placed: which block, and the byte offset within it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

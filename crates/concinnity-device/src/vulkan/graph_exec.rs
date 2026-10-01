@@ -582,7 +582,6 @@ impl VkContext {
         // Resolve every graph-driven resource's barrier target once, on the main
         // thread, then share the table read-only into the parallel pass workers.
         let mut scratch = self
-            .draw
             .barrier_scratch
             .take()
             .unwrap_or_else(VkBarrierScratch::new);
@@ -783,7 +782,7 @@ impl VkContext {
         // Hand the tables' allocations back for the next frame to refill. An
         // error path above skips this and the next frame allocates fresh, which
         // is immaterial: that frame already failed.
-        self.draw.barrier_scratch = Some(scratch);
+        self.barrier_scratch = Some(scratch);
         Ok(ordered)
     }
 

@@ -2066,7 +2066,7 @@ impl super::context::DxContext {
         ) else {
             return;
         };
-        if self.skinned.slots.draw_objects.is_empty() {
+        if self.state.skinned.draw_objects.is_empty() {
             return;
         }
         let src_gva = com::gpu_va(vb);
@@ -2083,7 +2083,7 @@ impl super::context::DxContext {
             cmd.SetComputeRootSignature(&skin.root_sig);
             cmd.SetPipelineState(&skin.pso);
         }
-        for (i, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
+        for (i, obj) in self.state.skinned.draw_objects.iter().enumerate() {
             let joint_gva = self.skinned_joint_gva(frame_idx, i);
             let target_count = self
                 .skinned
@@ -2148,7 +2148,7 @@ impl super::context::DxContext {
     // time (`rt.accel` is `None`), a topology change that introduces the first
     // participating geometry seeds the BVH from scratch here.
     pub(super) fn rt_dynamic_update(&mut self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
-        let topology_dirty = std::mem::take(&mut self.rt.topology_dirty);
+        let topology_dirty = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
 
         // Seed-from-empty: RT enabled + a topology change added the first
         // participating geometry to a scene that had none at build time. The
@@ -2174,7 +2174,7 @@ impl super::context::DxContext {
             self.skinned.index_buffer.as_ref(),
         ) {
             (Some(vb), Some(ib))
-                if self.rt.skinned_geometry && !self.skinned.slots.draw_objects.is_empty() =>
+                if self.rt.skinned_geometry && !self.state.skinned.draw_objects.is_empty() =>
             {
                 let vertex_gva = com::gpu_va(vb);
                 let index_gva = com::gpu_va(ib);
@@ -2197,7 +2197,7 @@ impl super::context::DxContext {
             return;
         };
         let skinned = skinned_inputs.map(|(v, i)| SkinnedRtInputs {
-            objects: &self.skinned.slots.draw_objects,
+            objects: &self.state.skinned.draw_objects,
             vertex_gva: v,
             index_gva: i,
             joint_buffers,
@@ -2205,7 +2205,7 @@ impl super::context::DxContext {
         accel.dynamic_update(
             &self.hw.alloc,
             cmd,
-            &self.draw.objects,
+            &self.state.draw.objects,
             RtDynamicInputs {
                 mode: self.rt.dynamic_mode,
                 skinned,
@@ -2248,7 +2248,7 @@ impl super::context::DxContext {
         let mut accel = match build_rt_accel(RtInitGeometry {
             alloc: &self.hw.alloc,
             shared: SharedGeometry::of(&self.scene.geometry),
-            draw_objects: &self.draw.objects,
+            draw_objects: &self.state.draw.objects,
             clusters: &self.instanced.clusters,
             albedo_count: self.scene.textures.len() as u32,
             exclude_seethrough: self.seethrough_meshes_enabled(),

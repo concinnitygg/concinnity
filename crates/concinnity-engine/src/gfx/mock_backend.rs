@@ -29,6 +29,7 @@ use concinnity_core::render::draw_slot;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reflection_probe;
 use concinnity_core::render::scene_flow::SceneControl;
+use concinnity_core::render::scene_state::SceneState;
 use concinnity_core::render::volumetric_fog;
 use concinnity_core::window::display_mode;
 use std::sync::{Arc, Mutex};
@@ -393,6 +394,18 @@ impl SceneControl for MockBackend {
 
     fn set_fade(&mut self, fade: f32) {
         self.record(Call::SetFade(fade));
+    }
+}
+
+impl backend::SceneHost for MockBackend {
+    fn scene(&self) -> Option<&SceneState> {
+        None
+    }
+    fn scene_mut(&mut self) -> Option<&mut SceneState> {
+        None
+    }
+    fn edit_geometry(&mut self, _: backend::GeometryEdit<'_>) -> Option<RenderResult<()>> {
+        None
     }
 }
 

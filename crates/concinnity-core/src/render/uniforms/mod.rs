@@ -33,4 +33,4 @@ pub use raymarch::{RaymarchShadowCascade, RaymarchView, RaymarchVolumeUniforms};
 pub use transparent::{
     GlassMeshParams, GlassParams, TransparentView, WATER_MAX_WAVES, WaterParams, WaterWaveGpu,
 };
-pub use view::{GBufferView, ViewUniforms};
+pub use view::{GBufferView, PassCamera, ViewUniforms};

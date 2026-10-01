@@ -48,6 +48,10 @@
 //!      tore the device down early. An earlier version of this note argued the
 //!      case was safe because no pass *retires* during encode; that was the
 //!      wrong question, since a plain clone touches the same counter.
+//!   7. `state.model_history` (`RefCell`) - borrowed only on the main thread,
+//!      by the draw-args record build that `record_frame` (before the fan-out)
+//!      and the probe bake share; `upload_skinned` uses `get_mut`. A worker
+//!      must never borrow it.
 //!
 //! Re-audit this list whenever a new pass migrates onto the fan-out.
 

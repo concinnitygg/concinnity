@@ -77,9 +77,9 @@ impl MtlContext {
         })?;
         // Snapped for the pass encoders (wireframe fill mode, unlit shading,
         // the composite's channel visualization + depth normalization).
-        self.view.mode = view_mode;
-        self.view.far = far;
-        self.view.sky_rot = sky_rot;
+        self.state.view.mode = view_mode;
+        self.state.view.far = far;
+        self.state.view.sky_rot = sky_rot;
         self.apply_pending_rebuilds()?;
 
         let pass_timing_slot = self.begin_frame_stats();
@@ -203,7 +203,7 @@ impl MtlContext {
         // when a feature toggles or a target resizes). Taken out of the cache so
         // the later `&mut self` execute_graph does not conflict with a borrow of
         // it; put back after execution. A mismatch (or a cold cache) rebuilds.
-        let graph = match self.draw.graph_cache.take() {
+        let graph = match self.graph_cache.take() {
             Some((cached_inputs, cached_graph)) if cached_inputs == graph_inputs => cached_graph,
             // A graph the core refuses to build is a topology mistake, not a
             // device failure.
@@ -331,7 +331,7 @@ impl MtlContext {
         }
         // Cache the compiled graph under this frame's inputs so the next frame
         // with matching inputs skips the rebuild.
-        self.draw.graph_cache = Some((graph_inputs, graph));
+        self.graph_cache = Some((graph_inputs, graph));
 
         self.submit_and_present(PresentFrame {
             cmd_buf,
@@ -406,7 +406,7 @@ impl MtlContext {
         // ray tracing): there is no BVH to keep current, and a lingering topology
         // flag must not trigger a build. Clear it and bail.
         if self.rt.settings.is_none() {
-            self.rt.topology_dirty = false;
+            self.state.gpu_dirty.rt_topology = false;
             return Ok(());
         }
         let albedo_count = self.scene.textures.len();
@@ -422,7 +422,7 @@ impl MtlContext {
         // edit alter the RT-relevant draw set since the last update? Consume the
         // flag; the BLAS topology must be refreshed below rather than ignored (the
         // `Auto` dirty check only watches the transforms of the prior set).
-        let topology_changed = std::mem::take(&mut self.rt.topology_dirty);
+        let topology_changed = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
 
         // Skinned meshes deform every frame, so their BLAS (baked from the posed
         // vertices) must be rebuilt each frame: a TLAS-only rebuild can't
@@ -433,7 +433,7 @@ impl MtlContext {
         // first frame after `upload_skinned` (the init build is static-only) or
         // when the `Rebuild` diagnostic forces a from-scratch build every frame.
         let has_skinned = self.rt.skinned_geometry
-            && !self.skinned.slots.draw_objects.is_empty()
+            && !self.state.skinned.draw_objects.is_empty()
             && self.rt.pipelines.skin.is_some();
         if has_skinned {
             if self.rt.accel.is_none() || self.rt.dynamic_mode == RtDynamicMode::Rebuild {
@@ -485,7 +485,7 @@ impl MtlContext {
                     .accel
                     .as_ref()
                     .expect("rt_accel is Some (checked above)")
-                    .transforms_dirty(&self.draw.objects);
+                    .transforms_dirty(&self.state.draw.objects);
                 if dirty {
                     self.rebuild_rt_tlas(albedo_count)?;
                 }
@@ -517,7 +517,7 @@ impl MtlContext {
         let vbuf = self.scene.vertex_buffer.retained();
         let ibuf = self.scene.index_buffer.retained();
         let exclude_seethrough = self.seethrough_meshes_enabled();
-        let draw_objects = std::mem::take(&mut self.draw.objects);
+        let draw_objects = std::mem::take(&mut self.state.draw.objects);
         let res = self
             .rt
             .accel
@@ -541,7 +541,7 @@ impl MtlContext {
                     frame_id,
                 },
             );
-        self.draw.objects = draw_objects;
+        self.state.draw.objects = draw_objects;
         res
     }
 
@@ -564,13 +564,13 @@ impl MtlContext {
             &self.rt.pipelines.skin,
         ) {
             (Some(svb), Some(sib), Some(pipe))
-                if !self.skinned.slots.draw_objects.is_empty() && self.rt.skinned_geometry =>
+                if !self.state.skinned.draw_objects.is_empty() && self.rt.skinned_geometry =>
             {
                 Some(SkinnedRtInputs {
-                    objects: &self.skinned.slots.draw_objects,
+                    objects: &self.state.skinned.draw_objects,
                     vertex_buffer: svb,
                     index_buffer: sib,
-                    joint_matrices: &self.skinned.slots.joint_matrices,
+                    joint_matrices: &self.state.skinned.joint_matrices,
                     skin_pipeline: pipe.as_ref(),
                 })
             }
@@ -587,7 +587,7 @@ impl MtlContext {
                 index_buffer: &self.scene.index_buffer,
             },
             super::raytrace::RtSceneGeometry {
-                draw_objects: &self.draw.objects,
+                draw_objects: &self.state.draw.objects,
                 clusters: &self.instanced.clusters,
             },
             super::raytrace::RtTextureCounts { albedo_count },
@@ -624,12 +624,12 @@ impl MtlContext {
         ) else {
             return Ok(());
         };
-        let draw_objects = std::mem::take(&mut self.draw.objects);
+        let draw_objects = std::mem::take(&mut self.state.draw.objects);
         let skinned = SkinnedRtInputs {
-            objects: &self.skinned.slots.draw_objects,
+            objects: &self.state.skinned.draw_objects,
             vertex_buffer: &svb,
             index_buffer: &sib,
-            joint_matrices: &self.skinned.slots.joint_matrices,
+            joint_matrices: &self.state.skinned.joint_matrices,
             skin_pipeline: pipe.as_ref(),
         };
         let res = self
@@ -649,7 +649,7 @@ impl MtlContext {
                 super::raytrace::RtTextureCounts { albedo_count },
                 frame,
             );
-        self.draw.objects = draw_objects;
+        self.state.draw.objects = draw_objects;
         res
     }
 
@@ -661,14 +661,14 @@ impl MtlContext {
     fn rebuild_rt_tlas(&mut self, albedo_count: usize) -> error::RenderResult<()> {
         let device = self.hw.device.clone();
         let queue = self.hw.command_queue.clone();
-        let draw_objects = std::mem::take(&mut self.draw.objects);
+        let draw_objects = std::mem::take(&mut self.state.draw.objects);
         let res = self
             .rt
             .accel
             .as_mut()
             .expect("rt_accel is Some (checked by caller)")
             .rebuild_tlas(&device, &queue, &draw_objects, albedo_count);
-        self.draw.objects = draw_objects;
+        self.state.draw.objects = draw_objects;
         res
     }
 

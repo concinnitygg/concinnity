@@ -170,7 +170,7 @@ impl MtlContext {
     ) {
         let placements = reflection_probe::resolve_placements(
             declared,
-            self.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)),
+            self.state.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)),
         );
         // Park both slots' GPU resources instead of dropping them: their command
         // buffers may still be reading the reserved-slot buffers, the capture cube or
@@ -417,7 +417,7 @@ impl MtlContext {
         // cross-command-buffer producer/consumer pattern, like the frame's). `None`
         // for static worlds.
         let deformed: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>> =
-            if self.draw.n_skinned > 0 {
+            if self.state.draw.n_skinned > 0 {
                 match self.skinned.deformed.first().map(|b| b.length()) {
                     Some(len) if len > 0 => Some(
                         self.hw

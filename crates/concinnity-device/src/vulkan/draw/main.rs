@@ -62,7 +62,7 @@ impl VkContext {
         // resolve attachment doesn't need a clear (resolve overwrites);
         // a `ClearValue::default()` placeholder keeps the slice index
         // aligned with `main_render_pass`'s attachment count.
-        let [r, g, b, a] = self.view.clear_color;
+        let [r, g, b, a] = self.state.view.clear_color;
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
                 float32: [r, g, b, a],
@@ -241,7 +241,7 @@ impl VkContext {
         // `skinned_record_base()`. The `encode_skin` compute pass (Cull graph arm)
         // has already posed the deformed buffer.
         if use_bindless
-            && self.draw.n_skinned > 0
+            && self.state.draw.n_skinned > 0
             && let (Some(bindless_pipeline), Some(bindless_layout), Some(deformed)) = (
                 self.cull.bindless_pipeline.as_ref(),
                 self.cull.bindless_pipeline_layout.as_ref(),
@@ -290,7 +290,7 @@ impl VkContext {
                     cmd,
                     self.cull.indirect_buffers[frame_idx].buffer(),
                     (self.skinned_record_base() * cmd_stride) as u64,
-                    self.draw.n_skinned as u32,
+                    self.state.draw.n_skinned as u32,
                     cmd_stride as u32,
                 );
             }
@@ -331,7 +331,7 @@ impl VkContext {
             return;
         };
         let pipeline = self.wireframe_or(pipeline, self.wireframe.bindless.as_ref());
-        if self.draw.n_objects == 0 || self.cull.indirect_buffers2.is_empty() {
+        if self.state.draw.n_objects == 0 || self.cull.indirect_buffers2.is_empty() {
             return;
         }
         let device = self.hw.device.clone();
@@ -440,7 +440,7 @@ impl VkContext {
         // The descriptor sets bound above persist, so only the pipeline (a bucket
         // may have replaced it) and the vertex/index buffers rebind. Skinned draws
         // always render bucket 0.
-        if self.draw.n_skinned > 0
+        if self.state.draw.n_skinned > 0
             && let Some(deformed) = self.skinned.deformed.get(frame_idx)
         {
             let cmd_stride = std::mem::size_of::<vk::DrawIndexedIndirectCommand>();
@@ -464,7 +464,7 @@ impl VkContext {
                     cmd,
                     self.cull.indirect_buffers2[frame_idx].buffer(),
                     (self.skinned_record_base() * cmd_stride) as u64,
-                    self.draw.n_skinned as u32,
+                    self.state.draw.n_skinned as u32,
                     cmd_stride as u32,
                 );
             }

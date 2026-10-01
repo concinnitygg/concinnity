@@ -23,6 +23,7 @@
 use concinnity_core::gfx::render_types::{FALLBACK_TEXTURE_COUNT, PostProcessParams};
 use concinnity_core::render::backend_init::{self, BackendInit, PostSettings, WorldShader};
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::scene_state::{DrawList, SceneState};
 
 use self::heap_layout::{RtvHeapLayout, SrvHeapParams};
 use super::context::*;
@@ -411,8 +412,6 @@ impl DxContext {
             spot_shadow,
             scene,
             descriptors,
-            mesh_stream: Default::default(),
-            chunk_stream: Default::default(),
             geometry_uploads: std::cell::RefCell::new(GeometryUploads::new(FRAMES)),
             skinned: SkinnedState::new(),
             uniforms,
@@ -423,7 +422,6 @@ impl DxContext {
             bloom,
             post_process: features.post_process,
             gbuffer,
-            model_history: Default::default(),
             taa,
             ssao,
             ssr,
@@ -442,9 +440,16 @@ impl DxContext {
             frame_sync,
             current_frame: 0,
             stream: StreamState::new(),
-            draw: DrawState::new(world.draw_objects, plan.n_instances, world.n_chunk_max),
+            state: SceneState::new(
+                DrawList::with_runtime_reserve(
+                    world.draw_objects,
+                    plan.n_instances,
+                    world.n_chunk_max,
+                ),
+                clear_color,
+            ),
+            graph_cache: std::cell::RefCell::new(None),
             instanced: DxInstanced::new(world.instanced_clusters),
-            view: ViewState::new(clear_color),
             wireframe: Default::default(),
             diagnostics: Default::default(),
             timestamps,

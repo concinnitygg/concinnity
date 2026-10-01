@@ -92,7 +92,7 @@ impl VkContext {
     pub(super) fn set_reflection_probes(&mut self, declared: &[ProbePlacement]) {
         let placements = reflection_probe::resolve_placements(
             declared,
-            self.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)),
+            self.state.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)),
         );
         // A re-placement (rare -- this is normally a one-time init call) abandons any
         // in-flight staggered bake and forgets the installed probes. Idle first when
@@ -336,7 +336,7 @@ impl VkContext {
             face_cmds: Vec::with_capacity(PROBE_FACE_COUNT),
             face_fences: Vec::with_capacity(PROBE_FACE_COUNT),
         };
-        rendering.write_face_views(self.scene.prefilter_mip_count, self.view.sky_rot);
+        rendering.write_face_views(self.scene.prefilter_mip_count, self.state.view.sky_rot);
         self.probe.rendering = Some(rendering);
         Ok(())
     }
@@ -346,7 +346,7 @@ impl VkContext {
     // caller has idled the device.
     pub(super) fn rewrite_probe_capture_views(&self) {
         if let Some(rendering) = self.probe.rendering.as_ref() {
-            rendering.write_face_views(self.scene.prefilter_mip_count, self.view.sky_rot);
+            rendering.write_face_views(self.scene.prefilter_mip_count, self.state.view.sky_rot);
         }
     }
 
@@ -904,7 +904,7 @@ impl VkContext {
             return;
         };
         let device = &self.hw.device;
-        let [r, g, b, a] = self.view.clear_color;
+        let [r, g, b, a] = self.state.view.clear_color;
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
                 float32: [r, g, b, a],

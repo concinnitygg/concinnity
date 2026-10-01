@@ -924,7 +924,7 @@ impl VkContext {
             jittered_vp,
             cur_vp,
             prev_vp,
-            view: self.view.matrix,
+            view: self.state.view.matrix,
         };
         gb.view_ubo_buffers[frame_idx].write_val(0, &view_uni);
 
@@ -1196,7 +1196,7 @@ impl VkContext {
         // once the ring is primed (a prior frame posed that slot); before then (or
         // when velocity is inactive) it is the current buffer, so prev_pos ==
         // cur_pos gives a harmless zero skinned motion vector.
-        if self.draw.n_skinned > 0
+        if self.state.draw.n_skinned > 0
             && let Some(cur) = self.skinned.deformed.get(frame_idx)
         {
             let frames = self.frames_in_flight.max(1);
@@ -1226,7 +1226,7 @@ impl VkContext {
                     cmd,
                     indirect,
                     (self.skinned_record_base() * stride as usize) as u64,
-                    self.draw.n_skinned as u32,
+                    self.state.draw.n_skinned as u32,
                     stride,
                 );
             }

@@ -6,6 +6,7 @@ use concinnity_core::components::sdf_programs::SdfPrograms;
 use concinnity_core::components::{ShaderPrograms, ShaderStage};
 use concinnity_core::render::backend::PreparedPipelines;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::scene_state::SceneState;
 use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
 use concinnity_engine::live_edit::shader_sources::ShaderFile;
 use std::collections::HashSet;
@@ -21,6 +22,21 @@ struct ShaderBackend {
     reject: bool,
     updates: Vec<(u32, String)>,
     prepared: Vec<Option<FakePipeline>>,
+}
+
+impl concinnity_core::render::backend::SceneHost for ShaderBackend {
+    fn scene(&self) -> Option<&SceneState> {
+        None
+    }
+    fn scene_mut(&mut self) -> Option<&mut SceneState> {
+        None
+    }
+    fn edit_geometry(
+        &mut self,
+        _: concinnity_core::render::backend::GeometryEdit<'_>,
+    ) -> Option<RenderResult<()>> {
+        None
+    }
 }
 
 impl LiveEdit for ShaderBackend {

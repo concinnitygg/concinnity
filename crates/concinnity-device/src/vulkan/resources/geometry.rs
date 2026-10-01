@@ -1,33 +1,64 @@
-//! Streamed-mesh upload + eviction for VkContext. Writes into the shared
-//! vertex / index buffers are staged and copied by the next geometry submit
-//! (see `geometry_upload`), so none waits on the GPU. Also the blocking
-//! `write_geometry_region` helper, which copies into a buffer through its own
-//! one-shot submit, for the init and rebuild paths that write fresh buffers.
+//! The scene VkContext lends to the `SceneHost` defaults, and the writer that
+//! stages its streamed geometry for the shared vertex / index buffers: each
+//! write is copied by the next geometry submit (see `geometry_upload`), so none
+//! waits on the GPU. Also the blocking `write_geometry_region` helper, which
+//! copies into a buffer through its own one-shot submit, for the init and
+//! rebuild paths that write fresh buffers.
 
 use ash::vk;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::DrawIndex;
-use concinnity_core::render::error;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::backend::{GeometryEdit, SceneHost};
+use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::scene_state::{GeometryBuffer, GeometryWriter, SceneState};
 
+use super::super::allocator::DeviceAllocator;
 use super::super::context::*;
-use super::super::geometry_upload::GeometryTarget;
+use super::super::geometry_upload::{GeometryTarget, GeometryUploads};
 use super::super::texture;
 
-impl VkContext {
-    // Stage `data` for the shared `target` buffer at byte `offset`. It lands
-    // after every earlier read of the buffer and before any later one.
-    pub(in crate::vulkan) fn stage_geometry(
-        &self,
-        target: GeometryTarget,
-        offset: usize,
-        data: &[u8],
-    ) -> RenderResult<()> {
-        self.geometry_uploads
-            .borrow_mut()
-            .stage(&self.hw.alloc, target, offset as u64, data)
+// Stages each write for the next geometry copy submit, which lands it after
+// every earlier GPU read of the buffer and before any later one.
+struct StagingWriter<'a> {
+    alloc: &'a DeviceAllocator,
+    uploads: &'a mut GeometryUploads,
+}
+
+impl GeometryWriter for StagingWriter<'_> {
+    fn write(&mut self, buffer: GeometryBuffer, offset: usize, bytes: &[u8]) -> RenderResult<()> {
+        let target = match buffer {
+            GeometryBuffer::Vertex => GeometryTarget::Vertex,
+            GeometryBuffer::Index => GeometryTarget::Index,
+        };
+        self.uploads.stage(self.alloc, target, offset as u64, bytes)
     }
 
+    fn reserve(&mut self, bytes: u64) {
+        if let Err(e) = self.uploads.reserve(self.alloc, bytes) {
+            tracing::warn!("mesh streaming: geometry staging reserve failed: {e}");
+        }
+    }
+}
+
+impl SceneHost for VkContext {
+    fn scene(&self) -> Option<&SceneState> {
+        Some(&self.state)
+    }
+
+    fn scene_mut(&mut self) -> Option<&mut SceneState> {
+        debug_assert_main_thread("scene_mut");
+        Some(&mut self.state)
+    }
+
+    fn edit_geometry(&mut self, edit: GeometryEdit<'_>) -> Option<RenderResult<()>> {
+        debug_assert_main_thread("edit_geometry");
+        let mut writer = StagingWriter {
+            alloc: &self.hw.alloc,
+            uploads: self.geometry_uploads.get_mut(),
+        };
+        Some(edit(&mut self.state, &mut writer))
+    }
+}
+
+impl VkContext {
     // Copy `data` into a sub-region of a DEVICE_LOCAL geometry buffer.
     //
     // `dest` is the vertex or index buffer (both created with `TRANSFER_DST`).
@@ -74,251 +105,5 @@ impl VkContext {
         drop(staging);
         self.hw.alloc.reclaim_idle();
         Ok(())
-    }
-
-    // Upload a streamed mesh's geometry into the shared vertex and index
-    // buffers, place it via the sub-allocators, and mark the draw resident.
-    // `frame` reclaims deferred frees that have retired by then, so no
-    // in-flight frame reads the chosen region while the staged copy lands.
-    pub(crate) fn upload_mesh(
-        &mut self,
-        draw_idx: DrawIndex,
-        vertices: &[Vertex],
-        indices: &[u16],
-        frame: u64,
-    ) -> error::RenderResult<()> {
-        let obj = self.draw.objects.get(draw_idx.index()).ok_or_else(|| {
-            RenderError::Other(format!(
-                "upload_mesh: draw object {} out of range",
-                draw_idx
-            ))
-        })?;
-        let (vertex_count, index_count) = (obj.vertex_count, obj.index_count);
-        if vertices.len() != vertex_count {
-            return Err(RenderError::Other(format!(
-                "upload_mesh: draw {} expects {} vertices, got {}",
-                draw_idx,
-                vertex_count,
-                vertices.len()
-            )));
-        }
-        if indices.len() != index_count {
-            return Err(RenderError::Other(format!(
-                "upload_mesh: draw {} expects {} indices, got {}",
-                draw_idx,
-                index_count,
-                indices.len()
-            )));
-        }
-
-        self.geometry.mesh_vtx_alloc.reclaim(frame);
-        self.geometry.mesh_idx_alloc.reclaim(frame);
-        let v_len = std::mem::size_of_val(vertices);
-        let i_len = indices.len() * std::mem::size_of::<u32>();
-        let (v_off, i_off) = crate::suballoc::geometry::place_mesh(
-            &mut self.geometry.mesh_vtx_alloc,
-            &mut self.geometry.mesh_idx_alloc,
-            v_len,
-            i_len,
-            || format!("upload_mesh: draw {draw_idx}"),
-        )?;
-
-        self.stage_geometry(
-            GeometryTarget::Vertex,
-            v_off,
-            bytemuck::cast_slice(vertices),
-        )?;
-        let base = (v_off / std::mem::size_of::<Vertex>()) as u32;
-        let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
-        self.stage_geometry(GeometryTarget::Index, i_off, bytemuck::cast_slice(&rebased))?;
-
-        let obj = &mut self.draw.objects[draw_idx.index()];
-        obj.vertex_offset = v_off;
-        obj.index_offset = i_off / std::mem::size_of::<u32>();
-        obj.resident = true;
-        // The mesh joins the RT-relevant draw set at a freshly allocated region;
-        // the next RT update builds its BLAS over the new slice.
-        self.rt.topology_dirty = true;
-        Ok(())
-    }
-
-    // Replace a build-time static mesh's vertex + index data in place.
-    // Driven by asset hot-reload (`cn debug` only). Reuses the slot's
-    // existing region in the shared VB / IB (allocated by the build-time
-    // layout, not `mesh_vtx_alloc`), so the new geometry must match the
-    // slot's `vertex_count` / `index_count` exactly; size-changing reloads
-    // route through `rebuild_static_geometry` instead. LOD alternates are
-    // uploaded into their existing per-LOD slices the same way LOD0 is.
-    // In-flight frames still read the regions; the staged copy waits for their
-    // reads on the GPU rather than on the CPU. Mirrors
-    // `DxContext::update_mesh_geometry`. Reached only through the bin's
-    // `cn debug` runtime-mutation path (dead in the FFI lib, live in the bin).
-    pub(crate) fn update_mesh_geometry(
-        &mut self,
-        draw_idx: DrawIndex,
-        vertices: &[Vertex],
-        indices: &[u16],
-        lod_alternates: &[(f32, Vec<u16>)],
-    ) -> RenderResult<()> {
-        let obj = self.draw.objects.get(draw_idx.index()).ok_or_else(|| {
-            RenderError::Other(format!(
-                "update_mesh_geometry: draw object {} out of range",
-                draw_idx
-            ))
-        })?;
-        if vertices.len() != obj.vertex_count {
-            return Err(RenderError::Other(format!(
-                "update_mesh_geometry: draw {} expects {} vertices, got {} \
-                 (in-place path is size-matched only; size changes route through \
-                 rebuild_static_geometry)",
-                draw_idx,
-                obj.vertex_count,
-                vertices.len()
-            )));
-        }
-        if indices.len() != obj.index_count {
-            return Err(RenderError::Other(format!(
-                "update_mesh_geometry: draw {} expects {} indices, got {} \
-                 (in-place path is size-matched only; size changes route through \
-                 rebuild_static_geometry)",
-                draw_idx,
-                obj.index_count,
-                indices.len()
-            )));
-        }
-        if lod_alternates.len() != obj.lod_alternates.len() {
-            return Err(RenderError::Other(format!(
-                "update_mesh_geometry: draw {} expects {} LOD alternate(s), got {} \
-                 (LOD-count changes need rebuild_static_geometry)",
-                draw_idx,
-                obj.lod_alternates.len(),
-                lod_alternates.len()
-            )));
-        }
-        for (lod_idx, ((_, alt_idx), slice)) in lod_alternates
-            .iter()
-            .zip(obj.lod_alternates.iter())
-            .enumerate()
-        {
-            if alt_idx.len() != slice.index_count {
-                return Err(RenderError::Other(format!(
-                    "update_mesh_geometry: draw {} LOD{} expects {} indices, got {} \
-                     (LOD size changes need rebuild_static_geometry)",
-                    draw_idx,
-                    lod_idx + 1,
-                    slice.index_count,
-                    alt_idx.len()
-                )));
-            }
-        }
-
-        let v_off = obj.vertex_offset;
-        let i_off_bytes = obj.index_offset * std::mem::size_of::<u32>();
-        // Static draws keep indices absolute (base_vertex == 0), so rebase
-        // mesh-relative u16 indices onto the slot's vertex_offset and widen
-        // to u32 before writing, matching the shared u32 index buffer.
-        let base = (obj.vertex_offset / std::mem::size_of::<Vertex>()) as u32;
-        let lod_byte_offsets: Vec<usize> = obj
-            .lod_alternates
-            .iter()
-            .map(|s| s.index_offset * std::mem::size_of::<u32>())
-            .collect();
-
-        self.stage_geometry(
-            GeometryTarget::Vertex,
-            v_off,
-            bytemuck::cast_slice(vertices),
-        )?;
-        let rebased: Vec<u32> = indices.iter().map(|&i| u32::from(i) + base).collect();
-        self.stage_geometry(
-            GeometryTarget::Index,
-            i_off_bytes,
-            bytemuck::cast_slice(&rebased),
-        )?;
-        // LOD alternates were laid out at init alongside LOD0 in the same
-        // shared IB; each alternate shares LOD0's vertex region, so rebase
-        // onto the same `base`.
-        for ((_, alt_idx), &alt_off_bytes) in lod_alternates.iter().zip(lod_byte_offsets.iter()) {
-            let alt_rebased: Vec<u32> = alt_idx.iter().map(|&i| u32::from(i) + base).collect();
-            self.stage_geometry(
-                GeometryTarget::Index,
-                alt_off_bytes,
-                bytemuck::cast_slice(&alt_rebased),
-            )?;
-        }
-        // Refresh per-LOD switch distances so JSON-side tweaks to
-        // `lod_distances` propagate without a process restart.
-        let slot = &mut self.draw.objects[draw_idx.index()];
-        for ((switch_distance, _), slice) in
-            lod_alternates.iter().zip(slot.lod_alternates.iter_mut())
-        {
-            slice.switch_distance = *switch_distance;
-        }
-        // The slot now holds different triangles at the same offsets, so its RT
-        // BLAS traces the pre-reload positions. Nothing else in the geometry
-        // signature moved, so bump the generation (which the signature carries)
-        // and flag the topology: the next RT update rebuilds this slot's BLAS
-        // rather than reusing the stale one.
-        slot.geometry_generation = slot.geometry_generation.wrapping_add(1);
-        self.rt.topology_dirty = true;
-        Ok(())
-    }
-
-    // Return a streamed mesh's geometry region to the sub-allocators and mark
-    // the draw non-resident so it is skipped in every pass.
-    pub(crate) fn evict_mesh(
-        &mut self,
-        draw_idx: DrawIndex,
-        retire_frame: u64,
-    ) -> RenderResult<()> {
-        let obj = self.draw.objects.get(draw_idx.index()).ok_or_else(|| {
-            error::RenderError::Other(format!("evict_mesh: draw object {draw_idx} out of range"))
-        })?;
-        let v_off = obj.vertex_offset as u64;
-        let v_len = (obj.vertex_count * std::mem::size_of::<Vertex>()) as u64;
-        let i_off = (obj.index_offset * std::mem::size_of::<u32>()) as u64;
-        let i_len = (obj.index_count * std::mem::size_of::<u32>()) as u64;
-        self.geometry
-            .mesh_vtx_alloc
-            .free(v_off, v_len, retire_frame);
-        self.geometry
-            .mesh_idx_alloc
-            .free(i_off, i_len, retire_frame);
-        self.draw.objects[draw_idx.index()].resident = false;
-        // The mesh leaves the RT-relevant draw set; the next RT update drops its
-        // BLAS (deferred-freed once in-flight traces retire).
-        self.rt.topology_dirty = true;
-        Ok(())
-    }
-
-    // Seed the streamed-mesh sub-allocators with the reserved headroom block
-    // (byte ranges in the shared vertex / index buffers), for the
-    // shrinkable-seed path.
-    //
-    // The streamed geometry is not baked into the buffers at build time;
-    // instead the buffers carry one zeroed headroom region (sized to the
-    // cap-many resident meshes) at these offsets, which `compact_for_streaming`
-    // appended before init. `retire_frame 0`: nothing has been drawn yet, so
-    // the space is allocatable immediately -- mirrors `setup_chunk_streaming`'s
-    // seeding. From then on `upload_mesh` / `evict_mesh` place and free streamed
-    // meshes within it. Mirrors `DxContext::seed_mesh_streaming`.
-    pub(crate) fn seed_mesh_streaming(
-        &mut self,
-        vtx_offset: u64,
-        vtx_bytes: u64,
-        idx_offset: u64,
-        idx_bytes: u64,
-    ) {
-        self.geometry.mesh_vtx_alloc.free(vtx_offset, vtx_bytes, 0);
-        self.geometry.mesh_vtx_alloc.reclaim(0);
-        self.geometry.mesh_idx_alloc.free(idx_offset, idx_bytes, 0);
-        self.geometry.mesh_idx_alloc.reclaim(0);
-        if let Err(e) = self
-            .geometry_uploads
-            .get_mut()
-            .reserve(&self.hw.alloc, vtx_bytes + idx_bytes)
-        {
-            tracing::warn!("mesh streaming: geometry staging reserve failed: {e}");
-        }
     }
 }

@@ -236,7 +236,7 @@ impl VkContext {
             }
 
             // Skinned tail against the deformed VB + skinned IB.
-            if self.draw.n_skinned > 0
+            if self.state.draw.n_skinned > 0
                 && let Some(deformed) = self.skinned.deformed.get(frame_idx)
             {
                 device.cmd_bind_vertex_buffers(
@@ -255,7 +255,7 @@ impl VkContext {
                     cmd,
                     view.indirect,
                     (self.skinned_record_base() * stride as usize) as u64,
-                    self.draw.n_skinned as u32,
+                    self.state.draw.n_skinned as u32,
                     stride,
                 );
                 self.inc_draw_calls(1);

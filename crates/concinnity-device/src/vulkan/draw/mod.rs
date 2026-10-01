@@ -92,10 +92,11 @@ impl VkContext {
         let texture_count = self.scene.textures.len() as u32;
         let stride = std::mem::size_of::<GpuObjectData>();
         for (i, obj) in self
+            .state
             .draw
             .objects
             .iter()
-            .take(self.draw.n_objects)
+            .take(self.state.draw.n_objects)
             .enumerate()
         {
             let albedo = albedo_pool_index(obj.texture_slot, texture_count);
@@ -128,11 +129,11 @@ impl VkContext {
         // no-ops when the fold is inactive.
         let skinned_base = self.skinned_record_base();
         for (k, obj) in self
+            .state
             .skinned
-            .slots
             .draw_objects
             .iter()
-            .take(self.draw.n_skinned)
+            .take(self.state.draw.n_skinned)
             .enumerate()
         {
             let albedo = albedo_pool_index(obj.texture_slot, texture_count);
@@ -171,7 +172,7 @@ impl VkContext {
             return;
         }
         let stride = std::mem::size_of::<GpuDrawArgs>();
-        let base = self.draw.n_objects;
+        let base = self.state.draw.n_objects;
         lod::for_each_instance_lod(
             &self.instanced.clusters,
             cam_pos,
@@ -203,7 +204,7 @@ impl VkContext {
             GpuDrawArgs, draw_args_bucket_bits, draw_args_flags,
         };
         let stride = std::mem::size_of::<GpuDrawArgs>();
-        let mut model_history = self.model_history.borrow_mut();
+        let mut model_history = self.state.model_history.borrow_mut();
         model_history.begin(history, self.cull_count());
         // Hand the dispatch the rebuild's prime request here, on the one thread
         // that owns the tracker; the encode runs on a worker.
@@ -220,10 +221,11 @@ impl VkContext {
         // every parallel cull / object-buffer / prev-model index stays intact.
         let mesh_glass_active = self.mesh_glass_active();
         for (i, obj) in self
+            .state
             .draw
             .objects
             .iter()
-            .take(self.draw.n_objects)
+            .take(self.state.draw.n_objects)
             .enumerate()
         {
             // Per-frame active LOD pick. Objects with no alternates fall
@@ -282,7 +284,7 @@ impl VkContext {
             base_vertex: 0,
             flags: 0,
         };
-        for k in n_resident_runtime..self.draw.n_runtime {
+        for k in n_resident_runtime..self.state.draw.n_runtime {
             buf.write_val((runtime_base + k) * stride, &disabled);
         }
 
@@ -294,11 +296,11 @@ impl VkContext {
         // so they are cullable + resident. `take(n_skinned)` no-ops when inactive.
         let skinned_base = self.skinned_record_base();
         for (k, obj) in self
+            .state
             .skinned
-            .slots
             .draw_objects
             .iter()
-            .take(self.draw.n_skinned)
+            .take(self.state.draw.n_skinned)
             .enumerate()
         {
             let d = lod::skinned_camera_distance(obj, cam_pos);
@@ -377,8 +379,8 @@ impl VkContext {
         let (aspect, proj, render_proj) = self.frame_projection(extent, fov_y_radians, near, far);
         // Un-jittered camera VP, fed to the velocity pre-pass so the stored
         // motion vector is free of the sub-pixel projection jitter.
-        let cur_vp = mat4_mul(proj, self.view.matrix);
-        let vp_mat = mat4_mul(render_proj, self.view.matrix);
+        let cur_vp = mat4_mul(proj, self.state.view.matrix);
+        let vp_mat = mat4_mul(render_proj, self.state.view.matrix);
 
         // Clustered light-binning params (main camera). The compute pass reads
         // these to build each cluster's world-space AABB (un-jittered inverse VP
@@ -391,7 +393,7 @@ impl VkContext {
         // `use_clusters = 0` copy instead.
         let cluster_params = render_types::ClusterParams::for_camera(
             &render_types::ClusterCamera {
-                view: self.view.matrix,
+                view: self.state.view.matrix,
                 proj,
                 position: cam_pos,
                 near,
@@ -407,7 +409,7 @@ impl VkContext {
         // Update view UBO for this frame.
         let view_uni = ViewUniforms {
             vp: vp_mat,
-            view: self.view.matrix,
+            view: self.state.view.matrix,
             elapsed,
             // Hand glossy dielectric specular to the SSR / RT resolve when its
             // composite owns the scene image, else the forward shader keeps it all.
@@ -420,7 +422,7 @@ impl VkContext {
             prefilter_mip_count: self.scene.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
             ambient_occlusion: 1.0,
-            sky_rot: self.view.sky_rot,
+            sky_rot: self.state.view.sky_rot,
         };
         self.uniforms.view_ubo_buffers[frame_idx].write_val(0, &view_uni);
 
@@ -491,7 +493,7 @@ impl VkContext {
         // feature toggles or a target resizes). Taken out of the cache so the later
         // `&mut self` execute_graph does not conflict with a borrow of it; put back
         // after execution. A mismatch (or a cold cache) rebuilds.
-        let graph = match self.draw.graph_cache.take() {
+        let graph = match self.graph_cache.take() {
             Some((cached_inputs, cached_graph)) if cached_inputs == seed_inputs => cached_graph,
             _ => build_frame_graph(&seed_inputs)
                 .map_err(|e| RenderError::Other(format!("frame graph: {e}")))?,
@@ -525,7 +527,7 @@ impl VkContext {
         let pass_bufs = self.execute_graph(&graph, &params)?;
         // Cache the compiled graph under this frame's inputs so the next frame with
         // matching inputs skips the rebuild.
-        self.draw.graph_cache = Some((seed_inputs, graph));
+        self.graph_cache = Some((seed_inputs, graph));
 
         self.advance_temporal_state(cur_vp);
 
@@ -753,7 +755,7 @@ impl VkContext {
         // The viewport's view mode + show flags mask the seeded inputs (the
         // per-frame counterpart of the init-time trims); Lit with every flag
         // set is the identity, so a shipped runtime is unaffected.
-        render_graph::apply_view(&seed_inputs, self.view.mode, self.view.show)
+        render_graph::apply_view(&seed_inputs, self.state.view.mode, self.state.view.show)
     }
 
     // The camera projection at render resolution and the same projection offset

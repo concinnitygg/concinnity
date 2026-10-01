@@ -236,7 +236,7 @@ impl MtlContext {
         // Recover the (jittered) projection from this frame's view-projection so
         // the mirror render shares the main camera's projection + jitter, keeping
         // the reflection aligned with the reflective fragment's screen-space sample.
-        let proj = mat4_mul(params.vp, mat4_inverse(self.view.matrix));
+        let proj = mat4_mul(params.vp, mat4_inverse(self.state.view.matrix));
         // The span opens and closes on the face renders, which always encode; a
         // mirror cull is skipped on a frame with no records, and a span opened
         // on one would drop the whole pass from the frame's timings.
@@ -244,7 +244,7 @@ impl MtlContext {
             let plane = set.layout.planes()[slot];
             let oriented = planar_reflection::orient_plane_toward(plane, params.cam_pos);
             let m = planar_reflection::planar_matrices(
-                self.view.matrix,
+                self.state.view.matrix,
                 proj,
                 params.cam_pos,
                 oriented,

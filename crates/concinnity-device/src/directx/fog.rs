@@ -659,7 +659,7 @@ impl DxContext {
     fn fog_froxel_params(&self, near: f32) -> Option<FogFroxelParams> {
         let fog = self.fog.settings?;
         Some(FogFroxelParams {
-            view: self.view.matrix,
+            view: self.state.view.matrix,
             froxel_dims: [FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z],
             _pad_align: 0,
             z_near: near.max(1e-3),

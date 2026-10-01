@@ -416,7 +416,7 @@ impl DxContext {
         // rotation (the transpose of the view matrix's orthonormal 3x3), same as
         // the SSR resolve; `params` then fills in the camera-position translation
         // column to complete the camera-to-world transform.
-        let v = self.view.matrix;
+        let v = self.state.view.matrix;
         let inv_view_rot = [
             [v[0][0], v[1][0], v[2][0], 0.0],
             [v[0][1], v[1][1], v[2][1], 0.0],
@@ -431,7 +431,7 @@ impl DxContext {
             sun_dir: self.fog.sun_dir,
             sun_color: self.fog.sun_color,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-            sky_rot: self.view.sky_rot,
+            sky_rot: self.state.view.sky_rot,
         });
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges

@@ -20,6 +20,7 @@ use concinnity_core::render::planar_reflection;
 use concinnity_core::render::probe_book::ProbeBook;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::scene_flow;
+use concinnity_core::render::scene_state::SceneState;
 use concinnity_core::render::slot_rewrites;
 use concinnity_core::window::display_mode;
 use std::cell::RefCell;
@@ -45,9 +46,7 @@ use super::post::ssao::*;
 use super::post::ssr::*;
 use super::post::taa::*;
 use super::post::upscale::UpscaleState;
-use super::resources::geometry::MeshStreamState;
 use super::resources::skinning::SkinnedState;
-use super::resources::streaming::ChunkStreamState;
 use super::texture::*;
 use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
 use crate::win32::window;
@@ -308,8 +307,7 @@ pub(super) struct DxFrameSync {
 }
 
 // Shared static-mesh geometry buffers + their views, grouped off the flat
-// `DxContext`. Mirrors Vulkan's `VkGeometry`. The streamed-mesh + chunk
-// sub-allocators stay in their own `MeshStreamState` / `ChunkStreamState`.
+// `DxContext`. Mirrors Vulkan's `VkGeometry`.
 pub(super) struct DxGeometry {
     pub vertex_buffer: PooledBuffer,
     pub index_buffer: PooledBuffer,
@@ -363,109 +361,6 @@ pub(super) struct DxDescriptors {
     pub shadow_sampler_gpu: SamplerSlot,
     pub linear_sampler_gpu: SamplerSlot,
     pub text_sampler_gpu: SamplerSlot,
-}
-
-// The scene draw list plus the record counts that partition the GPU-driven
-// bindless buffers.
-pub(super) struct DrawState {
-    pub objects: Vec<DrawObject>,
-    // The last compiled frame graph, keyed by the `FrameGraphInputs` it was built
-    // from. `build_frame_graph` is a pure function of those inputs (which change
-    // only when a feature toggles or a target resizes), so a frame whose inputs
-    // match the cached key reuses the compiled graph instead of rebuilding it.
-    // `RefCell` because `record_frame` is &self; taken out before
-    // `execute_graph` and put back after so a steady scene compiles the graph
-    // once and reuses it thereafter.
-    pub graph_cache: RefCell<Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>>,
-    // Build-time `objects` count. Streamed chunks are appended past this, so a
-    // draw index >= `draw.n_objects` identifies a chunk.
-    pub n_objects: usize,
-    // Instanced-cluster instances folded into the GPU-driven bindless pass as
-    // per-object `GpuObjectData` records after the `draw.n_objects` static records.
-    pub n_instances: usize,
-    // Runtime record reserve folded into the GPU-driven bindless pass BETWEEN the
-    // instances and the skinned tail: the cull buffers reserve
-    // `[draw.n_objects + draw.n_instances, +draw.n_runtime)` at init. It holds
-    // both kinds of object that appear after init -- streamed `VoxelWorld` chunks
-    // (capacity = the worst-case resident window) and spawned clones (capacity =
-    // `MAX_CLONE_DRAWS`) -- because neither can join the build-time BVH and both
-    // already have their geometry in the shared VB/IB. Resident ones are packed
-    // into this region each frame (`build_object_buffer` / `build_draw_args_buffer`)
-    // and drawn by the static+instance prefix `ExecuteIndirect`; the unused tail
-    // is disabled. Fixed at init, unlike `draw.n_skinned` (whose tail base sits
-    // past this reserve).
-    pub n_runtime: usize,
-    // Skinned draw objects folded into the GPU-driven bindless pass: each
-    // occupies a `GpuObjectData` / `GpuDrawArgs` record at buffer index
-    // `skinned_record_base() + k`, past the runtime reserve, drawn (as rigid deformed geometry) by the
-    // main pass's 2nd `ExecuteIndirect`. The cull / object / draw-args / indirect
-    // buffers reserve these slots at init (capacity threaded through `new`); this
-    // count is set in `upload_skinned` once the skinned geometry is resident, so
-    // it stays 0 (and `cull_count()` excludes the reserved tail) when no skinned
-    // mesh loads.
-    pub n_skinned: usize,
-}
-
-impl DrawState {
-    pub(super) fn new(objects: Vec<DrawObject>, n_instances: usize, n_chunk_max: usize) -> Self {
-        let n_objects = objects.len();
-        Self {
-            n_objects,
-            objects,
-            graph_cache: RefCell::new(None),
-            n_instances,
-            // Runtime record reserve (fixed at init): the worst-case
-            // resident streamed-chunk window plus the runtime-clone cap. The
-            // cull buffers reserve `[n_objects + n_instances, +n_runtime)`;
-            // resident chunks and spawned clones are folded in per frame and
-            // the unused tail is disabled.
-            n_runtime: n_chunk_max + clone_reserve(n_objects),
-            // Set in `upload_skinned` once skinned geometry is resident; the
-            // cull buffers reserve the tail at init via the threaded
-            // `n_skinned` capacity, but `cull_count()` reads this runtime
-            // count.
-            n_skinned: 0,
-        }
-    }
-}
-
-// The frame's view state, snapped from `FrameParams` at the top of `draw_frame`.
-pub(super) struct ViewState {
-    pub clear_color: [f32; 4],
-    // Scene-transition fade to black in [0, 1], applied in the composite pass.
-    // Backend-owned rather than a `PostProcessParams` field so a settings push
-    // cannot reset an in-flight fade. Stays out of `view.clear_color`: folding it
-    // there would tint only the pixels no geometry covers, and would mismatch the
-    // color target's baked D3D12 optimized clear value every frame.
-    pub scene_fade: f32,
-    // The viewport view mode: the main passes read it for the wireframe pipeline
-    // variant and the unlit shade flag, the composite for its channel
-    // visualization.
-    pub mode: concinnity_core::gfx::view_modes::ViewMode,
-    // The frame's show flags; `record_frame` masks the seeded graph inputs with
-    // both these and `mode`.
-    pub show: concinnity_core::gfx::view_modes::ShowFlags,
-    // The frame's camera far plane, for the composite's depth-channel
-    // normalization.
-    pub far: f32,
-    pub matrix: [[f32; 4]; 4],
-    // Rows of the sky's inverse rotation, uploaded into every uniform block
-    // whose pass samples the environment cubemaps.
-    pub sky_rot: [[f32; 4]; 3],
-}
-
-impl ViewState {
-    pub(super) fn new(clear_color: [f32; 4]) -> Self {
-        Self {
-            clear_color,
-            scene_fade: 0.0,
-            mode: Default::default(),
-            show: Default::default(),
-            far: 1.0,
-            matrix: concinnity_core::transform::IDENTITY,
-            sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
-        }
-    }
 }
 
 // Scene-captured reflection probes and the staggered bake that fills them.
@@ -684,13 +579,6 @@ pub(super) struct DxRayTracing {
     // request; in by default). Clear it and the BVH covers static + instanced
     // geometry only, isolating the skinned trace path.
     pub skinned_geometry: bool,
-    // Set when a runtime change altered the RT-relevant draw set (a cloned prop,
-    // a streamed chunk added/removed) since the last update. Consumed once per
-    // frame by `rt_dynamic_update`, which folds the change into the BLAS head
-    // (`RtAccelData::refresh_topology`) -- reusing every unchanged BLAS and
-    // building only the new ones -- rather than ignoring it (the `Auto` dirty
-    // check only watches transforms of the prior set) or rebuilding every BLAS.
-    pub topology_dirty: bool,
 }
 
 // The device layer every per-world resource is built on: device, queue,
@@ -793,15 +681,18 @@ pub(crate) struct DxContext {
     // Shader-visible descriptor heaps + samplers + scene texture pools. See
     // `DxDescriptors`.
     pub(super) descriptors: DxDescriptors,
-    // Draw list + cull inputs + folded record counts. See [`DrawState`].
-    pub(super) draw: DrawState,
-
-    // Streamed-mesh byte-range sub-allocators. See [`MeshStreamState`].
-    pub(super) mesh_stream: MeshStreamState,
-
-    // Chunk-streaming byte-range sub-allocators + slot recycling. See
-    // [`ChunkStreamState`].
-    pub(super) chunk_stream: ChunkStreamState,
+    // The CPU-side scene: draw list, view, skinned slots, model history and
+    // streamed-geometry placement. See [`SceneState`].
+    pub(super) state: SceneState,
+    // The last compiled frame graph, keyed by the `FrameGraphInputs` it was built
+    // from. `build_frame_graph` is a pure function of those inputs (which change
+    // only when a feature toggles or a target resizes), so a frame whose inputs
+    // match the cached key reuses the compiled graph instead of rebuilding it.
+    // `RefCell` because `record_frame` is &self; taken out before
+    // `execute_graph` and put back after so a steady scene compiles the graph
+    // once and reuses it thereafter.
+    pub(super) graph_cache:
+        RefCell<Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>>,
 
     // Geometry writes staged for the next copy submit. See [`GeometryUploads`].
     pub(super) geometry_uploads: RefCell<GeometryUploads>,
@@ -839,11 +730,6 @@ pub(crate) struct DxContext {
     // one MRT that all those consumers read, replacing the separate SSR / SSAO
     // / velocity geometry pre-passes. See [`GbufferResources`].
     pub(super) gbuffer: Option<GbufferResources>,
-    // Per-record validity of the GPU-filled model-history ring. A record whose
-    // occupant changed carries `NO_HISTORY` in its draw args, which sends the
-    // G-buffer pre-pass to its current model instead of a stranger's.
-    // `RefCell` because the draw-args build runs off `&self`.
-    pub(super) model_history: RefCell<concinnity_core::render::model_history::ModelHistory>,
 
     // Temporal anti-aliasing. `Some` only when `PostProcessConfig.aa_mode` is set;
     // when `None` the history resolve and the projection jitter are skipped and
@@ -943,7 +829,6 @@ pub(crate) struct DxContext {
 
     // Instanced-prop per-frame upload buffers + LOD buckets. See `DxInstanced`.
     pub(super) instanced: DxInstanced,
-    pub(super) view: ViewState,
     // Lazily-built wireframe twin of the main-pass pipeline; empty until the
     // first Wireframe frame. See [`super::wireframe`].
     pub(super) wireframe: super::wireframe::DxWireframe,
@@ -1041,10 +926,10 @@ impl DxContext {
         // Snapped for the passes recorded below (the wireframe pipeline
         // variant, the unlit shade flag, the composite's channel visualization
         // + depth normalization) and for the graph-input mask in record_frame.
-        self.view.mode = view_mode;
-        self.view.show = show;
-        self.view.far = far;
-        self.view.sky_rot = sky_rot;
+        self.state.view.mode = view_mode;
+        self.state.view.show = show;
+        self.state.view.far = far;
+        self.state.view.sky_rot = sky_rot;
         self.apply_pending_rebuilds()?;
 
         let frame = self.current_frame;
@@ -1165,48 +1050,6 @@ impl DxContext {
         }
     }
 
-    pub(crate) fn update_view(&mut self, matrix: [[f32; 4]; 4]) {
-        self.view.matrix = matrix;
-    }
-
-    // Update the model matrices of the given draw objects, one
-    // `(slot, matrix)` entry per changed object. Out-of-range slots have no
-    // effect.
-    pub(crate) fn update_models(&mut self, updates: &[(DrawIndex, [[f32; 4]; 4])]) {
-        for &(index, model) in updates {
-            if let Some(obj) = self.draw.objects.get_mut(index.index()) {
-                obj.model = model;
-            }
-        }
-    }
-
-    pub(crate) fn update_visibility(&mut self, index: DrawIndex, visible: bool) {
-        if let Some(obj) = self.draw.objects.get_mut(index.index()) {
-            obj.visible = visible;
-        }
-    }
-
-    // Retire a draw object for a despawned entity: clear `visible` (drops it
-    // from the main / shadow / velocity passes) and `resident` (drops it from
-    // the ray-tracing BLAS / geometry-table rebuild), so it leaves no ghost in
-    // any pass, then return its slot to the free list so the next runtime clone
-    // (or streamed chunk) recycles it. The geometry buffers stay allocated.
-    // No-op if the index is out of range.
-    pub(crate) fn retire_draw_object(&mut self, index: DrawIndex) {
-        if let Some(obj) = self.draw.objects.get_mut(index.index()) {
-            obj.visible = false;
-            obj.resident = false;
-            // Slot recycling lives in the engine's draw-slot allocator; only
-            // the runtime-append region recycles here (`reuses_build_slots` is
-            // false because the init-time cull BVH and RT `object_indices` key
-            // fixed build-time slots and cannot refit).
-        }
-    }
-
-    pub(crate) fn set_fade(&mut self, fade: f32) {
-        self.view.scene_fade = fade.clamp(0.0, 1.0);
-    }
-
     // Render statistics for the most recent `draw_frame`, for the profiler
     // overlay. `gpu_frame_us` is filled at the top of each `draw_frame` from
     // the timestamp pair this slot resolved on its previous trip through the
@@ -1307,7 +1150,7 @@ impl DxContext {
 
     // The frame's unlit flag for ViewUniforms, from the viewport view mode.
     pub(super) fn shade_mode(&self) -> f32 {
-        if self.view.mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {
+        if self.state.view.mode == concinnity_core::gfx::view_modes::ViewMode::Unlit {
             1.0
         } else {
             0.0
@@ -1386,7 +1229,8 @@ impl DxContext {
         self.mesh_glass_active()
             && self.transparent.as_ref().is_some_and(|t| {
                 t.seethrough_mesh_indices().iter().any(|&i| {
-                    self.draw
+                    self.state
+                        .draw
                         .objects
                         .get(i)
                         .is_some_and(|o| o.visible && o.resident)
@@ -1678,8 +1522,8 @@ impl DxContext {
             // cannot refit; only the runtime-append region recycles (tracked
             // as the RT incremental topology parity item).
             reuses_build_slots: false,
-            // Per-object material state is baked at build time here, so
-            // `set_draw_material` has no implementation yet.
+            // Per-object material state is baked into the GPU records at build
+            // time, so a slot rewrite in `SceneState` would not reach the frame.
             rewrites_draws: false,
         }
     }
@@ -1728,10 +1572,10 @@ impl DxContext {
 
 impl scene_flow::SceneControl for DxContext {
     fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
-        self.update_visibility(draw_idx, visible);
+        self.state.update_visibility(draw_idx, visible);
     }
     fn set_fade(&mut self, fade: f32) {
-        self.set_fade(fade);
+        self.state.set_fade(fade);
     }
 }
 

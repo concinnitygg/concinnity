@@ -270,7 +270,7 @@ impl DxContext {
         // copy the planar / probe re-renders bind (written once at init).
         let cluster_params = ClusterParams::for_camera(
             &ClusterCamera {
-                view: self.view.matrix,
+                view: self.state.view.matrix,
                 proj,
                 position: cam_pos,
                 near,
@@ -296,14 +296,14 @@ impl DxContext {
             };
         let view_uni = ViewUniforms {
             vp: vp_mat,
-            view: self.view.matrix,
+            view: self.state.view.matrix,
             elapsed,
             reflections_enabled,
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2]],
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             shade_mode: self.shade_mode(),
             ambient_occlusion: 1.0,
-            sky_rot: self.view.sky_rot,
+            sky_rot: self.state.view.sky_rot,
         };
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
@@ -355,7 +355,7 @@ impl DxContext {
         // feature toggles or a target resizes). `take`n out of the cache (the
         // `borrow_mut` guard drops at the end of this statement) so the owned graph
         // no longer borrows `self`; a mismatch (or a cold cache) rebuilds.
-        let cached_graph = self.draw.graph_cache.borrow_mut().take();
+        let cached_graph = self.graph_cache.borrow_mut().take();
         let frame_graph = match cached_graph {
             Some((cached_inputs, cached)) if cached_inputs == seed_inputs => cached,
             _ => build_frame_graph(&seed_inputs)
@@ -396,7 +396,7 @@ impl DxContext {
         let pass_cmd_lists = self.execute_graph(&frame_graph, &frame_params)?;
         // Cache the compiled graph under this frame's inputs so the next frame with
         // matching inputs skips the rebuild.
-        *self.draw.graph_cache.borrow_mut() = Some((seed_inputs, frame_graph));
+        *self.graph_cache.borrow_mut() = Some((seed_inputs, frame_graph));
 
         self.advance_temporal_state(cur_vp);
 

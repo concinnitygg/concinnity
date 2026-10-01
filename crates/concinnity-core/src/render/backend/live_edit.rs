@@ -10,7 +10,7 @@ use crate::components::ShaderPrograms;
 use crate::components::sdf_programs::SdfPrograms;
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::{DrawIndex, MATERIAL_PARAM_COUNT, MaterialUniforms, SkinnedIndex};
-use crate::render::backend::PreparedPipelines;
+use crate::render::backend::{PreparedPipelines, SceneHost};
 use crate::render::backend_init::{BackendInit, SwapchainConfig};
 use crate::render::error::{RenderError, RenderResult};
 use alloc::vec::Vec;
@@ -86,11 +86,12 @@ pub struct SkinnedSlotLayout {
 /// built world through.
 ///
 /// All defaulted, so a shipped backend that never reloads an asset implements
-/// none of it. The size queries report `None`, which is what makes the callers
-/// above decide there is nothing to rewrite; the rewrites themselves report
-/// [`RenderError::Unsupported`], so a reload is never counted as applied when
-/// nothing changed.
-pub trait LiveEdit {
+/// none of it. The edits that only rewrite the scene's draw slots are defaulted
+/// over [`SceneHost`]. Without a scene the size queries report `None`, which is
+/// what makes the callers above decide there is nothing to rewrite, and the
+/// rewrites report [`RenderError::Unsupported`], so a reload is never counted
+/// as applied when nothing changed.
+pub trait LiveEdit: SceneHost {
     /// Shared atomic flag the backend polls at frame start to trigger a
     /// shader rebuild. `Some` only under `cn debug` on backends that ship
     /// hot-reload; `None` on production runs and on backends that do not. The
@@ -113,11 +114,9 @@ pub trait LiveEdit {
     /// `None` when the index is out of range / the backend does not expose
     /// the field. Used by asset hot-reload to detect size-changing
     /// reloads before attempting [`Self::update_mesh_geometry`], which
-    /// rejects size mismatches. Default returns `None`; backends that
-    /// implement the rebuild path also override this.
+    /// rejects size mismatches.
     fn draw_geometry_size(&self, draw_idx: DrawIndex) -> Option<(usize, usize)> {
-        let _ = draw_idx;
-        None
+        self.scene()?.draw_geometry_size(draw_idx)
     }
 
     /// Per-LOD-alternate index counts for the static draw at `draw_idx`,
@@ -129,8 +128,7 @@ pub trait LiveEdit {
     /// breakdown queues the entry for [`Self::rebuild_static_geometry`]
     /// instead of [`Self::update_mesh_geometry`]'s in-place write.
     fn draw_lod_index_counts(&self, draw_idx: DrawIndex) -> Option<Vec<usize>> {
-        let _ = draw_idx;
-        None
+        self.scene()?.draw_lod_index_counts(draw_idx)
     }
 
     /// Rebuild the shared static-mesh vertex + index buffers, replacing the
@@ -215,10 +213,12 @@ pub trait LiveEdit {
         skinned_index: SkinnedIndex,
         new_joint_count: usize,
     ) -> RenderResult<()> {
-        let _ = (skinned_index, new_joint_count);
-        Err(RenderError::Unsupported {
-            op: "update_skinned_skeleton",
-        })
+        match self.scene_mut() {
+            Some(scene) => scene.update_skinned_skeleton(skinned_index, new_joint_count),
+            None => Err(RenderError::Unsupported {
+                op: "update_skinned_skeleton",
+            }),
+        }
     }
 
     /// Replace a `Mesh` draw slot's vertex + index data in place. Driven by
@@ -242,10 +242,12 @@ pub trait LiveEdit {
         idxs: &[u16],
         lod_alternates: &[(f32, Vec<u16>)],
     ) -> RenderResult<()> {
-        let _ = (draw_idx, verts, idxs, lod_alternates);
-        Err(RenderError::Unsupported {
-            op: "update_mesh_geometry",
+        self.edit_geometry(&mut |scene, writer| {
+            scene.update_mesh_geometry(draw_idx, verts, idxs, lod_alternates, writer)
         })
+        .unwrap_or(Err(RenderError::Unsupported {
+            op: "update_mesh_geometry",
+        }))
     }
 
     /// Replace the live IBL environment map with a freshly precomputed payload.
@@ -263,9 +265,9 @@ pub trait LiveEdit {
 
     /// Rewrite a draw slot's material parameters + texture/normal-map pool
     /// indices in place. Driven by the editor's live draw seam when a Prop edits
-    /// its `material` arg. Default no-op; a backend that implements it reports
-    /// [`DeviceCapabilities::rewrites_draws`], which is what the caller gates on
-    /// rather than pushing an edit that would not land.
+    /// its `material` arg. The caller gates on
+    /// [`DeviceCapabilities::rewrites_draws`], which a backend reports once its
+    /// GPU records and ray-tracing geometry table follow the rewritten slot.
     fn set_draw_material(
         &mut self,
         draw_idx: DrawIndex,
@@ -273,7 +275,9 @@ pub trait LiveEdit {
         texture_slot: usize,
         normal_map_slot: usize,
     ) {
-        let _ = (draw_idx, material, texture_slot, normal_map_slot);
+        if let Some(scene) = self.scene_mut() {
+            scene.set_draw_material(draw_idx, material, texture_slot, normal_map_slot);
+        }
     }
 
     /// Replace one row of the material parameter table with a material's new
@@ -286,10 +290,12 @@ pub trait LiveEdit {
     }
 
     /// Rewrite a draw slot's `cull_distance` in place. Driven by the editor's
-    /// live draw seam when a Prop edits its `cull_distance` arg. Default no-op,
-    /// gated by the same [`DeviceCapabilities::rewrites_draws`] flag.
+    /// live draw seam when a Prop edits its `cull_distance` arg. Gated by the
+    /// same [`DeviceCapabilities::rewrites_draws`] flag.
     fn set_draw_cull_distance(&mut self, draw_idx: DrawIndex, cull_distance: f32) {
-        let _ = (draw_idx, cull_distance);
+        if let Some(scene) = self.scene_mut() {
+            scene.set_draw_cull_distance(draw_idx, cull_distance);
+        }
     }
 
     /// Rebuild one world Shader's pipeline from freshly compiled programs.

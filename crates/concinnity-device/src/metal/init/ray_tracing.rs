@@ -107,7 +107,6 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
         dynamic_mode: post.rt_dynamic,
         skinned_geometry: post.rt_skinned_geometry,
         update_failed: false,
-        topology_dirty: false,
         pipelines,
     })
 }

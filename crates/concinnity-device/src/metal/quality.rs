@@ -194,7 +194,7 @@ impl MtlContext {
                         index_buffer: &self.scene.index_buffer,
                     },
                     RtSceneGeometry {
-                        draw_objects: &self.draw.objects,
+                        draw_objects: &self.state.draw.objects,
                         clusters: &self.instanced.clusters,
                     },
                     RtTextureCounts {

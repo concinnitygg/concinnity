@@ -5,6 +5,7 @@
 //! about. Before the pass was single-sourced these were three `#[repr(C)]`
 //! copies apiece, kept in step by hand.
 
+use super::PassCamera;
 use crate::components::sdf_volume::SDF_PARAMS_LEN;
 
 /// Per-frame view inputs, 208 bytes. Every field after `inv_vp` is a `float4`
@@ -29,6 +30,22 @@ pub struct RaymarchView {
     /// Rows of the rotation taking a world direction into the environment
     /// cubemap's baked frame, so a volume's ambient turns with the sky.
     pub sky_rot: [[f32; 4]; 3],
+}
+
+impl RaymarchView {
+    /// The view block for `camera`.
+    pub fn new(camera: &PassCamera) -> Self {
+        let c = camera.cam_pos;
+        Self {
+            vp: camera.vp,
+            inv_vp: camera.inv_vp,
+            cam_pos: [c[0], c[1], c[2], 0.0],
+            viewport: camera.viewport,
+            time: camera.time,
+            prefilter_mip_count: camera.prefilter_mip_count,
+            sky_rot: camera.sky_rot,
+        }
+    }
 }
 
 /// Per-volume uniforms, 176 bytes. `center` and `extent` each pair with the pad
@@ -81,5 +98,18 @@ mod tests {
         assert_eq!(size_of::<RaymarchView>(), 208);
         assert_eq!(size_of::<RaymarchVolumeUniforms>(), 176);
         assert_eq!(size_of::<RaymarchShadowCascade>(), 16);
+    }
+
+    #[test]
+    fn the_view_block_carries_the_camera_with_a_zero_w() {
+        let camera = super::super::view::test_camera();
+        let view = RaymarchView::new(&camera);
+        assert_eq!(view.vp, camera.vp);
+        assert_eq!(view.inv_vp, camera.inv_vp);
+        assert_eq!(view.cam_pos, [3.0, 4.0, 5.0, 0.0]);
+        assert_eq!(view.viewport, camera.viewport);
+        assert_eq!(view.time, camera.time);
+        assert_eq!(view.prefilter_mip_count, camera.prefilter_mip_count);
+        assert_eq!(view.sky_rot, camera.sky_rot);
     }
 }

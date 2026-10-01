@@ -849,7 +849,7 @@ impl VkContext {
         // (Vulkan builds `rt_accel` + `rt_reflections` together, so an RT-enabled
         // scene that was empty at build time has both `None` and RT stays off until
         // a quality re-toggle rebuilds the pass; there is no seed-from-empty here.)
-        let topology_dirty = std::mem::take(&mut self.rt.topology_dirty);
+        let topology_dirty = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
         if self.rt.accel.is_none() || self.rt_reflections.is_none() {
             return;
         }
@@ -866,7 +866,7 @@ impl VkContext {
         // joint palettes are borrowed straight out of this frame's slot instead of
         // being collected into a per-frame list.
         let skinned_inputs: Option<(vk::Buffer, vk::Buffer)> = if self.rt.skinned_geometry
-            && !self.skinned.slots.draw_objects.is_empty()
+            && !self.state.skinned.draw_objects.is_empty()
             && !self.skinned.vertex_buffer.is_null()
             && !self.skinned.index_buffer.is_null()
         {
@@ -894,7 +894,7 @@ impl VkContext {
                 .map(|b| b.as_slice())
                 .unwrap_or(&[]);
             let skinned = skinned_inputs.map(|(vb, ib)| super::super::raytrace::SkinnedRtInputs {
-                objects: &self.skinned.slots.draw_objects,
+                objects: &self.state.skinned.draw_objects,
                 vertex_buffer: vb,
                 index_buffer: ib,
                 joint_buffers,
@@ -907,7 +907,7 @@ impl VkContext {
                     pd,
                 },
                 cmd,
-                &self.draw.objects,
+                &self.state.draw.objects,
                 super::super::raytrace::RtDynamicInputs {
                     policy: super::super::raytrace::RtRebuildPolicy {
                         mode,
@@ -987,7 +987,7 @@ impl VkContext {
         // The view->world rotation is the transpose of the view matrix's
         // orthonormal 3x3; `params` fills in the camera-position translation
         // column to complete the camera-to-world transform.
-        let v = self.view.matrix;
+        let v = self.state.view.matrix;
         let inv_view_rot = [
             [v[0][0], v[1][0], v[2][0], 0.0],
             [v[0][1], v[1][1], v[2][1], 0.0],
@@ -1002,7 +1002,7 @@ impl VkContext {
             sun_dir: self.fog.sun_dir,
             sun_color: self.fog.sun_color,
             prefilter_mip_count: self.scene.prefilter_mip_count as f32,
-            sky_rot: self.view.sky_rot,
+            sky_rot: self.state.view.sky_rot,
         });
         rt.params_buffers[frame_idx].write_val(0, &params);
 

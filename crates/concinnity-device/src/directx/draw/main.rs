@@ -62,10 +62,11 @@ impl DxContext {
         // shader bind the pool base, so a shared texture resolves to one descriptor.
         let texture_count = self.scene.textures.len() as u32;
         for (i, obj) in self
+            .state
             .draw
             .objects
             .iter()
-            .take(self.draw.n_objects)
+            .take(self.state.draw.n_objects)
             .enumerate()
         {
             let albedo = albedo_pool_index(obj.texture_slot, texture_count);
@@ -115,11 +116,11 @@ impl DxContext {
         // frustum/Hi-Z test them. Drawn by the main pass's 2nd `ExecuteIndirect`.
         let skinned_base = self.skinned_record_base();
         for (k, obj) in self
+            .state
             .skinned
-            .slots
             .draw_objects
             .iter()
-            .take(self.draw.n_skinned)
+            .take(self.state.draw.n_skinned)
             .enumerate()
         {
             let albedo = albedo_pool_index(obj.texture_slot, texture_count);
@@ -127,7 +128,7 @@ impl DxContext {
             let rec = pack_skinned_record(obj, albedo, normal);
             // SAFETY: the buffer reserved `draw.n_skinned` records past
             // `skinned_record_base()` at init; the loop is bounded by
-            // `self.skinned.slots.draw_objects.len() == self.draw.n_skinned`.
+            // `self.state.skinned.draw_objects.len() == self.state.draw.n_skinned`.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &rec as *const GpuObjectData as *const u8,
@@ -169,7 +170,11 @@ impl DxContext {
                 false,
                 Some(&depth_dsv),
             );
-            cmd.ClearRenderTargetView(self.targets.hdr.color_rtv, &self.view.clear_color, None);
+            cmd.ClearRenderTargetView(
+                self.targets.hdr.color_rtv,
+                &self.state.view.clear_color,
+                None,
+            );
             cmd.ClearDepthStencilView(depth_dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
 
             let vp = D3D12_VIEWPORT {
@@ -349,7 +354,7 @@ impl DxContext {
         // has already posed the deformed buffer and left it in
         // VERTEX_AND_CONSTANT_BUFFER.
         if use_bindless
-            && self.draw.n_skinned > 0
+            && self.state.draw.n_skinned > 0
             && let (Some(bindless_pso), Some(bindless_root), Some(cull_sig), Some(deformed_vbv)) = (
                 self.cull.main_bindless_pso.as_ref(),
                 self.cull.main_bindless_root_sig.as_ref(),
@@ -404,7 +409,7 @@ impl DxContext {
                 // same indirect command buffer.
                 cmd.ExecuteIndirect(
                     cull_sig,
-                    self.draw.n_skinned as u32,
+                    self.state.draw.n_skinned as u32,
                     indirect,
                     (self.skinned_record_base()
                         * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)
@@ -603,7 +608,7 @@ impl DxContext {
             // IB. The root signature + root descriptors set above persist, so only
             // the pipeline (a bucket may have replaced it) and the vertex/index
             // buffers rebind. Skinned draws always render bucket 0.
-            if self.draw.n_skinned > 0
+            if self.state.draw.n_skinned > 0
                 && let Some(deformed_vbv) = self.skinned.deformed_vbvs.get(frame_idx)
             {
                 // SAFETY: the command list is in the recording state, and every resource,
@@ -614,7 +619,7 @@ impl DxContext {
                     cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
                     cmd.ExecuteIndirect(
                         cull_sig,
-                        self.draw.n_skinned as u32,
+                        self.state.draw.n_skinned as u32,
                         indirect,
                         (self.skinned_record_base()
                             * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)

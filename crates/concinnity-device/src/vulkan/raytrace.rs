@@ -2854,7 +2854,7 @@ impl super::context::VkContext {
             self.hw.graphics_queue,
             RtSceneGeometry {
                 shared: SharedGeometry::of(&self.geometry),
-                draw_objects: &self.draw.objects,
+                draw_objects: &self.state.draw.objects,
                 clusters: &self.instanced.clusters,
                 albedo_count: self.scene.textures.len(),
                 exclude_seethrough: self.seethrough_meshes_enabled(),
@@ -2915,13 +2915,13 @@ impl super::context::VkContext {
     // descriptor sets pointing at [skinned bind-pose VB, this object's joint
     // buffer, this frame's deformed buffer]. The deformed + joint buffers are
     // stable for the world's lifetime, so the sets are written once here (no
-    // per-frame re-point). Sets `self.draw.n_skinned`, which engages the fold. Called
+    // per-frame re-point). Sets `self.state.draw.n_skinned`, which engages the fold. Called
     // from `upload_skinned` when the bindless cull path is active. Mirrors the
     // DirectX `upload_skinned` skin block.
     pub(in crate::vulkan) fn build_main_skin(&mut self, vertex_total: usize) -> RenderResult<()> {
         let device = self.hw.device.clone();
         let frames = self.frames_in_flight.max(1);
-        let n = self.skinned.slots.draw_objects.len();
+        let n = self.state.skinned.draw_objects.len();
         if n == 0 {
             return Ok(());
         }
@@ -2971,7 +2971,7 @@ impl super::context::VkContext {
 
         self.skinned.skin = Some(skin);
         self.skinned.deformed = deformed;
-        self.draw.n_skinned = n;
+        self.state.draw.n_skinned = n;
         Ok(())
     }
 
@@ -3007,7 +3007,7 @@ impl super::context::VkContext {
         vertex_total: usize,
     ) -> RenderResult<Vec<DeviceBuffer>> {
         let frames = self.frames_in_flight.max(1);
-        let n = self.skinned.slots.draw_objects.len();
+        let n = self.state.skinned.draw_objects.len();
 
         let deformed_bytes = (vertex_total as u64 * VERTEX_STRIDE).max(VERTEX_STRIDE);
         let mut deformed: Vec<DeviceBuffer> = Vec::with_capacity(frames);
@@ -3061,7 +3061,7 @@ impl super::context::VkContext {
         let Some(skin) = self.skinned.skin.as_ref() else {
             return;
         };
-        if self.draw.n_skinned == 0 || self.skinned.deformed.len() <= frame_idx {
+        if self.state.draw.n_skinned == 0 || self.skinned.deformed.len() <= frame_idx {
             return;
         }
         let device = &self.hw.device;
@@ -3072,11 +3072,11 @@ impl super::context::VkContext {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, skin.pipeline.handle());
         }
         for (o, obj) in self
+            .state
             .skinned
-            .slots
             .draw_objects
             .iter()
-            .take(self.draw.n_skinned)
+            .take(self.state.draw.n_skinned)
             .enumerate()
         {
             let params = SkinParams {

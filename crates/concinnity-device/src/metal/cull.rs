@@ -357,7 +357,7 @@ impl MtlContext {
         self.rings.joint.write_all(
             &self.hw.device,
             ring_slot,
-            &self.skinned.slots.joint_matrices,
+            &self.state.skinned.joint_matrices,
         )
     }
 
@@ -372,7 +372,7 @@ impl MtlContext {
         self.rings.joint.write_weights(
             &self.hw.device,
             ring_slot,
-            &self.skinned.slots.morph_weights,
+            &self.state.skinned.morph_weights,
         )
     }
 
@@ -396,7 +396,7 @@ impl MtlContext {
         // borrows below stay on disjoint fields.
         let mut objects = std::mem::take(&mut self.rings.object_scratch);
         objects.clear();
-        for obj in &self.draw.objects {
+        for obj in &self.state.draw.objects {
             // Shared-pool indices (each the texture's own handle, a normal-less
             // draw's normal being the flat-normal fallback slot, all clamped to
             // the cap); the identical mapping the folded instance records use, so
@@ -418,15 +418,15 @@ impl MtlContext {
         // is a memcpy, and every instance draws the cluster base LOD. `objects`
         // was `mem::take`n, so this borrows only `instanced.records`, leaving
         // the other fields free.
-        if self.draw.n_instances > 0 {
+        if self.state.draw.n_instances > 0 {
             objects.extend_from_slice(&self.instanced.records);
         }
         // Append a record per skinned object: the compute-deformed
         // geometry draws as rigid static geometry, so it folds into the same
         // cull. Rebuilt every frame (the record's AABB + model follow obj.model,
         // which animates), unlike the cached static instance records.
-        if self.draw.n_skinned > 0 {
-            for obj in &self.skinned.slots.draw_objects {
+        if self.state.draw.n_skinned > 0 {
+            for obj in &self.state.skinned.draw_objects {
                 objects.push(metal_skinned_record(obj, texture_count));
             }
         }
@@ -456,7 +456,8 @@ impl MtlContext {
         if self.cull_count() == 0 {
             return Ok(None);
         }
-        self.model_history.begin(history, self.cull_count());
+        let n_cull = self.cull_count();
+        self.state.model_history.get_mut().begin(history, n_cull);
         // A transparent glass mesh (Layer 2) is disabled in the opaque pass when
         // the RT path is live: it draws in the transparent pass instead. Clearing
         // ENABLED makes the cull kernel reset its ICB slot to a no-op (the same
@@ -466,7 +467,7 @@ impl MtlContext {
         let mesh_glass_active = self.mesh_glass_active();
         let mut args = std::mem::take(&mut self.rings.draw_args_scratch);
         args.clear();
-        for (i, obj) in self.draw.objects.iter().enumerate() {
+        for (i, obj) in self.state.draw.objects.iter().enumerate() {
             // Pick this frame's active LOD by camera distance: the bindless
             // main pass then renders the chosen slice with no shader-side
             // change. Objects with no alternates fall straight through to LOD0.
@@ -483,7 +484,7 @@ impl MtlContext {
                 // cull kernel can route its command into that bucket's ICB.
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
                     | render_types::draw_args_bucket_bits(obj.shader_bucket)
-                    | self.model_history.draw_flags(i, i),
+                    | self.state.model_history.get_mut().draw_flags(i, i),
             });
         }
         // Append the instances' draw args in the SAME cluster-then-instance
@@ -491,7 +492,7 @@ impl MtlContext {
         // reads matching object + draw-args records. The cached args are each
         // cluster's base LOD slice, so this is a memcpy; clusters that declare
         // alternates then get their instances' active slice patched over it.
-        if self.draw.n_instances > 0 {
+        if self.state.draw.n_instances > 0 {
             let instance_base = args.len();
             args.extend_from_slice(&self.instanced.draw_args);
             if self.instanced.any_lod {
@@ -512,9 +513,9 @@ impl MtlContext {
         // obj.visible; rebuilt every frame (pose-driven LOD + visibility). The
         // cull kernel routes records at/after `skinned_record_base()` through the
         // skinned index buffer (see encode_cull's `skinned_base`).
-        if self.draw.n_skinned > 0 {
+        if self.state.draw.n_skinned > 0 {
             let base = args.len();
-            for (k, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
+            for (k, obj) in self.state.skinned.draw_objects.iter().enumerate() {
                 let d = lod::skinned_camera_distance(obj, cam_pos);
                 let (index_offset, index_count) = obj.active_lod(d);
                 args.push(GpuDrawArgs {
@@ -522,7 +523,11 @@ impl MtlContext {
                     index_offset: index_offset as u32,
                     base_vertex: 0,
                     flags: draw_args_flags(obj.visible, true, true)
-                        | self.model_history.skinned_flags(base + k, k),
+                        | self
+                            .state
+                            .model_history
+                            .get_mut()
+                            .skinned_flags(base + k, k),
                 });
             }
         }

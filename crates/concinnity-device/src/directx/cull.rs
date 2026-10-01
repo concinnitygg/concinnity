@@ -375,7 +375,10 @@ impl DxContext {
     // skinned meshes (or a non-bindless world) the extra terms are 0, leaving it
     // equal to the static `draw.n_objects`.
     pub(in crate::directx) fn cull_count(&self) -> usize {
-        self.draw.n_objects + self.draw.n_instances + self.draw.n_runtime + self.draw.n_skinned
+        self.state.draw.n_objects
+            + self.state.draw.n_instances
+            + self.state.draw.n_runtime
+            + self.state.draw.n_skinned
     }
 
     // Buffer index of the first runtime record. The runtime reserve is
@@ -386,7 +389,7 @@ impl DxContext {
     // `ExecuteIndirect` (their geometry already lives in the shared VB/IB), so
     // this is just the instance tail.
     pub(in crate::directx) fn runtime_record_base(&self) -> usize {
-        self.draw.n_objects + self.draw.n_instances
+        self.state.draw.n_objects + self.state.draw.n_instances
     }
 
     // Buffer index of the first skinned record. The static + instance + runtime
@@ -395,7 +398,7 @@ impl DxContext {
     // the per-frame deformed VB). The runtime reserve sits inside the prefix, so
     // the skinned base is past it.
     pub(in crate::directx) fn skinned_record_base(&self) -> usize {
-        self.draw.n_objects + self.draw.n_instances + self.draw.n_runtime
+        self.state.draw.n_objects + self.state.draw.n_instances + self.state.draw.n_runtime
     }
 
     // Walk every resident runtime draw object -- the tail past `draw.n_objects`,
@@ -417,21 +420,22 @@ impl DxContext {
     where
         F: FnMut(usize, usize, &render_types::DrawObject),
     {
-        if self.draw.n_runtime == 0 {
+        if self.state.draw.n_runtime == 0 {
             return 0;
         }
         let mut k = 0;
         for (i, obj) in self
+            .state
             .draw
             .objects
             .iter()
             .enumerate()
-            .skip(self.draw.n_objects)
+            .skip(self.state.draw.n_objects)
         {
             if !obj.resident {
                 continue;
             }
-            if k >= self.draw.n_runtime {
+            if k >= self.state.draw.n_runtime {
                 break;
             }
             emit(k, i, obj);
@@ -474,7 +478,7 @@ impl DxContext {
             return;
         };
         let stride = std::mem::size_of::<GpuDrawArgs>();
-        let mut model_history = self.model_history.borrow_mut();
+        let mut model_history = self.state.model_history.borrow_mut();
         model_history.begin(history, self.cull_count());
         // Hand the dispatch the rebuild's prime request here, on the one thread
         // that owns the tracker; the encode runs on a worker.
@@ -491,10 +495,11 @@ impl DxContext {
         // every parallel cull / object-buffer / prev-model index stays intact.
         let mesh_glass_active = self.mesh_glass_active();
         for (i, obj) in self
+            .state
             .draw
             .objects
             .iter()
-            .take(self.draw.n_objects)
+            .take(self.state.draw.n_objects)
             .enumerate()
         {
             // Per-frame active LOD pick. Objects with no alternates fall
@@ -573,7 +578,7 @@ impl DxContext {
             base_vertex: 0,
             flags: 0,
         };
-        for k in n_resident_runtime..self.draw.n_runtime {
+        for k in n_resident_runtime..self.state.draw.n_runtime {
             // SAFETY: `k < draw.n_runtime`, so `runtime_base + k < skinned_record_base()`.
             unsafe {
                 std::ptr::copy_nonoverlapping(
@@ -592,11 +597,11 @@ impl DxContext {
         // Active LOD is picked from the camera distance to the model translation.
         let base = self.skinned_record_base();
         for (k, obj) in self
+            .state
             .skinned
-            .slots
             .draw_objects
             .iter()
-            .take(self.draw.n_skinned)
+            .take(self.state.draw.n_skinned)
             .enumerate()
         {
             let d = lod::skinned_camera_distance(obj, cam_pos);
@@ -613,7 +618,7 @@ impl DxContext {
             };
             // SAFETY: the buffers reserved `draw.n_skinned` records past
             // `skinned_record_base()` at init (threaded capacity), and the loop
-            // is bounded by `self.skinned.slots.draw_objects.len() == self.draw.n_skinned`.
+            // is bounded by `self.state.skinned.draw_objects.len() == self.state.draw.n_skinned`.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &rec as *const GpuDrawArgs as *const u8,
@@ -629,7 +634,7 @@ impl DxContext {
         // is a no-op for a world without alternates and touches only the
         // instances of the clusters that have them.
         if self.instanced.any_lod {
-            let instance_base = self.draw.n_objects;
+            let instance_base = self.state.draw.n_objects;
             lod::for_each_instance_lod(
                 &self.instanced.clusters,
                 cam_pos,

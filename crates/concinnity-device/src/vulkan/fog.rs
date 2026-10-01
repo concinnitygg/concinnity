@@ -949,7 +949,7 @@ impl VkContext {
         // dimensions + the linear-Z `[near, max_distance]` mapping. `near` is
         // clamped to >= 1e-3 so the linear-Z reconstruction stays finite.
         let froxel_params = FogFroxelParams {
-            view: self.view.matrix,
+            view: self.state.view.matrix,
             froxel_dims: [FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z],
             _pad_align: 0,
             z_near: near.max(1e-3),

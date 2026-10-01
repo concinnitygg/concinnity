@@ -62,7 +62,7 @@ pub(in crate::vulkan) use concinnity_core::render::uniforms::{
 // 16-byte block is declared, not just the live `u32`: the shared source spells
 // it out to the padding the other two hosts allocate, and a range narrower than
 // what the shader declares is a validation finding.
-use concinnity_core::render::uniforms::RaymarchShadowCascade;
+use concinnity_core::render::uniforms::{PassCamera, RaymarchShadowCascade};
 
 mod swap;
 
@@ -1364,17 +1364,28 @@ impl VkContext {
         cam_pos: [f32; 3],
         time: f32,
     ) -> RaymarchView {
-        RaymarchView {
+        RaymarchView::new(&self.pass_camera(vp, cam_pos, time))
+    }
+
+    // The camera a screen-space pass reconstructs from: `vp` at the render
+    // extent, with this frame's IBL and sky rotation.
+    pub(in crate::vulkan) fn pass_camera(
+        &self,
+        vp: [[f32; 4]; 4],
+        cam_pos: [f32; 3],
+        time: f32,
+    ) -> PassCamera {
+        PassCamera {
             vp,
             inv_vp: mat4_inverse(vp),
-            cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
+            cam_pos,
             viewport: [
                 self.targets.render_extent.width as f32,
                 self.targets.render_extent.height as f32,
             ],
             time,
             prefilter_mip_count: self.scene.prefilter_mip_count as f32,
-            sky_rot: self.view.sky_rot,
+            sky_rot: self.state.view.sky_rot,
         }
     }
 

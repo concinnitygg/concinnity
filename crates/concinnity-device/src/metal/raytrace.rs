@@ -104,13 +104,6 @@ pub(crate) struct RtState {
     // transient rebuild failure is non-fatal (keep last frame's BVH) and
     // logged once per streak rather than every frame.
     pub update_failed: bool,
-    // Set when an operation changes the RT-relevant draw set (a streamed chunk
-    // added/removed, a prop cloned, a material edit that flips RT participation)
-    // since the last update. The per-frame update consumes it to refresh the
-    // BLAS topology -- reusing every unchanged BLAS and building only the new
-    // ones -- instead of either ignoring the change (the default `Auto` path
-    // only watches transforms of the prior set) or rebuilding every BLAS.
-    pub topology_dirty: bool,
     pub pipelines: RtPipelines,
 }
 
@@ -726,7 +719,7 @@ impl crate::metal::context::MtlContext {
         ) else {
             return Ok(());
         };
-        if self.skinned.slots.draw_objects.is_empty() {
+        if self.state.skinned.draw_objects.is_empty() {
             return Ok(());
         }
         let cenc = cmd_buf.computeCommandEncoder().ok_or_else(|| {
@@ -734,7 +727,7 @@ impl crate::metal::context::MtlContext {
         })?;
         cenc.set_pipeline(skin_pipeline);
         let tg = skin_pipeline.maxTotalThreadsPerThreadgroup().clamp(1, 64);
-        for (i, obj) in self.skinned.slots.draw_objects.iter().enumerate() {
+        for (i, obj) in self.state.skinned.draw_objects.iter().enumerate() {
             let Some(joint_buf) = joint_bufs.get(i) else {
                 continue;
             };
@@ -742,8 +735,8 @@ impl crate::metal::context::MtlContext {
             // `update_skinned_pose` never leaves it empty), matching the buffer
             // the kernel indexes.
             let joint_count = self
+                .state
                 .skinned
-                .slots
                 .joint_matrices
                 .get(i)
                 .map(|m| m.len().max(1))

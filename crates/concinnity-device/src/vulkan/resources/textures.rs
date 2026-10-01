@@ -6,8 +6,6 @@
 
 use ash::vk;
 use concinnity_core::bake;
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
 use concinnity_core::render::error::{RenderError, RenderResult};
 
@@ -289,79 +287,6 @@ impl VkContext {
             rm.rewire_ibl_cubes(&self.hw.device, new_irradiance_view, new_prefilter_view);
         }
         drop(old);
-        Ok(())
-    }
-}
-
-impl VkContext {
-    // Append a new draw object that re-uses an existing slot's geometry
-    // region with a fresh model matrix, texture / normal-map slots,
-    // material, and cull distance. Driven by `world.jsonl` hot-reload
-    // (`cn debug` only) when a newly authored Prop references a Mesh /
-    // Model already present in the init world. The clone rides the runtime
-    // reserve in the cull records, like a streamed `VoxelWorld` chunk, so it
-    // needs no descriptors of its own. Mirrors
-    // `DxContext::clone_static_draw_object`. Reached only through the bin's
-    // `cn debug` runtime-mutation path (dead in the FFI lib, live in the bin).
-    pub(crate) fn clone_static_draw_object(
-        &mut self,
-        src_draw_idx: render_types::DrawIndex,
-        model: [[f32; 4]; 4],
-        dst: draw_slot::SlotAlloc,
-    ) -> RenderResult<()> {
-        if render_types::runtime_reserve_full(
-            &self.draw.objects,
-            self.draw.n_objects,
-            self.draw.n_runtime,
-        ) {
-            return Err(error::RenderError::Other(format!(
-                "clone_static_draw_object: the runtime draw reserve ({}) is full",
-                self.draw.n_runtime
-            )));
-        }
-        let src = self.draw.objects.get(src_draw_idx.index()).ok_or_else(|| {
-            error::RenderError::Other(format!(
-                "clone_static_draw_object: src draw {src_draw_idx} out of range"
-            ))
-        })?;
-        // A runtime spawn duplicates the template, swapping only the transform:
-        // copy the source's material, pool slots, and cull distance.
-        let texture_slot = src.texture_slot;
-        let normal_map_slot = src.normal_map_slot;
-        let material = src.material;
-        let cull_distance = src.cull_distance;
-        let obj = render_types::DrawObject {
-            vertex_offset: src.vertex_offset,
-            vertex_count: src.vertex_count,
-            index_offset: src.index_offset,
-            index_count: src.index_count,
-            base_vertex: src.base_vertex,
-            geometry_generation: src.geometry_generation,
-            model,
-            texture_slot,
-            normal_map_slot,
-            material,
-            visible: true,
-            resident: true,
-            // Sentinel AABB: the GPU cull reads the record's bounds and a
-            // clone is always drawn, matching the chunk pattern.
-            bb_min: [f32::NAN; 3],
-            bb_max: [f32::NAN; 3],
-            cull_distance,
-            lod_alternates: src.lod_alternates.clone(),
-            shader_bucket: src.shader_bucket,
-        };
-
-        // Write at the engine-allocated destination slot.
-        let slot = draw_slot::place_draw_object(&mut self.draw.objects, obj, dst);
-        // The slot's model-history entry belongs to the prior occupant, so the
-        // clone reprojects through its own transform for one frame rather than
-        // ghosting from that occupant's.
-        self.model_history.borrow_mut().reoccupy_draw(slot);
-        // The cloned prop joins the RT-relevant draw set; the next RT update folds
-        // it into the BVH (it reuses the source mesh's geometry slice, so only
-        // this clone's BLAS is built).
-        self.rt.topology_dirty = true;
         Ok(())
     }
 }

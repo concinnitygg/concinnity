@@ -144,6 +144,5 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRa
         accel,
         dynamic_mode: post.rt_dynamic,
         skinned_geometry: post.rt_skinned_geometry,
-        topology_dirty: false,
     }
 }

@@ -3,13 +3,11 @@
 //!
 //!   textures.rs   Texture-pool slot updates + descriptor rewires (`update_*`,
 //!                 `evict_*`, `write_object_image`, `write_pool_image`)
-//!   geometry.rs   Streamed-mesh upload + eviction (`upload_mesh`,
-//!                 `evict_mesh`, the shared `write_geometry_region` helper)
-//!   streaming.rs  VoxelWorld chunk streaming (`setup_chunk_streaming`,
-//!                 `add_chunk_mesh`, `remove_chunk_mesh`, `set_chunk_model`)
+//!   geometry.rs   The scene lent to the `SceneHost` defaults, its staging
+//!                 geometry writer, and the shared `write_geometry_region` helper
+//!   streaming.rs  VoxelWorld chunk headroom (`setup_chunk_streaming`)
 //!   skinning.rs   Skinned-mesh upload + per-frame joint upload
-//!                 (`upload_skinned`, `update_skinned_pose`,
-//!                 `upload_joint_matrices`)
+//!                 (`upload_skinned`, `upload_joint_matrices`)
 //!   geometry_rebuild.rs  Size-changing static + skinned VB/IB rebuilds
 //!                 driven by asset hot-reload (`rebuild_static_geometry`,
 //!                 `rebuild_skinned_geometry`)

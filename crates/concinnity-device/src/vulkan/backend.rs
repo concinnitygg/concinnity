@@ -4,7 +4,7 @@
 use concinnity_core::bake;
 use concinnity_core::components;
 use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use concinnity_core::gfx::mesh_payload::SkinnedVertex;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::SkinnedDrawObject;
 use concinnity_core::input::keymap::KeyMap;
@@ -12,12 +12,11 @@ use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::profile::RenderStats;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::{
-    BackendProbe, ChunkMesh, DrawIndex, DrawStreaming, FrameParams, LiveEdit, RenderBackend,
-    RenderTuning, SceneEffects, SkinnedDraws, SkinnedIndex, WindowControl,
+    BackendProbe, DrawStreaming, FrameParams, LiveEdit, RenderBackend, RenderTuning, SceneEffects,
+    SkinnedDraws, SkinnedIndex, WindowControl,
 };
 use concinnity_core::render::backend_init;
 use concinnity_core::render::decal;
-use concinnity_core::render::draw_slot;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::particles;
 use concinnity_core::render::reflection_probe;
@@ -35,19 +34,11 @@ impl RenderBackend for VkContext {
         fn take_input(&mut self) -> InputSnapshot;
         fn wait_idle(&self);
         fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()>;
-        fn update_view(&mut self, matrix: [[f32; 4]; 4]);
-        fn update_models(&mut self, updates: &[(DrawIndex, [[f32; 4]; 4])]);
-        fn retire_draw_object(&mut self, draw_idx: DrawIndex);
     }
 }
 
 impl SkinnedDraws for VkContext {
     forward! { assert = debug_assert_main_thread;
-        fn update_skinned_pose(&mut self, skinned_index: SkinnedIndex, matrices: &[[[f32; 4]; 4]]);
-        fn update_morph_weights(&mut self, skinned_index: SkinnedIndex, weights: &[f32]);
-        fn reveal_skinned_instance(&mut self, instance_index: SkinnedIndex, model: [[f32; 4]; 4]);
-        fn retire_skinned_draw_object(&mut self, skinned_index: SkinnedIndex);
-        fn update_skinned_models(&mut self, updates: &[(SkinnedIndex, [[f32; 4]; 4])]);
         fn upload_skinned_morphs(&mut self, morphs: Vec<Option<std::sync::Arc<mesh_payload::PayloadMorphs>>>) -> RenderResult<()>;
         fn upload_skinned(&mut self, vertices: &[SkinnedVertex], indices: &[u32], draw_objects: Vec<SkinnedDrawObject>) -> RenderResult<()>;
     }
@@ -57,14 +48,7 @@ impl DrawStreaming for VkContext {
     forward! { assert = debug_assert_main_thread;
         fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()>;
         fn update_texture_slot(&mut self, slot: usize, image: &bake::texture::TextureImage) -> RenderResult<()>;
-        fn evict_mesh(&mut self, draw_idx: DrawIndex, retire_frame: u64) -> RenderResult<()>;
-        fn upload_mesh(&mut self, draw_idx: DrawIndex, verts: &[Vertex], idxs: &[u16], frame: u64) -> RenderResult<()>;
-        fn seed_mesh_streaming(&mut self, vtx_offset: u64, vtx_bytes: u64, idx_offset: u64, idx_bytes: u64);
         fn setup_chunk_streaming(&mut self, chunk_vtx_bytes: usize, chunk_idx_bytes: usize) -> RenderResult<()>;
-        fn add_chunk_mesh(&mut self, mesh: ChunkMesh<'_>, dst: draw_slot::SlotAlloc) -> RenderResult<()>;
-        fn remove_chunk_mesh(&mut self, draw_idx: DrawIndex, retire_frame: u64) -> RenderResult<()>;
-        fn set_chunk_model(&mut self, draw_idx: DrawIndex, model: [[f32; 4]; 4]) -> RenderResult<()>;
-        fn clone_static_draw_object(&mut self, src_draw_idx: DrawIndex, model: [[f32; 4]; 4], dst: draw_slot::SlotAlloc) -> RenderResult<()>;
         fn evict_world_shader(&mut self, bucket: u32);
     }
 
@@ -124,11 +108,9 @@ impl RenderTuning for VkContext {
 impl LiveEdit for VkContext {
     forward! { assert = debug_assert_main_thread;
         fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()>;
-        fn update_mesh_geometry(&mut self, draw_idx: DrawIndex, verts: &[mesh_payload::Vertex], idxs: &[u16], lod_alternates: &[(f32, Vec<u16>)]) -> RenderResult<()>;
         fn update_world_shader(&mut self, bucket: u32, programs: &concinnity_core::components::ShaderPrograms, prepared: Option<concinnity_core::render::backend::PreparedPipelines>) -> RenderResult<concinnity_core::render::backend::PipelineSwap>;
         fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &concinnity_core::components::sdf_programs::SdfPrograms, prepared: Option<concinnity_core::render::backend::PreparedPipelines>) -> RenderResult<concinnity_core::render::backend::PipelineSwap>;
         fn update_skinned_mesh_geometry(&mut self, skinned_index: SkinnedIndex, vertex_base: u32, verts: &[mesh_payload::SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
-        fn update_skinned_skeleton(&mut self, skinned_index: SkinnedIndex, new_joint_count: usize) -> RenderResult<()>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> RenderResult<Vec<backend::SkinnedSlotLayout>>;
         fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()>;
         fn rebuild_static_geometry(&mut self, changes: Vec<backend::DrawGeometryUpdate>) -> RenderResult<()>;
@@ -137,20 +119,6 @@ impl LiveEdit for VkContext {
 
     fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
         self.shader_reload_pending()
-    }
-
-    fn draw_geometry_size(&self, draw_idx: DrawIndex) -> Option<(usize, usize)> {
-        self.draw
-            .objects
-            .get(draw_idx.index())
-            .map(|o| (o.vertex_count, o.index_count))
-    }
-
-    fn draw_lod_index_counts(&self, draw_idx: DrawIndex) -> Option<Vec<usize>> {
-        self.draw
-            .objects
-            .get(draw_idx.index())
-            .map(|o| o.lod_alternates.iter().map(|s| s.index_count).collect())
     }
 
     // The swapchain config this live backend can hot-swap a world onto. A live

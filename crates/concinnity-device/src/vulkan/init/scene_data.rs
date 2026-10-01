@@ -9,7 +9,6 @@ use concinnity_core::render::frame_dirty::FrameDirty;
 use concinnity_core::render::ltc;
 
 use super::InitGpu;
-use crate::suballoc::range_alloc::RangeAllocator;
 use crate::vulkan::context::{VkAreaLight, VkGeometry, VkUniforms};
 use crate::vulkan::draw::{upload_light_uniforms, upload_static_records};
 use crate::vulkan::light_cull::VkLightCull;
@@ -174,8 +173,6 @@ pub(super) fn build_scene_resources(
         VkGeometry {
             vertex_buffer,
             index_buffer,
-            mesh_vtx_alloc: RangeAllocator::new(),
-            mesh_idx_alloc: RangeAllocator::new(),
             vertex_buffer_bytes,
             index_buffer_bytes,
         },

@@ -625,7 +625,7 @@ impl DxContext {
             jittered_vp,
             cur_vp,
             prev_vp,
-            view: self.view.matrix,
+            view: self.state.view.matrix,
         };
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges
@@ -830,7 +830,7 @@ impl DxContext {
         // base_vertex = 0 (global skinned indexing). When velocity is inactive the
         // previous deformed VB is the current one, so prev_pos == cur_pos and the
         // motion channel stays zero (GbView prev_vp also equals cur_vp).
-        if self.draw.n_skinned > 0
+        if self.state.draw.n_skinned > 0
             && let Some(cur_vbv) = self.skinned.deformed_vbvs.get(frame_idx)
         {
             // Read the previous frame's deformed pose only once the ring has been
@@ -862,7 +862,7 @@ impl DxContext {
                 cmd.IASetIndexBuffer(Some(&self.skinned.index_buffer_view));
                 cmd.ExecuteIndirect(
                     cmd_sig,
-                    self.draw.n_skinned as u32,
+                    self.state.draw.n_skinned as u32,
                     indirect,
                     (prefix * stride) as u64,
                     None::<&ID3D12Resource>,

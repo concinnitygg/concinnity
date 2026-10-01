@@ -45,13 +45,13 @@
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{LineVertex, TextDrawCall};
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::lights;
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{
     BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
 };
+use concinnity_core::render::uniforms::PassCamera;
 use concinnity_core::transform::mat4_inverse;
 use concinnity_host::thread::jobs;
 use std::sync::Mutex;
@@ -1108,43 +1108,37 @@ impl DxContext {
         })
     }
 
-    // Build the per-frame `RaymarchView` cbuffer payload from the
-    // graph executor's frame params. The matrix inputs match what the
-    // Main pass rasterizes with (the un-jittered VP), so raymarched
-    // surfaces share their NDC depth space with rasterized geometry.
+    // The per-frame `RaymarchView` payload. Its VP is the un-jittered one the
+    // Main pass rasterizes with, so raymarched surfaces share their NDC depth
+    // space with rasterized geometry.
     fn build_raymarch_view(&self, params: &GraphFrameParams<'_>) -> super::raymarch::RaymarchView {
-        let inv_vp = mat4_inverse(params.cur_vp);
-        super::raymarch::RaymarchView {
-            vp: params.cur_vp,
-            inv_vp,
-            cam_pos: [params.cam_pos[0], params.cam_pos[1], params.cam_pos[2], 0.0],
-            viewport: [params.width as f32, params.height as f32],
-            time: params.elapsed,
-            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-            sky_rot: self.view.sky_rot,
-        }
+        super::raymarch::RaymarchView::new(&self.pass_camera(params, params.cur_vp))
     }
 
-    // Build the per-frame `TransparentView` cbuffer payload for the transparent pass.
-    // Uses the jittered VP (`vp_mat`) the Main pass rasterized with, so the
-    // glass quad's clip-space depth matches the stored main-depth the fragment
-    // shader tests against. Mirrors `encode_decals`' use of `vp_mat`.
+    // The per-frame `TransparentView` payload. Its VP is the jittered one
+    // (`vp_mat`) the Main pass rasterized with, so the glass quad's clip-space
+    // depth matches the stored main-depth the fragment shader tests against.
     fn build_transparent_view(
         &self,
         params: &GraphFrameParams<'_>,
     ) -> super::transparent::TransparentView {
-        let inv_vp = mat4_inverse(params.vp_mat);
-        let (sun_dir, sun_color) = lights::glint_sun(&self.uniforms.light_uniforms);
-        super::transparent::TransparentView {
-            vp: params.vp_mat,
-            inv_vp,
-            camera_pos: [params.cam_pos[0], params.cam_pos[1], params.cam_pos[2], 0.0],
+        super::transparent::TransparentView::new(
+            &self.pass_camera(params, params.vp_mat),
+            &self.uniforms.light_uniforms,
+        )
+    }
+
+    // The camera a screen-space pass reconstructs from: `vp` at the frame's
+    // render size, with this frame's IBL and sky rotation.
+    fn pass_camera(&self, params: &GraphFrameParams<'_>, vp: [[f32; 4]; 4]) -> PassCamera {
+        PassCamera {
+            vp,
+            inv_vp: mat4_inverse(vp),
+            cam_pos: params.cam_pos,
             viewport: [params.width as f32, params.height as f32],
             time: params.elapsed,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-            sky_rot: self.view.sky_rot,
-            sun_dir,
-            sun_color,
+            sky_rot: self.state.view.sky_rot,
         }
     }
 

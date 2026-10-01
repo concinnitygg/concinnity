@@ -17,6 +17,10 @@
 
 use alloc::vec::Vec;
 
+use crate::gfx::lod::camera_distance;
+use crate::gfx::render_types::DrawObject;
+use crate::render::uniforms::GlassMeshParams;
+
 /// Which producer a transparent record belongs to, and so which pipeline draws
 /// it. The records are identical in shape, so this is the only thing a combined
 /// draw loop needs to tell them apart.
@@ -37,6 +41,62 @@ pub fn sort_distance(center: [f32; 3], cam: [f32; 3]) -> f32 {
     let dy = center[1] - cam[1];
     let dz = center[2] - cam[2];
     crate::math::sqrt(dx * dx + dy * dy + dz * dz)
+}
+
+/// Screen-space refraction offset a see-through glass mesh draws with. A
+/// `Material` carries no glass tunables, so this and
+/// [`GLASS_MESH_FRESNEL_POWER`] match the `GlassPanel` defaults.
+pub const GLASS_MESH_REFRACTION: f32 = 0.02;
+/// Schlick-Fresnel exponent a see-through glass mesh draws with: a subtle
+/// reflection head-on, a full mirror at grazing angles.
+pub const GLASS_MESH_FRESNEL_POWER: f32 = 1.0;
+
+/// One see-through glass mesh as this frame's transparent pass draws it: the
+/// LOD slice the opaque passes would have picked at the same camera distance,
+/// and the per-draw block its shading reads.
+#[derive(Clone, Copy)]
+pub struct SeeThroughMesh {
+    /// The per-draw block the glass mesh shader reads.
+    pub params: GlassMeshParams,
+    /// First index of the chosen LOD slice in the shared index buffer.
+    pub index_offset: usize,
+    /// Index count of the chosen LOD slice.
+    pub index_count: usize,
+    /// The draw's base vertex.
+    pub base_vertex: i32,
+    /// World-space AABB center.
+    pub center: [f32; 3],
+    /// Camera distance the LOD was chosen at, which is also the sort key.
+    pub distance: f32,
+}
+
+impl SeeThroughMesh {
+    /// The draw of `obj` seen from `cam`, with `prefilter_mip_count` the bound
+    /// IBL prefilter cube's mip count for the ray-miss fallback.
+    pub fn new(obj: &DrawObject, cam: [f32; 3], prefilter_mip_count: f32) -> Self {
+        let distance = camera_distance(obj, cam);
+        let (index_offset, index_count) = obj.active_lod(distance);
+        let t = obj.material.tint;
+        Self {
+            params: GlassMeshParams {
+                model: obj.model,
+                tint: [t[0], t[1], t[2], 0.0],
+                opacity: obj.material.opacity,
+                refraction_strength: GLASS_MESH_REFRACTION,
+                fresnel_power: GLASS_MESH_FRESNEL_POWER,
+                prefilter_mip_count,
+            },
+            index_offset,
+            index_count,
+            base_vertex: obj.base_vertex,
+            center: [
+                0.5 * (obj.bb_min[0] + obj.bb_max[0]),
+                0.5 * (obj.bb_min[1] + obj.bb_max[1]),
+                0.5 * (obj.bb_min[2] + obj.bb_max[2]),
+            ],
+            distance,
+        }
+    }
 }
 
 /// Every visible record of every producer, ordered farthest-camera-distance
@@ -110,7 +170,36 @@ pub fn back_to_front_order(distances: &[f32]) -> Vec<usize> {
 mod tests {
     use super::*;
 
+    use crate::gfx::render_types::LodSlice;
     use alloc::vec;
+
+    #[test]
+    fn a_see_through_mesh_draws_its_lod_slice_with_glass_shading() {
+        let mut obj = crate::test_support::draw_object();
+        obj.bb_min = [-1.0, -1.0, -1.0];
+        obj.bb_max = [1.0, 1.0, 1.0];
+        obj.material.tint = [0.2, 0.4, 0.6];
+        obj.material.opacity = 0.3;
+        obj.lod_alternates = vec![LodSlice {
+            index_offset: 100,
+            index_count: 6,
+            switch_distance: 5.0,
+        }];
+        let near = SeeThroughMesh::new(&obj, [0.0, 0.0, 3.0], 9.0);
+        assert_eq!((near.index_offset, near.index_count), (12, 36));
+        assert_eq!(near.distance, 3.0);
+        assert_eq!(near.center, [0.0; 3]);
+        assert_eq!(near.base_vertex, obj.base_vertex);
+        assert_eq!(near.params.model, obj.model);
+        assert_eq!(near.params.tint, [0.2, 0.4, 0.6, 0.0]);
+        assert_eq!(near.params.opacity, 0.3);
+        assert_eq!(near.params.refraction_strength, GLASS_MESH_REFRACTION);
+        assert_eq!(near.params.fresnel_power, GLASS_MESH_FRESNEL_POWER);
+        assert_eq!(near.params.prefilter_mip_count, 9.0);
+        let far = SeeThroughMesh::new(&obj, [0.0, 0.0, 8.0], 9.0);
+        assert_eq!((far.index_offset, far.index_count), (100, 6));
+    }
+
     #[test]
     fn orders_farthest_first() {
         let d = [1.0, 5.0, 3.0];

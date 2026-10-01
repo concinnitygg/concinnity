@@ -2,6 +2,27 @@
 //! place a fragment, and the per-draw model pair the pre-pass differentiates for
 //! motion vectors.
 
+/// The camera a screen-space pass reconstructs world positions from, as the
+/// per-frame view blocks of the raymarch and transparent passes take it.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct PassCamera {
+    /// The view-projection the pass's depth was rasterized with, column-major.
+    pub vp: [[f32; 4]; 4],
+    /// Inverse of `vp`.
+    pub inv_vp: [[f32; 4]; 4],
+    /// World-space camera position.
+    pub cam_pos: [f32; 3],
+    /// Render-target size in pixels.
+    pub viewport: [f32; 2],
+    /// Seconds since the world started.
+    pub time: f32,
+    /// Mip count of the bound IBL prefilter cube; 0 when none is bound.
+    pub prefilter_mip_count: f32,
+    /// Rows of the rotation taking a world direction into the environment
+    /// cubemaps' baked frame.
+    pub sky_rot: [[f32; 4]; 3],
+}
+
 /// Per-frame view-projection uniforms, uploaded once per frame and shared across
 /// every draw in it. `view` is the standalone view matrix the vertex shader uses
 /// to compute view-space depth for cascade selection in the fragment shader.
@@ -68,6 +89,21 @@ pub struct GBufferView {
     pub prev_vp: [[f32; 4]; 4],
     /// View matrix, column-major.
     pub view: [[f32; 4]; 4],
+}
+
+// A camera whose every lane holds a distinct value, for the view-block tests.
+#[cfg(test)]
+pub(super) fn test_camera() -> PassCamera {
+    let m = |k: f32| [[k; 4]; 4];
+    PassCamera {
+        vp: m(1.0),
+        inv_vp: m(2.0),
+        cam_pos: [3.0, 4.0, 5.0],
+        viewport: [640.0, 480.0],
+        time: 6.5,
+        prefilter_mip_count: 7.0,
+        sky_rot: [[8.0; 4]; 3],
+    }
 }
 
 #[cfg(test)]

@@ -25,18 +25,16 @@
 
 use ash::vk;
 use concinnity_core::components::{GlassPanel, WaterSurface};
-use concinnity_core::gfx::lod;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen::align_up;
-use concinnity_core::render::lights;
 use concinnity_core::render::post::rt_reflections::RtParamsInputs;
 pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
-use concinnity_core::transform::mat4_inverse;
 // `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that
 // lives in `core::render`; re-export it so the encode path and the graph's
 // view builder can keep naming it through this module.
+use concinnity_core::render::transparent::SeeThroughMesh;
 use concinnity_core::render::uniforms::GlassMeshParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -2009,14 +2007,6 @@ fn create_framebuffers(
     Ok(out)
 }
 
-// Refraction offset + Fresnel falloff for a see-through glass MESH. A `Material`
-// carries no glass-specific tunables (unlike a `GlassPanel`), so these match the
-// `GlassPanel` defaults: a gentle screen-space refraction and a fresnel power of
-// 1 (subtle reflection head-on, full mirror at grazing). The same constants the
-// other backends use, so a mesh reads the same everywhere.
-const GLASS_MESH_REFRACTION: f32 = 0.02;
-const GLASS_MESH_FRESNEL_POWER: f32 = 1.0;
-
 impl VkContext {
     // Whether a material opted into Layer 2 see-through glass AND the device can
     // drive it (the mesh pipelines built). Independent of `rt.accel`, so it
@@ -2048,7 +2038,8 @@ impl VkContext {
         self.mesh_glass_active()
             && self.transparent.as_ref().is_some_and(|t| {
                 t.seethrough_mesh_indices().iter().any(|&i| {
-                    self.draw
+                    self.state
+                        .draw
                         .objects
                         .get(i)
                         .is_some_and(|o| o.visible && o.resident)
@@ -2079,7 +2070,7 @@ impl VkContext {
 
         let mut draws = Vec::with_capacity(count);
         for (slot, &idx) in producer.object_indices.iter().enumerate() {
-            let Some(obj) = self.draw.objects.get(idx) else {
+            let Some(obj) = self.state.draw.objects.get(idx) else {
                 continue;
             };
             // The flag is re-read rather than trusted from the init list, so this
@@ -2088,29 +2079,17 @@ impl VkContext {
             if !obj.visible || !obj.resident || obj.material.see_through == 0 {
                 continue;
             }
-            let center = [
-                0.5 * (obj.bb_min[0] + obj.bb_max[0]),
-                0.5 * (obj.bb_min[1] + obj.bb_max[1]),
-                0.5 * (obj.bb_min[2] + obj.bb_max[2]),
-            ];
-            let d = lod::camera_distance(obj, cam);
-            let (index_offset, index_count) = obj.active_lod(d);
-            let t = obj.material.tint;
-            let params = GlassMeshParams {
-                model: obj.model,
-                tint: [t[0], t[1], t[2], 0.0],
-                opacity: obj.material.opacity,
-                refraction_strength: GLASS_MESH_REFRACTION,
-                fresnel_power: GLASS_MESH_FRESNEL_POWER,
-                prefilter_mip_count,
-            };
-            ring.write_val((slot as u64 * producer.params_stride) as usize, &params);
+            let mesh = SeeThroughMesh::new(obj, cam, prefilter_mip_count);
+            ring.write_val(
+                (slot as u64 * producer.params_stride) as usize,
+                &mesh.params,
+            );
             draws.push(GlassMeshDraw {
-                index_offset: index_offset as u32,
-                index_count: index_count as u32,
-                base_vertex: obj.base_vertex,
+                index_offset: mesh.index_offset as u32,
+                index_count: mesh.index_count as u32,
+                base_vertex: mesh.base_vertex,
                 params_set: producer.params_sets[frame_idx * count + slot],
-                center,
+                center: mesh.center,
             });
         }
         draws
@@ -2126,21 +2105,10 @@ impl VkContext {
         cam_pos: [f32; 3],
         time: f32,
     ) -> TransparentView {
-        let (sun_dir, sun_color) = lights::glint_sun(&self.uniforms.light_uniforms);
-        TransparentView {
-            vp,
-            inv_vp: mat4_inverse(vp),
-            camera_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
-            viewport: [
-                self.targets.render_extent.width as f32,
-                self.targets.render_extent.height as f32,
-            ],
-            time,
-            prefilter_mip_count: self.scene.prefilter_mip_count as f32,
-            sky_rot: self.view.sky_rot,
-            sun_dir,
-            sun_color,
-        }
+        TransparentView::new(
+            &self.pass_camera(vp, cam_pos, time),
+            &self.uniforms.light_uniforms,
+        )
     }
 
     // Encode the transparent pass. Runs after `SsrResolve` and before
@@ -2225,7 +2193,7 @@ impl VkContext {
             let rt = transparent.rt.as_ref().ok_or_else(|| {
                 RenderError::Other("transparent rt_live but rt pipelines missing".to_string())
             })?;
-            let v = self.view.matrix;
+            let v = self.state.view.matrix;
             let inv_view_rot = [
                 [v[0][0], v[1][0], v[2][0], 0.0],
                 [v[0][1], v[1][1], v[2][1], 0.0],
@@ -2240,7 +2208,7 @@ impl VkContext {
                 sun_dir: self.fog.sun_dir,
                 sun_color: self.fog.sun_color,
                 prefilter_mip_count: self.scene.prefilter_mip_count as f32,
-                sky_rot: self.view.sky_rot,
+                sky_rot: self.state.view.sky_rot,
             });
             // Traced glass reads the reduced layers back only when the pre-pass
             // below fills them this frame; otherwise it traces in place.

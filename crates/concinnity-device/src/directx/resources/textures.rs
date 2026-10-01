@@ -4,8 +4,6 @@
 //! descriptors).
 
 use concinnity_core::bake;
-use concinnity_core::gfx::render_types::*;
-use concinnity_core::render::draw_slot;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -204,76 +202,6 @@ impl DxContext {
             },
         )?;
         self.scene.env_map = new_env;
-        Ok(())
-    }
-
-    // Append a new draw object that re-uses an existing slot's geometry
-    // region (vertex / index offsets, base_vertex, LOD alternates) with a
-    // fresh model matrix, texture / normal-map slots, material, and cull
-    // distance. Driven by `world.jsonl` hot-reload (`cn debug` only) when a
-    // newly authored Prop references a Mesh / Model already present in the
-    // init world. The clone is non-cullable (sentinel AABB) and joins
-    // `draw.always` since the init-time BVH cannot refit; the dynamically added
-    // prop is drawn every frame, like a streamed `VoxelWorld` chunk -- and
-    // through the same runtime reserve in the cull records, so it needs no
-    // descriptors of its own. Mirrors `MtlContext::clone_static_draw_object`.
-    pub(crate) fn clone_static_draw_object(
-        &mut self,
-        src_draw_idx: DrawIndex,
-        model: [[f32; 4]; 4],
-        dst: draw_slot::SlotAlloc,
-    ) -> RenderResult<()> {
-        if runtime_reserve_full(&self.draw.objects, self.draw.n_objects, self.draw.n_runtime) {
-            return Err(RenderError::Other(format!(
-                "clone_static_draw_object: the runtime draw reserve ({}) is full",
-                self.draw.n_runtime
-            )));
-        }
-        let src = self.draw.objects.get(src_draw_idx.index()).ok_or_else(|| {
-            RenderError::Other(format!(
-                "clone_static_draw_object: src draw {} out of range",
-                src_draw_idx
-            ))
-        })?;
-        // A runtime spawn duplicates the template, swapping only the transform:
-        // copy the source's material, pool slots, and cull distance.
-        let texture_slot = src.texture_slot;
-        let normal_map_slot = src.normal_map_slot;
-        let material = src.material;
-        let cull_distance = src.cull_distance;
-        let obj = DrawObject {
-            vertex_offset: src.vertex_offset,
-            vertex_count: src.vertex_count,
-            index_offset: src.index_offset,
-            index_count: src.index_count,
-            base_vertex: src.base_vertex,
-            geometry_generation: src.geometry_generation,
-            model,
-            texture_slot,
-            normal_map_slot,
-            material,
-            visible: true,
-            resident: true,
-            // Sentinel AABB so the init-time BVH cull skips the new draw:
-            // it joins `draw.always` and is drawn every frame regardless of
-            // camera position. Matches the runtime-streamed chunk pattern.
-            bb_min: [f32::NAN; 3],
-            bb_max: [f32::NAN; 3],
-            cull_distance,
-            lod_alternates: src.lod_alternates.clone(),
-            shader_bucket: src.shader_bucket,
-        };
-
-        // Write at the engine-allocated destination slot.
-        let slot = draw_slot::place_draw_object(&mut self.draw.objects, obj, dst);
-        // The slot's model-history entry belongs to the prior occupant, so the
-        // clone reprojects through its own transform for one frame rather than
-        // ghosting from that occupant's.
-        self.model_history.borrow_mut().reoccupy_draw(slot);
-        // The cloned prop joins the RT-relevant draw set; the next RT update folds
-        // it into the BVH (it reuses the source mesh's geometry slice, so only
-        // this clone's BLAS is built).
-        self.rt.topology_dirty = true;
         Ok(())
     }
 }

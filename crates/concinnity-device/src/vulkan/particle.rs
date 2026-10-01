@@ -1075,7 +1075,7 @@ impl VkContext {
         // view matrix's 3×3 are the world-space right and up vectors (the
         // view matrix is column-major, so we read those rows out
         // element-wise). Mirrors metal/directx particle encoders.
-        let v = self.view.matrix;
+        let v = self.state.view.matrix;
         let cam_right = [v[0][0], v[1][0], v[2][0]];
         let cam_up = [v[0][1], v[1][1], v[2][1]];
         let view_uni = ParticleView {

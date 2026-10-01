@@ -39,7 +39,7 @@ impl VkContext {
     // yet. Called from `draw_frame` before the frame is
     // recorded.
     pub(super) fn ensure_wireframe_pipelines(&mut self) {
-        if self.view.mode != concinnity_core::gfx::view_modes::ViewMode::Wireframe
+        if self.state.view.mode != concinnity_core::gfx::view_modes::ViewMode::Wireframe
             || self.wireframe.built
         {
             return;
@@ -124,7 +124,12 @@ impl VkContext {
         twin: Option<&'a OwnedPipeline>,
     ) -> &'a OwnedPipeline {
         match twin {
-            Some(w) if self.view.mode == concinnity_core::gfx::view_modes::ViewMode::Wireframe => w,
+            Some(w)
+                if self.state.view.mode
+                    == concinnity_core::gfx::view_modes::ViewMode::Wireframe =>
+            {
+                w
+            }
             _ => solid,
         }
     }

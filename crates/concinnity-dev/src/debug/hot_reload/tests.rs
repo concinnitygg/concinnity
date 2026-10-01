@@ -16,6 +16,7 @@ use concinnity_core::render::backend;
 use concinnity_core::render::draw_slot;
 use concinnity_core::render::error;
 use concinnity_core::render::scene_flow;
+use concinnity_core::render::scene_state;
 use concinnity_core::render::volumetric_fog;
 use concinnity_engine::live_edit;
 use concinnity_engine::live_edit::hot_reload_sources::*;
@@ -725,6 +726,18 @@ struct RecordingBackend {
 impl scene_flow::SceneControl for RecordingBackend {
     fn update_visibility(&mut self, _: DrawIndex, _: bool) {}
     fn set_fade(&mut self, _: f32) {}
+}
+
+impl backend::SceneHost for RecordingBackend {
+    fn scene(&self) -> Option<&scene_state::SceneState> {
+        None
+    }
+    fn scene_mut(&mut self) -> Option<&mut scene_state::SceneState> {
+        None
+    }
+    fn edit_geometry(&mut self, _: backend::GeometryEdit<'_>) -> Option<error::RenderResult<()>> {
+        None
+    }
 }
 
 impl backend::RenderBackend for RecordingBackend {

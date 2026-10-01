@@ -74,7 +74,7 @@ impl MtlContext {
             .settings
             .map(|settings| settings.params(fov_y_radians, aspect));
         let ssr_params = self.ssr.settings.map(|settings| {
-            let v = self.view.matrix;
+            let v = self.state.view.matrix;
             let inv_view_rot = [
                 [v[0][0], v[1][0], v[2][0], 0.0],
                 [v[0][1], v[1][1], v[2][1], 0.0],
@@ -105,7 +105,7 @@ impl MtlContext {
                 .settings
                 .filter(|_| self.rt.accel.is_some())
                 .map(|settings| {
-                    let v = self.view.matrix;
+                    let v = self.state.view.matrix;
                     let inv_view_rot = [
                         [v[0][0], v[1][0], v[2][0], 0.0],
                         [v[0][1], v[1][1], v[2][1], 0.0],
@@ -159,14 +159,14 @@ impl MtlContext {
             // the jitter-free history, so the fog flickers (a moving moire). The
             // un-jittered inv_vp keeps the volume stable frame to frame; its offset
             // versus the jittered depth buffer is far below the coarse froxel grid.
-            let fog_inv_vp = mat4_inverse(mat4_mul(proj, self.view.matrix));
+            let fog_inv_vp = mat4_inverse(mat4_mul(proj, self.state.view.matrix));
             fog.params(fog_inv_vp, cam_pos, sun.direction, sun_color, viewport)
         });
         // FogFroxel volume extras: view matrix + volume dimensions + near/far
         // so the compute kernel can place each froxel in world-space and the
         // fragment shader can map a scene depth into the volume's Z axis.
         let fog_froxel_params = fog_settings.map(|fog| render_types::FogFroxelParams {
-            view: self.view.matrix,
+            view: self.state.view.matrix,
             froxel_dims: [
                 render_graph::FOG_FROXEL_X,
                 render_graph::FOG_FROXEL_Y,
@@ -188,7 +188,7 @@ impl MtlContext {
         // push it; a local copy feeds the LightCull arm.
         self.cluster_params = render_types::ClusterParams::for_camera(
             &render_types::ClusterCamera {
-                view: self.view.matrix,
+                view: self.state.view.matrix,
                 proj,
                 position: cam_pos,
                 near,
@@ -208,7 +208,7 @@ impl MtlContext {
         let vel_uniforms = if velocity_active {
             Some(VelocityUniforms {
                 jittered_vp: vp,
-                cur_vp: mat4_mul(proj, self.view.matrix),
+                cur_vp: mat4_mul(proj, self.state.view.matrix),
                 prev_vp: self.prev_view_proj,
             })
         } else {

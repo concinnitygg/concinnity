@@ -2,7 +2,10 @@
 //! per-record tunables of its producers -- glass panes, see-through glass
 //! meshes, and water surfaces.
 
+use super::PassCamera;
 use crate::components::{GlassPanel, WaterSurface, WaterWave};
+use crate::gfx::render_types::LightUniforms;
+use crate::render::lights::glint_sun;
 
 /// Per-frame view inputs shared by every draw in the transparent pass (water,
 /// glass), bound once for the whole pass. Matches `TransparentView` in
@@ -36,6 +39,25 @@ pub struct TransparentView {
     /// glint scales by. Zero when the world declares no directional light, and
     /// the shader draws no glint.
     pub sun_color: [f32; 4],
+}
+
+impl TransparentView {
+    /// The view block for `camera`, lit by the sun `lights` glints with.
+    pub fn new(camera: &PassCamera, lights: &LightUniforms) -> Self {
+        let c = camera.cam_pos;
+        let (sun_dir, sun_color) = glint_sun(lights);
+        Self {
+            vp: camera.vp,
+            inv_vp: camera.inv_vp,
+            camera_pos: [c[0], c[1], c[2], 0.0],
+            viewport: camera.viewport,
+            time: camera.time,
+            prefilter_mip_count: camera.prefilter_mip_count,
+            sky_rot: camera.sky_rot,
+            sun_dir,
+            sun_color,
+        }
+    }
 }
 
 /// Per-panel tunables for a `GlassPanel`, uploaded once per panel per frame.
@@ -253,6 +275,21 @@ mod tests {
         assert_eq!(offset_of!(GlassMeshParams, fresnel_power), 88);
         assert_eq!(offset_of!(GlassMeshParams, prefilter_mip_count), 92);
         assert_eq!(size_of::<GlassMeshParams>() % 16, 0);
+    }
+
+    #[test]
+    fn the_view_block_carries_the_camera_and_the_glint_sun() {
+        let camera = super::super::view::test_camera();
+        let lights = LightUniforms::DEFAULT;
+        let view = TransparentView::new(&camera, &lights);
+        assert_eq!(view.vp, camera.vp);
+        assert_eq!(view.inv_vp, camera.inv_vp);
+        assert_eq!(view.camera_pos, [3.0, 4.0, 5.0, 0.0]);
+        assert_eq!(view.viewport, camera.viewport);
+        assert_eq!(view.time, camera.time);
+        assert_eq!(view.prefilter_mip_count, camera.prefilter_mip_count);
+        assert_eq!(view.sky_rot, camera.sky_rot);
+        assert_eq!((view.sun_dir, view.sun_color), glint_sun(&lights));
     }
 
     // The per-frame block every transparent draw shares. `sky_rot` is a float4

@@ -35,7 +35,6 @@
 //! is off.
 
 use concinnity_core::components::{GlassPanel, WaterSurface};
-use concinnity_core::gfx::lod;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::render::error::RenderResult;
@@ -65,6 +64,7 @@ const RT_PARAMS_UBO_SIZE: u64 = 144;
 // `TransparentView` (the per-frame view cbuffer) is a GPU-free layout struct
 // that lives in `core::render`; re-export it so the encode path and the
 // graph's view builder can keep naming it through this module.
+use concinnity_core::render::transparent::SeeThroughMesh;
 use concinnity_core::render::uniforms::GlassMeshParams;
 pub(in crate::directx) use concinnity_core::render::uniforms::TransparentView;
 
@@ -1288,14 +1288,6 @@ impl TransparentResources {
     }
 }
 
-// Refraction offset + Fresnel falloff for a see-through glass MESH. A `Material`
-// carries no glass-specific tunables (unlike a `GlassPanel`), so these match the
-// `GlassPanel` defaults: a gentle screen-space refraction and a fresnel power of
-// 1 (subtle reflection head-on, full mirror at grazing). Same constants the
-// Metal backend uses, so a mesh reads the same on every backend.
-const GLASS_MESH_REFRACTION: f32 = 0.02;
-const GLASS_MESH_FRESNEL_POWER: f32 = 1.0;
-
 impl DxContext {
     // Build this frame's see-through mesh draw list and write each mesh's params
     // into its slot of the producer's ring. Only called while RT is live.
@@ -1319,7 +1311,7 @@ impl DxContext {
 
         let mut draws = Vec::with_capacity(producer.object_indices.len());
         for (slot, &idx) in producer.object_indices.iter().enumerate() {
-            let Some(obj) = self.draw.objects.get(idx) else {
+            let Some(obj) = self.state.draw.objects.get(idx) else {
                 continue;
             };
             // The flag is re-read rather than trusted from the init list, so this
@@ -1328,39 +1320,24 @@ impl DxContext {
             if !obj.visible || !obj.resident || obj.material.see_through == 0 {
                 continue;
             }
-            let center = [
-                0.5 * (obj.bb_min[0] + obj.bb_max[0]),
-                0.5 * (obj.bb_min[1] + obj.bb_max[1]),
-                0.5 * (obj.bb_min[2] + obj.bb_max[2]),
-            ];
-            let d = lod::camera_distance(obj, cam);
-            let (index_offset, index_count) = obj.active_lod(d);
-            let t = obj.material.tint;
-            let params = GlassMeshParams {
-                model: obj.model,
-                tint: [t[0], t[1], t[2], 0.0],
-                opacity: obj.material.opacity,
-                refraction_strength: GLASS_MESH_REFRACTION,
-                fresnel_power: GLASS_MESH_FRESNEL_POWER,
-                prefilter_mip_count,
-            };
+            let mesh = SeeThroughMesh::new(obj, cam, prefilter_mip_count);
             let offset = slot as u64 * block;
             // SAFETY: the destination is `slot`'s block of the persistent mapping of an
             // UPLOAD-heap buffer init sized for one block per mesh per frame, and the source is a
             // separate live local, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &params as *const GlassMeshParams as *const u8,
+                    &mesh.params as *const GlassMeshParams as *const u8,
                     ring_ptr.add(offset as usize),
                     std::mem::size_of::<GlassMeshParams>(),
                 );
             }
             draws.push(GlassMeshDraw {
-                index_offset: index_offset as u32,
-                index_count: index_count as u32,
-                base_vertex: obj.base_vertex,
+                index_offset: mesh.index_offset as u32,
+                index_count: mesh.index_count as u32,
+                base_vertex: mesh.base_vertex,
                 params_gva: ring_base + offset,
-                center,
+                center: mesh.center,
             });
         }
         draws
@@ -1436,7 +1413,7 @@ impl DxContext {
         // the shared RtParams ring. Mirrors `encode_rt_reflections`'s build.
         let rt_params_gva = if rt_live {
             let rt = self.rt_reflections.as_ref().expect("rt_reflections_active");
-            let v = self.view.matrix;
+            let v = self.state.view.matrix;
             let inv_view_rot = [
                 [v[0][0], v[1][0], v[2][0], 0.0],
                 [v[0][1], v[1][1], v[2][1], 0.0],
@@ -1451,7 +1428,7 @@ impl DxContext {
                 sun_dir: self.fog.sun_dir,
                 sun_color: self.fog.sun_color,
                 prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-                sky_rot: self.view.sky_rot,
+                sky_rot: self.state.view.sky_rot,
             });
             // Traced glass reads the reduced layers back only when the pre-pass
             // below fills them this frame; otherwise it traces in place.

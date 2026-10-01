@@ -173,7 +173,7 @@ impl DxContext {
     pub(super) fn set_reflection_probes(&mut self, declared: &[reflection_probe::ProbePlacement]) {
         let placements = reflection_probe::resolve_placements(
             declared,
-            self.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)),
+            self.state.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)),
         );
         self.abandon_in_flight_bakes();
         let placements = match self.reserve_probe_cubes(&PLAN, placements.len()) {
@@ -403,8 +403,14 @@ impl DxContext {
         let rtv = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
         // SAFETY: a property query on a live descriptor heap; it only reads.
         let dsv = unsafe { dsv_heap.GetCPUDescriptorHandleForHeapStart() };
-        let color =
-            create_hdr_color_target(device, size, size, sample_count, rtv, self.view.clear_color)?;
+        let color = create_hdr_color_target(
+            device,
+            size,
+            size,
+            sample_count,
+            rtv,
+            self.state.view.clear_color,
+        )?;
         let depth = create_bake_depth(device, size, sample_count, dsv)?;
         // A single-sample resolve target only when MSAA is on.
         let resolve = if sample_count > 1 {
@@ -460,7 +466,7 @@ impl DxContext {
                 // A probe capture is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
                 ambient_occlusion: 0.0,
-                sky_rot: self.view.sky_rot,
+                sky_rot: self.state.view.sky_rot,
             };
             let cbv = alloc.alloc_buffer(
                 256,
@@ -947,7 +953,7 @@ impl DxContext {
         // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&rtv), false, Some(&dsv));
-            cmd.ClearRenderTargetView(rtv, &self.view.clear_color, Some(&[scissor]));
+            cmd.ClearRenderTargetView(rtv, &self.state.view.clear_color, Some(&[scissor]));
             cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, Some(&[scissor]));
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,

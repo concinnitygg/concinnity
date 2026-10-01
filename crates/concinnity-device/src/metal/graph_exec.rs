@@ -89,7 +89,7 @@ use concinnity_core::render::planar_reflection::PlanarFramePlan;
 #[cfg(debug_assertions)]
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{CompiledGraph, PassId, PassQueue};
-use concinnity_core::render::uniforms::GBufferView;
+use concinnity_core::render::uniforms::{GBufferView, PassCamera};
 use concinnity_host::thread::jobs;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -499,17 +499,24 @@ impl MtlContext {
     // fragment only reads `time`, but constructing the full view keeps the
     // binding identical to the main pass.
     fn build_raymarch_view(&self, params: &GraphFrameParams<'_>) -> super::raymarch::RaymarchView {
-        super::raymarch::RaymarchView {
+        super::raymarch::RaymarchView::new(&self.pass_camera(params))
+    }
+
+    // The camera the raymarch and transparent passes reconstruct from: the
+    // frame's jittered VP and its inverse at the HDR target size, with this
+    // frame's IBL and sky rotation.
+    fn pass_camera(&self, params: &GraphFrameParams<'_>) -> PassCamera {
+        PassCamera {
             vp: params.vp,
             inv_vp: params.inv_vp,
-            cam_pos: [params.cam_pos[0], params.cam_pos[1], params.cam_pos[2], 0.0],
+            cam_pos: params.cam_pos,
             viewport: [
                 self.targets.hdr.width as f32,
                 self.targets.hdr.height as f32,
             ],
             time: params.elapsed,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-            sky_rot: self.view.sky_rot,
+            sky_rot: self.state.view.sky_rot,
         }
     }
 
@@ -586,7 +593,7 @@ impl MtlContext {
                 crate::metal::draw::main::MainPassCamera {
                     elapsed: params.elapsed,
                     vp: params.vp,
-                    view: self.view.matrix,
+                    view: self.state.view.matrix,
                     cam_pos: params.cam_pos,
                 },
                 crate::metal::draw::main::GpuFrameBuffers {
@@ -625,7 +632,7 @@ impl MtlContext {
                 crate::metal::draw::main::MainPassCamera {
                     elapsed: params.elapsed,
                     vp: params.vp,
-                    view: self.view.matrix,
+                    view: self.state.view.matrix,
                     cam_pos: params.cam_pos,
                 },
                 crate::metal::draw::main::GpuFrameBuffers {
@@ -650,7 +657,7 @@ impl MtlContext {
                         jittered_vp: v.jittered_vp,
                         cur_vp: v.cur_vp,
                         prev_vp: v.prev_vp,
-                        view: self.view.matrix,
+                        view: self.state.view.matrix,
                     },
                     // Velocity inactive: cur == prev so the motion channel is a
                     // harmless zero (no consumer reads it).
@@ -658,7 +665,7 @@ impl MtlContext {
                         jittered_vp: params.vp,
                         cur_vp: params.vp,
                         prev_vp: params.vp,
-                        view: self.view.matrix,
+                        view: self.state.view.matrix,
                     },
                 };
                 self.encode_gbuffer_prepass(
@@ -787,23 +794,10 @@ impl MtlContext {
             PassId::Transparent => {
                 let scene_pre_taa =
                     pass_input(params.scene_pre_taa, PassId::Transparent, "scene_pre_taa")?;
-                let inv_vp = params.inv_vp;
-                let (sun_dir, sun_color) =
-                    concinnity_core::render::lights::glint_sun(&self.light_uniforms);
-                let view = concinnity_core::render::uniforms::TransparentView {
-                    vp: params.vp,
-                    inv_vp,
-                    camera_pos: [params.cam_pos[0], params.cam_pos[1], params.cam_pos[2], 0.0],
-                    viewport: [
-                        self.targets.hdr.width as f32,
-                        self.targets.hdr.height as f32,
-                    ],
-                    time: params.elapsed,
-                    prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-                    sky_rot: self.view.sky_rot,
-                    sun_dir,
-                    sun_color,
-                };
+                let view = concinnity_core::render::uniforms::TransparentView::new(
+                    &self.pass_camera(params),
+                    &self.light_uniforms,
+                );
                 // The mirrors `PlanarReflection` rendered this frame, if the pass
                 // samples mirrors at all (the same gate that put the node in the
                 // graph). A reflector whose slot was not rendered keeps its probe

@@ -664,7 +664,7 @@ impl VkContext {
         // Recover the (jittered) projection from this frame's view-projection so the
         // mirror render shares the main camera's projection + jitter, keeping the
         // reflection aligned with the reflective fragment's screen-space sample.
-        let proj = mat4_mul(params.vp_mat, mat4_inverse(self.view.matrix));
+        let proj = mat4_mul(params.vp_mat, mat4_inverse(self.state.view.matrix));
         let prefilter_mip_count = self.scene.prefilter_mip_count as f32;
         let extent = vk::Extent2D {
             width: set.width,
@@ -675,7 +675,7 @@ impl VkContext {
             let oriented =
                 planar_reflection::orient_plane_toward(set.layout.planes()[slot], params.cam_pos);
             let m = planar_reflection::planar_matrices(
-                self.view.matrix,
+                self.state.view.matrix,
                 proj,
                 params.cam_pos,
                 oriented,
@@ -694,7 +694,7 @@ impl VkContext {
                 // A mirror render is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
                 ambient_occlusion: 0.0,
-                sky_rot: self.view.sky_rot,
+                sky_rot: self.state.view.sky_rot,
             };
             let ring = slot * set.frames + params.frame_idx;
             set.view_bufs[ring].write_val(0, &view);

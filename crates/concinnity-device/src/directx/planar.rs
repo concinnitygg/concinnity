@@ -480,7 +480,7 @@ impl DxContext {
         // Recover the (jittered) projection from this frame's view-projection so
         // the mirror render shares the main camera's projection + jitter, keeping
         // the reflection aligned with the reflective fragment's screen-space sample.
-        let proj = mat4_mul(params.vp_mat, mat4_inverse(self.view.matrix));
+        let proj = mat4_mul(params.vp_mat, mat4_inverse(self.state.view.matrix));
         let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
 
         // Per kept plane: compute the reflected matrices, write the reflected
@@ -492,7 +492,7 @@ impl DxContext {
             let oriented =
                 planar_reflection::orient_plane_toward(set.layout.planes()[slot], params.cam_pos);
             let m = planar_reflection::planar_matrices(
-                self.view.matrix,
+                self.state.view.matrix,
                 proj,
                 params.cam_pos,
                 oriented,
@@ -510,7 +510,7 @@ impl DxContext {
                 // A mirror render is always lit, whatever the viewport shows.
                 shade_mode: 0.0,
                 ambient_occlusion: 0.0,
-                sky_rot: self.view.sky_rot,
+                sky_rot: self.state.view.sky_rot,
             };
             let ring = slot * FRAMES + params.frame_idx;
             // SAFETY: `ring < planes.len() * FRAMES`; the CBV is 256 bytes and
