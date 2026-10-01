@@ -410,7 +410,7 @@ fn check_verb<'a>(verb: &str, body: &'a Value, scope: &mut Scope<'a>) -> Result<
                 scope.bindings.push((bind, Ty::Entity));
             }
         }
-        "despawn" | "show" | "hide" => {
+        "despawn" | "show" | "hide" | "wake" => {
             expect(
                 body.get("target"),
                 Ty::Entity,
@@ -1086,6 +1086,22 @@ mod tests {
             r#"{"do":[{"after":{"seconds":{"float":1.0},"do":[{"let":{"name":"inner","value":{"int":1}}}]}},
                      {"set":{"var":"v","value":{"bind":"inner"}}}]}"#,
             "reads unbound name 'inner'",
+        );
+    }
+
+    // Waking every dynamic body is a query over `PropBody` walked with
+    // `for_each`, and the target has to be an entity.
+    #[test]
+    fn wake_takes_an_entity_target() {
+        check_json(
+            r#"{"on":"start","queries":[{"name":"bodies","has":["PropBody"]}],
+                "do":[{"for_each":{"query":"bodies","bind":"body",
+                                   "do":[{"wake":{"target":{"bind":"body"}}}]}}]}"#,
+        )
+        .expect("a wake over a body query type checks");
+        assert_eq!(
+            fault_at(r#"{"on":"start","do":[{"wake":{"target":{"float":1.0}}}]}"#),
+            at(&["do", "0", "wake", "target"]),
         );
     }
 

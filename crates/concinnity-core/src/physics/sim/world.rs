@@ -824,6 +824,34 @@ impl Simulation {
         self.reclassify(handle, move |body| body.make_dynamic(velocity))
     }
 
+    /// Put a dynamic body to sleep where it stands. It stays put, gravity
+    /// included, until something strikes it or [`wake_body`](Self::wake_body)
+    /// wakes it. Returns whether the handle named a dynamic body.
+    pub fn sleep_body(&mut self, handle: BodyHandle) -> bool {
+        let time_to_sleep = self.config.time_to_sleep;
+        let Some(body) = self.bodies.get_mut(pool_handle(handle)) else {
+            return false;
+        };
+        if !body.is_dynamic() {
+            return false;
+        }
+        body.sleep();
+        // Already settled as far as the island pass is concerned, so the next
+        // step keeps it down instead of waking it for a timer still at zero.
+        body.sleep_timer = time_to_sleep;
+        true
+    }
+
+    /// Wake a sleeping body so the simulation moves it again. Returns whether
+    /// the handle named a live body.
+    pub fn wake_body(&mut self, handle: BodyHandle) -> bool {
+        let Some(body) = self.bodies.get_mut(pool_handle(handle)) else {
+            return false;
+        };
+        body.wake();
+        true
+    }
+
     /// Whether a body is driven by position rather than by forces.
     #[cfg(test)]
     pub(crate) fn is_kinematic(&self, handle: BodyHandle) -> Option<bool> {
@@ -1739,6 +1767,85 @@ mod tests {
         assert_eq!(sim.is_sleeping(ball), Some(false));
         sim.step(TICK);
         assert!(sim.body_pose(ball).expect("live").0[1] > 0.55);
+    }
+
+    // A body put to sleep in mid-air hangs there through any number of steps,
+    // and falls the moment it is woken.
+    #[test]
+    fn a_body_put_to_sleep_hangs_until_it_is_woken() {
+        let mut sim = Simulation::with_capacity(1);
+        let ball = sim
+            .add_dynamic(
+                &ColliderShape::Ball { radius: 0.5 },
+                [0.0, 10.0, 0.0],
+                [0.0; 3],
+                params(0.0, 0.0),
+                LayerMask::ALL,
+            )
+            .expect("room");
+        assert!(sim.sleep_body(ball));
+        for _ in 0..120 {
+            sim.step(TICK);
+        }
+        assert_eq!(sim.is_sleeping(ball), Some(true));
+        assert_eq!(sim.body_pose(ball).expect("live").0, [0.0, 10.0, 0.0]);
+
+        assert!(sim.wake_body(ball));
+        for _ in 0..30 {
+            sim.step(TICK);
+        }
+        assert!(sim.body_pose(ball).expect("live").0[1] < 9.0, "it fell");
+    }
+
+    // Only a body the solver moves can sleep: a wall is not put to sleep, and
+    // a removed body is not found.
+    #[test]
+    fn only_a_live_dynamic_body_can_be_put_to_sleep() {
+        let mut sim = Simulation::with_capacity(2);
+        let ground = floor(&mut sim);
+        assert!(!sim.sleep_body(ground));
+        let ball = sim
+            .add_dynamic(
+                &ColliderShape::Ball { radius: 0.5 },
+                [0.0, 4.0, 0.0],
+                [0.0; 3],
+                params(0.0, 0.0),
+                LayerMask::ALL,
+            )
+            .expect("room");
+        assert!(sim.remove_body(ball));
+        assert!(!sim.sleep_body(ball));
+        assert!(!sim.wake_body(ball));
+    }
+
+    // A sleeper is not out of the world: a body falling onto it wakes it, and
+    // the two fall on together.
+    #[test]
+    fn a_sleeping_body_struck_by_a_falling_one_wakes() {
+        let mut sim = Simulation::with_capacity(2);
+        let sleeper = sim
+            .add_dynamic(
+                &ColliderShape::Ball { radius: 0.5 },
+                [0.0, 4.0, 0.0],
+                [0.0; 3],
+                params(0.0, 0.0),
+                LayerMask::ALL,
+            )
+            .expect("room");
+        sim.add_dynamic(
+            &ColliderShape::Ball { radius: 0.5 },
+            [0.0, 6.0, 0.0],
+            [0.0; 3],
+            params(0.0, 0.0),
+            LayerMask::ALL,
+        )
+        .expect("room");
+        assert!(sim.sleep_body(sleeper));
+        for _ in 0..90 {
+            sim.step(TICK);
+        }
+        assert_eq!(sim.is_sleeping(sleeper), Some(false), "it was struck");
+        assert!(sim.body_pose(sleeper).expect("live").0[1] < 4.0, "it fell");
     }
 
     // A teleport is a placement, not a push: the body arrives exactly where it

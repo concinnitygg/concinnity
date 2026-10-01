@@ -14,7 +14,7 @@ use crate::physics::{
 
 use crate::components::{
     BodyDynamics, Camera3D, Collider, ContactEvent, Held, Identity, PhysicsConfig, PhysicsJoint,
-    Pickup, RigidBody, Transform, TriggerFilter, TriggerVolume, VolumeEvent,
+    Pickup, RigidBody, Transform, TriggerFilter, TriggerVolume, VolumeEvent, WakeRequest,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
@@ -74,6 +74,8 @@ pub struct PhysicsSystem {
     props: PropBodies,
     // Reader cursor over the `RootMotionEvent` event queue.
     root_cursor: EventCursor,
+    // Reader cursor over the `WakeRequest` event queue.
+    wake_cursor: EventCursor,
     // Scratch for the per-tick scan for freshly spawned collider-bearing
     // entities, refilled every step.
     new_props: Vec<(Entity, PropCollSnap)>,
@@ -169,6 +171,7 @@ impl PhysicsSystem {
             rigs: Vec::new(),
             props: PropBodies::default(),
             root_cursor: EventCursor::default(),
+            wake_cursor: EventCursor::default(),
             new_props: Vec::new(),
             motion_scratch: Vec::new(),
             contact_scratch: Vec::new(),
@@ -584,6 +587,16 @@ impl System for PhysicsSystem {
             snap.dynamics = ctx.get::<BodyDynamics>(entity).copied();
             self.props
                 .adopt(&self.layers, world, entity, snap, self.body_cap);
+        }
+
+        // Wake the bodies behaviors asked for, after the adopt so a copy
+        // spawned this frame can be woken in it too.
+        if let Some(requests) = ctx.events::<WakeRequest>() {
+            for request in requests.read(&mut self.wake_cursor) {
+                if let Some(handle) = self.props.handle_of(request.target) {
+                    world.wake_body(handle);
+                }
+            }
         }
 
         // pickup / drop on the interact edge; held_changed carries the entity to
@@ -1765,6 +1778,93 @@ mod tests {
     fn an_any_volume_reports_a_prop_crossing_it() {
         let crossings = crossings_through(TriggerFilter::Any, 180);
         assert_eq!(crossings.len(), 2, "in, then out: {crossings:?}");
+    }
+
+    // A camera nothing controls, moved from outside physics the way a camera
+    // track moves it, carries its capsule along: a `player` volume reports the
+    // camera arriving.
+    #[test]
+    fn a_camera_moved_from_outside_sets_off_a_player_volume() {
+        let volume_id = AssetId(9);
+        let mut world = World::new();
+        world.context().push_identified(
+            volume_id,
+            TriggerVolume {
+                position: [0.0, 5.0, -10.0],
+                collider: PropCollider {
+                    shape: crate::components::PropColliderShape::Cuboid,
+                    half_extents: [2.0; 3],
+                    ..Default::default()
+                },
+                detects: TriggerFilter::Player,
+                ..Default::default()
+            },
+        );
+        world.push(Camera3D {
+            controller: None,
+            position: [0.0, 5.0, 0.0],
+            ..controlled_camera()
+        });
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.context());
+
+        let mut cursor = EventCursor::default();
+        let mut entered = Vec::new();
+        for step in 0..60 {
+            for camera in world.context().query_mut::<Camera3D>() {
+                camera.position[2] = -(step as f32) * 0.25;
+            }
+            physics.step(&mut world.context());
+            let ctx = world.context();
+            if let Some(events) = ctx.events::<VolumeEvent>() {
+                entered.extend(
+                    events
+                        .read(&mut cursor)
+                        .filter(|e| e.entered)
+                        .map(|e| e.volume),
+                );
+            }
+        }
+        assert_eq!(entered, vec![volume_id]);
+    }
+
+    // A prop authored asleep hangs where it was placed until a wake request
+    // names it, and falls from there.
+    #[test]
+    fn a_wake_request_drops_a_prop_authored_asleep() {
+        let mut world = World::new();
+        let ball = spawn_prop(&mut world, AssetId(1), [0.0, 6.0, 0.0], false);
+        world.insert(
+            ball,
+            BodyDynamics {
+                asleep: true,
+                ..ball_dynamics()
+            },
+        );
+
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.context());
+        let height = |world: &mut World| {
+            world
+                .context()
+                .get::<Transform>(ball)
+                .map(|t| t.position[1])
+        };
+
+        for _ in 0..60 {
+            physics.step(&mut world.context());
+        }
+        assert_eq!(height(&mut world), Some(6.0), "it hung where it was placed");
+
+        world
+            .context()
+            .events_mut::<WakeRequest>()
+            .send(WakeRequest { target: ball });
+        for _ in 0..30 {
+            physics.step(&mut world.context());
+        }
+        assert!(height(&mut world).is_some_and(|y| y < 5.5), "it fell");
     }
 
     // A `player` volume classifies by body: a prop is not the player, so the

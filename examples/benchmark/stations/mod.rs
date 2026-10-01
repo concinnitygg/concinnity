@@ -70,7 +70,7 @@ pub(crate) const STATIONS: &[Station] = &[
     },
     Station {
         segment: physics::SEGMENT,
-        radius: 20.0,
+        radius: physics::RADIUS,
         pitch_deg: -11.0,
         declare: physics::declare,
     },

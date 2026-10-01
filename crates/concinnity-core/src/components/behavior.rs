@@ -40,7 +40,8 @@ pub struct Behavior {
     /// expands some types away, compiles others into the resource stream, and a
     /// load-time pass decomposes the rest. `"Prop"` is the common case and
     /// works, resolving to the marker decomposition leaves on every prop's
-    /// entity, model- and mesh-backed alike. A name with no runtime counterpart
+    /// entity, model- and mesh-backed alike; `"PropBody"` narrows that to the
+    /// props with a dynamic body. A name with no runtime counterpart
     /// is a build error rather than a scope that silently matches nothing.
     pub scope: Vec<String>,
     /// Per-entity state. Each matching entity gets its own copy, reset to the
@@ -397,6 +398,13 @@ pub enum BehaviorNode {
     /// hidden entity keeps simulating; `show` reverses this.
     Hide {
         /// The entity hidden.
+        target: BehaviorExpr,
+    },
+    /// Wakes an entity's physics body, so one authored asleep (see
+    /// [PropBody](#propbody)) or settled at rest is simulated again. An entity
+    /// with no dynamic body is left alone.
+    Wake {
+        /// The entity whose body wakes.
         target: BehaviorExpr,
     },
     /// Plays an [AudioClip](#audioclip) flat on the main mix (no 3D position).

@@ -609,24 +609,30 @@ pub fn asset_entry<T: Authored>(id: &str, value: &T) -> std::io::Result<serde_js
 /// `target`, the form the compile resolves to a handle. A typed authored value
 /// cannot carry the name itself (a reference field holds the resolved handle),
 /// so a builder names it after the fact.
+///
+/// A dotted `field` reaches into nested objects, so `on.enter` names the
+/// volume a behavior's `enter` source watches.
 pub fn set_reference(
     entry: &mut serde_json::Value,
     field: &str,
     target: &str,
 ) -> std::io::Result<()> {
-    entry
+    let invalid = |message: String| std::io::Error::new(std::io::ErrorKind::InvalidData, message);
+    let mut at = entry
         .get_mut("args")
         .and_then(|args| args.as_object_mut())
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("asset entry has no args to hold '{field}'"),
-            )
-        })?
-        .insert(
-            field.to_string(),
-            serde_json::Value::String(target.to_string()),
-        );
+        .ok_or_else(|| invalid(format!("asset entry has no args to hold '{field}'")))?;
+    let (path, key) = field.rsplit_once('.').unwrap_or(("", field));
+    for step in path.split('.').filter(|step| !step.is_empty()) {
+        at = at
+            .get_mut(step)
+            .and_then(|next| next.as_object_mut())
+            .ok_or_else(|| invalid(format!("'{field}' has no object at '{step}'")))?;
+    }
+    at.insert(
+        key.to_string(),
+        serde_json::Value::String(target.to_string()),
+    );
     Ok(())
 }
 
@@ -645,6 +651,18 @@ mod authored_tests {
         // An entry with no args object is refused, not mangled.
         let err = set_reference(&mut serde_json::json!(7), "target", "hero").expect_err("no args");
         assert!(err.to_string().contains("no args"), "{err}");
+    }
+
+    // A dotted field reaches into the object the authored value already
+    // serialized, and refuses a path through anything that is not one.
+    #[test]
+    fn set_reference_reaches_into_a_nested_field() {
+        let mut entry = serde_json::json!({"type": "Behavior", "args": {"on": {"enter": null}}});
+        set_reference(&mut entry, "on.enter", "gate").expect("patched");
+        assert_eq!(entry["args"]["on"]["enter"], "gate");
+
+        let err = set_reference(&mut entry, "once.enter", "gate").expect_err("no object");
+        assert!(err.to_string().contains("'once'"), "{err}");
     }
 
     // The three shapes the generation has to cover: an args-schema override, a

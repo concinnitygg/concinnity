@@ -9,7 +9,7 @@ use super::{BehaviorSystem, Deferred};
 use crate::behavior::{Effect, Val};
 use crate::components::{
     DespawnRequest, PlayCue, ReparentRequest, SceneCommand, ScreenCommand, SpawnRequest,
-    StoryCommand, StoryPlayback, Transform, VisibilityRequest,
+    StoryCommand, StoryPlayback, Transform, VisibilityRequest, WakeRequest,
 };
 use crate::ecs::{Entity, PipelineContext};
 
@@ -93,6 +93,10 @@ impl BehaviorSystem {
                             target: entity.into(),
                             visible,
                         });
+                }
+                Effect::Wake(entity) => {
+                    ctx.events_mut::<WakeRequest>()
+                        .send(WakeRequest { target: entity });
                 }
                 Effect::Sound(cue) => {
                     ctx.events_mut::<PlayCue>().send(cue);
@@ -282,6 +286,7 @@ mod tests {
                     parent: None,
                 },
                 Effect::Visible(entity, false),
+                Effect::Wake(entity),
                 Effect::Sound(PlayCue {
                     clip: AudioClipHandle(1),
                     kind: CueKind::Sound,
@@ -303,6 +308,7 @@ mod tests {
         assert_eq!(sent::<DespawnRequest>(&mut world), 1);
         assert_eq!(sent::<ReparentRequest>(&mut world), 2);
         assert_eq!(sent::<VisibilityRequest>(&mut world), 1);
+        assert_eq!(sent::<WakeRequest>(&mut world), 1);
         assert_eq!(sent::<PlayCue>(&mut world), 1);
         assert_eq!(sent::<SceneCommand>(&mut world), 1);
         assert_eq!(sent::<ScreenCommand>(&mut world), 1);

@@ -73,7 +73,7 @@ macro_rules! for_each_component {
                 FrameInput        => $crate::components::FrameInput { gen, runtime },
                 Prop              => $crate::components::Prop { gen, external, renders, validate: prop, consumed: PropInstance },
                 RigidBody         => $crate::components::RigidBody { gen, external, validate: rigid_body },
-                PropBody          => $crate::components::PropBody { gen, external, consumed },
+                PropBody          => $crate::components::PropBody { gen, external, consumed: BodyDynamics },
                 Room              => $crate::components::Room { gen, external, compiled, useful_blank, args: Room, consumed },
                 DirectionalLight  => $crate::components::DirectionalLight { gen, external, useful_blank, validate: directional_light },
                 PointLight        => $crate::components::PointLight { gen, external, useful_blank, validate: point_light },
@@ -344,16 +344,20 @@ mod tests {
     #[test]
     fn a_consumed_component_survives_as_nothing() {
         assert_eq!(ComponentTag::Screen.surviving_tag(), None);
-        assert_eq!(ComponentTag::PropBody.surviving_tag(), None);
+        assert_eq!(ComponentTag::PhysicsJoint.surviving_tag(), None);
     }
 
-    // The one entry whose `consumed` flag names a replacement: the flag is what
-    // keeps "Prop" a usable behavior scope after decomposition drains it.
+    // A `consumed` flag that names a replacement is what keeps "Prop" and
+    // "PropBody" usable behavior scopes after decomposition drains them.
     #[test]
     fn a_consumed_component_can_name_its_replacement() {
         assert_eq!(
             ComponentTag::Prop.surviving_tag(),
             Some(ComponentTag::PropInstance)
+        );
+        assert_eq!(
+            ComponentTag::PropBody.surviving_tag(),
+            Some(ComponentTag::BodyDynamics)
         );
     }
 

@@ -94,6 +94,7 @@ pub(crate) fn run(ctx: &mut PipelineContext) {
                 linear_damping: body.linear_damping,
                 impact_clip: body.impact_clip,
                 impact_volume: body.impact_volume,
+                asleep: body.asleep,
             },
         );
     }

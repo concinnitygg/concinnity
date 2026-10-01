@@ -121,6 +121,7 @@ mod volume_event;
 mod volumetric_fog;
 mod voxel_chunk;
 mod voxel_world;
+mod wake_request;
 mod water_surface;
 mod window;
 
@@ -321,6 +322,7 @@ pub use volume_event::VolumeEvent;
 pub use volumetric_fog::VolumetricFog;
 pub use voxel_chunk::VoxelChunk;
 pub use voxel_world::VoxelWorld;
+pub use wake_request::WakeRequest;
 pub use water_surface::MAX_WATER_WAVES;
 pub use water_surface::WaterSurface;
 pub use water_surface::WaterWave;

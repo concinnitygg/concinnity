@@ -401,7 +401,7 @@ fn node_rows(node: &Value, depth: usize, path: Path, out: &mut Vec<Row>) {
             f.text(out, "lifetime", Text::Num);
             f.text(out, "bind", Text::OptStr);
         }
-        "despawn" | "show" | "hide" => f.expr(out, "target", false),
+        "despawn" | "show" | "hide" | "wake" => f.expr(out, "target", false),
         "reparent" => {
             f.expr(out, "child", false);
             f.expr(out, "parent", true);
@@ -538,7 +538,7 @@ fn node_summary(verb: &str, body: Option<&Value>) -> String {
         "let" | "set_local" | "spawn" | "scene" | "screen" | "sound" => name(first_field(verb)),
         "set" => name("var"),
         "set_transform" => target("entity"),
-        "despawn" | "show" | "hide" => target("target"),
+        "despawn" | "show" | "hide" | "wake" => target("target"),
         "reparent" => target("child"),
         "story" => body.and_then(Value::as_str).unwrap_or("start").to_string(),
         _ => String::new(),

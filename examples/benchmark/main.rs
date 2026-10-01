@@ -3,10 +3,11 @@
 //! The camera flies down a corridor of eight stations, each loading the engine
 //! somewhere different -- a lattice of instanced spheres, a grove under casting
 //! lights, a colonnade under a field of local lights, a row of particle plumes,
-//! a hall of glass over a marked floor, a pen of falling bodies, a drift of
-//! tokens that wakes when the camera arrives, and a colonnade standing in water.
-//! It circles each one in turn, and when it reaches the end it prints what every
-//! frame cost, cut by the station it was at.
+//! a hall of glass over a marked floor, a pen of bodies that drop when the
+//! camera arrives, a drift of tokens that wakes when it does too, and a
+//! colonnade standing in water. It circles each one in turn, and when it
+//! reaches the end it prints what every frame cost, cut by the station it was
+//! at.
 //!
 //! The measurement is two of the world's own components. A `CameraTrack` drives
 //! the camera along the path and names each stretch of it; a `FrameReport` times
@@ -44,8 +45,9 @@
 //! per tick. The rest are read from the pass list. What a station cannot do is
 //! separate a cost the engine pays wherever the camera is: the pool and the pane
 //! each re-render the scene for their reflection, and the solver steps every
-//! body in the corridor. Those show up in every segment, and they are in the
-//! world because a frame without them is not the frame an application ships.
+//! awake body in the corridor. Those show up in every segment, and they are in
+//! the world because a frame without them is not the frame an application
+//! ships.
 //!
 //! # How it is built
 //!

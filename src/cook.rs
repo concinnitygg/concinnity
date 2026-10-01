@@ -160,7 +160,8 @@ impl WorldBuilder {
     /// A reference on an authored struct holds a resolved handle (a dense
     /// index the compile assigns in declaration order), so the typed value
     /// cannot carry the name it points at. This writes the name into the
-    /// pending declaration, where the compile resolves it.
+    /// pending declaration, where the compile resolves it. A dotted `field`
+    /// reaches into a nested object, such as a behavior's `on.enter`.
     ///
     /// ```no_run
     /// # use concinnity::components::{CharacterShape, ShapeSlider};

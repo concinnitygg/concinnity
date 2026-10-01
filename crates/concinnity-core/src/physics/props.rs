@@ -1,7 +1,8 @@
 // The prop bodies the simulation owns: one per collider-bearing entity, plus
 // the three indices kept in step with them -- handle -> entity, which the
-// contact publish resolves every hit through, the tracked-entity set the
-// per-tick scan for runtime spawns skips, and the refused set that keeps a
+// contact publish resolves every hit through, entity -> handle, which a wake
+// request resolves through and the per-tick scan for runtime spawns skips
+// what it already holds by, and the refused set that keeps a
 // spawn the budget had no room for from being retried every tick. Bodies enter
 // through `add` / `adopt` and leave through `reap`, so the indices have exactly
 // two places to stay honest.
@@ -63,7 +64,7 @@ pub(crate) struct PropCollSnap {
 pub(crate) struct PropBodies {
     bodies: Vec<PropPhysics>,
     by_handle: SortedMap<BodyHandle, Entity>,
-    tracked: SortedSet<Entity>,
+    by_entity: SortedMap<Entity, BodyHandle>,
     // Entities the body budget had no room for. Kept so the per-tick spawn
     // scan skips them instead of re-refusing them every tick; an entry lives
     // until its entity is despawned. Freed headroom does not bring one back.
@@ -79,7 +80,7 @@ impl PropBodies {
         Self {
             bodies: Vec::with_capacity(caps.props),
             by_handle: SortedMap::with_capacity(caps.props),
-            tracked: SortedSet::with_capacity(caps.props),
+            by_entity: SortedMap::with_capacity(caps.props),
             refused: SortedSet::with_capacity(caps.refused),
             sampled: Vec::with_capacity(caps.sampled),
         }
@@ -122,6 +123,9 @@ impl PropBodies {
                 layer_or(LAYER_WORLD),
             )
         }?;
+        if snap.dynamics.is_some_and(|d| d.asleep) {
+            world.sleep_body(handle);
+        }
         self.bodies.push(PropPhysics {
             entity,
             handle,
@@ -132,7 +136,7 @@ impl PropBodies {
             rest_written: false,
         });
         self.by_handle.insert(handle, entity);
-        self.tracked.insert(entity);
+        self.by_entity.insert(entity, handle);
         Some(handle)
     }
 
@@ -171,7 +175,7 @@ impl PropBodies {
         let Self {
             bodies,
             by_handle,
-            tracked,
+            by_entity,
             refused,
             ..
         } = self;
@@ -184,7 +188,7 @@ impl PropBodies {
             }
             world.remove_body(prop.handle);
             by_handle.remove(&prop.handle);
-            tracked.remove(&prop.entity);
+            by_entity.remove(&prop.entity);
             false
         });
         if bodies.len() == before {
@@ -202,7 +206,12 @@ impl PropBodies {
     // Whether the entity already owns a body, so the per-tick spawn scan can
     // skip it.
     pub(crate) fn is_tracked(&self, entity: Entity) -> bool {
-        self.tracked.contains(&entity)
+        self.by_entity.get(&entity).is_some()
+    }
+
+    // The body `entity` owns, or None when it has none.
+    pub(crate) fn handle_of(&self, entity: Entity) -> Option<BodyHandle> {
+        self.by_entity.get(&entity).copied()
     }
 
     // Whether the entity was already refused a body, so the per-tick spawn
@@ -339,6 +348,7 @@ mod tests {
         for (i, &entity) in entities.iter().enumerate() {
             let handle = props.get(i).expect("body i").handle;
             assert_eq!(props.entity_of(handle), Some(entity));
+            assert_eq!(props.handle_of(entity), Some(handle));
             assert!(props.is_tracked(entity));
         }
 
@@ -365,6 +375,27 @@ mod tests {
         assert_eq!(props.entity_of(first), Some(entities[0]));
     }
 
+    // A body authored asleep is built asleep; one authored awake is not.
+    #[test]
+    fn a_body_authored_asleep_is_built_asleep() {
+        let (mut world, layers, mut props, _) = three_props();
+        let mut storage = ComponentStorage::default();
+        let minted = mint_entities(&mut storage, 2);
+        let (sleeper, waker) = (minted[0], minted[1]);
+        let mut snap = ball_snap([0.0, 8.0, 4.0]);
+        if let Some(dynamics) = snap.dynamics.as_mut() {
+            dynamics.asleep = true;
+        }
+        let asleep = props
+            .add(&layers, &mut world, sleeper, snap)
+            .expect("room in the pool");
+        let awake = props
+            .add(&layers, &mut world, waker, ball_snap([0.0, 8.0, 8.0]))
+            .expect("room in the pool");
+        assert_eq!(world.is_sleeping(asleep), Some(true));
+        assert_eq!(world.is_sleeping(awake), Some(false));
+    }
+
     #[test]
     fn reap_drops_the_index_entries_of_despawned_props() {
         let (mut world, _layers, mut props, entities) = three_props();
@@ -381,6 +412,8 @@ mod tests {
         assert_eq!(world.body_count(), bodies_before - 1);
         assert_eq!(props.entity_of(handles[1]), None, "index entry dropped");
         assert!(!props.is_tracked(dead), "tracked entry dropped");
+        assert_eq!(props.handle_of(dead), None);
+        assert_eq!(props.handle_of(entities[2]), Some(handles[2]));
         assert_eq!(props.entity_of(handles[0]), Some(entities[0]));
         assert_eq!(props.entity_of(handles[2]), Some(entities[2]));
         assert_eq!(held, Some(1), "the carried prop followed the compaction");
@@ -485,7 +518,7 @@ mod tests {
         let props = PropBodies::with_capacity(&caps);
         assert!(props.bodies.capacity() >= 16);
         assert!(props.by_handle.capacity() >= 16);
-        assert!(props.tracked.capacity() >= 16);
+        assert!(props.by_entity.capacity() >= 16);
         assert!(props.refused.capacity() >= 4);
         assert!(props.sampled.capacity() >= 8);
     }

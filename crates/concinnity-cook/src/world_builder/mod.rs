@@ -96,7 +96,8 @@ impl WorldBuilder {
     /// A reference on an authored struct holds a resolved handle (a dense
     /// index the compile assigns in declaration order), so the typed value
     /// cannot carry the name it points at. This writes the name into the
-    /// pending declaration, where the compile resolves it.
+    /// pending declaration, where the compile resolves it. A dotted `field`
+    /// reaches into a nested object, such as a behavior's `on.enter`.
     pub fn reference(&mut self, field: &str, target: impl Into<String>) -> &mut Self {
         let Some(entry) = self.entries.last_mut() else {
             self.error.get_or_insert((

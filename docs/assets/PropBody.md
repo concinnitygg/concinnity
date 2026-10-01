@@ -23,3 +23,4 @@ obstacle.
 - `linear_damping`: A float. Linear velocity damping, modeling air drag. Defaults to `0.05`.
 - `impact_clip`: A string. Optional [AudioClip](AudioClip.md) played at the contact point when this body collides hard enough to pass the world's `contact_min_impulse` (see [PhysicsConfig](PhysicsConfig.md)). Louder impacts play louder.
 - `impact_volume`: A float. Linear gain applied to the impact clip at full impulse. Defaults to `1.0`.
+- `asleep`: A boolean. Start the body asleep: it holds its authored pose, ignoring gravity, until something strikes it or a [Behavior](Behavior.md)'s `wake` node wakes it. A body leaning on an awake one wakes with it. Defaults to `false`.

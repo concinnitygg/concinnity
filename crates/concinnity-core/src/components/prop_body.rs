@@ -40,6 +40,10 @@ pub struct PropBody {
     pub impact_clip: Option<AudioClipHandle>,
     /// Linear gain applied to the impact clip at full impulse.
     pub impact_volume: f32,
+    /// Start the body asleep: it holds its authored pose, ignoring gravity,
+    /// until something strikes it or a [Behavior](#behavior)'s `wake` node
+    /// wakes it. A body leaning on an awake one wakes with it.
+    pub asleep: bool,
 }
 
 impl Default for PropBody {
@@ -53,6 +57,7 @@ impl Default for PropBody {
             linear_damping: 0.05,
             impact_clip: None,
             impact_volume: 1.0,
+            asleep: false,
         }
     }
 }
@@ -72,13 +77,14 @@ mod tests {
         // Zero mass means "derive it from the collider", not "massless".
         assert_eq!(b.mass, 0.0);
         assert!(b.prop_name.is_none());
+        assert!(!b.asleep);
     }
 
     #[test]
     fn a_bouncy_floating_body_parses_and_round_trips_through_postcard() {
         let b: PropBody = crate::test_support::from_json(
             r#"{"prop_name":"ball","mass":2.5,"friction":0.1,"restitution":0.9,
-                "gravity_scale":0,"linear_damping":0.2}"#,
+                "gravity_scale":0,"linear_damping":0.2,"asleep":true}"#,
         );
         assert_eq!(b.prop_name, Some(Ref::new(AssetId(4))));
         assert_eq!(b.gravity_scale, 0.0);
@@ -90,5 +96,6 @@ mod tests {
         assert_eq!(back.friction, 0.1);
         assert_eq!(back.restitution, 0.9);
         assert_eq!(back.linear_damping, 0.2);
+        assert!(back.asleep);
     }
 }

@@ -1,15 +1,22 @@
 //! A pen of falling bodies under jointed chains, with sensors over it: the
 //! world's dynamic body population.
 //!
+//! The bodies hang asleep over the pen until the camera arrives. A volume
+//! around the station senses the camera crossing into it, and a behavior
+//! listening for that wakes every body at once, so the drop happens in front
+//! of the camera rather than seconds before it got there.
+//!
 //! A motor-driven paddle sweeps the floor of the pen, so the pile never
 //! settles: left alone it would fall asleep within a minute and the broad phase
 //! and the contact solver would measure nothing after that. The solver steps
-//! every awake body wherever the camera is, so what this station puts in the
-//! report is the physics row of the CPU breakdown in every segment; the pen,
-//! the paddle and the chains are what its own segment draws.
+//! every awake body wherever the camera is, so from the drop on, what this
+//! station puts in the report is the physics row of the CPU breakdown in every
+//! segment that follows; the pen, the paddle and the chains are what its own
+//! segment draws.
 
 use concinnity::components::{
-    PhysicsConfig, PhysicsJoint, PhysicsJointKind, ProceduralMesh, Prop, PropBody, PropCollider,
+    Behavior, BehaviorExpr, BehaviorNode, BehaviorQuery, BehaviorSource, PhysicsConfig,
+    PhysicsJoint, PhysicsJointKind, ProceduralMesh, Prop, PropBody, PropCollider,
     PropColliderShape, TriggerFilter, TriggerVolume,
 };
 use concinnity::cook::WorldBuilder;
@@ -19,6 +26,17 @@ use crate::stations::spread;
 
 /// The stretch of path this station is measured under.
 pub(crate) const SEGMENT: &str = "physics";
+
+/// The radius the camera circles this station at.
+pub(crate) const RADIUS: f32 = 20.0;
+
+// How far past the camera's circle the arrival volume reaches, so the camera
+// stays inside it all the way round once it has crossed in.
+const ARRIVAL_MARGIN: f32 = 1.0;
+
+// The volume the camera sets off on arrival, and the query the release wakes.
+const ARRIVAL: &str = "physics_arrival";
+const DYNAMIC_BODIES: &str = "bodies";
 
 // The falling bodies: how they are stacked, how big they are, and how high they
 // start.
@@ -118,6 +136,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
                             mass: 1.0,
                             friction: 0.4,
                             restitution: BODY_RESTITUTION,
+                            asleep: true,
                             ..Default::default()
                         },
                     )
@@ -129,6 +148,54 @@ pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
     chains(world, center);
     sensors(world, center);
     paddle(world, center);
+    release(world, center);
+}
+
+// The drop: a volume reaching just past the camera's circle, and a behavior
+// that wakes every dynamic body the first time the camera crosses into it.
+// The stack is all that is asleep, so waking the chains and the paddle with it
+// changes nothing.
+fn release(world: &mut WorldBuilder, center: [f32; 3]) {
+    world.add(
+        ARRIVAL,
+        TriggerVolume {
+            position: arrival_center(center),
+            collider: PropCollider {
+                shape: PropColliderShape::Ball,
+                radius: RADIUS + ARRIVAL_MARGIN,
+                ..Default::default()
+            },
+            detects: TriggerFilter::Player,
+            ..Default::default()
+        },
+    );
+    world
+        .add(
+            "physics_release",
+            Behavior {
+                on: BehaviorSource::Enter(None),
+                once: true,
+                queries: vec![BehaviorQuery {
+                    name: DYNAMIC_BODIES.to_string(),
+                    has: vec!["PropBody".to_string()],
+                }],
+                body: vec![BehaviorNode::ForEach {
+                    query: DYNAMIC_BODIES.to_string(),
+                    bind: "body".to_string(),
+                    body: vec![BehaviorNode::Wake {
+                        target: BehaviorExpr::Bind("body".to_string()),
+                    }],
+                }],
+                ..Default::default()
+            },
+        )
+        .reference("on.enter", ARRIVAL);
+}
+
+// The arrival volume sits on the station at the camera's height, so the
+// camera's circle is a ring around its middle.
+fn arrival_center(center: [f32; 3]) -> [f32; 3] {
+    [center[0], crate::track::HEIGHT, center[2]]
 }
 
 // Four static walls, so the bodies stay in the frame the camera looks at
@@ -348,6 +415,66 @@ mod tests {
         );
         assert!(PADDLE_CLEARANCE > 0.0, "it drags on the floor");
         assert!(2.0 * half_height > 2.0 * BODY_RADIUS, "balls roll over it");
+    }
+
+    // Where the camera is `at` seconds into the run, walking the track's legs
+    // from the pose the camera is authored at.
+    fn camera_at(at: f32) -> [f32; 3] {
+        let mut from = [0.0, crate::track::HEIGHT, crate::stations::START_Z];
+        let mut began = 0.0;
+        for leg in crate::track::travel_legs() {
+            let seconds = if leg.speed > 0.0 {
+                leg.distance / leg.speed
+            } else {
+                leg.seconds
+            };
+            let length = leg.direction.iter().map(|d| d * d).sum::<f32>().sqrt();
+            let reach = if length > 0.0 {
+                leg.distance / length
+            } else {
+                0.0
+            };
+            let along = ((at - began) / seconds).clamp(0.0, 1.0);
+            let to = [0, 1, 2].map(|i| from[i] + leg.direction[i] * reach);
+            if at < began + seconds {
+                return [0, 1, 2].map(|i| from[i] + (to[i] - from[i]) * along);
+            }
+            from = to;
+            began += seconds;
+        }
+        from
+    }
+
+    // The drop is set off by the camera arriving: the first moment its path
+    // reaches into the arrival volume is the moment this station's segment
+    // opens, give or take the approach grazing the volume on its way in.
+    #[test]
+    fn the_camera_sets_off_the_drop_as_its_segment_opens() {
+        let index = crate::stations::STATIONS
+            .iter()
+            .position(|s| s.segment == SEGMENT)
+            .expect("the station is on the corridor");
+        let volume = arrival_center(crate::stations::center(index));
+        let inside = |p: [f32; 3]| {
+            let d = [0, 1, 2].map(|i| p[i] - volume[i]);
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() < RADIUS + ARRIVAL_MARGIN
+        };
+        let step = 0.01;
+        let entered = (0..10_000)
+            .map(|i| i as f32 * step)
+            .find(|&t| inside(camera_at(t)))
+            .expect("the camera reaches the station");
+        let (opens, closes) = crate::track::segment_window(SEGMENT);
+        assert!(
+            (opens - 0.5..=opens + step).contains(&entered),
+            "the drop is set off at {entered}s, the segment opens at {opens}s"
+        );
+        // Once in, the camera stays in for the whole of its circle.
+        let mut t = entered;
+        while t < closes {
+            assert!(inside(camera_at(t)), "the camera leaves at {t}s");
+            t += step;
+        }
     }
 
     // The bodies have to fit inside the pen they are dropped over, or the outer

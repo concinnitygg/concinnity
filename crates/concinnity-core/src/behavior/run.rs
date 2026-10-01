@@ -131,6 +131,8 @@ pub enum Effect {
     },
     /// Show or hide an entity.
     Visible(Entity, bool),
+    /// Wake an entity's physics body.
+    Wake(Entity),
     /// Play an audio cue.
     Sound(PlayCue),
     /// Load a scene.
@@ -480,6 +482,11 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
         COp::Visible(target, visible) => {
             if let Some(entity) = eval(target, view).and_then(Val::as_entity) {
                 out.push(Effect::Visible(entity, *visible));
+            }
+        }
+        COp::Wake(target) => {
+            if let Some(entity) = eval(target, view).and_then(Val::as_entity) {
+                out.push(Effect::Wake(entity));
             }
         }
         COp::Sound { clip, kind, volume } => out.push(Effect::Sound(PlayCue {

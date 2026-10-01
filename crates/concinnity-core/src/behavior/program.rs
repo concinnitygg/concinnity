@@ -183,6 +183,8 @@ pub enum COp {
     },
     /// Show or hide an entity.
     Visible(CExpr, bool),
+    /// Wake an entity's physics body.
+    Wake(CExpr),
     /// Play an audio cue.
     Sound {
         /// The clip to play.

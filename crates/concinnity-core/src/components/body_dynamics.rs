@@ -22,6 +22,8 @@ pub struct BodyDynamics {
     pub impact_clip: Option<AudioClipHandle>,
     /// Linear gain applied to the impact clip at full impulse.
     pub impact_volume: f32,
+    /// Whether the body starts asleep, holding its pose until woken.
+    pub asleep: bool,
 }
 
 impl Default for BodyDynamics {
@@ -34,6 +36,7 @@ impl Default for BodyDynamics {
             linear_damping: 0.05,
             impact_clip: None,
             impact_volume: 1.0,
+            asleep: false,
         }
     }
 }

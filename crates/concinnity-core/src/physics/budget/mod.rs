@@ -188,7 +188,7 @@ pub(crate) fn reserved_bytes(budget: &PhysicsBudget) -> u64 {
     let caps = DriverCapacities::derive(budget);
     vec_bytes::<PropPhysics>(caps.props)
         + vec_bytes::<(BodyHandle, Entity)>(caps.props)
-        + vec_bytes::<Entity>(caps.props)
+        + vec_bytes::<(Entity, BodyHandle)>(caps.props)
         + vec_bytes::<Entity>(caps.refused)
         + vec_bytes::<(Entity, [f32; 3], [f32; 3])>(caps.sampled)
         + vec_bytes::<(Entity, PropCollSnap)>(caps.new_props)

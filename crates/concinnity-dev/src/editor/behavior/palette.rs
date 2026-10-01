@@ -149,6 +149,10 @@ pub(crate) const NODES: &[Entry] = &[
         hint: "hide an entity without removing it",
     },
     Entry {
+        verb: "wake",
+        hint: "wake an entity's physics body",
+    },
+    Entry {
         verb: "sound",
         hint: "play an audio clip",
     },
@@ -388,7 +392,7 @@ pub(crate) fn node_default(verb: &str) -> Value {
         "spawn" => json!({"spawn": {
             "template": null, "position": [0.0, 0.0, 0.0], "rotation_deg": [0.0, 0.0, 0.0],
             "scale": [1.0, 1.0, 1.0], "lifetime": 0.0, "bind": null}}),
-        "despawn" | "show" | "hide" => single(verb, json!({"target": "self"})),
+        "despawn" | "show" | "hide" | "wake" => single(verb, json!({"target": "self"})),
         "reparent" => json!({"reparent": {"child": "self", "parent": null}}),
         "sound" => json!({"sound": {"clip": null, "kind": "sound", "volume": 1.0}}),
         "scene" => json!({"scene": {"scene": null, "transition": "FadeBlack"}}),

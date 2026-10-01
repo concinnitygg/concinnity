@@ -115,16 +115,6 @@ impl<K: Ord + Copy> SortedSet<K> {
         }
     }
 
-    pub(crate) fn remove(&mut self, key: &K) -> bool {
-        match self.keys.binary_search(key) {
-            Ok(at) => {
-                self.keys.remove(at);
-                true
-            }
-            Err(_) => false,
-        }
-    }
-
     pub(crate) fn contains(&self, key: &K) -> bool {
         self.keys.binary_search(key).is_ok()
     }
@@ -207,9 +197,6 @@ mod tests {
         assert!(set.insert(1));
         assert!(set.contains(&1) && set.contains(&4));
         assert!(!set.contains(&2));
-        assert!(set.remove(&4));
-        assert!(!set.remove(&4));
-        assert!(!set.contains(&4));
     }
 
     #[test]

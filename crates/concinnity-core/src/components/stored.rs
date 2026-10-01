@@ -83,5 +83,5 @@ pub use super::{
     Interactable, Keyframe, Lifetime, MeshRenderer, ModelRenderer, MorphKey, NavDirection, Parent,
     Pickup, PlayCue, PropInstance, RenderHandle, ReparentRequest, Room, RootMotionEvent,
     SceneCommand, SceneMember, ScreenCommand, ScreenShown, SettingCommand, SettingOp, SkeletonPose,
-    SpawnRequest, Spawner, StoryCommand, Transform, VisibilityRequest, VolumeEvent,
+    SpawnRequest, Spawner, StoryCommand, Transform, VisibilityRequest, VolumeEvent, WakeRequest,
 };

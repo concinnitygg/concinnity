@@ -241,6 +241,7 @@ fn compile_node(
         },
         BehaviorNode::Show { target } => COp::Visible(compile_expr(target, names, vars), true),
         BehaviorNode::Hide { target } => COp::Visible(compile_expr(target, names, vars), false),
+        BehaviorNode::Wake { target } => COp::Wake(compile_expr(target, names, vars)),
         BehaviorNode::Sound { clip, kind, volume } => match clip {
             Some(clip) => COp::Sound {
                 clip: *clip,
@@ -542,6 +543,16 @@ mod tests {
         assert!(matches!(
             op(BehaviorNode::Hide { target: target() }),
             COp::Visible(_, false)
+        ));
+    }
+
+    #[test]
+    fn a_wake_compiles_its_target() {
+        assert!(matches!(
+            op(BehaviorNode::Wake {
+                target: BehaviorExpr::SelfEntity
+            }),
+            COp::Wake(CExpr::SelfEntity)
         ));
     }
 

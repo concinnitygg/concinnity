@@ -264,7 +264,7 @@ fn node_caption(verb: &str, body: Option<&Value>) -> String {
         "set_local" => assign(name("local"), "value"),
         "set_transform" => transform_caption(body, expr("entity")),
         "spawn" => name("template"),
-        "despawn" | "show" | "hide" => expr("target"),
+        "despawn" | "show" | "hide" | "wake" => expr("target"),
         "reparent" => format!("{} -> {}", expr("child"), expr("parent")),
         "sound" => name("clip"),
         "scene" => name("scene"),
