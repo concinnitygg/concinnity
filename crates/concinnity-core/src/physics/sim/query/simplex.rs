@@ -152,43 +152,38 @@ fn segment_of(v: [Vec3; 3], remap: [usize; 3]) -> Closest {
     best.unwrap_or_else(|| Closest::of(v[0], &[remap[0]], &[1.0]))
 }
 
-/// The four triangular faces of a tetrahedron, each with the vertex opposite
-/// it, wound so the opposite vertex is on the inside of the face's plane.
-const FACES: [([usize; 3], usize); 4] = [
-    ([0, 1, 2], 3),
-    ([0, 2, 3], 1),
-    ([0, 3, 1], 2),
-    ([1, 3, 2], 0),
-];
+/// The four triangular faces of a tetrahedron, wound so the vertex each one
+/// leaves out lies the signed volume along the face's normal.
+const FACES: [[usize; 3]; 4] = [[0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]];
 
 fn tetrahedron(v: [Vec3; 4]) -> Closest {
     let volume = (v[1] - v[0]).dot((v[2] - v[0]).cross(v[3] - v[0]));
 
     let mut best: Option<Closest> = None;
-    let mut outside_any = false;
-    for (face, opposite) in FACES {
+    for face in FACES {
         let [a, b, c] = [v[face[0]], v[face[1]], v[face[2]]];
         let normal = (b - a).cross(c - a);
-        // The origin is outside this face when it and the remaining vertex
-        // fall on opposite sides of the face's plane.
-        if (-a).dot(normal) * (v[opposite] - a).dot(normal) >= 0.0 {
+        // The origin is outside a face when it is on the far side of the
+        // face's plane from the volume. Measuring each face's left-out vertex
+        // instead gives a nearly flat tetrahedron four independent rounding
+        // errors, and faces picked by them need not cover the hull.
+        if (-a).dot(normal) * volume >= 0.0 {
             continue;
         }
-        outside_any = true;
         keep_nearest(&mut best, triangle([a, b, c], face));
     }
 
     if let Some(found) = best {
         return found;
     }
-    if outside_any || volume.abs() > FLAT_VOLUME {
+    if volume.abs() > FLAT_VOLUME {
         let mut enclosed = Closest::of(Vec3::ZERO, &[0, 1, 2, 3], &[0.0; 4]);
         enclosed.encloses_origin = true;
         return enclosed;
     }
 
     // Flat: no inside to be in, so the hull is the faces and all four count.
-    for (face, _) in FACES {
+    for face in FACES {
         let [a, b, c] = [v[face[0]], v[face[1]], v[face[2]]];
         keep_nearest(&mut best, triangle([a, b, c], face));
     }
@@ -414,6 +409,25 @@ mod tests {
         let mut kept = [closest.keep[0], closest.keep[1]];
         kept.sort();
         assert_eq!(kept, [1, 2], "B and C carry the closest point");
+    }
+
+    // Four points on one face of a box, three already spanning it and a
+    // fourth a support point added off by rounding. The tetrahedron is flat
+    // to within that rounding, and the face the origin sits over still has to
+    // carry the answer rather than an edge of it.
+    #[test]
+    fn a_nearly_flat_tetrahedron_answers_from_the_face_the_origin_is_over() {
+        let closest = check(
+            &[
+                vec3(0.2654016, 1.0824523, 0.23114085),
+                vec3(-1.1327431, -1.5666139, 0.39738476),
+                vec3(0.019010901, -2.113846, 1.3638213),
+                vec3(1.4171555, 0.5352202, 1.1975772),
+            ],
+            vec3(-0.2032617, 0.12699336, 0.31414604),
+        );
+        assert!(!closest.encloses_origin);
+        assert_eq!(closest.count, 3, "{closest:?}");
     }
 
     // Three collinear points enclose no area, so the barycentric split has

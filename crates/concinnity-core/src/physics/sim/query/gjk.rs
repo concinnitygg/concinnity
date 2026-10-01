@@ -135,11 +135,17 @@ pub(crate) fn separation(a: &Support, b: &Support) -> Separation {
 
         cso[count] = point;
         witness_b[count] = on_b;
-        count += 1;
-        closest = closest_to_origin(&cso[..count]);
-        if closest.encloses_origin {
+        let next = closest_to_origin(&cso[..=count]);
+        if next.encloses_origin {
             return entangled(radii);
         }
+        // Each step has to bring the simplex closer. One that does not has
+        // run into rounding, and taking it would trade the best answer so far
+        // for a worse one the iteration may then cycle back from.
+        if next.point.length_squared() >= v_dot_v {
+            break;
+        }
+        closest = next;
         // Keep only the vertices carrying the answer, so the simplex always
         // has room for the next support point.
         count = closest.count;
@@ -366,6 +372,91 @@ mod tests {
         assert!(at(&CAPSULE, Vec3::ZERO).contains(vec3(0.0, 0.7, 0.0)));
         assert!(!at(&CAPSULE, Vec3::ZERO).contains(vec3(0.0, 0.8, 0.0)));
         assert!(!at(&CAPSULE, Vec3::ZERO).contains(vec3(0.3, 0.0, 0.0)));
+    }
+
+    /// The gap between a ball and a box worked out in the box's own frame,
+    /// where the nearest point of the box is a clamp.
+    fn exact_ball_box_gap(center: Vec3, radius: f32, half: Vec3, pose: Pose) -> f32 {
+        let local = pose.to_local(center);
+        (local - local.clamp(-half, half)).length() - radius
+    }
+
+    // The ball's center is inside the top face's outline and 0.395 above it,
+    // so a 0.4 ball dips 5 mm into the box. The center is built the way the
+    // grid that found it built it: a literal 1.295 rounds one ulp lower and
+    // takes a different path.
+    #[test]
+    fn a_ball_just_into_a_turned_box_overlaps_it() {
+        let ball = ColliderShape::Ball { radius: 0.4 };
+        let cuboid = ColliderShape::Cuboid {
+            half_extents: [1.5, 0.5, 0.8],
+        };
+        let grid = |n: f32| (n - 5.5) * 0.37;
+        let a = at(&ball, vec3(grid(6.0), grid(4.0), grid(9.0)));
+        let b = turned(&cuboid, vec3(0.3, -0.2, 0.1), [20.0, 50.0, 70.0]);
+        let exact = exact_ball_box_gap(a.pose.position, 0.4, vec3(1.5, 0.5, 0.8), b.pose);
+        assert!(exact < 0.0, "{exact}");
+        for s in [separation(&a, &b), separation(&b, &a)] {
+            assert!(s.is_entangled() || s.gap < 0.0, "{s:?}");
+            assert!((s.gap - exact).abs() < 1.0e-4, "{s:?} against {exact}");
+        }
+    }
+
+    // A grid of ball centers around boxes turned about every axis at once,
+    // checked against the closed form. Rounding lands support points on a
+    // face the simplex already spans, which is where the descent has to hold
+    // its answer rather than lose it.
+    #[test]
+    fn a_ball_and_a_turned_box_agree_with_the_closed_form_everywhere() {
+        let radius = 0.4;
+        let half = vec3(1.5, 0.5, 0.8);
+        let ball = ColliderShape::Ball { radius };
+        let cuboid = ColliderShape::Cuboid {
+            half_extents: half.to_array(),
+        };
+        let turns = [
+            [20.0, 50.0, 70.0],
+            [35.0, -15.0, 110.0],
+            [-60.0, 25.0, 5.0],
+            [10.0, 80.0, -30.0],
+            [45.0, 45.0, 45.0],
+            [0.5, 89.5, 13.0],
+        ];
+        let grid = |n: i32| (n as f32 - 5.5) * 0.37;
+        let (mut inside, mut apart) = (0, 0);
+        for euler in turns {
+            let b = turned(&cuboid, vec3(0.3, -0.2, 0.1), euler);
+            for i in 0..12 {
+                for j in 0..12 {
+                    for k in 0..12 {
+                        let a = at(&ball, vec3(grid(i), grid(j), grid(k)));
+                        let exact = exact_ball_box_gap(a.pose.position, radius, half, b.pose);
+                        for s in [separation(&a, &b), separation(&b, &a)] {
+                            if s.is_entangled() {
+                                // Only a center inside the box, or too near
+                                // it for f32 to prove a separation, leaves no
+                                // direction between the cores.
+                                assert!(exact + radius < 1.0e-3, "{euler:?} {i} {j} {k}: {s:?}");
+                            } else {
+                                assert!(
+                                    (s.gap - exact).abs() < 1.0e-4,
+                                    "{euler:?} {i} {j} {k}: {s:?} against {exact}"
+                                );
+                            }
+                        }
+                        if exact < 0.0 {
+                            inside += 1;
+                        } else {
+                            apart += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            inside > 100 && apart > 100,
+            "{inside} overlapping, {apart} apart"
+        );
     }
 
     // Two runs of the same query must land on the same bits: a query whose
