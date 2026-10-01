@@ -68,9 +68,10 @@ pub struct GeometryPlacement {
     pub chunk_idx: RangeAllocator,
 }
 
-// Place `v_len` vertex bytes and `i_len` index bytes, all or nothing. A full
-// pool is `OutOfDeviceMemory`; when only the index pool is full the vertex
-// range goes back at retire frame 0, since nothing wrote or drew it.
+// Place `v_len` vertex bytes and `i_len` index bytes, all or nothing, each on
+// its own element boundary: a pool's headroom can start anywhere in its buffer.
+// A full pool is `OutOfDeviceMemory`; when only the index pool is full the
+// vertex range goes back at retire frame 0, since nothing wrote or drew it.
 fn place_mesh(
     vtx: &mut RangeAllocator,
     idx: &mut RangeAllocator,
@@ -78,13 +79,15 @@ fn place_mesh(
     i_len: usize,
     what: impl Fn() -> String,
 ) -> RenderResult<(usize, usize)> {
-    let v_off = vtx.alloc(v_len as u64).ok_or_else(|| {
-        RenderError::OutOfDeviceMemory(format!(
-            "{}: no free vertex space for {v_len} bytes",
-            what()
-        ))
-    })?;
-    let Some(i_off) = idx.alloc(i_len as u64) else {
+    let v_off = vtx
+        .alloc_aligned(v_len as u64, VERTEX_STRIDE)
+        .ok_or_else(|| {
+            RenderError::OutOfDeviceMemory(format!(
+                "{}: no free vertex space for {v_len} bytes",
+                what()
+            ))
+        })?;
+    let Some(i_off) = idx.alloc_aligned(i_len as u64, INDEX_STRIDE) else {
         vtx.free(v_off, v_len as u64, 0);
         return Err(RenderError::OutOfDeviceMemory(format!(
             "{}: no free index space for {i_len} bytes",
@@ -120,10 +123,13 @@ fn widen(indices: &[u16], base: u32) -> Vec<u32> {
 }
 
 // The vertex index a byte offset into the shared vertex buffer starts at. Every
-// region begins on a vertex boundary, so the division is exact.
+// region is placed on a vertex boundary, so the division is exact.
 fn vertex_base(vertex_offset: usize) -> usize {
     vertex_offset / size_of::<Vertex>()
 }
+
+const VERTEX_STRIDE: u64 = size_of::<Vertex>() as u64;
+const INDEX_STRIDE: u64 = size_of::<u32>() as u64;
 
 fn out_of_range(op: &str, draw_idx: DrawIndex) -> RenderError {
     RenderError::Other(format!("{op}: draw object {draw_idx} out of range"))
@@ -804,6 +810,27 @@ mod tests {
         assert!(obj.visible && obj.resident && !obj.cullable());
         assert!(obj.lod_alternates.is_empty());
         assert!(scene.gpu_dirty.rt_topology);
+    }
+
+    #[test]
+    fn a_chunk_in_headroom_off_a_vertex_boundary_still_draws_its_own_vertices() {
+        // An empty world's shared vertex buffer is a 4-byte placeholder, so the
+        // chunk headroom appended after it starts mid-vertex.
+        let mut scene = SceneState::new(DrawList::with_runtime_reserve(vec![], 0, 4), [0.0; 4]);
+        scene.placement.chunk_vtx.free(4, (4 * VERTEX) as u64, 0);
+        scene.placement.chunk_idx.free(2, 16, 0);
+        let mut w = Recorder::default();
+        scene
+            .add_chunk_mesh(
+                chunk(&vertices(3), &[0, 1, 2]),
+                SlotAlloc::Append(DrawIndex(0)),
+                &mut w,
+            )
+            .expect("room for the chunk");
+        let obj = &scene.draw.objects[0];
+        assert_eq!(obj.vertex_offset, VERTEX);
+        assert_eq!(obj.base_vertex as usize * VERTEX, w.writes[0].1);
+        assert_eq!(obj.index_offset * 4, w.writes[1].1);
     }
 
     #[test]

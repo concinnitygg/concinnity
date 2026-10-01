@@ -22,8 +22,6 @@
 
 use alloc::vec::Vec;
 
-use crate::render::fullscreen::align_up;
-
 // A contiguous free byte range `[offset, offset + size)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Block {
@@ -66,7 +64,8 @@ impl RangeAllocator {
     }
 
     /// Allocate `size` bytes at an offset that is a multiple of `align`, or
-    /// `None` if no free block can host the request.
+    /// `None` if no free block can host the request. `align` need not be a
+    /// power of two, so a vertex stride works as one.
     ///
     /// Best-fit on the bytes actually wasted, so alignment padding counts
     /// against a candidate block rather than being invisible to the choice. Any
@@ -79,7 +78,7 @@ impl RangeAllocator {
         let align = align.max(1);
         let mut best: Option<(usize, u64, u64)> = None;
         for (i, b) in self.free.iter().enumerate() {
-            let offset = align_up(b.offset, align);
+            let offset = b.offset.next_multiple_of(align);
             let pad = offset - b.offset;
             let Some(usable) = b.size.checked_sub(pad) else {
                 continue;
@@ -348,6 +347,16 @@ mod tests {
         assert_eq!(a.alloc_aligned(100, 256), None);
         // the same request without alignment fits
         assert_eq!(a.alloc_aligned(100, 1), Some(100));
+    }
+
+    #[test]
+    fn aligned_alloc_takes_a_non_power_of_two_stride() {
+        let mut a = RangeAllocator::new();
+        seed(&mut a, 4, 200);
+        assert_eq!(a.alloc_aligned(56, 56), Some(56));
+        assert_eq!(a.alloc_aligned(56, 56), Some(112));
+        // the skipped [4,56) stays free
+        assert_eq!(a.alloc_aligned(52, 1), Some(4));
     }
 
     #[test]
