@@ -15,7 +15,7 @@ use concinnity_core::gfx::render_types::{
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use concinnity_core::render::pass_timing;
-use concinnity_core::render::render_graph::build_frame_graph;
+use concinnity_core::render::render_graph::{PassId, build_frame_graph};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::com;
@@ -226,16 +226,17 @@ impl DxContext {
 
         // GPU-driven cull gating; matches the inner check in
         // encode_main_pass's bindless branch. When on, the host-side
-        // per-frame object buffer rebuild runs inline here (mapped-memory
-        // CPU work, mirrors Vulkan's pattern) and the pre-graph picks up
-        // a `PassId::Cull` node that writes the indirect command buffer
-        // ahead of Main.
+        // per-frame object + draw-args buffer rebuilds run inline here
+        // (mapped-memory CPU work, mirrors Vulkan's pattern) and the pre-graph
+        // picks up a `PassId::Cull` node that writes the indirect command
+        // buffer ahead of Main.
         let bindless_cull_enabled = self.cull.main_bindless_pso.is_some() && self.cull_count() > 0;
         // Skipped while the world is hidden behind an opaque menu: the masked
-        // graph drops the Cull pass and Main runs as a bare clear, so this
-        // per-object buffer rebuild would feed nothing.
+        // graph drops the Cull pass and Main runs as a bare clear, so these
+        // per-object buffer rebuilds would feed nothing.
         if !world_hidden && bindless_cull_enabled {
             self.build_object_buffer(frame_idx);
+            self.build_draw_args_buffer(frame_idx, cam_pos, self.model_history_mode());
         }
 
         // Clustered binning runs while a local light or a baked probe is live,
@@ -361,6 +362,10 @@ impl DxContext {
             _ => build_frame_graph(&seed_inputs)
                 .map_err(|e| RenderError::Other(format!("frame-graph compile: {e}")))?,
         };
+        // A rebuild's prime request is spent only on a frame whose G-buffer
+        // pre-pass runs the history snapshot; any other frame leaves it pending.
+        let prime_model_history = frame_graph.pass(PassId::GBufferPrepass).is_some()
+            && self.state.model_history.borrow_mut().take_prime();
         let frame_params = GraphFrameParams {
             cmd: end_cmd,
             frame_idx,
@@ -387,6 +392,7 @@ impl DxContext {
             elapsed,
             near,
             far,
+            prime_model_history,
             planar: self
                 .planar_reflection
                 .as_ref()

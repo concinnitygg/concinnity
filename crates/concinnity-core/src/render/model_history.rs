@@ -284,6 +284,21 @@ mod tests {
         assert_eq!(h.draw_flags(0, 0), KEEP);
     }
 
+    // A frame that runs no history snapshot leaves the prime untaken, and it
+    // must still be pending for the first frame that does, across both steady
+    // tracked builds and probe bakes in between.
+    #[test]
+    fn an_untaken_prime_stays_pending_until_taken() {
+        let mut h = ModelHistory::new();
+        h.begin(HistoryMode::Track, 3);
+        h.begin(HistoryMode::Track, 3);
+        h.begin(HistoryMode::Untracked, 3);
+        h.begin(HistoryMode::Track, 3);
+        assert!(h.take_prime());
+        h.begin(HistoryMode::Track, 3);
+        assert!(!h.take_prime());
+    }
+
     // A record past the tracked range (a world that grew its reserve without a
     // rebuild) never claims a history it does not have.
     #[test]

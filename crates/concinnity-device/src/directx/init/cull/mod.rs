@@ -140,7 +140,6 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         prev_model_buffers: gbuffer_pass.prev_model_buffers,
         model_history_root_sig: gbuffer_pass.model_history_root_sig,
         model_history_pso: gbuffer_pass.model_history_pso,
-        model_history_prime: std::sync::atomic::AtomicBool::new(false),
         occlusion_two_pass,
         hiz: compute.hiz,
         prev_view_proj: std::cell::Cell::new(IDENTITY),

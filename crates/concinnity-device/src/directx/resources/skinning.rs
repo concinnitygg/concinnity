@@ -210,10 +210,8 @@ impl DxContext {
         self.state.skinned.draw_objects = draw_objects;
         // A whole new skinned set: nothing in the model-history ring was written
         // for these records.
-        self.state
-            .model_history
-            .borrow_mut()
-            .reset(self.cull_count());
+        let n_cull = self.cull_count();
+        self.state.model_history.get_mut().reset(n_cull);
 
         // Morph targets are attached by a later `upload_skinned_morphs`; until
         // then every object is morphless (a re-upload / hot-reload resets here).

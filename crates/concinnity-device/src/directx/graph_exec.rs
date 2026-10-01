@@ -585,6 +585,10 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // Camera far-plane in view units. Consumed by `Upscale` (FSR3
     // dispatch's `cameraFar`).
     pub far: f32,
+    // Whether this frame's model-history snapshot fills every ring slot rather
+    // than only its own: the rebuild's prime request, taken from the tracker
+    // before the fan-out. Consumed by GBufferPrepass.
+    pub prime_model_history: bool,
     // Which planar mirrors this frame renders, and the screen rectangle each
     // covers; computed once from `vp_mat` so the mirror pass and the transparent
     // pass that samples it agree.
@@ -1402,7 +1406,10 @@ impl DxContext {
                         jittered_vp: params.vp_mat,
                         cur_vp: params.cur_vp,
                     },
-                    self.reads_motion(),
+                    crate::directx::post::gbuffer::GbufferPrepassFrame {
+                        velocity_active: self.reads_motion(),
+                        prime_history: params.prime_model_history,
+                    },
                 );
             }
         }

@@ -129,7 +129,7 @@ impl UploadRing {
         }
         // SAFETY: `base` is the persistent map of a buffer of `capacity` bytes;
         // `offset + bytes.len() <= capacity` checked above; the slot is only
-        // touched on the main render thread.
+        // touched by one pass's encode at a time.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),

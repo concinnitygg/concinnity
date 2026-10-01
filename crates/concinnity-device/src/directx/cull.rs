@@ -126,12 +126,9 @@ pub(in crate::directx) struct CullState {
     // pre-pass reads them, so the host never touches their bytes. Frame `R`
     // reads the slot frame `R - 1` filled.
     pub prev_model_buffers: Vec<ID3D12Resource>,
-    // The snapshot kernel that fills them from the object buffer, and the
-    // rebuild's request that it fill every slot before one is read. An atomic
-    // rather than a borrow of the tracker: passes encode on worker threads.
+    // The snapshot kernel that fills them from the object buffer.
     pub model_history_root_sig: Option<ID3D12RootSignature>,
     pub model_history_pso: Option<ID3D12PipelineState>,
-    pub model_history_prime: std::sync::atomic::AtomicBool,
     // `PostProcessConfig.occlusion_two_pass`, as requested by the world.
     pub occlusion_two_pass: bool,
     // Hi-Z (depth-mip pyramid) used by the cull kernel for occlusion culling.
@@ -457,6 +454,18 @@ impl DxContext {
         (bucket * self.cull.bucket_stride) as u64 * INDIRECT_COMMAND_STRIDE as u64
     }
 
+    // How this frame's draw-args build treats the model-history ring. The
+    // GPU-driven pre-pass both fills and reads it; with no consumer of motion,
+    // or with the pre-pass not built, the ring goes stale, so every record is
+    // marked `NO_HISTORY` and the tracker re-primes when the pre-pass returns.
+    pub(in crate::directx) fn model_history_mode(&self) -> HistoryMode {
+        match self.gbuffer.is_some() && self.cull.model_history_pso.is_some() && self.reads_motion()
+        {
+            true => HistoryMode::Track,
+            false => HistoryMode::Stale,
+        }
+    }
+
     // Rebuild this frame's `StructuredBuffer<GpuDrawArgs>` for the GPU-cull
     // compute kernel: one 16-byte record per build-time `DrawObject`, carrying
     // the indexed-draw arguments the kernel encodes plus the per-frame
@@ -478,15 +487,9 @@ impl DxContext {
             return;
         };
         let stride = std::mem::size_of::<GpuDrawArgs>();
+        // Main thread only, ahead of the encode fan-out: no worker borrows the tracker.
         let mut model_history = self.state.model_history.borrow_mut();
         model_history.begin(history, self.cull_count());
-        // Hand the dispatch the rebuild's prime request here, on the one thread
-        // that owns the tracker; the encode runs on a worker.
-        if model_history.take_prime() {
-            self.cull
-                .model_history_prime
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-        }
         // A see-through glass mesh (Layer 2) is disabled in the opaque pass when
         // the RT path is live: it draws in the transparent pass instead. Clearing
         // ENABLED makes the cull kernel reset its command to a no-op (the same
@@ -661,15 +664,15 @@ impl DxContext {
         }
     }
 
-    // Dispatch the cull compute pass: fills the per-frame draw-args buffer,
-    // packs the camera frustum planes + Hi-Z metadata + previous frame's VP,
-    // runs one thread per build-time object to test it against the frustum,
-    // distance, and (when valid) the Hi-Z pyramid, and writes the surviving
-    // `ExecuteIndirect` commands into this frame's indirect buffer. The
-    // indirect buffer rests in `INDIRECT_ARGUMENT` between frames; the graph
-    // drives the `UAV` transition here and back at the consuming pass, off the
-    // `draw_args` write edge. Caller must already have built the per-frame
-    // `GpuObjectData` buffer (the bindless main pass owns that step).
+    // Dispatch the cull compute pass: packs the camera frustum planes + Hi-Z
+    // metadata + previous frame's VP, runs one thread per build-time object to
+    // test it against the frustum, distance, and (when valid) the Hi-Z pyramid,
+    // and writes the surviving `ExecuteIndirect` commands into this frame's
+    // indirect buffer. The indirect buffer rests in `INDIRECT_ARGUMENT` between
+    // frames; the graph drives the `UAV` transition here and back at the
+    // consuming pass, off the `draw_args` write edge. Caller must already have
+    // built the per-frame `GpuObjectData` and `GpuDrawArgs` buffers
+    // (`record_frame` does both before the encode fan-out).
     pub(in crate::directx) fn encode_cull(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -677,19 +680,6 @@ impl DxContext {
         frustum: &Frustum,
         cam_pos: [f32; 3],
     ) {
-        // The GPU-driven pre-pass both fills and reads the model-history ring.
-        // With no consumer of motion, or with the pre-pass not built, the ring
-        // goes stale, so every record is marked `NO_HISTORY` and the tracker
-        // re-primes when the pre-pass returns.
-        let history = match self.gbuffer.is_some()
-            && self.cull.model_history_pso.is_some()
-            && self.reads_motion()
-        {
-            true => HistoryMode::Track,
-            false => HistoryMode::Stale,
-        };
-        self.build_draw_args_buffer(frame_idx, cam_pos, history);
-
         let cull_pso = self
             .cull
             .cull_pso

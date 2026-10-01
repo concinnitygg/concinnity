@@ -585,6 +585,17 @@ pub(in crate::directx) struct GbufferPrepassView {
     pub cur_vp: [[f32; 4]; 4],
 }
 
+// Per-frame decisions the G-buffer pre-pass takes as data, made on the main
+// thread before the encode fan-out.
+pub(in crate::directx) struct GbufferPrepassFrame {
+    // A consumer (TAA, FSR or SSGI) reads motion; when false, cur == prev so the
+    // motion channel is a harmless zero.
+    pub velocity_active: bool,
+    // The model-history snapshot fills every ring slot rather than only this
+    // frame's, because a rebuild left the ring unwritten.
+    pub prime_history: bool,
+}
+
 impl DxContext {
     // Whether anything reprojects through the pre-pass's motion channel this
     // frame: TAA, the FSR upscaler, or the SSGI accumulation.
@@ -595,20 +606,23 @@ impl DxContext {
     }
 
     // Encode the unified G-buffer pre-pass: one jittered traversal of the cull
-    // records into the normal+depth / roughness / velocity MRT.
-    // `velocity_active` is true when a consumer (TAA, FSR or SSGI) reads motion;
-    // when false, cur == prev so the motion channel is a harmless zero.
+    // records into the normal+depth / roughness / velocity MRT, then this
+    // frame's model-history snapshot.
     pub(in crate::directx) fn encode_gbuffer_prepass(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         view: GbufferPrepassView,
-        velocity_active: bool,
+        frame: GbufferPrepassFrame,
     ) {
         let GbufferPrepassView {
             jittered_vp,
             cur_vp,
         } = view;
+        let GbufferPrepassFrame {
+            velocity_active,
+            prime_history,
+        } = frame;
         let gb = match &self.gbuffer {
             Some(g) => g,
             None => return,
@@ -688,14 +702,14 @@ impl DxContext {
         // Snapshot this frame's models into this frame's history slot, AFTER the
         // pass above read the previous one -- which is what keeps a single frame
         // in flight (one slot, read then rewritten) correct.
-        self.encode_model_history(cmd, frame_idx);
+        self.encode_model_history(cmd, frame_idx, prime_history);
     }
 
     // Dispatch the model-history snapshot: one thread per cull record copying
-    // `objects[i].model` into this frame's history slot. The slot rests as a
-    // shader resource (the pre-pass reads it through a root SRV) and is
-    // transitioned to a UAV for the write and back.
-    fn encode_model_history(&self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
+    // `objects[i].model` into this frame's history slot, or into every slot when
+    // `prime` is set. The slot rests as a shader resource (the pre-pass reads it
+    // through a root SRV) and is transitioned to a UAV for the write and back.
+    fn encode_model_history(&self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize, prime: bool) {
         let (Some(root_sig), Some(pso), true) = (
             self.cull.model_history_root_sig.as_ref(),
             self.cull.model_history_pso.as_ref(),
@@ -709,14 +723,8 @@ impl DxContext {
         }
         // A rebuilt ring holds nothing these records were written for, so the
         // priming frame fills every slot rather than only its own: the instance
-        // region is the one the draw args cannot flag, being init-written. The
-        // request arrives through an atomic because passes encode on worker
-        // threads and the tracker belongs to the draw-args build.
-        let slots = match self
-            .cull
-            .model_history_prime
-            .swap(false, std::sync::atomic::Ordering::Relaxed)
-        {
+        // region is the one the draw args cannot flag, being init-written.
+        let slots = match prime {
             true => 0..self.cull.prev_model_buffers.len(),
             false => frame_idx..frame_idx + 1,
         };
