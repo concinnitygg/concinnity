@@ -40,6 +40,9 @@ pub(crate) struct PropPhysics {
     // The pose written back to the entity's Transform last frame. A Transform
     // that differs was written by something else and is adopted.
     written: ([f32; 3], [f32; 3]),
+    // Whether the Transform already holds the pose the body is resting at, so
+    // writing it again would change nothing.
+    rest_written: bool,
 }
 
 // A collider-bearing entity's physics description, snapshotted from its
@@ -126,6 +129,7 @@ impl PropBodies {
             pickup: snap.pickup && dynamic,
             pose,
             written: (snap.position, snap.rotation_deg),
+            rest_written: false,
         });
         self.by_handle.insert(handle, entity);
         self.tracked.insert(entity);
@@ -245,6 +249,7 @@ impl PropBodies {
             if world.teleport_body(prop.handle, position, rotation_deg) {
                 prop.pose.snap(position, quat_from_euler_deg(rotation_deg));
                 prop.written = (position, rotation_deg);
+                prop.rest_written = false;
             }
         }
     }
@@ -259,17 +264,24 @@ impl PropBodies {
     }
 
     // Blend each dynamic prop's tick poses by the frame's alpha, decomposing
-    // the rotation to Euler degrees once here at the write boundary.
+    // the rotation to Euler degrees once here at the write boundary. A prop at
+    // rest whose Transform already holds that pose is left out, so a settled
+    // world writes nothing back.
     pub(crate) fn sample_poses(&mut self, alpha: f32) -> &[(Entity, [f32; 3], [f32; 3])] {
         let Self {
             bodies, sampled, ..
         } = self;
         sampled.clear();
-        sampled.extend(bodies.iter_mut().filter(|p| p.dynamic).map(|prop| {
+        sampled.extend(bodies.iter_mut().filter(|p| p.dynamic).filter_map(|prop| {
+            let still = prop.pose.is_still();
+            if still && prop.rest_written {
+                return None;
+            }
+            prop.rest_written = still;
             let (pos, rot) = prop.pose.sample(alpha);
             let rot = euler_deg_from_quat(rot);
             prop.written = (pos, rot);
-            (prop.entity, pos, rot)
+            Some((prop.entity, pos, rot))
         }));
         sampled
     }
@@ -596,10 +608,66 @@ mod tests {
         assert_eq!(props.dynamic_count(), 1);
         let sampled: Vec<Entity> = props.sample_poses(1.0).iter().map(|(e, ..)| *e).collect();
         assert_eq!(sampled, vec![ids[0]], "static props are never written back");
+        world.step(1.0 / 60.0);
+        props.record_tick_poses(&world);
         assert_eq!(
             props.sample_poses(1.0).len(),
             1,
             "the scratch is refilled, not appended to"
         );
+    }
+
+    // A body asleep on the floor is written back once at the pose it settled
+    // at and then left alone, until something moves it again.
+    #[test]
+    fn a_resting_prop_is_written_back_once_and_then_left_alone() {
+        let (mut world, _layers, mut props, entities) = three_props();
+        world
+            .add_fixed(
+                &ColliderShape::Cuboid {
+                    half_extents: [20.0, 1.0, 20.0],
+                },
+                [0.0, -1.0, 0.0],
+                [0.0; 3],
+                0.8,
+                crate::physics::LayerMask::ALL,
+            )
+            .expect("room for a floor");
+        let mut written = Vec::new();
+        for _ in 0..240 {
+            world.step(1.0 / 60.0);
+            props.record_tick_poses(&world);
+            written.push(props.sample_poses(0.5).len());
+        }
+        assert!(
+            props
+                .iter()
+                .all(|p| world.is_sleeping(p.handle) == Some(true)),
+            "the props settled"
+        );
+        assert_eq!(written[0], 3, "falling props are written every frame");
+        assert_eq!(*written.last().expect("frames"), 0, "resting props are not");
+        let at_rest = written
+            .iter()
+            .rposition(|&count| count > 0)
+            .expect("a write");
+        for _ in 0..2 {
+            world.step(1.0 / 60.0);
+            props.record_tick_poses(&world);
+        }
+        assert!(
+            props.sample_poses(0.5).is_empty(),
+            "rested since frame {at_rest}"
+        );
+
+        // A move from outside puts the prop back in the frame's writes, along
+        // with the neighbors it woke by leaving.
+        props.sync_external_poses(&mut world, |entity| {
+            (entity == entities[1]).then_some(([1.0, 5.0, 0.0], [0.0; 3]))
+        });
+        world.step(1.0 / 60.0);
+        props.record_tick_poses(&world);
+        let sampled: Vec<Entity> = props.sample_poses(0.5).iter().map(|(e, ..)| *e).collect();
+        assert!(sampled.contains(&entities[1]), "{sampled:?}");
     }
 }

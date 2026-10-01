@@ -1,12 +1,12 @@
 //! A pen of falling bodies under jointed chains, with sensors over it: the
 //! world's dynamic body population.
 //!
-//! The bodies are bouncy and the chains never hang still, so the broad phase
-//! and the contact solver keep working for the length of the run rather than
-//! going quiet in the first second and measuring nothing after that. The solver
-//! steps every body wherever the camera is, so what this station puts in the
-//! report is the physics row of the CPU breakdown in every segment; the pen and
-//! the chains are what its own segment draws.
+//! A motor-driven paddle sweeps the floor of the pen, so the pile never
+//! settles: left alone it would fall asleep within a minute and the broad phase
+//! and the contact solver would measure nothing after that. The solver steps
+//! every awake body wherever the camera is, so what this station puts in the
+//! report is the physics row of the CPU breakdown in every segment; the pen,
+//! the paddle and the chains are what its own segment draws.
 
 use concinnity::components::{
     PhysicsConfig, PhysicsJoint, PhysicsJointKind, ProceduralMesh, Prop, PropBody, PropCollider,
@@ -46,6 +46,15 @@ const CHAIN_ANCHOR_HEIGHT: f32 = 9.0;
 // The sensors over the pen, which test every dynamic body against their region
 // each step.
 const SENSORS: usize = 4;
+
+// The paddle turning on a vertical hinge at the middle of the pen: nearly as
+// long as the pen is wide, taller than a ball, and held just clear of the floor
+// so only the balls touch it.
+const PADDLE_HALF_EXTENTS: [f32; 3] = [PEN_HALF_WIDTH - 1.5, 0.55, 0.2];
+const PADDLE_CLEARANCE: f32 = 0.05;
+const PADDLE_MASS: f32 = 40.0;
+const PADDLE_DEGREES_PER_SECOND: f32 = 40.0;
+const PADDLE_MAX_FORCE: f32 = 4000.0;
 
 /// Declare the pen, the bodies, the chains, and the sensors.
 pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
@@ -119,6 +128,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
 
     chains(world, center);
     sensors(world, center);
+    paddle(world, center);
 }
 
 // Four static walls, so the bodies stay in the frame the camera looks at
@@ -229,6 +239,63 @@ fn chains(world: &mut WorldBuilder, center: [f32; 3]) {
     }
 }
 
+// The paddle and the motorized hinge that turns it. The hinge anchors it to
+// the world at its own center, so it turns in place without falling.
+fn paddle(world: &mut WorldBuilder, center: [f32; 3]) {
+    world.add(
+        "physics_paddle_mesh",
+        ProceduralMesh {
+            generator: "box".to_string(),
+            half_extents: Some(PADDLE_HALF_EXTENTS),
+            ..Default::default()
+        },
+    );
+    let position = [
+        center[0],
+        PADDLE_HALF_EXTENTS[1] + PADDLE_CLEARANCE,
+        center[2],
+    ];
+    world
+        .add(
+            "physics_paddle",
+            Prop {
+                position,
+                collider: Some(PropCollider {
+                    shape: PropColliderShape::Cuboid,
+                    half_extents: PADDLE_HALF_EXTENTS,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .reference("mesh", "physics_paddle_mesh")
+        .reference("material", palette::METAL);
+    world
+        .add(
+            "physics_paddle_body",
+            PropBody {
+                mass: PADDLE_MASS,
+                friction: 0.3,
+                restitution: 0.1,
+                ..Default::default()
+            },
+        )
+        .reference("prop_name", "physics_paddle");
+    world
+        .add(
+            "physics_paddle_hinge",
+            PhysicsJoint {
+                kind: PhysicsJointKind::Revolute,
+                anchor_b: position,
+                axis: [0.0, 1.0, 0.0],
+                motor_target_velocity: PADDLE_DEGREES_PER_SECOND,
+                motor_max_force: PADDLE_MAX_FORCE,
+                ..Default::default()
+            },
+        )
+        .reference("body_a", "physics_paddle");
+}
+
 // Sensors over the pen. They collide with nothing; the cost is the overlap
 // test they run against every dynamic body each step.
 fn sensors(world: &mut WorldBuilder, center: [f32; 3]) {
@@ -257,14 +324,30 @@ fn sensors(world: &mut WorldBuilder, center: [f32; 3]) {
 mod tests {
     use super::*;
 
-    // How many dynamic bodies the station drops.
+    // How many dynamic bodies the station holds: the dropped balls, the chain
+    // links, and the paddle.
     const fn body_count() -> usize {
-        BODIES[0] * BODIES[1] * BODIES[2] + CHAINS * CHAIN_LINKS
+        BODIES[0] * BODIES[1] * BODIES[2] + CHAINS * CHAIN_LINKS + 1
     }
 
     #[test]
     fn the_pen_holds_what_its_counts_say() {
-        assert_eq!(body_count(), 210);
+        assert_eq!(body_count(), 211);
+    }
+
+    // The paddle has to turn inside the walls and pass under nothing but the
+    // balls: clear of the floor, and taller than a resting ball so it pushes
+    // the pile rather than riding over it.
+    #[test]
+    fn the_paddle_sweeps_inside_the_pen_and_over_the_floor() {
+        let [half_length, half_height, half_thickness] = PADDLE_HALF_EXTENTS;
+        let reach = (half_length * half_length + half_thickness * half_thickness).sqrt();
+        assert!(
+            reach < PEN_HALF_WIDTH - PEN_WALL_THICKNESS,
+            "it hits a wall"
+        );
+        assert!(PADDLE_CLEARANCE > 0.0, "it drags on the floor");
+        assert!(2.0 * half_height > 2.0 * BODY_RADIUS, "balls roll over it");
     }
 
     // The bodies have to fit inside the pen they are dropped over, or the outer

@@ -66,6 +66,12 @@ impl PoseInterp {
         self.curr = (position, rotation);
     }
 
+    // Whether the last two ticks left the pose exactly where it was, so every
+    // blend between them is the same pose.
+    pub(crate) fn is_still(&self) -> bool {
+        self.prev == self.curr
+    }
+
     // Adopt an externally written pose with no blend across the jump.
     pub(crate) fn snap(&mut self, position: [f32; 3], rotation: [f32; 4]) {
         self.prev = (position, rotation);
@@ -167,5 +173,17 @@ mod tests {
         for i in 0..4 {
             assert!((r1[i] - expected[i]).abs() < 1.0e-4);
         }
+    }
+
+    #[test]
+    fn a_pose_is_still_only_while_two_ticks_agree() {
+        let mut pose = PoseInterp::new([1.0, 2.0, 3.0], IDENTITY);
+        assert!(pose.is_still());
+        pose.push([1.0, 2.5, 3.0], IDENTITY);
+        assert!(!pose.is_still());
+        pose.push([1.0, 2.5, 3.0], IDENTITY);
+        assert!(pose.is_still());
+        pose.push([1.0, 2.5, 3.0], quat_y(1.0));
+        assert!(!pose.is_still(), "a turn alone is motion");
     }
 }

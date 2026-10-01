@@ -18,6 +18,7 @@ use crate::physics::{
     Simulation,
 };
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 const WORKERS: usize = 8;
 const CUBE: ColliderShape = ColliderShape::Cuboid {
@@ -47,6 +48,48 @@ impl Fanout for Threads {
                 scope.spawn(move || body(item));
             }
         });
+    }
+}
+
+/// [`Threads`] that also counts how many steps gathered it.
+struct Counted {
+    threads: Threads,
+    scopes: AtomicUsize,
+}
+
+impl Counted {
+    fn new(workers: usize) -> Self {
+        Counted {
+            threads: Threads(workers),
+            scopes: AtomicUsize::new(0),
+        }
+    }
+
+    fn scopes(&self) -> usize {
+        self.scopes.load(Ordering::Relaxed)
+    }
+}
+
+impl Fanout for Counted {
+    fn workers(&self) -> usize {
+        self.threads.workers()
+    }
+
+    fn scope<R, F>(&self, work: F) -> R
+    where
+        F: FnOnce() -> R + Send,
+        R: Send,
+    {
+        self.scopes.fetch_add(1, Ordering::Relaxed);
+        work()
+    }
+
+    fn for_each<T, F>(&self, items: &mut [T], body: F)
+    where
+        T: Send,
+        F: Fn(&mut T) + Send + Sync,
+    {
+        self.threads.for_each(items, body);
     }
 }
 
@@ -369,4 +412,57 @@ fn a_world_that_reserved_nothing_steps_serially() {
         poses(&sim, &bodies),
         walked(|| stacked(256, 0.85, 0.0), 60, 1)
     );
+}
+
+/// `side * side` cubes on a floor, `gap` apart edge to edge.
+fn carpet(side: usize, gap: f32) -> Simulation {
+    let mut sim = Simulation::new(config(), side * side + 1);
+    sim.add_fixed(
+        &ColliderShape::Cuboid {
+            half_extents: [200.0, 0.5, 200.0],
+        },
+        [0.0, -0.5, 0.0],
+        [0.0; 3],
+        0.8,
+        LayerMask::ALL,
+    )
+    .expect("room for the floor");
+    let pitch = 0.8 + gap;
+    for i in 0..side * side {
+        let (x, z) = ((i % side) as f32 * pitch, (i / side) as f32 * pitch);
+        sim.add_dynamic(
+            &CUBE,
+            [x, 0.4, z],
+            [0.0; 3],
+            cube_params(0.0, 0.0),
+            LayerMask::ALL,
+        )
+        .expect("room for a cube");
+    }
+    sim.reserve_workers(WORKERS);
+    sim
+}
+
+/// How many of `steps` steps gathered the workers, after one step to learn
+/// the world's islands.
+fn gathered(mut sim: Simulation, steps: usize) -> usize {
+    sim.step_with(TICK, &Counted::new(WORKERS));
+    let fanout = Counted::new(WORKERS);
+    for _ in 0..steps {
+        sim.step_with(TICK, &fanout);
+    }
+    fanout.scopes()
+}
+
+// Cubes pressed side to side are one island, so the solve stays on one worker
+// whatever it is lent and the pool would only cost the reaching of it.
+#[test]
+fn one_island_is_stepped_on_the_calling_thread() {
+    assert_eq!(gathered(carpet(18, 0.0), 10), 0);
+}
+
+// The same cubes spread apart are hundreds of islands, which a split shares out.
+#[test]
+fn many_islands_are_handed_to_the_workers() {
+    assert_eq!(gathered(carpet(18, 0.5), 10), 10);
 }

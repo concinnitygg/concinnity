@@ -51,8 +51,9 @@ const CHARACTER_FRICTION: f32 = 0.5;
 // The threshold is high on purpose. Gathering a pool's workers from a thread
 // that is not one of them costs about as much as three hundred of these units,
 // and the gathering is serial: a step that only just covers it comes out level
-// at best. So a step hands its work out once it is worth an order of magnitude
-// more than the gathering, and keeps it otherwise.
+// at best. So a step hands its work out once the part of it a split can reach
+// is worth an order of magnitude more than the gathering, and keeps it
+// otherwise.
 const CONTACT_COST: usize = 20;
 const JOINT_COST: usize = 16;
 const MIN_FANOUT_COST: usize = 4000;
@@ -257,6 +258,12 @@ impl Simulation {
     /// Joints currently constraining bodies.
     pub fn joint_count(&self) -> usize {
         self.joints.len()
+    }
+
+    #[cfg(test)]
+    /// Sensor pairs the last step measured rather than carried over.
+    pub(crate) fn sensor_pairs_measured(&self) -> usize {
+        self.sensors.measured()
     }
 
     #[cfg(test)]
@@ -798,7 +805,7 @@ impl Simulation {
         self.broadphase.set_proxy(slot, proxy);
         // Whatever was resting against the body where it stood has to be
         // re-examined without it.
-        self.wake_neighbors(slot);
+        self.disturb(slot);
         true
     }
 
@@ -955,7 +962,7 @@ impl Simulation {
         self.broadphase.remove(slot);
         // Whatever this body was touching or holding has to be re-examined
         // without it, which has to happen before the joints are dropped.
-        self.wake_neighbors(slot);
+        self.disturb(slot);
         self.joints.remove_incident(slot);
         true
     }
@@ -1104,9 +1111,9 @@ impl Simulation {
         self.drive_kinematics(dt);
         let awake = self.refresh_bounds();
         // Reaching a fan-out's workers costs the same whatever is handed to
-        // them, so a step with little to do is worth more on the thread it is
-        // already on.
-        if workers > 1 && self.step_cost(awake) >= MIN_FANOUT_COST {
+        // them, so a step with little a split can reach is worth more on the
+        // thread it is already on.
+        if workers > 1 && self.splittable_cost(awake) >= MIN_FANOUT_COST {
             fanout.scope(|| self.advance(dt, fanout, workers));
         } else {
             self.advance(dt, &crate::physics::Inline, 1);
@@ -1126,6 +1133,22 @@ impl Simulation {
         let contacts = self.broadphase.pair_count().min(awake * 4);
         let joints = self.joints.len().min(awake * 2);
         awake + contacts * CONTACT_COST + joints * JOINT_COST
+    }
+
+    /// The part of the step ahead a split could take off one worker, or
+    /// nothing when one island dominates it.
+    ///
+    /// The solve is split by island, so whatever the largest island holds
+    /// runs on one worker however many there are. Last step's islands are the
+    /// estimate. A step finishes no sooner than its largest island does, so
+    /// when that island holds much of the solve what the rest saves does not
+    /// cover waking a pool for every stage, and the step is kept whole.
+    fn splittable_cost(&self, awake: usize) -> usize {
+        let spread = self.solver.spread();
+        if spread.is_dominated() {
+            return 0;
+        }
+        spread.reachable(self.step_cost(awake) as u64) as usize
     }
 
     /// Everything a step does once the bounds are current and the workers, if
@@ -1188,6 +1211,7 @@ impl Simulation {
                 continue;
             }
             let slot = handle.index() as u32;
+            sensors.mark_moved(slot);
             let solved = solver.body(slot);
             let began_at = body.position;
             body.linear_velocity = solved.linear_velocity;
@@ -1215,7 +1239,7 @@ impl Simulation {
             };
             ccd.resolve(scene, config, dt);
             ccd.report_crossings(bodies, sensors);
-            ccd.apply(bodies);
+            ccd.apply(bodies, sensors);
         }
 
         if !solver.is_idle() {
@@ -1237,7 +1261,7 @@ impl Simulation {
         let proxy = proxy_for(body);
         let slot = handle.index();
         self.broadphase.set_proxy(slot, proxy);
-        self.wake_neighbors(slot);
+        self.disturb(slot);
         true
     }
 
@@ -1259,8 +1283,16 @@ impl Simulation {
         self.broadphase.insert(slot);
         self.broadphase.set_proxy(slot, proxy);
         // A body arriving inside a settled stack has to be able to disturb it.
-        self.wake_neighbors(slot);
+        self.disturb(slot);
         Some(body_handle(handle))
+    }
+
+    /// Account for a body that was added, removed, moved or reclassified
+    /// outside a step: its sensor pairs are measured afresh and its neighbors
+    /// are woken.
+    fn disturb(&mut self, slot: u32) {
+        self.sensors.mark_moved(slot);
+        self.wake_neighbors(slot);
     }
 
     /// Wake whatever the given slot was in contact with or jointed to, so a

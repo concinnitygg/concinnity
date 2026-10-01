@@ -15,7 +15,7 @@
 //! surface a body is actually resting on, and a stack riding a platform must
 //! still be riding it a few seconds later.
 
-use super::fixtures::{TICK, add_floor, awake};
+use super::fixtures::{TICK, add_floor, awake, drop_ball};
 use crate::math::vec3::length;
 use crate::physics::{
     BodyHandle, ColliderShape, DynamicParams, LayerMask, ShapeCast, SimConfig, Simulation,
@@ -240,6 +240,46 @@ fn a_sleeping_stack_wakes_when_something_lands_on_it() {
         handles.iter().all(|&h| sim.is_sleeping(h) == Some(false)),
         "the whole island should be awake again"
     );
+}
+
+/// A half-meter ball rolling along x on the floor at `speed`, and how fast it
+/// is going after `seconds`.
+fn rolled(speed: f32, damping: f32, seconds: f32) -> f32 {
+    let mut sim = Simulation::new(awake(), 2);
+    add_floor(&mut sim);
+    let ball = drop_ball(
+        &mut sim,
+        [0.0, 0.5, 0.0],
+        DynamicParams {
+            friction: 0.6,
+            linear_damping: damping,
+            ..Default::default()
+        },
+    );
+    sim.set_linear_velocity(ball, [speed, 0.0, 0.0]);
+    sim.set_angular_velocity(ball, [0.0, 0.0, -speed / 0.5]);
+    settle(&mut sim, (seconds / TICK) as usize);
+    length(sim.linear_velocity(ball).expect("live"))
+}
+
+// The contact point under a rolling ball trails behind its center as it turns.
+// The floor's push must not be applied there, or that push spins the ball
+// forward and it rolls forever whatever its damping says.
+#[test]
+fn a_rolling_ball_slows_down_under_its_damping() {
+    let (speed, damping, seconds) = (2.0, 0.3, 5.0);
+    let after = rolled(speed, damping, seconds);
+    let expected = speed * crate::math::exp(-damping * seconds);
+    assert!(
+        after < expected * 1.1,
+        "rolled at {after:.3} after {seconds} s, damping alone leaves {expected:.3}"
+    );
+}
+
+#[test]
+fn an_undamped_rolling_ball_never_gains_speed() {
+    let after = rolled(2.0, 0.0, 5.0);
+    assert!(after <= 2.0 * 1.001, "rolled at {after:.4}");
 }
 
 // Friction has to hold below the friction angle and give way above it.

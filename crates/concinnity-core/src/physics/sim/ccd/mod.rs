@@ -230,7 +230,7 @@ impl Ccd {
     /// was shoved by a driven body ends up clear of the driven one: that body
     /// arrives wherever it was sent whatever this stage does, so its half of
     /// the pair is the one that cannot be given up.
-    pub(crate) fn apply(&self, bodies: &mut Pool<Body>) {
+    pub(crate) fn apply(&self, bodies: &mut Pool<Body>, sensors: &mut Sensors) {
         for mover in &self.movers {
             if let Some(Outcome::Stop { target, position }) = mover.outcome {
                 if let Some(body) = bodies.get_at_mut(mover.slot as usize) {
@@ -245,6 +245,10 @@ impl Ccd {
                     body.position += offset;
                 }
                 wake(bodies, target);
+                // Moved after the write-back that marks the step's movers, so
+                // the next step measures its sensor pairs rather than carrying
+                // where it stood before.
+                sensors.mark_moved(target);
             }
         }
     }
@@ -466,6 +470,37 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    // A shove moves its target after the write-back that marks the step's
+    // movers, so it marks the target itself, or the next step would carry the
+    // target's sensor answers from where it stood before.
+    #[test]
+    fn a_shoved_body_is_measured_by_the_next_sensor_pass() {
+        let mut bodies: Pool<Body> = Pool::with_capacity(2);
+        bodies.insert(dynamic_at(Vec3::ZERO)).expect("room");
+        bodies
+            .insert(dynamic_at(vec3(0.0, 0.0, 9.0)))
+            .expect("room");
+        let mut sensors = Sensors::with_capacity(2);
+        sensors.resolve(&bodies, &[]);
+        assert!(!sensors.is_marked_moved(0), "a pass clears the marks");
+
+        let mut ccd = Ccd::with_capacity(2);
+        ccd.begin();
+        let mut driven = mover(1, vec3(0.0, 0.0, 8.0));
+        driven.driven = true;
+        driven.outcome = Some(Outcome::Shove {
+            target: 0,
+            offset: vec3(0.0, 0.0, 4.0),
+        });
+        ccd.movers.push(driven);
+        ccd.apply(&mut bodies, &mut sensors);
+        assert!(sensors.is_marked_moved(0));
+        assert_eq!(
+            bodies.get_at(0).map(|b| b.position),
+            Some(vec3(0.0, 0.0, 4.0))
+        );
     }
 
     #[test]

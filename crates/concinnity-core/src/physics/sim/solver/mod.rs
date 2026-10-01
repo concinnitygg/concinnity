@@ -51,6 +51,8 @@ use chunk::{Chunk, Tuning};
 use contact::ContactConstraint;
 use partition::{Ends, Partition};
 
+pub(crate) use partition::Spread;
+
 pub(crate) use bodies::{Bodies, SolverBody};
 
 /// Chunks one step's solve may be cut into. A caller lending more workers than
@@ -138,6 +140,11 @@ impl Solver {
     /// Whether the step has anything to move at all.
     pub(crate) fn is_idle(&self) -> bool {
         self.active.is_empty()
+    }
+
+    /// How the last solve's cost fell across its islands.
+    pub(crate) fn spread(&self) -> Spread {
+        self.partition.spread()
     }
 
     /// Contacts the last step solved.

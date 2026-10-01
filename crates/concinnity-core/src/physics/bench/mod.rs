@@ -14,6 +14,7 @@
 //     cargo test -p concinnity-core --release -- --ignored --nocapture \
 //         --test-threads=1 physics::bench
 
+mod pen;
 mod sim;
 
 use crate::physics::Fanout;

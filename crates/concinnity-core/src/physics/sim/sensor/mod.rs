@@ -12,11 +12,13 @@
 // the continuous-collision stage runs, and both of its crossings are recorded
 // on the step it happened.
 //
-// Every pair is measured every step rather than carried forward from the last
-// one. A pair only reaches here with a region on one side, so there are few of
-// them however many bodies the world holds, and a carried answer would have to
-// be invalidated by every way a body can arrive somewhere -- including the one
-// where it is placed inside a region and never moves again.
+// A pair is measured again only when one of its bodies has moved since the
+// last measurement; otherwise last step's answer still stands. A settled world
+// is mostly sleeping bodies sitting inside regions, so this is what keeps it
+// cheap. Every way a body can come to be somewhere marks it: the step's own
+// write-back for whatever it simulated, and the world's edits (adding,
+// removing, moving or reclassifying a body) for everything else. The marks
+// start set, so the first step measures everything.
 //
 // The queues are reserved once and capped. A caller that stops draining, or a
 // world with more regions in it than the reservation covers, is declined and
@@ -43,6 +45,11 @@ use track::Overlap;
 pub(crate) struct Sensors {
     overlaps: Vec<Overlap>,
     previous: Vec<Overlap>,
+    /// Per body slot, whether it may have moved since the last measurement.
+    moved: Vec<bool>,
+    /// Pairs the last step measured rather than carried over.
+    #[cfg(test)]
+    measured: usize,
     crossings: Vec<SensorCrossing>,
     overflows: u32,
 }
@@ -52,6 +59,9 @@ impl Sensors {
         Sensors {
             overlaps: Vec::with_capacity(capacity),
             previous: Vec::with_capacity(capacity),
+            moved: alloc::vec![true; capacity],
+            #[cfg(test)]
+            measured: 0,
             crossings: Vec::with_capacity(capacity),
             overflows: 0,
         }
@@ -69,17 +79,46 @@ impl Sensors {
         let Sensors {
             overlaps,
             previous,
+            moved,
             crossings,
             overflows,
+            ..
         } = self;
+        #[cfg(test)]
+        let mut measured = 0;
 
+        let has_moved = |slot: u32| moved.get(slot as usize).copied().unwrap_or(true);
+        let mut was = 0usize;
+        let mut declined = false;
         for &pair in pairs {
+            if !has_moved(pair.0) && !has_moved(pair.1) {
+                // Both lists are sorted by pair, so one cursor walks the old
+                // answers beside the new pairs. A carried answer takes a
+                // reserved place like a measured one: overlaps measured
+                // earlier in the pass may already have filled the list.
+                while previous.get(was).is_some_and(|old| old.pair < pair) {
+                    was += 1;
+                }
+                if let Some(&old) = previous.get(was).filter(|old| old.pair == pair) {
+                    if overlaps.len() == overlaps.capacity() {
+                        *overflows = overflows.saturating_add(1);
+                        declined = true;
+                    } else {
+                        overlaps.push(old);
+                    }
+                }
+                continue;
+            }
             let (Some(a), Some(b)) = (
                 bodies.get_at(pair.0 as usize),
                 bodies.get_at(pair.1 as usize),
             ) else {
                 continue;
             };
+            #[cfg(test)]
+            {
+                measured += 1;
+            }
             if !overlap::overlapping(a, b) {
                 continue;
             }
@@ -88,11 +127,19 @@ impl Sensors {
             };
             if overlaps.len() == overlaps.capacity() {
                 *overflows = overflows.saturating_add(1);
+                declined = true;
                 continue;
             }
             overlaps.push(Overlap { pair, a, b });
         }
 
+        // A declined overlap is missing from the answers a still pair would
+        // reuse, so after one every pair is measured again.
+        moved.fill(declined);
+        #[cfg(test)]
+        {
+            self.measured = measured;
+        }
         track::transitions(previous, overlaps, |crossed, entered| {
             // Either side may be a region: two of them overlapping record a
             // crossing each, and a region whose body has gone records none.
@@ -112,6 +159,14 @@ impl Sensors {
                 crossings.push(crossing);
             }
         });
+    }
+
+    /// Note that a body may be somewhere new, so the next step measures every
+    /// pair it is in rather than reusing what it found before.
+    pub(crate) fn mark_moved(&mut self, slot: u32) {
+        if let Some(moved) = self.moved.get_mut(slot as usize) {
+            *moved = true;
+        }
     }
 
     /// Record a body that crossed clean through a region inside one step:
@@ -155,6 +210,18 @@ impl Sensors {
     }
 
     #[cfg(test)]
+    /// Pairs the last step measured rather than carried over.
+    pub(crate) fn measured(&self) -> usize {
+        self.measured
+    }
+
+    #[cfg(test)]
+    /// Whether the next step measures `slot`'s pairs afresh.
+    pub(crate) fn is_marked_moved(&self, slot: u32) -> bool {
+        self.moved.get(slot as usize).copied().unwrap_or(true)
+    }
+
+    #[cfg(test)]
     /// Pairs currently overlapping.
     pub(crate) fn overlap_count(&self) -> usize {
         self.overlaps.len()
@@ -162,6 +229,7 @@ impl Sensors {
 
     pub(crate) fn reserved_bytes(&self) -> u64 {
         ((self.overlaps.capacity() + self.previous.capacity()) * size_of::<Overlap>()
+            + self.moved.capacity()
             + self.crossings.capacity() * size_of::<SensorCrossing>()) as u64
     }
 }

@@ -47,6 +47,33 @@ pub(crate) struct Ends {
     pub(crate) joints: usize,
 }
 
+/// How a step's solve cost fell across its islands, in the units the islands
+/// are shared out by.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Spread {
+    pub(crate) total: u64,
+    pub(crate) largest: u64,
+}
+
+impl Spread {
+    /// Whether one island holds more than a quarter of the solve, which is
+    /// as much as it can hold and still let a split finish in a fraction of
+    /// the time.
+    pub(crate) fn is_dominated(self) -> bool {
+        self.largest * 4 > self.total
+    }
+
+    /// The part of `cost` a split can take off one worker: everything but the
+    /// largest island, which stays on whichever worker it lands on. A step
+    /// that solved nothing says nothing, so all of `cost` is offered.
+    pub(crate) fn reachable(self, cost: u64) -> u64 {
+        if self.total == 0 {
+            return cost;
+        }
+        cost * (self.total - self.largest) / self.total
+    }
+}
+
 /// The islands a step's solve breaks into, and how they are shared out.
 pub(crate) struct Partition {
     /// Island number given to each island's union-find root. Every entry is
@@ -73,6 +100,7 @@ pub(crate) struct Partition {
     contact_order: Vec<u32>,
     ends: Vec<Ends>,
     islands: usize,
+    spread: Spread,
 }
 
 impl Partition {
@@ -91,6 +119,7 @@ impl Partition {
             contact_order: Vec::with_capacity(capacity * 2),
             ends: Vec::with_capacity(capacity),
             islands: 0,
+            spread: Spread::default(),
         }
     }
 
@@ -135,6 +164,11 @@ impl Partition {
         &self.ends
     }
 
+    /// How the last solve's cost fell across its islands.
+    pub(crate) fn spread(&self) -> Spread {
+        self.spread
+    }
+
     /// Islands the step's solve broke into.
     #[cfg(test)]
     pub(crate) fn islands(&self) -> usize {
@@ -159,6 +193,7 @@ impl Partition {
         self.joint_island.clear();
         self.ends.clear();
         self.islands = 0;
+        self.spread = Spread::default();
         if active.is_empty() {
             return;
         }
@@ -238,9 +273,14 @@ impl Partition {
         let cost = |bodies: u32, contacts: u32, joints: u32| {
             bodies as u64 + (contacts as u64 + joints as u64) * CONTACT_WEIGHT
         };
-        let total: u64 = (0..self.islands)
-            .map(|i| cost(self.bodies_at[i], self.contacts_at[i], self.joints_at[i]))
-            .sum();
+        let mut spread = Spread::default();
+        for i in 0..self.islands {
+            let held = cost(self.bodies_at[i], self.contacts_at[i], self.joints_at[i]);
+            spread.total += held;
+            spread.largest = spread.largest.max(held);
+        }
+        self.spread = spread;
+        let total = spread.total;
         let workers = workers.clamp(1, self.islands).max(1) as u64;
 
         let (mut bodies, mut contacts, mut joints) = (0usize, 0usize, 0usize);
@@ -499,5 +539,50 @@ mod tests {
         assert_eq!(partition.islands(), 0);
         assert!(partition.ends().is_empty());
         assert!(partition.active().is_empty());
+    }
+
+    // One island cost 1 + 2 * 16, and the two lone bodies cost 1 each.
+    #[test]
+    fn the_spread_records_the_total_and_the_largest_island() {
+        let simulated = [true, true, true, true, true];
+        let mut fixture = fixture(&simulated);
+        let mut partition = Partition::with_capacity(5);
+        let manifolds = [manifold(0, 1), manifold(1, 2)];
+        build(&mut partition, &mut fixture, &simulated, &manifolds, 4);
+        assert_eq!(
+            partition.spread(),
+            Spread {
+                total: 3 + 2 * CONTACT_WEIGHT + 2,
+                largest: 3 + 2 * CONTACT_WEIGHT,
+            }
+        );
+        build(&mut partition, &mut fixture, &[false; 5], &manifolds, 4);
+        assert_eq!(partition.spread(), Spread::default(), "nothing solved");
+    }
+
+    #[test]
+    fn only_what_lies_outside_the_largest_island_is_reachable() {
+        let one_island = Spread {
+            total: 100,
+            largest: 100,
+        };
+        assert_eq!(one_island.reachable(8000), 0);
+        let four_even = Spread {
+            total: 100,
+            largest: 25,
+        };
+        assert_eq!(four_even.reachable(8000), 6000);
+        assert_eq!(Spread::default().reachable(8000), 8000, "no history");
+    }
+
+    #[test]
+    fn an_island_holding_most_of_the_solve_dominates_it() {
+        let spread = |largest| Spread {
+            total: 100,
+            largest,
+        };
+        assert!(spread(26).is_dominated());
+        assert!(!spread(25).is_dominated());
+        assert!(!Spread::default().is_dominated(), "no history");
     }
 }

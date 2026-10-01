@@ -23,7 +23,8 @@ use super::bodies::SolverBody;
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ConstraintPoint {
     /// Offset from each body's center to the contact, as of the top of the
-    /// step. Rotated by the body's delta rotation as the substeps advance.
+    /// step. Impulses are applied at these fixed arms; only the separation
+    /// estimate rotates them with the body as the substeps advance.
     anchor_a: Vec3,
     anchor_b: Vec3,
     /// The separation the anchors imply at zero displacement, so the current
@@ -174,8 +175,7 @@ pub(crate) fn warm_start(constraints: &mut [ContactConstraint], bodies: &mut Bod
             let impulse = normal * point.normal_impulse
                 + t0 * point.tangent_impulse[0]
                 + t1 * point.tangent_impulse[1];
-            let ra = bodies.get(a).delta_rotation.rotate(point.anchor_a);
-            let rb = bodies.get(b).delta_rotation.rotate(point.anchor_b);
+            let (ra, rb) = (point.anchor_a, point.anchor_b);
             point.step_impulse += point.normal_impulse;
             bodies.get_mut(a).apply_impulse(-impulse, ra);
             bodies.get_mut(b).apply_impulse(impulse, rb);
@@ -203,13 +203,8 @@ pub(crate) fn solve(
         let (a, b) = (constraint.a, constraint.b);
         let count = constraint.count as usize;
 
-        let mut arms = [(Vec3::ZERO, Vec3::ZERO); MAX_MANIFOLD_POINTS];
         let mut held = [0.0; MAX_MANIFOLD_POINTS];
         for (index, point) in constraint.points[..count].iter().enumerate() {
-            arms[index] = (
-                bodies.get(a).delta_rotation.rotate(point.anchor_a),
-                bodies.get(b).delta_rotation.rotate(point.anchor_b),
-            );
             held[index] = point.normal_impulse;
         }
         // What the impulses already held are worth in approach speed, which is
@@ -223,9 +218,8 @@ pub(crate) fn solve(
 
         let mut error = [None; MAX_MANIFOLD_POINTS];
         for (index, point) in constraint.points[..count].iter().enumerate() {
-            let (ra, rb) = arms[index];
-            let travel = (bodies.get(b).delta_position + rb) - (bodies.get(a).delta_position + ra);
-            let separation = travel.dot(normal) + point.base_separation;
+            let separation = current_separation(point, bodies.get(a), bodies.get(b), normal);
+            let (ra, rb) = (point.anchor_a, point.anchor_b);
 
             let (bias, mass_scale, impulse_scale) = if separation > 0.0 {
                 // A gap the bodies are still closing: allow exactly enough
@@ -253,15 +247,14 @@ pub(crate) fn solve(
             point.max_normal_impulse = point.max_normal_impulse.max(point.normal_impulse);
             point.step_impulse += applied;
 
-            let (ra, rb) = arms[index];
+            let (ra, rb) = (point.anchor_a, point.anchor_b);
             let impulse = normal * applied;
             bodies.get_mut(a).apply_impulse(-impulse, ra);
             bodies.get_mut(b).apply_impulse(impulse, rb);
         }
 
         for point in &mut constraint.points[..count] {
-            let ra = bodies.get(a).delta_rotation.rotate(point.anchor_a);
-            let rb = bodies.get(b).delta_rotation.rotate(point.anchor_b);
+            let (ra, rb) = (point.anchor_a, point.anchor_b);
             let relative = bodies.get(b).velocity_at(rb) - bodies.get(a).velocity_at(ra);
 
             let mut wanted = [
@@ -307,15 +300,10 @@ pub(crate) fn apply_restitution(
         let (a, b) = (constraint.a, constraint.b);
         let count = constraint.count as usize;
 
-        let mut arms = [(Vec3::ZERO, Vec3::ZERO); MAX_MANIFOLD_POINTS];
         let mut held = [0.0; MAX_MANIFOLD_POINTS];
         let mut error = [None; MAX_MANIFOLD_POINTS];
         for (index, point) in constraint.points[..count].iter().enumerate() {
-            let (ra, rb) = (
-                bodies.get(a).delta_rotation.rotate(point.anchor_a),
-                bodies.get(b).delta_rotation.rotate(point.anchor_b),
-            );
-            arms[index] = (ra, rb);
+            let (ra, rb) = (point.anchor_a, point.anchor_b);
             held[index] = point.normal_impulse;
             // A slow approach does not bounce, or a settling body never stops;
             // a point that carried no load has nothing to bounce.
@@ -335,12 +323,29 @@ pub(crate) fn apply_restitution(
             let applied = solved[index];
             point.normal_impulse += applied;
             point.step_impulse += applied;
-            let (ra, rb) = arms[index];
+            let (ra, rb) = (point.anchor_a, point.anchor_b);
             let impulse = normal * applied;
             bodies.get_mut(a).apply_impulse(-impulse, ra);
             bodies.get_mut(b).apply_impulse(impulse, rb);
         }
     }
+}
+
+/// How far apart a point's two anchors are along the normal now, with each
+/// anchor carried by its body's motion and rotation since the top of the step.
+///
+/// The rotated anchors are only a measurement. Applying impulses there instead
+/// would move a rolling body's support off its center and let the normal push
+/// drive the roll, so the impulses stay on the fixed arms.
+fn current_separation(
+    point: &ConstraintPoint,
+    a: &SolverBody,
+    b: &SolverBody,
+    normal: Vec3,
+) -> f32 {
+    let reach_a = a.delta_position + a.delta_rotation.rotate(point.anchor_a);
+    let reach_b = b.delta_position + b.delta_rotation.rotate(point.anchor_b);
+    (reach_b - reach_a).dot(normal) + point.base_separation
 }
 
 /// Mass seen along `direction` at the contact: the linear part plus what the

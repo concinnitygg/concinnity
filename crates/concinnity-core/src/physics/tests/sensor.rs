@@ -14,8 +14,8 @@
 
 use super::fixtures::{TICK, add_floor, sim};
 use crate::physics::{
-    CharacterMoveInput, ColliderShape, DynamicParams, LayerMask, SensorCrossing, ShapeCast,
-    Simulation,
+    BodyHandle, CharacterMoveInput, ColliderShape, DynamicParams, LayerMask, SensorCrossing,
+    ShapeCast, Simulation,
 };
 use alloc::vec;
 use alloc::vec::Vec;
@@ -87,6 +87,72 @@ fn a_body_resting_inside_a_region_reports_once() {
     assert_eq!(crossings.len(), 1, "{crossings:?}");
     assert!(crossings[0].entered);
     assert_eq!(sim.sensor_overlap_count(), 1, "still being tracked");
+}
+
+/// A ball asleep on the floor at the origin, and a region elsewhere.
+fn sleeping_ball_beside_a_region() -> (Simulation, BodyHandle, BodyHandle) {
+    let mut sim = sim(4);
+    add_floor(&mut sim);
+    let region = sim
+        .add_sensor(&REGION, [5.0, 1.0, 0.0], [0.0; 3], 3, LayerMask::ALL)
+        .expect("room for the region");
+    let ball = sim
+        .add_dynamic(
+            &BALL,
+            [0.0, 0.25, 0.0],
+            [0.0; 3],
+            DynamicParams::default(),
+            LayerMask::ALL,
+        )
+        .expect("room for the ball");
+    assert!(run(&mut sim, 120).is_empty());
+    assert_eq!(sim.is_sleeping(ball), Some(true), "settled first");
+    (sim, ball, region)
+}
+
+// Nothing in a settled region moves, so nothing in it needs measuring again:
+// the answer from when it last moved still stands.
+#[test]
+fn a_region_holding_only_sleepers_measures_nothing_and_keeps_them() {
+    let (mut sim, ball, _) = sleeping_ball_beside_a_region();
+    sim.add_sensor(&REGION, [0.0, 1.0, 0.0], [0.0; 3], 4, LayerMask::ALL)
+        .expect("room for a region over the ball");
+    let crossings = run(&mut sim, 2);
+    assert_eq!(crossings.len(), 1, "{crossings:?}");
+    assert!(crossings[0].entered && crossings[0].other == Some(ball));
+    assert_eq!(sim.sensor_pairs_measured(), 0, "a still pair is carried");
+    assert_eq!(sim.sensor_overlap_count(), 1, "still inside");
+    assert!(run(&mut sim, 60).is_empty());
+}
+
+// A region moved onto a body that will never move again still has to see it,
+// and moved off again has to let it go.
+#[test]
+fn a_region_moved_onto_a_sleeper_reports_it_coming_and_going() {
+    let (mut sim, ball, region) = sleeping_ball_beside_a_region();
+    assert!(sim.teleport_body(region, [0.0, 1.0, 0.0], [0.0; 3]));
+    let entered = run(&mut sim, 1);
+    assert_eq!(entered.len(), 1, "{entered:?}");
+    assert!(entered[0].entered && entered[0].other == Some(ball));
+    assert_eq!(sim.is_sleeping(ball), Some(true), "the region woke nothing");
+
+    assert!(sim.teleport_body(region, [5.0, 1.0, 0.0], [0.0; 3]));
+    let left = run(&mut sim, 1);
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert!(!left[0].entered);
+}
+
+// The other way in: the sleeper is placed inside the region, at rest, and is
+// asleep again before the region would otherwise look at it.
+#[test]
+fn a_sleeper_placed_inside_a_region_is_seen_entering() {
+    let (mut sim, ball, _) = sleeping_ball_beside_a_region();
+    assert!(sim.teleport_body(ball, [5.0, 0.25, 0.0], [0.0; 3]));
+    let crossings = run(&mut sim, 120);
+    assert_eq!(crossings.len(), 1, "{crossings:?}");
+    assert!(crossings[0].entered && crossings[0].other == Some(ball));
+    assert_eq!(sim.is_sleeping(ball), Some(true));
+    assert_eq!(sim.sensor_overlap_count(), 1);
 }
 
 // The character capsule is position-driven, and a controller that could not
@@ -496,6 +562,66 @@ fn a_world_past_its_reservation_declines_and_counts() {
     assert!(sim.sensor_overflows() > 0);
     sim.clear_sensor_overflows();
     assert_eq!(sim.sensor_overflows(), 0);
+}
+
+// A still pair's answer is carried from the step before, and it takes a
+// reserved place like a measured one: a mover entering a region ahead of the
+// carried pairs must not push the list past what was reserved.
+#[test]
+fn carried_overlaps_stay_inside_the_reservation() {
+    // Seven bodies, so seven reserved overlaps: two regions over three
+    // sleepers overlap in exactly seven pairs, all of them still.
+    let mut sim = sim(7);
+    let floating = DynamicParams {
+        gravity_scale: 0.0,
+        ..Default::default()
+    };
+    let mover = sim
+        .add_dynamic(&BALL, [-4.0, 1.0, 0.0], [0.0; 3], floating, LayerMask::ALL)
+        .expect("room for the mover");
+    add_floor(&mut sim);
+    let sleepers: Vec<BodyHandle> = [-0.6, 0.0, 0.6]
+        .into_iter()
+        .map(|x| {
+            sim.add_dynamic(
+                &BALL,
+                [x, 0.25, 0.0],
+                [0.0; 3],
+                DynamicParams::default(),
+                LayerMask::ALL,
+            )
+            .expect("room for a sleeper")
+        })
+        .collect();
+    assert!(run(&mut sim, 120).is_empty());
+    for &sleeper in &sleepers {
+        assert_eq!(sim.is_sleeping(sleeper), Some(true), "settled first");
+    }
+    // One region a step, so no step queues more crossings than it reserved.
+    for tag in 0..2 {
+        sim.add_sensor(&REGION, [0.0, 1.0, 0.0], [0.0; 3], tag, LayerMask::ALL)
+            .expect("room for the region");
+        run(&mut sim, 1);
+    }
+    run(&mut sim, 1);
+    assert_eq!(sim.sensor_overlap_count(), 7, "the reservation, exactly");
+    assert_eq!(sim.sensor_pairs_measured(), 0, "every pair is carried");
+
+    // The mover's slot sorts ahead of every carried pair.
+    sim.set_linear_velocity(mover, [6.0, 0.0, 0.0]);
+    let mut out = Vec::new();
+    for _ in 0..90 {
+        sim.step(TICK);
+        sim.drain_sensor_crossings_into(&mut out);
+        assert!(
+            sim.sensor_overlap_count() <= 7,
+            "the list grew past its reservation"
+        );
+    }
+    assert!(
+        sim.sensor_overflows() > 0,
+        "the shortfall has to be reported"
+    );
 }
 
 #[test]
