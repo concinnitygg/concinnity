@@ -1169,8 +1169,8 @@ pub(in crate::vulkan) struct RtSceneGeometry<'a> {
 // Build the BLAS / TLAS / geometry table for the scene on a one-shot command
 // buffer (submitted and fence-waited so the structures are ready before the
 // first frame traces them). Returns `Ok(None)` when there is no resident
-// triangle geometry to trace: the caller then leaves RT disabled and falls back
-// to SSR.
+// triangle geometry to trace: the RT pass then skips its trace until a
+// topology change seeds one.
 pub(super) fn build_rt_accel(
     ctx: RtDeviceCtx,
     command_pool: vk::CommandPool,
@@ -1492,10 +1492,17 @@ impl RtAccelData {
             }
         }
 
-        // An empty head still gets a (zero-instance) TLAS, so the trace stops
-        // reaching what left.
         let stepped = match self.book.next_step(mode, &plan, draw_objects) {
             RtStep::Keep => RtUpdate::Done,
+            // Nothing static is left and no skinned geometry can rejoin: stop
+            // publishing the skinned tail, which leaves the BVH spent for the
+            // caller to drop.
+            RtStep::Tlas if self.book.is_empty() && skinned.is_none() => {
+                self.book.release_skinned();
+                RtUpdate::Done
+            }
+            // An empty head still gets a (zero-instance) TLAS, so the trace stops
+            // reaching what left.
             RtStep::Tlas => {
                 self.rebuild_tlas(ctx, cmd, draw_objects, frame_idx)?;
                 RtUpdate::Done
@@ -1513,6 +1520,12 @@ impl RtAccelData {
             },
         };
         refreshed.map(|()| stepped)
+    }
+
+    // Whether the BVH has nothing left to trace and nothing that could rejoin
+    // it. Skinned geometry rejoins only through the skin pipeline.
+    pub(super) fn is_spent(&self, skinned_present: bool) -> bool {
+        self.book.is_spent(skinned_present && self.skin.is_some())
     }
 
     // Bring the draw-object BLAS head in line with the current participating
@@ -1535,9 +1548,10 @@ impl RtAccelData {
     // slot is replaced when this refresh's builds need more than its capacity.
     // A refresh that would leave no draw or cluster geometry follows `if_empty`.
     // With skinned geometry following, it commits the empty head and parks the
-    // orphans until the skinned TLAS this frame publishes. Otherwise it builds a
-    // zero-instance static TLAS, even where `EmptyHead::Drop` would drop the BVH,
-    // since the RT pass is built with the BVH and cannot go without one.
+    // orphans until the skinned TLAS this frame publishes. With skinned geometry
+    // that could rejoin, it builds a zero-instance static TLAS like any other
+    // refresh. With none, it empties the book for the caller to drop the whole
+    // BVH, orphans included, through a deferred free.
     fn refresh_topology(
         &mut self,
         ctx: RtDeviceCtx,
@@ -1549,9 +1563,12 @@ impl RtAccelData {
         let refresh = self
             .book
             .plan_refresh(draw_objects, req.exclude_seethrough, req.mode);
-        if if_empty == EmptyHead::AwaitSkinned && self.book.refresh_leaves_nothing(&refresh) {
+        if if_empty != EmptyHead::Build && self.book.refresh_leaves_nothing(&refresh) {
             let orphans = self.book.commit_refresh(refresh, Vec::new(), draw_objects);
             self.book.park(orphans);
+            if if_empty == EmptyHead::Drop {
+                self.book.release_skinned();
+            }
             return Ok(());
         }
         // Take the slot after the live one out, which sidesteps the `&mut self`
@@ -2400,18 +2417,48 @@ pub(super) fn create_main_deformed_buffer(
     })
 }
 
+impl super::context::VkRayTracing {
+    // Advance the retire clock and destroy every dropped BVH no frame in flight
+    // can still trace: the frame-begin fence wait bounds those at
+    // `frames_in_flight`, plus the one this frame records.
+    pub(in crate::vulkan) fn collect_retired(
+        &mut self,
+        device: &VkDevice,
+        frames_in_flight: usize,
+    ) {
+        self.retire_tick += 1;
+        let depth = frames_in_flight as u64 + 1;
+        while let Some(mut accel) = self.retired.pop_due(self.retire_tick, depth) {
+            accel.destroy(device);
+        }
+    }
+
+    // Drop the live BVH, holding it until the frames in flight have finished
+    // tracing it.
+    pub(in crate::vulkan) fn retire_accel(&mut self) {
+        if let Some(accel) = self.accel.take() {
+            self.retired.push(self.retire_tick, accel);
+        }
+    }
+
+    // Destroy the live BVH and every dropped one. The caller has already idled
+    // the device.
+    pub(in crate::vulkan) fn destroy_accels(&mut self, device: &VkDevice) {
+        if let Some(mut accel) = self.accel.take() {
+            accel.destroy(device);
+        }
+        for mut accel in self.retired.drain() {
+            accel.destroy(device);
+        }
+    }
+}
+
 impl super::context::VkContext {
-    // Replace the live acceleration structure with one built over the current
-    // shared vertex / index buffers, and re-point every pass that reads those
-    // buffers directly. Called by `rebuild_static_geometry`, which destroys both
-    // buffers and re-lays out every draw underneath the BVH: its BLAS then trace
-    // the old geometry, its geometry table indexes offsets into freed memory,
-    // and the RT / glass descriptor sets still name the destroyed buffers.
-    //
-    // An empty scene or a failed build drops the BVH rather than keeping the
-    // stale one, and the RT pass with it. The caller has already drained the device.
-    pub(in crate::vulkan) fn rebuild_rt_accel(&mut self) -> RenderResult<()> {
-        let fresh = match build_rt_accel(
+    // Build a scene acceleration structure over the current draw set and shared
+    // geometry buffers. `None` when the scene has no participating geometry or
+    // the build failed (warned).
+    pub(in crate::vulkan) fn build_scene_accel(&self) -> Option<RtAccelData> {
+        let built = build_rt_accel(
             RtDeviceCtx {
                 alloc: &self.hw.alloc,
                 instance: &self.hw.instance,
@@ -2429,35 +2476,40 @@ impl super::context::VkContext {
             },
             self.frames_in_flight,
             self.hot_reload.enabled,
-        ) {
-            Ok(accel) => accel,
-            Err(e) => {
-                tracing::warn!("RT acceleration-structure rebuild failed (dropping BVH): {e}");
-                None
-            }
-        };
-        if let Some(mut old) = self.rt.accel.take() {
-            old.destroy(&self.hw.device);
-        }
-        self.rt.accel = fresh;
-        // An RT pass with no BVH traces nothing, so it goes with the BVH.
-        if self.rt.accel.is_none()
-            && let Some(mut rt) = self.rt_reflections.take()
-        {
-            rt.destroy(&self.hw.device);
-        }
+        );
+        built.unwrap_or_else(|e| {
+            tracing::warn!("RT acceleration-structure build failed: {e}");
+            None
+        })
+    }
 
-        // The resolve + glass sets must follow the swap even when the BVH itself
-        // was dropped.
+    // Forget what the RT descriptor sets point at, so the next frame with a BVH
+    // rewires them. Called whenever the BVH is replaced: a new one can reuse a
+    // destroyed one's handles.
+    pub(in crate::vulkan) fn forget_wired_accel(&mut self) {
+        if let Some(rt) = self.rt_reflections.as_mut() {
+            rt.forget_accel();
+        }
+        if let Some(transparent) = self.transparent.as_mut() {
+            transparent.forget_rt_dynamic();
+        }
+    }
+
+    // Replace the live acceleration structure with one built over the current
+    // shared vertex / index buffers, and re-point every pass that reads those
+    // buffers directly. Called by `rebuild_static_geometry`, which destroys both
+    // buffers and re-lays out every draw underneath the BVH: its BLAS then trace
+    // the old geometry, its geometry table indexes offsets into freed memory,
+    // and the RT / glass descriptor sets still name the destroyed buffers.
+    //
+    // An empty scene or a failed build leaves no BVH rather than the stale one;
+    // the pass stays and the next topology change seeds a new one. The caller
+    // has already drained the device.
+    pub(in crate::vulkan) fn rebuild_rt_accel(&mut self) {
+        self.rt.destroy_accels(&self.hw.device);
+        self.rt.accel = self.build_scene_accel();
+        self.forget_wired_accel();
         self.rewire_shared_geometry_readers();
-
-        // Without RT, an authored SSR resolve keeps feeding the composite and every
-        // reader stays wired to it. Otherwise the composite goes, and the scene
-        // readers are wired once, so the swapchain rebuild re-points them.
-        if self.release_unfed_reflection_composite() {
-            self.rebuild_swapchain()?;
-        }
-        Ok(())
     }
 
     // Re-point the RT resolve + glass sets at the current shared vertex / index

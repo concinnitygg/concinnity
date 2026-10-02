@@ -1839,6 +1839,15 @@ impl TransparentResources {
         }
     }
 
+    // Forget what the transparent RT sets' acceleration-structure bindings point
+    // at, so the next frame rewires them. A no-op when the RT pipelines are
+    // absent.
+    pub(in crate::vulkan) fn forget_rt_dynamic(&mut self) {
+        if let Some(rt) = self.rt.as_mut() {
+            rt.wired_accel.reset();
+        }
+    }
+
     // Re-point the transparent RT set's shared static verts + indices at new
     // buffers, after an asset hot-reload replaced the shared geometry buffers. A
     // no-op when the RT pipelines are absent.

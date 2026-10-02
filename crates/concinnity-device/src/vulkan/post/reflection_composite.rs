@@ -550,28 +550,44 @@ impl ReflectionCompositeResources {
     }
 }
 
-// Which reflection stages exist. RT takes the resolve slot when it is live, the
-// SSR resolve runs only when SSR is authored and RT did not take the slot, and
-// the composite exists exactly when one of the two feeds it.
+// Which reflection stages run. The composite exists whenever the RT pass or an
+// authored SSR resolve can feed it, so a BVH coming or going never rebuilds it.
+// RT takes the resolve slot while its BVH is live. Without one the SSR resolve
+// covers when authored, and otherwise the RT node keeps the composite fed with
+// an empty reflection, which leaves the scene as it was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::vulkan) struct ReflectionPath {
+    pub(in crate::vulkan) rt_trace: bool,
+    pub(in crate::vulkan) rt_node: bool,
     pub(in crate::vulkan) ssr_resolve: bool,
     pub(in crate::vulkan) composite: bool,
 }
 
 impl ReflectionPath {
-    pub(in crate::vulkan) fn new(ssr_authored: bool, rt_active: bool) -> Self {
-        let ssr_resolve = ssr_authored && !rt_active;
+    pub(in crate::vulkan) fn new(ssr_authored: bool, rt_pass: bool, bvh_live: bool) -> Self {
+        let rt_trace = rt_pass && bvh_live;
         Self {
-            ssr_resolve,
-            composite: rt_active || ssr_resolve,
+            rt_trace,
+            rt_node: rt_trace || (rt_pass && !ssr_authored),
+            ssr_resolve: ssr_authored && !rt_trace,
+            composite: rt_pass || ssr_authored,
         }
+    }
+
+    // Whether a resolve composites reflections over the scene this frame, which
+    // is when the forward pass hands it the glossy dielectric specular.
+    pub(in crate::vulkan) fn resolves(&self) -> bool {
+        self.rt_trace || self.ssr_resolve
     }
 }
 
 impl VkContext {
-    fn reflection_path(&self) -> ReflectionPath {
-        ReflectionPath::new(self.ssr_authored(), self.rt_reflections_active())
+    pub(in crate::vulkan) fn reflection_path(&self) -> ReflectionPath {
+        ReflectionPath::new(
+            self.ssr_authored(),
+            self.rt_reflections.is_some(),
+            self.rt.accel.is_some(),
+        )
     }
 
     // Whether the SSR resolve runs: SSR is authored and RT did not take its slot.
@@ -580,7 +596,7 @@ impl VkContext {
     }
 
     // The pre-TAA scene image for frame slot `frame`: the composite's output when
-    // one exists, which is exactly when a resolve feeds it.
+    // one exists, which is exactly when a resolve node writes it every frame.
     pub(in crate::vulkan) fn post_scene_image(&self, frame: usize) -> &GpuImage {
         match self.reflection_composite.as_ref() {
             Some(rc) => &rc.output,
@@ -591,7 +607,7 @@ impl VkContext {
     // Destroy the composite once no resolve feeds it, reporting whether it went.
     // The caller rebuilds the swapchain when it did, which re-points every scene
     // reader at the HDR resolve.
-    pub(in crate::vulkan) fn release_unfed_reflection_composite(&mut self) -> bool {
+    fn release_unfed_reflection_composite(&mut self) -> bool {
         if self.reflection_path().composite {
             return false;
         }
@@ -636,10 +652,10 @@ impl VkContext {
     }
 
     // Point this frame's composite sets at the resolve target that will feed
-    // them: the RT output when the trace is live (RT takes the `SsrResolve`
-    // slot), the SSR output otherwise. Reads the same `rt_reflections_active`
-    // the frame graph gates `rt_reflections_enabled` on, so the wiring and the
-    // pass that encodes always agree. Runs on `&mut self` ahead of the parallel
+    // them: the RT output when the RT node runs (it takes the `SsrResolve`
+    // slot), the SSR output otherwise. Reads the same `ReflectionPath` the frame
+    // graph gates `rt_reflections_enabled` on, so the wiring and the pass that
+    // encodes always agree. Runs on `&mut self` ahead of the parallel
     // recording, and skips the write unless the view actually moved.
     pub(in crate::vulkan) fn prepare_reflection_composite(&mut self, frame_idx: usize) {
         debug_assert_eq!(
@@ -647,7 +663,7 @@ impl VkContext {
             self.reflection_path().composite,
             "the reflection composite is out of step with the resolves that feed it"
         );
-        let view = if self.rt_reflections_active() {
+        let view = if self.reflection_path().rt_node {
             self.rt_reflections.as_ref().map(|rt| rt.output.view)
         } else {
             self.ssr.as_ref().map(|ssr| ssr.output.view())
@@ -736,32 +752,70 @@ mod tests {
     use super::ReflectionPath;
 
     #[test]
-    fn rt_takes_the_resolve_slot_from_authored_ssr() {
-        let path = ReflectionPath::new(true, true);
+    fn a_live_trace_takes_the_resolve_slot_from_authored_ssr() {
+        let path = ReflectionPath::new(true, true, true);
+        assert!(path.rt_trace && path.rt_node);
         assert!(!path.ssr_resolve);
-        assert!(path.composite);
+        assert!(path.composite && path.resolves());
+    }
+
+    #[test]
+    fn authored_ssr_covers_while_the_rt_pass_has_no_bvh() {
+        let path = ReflectionPath::new(true, true, false);
+        assert!(!path.rt_trace && !path.rt_node);
+        assert!(path.ssr_resolve);
+        assert!(path.composite && path.resolves());
     }
 
     #[test]
     fn authored_ssr_resolves_without_rt() {
-        let path = ReflectionPath::new(true, false);
-        assert!(path.ssr_resolve);
-        assert!(path.composite);
+        for bvh_live in [false, true] {
+            let path = ReflectionPath::new(true, false, bvh_live);
+            assert!(!path.rt_trace && !path.rt_node);
+            assert!(path.ssr_resolve);
+            assert!(path.composite && path.resolves());
+        }
     }
 
     #[test]
-    fn rt_alone_keeps_the_composite() {
-        let path = ReflectionPath::new(false, true);
+    fn rt_alone_traces_its_live_bvh() {
+        let path = ReflectionPath::new(false, true, true);
+        assert!(path.rt_trace && path.rt_node);
         assert!(!path.ssr_resolve);
-        assert!(path.composite);
+        assert!(path.composite && path.resolves());
+    }
+
+    #[test]
+    fn rt_alone_without_a_bvh_feeds_the_composite_nothing() {
+        // The RT node still runs, so the composite stays fed, but it traces
+        // nothing and the forward pass keeps its own specular.
+        let path = ReflectionPath::new(false, true, false);
+        assert!(!path.rt_trace && path.rt_node);
+        assert!(!path.ssr_resolve);
+        assert!(path.composite && !path.resolves());
     }
 
     #[test]
     fn no_resolve_leaves_no_composite() {
-        // RT lost without authored SSR, or a SSGI-only world.
-        let path = ReflectionPath::new(false, false);
-        assert!(!path.ssr_resolve);
-        assert!(!path.composite);
+        // RT off or unsupported without authored SSR, or a SSGI-only world.
+        for bvh_live in [false, true] {
+            let path = ReflectionPath::new(false, false, bvh_live);
+            assert!(!path.rt_trace && !path.rt_node && !path.ssr_resolve);
+            assert!(!path.composite && !path.resolves());
+        }
+    }
+
+    #[test]
+    fn at_most_one_resolve_node_runs() {
+        for bits in 0..8u8 {
+            let path = ReflectionPath::new(bits & 1 != 0, bits & 2 != 0, bits & 4 != 0);
+            assert!(!(path.rt_node && path.ssr_resolve), "{bits:03b}: {path:?}");
+            assert_eq!(
+                path.composite,
+                path.rt_node || path.ssr_resolve,
+                "{bits:03b}"
+            );
+        }
     }
 
     // The composite vert + blur + composite fragments compile to SPIR-V. Guards the

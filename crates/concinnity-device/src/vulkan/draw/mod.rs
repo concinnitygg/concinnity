@@ -412,8 +412,11 @@ impl VkContext {
             view: self.state.view.matrix,
             elapsed,
             // Hand glossy dielectric specular to the SSR / RT resolve when its
-            // composite owns the scene image, else the forward shader keeps it all.
-            reflections_enabled: if self.reflection_composite.is_some() {
+            // composite owns the scene image and a resolve writes reflections
+            // into it this frame, else the forward shader keeps it all.
+            reflections_enabled: if self.reflection_composite.is_some()
+                && self.reflection_path().resolves()
+            {
                 1.0
             } else {
                 0.0
@@ -721,12 +724,12 @@ impl VkContext {
             // settings whether they contribute: a zero intensity would otherwise
             // pay a hemisphere ray-march to add exactly zero.
             ssgi_enabled: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
-            // Hardware ray-traced reflections (`VK_KHR_ray_query`). On only when
-            // the world requested it, the GPU exposed the ray-query extensions,
-            // and the acceleration structure built; the shared builder then emits
-            // `RtReflections` in the `SsrResolve` slot (RT takes precedence; SSR
-            // is the non-RT-GPU fallback).
-            rt_reflections_enabled: self.rt_reflections_active(),
+            // Hardware ray-traced reflections (`VK_KHR_ray_query`). The shared
+            // builder emits `RtReflections` in the `SsrResolve` slot while the
+            // trace is live (RT takes precedence; SSR is the fallback), and also
+            // while the RT pass has no BVH and no authored SSR covers for it, to
+            // keep the reflection composite fed.
+            rt_reflections_enabled: self.reflection_path().rt_node,
             // Geometry pre-pass: one `GBufferPrepass` node rasterizes the
             // normal+depth / roughness / velocity MRT every screen-space consumer
             // (SSR / SSAO / SSGI / TAA / FSR) reads. On exactly when the buffer

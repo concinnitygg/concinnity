@@ -4,6 +4,7 @@
 use ash::vk;
 use concinnity_core::render::backend_init::{PostSettings, SceneData};
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::retire_pool::RetirePool;
 
 use super::InitGpu;
 use crate::vulkan::context::{
@@ -56,16 +57,18 @@ pub(super) fn build_rt_reflections(
         rt_wanted,
     } = inputs;
     let (hdr_resolve_images, render_extent) = (&targets.hdr_resolve_images, targets.render_extent);
-    // Hardware ray-traced reflections: the scene acceleration structure +
-    // the inline-`rayQueryEXT` reflection pass. Built only when the world
+    // Hardware ray-traced reflections: the inline-`rayQueryEXT` reflection pass
+    // + the scene acceleration structure it traces. Built only when the world
     // requested it AND the device exposed the ray-query extensions
     // (`rt_wanted`). Reuses the SSR pre-pass G-buffer (forced on earlier) for
     // the per-pixel surface point + normal, and the bindless pool (when live)
-    // for textured hit shading. Graceful-fallback throughout: no resident
-    // geometry, an AS build error, or a shader compile failure leaves both
-    // `None` and the graph keeps `SsrResolve`. RT takes precedence over the
-    // SSR resolve in the shared graph slot, which `ReflectionPath` settles once
-    // the build outcome is known.
+    // for textured hit shading. A shader compile failure leaves the pass `None`
+    // and the graph keeps `SsrResolve`. The pass outlives the acceleration
+    // structure: a scene with no resident geometry (or an AS build error) starts
+    // with none, and the first topology change that brings geometry seeds it.
+    // `ReflectionPath` settles which resolve takes the shared graph slot each
+    // frame.
+    //
     // Layer 2 see-through glass is opt-in per `Material` (the `see_through`
     // arg, which implies `transparent`): see-through only looks right when the
     // space behind the glass is modeled. A material that is `transparent` but
@@ -89,7 +92,50 @@ pub(super) fn build_rt_reflections(
     // topology refresh re-reads `seethrough_meshes_enabled` and puts them back.
     let has_seethrough_meshes = !seethrough_mesh_indices.is_empty() && hw.rt_capable;
 
-    let (rt_accel_opt, rt_opt) = if rt_wanted {
+    let rt_opt = if rt_wanted {
+        let hdr_views: Vec<vk::ImageView> = hdr_resolve_images.iter().map(|i| i.view).collect();
+        // RT reads the unified G-buffer pre-pass's per-frame normal+depth +
+        // roughness (built earlier whenever any consumer is on); `gbuffer` is
+        // `Some` here because RT forces the pre-pass on.
+        let gb = gbuffer
+            .as_ref()
+            .expect("RT forces the unified G-buffer pre-pass to exist");
+        let nd_views = gb.normal_depth_views();
+        let rough_views = gb.roughness_views();
+        match crate::vulkan::post::rt_reflections::RtReflectionsResources::new(
+            crate::vulkan::post::rt_reflections::RtBuild {
+                alloc,
+                device,
+                width: render_extent.width,
+                height: render_extent.height,
+                frames,
+            },
+            post.rt_reflections
+                .expect("rt_wanted implies rt_settings is Some"),
+            crate::vulkan::post::rt_reflections::RtStaticInputs {
+                vertex_buffer: geometry.vertex_buffer.buffer(),
+                index_buffer: geometry.index_buffer.buffer(),
+                hdr_resolve_views: &hdr_views,
+                gbuffer_views: &nd_views,
+                roughness_views: &rough_views,
+            },
+            crate::vulkan::post::rt_reflections::RtLayoutConfig {
+                bindless_set_layout: cull.bindless_set_layout.as_ref().map(|l| l.handle()),
+                global_set_layout: descriptors.global_set_layout.handle(),
+                pool_size: cull.bindless_pool_size,
+                hot_reload,
+            },
+        ) {
+            Ok(rt) => Some(rt),
+            Err(e) => {
+                tracing::warn!("RT reflections pass build failed (falling back to SSR): {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let rt_accel_opt = if rt_opt.is_some() {
         match crate::vulkan::raytrace::build_rt_accel(
             crate::vulkan::raytrace::RtDeviceCtx {
                 alloc,
@@ -109,84 +155,29 @@ pub(super) fn build_rt_reflections(
             frames,
             hot_reload,
         ) {
-            Ok(Some(accel)) => {
-                let hdr_views: Vec<vk::ImageView> =
-                    hdr_resolve_images.iter().map(|i| i.view).collect();
-                // RT reads the unified G-buffer pre-pass's per-frame
-                // normal+depth + roughness (built earlier whenever any consumer
-                // is on); `gbuffer` is `Some` here because RT forces the
-                // pre-pass on.
-                let gb = gbuffer
-                    .as_ref()
-                    .expect("RT forces the unified G-buffer pre-pass to exist");
-                let nd_views = gb.normal_depth_views();
-                let rough_views = gb.roughness_views();
-                let (geom_buffer, geom_size) = accel.geom_table();
-                match crate::vulkan::post::rt_reflections::RtReflectionsResources::new(
-                    crate::vulkan::post::rt_reflections::RtBuild {
-                        alloc,
-                        device,
-                        width: render_extent.width,
-                        height: render_extent.height,
-                        frames,
-                    },
-                    post.rt_reflections
-                        .expect("rt_wanted implies rt_settings is Some"),
-                    crate::vulkan::post::rt_reflections::RtStaticInputs {
-                        vertex_buffer: geometry.vertex_buffer.buffer(),
-                        index_buffer: geometry.index_buffer.buffer(),
-                        hdr_resolve_views: &hdr_views,
-                        gbuffer_views: &nd_views,
-                        roughness_views: &rough_views,
-                    },
-                    crate::vulkan::post::rt_reflections::RtAccelHandles {
-                        tlas: accel.tlas(),
-                        geom_buffer,
-                        geom_size,
-                        deformed_verts: accel.deformed_verts(),
-                        skinned_indices: accel.skinned_indices(),
-                    },
-                    crate::vulkan::post::rt_reflections::RtLayoutConfig {
-                        bindless_set_layout: cull.bindless_set_layout.as_ref().map(|l| l.handle()),
-                        global_set_layout: descriptors.global_set_layout.handle(),
-                        pool_size: cull.bindless_pool_size,
-                        hot_reload,
-                    },
-                ) {
-                    Ok(rt) => (Some(accel), Some(rt)),
-                    Err(e) => {
-                        tracing::warn!(
-                            "RT reflections pass build failed (falling back to SSR): {e}"
-                        );
-                        let mut accel = accel;
-                        accel.destroy(device);
-                        (None, None)
-                    }
-                }
-            }
+            Ok(Some(accel)) => Some(accel),
             Ok(None) => {
                 tracing::info!(
-                    "RT reflections requested but no resident triangle geometry to trace; \
-                     using SSR"
+                    "RT reflections requested but no resident triangle geometry to trace yet"
                 );
-                (None, None)
+                None
             }
             Err(e) => {
-                tracing::warn!("RT acceleration-structure build failed (falling back to SSR): {e}");
-                (None, None)
+                tracing::warn!("RT acceleration-structure build failed: {e}");
+                None
             }
         }
     } else {
-        (None, None)
+        None
     };
-    let rt_active = rt_opt.is_some();
     // Reflection composite: built whenever a resolve feeds it. Both resolves
     // write radiance+weight into their output target; this blurs by roughness
     // and composites over the scene into its own output, which then replaces
     // the raw resolve output as the scene image every downstream pass samples.
     let composite_opt = if crate::vulkan::post::reflection_composite::ReflectionPath::new(
         post.ssr.is_some(),
-        rt_active,
+        rt_opt.is_some(),
+        rt_accel_opt.is_some(),
     )
     .composite
     {
@@ -213,6 +204,8 @@ pub(super) fn build_rt_reflections(
     Ok(RtResources {
         state: VkRayTracing {
             accel: rt_accel_opt,
+            retired: RetirePool::new(),
+            retire_tick: 0,
             dynamic_mode: post.rt_dynamic,
             skinned_geometry: post.rt_skinned_geometry,
             update_streak: Default::default(),

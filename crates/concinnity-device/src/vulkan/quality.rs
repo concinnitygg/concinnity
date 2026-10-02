@@ -292,9 +292,7 @@ impl VkContext {
             if let Some(mut rt) = self.rt_reflections.take() {
                 rt.destroy(&self.hw.device);
             }
-            if let Some(mut accel) = self.rt.accel.take() {
-                accel.destroy(&self.hw.device);
-            }
+            self.rt.destroy_accels(&self.hw.device);
         }
 
         // The composite follows the ACTUAL post-build RT state, so a failed RT
@@ -310,49 +308,18 @@ impl VkContext {
         self.rebuild_swapchain()
     }
 
-    // Build the RT acceleration structure + reflection pass at runtime (a live
-    // toggle-on). Mirrors the init RT block: an empty scene, an AS-build error,
-    // or a shader-compile failure leaves both `rt.accel` / `rt_reflections`
-    // `None` and the renderer falls back to the SSR resolve when authored (a soft
-    // failure, returns `Ok`). The
-    // caller has ensured the unified G-buffer pre-pass exists and drained the
-    // device (`wait_idle`). `rebuild_swapchain` refreshes the output target after.
+    // Build the RT reflection pass + acceleration structure at runtime (a live
+    // toggle-on). Mirrors the init RT block: a shader-compile failure leaves
+    // `rt_reflections` `None` and the renderer falls back to the SSR resolve when
+    // authored (a soft failure, returns `Ok`), while an empty scene or an
+    // AS-build error leaves only `rt.accel` `None` until a topology change seeds
+    // it. The caller has ensured the unified G-buffer pre-pass exists and drained
+    // the device (`wait_idle`). `rebuild_swapchain` refreshes the output target
+    // after.
     fn build_rt_runtime(
         &mut self,
         settings: rt_reflections::RtReflectionSettings,
     ) -> RenderResult<()> {
-        let accel = match crate::vulkan::raytrace::build_rt_accel(
-            crate::vulkan::raytrace::RtDeviceCtx {
-                alloc: &self.hw.alloc,
-                instance: &self.hw.instance,
-                device: &self.hw.device,
-                pd: self.hw.physical_device,
-            },
-            self.commands.command_pool,
-            self.hw.graphics_queue,
-            crate::vulkan::raytrace::RtSceneGeometry {
-                shared: crate::vulkan::raytrace::SharedGeometry::of(&self.geometry),
-                draw_objects: &self.state.draw.objects,
-                clusters: &self.instanced.clusters,
-                albedo_count: self.scene.textures.len(),
-                exclude_seethrough: self.seethrough_meshes_enabled(),
-            },
-            self.frames_in_flight,
-            self.hot_reload.enabled,
-        ) {
-            Ok(Some(accel)) => accel,
-            Ok(None) => {
-                tracing::info!(
-                    "RT reflections enabled but no resident triangle geometry to trace; keeping SSR"
-                );
-                return Ok(());
-            }
-            Err(e) => {
-                tracing::warn!("RT acceleration-structure build failed (keeping SSR): {e}");
-                return Ok(());
-            }
-        };
-
         let hdr_views: Vec<vk::ImageView> = self
             .targets
             .hdr_resolve_images
@@ -365,7 +332,6 @@ impl VkContext {
             .expect("RT enable forces the unified G-buffer pre-pass on");
         let nd_views = gb.normal_depth_views();
         let rough_views = gb.roughness_views();
-        let (geom_buffer, geom_size) = accel.geom_table();
         // The textured hit variant indexes the bindless pool, so it compiles
         // against the length the pool set layout was built with; 0 when there
         // is no bindless layout, in which case the variant is not built.
@@ -386,13 +352,6 @@ impl VkContext {
                 gbuffer_views: &nd_views,
                 roughness_views: &rough_views,
             },
-            super::post::rt_reflections::RtAccelHandles {
-                tlas: accel.tlas(),
-                geom_buffer,
-                geom_size,
-                deformed_verts: accel.deformed_verts(),
-                skinned_indices: accel.skinned_indices(),
-            },
             super::post::rt_reflections::RtLayoutConfig {
                 bindless_set_layout: self.cull.bindless_set_layout.as_ref().map(|l| l.handle()),
                 global_set_layout: self.descriptors.global_set_layout.handle(),
@@ -403,13 +362,12 @@ impl VkContext {
             Ok(rt) => rt,
             Err(e) => {
                 tracing::warn!("RT reflections pass build failed (keeping SSR): {e}");
-                let mut accel = accel;
-                accel.destroy(&self.hw.device);
                 return Ok(());
             }
         };
-        self.rt.accel = Some(accel);
         self.rt_reflections = Some(rt);
+        self.rt.accel = self.build_scene_accel();
+        self.forget_wired_accel();
         Ok(())
     }
 }

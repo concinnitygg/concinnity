@@ -1065,7 +1065,7 @@ impl VkContext {
                 // composites into the RT output target, which then feeds the post
                 // stack. Occupies the `SsrResolve` slot; gated by
                 // `FrameGraphInputs::rt_reflections_enabled`
-                // (`VkContext::rt_reflections_active`). The per-frame TLAS update +
+                // (`ReflectionPath::rt_node`). The per-frame TLAS update +
                 // descriptor re-point already ran on the outer "start" buffer.
                 self.encode_rt_reflections(
                     cmd,

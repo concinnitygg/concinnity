@@ -10,12 +10,15 @@
 //! writes its own `output` target) and is mutually exclusive with the SSR
 //! resolve. Like SSGI it reuses the SSR depth + normal + roughness pre-pass
 //! G-buffer, so that pre-pass is forced on whenever RT reflections are enabled.
+//! While there is no BVH to trace, an authored SSR resolve takes the slot, or
+//! the pass clears its output so the reflection composite leaves the scene as
+//! it was.
 //! Mirrors src/directx/post/rt_reflections.rs (DXR inline `RayQuery`); the GLSL
 //! is compiled with the Vulkan-1.2 / SPIR-V-1.4 target ray query needs.
 //!
 //! Unlike DirectX (which binds the TLAS + geometry table as root SRVs by GPU
 //! virtual address each frame), Vulkan binds them through a descriptor set, so
-//! `VkContext::rt_update_descriptors` re-points the current frame's set at the
+//! `VkContext::rt_dynamic_update` re-points the current frame's set at the
 //! live TLAS + geometry-table handles every frame (they change on a dynamic
 //! rebuild; see `crate::vulkan::raytrace`).
 
@@ -24,6 +27,7 @@ use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection;
 use concinnity_core::render::post::rt_reflections::{RtParamsInputs, RtReflectionSettings};
+use concinnity_core::render::rt_accel::seed_wanted;
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::{HDR_FORMAT, VkContext};
@@ -75,9 +79,10 @@ pub(in crate::vulkan) fn compile_rt_shaders(
 }
 
 // RT-reflection resources held by `VkContext` when `ray_traced_reflections` is
-// on AND the GPU exposes the ray-query extensions AND the acceleration-structure
-// build succeeds; otherwise the context leaves this `None` and the graph falls
-// back to `SsrResolve`. All `vk::*` handles are owned here and freed on `destroy`.
+// on AND the GPU exposes the ray-query extensions AND the pass built; otherwise
+// the context leaves this `None` and the graph falls back to `SsrResolve`. The
+// pass outlives the scene acceleration structure, which comes and goes with the
+// geometry it covers. All `vk::*` handles are owned here and freed on `destroy`.
 pub(in crate::vulkan) struct RtReflectionsResources {
     // Resolved authored tunables; turned into a per-frame `RtParams` push.
     pub(in crate::vulkan) settings: RtReflectionSettings,
@@ -159,7 +164,8 @@ fn resolve_set_bindings() -> [Binding; 13] {
 }
 
 // RT render pass: one HDR-format color attachment (`output`), no depth. The
-// fullscreen triangle overwrites every pixel so `DONT_CARE` is safe on load.
+// fullscreen triangle (or the clear while there is no BVH) overwrites every
+// pixel, so `DONT_CARE` is safe on load.
 // Ends shader-readable for the bloom + composite passes. Mirrors the SSR resolve
 // render pass.
 fn create_rt_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass> {
@@ -348,14 +354,14 @@ pub(in crate::vulkan) struct RtLayoutConfig {
 
 impl RtReflectionsResources {
     // Build every RT-reflection resource. Returns `Err` when the GLSL fails to
-    // compile (the caller then falls back to SSR). `accel` holds the initial
-    // acceleration-structure handles (re-pointed each frame thereafter);
-    // `layout.bindless_set_layout` + `layout.pool_size` enable the textured variant.
+    // compile (the caller then falls back to SSR). The acceleration-structure
+    // bindings are wired by `wire_dynamic` on each frame that has a BVH to
+    // trace; `layout.bindless_set_layout` + `layout.pool_size` enable the
+    // textured variant.
     pub(in crate::vulkan) fn new(
         build: RtBuild,
         settings: RtReflectionSettings,
         static_inputs: RtStaticInputs,
-        accel: RtAccelHandles,
         layout: RtLayoutConfig,
     ) -> RenderResult<Self> {
         let RtBuild {
@@ -372,13 +378,6 @@ impl RtReflectionsResources {
             gbuffer_views,
             roughness_views,
         } = static_inputs;
-        let RtAccelHandles {
-            tlas,
-            geom_buffer,
-            geom_size,
-            deformed_verts,
-            skinned_indices,
-        } = accel;
         let RtLayoutConfig {
             bindless_set_layout,
             global_set_layout,
@@ -503,19 +502,6 @@ impl RtReflectionsResources {
                 roughness_views,
             },
         );
-        for i in 0..frames {
-            me.wire_dynamic(
-                device,
-                i,
-                RtAccelHandles {
-                    tlas,
-                    geom_buffer,
-                    geom_size,
-                    deformed_verts,
-                    skinned_indices,
-                },
-            );
-        }
         Ok(me)
     }
 
@@ -778,6 +764,12 @@ impl RtReflectionsResources {
         Ok(())
     }
 
+    // Forget what each frame's acceleration-structure bindings point at, so the
+    // next frame rewires them. A replaced BVH can reuse a destroyed one's handles.
+    pub(in crate::vulkan) fn forget_accel(&mut self) {
+        self.wired_accel.reset();
+    }
+
     // Swap freshly-built pipelines into the live resources after a hot-reload.
     pub(in crate::vulkan) fn swap_pipelines(&mut self, rebuilt: RebuiltRtPipelines) {
         self.flat_pso = rebuilt.flat;
@@ -793,10 +785,10 @@ impl RtReflectionsResources {
 }
 
 impl VkContext {
-    // True when hardware ray-traced reflections are live (both the pass + the
-    // acceleration structure built). Gates `FrameGraphInputs::rt_reflections_enabled`
-    // (so the graph emits `RtReflections` in the `SsrResolve` slot) and the
-    // post-stack scene-image routing. Mirrors `DxContext::rt_reflections_active`.
+    // True when hardware ray-traced reflections are live (the pass is built and
+    // a BVH exists to trace). Gates the transparent pass's trace and the planar
+    // mirrors; `ReflectionPath` settles the graph's resolve slot from the same
+    // state. Mirrors `DxContext::rt_reflections_active`.
     pub(in crate::vulkan) fn rt_reflections_active(&self) -> bool {
         self.rt_reflections.is_some() && self.rt.accel.is_some()
     }
@@ -839,89 +831,39 @@ impl VkContext {
     // table. A no-op when RT reflections are off. The descriptor rewrite happens
     // every frame (not only on a rebuild) so a frame that did not rebuild still
     // binds the current handles rather than a stale / retired one.
+    //
+    // Follows the shared BVH lifetime: a pass with no BVH seeds one once
+    // participating geometry appears (`seed_wanted`), and a BVH with nothing left
+    // to trace and nothing that could rejoin it is dropped (`is_spent`), held
+    // until the frames in flight have finished tracing it. The trace skips while
+    // there is none.
     pub(in crate::vulkan) fn rt_dynamic_update(
         &mut self,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
     ) {
         // Consumed by the accel's `dynamic_update`, which folds a runtime draw-set
-        // change (cloned prop, streamed chunk added/removed) into the BLAS head.
-        // (Vulkan builds `rt_accel` + `rt_reflections` together, so an RT-enabled
-        // scene that was empty at build time has both `None` and RT stays off until
-        // a quality re-toggle rebuilds the pass; there is no seed-from-empty here.)
+        // change (cloned prop, streamed chunk added/removed) into the BLAS head,
+        // or by the seed of a scene that had nothing to trace.
         let topology_dirty = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
-        if self.rt.accel.is_none() || self.rt_reflections.is_none() {
+        let device = self.hw.device.clone();
+        self.rt.collect_retired(&device, self.frames_in_flight);
+        if self.rt_reflections.is_none() {
             return;
         }
-        let device = self.hw.device.clone();
-        let instance = self.hw.instance.clone();
-        let pd = self.hw.physical_device;
-        let mode = self.rt.dynamic_mode;
-
-        // Assemble this frame's skinned-geometry inputs while `self` is still
-        // fully borrowable: the shared skinned VB/IB handles. `None` when there is
-        // no skinned geometry resident or the launch excluded it (the static path
-        // runs). Read up-front so
-        // they do not overlap the `rt_accel` mutable borrow below; the per-object
-        // joint palettes are borrowed straight out of this frame's slot instead of
-        // being collected into a per-frame list.
-        let skinned_inputs: Option<(vk::Buffer, vk::Buffer)> = if self.rt.skinned_geometry
-            && !self.state.skinned.draw_objects.is_empty()
-            && !self.skinned.vertex_buffer.is_null()
-            && !self.skinned.index_buffer.is_null()
-        {
-            Some((
-                self.skinned.vertex_buffer.buffer(),
-                self.skinned.index_buffer.buffer(),
-            ))
+        if self.rt.accel.is_none() {
+            // The seed build is static-only, so skinned geometry alone cannot
+            // seed one. It is fence-waited internally (a rare, one-time stall)
+            // and already covers this frame's draw set.
+            if !seed_wanted(self.rt.dynamic_mode, topology_dirty, false) {
+                return;
+            }
+            self.rt.accel = self.build_scene_accel();
+            self.forget_wired_accel();
         } else {
-            None
-        };
-
-        // Read before `rt_accel` is taken: `seethrough_meshes_enabled` borrows
-        // `self.transparent`, which the block below holds `&self` across.
-        let exclude_seethrough = self.seethrough_meshes_enabled();
-        let shared = super::super::raytrace::SharedGeometry::of(&self.geometry);
-
-        // Take `rt_accel` out so its `&mut` borrow does not overlap the shared
-        // `&self` reads (`skinned_draw_objects` / `draw_objects`) the inputs need;
-        // put it back immediately after.
-        if let Some(mut accel) = self.rt.accel.take() {
-            let joint_buffers = self
-                .skinned
-                .joint_buffers
-                .get(frame_idx)
-                .map(|b| b.as_slice())
-                .unwrap_or(&[]);
-            let skinned = skinned_inputs.map(|(vb, ib)| super::super::raytrace::SkinnedRtInputs {
-                objects: &self.state.skinned.draw_objects,
-                vertex_buffer: vb,
-                index_buffer: ib,
-                joint_buffers,
-            });
-            let updated = accel.dynamic_update(
-                super::super::raytrace::RtDeviceCtx {
-                    alloc: &self.hw.alloc,
-                    instance: &instance,
-                    device: &device,
-                    pd,
-                },
-                cmd,
-                &self.state.draw.objects,
-                super::super::raytrace::RtDynamicInputs {
-                    policy: super::super::raytrace::RtRebuildPolicy {
-                        mode,
-                        topology_dirty,
-                        exclude_seethrough,
-                    },
-                    frame_idx,
-                    shared,
-                    skinned,
-                },
-            );
-            crate::rt_report::report_rt_update(&mut self.rt.update_streak, updated);
-            self.rt.accel = Some(accel);
+            self.update_live_accel(cmd, frame_idx, topology_dirty);
         }
+
         let Some(accel) = self.rt.accel.as_ref() else {
             return;
         };
@@ -962,11 +904,89 @@ impl VkContext {
         }
     }
 
+    // Run the live BVH's dynamic update, then drop it when nothing is left to
+    // trace and no skinned geometry can rejoin it.
+    fn update_live_accel(
+        &mut self,
+        cmd: vk::CommandBuffer,
+        frame_idx: usize,
+        topology_dirty: bool,
+    ) {
+        // Assemble this frame's skinned-geometry inputs while `self` is still
+        // fully borrowable: the shared skinned VB/IB handles. `None` when there is
+        // no skinned geometry resident or the launch excluded it (the static path
+        // runs).
+        let skinned_inputs: Option<(vk::Buffer, vk::Buffer)> = if self.rt.skinned_geometry
+            && !self.state.skinned.draw_objects.is_empty()
+            && !self.skinned.vertex_buffer.is_null()
+            && !self.skinned.index_buffer.is_null()
+        {
+            Some((
+                self.skinned.vertex_buffer.buffer(),
+                self.skinned.index_buffer.buffer(),
+            ))
+        } else {
+            None
+        };
+
+        // Read before `rt_accel` is taken: `seethrough_meshes_enabled` borrows
+        // `self.transparent`.
+        let exclude_seethrough = self.seethrough_meshes_enabled();
+        let shared = super::super::raytrace::SharedGeometry::of(&self.geometry);
+
+        // Take `rt_accel` out so its `&mut` borrow does not overlap the shared
+        // `&self` reads (`skinned_draw_objects` / `draw_objects`) the inputs need;
+        // put it back immediately after.
+        let Some(mut accel) = self.rt.accel.take() else {
+            return;
+        };
+        let joint_buffers = self
+            .skinned
+            .joint_buffers
+            .get(frame_idx)
+            .map(|b| b.as_slice())
+            .unwrap_or(&[]);
+        let skinned = skinned_inputs.map(|(vb, ib)| super::super::raytrace::SkinnedRtInputs {
+            objects: &self.state.skinned.draw_objects,
+            vertex_buffer: vb,
+            index_buffer: ib,
+            joint_buffers,
+        });
+        let updated = accel.dynamic_update(
+            super::super::raytrace::RtDeviceCtx {
+                alloc: &self.hw.alloc,
+                instance: &self.hw.instance,
+                device: &self.hw.device,
+                pd: self.hw.physical_device,
+            },
+            cmd,
+            &self.state.draw.objects,
+            super::super::raytrace::RtDynamicInputs {
+                policy: super::super::raytrace::RtRebuildPolicy {
+                    mode: self.rt.dynamic_mode,
+                    topology_dirty,
+                    exclude_seethrough,
+                },
+                frame_idx,
+                shared,
+                skinned,
+            },
+        );
+        crate::rt_report::report_rt_update(&mut self.rt.update_streak, updated);
+        let spent = accel.is_spent(skinned_inputs.is_some());
+        self.rt.accel = Some(accel);
+        if spent {
+            self.rt.retire_accel();
+        }
+    }
+
     // Encode the RT-reflection resolve: a fullscreen triangle that traces each
     // glossy pixel's reflection ray against the scene TLAS and writes radiance +
     // weight into `rt_reflections.output`, which the reflection composite then
-    // blends over the scene. No-op when RT is off (the graph
-    // only schedules this pass when RT is live, so the guard is defensive).
+    // blends over the scene. Without a BVH the output is cleared to zero weight
+    // instead, which the composite passes the scene through unchanged for. No-op
+    // when the pass is absent (the graph only schedules it when the pass exists,
+    // so the guard is defensive).
     pub(in crate::vulkan) fn encode_rt_reflections(
         &self,
         cmd: vk::CommandBuffer,
@@ -981,6 +1001,31 @@ impl VkContext {
         };
         let device = &self.hw.device;
         let extent = rt.extent;
+        let rp_begin = vk::RenderPassBeginInfo::default()
+            .render_pass(rt.render_pass.handle())
+            .framebuffer(rt.framebuffer.handle())
+            .render_area(vk::Rect2D::default().extent(extent));
+        if self.rt.accel.is_none() {
+            let clear = vk::ClearAttachment {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                color_attachment: 0,
+                clear_value: vk::ClearValue::default(),
+            };
+            let rect = vk::ClearRect {
+                rect: vk::Rect2D::default().extent(extent),
+                base_array_layer: 0,
+                layer_count: 1,
+            };
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
+            // slice these commands name is live for the call.
+            unsafe {
+                device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
+                device.cmd_clear_attachments(cmd, &[clear], &[rect]);
+                device.cmd_end_render_pass(cmd);
+            }
+            self.encode_reflection_composite(cmd, rt.output.view, frame_idx);
+            return;
+        }
 
         // The view->world rotation is the transpose of the view matrix's
         // orthonormal 3x3; `params` fills in the camera-position translation
@@ -1017,10 +1062,6 @@ impl VkContext {
             _ => (&rt.flat_pso, &rt.layout_flat),
         };
 
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(rt.render_pass.handle())
-            .framebuffer(rt.framebuffer.handle())
-            .render_area(vk::Rect2D::default().extent(extent));
         let vp = vk::Viewport {
             x: 0.0,
             y: 0.0,

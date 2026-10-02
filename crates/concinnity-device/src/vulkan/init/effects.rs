@@ -595,9 +595,9 @@ pub(super) fn build_world_effects(
         let transparent_depth_views: Vec<vk::ImageView> =
             targets.depth_images.iter().map(|img| img.view).collect();
         // The initial acceleration-structure handles for the RT path (`None`
-        // when RT is off at launch; the per-frame `rt_dynamic_update` fills the
-        // ring before the RT path is taken). The RT pipelines themselves are
-        // built whenever the device is RT-capable.
+        // when RT is off at launch or there is no BVH yet; the per-frame
+        // `rt_dynamic_update` fills the ring before the RT path is taken). The
+        // RT pipelines themselves are built whenever the device is RT-capable.
         let rt_inputs = rt.state.accel.as_ref().map(|a| {
             let (geom_buffer, geom_size) = a.geom_table();
             crate::vulkan::transparent::TransparentRtInputs {

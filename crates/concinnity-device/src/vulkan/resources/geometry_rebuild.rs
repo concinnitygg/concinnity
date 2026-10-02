@@ -104,8 +104,8 @@ impl VkContext {
         // The RT acceleration structure was built against the buffers just
         // destroyed and the per-draw offsets just rewritten. Rebuild it over the
         // fresh layout and re-point the passes that read the buffers directly.
-        if self.rt.accel.is_some() {
-            self.rebuild_rt_accel()?;
+        if self.rt_reflections.is_some() {
+            self.rebuild_rt_accel();
         }
         Ok(())
     }

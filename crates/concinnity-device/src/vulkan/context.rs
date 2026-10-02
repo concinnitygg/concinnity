@@ -930,9 +930,16 @@ pub(super) struct VkSceneAssets {
 // The hardware ray-tracing scene: the acceleration structures and the policy
 // that keeps them current as the draw set changes.
 pub(super) struct VkRayTracing {
-    // The scene BLAS / TLAS + geometry table. `Some` only when RT reflections
-    // are on, the device is RT-capable, and the build succeeded.
+    // The scene BLAS / TLAS + geometry table. `Some` only while the RT pass is
+    // live and the scene has participating geometry: it is seeded when the
+    // first geometry appears and dropped once nothing can be traced.
     pub(super) accel: Option<crate::vulkan::raytrace::RtAccelData>,
+    // Dropped BVHs, held until the frames in flight have finished tracing them,
+    // timed against `retire_tick`.
+    pub(super) retired:
+        concinnity_core::render::retire_pool::RetirePool<crate::vulkan::raytrace::RtAccelData>,
+    // Advanced once per frame by `rt_dynamic_update`.
+    pub(super) retire_tick: u64,
     // How the TLAS is kept current when props move (the launch's `--rt-dynamic`
     // request); read by the per-frame `rt_dynamic_update`. Inert when `accel`
     // is `None`.
@@ -1165,11 +1172,11 @@ pub(crate) struct VkContext {
     pub(super) gbuffer: Option<GbufferResources>,
 
     // Hardware ray-traced reflections (`VK_KHR_ray_query`). `rt_reflections` (the
-    // fullscreen inline-`rayQueryEXT` pass + its output target) and `rt.accel`
-    // (the scene BLAS / TLAS + geometry table) are both `Some` only when the
-    // world set `ray_traced_reflections: true`, the GPU exposed the ray-query
-    // extensions, and the acceleration-structure build succeeded; otherwise both
-    // stay `None` and the graph falls back to `SsrResolve`. Like SSGI, RT reuses
+    // fullscreen inline-`rayQueryEXT` pass + its output target) is `Some` when
+    // the world set `ray_traced_reflections: true`, the GPU exposed the
+    // ray-query extensions, and the pass built; otherwise the graph falls back
+    // to `SsrResolve`. `rt.accel` (the scene BLAS / TLAS + geometry table) lives
+    // under it only while there is geometry to trace. Like SSGI, RT reuses
     // the SSR depth + normal + roughness pre-pass G-buffer (so `ssr` is built
     // whenever RT is on), and it replaces the SSR *resolve* in the frame graph:
     // when `rt_reflections_active()` the reflection composite blends
@@ -1978,9 +1985,7 @@ impl VkContext {
         if let Some(mut rt) = self.rt_reflections.take() {
             rt.destroy(device);
         }
-        if let Some(mut accel) = self.rt.accel.take() {
-            accel.destroy(device);
-        }
+        self.rt.destroy_accels(device);
 
         // Temporal upscaling (FSR / DLSS / XeSS): the vendor context + the
         // output texture, via the backend trait.
