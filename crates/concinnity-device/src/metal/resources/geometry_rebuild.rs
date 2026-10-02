@@ -99,7 +99,7 @@ impl MtlContext {
         // reads the (possibly smaller) new vertex buffer at old offsets, risking
         // an out-of-bounds fetch. Rebuild the BVH from the new geometry now. We
         // are past `wait_idle` on the editor-only hot-reload path, so a synchronous
-        // full rebuild (the same path the init build + `Rebuild` diagnostic use) is
+        // full rebuild (the same path the init build and a seed from empty use) is
         // appropriate. Rebuild regardless of `dynamic_mode` -- even a build-once
         // (`Off`) BVH is invalid once its source buffers are replaced. A rebuild
         // failure leaves the prior BVH in place (`rebuild_rt_accel` only swaps on

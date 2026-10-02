@@ -45,6 +45,7 @@ impl SceneState {
         if let Some(obj) = self.draw.objects.get_mut(index.index()) {
             obj.visible = false;
             obj.resident = false;
+            self.gpu_dirty.rt_topology = true;
         }
     }
 
@@ -242,7 +243,15 @@ mod tests {
         s.retire_draw_object(DrawIndex(0));
         assert!(!s.draw.objects[0].visible);
         assert!(!s.draw.objects[0].resident);
+        assert!(s.gpu_dirty.rt_topology);
+    }
+
+    #[test]
+    fn retiring_an_out_of_range_slot_changes_nothing() {
+        let mut s = scene(1);
         s.retire_draw_object(DrawIndex(3));
+        assert!(s.draw.objects[0].visible && s.draw.objects[0].resident);
+        assert!(!s.gpu_dirty.rt_topology);
     }
 
     #[test]

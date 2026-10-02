@@ -13,9 +13,9 @@ use objc2_metal::MTLVertexDescriptor;
 use super::{Features, InitGpu};
 use crate::metal::context::{InstancedState, ProbeState};
 use crate::metal::cull::{CullState, metal_instance_records};
-use crate::metal::frame_rings::RetirePool;
 use crate::metal::probe_prefilter::ProbePrefilterPipelines;
 use crate::metal::probe_set::ProbeCubeArray;
+use concinnity_core::render::retire_pool::RetirePool;
 
 mod bindless;
 mod compute;

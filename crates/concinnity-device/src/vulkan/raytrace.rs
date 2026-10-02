@@ -35,8 +35,10 @@
 //! because its cursor advances per rebuild rather than per frame (a sparsely-moving
 //! scene traces one TLAS across many frames, so a frame-keyed slot could be reused
 //! while a live trace still reads it). See `SkinnedFrameRing` / `StaticFrameRing`.
-//! Only a topology refresh's orphaned draw BLAS still go through the deferred-free
-//! `Retired` pool.
+//! Only a topology refresh's orphaned draw BLAS (and what a growing slot displaces)
+//! still go through the deferred-free `Retired` pool. The bookkeeping over all of it -- which draws and clusters the
+//! BLAS cover, the instance and geometry-table order, and when to update -- is the
+//! shared `AccelBook`.
 //!
 //! Unlike DXR (which binds the TLAS as a root SRV by GPU virtual address each
 //! frame), Vulkan binds the TLAS + geometry table through a descriptor set, so the
@@ -53,19 +55,17 @@
 //! per-material hit shaders, which screen-space reflections do not.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{
-    DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject,
-};
+use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen::align_up;
-use concinnity_core::render::rt_geom::RtDynamicMode;
-use concinnity_core::render::rt_geom::{
-    cluster_geom_entry, geom_entry, models_dirty, skinned_geom_entry,
+use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_core::render::rt_accel::{
+    AccelBook, EmptyHead, FrameRing, HeadRefresh, InstanceBlas, RefreshMode, RtStep, RtUpdate,
+    ScratchRing, SeedSet, StaticRing, empty_head,
 };
-use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedRefit, SkinnedShape};
-use concinnity_core::render::rt_topology::{
-    GeomSig, blas_vertex_count, participates_in_bvh, plan_topology_refresh,
-};
+use concinnity_core::render::rt_geom::{RtDynamicMode, pack_row_major_3x4};
+use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedRefit};
+use concinnity_core::render::rt_topology::blas_vertex_count;
 use concinnity_core::render::uniforms::SkinParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -82,31 +82,6 @@ use crate::vulkan::owned::{
 // buffer the skin kernel writes carries the same 56-byte layout.
 const VERTEX_STRIDE: u64 = 56;
 
-// Pack a column-major object-to-world `model` matrix into a Vulkan instance
-// transform: a 3x4 ROW-major affine (`VkTransformMatrixKHR`, `matrix[3][4]`),
-// row r = `[m_r0 m_r1 m_r2 m_r3]` where element (row r, col c) is the world-matrix
-// value. The Rust `model` is column-major, so math element (r, c) lives at
-// `model[c][r]`. `VkTransformMatrixKHR` and the DXR 3x4 row-major transform are
-// byte-identical, so this is the same packing as `directx::raytrace`. Unit-tested.
-pub(super) fn pack_instance_transform(model: [[f32; 4]; 4]) -> vk::TransformMatrixKHR {
-    vk::TransformMatrixKHR {
-        matrix: [
-            model[0][0],
-            model[1][0],
-            model[2][0],
-            model[3][0],
-            model[0][1],
-            model[1][1],
-            model[2][1],
-            model[3][1],
-            model[0][2],
-            model[1][2],
-            model[2][2],
-            model[3][2],
-        ],
-    }
-}
-
 // One TLAS instance descriptor: explicit 3x4 transform, custom index (indexes
 // the geometry table), full visibility mask, no SBT offset / flags, and the BLAS
 // device address. Inline tracing ignores hit groups so the SBT fields are zero.
@@ -116,7 +91,9 @@ fn tlas_instance(
     blas_address: u64,
 ) -> vk::AccelerationStructureInstanceKHR {
     vk::AccelerationStructureInstanceKHR {
-        transform: pack_instance_transform(model),
+        transform: vk::TransformMatrixKHR {
+            matrix: pack_row_major_3x4(model),
+        },
         // instanceCustomIndex (low 24) + mask (high 8 = 0xFF).
         instance_custom_index_and_mask: vk::Packed24_8::new(custom_index & 0x00FF_FFFF, 0xFFu8),
         // instanceShaderBindingTableRecordOffset (24) + flags (8), both zero.
@@ -127,6 +104,22 @@ fn tlas_instance(
     }
 }
 
+// The device address of the BLAS an instance the book laid out references:
+// `fresh` holds the addresses of the BLAS a refresh in progress builds, indexed by
+// head slot, and `skinned` this frame's skinned BLAS. A missing one reads as 0,
+// which Vulkan defines as an inactive instance.
+fn instance_blas_address(
+    blas: InstanceBlas<'_, AccelBuffer>,
+    fresh: &[u64],
+    skinned: &[u64],
+) -> u64 {
+    match blas {
+        InstanceBlas::Head { blas, .. } => blas.address,
+        InstanceBlas::Fresh { index } => fresh.get(index).copied().unwrap_or(0),
+        InstanceBlas::Skinned { n } => skinned.get(n).copied().unwrap_or(0),
+    }
+}
+
 // The byte size a build scratch buffer needs to serve a build requiring
 // `required` bytes: the requirement plus the offset alignment, so the aligned
 // device address inside the buffer still leaves room for it.
@@ -134,81 +127,25 @@ fn scratch_capacity(required: u64, align: u64) -> u64 {
     required + align
 }
 
-// One frame's acceleration-structure build scratch. `addr` is the buffer's
-// device address pre-aligned to `minAccelerationStructureScratchOffsetAlignment`.
+// One frame's acceleration-structure build scratch (see `ScratchRing`). `addr`
+// is the buffer's device address pre-aligned to
+// `minAccelerationStructureScratchOffsetAlignment`. A replaced slot is dropped in
+// place: the allocator withholds its range and handle for `frames_in_flight + 1`
+// ticks, which outlasts both the builds this frame already recorded against it
+// and any still in flight.
 struct ScratchSlot {
     // Owns the memory the builds write; nothing reads it afterwards.
     _pooled: PooledBuffer,
     addr: u64,
-    capacity: u64,
 }
 
-impl ScratchSlot {
-    fn fits(&self, required: u64, align: u64) -> bool {
-        scratch_capacity(required, align) <= self.capacity
-    }
-}
-
-// The build scratch as a per-frame ring: one buffer per frame in flight, indexed
-// by `frame_idx`. Scratch is written by the build that names it and read by
-// nothing afterwards, so it only has to outlive the frame that recorded it, and
-// the in-flight fence retires a slot's previous writer before the next frame
-// reaches it. One shared buffer cannot promise that -- frame N's build writes the
-// same bytes frame N-1's build is still working in, which is a write-after-write
-// race the validation layer reports once per frame.
-struct ScratchRing {
-    slots: Vec<ScratchSlot>,
-}
-
-impl ScratchRing {
-    // Allocate `frames` slots, each covering a build requiring `required` bytes.
-    fn new(
-        alloc: &DeviceAllocator,
-        device: &VkDevice,
-        frames: usize,
-        required: u64,
-        align: u64,
-    ) -> RenderResult<Self> {
-        let mut slots = Vec::with_capacity(frames);
-        for _ in 0..frames {
-            slots.push(alloc_scratch(alloc, device, required, align)?);
-        }
-        Ok(Self { slots })
-    }
-
-    // The address this frame's builds record over.
-    fn addr(&self, frame_idx: usize) -> u64 {
-        self.slots[frame_idx].addr
-    }
-
-    // Ensure this frame's slot covers a build requiring `required` bytes, then
-    // hand back its address. A replaced buffer is dropped in place: the allocator
-    // withholds its range and handle for `frames_in_flight + 1` ticks, which
-    // outlasts both the builds this frame already recorded against it and any
-    // still in flight.
-    fn ensure(
-        &mut self,
-        alloc: &DeviceAllocator,
-        device: &VkDevice,
-        frame_idx: usize,
-        required: u64,
-        align: u64,
-    ) -> RenderResult<u64> {
-        if !self.slots[frame_idx].fits(required, align) {
-            self.slots[frame_idx] = alloc_scratch(alloc, device, required, align)?;
-        }
-        Ok(self.slots[frame_idx].addr)
-    }
-}
-
-// Allocate one scratch slot covering a build requiring `required` bytes.
+// Allocate one scratch slot of `capacity` bytes, its address aligned to `align`.
 fn alloc_scratch(
     alloc: &DeviceAllocator,
     device: &VkDevice,
-    required: u64,
+    capacity: u64,
     align: u64,
 ) -> RenderResult<ScratchSlot> {
-    let capacity = scratch_capacity(required, align);
     let pooled = alloc.create_buffer(
         capacity,
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
@@ -218,8 +155,21 @@ fn alloc_scratch(
     Ok(ScratchSlot {
         _pooled: pooled,
         addr,
-        capacity,
     })
+}
+
+// This frame's build scratch, holding a build requiring `required` bytes.
+fn ensure_scratch(
+    ring: &mut ScratchRing<ScratchSlot>,
+    ctx: RtDeviceCtx,
+    frame_idx: usize,
+    required: u64,
+) -> RenderResult<u64> {
+    let align = scratch_alignment(ctx.instance, ctx.pd);
+    ring.ensure(frame_idx, scratch_capacity(required, align), |capacity| {
+        alloc_scratch(ctx.alloc, ctx.device, capacity, align)
+    })
+    .map(|slot| slot.addr)
 }
 
 // A device-local buffer holding an acceleration structure plus its handle.
@@ -230,14 +180,19 @@ struct AccelBuffer {
     // Backing buffer, held so the acceleration structure's memory outlives it.
     _pooled: PooledBuffer,
     size: u64,
+    // The structure's device address, which TLAS instances reference it by.
+    address: u64,
 }
 
 impl AccelBuffer {
     // The backing buffer retires through the allocator when the value drops;
     // only the acceleration-structure handle is destroyed by hand.
     fn destroy(&self, as_loader: &ash::khr::acceleration_structure::Device) {
-        // SAFETY: the handle was created from this device and is destroyed exactly once; the caller
-        // has already waited for the device to go idle, so no submission still references it.
+        // SAFETY: the handle was created from this device and is destroyed exactly once, by its
+        // owner, when no submission can still reference it: at teardown after the device idles,
+        // from the retire pool once the frames-in-flight window since it was displaced has
+        // passed, or by the ring slot that owns it, which is only rewritten after the
+        // frame-begin fence retired every frame that traced it.
         unsafe {
             as_loader.destroy_acceleration_structure(self.accel, None);
         }
@@ -363,81 +318,60 @@ struct SkinnedRebuild<'a> {
     draw_objects: &'a [DrawObject],
     skinned: SkinnedRtInputs<'a>,
     frame_idx: usize,
+    // Build every skinned BLAS from scratch rather than refitting.
+    full_build: bool,
 }
 
-// Resources parked for deferred free: the draw BLAS a topology refresh orphaned,
-// and whatever a growing ring slot displaced. Something a rebuild replaces cannot
+// A resource parked for deferred free: a draw BLAS a topology refresh orphaned,
+// or whatever a growing ring slot displaced. Something a rebuild replaces cannot
 // be freed in place -- a prior frame's in-flight trace may still reach it, and a
 // live handle may still name it if a later step of the same rebuild fails (the
 // live BVH is the very slot being rebuilt when the ring is one deep) -- so it is
-// freed only once `free_at` updates have elapsed, by which point the
-// frames-in-flight fence guarantees neither is true. Growth is rare, so the
-// steady state never pushes here.
-struct Retired {
-    free_at: u64,
-    // Structures whose handle has to be destroyed by hand.
-    accel: Vec<AccelBuffer>,
-    // Buffers that free on `Drop`; parked only so that drop waits out the window,
-    // so these are never read.
-    _device: Vec<DeviceBuffer>,
-    _host: Vec<HostBuffer>,
+// freed only once the frames-in-flight window has elapsed, by which point the
+// fence guarantees neither is true. Growth is rare, so the steady state never
+// parks anything.
+enum Retired {
+    // A structure whose handle has to be destroyed by hand.
+    Accel(AccelBuffer),
+    // Buffers that free on `Drop`, parked only so that drop waits out the window.
+    Device { _buffer: DeviceBuffer },
+    Host { _buffer: HostBuffer },
 }
 
 impl Retired {
-    fn new(free_at: u64) -> Self {
-        Self {
-            free_at,
-            accel: Vec::new(),
-            _device: Vec::new(),
-            _host: Vec::new(),
-        }
-    }
-
     fn destroy(&self, as_loader: &ash::khr::acceleration_structure::Device) {
-        for b in &self.accel {
+        if let Retired::Accel(b) = self {
             b.destroy(as_loader);
         }
     }
 }
 
 // The deferred-free pool as a growing ring slot sees it: somewhere to hand the
-// resource it displaced, plus the update that resource must survive to. Passed by
+// resource it displaced, plus the update tick it was displaced on. Passed by
 // value so the borrow of the pool lasts only the one `ensure_*` call that needs
-// it, and consumed by the push so a sink can never park two resources under
-// separate deadlines.
+// it.
 struct RetireSink<'a> {
-    pool: &'a mut Vec<Retired>,
-    free_at: u64,
+    pool: &'a mut RetirePool<Retired>,
+    now: u64,
 }
 
 impl<'a> RetireSink<'a> {
-    // Built from the accel's fields rather than from `&mut self`, so the borrow
-    // stays on `retire` alone and a call can still pass `&self.as_loader`.
-    // `free_at` is the same frames-in-flight window a topology refresh's orphans
-    // wait out.
-    fn new(pool: &'a mut Vec<Retired>, now: u64, depth: u64) -> Self {
-        Self {
-            pool,
-            free_at: now + depth,
-        }
+    fn new(pool: &'a mut RetirePool<Retired>, now: u64) -> Self {
+        Self { pool, now }
     }
 
     fn accel(self, resource: AccelBuffer) {
-        let mut entry = Retired::new(self.free_at);
-        entry.accel.push(resource);
-        self.pool.push(entry);
+        self.pool.push(self.now, Retired::Accel(resource));
     }
 
     fn device(self, resource: DeviceBuffer) {
-        let mut entry = Retired::new(self.free_at);
-        entry._device.push(resource);
-        self.pool.push(entry);
+        self.pool
+            .push(self.now, Retired::Device { _buffer: resource });
     }
 
     fn host(self, resource: HostBuffer) {
-        let mut entry = Retired::new(self.free_at);
-        entry._host.push(resource);
-        self.pool.push(entry);
+        self.pool
+            .push(self.now, Retired::Host { _buffer: resource });
     }
 }
 
@@ -486,7 +420,7 @@ impl SkinnedFrameRing {
 // One ring slot of the per-rebuild static-transform buffers (the TLAS + its
 // instance descriptors + the geometry table), owned by the slot for the accel's
 // lifetime like `SkinnedFrameRing`. The dynamic-transform rebuild advances
-// `static_cursor` to the next slot each rebuild, rebuilds that slot's buffers in
+// the ring cursor to the next slot each rebuild, rebuilds that slot's buffers in
 // place (re-map + copy / build-over) and publishes its handles as the live BVH,
 // growing one only when a later rebuild outgrows it (the static instance count is
 // fixed, so the steady state allocates nothing). Reuse is hazard-free: the cursor
@@ -509,58 +443,16 @@ impl StaticFrameRing {
     }
 }
 
-// Advance a ring cursor to the next slot, wrapping at `len`. Pure so the
-// wrap-around is unit-testable without a device.
-fn next_slot(cursor: usize, len: usize) -> usize {
-    (cursor + 1) % len.max(1)
-}
-
-// The scene-scaled `Vec`s the per-frame dynamic update fills. Kept on the accel
-// and swapped out with `mem::take` for the duration of an update, so each frame
-// reuses the heap capacity instead of collecting fresh ones at frame rate.
+// The skinned rebuild's per-frame lists the book does not keep, held on the
+// accel so their capacity is reused from frame to frame.
 #[derive(Default)]
-struct RtUpdateScratch {
-    // Indices into the frame's skinned draw objects, for those visible with real
-    // triangles, in skinned-BLAS order.
-    skinned: Vec<usize>,
-    // The participating draw objects' current model matrices, in BLAS order.
-    models: Vec<[[f32; 4]; 4]>,
-    // The geometry each skinned BLAS covers, parallel to `skinned`; compared
-    // against the ring slot's last set to decide build vs update.
-    shapes: Vec<SkinnedShape>,
-    // This frame's skinned geometry parameters, parallel to `skinned`. Held
-    // across the sizing and recording loops, which both rebuild the temporary
-    // `vk::*` geometry structs from it.
+struct SkinnedScratch {
+    // This frame's skinned geometry parameters, parallel to the book's selected
+    // skinned objects. Held across the sizing and recording loops, which both
+    // rebuild the temporary `vk::*` geometry structs from it.
     params: Vec<BlasParams>,
-    // Device addresses of this frame's skinned BLAS, parallel to `skinned`.
+    // Device addresses of this frame's skinned BLAS, in the same order.
     blas_addresses: Vec<u64>,
-    // This frame's TLAS instance descriptors and per-instance geometry entries,
-    // in instance order.
-    instances: Vec<vk::AccelerationStructureInstanceKHR>,
-    geom: Vec<RtGeomEntry>,
-}
-
-// Re-collect the participating objects' current model matrices into `out`, in
-// BLAS order. Returns `false` (leaving `out` unspecified) when the draw list
-// changed shape -- an index is now out of range or non-resident -- in which case
-// the caller leaves the structure as-is for this frame; the topology-refresh path
-// is what handles a changed object set. Free-standing and filling a caller-owned
-// buffer so the per-frame `Vec` lives in the update scratch rather than being
-// collected fresh, and so it can be called while another field of the accel is
-// mutably borrowed.
-fn collect_models(
-    object_indices: &[usize],
-    draw_objects: &[DrawObject],
-    out: &mut Vec<[[f32; 4]; 4]>,
-) -> bool {
-    out.clear();
-    for &idx in object_indices {
-        match draw_objects.get(idx) {
-            Some(o) if o.resident && o.index_count >= 3 => out.push(o.model),
-            _ => return false,
-        }
-    }
-    true
 }
 
 // The Vulkan ray-query acceleration structures + geometry table for hardware ray
@@ -570,15 +462,12 @@ fn collect_models(
 pub(super) struct RtAccelData {
     as_loader: ash::khr::acceleration_structure::Device,
 
-    // The persistent static + cluster BLAS in build order: one per participating
-    // static object (in `object_indices` order), then one per instanced cluster.
-    // Built once and never rebuilt (a rigid transform leaves object-space geometry
-    // unchanged). The per-frame skinned BLAS are owned by their `skinned_ring`
-    // slot, not held here.
-    blas: Vec<AccelBuffer>,
-    // How many `blas` entries are the persistent static + cluster BLAS, which is
-    // also the base a skinned object's TLAS instance index counts from.
-    static_blas_count: usize,
+    // The persistent static + cluster BLAS (the book's head, built once and
+    // never rebuilt: a rigid transform leaves object-space geometry unchanged),
+    // the order the TLAS instances and geometry table follow, and the update
+    // policy over them. The per-frame skinned BLAS are owned by their
+    // `skinned_ring` slot, not by the book.
+    book: AccelBook<AccelBuffer, vk::AccelerationStructureInstanceKHR>,
     // The top-level (instance) acceleration structure the trace reads, owned by
     // the ring slot that last rebuilt it (`static_ring` on the static path,
     // `skinned_ring` on the skinned path).
@@ -591,7 +480,7 @@ pub(super) struct RtAccelData {
     // Build scratch, one slot per frame in flight (see `ScratchRing`). Sized at
     // init for the largest of every BLAS build and the TLAS build; a rebuild
     // whose builds need more replaces the slot it records over.
-    scratch: ScratchRing,
+    scratch: ScratchRing<ScratchSlot>,
     // Size the TLAS prebuild reported; the static rebuild recycles the ring slot's
     // TLAS at this size (the static instance count is fixed).
     tlas_size: u64,
@@ -600,55 +489,29 @@ pub(super) struct RtAccelData {
     // frame's slot.
     tlas_scratch: u64,
     instance_count: u32,
-    // Frames-in-flight depth; a retired structure is freed this many frames
-    // after the rebuild that displaced it (by then its frame's fence has
-    // signaled, so no in-flight trace can still read it).
+    // Frames-in-flight depth; a retired structure is freed this many updates
+    // after the one that displaced it (by then its frame's fence has signaled,
+    // so no in-flight trace can still read it).
     frames_in_flight: u64,
 
-    // Per-frame update state.
-    // Indices into the frame's `draw.objects` for the participating objects, in
-    // BLAS / instance order. Lets a rebuild re-read current transforms in build
-    // order and detect a changed draw list.
-    object_indices: Vec<usize>,
-    // The geometry signature each draw-object BLAS (`blas[..object_indices.len()]`)
-    // was built from, parallel to `object_indices`. An incremental topology
-    // refresh compares these against the current draw set to reuse every unchanged
-    // BLAS and build only the new / changed ones.
-    draw_blas_sigs: Vec<GeomSig>,
-    // BLAS device addresses, parallel to `blas`, cached so a rebuild re-emits the
-    // instance descriptors without re-querying.
-    blas_addresses: Vec<u64>,
-    // Each participating object's model matrix as baked into the live TLAS. The
-    // `Auto` dirty check compares the live draw list against these.
-    cached_models: Vec<[[f32; 4]; 4]>,
-    // The TLAS instance descriptors for every cluster instance, re-appended
-    // verbatim on a rebuild (clusters are baked static into the BVH).
-    cluster_instances: Vec<vk::AccelerationStructureInstanceKHR>,
-    // The geometry-table entries for the cluster instances, parallel to
-    // `cluster_instances`.
-    cluster_geom: Vec<RtGeomEntry>,
-    // Shared-pool real-texture count for the geometry-table pool indices on a
-    // rebuild (the flat-normal fallback sits at this index).
-    albedo_count: usize,
-
-    // Deferred-free pool (for the draw BLAS a topology refresh orphans) + the
-    // monotonic per-update counter that drives it. Every per-frame resource is
-    // owned by a ring slot, so this never churns on the steady-state path.
-    retire: Vec<Retired>,
-    frame_counter: u64,
+    // Deferred-free pool for the draw BLAS a topology refresh orphans and what a
+    // growing ring slot displaces, timed against the book's update clock. Every
+    // per-frame resource is owned by a ring slot, so a steady scene parks nothing
+    // here; a refresh does, and the `Rebuild` diagnostic retires every draw BLAS
+    // on every frame.
+    retire: RetirePool<Retired>,
 
     // Per-rebuild static-transform buffers (see `StaticFrameRing`), owned by their
-    // slot and rebuilt in place by the static `rebuild_tlas` path. `static_cursor`
+    // slot and rebuilt in place by the static `rebuild_tlas` path. The cursor
     // advances one slot per rebuild; a slot is revisited only after a full ring
     // cycle, so its prior trace has retired. Slot 0 holds the initial build's
     // structures. The skinned path uses `skinned_ring` instead.
-    static_ring: Vec<StaticFrameRing>,
-    static_cursor: usize,
+    static_ring: StaticRing<StaticFrameRing>,
 
     // Per-frame skinned-rebuild resources, one slot per frame in flight, owned by
     // their slot and rebuilt in place (see `SkinnedFrameRing`). Indexed by
     // `frame_idx`.
-    skinned_ring: Vec<SkinnedFrameRing>,
+    skinned_ring: FrameRing<SkinnedFrameRing>,
 
     // Skinned geometry.
     // The compute-skinning pipeline (`rt_skin`). `Some` only when the GLSL
@@ -668,14 +531,10 @@ pub(super) struct RtAccelData {
     // SSBO). A dummy `vk::Buffer::null()`-backed handle when there is no skinned
     // geometry; the post pass binds a dummy SSBO in that case.
     skinned_indices: vk::Buffer,
-    // Whether any skinned object is currently live in the BVH (drives whether the
-    // per-frame update runs `rebuild_skinned` or the static `rebuild_tlas`).
-    has_skinned: bool,
     frames_in_flight_usize: usize,
 
-    // Persistent CPU scratch for the per-frame dynamic update, swapped out with
-    // `mem::take` so its heap capacity survives the frame.
-    update_scratch: RtUpdateScratch,
+    // Persistent CPU scratch for the skinned rebuild.
+    skinned_scratch: SkinnedScratch,
 }
 
 // SAFETY: Raw pointers in `HostBuffer` are host-mapped and only touched on the render
@@ -865,6 +724,89 @@ fn tlas_geometry(instance_address: u64) -> vk::AccelerationStructureGeometryKHR<
         .flags(vk::GeometryFlagsKHR::OPAQUE)
 }
 
+// A from-scratch build of a `ty` structure over the one geometry `geo`, preferring
+// trace speed. The destination and scratch are set by the caller.
+fn build_info<'a>(
+    ty: vk::AccelerationStructureTypeKHR,
+    geo: &'a vk::AccelerationStructureGeometryKHR<'a>,
+) -> vk::AccelerationStructureBuildGeometryInfoKHR<'a> {
+    vk::AccelerationStructureBuildGeometryInfoKHR::default()
+        .ty(ty)
+        .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
+        .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+        .geometries(std::slice::from_ref(geo))
+}
+
+// The structure and scratch sizes `info` needs over `primitive_count` primitives.
+fn build_sizes(
+    as_loader: &ash::khr::acceleration_structure::Device,
+    info: &vk::AccelerationStructureBuildGeometryInfoKHR<'_>,
+    primitive_count: u32,
+) -> vk::AccelerationStructureBuildSizesInfoKHR<'static> {
+    let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
+    // SAFETY: a property query on a live handle; it only reads.
+    unsafe {
+        as_loader.get_acceleration_structure_build_sizes(
+            vk::AccelerationStructureBuildTypeKHR::DEVICE,
+            info,
+            &[primitive_count],
+            &mut sizes,
+        );
+    }
+    sizes
+}
+
+// The sizes a from-scratch BLAS build over `geo` needs.
+fn blas_build_sizes(
+    as_loader: &ash::khr::acceleration_structure::Device,
+    geo: &vk::AccelerationStructureGeometryKHR<'_>,
+    primitive_count: u32,
+) -> vk::AccelerationStructureBuildSizesInfoKHR<'static> {
+    let info = build_info(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL, geo);
+    build_sizes(as_loader, &info, primitive_count)
+}
+
+// The sizes a TLAS build over `instance_count` instances needs.
+fn tlas_build_sizes(
+    as_loader: &ash::khr::acceleration_structure::Device,
+    geo: &vk::AccelerationStructureGeometryKHR<'_>,
+    instance_count: u32,
+) -> vk::AccelerationStructureBuildSizesInfoKHR<'static> {
+    let info = build_info(vk::AccelerationStructureTypeKHR::TOP_LEVEL, geo);
+    build_sizes(as_loader, &info, instance_count)
+}
+
+// The range of one build: `primitive_count` primitives starting `primitive_offset`
+// bytes into the geometry's index (or instance) data.
+fn build_range(
+    primitive_count: u32,
+    primitive_offset: u32,
+) -> vk::AccelerationStructureBuildRangeInfoKHR {
+    vk::AccelerationStructureBuildRangeInfoKHR::default()
+        .primitive_count(primitive_count)
+        .primitive_offset(primitive_offset)
+        .first_vertex(0)
+        .transform_offset(0)
+}
+
+// Record one acceleration-structure build onto `cmd`.
+fn record_build(
+    as_loader: &ash::khr::acceleration_structure::Device,
+    cmd: vk::CommandBuffer,
+    info: vk::AccelerationStructureBuildGeometryInfoKHR<'_>,
+    range: vk::AccelerationStructureBuildRangeInfoKHR,
+) {
+    // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+    // these commands name is live for the call.
+    unsafe {
+        as_loader.cmd_build_acceleration_structures(
+            cmd,
+            std::slice::from_ref(&info),
+            &[std::slice::from_ref(&range)],
+        );
+    }
+}
+
 // Device address of a buffer (core in Vulkan 1.2; the device enables
 // `bufferDeviceAddress` for the RT path).
 fn buffer_address(device: &VkDevice, buffer: vk::Buffer) -> u64 {
@@ -899,11 +841,26 @@ fn create_accel(
     // names belongs to this device.
     let accel = unsafe { as_loader.create_acceleration_structure(&info, None) }
         .map_err(|e| super::error::map_vk_result(e, "create acceleration structure"))?;
+    // SAFETY: the acceleration structure was just created from this device and the info struct
+    // borrows its handle for the call; the query only reads.
+    let address = unsafe {
+        as_loader.get_acceleration_structure_device_address(
+            &vk::AccelerationStructureDeviceAddressInfoKHR::default().acceleration_structure(accel),
+        )
+    };
     Ok(AccelBuffer {
         accel,
         _pooled: pooled,
         size,
+        address,
     })
+}
+
+// The bytes a host buffer holding `data` needs: at least one whole element, so
+// a shader binding it as an array (the geometry table of a zero-instance TLAS)
+// sees a full entry, and never under 16.
+fn host_buffer_size<T>(data: &[T]) -> vk::DeviceSize {
+    (std::mem::size_of_val(data).max(std::mem::size_of::<T>()) as vk::DeviceSize).max(16)
 }
 
 // Allocate a host-visible, persistently-mapped buffer of `size` bytes with the
@@ -914,7 +871,7 @@ fn create_host_buffer<T: Copy>(
     usage: vk::BufferUsageFlags,
     _label: &str,
 ) -> RenderResult<HostBuffer> {
-    let size = (std::mem::size_of_val(data) as vk::DeviceSize).max(16);
+    let size = host_buffer_size(data);
     let pooled = alloc.create_buffer(
         size,
         usage,
@@ -946,7 +903,7 @@ fn write_or_recreate_host<T: Copy>(
     label: &str,
     retire: RetireSink,
 ) -> RenderResult<()> {
-    let needed = (std::mem::size_of_val(data) as vk::DeviceSize).max(16);
+    let needed = host_buffer_size(data);
     if let Some(buf) = slot.as_ref()
         && buf.size >= needed
     {
@@ -958,6 +915,24 @@ fn write_or_recreate_host<T: Copy>(
         retire.host(old);
     }
     Ok(())
+}
+
+// The buffer a ring slot's host-buffer write just ensured.
+fn host_buffer(slot: &Option<HostBuffer>) -> RenderResult<vk::Buffer> {
+    slot.as_ref()
+        .map(|b| b.buffer)
+        .ok_or_else(missing_slot_buffer)
+}
+
+// The structure a ring slot's `ensure_accel` just ensured.
+fn live_accel(slot: &Option<AccelBuffer>) -> RenderResult<vk::AccelerationStructureKHR> {
+    slot.as_ref()
+        .map(|b| b.accel)
+        .ok_or_else(missing_slot_buffer)
+}
+
+fn missing_slot_buffer() -> RenderError {
+    RenderError::Other("RT ring slot is missing a buffer it was just sized for".into())
 }
 
 // Ensure `slot` holds an acceleration structure of at least `size` bytes, keeping
@@ -1220,18 +1195,8 @@ pub(super) fn build_rt_accel(
 
     // Participating static objects + clusters (real triangles, resident, and not
     // rerouted to the see-through transparent path).
-    let object_indices: Vec<usize> = draw_objects
-        .iter()
-        .enumerate()
-        .filter(|(_, o)| participates_in_bvh(o, exclude_seethrough))
-        .map(|(i, _)| i)
-        .collect();
-    let cluster_list: Vec<(usize, &InstancedCluster)> = clusters
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.index_count >= 3 && !c.instances.is_empty())
-        .collect();
-    if object_indices.is_empty() && cluster_list.is_empty() {
+    let seed = SeedSet::new(draw_objects, clusters, exclude_seethrough);
+    if seed.is_empty() {
         return Ok(None);
     }
 
@@ -1242,10 +1207,11 @@ pub(super) fn build_rt_accel(
     // Each object folds its base_vertex into the vertex device address + uses its
     // mesh-relative indices (the shader adds base_vertex back via the geom table),
     // mirroring the DirectX vertex-address fold.
-    let params: Vec<BlasParams> = object_indices
+    let params: Vec<BlasParams> = seed
+        .objects
         .iter()
         .map(|&i| shared.draw_params(&draw_objects[i]))
-        .chain(cluster_list.iter().map(|(_, c)| shared.cluster_params(c)))
+        .chain(seed.clusters.iter().map(|c| shared.cluster_params(c)))
         .collect();
 
     // Size + allocate each BLAS; track the largest scratch requirement.
@@ -1253,21 +1219,7 @@ pub(super) fn build_rt_accel(
     let mut max_scratch: u64 = 0;
     for p in &params {
         let geo = blas_geometry(p, ibuf_addr);
-        let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-            .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-            .geometries(std::slice::from_ref(&geo));
-        let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
-        // SAFETY: a property query on a live handle; it only reads.
-        unsafe {
-            as_loader.get_acceleration_structure_build_sizes(
-                vk::AccelerationStructureBuildTypeKHR::DEVICE,
-                &build_info,
-                &[p.primitive_count],
-                &mut sizes,
-            );
-        }
+        let sizes = blas_build_sizes(&as_loader, &geo, p.primitive_count);
         blas.push(create_accel(
             alloc,
             &as_loader,
@@ -1276,75 +1228,31 @@ pub(super) fn build_rt_accel(
         )?);
         max_scratch = max_scratch.max(sizes.build_scratch_size);
     }
-    let blas_addresses: Vec<u64> = blas
-        .iter()
-        // SAFETY: the acceleration structure was created from this device and the info struct
-        // borrows its handle for the call; the query only reads.
-        .map(|b| unsafe {
-            as_loader.get_acceleration_structure_device_address(
-                &vk::AccelerationStructureDeviceAddressInfoKHR::default()
-                    .acceleration_structure(b.accel),
-            )
-        })
-        .collect();
 
-    // Instance descriptors + geometry table, in instance order: static objects
-    // (each referencing its own BLAS), then every cluster instance (referencing
-    // the cluster's single BLAS, each with its own transform + geom entry).
-    let draw_blas_count = object_indices.len();
-    let mut instances: Vec<vk::AccelerationStructureInstanceKHR> =
-        Vec::with_capacity(object_indices.len());
-    let mut geom_entries: Vec<RtGeomEntry> = Vec::with_capacity(object_indices.len());
-    for (slot, &i) in object_indices.iter().enumerate() {
-        let obj = &draw_objects[i];
-        instances.push(tlas_instance(obj.model, slot as u32, blas_addresses[slot]));
-        geom_entries.push(geom_entry(obj, albedo_count as u32));
-    }
-    let mut cluster_instances: Vec<vk::AccelerationStructureInstanceKHR> = Vec::new();
-    let mut cluster_geom: Vec<RtGeomEntry> = Vec::new();
-    for (ci, (_, c)) in cluster_list.iter().enumerate() {
-        let blas_address = blas_addresses[draw_blas_count + ci];
-        for model in &c.instances {
-            let id = (instances.len() + cluster_instances.len()) as u32;
-            cluster_instances.push(tlas_instance(*model, id, blas_address));
-            cluster_geom.push(cluster_geom_entry(c, *model, albedo_count as u32));
-        }
-    }
-    instances.extend_from_slice(&cluster_instances);
-    geom_entries.extend_from_slice(&cluster_geom);
-    let instance_count = instances.len() as u32;
+    // Instance descriptors + geometry table, in the book's instance order.
+    let mut book = AccelBook::new(&seed, blas, draw_objects, albedo_count as u32)?;
+    book.fill_instances(draw_objects, None, |model, id, blas| {
+        tlas_instance(model, id, instance_blas_address(blas, &[], &[]))
+    });
+    let instance_count = book.instances().len() as u32;
 
     let instance_buffer = create_host_buffer(
         alloc,
-        &instances,
+        book.instances(),
         vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
             | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
         "RT instance buffer",
     )?;
     let geom_table = create_host_buffer(
         alloc,
-        &geom_entries,
+        book.geom_table(),
         vk::BufferUsageFlags::STORAGE_BUFFER,
         "RT geometry table",
     )?;
 
     // Size + allocate the TLAS + the scratch ring (>= the largest BLAS/TLAS).
     let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer.buffer));
-    let tlas_build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-        .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-        .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-        .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-        .geometries(std::slice::from_ref(&tlas_geo));
-    let mut tlas_sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
-    // SAFETY: a property query on a live handle; it only reads.
-    unsafe {
-        as_loader.get_acceleration_structure_build_sizes(
-            vk::AccelerationStructureBuildTypeKHR::DEVICE,
-            &tlas_build_info,
-            &[instance_count],
-            &mut tlas_sizes,
-        );
-    }
+    let tlas_sizes = tlas_build_sizes(&as_loader, &tlas_geo, instance_count);
     max_scratch = max_scratch.max(tlas_sizes.build_scratch_size);
     let tlas = create_accel(
         alloc,
@@ -1357,75 +1265,43 @@ pub(super) fn build_rt_accel(
     // one-shot build is fence-waited before the first frame records, so it can
     // take slot 0.
     let align = scratch_alignment(instance, pd);
-    let scratch = ScratchRing::new(alloc, device, frames_in_flight.max(1), max_scratch, align)?;
-    let scratch_addr = scratch.addr(0);
+    let scratch = ScratchRing::filled(
+        frames_in_flight,
+        scratch_capacity(max_scratch, align),
+        |capacity| alloc_scratch(alloc, device, capacity, align),
+    )?;
+    let scratch_addr = scratch.get(0).map_or(0, |slot| slot.addr);
 
     // Record every BLAS build (build-barrier-serialized over the one scratch slot
     // they share), then the TLAS build, on a one-shot command buffer; fence-wait so the BVH is
     // ready before the first trace.
     super::texture::one_shot_submit(device, command_pool, queue, |cmd| {
-        for (slot, p) in params.iter().enumerate() {
+        for (dst, p) in book.head().iter().zip(&params) {
             let geo = blas_geometry(p, ibuf_addr);
-            let mut bi = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-                .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-                .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                .geometries(std::slice::from_ref(&geo));
-            bi.dst_acceleration_structure = blas[slot].accel;
-            bi.scratch_data = vk::DeviceOrHostAddressKHR {
-                device_address: scratch_addr,
-            };
-            let range = vk::AccelerationStructureBuildRangeInfoKHR::default()
-                .primitive_count(p.primitive_count)
-                .primitive_offset(p.index_byte_offset)
-                .first_vertex(0)
-                .transform_offset(0);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                as_loader.cmd_build_acceleration_structures(
-                    cmd,
-                    std::slice::from_ref(&bi),
-                    &[std::slice::from_ref(&range)],
-                );
-            }
+            record_build(
+                &as_loader,
+                cmd,
+                build_info(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL, &geo)
+                    .dst_acceleration_structure(dst.accel)
+                    .scratch_data(vk::DeviceOrHostAddressKHR {
+                        device_address: scratch_addr,
+                    }),
+                build_range(p.primitive_count, p.index_byte_offset),
+            );
             build_barrier(device, cmd, BUILD_TO_BUILD);
         }
         let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer.buffer));
-        let mut bi = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-            .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-            .geometries(std::slice::from_ref(&tlas_geo));
-        bi.dst_acceleration_structure = tlas.accel;
-        bi.scratch_data = vk::DeviceOrHostAddressKHR {
-            device_address: scratch_addr,
-        };
-        let range = vk::AccelerationStructureBuildRangeInfoKHR::default()
-            .primitive_count(instance_count)
-            .primitive_offset(0)
-            .first_vertex(0)
-            .transform_offset(0);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            as_loader.cmd_build_acceleration_structures(
-                cmd,
-                std::slice::from_ref(&bi),
-                &[std::slice::from_ref(&range)],
-            );
-        }
+        record_build(
+            &as_loader,
+            cmd,
+            build_info(vk::AccelerationStructureTypeKHR::TOP_LEVEL, &tlas_geo)
+                .dst_acceleration_structure(tlas.accel)
+                .scratch_data(vk::DeviceOrHostAddressKHR {
+                    device_address: scratch_addr,
+                }),
+            build_range(instance_count, 0),
+        );
     })?;
-
-    let cached_models = object_indices
-        .iter()
-        .map(|&i| draw_objects[i].model)
-        .collect();
-    let draw_blas_sigs = object_indices
-        .iter()
-        .map(|&i| GeomSig::of(&draw_objects[i]))
-        .collect();
-    let static_blas_count = blas.len();
 
     // Skinned geometry is seeded on the first dynamic frame (like DirectX /
     // Metal), so the init build is static-only. Allocate a 1-element dummy
@@ -1434,20 +1310,20 @@ pub(super) fn build_rt_accel(
     let deformed_dummy = create_device_buffer(alloc, device, VERTEX_STRIDE)?;
 
     // The structures just built are the live BVH; home them in static ring slot 0,
-    // which owns them from here on. `static_cursor` starts there, so the first
-    // dynamic rebuild advances past it and slot 0 is only reused a full ring cycle
-    // later -- the same window every other slot rests on.
-    let mut static_ring: Vec<StaticFrameRing> = (0..frames_in_flight.max(1))
-        .map(|_| StaticFrameRing::default())
-        .collect();
+    // which owns them from here on. The first dynamic rebuild advances past it, so
+    // slot 0 is only reused a full ring cycle later -- the same window every other
+    // slot rests on.
     let live_tlas = tlas.accel;
     let live_geom = geom_table.buffer;
     let live_geom_size = geom_table.size;
-    static_ring[0] = StaticFrameRing {
-        tlas: Some(tlas),
-        instance: Some(instance_buffer),
-        geom: Some(geom_table),
-    };
+    let static_ring = StaticRing::new(
+        frames_in_flight,
+        StaticFrameRing {
+            tlas: Some(tlas),
+            instance: Some(instance_buffer),
+            geom: Some(geom_table),
+        },
+    );
 
     // The compute-skinning pipeline (gated on RT, which is the only path that
     // reaches `build_rt_accel`). A build failure is non-fatal: the RT pass still
@@ -1464,8 +1340,7 @@ pub(super) fn build_rt_accel(
 
     Ok(Some(RtAccelData {
         as_loader,
-        blas,
-        static_blas_count,
+        book,
         live_tlas,
         live_geom,
         live_geom_size,
@@ -1474,27 +1349,15 @@ pub(super) fn build_rt_accel(
         tlas_scratch: tlas_sizes.build_scratch_size,
         instance_count,
         frames_in_flight: (frames_in_flight.max(1)) as u64,
-        object_indices,
-        draw_blas_sigs,
-        blas_addresses,
-        cached_models,
-        cluster_instances,
-        cluster_geom,
-        albedo_count,
-        retire: Vec::new(),
-        frame_counter: 0,
+        retire: RetirePool::new(),
         static_ring,
-        static_cursor: 0,
-        skinned_ring: (0..frames_in_flight.max(1))
-            .map(|_| SkinnedFrameRing::default())
-            .collect(),
+        skinned_ring: FrameRing::new(frames_in_flight),
         skin,
         live_deformed: deformed_dummy.buffer,
         _deformed_dummy: deformed_dummy,
         skinned_indices: vk::Buffer::null(),
-        has_skinned: false,
         frames_in_flight_usize: frames_in_flight.max(1),
-        update_scratch: RtUpdateScratch::default(),
+        skinned_scratch: SkinnedScratch::default(),
     }))
 }
 
@@ -1525,53 +1388,64 @@ pub(in crate::vulkan) struct RtDynamicInputs<'a> {
     pub skinned: Option<SkinnedRtInputs<'a>>,
 }
 
-// What one incremental topology refresh needs beyond the device context, the
-// command buffer and the draw list: the buffers new draw BLAS are built over, the
-// BVH membership rule, which per-frame scratch slot its builds record over, and
-// the update counter its orphaned BLAS are retired against.
+// What one topology refresh needs beyond the device context, the command buffer
+// and the draw list: the buffers new draw BLAS are built over, the BVH
+// membership rule, whether unchanged BLAS are reused, and which per-frame scratch
+// slot its builds record over.
 #[derive(Clone, Copy)]
 struct TopologyRefresh {
     shared: SharedGeometry,
     exclude_seethrough: bool,
+    mode: RefreshMode,
     frame_idx: usize,
-    now: u64,
+}
+
+// The static TLAS and geometry table a rebuild recorded, to publish as the live
+// BVH once the recording is done.
+#[derive(Clone, Copy)]
+struct StaticBuilt {
+    tlas: vk::AccelerationStructureKHR,
+    geom: vk::Buffer,
+    geom_size: vk::DeviceSize,
+    instance_count: u32,
+}
+
+impl StaticBuilt {
+    // The structures `slot` holds once its rebuild has sized them.
+    fn of(slot: &StaticFrameRing, instance_count: u32) -> RenderResult<Self> {
+        let geom = slot.geom.as_ref().ok_or_else(missing_slot_buffer)?;
+        Ok(Self {
+            tlas: live_accel(&slot.tlas)?,
+            geom: geom.buffer,
+            geom_size: geom.size,
+            instance_count,
+        })
+    }
+}
+
+// A topology refresh in flight: its plan, and the fresh BLAS built for the slots
+// the plan could not reuse, indexed by head slot.
+struct PendingRefresh {
+    refresh: HeadRefresh,
+    fresh: Vec<Option<AccelBuffer>>,
 }
 
 impl RtAccelData {
     // Per-frame dynamic update, recorded onto `cmd` (the frame's "start" command
     // buffer, submitted before every per-pass trace on the single graphics
-    // queue). Drains the retire pool, then, when the mode + dirty gate call for
-    // it, rebuilds the TLAS + geometry table from current transforms with fresh
-    // allocations and parks the outgoing structures for deferred free. A
-    // transient failure is non-fatal (keeps the live BVH).
-    //
-    // `topology_dirty` is set when a runtime change (cloned prop, streamed chunk
-    // added/removed) altered the participating draw set since the last update: the
-    // BLAS head is refreshed (`refresh_topology`) before the transform path, so
-    // the new/removed geometry enters/leaves the BVH instead of being ignored (the
-    // `Auto` dirty check only watches transforms of the prior set).
+    // queue), following the book's plan: drain the retire pool, refresh the draw
+    // BLAS head when the participating draw set changed (a cloned prop, a
+    // streamed chunk added/removed), then re-skin, rebuild the TLAS, or keep it.
+    // A failure is non-fatal: the live BVH is kept and the first error comes
+    // back for the caller to report; a failed refresh still lets the step after
+    // it run.
     pub(super) fn dynamic_update(
         &mut self,
         ctx: RtDeviceCtx,
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
         inputs: RtDynamicInputs,
-    ) {
-        // Persistent CPU scratch, swapped out so its heap capacity survives the
-        // frame and put back on every exit path.
-        let mut scratch = std::mem::take(&mut self.update_scratch);
-        self.dynamic_update_inner(ctx, cmd, draw_objects, inputs, &mut scratch);
-        self.update_scratch = scratch;
-    }
-
-    fn dynamic_update_inner(
-        &mut self,
-        ctx: RtDeviceCtx,
-        cmd: vk::CommandBuffer,
-        draw_objects: &[DrawObject],
-        inputs: RtDynamicInputs,
-        scratch: &mut RtUpdateScratch,
-    ) {
+    ) -> RenderResult<RtUpdate> {
         let RtDynamicInputs {
             policy:
                 RtRebuildPolicy {
@@ -1583,486 +1457,325 @@ impl RtAccelData {
             shared,
             skinned,
         } = inputs;
-        self.frame_counter += 1;
-        let now = self.frame_counter;
         // Free any retired resources whose frames-in-flight window has elapsed.
-        let mut i = 0;
-        while i < self.retire.len() {
-            if self.retire[i].free_at <= now {
-                let r = self.retire.swap_remove(i);
-                r.destroy(&self.as_loader);
-            } else {
-                i += 1;
-            }
+        let now = self.book.tick();
+        while let Some(r) = self.retire.pop_due(now, self.frames_in_flight) {
+            r.destroy(&self.as_loader);
         }
 
-        if !mode.is_dynamic() {
-            return;
-        }
-
-        // Skinned objects visible this frame, as indices into the skinned draw
-        // list (which is also the joint-palette list's order). The skin pipeline
-        // must be present (GLSL compiled); with none, skinned geometry stays
-        // absent (the static path runs).
-        scratch.skinned.clear();
-        if let (Some(_), Some(s)) = (&self.skin, &skinned) {
-            scratch.skinned.extend(
-                s.objects
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, o)| o.visible && o.index_count >= 3)
-                    .map(|(i, _)| i),
-            );
-        }
+        // Skinned geometry takes part only with the skin pipeline (GLSL compiled);
+        // without it the static path runs.
+        let skinned = skinned.filter(|_| self.skin.is_some());
+        let Some(plan) = self
+            .book
+            .plan(mode, topology_dirty, skinned.as_ref().map(|s| s.objects))
+        else {
+            return Ok(RtUpdate::Done);
+        };
 
         // Fold any added/removed/cloned draw geometry into the BLAS head + rebuild
-        // the static TLAS FIRST (before the transform path re-reads `object_indices`).
-        // The refresh always rebuilds a static TLAS; on the skinned path
-        // `rebuild_skinned` below then overlays the skinned tail on top.
-        let refresh = TopologyRefresh {
-            shared,
-            exclude_seethrough,
-            frame_idx,
-            now,
-        };
-        if topology_dirty && let Err(e) = self.refresh_topology(ctx, cmd, draw_objects, refresh) {
-            tracing::warn!("RT topology refresh failed (keeping live BVH): {e}");
-        }
-
-        // Skinned geometry present: always re-skin + rebuild (the pose changes
-        // every frame), regardless of the dirty gate.
-        if !scratch.skinned.is_empty() {
-            let s = skinned.expect("scratch.skinned non-empty implies inputs present");
-            if !collect_models(&self.object_indices, draw_objects, &mut scratch.models) {
-                return;
-            }
-            let req = SkinnedRebuild {
-                ctx,
-                cmd,
-                draw_objects,
-                skinned: s,
+        // the static TLAS FIRST. On the skinned path `rebuild_skinned` below then
+        // overlays the skinned BLAS on top.
+        let mut refreshed = Ok(());
+        if let Some(mode) = plan.refresh {
+            let req = TopologyRefresh {
+                shared,
+                exclude_seethrough,
+                mode,
                 frame_idx,
             };
-            if let Err(e) = self.rebuild_skinned(req, scratch) {
-                tracing::warn!("RT skinned rebuild failed (keeping live BVH): {e}");
+            let if_empty = empty_head(plan.skinned, skinned.is_some());
+            refreshed = self.refresh_topology(ctx, cmd, draw_objects, req, if_empty);
+            if refreshed.is_err() {
+                self.book.owe_refresh();
             }
-            return;
         }
 
-        // No skinned geometry this frame. The topology refresh above already
-        // rebuilt the TLAS + geometry table over the current set, so nothing more
-        // is needed this frame.
-        if topology_dirty {
-            return;
-        }
-
-        // Re-collect current transforms in BLAS order. A changed draw-list shape
-        // (an index now out of range / non-resident) is left for the topology
-        // path; skip this frame.
-        if !collect_models(&self.object_indices, draw_objects, &mut scratch.models) {
-            return;
-        }
-
-        // If the BVH still carries a skinned tail (the last skinned object just
-        // turned invisible), drop it back to the static head with a fresh TLAS so
-        // the trace stops reaching stale skinned BLAS. Otherwise fall through to
-        // the dirty-gated static rebuild.
-        let needs_rebuild = match mode {
-            RtDynamicMode::Auto => {
-                self.has_skinned || models_dirty(&self.cached_models, &scratch.models)
+        // An empty head still gets a (zero-instance) TLAS, so the trace stops
+        // reaching what left.
+        let stepped = match self.book.next_step(mode, &plan, draw_objects) {
+            RtStep::Keep => RtUpdate::Done,
+            RtStep::Tlas => {
+                self.rebuild_tlas(ctx, cmd, draw_objects, frame_idx)?;
+                RtUpdate::Done
             }
-            RtDynamicMode::Rebuild | RtDynamicMode::Tlas => true,
-            RtDynamicMode::Off => false,
+            RtStep::Skinned => match skinned {
+                Some(skinned) => self.rebuild_skinned(SkinnedRebuild {
+                    ctx,
+                    cmd,
+                    draw_objects,
+                    skinned,
+                    frame_idx,
+                    full_build: plan.full_skinned_build,
+                })?,
+                None => RtUpdate::Done,
+            },
         };
-        if !needs_rebuild {
-            return;
-        }
-
-        if let Err(e) = self.rebuild_tlas(ctx, cmd, draw_objects, frame_idx, scratch) {
-            tracing::warn!("RT dynamic TLAS rebuild failed (keeping live BVH): {e}");
-        }
+        refreshed.map(|()| stepped)
     }
 
-    // Device address of a BLAS handle (for the instance descriptors).
-    fn blas_device_address(&self, accel: vk::AccelerationStructureKHR) -> u64 {
-        // SAFETY: the acceleration structure was created from this device and the info struct
-        // borrows its handle for the call; the query only reads.
-        unsafe {
-            self.as_loader.get_acceleration_structure_device_address(
-                &vk::AccelerationStructureDeviceAddressInfoKHR::default()
-                    .acceleration_structure(accel),
-            )
-        }
-    }
-
-    // Incrementally bring the draw-object BLAS head in line with the current
-    // participating draw set: reuse every BLAS whose geometry slice is unchanged
-    // (moved, not rebuilt), build only the new / changed ones, retire the orphans
-    // through the deferred-free pool. The cluster BLAS are kept verbatim. The TLAS
-    // + geometry table are rebuilt inline over [refreshed head + clusters] into the
-    // next `static_ring` slot, like `rebuild_tlas`; on the skinned path
-    // `rebuild_skinned` overlays its own TLAS over that the same frame. The skinned
-    // BLAS are untouched either way -- they belong to their `skinned_ring` slot and
-    // are not referenced by the TLAS built here -- so their slots only have their
-    // refit bookkeeping reset, which makes the next skinned update rebuild.
+    // Bring the draw-object BLAS head in line with the current participating
+    // draw set: reuse every BLAS whose geometry slice is unchanged (or none, under
+    // `RefreshMode::RebuildAll`), build only the new / changed ones, retire the
+    // orphans through the deferred-free pool. The cluster BLAS are kept verbatim.
+    // The TLAS + geometry table are rebuilt inline over [refreshed head +
+    // clusters] into the next `static_ring` slot, like `rebuild_tlas`; on the
+    // skinned path `rebuild_skinned` overlays its own TLAS over that the same
+    // frame. Building the static TLAS here keeps the live TLAS from referencing an
+    // orphan once it is retired, and keeps `tlas_size` in step with the static
+    // instance count. The skinned BLAS are untouched -- they belong to their
+    // `skinned_ring` slot -- so their slots only have their refit bookkeeping
+    // reset, which makes the next skinned update rebuild.
     //
     // Recorded onto `cmd` (the frame's start command buffer), so the builds order
-    // before this frame's trace by submission. The orphaned BLAS go through
-    // `retire` (freed once the frames-in-flight fence retires the frames whose
-    // in-flight trace could still reach them through the not-yet-replaced TLAS);
-    // this frame's scratch slot is replaced when this refresh's builds need more
-    // than its current capacity.
+    // before this frame's trace by submission. The orphaned BLAS are freed once
+    // the frames-in-flight fence retires the frames whose in-flight trace could
+    // still reach them through the not-yet-replaced TLAS; this frame's scratch
+    // slot is replaced when this refresh's builds need more than its capacity.
+    // A refresh that would leave no draw or cluster geometry follows `if_empty`.
+    // With skinned geometry following, it commits the empty head and parks the
+    // orphans until the skinned TLAS this frame publishes. Otherwise it builds a
+    // zero-instance static TLAS, even where `EmptyHead::Drop` would drop the BVH,
+    // since the RT pass is built with the BVH and cannot go without one.
     fn refresh_topology(
         &mut self,
         ctx: RtDeviceCtx,
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
         req: TopologyRefresh,
+        if_empty: EmptyHead,
     ) -> RenderResult<()> {
-        // Advance to the next ring slot and take it out, which sidesteps the
-        // `&mut self` borrow while the refresh reads the rest of the accel. It is
-        // put back on every exit path, so a failed refresh leaves the ring -- and
-        // the live handles naming it -- intact.
-        self.static_cursor = next_slot(self.static_cursor, self.static_ring.len());
-        let cursor = self.static_cursor;
-        let mut slot = std::mem::take(&mut self.static_ring[cursor]);
-        let result = self.refresh_topology_into(ctx, cmd, draw_objects, req, &mut slot);
-        self.static_ring[cursor] = slot;
-        result
+        let refresh = self
+            .book
+            .plan_refresh(draw_objects, req.exclude_seethrough, req.mode);
+        if if_empty == EmptyHead::AwaitSkinned && self.book.refresh_leaves_nothing(&refresh) {
+            let orphans = self.book.commit_refresh(refresh, Vec::new(), draw_objects);
+            self.book.park(orphans);
+            return Ok(());
+        }
+        // Take the slot after the live one out, which sidesteps the `&mut self`
+        // borrow while the refresh reads the rest of the accel. It is put back on
+        // every exit path, and becomes the live slot only when the refresh
+        // publishes, so a failed refresh leaves the ring -- and the live handles
+        // naming it -- intact.
+        let (next, mut slot) = self.static_ring.take_next();
+        let mut pending = PendingRefresh {
+            fresh: (0..refresh.indices().len()).map(|_| None).collect(),
+            refresh,
+        };
+        let recorded = self.record_refresh(ctx, cmd, draw_objects, &mut pending, req, &mut slot);
+        match recorded {
+            Ok((tlas_sizes, built)) => {
+                self.commit_refresh(pending, draw_objects, built, tlas_sizes);
+                self.static_ring.publish(next, slot);
+                Ok(())
+            }
+            Err(e) => {
+                // Nothing was recorded against the structures built so far.
+                for b in pending.fresh.into_iter().flatten() {
+                    b.destroy(&self.as_loader);
+                }
+                self.static_ring.put(next, slot);
+                Err(e)
+            }
+        }
     }
 
-    fn refresh_topology_into(
+    // The fallible half of a topology refresh: allocate a fresh BLAS for every
+    // slot that needs one, write the TLAS instances and geometry table over the
+    // refreshed head into `slot`, size the TLAS and this frame's scratch, then
+    // record the fresh BLAS builds and the TLAS build. Returns the TLAS sizes.
+    fn record_refresh(
         &mut self,
         ctx: RtDeviceCtx,
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
+        pending: &mut PendingRefresh,
         req: TopologyRefresh,
         slot: &mut StaticFrameRing,
-    ) -> RenderResult<()> {
-        let TopologyRefresh {
-            shared,
-            exclude_seethrough,
-            frame_idx,
-            now,
-        } = req;
-        let RtDeviceCtx {
-            alloc,
-            instance,
-            device,
-            pd,
-        } = ctx;
-        let shared = shared.addresses(device);
-        // Current participating draw set (same predicate as `build_rt_accel`).
-        let new_indices: Vec<usize> = draw_objects
-            .iter()
-            .enumerate()
-            .filter(|(_, o)| participates_in_bvh(o, exclude_seethrough))
-            .map(|(i, _)| i)
-            .collect();
-        let new_sigs: Vec<GeomSig> = new_indices
-            .iter()
-            .map(|&i| GeomSig::of(&draw_objects[i]))
-            .collect();
+    ) -> RenderResult<(
+        vk::AccelerationStructureBuildSizesInfoKHR<'static>,
+        StaticBuilt,
+    )> {
+        let RtDeviceCtx { alloc, device, .. } = ctx;
+        let PendingRefresh { refresh, fresh } = pending;
+        let shared = req.shared.addresses(device);
+        let now = self.book.clock();
 
-        // Keep the last-good BVH rather than build a degenerate zero-instance TLAS
-        // when the refresh would leave no draw + cluster geometry (all removed).
-        if new_indices.is_empty() && self.cluster_instances.is_empty() {
-            return Ok(());
-        }
-
-        // Each cluster instance bakes an `instanceCustomIndex = draw_count + ci`
-        // indexing the geometry table (draw entries first, then per cluster instance).
-        // The draw count may have changed, so re-bake into a LOCAL copy for this
-        // refresh's TLAS build; the copy is committed to `self.cluster_instances` at
-        // the end (so a mid-refresh failure does not desync the stored IDs from the
-        // draw count), and every later `rebuild_tlas` / `rebuild_skinned` appends the
-        // committed copy verbatim. Transform + BLAS reference are preserved (the
-        // cluster BLAS are kept verbatim, so their addresses stay valid).
-        let new_draw_count = new_indices.len();
-        let mut rebaked_clusters = self.cluster_instances.clone();
-        for (ci, inst) in rebaked_clusters.iter_mut().enumerate() {
-            let id = (new_draw_count + ci) as u32;
-            inst.instance_custom_index_and_mask = vk::Packed24_8::new(id & 0x00FF_FFFF, 0xFFu8);
-        }
-
-        let plan = plan_topology_refresh(
-            &self.object_indices,
-            &self.draw_blas_sigs,
-            &new_indices,
-            &new_sigs,
-        );
-        let old_draw_count = self.object_indices.len();
-        let cluster_count = self.static_blas_count - old_draw_count;
-
-        // --- Fallible allocation phase: everything below reads `self` but does NOT
-        // move `self.blas` / `self.blas_addresses` out; a mid-phase `?` therefore
-        // leaves the live BVH intact (`self` unchanged except the ring cursor +
-        // scratch, whose failure mode is a bounded leak like the existing
-        // `rebuild_tlas`, never a desync). The reused draw BLAS are moved out only in
-        // the infallible commit at the end. `AccelBuffer` is not `Clone`, so this
-        // deferral is what keeps `self.blas` consistent with `object_indices` on
-        // failure (an early take + late restore would empty it and later panic). ---
-
-        // Fresh BLAS per new/changed slot; reused slots read their cached address.
-        // `fresh_slots[j]` holds the fresh `AccelBuffer` (moved into `new_blas` at
-        // commit); `new_addrs[j]` is that slot's BLAS device address for the TLAS.
-        let mut fresh_slots: Vec<Option<AccelBuffer>> =
-            (0..new_indices.len()).map(|_| None).collect();
-        let mut new_addrs: Vec<u64> = vec![0; new_indices.len()];
+        // A fresh BLAS per new / changed slot; reused slots keep their structure.
         let mut fresh_params: Vec<(BlasParams, usize)> = Vec::new();
         let mut max_scratch: u64 = 0;
-        for (j, reuse) in plan.reuse.iter().enumerate() {
-            match reuse {
-                Some(k) => new_addrs[j] = self.blas_addresses[*k],
-                None => {
-                    let p = shared.draw_params(&draw_objects[new_indices[j]]);
-                    let geo = blas_geometry(&p, shared.index);
-                    let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                        .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-                        .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-                        .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                        .geometries(std::slice::from_ref(&geo));
-                    let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
-                    // SAFETY: a property query on a live handle; it only reads.
-                    unsafe {
-                        self.as_loader.get_acceleration_structure_build_sizes(
-                            vk::AccelerationStructureBuildTypeKHR::DEVICE,
-                            &build_info,
-                            &[p.primitive_count],
-                            &mut sizes,
-                        );
-                    }
-                    let blas = create_accel(
-                        alloc,
-                        &self.as_loader,
-                        sizes.acceleration_structure_size,
-                        vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
-                    )?;
-                    new_addrs[j] = self.blas_device_address(blas.accel);
-                    max_scratch = max_scratch.max(sizes.build_scratch_size);
-                    fresh_slots[j] = Some(blas);
-                    fresh_params.push((p, j));
-                }
-            }
+        for (j, idx) in refresh.fresh_slots() {
+            let p = shared.draw_params(&draw_objects[idx]);
+            let geo = blas_geometry(&p, shared.index);
+            let sizes = blas_build_sizes(&self.as_loader, &geo, p.primitive_count);
+            fresh[j] = Some(create_accel(
+                alloc,
+                &self.as_loader,
+                sizes.acceleration_structure_size,
+                vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+            )?);
+            max_scratch = max_scratch.max(sizes.build_scratch_size);
+            fresh_params.push((p, j));
         }
+        let fresh_addresses: Vec<u64> = fresh
+            .iter()
+            .map(|b| b.as_ref().map_or(0, |b| b.address))
+            .collect();
 
         // Static TLAS instances + geometry table over [refreshed draw head +
-        // clusters]. The skinned tail is NOT included: the static TLAS built here is
-        // superseded the same frame by `rebuild_skinned` (which overlays the skinned
-        // tail) on the skinned path, and is the live TLAS as-is on the no-skinned
-        // path. Building it here (rather than only on the no-skinned path) keeps
-        // `self.tlas` referencing no orphaned BLAS before they are retired, and keeps
-        // `self.tlas_size` in step with the static instance count.
-        let mut instances: Vec<vk::AccelerationStructureInstanceKHR> =
-            Vec::with_capacity(new_indices.len() + rebaked_clusters.len());
-        let mut geom_entries: Vec<RtGeomEntry> = Vec::with_capacity(instances.capacity());
-        for (inst, &idx) in new_indices.iter().enumerate() {
-            let obj = &draw_objects[idx];
-            instances.push(tlas_instance(obj.model, inst as u32, new_addrs[inst]));
-            geom_entries.push(geom_entry(obj, self.albedo_count as u32));
-        }
-        instances.extend_from_slice(&rebaked_clusters);
-        geom_entries.extend_from_slice(&self.cluster_geom);
-        let instance_count = instances.len() as u32;
-
-        // Rebuild this ring slot's host buffers in place (growing on demand),
-        // exactly like `rebuild_tlas`. The slot was last written a full ring cycle
-        // ago, so its trace has retired.
+        // clusters], rebuilt into this ring slot's host buffers in place (growing
+        // on demand), exactly like `rebuild_tlas`. The slot was last written a
+        // full ring cycle ago, so its trace has retired.
+        self.book
+            .fill_refresh_instances(refresh, draw_objects, |model, id, blas| {
+                tlas_instance(
+                    model,
+                    id,
+                    instance_blas_address(blas, &fresh_addresses, &[]),
+                )
+            });
+        let instance_count = self.book.instances().len() as u32;
         write_or_recreate_host(
             &mut slot.instance,
             alloc,
-            &instances,
+            self.book.instances(),
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                 | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
             "RT instance buffer",
-            RetireSink::new(&mut self.retire, self.frame_counter, self.frames_in_flight),
+            RetireSink::new(&mut self.retire, now),
         )?;
         write_or_recreate_host(
             &mut slot.geom,
             alloc,
-            &geom_entries,
+            self.book.geom_table(),
             vk::BufferUsageFlags::STORAGE_BUFFER,
             "RT geometry table",
-            RetireSink::new(&mut self.retire, self.frame_counter, self.frames_in_flight),
+            RetireSink::new(&mut self.retire, now),
         )?;
-        let instance_buffer = slot
-            .instance
-            .as_ref()
-            .expect("instance buffer written above")
-            .buffer;
+        let instance_buffer = host_buffer(&slot.instance)?;
 
-        // Size the TLAS for this (possibly new) static instance count.
+        // Size the TLAS for this (possibly new) static instance count, then ensure
+        // this frame's scratch slot covers every fresh BLAS build + this TLAS.
         let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer));
-        let tlas_build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-            .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-            .geometries(std::slice::from_ref(&tlas_geo));
-        let mut tlas_sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
-        // SAFETY: a property query on a live handle; it only reads.
-        unsafe {
-            self.as_loader.get_acceleration_structure_build_sizes(
-                vk::AccelerationStructureBuildTypeKHR::DEVICE,
-                &tlas_build_info,
-                &[instance_count],
-                &mut tlas_sizes,
-            );
-        }
+        let tlas_sizes = tlas_build_sizes(&self.as_loader, &tlas_geo, instance_count);
         max_scratch = max_scratch.max(tlas_sizes.build_scratch_size);
-
-        // Ensure this frame's scratch slot covers every fresh BLAS build + this TLAS.
-        let align = scratch_alignment(instance, pd);
-        let scratch_addr = self
-            .scratch
-            .ensure(alloc, device, frame_idx, max_scratch, align)?;
+        let scratch_addr = ensure_scratch(&mut self.scratch, ctx, req.frame_idx, max_scratch)?;
         ensure_accel(
             &mut slot.tlas,
             alloc,
             &self.as_loader,
             tlas_sizes.acceleration_structure_size,
             vk::AccelerationStructureTypeKHR::TOP_LEVEL,
-            RetireSink::new(&mut self.retire, self.frame_counter, self.frames_in_flight),
+            RetireSink::new(&mut self.retire, now),
         )?;
-        let tlas = slot.tlas.as_ref().expect("TLAS sized above").accel;
+        let built = StaticBuilt::of(slot, instance_count)?;
+        let tlas = built.tlas;
+        // The commit must follow the builds recorded next, so it is checked now,
+        // while a failure still leaves nothing recorded.
+        self.book.check_refresh(refresh, fresh)?;
 
         // Record the fresh draw-BLAS builds (build-barrier-serialized over the one
         // scratch slot they share), then the TLAS build, on `cmd`. Infallible from here on.
-        for (p, j) in &fresh_params {
-            let geo = blas_geometry(p, shared.index);
-            let mut bi = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-                .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-                .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                .geometries(std::slice::from_ref(&geo));
-            bi.dst_acceleration_structure =
-                fresh_slots[*j].as_ref().expect("fresh BLAS present").accel;
-            bi.scratch_data = vk::DeviceOrHostAddressKHR {
-                device_address: scratch_addr,
-            };
-            let range = vk::AccelerationStructureBuildRangeInfoKHR::default()
-                .primitive_count(p.primitive_count)
-                .primitive_offset(p.index_byte_offset)
-                .first_vertex(0)
-                .transform_offset(0);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                self.as_loader.cmd_build_acceleration_structures(
-                    cmd,
-                    std::slice::from_ref(&bi),
-                    &[std::slice::from_ref(&range)],
-                );
-            }
-            build_barrier(device, cmd, BUILD_TO_BUILD);
-        }
-        let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer));
-        let mut bi = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-            .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-            .geometries(std::slice::from_ref(&tlas_geo));
-        bi.dst_acceleration_structure = tlas;
-        bi.scratch_data = vk::DeviceOrHostAddressKHR {
+        let scratch = vk::DeviceOrHostAddressKHR {
             device_address: scratch_addr,
         };
-        let range = vk::AccelerationStructureBuildRangeInfoKHR::default()
-            .primitive_count(instance_count)
-            .primitive_offset(0)
-            .first_vertex(0)
-            .transform_offset(0);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            self.as_loader.cmd_build_acceleration_structures(
+        for (p, j) in &fresh_params {
+            let Some(dst) = fresh[*j].as_ref() else {
+                continue;
+            };
+            let geo = blas_geometry(p, shared.index);
+            record_build(
+                &self.as_loader,
                 cmd,
-                std::slice::from_ref(&bi),
-                &[std::slice::from_ref(&range)],
+                build_info(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL, &geo)
+                    .dst_acceleration_structure(dst.accel)
+                    .scratch_data(scratch),
+                build_range(p.primitive_count, p.index_byte_offset),
             );
+            build_barrier(device, cmd, BUILD_TO_BUILD);
         }
+        record_build(
+            &self.as_loader,
+            cmd,
+            build_info(vk::AccelerationStructureTypeKHR::TOP_LEVEL, &tlas_geo)
+                .dst_acceleration_structure(tlas)
+                .scratch_data(scratch),
+            build_range(instance_count, 0),
+        );
         build_barrier(device, cmd, BUILD_TO_TRACE);
+        Ok((tlas_sizes, built))
+    }
 
-        // --- Commit (infallible): move the reused BLAS out of the live `self.blas`,
-        // assemble the new head, retire the orphans, and publish this slot's
-        // structures as the live BVH. ---
-        let mut old_blas = std::mem::take(&mut self.blas);
-        let _ = std::mem::take(&mut self.blas_addresses);
-        let cluster_blas: Vec<AccelBuffer> = old_blas.split_off(old_draw_count);
-        let mut draw_head: Vec<Option<AccelBuffer>> = old_blas.into_iter().map(Some).collect();
-
-        let mut new_blas: Vec<AccelBuffer> = Vec::with_capacity(new_indices.len() + cluster_count);
-        for (j, reuse) in plan.reuse.iter().enumerate() {
-            match reuse {
-                Some(k) => new_blas.push(draw_head[*k].take().expect("reused draw BLAS present")),
-                None => new_blas.push(fresh_slots[j].take().expect("fresh draw BLAS present")),
-            }
-        }
-        let orphans: Vec<AccelBuffer> = plan
-            .retire
-            .iter()
-            .map(|&k| draw_head[k].take().expect("orphan draw BLAS present"))
-            .collect();
-        if !orphans.is_empty() {
-            let mut entry = Retired::new(now + self.frames_in_flight);
-            entry.accel = orphans;
-            self.retire.push(entry);
-        }
-        new_blas.extend(cluster_blas);
-        // `new_addrs` holds the draw-head addresses; append the (unchanged) cluster
-        // addresses, recomputed from the moved cluster BLAS, to stay parallel.
-        for b in &new_blas[new_indices.len()..] {
-            new_addrs.push(self.blas_device_address(b.accel));
-        }
-
-        // Publish this slot's structures as the live BVH; the slot keeps owning
-        // them until the cursor comes back around.
-        let geom = slot.geom.as_ref().expect("geometry table written above");
-        self.live_tlas = tlas;
-        self.live_geom = geom.buffer;
-        self.live_geom_size = geom.size;
-
-        self.blas = new_blas;
-        self.blas_addresses = new_addrs;
-        self.static_blas_count = new_indices.len() + cluster_count;
-        self.draw_blas_sigs = new_sigs;
-        self.cluster_instances = rebaked_clusters;
+    // The infallible half of a topology refresh: swap the refreshed head into the
+    // book, retire the orphans, and publish `slot`'s structures as the live BVH.
+    fn commit_refresh(
+        &mut self,
+        pending: PendingRefresh,
+        draw_objects: &[DrawObject],
+        built: StaticBuilt,
+        tlas_sizes: vk::AccelerationStructureBuildSizesInfoKHR<'static>,
+    ) {
+        // Publish first: the TLAS just recorded references none of the orphans, so
+        // once it is live they are safe to retire.
+        self.publish_static(built);
+        let PendingRefresh { refresh, fresh } = pending;
+        let orphans = self.book.commit_refresh(refresh, fresh, draw_objects);
+        self.retire_orphans(orphans);
         self.tlas_size = tlas_sizes.acceleration_structure_size;
         self.tlas_scratch = tlas_sizes.build_scratch_size;
-        self.instance_count = instance_count;
-        self.has_skinned = false;
         // The TLAS just built references no skinned BLAS, so no ring slot's refit
         // bookkeeping describes a published tree any more. On the skinned path
         // `rebuild_skinned` re-adds the skinned instances this same frame and
         // rebuilds their BLAS from scratch, which is also the right answer for the
         // change that triggered this refresh. The slots keep their structures for
         // reuse; nothing else references them.
-        for ring in &mut self.skinned_ring {
+        self.book.release_skinned();
+        self.skinned_ring.unpublish(self.book.clock());
+        for ring in self.skinned_ring.slots_mut() {
             ring.refit.reset();
         }
-        // Snapshot the transforms baked into the new TLAS for the next dirty check.
-        // (On the skinned path `rebuild_skinned` overwrites `cached_models`.)
-        self.cached_models = new_indices.iter().map(|&i| draw_objects[i].model).collect();
-        self.object_indices = new_indices;
-        Ok(())
     }
 
-    // Rebuild the TLAS + geometry table from `current` transforms, rebuilding the
-    // next `static_ring` slot's buffers in place, and record the build onto `cmd`.
-    // The BLAS are kept (rigid transforms leave object-space geometry unchanged).
+    // Retire BLAS the live TLAS no longer references, together with any a
+    // refresh parked until a TLAS built after it published.
+    fn retire_orphans(&mut self, orphans: Vec<AccelBuffer>) {
+        let now = self.book.clock();
+        for orphan in orphans.into_iter().chain(self.book.take_parked()) {
+            self.retire.push(now, Retired::Accel(orphan));
+        }
+    }
+
+    // Point the live BVH at a static rebuild's TLAS and geometry table; the ring
+    // slot keeps owning them until the cursor comes back around a full ring cycle
+    // later (by then its fence has signaled, so no in-flight trace still reads it).
+    fn publish_static(&mut self, built: StaticBuilt) {
+        self.live_tlas = built.tlas;
+        self.live_geom = built.geom;
+        self.live_geom_size = built.geom_size;
+        self.instance_count = built.instance_count;
+    }
+
+    // Rebuild the TLAS + geometry table from the transforms the book collected,
+    // rebuilding the next `static_ring` slot's buffers in place, and record the
+    // build onto `cmd`. The BLAS are kept (rigid transforms leave object-space
+    // geometry unchanged).
     fn rebuild_tlas(
         &mut self,
         ctx: RtDeviceCtx,
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
         frame_idx: usize,
-        scratch: &mut RtUpdateScratch,
     ) -> RenderResult<()> {
-        // Advance to the next ring slot and take it out (see `refresh_topology`);
-        // it is put back on every exit path.
-        self.static_cursor = next_slot(self.static_cursor, self.static_ring.len());
-        let cursor = self.static_cursor;
-        let mut slot = std::mem::take(&mut self.static_ring[cursor]);
-        let result = self.rebuild_tlas_into(ctx, cmd, draw_objects, frame_idx, scratch, &mut slot);
-        self.static_ring[cursor] = slot;
+        // Take the slot after the live one out (see `refresh_topology`); it is put
+        // back on every exit path and becomes live only on success.
+        let (next, mut slot) = self.static_ring.take_next();
+        let result = self.rebuild_tlas_into(ctx, cmd, draw_objects, frame_idx, &mut slot);
+        if result.is_ok() {
+            self.static_ring.publish(next, slot);
+        } else {
+            self.static_ring.put(next, slot);
+        }
         result
     }
 
@@ -2072,41 +1785,17 @@ impl RtAccelData {
         cmd: vk::CommandBuffer,
         draw_objects: &[DrawObject],
         frame_idx: usize,
-        scratch: &mut RtUpdateScratch,
         slot: &mut StaticFrameRing,
     ) -> RenderResult<()> {
-        let RtDeviceCtx {
-            alloc,
-            device,
-            instance,
-            pd,
-        } = ctx;
-        let RtUpdateScratch {
-            models,
-            instances,
-            geom: geom_entries,
-            ..
-        } = scratch;
-        // Freshly-transformed draw-object instances, then the cluster instances
-        // re-appended verbatim. The geometry table mirrors this order.
-        instances.clear();
-        geom_entries.clear();
-        for (inst, &idx) in self.object_indices.iter().enumerate() {
-            let obj = &draw_objects[idx];
-            instances.push(tlas_instance(
-                obj.model,
-                inst as u32,
-                self.blas_addresses[inst],
-            ));
-            geom_entries.push(geom_entry(obj, self.albedo_count as u32));
-        }
-        instances.extend_from_slice(&self.cluster_instances);
-        geom_entries.extend_from_slice(&self.cluster_geom);
-
-        // Refresh the live instance count so the TLAS build below covers exactly
-        // this rebuild's descriptors. A prior skinned rebuild may have left a
-        // larger count; reusing it would read past the valid instance buffer.
-        self.instance_count = instances.len() as u32;
+        let RtDeviceCtx { alloc, device, .. } = ctx;
+        let now = self.book.clock();
+        // Freshly-transformed draw-object instances, then the cluster instances.
+        // The geometry table mirrors this order.
+        self.book
+            .fill_instances(draw_objects, None, |model, id, blas| {
+                tlas_instance(model, id, instance_blas_address(blas, &[], &[]))
+            });
+        let instance_count = self.book.instances().len() as u32;
 
         // Rebuild this ring slot's buffers in place. The slot was last written a
         // full ring cycle ago, so the frames-in-flight fence has retired every
@@ -2115,19 +1804,19 @@ impl RtAccelData {
         write_or_recreate_host(
             &mut slot.instance,
             alloc,
-            instances.as_slice(),
+            self.book.instances(),
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                 | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
             "RT instance buffer",
-            RetireSink::new(&mut self.retire, self.frame_counter, self.frames_in_flight),
+            RetireSink::new(&mut self.retire, now),
         )?;
         write_or_recreate_host(
             &mut slot.geom,
             alloc,
-            geom_entries.as_slice(),
+            self.book.geom_table(),
             vk::BufferUsageFlags::STORAGE_BUFFER,
             "RT geometry table",
-            RetireSink::new(&mut self.retire, self.frame_counter, self.frames_in_flight),
+            RetireSink::new(&mut self.retire, now),
         )?;
         ensure_accel(
             &mut slot.tlas,
@@ -2135,69 +1824,41 @@ impl RtAccelData {
             &self.as_loader,
             self.tlas_size,
             vk::AccelerationStructureTypeKHR::TOP_LEVEL,
-            RetireSink::new(&mut self.retire, self.frame_counter, self.frames_in_flight),
+            RetireSink::new(&mut self.retire, now),
         )?;
-        let instance_buffer = slot
-            .instance
-            .as_ref()
-            .expect("instance buffer written above")
-            .buffer;
-        let tlas = slot.tlas.as_ref().expect("TLAS sized above").accel;
+        let instance_buffer = host_buffer(&slot.instance)?;
+        let built = StaticBuilt::of(slot, instance_count)?;
         // This frame's scratch slot was sized at init; a topology refresh that
         // raised the instance count grew only the slot it recorded over.
-        let align = scratch_alignment(instance, pd);
-        let scratch_addr =
-            self.scratch
-                .ensure(alloc, device, frame_idx, self.tlas_scratch, align)?;
+        let scratch_addr = ensure_scratch(&mut self.scratch, ctx, frame_idx, self.tlas_scratch)?;
 
         let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer));
-        let mut bi = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-            .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-            .geometries(std::slice::from_ref(&tlas_geo));
-        bi.dst_acceleration_structure = tlas;
-        bi.scratch_data = vk::DeviceOrHostAddressKHR {
-            device_address: scratch_addr,
-        };
-        let range = vk::AccelerationStructureBuildRangeInfoKHR::default()
-            .primitive_count(self.instance_count)
-            .primitive_offset(0)
-            .first_vertex(0)
-            .transform_offset(0);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            self.as_loader.cmd_build_acceleration_structures(
-                cmd,
-                std::slice::from_ref(&bi),
-                &[std::slice::from_ref(&range)],
-            );
-        }
+        record_build(
+            &self.as_loader,
+            cmd,
+            build_info(vk::AccelerationStructureTypeKHR::TOP_LEVEL, &tlas_geo)
+                .dst_acceleration_structure(built.tlas)
+                .scratch_data(vk::DeviceOrHostAddressKHR {
+                    device_address: scratch_addr,
+                }),
+            build_range(instance_count, 0),
+        );
         build_barrier(device, cmd, BUILD_TO_TRACE);
 
-        // Publish this slot's structures as the live BVH; the slot keeps owning
-        // them until the cursor comes back around a full ring cycle later (by then
-        // its fence has signaled, so no in-flight trace still reads it).
-        let geom = slot.geom.as_ref().expect("geometry table written above");
-        self.live_tlas = tlas;
-        self.live_geom = geom.buffer;
-        self.live_geom_size = geom.size;
-
+        self.publish_static(built);
         // If skinned instances were still live (the last skinned object just turned
         // invisible), the rebuilt static TLAS no longer references their BLAS. The
         // ring slots keep them for reuse, but an update continues the tree its last
         // full build produced, so re-entering the skinned path after an arbitrary
         // gap must rebuild rather than update from a pose the tree was never fitted
         // for.
-        if self.has_skinned {
-            self.has_skinned = false;
-            for ring in &mut self.skinned_ring {
+        if self.book.commit_static().is_some() {
+            self.skinned_ring.unpublish(self.book.clock());
+            for ring in self.skinned_ring.slots_mut() {
                 ring.refit.reset();
             }
         }
-        self.cached_models.clear();
-        self.cached_models.extend_from_slice(models);
+        self.retire_orphans(Vec::new());
         Ok(())
     }
 
@@ -2220,26 +1881,33 @@ impl RtAccelData {
     // (COMPUTE write -> AS-build + FRAGMENT read), then the BLAS/TLAS build (reads
     // it). The start buffer is submitted before every per-pass trace, so build ->
     // trace is ordered by submission too.
-    fn rebuild_skinned(
-        &mut self,
-        req: SkinnedRebuild,
-        scratch: &mut RtUpdateScratch,
-    ) -> RenderResult<()> {
+    fn rebuild_skinned(&mut self, req: SkinnedRebuild) -> RenderResult<RtUpdate> {
         // This frame slot's resources, taken out for the duration (sidesteps the
         // `&mut self` borrow while the rebuild reads other fields) and put back on
         // every exit path, so a failed rebuild leaves the ring -- and the live
-        // handles naming it -- intact.
+        // handles naming it -- intact. A slot a failed rebuild left live is still
+        // traced by the frames since, so this frame skips rather than rewrite it.
         let frame_idx = req.frame_idx;
-        let mut slot = std::mem::take(&mut self.skinned_ring[frame_idx]);
-        let result = self.rebuild_skinned_into(req, scratch, &mut slot);
-        self.skinned_ring[frame_idx] = slot;
-        result
+        let now = self.book.clock();
+        let Some(mut slot) = self.skinned_ring.take(frame_idx, now)? else {
+            return Ok(RtUpdate::Skipped);
+        };
+        let result = self.rebuild_skinned_into(req, &mut slot);
+        if result.is_ok() {
+            self.skinned_ring.publish(frame_idx, slot, now);
+            self.retire_orphans(Vec::new());
+        } else {
+            // A failure can leave freshly (re)allocated BLAS in the slot that no
+            // build was recorded into, so the next visit must build, not refit.
+            slot.refit.reset();
+            self.skinned_ring.put(frame_idx, slot);
+        }
+        result.map(|()| RtUpdate::Done)
     }
 
     fn rebuild_skinned_into(
         &mut self,
         req: SkinnedRebuild,
-        scratch: &mut RtUpdateScratch,
         slot: &mut SkinnedFrameRing,
     ) -> RenderResult<()> {
         let SkinnedRebuild {
@@ -2248,24 +1916,13 @@ impl RtAccelData {
             draw_objects,
             skinned,
             frame_idx,
+            full_build,
         } = req;
         let skinned = &skinned;
-        let RtUpdateScratch {
-            skinned: skinned_objects,
-            models,
-            shapes,
-            params: skinned_params,
-            blas_addresses: skinned_blas_addresses,
-            instances,
-            geom: geom_entries,
-        } = scratch;
-        let RtDeviceCtx {
-            alloc,
-            instance,
-            device,
-            pd,
-        } = ctx;
-        let skin = self.skin.as_ref().ok_or_else(|| {
+        let RtDeviceCtx { alloc, device, .. } = ctx;
+        let now = self.book.clock();
+        let frames = self.frames_in_flight_usize;
+        let skin = self.skin.as_mut().ok_or_else(|| {
             RenderError::Other("rebuild_skinned called without a skin pipeline".into())
         })?;
         let pipeline = skin.pipeline.handle();
@@ -2275,13 +1932,9 @@ impl RtAccelData {
         // mirroring the skinned VB's indexing so the index buffer addresses it
         // directly. Sized to the highest vertex the skinned objects reach. Owned by
         // this slot, rebuilt in place and grown only when a later frame outgrows it.
-        let deformed_extent: u64 = skinned_objects
-            .iter()
-            .map(|&i| {
-                skinned.objects[i].vertex_base as u64 + skinned.objects[i].vertex_count as u64
-            })
-            .max()
-            .unwrap_or(0);
+        let deformed_extent = self.book.skinned_vertex_extent(skinned.objects);
+        self.book
+            .fill_skinned_shapes(skinned.objects, deformed_extent as u32);
         let deformed_bytes = (deformed_extent * VERTEX_STRIDE).max(VERTEX_STRIDE);
         // A (re)allocated buffer leaves no tree for an update to continue, so it
         // forces this frame's BLAS to be built from scratch.
@@ -2290,23 +1943,23 @@ impl RtAccelData {
             alloc,
             device,
             deformed_bytes,
-            RetireSink::new(&mut self.retire, self.frame_counter, self.frames_in_flight),
+            RetireSink::new(&mut self.retire, now),
         )?;
         let deformed = slot
             .deformed
             .as_ref()
-            .expect("deformed buffer sized above")
+            .ok_or_else(missing_slot_buffer)?
             .handle();
 
         // Ensure per-(frame, object) compute descriptor sets exist for this
         // skinned object count, then point this frame's sets at the skinned VB
         // (binding 0), each object's current-frame joint buffer (binding 1), and
         // the fresh deformed buffer (binding 2).
-        self.ensure_skin_sets(device, skinned.objects.len())?;
-        let skin = self.skin.as_mut().expect("skin pipeline present");
+        ensure_skin_sets(device, skin, frames, skinned.objects.len())?;
+        let visible = self.book.visible_skinned();
         let frame_sets = &skin.sets[frame_idx];
         let frame_wired = &mut skin.wired[frame_idx];
-        for &obj_idx in skinned_objects.iter() {
+        for &obj_idx in visible {
             let joint_buffer = skinned
                 .joint_buffers
                 .get(obj_idx)
@@ -2380,14 +2033,12 @@ impl RtAccelData {
         }
 
         // Stage 1: skin dispatch per visible skinned object onto `cmd`.
-        let skin = self.skin.as_ref().expect("skin pipeline present");
-        let frame_sets = &skin.sets[frame_idx];
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
         }
-        for &obj_idx in skinned_objects.iter() {
+        for &obj_idx in visible {
             let obj = &skinned.objects[obj_idx];
             let joint_buffer = skinned
                 .joint_buffers
@@ -2463,23 +2114,21 @@ impl RtAccelData {
         // Stage 2: one BLAS per skinned object over the deformed buffer.
         let skinned_idx_addr = buffer_address(device, skinned.index_buffer);
         let max_vertex = deformed_extent.saturating_sub(1) as u32;
+        let SkinnedScratch {
+            params: skinned_params,
+            blas_addresses: skinned_blas_addresses,
+        } = &mut self.skinned_scratch;
         skinned_params.clear();
-        shapes.clear();
-        for &i in skinned_objects.iter() {
+        skinned_params.extend(visible.iter().map(|&i| {
             let obj = &skinned.objects[i];
-            skinned_params.push(BlasParams {
+            BlasParams {
                 vertex_address: deformed.address,
                 max_vertex,
                 // u32 indices = 4 bytes each.
                 index_byte_offset: obj.index_offset as u32 * 4,
                 primitive_count: (obj.index_count / 3) as u32,
-            });
-            shapes.push(SkinnedShape {
-                index_offset: obj.index_offset,
-                index_count: obj.index_count,
-                vertex_extent: deformed_extent as u32,
-            });
-        }
+            }
+        }));
 
         // Size each skinned BLAS, rebuilding this slot's own BLAS in place when it
         // still fits (else growing); track the largest scratch either a full build
@@ -2489,17 +2138,8 @@ impl RtAccelData {
         let mut max_scratch: u64 = 0;
         for (si, p) in skinned_params.iter().enumerate() {
             let geo = skinned_blas_geometry(p, skinned_idx_addr);
-            let build_info = skinned_blas_build_info(&geo, BlasUpdate::Build);
-            let mut sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
-            // SAFETY: a property query on a live handle; it only reads.
-            unsafe {
-                self.as_loader.get_acceleration_structure_build_sizes(
-                    vk::AccelerationStructureBuildTypeKHR::DEVICE,
-                    &build_info,
-                    &[p.primitive_count],
-                    &mut sizes,
-                );
-            }
+            let info = skinned_blas_build_info(&geo, BlasUpdate::Build);
+            let sizes = build_sizes(&self.as_loader, &info, p.primitive_count);
             let needed = sizes.acceleration_structure_size;
             match slot.blas.get(si) {
                 Some(b) if b.size >= needed => {}
@@ -2532,88 +2172,52 @@ impl RtAccelData {
         // published set, so it forces a full build like any other (re)allocation.
         storage_changed |= slot.blas.len() > skinned_params.len();
         skinned_blas_addresses.clear();
-        skinned_blas_addresses.extend(slot.blas[..skinned_params.len()].iter().map(|b| {
-            // SAFETY: the acceleration structure was created from this device and the info struct
-            // borrows its handle for the call; the query only reads.
-            unsafe {
-                self.as_loader.get_acceleration_structure_device_address(
-                    &vk::AccelerationStructureDeviceAddressInfoKHR::default()
-                        .acceleration_structure(b.accel),
-                )
-            }
-        }));
+        skinned_blas_addresses.extend(
+            slot.blas
+                .iter()
+                .take(skinned_params.len())
+                .map(|b| b.address),
+        );
 
-        // Instance descriptors + geometry table, in instance order: static
-        // objects (current transforms), then the cluster instances verbatim, then
-        // one per skinned object (BLAS index `static_blas_count + si`).
-        instances.clear();
-        geom_entries.clear();
-        for (inst, &idx) in self.object_indices.iter().enumerate() {
-            let obj = &draw_objects[idx];
-            instances.push(tlas_instance(
-                obj.model,
-                inst as u32,
-                self.blas_addresses[inst],
-            ));
-            geom_entries.push(geom_entry(obj, self.albedo_count as u32));
-        }
-        instances.extend_from_slice(&self.cluster_instances);
-        geom_entries.extend_from_slice(&self.cluster_geom);
-        for (si, &obj_idx) in skinned_objects.iter().enumerate() {
-            let obj = &skinned.objects[obj_idx];
-            let id = instances.len() as u32;
-            instances.push(tlas_instance(obj.model, id, skinned_blas_addresses[si]));
-            // The skinned object's textures bake into the shared bindless pool
-            // from its own `texture_slot` / `normal_map_slot`, so the pool index
-            // reads off `obj` directly (no list-position dependence).
-            geom_entries.push(skinned_geom_entry(obj, self.albedo_count as u32));
-        }
-        let instance_count = instances.len() as u32;
+        // Instance descriptors + geometry table, in the book's instance order:
+        // static objects (current transforms), the cluster instances, then one per
+        // skinned object.
+        self.book
+            .fill_instances(draw_objects, Some(skinned.objects), |model, id, blas| {
+                tlas_instance(
+                    model,
+                    id,
+                    instance_blas_address(blas, &[], skinned_blas_addresses),
+                )
+            });
+        let instance_count = self.book.instances().len() as u32;
 
         // Rewrite this slot's own host buffers in place (re-map + copy) when they
         // still fit, else grow.
         write_or_recreate_host(
             &mut slot.instance,
             alloc,
-            instances.as_slice(),
+            self.book.instances(),
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                 | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
             "RT instance buffer",
-            RetireSink::new(&mut self.retire, self.frame_counter, self.frames_in_flight),
+            RetireSink::new(&mut self.retire, now),
         )?;
         write_or_recreate_host(
             &mut slot.geom,
             alloc,
-            geom_entries.as_slice(),
+            self.book.geom_table(),
             vk::BufferUsageFlags::STORAGE_BUFFER,
             "RT geometry table",
-            RetireSink::new(&mut self.retire, self.frame_counter, self.frames_in_flight),
+            RetireSink::new(&mut self.retire, now),
         )?;
-        let instance_buffer = slot
-            .instance
-            .as_ref()
-            .expect("instance buffer written above")
-            .buffer;
+        let instance_buffer = host_buffer(&slot.instance)?;
 
         // Size the TLAS + scratch (>= the largest skinned BLAS + the TLAS). The
         // skinned instance count can change frame to frame, so size the TLAS from
         // this frame's prebuild rather than the cached size.
         let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer));
-        let tlas_build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-            .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-            .geometries(std::slice::from_ref(&tlas_geo));
-        let mut tlas_sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
-        // SAFETY: a property query on a live handle; it only reads.
-        unsafe {
-            self.as_loader.get_acceleration_structure_build_sizes(
-                vk::AccelerationStructureBuildTypeKHR::DEVICE,
-                &tlas_build_info,
-                &[instance_count],
-                &mut tlas_sizes,
-            );
-        }
+        let tlas_sizes = tlas_build_sizes(&self.as_loader, &tlas_geo, instance_count);
         max_scratch = max_scratch.max(tlas_sizes.build_scratch_size);
         // Rebuild this slot's own TLAS in place when it still fits, else grow.
         ensure_accel(
@@ -2622,127 +2226,90 @@ impl RtAccelData {
             &self.as_loader,
             tlas_sizes.acceleration_structure_size,
             vk::AccelerationStructureTypeKHR::TOP_LEVEL,
-            RetireSink::new(&mut self.retire, self.frame_counter, self.frames_in_flight),
+            RetireSink::new(&mut self.retire, now),
         )?;
-        let tlas = slot.tlas.as_ref().expect("TLAS sized above").accel;
+        let tlas = live_accel(&slot.tlas)?;
 
         // The scratch was sized for the static build; the skinned BLAS + this
         // frame's TLAS may need more, so re-size this frame's slot if so.
-        let align = scratch_alignment(instance, pd);
-        let scratch_addr = self
-            .scratch
-            .ensure(alloc, device, frame_idx, max_scratch, align)?;
+        let scratch_addr = ensure_scratch(&mut self.scratch, ctx, frame_idx, max_scratch)?;
 
         // Settle build-or-update last, once every fallible step above has passed:
         // recording a build the command buffer never gets would leave the slot
         // claiming a tree a later update could not continue.
-        let update = slot.refit.plan(shapes, storage_changed);
+        let update = slot
+            .refit
+            .plan(self.book.skinned_shapes(), storage_changed || full_build);
 
         // Record the skinned BLAS updates (build-barrier-serialized over the one
         // scratch slot they share), then the TLAS build, on `cmd`. A `Build` writes the structure
         // from scratch; a `Refit` names it as its own source, which the spec defines
         // as an in-place update.
-        for (si, p) in skinned_params.iter().enumerate() {
-            let geo = skinned_blas_geometry(p, skinned_idx_addr);
-            let mut bi = skinned_blas_build_info(&geo, update);
-            bi.dst_acceleration_structure = slot.blas[si].accel;
-            if update == BlasUpdate::Refit {
-                bi.src_acceleration_structure = slot.blas[si].accel;
-            }
-            bi.scratch_data = vk::DeviceOrHostAddressKHR {
-                device_address: scratch_addr,
-            };
-            let range = vk::AccelerationStructureBuildRangeInfoKHR::default()
-                .primitive_count(p.primitive_count)
-                .primitive_offset(p.index_byte_offset)
-                .first_vertex(0)
-                .transform_offset(0);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                self.as_loader.cmd_build_acceleration_structures(
-                    cmd,
-                    std::slice::from_ref(&bi),
-                    &[std::slice::from_ref(&range)],
-                );
-            }
-            build_barrier(device, cmd, BUILD_TO_BUILD);
-        }
-        let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer));
-        let mut bi = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-            .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-            .geometries(std::slice::from_ref(&tlas_geo));
-        bi.dst_acceleration_structure = tlas;
-        bi.scratch_data = vk::DeviceOrHostAddressKHR {
+        let scratch = vk::DeviceOrHostAddressKHR {
             device_address: scratch_addr,
         };
-        let range = vk::AccelerationStructureBuildRangeInfoKHR::default()
-            .primitive_count(instance_count)
-            .primitive_offset(0)
-            .first_vertex(0)
-            .transform_offset(0);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            self.as_loader.cmd_build_acceleration_structures(
+        for (p, dst) in self.skinned_scratch.params.iter().zip(&slot.blas) {
+            let geo = skinned_blas_geometry(p, skinned_idx_addr);
+            let mut bi = skinned_blas_build_info(&geo, update)
+                .dst_acceleration_structure(dst.accel)
+                .scratch_data(scratch);
+            if update == BlasUpdate::Refit {
+                bi.src_acceleration_structure = dst.accel;
+            }
+            record_build(
+                &self.as_loader,
                 cmd,
-                std::slice::from_ref(&bi),
-                &[std::slice::from_ref(&range)],
+                bi,
+                build_range(p.primitive_count, p.index_byte_offset),
             );
+            build_barrier(device, cmd, BUILD_TO_BUILD);
         }
+        record_build(
+            &self.as_loader,
+            cmd,
+            build_info(vk::AccelerationStructureTypeKHR::TOP_LEVEL, &tlas_geo)
+                .dst_acceleration_structure(tlas)
+                .scratch_data(scratch),
+            build_range(instance_count, 0),
+        );
         build_barrier(device, cmd, BUILD_TO_TRACE);
 
         // Publish this slot's resources as the live BVH. The slot keeps owning
         // everything it just built into, so the handles it hands out are the same
         // ones it will hand out next cycle -- which is what lets the skin
-        // descriptor cache above skip. The static/cluster `blas` head is untouched.
+        // descriptor cache above skip. The static/cluster head is untouched.
         // BLAS this slot no longer needs (the visible skinned count shrank). Freed
         // in place, not retired: unlike a resource a grow REPLACES, nothing names
         // these -- the TLAS built above does not reference them, no live handle
         // does, and the only TLAS that did was this same slot's, whose frame the
         // fence retired before this one recorded.
-        for leftover in slot.blas.drain(skinned_params.len()..) {
+        for leftover in slot.blas.drain(self.skinned_scratch.params.len()..) {
             leftover.destroy(&self.as_loader);
         }
-        let geom = slot.geom.as_ref().expect("geometry table written above");
+        let geom = slot.geom.as_ref().ok_or_else(missing_slot_buffer)?;
         self.live_tlas = tlas;
         self.live_geom = geom.buffer;
         self.live_geom_size = geom.size;
         self.live_deformed = deformed.buffer;
         self.instance_count = instance_count;
         self.skinned_indices = skinned.index_buffer;
-        self.has_skinned = true;
-        self.cached_models.clear();
-        self.cached_models.extend_from_slice(models);
+        self.book.commit_skinned();
         Ok(())
-    }
-
-    // Ensure the per-(frame, object) compute descriptor sets cover `object_count`
-    // skinned objects. Allocated lazily on the first skinned rebuild (the count
-    // is unknown at init, before `upload_skinned`). Idempotent once sized.
-    fn ensure_skin_sets(&mut self, device: &VkDevice, object_count: usize) -> RenderResult<()> {
-        let frames = self.frames_in_flight_usize;
-        let skin = self.skin.as_mut().ok_or_else(|| {
-            RenderError::Other("ensure_skin_sets called without a skin pipeline".into())
-        })?;
-        ensure_skin_sets(device, skin, frames, object_count)
     }
 
     // Destroy every acceleration-structure resource. The caller has already
     // idled the device.
     pub(super) fn destroy(&mut self, device: &VkDevice) {
-        for r in self.retire.drain(..) {
+        for r in self.retire.drain() {
             r.destroy(&self.as_loader);
         }
-        for slot in &mut self.skinned_ring {
+        for slot in self.skinned_ring.slots_mut() {
             slot.destroy(&self.as_loader);
         }
-        for slot in &self.static_ring {
+        for slot in self.static_ring.slots_mut() {
             slot.destroy(&self.as_loader);
         }
-        for b in &self.blas {
+        for b in self.book.drain_blas() {
             b.destroy(&self.as_loader);
         }
         if let Some(skin) = &self.skin {
@@ -3146,17 +2713,6 @@ mod tests {
     use super::*;
     use concinnity_core::gfx::mesh_payload;
 
-    #[test]
-    fn next_slot_wraps_around_the_ring() {
-        // Advancing the static-rebuild cursor cycles through every slot and wraps
-        // at the end, so a slot is revisited only after a full ring cycle.
-        assert_eq!(next_slot(0, 3), 1);
-        assert_eq!(next_slot(1, 3), 2);
-        assert_eq!(next_slot(2, 3), 0);
-        // A degenerate single-slot ring always returns slot 0.
-        assert_eq!(next_slot(0, 1), 0);
-    }
-
     // Distinct fake buffer handles for the descriptor-cache rule.
     fn buf(raw: u64) -> vk::Buffer {
         use ash::vk::Handle;
@@ -3190,45 +2746,6 @@ mod tests {
     }
 
     #[test]
-    fn pack_instance_transform_transposes_column_major_to_3x4_row_major() {
-        // A column-major model with a known translation column [10, 20, 30].
-        let model = [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [10.0, 20.0, 30.0, 1.0],
-        ];
-        let t = pack_instance_transform(model);
-        // VkTransformMatrixKHR is 3x4 row-major (flat); the translation is the
-        // last entry of each 4-wide row.
-        assert_eq!(
-            t.matrix,
-            [
-                1.0, 0.0, 0.0, 10.0, 0.0, 1.0, 0.0, 20.0, 0.0, 0.0, 1.0, 30.0
-            ]
-        );
-    }
-
-    #[test]
-    fn pack_instance_transform_preserves_a_rotation_shear() {
-        // Distinct values in every cell so a row/col swap would be detectable.
-        let model = [
-            [1.0, 2.0, 3.0, 0.0],
-            [4.0, 5.0, 6.0, 0.0],
-            [7.0, 8.0, 9.0, 0.0],
-            [10.0, 11.0, 12.0, 1.0],
-        ];
-        let t = pack_instance_transform(model);
-        // Flat row-major: row r is [model[0][r], model[1][r], model[2][r], model[3][r]].
-        assert_eq!(
-            t.matrix,
-            [
-                1.0, 4.0, 7.0, 10.0, 2.0, 5.0, 8.0, 11.0, 3.0, 6.0, 9.0, 12.0
-            ]
-        );
-    }
-
-    #[test]
     fn instance_packs_custom_index_and_full_mask() {
         let d = tlas_instance(
             [
@@ -3251,33 +2768,22 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_host_buffer_still_holds_one_element() {
+        assert_eq!(
+            host_buffer_size::<concinnity_core::gfx::render_types::RtGeomEntry>(&[]),
+            128
+        );
+        assert_eq!(host_buffer_size::<u8>(&[]), 16);
+        assert_eq!(host_buffer_size(&[0u64; 3]), 24);
+    }
+
+    #[test]
     fn scratch_capacity_leaves_room_for_the_aligned_address() {
         // The slot is sized so an address aligned up from anywhere inside the
         // buffer still has `required` bytes ahead of it.
         assert_eq!(scratch_capacity(1000, 256), 1256);
         // A device reporting no alignment requirement asks for the bare size.
         assert_eq!(scratch_capacity(1000, 1), 1001);
-    }
-
-    // A slot with no backing memory, for the sizing rule alone.
-    fn sized_slot(capacity: u64) -> ScratchSlot {
-        ScratchSlot {
-            _pooled: PooledBuffer::null(),
-            addr: 0,
-            capacity,
-        }
-    }
-
-    #[test]
-    fn scratch_slot_is_replaced_only_when_the_build_outgrows_it() {
-        let slot = sized_slot(scratch_capacity(1000, 256));
-        // The build it was sized for, and a smaller one, reuse it.
-        assert!(slot.fits(1000, 256));
-        assert!(slot.fits(1, 256));
-        // One byte more, or the same build on a device wanting more alignment
-        // headroom, does not.
-        assert!(!slot.fits(1001, 256));
-        assert!(!slot.fits(1000, 512));
     }
 
     #[test]

@@ -35,18 +35,22 @@
 //! frames whose still-in-flight trace could read them. The per-frame skinned
 //! update instead rebuilds in place in a ring slot (`rt_ring`), which is sound
 //! precisely because it runs on every frame: see that module's header for why the
-//! static paths cannot use the same trick.
+//! static paths cannot use the same trick. The bookkeeping over all of it -- which
+//! draws and clusters the BLAS cover, the instance and geometry-table order, and
+//! when to update -- is the shared `AccelBook`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types::{
-    DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject,
-};
+use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
+use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_core::render::rt_accel::{
+    AccelBook, EmptyHead, FailureStreak, InstanceBlas, RefreshMode, RtUpdate, SeedSet,
+    SlotLiveness, empty_head,
+};
 use concinnity_core::render::rt_geom::RtDynamicMode;
-use concinnity_core::render::rt_geom::{cluster_geom_entry, geom_entry, skinned_geom_entry};
 use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedShape};
-use concinnity_core::render::rt_topology::{GeomSig, participates_in_bvh, plan_topology_refresh};
+use concinnity_core::render::rt_topology::traced_skinned;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSArray;
@@ -69,13 +73,14 @@ use super::builtin_shaders::compute_pipeline;
 use super::context::write_buffer_slice;
 use super::encode::ComputeEncode;
 use super::error::{allocation_failed, completed_command_buffer};
-use super::frame_rings::RetirePool;
 use super::rt_ring::{RtFrameRing, SkinnedBlasSet, TlasKey};
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + color + uv = 14 floats). The RT kernel reads positions at this stride; the
 // main-pass skinned fold sizes its deformed buffer by it too.
 pub(in crate::metal) const VERTEX_STRIDE: usize = 56;
+
+type Structure = Retained<ProtocolObject<dyn MTLAccelerationStructure>>;
 
 // All hardware-ray-traced-reflection state grouped into one feature unit: the
 // resolved tunables, the scene acceleration structure, the dynamic-update
@@ -100,10 +105,10 @@ pub(crate) struct RtState {
     // `--rt-skinned-geometry` request; in by default). Clear it and the BVH
     // covers static + instanced geometry only, isolating the skinned trace path.
     pub skinned_geometry: bool,
-    // Whether the per-frame BVH update is currently in a failure streak. A
-    // transient rebuild failure is non-fatal (keep last frame's BVH) and
-    // logged once per streak rather than every frame.
-    pub update_failed: bool,
+    // Whether the per-frame BVH update is failing. A transient rebuild failure
+    // is non-fatal (keep last frame's BVH) and logged once per streak rather
+    // than every frame.
+    pub update_streak: FailureStreak,
     pub pipelines: RtPipelines,
 }
 
@@ -127,56 +132,20 @@ pub(crate) struct RtPipelines {
 // on the context behind an `Option`; present only when the world enables RT
 // reflections, the GPU supports ray tracing, and the scene has geometry.
 pub(crate) struct RtAccelData {
-    // Bottom-level acceleration structures, in build order: one per
-    // participating `DrawObject` (in `object_indices` order), then one per
-    // instanced cluster, then one per skinned object. This Vec is the sole CPU
-    // owner that keeps every BLAS alive: a TLAS does not retain the structures it
-    // references, and the `useResource` the kernel encoder issues only declares
-    // residency, not lifetime, so a BLAS must stay owned here for as long as any
-    // in-flight trace can reach it through the TLAS. A skinned rebuild produces a
-    // whole fresh `RtAccelData`; the outgoing one is parked in the context's
-    // retire pool until the frames-in-flight fence retires the frames that could
-    // still trace it.
-    pub blas: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>>,
-    // How many leading entries of `blas` are the persistent static + cluster
-    // BLAS, built once and never rebuilt (a rigid transform leaves object-space
-    // geometry unchanged). Skinned BLAS occupy `blas[static_blas_count..]` and
-    // are rebuilt each frame from the current pose; a skinned object's
-    // `accelerationStructureIndex` is `static_blas_count + si`. Lets the
-    // per-frame skinned update rebuild only the skinned tail and keep the head.
-    static_blas_count: usize,
+    // The BLAS head (one per participating draw object, then one per cluster)
+    // plus the skinned tail, and the update policy over them. The book is the
+    // sole CPU owner that keeps every BLAS alive: a TLAS does not retain the
+    // structures it references, and the `useResource` an encoder issues only
+    // declares residency, so a BLAS must stay owned as long as any in-flight
+    // trace can reach it through the TLAS.
+    book: AccelBook<Structure, MTLAccelerationStructureInstanceDescriptor>,
     // The top-level (instance) acceleration structure the kernel traces.
-    pub tlas: Retained<ProtocolObject<dyn MTLAccelerationStructure>>,
+    pub tlas: Structure,
     // `[RtGeomEntry; instance_count]`, indexed by the intersector's
     // `instance_id`. Lets the kernel find the hit triangle + shade it. Carries
     // each instance's model matrix, which the kernel uses to bring the hit
     // normal to world space, so it moves in lockstep with the TLAS transforms.
     pub geom_table: Retained<ProtocolObject<dyn MTLBuffer>>,
-
-    // Per-frame update state.
-    // Indices into the frame's `draw.objects` for the objects that participate,
-    // in BLAS / instance order. Lets an update re-read current transforms in
-    // the exact order the BLAS were built, and detect a changed draw list.
-    object_indices: Vec<usize>,
-    // The geometry signature each draw-object BLAS (`blas[..object_indices.len()]`)
-    // was built from, parallel to `object_indices`. A topology refresh compares
-    // these against the current draw set to reuse every unchanged BLAS and build
-    // only the new / changed ones.
-    draw_blas_sigs: Vec<GeomSig>,
-    // Each participating object's model matrix as baked into the current TLAS,
-    // in `object_indices` order. The `Auto` dirty check compares the live draw
-    // list against these to decide whether a rebuild is needed.
-    cached_models: Vec<[[f32; 4]; 4]>,
-    // The TLAS instance descriptors for every instanced-cluster instance, in
-    // the order they follow the draw-object instances. Clusters are baked
-    // static into the BVH, so a per-frame TLAS rebuild re-appends these
-    // verbatim after the freshly-transformed draw-object instances (their
-    // `accelerationStructureIndex` points at the cluster BLAS, which never
-    // move in `blas`). Empty when the world declares no `InstancedProp`.
-    cluster_instances: Vec<MTLAccelerationStructureInstanceDescriptor>,
-    // The geometry-table entries for the cluster instances, parallel to
-    // `cluster_instances`. Re-appended alongside them on a rebuild.
-    cluster_geom: Vec<RtGeomEntry>,
     // Private scratch for the seed build and the static `rebuild_tlas`, which
     // grows it as the instance count rises. One buffer serves every frame
     // because both paths commit and wait; the paths that do not (the skinned
@@ -231,24 +200,9 @@ pub(crate) struct RtAccelData {
     // update must park the outgoing handles in `retire_pool` instead of dropping
     // them, because a prior in-flight frame's trace can still reach them.
     ring_published: bool,
-    // Persistent CPU scratch for the per-frame skinned update, swapped out with
-    // `mem::take` so its heap capacity survives the frame.
-    update_scratch: RtUpdateScratch,
-}
-
-// The scene-scaled `Vec`s the per-frame skinned update fills. Kept on the accel
-// so each frame reuses the capacity instead of collecting fresh ones.
-#[derive(Default)]
-struct RtUpdateScratch {
-    // Indices into the frame's skinned draw objects, for those visible with real
-    // triangles, in skinned-BLAS order.
-    skinned: Vec<usize>,
-    // The geometry each of those objects' BLAS covers, parallel to `skinned`.
-    shapes: Vec<SkinnedShape>,
-    // This frame's TLAS instance descriptors and per-instance geometry entries,
-    // in instance order.
-    instances: Vec<MTLAccelerationStructureInstanceDescriptor>,
-    geom: Vec<RtGeomEntry>,
+    // Which ring slot the live TLAS was built from, so a slot a failed skinned
+    // update left live is not rewritten while frames still in flight trace it.
+    ring_liveness: SlotLiveness,
 }
 
 // Outgoing RT resources parked by a skinned rebuild or an incremental topology
@@ -331,13 +285,23 @@ pub(crate) struct RtTextureCounts {
     pub albedo_count: usize,
 }
 
-// The trailing knobs of an incremental topology refresh: whether see-through
-// glass is excluded from the BLAS, whether to also rebuild the TLAS inline (the
-// no-skinned path), and the frame id the retired resources are parked under.
+// Where skinned geometry stands on the frame of a topology refresh.
+#[derive(Clone, Copy)]
+pub(crate) struct RefreshShape {
+    // This frame's skinned update follows the refresh and builds the TLAS.
+    pub skinned_follows: bool,
+    // Skinned geometry exists, visible or not.
+    pub skinned_present: bool,
+}
+
+// The trailing knobs of a topology refresh: whether see-through glass is
+// excluded from the BLAS, whether unchanged BLAS are reused, where skinned
+// geometry stands, and the frame id the retired resources are parked under.
 #[derive(Clone, Copy)]
 pub(crate) struct RtTopologyRefreshOptions {
     pub exclude_seethrough: bool,
-    pub build_tlas: bool,
+    pub mode: RefreshMode,
+    pub shape: RefreshShape,
     pub frame_id: u64,
 }
 
@@ -430,9 +394,19 @@ fn instance_desc_at(
     }
 }
 
-// The instance descriptor for draw object `i` (its BLAS index == its position).
-fn instance_desc(obj: &DrawObject, i: usize) -> MTLAccelerationStructureInstanceDescriptor {
-    instance_desc_at(obj.model, i as u32)
+// The instance descriptor for an instance the book laid out. Its BLAS index is
+// the BLAS's position in the TLAS's array, where the skinned BLAS follow the
+// `static_blas_count` head entries.
+fn book_instance(
+    model: [[f32; 4]; 4],
+    blas: InstanceBlas<'_, Structure>,
+    static_blas_count: usize,
+) -> MTLAccelerationStructureInstanceDescriptor {
+    let index = match blas {
+        InstanceBlas::Head { index, .. } | InstanceBlas::Fresh { index } => index,
+        InstanceBlas::Skinned { n } => static_blas_count + n,
+    };
+    instance_desc_at(model, index as u32)
 }
 
 // The TLAS descriptor over `blas_refs`, reading transforms from
@@ -487,17 +461,17 @@ fn declare_blas_resident<'a>(
 // must declare them itself. Batching collapses the per-frame Obj-C message-send
 // count on BLAS-heavy worlds (the driver records the same residency set either
 // way, just in one call). A no-op when there are no BLAS.
-pub(in crate::metal) fn use_blas_resident_fragment(
+pub(in crate::metal) fn use_blas_resident_fragment<'a>(
     enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
-    blas: &[Retained<ProtocolObject<dyn MTLAccelerationStructure>>],
+    blas: impl IntoIterator<Item = &'a Structure>,
 ) {
-    if blas.is_empty() {
-        return;
-    }
     let res: Vec<NonNull<ProtocolObject<dyn MTLResource>>> = blas
-        .iter()
+        .into_iter()
         .map(|b| NonNull::from(ProtocolObject::from_ref(&**b)))
         .collect();
+    if res.is_empty() {
+        return;
+    }
     // SAFETY: `res` is a non-empty, contiguous array of `res.len()` live resource
     // pointers; the encoder reads it for the duration of the call only.
     unsafe {
@@ -817,47 +791,66 @@ pub(crate) fn build_rt_accel(
         clusters,
     } = scene;
     let RtTextureCounts { albedo_count } = texture_counts;
-    // Track the participating indices into `draw.objects` so a per-frame update
-    // re-reads transforms in BLAS-build order.
-    let object_indices: Vec<usize> = draw_objects
-        .iter()
-        .enumerate()
-        .filter(|(_, o)| participates_in_bvh(o, exclude_seethrough))
-        .map(|(i, _)| i)
-        .collect();
-    // Instanced clusters that carry real geometry and at least one instance.
-    let cluster_list: Vec<&InstancedCluster> = clusters
-        .iter()
-        .filter(|c| c.index_count >= 3 && !c.instances.is_empty())
-        .collect();
-    // Skinned objects that are visible and carry real triangles, as indices into
-    // the skinned draw list so the skin dispatch finds each one's pose. Clusters
+    let seed = SeedSet::new(draw_objects, clusters, exclude_seethrough);
+    // Skinned geometry joins the seed build alongside the static head. Clusters
     // and skinned geometry coexist in the BVH; the combination once page-faulted
     // the trace, but that was a per-frame VRAM leak (no autorelease pool around
     // the frame), fixed separately.
     let skinned_list: &[SkinnedDrawObject] = skinned.as_ref().map_or(&[], |s| s.objects);
-    let skinned_objects: Vec<usize> = skinned_list
-        .iter()
-        .enumerate()
-        .filter(|(_, o)| o.visible && o.index_count >= 3)
-        .map(|(i, _)| i)
-        .collect();
-    if object_indices.is_empty() && cluster_list.is_empty() && skinned_objects.is_empty() {
+    if seed.is_empty() && !skinned_list.iter().any(traced_skinned) {
         return Ok(None);
     }
-    let objects: Vec<&DrawObject> = object_indices.iter().map(|&i| &draw_objects[i]).collect();
+
+    // One BLAS per draw object, then one per cluster: the book's head.
+    let mut prim_descs: Vec<Retained<MTLPrimitiveAccelerationStructureDescriptor>> = seed
+        .objects
+        .iter()
+        .map(|&i| {
+            let obj = &draw_objects[i];
+            prim_desc_for(
+                vertex_buffer,
+                index_buffer,
+                obj.base_vertex as usize,
+                obj.index_offset,
+                obj.index_count,
+                MTLIndexType::UInt32,
+                MTLAccelerationStructureUsage::None,
+            )
+        })
+        .chain(seed.clusters.iter().map(|c| {
+            prim_desc_for(
+                vertex_buffer,
+                index_buffer,
+                0,
+                c.index_offset,
+                c.index_count,
+                MTLIndexType::UInt32,
+                MTLAccelerationStructureUsage::None,
+            )
+        }))
+        .collect();
+    let mut max_scratch: usize = 0;
+    let mut allocate = |prim: &MTLPrimitiveAccelerationStructureDescriptor| {
+        let sizes = device.accelerationStructureSizesWithDescriptor(prim);
+        max_scratch = max_scratch.max(sizes.buildScratchBufferSize);
+        device
+            .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
+            .ok_or_else(|| allocation_failed("BLAS"))
+    };
+    let head = prim_descs
+        .iter()
+        .map(|prim| allocate(prim))
+        .collect::<RenderResult<Vec<Structure>>>()?;
+    let albedo_count = albedo_count as u32;
+    let mut book = AccelBook::new(&seed, head, draw_objects, albedo_count)?;
+    book.select_skinned(Some(skinned_list));
+    let skinned_objects = book.visible_skinned().to_vec();
 
     // Deformed-vertex buffer for skinned geometry: the `rt_skin` kernel writes
     // posed model-space `Vertex`s here, mirroring the skinned vertex buffer's
-    // indexing so the skinned index buffer addresses it directly. Sized to
-    // the highest vertex the skinned objects reach; a 1-vertex dummy when there
-    // is no skinned geometry (so the encoder always has a buffer to bind).
-    let deformed_extent: usize = skinned_objects
-        .iter()
-        .map(|&i| skinned_list[i].vertex_base as usize + skinned_list[i].vertex_count)
-        .max()
-        .unwrap_or(0);
-    let deformed_bytes = (deformed_extent * VERTEX_STRIDE).max(VERTEX_STRIDE);
+    // indexing so the skinned index buffer addresses it directly. Sized to the
+    // highest vertex the skinned objects reach.
+    //
     // Shared, not Private: the buffer is written by the skin compute pass and
     // then read both by the acceleration-structure build and (per hit) by the
     // reflection fragment shader, which run in *separate* command buffers. A
@@ -868,6 +861,8 @@ pub(crate) fn build_rt_accel(
     // The 1-vertex dummy is allocated unconditionally: it is what the encoder
     // binds whenever no skinned geometry is traced, both here and after the
     // per-frame update stops publishing its ring slot.
+    let deformed_bytes =
+        (book.skinned_vertex_extent(skinned_list) as usize * VERTEX_STRIDE).max(VERTEX_STRIDE);
     let deformed_dummy = device
         .newBufferWithLength_options(VERTEX_STRIDE, MTLResourceOptions::StorageModeShared)
         .ok_or_else(|| allocation_failed("RT deformed-vertex dummy buffer"))?;
@@ -893,112 +888,43 @@ pub(crate) fn build_rt_accel(
             .ok_or_else(|| allocation_failed("RT skinned-index dummy buffer"))?,
     };
 
-    // One BLAS per draw object, then one per cluster, then one per skinned
-    // object. `blas[i]` for i < draw_blas_count is draw object i; the next
-    // `cluster_list.len()` are clusters; the rest are skinned objects.
-    let draw_blas_count = objects.len();
-    let skinned_blas_base = draw_blas_count + cluster_list.len();
-    let mut prim_descs: Vec<Retained<MTLPrimitiveAccelerationStructureDescriptor>> =
-        Vec::with_capacity(skinned_blas_base + skinned_objects.len());
-    for obj in &objects {
-        prim_descs.push(prim_desc_for(
-            vertex_buffer,
-            index_buffer,
-            obj.base_vertex as usize,
-            obj.index_offset,
-            obj.index_count,
-            MTLIndexType::UInt32,
-            MTLAccelerationStructureUsage::None,
-        ));
-    }
-    for c in &cluster_list {
-        prim_descs.push(prim_desc_for(
-            vertex_buffer,
-            index_buffer,
-            0,
-            c.index_offset,
-            c.index_count,
-            MTLIndexType::UInt32,
-            MTLAccelerationStructureUsage::None,
-        ));
-    }
-    // Skinned BLAS trace the deformed buffer (absolute indices, base_vertex
-    // 0). The buffer's contents are written by the compute pass on the same
-    // command buffer below, before this BLAS builds.
-    for &i in &skinned_objects {
-        let obj = &skinned_list[i];
-        prim_descs.push(prim_desc_for(
-            deformed_verts.as_ref(),
-            skinned_indices.as_ref(),
-            0,
-            obj.index_offset,
-            obj.index_count,
-            MTLIndexType::UInt32,
-            MTLAccelerationStructureUsage::Refit,
-        ));
-    }
-
-    // Allocate each BLAS and track the largest scratch requirement so a single
-    // shared scratch buffer covers the whole build (reused serially).
-    let mut blas: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> =
-        Vec::with_capacity(prim_descs.len());
-    let mut max_scratch: usize = 0;
-    for prim in &prim_descs {
-        let sizes = device.accelerationStructureSizesWithDescriptor(prim);
-        let acc = device
-            .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
-            .ok_or_else(|| allocation_failed("BLAS"))?;
-        max_scratch = max_scratch.max(sizes.buildScratchBufferSize);
-        blas.push(acc);
-    }
+    // Skinned BLAS trace the deformed buffer (absolute indices, base_vertex 0)
+    // and follow the head as the book's tail. The buffer's contents are written
+    // by the skin pass below, before these build.
+    let skinned_descs: Vec<_> = skinned_objects
+        .iter()
+        .map(|&i| {
+            let obj = &skinned_list[i];
+            prim_desc_for(
+                deformed_verts.as_ref(),
+                skinned_indices.as_ref(),
+                0,
+                obj.index_offset,
+                obj.index_count,
+                MTLIndexType::UInt32,
+                MTLAccelerationStructureUsage::Refit,
+            )
+        })
+        .collect();
+    let tail = skinned_descs
+        .iter()
+        .map(|prim| allocate(prim))
+        .collect::<RenderResult<Vec<Structure>>>()?;
+    book.replace_tail(tail);
+    prim_descs.extend(skinned_descs);
 
     // The geometry table is indexed PER INSTANCE, by the intersector's
     // `instance_id`, which is the instance's position in the instance buffer
-    // (NOT the `accelerationStructureIndex`). So there is exactly one entry per
-    // TLAS instance, in instance order: draw objects, then every cluster
-    // instance, then skinned objects.
-    let mut instance_descs: Vec<MTLAccelerationStructureInstanceDescriptor> = objects
-        .iter()
-        .enumerate()
-        .map(|(i, obj)| instance_desc(obj, i))
-        .collect();
-    let mut geom_entries: Vec<RtGeomEntry> = objects
-        .iter()
-        .map(|obj| geom_entry(obj, albedo_count as u32))
-        .collect();
+    // (NOT the `accelerationStructureIndex`), so there is exactly one entry per
+    // TLAS instance, in the book's instance order.
+    let static_blas_count = book.static_blas_count();
+    book.fill_instances(draw_objects, Some(skinned_list), |model, _, blas| {
+        book_instance(model, blas, static_blas_count)
+    });
+    let instance_buffer = upload_buffer(device, book.instances(), "RT instance descriptors")?;
+    let geom_table = upload_buffer(device, book.geom_table(), "RT geometry table")?;
 
-    // Clusters: one TLAS instance + one geometry entry per cluster instance, all
-    // referencing the cluster's single BLAS (via `accelerationStructureIndex`)
-    // but each with its own transform + geometry entry (so per-instance normals
-    // are correct). Stored on `RtAccelData` so a per-frame TLAS rebuild
-    // re-appends them verbatim (clusters are baked static into the BVH).
-    let mut cluster_instances: Vec<MTLAccelerationStructureInstanceDescriptor> = Vec::new();
-    let mut cluster_geom: Vec<RtGeomEntry> = Vec::new();
-    for (ci, c) in cluster_list.iter().enumerate() {
-        let blas_index = (draw_blas_count + ci) as u32;
-        for model in &c.instances {
-            cluster_instances.push(instance_desc_at(*model, blas_index));
-            cluster_geom.push(cluster_geom_entry(c, *model, albedo_count as u32));
-        }
-    }
-    instance_descs.extend_from_slice(&cluster_instances);
-    geom_entries.extend_from_slice(&cluster_geom);
-
-    // Skinned objects: one TLAS instance + one geometry entry each (each skinned
-    // object has its own BLAS). The deformed verts are in model space, so the
-    // instance transform (= the object's model matrix) brings the trace to world
-    // space, like the static path.
-    for (si, &i) in skinned_objects.iter().enumerate() {
-        let obj = &skinned_list[i];
-        let blas_index = (skinned_blas_base + si) as u32;
-        instance_descs.push(instance_desc_at(obj.model, blas_index));
-        geom_entries.push(skinned_geom_entry(obj, albedo_count as u32));
-    }
-
-    let instance_buffer = upload_buffer(device, &instance_descs, "RT instance descriptors")?;
-    let geom_table = upload_buffer(device, &geom_entries, "RT geometry table")?;
-
-    let tlas_desc = make_tlas_desc(&blas, &instance_buffer, instance_descs.len());
+    let tlas_desc = make_tlas_desc(book.blas(), &instance_buffer, book.instances().len());
     let tlas_sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
     let tlas = device
         .newAccelerationStructureWithSize(tlas_sizes.accelerationStructureSize)
@@ -1037,7 +963,7 @@ pub(crate) fn build_rt_accel(
     let cmd = command_queue
         .commandBuffer()
         .ok_or_else(|| RenderError::Other("failed to create RT build command buffer".into()))?;
-    for (acc, prim) in blas.iter().zip(prim_descs.iter()) {
+    for (acc, prim) in book.blas().iter().zip(prim_descs.iter()) {
         let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
             RenderError::Other("failed to create acceleration-structure encoder".into())
         })?;
@@ -1051,7 +977,7 @@ pub(crate) fn build_rt_accel(
     let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
         RenderError::Other("failed to create acceleration-structure encoder".into())
     })?;
-    declare_blas_resident(&enc, &blas);
+    declare_blas_resident(&enc, book.blas());
     enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
         &tlas, &tlas_desc, &scratch, 0,
     );
@@ -1060,20 +986,12 @@ pub(crate) fn build_rt_accel(
     cmd.waitUntilCompleted();
     check_build_status(&cmd, "acceleration-structure build")?;
 
-    let cached_models = objects.iter().map(|o| o.model).collect();
-    let draw_blas_sigs = objects.iter().map(|o| GeomSig::of(o)).collect();
     let identity_palette = upload_buffer(device, &[IDENTITY4], "RT identity palette")?;
 
     Ok(Some(RtAccelData {
-        blas,
-        static_blas_count: skinned_blas_base,
+        book,
         tlas,
         geom_table,
-        object_indices,
-        draw_blas_sigs,
-        cached_models,
-        cluster_instances,
-        cluster_geom,
         scratch,
         instance_buffer,
         deformed_verts,
@@ -1086,7 +1004,7 @@ pub(crate) fn build_rt_accel(
         // Everything above is a fresh allocation, not a ring clone, so the first
         // skinned update has to retire it rather than drop it.
         ring_published: false,
-        update_scratch: RtUpdateScratch::default(),
+        ring_liveness: SlotLiveness::new(frames_in_flight),
     }))
 }
 
@@ -1137,68 +1055,32 @@ fn slot_scratch_bytes(blas_scratch: usize, tlas_scratch: usize) -> usize {
     blas_scratch.max(tlas_scratch).max(1)
 }
 
-// Whether every participating draw-object index still resolves to a resident,
-// real-triangle object. `false` means the draw list changed shape, and the
-// caller leaves the structure as-is for this frame (a full rebuild is the path
-// that handles a changed object set). Free-standing so it can be called while
-// another field of the accel is mutably borrowed.
-fn objects_current(object_indices: &[usize], draw_objects: &[DrawObject]) -> bool {
-    object_indices.iter().all(|&idx| {
-        draw_objects
-            .get(idx)
-            .is_some_and(|o| o.resident && o.index_count >= 3)
-    })
-}
-
-// The participating draw objects in BLAS order, without materializing a `Vec`.
-// Only meaningful once `objects_current` has passed; a stale index is skipped
-// rather than panicking.
-fn objects_in_blas_order<'a>(
-    object_indices: &'a [usize],
-    draw_objects: &'a [DrawObject],
-) -> impl Iterator<Item = &'a DrawObject> + Clone {
-    object_indices
-        .iter()
-        .filter_map(move |&idx| draw_objects.get(idx))
-}
-
 impl RtAccelData {
-    // Keep the static BLAS; rebuild the TLAS + geometry table from current
-    // transforms with fresh allocations, then build on a separate command
-    // buffer (committed and waited). Fresh allocations mean no prior in-flight
-    // frame can observe a half-updated structure: the old TLAS / table stay
-    // alive (retained by their command buffers) until those frames complete.
+    // Keep the static BLAS; rebuild the TLAS + geometry table from the
+    // transforms the book's `next_step` collected, with fresh allocations, then
+    // build on a separate command buffer (committed and waited). Fresh
+    // allocations mean no prior in-flight frame can observe a half-updated
+    // structure: the old TLAS / table stay alive (retained by their command
+    // buffers) until those frames complete.
     pub(crate) fn rebuild_tlas(
         &mut self,
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
         command_queue: &ProtocolObject<dyn objc2_metal::MTLCommandQueue>,
         draw_objects: &[DrawObject],
-        albedo_count: usize,
+        frame_id: u64,
     ) -> RenderResult<()> {
-        if !objects_current(&self.object_indices, draw_objects) {
-            return Ok(());
-        }
         // Freshly-transformed draw-object instances, then the cluster instances
-        // re-appended verbatim (clusters are baked static; their BLAS never move
-        // in `self.blas`, so the stored `accelerationStructureIndex` stays
-        // valid). The geometry table stays per-BLAS: draw entries (per object)
-        // then the per-cluster entries. Built into the persistent scratch so the
-        // per-frame `Auto` rebuild reuses its capacity.
-        let mut scratch = std::mem::take(&mut self.update_scratch);
-        scratch.instances.clear();
-        scratch.geom.clear();
-        for (i, obj) in objects_in_blas_order(&self.object_indices, draw_objects).enumerate() {
-            scratch.instances.push(instance_desc(obj, i));
-            scratch.geom.push(geom_entry(obj, albedo_count as u32));
-        }
-        scratch.instances.extend_from_slice(&self.cluster_instances);
-        scratch.geom.extend_from_slice(&self.cluster_geom);
-        let instance_descs = &scratch.instances;
-        let geom_entries = &scratch.geom;
-
-        let instance_buffer = upload_buffer(device, instance_descs, "RT instance descriptors")?;
-        let geom_table = upload_buffer(device, geom_entries, "RT geometry table")?;
-        let tlas_desc = make_tlas_desc(&self.blas, &instance_buffer, instance_descs.len());
+        // (clusters are baked static; their BLAS never move in the head).
+        let static_blas_count = self.book.static_blas_count();
+        self.book
+            .fill_instances(draw_objects, None, |model, _, blas| {
+                book_instance(model, blas, static_blas_count)
+            });
+        let instance_count = self.book.instances().len();
+        let instance_buffer =
+            upload_buffer(device, self.book.instances(), "RT instance descriptors")?;
+        let geom_table = upload_buffer(device, self.book.geom_table(), "RT geometry table")?;
+        let tlas_desc = make_tlas_desc(self.book.head(), &instance_buffer, instance_count);
         let sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
         let tlas = device
             .newAccelerationStructureWithSize(sizes.accelerationStructureSize)
@@ -1226,7 +1108,7 @@ impl RtAccelData {
         })?;
         // Every BLAS the rebuilt TLAS references was built on an earlier command
         // buffer (none are rebuilt here), so all must be declared resident.
-        declare_blas_resident(&enc, &self.blas);
+        declare_blas_resident(&enc, self.book.head());
         enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
             &tlas,
             &tlas_desc,
@@ -1240,57 +1122,77 @@ impl RtAccelData {
 
         self.tlas = tlas;
         self.geom_table = geom_table;
+        if let Some(tail) = self.book.commit_static() {
+            self.release_skinned(tail, frame_id);
+        }
+        self.retire_parked(frame_id);
         // Fresh allocations, so a later skinned update has to retire rather than
         // drop them.
         self.ring_published = false;
-        // Snapshot the transforms now baked into the TLAS so the next frame's
-        // dirty check compares against what was actually built.
-        self.cached_models.clear();
-        self.cached_models
-            .extend(objects_in_blas_order(&self.object_indices, draw_objects).map(|o| o.model));
-        self.update_scratch = scratch;
         Ok(())
     }
 
-    // Whether the BVH has no draw-object and no cluster geometry left. After a
-    // topology refresh removes the last of both (every chunk streamed out, with
-    // no clusters), the caller drops the structure so a later add re-seeds it
-    // rather than building a degenerate zero-instance TLAS. (Skinned geometry is
-    // handled on its own per-frame path and never reaches the refresh, so it is
-    // not consulted here.)
+    // Whether the BVH has no draw-object and no cluster geometry left.
     pub(crate) fn is_empty(&self) -> bool {
-        self.object_indices.is_empty() && self.cluster_instances.is_empty()
+        self.book.is_empty()
     }
 
-    // Incrementally bring the draw-object BLAS head in line with the current
-    // participating draw set: reuse every BLAS whose geometry is unchanged, build
-    // only the new / changed ones, retire the orphans. The cluster + skinned tails
-    // of `blas` are preserved verbatim. When `build_tlas` is set (the no-skinned
-    // path), also rebuilds the TLAS + geometry table over [refreshed draw head +
-    // clusters] in the same command buffer; when clear (the skinned path) only the
-    // head is refreshed and the caller's `rebuild_skinned` rebuilds the TLAS over
-    // the head + the fresh skinned tail. Used when streamed chunks are
-    // added/removed, props are cloned, or a material edit changes RT
-    // participation; a full rebuild of every BLAS would be too costly when most
-    // are unchanged.
+    // Every BLAS, the head then any skinned tail.
+    pub(crate) fn blas(&self) -> &[Structure] {
+        self.book.blas()
+    }
+
+    // Every BLAS the live TLAS may reference, parked orphans included, for a
+    // trace pass to declare resident.
+    pub(crate) fn traced_blas(&self) -> impl Iterator<Item = &Structure> {
+        self.book.traced_blas()
+    }
+
+    // Follow a change to the shared texture pool's real-texture count.
+    pub(crate) fn set_albedo_count(&mut self, albedo_count: usize) {
+        self.book.set_albedo_count(albedo_count as u32);
+    }
+
+    // The update policy: what this frame's update plans and runs.
+    pub(crate) fn book_mut(
+        &mut self,
+    ) -> &mut AccelBook<Structure, MTLAccelerationStructureInstanceDescriptor> {
+        &mut self.book
+    }
+
+    // Bring the draw-object BLAS head in line with the current participating draw
+    // set: reuse every BLAS whose geometry is unchanged (or none, under
+    // `RefreshMode::RebuildAll`), build the new / changed ones, and commit the
+    // refreshed head. The cluster BLAS and any skinned tail are preserved. Used
+    // when streamed chunks are added/removed, props are cloned, or a material
+    // edit changes RT participation.
+    //
+    // On the skinned path (`skinned_follows`) the caller's `rebuild_skinned`
+    // builds this frame's TLAS over the refreshed head + the skinned tail, so no
+    // TLAS is built here and the ring is left alone; the orphans stay parked in
+    // the book, and declared resident by every trace, until a TLAS that does not
+    // reference them publishes, since a failed or skipped skinned step leaves the
+    // old one live. On the static path the TLAS + geometry table are rebuilt over
+    // the refreshed head in the same command buffer and any skinned tail stops
+    // being published. A refresh that leaves no draw or cluster geometry follows
+    // `empty_head`: with no skinned geometry at all it builds nothing and the
+    // caller drops the BVH.
     //
     // Fully asynchronous, mirroring `rebuild_skinned`: NO `waitUntilCompleted`.
-    // The new BLAS (and, when `build_tlas`, the TLAS) build on one command buffer
+    // The new BLAS (and, on the static path, the TLAS) build on one command buffer
     // committed on the shared queue ahead of this frame's reflection-trace command
-    // buffer, ordered by same-queue FIFO commit -- the same mechanism the skinned
-    // rebuild and the whole render graph rely on -- so the trace reads
-    // fully-built structures with no CPU stall. All outgoing / transient resources
-    // (orphan BLAS, the old TLAS + geometry table + instance buffer when
-    // `build_tlas`, and the build scratch) are parked in `retire_pool` rather than
-    // freed in place: `useResource` declares residency not lifetime, and the build
-    // keeps reading the scratch / instance buffer after this returns, so they must
-    // outlive the frames whose still-in-flight trace could reach them.
+    // buffer, ordered by same-queue FIFO commit. Outgoing / transient resources
+    // (orphan BLAS, the replaced TLAS + geometry table + instance buffer, and the
+    // build scratch) are parked in `retire_pool` rather than freed in place:
+    // `useResource` declares residency not lifetime, and the build keeps reading
+    // the scratch / instance buffer after this returns, so they must outlive the
+    // frames whose still-in-flight trace could reach them. Every allocation
+    // precedes the commit, so a failure leaves the live BVH untouched.
     pub(crate) fn refresh_static_topology(
         &mut self,
         gpu: RtGpu,
         static_geometry: RtStaticGeometry,
         draw_objects: &[DrawObject],
-        texture_counts: RtTextureCounts,
         options: RtTopologyRefreshOptions,
     ) -> RenderResult<()> {
         let RtGpu {
@@ -1302,51 +1204,30 @@ impl RtAccelData {
             vertex_buffer,
             index_buffer,
         } = static_geometry;
-        let RtTextureCounts { albedo_count } = texture_counts;
         let RtTopologyRefreshOptions {
             exclude_seethrough,
-            build_tlas,
+            mode,
+            shape:
+                RefreshShape {
+                    skinned_follows,
+                    skinned_present,
+                },
             frame_id,
         } = options;
-        // The current participating draw set, by the same predicate as the full
-        // build. (Clusters + skinned never change here, so they are not re-filtered.)
-        let new_indices: Vec<usize> = draw_objects
-            .iter()
-            .enumerate()
-            .filter(|(_, o)| participates_in_bvh(o, exclude_seethrough))
-            .map(|(i, _)| i)
-            .collect();
-        let new_sigs: Vec<GeomSig> = new_indices
-            .iter()
-            .map(|&i| GeomSig::of(&draw_objects[i]))
-            .collect();
-
-        let plan = plan_topology_refresh(
-            &self.object_indices,
-            &self.draw_blas_sigs,
-            &new_indices,
-            &new_sigs,
-        );
-
-        let old_draw_count = self.object_indices.len();
-        // Clusters occupy `blas[old_draw_count..static_blas_count]`; skinned the
-        // tail past `static_blas_count`. Both are preserved across the refresh.
-        let cluster_count = self.static_blas_count - old_draw_count;
+        let refresh = self
+            .book
+            .plan_refresh(draw_objects, exclude_seethrough, mode);
+        let leaves_nothing = self.book.refresh_leaves_nothing(&refresh);
 
         // Allocate (but do not yet build) a fresh BLAS for every slot the plan did
-        // not match to an existing one. Each is parked at its new-slot position so
-        // the assembly below can interleave reused and built BLAS in `new_indices`
-        // order.
-        let mut fresh: Vec<Option<Retained<ProtocolObject<dyn MTLAccelerationStructure>>>> =
-            (0..new_indices.len()).map(|_| None).collect();
+        // not match to an existing one.
+        let mut fresh: Vec<Option<Structure>> =
+            (0..refresh.indices().len()).map(|_| None).collect();
         let mut build_jobs: Vec<(usize, Retained<MTLPrimitiveAccelerationStructureDescriptor>)> =
             Vec::new();
         let mut max_scratch: usize = 0;
-        for (j, reuse) in plan.reuse.iter().enumerate() {
-            if reuse.is_some() {
-                continue;
-            }
-            let obj = &draw_objects[new_indices[j]];
+        for (j, idx) in refresh.fresh_slots() {
+            let obj = &draw_objects[idx];
             let prim = prim_desc_for(
                 vertex_buffer,
                 index_buffer,
@@ -1366,66 +1247,42 @@ impl RtAccelData {
             build_jobs.push((j, prim));
         }
 
-        // Assemble the new BLAS array: [refreshed draw head, clusters, skinned],
-        // pulling each draw slot from the reused old BLAS or its freshly-built one.
-        let old_blas = std::mem::take(&mut self.blas);
-        let mut new_blas: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> =
-            Vec::with_capacity(new_indices.len() + (old_blas.len() - old_draw_count));
-        for (j, reuse) in plan.reuse.iter().enumerate() {
-            match reuse {
-                Some(k) => new_blas.push(old_blas[*k].clone()),
-                None => new_blas.push(fresh[j].clone().expect("fresh BLAS built above")),
-            }
-        }
-        // Clusters then skinned, verbatim.
-        for b in &old_blas[old_draw_count..] {
-            new_blas.push(b.clone());
-        }
-
-        // Outgoing structures / buffers to retire once the frames-in-flight fence
-        // clears them. Orphaned draw BLAS go here always: the current (not yet
-        // replaced) TLAS, which an in-flight trace may still be reading, references
-        // them, and `useResource` is residency not lifetime.
-        let mut retire_structures: Vec<Retained<ProtocolObject<dyn MTLAccelerationStructure>>> =
-            plan.retire.iter().map(|&k| old_blas[k].clone()).collect();
-        let mut retire_buffers: Vec<Retained<ProtocolObject<dyn MTLBuffer>>> = Vec::new();
-        drop(old_blas);
-
-        // When asked, rebuild the TLAS + geometry table over the refreshed draw
-        // head + the cluster instances (re-appended verbatim), with the current
-        // transforms. Skipped if the set is empty (the caller drops the BVH rather
-        // than build a degenerate zero-instance TLAS). The structures are
-        // allocated here and built on the command buffer below.
-        let do_tlas = build_tlas && !(new_indices.is_empty() && cluster_count == 0);
-        let tlas_build = if do_tlas {
-            let objects: Vec<&DrawObject> = new_indices.iter().map(|&i| &draw_objects[i]).collect();
-            let mut instance_descs: Vec<MTLAccelerationStructureInstanceDescriptor> = objects
-                .iter()
-                .enumerate()
-                .map(|(i, obj)| instance_desc(obj, i))
-                .collect();
-            let mut geom_entries: Vec<RtGeomEntry> = objects
-                .iter()
-                .map(|obj| geom_entry(obj, albedo_count as u32))
-                .collect();
-            instance_descs.extend_from_slice(&self.cluster_instances);
-            geom_entries.extend_from_slice(&self.cluster_geom);
-
+        // On the static path, rebuild the TLAS + geometry table over the refreshed
+        // head with the current transforms. An empty head that skinned geometry
+        // can rejoin still gets a (zero-instance) TLAS, so the trace stops
+        // reaching what left.
+        let empty = leaves_nothing.then(|| empty_head(skinned_follows, skinned_present));
+        let build_tlas = !skinned_follows && empty != Some(EmptyHead::Drop);
+        let tlas_build = if build_tlas {
+            self.book
+                .fill_refresh_instances(&refresh, draw_objects, |model, _, blas| {
+                    book_instance(model, blas, 0)
+                });
+            let instance_count = self.book.instances().len();
             let instance_buffer =
-                upload_buffer(device, &instance_descs, "RT instance descriptors")?;
-            let geom_table = upload_buffer(device, &geom_entries, "RT geometry table")?;
-            let tlas_desc = make_tlas_desc(&new_blas, &instance_buffer, instance_descs.len());
+                upload_buffer(device, self.book.instances(), "RT instance descriptors")?;
+            let geom_table = upload_buffer(device, self.book.geom_table(), "RT geometry table")?;
+            let head: Vec<&ProtocolObject<dyn MTLAccelerationStructure>> = self
+                .book
+                .refreshed_head(&refresh, &fresh)
+                .into_iter()
+                .map(|b| b.as_ref())
+                .collect();
+            let tlas_desc = make_tlas_desc_from_refs(&head, &instance_buffer, instance_count);
             let tlas_sizes = device.accelerationStructureSizesWithDescriptor(&tlas_desc);
             max_scratch = max_scratch.max(tlas_sizes.buildScratchBufferSize);
             let tlas = device
                 .newAccelerationStructureWithSize(tlas_sizes.accelerationStructureSize)
                 .ok_or_else(|| allocation_failed("TLAS"))?;
             tlas.setLabel(Some(&crate::metal::pipeline::ns_str("rt_tlas")));
-            let cached_models: Vec<[[f32; 4]; 4]> = objects.iter().map(|o| o.model).collect();
-            Some((tlas, tlas_desc, instance_buffer, geom_table, cached_models))
+            Some((tlas, tlas_desc, instance_buffer, geom_table))
         } else {
             None
         };
+
+        // The commit must follow the builds committed next, so it is checked now,
+        // while a failure still leaves nothing committed.
+        self.book.check_refresh(&refresh, &fresh)?;
 
         // Build everything on ONE command buffer, committed WITHOUT waiting. Each
         // new BLAS in its own encoder (Metal does not order builds within an
@@ -1433,6 +1290,7 @@ impl RtAccelData {
         // final encoder that declares every referenced BLAS resident (all were
         // built on this or an earlier command buffer, so the TLAS build needs the
         // explicit `useResource`, exactly as the full build does).
+        let mut retire_buffers: Vec<Retained<ProtocolObject<dyn MTLBuffer>>> = Vec::new();
         if !build_jobs.is_empty() || tlas_build.is_some() {
             let scratch = device
                 .newBufferWithLength_options(
@@ -1445,7 +1303,9 @@ impl RtAccelData {
             })?;
             cmd.setLabel(Some(&crate::metal::pipeline::ns_str("rt_topology_build")));
             for (j, prim) in &build_jobs {
-                let acc = fresh[*j].as_ref().expect("fresh BLAS allocated above");
+                let Some(acc) = fresh[*j].as_ref() else {
+                    continue;
+                };
                 let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
                     RenderError::Other("failed to create acceleration-structure encoder".into())
                 })?;
@@ -1454,11 +1314,11 @@ impl RtAccelData {
                 );
                 enc.endEncoding();
             }
-            if let Some((tlas, tlas_desc, _, _, _)) = &tlas_build {
+            if let Some((tlas, tlas_desc, _, _)) = &tlas_build {
                 let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
                     RenderError::Other("failed to create acceleration-structure encoder".into())
                 })?;
-                declare_blas_resident(&enc, &new_blas);
+                declare_blas_resident(&enc, self.book.refreshed_head(&refresh, &fresh));
                 enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
                     tlas, tlas_desc, &scratch, 0,
                 );
@@ -1470,31 +1330,35 @@ impl RtAccelData {
             retire_buffers.push(scratch);
         }
 
-        // Swap in the refreshed structures; park the outgoing ones for deferred
-        // free. The new BLAS stay owned by `self.blas` (the build references them
-        // by residency, not retention), so they must not be dropped here.
-        self.blas = new_blas;
-        self.static_blas_count = new_indices.len() + cluster_count;
-        self.object_indices = new_indices;
-        self.draw_blas_sigs = new_sigs;
+        // Swap in the refreshed head. The orphaned draw BLAS are referenced by the
+        // current (not yet replaced) TLAS, which an in-flight trace may still be
+        // reading, and `useResource` is residency not lifetime, so they are retired
+        // rather than dropped, and only once a TLAS without them is live.
+        let orphans = self.book.commit_refresh(refresh, fresh, draw_objects);
         // The persistent BLAS head changed identity, so every ring slot's cached
         // TLAS descriptor (which pins the array of referenced structures) is stale.
         self.head_generation = self.head_generation.wrapping_add(1);
-        if let Some((tlas, _, instance_buffer, geom_table, cached_models)) = tlas_build {
+        let mut retire_structures = Vec::new();
+        if skinned_follows {
+            self.book.park(orphans);
+        } else {
+            retire_structures.extend(orphans);
+        }
+        if let Some((tlas, _, instance_buffer, geom_table)) = tlas_build {
+            retire_structures.extend(self.book.take_parked());
             retire_structures.push(std::mem::replace(&mut self.tlas, tlas));
             retire_buffers.push(std::mem::replace(&mut self.geom_table, geom_table));
             retire_buffers.push(std::mem::replace(
                 &mut self.instance_buffer,
                 instance_buffer,
             ));
-            // Snapshot the transforms baked into the new TLAS for the next dirty check.
-            self.cached_models = cached_models;
+            if let Some(tail) = self.book.release_skinned() {
+                self.release_skinned(tail, frame_id);
+            }
             // Fresh allocations, so a later skinned update has to retire rather
             // than drop them.
             self.ring_published = false;
         }
-        // When `build_tlas` is clear (the skinned path), `cached_models` is rebuilt
-        // by the caller's `rebuild_skinned` over the refreshed `object_indices`.
         if !retire_structures.is_empty() || !retire_buffers.is_empty() {
             self.retire_pool.push(
                 frame_id,
@@ -1528,93 +1392,50 @@ impl RtAccelData {
     // bound the traversal-quality drift, and the joint palettes are the buffers
     // the main pass already built for this frame.
     //
-    // Returns `Ok(())` without touching the structures when the draw list changed
-    // shape (a full rebuild handles that), and falls back to `rebuild_tlas` when
-    // no skinned object is visible this frame.
+    // Runs over the skinned objects the book selected for this frame; the book's
+    // plan only takes this step when there is at least one. `full_build` builds
+    // every skinned BLAS from scratch rather than refitting.
     pub(crate) fn rebuild_skinned(
         &mut self,
         gpu: RtGpu,
         draw_objects: &[DrawObject],
         skinned: SkinnedRtInputs,
         joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
-        texture_counts: RtTextureCounts,
         frame: RtFrame,
-    ) -> RenderResult<()> {
+        full_build: bool,
+    ) -> RenderResult<RtUpdate> {
         let RtGpu {
             device,
             command_queue,
             ..
         } = gpu;
-        let RtTextureCounts { albedo_count } = texture_counts;
-        if !objects_current(&self.object_indices, draw_objects) {
-            return Ok(());
+        // A slot a failed update left live is still traced by the frames since, so
+        // this frame skips rather than rewrite it.
+        if !self.ring_liveness.writable(frame.ring_slot, frame.id) {
+            return Ok(RtUpdate::Skipped);
         }
-        // Persistent CPU scratch, swapped out so its heap capacity survives the
-        // frame and put back before the successful return. An error path loses
-        // the capacity, which is acceptable for an exceptional path.
-        let mut scratch = std::mem::take(&mut self.update_scratch);
-        let RtUpdateScratch {
-            skinned: skinned_objects,
-            shapes,
-            instances,
-            geom,
-        } = &mut scratch;
-
-        skinned_objects.clear();
-        skinned_objects.extend(
-            skinned
-                .objects
-                .iter()
-                .enumerate()
-                .filter(|(_, o)| o.visible && o.index_count >= 3)
-                .map(|(i, _)| i),
-        );
-        // No skinned geometry visible this frame: stop publishing the ring's
-        // structures (nothing may keep binding a slot a later skinned frame will
-        // rewrite), keep the static BLAS, and just refresh the TLAS from current
-        // transforms (the static path).
-        if skinned_objects.is_empty() {
-            self.update_scratch = scratch;
-            self.release_skinned();
-            return self.rebuild_tlas(device, command_queue, draw_objects, albedo_count);
-        }
-
         // The deformed buffer mirrors the skinned vertex buffer's indexing, so it
         // spans the highest vertex any visible skinned object reaches.
-        let deformed_extent = skinned_objects
-            .iter()
-            .map(|&i| skinned.objects[i].vertex_base as usize + skinned.objects[i].vertex_count)
-            .max()
-            .unwrap_or(0);
-        let deformed_bytes = (deformed_extent * VERTEX_STRIDE).max(VERTEX_STRIDE);
+        let deformed_bytes = (self.book.skinned_vertex_extent(skinned.objects) as usize
+            * VERTEX_STRIDE)
+            .max(VERTEX_STRIDE);
+        self.book.fill_skinned_shapes(skinned.objects, 0);
 
-        shapes.clear();
-        shapes.extend(skinned_objects.iter().map(|&i| SkinnedShape {
-            index_offset: skinned.objects[i].index_offset,
-            index_count: skinned.objects[i].index_count,
-            vertex_extent: 0,
-        }));
-
-        // TLAS instances + geometry table, in instance order: static draw objects
-        // (current transforms), then the cluster instances verbatim, then one per
-        // skinned object. Skinned BLAS follow the static/cluster head, so their
-        // `accelerationStructureIndex` is `static_blas_count + si`. Built before
-        // the ring slot is borrowed so the reads of `self` stay disjoint from it.
-        let static_blas_count = self.static_blas_count;
+        // TLAS instances + geometry table in the book's order. Skinned BLAS follow
+        // the static/cluster head, so their `accelerationStructureIndex` is
+        // `static_blas_count + n`. Built before the ring slot is borrowed so the
+        // reads of `self` stay disjoint from it.
+        let static_blas_count = self.book.static_blas_count();
         let head_generation = self.head_generation;
-        instances.clear();
-        geom.clear();
-        for (i, obj) in objects_in_blas_order(&self.object_indices, draw_objects).enumerate() {
-            instances.push(instance_desc(obj, i));
-            geom.push(geom_entry(obj, albedo_count as u32));
-        }
-        instances.extend_from_slice(&self.cluster_instances);
-        geom.extend_from_slice(&self.cluster_geom);
-        for (si, &oi) in skinned_objects.iter().enumerate() {
-            let obj = &skinned.objects[oi];
-            instances.push(instance_desc_at(obj.model, (static_blas_count + si) as u32));
-            geom.push(skinned_geom_entry(obj, albedo_count as u32));
-        }
+        self.book
+            .fill_instances(draw_objects, Some(skinned.objects), |model, _, blas| {
+                book_instance(model, blas, static_blas_count)
+            });
+        let book = &self.book;
+        let skinned_objects = book.visible_skinned();
+        let shapes = book.skinned_shapes();
+        let instances = book.instances();
+        let geom = book.geom_table();
 
         let skinned_indices = skinned.index_buffer.clone();
         let slot = self.ring.slot(frame.ring_slot);
@@ -1635,8 +1456,8 @@ impl RtAccelData {
 
         // This frame's instance descriptors + geometry entries, written straight
         // into the slot's upload buffers.
-        let instance_buffer = slot.instances(device, std::mem::size_of_val(&instances[..]))?;
-        let geom_table = slot.geom_table(device, std::mem::size_of_val(&geom[..]))?;
+        let instance_buffer = slot.instances(device, std::mem::size_of_val(instances))?;
+        let geom_table = slot.geom_table(device, std::mem::size_of_val(geom))?;
         write_buffer_slice(&instance_buffer, instances)?;
         write_buffer_slice(&geom_table, geom)?;
 
@@ -1653,8 +1474,8 @@ impl RtAccelData {
         let tlas_desc = match cached {
             Some(desc) => desc,
             None => {
-                let refs: Vec<&ProtocolObject<dyn MTLAccelerationStructure>> = self.blas
-                    [..static_blas_count]
+                let refs: Vec<&ProtocolObject<dyn MTLAccelerationStructure>> = book
+                    .head()
                     .iter()
                     .map(|b| b.as_ref())
                     .chain(slot.skinned_blas().iter().map(|b| b.as_ref()))
@@ -1704,7 +1525,7 @@ impl RtAccelData {
         // Settle build-or-refit last, once every fallible step above has passed:
         // recording a build the encoder never ran would leave the slot claiming a
         // tree a later refit could not update.
-        let update = slot.refit.plan(shapes, shape_changed);
+        let update = slot.refit.plan(shapes, shape_changed || full_build);
 
         // Stage 2: skinned BLAS + TLAS update, committed WITHOUT waiting:
         // same-queue commit order runs it after the skin compute above and before
@@ -1763,12 +1584,7 @@ impl RtAccelData {
             let enc = cmd.accelerationStructureCommandEncoder().ok_or_else(|| {
                 RenderError::Other("failed to create acceleration-structure encoder".into())
             })?;
-            declare_blas_resident(
-                &enc,
-                self.blas[..static_blas_count]
-                    .iter()
-                    .chain(slot.skinned_blas().iter()),
-            );
+            declare_blas_resident(&enc, book.head().iter().chain(slot.skinned_blas().iter()));
             enc.buildAccelerationStructure_descriptor_scratchBuffer_scratchBufferOffset(
                 &tlas,
                 &tlas_desc,
@@ -1786,13 +1602,7 @@ impl RtAccelData {
         // rather than dropped, because a prior in-flight frame's trace can still
         // reach them; once the ring owns them there is nothing left to retire.
         let takeover = !self.ring_published;
-        let old_skinned = if takeover {
-            self.blas.split_off(static_blas_count)
-        } else {
-            self.blas.truncate(static_blas_count);
-            Vec::new()
-        };
-        self.blas.extend(slot.skinned_blas().iter().cloned());
+        let old_skinned = self.book.replace_tail(slot.skinned_blas().iter().cloned());
         let old_tlas = std::mem::replace(&mut self.tlas, tlas);
         let old_geom_table = std::mem::replace(&mut self.geom_table, geom_table);
         let old_deformed = std::mem::replace(&mut self.deformed_verts, deformed_verts);
@@ -1808,23 +1618,48 @@ impl RtAccelData {
             );
         }
         self.skinned_indices = skinned_indices;
-        self.cached_models.clear();
-        self.cached_models
-            .extend(objects_in_blas_order(&self.object_indices, draw_objects).map(|o| o.model));
+        self.book.commit_skinned();
         self.ring_published = true;
-        self.update_scratch = scratch;
-        Ok(())
+        self.ring_liveness.publish(frame.ring_slot, frame.id);
+        self.retire_parked(frame.id);
+        Ok(RtUpdate::Done)
     }
 
-    // Stop publishing the ring's skinned structures: drop the skinned BLAS tail,
-    // fall back to the persistent dummy deformed buffer, and let every slot forget
+    // Retire the orphans a refresh parked until a TLAS built after it published.
+    fn retire_parked(&mut self, frame_id: u64) {
+        let structures = self.book.take_parked();
+        if !structures.is_empty() {
+            self.retire_pool.push(
+                frame_id,
+                RetiredRt {
+                    structures,
+                    buffers: Vec::new(),
+                },
+            );
+        }
+    }
+
+    // Stop publishing the skinned structures the TLAS no longer references: fall
+    // back to the persistent dummy deformed buffer and let every ring slot forget
     // the trees it built. A ring slot may be rewritten in place only because the
     // frame that wrote it is the only frame that binds it, so the moment the
-    // skinned path stops running its handles have to go with it.
-    fn release_skinned(&mut self) {
-        self.blas.truncate(self.static_blas_count);
+    // skinned path stops running its handles have to go with it. The `tail` may
+    // still be reached by an in-flight trace through the TLAS it was published
+    // in, so it is retired rather than dropped: a ring slot dropping its handles
+    // does not free a structure a retired copy still holds.
+    fn release_skinned(&mut self, tail: Vec<Structure>, frame_id: u64) {
+        if !tail.is_empty() {
+            self.retire_pool.push(
+                frame_id,
+                RetiredRt {
+                    structures: tail,
+                    buffers: Vec::new(),
+                },
+            );
+        }
         self.deformed_verts = self.deformed_dummy.clone();
         self.ring.release_all();
+        self.ring_liveness.unpublish(frame_id);
     }
 
     // Drop resources parked by prior skinned rebuilds that the frames-in-flight
@@ -1833,33 +1668,6 @@ impl RtAccelData {
     pub(crate) fn retire_completed(&mut self, frame_id: u64, depth: usize) {
         self.retire_pool.collect(frame_id, depth as u64);
     }
-
-    // Whether any participating object's model matrix differs from the one
-    // baked into the current TLAS. The cheap per-frame check that gates the
-    // `Auto` rebuild so a static scene never rebuilds. A changed draw-list
-    // shape (missing index) reads as dirty: the conservative answer.
-    pub(crate) fn transforms_dirty(&self, draw_objects: &[DrawObject]) -> bool {
-        models_dirty(&self.object_indices, &self.cached_models, |idx| {
-            draw_objects.get(idx).map(|o| o.model)
-        })
-    }
-}
-
-// Pure dirty test: true if `current(idx)` differs from the cached model for any
-// `(idx, cached)` pair, or `current` has no entry for an index. Split out from
-// `transforms_dirty` so it is unit-testable without a `DrawObject`.
-fn models_dirty(
-    object_indices: &[usize],
-    cached_models: &[[[f32; 4]; 4]],
-    current: impl Fn(usize) -> Option<[[f32; 4]; 4]>,
-) -> bool {
-    if object_indices.len() != cached_models.len() {
-        return true;
-    }
-    object_indices
-        .iter()
-        .zip(cached_models.iter())
-        .any(|(&idx, cached)| current(idx) != Some(*cached))
 }
 
 // Build the compute pipeline that deforms skinned vertices for ray tracing
@@ -1896,10 +1704,14 @@ fn upload_buffer<T: Copy>(
     let bytes = std::mem::size_of_val(data);
     if bytes == 0 {
         // Metal rejects a zero-length buffer, and `data.as_ptr()` on an empty
-        // slice is dangling, so there is no byte to copy from. Hand back a
-        // 1-byte buffer the GPU never reads instead.
+        // slice is dangling, so there is no byte to copy from. Hand back one
+        // zeroed element instead: a shader binding the buffer as an array of `T`
+        // (the geometry table of a zero-instance TLAS) needs a whole one.
         return device
-            .newBufferWithLength_options(1, MTLResourceOptions::StorageModeShared)
+            .newBufferWithLength_options(
+                std::mem::size_of::<T>().max(1),
+                MTLResourceOptions::StorageModeShared,
+            )
             .ok_or_else(|| allocation_failed(format_args!("buffer for {what}")));
     }
     let ptr = std::ptr::NonNull::new(data.as_ptr() as *mut std::ffi::c_void)
@@ -1954,7 +1766,7 @@ mod tests {
         // float4; metallic + emissive[3] fill the next so the float4x4 model
         // lands on a 16-byte boundary, exactly as MSL lays the struct out
         // (emissive is a `packed_float3` there, matching `[f32; 3]` here).
-        assert_eq!(std::mem::size_of::<RtGeomEntry>(), 128);
+        assert_eq!(std::mem::size_of::<render_types::RtGeomEntry>(), 128);
     }
 
     #[test]
@@ -1966,96 +1778,5 @@ mod tests {
         // Metal rejects a zero-length buffer, so a scene whose structures need no
         // scratch still asks for a byte.
         assert_eq!(slot_scratch_bytes(0, 0), 1);
-    }
-
-    // A resident draw object carrying real triangles, tagged by `generation` so
-    // a test can tell two of them apart.
-    fn draw_object(generation: u32) -> DrawObject {
-        DrawObject {
-            vertex_offset: 0,
-            vertex_count: 8,
-            index_offset: 0,
-            index_count: 6,
-            base_vertex: 0,
-            geometry_generation: generation,
-            shader_bucket: 0,
-            model: [[0.0; 4]; 4],
-            texture_slot: 0,
-            normal_map_slot: 0,
-            material: render_types::MaterialUniforms::DEFAULT,
-            visible: true,
-            resident: true,
-            bb_min: [0.0; 3],
-            bb_max: [1.0; 3],
-            cull_distance: 0.0,
-            lod_alternates: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn objects_current_rejects_a_changed_draw_list() {
-        let objects = vec![draw_object(0), draw_object(1), draw_object(2)];
-        assert!(objects_current(&[0, 2], &objects));
-        // An index past the end: the draw list shrank.
-        assert!(!objects_current(&[0, 5], &objects));
-
-        // A slot that streamed out is no longer resident.
-        let mut evicted = vec![draw_object(0), draw_object(1)];
-        evicted[1].resident = false;
-        assert!(!objects_current(&[0, 1], &evicted));
-
-        // A degenerate slot carries no triangles to trace.
-        let mut degenerate = vec![draw_object(0), draw_object(1)];
-        degenerate[1].index_count = 0;
-        assert!(!objects_current(&[0, 1], &degenerate));
-    }
-
-    #[test]
-    fn objects_in_blas_order_follows_the_index_list() {
-        let objects = vec![draw_object(0), draw_object(1), draw_object(2)];
-        let seen: Vec<u32> = objects_in_blas_order(&[2, 0], &objects)
-            .map(|o| o.geometry_generation)
-            .collect();
-        assert_eq!(seen, vec![2, 0]);
-        // A stale index is skipped rather than panicking; `objects_current` is
-        // the guard that keeps a caller from reaching this state.
-        let seen: Vec<u32> = objects_in_blas_order(&[1, 9], &objects)
-            .map(|o| o.geometry_generation)
-            .collect();
-        assert_eq!(seen, vec![1]);
-    }
-
-    #[test]
-    fn models_dirty_detects_moves_and_shape_changes() {
-        let ident = [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ];
-        let mut moved = ident;
-        moved[3][0] = 5.0; // translate one object along x
-
-        let indices = vec![0usize, 2usize];
-        let cached = vec![ident, ident];
-
-        // All transforms unchanged -> not dirty.
-        assert!(!models_dirty(&indices, &cached, |idx| match idx {
-            0 | 2 => Some(ident),
-            _ => None,
-        }));
-        // One object moved -> dirty.
-        assert!(models_dirty(&indices, &cached, |idx| match idx {
-            0 => Some(moved),
-            2 => Some(ident),
-            _ => None,
-        }));
-        // An index that no longer resolves (draw list shrank) -> dirty.
-        assert!(models_dirty(&indices, &cached, |idx| match idx {
-            0 => Some(ident),
-            _ => None,
-        }));
-        // A cached/indices length mismatch -> dirty.
-        assert!(models_dirty(&[0usize], &cached, |_| Some(ident)));
     }
 }

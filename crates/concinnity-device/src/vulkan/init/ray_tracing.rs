@@ -215,6 +215,7 @@ pub(super) fn build_rt_reflections(
             accel: rt_accel_opt,
             dynamic_mode: post.rt_dynamic,
             skinned_geometry: post.rt_skinned_geometry,
+            update_streak: Default::default(),
         },
         reflections: rt_opt,
         composite: composite_opt,

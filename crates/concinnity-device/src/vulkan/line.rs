@@ -13,6 +13,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::LineVertex;
+use concinnity_core::render::buffer_growth::grow_capacity;
 use concinnity_core::render::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -246,17 +247,6 @@ fn new_vertex_slot(alloc: &DeviceAllocator, capacity: u64) -> RenderResult<Verte
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
     Ok(VertexSlot { buffer, capacity })
-}
-
-// New capacity for a slot that must hold at least `needed` bytes, given its
-// current `capacity`. Grows geometrically so a burst of small growths
-// amortizes, but never returns less than `needed`.
-fn grow_capacity(capacity: u64, needed: u64) -> u64 {
-    let mut cap = capacity.max(MIN_VERTEX_CAPACITY);
-    while cap < needed {
-        cap *= 2;
-    }
-    cap
 }
 
 fn create_line_framebuffer(
@@ -597,10 +587,9 @@ impl VkContext {
         let Some(slot) = lines.vertex_slots.get_mut(frame_idx) else {
             return Ok(());
         };
-        if needed <= slot.capacity {
+        let Some(capacity) = grow_capacity(slot.capacity, needed, MIN_VERTEX_CAPACITY) else {
             return Ok(());
-        }
-        let capacity = grow_capacity(slot.capacity, needed);
+        };
         *slot = new_vertex_slot(&self.hw.alloc, capacity)?;
         Ok(())
     }
@@ -677,31 +666,5 @@ impl VkContext {
         rec.end_render_pass();
 
         self.inc_draw_calls(1);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn grow_capacity_starts_at_minimum() {
-        assert_eq!(grow_capacity(0, 1), MIN_VERTEX_CAPACITY);
-    }
-
-    #[test]
-    fn grow_capacity_doubles_until_it_fits() {
-        let need = MIN_VERTEX_CAPACITY * 3 + 1;
-        let cap = grow_capacity(0, need);
-        assert!(cap >= need);
-        assert_eq!(cap, MIN_VERTEX_CAPACITY * 4);
-    }
-
-    #[test]
-    fn grow_capacity_never_shrinks_below_existing() {
-        assert_eq!(
-            grow_capacity(MIN_VERTEX_CAPACITY * 8, 10),
-            MIN_VERTEX_CAPACITY * 8
-        );
     }
 }

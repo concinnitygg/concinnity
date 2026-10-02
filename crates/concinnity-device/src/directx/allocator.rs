@@ -49,6 +49,7 @@
 //! allocation, clone and drop happens on the main thread.
 
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::retire_pool::RetirePool;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -189,20 +190,11 @@ fn round_up(value: u64, granularity: u64) -> u64 {
     value.div_ceil(granularity).saturating_mul(granularity)
 }
 
-// COM objects held until the GPU has provably retired every command list that
-// could name them. Never read; dropping the entry releases the handles.
-struct Parked {
-    #[expect(
-        dead_code,
-        reason = "held until the GPU retires the lists naming it; dropping the entry releases it"
-    )]
-    objects: Vec<IUnknown>,
-    retire_at: u64,
-}
-
 struct Inner {
     pools: HashMap<PoolKey, Pool>,
-    parked: Vec<Parked>,
+    // COM objects held until the GPU has provably retired every command list
+    // that could name them; dropping an entry releases the handles.
+    parked: RetirePool<Vec<IUnknown>>,
     // Monotonic frame tick driving the deferred frees. Not the frame-in-flight
     // index, which wraps.
     frame: u64,
@@ -356,7 +348,7 @@ impl DeviceAllocator {
             heap_tier: resource_heap_tier(device),
             inner: Rc::new(RefCell::new(Inner {
                 pools: HashMap::new(),
-                parked: Vec::new(),
+                parked: RetirePool::new(),
                 frame: 0,
                 // One tick beyond the frames in flight, matching the streamed
                 // upload retire discipline: a resource replaced between frames
@@ -433,7 +425,8 @@ impl DeviceAllocator {
                 }
             }
         }
-        inner.parked.retain(|p| p.retire_at > frame);
+        let depth = inner.retire_depth;
+        inner.parked.collect(frame, depth);
     }
 
     pub(super) fn stats(&self) -> AllocatorStats {
@@ -599,8 +592,8 @@ impl DeviceAllocator {
 
     fn park(&self, objects: Vec<IUnknown>) {
         let mut inner = self.inner.borrow_mut();
-        let retire_at = inner.frame + inner.retire_depth;
-        inner.parked.push(Parked { objects, retire_at });
+        let frame = inner.frame;
+        inner.parked.push(frame, objects);
     }
 
     fn lease(&self, reservation: Reservation) -> Lease {

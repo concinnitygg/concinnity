@@ -180,7 +180,7 @@ impl MtlContext {
         }
         // The TLAS references each BLAS indirectly, so the BLASes are not
         // auto-tracked: declare them resident or the trace reads garbage.
-        crate::metal::raytrace::use_blas_resident_fragment(&enc, &accel.blas);
+        crate::metal::raytrace::use_blas_resident_fragment(&enc, accel.traced_blas());
         // SAFETY: the fullscreen triangle's three vertices are generated from
         // `[[vertex_id]]` in the shader, so the draw reads no vertex buffer.
         unsafe {

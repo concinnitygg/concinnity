@@ -575,6 +575,14 @@ pub(super) struct DxRayTracing {
     // How the acceleration structure is kept current as props move (the
     // launch's `--rt-dynamic` request; `Auto` by default).
     pub dynamic_mode: concinnity_core::render::rt_geom::RtDynamicMode,
+    // Whether the per-frame BVH update is failing, so a failure is logged once
+    // per streak rather than every frame.
+    pub update_streak: concinnity_core::render::rt_accel::FailureStreak,
+    // BVHs dropped mid-run (a refresh removed the last geometry), held until no
+    // frame still in flight can trace them, timed against `retire_tick`, which
+    // advances once per frame.
+    pub retired: concinnity_core::render::retire_pool::RetirePool<super::raytrace::RtAccelData>,
+    pub retire_tick: u64,
     // Whether skinned meshes join the BVH (the launch's `--rt-skinned-geometry`
     // request; in by default). Clear it and the BVH covers static + instanced
     // geometry only, isolating the skinned trace path.

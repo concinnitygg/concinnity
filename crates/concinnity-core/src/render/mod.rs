@@ -23,6 +23,7 @@
 pub mod area_light;
 pub mod backend;
 pub mod backend_init;
+pub mod buffer_growth;
 pub mod call_buffer;
 pub mod chunk_window;
 pub mod csm;
@@ -52,6 +53,8 @@ pub mod probe_book;
 pub mod range_alloc;
 pub mod reflection_probe;
 pub mod render_graph;
+pub mod retire_pool;
+pub mod rt_accel;
 pub mod rt_geom;
 pub mod rt_refit;
 pub mod rt_topology;

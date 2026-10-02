@@ -899,7 +899,7 @@ impl VkContext {
                 index_buffer: ib,
                 joint_buffers,
             });
-            accel.dynamic_update(
+            let updated = accel.dynamic_update(
                 super::super::raytrace::RtDeviceCtx {
                     alloc: &self.hw.alloc,
                     instance: &instance,
@@ -919,21 +919,19 @@ impl VkContext {
                     skinned,
                 },
             );
+            crate::rt_report::report_rt_update(&mut self.rt.update_streak, updated);
             self.rt.accel = Some(accel);
         }
-        let accel = self
-            .rt
-            .accel
-            .as_ref()
-            .expect("RT acceleration structures are live");
+        let Some(accel) = self.rt.accel.as_ref() else {
+            return;
+        };
         let (geom_buffer, geom_size) = accel.geom_table();
         let tlas = accel.tlas();
         let deformed = accel.deformed_verts();
         let skinned_indices = accel.skinned_indices();
-        let rt = self
-            .rt_reflections
-            .as_mut()
-            .expect("RT reflection resources are live");
+        let Some(rt) = self.rt_reflections.as_mut() else {
+            return;
+        };
         rt.wire_dynamic(
             &device,
             frame_idx,

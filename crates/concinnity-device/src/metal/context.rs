@@ -117,7 +117,7 @@ pub(super) struct ProbeState {
     // buffers may still be reading those buffers/textures, so they are parked
     // here and freed once the frames-in-flight fence guarantees the bake has
     // retired.
-    pub retire_pool: super::frame_rings::RetirePool<super::probe::RetiredBake>,
+    pub retire_pool: concinnity_core::render::retire_pool::RetirePool<super::probe::RetiredBake>,
 }
 
 // Cascaded shadow map resources + the cascade schedule. `enabled` is false when

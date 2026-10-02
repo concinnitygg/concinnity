@@ -53,6 +53,9 @@ mod shader_layout;
 #[cfg(test)]
 mod audit;
 
+// How a failed ray-tracing BVH update is logged, the same on every backend.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
+pub(crate) mod rt_report;
 // Device-memory placement policy shared by the backends' allocators.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod suballoc;

@@ -30,6 +30,7 @@
 //! context's retiring objects are drained by its successor.
 
 use ash::vk;
+use concinnity_core::render::retire_pool::RetirePool;
 use concinnity_core::render::shadow_bias;
 use std::sync::{Arc, Mutex};
 
@@ -70,17 +71,10 @@ impl Retired {
     }
 }
 
-// A handle waiting out its retire window.
-#[derive(Clone, Copy)]
-struct Pending {
-    handle: Retired,
-    retire_at: u64,
-}
-
 // The frame-tick bookkeeping behind the deferred destruction, with no Vulkan in
 // it so the window arithmetic is testable on its own.
 struct RetireQueue {
-    pending: Vec<Pending>,
+    pending: RetirePool<Retired>,
     // Monotonic frame tick, not the wrapping frame-in-flight index.
     frame: u64,
     // How many ticks a handle is withheld for: `frames_in_flight + 1`, matching
@@ -92,42 +86,30 @@ struct RetireQueue {
 impl RetireQueue {
     fn new(frames_in_flight: usize) -> Self {
         Self {
-            pending: Vec::new(),
+            pending: RetirePool::new(),
             frame: 0,
             depth: frames_in_flight as u64 + 1,
         }
     }
 
     fn push(&mut self, handle: Retired) {
-        self.pending.push(Pending {
-            handle,
-            retire_at: self.frame + self.depth,
-        });
+        self.pending.push(self.frame, handle);
     }
 
     // Advance one frame and return everything whose window has closed.
     fn tick(&mut self) -> Vec<Retired> {
         self.frame += 1;
-        let frame = self.frame;
         let mut due = Vec::new();
-        self.pending.retain(|p| {
-            if p.retire_at <= frame {
-                due.push(p.handle);
-                false
-            } else {
-                true
-            }
-        });
+        while let Some(handle) = self.pending.pop_due(self.frame, self.depth) {
+            due.push(handle);
+        }
         due
     }
 
     // Return everything queued regardless of its window. Only for a caller that
     // has already idled the device.
     fn drain(&mut self) -> Vec<Retired> {
-        std::mem::take(&mut self.pending)
-            .into_iter()
-            .map(|p| p.handle)
-            .collect()
+        self.pending.drain().collect()
     }
 
     #[cfg(test)]

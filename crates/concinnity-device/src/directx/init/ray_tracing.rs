@@ -143,6 +143,9 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRa
     DxRayTracing {
         accel,
         dynamic_mode: post.rt_dynamic,
+        update_streak: Default::default(),
+        retired: Default::default(),
+        retire_tick: 0,
         skinned_geometry: post.rt_skinned_geometry,
     }
 }

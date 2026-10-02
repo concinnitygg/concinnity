@@ -8,7 +8,7 @@
 //! allocation / build / retire is per-backend. Split out so the plan is
 //! unit-testable without a GPU.
 
-use crate::gfx::render_types::DrawObject;
+use crate::gfx::render_types::{DrawObject, SkinnedDrawObject};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -21,6 +21,12 @@ use alloc::vec::Vec;
 /// reflected like any other surface.
 pub fn participates_in_bvh(o: &DrawObject, exclude_seethrough: bool) -> bool {
     o.resident && o.index_count >= 3 && !(exclude_seethrough && o.material.see_through != 0)
+}
+
+/// Whether a skinned object contributes geometry to the BVH this frame: it must
+/// be visible and carry at least one triangle.
+pub fn traced_skinned(o: &SkinnedDrawObject) -> bool {
+    o.visible && o.index_count >= 3
 }
 
 /// How many vertices a BLAS over the shared vertex buffer may address from

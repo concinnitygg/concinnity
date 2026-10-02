@@ -206,7 +206,7 @@ impl MtlContext {
                     Ok(Some(a)) => {
                         tracing::info!(
                             "ray-traced reflections: built BVH over {} static objects",
-                            a.blas.len()
+                            a.blas().len()
                         );
                         self.rt.accel = Some(a);
                     }
@@ -227,7 +227,7 @@ impl MtlContext {
             self.rt.accel = None;
         }
         // Reset the failure streak so a later toggle-on starts clean.
-        self.rt.update_failed = false;
+        self.rt.update_streak = concinnity_core::render::rt_accel::FailureStreak::default();
 
         // Auto-exposure. When it turns off the static path uses
         // `self.post_process.exposure` (the authored / slider EV), already set,

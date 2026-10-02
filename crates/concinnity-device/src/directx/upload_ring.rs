@@ -12,6 +12,7 @@
 //! fence (waited before a slot is reused) guarantees the GPU has finished
 //! reading a slot's buffer before the CPU overwrites or grows it.
 
+use concinnity_core::render::buffer_growth::grow_capacity;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen::align_up;
 use std::cell::RefCell;
@@ -28,17 +29,6 @@ pub(in crate::directx) const UPLOAD_ALIGN: u64 = 16;
 // First-allocation capacity for a slot's buffer. A HUD's worth of text is a few
 // kilobytes, so this avoids any growth in practice while staying tiny.
 const UPLOAD_MIN_CAPACITY: u64 = 64 * 1024;
-
-// New capacity for a slot that must hold at least `needed` bytes, given its
-// current `capacity`. Grows geometrically (doubling from the minimum) so a burst
-// of small growths amortizes, but never returns less than `needed`.
-fn grow_capacity(capacity: u64, needed: u64) -> u64 {
-    let mut cap = capacity.max(UPLOAD_MIN_CAPACITY);
-    while cap < needed {
-        cap *= 2;
-    }
-    cap
-}
 
 // One frame slot's persistently-mapped upload buffer. `base` is the CPU map
 // pointer (null until the first allocation) and `gpu_va` its GPU virtual
@@ -90,10 +80,9 @@ impl UploadRing {
     ) -> RenderResult<()> {
         let mut slot = self.slots[frame].borrow_mut();
         slot.cursor = 0;
-        if needed <= slot.capacity {
+        let Some(new_cap) = grow_capacity(slot.capacity, needed, UPLOAD_MIN_CAPACITY) else {
             return Ok(());
-        }
-        let new_cap = grow_capacity(slot.capacity, needed);
+        };
         let buffer = alloc.alloc_buffer(
             new_cap,
             D3D12_HEAP_TYPE_UPLOAD,
@@ -141,30 +130,5 @@ impl UploadRing {
         }
         slot.cursor = end;
         Ok(slot.gpu_va + offset)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn grow_capacity_starts_at_minimum() {
-        assert_eq!(grow_capacity(0, 1), UPLOAD_MIN_CAPACITY);
-        assert_eq!(grow_capacity(0, 0), UPLOAD_MIN_CAPACITY);
-    }
-
-    #[test]
-    fn grow_capacity_doubles_until_it_fits() {
-        let need = UPLOAD_MIN_CAPACITY * 3 + 1;
-        let cap = grow_capacity(0, need);
-        assert!(cap >= need);
-        assert_eq!(cap, UPLOAD_MIN_CAPACITY * 4);
-    }
-
-    #[test]
-    fn grow_capacity_never_shrinks_below_existing() {
-        let cap = grow_capacity(UPLOAD_MIN_CAPACITY * 8, 10);
-        assert_eq!(cap, UPLOAD_MIN_CAPACITY * 8);
     }
 }

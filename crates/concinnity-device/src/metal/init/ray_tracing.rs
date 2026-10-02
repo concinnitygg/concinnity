@@ -74,7 +74,7 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
             Some(a) => {
                 tracing::info!(
                     "ray-traced reflections: built BVH over {} static objects",
-                    a.blas.len()
+                    a.blas().len()
                 );
                 Some(a)
             }
@@ -106,7 +106,7 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
         accel,
         dynamic_mode: post.rt_dynamic,
         skinned_geometry: post.rt_skinned_geometry,
-        update_failed: false,
+        update_streak: concinnity_core::render::rt_accel::FailureStreak::default(),
         pipelines,
     })
 }

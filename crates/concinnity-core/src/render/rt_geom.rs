@@ -33,13 +33,15 @@ pub enum RtDynamicMode {
     /// Build once, never update. Forces a static BVH even if props move: the
     /// pre-dynamic behavior, kept as a fast path / diagnostic (`off`).
     Off,
-    /// Default. Rebuild the TLAS + table (fresh allocations, static BLAS) only on
-    /// the frames a participating transform actually changed. Static scenes never
-    /// rebuild, so they pay only a cheap per-frame matrix compare.
+    /// Default. Rebuild the TLAS + table (the static BLAS kept) only on the frames
+    /// a participating transform actually changed. Static scenes never rebuild,
+    /// so they pay only a cheap per-frame matrix compare.
     #[default]
     Auto,
-    /// Force a full BVH rebuild every frame, dirty or not. Diagnostic (`rebuild`);
-    /// the most expensive path.
+    /// Rebuild every draw-object BLAS, build every skinned BLAS from scratch
+    /// rather than refitting, and rebuild the TLAS + table, every frame, dirty or
+    /// not; only the instanced-cluster BLAS are kept. Diagnostic (`rebuild`); the
+    /// most expensive path.
     Rebuild,
     /// Force a fresh TLAS + table rebuild every frame, dirty or not. Diagnostic
     /// (`tlas`); the same GPU work `Auto` does, minus the dirty gate.
@@ -150,6 +152,33 @@ pub fn skinned_geom_entry(obj: &SkinnedDrawObject, texture_count: u32) -> RtGeom
     )
 }
 
+/// Pack a column-major model matrix into the 3x4 row-major affine transform a
+/// Vulkan or DirectX TLAS instance carries (`VkTransformMatrixKHR` and the DXR
+/// instance `Transform` are byte-identical). Row r holds `[m_r0 m_r1 m_r2 m_r3]`,
+/// and math element (r, c) sits at `model[c][r]`.
+pub fn pack_row_major_3x4(model: [[f32; 4]; 4]) -> [f32; 12] {
+    [
+        model[0][0],
+        model[1][0],
+        model[2][0],
+        model[3][0],
+        model[0][1],
+        model[1][1],
+        model[2][1],
+        model[3][1],
+        model[0][2],
+        model[1][2],
+        model[2][2],
+        model[3][2],
+    ]
+}
+
+/// A TLAS instance's custom index (the low 24 bits, which index the geometry
+/// table) packed with a full visibility mask (the high 8 bits).
+pub fn instance_id_and_mask(instance_id: u32) -> u32 {
+    (instance_id & 0x00FF_FFFF) | (0xFF << 24)
+}
+
 /// True when any participating object's current model matrix differs from the one
 /// baked into the live TLAS. Pure (no GPU) so the dirty gate is unit-testable.
 pub fn models_dirty(cached: &[[[f32; 4]; 4]], current: &[[[f32; 4]; 4]]) -> bool {
@@ -175,6 +204,49 @@ mod tests {
             );
             assert_eq!(bytes % 4, 0, "{count}: {bytes} is not whole words");
         }
+    }
+
+    #[test]
+    fn the_row_major_pack_transposes_a_column_major_model() {
+        // A column-major model with a known translation column [10, 20, 30]: the
+        // translation is the last entry of each 4-wide row.
+        let model = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [10.0, 20.0, 30.0, 1.0],
+        ];
+        assert_eq!(
+            pack_row_major_3x4(model),
+            [
+                1.0, 0.0, 0.0, 10.0, 0.0, 1.0, 0.0, 20.0, 0.0, 0.0, 1.0, 30.0
+            ]
+        );
+    }
+
+    #[test]
+    fn the_row_major_pack_preserves_a_rotation_shear() {
+        // Distinct values in every cell, so a row/column swap is detectable.
+        let model = [
+            [1.0, 2.0, 3.0, 0.0],
+            [4.0, 5.0, 6.0, 0.0],
+            [7.0, 8.0, 9.0, 0.0],
+            [10.0, 11.0, 12.0, 1.0],
+        ];
+        assert_eq!(
+            pack_row_major_3x4(model),
+            [
+                1.0, 4.0, 7.0, 10.0, 2.0, 5.0, 8.0, 11.0, 3.0, 6.0, 9.0, 12.0
+            ]
+        );
+    }
+
+    #[test]
+    fn the_instance_id_keeps_24_bits_under_a_full_mask() {
+        assert_eq!(instance_id_and_mask(7), 0xFF00_0007);
+        assert_eq!(instance_id_and_mask(0x00FF_FFFF), 0xFFFF_FFFF);
+        // An id past 24 bits cannot spill into the mask.
+        assert_eq!(instance_id_and_mask(0x0100_0002), 0xFF00_0002);
     }
 
     #[test]

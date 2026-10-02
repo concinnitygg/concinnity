@@ -941,6 +941,9 @@ pub(super) struct VkRayTracing {
     // request; in by default). Clear it and the BVH covers static + instanced
     // geometry only, isolating the skinned trace path.
     pub(super) skinned_geometry: bool,
+    // Whether the per-frame BVH update is failing, so a failure is logged once
+    // per streak rather than every frame.
+    pub(super) update_streak: concinnity_core::render::rt_accel::FailureStreak,
 }
 
 // The device layer every per-world resource is built on: instance, device,

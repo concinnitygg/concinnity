@@ -1,4 +1,3 @@
-use alloc::string::ToString;
 use alloc::vec::Vec;
 use serde_json::json;
 
@@ -163,7 +162,7 @@ fn the_schema_documents_every_variant() {
         let json = serde_json::to_value(&action).unwrap();
         let name = json
             .as_str()
-            .map(str::to_string)
+            .map(alloc::string::ToString::to_string)
             .or_else(|| json.as_object().and_then(|o| o.keys().next().cloned()))
             .unwrap();
         assert!(

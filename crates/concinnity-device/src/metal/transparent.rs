@@ -255,7 +255,7 @@ impl MtlContext {
             enc.set_fragment_acceleration_structure(accel.tlas.as_ref(), 4);
             enc.set_fragment_buffer(accel.deformed_verts.as_ref(), 0, 8);
             enc.set_fragment_buffer(accel.skinned_indices.as_ref(), 0, 9);
-            super::raytrace::use_blas_resident_fragment(enc, &accel.blas);
+            super::raytrace::use_blas_resident_fragment(enc, accel.traced_blas());
             // Textured variants (bindless world): the albedo / normal /
             // emissive pool at buffer(10) + its textures declared resident.
             if let Some(tex_args) = inputs.bindless_tex_args.filter(|_| {

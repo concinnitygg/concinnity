@@ -24,6 +24,7 @@ use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::error;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::render_graph;
+use concinnity_core::render::rt_accel::RtUpdate;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandQueue as _};
@@ -346,170 +347,117 @@ impl MtlContext {
         Ok(())
     }
 
-    // Update the RT acceleration structure to this frame's transforms. The
-    // per-frame skinned path (`update_rt_skinned` -> `rebuild_skinned`) keeps the
-    // persistent static/cluster BLAS and rebuilds only the skinned BLAS + TLAS +
-    // geometry table from the current pose; the non-skinned `rebuild_tlas` path
-    // and the one-time seed rebuild the TLAS (or the whole BVH). All paths
-    // allocate fresh and retire the outgoing structures through a deferred-free
-    // pool keyed on `frame_id`, so a prior in-flight frame keeps reading the old
-    // structures. The skinned skin-compute + BLAS/TLAS build are committed without
-    // waiting and ordered against the trace by same-queue commit order (both cmd
-    // bufs are committed here, before the trace cmd buf in `execute_graph`, on the
-    // shared queue). A no-op when RT is off or the scene is static (`Off`).
-    //
-    // `Auto` (the default) rebuilds the TLAS only when a participating
-    // transform actually changed; `Rebuild` / `Tlas` force their work every
-    // frame and exist only as diagnostics.
     // Keep the RT acceleration structure current with this frame's transforms
-    // and skinned pose. Non-fatal: a per-frame rebuild can fail transiently
-    // (e.g. a momentary acceleration-structure allocation hiccup under the
-    // per-frame skinned rebuild), and a reflection-BVH update failure must
-    // never stop the whole renderer. On failure the previous frame's BVH is
-    // kept (the reflection is at most one frame stale, imperceptible) and the
-    // failure is logged once per streak (and once on recovery), not at frame
-    // rate. The actual work is in `rt_dynamic_update_inner`.
+    // and skinned pose, following the shared update plan (`rt_accel`): refresh
+    // the draw BLAS head when the participating set changed, then re-skin,
+    // rebuild the TLAS, or keep it. The skinned skin-compute + BLAS/TLAS build
+    // and a topology refresh are committed without waiting and ordered against
+    // the trace by same-queue commit order (both cmd bufs are committed here,
+    // before the trace cmd buf in `execute_graph`, on the shared queue); the
+    // static TLAS rebuild commits and waits. Outgoing structures are retired
+    // through a deferred-free pool keyed on the frame id.
+    //
+    // Non-fatal: a per-frame rebuild can fail transiently (e.g. a momentary
+    // acceleration-structure allocation hiccup under the per-frame skinned
+    // rebuild), and a reflection-BVH update failure must never stop the whole
+    // renderer. On failure the previous frame's BVH is kept (the reflection is
+    // at most one frame stale, imperceptible) and the failure is logged once per
+    // streak (and once on recovery), not at frame rate.
     fn rt_dynamic_update(
         &mut self,
         frame: super::raytrace::RtFrame,
         joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
     ) {
-        match self.rt_dynamic_update_inner(frame, joint_buffers) {
-            Ok(()) => {
-                if self.rt.update_failed {
-                    tracing::info!("ray-traced reflections: BVH update recovered");
-                    self.rt.update_failed = false;
-                }
-            }
-            Err(e) => {
-                if !self.rt.update_failed {
-                    tracing::warn!(
-                        "ray-traced reflections: keeping last frame's BVH, update failed: {e}"
-                    );
-                    self.rt.update_failed = true;
-                }
-            }
+        // Consumed whether or not anything below runs: a change the BVH cannot
+        // follow (RT off, or a mode that never updates) is not owed later.
+        let topology_dirty = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
+        if self.rt.settings.is_none() {
+            return;
         }
+        let result = self.rt_dynamic_update_inner(frame, joint_buffers, topology_dirty);
+        crate::rt_report::report_rt_update(&mut self.rt.update_streak, result);
     }
 
     fn rt_dynamic_update_inner(
         &mut self,
         frame: super::raytrace::RtFrame,
         joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
-    ) -> error::RenderResult<()> {
-        use concinnity_core::render::rt_geom::RtDynamicMode;
-        let frame_id = frame.id;
-        if !self.rt.dynamic_mode.is_dynamic() {
-            return Ok(());
-        }
-        // RT reflections are not enabled this run (no settings, or the GPU lacks
-        // ray tracing): there is no BVH to keep current, and a lingering topology
-        // flag must not trigger a build. Clear it and bail.
-        if self.rt.settings.is_none() {
-            self.state.gpu_dirty.rt_topology = false;
-            return Ok(());
-        }
+        topology_dirty: bool,
+    ) -> error::RenderResult<RtUpdate> {
+        use concinnity_core::render::rt_accel::{RtStep, seed_wanted};
+        let mode = self.rt.dynamic_mode;
         let albedo_count = self.scene.textures.len();
-
-        // Free resources parked by prior skinned rebuilds that the frames-in-
-        // flight fence now guarantees no in-flight frame can still read.
-        let depth = self.frames_in_flight;
-        if let Some(accel) = self.rt.accel.as_mut() {
-            accel.retire_completed(frame_id, depth);
-        }
-
-        // Did a streamed chunk, cloned prop, or participation-changing material
-        // edit alter the RT-relevant draw set since the last update? Consume the
-        // flag; the BLAS topology must be refreshed below rather than ignored (the
-        // `Auto` dirty check only watches the transforms of the prior set).
-        let topology_changed = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
-
-        // Skinned meshes deform every frame, so their BLAS (baked from the posed
-        // vertices) must be rebuilt each frame: a TLAS-only rebuild can't
-        // re-skin. But the static + cluster BLAS never change under a rigid
-        // transform, so only the skinned tail (+ TLAS + geometry table) needs
-        // rebuilding. `rebuild_skinned` does exactly that, keeping the persistent
-        // static BLAS; a full `rebuild_rt_accel` is used only to seed the BVH the
-        // first frame after `upload_skinned` (the init build is static-only) or
-        // when the `Rebuild` diagnostic forces a from-scratch build every frame.
-        let has_skinned = self.rt.skinned_geometry
+        let skinned_present = self.rt.skinned_geometry
             && !self.state.skinned.draw_objects.is_empty()
             && self.rt.pipelines.skin.is_some();
-        if has_skinned {
-            if self.rt.accel.is_none() || self.rt.dynamic_mode == RtDynamicMode::Rebuild {
-                return self.rebuild_rt_accel(albedo_count);
+
+        let Some(accel) = self.rt.accel.as_mut() else {
+            if seed_wanted(mode, topology_dirty, skinned_present) {
+                self.rebuild_rt_accel(albedo_count)?;
             }
-            // Fold any added/removed draw geometry into the static head (BLAS only,
-            // async), then the skinned path rebuilds the TLAS + table over the
-            // refreshed head + the fresh skinned tail.
-            if topology_changed {
-                self.refresh_rt_topology(albedo_count, false, frame_id)?;
-            }
-            return self.update_rt_skinned(albedo_count, frame, joint_buffers);
-        }
-        // No skinned geometry.
-        if self.rt.accel.is_none() {
-            // A topology change can introduce the first participating geometry
-            // (e.g. the first streamed chunk in a world that began empty): seed
-            // the BVH from scratch. Otherwise nothing to keep current.
-            if topology_changed {
-                return self.rebuild_rt_accel(albedo_count);
-            }
-            return Ok(());
-        }
-        // The `Rebuild` diagnostic rebuilds every BLAS every frame, which already
-        // absorbs any topology change.
-        if self.rt.dynamic_mode == RtDynamicMode::Rebuild {
-            return self.rebuild_rt_accel(albedo_count);
-        }
-        if topology_changed {
-            // Incrementally refresh the draw-object BLAS head AND rebuild the TLAS
-            // over the refreshed set, all async on one command buffer (the
-            // transform dirty check only sees the prior set, so the rebuild is
-            // forced). `build_tlas = true` does the TLAS inline -- no separate
-            // `rebuild_rt_tlas` follow-up.
-            self.refresh_rt_topology(albedo_count, true, frame_id)?;
-            if self.rt.accel.as_ref().is_some_and(|a| a.is_empty()) {
-                // The refresh removed the last draw + cluster geometry; drop the
-                // BVH so a later add re-seeds it instead of building a degenerate
-                // zero-instance TLAS.
-                self.rt.accel = None;
-            }
-            return Ok(());
-        }
-        match self.rt.dynamic_mode {
-            RtDynamicMode::Auto => {
-                // Cheap shared-borrow dirty check; rebuild only if something moved.
-                let dirty = self
-                    .rt
-                    .accel
-                    .as_ref()
-                    .expect("rt_accel is Some (checked above)")
-                    .transforms_dirty(&self.state.draw.objects);
-                if dirty {
-                    self.rebuild_rt_tlas(albedo_count)?;
+            return Ok(RtUpdate::Done);
+        };
+        // Free resources parked by prior rebuilds that the frames-in-flight fence
+        // now guarantees no in-flight frame can still read.
+        accel.retire_completed(frame.id, self.frames_in_flight);
+        accel.set_albedo_count(albedo_count);
+        let skinned_objects = skinned_present.then_some(self.state.skinned.draw_objects.as_slice());
+        let Some(plan) = accel.book_mut().plan(mode, topology_dirty, skinned_objects) else {
+            return Ok(RtUpdate::Done);
+        };
+
+        // A failed refresh keeps the last head, is planned again next frame, and
+        // still lets the step below run.
+        let mut refreshed = Ok(());
+        if let Some(refresh) = plan.refresh {
+            let shape = super::raytrace::RefreshShape {
+                skinned_follows: plan.skinned,
+                skinned_present,
+            };
+            refreshed = self.refresh_rt_topology(refresh, shape, frame.id);
+            if let Some(accel) = self.rt.accel.as_mut() {
+                if refreshed.is_err() {
+                    accel.book_mut().owe_refresh();
+                } else if !skinned_present && accel.is_empty() {
+                    // The refresh removed the last draw + cluster geometry and no
+                    // skinned geometry can rejoin (`EmptyHead::Drop`); drop the
+                    // BVH so a later add re-seeds it.
+                    self.rt.accel = None;
+                    return Ok(RtUpdate::Done);
                 }
             }
-            RtDynamicMode::Tlas => self.rebuild_rt_tlas(albedo_count)?,
-            // Handled above / filtered out by the `is_dynamic` guard.
-            RtDynamicMode::Rebuild | RtDynamicMode::Off => {}
         }
-        Ok(())
+
+        let Some(accel) = self.rt.accel.as_mut() else {
+            return refreshed.map(|()| RtUpdate::Done);
+        };
+        let step = accel
+            .book_mut()
+            .next_step(mode, &plan, &self.state.draw.objects);
+        let stepped = match step {
+            RtStep::Keep => RtUpdate::Done,
+            RtStep::Tlas => {
+                self.rebuild_rt_tlas(frame.id)?;
+                RtUpdate::Done
+            }
+            RtStep::Skinned => {
+                self.update_rt_skinned(frame, joint_buffers, plan.full_skinned_build)?
+            }
+        };
+        refreshed.map(|()| stepped)
     }
 
-    // Incrementally refresh the RT draw-object BLAS head to match the current
-    // draw set (added/removed chunks, cloned props, participation-changing
-    // material edits), reusing every unchanged BLAS, async. `build_tlas` also
-    // rebuilds the TLAS + geometry table inline (the no-skinned path); when clear,
-    // the caller's `rebuild_skinned` rebuilds the TLAS over the refreshed head +
-    // skinned tail. Borrows the accel mutably while reading the device / queue /
-    // shared buffers / draw list, so the cheap handles are cloned and the draw
-    // list is lifted out (an O(1) `Vec` swap) to keep the borrows disjoint, then
-    // restored.
+    // Bring the RT draw-object BLAS head in line with the current draw set
+    // (added/removed chunks, cloned props, participation-changing material
+    // edits), async. On the static path the TLAS + geometry table are rebuilt
+    // over the refreshed head inline; on the skinned path the caller's
+    // `rebuild_skinned` builds the TLAS over the refreshed head + skinned tail.
+    // The device / queue / shared buffers are cheap handles, cloned so the accel
+    // can be borrowed mutably beside the draw list.
     fn refresh_rt_topology(
         &mut self,
-        albedo_count: usize,
-        build_tlas: bool,
+        mode: concinnity_core::render::rt_accel::RefreshMode,
+        shape: super::raytrace::RefreshShape,
         frame_id: u64,
     ) -> error::RenderResult<()> {
         let device = self.hw.device.clone();
@@ -517,38 +465,32 @@ impl MtlContext {
         let vbuf = self.scene.vertex_buffer.retained();
         let ibuf = self.scene.index_buffer.retained();
         let exclude_seethrough = self.seethrough_meshes_enabled();
-        let draw_objects = std::mem::take(&mut self.state.draw.objects);
-        let res = self
-            .rt
-            .accel
-            .as_mut()
-            .expect("rt_accel is Some (checked by caller)")
-            .refresh_static_topology(
-                super::raytrace::RtGpu {
-                    device: &device,
-                    command_queue: &queue,
-                    frames_in_flight: self.frames_in_flight,
-                },
-                super::raytrace::RtStaticGeometry {
-                    vertex_buffer: &vbuf,
-                    index_buffer: &ibuf,
-                },
-                &draw_objects,
-                super::raytrace::RtTextureCounts { albedo_count },
-                super::raytrace::RtTopologyRefreshOptions {
-                    exclude_seethrough,
-                    build_tlas,
-                    frame_id,
-                },
-            );
-        self.state.draw.objects = draw_objects;
-        res
+        let Some(accel) = self.rt.accel.as_mut() else {
+            return Ok(());
+        };
+        accel.refresh_static_topology(
+            super::raytrace::RtGpu {
+                device: &device,
+                command_queue: &queue,
+                frames_in_flight: self.frames_in_flight,
+            },
+            super::raytrace::RtStaticGeometry {
+                vertex_buffer: &vbuf,
+                index_buffer: &ibuf,
+            },
+            &self.state.draw.objects,
+            super::raytrace::RtTopologyRefreshOptions {
+                exclude_seethrough,
+                mode,
+                shape,
+                frame_id,
+            },
+        )
     }
 
     // Full BVH rebuild (fresh BLAS + TLAS + table) from the current draw list,
-    // instanced clusters, and skinned pose. The proven hazard-free path (fresh
-    // allocations): used by the `Rebuild` diagnostic mode and, every frame, by
-    // any scene with skinned geometry (its deformed vertices change per frame).
+    // instanced clusters, and skinned pose: seeds a BVH where there was none, and
+    // replaces one whose shared geometry buffers were rebuilt underneath it.
     // Replaces `rt_accel` only on a successful non-empty build, so a transient
     // failure or an emptied scene leaves the previous BVH in place. The
     // immutable borrows of `self` all end when the build returns, before the
@@ -602,74 +544,56 @@ impl MtlContext {
 
     // Per-frame skinned RT update: rebuild only the skinned BLAS + TLAS +
     // geometry table (keeping the persistent static/cluster BLAS) from the
-    // current pose and transforms. The accel is borrowed mutably while the
-    // skinned inputs are borrowed immutably, so the cheap handles are cloned and
-    // the draw list is lifted out (an O(1) `Vec` swap) to keep the borrows
-    // disjoint, then restored. A no-op (keeps last frame's BVH) if the required
-    // skinned resources are missing.
+    // current pose and transforms. A no-op (keeps last frame's BVH) if the
+    // required skinned resources are missing.
     fn update_rt_skinned(
         &mut self,
-        albedo_count: usize,
         frame: super::raytrace::RtFrame,
         joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
-    ) -> error::RenderResult<()> {
+        full_build: bool,
+    ) -> error::RenderResult<RtUpdate> {
         use super::raytrace::SkinnedRtInputs;
         let device = self.hw.device.clone();
         let queue = self.hw.command_queue.clone();
         let frames_in_flight = self.frames_in_flight;
-        let (Some(svb), Some(sib), Some(pipe)) = (
-            self.skinned.vertex_buffer.clone(),
-            self.skinned.index_buffer.clone(),
-            self.rt.pipelines.skin.clone(),
+        let (Some(svb), Some(sib), Some(pipe), Some(accel)) = (
+            self.skinned.vertex_buffer.as_ref(),
+            self.skinned.index_buffer.as_ref(),
+            self.rt.pipelines.skin.as_ref(),
+            self.rt.accel.as_mut(),
         ) else {
-            return Ok(());
+            return Ok(RtUpdate::Done);
         };
-        let draw_objects = std::mem::take(&mut self.state.draw.objects);
         let skinned = SkinnedRtInputs {
             objects: &self.state.skinned.draw_objects,
-            vertex_buffer: &svb,
-            index_buffer: &sib,
+            vertex_buffer: svb,
+            index_buffer: sib,
             joint_matrices: &self.state.skinned.joint_matrices,
             skin_pipeline: pipe.as_ref(),
         };
-        let res = self
-            .rt
-            .accel
-            .as_mut()
-            .expect("rt_accel is Some (checked by caller)")
-            .rebuild_skinned(
-                super::raytrace::RtGpu {
-                    device: &device,
-                    command_queue: &queue,
-                    frames_in_flight,
-                },
-                &draw_objects,
-                skinned,
-                joint_buffers,
-                super::raytrace::RtTextureCounts { albedo_count },
-                frame,
-            );
-        self.state.draw.objects = draw_objects;
-        res
+        accel.rebuild_skinned(
+            super::raytrace::RtGpu {
+                device: &device,
+                command_queue: &queue,
+                frames_in_flight,
+            },
+            &self.state.draw.objects,
+            skinned,
+            joint_buffers,
+            frame,
+            full_build,
+        )
     }
 
     // Rebuild just the TLAS + geometry table (fresh allocations, static BLAS)
-    // from the current draw-object transforms. `rebuild_tlas` borrows the accel
-    // mutably while reading the device / queue / draw list, so clone the two
-    // cheap handles and lift the draw list out (an O(1) `Vec` swap) to keep the
-    // borrows from aliasing, then put the draw list back.
-    fn rebuild_rt_tlas(&mut self, albedo_count: usize) -> error::RenderResult<()> {
+    // from the current draw-object transforms.
+    fn rebuild_rt_tlas(&mut self, frame_id: u64) -> error::RenderResult<()> {
         let device = self.hw.device.clone();
         let queue = self.hw.command_queue.clone();
-        let draw_objects = std::mem::take(&mut self.state.draw.objects);
-        let res = self
-            .rt
-            .accel
-            .as_mut()
-            .expect("rt_accel is Some (checked by caller)")
-            .rebuild_tlas(&device, &queue, &draw_objects, albedo_count);
-        self.state.draw.objects = draw_objects;
-        res
+        let Some(accel) = self.rt.accel.as_mut() else {
+            return Ok(());
+        };
+        accel.rebuild_tlas(&device, &queue, &self.state.draw.objects, frame_id)
     }
 
     // Rebuild the off-screen render targets whose footprint follows the
