@@ -18,12 +18,11 @@
 
 use ash::vk;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::retire_pool::RetirePool;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::error::map_vk_result;
-use crate::suballoc::staging::{
-    Recycler, STAGING_ALIGN, StagingRing, grown_capacity, reserved_capacity,
-};
+use crate::suballoc::staging::{STAGING_ALIGN, StagingRing, grown_capacity, reserved_capacity};
 
 // Which shared buffer a staged write lands in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -71,7 +70,7 @@ struct Staging {
 pub(in crate::vulkan) struct GeometryUploads {
     staging: Option<Staging>,
     queued: Vec<StagedCopy>,
-    command_buffers: Recycler<vk::CommandBuffer>,
+    command_buffers: RetirePool<vk::CommandBuffer>,
     tick: u64,
     depth: u64,
 }
@@ -81,7 +80,7 @@ impl GeometryUploads {
         Self {
             staging: None,
             queued: Vec::new(),
-            command_buffers: Recycler::new(),
+            command_buffers: RetirePool::new(),
             tick: 0,
             depth: frames_in_flight as u64 + 1,
         }
@@ -92,7 +91,7 @@ impl GeometryUploads {
     pub(in crate::vulkan) fn destroy(&mut self) {
         self.staging = None;
         self.queued.clear();
-        self.command_buffers = Recycler::new();
+        self.command_buffers = RetirePool::new();
     }
 
     // Advance the frame tick. Called after the frame-slot fence wait, which is
@@ -206,7 +205,7 @@ impl GeometryUploads {
         if self.queued.is_empty() {
             return Ok(());
         }
-        let cmd = match self.command_buffers.acquire(self.tick) {
+        let cmd = match self.command_buffers.pop_due(self.tick, self.depth) {
             Some(cmd) => cmd,
             None => {
                 let info = vk::CommandBufferAllocateInfo::default()
@@ -251,7 +250,7 @@ impl GeometryUploads {
             staging.ring.seal(retire_at);
         }
         self.queued.clear();
-        self.command_buffers.release(cmd, retire_at);
+        self.command_buffers.push(self.tick, cmd);
         Ok(())
     }
 }
@@ -490,10 +489,8 @@ mod tests {
             .expect("stage");
         harness.flush(&gpu, &mut uploads);
         let ring = uploads.staging.as_ref().expect("ring").buffer.buffer();
-        let first_cmd = uploads.command_buffers.acquire(u64::MAX).expect("held");
-        uploads
-            .command_buffers
-            .release(first_cmd, uploads.tick + uploads.depth);
+        let first_cmd = uploads.command_buffers.pop_due(u64::MAX, 0).expect("held");
+        uploads.command_buffers.push(uploads.tick, first_cmd);
         for _ in 0..uploads.depth {
             uploads.begin_frame();
         }
@@ -515,7 +512,7 @@ mod tests {
         );
         harness.flush(&gpu, &mut uploads);
         assert_eq!(
-            uploads.command_buffers.acquire(u64::MAX),
+            uploads.command_buffers.pop_due(u64::MAX, 0),
             Some(first_cmd),
             "the retired command buffer was reused"
         );

@@ -21,6 +21,7 @@ use concinnity_core::render::lights;
 use concinnity_core::render::particles;
 use concinnity_core::render::probe_book::ProbeBook;
 use concinnity_core::render::render_graph;
+use concinnity_core::render::retire_pool::RetirePool;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::scene_state::SceneState;
 use concinnity_core::render::shadow_schedule;
@@ -817,15 +818,18 @@ impl ProbeState {
 // their frames are pending; `pool_rewrites` carries the slot to each frame
 // slot's copy right after its fence wait (`apply_streamed_texture_rewrites`).
 // The replaced image and the upload's transient resources are parked on
-// `retires` against the monotonic `frame` tick and freed `frames_in_flight + 1`
-// ticks later: by then every pool copy has been re-pointed, every frame recorded
-// against the old view has retired, and the tick's fence wait covers the upload
-// submission itself (a swap lands between frames, after the previous frame's
-// submit, so a frame-slot-keyed drain would free it too soon).
+// `retires` against the monotonic `frame` tick and freed `retire_depth`
+// (`frames_in_flight + 1`) ticks later: by then every pool copy has been
+// re-pointed, every frame recorded against the old view has retired, and the
+// tick's fence wait covers the upload submission itself (a swap lands between
+// frames, after the previous frame's submit, so the first frame fence that
+// covers it is the one signaled by the NEXT draw, and a frame-slot-keyed drain
+// would free it too soon).
 pub(super) struct StreamState {
     pub pool_rewrites: slot_rewrites::SlotRewriteQueue,
     pub frame: u64,
-    pub retires: Vec<StreamedUploadRetire>,
+    pub retires: RetirePool<StreamedUploadRetire>,
+    pub retire_depth: u64,
 }
 
 impl StreamState {
@@ -833,7 +837,8 @@ impl StreamState {
         Self {
             pool_rewrites: slot_rewrites::SlotRewriteQueue::new(frames),
             frame: 0,
-            retires: Vec::new(),
+            retires: RetirePool::new(),
+            retire_depth: frames as u64 + 1,
         }
     }
 }
@@ -936,8 +941,7 @@ pub(super) struct VkRayTracing {
     pub(super) accel: Option<crate::vulkan::raytrace::RtAccelData>,
     // Dropped BVHs, held until the frames in flight have finished tracing them,
     // timed against `retire_tick`.
-    pub(super) retired:
-        concinnity_core::render::retire_pool::RetirePool<crate::vulkan::raytrace::RtAccelData>,
+    pub(super) retired: RetirePool<crate::vulkan::raytrace::RtAccelData>,
     // Advanced once per frame by `rt_dynamic_update`.
     pub(super) retire_tick: u64,
     // How the TLAS is kept current when props move (the launch's `--rt-dynamic`

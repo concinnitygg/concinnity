@@ -49,6 +49,7 @@
 
 use ash::{Device, vk};
 use concinnity_core::render::error;
+use concinnity_core::render::retire_pool::RetirePool;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
@@ -132,12 +133,11 @@ enum PooledHandle {
 struct Retired {
     handle: PooledHandle,
     views: Vec<vk::ImageView>,
-    retire_at: u64,
 }
 
 struct Inner {
     pools: HashMap<PoolKey, Pool>,
-    retired: Vec<Retired>,
+    retired: RetirePool<Retired>,
     // Monotonic frame tick driving the deferred frees. Not the frame-in-flight
     // index, which wraps.
     frame: u64,
@@ -153,11 +153,16 @@ impl Inner {
         if let Some(pool) = self.pools.get_mut(&lease.key) {
             pool.placement.free(lease.placement, lease.size, retire);
         }
-        self.retired.push(Retired {
-            handle: std::mem::replace(&mut lease.handle, PooledHandle::Buffer(vk::Buffer::null())),
-            views: std::mem::take(&mut *lease.views.borrow_mut()),
-            retire_at: retire,
-        });
+        self.retired.push(
+            self.frame,
+            Retired {
+                handle: std::mem::replace(
+                    &mut lease.handle,
+                    PooledHandle::Buffer(vk::Buffer::null()),
+                ),
+                views: std::mem::take(&mut *lease.views.borrow_mut()),
+            },
+        );
     }
 }
 
@@ -418,7 +423,7 @@ impl DeviceAllocator {
             device: device.clone(),
             inner: Rc::new(RefCell::new(Inner {
                 pools: HashMap::new(),
-                retired: Vec::new(),
+                retired: RetirePool::new(),
                 frame: 0,
                 // One tick beyond the frames in flight, matching the streamed
                 // upload retire discipline: a resource replaced between frames
@@ -558,14 +563,9 @@ impl DeviceAllocator {
         let mut inner = self.inner.borrow_mut();
         inner.frame += ticks;
         let frame = inner.frame;
-        let mut index = 0;
-        while index < inner.retired.len() {
-            if inner.retired[index].retire_at <= frame {
-                let retired = inner.retired.swap_remove(index);
-                self.destroy_retired(retired);
-            } else {
-                index += 1;
-            }
+        let depth = inner.retire_depth;
+        while let Some(retired) = inner.retired.pop_due(frame, depth) {
+            self.destroy_retired(retired);
         }
         for pool in inner.pools.values_mut() {
             pool.placement.reclaim(frame);
@@ -609,7 +609,7 @@ impl DeviceAllocator {
     // last allocator call before `destroy_device`.
     pub(super) fn destroy(&self) {
         let mut inner = self.inner.borrow_mut();
-        for retired in std::mem::take(&mut inner.retired) {
+        for retired in inner.retired.drain() {
             self.destroy_retired(retired);
         }
         for pool in inner.pools.values_mut() {

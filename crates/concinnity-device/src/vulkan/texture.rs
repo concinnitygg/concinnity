@@ -436,8 +436,8 @@ pub(super) struct UploadInFlight {
     pub cmd: vk::CommandBuffer,
 }
 
-// A streamed texture swap's GPU debris, freed once `VkContext`'s `stream.frame`
-// reaches `retire_at`: the replaced pool image (pending frames may still
+// A streamed texture swap's GPU debris, parked on `VkContext`'s `stream.retires`
+// until its window closes: the replaced pool image (pending frames may still
 // sample it, and the per-frame pool copies re-point over the next
 // `frames_in_flight` ticks) plus the upload's in-flight transients (still
 // executing when parked; covered by the first frame fence signaled after the
@@ -447,7 +447,6 @@ pub(super) struct StreamedUploadRetire {
     pub _image: GpuImage,
     pub _staging: PooledBuffer,
     pub cmd: vk::CommandBuffer,
-    pub retire_at: u64,
 }
 
 impl StreamedUploadRetire {

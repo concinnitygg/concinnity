@@ -6,9 +6,6 @@
 //! overwritten; `reclaim` releases batches oldest first as ticks pass. The
 //! backend owns the buffer and records the copies, so this is pure policy like
 //! the rest of `suballoc`.
-//!
-//! `Recycler` holds the command lists those submits recorded into until their
-//! tick passes, so a list is reused rather than created per submit.
 
 use concinnity_core::render::fullscreen::align_up;
 use std::collections::VecDeque;
@@ -131,28 +128,6 @@ pub(crate) fn reserved_capacity(expected: u64) -> u64 {
         .next_power_of_two()
 }
 
-// Objects held until a frame tick, then handed back for reuse.
-pub(crate) struct Recycler<T> {
-    held: Vec<(T, u64)>,
-}
-
-impl<T> Recycler<T> {
-    pub(crate) fn new() -> Self {
-        Self { held: Vec::new() }
-    }
-
-    // Hold `object` until tick `retire_at`.
-    pub(crate) fn release(&mut self, object: T, retire_at: u64) {
-        self.held.push((object, retire_at));
-    }
-
-    // One object whose tick has passed, if any.
-    pub(crate) fn acquire(&mut self, tick: u64) -> Option<T> {
-        let index = self.held.iter().position(|(_, at)| *at <= tick)?;
-        Some(self.held.swap_remove(index).0)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,24 +233,5 @@ mod tests {
         assert_eq!(reserved_capacity(0), min);
         assert_eq!(reserved_capacity(min * 3), min * 4);
         assert_eq!(reserved_capacity(u64::MAX), STAGING_RESERVE_CAP);
-    }
-
-    #[test]
-    fn a_recycled_object_waits_for_its_tick() {
-        let mut pool = Recycler::new();
-        pool.release("a", 4);
-        assert_eq!(pool.acquire(3), None);
-        assert_eq!(pool.acquire(4), Some("a"));
-        assert_eq!(pool.acquire(4), None);
-    }
-
-    #[test]
-    fn the_first_retired_object_is_handed_back() {
-        let mut pool = Recycler::new();
-        pool.release(1, 9);
-        pool.release(2, 1);
-        assert_eq!(pool.acquire(5), Some(2));
-        assert_eq!(pool.acquire(5), None);
-        assert_eq!(pool.acquire(9), Some(1));
     }
 }

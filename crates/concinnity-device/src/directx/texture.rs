@@ -192,8 +192,8 @@ pub(super) fn upload_buffer_padded(
 
 // Texture helpers
 
-// A streamed texture swap's GPU debris, released once `DxContext`'s `stream.frame`
-// reaches `retire_at`: the replaced pool resource (pending lists may still
+// A streamed texture swap's GPU debris, parked on `DxContext`'s `stream.retires`
+// until its window closes: the replaced pool resource (pending lists may still
 // sample it, and the per-frame flat-pool copies re-point over the next FRAMES
 // ticks) plus the upload's staging buffer and one-shot allocator + list (still
 // executing when parked; covered by the first frame fence signaled after the
@@ -220,7 +220,6 @@ pub(super) struct StreamedUploadRetire {
         reason = "held only so dropping the entry releases the COM reference"
     )]
     pub cmd: ID3D12GraphicsCommandList,
-    pub retire_at: u64,
 }
 
 // The transient resources a deferred texture upload leaves in flight.

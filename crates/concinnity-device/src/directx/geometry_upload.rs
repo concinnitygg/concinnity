@@ -13,15 +13,14 @@
 //! larger ring replaced outlives the submits that still name it.
 
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::retire_pool::RetirePool;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::error::map_hresult;
 use super::texture::transition_barrier;
-use crate::suballoc::staging::{
-    Recycler, STAGING_ALIGN, StagingRing, grown_capacity, reserved_capacity,
-};
+use crate::suballoc::staging::{STAGING_ALIGN, StagingRing, grown_capacity, reserved_capacity};
 
 // Which shared buffer a staged write lands in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -80,7 +79,7 @@ struct CopyList {
 pub(in crate::directx) struct GeometryUploads {
     staging: Option<Staging>,
     queued: Vec<StagedCopy>,
-    lists: Recycler<CopyList>,
+    lists: RetirePool<CopyList>,
     tick: u64,
     depth: u64,
 }
@@ -90,7 +89,7 @@ impl GeometryUploads {
         Self {
             staging: None,
             queued: Vec::new(),
-            lists: Recycler::new(),
+            lists: RetirePool::new(),
             tick: 0,
             depth: frames_in_flight as u64 + 1,
         }
@@ -221,7 +220,7 @@ impl GeometryUploads {
         if self.queued.is_empty() {
             return Ok(());
         }
-        let mut list = match self.lists.acquire(self.tick) {
+        let mut list = match self.lists.pop_due(self.tick, self.depth) {
             Some(list) => list,
             None => new_copy_list(device)?,
         };
@@ -287,7 +286,7 @@ impl GeometryUploads {
         }
         list.sources.extend(self.queued.drain(..).map(|c| c.src));
         list.sources.dedup_by(|a, b| **a == **b);
-        self.lists.release(list, retire_at);
+        self.lists.push(self.tick, list);
         Ok(())
     }
 }
@@ -517,10 +516,10 @@ mod tests {
             .expect("stage");
         flush(device, queue, &mut uploads, &dest);
         let ring = uploads.staging.as_ref().expect("ring").buffer.clone();
-        let first = uploads.lists.acquire(u64::MAX).expect("held");
+        let first = uploads.lists.pop_due(u64::MAX, 0).expect("held");
         let first_cmd = first.cmd.clone();
         assert_eq!(first.sources.len(), 1, "one ring read, held once");
-        uploads.lists.release(first, uploads.tick + uploads.depth);
+        uploads.lists.push(uploads.tick, first);
         for _ in 0..uploads.depth {
             uploads.begin_frame();
         }
@@ -537,7 +536,7 @@ mod tests {
         }
         assert!(*uploads.staging.as_ref().expect("ring").buffer == *ring);
         flush(device, queue, &mut uploads, &dest);
-        let reused = uploads.lists.acquire(u64::MAX).expect("held");
+        let reused = uploads.lists.pop_due(u64::MAX, 0).expect("held");
         assert!(reused.cmd == first_cmd, "the retired copy list was reused");
         assert_eq!(
             read(&gpu, GeometryTarget::Index, &dest.1, 0, half),

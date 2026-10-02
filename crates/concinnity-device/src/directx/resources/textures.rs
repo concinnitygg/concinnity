@@ -101,19 +101,15 @@ impl DxContext {
         let (texture, in_flight) = upload_texture_image_deferred(&self.hw.alloc, image)?;
         let old = std::mem::replace(&mut self.scene.textures[slot], texture);
         self.stream.pool_rewrites.queue(slot);
-        // `+ 1`: the swap lands between frames, after the previous frame's
-        // submit, so the first frame fence that covers the upload submission
-        // is the one signaled by the NEXT draw -- waited FRAMES ticks after
-        // that draw's own tick.
-        self.stream
-            .retires
-            .push(super::super::texture::StreamedUploadRetire {
+        self.stream.retires.push(
+            self.stream.frame,
+            super::super::texture::StreamedUploadRetire {
                 texture: old,
                 upload: in_flight.upload,
                 allocator: in_flight.allocator,
                 cmd: in_flight.cmd,
-                retire_at: self.stream.frame + FRAMES as u64 + 1,
-            });
+            },
+        );
         Ok(())
     }
 
@@ -135,8 +131,9 @@ impl DxContext {
                 );
             }
         }
-        let now = self.stream.frame;
-        self.stream.retires.retain(|r| r.retire_at > now);
+        self.stream
+            .retires
+            .collect(self.stream.frame, StreamState::RETIRE_DEPTH);
     }
 
     // Reset texture-pool `slot` to a 1x1 mid-gray placeholder.

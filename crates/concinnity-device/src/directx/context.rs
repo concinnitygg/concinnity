@@ -19,6 +19,7 @@ use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection;
 use concinnity_core::render::probe_book::ProbeBook;
 use concinnity_core::render::render_graph;
+use concinnity_core::render::retire_pool::RetirePool;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::scene_state::SceneState;
 use concinnity_core::render::slot_rewrites;
@@ -409,21 +410,26 @@ impl ProbeState {
 // frames' lists are pending; `stream.pool_rewrites` carries the slot to each frame's
 // copy right after its fence wait (`apply_streamed_texture_rewrites`). The
 // replaced resource and the upload's transients are parked on `retires` against
-// the monotonic `frame` tick and released `FRAMES + 1` ticks later: by then every
-// copy has been re-pointed, every list recorded against the old resource has
-// retired, and the tick's fence wait covers the upload submission itself.
+// the monotonic `frame` tick and released `RETIRE_DEPTH` ticks later: by then
+// every copy has been re-pointed, every list recorded against the old resource
+// has retired, and the tick's fence wait covers the upload submission itself.
 pub(super) struct StreamState {
     pub pool_rewrites: slot_rewrites::SlotRewriteQueue,
     pub frame: u64,
-    pub retires: Vec<super::texture::StreamedUploadRetire>,
+    pub retires: RetirePool<super::texture::StreamedUploadRetire>,
 }
 
 impl StreamState {
+    // `FRAMES + 1`: a swap lands between frames, after the previous frame's
+    // submit, so the first frame fence that covers the upload submission is the
+    // one signaled by the NEXT draw, waited FRAMES ticks after that draw's tick.
+    pub(super) const RETIRE_DEPTH: u64 = FRAMES as u64 + 1;
+
     pub(super) fn new() -> Self {
         Self {
             pool_rewrites: slot_rewrites::SlotRewriteQueue::new(FRAMES),
             frame: 0,
-            retires: Vec::new(),
+            retires: RetirePool::new(),
         }
     }
 }
@@ -581,7 +587,7 @@ pub(super) struct DxRayTracing {
     // BVHs dropped mid-run (a refresh removed the last geometry), held until no
     // frame still in flight can trace them, timed against `retire_tick`, which
     // advances once per frame.
-    pub retired: concinnity_core::render::retire_pool::RetirePool<super::raytrace::RtAccelData>,
+    pub retired: RetirePool<super::raytrace::RtAccelData>,
     pub retire_tick: u64,
     // Whether skinned meshes join the BVH (the launch's `--rt-skinned-geometry`
     // request; in by default). Clear it and the BVH covers static + instanced

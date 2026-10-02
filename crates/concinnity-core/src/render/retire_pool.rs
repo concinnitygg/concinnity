@@ -5,7 +5,8 @@
 //! only once `depth` more ticks have passed, by which point the frames-in-flight
 //! fence guarantees every frame that could still reference it has retired on the
 //! GPU. Dropping what comes back frees it; a backend whose handles need an
-//! explicit destroy takes them out with [`RetirePool::pop_due`].
+//! explicit destroy, or that reuses them, takes them out with
+//! [`RetirePool::pop_due`].
 //!
 //! This deliberately does not key storage by `frame % depth` the way a per-frame
 //! ring does: a ring is only safe when every slot is rewritten every frame, and a
@@ -119,6 +120,16 @@ mod tests {
         pool.collect(3, 3);
         pool.collect(3, 3);
         assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn a_reused_item_waits_a_fresh_window() {
+        let mut pool = RetirePool::new();
+        pool.push(0, 'a');
+        let item = pool.pop_due(2, 2).expect("window closed");
+        pool.push(2, item);
+        assert_eq!(pool.pop_due(3, 2), None);
+        assert_eq!(pool.pop_due(4, 2), Some('a'));
     }
 
     #[test]

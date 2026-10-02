@@ -128,16 +128,14 @@ impl VkContext {
         let (img, in_flight) = upload_texture_image_deferred(&ctx, image)?;
         let old = std::mem::replace(&mut self.scene.textures[slot], img);
         self.stream.pool_rewrites.queue(slot);
-        // `+ 1`: the swap lands between frames, after the previous frame's
-        // submit, so the first frame fence that covers the upload submission
-        // is the one signaled by the NEXT draw -- waited `frames_in_flight`
-        // ticks after that draw's own tick.
-        self.stream.retires.push(StreamedUploadRetire {
-            _image: old,
-            _staging: in_flight.staging,
-            cmd: in_flight.cmd,
-            retire_at: self.stream.frame + self.frames_in_flight as u64 + 1,
-        });
+        self.stream.retires.push(
+            self.stream.frame,
+            StreamedUploadRetire {
+                _image: old,
+                _staging: in_flight.staging,
+                cmd: in_flight.cmd,
+            },
+        );
         Ok(())
     }
 
@@ -163,18 +161,10 @@ impl VkContext {
                 }
             }
         }
-        if !self.stream.retires.is_empty() {
-            let now = self.stream.frame;
-            let device = self.hw.device.clone();
-            let pool = self.commands.command_pool;
-            let mut i = 0;
-            while i < self.stream.retires.len() {
-                if self.stream.retires[i].retire_at <= now {
-                    self.stream.retires.swap_remove(i).destroy(&device, pool);
-                } else {
-                    i += 1;
-                }
-            }
+        let now = self.stream.frame;
+        let depth = self.stream.retire_depth;
+        while let Some(retire) = self.stream.retires.pop_due(now, depth) {
+            retire.destroy(&self.hw.device, self.commands.command_pool);
         }
     }
 
@@ -182,10 +172,8 @@ impl VkContext {
     // a device drain; the world-reload and drop paths call this before
     // tearing the pool down.
     pub(in crate::vulkan) fn drain_stream_retires(&mut self) {
-        let device = self.hw.device.clone();
-        let pool = self.commands.command_pool;
-        for retire in self.stream.retires.drain(..) {
-            retire.destroy(&device, pool);
+        for retire in self.stream.retires.drain() {
+            retire.destroy(&self.hw.device, self.commands.command_pool);
         }
     }
 
