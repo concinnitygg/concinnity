@@ -216,6 +216,7 @@ impl DxContext {
         } else if !desired_rt && self.rt_reflections.is_some() {
             self.rt_reflections = None;
             self.rt.accel = None;
+            self.rt.skin = None;
         }
 
         // The glass reflection pre-pass follows the live RT trace divisor.
@@ -324,22 +325,18 @@ impl DxContext {
     // or a shader-compile failure leaves both `rt.accel` / `rt_reflections`
     // `None` and the renderer stays on SSR (a soft failure, returns `Ok`). The
     // caller has ensured the unified G-buffer pre-pass exists and drained the
-    // device (`wait_idle`). The skinned BLAS is seeded on the first dynamic
-    // frame, so the skin pipeline is attached here (a build failure is non-fatal:
-    // static geometry still reflects, just without skinned hits).
+    // device (`wait_idle`). The skin pipeline is built first, since whether
+    // skinned geometry can join decides whether a scene with no static geometry
+    // gets a BVH (a build failure is non-fatal: static geometry still reflects,
+    // just without skinned hits).
     fn build_rt_runtime(
         &mut self,
         settings: rt_reflections::RtReflectionSettings,
     ) -> RenderResult<()> {
         let hot_reload = self.hot_reload.enabled;
-        let mut accel = match super::raytrace::build_rt_accel(super::raytrace::RtInitGeometry {
-            alloc: &self.hw.alloc,
-            shared: super::raytrace::SharedGeometry::of(&self.scene.geometry),
-            draw_objects: &self.state.draw.objects,
-            clusters: &self.instanced.clusters,
-            albedo_count: self.scene.textures.len() as u32,
-            exclude_seethrough: self.seethrough_meshes_enabled(),
-        }) {
+        self.rt.skin = super::raytrace::build_rt_skin(&self.hw.device, hot_reload);
+        let skinned_present = self.rt_skinned_present();
+        let accel = match self.build_scene_accel(skinned_present) {
             Ok(Some(accel)) => accel,
             Ok(None) => {
                 tracing::info!(
@@ -352,12 +349,6 @@ impl DxContext {
                 return Ok(());
             }
         };
-        match super::raytrace::build_rt_skin_pipeline(&self.hw.device, hot_reload) {
-            Ok(skin) => accel.set_skin_pipeline(skin),
-            Err(e) => tracing::warn!(
-                "RT skin pipeline build failed (skinned meshes absent from reflections): {e}"
-            ),
-        }
         let slots = self.quality_slots;
         let rt = match super::post::rt_reflections::RtReflectionsResources::new(
             super::post::rt_reflections::RtBuildContext {

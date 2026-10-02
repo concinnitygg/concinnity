@@ -50,7 +50,6 @@ use concinnity_core::render::rt_accel::{
 };
 use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedShape};
-use concinnity_core::render::rt_topology::traced_skinned;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSArray;
@@ -775,8 +774,8 @@ impl crate::metal::context::MtlContext {
 }
 
 // Build the BLAS / TLAS / geometry table for the scene. Returns `None` (not an
-// error) when there is no resident triangle geometry to trace: the caller then
-// leaves RT disabled and the pass falls back to the base scene.
+// error) when the seed builds nothing (`SeedSet::builds_nothing`): the caller
+// then leaves RT disabled and the pass falls back to the base scene.
 //
 // `skinned`, when present, adds skeletally-animated geometry: a compute pass
 // deforms each skinned object's vertices into a fresh model-space buffer, and
@@ -817,7 +816,7 @@ pub(crate) fn build_rt_accel(
     // the trace, but that was a per-frame VRAM leak (no autorelease pool around
     // the frame), fixed separately.
     let skinned_list: &[SkinnedDrawObject] = skinned.as_ref().map_or(&[], |s| s.objects);
-    if seed.is_empty() && !skinned_list.iter().any(traced_skinned) {
+    if seed.builds_nothing(skinned.is_some()) {
         return Ok(None);
     }
 

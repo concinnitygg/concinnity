@@ -45,9 +45,18 @@ impl<'a> SeedSet<'a> {
         }
     }
 
-    /// Whether there is no static geometry to build over.
-    pub fn is_empty(&self) -> bool {
+    // Whether there is no draw or cluster geometry to build over.
+    fn is_empty(&self) -> bool {
         self.objects.is_empty() && self.clusters.is_empty()
+    }
+
+    /// Whether an initial build would start out spent (see
+    /// [`AccelBook::is_spent`]): no draw or cluster geometry, and
+    /// `skinned_present` says no skinned geometry exists to join it, visible or
+    /// not. Otherwise the build covers the seed, possibly as an empty head the
+    /// skinned step fills.
+    pub fn builds_nothing(&self, skinned_present: bool) -> bool {
+        self.is_empty() && plan::empty_head(false, skinned_present) == EmptyHead::Drop
     }
 }
 

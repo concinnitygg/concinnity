@@ -833,10 +833,11 @@ impl VkContext {
     // binds the current handles rather than a stale / retired one.
     //
     // Follows the shared BVH lifetime: a pass with no BVH seeds one once
-    // participating geometry appears (`seed_wanted`), and a BVH with nothing left
-    // to trace and nothing that could rejoin it is dropped (`is_spent`), held
-    // until the frames in flight have finished tracing it. The trace skips while
-    // there is none.
+    // participating geometry appears or skinned geometry is present
+    // (`seed_wanted`), and this frame's update then runs over it. A BVH with
+    // nothing left to trace and nothing that could rejoin it is dropped
+    // (`is_spent`), held until the frames in flight have finished tracing it.
+    // The trace skips while there is none.
     pub(in crate::vulkan) fn rt_dynamic_update(
         &mut self,
         cmd: vk::CommandBuffer,
@@ -845,24 +846,31 @@ impl VkContext {
         // Consumed by the accel's `dynamic_update`, which folds a runtime draw-set
         // change (cloned prop, streamed chunk added/removed) into the BLAS head,
         // or by the seed of a scene that had nothing to trace.
-        let topology_dirty = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
+        let mut topology_dirty = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
         let device = self.hw.device.clone();
-        self.rt.collect_retired(&device, self.frames_in_flight);
+        self.rt.collect_retired(self.frames_in_flight);
         if self.rt_reflections.is_none() {
             return;
         }
         if self.rt.accel.is_none() {
-            // The seed build is static-only, so skinned geometry alone cannot
-            // seed one. It is fence-waited internally (a rare, one-time stall)
-            // and already covers this frame's draw set.
-            if !seed_wanted(self.rt.dynamic_mode, topology_dirty, false) {
+            // The seed is fence-waited internally (a rare stall).
+            let skinned_present = self.rt_skinned_present();
+            if !seed_wanted(self.rt.dynamic_mode, topology_dirty, skinned_present) {
                 return;
             }
-            self.rt.accel = self.build_scene_accel();
+            match self.build_scene_accel(skinned_present) {
+                Ok(Some(accel)) => self.rt.accel = Some(accel),
+                Ok(None) => return,
+                Err(e) => {
+                    crate::rt_report::report_rt_update(&mut self.rt.update_streak, Err(e));
+                    return;
+                }
+            }
             self.forget_wired_accel();
-        } else {
-            self.update_live_accel(cmd, frame_idx, topology_dirty);
+            // The seed already covers this frame's draw set.
+            topology_dirty = false;
         }
+        self.update_live_accel(cmd, frame_idx, topology_dirty);
 
         let Some(accel) = self.rt.accel.as_ref() else {
             return;
@@ -913,21 +921,9 @@ impl VkContext {
         topology_dirty: bool,
     ) {
         // Assemble this frame's skinned-geometry inputs while `self` is still
-        // fully borrowable: the shared skinned VB/IB handles. `None` when there is
-        // no skinned geometry resident or the launch excluded it (the static path
-        // runs).
-        let skinned_inputs: Option<(vk::Buffer, vk::Buffer)> = if self.rt.skinned_geometry
-            && !self.state.skinned.draw_objects.is_empty()
-            && !self.skinned.vertex_buffer.is_null()
-            && !self.skinned.index_buffer.is_null()
-        {
-            Some((
-                self.skinned.vertex_buffer.buffer(),
-                self.skinned.index_buffer.buffer(),
-            ))
-        } else {
-            None
-        };
+        // fully borrowable: the shared skinned VB/IB handles. `None` when skinned
+        // geometry cannot join (the static path runs).
+        let skinned_inputs = self.rt_skinned_buffers();
 
         // Read before `rt_accel` is taken: `seethrough_meshes_enabled` borrows
         // `self.transparent`.
@@ -946,12 +942,15 @@ impl VkContext {
             .get(frame_idx)
             .map(|b| b.as_slice())
             .unwrap_or(&[]);
-        let skinned = skinned_inputs.map(|(vb, ib)| super::super::raytrace::SkinnedRtInputs {
-            objects: &self.state.skinned.draw_objects,
-            vertex_buffer: vb,
-            index_buffer: ib,
-            joint_buffers,
-        });
+        let skinned = skinned_inputs
+            .zip(self.rt.skin.as_mut())
+            .map(|((vb, ib), skin)| super::super::raytrace::SkinnedRtInputs {
+                objects: &self.state.skinned.draw_objects,
+                vertex_buffer: vb,
+                index_buffer: ib,
+                joint_buffers,
+                skin,
+            });
         let updated = accel.dynamic_update(
             super::super::raytrace::RtDeviceCtx {
                 alloc: &self.hw.alloc,

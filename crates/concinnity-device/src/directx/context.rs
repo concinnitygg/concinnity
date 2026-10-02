@@ -593,6 +593,9 @@ pub(super) struct DxRayTracing {
     // request; in by default). Clear it and the BVH covers static + instanced
     // geometry only, isolating the skinned trace path.
     pub skinned_geometry: bool,
+    // The compute-skinning pipeline (`rt_skin`) skinned geometry joins the BVH
+    // through, built with the RT pass. `None` when the kernel failed to compile.
+    pub skin: Option<super::raytrace::SkinPipeline>,
 }
 
 // The device layer every per-world resource is built on: device, queue,

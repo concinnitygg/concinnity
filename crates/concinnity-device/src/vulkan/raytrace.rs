@@ -244,8 +244,8 @@ struct DeviceBufferRef {
 // The compute pipeline that deforms skinned vertices for ray tracing
 // (`rt_skin.hlsl`): set 0 = [src skinned verts, joint palette, deformed output,
 // morph deltas, morph weights] (five storage buffers) + a 16-byte `SkinParams`
-// push-constant block. Built in `build_rt_accel` (gated on RT) and held on
-// `RtAccelData`; mirrors DirectX's `SkinPipeline` / Metal's `skin_pipeline`.
+// push-constant block. Built with the RT pass and held on `VkRayTracing`;
+// mirrors DirectX's `SkinPipeline` / Metal's `skin_pipeline`.
 pub(super) struct SkinPipeline {
     set_layout: OwnedSetLayout,
     pipeline_layout: OwnedPipelineLayout,
@@ -273,6 +273,14 @@ pub(super) struct SkinPipeline {
 
 impl SkinPipeline {
     pub(super) fn destroy(&self, _device: &VkDevice) {}
+
+    // Forget what every set was last pointed at, so the next RT rebuild re-points
+    // each one. Called when the BVH whose deformed buffers they name is replaced.
+    pub(in crate::vulkan) fn forget_wired(&mut self) {
+        for frame in &mut self.wired {
+            frame.fill([vk::Buffer::null(); 3]);
+        }
+    }
 }
 
 // Whether a skin descriptor set can be left alone: it already names `want`, and
@@ -307,6 +315,9 @@ pub(super) struct SkinnedRtInputs<'a> {
     // palettes rather than uploaded again here, so the RT skin dispatch costs no
     // extra buffer per object per frame.
     pub joint_buffers: &'a [PooledBuffer],
+    // The compute-skinning pipeline the skin dispatch runs, whose per-(frame,
+    // object) sets this rebuild points at its buffers.
+    pub skin: &'a mut SkinPipeline,
 }
 
 // Everything one skinned rebuild reads beyond the accel itself: the device
@@ -515,10 +526,6 @@ pub(super) struct RtAccelData {
     skinned_ring: FrameRing<SkinnedFrameRing>,
 
     // Skinned geometry.
-    // The compute-skinning pipeline (`rt_skin`). `Some` only when the GLSL
-    // compile + pipeline creation succeeded; without it skinned geometry is
-    // absent from the BVH (the RT pass still runs for static geometry).
-    skin: Option<SkinPipeline>,
     // The deformed (posed) skinned vertex buffer the skin pass writes and the
     // skinned BLAS + reflection trace read, owned by the `skinned_ring` slot that
     // last rebuilt it. Re-pointed onto the RT descriptor set each frame, like the
@@ -1018,6 +1025,22 @@ fn create_device_buffer(
 // skinned geometry is omitted from the BVH (the RT pass still runs for static
 // geometry). Per-(frame, object) descriptor sets are allocated lazily on the
 // first `rebuild_skinned`, when the skinned object count is known.
+// The RT skin pipeline, built with the RT pass. A build failure is non-fatal
+// (warned): reflections still trace the static geometry, without skinned hits.
+pub(in crate::vulkan) fn build_rt_skin(
+    alloc: &DeviceAllocator,
+    device: &VkDevice,
+    hot_reload: bool,
+) -> Option<SkinPipeline> {
+    build_skin_pipeline(alloc, device, hot_reload)
+        .inspect_err(|e| {
+            tracing::warn!(
+                "RT skin pipeline build failed (skinned meshes absent from reflections): {e}"
+            )
+        })
+        .ok()
+}
+
 pub(super) fn build_skin_pipeline(
     alloc: &DeviceAllocator,
     device: &VkDevice,
@@ -1164,20 +1187,24 @@ pub(in crate::vulkan) struct RtSceneGeometry<'a> {
     pub(in crate::vulkan) albedo_count: usize,
     // Leave see-through glass meshes out of the BVH (see `participates_in_bvh`).
     pub(in crate::vulkan) exclude_seethrough: bool,
+    // Skinned geometry exists to join the BVH, visible or not (see
+    // `SeedSet::builds_nothing`).
+    pub(in crate::vulkan) skinned_present: bool,
 }
 
 // Build the BLAS / TLAS / geometry table for the scene on a one-shot command
 // buffer (submitted and fence-waited so the structures are ready before the
-// first frame traces them). Returns `Ok(None)` when there is no resident
-// triangle geometry to trace: the RT pass then skips its trace until a
-// topology change seeds one.
+// first frame traces them). Returns `Ok(None)` when the seed builds nothing
+// (`SeedSet::builds_nothing`): the RT pass then skips its trace until one is
+// seeded. With no draw or cluster geometry but skinned geometry present, the
+// head is empty and the TLAS has no instances until the dynamic update's
+// skinned step adds them.
 pub(super) fn build_rt_accel(
     ctx: RtDeviceCtx,
     command_pool: vk::CommandPool,
     queue: vk::Queue,
     geometry: RtSceneGeometry,
     frames_in_flight: usize,
-    hot_reload: bool,
 ) -> RenderResult<Option<RtAccelData>> {
     let RtDeviceCtx {
         alloc,
@@ -1191,13 +1218,14 @@ pub(super) fn build_rt_accel(
         clusters,
         albedo_count,
         exclude_seethrough,
+        skinned_present,
     } = geometry;
     let as_loader = ash::khr::acceleration_structure::Device::new(instance, device);
 
     // Participating static objects + clusters (real triangles, resident, and not
     // rerouted to the see-through transparent path).
     let seed = SeedSet::new(draw_objects, clusters, exclude_seethrough);
-    if seed.is_empty() {
+    if seed.builds_nothing(skinned_present) {
         return Ok(None);
     }
 
@@ -1304,8 +1332,8 @@ pub(super) fn build_rt_accel(
         );
     })?;
 
-    // Skinned geometry is seeded on the first dynamic frame (like DirectX /
-    // Metal), so the init build is static-only. Allocate a 1-element dummy
+    // Skinned geometry joins on the dynamic update (`rebuild_skinned`), so this
+    // build covers the head alone. Allocate a 1-element dummy
     // deformed-vertex buffer so the trace's skinned-verts SSBO always binds a
     // valid resource; the first `rebuild_skinned` points it at a ring slot's.
     let deformed_dummy = create_device_buffer(alloc, device, VERTEX_STRIDE)?;
@@ -1326,19 +1354,6 @@ pub(super) fn build_rt_accel(
         },
     );
 
-    // The compute-skinning pipeline (gated on RT, which is the only path that
-    // reaches `build_rt_accel`). A build failure is non-fatal: the RT pass still
-    // runs for static geometry, just without skinned hits.
-    let skin = match build_skin_pipeline(alloc, device, hot_reload) {
-        Ok(s) => Some(s),
-        Err(e) => {
-            tracing::warn!(
-                "RT skin pipeline build failed (skinned meshes absent from reflections): {e}"
-            );
-            None
-        }
-    };
-
     Ok(Some(RtAccelData {
         as_loader,
         book,
@@ -1353,7 +1368,6 @@ pub(super) fn build_rt_accel(
         retire: RetirePool::new(),
         static_ring,
         skinned_ring: FrameRing::new(frames_in_flight),
-        skin,
         live_deformed: deformed_dummy.buffer,
         _deformed_dummy: deformed_dummy,
         skinned_indices: vk::Buffer::null(),
@@ -1464,9 +1478,6 @@ impl RtAccelData {
             r.destroy(&self.as_loader);
         }
 
-        // Skinned geometry takes part only with the skin pipeline (GLSL compiled);
-        // without it the static path runs.
-        let skinned = skinned.filter(|_| self.skin.is_some());
         let Some(plan) = self
             .book
             .plan(mode, topology_dirty, skinned.as_ref().map(|s| s.objects))
@@ -1523,9 +1534,9 @@ impl RtAccelData {
     }
 
     // Whether the BVH has nothing left to trace and nothing that could rejoin
-    // it. Skinned geometry rejoins only through the skin pipeline.
+    // it.
     pub(super) fn is_spent(&self, skinned_present: bool) -> bool {
-        self.book.is_spent(skinned_present && self.skin.is_some())
+        self.book.is_spent(skinned_present)
     }
 
     // Bring the draw-object BLAS head in line with the current participating
@@ -1936,13 +1947,10 @@ impl RtAccelData {
             frame_idx,
             full_build,
         } = req;
-        let skinned = &skinned;
+        let skin = &mut *skinned.skin;
         let RtDeviceCtx { alloc, device, .. } = ctx;
         let now = self.book.clock();
         let frames = self.frames_in_flight_usize;
-        let skin = self.skin.as_mut().ok_or_else(|| {
-            RenderError::Other("rebuild_skinned called without a skin pipeline".into())
-        })?;
         let pipeline = skin.pipeline.handle();
         let pipeline_layout = skin.pipeline_layout.handle();
 
@@ -2317,7 +2325,7 @@ impl RtAccelData {
 
     // Destroy every acceleration-structure resource. The caller has already
     // idled the device.
-    pub(super) fn destroy(&mut self, device: &VkDevice) {
+    pub(super) fn destroy(&mut self) {
         for r in self.retire.drain() {
             r.destroy(&self.as_loader);
         }
@@ -2330,16 +2338,13 @@ impl RtAccelData {
         for b in self.book.drain_blas() {
             b.destroy(&self.as_loader);
         }
-        if let Some(skin) = &self.skin {
-            skin.destroy(device);
-        }
     }
 }
 
 // Grow a `SkinPipeline`'s per-(frame, object) descriptor-set pool to hold at least
 // `object_count` objects per frame, reallocating the pool from scratch when it must
 // grow. A no-op when the pool already holds enough (or `object_count == 0`). Shared
-// by the RT skin path (`RtAccelData::ensure_skin_sets`) and the GPU-driven main-pass
+// by the RT skin path (`RtAccelData::rebuild_skinned`) and the GPU-driven main-pass
 // skin fold (`VkContext::build_main_skin`).
 pub(super) fn ensure_skin_sets(
     device: &VkDevice,
@@ -2421,15 +2426,11 @@ impl super::context::VkRayTracing {
     // Advance the retire clock and destroy every dropped BVH no frame in flight
     // can still trace: the frame-begin fence wait bounds those at
     // `frames_in_flight`, plus the one this frame records.
-    pub(in crate::vulkan) fn collect_retired(
-        &mut self,
-        device: &VkDevice,
-        frames_in_flight: usize,
-    ) {
+    pub(in crate::vulkan) fn collect_retired(&mut self, frames_in_flight: usize) {
         self.retire_tick += 1;
         let depth = frames_in_flight as u64 + 1;
         while let Some(mut accel) = self.retired.pop_due(self.retire_tick, depth) {
-            accel.destroy(device);
+            accel.destroy();
         }
     }
 
@@ -2443,22 +2444,24 @@ impl super::context::VkRayTracing {
 
     // Destroy the live BVH and every dropped one. The caller has already idled
     // the device.
-    pub(in crate::vulkan) fn destroy_accels(&mut self, device: &VkDevice) {
+    pub(in crate::vulkan) fn destroy_accels(&mut self) {
         if let Some(mut accel) = self.accel.take() {
-            accel.destroy(device);
+            accel.destroy();
         }
         for mut accel in self.retired.drain() {
-            accel.destroy(device);
+            accel.destroy();
         }
     }
 }
 
 impl super::context::VkContext {
     // Build a scene acceleration structure over the current draw set and shared
-    // geometry buffers. `None` when the scene has no participating geometry or
-    // the build failed (warned).
-    pub(in crate::vulkan) fn build_scene_accel(&self) -> Option<RtAccelData> {
-        let built = build_rt_accel(
+    // geometry buffers. `None` when the seed builds nothing.
+    pub(in crate::vulkan) fn build_scene_accel(
+        &self,
+        skinned_present: bool,
+    ) -> RenderResult<Option<RtAccelData>> {
+        build_rt_accel(
             RtDeviceCtx {
                 alloc: &self.hw.alloc,
                 instance: &self.hw.instance,
@@ -2473,14 +2476,42 @@ impl super::context::VkContext {
                 clusters: &self.instanced.clusters,
                 albedo_count: self.scene.textures.len(),
                 exclude_seethrough: self.seethrough_meshes_enabled(),
+                skinned_present,
             },
             self.frames_in_flight,
-            self.hot_reload.enabled,
-        );
-        built.unwrap_or_else(|e| {
-            tracing::warn!("RT acceleration-structure build failed: {e}");
-            None
+        )
+    }
+
+    // Build a scene acceleration structure where a failure only warns: the RT
+    // pass skips its trace until the next update seeds one.
+    pub(in crate::vulkan) fn build_scene_accel_or_warn(&self) -> Option<RtAccelData> {
+        self.build_scene_accel(self.rt_skinned_present())
+            .unwrap_or_else(|e| {
+                tracing::warn!("RT acceleration-structure build failed: {e}");
+                None
+            })
+    }
+
+    // The shared skinned vertex / index buffers the RT skin dispatch reads, or
+    // `None` when skinned geometry cannot join the BVH: none is resident, the
+    // launch excluded it, or the skin pipeline failed to build.
+    pub(in crate::vulkan) fn rt_skinned_buffers(&self) -> Option<(vk::Buffer, vk::Buffer)> {
+        let present = self.rt.skinned_geometry
+            && self.rt.skin.is_some()
+            && !self.state.skinned.draw_objects.is_empty()
+            && !self.skinned.vertex_buffer.is_null()
+            && !self.skinned.index_buffer.is_null();
+        present.then(|| {
+            (
+                self.skinned.vertex_buffer.buffer(),
+                self.skinned.index_buffer.buffer(),
+            )
         })
+    }
+
+    // Whether skinned geometry can join the BVH (see `rt_skinned_buffers`).
+    pub(in crate::vulkan) fn rt_skinned_present(&self) -> bool {
+        self.rt_skinned_buffers().is_some()
     }
 
     // Forget what the RT descriptor sets point at, so the next frame with a BVH
@@ -2492,6 +2523,9 @@ impl super::context::VkContext {
         }
         if let Some(transparent) = self.transparent.as_mut() {
             transparent.forget_rt_dynamic();
+        }
+        if let Some(skin) = self.rt.skin.as_mut() {
+            skin.forget_wired();
         }
     }
 
@@ -2506,8 +2540,8 @@ impl super::context::VkContext {
     // the pass stays and the next topology change seeds a new one. The caller
     // has already drained the device.
     pub(in crate::vulkan) fn rebuild_rt_accel(&mut self) {
-        self.rt.destroy_accels(&self.hw.device);
-        self.rt.accel = self.build_scene_accel();
+        self.rt.destroy_accels();
+        self.rt.accel = self.build_scene_accel_or_warn();
         self.forget_wired_accel();
         self.rewire_shared_geometry_readers();
     }

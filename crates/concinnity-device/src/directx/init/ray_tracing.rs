@@ -95,11 +95,9 @@ pub(super) struct RtInputs<'a> {
 // RT reflection resources came up (DXR-capable GPU + DXC compile OK).
 // `Ok(None)` means an empty scene; an `Err` is non-fatal (logged, falls
 // back to SSR). `rt_reflections_active` gates the RT pass on both this
-// and the resources being `Some`. The init build is static-only; skinned
-// meshes are seeded into the BVH on the first dynamic frame
-// (`rebuild_skinned`), so the compute-skinning pipeline is built here and
-// attached. A skin-pipeline build failure is non-fatal: the
-// RT pass still runs for static geometry, just without skinned hits.
+// and the resources being `Some`. Skinned meshes upload after init, so this
+// build covers static geometry; the first dynamic frame adds the skinned
+// BLAS (`rebuild_skinned`), or seeds a BVH for them when there is none.
 pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRayTracing {
     let RtInputs {
         world,
@@ -121,17 +119,9 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRa
             // the context does not exist yet; the two agree because both read
             // "a material opted in AND the mesh pipelines built".
             exclude_seethrough: transparent.is_some_and(|t| t.mesh_pipelines_ready()),
+            skinned_present: false,
         }) {
-            Ok(Some(mut accel)) => {
-                match raytrace::build_rt_skin_pipeline(&hw.device, gpu.hot_reload) {
-                    Ok(skin) => accel.set_skin_pipeline(skin),
-                    Err(e) => tracing::warn!(
-                        "RT skin pipeline build failed (skinned meshes absent from reflections): {e}"
-                    ),
-                }
-                Some(accel)
-            }
-            Ok(None) => None,
+            Ok(accel) => accel,
             Err(e) => {
                 tracing::warn!("RT acceleration-structure build failed, falling back to SSR: {e}");
                 None
@@ -140,6 +130,10 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRa
     } else {
         None
     };
+    let skin = reflections
+        .is_some()
+        .then(|| raytrace::build_rt_skin(&hw.device, gpu.hot_reload))
+        .flatten();
     DxRayTracing {
         accel,
         dynamic_mode: post.rt_dynamic,
@@ -147,5 +141,6 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRa
         retired: Default::default(),
         retire_tick: 0,
         skinned_geometry: post.rt_skinned_geometry,
+        skin,
     }
 }

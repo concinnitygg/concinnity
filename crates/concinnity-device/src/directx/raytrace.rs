@@ -396,7 +396,7 @@ fn tlas_inputs(
 // (`rt_skin.hlsl`): a root SRV for the bind-pose skinned vertices (t0), a root
 // SRV for the per-object joint palette (t1), a root UAV for the deformed output
 // (u0), and a 4-DWORD `SkinParams` root-constant block (b0). Built alongside the
-// RT PSO and held on `RtAccelData`; mirrors Metal's `skin_pipeline`.
+// RT PSO and held on `DxRayTracing`; mirrors Metal's `skin_pipeline`.
 pub(super) struct SkinPipeline {
     pub(super) root_sig: ID3D12RootSignature,
     pub(super) pso: ID3D12PipelineState,
@@ -525,6 +525,8 @@ pub(super) struct SkinnedRtInputs<'a> {
     // from the main pass's per-frame palettes rather than uploaded again here, so
     // the RT skin dispatch costs no extra buffer per object per frame.
     pub joint_buffers: &'a [PooledBuffer],
+    // The compute-skinning pipeline the skin dispatch runs.
+    pub skin: &'a SkinPipeline,
 }
 
 // Whether a ring slot must (re)allocate to satisfy `needed` bytes: it is either
@@ -688,9 +690,6 @@ pub(super) struct RtAccelData {
     skinned_ring: FrameRing<SkinnedFrameRing>,
 
     // Skinned geometry.
-    // The compute-skinning pipeline (`rt_skin`). `Some` only when the kernel
-    // compiled; without it skinned geometry is absent from the BVH.
-    skin: Option<SkinPipeline>,
     // The deformed (posed) skinned vertex buffer the skin pass writes and the
     // skinned BLAS + reflection trace read, owned by the `skinned_ring` slot that
     // last rebuilt it. A 1-element dummy when the scene has no skinned geometry,
@@ -742,13 +741,6 @@ impl RtAccelData {
     pub(super) fn skinned_index_gva(&self) -> u64 {
         com::gpu_va(&self.skinned_indices)
     }
-
-    // Attach the compute-skinning pipeline, built alongside the RT PSO (gated on
-    // `rt_reflections.is_some()` + DXR support). Called once at init after the
-    // accel data is built; skinned geometry is seeded on the first dynamic frame.
-    pub(super) fn set_skin_pipeline(&mut self, skin: SkinPipeline) {
-        self.skin = Some(skin);
-    }
 }
 
 // Build the `rt_skin` compute pipeline for the RT skinning pass. A thin wrapper
@@ -760,6 +752,18 @@ pub(super) fn build_rt_skin_pipeline(
     hot_reload: bool,
 ) -> RenderResult<SkinPipeline> {
     build_skin_pipeline(device, hot_reload)
+}
+
+// The RT skin pipeline, built with the RT pass. A build failure is non-fatal
+// (warned): reflections still trace the static geometry, without skinned hits.
+pub(super) fn build_rt_skin(device: &ID3D12Device, hot_reload: bool) -> Option<SkinPipeline> {
+    build_skin_pipeline(device, hot_reload)
+        .inspect_err(|e| {
+            tracing::warn!(
+                "RT skin pipeline build failed (skinned meshes absent from reflections): {e}"
+            )
+        })
+        .ok()
 }
 
 // Geometry + counts the RT acceleration-structure build reads.
@@ -779,6 +783,9 @@ pub(super) struct RtInitGeometry<'a> {
     pub albedo_count: u32,
     // Leave see-through glass meshes out of the BVH (see `participates_in_bvh`).
     pub exclude_seethrough: bool,
+    // Skinned geometry exists to join the BVH, visible or not (see
+    // `SeedSet::builds_nothing`).
+    pub skinned_present: bool,
 }
 
 // Per-frame dynamic-update policy + skinned inputs for `dynamic_update`.
@@ -801,8 +808,11 @@ pub(super) struct RtDynamicInputs<'a> {
 
 // Build the BLAS / TLAS / geometry table for the scene on a one-shot command
 // list (committed and fence-waited so the structures are ready before the first
-// frame traces them). Returns `Ok(None)` when there is no resident triangle
-// geometry to trace: the caller then leaves RT disabled and falls back to SSR.
+// frame traces them). Returns `Ok(None)` when the seed builds nothing
+// (`SeedSet::builds_nothing`): the caller then leaves RT disabled and falls back
+// to SSR. With no draw or cluster geometry but skinned geometry present, the
+// head is empty and the TLAS has no instances until the dynamic update's
+// skinned step adds them.
 //
 // `albedo_count` is the shared pool's real-texture count, used to resolve each
 // geometry's albedo / normal pool indices (the flat-normal fallback sits at
@@ -815,6 +825,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
         clusters,
         albedo_count,
         exclude_seethrough,
+        skinned_present,
     } = geometry;
     let device = alloc.device();
     let queue = alloc.queue();
@@ -825,7 +836,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
     // Participating static objects + clusters (real triangles, resident, and not
     // rerouted to the see-through transparent path).
     let seed = SeedSet::new(draw_objects, clusters, exclude_seethrough);
-    if seed.is_empty() {
+    if seed.builds_nothing(skinned_present) {
         return Ok(None);
     }
 
@@ -892,8 +903,8 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
         cmd4.BuildRaytracingAccelerationStructure(&tlas_desc, None);
     })?;
 
-    // Skinned geometry is seeded on the first dynamic frame (like Metal), so the
-    // init build is static-only. Allocate dummy deformed-vertex / skinned-index
+    // Skinned geometry joins on the dynamic update (`rebuild_skinned`), so this
+    // build covers the head alone. Allocate dummy deformed-vertex / skinned-index
     // buffers so the trace's t8/t9 root SRVs always bind a valid resource; the
     // first `rebuild_skinned` replaces the deformed buffer with the real one.
     // D3D12 buffers are always created in COMMON regardless of the requested
@@ -930,7 +941,6 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
         tlas_size: tlas_pre.ResultDataMaxSizeInBytes,
         static_ring,
         skinned_ring: FrameRing::new(FRAMES),
-        skin: None,
         deformed_verts,
         skinned_indices,
         skinned_scratch: SkinnedScratch::default(),
@@ -1040,9 +1050,6 @@ impl RtAccelData {
             topology_dirty,
             exclude_seethrough,
         } = inputs;
-        // Skinned geometry takes part only with the skin pipeline (the kernel
-        // compiled); without it the static path runs.
-        let skinned = skinned.filter(|_| self.skin.is_some());
         self.book.tick();
         let Some(plan) = self
             .book
@@ -1099,9 +1106,9 @@ impl RtAccelData {
     }
 
     // Whether the BVH has nothing left to trace and nothing that could rejoin
-    // it. Skinned geometry rejoins only through the skin pipeline.
+    // it.
     pub(super) fn is_spent(&self, skinned_present: bool) -> bool {
-        self.book.is_spent(skinned_present && self.skin.is_some())
+        self.book.is_spent(skinned_present)
     }
 
     // Bring the draw-object BLAS head in line with the current participating
@@ -1522,9 +1529,7 @@ impl RtAccelData {
         }
 
         // Stage 1: skin dispatch per skinned object, writing the deformed buffer.
-        let skin = self.skin.as_ref().ok_or_else(|| {
-            RenderError::Other("rebuild_skinned called without a skin pipeline".to_string())
-        })?;
+        let skin = skinned.skin;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
@@ -1837,11 +1842,11 @@ impl super::context::DxContext {
     //
     // Consumes `rt.topology_dirty` (set when a cloned prop / streamed chunk
     // altered the draw set): the accel's `dynamic_update` folds the change into
-    // the BLAS head. When RT is on but the scene had no resident geometry at build
-    // time (`rt.accel` is `None`), a topology change that introduces the first
-    // participating geometry seeds the BVH from scratch here.
+    // the BLAS head. When RT is on but there is no BVH (`rt.accel` is `None`),
+    // one is seeded once participating geometry appears or skinned geometry is
+    // present (`seed_wanted`), and this frame's update then runs over it.
     pub(super) fn rt_dynamic_update(&mut self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
-        let topology_dirty = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
+        let mut topology_dirty = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
         // Drop the dropped BVHs no in-flight frame can trace any more: the
         // frame-begin fence wait bounds that at `FRAMES` frames, plus the one this
         // frame records.
@@ -1850,40 +1855,34 @@ impl super::context::DxContext {
             .retired
             .collect(self.rt.retire_tick, FRAMES as u64 + 1);
 
-        // Seed-from-empty: RT enabled + a topology change added the first
-        // participating geometry to a scene that had none at build time. The
-        // one-shot build is fence-waited internally (a rare, one-time stall); the
-        // DXR trace reads the TLAS + table by GPU virtual address each frame, so
-        // the fresh accel is picked up with no descriptor rewire. The seed build
-        // is static-only, so skinned geometry alone cannot seed one.
+        // Only the two shared skinned GVAs are read up-front; the per-object
+        // joint palettes are borrowed straight out of this frame's slot below (a
+        // disjoint field borrow), so the skin dispatch costs no per-frame list of
+        // its own.
+        let skinned_gvas = self.rt_skinned_gvas();
+        let skinned_present = skinned_gvas.is_some();
+
+        // Seed-from-empty. The one-shot build is fence-waited internally (a rare
+        // stall); the DXR trace reads the TLAS + table by GPU virtual address each
+        // frame, so the fresh accel is picked up with no descriptor rewire.
         if self.rt.accel.is_none() {
-            if self.rt_reflections.is_some()
-                && seed_wanted(self.rt.dynamic_mode, topology_dirty, false)
+            if self.rt_reflections.is_none()
+                || !seed_wanted(self.rt.dynamic_mode, topology_dirty, skinned_present)
             {
-                self.seed_rt_accel();
+                return;
             }
-            return;
+            match self.build_scene_accel(skinned_present) {
+                Ok(Some(accel)) => self.rt.accel = Some(accel),
+                Ok(None) => return,
+                Err(e) => {
+                    crate::rt_report::report_rt_update(&mut self.rt.update_streak, Err(e));
+                    return;
+                }
+            }
+            // The seed already covers this frame's draw set.
+            topology_dirty = false;
         }
 
-        // Build the skinned inputs while `self` is still fully borrowable. `None`
-        // when there is no skinned geometry resident or the launch excluded it
-        // (the static path runs). Only the two shared GVAs are read up-front; the
-        // per-object joint palettes are borrowed straight out of this frame's slot
-        // below (a disjoint field borrow), so the skin dispatch costs no per-frame
-        // list of its own.
-        let skinned_inputs = match (
-            self.skinned.vertex_buffer.as_ref(),
-            self.skinned.index_buffer.as_ref(),
-        ) {
-            (Some(vb), Some(ib))
-                if self.rt.skinned_geometry && !self.state.skinned.draw_objects.is_empty() =>
-            {
-                let vertex_gva = com::gpu_va(vb);
-                let index_gva = com::gpu_va(ib);
-                Some((vertex_gva, index_gva))
-            }
-            _ => None,
-        };
         let joint_buffers: &[PooledBuffer] = self
             .skinned
             .joint_buffers
@@ -1898,12 +1897,15 @@ impl super::context::DxContext {
         let Some(accel) = self.rt.accel.as_mut() else {
             return;
         };
-        let skinned = skinned_inputs.map(|(v, i)| SkinnedRtInputs {
-            objects: &self.state.skinned.draw_objects,
-            vertex_gva: v,
-            index_gva: i,
-            joint_buffers,
-        });
+        let skinned = skinned_gvas
+            .zip(self.rt.skin.as_ref())
+            .map(|((v, i), skin)| SkinnedRtInputs {
+                objects: &self.state.skinned.draw_objects,
+                vertex_gva: v,
+                index_gva: i,
+                joint_buffers,
+                skin,
+            });
         let updated = accel.dynamic_update(
             &self.hw.alloc,
             cmd,
@@ -1922,7 +1924,6 @@ impl super::context::DxContext {
         // rejoin: drop the BVH so a later add re-seeds it, holding it until the
         // frames still in flight have finished tracing it. The trace falls back
         // to SSR meanwhile.
-        let skinned_present = skinned_inputs.is_some();
         if self
             .rt
             .accel
@@ -1934,15 +1935,24 @@ impl super::context::DxContext {
         }
     }
 
-    // Build the scene acceleration structure from scratch (mirrors the init /
-    // `build_rt_runtime` accel block) when a runtime topology change introduces
-    // the first participating geometry into an RT-enabled scene that had none.
-    // A build failure / still-empty scene is non-fatal: `rt.accel` stays `None`
-    // and the next topology change retries.
-    fn seed_rt_accel(&mut self) {
-        if let Some(accel) = self.build_scene_accel() {
-            self.rt.accel = Some(accel);
+    // The shared skinned vertex / index buffer GVAs the RT skin dispatch reads,
+    // or `None` when skinned geometry cannot join the BVH: none is resident, the
+    // launch excluded it, or the skin pipeline failed to build.
+    fn rt_skinned_gvas(&self) -> Option<(u64, u64)> {
+        if !self.rt.skinned_geometry
+            || self.rt.skin.is_none()
+            || self.state.skinned.draw_objects.is_empty()
+        {
+            return None;
         }
+        let vb = self.skinned.vertex_buffer.as_ref()?;
+        let ib = self.skinned.index_buffer.as_ref()?;
+        Some((com::gpu_va(vb), com::gpu_va(ib)))
+    }
+
+    // Whether skinned geometry can join the BVH (see `rt_skinned_gvas`).
+    pub(super) fn rt_skinned_present(&self) -> bool {
+        self.rt_skinned_gvas().is_some()
     }
 
     // Replace the live acceleration structure with one built over the current
@@ -1952,38 +1962,30 @@ impl super::context::DxContext {
     // buffer that no longer exists. An empty scene or a failed build drops the
     // BVH rather than keeping the stale one (which would have the trace read the
     // new, possibly smaller, buffers at old offsets); RT falls back to SSR until
-    // the next topology change re-seeds it.
+    // the next update re-seeds it.
     pub(super) fn rebuild_rt_accel(&mut self) {
-        self.rt.accel = self.build_scene_accel();
+        let skinned_present = self.rt_skinned_present();
+        self.rt.accel = self.build_scene_accel(skinned_present).unwrap_or_else(|e| {
+            tracing::warn!("RT acceleration-structure build failed: {e}");
+            None
+        });
     }
 
     // Build a scene acceleration structure from scratch over the current draw set
-    // + shared geometry buffers, with the skin pipeline attached. `None` when the
-    // scene has no participating geometry or the build failed (warned).
-    fn build_scene_accel(&self) -> Option<RtAccelData> {
-        let hot_reload = self.hot_reload.enabled;
-        let mut accel = match build_rt_accel(RtInitGeometry {
+    // + shared geometry buffers. `None` when the seed builds nothing.
+    pub(super) fn build_scene_accel(
+        &self,
+        skinned_present: bool,
+    ) -> RenderResult<Option<RtAccelData>> {
+        build_rt_accel(RtInitGeometry {
             alloc: &self.hw.alloc,
             shared: SharedGeometry::of(&self.scene.geometry),
             draw_objects: &self.state.draw.objects,
             clusters: &self.instanced.clusters,
             albedo_count: self.scene.textures.len() as u32,
             exclude_seethrough: self.seethrough_meshes_enabled(),
-        }) {
-            Ok(Some(accel)) => accel,
-            Ok(None) => return None,
-            Err(e) => {
-                tracing::warn!("RT acceleration-structure build failed: {e}");
-                return None;
-            }
-        };
-        match build_rt_skin_pipeline(&self.hw.device, hot_reload) {
-            Ok(skin) => accel.set_skin_pipeline(skin),
-            Err(e) => {
-                tracing::warn!("RT skin pipeline build failed (skinned meshes absent): {e}")
-            }
-        }
-        Some(accel)
+            skinned_present,
+        })
     }
 }
 

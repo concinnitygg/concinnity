@@ -88,6 +88,29 @@ fn a_seed_skips_what_cannot_be_traced() {
 }
 
 #[test]
+fn a_seed_builds_whenever_its_book_would_not_start_out_spent() {
+    let draw = [object(0)];
+    let clusters = [cluster(&[1.0])];
+    for (objects, clusters) in [
+        (&draw[..0], &clusters[..0]),
+        (&draw[..], &clusters[..0]),
+        (&draw[..0], &clusters[..]),
+    ] {
+        let seed = SeedSet::new(objects, clusters, false);
+        let blas = (0..(seed.objects.len() + seed.clusters.len()) as u32).collect();
+        let book = Book::new(&seed, blas, objects, 0).expect("one BLAS per seed entry");
+        for skinned_present in [false, true] {
+            assert_eq!(
+                seed.builds_nothing(skinned_present),
+                book.is_spent(skinned_present)
+            );
+        }
+    }
+    assert!(SeedSet::new(&[], &[], false).builds_nothing(false));
+    assert!(!SeedSet::new(&[], &[], false).builds_nothing(true));
+}
+
+#[test]
 fn a_book_needs_one_blas_per_seed_entry() {
     let draw = vec![object(0)];
     let seed = SeedSet::new(&draw, &[], false);

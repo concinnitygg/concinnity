@@ -292,7 +292,8 @@ impl VkContext {
             if let Some(mut rt) = self.rt_reflections.take() {
                 rt.destroy(&self.hw.device);
             }
-            self.rt.destroy_accels(&self.hw.device);
+            self.rt.destroy_accels();
+            self.rt.skin = None;
         }
 
         // The composite follows the ACTUAL post-build RT state, so a failed RT
@@ -366,7 +367,12 @@ impl VkContext {
             }
         };
         self.rt_reflections = Some(rt);
-        self.rt.accel = self.build_scene_accel();
+        self.rt.skin = crate::vulkan::raytrace::build_rt_skin(
+            &self.hw.alloc,
+            &self.hw.device,
+            self.hot_reload.enabled,
+        );
+        self.rt.accel = self.build_scene_accel_or_warn();
         self.forget_wired_accel();
         Ok(())
     }

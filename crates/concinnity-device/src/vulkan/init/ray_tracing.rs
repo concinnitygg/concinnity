@@ -151,9 +151,11 @@ pub(super) fn build_rt_reflections(
                 clusters: &world.instanced_clusters,
                 albedo_count: scene.textures.len(),
                 exclude_seethrough: has_seethrough_meshes,
+                // Skinned meshes upload after init; the first dynamic frame
+                // adds them, or seeds a BVH for them when there is none.
+                skinned_present: false,
             },
             frames,
-            hot_reload,
         ) {
             Ok(Some(accel)) => Some(accel),
             Ok(None) => {
@@ -209,6 +211,10 @@ pub(super) fn build_rt_reflections(
             dynamic_mode: post.rt_dynamic,
             skinned_geometry: post.rt_skinned_geometry,
             update_streak: Default::default(),
+            skin: rt_opt
+                .is_some()
+                .then(|| crate::vulkan::raytrace::build_rt_skin(alloc, device, hot_reload))
+                .flatten(),
         },
         reflections: rt_opt,
         composite: composite_opt,

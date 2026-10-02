@@ -955,6 +955,9 @@ pub(super) struct VkRayTracing {
     // Whether the per-frame BVH update is failing, so a failure is logged once
     // per streak rather than every frame.
     pub(super) update_streak: concinnity_core::render::rt_accel::FailureStreak,
+    // The compute-skinning pipeline (`rt_skin`) skinned geometry joins the BVH
+    // through, built with the RT pass. `None` when the kernel failed to compile.
+    pub(super) skin: Option<crate::vulkan::raytrace::SkinPipeline>,
 }
 
 // The device layer every per-world resource is built on: instance, device,
@@ -1989,7 +1992,8 @@ impl VkContext {
         if let Some(mut rt) = self.rt_reflections.take() {
             rt.destroy(device);
         }
-        self.rt.destroy_accels(device);
+        self.rt.destroy_accels();
+        self.rt.skin = None;
 
         // Temporal upscaling (FSR / DLSS / XeSS): the vendor context + the
         // output texture, via the backend trait.
