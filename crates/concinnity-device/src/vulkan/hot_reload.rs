@@ -22,13 +22,12 @@ use super::pipeline::{
 use super::post::bloom::{compile_bloom_shaders, create_bloom_pipeline};
 use super::post::ssao::rebuild_ssao_pipelines;
 
-// Rebuild a feature's pipeline(s) into a temporary only when the feature is
-// live, propagating any compile/create error out of the enclosing
-// `reload_shaders`. `$cond` is the liveness check (`self.x.is_some()`); `$build`
-// is the build expression (which re-accesses `self.x` and may use `?` internally
-// for the shader compile). Expands to `Some(build?)` when live, `None`
-// otherwise, so the swap phase below can pair each rebuilt `Some(_)` with its
-// live target uniformly. Mirrors `directx/hot_reload.rs::rebuild_if_live!`.
+// Rebuild a feature's pipeline(s) into a temporary only when `$cond` says the
+// feature is live, propagating any compile/create error out of the enclosing
+// `reload_shaders`. Expands to `Some(build?)` when live, `None` otherwise. A
+// feature whose resources sit behind an `Option` maps over that `Option`
+// instead, so its build borrows them directly. Mirrors
+// `directx/hot_reload.rs::rebuild_if_live!`.
 macro_rules! rebuild_if_live {
     ($cond:expr_2021, $build:expr_2021 $(,)?) => {
         if $cond { Some($build?) } else { None }
@@ -147,121 +146,93 @@ impl VkContext {
                 Ok::<_, RenderError>((pipeline, engine_pair))
             }
         );
-        let cull_pipeline = rebuild_if_live!(
-            self.cull.cull_pipeline_layout.is_some() && self.cull.cull_pipeline.is_some(),
-            {
-                let cs = compile_cull_shader(hr)?;
-                create_cull_pipeline(
-                    device,
-                    self.cull
-                        .cull_pipeline_layout
-                        .as_ref()
-                        .expect("cull pipeline layout is live alongside its pipeline")
-                        .handle(),
-                    &cs,
-                )
-            }
-        );
-        // Phase-2 cull (two-pass occlusion), rebuilt alongside phase 1 from the
-        // same source with the `CULL_PHASE2` define + the shared layout.
-        let cull_pipeline_phase2 = rebuild_if_live!(
-            self.cull.cull_pipeline_layout.is_some() && self.cull.cull_pipeline_phase2.is_some(),
-            {
-                let cs = compile_cull_shader_phase2(hr)?;
-                create_cull_pipeline(
-                    device,
-                    self.cull
-                        .cull_pipeline_layout
-                        .as_ref()
-                        .expect("cull pipeline layout is live alongside its phase-2 pipeline")
-                        .handle(),
-                    &cs,
-                )
-            }
-        );
+        // The cull kernel, and its phase-2 twin (two-pass occlusion) when built:
+        // the same source with the `CULL_PHASE2` define, over the shared layout.
+        let cull_pipelines = self
+            .cull
+            .cull_kernels
+            .as_ref()
+            .map(|kernels| {
+                let layout = kernels.pipeline_layout.handle();
+                let pipeline = create_cull_pipeline(device, layout, &compile_cull_shader(hr)?)?;
+                let phase2 = kernels
+                    .pipeline_phase2
+                    .as_ref()
+                    .map(|_| create_cull_pipeline(device, layout, &compile_cull_shader_phase2(hr)?))
+                    .transpose()?;
+                Ok::<_, RenderError>((pipeline, phase2))
+            })
+            .transpose()?;
         // Hi-Z build kernels (live alongside the cull pipeline).
-        let hiz_pipelines = rebuild_if_live!(
-            self.cull.hiz.is_some(),
-            self.cull
-                .hiz
-                .as_ref()
-                .expect("hi-Z resources are live alongside the cull pipeline")
-                .recompile_pipelines(device, hr)
-        );
+        let hiz_pipelines = self
+            .cull
+            .hiz
+            .as_ref()
+            .map(|hiz| hiz.recompile_pipelines(device, hr))
+            .transpose()?;
 
         // Auto-exposure (gated on the post-process config). Builds the histogram
         // + average compute pipelines; the trailing `.map` tuples them so the
         // whole build is one Result expression for the macro.
-        let auto_exposure_pipelines = rebuild_if_live!(self.auto_exposure.resources.is_some(), {
-            let ae = self
-                .auto_exposure
-                .resources
-                .as_ref()
-                .expect("auto-exposure resources are live");
-            let (build_cs, average_cs) = compile_auto_exposure_shaders(hr)?;
-            let build = AutoExposureResources::create_compute_pipeline(
-                device,
-                ae.build_pipeline_layout(),
-                &build_cs,
-            )?;
-            AutoExposureResources::create_compute_pipeline(
-                device,
-                ae.average_pipeline_layout(),
-                &average_cs,
-            )
-            .map(|average| (build, average))
-        });
+        let auto_exposure_pipelines = self
+            .auto_exposure
+            .resources
+            .as_ref()
+            .map(|ae| {
+                let (build_cs, average_cs) = compile_auto_exposure_shaders(hr)?;
+                let build = AutoExposureResources::create_compute_pipeline(
+                    device,
+                    ae.build_pipeline_layout(),
+                    &build_cs,
+                )?;
+                AutoExposureResources::create_compute_pipeline(
+                    device,
+                    ae.average_pipeline_layout(),
+                    &average_cs,
+                )
+                .map(|average| (build, average))
+            })
+            .transpose()?;
 
         // Decal (always built when DecalResources exists, which is
         // unconditional in `VkContext::new`).
-        let decal_pipeline = rebuild_if_live!(
-            self.decal.resources.is_some(),
-            super::decal::rebuild_decal_pipeline(
-                device,
-                self.decal.resources.as_ref().expect("decal state is live"),
-                self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
-                hr,
-            )
-        );
+        let msaa = self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1;
+        let decal_pipeline = self
+            .decal
+            .resources
+            .as_ref()
+            .map(|decals| super::decal::rebuild_decal_pipeline(device, decals, msaa, hr))
+            .transpose()?;
 
         // Lines (only once a frame published some and the lazy build ran).
-        let line_pipeline = rebuild_if_live!(
-            self.lines.resources.is_some(),
-            super::line::rebuild_line_pipeline(
-                device,
-                self.lines
-                    .resources
-                    .as_ref()
-                    .expect("line resources are live"),
-                self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
-                hr,
-            )
-        );
+        let line_pipeline = self
+            .lines
+            .resources
+            .as_ref()
+            .map(|lines| super::line::rebuild_line_pipeline(device, lines, msaa, hr))
+            .transpose()?;
 
         // Fog (only when the world declared a VolumetricFog). Rebuilds both the
         // fullscreen render pipeline and the froxel-volume compute kernel; the
-        // trailing `.map` tuples them into one Result for the macro.
-        let fog_pipelines = rebuild_if_live!(self.fog.resources.is_some(), {
-            let fog = self.fog.resources.as_ref().expect("fog resources are live");
-            let render = super::fog::rebuild_fog_pipeline(
-                device,
-                fog,
-                self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
-                hr,
-            )?;
-            super::fog::rebuild_fog_froxel_pipeline(device, fog, hr).map(|froxel| (render, froxel))
-        });
+        // trailing `.map` tuples them into one Result.
+        let fog_pipelines = self
+            .fog
+            .resources
+            .as_ref()
+            .map(|fog| {
+                let render = super::fog::rebuild_fog_pipeline(device, fog, msaa, hr)?;
+                super::fog::rebuild_fog_froxel_pipeline(device, fog, hr)
+                    .map(|froxel| (render, froxel))
+            })
+            .transpose()?;
 
         // SSAO (only when PostProcessConfig opted in). Rebuilds prepass
         // static / instanced / skinned + kernel + blur in one shot.
-        let ssao_rebuilt = rebuild_if_live!(
-            self.ssao.is_some(),
-            rebuild_ssao_pipelines(
-                device,
-                self.ssao.as_ref().expect("SSAO resources are live"),
-                hr
-            )
-        );
+        let ssao_rebuilt = self
+            .ssao
+            .as_ref()
+            .map(|ssao| rebuild_ssao_pipelines(device, ssao, hr))
+            .transpose()?;
 
         // SSR (only when PostProcessConfig opted in). Rebuilds the resolve.
         let ssr_rebuilt = rebuild_if_live!(
@@ -277,29 +248,23 @@ impl VkContext {
 
         // RT reflections (only when the world opted in + the GPU supports it).
         // Rebuilds the flat + textured ray-query pipelines.
-        let rt_rebuilt = rebuild_if_live!(
-            self.rt_reflections.is_some(),
-            crate::vulkan::post::rt_reflections::rebuild_rt_pipelines(
-                device,
-                self.rt_reflections
-                    .as_ref()
-                    .expect("RT reflection resources are live"),
-                hr,
-            )
-        );
+        let rt_rebuilt = self
+            .rt_reflections
+            .as_ref()
+            .map(|rt| crate::vulkan::post::rt_reflections::rebuild_rt_pipelines(device, rt, hr))
+            .transpose()?;
 
         // Reflection composite (only when a reflection path owns the scene image).
         // Rebuilds the roughness blur + composite pipelines.
-        let reflection_composite_rebuilt = rebuild_if_live!(
-            self.reflection_composite.is_some(),
-            crate::vulkan::post::reflection_composite::rebuild_reflection_composite_pipelines(
-                device,
-                self.reflection_composite
-                    .as_ref()
-                    .expect("reflection composite resources are live"),
-                hr,
-            )
-        );
+        let reflection_composite_rebuilt = self
+            .reflection_composite
+            .as_ref()
+            .map(|rc| {
+                crate::vulkan::post::reflection_composite::rebuild_reflection_composite_pipelines(
+                    device, rc, hr,
+                )
+            })
+            .transpose()?;
 
         // TAA (only when PostProcessConfig opted in). Rebuilds the resolve
         // pipeline; the velocity channel lives on the unified G-buffer pre-pass.
@@ -311,14 +276,12 @@ impl VkContext {
         // Particles (only when ≥1 emitter is live or has ever been
         // added at runtime). Rebuilds the compute + render pipelines in
         // one shot.
-        let particle_rebuilt = rebuild_if_live!(
-            self.particle.resources.is_some(),
-            self.particle
-                .resources
-                .as_ref()
-                .expect("particle resources are live")
-                .rebuild_pipelines(device, hr)
-        );
+        let particle_rebuilt = self
+            .particle
+            .resources
+            .as_ref()
+            .map(|particles| particles.rebuild_pipelines(device, hr))
+            .transpose()?;
 
         // All builds succeeded: swap the freshly compiled pipelines in. Each
         // assignment drops the pipeline it displaces, which retires it through
@@ -341,11 +304,11 @@ impl VkContext {
         // The wireframe twins were built from the pre-reload shaders; drop them
         // so the next wireframe frame rebuilds against these.
         self.invalidate_wireframe_pipelines();
-        if let Some(new_pipeline) = cull_pipeline {
-            self.cull.cull_pipeline = Some(new_pipeline);
-        }
-        if let Some(new_pipeline) = cull_pipeline_phase2 {
-            self.cull.cull_pipeline_phase2 = Some(new_pipeline);
+        if let (Some((pipeline, phase2)), Some(kernels)) =
+            (cull_pipelines, self.cull.cull_kernels.as_mut())
+        {
+            kernels.pipeline = pipeline;
+            kernels.pipeline_phase2 = phase2;
         }
         if let (Some((init, downsample)), Some(hiz)) = (hiz_pipelines, self.cull.hiz.as_mut()) {
             hiz.swap_pipelines(init, downsample);

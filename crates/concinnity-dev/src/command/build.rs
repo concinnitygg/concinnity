@@ -1,28 +1,25 @@
-use concinnity_cook::authoring::world::find_world_jsonl;
+use crate::command::resolve_world_path;
 
-// Compile a world to binary blobs and write world-lock.json.
-// Entry point for the `cn build` CLI subcommand.
-//
-// `world` is an optional world name resolved against worlds/; None
-// selects the most recently modified world there, falling back to world.jsonl.
-//
-// If `server` and `user` are both provided, any source files missing from
-// assets/ are fetched from the server before compiling.
 /// Compile a world to binary blobs and write `world-lock.json`.
 ///
-/// `json_path` is used when it names an existing file; otherwise the world is
-/// discovered.
+/// `json_path` names the world explicitly and must exist; `None` discovers it.
 pub fn build(json_path: Option<&str>) -> std::io::Result<()> {
     // The cook reports what does not fail the build, such as a shader
     // warning, through the log.
     concinnity_engine::app::run::init_logging();
-    let resolved;
-    let json_path = match json_path {
-        Some(p) if std::path::Path::new(p).exists() => p,
-        _ => {
-            resolved = find_world_jsonl(crate::project::worlds_dir().as_deref(), None)?;
-            resolved.as_str()
-        }
-    };
-    crate::authoring::build_world_file(json_path)
+    let json_path = resolve_world_path(json_path)?;
+    crate::authoring::build_world_file(&json_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_of_a_missing_explicit_world_is_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("absent.jsonl");
+        let err = build(path.to_str()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
 }

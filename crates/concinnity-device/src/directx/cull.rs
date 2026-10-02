@@ -33,6 +33,14 @@ use crate::directx::pipeline::serialize_desc_and_create;
 use crate::directx::root_constants::{RootConstants, root_dwords};
 use crate::directx::texture::transition_barrier;
 
+// The compute cull kernel and its root signature, plus two-pass occlusion's
+// phase-2 kernel over the same signature (`None` when two-pass is off).
+pub(in crate::directx) struct CullKernels {
+    pub root_sig: ID3D12RootSignature,
+    pub pso: ID3D12PipelineState,
+    pub pso_phase2: Option<ID3D12PipelineState>,
+}
+
 // GPU-driven cull + main pass. A compute kernel frustum/distance-tests every
 // record and writes one `ExecuteIndirect` command per object; the main pass
 // issues each bucket's region with one `ExecuteIndirect`. All `Some`/non-empty
@@ -69,11 +77,7 @@ pub(in crate::directx) struct CullState {
     // just fence-waited instead of draining the device (see
     // `apply_streamed_texture_rewrites`).
     pub bindless_pool_gpu: Vec<SrvSlot>,
-    // Cull compute pipeline; `cull_pso_phase2` is the two-pass-occlusion PSO
-    // (same root signature as `cull_pso`).
-    pub cull_root_sig: Option<ID3D12RootSignature>,
-    pub cull_pso: Option<ID3D12PipelineState>,
-    pub cull_pso_phase2: Option<ID3D12PipelineState>,
+    pub cull_kernels: Option<CullKernels>,
     pub cull_command_signature: Option<ID3D12CommandSignature>,
     // Per-frame `StructuredBuffer<GpuDrawArgs>` upload buffers (indexed-draw
     // args + per-frame cull-decision bits the kernel reads).
@@ -680,16 +684,10 @@ impl DxContext {
         frustum: &Frustum,
         cam_pos: [f32; 3],
     ) {
-        let cull_pso = self
-            .cull
-            .cull_pso
-            .as_ref()
-            .expect("encode_cull: cull_pso missing");
-        let cull_root = self
-            .cull
-            .cull_root_sig
-            .as_ref()
-            .expect("encode_cull: cull_root_sig missing");
+        let Some(kernels) = self.cull.cull_kernels.as_ref() else {
+            return;
+        };
+        let (cull_pso, cull_root) = (&kernels.pso, &kernels.root_sig);
         let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
         let draw_args_gva = com::gpu_va(&self.cull.draw_args_buffer_resources[frame_idx]);
@@ -776,16 +774,10 @@ impl DxContext {
         frustum: &Frustum,
         cam_pos: [f32; 3],
     ) {
-        let cull_pso = self
-            .cull
-            .cull_pso
-            .as_ref()
-            .expect("encode_probe_cull: cull_pso missing");
-        let cull_root = self
-            .cull
-            .cull_root_sig
-            .as_ref()
-            .expect("encode_probe_cull: cull_root_sig missing");
+        let Some(kernels) = self.cull.cull_kernels.as_ref() else {
+            return;
+        };
+        let (cull_pso, cull_root) = (&kernels.pso, &kernels.root_sig);
         let indirect = &self.cull.indirect_cmd_buffers[slot];
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[slot]);
         let draw_args_gva = com::gpu_va(&self.cull.draw_args_buffer_resources[slot]);
@@ -961,7 +953,7 @@ impl DxContext {
         // fails to build), shifting plane >= 1's read offset off the written region.
         region_count: usize,
     ) {
-        let Some(pso) = self.cull.cull_pso.as_ref() else {
+        let Some(pso) = self.cull.cull_kernels.as_ref().map(|k| &k.pso) else {
             return;
         };
         self.encode_region_culls(
@@ -994,7 +986,7 @@ impl DxContext {
         pass: RegionCullPass<'_>,
         regions: &[RegionCull],
     ) {
-        let Some(cull_root) = self.cull.cull_root_sig.as_ref() else {
+        let Some(cull_root) = self.cull.cull_kernels.as_ref().map(|k| &k.root_sig) else {
             return;
         };
         let n_cull = self.cull_count();
@@ -1091,14 +1083,17 @@ impl DxContext {
         frustum: &Frustum,
         cur_vp: [[f32; 4]; 4],
     ) {
-        let (Some(cull_pso2), Some(cull_root), Some(hiz), Some(indirect)) = (
-            self.cull.cull_pso_phase2.as_ref(),
-            self.cull.cull_root_sig.as_ref(),
+        let (Some(kernels), Some(hiz), Some(indirect)) = (
+            self.cull.cull_kernels.as_ref(),
             self.cull.hiz.as_ref(),
             self.cull.indirect_cmd_buffers_2.get(frame_idx),
         ) else {
             return;
         };
+        let Some(cull_pso2) = kernels.pso_phase2.as_ref() else {
+            return;
+        };
+        let cull_root = &kernels.root_sig;
         if self.cull_count() == 0 {
             return;
         }
@@ -1156,7 +1151,11 @@ impl DxContext {
     // `CullState.two_pass_occlusion` gate.
     pub(in crate::directx) fn two_pass_occlusion_active(&self) -> bool {
         self.cull.occlusion_two_pass
-            && self.cull.cull_pso_phase2.is_some()
+            && self
+                .cull
+                .cull_kernels
+                .as_ref()
+                .is_some_and(|k| k.pso_phase2.is_some())
             && self.cull.hiz.is_some()
             && self.cull.main_bindless_pso.is_some()
             && self.cull_count() > 0

@@ -75,11 +75,10 @@ pub(super) fn build_two_pass_cull(
         indirect_buffers2,
         main_render_pass_phase1,
         main_render_pass_phase2,
-    ): TwoPassCullResources = if let (Some(set_layout), Some(pipeline_layout)) = (
-        compute.set_layout.as_ref(),
-        compute.pipeline_layout.as_ref(),
-    ) && occlusion_two_pass
+    ): TwoPassCullResources = if let Some(kernels) = compute.kernels.as_ref()
+        && occlusion_two_pass
     {
+        let (set_layout, pipeline_layout) = (&kernels.set_layout, &kernels.pipeline_layout);
         let n = plan.n_cull as u64;
         let object_buffer_size = n * std::mem::size_of::<render_types::GpuObjectData>() as u64;
         let draw_args_size = n * std::mem::size_of::<render_types::GpuDrawArgs>() as u64;

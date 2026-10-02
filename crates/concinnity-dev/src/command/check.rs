@@ -1,25 +1,13 @@
 //! Discovery wrapper around `crate::authoring::check_at_path`.
-//!
-//! `cn test` accepts an optional --file path. When the path is missing or
-//! doesn't exist on disk, fall back to discovery via find_world_jsonl.
-
-use concinnity_cook::authoring::world::find_world_jsonl;
 
 use crate::authoring::check_at_path;
+use crate::command::resolve_world_path;
 
 /// Validate a world and report its errors without building blobs.
 ///
-/// `json_path` is used when it names an existing file; otherwise the world is
-/// discovered.
-pub fn check(json_path: &str) -> std::io::Result<()> {
-    let resolved;
-    let json_path = if !std::path::Path::new(json_path).exists() {
-        resolved = find_world_jsonl(crate::project::worlds_dir().as_deref(), None)?;
-        resolved.as_str()
-    } else {
-        json_path
-    };
-    check_at_path(json_path)
+/// `json_path` names the world explicitly and must exist; `None` discovers it.
+pub fn check(json_path: Option<&str>) -> std::io::Result<()> {
+    check_at_path(&resolve_world_path(json_path)?)
 }
 
 #[cfg(test)]
@@ -33,7 +21,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
         std::fs::write(&path, "[\"PhysicsConfig\",{\"$id\":\"phys\"}]\n").unwrap();
-        check(path.to_str().unwrap()).unwrap();
+        check(path.to_str()).unwrap();
     }
 
     #[test]
@@ -41,6 +29,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
         std::fs::write(&path, "[\"NotARealAssetType\",{\"$id\":\"x\"}]\n").unwrap();
-        assert!(check(path.to_str().unwrap()).is_err());
+        assert!(check(path.to_str()).is_err());
+    }
+
+    #[test]
+    fn check_of_a_missing_explicit_world_is_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("absent.jsonl");
+        let err = check(path.to_str()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 }

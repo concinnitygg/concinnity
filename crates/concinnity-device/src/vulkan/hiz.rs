@@ -75,7 +75,7 @@ pub(super) fn hiz_mip_count(width: u32, height: u32) -> u32 {
 // Compute pipelines + image + per-mip views + descriptor sets for the Hi-Z
 // build, plus the cull-read set (set 1 of the cull pipeline) and its per-frame
 // uniform buffers. `Some` on the context exactly when the GPU-cull pipeline is
-// active (same gating as `cull_pipeline`).
+// active (same gating as `cull_kernels`).
 pub(super) struct HiZResources {
     // Build pipelines + their layouts (the phase-1 SPD and tail kernels bind
     // different set layouts, so each needs its own pipeline layout).

@@ -63,6 +63,18 @@ mod tests {
     }
 
     #[test]
+    fn explain_of_a_missing_explicit_world_is_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("absent.jsonl")
+            .to_string_lossy()
+            .into_owned();
+        let err = explain("gfx", Some(&path)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
     fn explain_resolves_an_anonymous_label() {
         let (_dir, path) = write_world("[\"GraphicsConfig\",{}]\n[\"Scene\"]\n");
         explain("Scene#0", Some(&path)).unwrap();

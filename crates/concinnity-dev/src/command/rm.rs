@@ -1,11 +1,10 @@
 //! Discovery wrapper around `crate::authoring::rm_at_path`.
 
-use concinnity_cook::authoring::world::find_world_jsonl;
-
 use crate::authoring::rm_at_path;
+use crate::command::discover_world_path;
 
 /// Delete the asset named `name` from the discovered world.
 pub fn rm(name: &str) -> std::io::Result<()> {
-    let world_path = find_world_jsonl(crate::project::worlds_dir().as_deref(), None)?;
+    let world_path = discover_world_path()?;
     rm_at_path(&world_path, name)
 }

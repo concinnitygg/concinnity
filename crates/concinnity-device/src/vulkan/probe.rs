@@ -139,7 +139,7 @@ impl VkContext {
         // Permanent ineligibility: the capture renders through the bindless GPU
         // cull. That never changes after init, so abandon the queue rather than
         // re-checking forever (the forward specular keeps sampling the sky).
-        if self.cull.cull_pipeline.is_none()
+        if self.cull.cull_kernels.is_none()
             || self.cull.bindless_pipeline.is_none()
             || self.probe.prefilter.is_none()
         {
@@ -826,12 +826,10 @@ impl VkContext {
         frustum: &Frustum,
         cam_pos: [f32; 3],
     ) {
-        let (Some(pipeline), Some(layout)) = (
-            self.cull.cull_pipeline.as_ref(),
-            self.cull.cull_pipeline_layout.as_ref(),
-        ) else {
+        let Some(kernels) = self.cull.cull_kernels.as_ref() else {
             return;
         };
+        let (pipeline, layout) = (&kernels.pipeline, &kernels.pipeline_layout);
         let device = &self.hw.device;
         let params = capture_cull_params(frustum, cam_pos, self.cull_count() as u32);
         // SAFETY: `CullParams` is `repr(C)` and matches the push-constant block
@@ -1339,16 +1337,14 @@ impl BakeResources {
             .map_err(|e| super::error::map_vk_result(e, "probe descriptor pool"))?;
 
         // Cull set (set 0): object / draw-args / indirect / status SSBOs.
+        let cull_kernels =
+            ctx.cull.cull_kernels.as_ref().ok_or_else(|| {
+                RenderError::Other("probe: the GPU cull is not initialized".into())
+            })?;
         let cull_set = alloc_descriptor_sets(
             device,
             pool.handle(),
-            std::slice::from_ref(
-                &ctx.cull
-                    .cull_set_layout
-                    .as_ref()
-                    .expect("cull descriptor set layout exists once culling is initialized")
-                    .handle(),
-            ),
+            std::slice::from_ref(&cull_kernels.set_layout.handle()),
         )?[0];
         write_storage_buffer(device, cull_set, 0, object_buf.buffer(), object_size);
         write_storage_buffer(device, cull_set, 1, draw_args_buf.buffer(), args_size);

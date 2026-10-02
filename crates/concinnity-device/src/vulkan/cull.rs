@@ -130,9 +130,12 @@ impl VkContext {
     // `directx/cull.rs::two_pass_occlusion_active`.
     pub(in crate::vulkan) fn two_pass_occlusion_active(&self) -> bool {
         self.cull.occlusion_two_pass
-            && self.cull.cull_pipeline_phase2.is_some()
+            && self
+                .cull
+                .cull_kernels
+                .as_ref()
+                .is_some_and(|k| k.pipeline_phase2.is_some())
             && self.cull.hiz.is_some()
-            && self.cull.cull_pipeline.is_some()
             && !self.cull.indirect_buffers2.is_empty()
             && self.cull_count() > 0
     }
@@ -155,12 +158,10 @@ impl VkContext {
         frustum: &Frustum,
         cam_pos: [f32; 3],
     ) {
-        let (Some(pipeline), Some(layout)) = (
-            self.cull.cull_pipeline.as_ref(),
-            self.cull.cull_pipeline_layout.as_ref(),
-        ) else {
+        let Some(kernels) = self.cull.cull_kernels.as_ref() else {
             return;
         };
+        let (pipeline, layout) = (&kernels.pipeline, &kernels.pipeline_layout);
         let device = &self.hw.device;
 
         // Pack the six already-normalized frustum planes for the kernel.
@@ -380,13 +381,14 @@ impl VkContext {
         cam_pos: [f32; 3],
         cur_vp: [[f32; 4]; 4],
     ) {
-        let (Some(pipeline), Some(layout), Some(hiz)) = (
-            self.cull.cull_pipeline_phase2.as_ref(),
-            self.cull.cull_pipeline_layout.as_ref(),
-            self.cull.hiz.as_ref(),
-        ) else {
+        let (Some(kernels), Some(hiz)) = (self.cull.cull_kernels.as_ref(), self.cull.hiz.as_ref())
+        else {
             return;
         };
+        let Some(pipeline) = kernels.pipeline_phase2.as_ref() else {
+            return;
+        };
+        let layout = &kernels.pipeline_layout;
         if self.cull.cull_sets2.is_empty() || self.cull_count() == 0 {
             return;
         }

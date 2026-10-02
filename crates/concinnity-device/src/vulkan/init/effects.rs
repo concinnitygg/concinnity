@@ -520,15 +520,15 @@ pub(super) fn build_world_effects(
     }
     // The reflected-frustum mirror cull is bindless-only (it needs the GPU cull
     // set layout + the per-frame object/draw-args SSBOs); a non-bindless world
-    // has no `cull_set_layout`, so planar is skipped and its panes keep the
+    // has no `cull_kernels`, so planar is skipped and its panes keep the
     // probe / sky reflection. Mirrors `metal::planar`'s bindless gate.
     let planar_reflection = if planar.planes().is_empty() {
         None
-    } else if let Some(csl) = cull.cull_set_layout.as_ref() {
+    } else if let Some(kernels) = cull.cull_kernels.as_ref() {
         let cull_sources = crate::vulkan::planar::PlanarCullSources {
             frame_object_buffers: &cull.object_buffers,
             frame_draw_args_buffers: &cull.draw_args_buffers,
-            cull_set_layout: csl.handle(),
+            cull_set_layout: kernels.set_layout.handle(),
             cull_count: n_cull,
             hiz: cull
                 .hiz

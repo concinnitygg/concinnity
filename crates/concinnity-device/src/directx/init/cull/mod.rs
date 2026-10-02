@@ -9,7 +9,7 @@ use concinnity_core::transform::IDENTITY;
 
 use super::InitGpu;
 use crate::directx::context::{DxDescriptors, DxTargets, FRAMES};
-use crate::directx::cull::CullState;
+use crate::directx::cull::{CullKernels, CullState};
 use crate::directx::probe_prefilter::ProbePrefilterPipelines;
 use bindless::BindlessPass;
 use compute::ComputeCull;
@@ -118,9 +118,10 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         object_buffer_ptrs: bindless.object_ptrs,
         material_params: bindless.material_params,
         bindless_pool_gpu,
-        cull_root_sig: compute.root_sig,
-        cull_pso: compute.pso,
-        cull_pso_phase2: two_pass.pso,
+        cull_kernels: compute.kernels.map(|kernels| CullKernels {
+            pso_phase2: two_pass.pso,
+            ..kernels
+        }),
         cull_command_signature: compute.command_signature,
         draw_args_buffer_resources: compute.draw_args_buffers,
         draw_args_buffer_ptrs: compute.draw_args_ptrs,
@@ -159,12 +160,12 @@ pub(super) fn build_probe_prefilter(
     cull: &CullState,
 ) -> RenderResult<Option<ProbePrefilterPipelines>> {
     let typed_uav_load = crate::directx::probe_prefilter::typed_uav_load_supported(&gpu.hw.device);
-    if cull.cull_pso.is_some() && !typed_uav_load {
+    if cull.cull_kernels.is_some() && !typed_uav_load {
         tracing::warn!(
             "reflection probes: device lacks TypedUAVLoadAdditionalFormats, skipping probe baking"
         );
     }
-    let probe_prefilter = match cull.cull_pso.is_some() && typed_uav_load {
+    let probe_prefilter = match cull.cull_kernels.is_some() && typed_uav_load {
         true => Some(ProbePrefilterPipelines::new(
             &gpu.hw.device,
             gpu.hot_reload,

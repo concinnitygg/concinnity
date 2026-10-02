@@ -12,7 +12,7 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
     match cli.resolved_command() {
         Commands::Init => command::init(),
         Commands::New(args) => command::new(&args.path),
-        Commands::Build(args) => command::build(args.file.as_deref()),
+        Commands::Build(args) => command::build(args.world.file()),
         Commands::Run(args) => concinnity_engine::app::run(
             tree,
             concinnity_engine::app::run::RunOptions {
@@ -33,7 +33,7 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
         ),
         Commands::Debug(args) => {
             let launch = args.render.launch(args.validation, true);
-            crate::run_debug(launch, args.file.as_deref(), args.debug_port)
+            crate::run_debug(launch, args.world.file(), args.debug_port)
         }
         Commands::Editor(args) => {
             // Every editor session hot-reloads, with or without a debug port.
@@ -44,15 +44,12 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
             command::add(args.id.as_deref(), &args.target, args.template.as_deref())
         }
         Commands::Rm(args) => command::rm(&args.id),
-        Commands::List(args) => command::list(args.file.as_deref(), args.expanded, args.systems),
-        Commands::Explain(args) => command::explain(&args.id, args.file.as_deref()),
+        Commands::List(args) => command::list(args.world.file(), args.expanded, args.systems),
+        Commands::Explain(args) => command::explain(&args.id, args.world.file()),
         Commands::Docs(args) => crate::docs::docs(args.root.as_deref()),
-        Commands::Test(args) => {
-            let path = args.file.as_deref().unwrap_or("");
-            command::check(path)
-        }
+        Commands::Test(args) => command::check(args.world.file()),
         Commands::Export(args) => crate::export::export(&ExportOptions {
-            world: args.file.clone(),
+            world: args.world.file().map(str::to_string),
             name: args.name.clone(),
             version: args.version.clone(),
             platform: args.platform.clone(),

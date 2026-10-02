@@ -44,7 +44,10 @@ pub(super) fn build_shadow_cull(
     shadow_enabled: bool,
     spot_slices: usize,
 ) -> RenderResult<ShadowCull> {
-    let (Some(crs), true) = (compute.root_sig.as_ref(), shadow_enabled) else {
+    let (Some(crs), true) = (
+        compute.kernels.as_ref().map(|k| &k.root_sig),
+        shadow_enabled,
+    ) else {
         return Ok(ShadowCull {
             bindless_root_sig: None,
             bindless_pso: None,

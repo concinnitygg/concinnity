@@ -209,7 +209,7 @@ impl DxContext {
     // slot must exist.
     fn probe_capture_supported(&self) -> bool {
         self.cull.main_bindless_pso.is_some()
-            && self.cull.cull_pso.is_some()
+            && self.cull.cull_kernels.is_some()
             && self.cull.object_buffer_resources.len() > FRAMES
             && self.cull.draw_args_buffer_resources.len() > FRAMES
             && self.cull.indirect_cmd_buffers.len() > FRAMES

@@ -36,13 +36,12 @@ impl HotReloadState {
     }
 }
 
-// Rebuild a feature's PSO(s) into a temporary only when the feature is live,
-// propagating any compile/create error out of the enclosing `reload_shaders`.
-// `$cond` is the liveness check (`self.x.is_some()`); `$build` is the build
-// expression (which re-accesses `self.x` and may use `?` internally for the
-// shader compile). Expands to `Some(build?)` when live, `None` otherwise, so
-// the swap phase below can `if let (Some(rebuilt), Some(x)) = ...` uniformly.
-// Mirrors `metal/hot_reload.rs::rebuild_if_live!`.
+// Rebuild a feature's PSO(s) into a temporary only when `$cond` says the
+// feature is live, propagating any compile/create error out of the enclosing
+// `reload_shaders`. Expands to `Some(build?)` when live, `None` otherwise. A
+// feature whose resources sit behind an `Option` maps over that `Option`
+// instead, so its build borrows them directly. Mirrors
+// `metal/hot_reload.rs::rebuild_if_live!`.
 macro_rules! rebuild_if_live {
     ($cond:expr_2021, $build:expr_2021 $(,)?) => {
         if $cond { Some($build?) } else { None }
@@ -173,42 +172,28 @@ impl DxContext {
                 Ok::<_, RenderError>((pso, engine_pair))
             }
         );
-        let cull_pso = rebuild_if_live!(
-            self.cull.cull_root_sig.is_some() && self.cull.cull_pso.is_some(),
-            {
-                let cs = super::cull::compile_cull_shader(hr)?;
-                super::context::dump_on_err(
-                    info_queue,
-                    super::cull::create_cull_pso(
-                        device,
-                        self.cull
-                            .cull_root_sig
-                            .as_ref()
-                            .expect("cull root signature is live alongside its PSO"),
-                        &cs,
-                    ),
-                )
-            }
-        );
-        // Phase-2 cull PSO (two-pass occlusion), rebuilt against the same root
-        // signature when it's live.
-        let cull_pso_phase2 = rebuild_if_live!(
-            self.cull.cull_root_sig.is_some() && self.cull.cull_pso_phase2.is_some(),
-            {
-                let cs2 = super::cull::compile_cull_shader_phase2(hr)?;
-                super::context::dump_on_err(
-                    info_queue,
-                    super::cull::create_cull_pso(
-                        device,
-                        self.cull
-                            .cull_root_sig
-                            .as_ref()
-                            .expect("cull root signature is live alongside its phase-2 PSO"),
-                        &cs2,
-                    ),
-                )
-            }
-        );
+        // The cull PSO, and its phase-2 twin (two-pass occlusion) when built,
+        // both against the shared root signature.
+        let cull_psos = self
+            .cull
+            .cull_kernels
+            .as_ref()
+            .map(|kernels| {
+                let create = |cs: &[u8]| {
+                    super::context::dump_on_err(
+                        info_queue,
+                        super::cull::create_cull_pso(device, &kernels.root_sig, cs),
+                    )
+                };
+                let pso = create(&super::cull::compile_cull_shader(hr)?)?;
+                let phase2 = kernels
+                    .pso_phase2
+                    .as_ref()
+                    .map(|_| create(&super::cull::compile_cull_shader_phase2(hr)?))
+                    .transpose()?;
+                Ok::<_, RenderError>((pso, phase2))
+            })
+            .transpose()?;
 
         // Hi-Z (only when cull pipeline is live; same gating condition).
         // Rebuilds all three SPD kernels against the existing root signatures
@@ -277,113 +262,77 @@ impl DxContext {
         };
 
         // Decal (always built when DecalResources exists, which is unconditional).
-        let decal_pso = rebuild_if_live!(
-            self.decal.state.is_some(),
-            super::decal::rebuild_decal_pso(
-                device,
-                &self
-                    .decal
-                    .state
-                    .as_ref()
-                    .expect("decal state is live")
-                    .root_sig,
-                self.targets.hdr.msaa_samples,
-                hr,
-                info_queue,
-            )
-        );
+        let msaa_samples = self.targets.hdr.msaa_samples;
+        let decal_pso = self
+            .decal
+            .state
+            .as_ref()
+            .map(|decals| {
+                super::decal::rebuild_decal_pso(
+                    device,
+                    &decals.root_sig,
+                    msaa_samples,
+                    hr,
+                    info_queue,
+                )
+            })
+            .transpose()?;
 
         // Lines (only once a frame published some and the lazy build ran).
-        let line_pso = rebuild_if_live!(
-            self.lines.resources.is_some(),
-            super::line::rebuild_line_pso(
-                device,
-                self.lines
-                    .resources
-                    .as_ref()
-                    .expect("line resources are live"),
-                self.targets.hdr.msaa_samples,
-                hr,
-                info_queue,
-            )
-        );
+        let line_pso = self
+            .lines
+            .resources
+            .as_ref()
+            .map(|lines| super::line::rebuild_line_pso(device, lines, msaa_samples, hr, info_queue))
+            .transpose()?;
 
         // The transparent pass's two producers (each only when the world declared
         // its asset). Both rebuild against the pass's shared root signature.
-        let glass_pso = rebuild_if_live!(
-            self.transparent.as_ref().is_some_and(|t| t.has_glass()),
-            super::glass::rebuild_glass_pso(
-                device,
-                self.transparent
-                    .as_ref()
-                    .expect("transparent resources are live")
-                    .root_sig(),
-                self.targets.hdr.msaa_samples,
-                hr,
-                info_queue,
-            )
-        );
-        let water_pso = rebuild_if_live!(
-            self.transparent.as_ref().is_some_and(|t| t.has_water()),
-            super::water::rebuild_water_pso(
-                device,
-                self.transparent
-                    .as_ref()
-                    .expect("transparent resources are live")
-                    .root_sig(),
-                self.targets.hdr.msaa_samples,
-                hr,
-                info_queue,
-            )
-        );
+        let glass_pso = self
+            .transparent
+            .as_ref()
+            .filter(|t| t.has_glass())
+            .map(|t| {
+                super::glass::rebuild_glass_pso(device, t.root_sig(), msaa_samples, hr, info_queue)
+            })
+            .transpose()?;
+        let water_pso = self
+            .transparent
+            .as_ref()
+            .filter(|t| t.has_water())
+            .map(|t| {
+                super::water::rebuild_water_pso(device, t.root_sig(), msaa_samples, hr, info_queue)
+            })
+            .transpose()?;
 
         // Fog (only when the world declared a VolumetricFog). Both the
         // render PSO (fragment volume sampler) and the compute PSO
         // (froxel-volume kernel) rebuild from the same `fog.metal`-style
         // source pair.
-        let fog_pso = rebuild_if_live!(
-            self.fog.resources.is_some(),
-            super::fog::rebuild_fog_pso(
-                device,
-                &self
-                    .fog
-                    .resources
-                    .as_ref()
-                    .expect("fog resources are live")
-                    .root_sig,
-                self.targets.hdr.msaa_samples,
-                hr,
-                info_queue,
-            )
-        );
-        let fog_froxel_pso = rebuild_if_live!(
-            self.fog.resources.is_some(),
-            super::fog::rebuild_fog_froxel_pso(
-                device,
-                &self
-                    .fog
-                    .resources
-                    .as_ref()
-                    .expect("fog resources are live")
-                    .froxel_root_sig,
-                hr,
-                info_queue,
-            )
-        );
+        let fog_psos = self
+            .fog
+            .resources
+            .as_ref()
+            .map(|fog| {
+                let render = super::fog::rebuild_fog_pso(
+                    device,
+                    &fog.root_sig,
+                    msaa_samples,
+                    hr,
+                    info_queue,
+                )?;
+                super::fog::rebuild_fog_froxel_pso(device, &fog.froxel_root_sig, hr, info_queue)
+                    .map(|froxel| (render, froxel))
+            })
+            .transpose()?;
 
         // SSAO (only when PostProcessConfig opted in).
-        let ssao_rebuilt = rebuild_if_live!(
-            self.ssao.resources.is_some(),
-            super::post::ssao::rebuild_ssao_pipelines(
-                device,
-                self.ssao
-                    .resources
-                    .as_ref()
-                    .expect("SSAO resources are live"),
-                hr,
-                info_queue
-            )
-        );
+        let ssao_rebuilt = self
+            .ssao
+            .resources
+            .as_ref()
+            .map(|ssao| super::post::ssao::rebuild_ssao_pipelines(device, ssao, hr, info_queue))
+            .transpose()?;
 
         // SSR (only when the resolve itself is authored).
         let ssr_rebuilt = rebuild_if_live!(
@@ -405,30 +354,26 @@ impl DxContext {
 
         // RT reflections (only when DXR + DXC compile + accel build all succeeded
         // at init). The shader compiles through DXC (SM 6.5).
-        let rt_rebuilt = rebuild_if_live!(
-            self.rt_reflections.is_some(),
-            super::post::rt_reflections::rebuild_rt_reflections_pipelines(
-                device,
-                self.rt_reflections
-                    .as_ref()
-                    .expect("RT reflection resources are live"),
-                hr,
-                info_queue
-            )
-        );
+        let rt_rebuilt = self
+            .rt_reflections
+            .as_ref()
+            .map(|rt| {
+                super::post::rt_reflections::rebuild_rt_reflections_pipelines(
+                    device, rt, hr, info_queue,
+                )
+            })
+            .transpose()?;
 
         // Reflection composite (blur + composite PSOs); only when built.
-        let refl_composite_rebuilt = rebuild_if_live!(
-            self.reflection_composite.is_some(),
-            super::post::reflection_composite::rebuild_reflection_composite_pipelines(
-                device,
-                self.reflection_composite
-                    .as_ref()
-                    .expect("reflection composite resources are live"),
-                hr,
-                info_queue
-            )
-        );
+        let refl_composite_rebuilt = self
+            .reflection_composite
+            .as_ref()
+            .map(|rc| {
+                super::post::reflection_composite::rebuild_reflection_composite_pipelines(
+                    device, rc, hr, info_queue,
+                )
+            })
+            .transpose()?;
 
         // All builds succeeded; swap into the live context. After this
         // point the next frame's draw calls bind the freshly compiled
@@ -447,11 +392,9 @@ impl DxContext {
         // The wireframe twins were built from the pre-reload shaders; drop them
         // so the next wireframe frame rebuilds against these.
         self.invalidate_wireframe_pipelines();
-        if let Some(p) = cull_pso {
-            self.cull.cull_pso = Some(p);
-        }
-        if let Some(p) = cull_pso_phase2 {
-            self.cull.cull_pso_phase2 = Some(p);
+        if let (Some((pso, phase2)), Some(kernels)) = (cull_psos, self.cull.cull_kernels.as_mut()) {
+            kernels.pso = pso;
+            kernels.pso_phase2 = phase2;
         }
         if let (Some((single, msaa, tail)), Some(hiz)) = (hiz_rebuilt, self.cull.hiz.as_mut()) {
             hiz.swap_pipelines(single, msaa, tail);
@@ -472,11 +415,9 @@ impl DxContext {
         if let Some(transparent) = self.transparent.as_mut() {
             transparent.swap_pipelines(glass_pso, water_pso);
         }
-        if let (Some(pso), Some(fog)) = (fog_pso, self.fog.resources.as_mut()) {
-            fog.pso = pso;
-        }
-        if let (Some(pso), Some(fog)) = (fog_froxel_pso, self.fog.resources.as_mut()) {
-            fog.froxel_pso = pso;
+        if let (Some((render, froxel)), Some(fog)) = (fog_psos, self.fog.resources.as_mut()) {
+            fog.pso = render;
+            fog.froxel_pso = froxel;
         }
         if let (Some(rebuilt), Some(ssao)) = (ssao_rebuilt, self.ssao.resources.as_mut()) {
             swap_ssao_pipelines(ssao, rebuilt);

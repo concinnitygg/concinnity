@@ -2,21 +2,14 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use std::path::Path;
 
 use concinnity_cook::WorldSource;
-use concinnity_cook::authoring::world::{entry_handles, find_world_jsonl, parse_world_jsonl};
+use concinnity_cook::authoring::world::{entry_handles, parse_world_jsonl};
 use concinnity_cook::build_only::include::resolve_includes;
+
+use crate::command::resolve_world_path;
 
 // Authoring metadata for a type name, whichever group of the registry it is in.
 fn registration_for(type_str: &str) -> Option<concinnity_cook::authoring::registry::Registration> {
     RegisteredType::parse(type_str).map(RegisteredType::registration)
-}
-
-// Resolve the world path the same way every other subcommand does: an explicit
-// existing path wins, otherwise discover from worlds/ or cwd.
-pub(crate) fn resolve_world_path(json_path: Option<&str>) -> std::io::Result<String> {
-    match json_path {
-        Some(p) if std::path::Path::new(p).exists() => Ok(p.to_string()),
-        _ => find_world_jsonl(crate::project::worlds_dir().as_deref(), None),
-    }
 }
 
 // Provenance of one expanded-world row: declared in the file, added by an
@@ -274,12 +267,6 @@ mod tests {
         (dir, path.to_string_lossy().into_owned())
     }
 
-    #[test]
-    fn resolve_world_path_prefers_an_explicit_existing_path() {
-        let (_dir, path) = write_world("");
-        assert_eq!(resolve_world_path(Some(&path)).unwrap(), path);
-    }
-
     // A minimal rendering world with a controlled camera gates in the graphics,
     // overlay, and camera systems; each manifest line names the system and the
     // condition that includes it.
@@ -436,6 +423,18 @@ mod tests {
     #[test]
     fn registration_for_unknown_type_is_none() {
         assert!(registration_for("NotARealAssetType").is_none());
+    }
+
+    #[test]
+    fn list_of_a_missing_explicit_world_is_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("absent.jsonl")
+            .to_string_lossy()
+            .into_owned();
+        let err = list(Some(&path), false, false).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]

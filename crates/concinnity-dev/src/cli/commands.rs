@@ -145,11 +145,26 @@ impl RenderArgs {
     }
 }
 
+// The `-f` world a command operates on. Flattened into every command that
+// reads a world from disk; an absent flag discovers it, a named file that does
+// not exist is an error.
 #[derive(Debug, clap::Args)]
-pub(crate) struct DebugArgs {
+pub(crate) struct WorldArg {
     /// Path to a world JSONL file (default: discover from worlds/)
     #[arg(short = 'f', long)]
-    pub(crate) file: Option<String>,
+    file: Option<String>,
+}
+
+impl WorldArg {
+    pub(crate) fn file(&self) -> Option<&str> {
+        self.file.as_deref()
+    }
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct DebugArgs {
+    #[command(flatten)]
+    pub(crate) world: WorldArg,
 
     /// Port for the localhost runtime debug server
     #[arg(long, default_value_t = 8777)]
@@ -253,16 +268,14 @@ pub(crate) struct RmArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct TestArgs {
-    /// Path to a world JSONL file (default: discover from worlds/)
-    #[arg(short = 'f', long)]
-    pub(crate) file: Option<String>,
+    #[command(flatten)]
+    pub(crate) world: WorldArg,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct ListArgs {
-    /// Path to a world JSONL file (default: discover from worlds/)
-    #[arg(short = 'f', long)]
-    pub(crate) file: Option<String>,
+    #[command(flatten)]
+    pub(crate) world: WorldArg,
 
     /// List the expanded world the build produces
     // build-time macros are expanded and injected defaults included,
@@ -282,9 +295,8 @@ pub(crate) struct ExplainArgs {
     /// The asset's `$id`, or the `<Type>#<ordinal>` of an anonymous one
     pub(crate) id: String,
 
-    /// Path to a world JSONL file (default: discover from worlds/)
-    #[arg(short = 'f', long)]
-    pub(crate) file: Option<String>,
+    #[command(flatten)]
+    pub(crate) world: WorldArg,
 }
 
 #[derive(Debug, clap::Args)]
@@ -302,16 +314,14 @@ pub(crate) struct NewArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct BuildArgs {
-    /// Path to a world JSONL file (default: discover from worlds/)
-    #[arg(short = 'f', long)]
-    pub(crate) file: Option<String>,
+    #[command(flatten)]
+    pub(crate) world: WorldArg,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct ExportArgs {
-    /// Path to a world JSONL file (default: discover from worlds/)
-    #[arg(short = 'f', long)]
-    pub(crate) file: Option<String>,
+    #[command(flatten)]
+    pub(crate) world: WorldArg,
 
     /// Override the application name
     #[arg(short = 'n', long)]
@@ -439,7 +449,7 @@ mod tests {
         let Commands::Debug(a) = cli.resolved_command() else {
             panic!("expected debug");
         };
-        assert_eq!(a.file.as_deref(), Some("world.jsonl"));
+        assert_eq!(a.world.file(), Some("world.jsonl"));
         assert_eq!(a.debug_port, 8777, "the same default cn mcp dials");
     }
 
@@ -520,19 +530,19 @@ mod tests {
         let Commands::Build(a) = cli.resolved_command() else {
             panic!("expected build");
         };
-        assert!(a.file.is_none());
+        assert!(a.world.file().is_none());
 
         let cli = Cli::try_parse_from(["concinnity", "build", "-f", "w.jsonl"]).unwrap();
         let Commands::Build(a) = cli.resolved_command() else {
             panic!("expected build");
         };
-        assert_eq!(a.file.as_deref(), Some("w.jsonl"));
+        assert_eq!(a.world.file(), Some("w.jsonl"));
 
         let cli = Cli::try_parse_from(["concinnity", "test", "--file", "w.jsonl"]).unwrap();
         let Commands::Test(a) = cli.resolved_command() else {
             panic!("expected test");
         };
-        assert_eq!(a.file.as_deref(), Some("w.jsonl"));
+        assert_eq!(a.world.file(), Some("w.jsonl"));
     }
 
     #[test]
@@ -560,7 +570,7 @@ mod tests {
             panic!("expected explain");
         };
         assert_eq!(a.id, "gfx");
-        assert_eq!(a.file.as_deref(), Some("w.jsonl"));
+        assert_eq!(a.world.file(), Some("w.jsonl"));
     }
 
     #[test]
@@ -671,7 +681,7 @@ mod tests {
         let Commands::Export(e) = cli.resolved_command() else {
             panic!("expected export");
         };
-        assert_eq!(e.file.as_deref(), Some("w.jsonl"));
+        assert_eq!(e.world.file(), Some("w.jsonl"));
         assert_eq!(e.name.as_deref(), Some("My Game"));
         assert_eq!(e.version.as_deref(), Some("2.0.0"));
         assert_eq!(e.platform.as_deref(), Some("macos"));

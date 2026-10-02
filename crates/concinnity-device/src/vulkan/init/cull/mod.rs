@@ -10,7 +10,9 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::transform::IDENTITY;
 
 use super::InitGpu;
-use crate::vulkan::context::{VkCull, VkDescriptors, VkSceneAssets, VkShadow, VkTargets};
+use crate::vulkan::context::{
+    VkCull, VkCullKernels, VkDescriptors, VkSceneAssets, VkShadow, VkTargets,
+};
 use crate::vulkan::post::gbuffer::GbufferResources;
 use crate::vulkan::probe_prefilter::ProbePrefilterPipelines;
 
@@ -184,7 +186,7 @@ pub(super) fn build_cull(
     // The reflection-probe convolution kernels, under the same gate the bake
     // itself needs: a probe capture renders through the bindless GPU cull, so a
     // world without the cull pipeline never bakes one and never needs them.
-    let probe_prefilter = match compute.pipeline.is_some() {
+    let probe_prefilter = match compute.kernels.is_some() {
         true => Some(ProbePrefilterPipelines::new(
             &gpu.hw.device,
             gpu.hot_reload,
@@ -200,6 +202,10 @@ pub(super) fn build_cull(
         targets.msaa_samples,
         occlusion_two_pass,
     )?;
+    let cull_kernels = compute.kernels.map(|kernels| VkCullKernels {
+        pipeline_phase2: two_pass.pipeline,
+        ..kernels
+    });
     let cull = VkCull {
         bindless_pipeline: bindless.pipeline,
         bindless_pipeline_layout: bindless.pipeline_layout,
@@ -212,15 +218,12 @@ pub(super) fn build_cull(
         bindless_sets: bindless.sets,
         object_buffers: bindless.object_buffers,
         material_params: bindless.material_params,
-        cull_pipeline: compute.pipeline,
-        cull_pipeline_layout: compute.pipeline_layout,
-        cull_set_layout: compute.set_layout,
+        cull_kernels,
         cull_sets: compute.sets,
         draw_args_buffers: compute.draw_args_buffers,
         indirect_buffers: compute.indirect_buffers,
         cull_status_buffers: compute.status_buffers,
         occlusion_two_pass,
-        cull_pipeline_phase2: two_pass.pipeline,
         cull_sets2: two_pass.sets,
         _two_pass_pool: two_pass.pool,
         indirect_buffers2: two_pass.indirect_buffers,

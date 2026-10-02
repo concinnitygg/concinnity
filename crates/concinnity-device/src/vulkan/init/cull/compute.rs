@@ -9,17 +9,15 @@ use concinnity_core::render::error::RenderResult;
 
 use super::CullPlan;
 use super::bindless::BindlessPass;
-use crate::vulkan::context::{VkDescriptors, VkSceneAssets, VkTargets};
+use crate::vulkan::context::{VkCullKernels, VkDescriptors, VkSceneAssets, VkTargets};
 use crate::vulkan::init::InitGpu;
-use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout};
 use crate::vulkan::pipeline::*;
 use crate::vulkan::resources::alloc_descriptor_sets;
 
 // The compute cull; `None`/empty when the bindless path is inactive.
 pub(super) struct ComputeCull {
-    pub(super) pipeline: Option<OwnedPipeline>,
-    pub(super) pipeline_layout: Option<OwnedPipelineLayout>,
-    pub(super) set_layout: Option<OwnedSetLayout>,
+    // Phase 1 only; the two-pass build fills in `pipeline_phase2`.
+    pub(super) kernels: Option<VkCullKernels>,
     pub(super) sets: Vec<vk::DescriptorSet>,
     pub(super) draw_args_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
     pub(super) indirect_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
@@ -96,168 +94,157 @@ pub(super) fn build_compute_cull(
     // indirect draw command per build-time object, which the bindless main
     // pass issues with a single multiDrawIndexedIndirect.
     type CullPipelineResources = (
-        Option<OwnedPipeline>,
-        Option<OwnedPipelineLayout>,
-        Option<OwnedSetLayout>,
+        Option<VkCullKernels>,
         Vec<vk::DescriptorSet>,
         Vec<crate::vulkan::allocator::PooledBuffer>,
         Vec<crate::vulkan::allocator::PooledBuffer>,
         Option<crate::vulkan::hiz::HiZResources>,
     );
-    let (
-        cull_pipeline,
-        cull_pipeline_layout,
-        cull_set_layout,
-        cull_sets,
-        draw_args_buffers,
-        indirect_buffers,
-        hiz,
-    ): CullPipelineResources = if bindless_active {
-        // Set 0: object SSBO + draw-args SSBO + indirect-command SSBO +
-        // cull-status SSBO (binding 3: phase-1 writes the per-object cull
-        // outcome for two-pass occlusion; the phase-2 kernel reads it).
-        let set_bindings: Vec<_> = (0..4u32)
-            .map(|b| {
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(b)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::COMPUTE)
-            })
-            .collect();
-        let set_layout = device
-            .create_descriptor_set_layout(
-                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&set_bindings),
-            )
-            .map_err(|e| crate::vulkan::error::map_vk_result(e, "cull set layout"))?;
+    let (kernels, cull_sets, draw_args_buffers, indirect_buffers, hiz): CullPipelineResources =
+        if bindless_active {
+            // Set 0: object SSBO + draw-args SSBO + indirect-command SSBO +
+            // cull-status SSBO (binding 3: phase-1 writes the per-object cull
+            // outcome for two-pass occlusion; the phase-2 kernel reads it).
+            let set_bindings: Vec<_> = (0..4u32)
+                .map(|b| {
+                    vk::DescriptorSetLayoutBinding::default()
+                        .binding(b)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .descriptor_count(1)
+                        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                })
+                .collect();
+            let set_layout = device
+                .create_descriptor_set_layout(
+                    &vk::DescriptorSetLayoutCreateInfo::default().bindings(&set_bindings),
+                )
+                .map_err(|e| crate::vulkan::error::map_vk_result(e, "cull set layout"))?;
 
-        // Hi-Z occlusion resources. Built under the same gating as the cull
-        // pipeline; its `read_set_layout` becomes set 1 of the cull
-        // pipeline (the Hi-Z image + per-frame CullHizParams UBO).
-        let depth_views: Vec<vk::ImageView> =
-            targets.depth_images.iter().map(|img| img.view).collect();
-        let hiz = crate::vulkan::hiz::HiZResources::new(
-            crate::vulkan::hiz::HiZDeviceCtx {
-                alloc,
-                device,
-                command_pool,
-                queue: graphics_queue,
-            },
-            crate::vulkan::hiz::HiZTarget {
-                width: targets.render_extent.width,
-                height: targets.render_extent.height,
-                depth_views: &depth_views,
-            },
-            targets.msaa_samples.as_raw(),
-            frames,
-            occlusion_two_pass,
-            hot_reload,
-        )?;
+            // Hi-Z occlusion resources. Built under the same gating as the cull
+            // pipeline; its `read_set_layout` becomes set 1 of the cull
+            // pipeline (the Hi-Z image + per-frame CullHizParams UBO).
+            let depth_views: Vec<vk::ImageView> =
+                targets.depth_images.iter().map(|img| img.view).collect();
+            let hiz = crate::vulkan::hiz::HiZResources::new(
+                crate::vulkan::hiz::HiZDeviceCtx {
+                    alloc,
+                    device,
+                    command_pool,
+                    queue: graphics_queue,
+                },
+                crate::vulkan::hiz::HiZTarget {
+                    width: targets.render_extent.width,
+                    height: targets.render_extent.height,
+                    depth_views: &depth_views,
+                },
+                targets.msaa_samples.as_raw(),
+                frames,
+                occlusion_two_pass,
+                hot_reload,
+            )?;
 
-        let push_range = vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::COMPUTE)
-            .offset(0)
-            .size(CULL_PUSH_CONSTANT_BYTES);
-        let layouts = [set_layout.handle(), hiz.read_set_layout.handle()];
-        let pipeline_layout = device
-            .create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::default()
-                    .set_layouts(&layouts)
-                    .push_constant_ranges(std::slice::from_ref(&push_range)),
-            )
-            .map_err(|e| crate::vulkan::error::map_vk_result(e, "cull pipeline layout"))?;
-
-        let cs = compile_cull_shader(hot_reload)?;
-        let pipeline = create_cull_pipeline(device, pipeline_layout.handle(), &cs)?;
-
-        // Per-frame GpuDrawArgs (host-visible, rebuilt each frame) and
-        // indirect-command buffers (device-local, GPU-written). `n_cull`
-        // covers the static objects plus the merged instances.
-        let n = n_cull as u64;
-        let object_buffer_size = n * std::mem::size_of::<render_types::GpuObjectData>() as u64;
-        let draw_args_size = n * std::mem::size_of::<render_types::GpuDrawArgs>() as u64;
-        // One `n_cull`-command region per shader bucket: the cull kernel writes
-        // every record's slot in each region and the main pass issues one
-        // indirect draw per region under that bucket's pipeline.
-        let indirect_size = shader_bucket_count as u64
-            * n
-            * std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64;
-        let mut da_buffers = Vec::with_capacity(frames);
-        let mut ind_buffers = Vec::with_capacity(frames);
-        for _ in 0..frames {
-            da_buffers.push(alloc.create_buffer(
-                draw_args_size,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )?);
-            ind_buffers.push(alloc.create_buffer(
-                indirect_size,
-                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            )?);
-        }
-
-        // One cull set per frame: that frame's object / draw-args /
-        // indirect-command buffers at bindings 0 / 1 / 2.
-        let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
-        let sets =
-            alloc_descriptor_sets(device, descriptors.descriptor_pool.handle(), &set_layouts)?;
-        for (i, &set) in sets.iter().enumerate() {
-            let obj_info = vk::DescriptorBufferInfo::default()
-                .buffer(object_buffers[i].buffer())
+            let push_range = vk::PushConstantRange::default()
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .offset(0)
-                .range(object_buffer_size);
-            let arg_info = vk::DescriptorBufferInfo::default()
-                .buffer(da_buffers[i].buffer())
-                .offset(0)
-                .range(draw_args_size);
-            let cmd_info = vk::DescriptorBufferInfo::default()
-                .buffer(ind_buffers[i].buffer())
-                .offset(0)
-                .range(indirect_size);
-            let status_info = vk::DescriptorBufferInfo::default()
-                .buffer(cull_status_buffers[i].buffer())
-                .offset(0)
-                .range(n * std::mem::size_of::<u32>() as u64);
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&obj_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(1)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&arg_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(2)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&cmd_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(3)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&status_info)),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
-        }
+                .size(CULL_PUSH_CONSTANT_BYTES);
+            let layouts = [set_layout.handle(), hiz.read_set_layout.handle()];
+            let pipeline_layout = device
+                .create_pipeline_layout(
+                    &vk::PipelineLayoutCreateInfo::default()
+                        .set_layouts(&layouts)
+                        .push_constant_ranges(std::slice::from_ref(&push_range)),
+                )
+                .map_err(|e| crate::vulkan::error::map_vk_result(e, "cull pipeline layout"))?;
 
-        (
-            Some(pipeline),
-            Some(pipeline_layout),
-            Some(set_layout),
-            sets,
-            da_buffers,
-            ind_buffers,
-            Some(hiz),
-        )
-    } else {
-        (None, None, None, Vec::new(), Vec::new(), Vec::new(), None)
-    };
+            let cs = compile_cull_shader(hot_reload)?;
+            let pipeline = create_cull_pipeline(device, pipeline_layout.handle(), &cs)?;
+
+            // Per-frame GpuDrawArgs (host-visible, rebuilt each frame) and
+            // indirect-command buffers (device-local, GPU-written). `n_cull`
+            // covers the static objects plus the merged instances.
+            let n = n_cull as u64;
+            let object_buffer_size = n * std::mem::size_of::<render_types::GpuObjectData>() as u64;
+            let draw_args_size = n * std::mem::size_of::<render_types::GpuDrawArgs>() as u64;
+            // One `n_cull`-command region per shader bucket: the cull kernel writes
+            // every record's slot in each region and the main pass issues one
+            // indirect draw per region under that bucket's pipeline.
+            let indirect_size = shader_bucket_count as u64
+                * n
+                * std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64;
+            let mut da_buffers = Vec::with_capacity(frames);
+            let mut ind_buffers = Vec::with_capacity(frames);
+            for _ in 0..frames {
+                da_buffers.push(alloc.create_buffer(
+                    draw_args_size,
+                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                )?);
+                ind_buffers.push(alloc.create_buffer(
+                    indirect_size,
+                    vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                )?);
+            }
+
+            // One cull set per frame: that frame's object / draw-args /
+            // indirect-command buffers at bindings 0 / 1 / 2.
+            let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
+            let sets =
+                alloc_descriptor_sets(device, descriptors.descriptor_pool.handle(), &set_layouts)?;
+            for (i, &set) in sets.iter().enumerate() {
+                let obj_info = vk::DescriptorBufferInfo::default()
+                    .buffer(object_buffers[i].buffer())
+                    .offset(0)
+                    .range(object_buffer_size);
+                let arg_info = vk::DescriptorBufferInfo::default()
+                    .buffer(da_buffers[i].buffer())
+                    .offset(0)
+                    .range(draw_args_size);
+                let cmd_info = vk::DescriptorBufferInfo::default()
+                    .buffer(ind_buffers[i].buffer())
+                    .offset(0)
+                    .range(indirect_size);
+                let status_info = vk::DescriptorBufferInfo::default()
+                    .buffer(cull_status_buffers[i].buffer())
+                    .offset(0)
+                    .range(n * std::mem::size_of::<u32>() as u64);
+                let writes = [
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(0)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(&obj_info)),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(1)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(&arg_info)),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(2)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(&cmd_info)),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(3)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(&status_info)),
+                ];
+                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
+                // every set and resource it names belongs to this device.
+                unsafe { device.update_descriptor_sets(&writes, &[]) };
+            }
+
+            let kernels = VkCullKernels {
+                pipeline,
+                pipeline_phase2: None,
+                pipeline_layout,
+                set_layout,
+            };
+            (Some(kernels), sets, da_buffers, ind_buffers, Some(hiz))
+        } else {
+            (None, Vec::new(), Vec::new(), Vec::new(), None)
+        };
 
     // GPU-driven instanced merge: write each instance's `GpuObjectData`
     // record (+ `GpuDrawArgs`) once into every frame buffer, after the
@@ -299,9 +286,7 @@ pub(super) fn build_compute_cull(
         }
     }
     Ok(ComputeCull {
-        pipeline: cull_pipeline,
-        pipeline_layout: cull_pipeline_layout,
-        set_layout: cull_set_layout,
+        kernels,
         sets: cull_sets,
         draw_args_buffers,
         indirect_buffers,

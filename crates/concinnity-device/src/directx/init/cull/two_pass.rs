@@ -28,7 +28,10 @@ pub(super) fn build_two_pass_cull(
     plan: &CullPlan,
     occlusion_two_pass: bool,
 ) -> RenderResult<TwoPassCull> {
-    let (Some(crs), true) = (compute.root_sig.as_ref(), occlusion_two_pass) else {
+    let (Some(crs), true) = (
+        compute.kernels.as_ref().map(|k| &k.root_sig),
+        occlusion_two_pass,
+    ) else {
         return Ok(TwoPassCull {
             pso: None,
             indirect_buffers: Vec::new(),

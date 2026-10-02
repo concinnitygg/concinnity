@@ -656,7 +656,7 @@ impl VkContext {
             hdr_width: extent.width,
             hdr_height: extent.height,
             hdr_sample_count: self.targets.msaa_samples.as_raw(),
-            bindless_cull_enabled: self.cull.cull_pipeline.is_some() && self.cull_count() > 0,
+            bindless_cull_enabled: self.cull.cull_kernels.is_some() && self.cull_count() > 0,
             auto_exposure_enabled: self.auto_exposure.resources.is_some(),
             bloom_enabled: self.post_process.bloom_intensity > 0.0,
             // Velocity (motion vectors) runs for TAA, temporal upscaling (FSR

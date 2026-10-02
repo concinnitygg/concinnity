@@ -5,9 +5,10 @@
 //! hit and the target is a 3D scene (.glb), `add_to_path` scaffolds a fresh
 //! world at that location.
 
-use concinnity_cook::authoring::world::{WORLD_JSONL, find_world_jsonl};
+use concinnity_cook::authoring::world::WORLD_JSONL;
 
 use crate::authoring::add_to_path;
+use crate::command::discover_world_path;
 
 /// Create an asset from `target` and apply it to the discovered world.
 ///
@@ -15,7 +16,7 @@ use crate::authoring::add_to_path;
 /// directory; when neither exists and the target is a 3D scene, the world is
 /// scaffolded at the fallback location.
 pub fn add(name: Option<&str>, target: &str, template: Option<&str>) -> std::io::Result<()> {
-    let world_path = match find_world_jsonl(crate::project::worlds_dir().as_deref(), None) {
+    let world_path = match discover_world_path() {
         Ok(p) => p,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => WORLD_JSONL.to_string(),
         Err(e) => return Err(e),

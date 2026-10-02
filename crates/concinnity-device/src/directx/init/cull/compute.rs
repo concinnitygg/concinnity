@@ -11,8 +11,8 @@ use super::bindless::BindlessPass;
 use crate::directx::allocator::PooledBuffer;
 use crate::directx::context::{DxDescriptors, DxTargets, FRAMES, align256, dump_on_err};
 use crate::directx::cull::{
-    INDIRECT_COMMAND_STRIDE, compile_cull_shader, create_cull_command_signature, create_cull_pso,
-    create_cull_root_signature,
+    CullKernels, INDIRECT_COMMAND_STRIDE, compile_cull_shader, create_cull_command_signature,
+    create_cull_pso, create_cull_root_signature,
 };
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
@@ -21,8 +21,8 @@ use crate::directx::init::{HIZ_MAX_MIPS, InitGpu};
 use crate::directx::texture::create_uav_buffer;
 
 pub(super) struct ComputeCull {
-    pub(super) root_sig: Option<ID3D12RootSignature>,
-    pub(super) pso: Option<ID3D12PipelineState>,
+    // Phase 1 only; the two-pass build fills in `pso_phase2`.
+    pub(super) kernels: Option<CullKernels>,
     pub(super) command_signature: Option<ID3D12CommandSignature>,
     pub(super) draw_args_buffers: Vec<PooledBuffer>,
     pub(super) draw_args_ptrs: Vec<*mut u8>,
@@ -70,8 +70,7 @@ pub(super) fn build_compute_cull(
     let n_cull = plan.n_cull;
     if n_cull == 0 {
         return Ok(ComputeCull {
-            root_sig: None,
-            pso: None,
+            kernels: None,
             command_signature: None,
             draw_args_buffers: Vec::new(),
             draw_args_ptrs: Vec::new(),
@@ -133,8 +132,11 @@ pub(super) fn build_compute_cull(
 
     let hiz = build_hiz(gpu, descriptors, targets)?;
     Ok(ComputeCull {
-        root_sig: Some(crs),
-        pso: Some(cps),
+        kernels: Some(CullKernels {
+            root_sig: crs,
+            pso: cps,
+            pso_phase2: None,
+        }),
         command_signature: Some(csig),
         draw_args_buffers,
         draw_args_ptrs,

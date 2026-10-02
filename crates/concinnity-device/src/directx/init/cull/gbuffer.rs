@@ -35,7 +35,7 @@ pub(super) fn build_gbuffer_pass(
     plan: &CullPlan,
     gbuffer_enabled: bool,
 ) -> RenderResult<GbufferPass> {
-    if compute.pso.is_none() || !gbuffer_enabled {
+    if compute.kernels.is_none() || !gbuffer_enabled {
         return Ok(GbufferPass {
             root_sig: None,
             pso: None,

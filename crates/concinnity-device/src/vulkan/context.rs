@@ -329,6 +329,15 @@ impl VkInstanced {
     }
 }
 
+// The compute cull kernel and its layouts, plus two-pass occlusion's phase-2
+// kernel over the same layout (`None` when two-pass is off).
+pub(super) struct VkCullKernels {
+    pub(super) pipeline: OwnedPipeline,
+    pub(super) pipeline_phase2: Option<OwnedPipeline>,
+    pub(super) pipeline_layout: OwnedPipelineLayout,
+    pub(super) set_layout: OwnedSetLayout,
+}
+
 // GPU-driven cull + bindless static main pass (+ optional two-pass Hi-Z
 // occlusion), grouped off the flat `VkContext` field soup. Mirrors the DirectX
 // backend's `cull: CullState`. A compute kernel frustum/distance-tests the
@@ -379,11 +388,9 @@ pub(super) struct VkCull {
     // The material parameter table, one copy per frame at binding 2 of that
     // frame's bindless set. `None` when the bindless pass is inactive.
     pub(super) material_params: Option<super::material_params::VkMaterialParams>,
-    // Compute cull pipeline + its per-frame sets (bindings 0/1/2 = that frame's
+    // Compute cull kernels + their per-frame sets (bindings 0/1/2 = that frame's
     // object SSBO, draw-args SSBO, indirect-command SSBO). Sets are pool-freed.
-    pub(super) cull_pipeline: Option<OwnedPipeline>,
-    pub(super) cull_pipeline_layout: Option<OwnedPipelineLayout>,
-    pub(super) cull_set_layout: Option<OwnedSetLayout>,
+    pub(super) cull_kernels: Option<VkCullKernels>,
     pub(super) cull_sets: Vec<vk::DescriptorSet>,
     // Per-frame `GpuDrawArgs` storage buffers, persistently mapped.
     pub(super) draw_args_buffers: Vec<PooledBuffer>,
@@ -397,9 +404,8 @@ pub(super) struct VkCull {
     // records the world's request; the live resources below are `Some` /
     // non-empty only when it AND the bindless cull path are active.
     pub(super) occlusion_two_pass: bool,
-    // Phase-2 cull pipeline (same layout as `cull_pipeline`) + its per-frame
-    // sets, allocated from `two_pass_pool`.
-    pub(super) cull_pipeline_phase2: Option<OwnedPipeline>,
+    // Phase-2 cull sets (the pipeline is `VkCullKernels::pipeline_phase2`),
+    // allocated from `two_pass_pool`.
     pub(super) cull_sets2: Vec<vk::DescriptorSet>,
     pub(super) _two_pass_pool: Option<OwnedDescriptorPool>,
     // Per-frame second indirect draw-command buffers `Cull2` writes and `Main2`
@@ -412,7 +418,7 @@ pub(super) struct VkCull {
     // Hi-Z occlusion culling. The depth-mip pyramid (built at end of frame
     // from this frame's main depth) + its build pipelines + the cull pipeline's
     // set 1 (the Hi-Z image + per-frame `CullHizParams` UBO). `Some` exactly
-    // when the GPU-cull pipeline is active (same gating as `cull_pipeline`):
+    // when the GPU-cull pipeline is active (same gating as `cull_kernels`):
     // the next frame's `Cull` kernel projects each AABB through the previous
     // frame's un-jittered VP and discards objects fully behind the pyramid.
     pub(super) hiz: Option<crate::vulkan::hiz::HiZResources>,
