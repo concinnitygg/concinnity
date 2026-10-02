@@ -374,6 +374,26 @@ fn a_refresh_can_leave_nothing_to_trace() {
 }
 
 #[test]
+fn an_emptied_book_is_spent_only_once_skinned_geometry_cannot_rejoin() {
+    let mut draw = vec![object(0)];
+    let seed = SeedSet::new(&draw, &[], false);
+    let mut book = Book::new(&seed, vec![10], &draw, 0).expect("one BLAS");
+    assert!(!book.is_spent(false));
+
+    book.replace_tail([77]);
+    draw[0].resident = false;
+    let refresh = book.plan_refresh(&draw, false, RefreshMode::Reuse);
+    book.commit_refresh(refresh, vec![], &draw);
+    assert!(book.is_empty());
+    // The live TLAS still publishes the skinned tail.
+    assert!(!book.is_spent(false));
+
+    assert_eq!(book.release_skinned(), Some(vec![77]));
+    assert!(!book.is_spent(true));
+    assert!(book.is_spent(false));
+}
+
+#[test]
 fn the_clock_only_moves_forward() {
     let (_, mut book) = seeded(1);
     assert_eq!(book.tick(), 1);

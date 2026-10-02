@@ -371,6 +371,7 @@ impl MtlContext {
         // Consumed whether or not anything below runs: a change the BVH cannot
         // follow (RT off, or a mode that never updates) is not owed later.
         let topology_dirty = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
+        self.rt.collect_retired(frame.id, self.frames_in_flight);
         if self.rt.settings.is_none() {
             return;
         }
@@ -389,7 +390,9 @@ impl MtlContext {
         let albedo_count = self.scene.textures.len();
         let skinned_present = self.rt.skinned_geometry
             && !self.state.skinned.draw_objects.is_empty()
-            && self.rt.pipelines.skin.is_some();
+            && self.rt.pipelines.skin.is_some()
+            && self.skinned.vertex_buffer.is_some()
+            && self.skinned.index_buffer.is_some();
 
         let Some(accel) = self.rt.accel.as_mut() else {
             if seed_wanted(mode, topology_dirty, skinned_present) {
@@ -415,16 +418,10 @@ impl MtlContext {
                 skinned_present,
             };
             refreshed = self.refresh_rt_topology(refresh, shape, frame.id);
-            if let Some(accel) = self.rt.accel.as_mut() {
-                if refreshed.is_err() {
-                    accel.book_mut().owe_refresh();
-                } else if !skinned_present && accel.is_empty() {
-                    // The refresh removed the last draw + cluster geometry and no
-                    // skinned geometry can rejoin (`EmptyHead::Drop`); drop the
-                    // BVH so a later add re-seeds it.
-                    self.rt.accel = None;
-                    return Ok(RtUpdate::Done);
-                }
+            if refreshed.is_err()
+                && let Some(accel) = self.rt.accel.as_mut()
+            {
+                accel.book_mut().owe_refresh();
             }
         }
 
@@ -434,17 +431,40 @@ impl MtlContext {
         let step = accel
             .book_mut()
             .next_step(mode, &plan, &self.state.draw.objects);
+        let nothing_can_rejoin = accel.is_empty() && !skinned_present;
         let stepped = match step {
-            RtStep::Keep => RtUpdate::Done,
-            RtStep::Tlas => {
-                self.rebuild_rt_tlas(frame.id)?;
-                RtUpdate::Done
+            RtStep::Keep => Ok(RtUpdate::Done),
+            // Nothing static is left and no skinned geometry can rejoin: stop
+            // publishing the skinned tail, which leaves the BVH spent.
+            RtStep::Tlas if nothing_can_rejoin => {
+                accel.release_skinned_tail(frame.id);
+                Ok(RtUpdate::Done)
             }
+            RtStep::Tlas => self.rebuild_rt_tlas(frame.id).map(|()| RtUpdate::Done),
             RtStep::Skinned => {
-                self.update_rt_skinned(frame, joint_buffers, plan.full_skinned_build)?
+                self.update_rt_skinned(frame, joint_buffers, plan.full_skinned_build)
             }
         };
-        refreshed.map(|()| stepped)
+        // A refresh on the skinned path leaves the TLAS to the skinned step, so a
+        // step that did not build it keeps the refresh owed.
+        if plan.refresh.is_some()
+            && plan.skinned
+            && !matches!(stepped, Ok(RtUpdate::Done))
+            && let Some(accel) = self.rt.accel.as_mut()
+        {
+            accel.book_mut().owe_refresh();
+        }
+        // The last draw + cluster geometry is gone and no skinned geometry can
+        // rejoin (`EmptyHead::Drop`): drop the BVH so a later add re-seeds it.
+        if self
+            .rt
+            .accel
+            .as_ref()
+            .is_some_and(|a| a.is_spent(skinned_present))
+        {
+            self.rt.retire_accel(frame.id);
+        }
+        refreshed.and(stepped)
     }
 
     // Bring the RT draw-object BLAS head in line with the current draw set
@@ -544,7 +564,7 @@ impl MtlContext {
 
     // Per-frame skinned RT update: rebuild only the skinned BLAS + TLAS +
     // geometry table (keeping the persistent static/cluster BLAS) from the
-    // current pose and transforms. A no-op (keeps last frame's BVH) if the
+    // current pose and transforms. Skipped, keeping last frame's BVH, if the
     // required skinned resources are missing.
     fn update_rt_skinned(
         &mut self,
@@ -562,7 +582,7 @@ impl MtlContext {
             self.rt.pipelines.skin.as_ref(),
             self.rt.accel.as_mut(),
         ) else {
-            return Ok(RtUpdate::Done);
+            return Ok(RtUpdate::Skipped);
         };
         let skinned = SkinnedRtInputs {
             objects: &self.state.skinned.draw_objects,

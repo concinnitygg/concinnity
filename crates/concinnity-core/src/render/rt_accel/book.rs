@@ -2,7 +2,7 @@ use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::plan::{self, LiveState, RefreshMode, RtStep, RtUpdatePlan};
+use super::plan::{self, EmptyHead, LiveState, RefreshMode, RtStep, RtUpdatePlan};
 use crate::gfx::render_types::{DrawObject, InstancedCluster, RtGeomEntry, SkinnedDrawObject};
 use crate::render::error::{RenderError, RenderResult};
 use crate::render::rt_geom::{
@@ -234,6 +234,16 @@ impl<B, I> AccelBook<B, I> {
     /// Whether the live TLAS references skinned BLAS.
     pub fn has_skinned(&self) -> bool {
         self.has_skinned
+    }
+
+    /// Whether nothing is left to trace and nothing can rejoin, so the backend
+    /// drops the BVH ([`EmptyHead::Drop`]): no draw or cluster geometry, no
+    /// skinned BLAS published, and `skinned_present` says no skinned geometry
+    /// exists to publish.
+    pub fn is_spent(&self, skinned_present: bool) -> bool {
+        self.is_empty()
+            && !self.has_skinned
+            && plan::empty_head(false, skinned_present) == EmptyHead::Drop
     }
 
     /// Follow a change to the shared texture pool's real-texture count.

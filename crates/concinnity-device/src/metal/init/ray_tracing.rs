@@ -108,6 +108,7 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
         skinned_geometry: post.rt_skinned_geometry,
         update_streak: concinnity_core::render::rt_accel::FailureStreak::default(),
         pipelines,
+        retired: concinnity_core::render::retire_pool::RetirePool::new(),
     })
 }
 

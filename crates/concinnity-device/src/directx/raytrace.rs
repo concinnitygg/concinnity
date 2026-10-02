@@ -32,11 +32,11 @@
 //! frames, so a frame-keyed slot could be reused while a live trace still reads
 //! it). See `SkinnedFrameRing` / `StaticFrameRing`. Only a topology refresh (rare
 //! in a running scene, every frame under the `Rebuild` diagnostic) still
-//! allocates fresh; its orphans and its own dedicated
-//! scratch go to the allocator's deferred free (orphans waiting, when the refresh
-//! built no TLAS, for the next TLAS to publish). The bookkeeping over all of
-//! it -- which draws and clusters the BLAS cover, the instance and geometry-table
-//! order, and when to update -- is the shared `AccelBook`.
+//! allocates fresh; its orphans and its own dedicated scratch go to the
+//! allocator's deferred free (orphans waiting, when the refresh built no TLAS,
+//! for the next TLAS to publish). The bookkeeping over all of it -- which draws
+//! and clusters the BLAS cover, the instance and geometry-table order, and when
+//! to update -- is the shared `AccelBook`.
 
 use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -1099,12 +1099,9 @@ impl RtAccelData {
     }
 
     // Whether the BVH has nothing left to trace and nothing that could rejoin
-    // it: the last draw and cluster geometry is gone, no skinned geometry is
-    // published, and `skinned_present` says none exists to publish.
+    // it. Skinned geometry rejoins only through the skin pipeline.
     pub(super) fn is_spent(&self, skinned_present: bool) -> bool {
-        self.book.is_empty()
-            && !self.book.has_skinned()
-            && empty_head(false, skinned_present && self.skin.is_some()) == EmptyHead::Drop
+        self.book.is_spent(skinned_present && self.skin.is_some())
     }
 
     // Bring the draw-object BLAS head in line with the current participating

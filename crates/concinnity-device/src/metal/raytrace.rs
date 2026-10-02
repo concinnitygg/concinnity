@@ -110,6 +110,27 @@ pub(crate) struct RtState {
     // than every frame.
     pub update_streak: FailureStreak,
     pub pipelines: RtPipelines,
+    // Dropped BVHs, held until no frame still in flight can reach them.
+    pub retired: RetirePool<RtAccelData>,
+}
+
+impl RtState {
+    // Drop the BVH, so the trace falls back to SSR until a later update seeds
+    // one. Retained command buffers keep alive what they bind or declare with
+    // `useResource`, but nothing guarantees that for a buffer a build reads only
+    // through its descriptor (an instance or deformed-vertex buffer), so the BVH
+    // waits out the frames in flight rather than being freed now.
+    pub(crate) fn retire_accel(&mut self, frame_id: u64) {
+        if let Some(accel) = self.accel.take() {
+            self.retired.push(frame_id, accel);
+        }
+    }
+
+    // Free the dropped BVHs the frames-in-flight fence now guarantees no
+    // in-flight frame can reach. Called once per frame.
+    pub(crate) fn collect_retired(&mut self, frame_id: u64, depth: usize) {
+        self.retired.collect(frame_id, depth as u64);
+    }
 }
 
 // The ray-traced reflection pipelines, `Some` only when RT reflections are on.
@@ -133,11 +154,10 @@ pub(crate) struct RtPipelines {
 // reflections, the GPU supports ray tracing, and the scene has geometry.
 pub(crate) struct RtAccelData {
     // The BLAS head (one per participating draw object, then one per cluster)
-    // plus the skinned tail, and the update policy over them. The book is the
-    // sole CPU owner that keeps every BLAS alive: a TLAS does not retain the
-    // structures it references, and the `useResource` an encoder issues only
-    // declares residency, so a BLAS must stay owned as long as any in-flight
-    // trace can reach it through the TLAS.
+    // plus the skinned tail, and the update policy over them. A TLAS does not
+    // retain the structures it references, so the book keeps every BLAS a live
+    // TLAS reaches for later frames to declare resident; a frame already in
+    // flight holds its own retain through the `useResource` it encoded.
     book: AccelBook<Structure, MTLAccelerationStructureInstanceDescriptor>,
     // The top-level (instance) acceleration structure the kernel traces.
     pub tlas: Structure,
@@ -1137,6 +1157,19 @@ impl RtAccelData {
         self.book.is_empty()
     }
 
+    // Whether the BVH has nothing left to trace and nothing that could rejoin it.
+    pub(crate) fn is_spent(&self, skinned_present: bool) -> bool {
+        self.book.is_spent(skinned_present)
+    }
+
+    // Stop publishing the skinned tail without building a TLAS, for a BVH with
+    // nothing static left that no skinned geometry can rejoin.
+    pub(crate) fn release_skinned_tail(&mut self, frame_id: u64) {
+        if let Some(tail) = self.book.release_skinned() {
+            self.release_skinned(tail, frame_id);
+        }
+    }
+
     // Every BLAS, the head then any skinned tail.
     pub(crate) fn blas(&self) -> &[Structure] {
         self.book.blas()
@@ -1183,11 +1216,11 @@ impl RtAccelData {
     // committed on the shared queue ahead of this frame's reflection-trace command
     // buffer, ordered by same-queue FIFO commit. Outgoing / transient resources
     // (orphan BLAS, the replaced TLAS + geometry table + instance buffer, and the
-    // build scratch) are parked in `retire_pool` rather than freed in place:
-    // `useResource` declares residency not lifetime, and the build keeps reading
-    // the scratch / instance buffer after this returns, so they must outlive the
-    // frames whose still-in-flight trace could reach them. Every allocation
-    // precedes the commit, so a failure leaves the live BVH untouched.
+    // build scratch) are parked in `retire_pool` rather than freed in place: the
+    // build keeps reading the instance buffer through its descriptor after this
+    // returns, which nothing guarantees its command buffer retains, so everything
+    // it replaces waits out the frames in flight. Every allocation precedes the
+    // commit, so a failure leaves the live BVH untouched.
     pub(crate) fn refresh_static_topology(
         &mut self,
         gpu: RtGpu,
@@ -1331,9 +1364,9 @@ impl RtAccelData {
         }
 
         // Swap in the refreshed head. The orphaned draw BLAS are referenced by the
-        // current (not yet replaced) TLAS, which an in-flight trace may still be
-        // reading, and `useResource` is residency not lifetime, so they are retired
-        // rather than dropped, and only once a TLAS without them is live.
+        // current (not yet replaced) TLAS, which later frames keep declaring
+        // resident until a TLAS without them is live, and only then are they
+        // retired.
         let orphans = self.book.commit_refresh(refresh, fresh, draw_objects);
         // The persistent BLAS head changed identity, so every ring slot's cached
         // TLAS descriptor (which pins the array of referenced structures) is stale.
@@ -1343,6 +1376,11 @@ impl RtAccelData {
             self.book.park(orphans);
         } else {
             retire_structures.extend(orphans);
+        }
+        // Nothing can rejoin, so stop publishing the skinned tail and leave the
+        // BVH spent for the caller to drop.
+        if empty == Some(EmptyHead::Drop) {
+            self.release_skinned_tail(frame_id);
         }
         if let Some((tlas, _, instance_buffer, geom_table)) = tlas_build {
             retire_structures.extend(self.book.take_parked());

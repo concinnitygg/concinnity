@@ -25,18 +25,19 @@
 //! rebuild, and the build scratch every path records over is one slot per frame in
 //! flight too (see `ScratchRing`). Each slot OWNS its resources for the accel's
 //! lifetime and rebuilds them in place, growing them only on demand, so a steady
-//! scene allocates nothing after warm-up. `RtAccelData`'s `live_*` fields are plain handle copies of
-//! whichever slot last built -- Vulkan has no refcount, so the ownership split has
-//! to be explicit. Nothing rotates between slots: a slot handing its buffer to the
-//! next one would make every handle-keyed cache (`SkinPipeline::wired`) miss on
-//! every visit. The ring rule they rest on is that the `in_flight` fence wait
-//! retires a slot's previous writer before the next one touches it -- sound for
-//! the skinned path because it runs on EVERY frame, and for the static path
-//! because its cursor advances per rebuild rather than per frame (a sparsely-moving
-//! scene traces one TLAS across many frames, so a frame-keyed slot could be reused
-//! while a live trace still reads it). See `SkinnedFrameRing` / `StaticFrameRing`.
-//! Only a topology refresh's orphaned draw BLAS (and what a growing slot displaces)
-//! still go through the deferred-free `Retired` pool. The bookkeeping over all of it -- which draws and clusters the
+//! scene allocates nothing after warm-up. `RtAccelData`'s `live_*` fields are
+//! plain handle copies of whichever slot last built -- Vulkan has no refcount, so
+//! the ownership split has to be explicit. Nothing rotates between slots: a slot
+//! handing its buffer to the next one would make every handle-keyed cache
+//! (`SkinPipeline::wired`) miss on every visit. The ring rule they rest on is that
+//! the `in_flight` fence wait retires a slot's previous writer before the next one
+//! touches it -- sound for the skinned path because it runs on EVERY frame, and
+//! for the static path because its cursor advances per rebuild rather than per
+//! frame (a sparsely-moving scene traces one TLAS across many frames, so a
+//! frame-keyed slot could be reused while a live trace still reads it). See
+//! `SkinnedFrameRing` / `StaticFrameRing`. Only a topology refresh's orphaned draw
+//! BLAS (and what a growing slot displaces) still go through the deferred-free
+//! `Retired` pool. The bookkeeping over all of it -- which draws and clusters the
 //! BLAS cover, the instance and geometry-table order, and when to update -- is the
 //! shared `AccelBook`.
 //!

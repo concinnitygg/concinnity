@@ -224,7 +224,8 @@ impl MtlContext {
                 }
             }
         } else {
-            self.rt.accel = None;
+            // Between frames, so it is tagged with the next frame's id.
+            self.rt.retire_accel(self.frame_ring_index);
         }
         // Reset the failure streak so a later toggle-on starts clean.
         self.rt.update_streak = concinnity_core::render::rt_accel::FailureStreak::default();
