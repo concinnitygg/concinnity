@@ -43,13 +43,15 @@
 //!      must never borrow it there); `borrow_mut`ed after the join.
 //!   7. The upscaler's `reset_pending` / `output_is_psr` (`Cell`) - read and
 //!      written by the Upscale pass alone.
-//!   8. The line upload ring (`lines.vertices`, `RefCell<Slot>` per frame) and,
-//!      when that ring grows, the device allocator (`DeviceAllocator`'s
-//!      `Rc<RefCell<Inner>>`, reached by allocating the new buffer and dropping
-//!      the old one's lease) - touched by the Lines pass alone. That holds only
-//!      while no other pass on the fan-out allocates, clones, or drops a
-//!      `PooledBuffer` / `PooledTexture`: every other site that does runs in
-//!      init, a rebuild, or `rt_dynamic_update`, all on the main thread.
+//!   8. The upload rings (`lines.vertices`, `text.upload`; `RefCell<Slot>` per
+//!      frame) and the device allocator (`DeviceAllocator`'s
+//!      `Rc<RefCell<Inner>>`, mutated by allocating, cloning, or dropping a
+//!      `PooledBuffer` / `PooledTexture`, as a ring's growth does) - main
+//!      thread only. The line ring is reserved and filled by `upload_lines` in
+//!      `record_frame`, which hands the Lines pass a plain `LineUpload`, and
+//!      the text ring by Composite after the join; every other allocation runs
+//!      in init, a rebuild, or `rt_dynamic_update`. A worker must never touch
+//!      either ring or a pooled resource's lifetime.
 //!
 //! Re-audit this list whenever a new pass migrates onto the fan-out.
 
@@ -82,10 +84,10 @@ pub(super) type ParallelCtxRef<'a> = parallel_ctx::ParallelCtxRef<'a, DxContext>
 // state reachable during `encode_pass_into`: atomics (draw-call accumulator,
 // deformed-primed gate), state touched only on the main thread around the
 // fan-out (model history, particle state, frame-stage cells), and state a
-// single pass owns during the fan-out (G-buffer previous VP, upscaler cells,
-// line upload ring and its allocator growth). D3D12 device-derived objects are
-// thread-safe for shared read, and each worker records into a distinct command
-// list from a distinct allocator.
+// single pass owns during the fan-out (G-buffer previous VP, upscaler cells).
+// The upload rings and the device allocator stay on the main thread. D3D12
+// device-derived objects are thread-safe for shared read, and each worker
+// records into a distinct command list from a distinct allocator.
 unsafe impl parallel_ctx::ParallelEncodeCtx for DxContext {}
 
 // Index into the per-pass `pass_allocators` / `pass_cmd_lists` pools

@@ -12,7 +12,7 @@
 //! Mirrors src/metal/line.rs.
 
 use concinnity_core::gfx::render_types::LineVertex;
-use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen::align_up;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -301,6 +301,46 @@ fn create_line_pso(
         .map_err(|e| map_pso_hresult(e.code(), "create line PSO"))
 }
 
+// Byte length of `vertex_count` ribbon vertices, as the `u32` a vertex buffer
+// view carries. Errors rather than truncating a frame too large to bind.
+fn line_vertex_bytes(vertex_count: usize) -> RenderResult<u32> {
+    vertex_count
+        .checked_mul(std::mem::size_of::<LineVertex>())
+        .and_then(|bytes| u32::try_from(bytes).ok())
+        .ok_or_else(|| {
+            RenderError::Other(format!(
+                "line pass: {vertex_count} vertices exceed a vertex buffer view"
+            ))
+        })
+}
+
+// This frame's ribbon vertices as placed in the line upload ring: plain data
+// the main thread hands the Lines pass, so the pass itself never touches the
+// ring or the allocator behind it.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct LineUpload {
+    gpu_va: u64,
+    byte_len: u32,
+}
+
+impl LineUpload {
+    fn new(gpu_va: u64, byte_len: u32) -> Self {
+        Self { gpu_va, byte_len }
+    }
+
+    fn vertex_count(&self) -> u32 {
+        self.byte_len / std::mem::size_of::<LineVertex>() as u32
+    }
+
+    fn vertex_buffer_view(&self) -> D3D12_VERTEX_BUFFER_VIEW {
+        D3D12_VERTEX_BUFFER_VIEW {
+            BufferLocation: self.gpu_va,
+            SizeInBytes: self.byte_len,
+            StrideInBytes: std::mem::size_of::<LineVertex>() as u32,
+        }
+    }
+}
+
 // Encoder
 
 impl DxContext {
@@ -327,23 +367,50 @@ impl DxContext {
         }
     }
 
+    // Copy this frame's expanded ribbons into this frame's slot of the upload
+    // ring. Call once per frame on the main thread, before the graph fans its
+    // passes out: growing the ring allocates through the device allocator,
+    // which no worker may touch. The frame fence (waited before the slot is
+    // reused) already retired the lists that read it last trip. `None` when
+    // there is nothing to draw.
+    pub(in crate::directx) fn upload_lines(
+        &self,
+        frame_idx: usize,
+        vertices: &[LineVertex],
+    ) -> RenderResult<Option<LineUpload>> {
+        let Some(lines) = self.lines.resources.as_ref() else {
+            return Ok(None);
+        };
+        if vertices.is_empty() {
+            return Ok(None);
+        }
+        let byte_len = line_vertex_bytes(vertices.len())?;
+        lines.vertices.reserve(
+            &self.hw.alloc,
+            frame_idx,
+            align_up(u64::from(byte_len), UPLOAD_ALIGN),
+        )?;
+        let gpu_va = lines
+            .vertices
+            .push(frame_idx, bytemuck::cast_slice(vertices))?;
+        Ok(Some(LineUpload::new(gpu_va, byte_len)))
+    }
+
     // Encode the line pass: one unindexed triangle list covering every expanded
     // ribbon, alpha-blended into the resolved HDR target. `vp` is the same
     // view-projection the main pass rasterized with (jittered under TAA), so a
-    // line sits on the pixel its geometry did.
+    // line sits on the pixel its geometry did. `upload` is this frame's ribbon
+    // vertices, already in the ring (`upload_lines`).
     pub(in crate::directx) fn encode_lines(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         vp: [[f32; 4]; 4],
-        vertices: &[LineVertex],
-    ) -> RenderResult<()> {
-        let Some(lines) = self.lines.resources.as_ref() else {
-            return Ok(());
+        upload: Option<LineUpload>,
+    ) {
+        let (Some(lines), Some(upload)) = (self.lines.resources.as_ref(), upload) else {
+            return;
         };
-        if vertices.is_empty() {
-            return Ok(());
-        }
 
         let view_uni = LineView {
             vp,
@@ -361,22 +428,6 @@ impl DxContext {
             );
         }
         let view_gva = com::gpu_va(&lines.view_ubo_resources[frame_idx]);
-
-        // Ribbon vertices into this frame's slot of the upload ring. The frame
-        // fence (waited before the slot is reused) already retired the lists
-        // that read it last trip.
-        let vertex_bytes: &[u8] = bytemuck::cast_slice(vertices);
-        lines.vertices.reserve(
-            &self.hw.alloc,
-            frame_idx,
-            align_up(vertex_bytes.len() as u64, UPLOAD_ALIGN),
-        )?;
-        let vertex_gva = lines.vertices.push(frame_idx, vertex_bytes)?;
-        let vertex_view = D3D12_VERTEX_BUFFER_VIEW {
-            BufferLocation: vertex_gva,
-            SizeInBytes: vertex_bytes.len() as u32,
-            StrideInBytes: std::mem::size_of::<LineVertex>() as u32,
-        };
 
         // Main depth is already in a shader-resource state for the fragment's
         // occlusion sample: the graph declares this pass's depth read and the
@@ -410,16 +461,51 @@ impl DxContext {
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
-            cmd.IASetVertexBuffers(0, Some(&[vertex_view]));
+            cmd.IASetVertexBuffers(0, Some(&[upload.vertex_buffer_view()]));
 
             cmd.SetPipelineState(&lines.pso);
             cmd.SetGraphicsRootSignature(&lines.root_sig);
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
             cmd.SetGraphicsRootConstantBufferView(0, view_gva);
             cmd.set_graphics_srv_table(1, lines.depth_srv_gpu);
-            cmd.DrawInstanced(vertices.len() as u32, 1, 0, 0);
+            cmd.DrawInstanced(upload.vertex_count(), 1, 0, 0);
         }
         self.inc_draw_calls(1);
-        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STRIDE: u32 = std::mem::size_of::<LineVertex>() as u32;
+
+    #[test]
+    fn line_vertex_bytes_is_count_times_stride() {
+        assert_eq!(line_vertex_bytes(0).unwrap(), 0);
+        assert_eq!(line_vertex_bytes(6).unwrap(), 6 * STRIDE);
+    }
+
+    #[test]
+    fn line_vertex_bytes_accepts_the_largest_view() {
+        let max = (u32::MAX / STRIDE) as usize;
+        assert_eq!(line_vertex_bytes(max).unwrap(), max as u32 * STRIDE);
+    }
+
+    #[test]
+    fn line_vertex_bytes_refuses_a_view_overflow() {
+        let past = (u32::MAX / STRIDE) as usize + 1;
+        assert!(line_vertex_bytes(past).is_err());
+        assert!(line_vertex_bytes(usize::MAX).is_err());
+    }
+
+    #[test]
+    fn line_upload_binds_what_was_pushed() {
+        let upload = LineUpload::new(0x1000, 12 * STRIDE);
+        assert_eq!(upload.vertex_count(), 12);
+        let view = upload.vertex_buffer_view();
+        assert_eq!(view.BufferLocation, 0x1000);
+        assert_eq!(view.SizeInBytes, 12 * STRIDE);
+        assert_eq!(view.StrideInBytes, STRIDE);
     }
 }

@@ -73,6 +73,14 @@ pub(super) struct RecordFrameResolution {
     pub output_height: u32,
 }
 
+// What `record_frame` recorded: the per-pass cmd lists, in topological pass
+// order, and whether they carry the model-history prime it took from the
+// tracker, which the caller hands back if the frame then fails to submit.
+pub(super) struct RecordedFrame {
+    pub pass_cmd_lists: Vec<ID3D12GraphicsCommandList>,
+    pub primed_model_history: bool,
+}
+
 impl DxContext {
     // Resets this slot's START list, pre-inits its timestamps, records the RT
     // acceleration-structure update, and closes it.
@@ -148,17 +156,16 @@ impl DxContext {
     // per-frame restore barriers); the executor encodes the Composite
     // pass onto it inline, and the post-graph restore barriers below
     // also append onto it. Returns the per-pass cmd lists the executor
-    // recorded (in topological pass order) so the caller can submit
-    // them between the "start" outer cmd list (timestamp pre-init,
-    // closed by the caller before record_frame) and the "end" outer
-    // cmd list.
+    // recorded (`RecordedFrame`) so the caller can submit them between the
+    // "start" outer cmd list (timestamp pre-init, closed by the caller before
+    // record_frame) and the "end" outer cmd list.
     pub(super) fn record_frame(
         &self,
         targets: RecordFrameTargets<'_>,
         view: RecordFrameView<'_>,
         resolution: RecordFrameResolution,
         world_hidden: bool,
-    ) -> RenderResult<Vec<ID3D12GraphicsCommandList>> {
+    ) -> RenderResult<RecordedFrame> {
         let RecordFrameTargets {
             cmd: end_cmd,
             back_buffer,
@@ -362,8 +369,16 @@ impl DxContext {
             _ => build_frame_graph(&seed_inputs)
                 .map_err(|e| RenderError::Other(format!("frame-graph compile: {e}")))?,
         };
+        // The line ring is reserved and filled here rather than by the Lines
+        // pass, since growing it allocates and no fanned-out pass may.
+        let lines = if frame_graph.pass(PassId::Lines).is_some() {
+            self.upload_lines(frame_idx, lines)?
+        } else {
+            None
+        };
         // A rebuild's prime request is spent only on a frame whose G-buffer
         // pre-pass runs the history snapshot; any other frame leaves it pending.
+        // Taken after every other fallible step but the graph itself.
         let prime_model_history = frame_graph.pass(PassId::GBufferPrepass).is_some()
             && self.state.model_history.borrow_mut().take_prime();
         let frame_params = GraphFrameParams {
@@ -399,14 +414,25 @@ impl DxContext {
                 .map(|set| set.frame_plan(vp_mat))
                 .unwrap_or_default(),
         };
-        let pass_cmd_lists = self.execute_graph(&frame_graph, &frame_params)?;
+        let pass_cmd_lists = match self.execute_graph(&frame_graph, &frame_params) {
+            Ok(lists) => lists,
+            Err(e) => {
+                if prime_model_history {
+                    self.state.model_history.borrow_mut().request_prime();
+                }
+                return Err(e);
+            }
+        };
         // Cache the compiled graph under this frame's inputs so the next frame with
         // matching inputs skips the rebuild.
         *self.graph_cache.borrow_mut() = Some((seed_inputs, frame_graph));
 
         self.advance_temporal_state(cur_vp);
 
-        Ok(pass_cmd_lists)
+        Ok(RecordedFrame {
+            pass_cmd_lists,
+            primed_model_history: prime_model_history,
+        })
     }
 }
 

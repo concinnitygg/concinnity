@@ -128,6 +128,12 @@ impl ModelHistory {
         core::mem::take(&mut self.prime)
     }
 
+    /// Ask for a prime again: a frame that took one failed before its history
+    /// snapshot reached the GPU, so the ring may still hold unwritten slots.
+    pub fn request_prime(&mut self) {
+        self.prime = true;
+    }
+
     /// Note that draw slot `draw_idx` now holds a different object. Call
     /// wherever a slot is written for a new occupant -- a reused or appended
     /// draw slot, a streamed chunk moving in, a spawned clone.
@@ -296,6 +302,19 @@ mod tests {
         h.begin(HistoryMode::Track, 3);
         assert!(h.take_prime());
         h.begin(HistoryMode::Track, 3);
+        assert!(!h.take_prime());
+    }
+
+    // A frame that fails after taking the prime hands it back, and the next
+    // frame takes it as if the failed one had never run.
+    #[test]
+    fn a_requested_prime_is_taken_once_by_the_next_frame() {
+        let mut h = ModelHistory::new();
+        h.begin(HistoryMode::Track, 2);
+        assert!(h.take_prime());
+        h.request_prime();
+        h.begin(HistoryMode::Track, 2);
+        assert!(h.take_prime());
         assert!(!h.take_prime());
     }
 

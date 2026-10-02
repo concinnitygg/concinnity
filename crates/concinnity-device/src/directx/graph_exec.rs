@@ -43,7 +43,7 @@
 //! derived from the graph rather than emitted inline.
 
 use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{LineVertex, TextDrawCall};
+use concinnity_core::gfx::render_types::TextDrawCall;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
@@ -62,6 +62,7 @@ use super::context::DxContext;
 use super::parallel_encoder::{ParallelCtxRef, SendableCmdList, pool_index};
 use super::texture::{aliasing_barrier, transition_barrier, uav_barrier};
 use crate::directx::descriptor_slot::SrvSlot;
+use crate::directx::line::LineUpload;
 
 // One resolved barrier target: the D3D12 resource a graph resource backs, its
 // class, and its resting state (created / cross-frame-restored). Built once per
@@ -508,10 +509,11 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     pub back_buffer: &'a ID3D12Resource,
     pub back_buffer_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub text_calls: &'a [TextDrawCall],
-    // This frame's expanded line ribbons, consumed by the Lines pass. Empty
-    // whenever nothing published lines, in which case the graph carries no
-    // Lines node either.
-    pub lines: &'a [LineVertex],
+    // This frame's line ribbons, uploaded on the main thread before the fan-out
+    // so the Lines pass never touches the upload ring or the allocator. `None`
+    // when there is nothing to draw, including whenever the graph carries no
+    // Lines node.
+    pub lines: Option<LineUpload>,
     // An opaque menu backdrop hides the scene: the Main pass clears its target
     // and skips every draw (the masked graph drops all other world passes), so
     // nothing of the world renders behind the menu.
@@ -1246,7 +1248,7 @@ impl DxContext {
                 self.encode_decals(cmd, params.frame_idx, params.vp_mat, params.frustum);
             }
             PassId::Lines => {
-                self.encode_lines(cmd, params.frame_idx, params.vp_mat, params.lines)?;
+                self.encode_lines(cmd, params.frame_idx, params.vp_mat, params.lines);
             }
             PassId::Fog => {
                 self.encode_fog(cmd, params.frame_idx, params.vp_mat, params.cam_pos);

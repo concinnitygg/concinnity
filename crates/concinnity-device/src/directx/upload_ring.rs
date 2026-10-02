@@ -64,8 +64,9 @@ impl Slot {
 }
 
 // A persistently-mapped upload buffer per frame-in-flight slot for transient
-// geometry. Interior-mutable (the pass encoders run through `&self`), matching
-// the rest of the per-frame DX state.
+// geometry. Interior-mutable so the `&self` frame recording can fill it, but
+// main-thread only: growth allocates through the device allocator, which the
+// parallel encode fan-out must never touch.
 pub(in crate::directx) struct UploadRing {
     slots: Vec<RefCell<Slot>>,
 }
@@ -127,9 +128,10 @@ impl UploadRing {
                 slot.capacity
             )));
         }
-        // SAFETY: `base` is the persistent map of a buffer of `capacity` bytes;
-        // `offset + bytes.len() <= capacity` checked above; the slot is only
-        // touched by one pass's encode at a time.
+        // SAFETY: `base` is the persistent map of a buffer of `capacity` bytes and
+        // `offset + bytes.len() <= capacity` was checked above. Every ring is
+        // reserved and pushed on the main thread only, and the frame fence
+        // retired the GPU's last read of this slot.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),

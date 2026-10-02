@@ -1002,7 +1002,7 @@ impl DxContext {
         //    and dispatches Composite + per-frame restore barriers onto
         //    `end_cmd`. Returns the per-pass cmd lists in topological
         //    pass order.
-        let pass_cmd_lists = self.record_frame(
+        let recorded = self.record_frame(
             crate::directx::draw::RecordFrameTargets {
                 cmd: end_cmd,
                 back_buffer: &back_buffer,
@@ -1039,8 +1039,21 @@ impl DxContext {
         }
 
         self.finish_frame_stats();
-        self.close_end_list(frame)?;
-        self.submit_and_present(start_cmd, &pass_cmd_lists, back_idx, frame, gpu_wait)
+        let submitted = self.close_end_list(frame).and_then(|()| {
+            self.submit_and_present(
+                start_cmd,
+                &recorded.pass_cmd_lists,
+                back_idx,
+                frame,
+                gpu_wait,
+            )
+        });
+        // A frame that took the history prime but never reached the GPU leaves
+        // the ring unwritten, so the next frame primes instead.
+        if submitted.is_err() && recorded.primed_model_history {
+            self.state.model_history.get_mut().request_prime();
+        }
+        submitted
     }
 
     // Drain any queued D3D12 validation messages and emit them via tracing.
