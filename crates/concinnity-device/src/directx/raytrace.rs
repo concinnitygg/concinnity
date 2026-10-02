@@ -1956,13 +1956,13 @@ impl super::context::DxContext {
     }
 
     // Replace the live acceleration structure with one built over the current
-    // shared vertex / index buffers. Called by `rebuild_static_geometry`, which
-    // swaps both buffers and re-lays out every draw underneath the BVH: its BLAS
-    // then trace the old geometry and its geometry table indexes offsets into a
-    // buffer that no longer exists. An empty scene or a failed build drops the
-    // BVH rather than keeping the stale one (which would have the trace read the
-    // new, possibly smaller, buffers at old offsets); RT falls back to SSR until
-    // the next update re-seeds it.
+    // draw set + shared vertex / index buffers. Called by the RT toggle-on and by
+    // `rebuild_static_geometry`, which swaps both buffers and re-lays out every
+    // draw underneath the BVH: its BLAS then trace the old geometry and its
+    // geometry table indexes offsets into a buffer that no longer exists. An
+    // empty scene or a failed build leaves no BVH rather than a stale one (which
+    // would have the trace read the new, possibly smaller, buffers at old
+    // offsets); RT falls back to SSR until the next update seeds it.
     pub(super) fn rebuild_rt_accel(&mut self) {
         let skinned_present = self.rt_skinned_present();
         self.rt.accel = self.build_scene_accel(skinned_present).unwrap_or_else(|e| {

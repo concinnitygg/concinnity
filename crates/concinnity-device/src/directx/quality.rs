@@ -320,35 +320,21 @@ impl DxContext {
         Ok(())
     }
 
-    // Build the RT acceleration structure + reflection pass at runtime (a live
-    // toggle-on). Mirrors the init RT block: an empty scene, an AS-build error,
-    // or a shader-compile failure leaves both `rt.accel` / `rt_reflections`
-    // `None` and the renderer stays on SSR (a soft failure, returns `Ok`). The
-    // caller has ensured the unified G-buffer pre-pass exists and drained the
-    // device (`wait_idle`). The skin pipeline is built first, since whether
+    // Build the RT reflection pass + acceleration structure at runtime (a live
+    // toggle-on). Mirrors the init RT block: a shader-compile failure leaves
+    // `rt_reflections` `None` and the renderer stays on SSR (a soft failure,
+    // returns `Ok`), while an empty scene or an AS-build error leaves only
+    // `rt.accel` `None` until `rt_dynamic_update` seeds it. The caller has
+    // ensured the unified G-buffer pre-pass exists and drained the device
+    // (`wait_idle`). The skin pipeline is built before the BVH, since whether
     // skinned geometry can join decides whether a scene with no static geometry
-    // gets a BVH (a build failure is non-fatal: static geometry still reflects,
+    // gets one (a build failure is non-fatal: static geometry still reflects,
     // just without skinned hits).
     fn build_rt_runtime(
         &mut self,
         settings: rt_reflections::RtReflectionSettings,
     ) -> RenderResult<()> {
         let hot_reload = self.hot_reload.enabled;
-        self.rt.skin = super::raytrace::build_rt_skin(&self.hw.device, hot_reload);
-        let skinned_present = self.rt_skinned_present();
-        let accel = match self.build_scene_accel(skinned_present) {
-            Ok(Some(accel)) => accel,
-            Ok(None) => {
-                tracing::info!(
-                    "RT reflections enabled but no resident triangle geometry to trace; keeping SSR"
-                );
-                return Ok(());
-            }
-            Err(e) => {
-                tracing::warn!("RT acceleration-structure build failed (keeping SSR): {e}");
-                return Ok(());
-            }
-        };
         let slots = self.quality_slots;
         let rt = match super::post::rt_reflections::RtReflectionsResources::new(
             super::post::rt_reflections::RtBuildContext {
@@ -372,8 +358,9 @@ impl DxContext {
                 return Ok(());
             }
         };
-        self.rt.accel = Some(accel);
         self.rt_reflections = Some(rt);
+        self.rt.skin = super::raytrace::build_rt_skin(&self.hw.device, hot_reload);
+        self.rebuild_rt_accel();
         Ok(())
     }
 
