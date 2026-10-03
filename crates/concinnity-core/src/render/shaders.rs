@@ -192,13 +192,15 @@ mod tests {
 
     // The pre-pass rasterizes the same visible set the main pass does, sky
     // shell included, so an unpinned sky vert clips and the G-buffer loses
-    // coverage the main pass has. The bindless vertex entry is the only one
-    // that carries skybox geometry, so the two matches are the pin's definition
-    // and its one call.
+    // coverage the main pass has. The pin also zeroes the sky's depth, so the
+    // screen-space passes see no surface there rather than the shell's inward
+    // faces. The bindless vertex entry is the only one that carries skybox
+    // geometry, so the two matches are the pin's definition and its one call.
     #[test]
     fn the_prepass_pins_sky_to_the_far_plane() {
         assert!(GBUFFER_PREPASS.contains("color.b > 1.5"));
-        assert!(GBUFFER_PREPASS.contains("position.z = position.w"));
+        assert!(GBUFFER_PREPASS.contains("position.z = o.position.w"));
+        assert!(GBUFFER_PREPASS.contains("o.view_depth = 0.0"));
         assert_eq!(GBUFFER_PREPASS.matches("gb_sky_pin(").count(), 2);
     }
 }

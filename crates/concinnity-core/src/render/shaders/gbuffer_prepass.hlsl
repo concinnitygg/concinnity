@@ -7,7 +7,8 @@
 //   target(2) RG16F    screen-space motion (prev_uv - cur_uv)
 // The rasterized position uses the JITTERED VP so coverage matches the main
 // pass; the motion vector comes from the UN-jittered cur/prev VPs so jitter
-// never leaks into it. Alpha 0 in target(0) marks "no geometry".
+// never leaks into it. Alpha 0 in target(0) marks "no geometry", the sky
+// included.
 //
 // Every host rasterizes this pre-pass off the cull records, so there are two
 // entries, one per stage, each selected by a define:
@@ -136,14 +137,16 @@ GbVertexOut gb_project(float4x4 model, float4 cur_world, float4 prev_world, floa
 }
 
 // Skybox vertices carry a blue channel of 2.0: pin them to the far plane so the
-// sky never occludes scene geometry.
-float4 gb_sky_pin(float4 position, float3 color)
+// sky never occludes scene geometry, and zero their depth so the sky reads as
+// "no geometry" to every screen-space pass while still writing its motion.
+GbVertexOut gb_sky_pin(GbVertexOut o, float3 color)
 {
     if (color.b > 1.5)
     {
-        position.z = position.w * (1.0 - 1e-6);
+        o.position.z = o.position.w * (1.0 - 1e-6);
+        o.view_depth = 0.0;
     }
-    return position;
+    return o;
 }
 
 #endif
@@ -179,8 +182,7 @@ GbVertexOut gbuffer_prepass_vertex_bindless(
     GpuObjectData obj = objects[oid];
     float4 cur_world  = mul(obj.model, float4(v.pos, 1.0));
     float4 prev_world = mul(gb_prev_model(oid, obj.model), float4(v.prev_pos, 1.0));
-    GbVertexOut o = gb_project(obj.model, cur_world, prev_world, v.normal);
-    o.position  = gb_sky_pin(o.position, v.color);
+    GbVertexOut o = gb_sky_pin(gb_project(obj.model, cur_world, prev_world, v.normal), v.color);
     o.roughness = obj.tint_roughness.w;
     return o;
 }
@@ -193,7 +195,7 @@ GbVertexOut gbuffer_prepass_vertex_bindless(
 GbFragmentOut gbuffer_prepass_fragment_bindless(GbVertexOut p)
 {
     GbFragmentOut o;
-    o.nd    = float4(normalize(p.view_normal), p.view_depth);
+    o.nd    = p.view_depth > 0.0 ? float4(normalize(p.view_normal), p.view_depth) : (float4)(0.0);
     o.rough = p.roughness;
     o.vel   = gb_motion(p.cur_clip, p.prev_clip);
     return o;
