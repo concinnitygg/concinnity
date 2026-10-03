@@ -1,410 +1,82 @@
-//! Bloom for the Vulkan backend. Co-locates the bloom GLSL sources, the
-//! prefilter / downsample / upsample pipeline builders, the bloom mip-chain
-//! target allocator (per frame slot), the framebuffer + descriptor wiring, and
-//! the per-frame `encode_bloom` encoder. Mirrors src/metal/post/bloom.rs.
+//! Vulkan's share of bloom, which is where the chain's scene and top octave
+//! come from this frame. The chain itself -- its pipelines, the octaves below
+//! the top, and every draw -- is written once in
+//! `concinnity_core::render::post::bloom` and reaches Vulkan through
+//! `VkPostDevice`.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::fullscreen;
+use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::post::bloom::{BloomInputs, BloomPass, top_extent};
+use concinnity_core::render::render_graph::PixelFormat;
 
-use super::super::allocator::DeviceAllocator;
-use super::super::context::*;
-use super::super::pipeline_desc::{Blend, GraphicsPipelineDesc};
-use super::super::record::cmd_push_constants;
-use super::super::resources::{alloc_descriptor_sets, write_source_set};
-use super::super::set_writes::SetWrites;
-use super::super::texture::*;
-use crate::vulkan::builtin_shaders::CompileProgram;
-use crate::vulkan::owned::{OwnedFramebuffer, OwnedPipeline, VkDevice};
+use crate::vulkan::context::VkContext;
+use crate::vulkan::post::pass_cache::AttachmentRest;
+use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkAttachment, post_extent};
+use crate::vulkan::transient_pool::TransientImagePool;
 
-// Upper bound on `bloom_mip_count` (which clamps to 4..=6). The bloom
-// descriptor pool is sized for this many mips per frame so a resize that
-// changes the octave count never has to resize the pool.
-pub(in crate::vulkan) const MAX_BLOOM_MIPS: u32 = 6;
+// The shared chain, holding Vulkan's own pipeline and target types.
+pub(in crate::vulkan) type VkBloomPass = BloomPass<PostPipeline, PostTarget>;
 
-// SPIR-V for the bloom chain: the shared fullscreen-triangle vertex shader
-// plus the prefilter / downsample / upsample fragment shaders.
-pub(in crate::vulkan) struct BloomShaders {
-    pub vert: Vec<u8>,
-    pub prefilter: Vec<u8>,
-    pub downsample: Vec<u8>,
-    pub upsample: Vec<u8>,
-}
-
-pub(in crate::vulkan) fn compile_bloom_shaders(hot_reload: bool) -> RenderResult<BloomShaders> {
-    use super::super::builtin_shaders;
-    Ok(BloomShaders {
-        vert: builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?,
-        prefilter: builtin_shaders::BLOOM_PREFILTER.compile(hot_reload)?,
-        downsample: builtin_shaders::BLOOM_DOWNSAMPLE.compile(hot_reload)?,
-        upsample: builtin_shaders::BLOOM_UPSAMPLE.compile(hot_reload)?,
-    })
-}
-
-// Build a bloom-chain pipeline: a vertex-buffer-less fullscreen triangle into
-// a single-sample HDR mip, no depth. With `additive` set the color blend is
-// `dst + src`, used by the upsample pass to accumulate onto the downsampled
-// mip already in the target.
-pub(in crate::vulkan) fn create_bloom_pipeline(
-    device: &VkDevice,
-    render_pass: vk::RenderPass,
-    layout: vk::PipelineLayout,
-    vert_spv: &[u8],
-    frag_spv: &[u8],
-    additive: bool,
-) -> RenderResult<OwnedPipeline> {
-    let blend = if additive {
-        Blend::Additive
-    } else {
-        Blend::Opaque
-    };
-    GraphicsPipelineDesc::fullscreen(vert_spv, frag_spv, layout, render_pass, &[blend])
-        .build(device, "bloom")
-}
-
-// Number of mip levels in the bloom chain for an HDR target of the given
-// resolution. Clamped to 4..=6: enough octaves for a wide soft glow without
-// spending a dozen render passes on sub-pixel mips. Mirrors `bloom_mip_count`
-// in metal/texture.rs.
-pub(in crate::vulkan) fn bloom_mip_count(width: u32, height: u32) -> u32 {
-    let min_dim = width.min(height).max(1);
-    // mip 0 is already half-res, so subtract one octave before clamping.
-    let levels = (min_dim as f32).log2().floor() as i32 - 1;
-    levels.clamp(4, 6) as u32
-}
-
-// The shared Vulkan device + one-shot upload context threaded through the
-// bloom target allocators. Bundles the instance/device borrows with the
-// physical device, command pool, and queue used to create images and submit
-// the one-shot layout transitions.
-pub(in crate::vulkan) struct BloomDeviceContext<'a> {
-    pub alloc: &'a DeviceAllocator,
-    pub device: &'a VkDevice,
-    pub command_pool: vk::CommandPool,
-    pub queue: vk::Queue,
-}
-
-// Create the bloom mip chain for an HDR target of `width`x`height`. `mips[i]`
-// has resolution `(width >> (i+1), height >> (i+1))`, floored at one texel;
-// `mips[0]` is half-res. Each mip is a single-sample color image usable as
-// both a render target and a sampled texture, and is pre-transitioned to
-// `SHADER_READ_ONLY_OPTIMAL` so the composite pass can bind it even when
-// bloom is disabled and the bloom passes never run.
-pub(in crate::vulkan) fn create_bloom_mips(
-    ctx: &BloomDeviceContext,
-    width: u32,
-    height: u32,
-    format: vk::Format,
-    mip0_override: Option<(vk::Image, vk::ImageView)>,
-) -> RenderResult<(Vec<GpuImage>, Vec<vk::Extent2D>)> {
-    let &BloomDeviceContext {
-        alloc,
-        device,
-        command_pool,
-        queue,
-    } = ctx;
-    let full_w = width.max(1);
-    let full_h = height.max(1);
-    let count = bloom_mip_count(full_w, full_h);
-
-    let mut mips = Vec::with_capacity(count as usize);
-    let mut extents = Vec::with_capacity(count as usize);
-    for i in 0..count {
-        let mw = (full_w >> (i + 1)).max(1);
-        let mh = (full_h >> (i + 1)).max(1);
-        let gpu_image = if i == 0
-            && let Some((image, view)) = mip0_override
-        {
-            // Pooled `bloom_top`: the transient pool owns image + view + memory.
-            // Wrap it borrowed so the chain indexes it uniformly; the prefilter
-            // re-establishes its layout from UNDEFINED each frame, so no
-            // pre-transition is done here.
-            GpuImage::borrowed(image, view)
-        } else {
-            let pooled = create_image(
-                alloc,
-                &ImageSpec {
-                    width: mw,
-                    height: mh,
-                    format,
-                    tiling: vk::ImageTiling::OPTIMAL,
-                    usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-                    mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                    samples: vk::SampleCountFlags::TYPE_1,
-                },
-            )?;
-            let image = pooled.image();
-            one_shot_submit(device, command_pool, queue, |cmd| {
-                transition_image_layout(
-                    device,
-                    cmd,
-                    image,
-                    vk::ImageLayout::UNDEFINED,
-                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    vk::ImageAspectFlags::COLOR,
-                );
-            })?;
-            let view = create_image_view(device, image, format, vk::ImageAspectFlags::COLOR)?;
-            GpuImage::from_pooled(pooled, view)
-        };
-        mips.push(gpu_image);
-        extents.push(vk::Extent2D {
-            width: mw,
-            height: mh,
-        });
-    }
-    Ok((mips, extents))
-}
-
-// Create the per-frame-slot bloom mip chains. Returns one chain per slot
-// plus the shared mip extents (the same across all slots).
-// `bloom_top` is the per-frame pooled mip 0 (one `(image, view)` per frame in
-// flight) when bloom is enabled, else empty (mip 0 is committed like the rest).
-pub(in crate::vulkan) fn create_bloom_chain(
-    ctx: &BloomDeviceContext,
-    extent: vk::Extent2D,
-    frames: usize,
-    bloom_top: &[(vk::Image, vk::ImageView)],
-) -> RenderResult<(Vec<Vec<GpuImage>>, Vec<vk::Extent2D>)> {
-    let mut mips = Vec::with_capacity(frames);
-    let mut extents = Vec::new();
-    for f in 0..frames {
-        let (m, e) = create_bloom_mips(
-            ctx,
-            extent.width,
-            extent.height,
-            HDR_FORMAT,
-            bloom_top.get(f).copied(),
-        )?;
-        if extents.is_empty() {
-            extents = e;
-        }
-        mips.push(m);
-    }
-    Ok((mips, extents))
-}
-
-// The bloom write and blend framebuffer sets, each indexed [frame][mip].
-type BloomFramebuffers = (Vec<Vec<OwnedFramebuffer>>, Vec<Vec<OwnedFramebuffer>>);
-
-// Build the bloom write + blend framebuffers for every frame slot. The write
-// set has one framebuffer per mip; the blend set omits the smallest mip,
-// which is never upsampled into.
-pub(in crate::vulkan) fn create_bloom_framebuffers(
-    device: &VkDevice,
-    write_pass: vk::RenderPass,
-    blend_pass: vk::RenderPass,
-    bloom_mips: &[Vec<GpuImage>],
-    extents: &[vk::Extent2D],
-) -> RenderResult<BloomFramebuffers> {
-    let make_fb = |rp: vk::RenderPass, view: vk::ImageView, ext: vk::Extent2D| {
-        let fb_info = vk::FramebufferCreateInfo::default()
-            .render_pass(rp)
-            .attachments(std::slice::from_ref(&view))
-            .width(ext.width)
-            .height(ext.height)
-            .layers(1);
-        device
-            .create_framebuffer(&fb_info)
-            .map_err(|e| crate::vulkan::error::map_vk_result(e, "bloom framebuffer"))
-    };
-    let mut write = Vec::with_capacity(bloom_mips.len());
-    let mut blend = Vec::with_capacity(bloom_mips.len());
-    for mips in bloom_mips {
-        let mut w = Vec::with_capacity(mips.len());
-        let mut b = Vec::with_capacity(mips.len().saturating_sub(1));
-        for (i, mip) in mips.iter().enumerate() {
-            w.push(make_fb(write_pass, mip.view, extents[i])?);
-            if i + 1 < mips.len() {
-                b.push(make_fb(blend_pass, mip.view, extents[i])?);
-            }
-        }
-        write.push(w);
-        blend.push(b);
-    }
-    Ok((write, blend))
-}
-
-// Re-point bloom input set 0's binding 0 at `view`. Used when TAA is enabled
-// so the bloom prefilter thresholds the post-TAA scene image instead of the
-// raw HDR resolve.
-pub(in crate::vulkan) fn rebind_bloom_input0(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    view: vk::ImageView,
-) {
-    write_bloom_input(device, set, view);
-}
-
-// Point bloom input `set`'s image binding at `view`.
-fn write_bloom_input(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
-    SetWrites::new(set).sampled_image(0, view).apply(device);
-}
-
-// Allocate + wire the bloom input descriptor sets. Per frame slot there is
-// one set per distinct input image: set 0 binds that slot's HDR resolve
-// image, set `1 + m` binds bloom mip `m`. Every set reads through `sampler`.
-pub(in crate::vulkan) fn alloc_bloom_input_sets(
-    device: &VkDevice,
-    pool: vk::DescriptorPool,
-    layout: vk::DescriptorSetLayout,
-    sampler: vk::Sampler,
-    hdr_resolve_images: &[GpuImage],
-    bloom_mips: &[Vec<GpuImage>],
-) -> RenderResult<Vec<Vec<vk::DescriptorSet>>> {
-    let mut out = Vec::with_capacity(bloom_mips.len());
-    for (frame, mips) in bloom_mips.iter().enumerate() {
-        let layouts: Vec<_> = (0..mips.len() + 1).map(|_| layout).collect();
-        let sets = alloc_descriptor_sets(device, pool, &layouts)?;
-        for (idx, &set) in sets.iter().enumerate() {
-            let view = if idx == 0 {
-                hdr_resolve_images[frame].view
-            } else {
-                mips[idx - 1].view
-            };
-            write_source_set(device, set, &[(view, sampler)]);
-        }
-        out.push(sets);
-    }
-    Ok(out)
-}
-
-// The bloom chain orchestration lives once in `gfx::fullscreen`; this impl binds
-// + draws each sub-pass in Vulkan. `Args` is the frame-in-flight index selecting
-// the per-frame framebuffers + descriptor sets (the scene input is pre-wired into
-// `bloom.input_sets[frame_idx][0]`, so prefilter needs no extra argument).
-impl fullscreen::BloomEncoder for VkContext {
-    type Rec = vk::CommandBuffer;
-    type Args = usize;
-
-    fn bloom_mip_count(&self) -> usize {
-        self.bloom.mip_extents.len()
-    }
-
-    // All three bloom pipelines share one layout, so the tunables pushed here
-    // survive the pipeline switches and the render-pass boundaries between the
-    // sub-passes; the rest of the render-pass state is set per sub-pass.
-    fn begin_bloom(&self, cmd: &Self::Rec, _frame_idx: &Self::Args) -> RenderResult<()> {
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            cmd_push_constants(
-                &self.hw.device,
-                *cmd,
-                self.bloom.pipeline_layout.handle(),
-                vk::ShaderStageFlags::FRAGMENT,
-                &self.post_process,
-            );
-        }
-        Ok(())
-    }
-
-    // Prefilter: HDR resolve (input set 0) -> mip 0 (soft-knee + Karis).
-    fn bloom_prefilter(&self, cmd: &Self::Rec, frame_idx: &Self::Args) -> RenderResult<()> {
-        let f = *frame_idx;
-        self.bloom_run_pass(
-            *cmd,
-            self.bloom.write_pass.handle(),
-            self.bloom.write_framebuffers[f][0].handle(),
-            self.bloom.mip_extents[0],
-            &self.bloom.pipeline_prefilter,
-            self.bloom.input_sets[f][0],
-        );
-        Ok(())
-    }
-
-    // Downsample: mip dst-1 -> mip dst. Input set for mip m is `m`.
-    fn bloom_downsample(
-        &self,
-        cmd: &Self::Rec,
-        frame_idx: &Self::Args,
-        dst: usize,
-    ) -> RenderResult<()> {
-        let f = *frame_idx;
-        self.bloom_run_pass(
-            *cmd,
-            self.bloom.write_pass.handle(),
-            self.bloom.write_framebuffers[f][dst].handle(),
-            self.bloom.mip_extents[dst],
-            &self.bloom.pipeline_downsample,
-            self.bloom.input_sets[f][dst],
-        );
-        Ok(())
-    }
-
-    // Upsample: mip dst+1 -> mip dst, additively blended. Input set is `dst + 2`.
-    fn bloom_upsample(
-        &self,
-        cmd: &Self::Rec,
-        frame_idx: &Self::Args,
-        dst: usize,
-    ) -> RenderResult<()> {
-        let f = *frame_idx;
-        self.bloom_run_pass(
-            *cmd,
-            self.bloom.blend_pass.handle(),
-            self.bloom.blend_framebuffers[f][dst].handle(),
-            self.bloom.mip_extents[dst],
-            &self.bloom.pipeline_upsample,
-            self.bloom.input_sets[f][dst + 2],
-        );
-        Ok(())
-    }
+// What the composite samples as bloom for frame slot `frame`: the pool's
+// `bloom_top`. The pool always manages it; `fallback` only keeps the binding
+// valid should it not, and the composite skips the sample while bloom is off.
+pub(in crate::vulkan) fn composite_bloom_view(
+    pool: &TransientImagePool,
+    fallback: vk::ImageView,
+    frame: usize,
+) -> vk::ImageView {
+    pool.view_for("bloom_top", frame).unwrap_or(fallback)
 }
 
 impl VkContext {
-    // Encode the bloom prefilter, downsample, and additive upsample passes for
-    // frame slot `frame_idx` via the shared `gfx::fullscreen` driver. On return
-    // `bloom.mips[frame_idx][0]` holds the accumulated bloom the composite pass
-    // samples. Called only when `post_process.bloom_intensity > 0`.
-    // Vulkan's sub-passes cannot fail (every framebuffer and set was wired at
-    // init), so the chain's Result is always Ok here.
-    pub(in crate::vulkan) fn encode_bloom(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
-        let _ = fullscreen::encode_bloom_chain(self, &cmd, frame_idx);
-    }
-
-    // One fullscreen-triangle bloom sub-pass: render into `framebuffer` (sized
-    // `ext`) sampling `input_set`, with `pipeline` bound inside `render_pass`.
-    fn bloom_run_pass(
+    // Encode the chain for frame slot `frame_idx` over this frame's scene color.
+    // On return the pool's `bloom_top` holds the glow the composite samples.
+    // Called only when `post_process.bloom_intensity > 0`.
+    pub(in crate::vulkan) fn encode_bloom(
         &self,
         cmd: vk::CommandBuffer,
-        render_pass: vk::RenderPass,
-        framebuffer: vk::Framebuffer,
-        ext: vk::Extent2D,
-        pipeline: &OwnedPipeline,
-        input_set: vk::DescriptorSet,
-    ) {
-        let device = &self.hw.device;
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(render_pass)
-            .framebuffer(framebuffer)
-            .render_area(vk::Rect2D::default().extent(ext));
-        let vp = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: ext.width as f32,
-            height: ext.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
+        frame_idx: usize,
+    ) -> RenderResult<()> {
+        let Some(bloom) = &self.bloom else {
+            return Ok(());
         };
-        let scissor = vk::Rect2D::default().extent(ext);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE);
-            device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp));
-            device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor));
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.bloom.pipeline_layout.handle(),
-                0,
-                std::slice::from_ref(&input_set),
-                &[],
-            );
-            device.cmd_draw(cmd, 3, 1, 0, 0);
-            device.cmd_end_render_pass(cmd);
+        let view = self
+            .targets
+            .transient_pool
+            .view_for("bloom_top", frame_idx)
+            .ok_or_else(|| RenderError::Other("bloom_top missing from transient pool".into()))?;
+        let extent = top_extent(post_extent(self.swapchain.extent));
+        let top = VkAttachment {
+            view,
+            extent: vk::Extent2D {
+                width: extent.width,
+                height: extent.height,
+            },
+            format: PixelFormat::Rgba16Float,
+            rest: AttachmentRest::Sampled,
+        };
+        bloom.encode(
+            &self.post_device(frame_idx),
+            &cmd,
+            BloomInputs {
+                scene: self.scene_color_view(frame_idx),
+                top,
+                top_ref: view,
+            },
+            &self.post_process,
+        )
+    }
+
+    // The scene the bloom prefilter and the composite read for frame slot
+    // `frame`: the upscaler's output, else the TAA output, else the pre-TAA
+    // scene.
+    pub(in crate::vulkan) fn scene_color_view(&self, frame: usize) -> vk::ImageView {
+        if let Some(up) = &self.upscale {
+            up.output_image().view
+        } else if let Some(taa) = &self.taa {
+            taa.output_view(frame)
+        } else {
+            self.post_scene_image(frame).view
         }
     }
 }

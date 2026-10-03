@@ -107,7 +107,7 @@ const REGISTRIES: &[BackendRegistry] = &[
             // resource at the barrier, which a local binding would hide.
             ("scene_pre_taa", "post_scene_target()"),
             ("scene_color", "taa.output()"),
-            ("bloom_top", "bloom.mips"),
+            ("bloom_top", "bloom_top.resource()"),
             ("gbuffer_normal_depth", "gb.normal_depth"),
             ("gbuffer_roughness", "gb.roughness"),
             ("gbuffer_velocity", "gb.velocity"),
@@ -140,10 +140,10 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     // The translucent pass's refraction snapshot, on whichever scene the graph
     // handed it.
     ("directx", "transparent.rs", "post_scene_target()"),
-    // The bloom chain: the graph drives `bloom_top` (mip 0) across the node, and
-    // these order the octaves inside it -- including mip 0's own borrow, which
-    // the downsample samples between the prefilter and the final upsample.
-    ("directx", "post/bloom.rs", "bloom.mips"),
+    // The bloom chain: the graph drives `bloom_top` across the node, and the
+    // downsample chain samples it between the prefilter and the last upsample,
+    // so the node borrows it for that stretch.
+    ("directx", "post/bloom.rs", "bloom_top.resource()"),
 ];
 
 // Source with line comments removed, so a field named in prose is not a hit.

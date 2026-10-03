@@ -1067,8 +1067,8 @@ pub(super) fn write_hdr_srv(
 
 // Single-sample color render targets
 //
-// Used by the TAA velocity + history images and the SSAO G-buffer / occlusion
-// targets. The bloom mip chain is its own family (see post/bloom.rs).
+// Used by the transparent pass's layers and the RT reflection output; the
+// shared post passes create theirs through `post/post_device.rs`.
 
 // Create a single-sample color render target usable as both a render target
 // and a sampled texture. Created in the PIXEL_SHADER_RESOURCE state so the

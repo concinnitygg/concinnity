@@ -12,7 +12,7 @@
 //!   effects.rs       upscaler, screen-space passes, TAA wiring, world effects.
 //!   cull/            bindless pass, compute cull, Hi-Z, GPU-driven shadow, G-buffer.
 //!   ray_tracing.rs   RT acceleration structure, reflections, reflection composite.
-//!   bloom.rs         bloom passes, pipelines, mip chain and input sets.
+//!   bloom.rs         the shared bloom chain.
 //!   composite.rs     composite pass, pipeline and input sets.
 //!   text.rs          text atlases, pipeline and atlas sets.
 
@@ -67,7 +67,6 @@ struct Features {
     taa_enabled: bool,
     msaa_samples: vk::SampleCountFlags,
     post_process: PostProcessParams,
-    bloom_on: bool,
     rt_wanted: bool,
     gbuffer_enabled: bool,
 }
@@ -99,7 +98,6 @@ impl Features {
             taa_enabled,
             msaa_samples,
             post_process,
-            bloom_on: post_process.bloom_intensity > 0.0,
             rt_wanted,
             // The unified pre-pass exists when any screen-space consumer needs
             // it. Derived once: the transient pool gate and the feature gate
@@ -279,16 +277,17 @@ impl VkContext {
                 descriptors: &descriptors,
                 cull: &cull,
                 post: &post,
+                post_support: &screen.post,
                 rt_wanted: features.rt_wanted,
             },
         )?;
         let bloom = bloom::build_bloom(
             &gpu,
             bloom::BloomInputs {
-                targets: &targets,
                 extent: swapchain.extent,
-                sampler: &screen.post.sampler,
-                reflection_composite: rt.composite.as_ref(),
+                post: &screen.post,
+                scene: &scene,
+                descriptors: &descriptors,
             },
         )?;
         let composite = composite::build_composite(
@@ -296,7 +295,6 @@ impl VkContext {
             composite::CompositeInputs {
                 swapchain: &swapchain,
                 descriptors: &descriptors,
-                bloom: &bloom,
                 scene: &scene,
                 targets: &targets,
                 sampler: &screen.post.sampler,
@@ -312,7 +310,6 @@ impl VkContext {
                 scene: &scene,
                 descriptors: &descriptors,
                 composite: &composite,
-                bloom: &bloom,
                 screen: &screen,
                 upscale: upscale.as_deref(),
             },
@@ -345,7 +342,7 @@ impl VkContext {
             cull,
             light_cull,
             text,
-            bloom,
+            bloom: Some(bloom),
             post_process: features.post_process,
             taa,
             post: screen.post,

@@ -36,8 +36,7 @@ use super::fog::FogState;
 use super::line::LineState;
 use super::particle::ParticleState;
 use super::post::{
-    BloomPipelines, BloomTargets, GBufferState, SsaoState, SsgiState, SsrState, TaaState,
-    UpscaleState,
+    GBufferState, MtlBloomPass, SsaoState, SsgiState, SsrState, TaaState, UpscaleState,
 };
 use super::raytrace::RtState;
 use super::resources::skinning::SkinnedState;
@@ -464,12 +463,13 @@ pub(super) struct MtlTargets {
     // these, and the post-process pass samples `hdr_resolve` to write
     // the tonemapped + FXAA-filtered output into the drawable.
     pub hdr: HdrTargets,
-    // Bloom mip chain (prefilter/downsample/upsample targets). Re-created
-    // alongside `hdr` whenever the drawable size changes.
-    pub bloom: BloomTargets,
+    // The drawable (output) size the bloom chain and the pool's half-output
+    // `bloom_top` were built for. Bloom follows it rather than the render
+    // resolution, so the glow stays on the panel's pixel grid under upscaling.
+    pub output: (u32, u32),
     // Pool backing the render graph's transient textures
-    // (`gfx::render_graph::alias`). Owns `bloom_top` (which `bloom` borrows as
-    // mip 0) and, when SSAO is on, `ao_output`; their disjoint lifetimes put
+    // (`gfx::render_graph::alias`). Owns `bloom_top` (the bloom chain's top
+    // octave) and, when SSAO is on, `ao_output`; their disjoint lifetimes put
     // them on one aliased `MTLHeap` slot. Rebuilt on resize. See
     // [`TransientTexturePool`].
     pub transient_pool: TransientTexturePool,
@@ -622,10 +622,10 @@ pub(crate) struct MtlContext {
     pub(super) targets: MtlTargets,
     // Composite pass. See [`CompositeState`].
     pub(super) composite: CompositeState,
-    // Prefilter / downsample / upsample pipelines for the bloom chain. None
-    // for a world with no 3D scene content: the graph never inserts the Bloom
-    // pass, and the composite's unconditional top-mip bind stays 1x1 black.
-    pub(super) bloom_pipelines: Option<BloomPipelines>,
+    // The bloom chain. None for a world with no 3D scene content: the graph
+    // never inserts the Bloom pass, and the composite's unconditional bind of
+    // the pool's `bloom_top` reads it unwritten.
+    pub(super) bloom: Option<MtlBloomPass>,
     // Post-process tunables (bloom intensity / threshold / knee). Pushed to
     // the bloom prefilter and composite fragment shaders. `bloom_intensity`
     // of 0 skips the bloom passes entirely.

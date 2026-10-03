@@ -1,32 +1,22 @@
-//! What order the two multi-draw post passes encode their sub-passes in, shared
-//! by every backend.
+//! What order the composite -> text overlay pass encodes its sub-passes in,
+//! shared by every backend, plus the text-geometry helpers it uploads through.
 //!
-//! The bloom prefilter -> downsample -> upsample chain and the composite ->
-//! text overlay pass are structurally identical on every backend, so each one's
-//! loop lives here once and a backend implements the hooks that bind + draw one
-//! sub-pass in its own command stream. All three backends implement both.
+//! The pass is structurally identical on every backend, so its loop lives here
+//! once and a backend implements the hooks that bind + draw one sub-pass in its
+//! own command stream.
 //!
 //! This shares orchestration only: every resource, layout and bind stays per
-//! backend, so a pass written against it is still written three times. The
-//! deeper seam beside it, `render::post`, shares the whole pass instead
-//! (pipeline, target, and one fullscreen draw over slot-indexed binds), so a
-//! pass written against that one is written once. A new post pass belongs
-//! there.
+//! backend. The deeper seam beside it, `render::post`, shares the whole pass
+//! instead (pipeline, target, and one fullscreen draw over slot-indexed binds),
+//! so a pass written against that one is written once. A new post pass belongs
+//! there. The composite stays here because it is not a fullscreen post draw: it
+//! writes the swapchain image and draws per-label geometry under its own
+//! scissor.
 //!
-//! What is left here is the two passes that are not a single draw. Converging
-//! them is open work, and neither is close: the composite writes the swapchain
-//! image and draws per-label geometry under its own scissor, and bloom's chain
-//! is a run of mips the render graph owns, none of which that seam models
-//! today.
-//!
-//! Two associated types absorb the only real divergence, so the traits name no
+//! Two associated types absorb the only real divergence, so the trait names no
 //! backend types: `Rec` hides the per-backend command recorder, and `Args`
-//! carries the per-invocation binding context (DirectX passes the scene-color
-//! SRV its prefilter samples; Vulkan threads the frame-in-flight index that
-//! selects its per-frame framebuffers + descriptor sets; Metal, which binds per
-//! sub-pass encoder, carries what it needs on the encoder value itself and
-//! passes `()`). Everything else each impl reads from `&self`, consistent with
-//! the read-only parallel-encode contract.
+//! carries the per-invocation binding context. Everything else each impl reads
+//! from `&self`, consistent with the read-only parallel-encode contract.
 
 use crate::gfx::render_types::TextDrawCall;
 use crate::math::{ceil, floor};
@@ -96,61 +86,6 @@ pub fn text_upload_bytes(text_calls: &[TextDrawCall], align: u64) -> u64 {
             align_up(v, align) + align_up(i, align)
         })
         .sum()
-}
-
-/// Per-backend hooks the shared bloom driver encodes through.
-pub trait BloomEncoder {
-    /// Per-backend command recorder (DX `ID3D12GraphicsCommandList`, VK
-    /// `vk::CommandBuffer`, Metal the command buffer each sub-pass opens its own
-    /// render encoder on).
-    type Rec: ?Sized;
-    /// Per-invocation binding context (DX scene-color SRV handle, VK frame index).
-    type Args;
-
-    /// Number of bloom mips; zero means bloom is off and the driver no-ops.
-    fn bloom_mip_count(&self) -> usize;
-    /// One-time per-encode preamble, run once before the sub-passes and on the
-    /// same recorder: state every sub-pass shares belongs here, not in the
-    /// per-mip hooks (DX root signature / heap / IA state and the post-process
-    /// root constants; VK the post-process push constants). Metal binds per
-    /// sub-pass encoder, so it has nothing to do here.
-    fn begin_bloom(&self, rec: &Self::Rec, args: &Self::Args) -> RenderResult<()>;
-    /// Prefilter: scene color -> mip 0 (soft-knee threshold + Karis average).
-    fn bloom_prefilter(&self, rec: &Self::Rec, args: &Self::Args) -> RenderResult<()>;
-    /// Downsample: mip `dst - 1` -> mip `dst`.
-    fn bloom_downsample(&self, rec: &Self::Rec, args: &Self::Args, dst: usize) -> RenderResult<()>;
-    /// Upsample: mip `dst + 1` -> mip `dst`, additively blended.
-    fn bloom_upsample(&self, rec: &Self::Rec, args: &Self::Args, dst: usize) -> RenderResult<()>;
-}
-
-/// The bloom chain orchestration, previously hand-duplicated in each backend's
-/// `encode_bloom`. On return, mip 0 holds the accumulated glow the composite pass
-/// samples.
-///
-/// A sub-pass reports failure where opening its own encoder can fail (Metal),
-/// which abandons the chain: the mips below the failure hold no glow, and the
-/// caller fails the frame rather than compositing a half-built chain.
-pub fn encode_bloom_chain<E: BloomEncoder>(
-    enc: &E,
-    rec: &E::Rec,
-    args: E::Args,
-) -> RenderResult<()> {
-    let n = enc.bloom_mip_count();
-    if n == 0 {
-        return Ok(());
-    }
-    enc.begin_bloom(rec, &args)?;
-    // Prefilter: scene -> mip 0.
-    enc.bloom_prefilter(rec, &args)?;
-    // Downsample chain: mip i-1 -> mip i.
-    for dst in 1..n {
-        enc.bloom_downsample(rec, &args, dst)?;
-    }
-    // Upsample chain: mip i+1 -> mip i, walking back down to mip 0.
-    for dst in (0..n - 1).rev() {
-        enc.bloom_upsample(rec, &args, dst)?;
-    }
-    Ok(())
 }
 
 /// The text-overlay state one draw call would set that the previous call in the
@@ -242,7 +177,7 @@ pub trait CompositeEncoder {
         idx: usize,
         call: &TextDrawCall,
         cache: &mut TextBindCache,
-    ) -> crate::render::error::RenderResult<()>;
+    ) -> RenderResult<()>;
     /// End the pass: DX transitions the back-buffer back to PRESENT; VK ends the
     /// render pass. Runs however the chain leaves, a failed text draw included,
     /// so no backend is left with a pass or a resource state half-open. Nothing
@@ -263,7 +198,7 @@ pub fn encode_composite_chain<E: CompositeEncoder>(
     rec: &E::Rec,
     args: &E::Args,
     text_calls: &[TextDrawCall],
-) -> crate::render::error::RenderResult<()> {
+) -> RenderResult<()> {
     enc.begin_composite(rec, args);
     enc.composite_draw(rec, args);
     let mut result = Ok(());
@@ -290,7 +225,7 @@ mod tests {
 
     use crate::render::error::RenderError;
     use alloc::format;
-    use alloc::string::{String, ToString};
+    use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
     #[test]
@@ -443,101 +378,6 @@ mod tests {
         }
     }
 
-    // A mock bloom encoder recording each sub-pass in call order. The trait's
-    // associated types name no backend types, so both are `()`. `fail_at` is the
-    // log entry whose sub-pass reports failure, for the abandon-the-chain test.
-    struct MockBloom {
-        mips: usize,
-        log: RefCell<Vec<String>>,
-        fail_at: Option<&'static str>,
-    }
-
-    impl MockBloom {
-        fn new(mips: usize) -> Self {
-            Self {
-                mips,
-                log: RefCell::new(Vec::new()),
-                fail_at: None,
-            }
-        }
-
-        // Record one sub-pass, reporting failure where the test asked for it.
-        fn step(&self, entry: String) -> RenderResult<()> {
-            let failed = self.fail_at == Some(entry.as_str());
-            self.log.borrow_mut().push(entry);
-            if failed {
-                return Err(RenderError::Other("sub-pass failed".to_string()));
-            }
-            Ok(())
-        }
-    }
-
-    impl BloomEncoder for MockBloom {
-        type Rec = ();
-        type Args = ();
-
-        fn bloom_mip_count(&self) -> usize {
-            self.mips
-        }
-        fn begin_bloom(&self, _rec: &(), _args: &()) -> RenderResult<()> {
-            self.step("begin".to_string())
-        }
-        fn bloom_prefilter(&self, _rec: &(), _args: &()) -> RenderResult<()> {
-            self.step("prefilter".to_string())
-        }
-        fn bloom_downsample(&self, _rec: &(), _args: &(), dst: usize) -> RenderResult<()> {
-            self.step(format!("down{dst}"))
-        }
-        fn bloom_upsample(&self, _rec: &(), _args: &(), dst: usize) -> RenderResult<()> {
-            self.step(format!("up{dst}"))
-        }
-    }
-
-    #[test]
-    fn bloom_chain_encodes_prefilter_downsample_upsample_in_order() {
-        // 3 mips: prefilter, then the downsample chain 1..3, then the upsample
-        // chain walking back down (1, 0).
-        let enc = MockBloom::new(3);
-        assert!(encode_bloom_chain(&enc, &(), ()).is_ok());
-        assert_eq!(
-            *enc.log.borrow(),
-            ["begin", "prefilter", "down1", "down2", "up1", "up0"]
-        );
-    }
-
-    #[test]
-    fn bloom_chain_begins_once_whatever_the_mip_count() {
-        // Backends push the shared post-process constants in `begin_bloom` and
-        // rely on them surviving every sub-pass, so the preamble must run
-        // exactly once per chain, ahead of the first draw.
-        for mips in 1..8 {
-            let enc = MockBloom::new(mips);
-            assert!(encode_bloom_chain(&enc, &(), ()).is_ok());
-            let log = enc.log.borrow();
-            assert_eq!(log.iter().filter(|e| *e == "begin").count(), 1);
-            assert_eq!(log[0], "begin");
-        }
-    }
-
-    #[test]
-    fn bloom_chain_with_zero_mips_is_a_noop() {
-        // Bloom off: the driver returns before touching the encoder at all.
-        let enc = MockBloom::new(0);
-        assert!(encode_bloom_chain(&enc, &(), ()).is_ok());
-        assert!(enc.log.borrow().is_empty());
-    }
-
-    #[test]
-    fn a_failed_sub_pass_abandons_the_rest_of_the_bloom_chain() {
-        // A backend that opens an encoder per sub-pass can fail mid-chain. The
-        // mips past the failure are left unwritten rather than half-built, and
-        // the caller sees the error.
-        let mut enc = MockBloom::new(3);
-        enc.fail_at = Some("down1");
-        assert!(encode_bloom_chain(&enc, &(), ()).is_err());
-        assert_eq!(*enc.log.borrow(), ["begin", "prefilter", "down1"]);
-    }
-
     // A mock composite encoder. `text_ready` is the `begin_text` return; when
     // `fail_at` matches a text-draw index that draw returns an error. `binds`
     // records what the cache answered per call, so a test can see which calls
@@ -583,7 +423,7 @@ mod tests {
             idx: usize,
             call: &TextDrawCall,
             cache: &mut TextBindCache,
-        ) -> crate::render::error::RenderResult<()> {
+        ) -> RenderResult<()> {
             let mut n = self.text_seen.borrow_mut();
             // The driver's index and the encoder's own call count must agree, so
             // a backend addressing pre-uploaded geometry by position can trust it.

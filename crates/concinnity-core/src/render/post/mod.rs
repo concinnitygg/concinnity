@@ -19,6 +19,9 @@
 //! clamped settings, or `None` when the effect is off, and the settings build
 //! the per-frame uniform once the camera is known.
 
+/// Bloom: the prefilter and the octave chain, written once.
+pub mod bloom;
+
 /// The backend seam: pipelines, persistent targets, and one fullscreen draw.
 pub mod device;
 
@@ -33,7 +36,11 @@ pub mod rt_reflections;
 /// declares.
 pub mod program;
 
-/// Screen-space ambient occlusion settings, resolved from the authored config.
+/// The reflection composite: the roughness blur and the blend over the scene,
+/// written once.
+pub mod reflection_composite;
+
+/// Screen-space ambient occlusion: the kernel and blur, written once.
 pub mod ssao;
 
 /// Screen-space global illumination: the gather and composite, written once.

@@ -1,39 +1,27 @@
-//! SSAO (GTAO) for the D3D12 backend. Owns the GTAO horizon-search kernel
-//! pipeline, the depth-aware blur pipeline, and the `encode_ssao` per-frame
-//! encoder. The view normal + linear depth it samples come from the unified
-//! G-buffer pre-pass (post/gbuffer.rs).
-//!
-//! The main pass samples `ssao.ao_srv_gpu` (the blurred occlusion) to modulate
-//! its ambient term; when SSAO is disabled the renderer binds the 1×1 white
-//! fallback (built once in init/effects.rs) so the multiplier is a pass-through
-//! 1.0. Mirrors src/metal/post/ssao.rs.
+//! DirectX's share of SSAO (GTAO): the settings, the white fallback the forward
+//! pass binds while it is off, and the view of the pool's `ao_output` the blur
+//! writes. The kernel and blur -- their pipelines, the raw occlusion between
+//! them and both draws -- are written once in
+//! `concinnity_core::render::post::ssao` and reach D3D12 through
+//! `DxPostDevice`. The view normal + linear depth they read come from the
+//! unified G-buffer pre-pass.
 
-use concinnity_core::gfx::render_types::SsaoParams;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::ssao;
-use windows::Win32::Foundation::RECT;
+use concinnity_core::render::post::device::PostExtent;
+use concinnity_core::render::post::ssao::settings::SsaoSettings;
+use concinnity_core::render::post::ssao::{OCCLUSION_FORMAT, SsaoInputs, SsaoPass, SsaoPipelines};
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::allocator::PooledTexture;
-use crate::directx::builtin_shaders;
-use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::context::{DxContext, dump_on_err};
-use crate::directx::descriptor_slot::DescriptorTables;
+use crate::directx::context::DxContext;
 use crate::directx::descriptor_slot::SrvSlot;
-use crate::directx::pso::{Blend, GraphicsPso};
-use crate::directx::root_constants::RootConstants;
-use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
-use crate::directx::texture::{
-    create_rt_target, transition_barrier, write_format_rtv, write_format_srv,
-};
+use crate::directx::post::post_device::{DxPostDevice, PooledTarget, PostPipeline, PostTarget};
 
 // SSAO (GTAO). `resources` is `Some` only when `PostProcessConfig.ssao` is set;
-// otherwise the pre-pass / kernel / blur are skipped and the main pass samples
-// the 1x1 `white` fallback (always present, so the main-pass root signature's AO
-// SRV slot always points at a valid descriptor) through `white_srv_gpu` for a
-// pass-through ambient term. SSAO always runs its own depth + normal pre-pass on
-// DirectX even when SSR is on (no shared-G-buffer shortcut here).
+// otherwise the kernel and blur are skipped and the main pass samples the 1x1
+// `white` fallback (always present, so the main-pass root signature's AO SRV
+// slot always points at a valid descriptor) through `white_srv_gpu` for a
+// pass-through ambient term.
 pub(in crate::directx) struct SsaoState {
     pub resources: Option<SsaoResources>,
     #[expect(
@@ -44,253 +32,58 @@ pub(in crate::directx) struct SsaoState {
     pub white_srv_gpu: SrvSlot,
 }
 
-// Single-channel occlusion target format. 1.0 = unoccluded; the main pass
-// multiplies the ambient term by this value. Both the GTAO kernel and the
-// depth-aware blur target this format.
-pub(crate) const SSAO_OCCLUSION_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8_UNORM;
-
-// Shader compilation
-
-// Compiled bytecode for every SSAO shader stage.
-struct SsaoShaders {
-    fullscreen_vs: Vec<u8>,
-    kernel_ps: Vec<u8>,
-    blur_ps: Vec<u8>,
-}
-
-// Compile every SSAO shader stage. Both the kernel + blur are fullscreen
-// passes that read the unified G-buffer; neither has a geometry input.
-fn compile_ssao_shaders(hot_reload: bool) -> RenderResult<SsaoShaders> {
-    Ok(SsaoShaders {
-        fullscreen_vs: builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?,
-        kernel_ps: builtin_shaders::SSAO_KERNEL.compile(hot_reload)?,
-        blur_ps: builtin_shaders::SSAO_BLUR.compile(hot_reload)?,
-    })
-}
-
-// Root signatures + PSOs
-
-// Root signature for the GTAO kernel fullscreen pass: four 32-bit root
-// constants at b0 (SsaoParams: radius, intensity, tan_half_fov_y, aspect),
-// a 1-SRV descriptor table at t0 (the pre-pass G-buffer), and a static
-// linear-clamp sampler at s0.
-fn create_ssao_kernel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    RootSig::new()
-        .constants::<SsaoParams>(0, Visibility::Pixel)
-        .srv_table(0, 1, Visibility::Pixel)
-        .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
-        .build(device, "ssao kernel root sig")
-}
-
-// Root signature for the depth-aware blur pass: two 1-SRV descriptor tables
-// (raw occlusion at t0, G-buffer at t1) and static linear-clamp samplers at
-// s0 / s1 -- one per source, which is how the single source declares them.
-fn create_ssao_blur_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    RootSig::new()
-        .srv_table(0, 1, Visibility::Pixel)
-        .srv_table(1, 1, Visibility::Pixel)
-        .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
-        .static_sampler(SamplerState::LinearClamp, 1, Visibility::Pixel)
-        .build(device, "ssao blur root sig")
-}
-
-// The kernel and blur PSOs over their root signatures.
-fn create_ssao_psos(
-    device: &ID3D12Device,
-    info_queue: Option<&ID3D12InfoQueue>,
-    kernel_root_sig: &ID3D12RootSignature,
-    blur_root_sig: &ID3D12RootSignature,
-    shaders: &SsaoShaders,
-) -> RenderResult<RebuiltSsaoPipelines> {
-    let pso = |root_sig: &ID3D12RootSignature, ps: &[u8], label: &str| {
-        dump_on_err(
-            info_queue,
-            GraphicsPso::fullscreen(
-                root_sig,
-                &shaders.fullscreen_vs,
-                ps,
-                SSAO_OCCLUSION_FORMAT,
-                Blend::Opaque,
-            )
-            .build(device, label),
-        )
-    };
-    Ok(RebuiltSsaoPipelines {
-        kernel_pso: pso(kernel_root_sig, &shaders.kernel_ps, "ssao kernel")?,
-        blur_pso: pso(blur_root_sig, &shaders.blur_ps, "ssao blur")?,
-    })
-}
-
-// Resources
-
 // SSAO resources held by `DxContext` when `PostProcessConfig.ssao` is on.
-// Drops cleanly with the context: all D3D12 objects are COM-refcounted.
 pub(in crate::directx) struct SsaoResources {
     // Resolved authored tunables; turned into a per-frame `SsaoParams` push.
-    pub(in crate::directx) settings: ssao::SsaoSettings,
-
-    // Raw GTAO kernel output (R8) and the blurred final occlusion (R8) the
-    // main pass samples.
-    pub(in crate::directx) ao_raw: ID3D12Resource,
-    pub(in crate::directx) ao_raw_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub(in crate::directx) ao_raw_srv_gpu: SrvSlot,
-    // The blurred `ao_output` the main pass samples is the graph's transient and
-    // is owned by `DxTargets::transient_pool` (a placed resource); SSAO holds
-    // only its RTV (blur writes it) + SRV (main samples it), written from the
-    // pooled resource at build / resize time.
-    pub(in crate::directx) ao_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub(in crate::directx) ao_srv_gpu: SrvSlot,
-
-    // GTAO horizon-search kernel + depth-aware blur (fullscreen triangle).
-    pub(in crate::directx) kernel_root_sig: ID3D12RootSignature,
-    pub(in crate::directx) kernel_pso: ID3D12PipelineState,
-    pub(in crate::directx) blur_root_sig: ID3D12RootSignature,
-    pub(in crate::directx) blur_pso: ID3D12PipelineState,
-}
-
-// GPU device handles the SSAO builder needs: the device and the optional debug
-// info queue. They always travel together through `new`.
-#[derive(Clone, Copy)]
-pub(in crate::directx) struct SsaoDeviceCtx<'a> {
-    pub device: &'a ID3D12Device,
-    pub info_queue: Option<&'a ID3D12InfoQueue>,
-}
-
-// Descriptor handles for the SSAO raw + blurred occlusion targets. Each target
-// has a CPU RTV plus a (CPU, GPU) SRV pair reserved in the parent heaps.
-#[derive(Clone, Copy)]
-pub(in crate::directx) struct SsaoDescriptorHandles {
-    pub ao_raw_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub ao_raw_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
-    pub ao_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub ao_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
+    pub(in crate::directx) settings: SsaoSettings,
+    pass: SsaoPass<PostPipeline, PostTarget>,
+    // The pool's `ao_output`, which the blur writes and the main pass samples.
+    output: PooledTarget,
 }
 
 impl SsaoResources {
-    // Build all SSAO resources. Called from `DxContext::new` only when the
-    // world's `PostProcessConfig` enables SSAO. `ao_raw_*` / `ao_*` reserve
-    // heap slots in the SRV + RTV heaps the caller laid out at init; the view
-    // normal + depth the kernel samples come from the unified G-buffer pre-pass.
+    // Build the kernel and blur at render resolution `extent`, over the pool's
+    // `ao_output`.
     pub(in crate::directx) fn new(
-        ctx: SsaoDeviceCtx,
-        width: u32,
-        height: u32,
-        settings: ssao::SsaoSettings,
-        handles: SsaoDescriptorHandles,
-        // The pooled `ao_output` resource (placed in `DxTargets::transient_pool`);
-        // SSAO writes its RTV + SRV but does not own it.
-        ao_resource: &ID3D12Resource,
-        hot_reload: bool,
+        device: &DxPostDevice,
+        settings: SsaoSettings,
+        extent: PostExtent,
+        ao_output: &ID3D12Resource,
     ) -> RenderResult<Self> {
-        let SsaoDeviceCtx { device, info_queue } = ctx;
-        let SsaoDescriptorHandles {
-            ao_raw_rtv,
-            ao_raw_srv,
-            ao_rtv,
-            ao_srv,
-        } = handles;
-        // Raw occlusion is SSAO-internal (committed); the blurred `ao` is the
-        // pooled `ao_output`, so SSAO only writes its RTV + SRV.
-        let ao_raw = create_rt_target(device, width, height, SSAO_OCCLUSION_FORMAT)?;
-        write_format_rtv(device, &ao_raw, ao_raw_rtv, SSAO_OCCLUSION_FORMAT);
-        write_format_srv(device, &ao_raw, ao_raw_srv.0, SSAO_OCCLUSION_FORMAT);
-        write_format_rtv(device, ao_resource, ao_rtv, SSAO_OCCLUSION_FORMAT);
-        write_format_srv(device, ao_resource, ao_srv.0, SSAO_OCCLUSION_FORMAT);
-
-        // Pipelines.
-        let shaders = compile_ssao_shaders(hot_reload)?;
-        let kernel_root_sig = dump_on_err(info_queue, create_ssao_kernel_root_signature(device))?;
-        let blur_root_sig = dump_on_err(info_queue, create_ssao_blur_root_signature(device))?;
-        let RebuiltSsaoPipelines {
-            kernel_pso,
-            blur_pso,
-        } = create_ssao_psos(
-            device,
-            info_queue,
-            &kernel_root_sig,
-            &blur_root_sig,
-            &shaders,
-        )?;
-
         Ok(Self {
             settings,
-            ao_raw,
-            ao_raw_rtv,
-            ao_raw_srv_gpu: ao_raw_srv.1,
-            ao_rtv,
-            ao_srv_gpu: ao_srv.1,
-            kernel_root_sig,
-            kernel_pso,
-            blur_root_sig,
-            blur_pso,
+            pass: SsaoPass::new(device, extent)?,
+            output: device.pooled_target(ao_output, OCCLUSION_FORMAT, extent)?,
         })
     }
-}
 
-// Replacement SSAO PSOs returned by [`rebuild_ssao_pipelines`]. The caller
-// swaps them in atomically only if every build succeeded. Mirrors the safety
-// pattern used by Metal's shader hot-reload.
-pub(in crate::directx) struct RebuiltSsaoPipelines {
-    pub kernel_pso: ID3D12PipelineState,
-    pub blur_pso: ID3D12PipelineState,
-}
-
-impl SsaoResources {
-    // Rebuild the raw + blurred occlusion targets at a new resolution. The
-    // descriptor *slots* stay where they were; only the resources backing them
-    // change.
-    pub(in crate::directx) fn resize_to(
+    // Recreate the raw occlusion for a new render resolution and view the
+    // rebuilt pool's `ao_output`. The caller has already idled the device.
+    pub(in crate::directx) fn resize(
         &mut self,
-        device: &ID3D12Device,
-        width: u32,
-        height: u32,
-        srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
-        srv_gpu_base: SrvSlot,
-        // The rebuilt pooled `ao_output` resource; SSAO rewrites its RTV + SRV.
-        ao_resource: &ID3D12Resource,
+        device: &DxPostDevice,
+        extent: PostExtent,
+        ao_output: &ID3D12Resource,
     ) -> RenderResult<()> {
-        let srv_cpu = |gpu: SrvSlot| gpu.cpu_in(srv_cpu_base, srv_gpu_base);
+        self.pass.resize(device, extent)?;
+        self.repoint_output(device, extent, ao_output)
+    }
 
-        self.ao_raw = create_rt_target(device, width, height, SSAO_OCCLUSION_FORMAT)?;
-        write_format_rtv(device, &self.ao_raw, self.ao_raw_rtv, SSAO_OCCLUSION_FORMAT);
-        write_format_srv(
-            device,
-            &self.ao_raw,
-            srv_cpu(self.ao_raw_srv_gpu),
-            SSAO_OCCLUSION_FORMAT,
-        );
-
-        write_format_rtv(device, ao_resource, self.ao_rtv, SSAO_OCCLUSION_FORMAT);
-        write_format_srv(
-            device,
-            ao_resource,
-            srv_cpu(self.ao_srv_gpu),
-            SSAO_OCCLUSION_FORMAT,
-        );
-
+    // View the pool's `ao_output` after a rebuild relocated it.
+    pub(in crate::directx) fn repoint_output(
+        &mut self,
+        device: &DxPostDevice,
+        extent: PostExtent,
+        ao_output: &ID3D12Resource,
+    ) -> RenderResult<()> {
+        self.output = device.pooled_target(ao_output, OCCLUSION_FORMAT, extent)?;
         Ok(())
     }
-}
 
-// Rebuild every SSAO PSO against fresh shader source. Reuses each PSO's
-// existing root signature, so descriptor-table layouts stay stable. Returns
-// the new PSOs for the caller to swap into the live `SsaoResources`.
-pub(in crate::directx) fn rebuild_ssao_pipelines(
-    device: &ID3D12Device,
-    ssao: &SsaoResources,
-    hot_reload: bool,
-    info_queue: Option<&ID3D12InfoQueue>,
-) -> RenderResult<RebuiltSsaoPipelines> {
-    create_ssao_psos(
-        device,
-        info_queue,
-        &ssao.kernel_root_sig,
-        &ssao.blur_root_sig,
-        &compile_ssao_shaders(hot_reload)?,
-    )
+    pub(in crate::directx) fn swap_pipelines(&mut self, pipelines: SsaoPipelines<PostPipeline>) {
+        self.pass.swap_pipelines(pipelines);
+    }
 }
-
-// Encoder
 
 impl DxContext {
     // GPU descriptor handle of the AO SRV the main pass should sample.
@@ -298,116 +91,33 @@ impl DxContext {
     // white fallback so the ambient multiplier is a constant 1.0.
     pub(in crate::directx) fn ssao_ao_srv_gpu(&self) -> SrvSlot {
         match &self.ssao.resources {
-            Some(s) => s.ao_srv_gpu,
+            Some(s) => s.output.srv_gpu(),
             None => self.ssao.white_srv_gpu,
         }
     }
 
-    // Encode the SSAO depth + normal pre-pass, the GTAO horizon-search
-    // kernel, and the depth-aware blur. Called from `encode_main_pass` after
-    // the main-pass RT/viewport setup so the main fragment shader can sample
-    // the blurred occlusion. No-op when SSAO is disabled.
+    // Encode the GTAO kernel and the depth-aware blur over the unified
+    // G-buffer pre-pass into `ao_output`, which the graph has put in
+    // RENDER_TARGET for this node and moves back for the main pass. No-op when
+    // SSAO is disabled or the G-buffer is absent.
     pub(in crate::directx) fn encode_ssao(
         &self,
         cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
         fov_y_radians: f32,
         aspect: f32,
-    ) {
-        let ssao = match &self.ssao.resources {
-            Some(s) => s,
-            None => return,
+    ) -> RenderResult<()> {
+        let (Some(ssao), Some(gbuffer)) = (&self.ssao.resources, &self.gbuffer) else {
+            return Ok(());
         };
-
-        // SSAO reads the unified G-buffer pre-pass (view normal + linear
-        // depth) and runs no geometry redraw of its own; skip if the G-buffer
-        // is absent.
-        let gbuffer_srv = match &self.gbuffer {
-            Some(g) => g.normal_depth_srv_gpu,
-            None => return,
-        };
-        let params = ssao.settings.params(fov_y_radians, aspect);
-        let w = self.targets.extent.render_width;
-        let h = self.targets.extent.render_height;
-
-        // The kernel + blur are fullscreen passes; restore the viewport /
-        // scissor / primitive topology the (now removed) geometry pre-pass used
-        // to leave bound. This pass records into its own command list, where the
-        // topology starts UNDEFINED, so it must be set here for the draws below.
-        // The descriptor heaps are list state too, so both are bound once here and
-        // never rebound between the two draws.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: w as f32,
-                Height: h as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            let scissor = RECT {
-                left: 0,
-                top: 0,
-                right: w as i32,
-                bottom: h as i32,
-            };
-            cmd.RSSetScissorRects(&[scissor]);
-            cmd.IASetPrimitiveTopology(
-                windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-            );
-            cmd.SetDescriptorHeaps(&[
-                Some(self.descriptors.srv_heap.clone()),
-                Some(self.descriptors.sampler_heap.clone()),
-            ]);
-        }
-
-        // Kernel: GTAO horizon search over the G-buffer → raw occlusion.
-        let to_rt = transition_barrier(
-            &ssao.ao_raw,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-        );
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ResourceBarrier(&[to_rt]);
-            cmd.OMSetRenderTargets(1, Some(&ssao.ao_raw_rtv), false, None);
-            cmd.SetPipelineState(&ssao.kernel_pso);
-            cmd.SetGraphicsRootSignature(&ssao.kernel_root_sig);
-            cmd.set_graphics_root_constants(0, &params);
-            cmd.set_graphics_srv_table(1, gbuffer_srv);
-            cmd.IASetVertexBuffers(0, None);
-            cmd.IASetIndexBuffer(None);
-            cmd.DrawInstanced(3, 1, 0, 0);
-        }
-        let raw_to_psr = transition_barrier(
-            &ssao.ao_raw,
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe { cmd.ResourceBarrier(&[raw_to_psr]) };
-
-        // Blur: depth-aware smoothing of raw occlusion → final AO. The blurred
-        // `ao` is the graph's `ao_output` resource: its transition into
-        // RENDER_TARGET before this draw and back to PIXEL_SHADER_RESOURCE for
-        // the main pass is graph-driven (the executor emits ao_output's
-        // `barriers_before` around the SsaoBlur and Main passes), so no inline
-        // barrier on `ao` is issued here. `ao_raw` stays inline above.
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.OMSetRenderTargets(1, Some(&ssao.ao_rtv), false, None);
-            cmd.SetPipelineState(&ssao.blur_pso);
-            cmd.SetGraphicsRootSignature(&ssao.blur_root_sig);
-            cmd.set_graphics_srv_table(0, ssao.ao_raw_srv_gpu);
-            cmd.set_graphics_srv_table(1, gbuffer_srv);
-            cmd.IASetVertexBuffers(0, None);
-            cmd.IASetIndexBuffer(None);
-            cmd.DrawInstanced(3, 1, 0, 0);
-        }
+        ssao.pass.encode(
+            &self.post_device(frame_idx),
+            cmd,
+            SsaoInputs {
+                normal_depth: gbuffer.normal_depth_srv_gpu,
+                output: ssao.output.attachment(),
+            },
+            &ssao.settings.params(fov_y_radians, aspect),
+        )
     }
 }

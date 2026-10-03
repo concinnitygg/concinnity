@@ -23,7 +23,7 @@ use crate::vulkan::builtin_shaders::{self, CompileProgram};
 use crate::vulkan::error::map_vk_result;
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice};
 use crate::vulkan::pipeline_desc::{Blend, GraphicsPipelineDesc};
-use crate::vulkan::post::pass_cache::PostPassCache;
+use crate::vulkan::post::pass_cache::{AttachmentRest, PostPassCache};
 use crate::vulkan::post::set_arena::PostSetArena;
 use crate::vulkan::set_writes::SetWrites;
 use crate::vulkan::texture::{
@@ -59,6 +59,12 @@ impl PostTarget {
     /// The sampled view of this target, for a consumer that binds it directly.
     pub(in crate::vulkan) fn view(&self) -> vk::ImageView {
         self.image.view
+    }
+
+    /// The image and its sampled view, for a consumer that copies from it or
+    /// barriers it itself.
+    pub(in crate::vulkan) fn image(&self) -> &GpuImage {
+        &self.image
     }
 
     // Mip `level` alone: its own view when the target has several, else the
@@ -101,14 +107,16 @@ fn level_range_view(
 }
 
 // A draw's color target: the view a framebuffer binds, the extent it is sized
-// at, and the format its render pass is built for. A created target names
-// itself this way through `target_attachment`; an image another subsystem owns
-// (the HDR scene) is described directly.
+// at, the format its render pass is built for, and where its layout rests. A
+// created target names itself this way through `target_attachment`; an image
+// another subsystem owns (the HDR scene, a pooled transient) is described
+// directly.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct VkAttachment {
     pub view: vk::ImageView,
     pub extent: vk::Extent2D,
     pub format: PixelFormat,
+    pub rest: AttachmentRest,
 }
 
 // The forward global set, as a probe-reading program binds it for the probe
@@ -218,9 +226,12 @@ impl PostPassDevice for VkPostDevice<'_> {
         // A pipeline is created against a render pass but is compatible with any
         // pass of the same attachment shape, so the cached one for this format
         // serves both the build and every draw.
-        let render_pass = self
-            .cache
-            .render_pass(self.device, format, PostLoadOp::DontCare)?;
+        let render_pass = self.cache.render_pass(
+            self.device,
+            format,
+            PostLoadOp::DontCare,
+            AttachmentRest::Sampled,
+        )?;
         // Every fullscreen post pass has the same pipeline shape, which is why it
         // is built once here instead of once per effect.
         let (vert, frag) = compile(program, self.hot_reload)?;
@@ -330,6 +341,7 @@ impl PostPassDevice for VkPostDevice<'_> {
                 .unwrap_or(target.image.view),
             extent: target.extent,
             format: target.format,
+            rest: AttachmentRest::Sampled,
         }
     }
 
@@ -354,6 +366,7 @@ impl PostPassDevice for VkPostDevice<'_> {
                 height: extent.height,
             },
             format: target.format,
+            rest: AttachmentRest::Sampled,
         })
     }
 
@@ -373,9 +386,9 @@ impl PostPassDevice for VkPostDevice<'_> {
             })?),
         };
         let target = draw.target;
-        let render_pass = self
-            .cache
-            .render_pass(self.device, target.format, draw.load)?;
+        let render_pass =
+            self.cache
+                .render_pass(self.device, target.format, draw.load, target.rest)?;
         let framebuffer =
             self.cache
                 .framebuffer(self.device, render_pass, target.view, target.extent)?;
@@ -492,6 +505,7 @@ impl crate::vulkan::context::VkContext {
                 .view,
             extent: self.targets.render_extent,
             format: PixelFormat::Rgba16Float,
+            rest: AttachmentRest::Sampled,
         }
     }
 }

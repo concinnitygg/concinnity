@@ -19,8 +19,6 @@ use super::pipeline::{
     create_composite_pipeline, create_text_pipeline,
 };
 use super::pipeline_desc::compute_pipeline;
-use super::post::bloom::{compile_bloom_shaders, create_bloom_pipeline};
-use super::post::ssao::rebuild_ssao_pipelines;
 
 // Rebuild a feature's pipeline(s) into a temporary only when `$cond` says the
 // feature is live, propagating any compile/create error out of the enclosing
@@ -64,10 +62,9 @@ impl VkContext {
     // Covers every runtime-bundled pipeline whose source lives in
     // `vulkan/shaders/`: composite, text, bloom (prefilter / downsample /
     // upsample), bindless main (when live), GPU-cull compute, auto-exposure
-    // (build + average), projected-decal, volumetric-fog, SSAO (prepass
-    // static / instanced / skinned, kernel, blur), SSR (prepass static /
-    // instanced / skinned, resolve), and TAA (velocity static / instanced,
-    // resolve). The world-loaded main / shadow / instanced / skinned
+    // (build + average), projected-decal, volumetric-fog, SSAO (kernel,
+    // blur), SSR (resolve), the reflection composite (blur, composite), and
+    // TAA (resolve). The world-loaded main / shadow / instanced / skinned
     // pipelines remain out of scope; same split as DirectX. The caller
     // has already `device_wait_idle`'d so swapping pipelines out from
     // under in-flight command buffers is safe.
@@ -107,32 +104,11 @@ impl VkContext {
             )
         });
 
-        // Bloom (always live, 3 pipelines).
-        let bloom_shaders = compile_bloom_shaders(hr)?;
-        let bloom_prefilter = create_bloom_pipeline(
-            device,
-            self.bloom.write_pass.handle(),
-            self.bloom.pipeline_layout.handle(),
-            &bloom_shaders.vert,
-            &bloom_shaders.prefilter,
-            false,
-        )?;
-        let bloom_downsample = create_bloom_pipeline(
-            device,
-            self.bloom.write_pass.handle(),
-            self.bloom.pipeline_layout.handle(),
-            &bloom_shaders.vert,
-            &bloom_shaders.downsample,
-            false,
-        )?;
-        let bloom_upsample = create_bloom_pipeline(
-            device,
-            self.bloom.blend_pass.handle(),
-            self.bloom.pipeline_layout.handle(),
-            &bloom_shaders.vert,
-            &bloom_shaders.upsample,
-            true,
-        )?;
+        // Bloom (live from init to teardown, 3 pipelines).
+        let bloom_rebuilt = rebuild_if_live!(
+            self.bloom.is_some(),
+            concinnity_core::render::post::bloom::build_pipelines(&self.post_device(0))
+        );
 
         // Bucket 0 of the GPU-driven main pass, from the engine's freshly
         // compiled pair; a world default Shader's own pair is spliced into the
@@ -214,13 +190,12 @@ impl VkContext {
             })
             .transpose()?;
 
-        // SSAO (only when PostProcessConfig opted in). Rebuilds prepass
-        // static / instanced / skinned + kernel + blur in one shot.
-        let ssao_rebuilt = self
-            .ssao
-            .as_ref()
-            .map(|ssao| rebuild_ssao_pipelines(device, ssao, hr))
-            .transpose()?;
+        // SSAO (only when PostProcessConfig opted in). Rebuilds the kernel +
+        // blur.
+        let ssao_rebuilt = rebuild_if_live!(
+            self.ssao.is_some(),
+            concinnity_core::render::post::ssao::build_pipelines(&self.post_device(0))
+        );
 
         // SSR (only when PostProcessConfig opted in). Rebuilds the resolve.
         let ssr_rebuilt = rebuild_if_live!(
@@ -244,15 +219,12 @@ impl VkContext {
 
         // Reflection composite (only when a reflection path owns the scene image).
         // Rebuilds the roughness blur + composite pipelines.
-        let reflection_composite_rebuilt = self
-            .reflection_composite
-            .as_ref()
-            .map(|rc| {
-                crate::vulkan::post::reflection_composite::rebuild_reflection_composite_pipelines(
-                    device, rc, hr,
-                )
-            })
-            .transpose()?;
+        let reflection_composite_rebuilt = rebuild_if_live!(
+            self.reflection_composite.is_some(),
+            concinnity_core::render::post::reflection_composite::build_pipelines(
+                &self.post_device(0)
+            )
+        );
 
         // TAA (only when PostProcessConfig opted in). Rebuilds the resolve
         // pipeline; the velocity channel lives on the unified G-buffer pre-pass.
@@ -281,9 +253,9 @@ impl VkContext {
             self.text.pipeline = Some(new_pipeline);
         }
 
-        self.bloom.pipeline_prefilter = bloom_prefilter;
-        self.bloom.pipeline_downsample = bloom_downsample;
-        self.bloom.pipeline_upsample = bloom_upsample;
+        if let (Some(rebuilt), Some(bloom)) = (bloom_rebuilt, self.bloom.as_mut()) {
+            bloom.swap_pipelines(rebuilt);
+        }
 
         if let Some((new_pipeline, engine_pair)) = bindless_main_pipeline {
             self.cull.bindless_pipeline = Some(new_pipeline);

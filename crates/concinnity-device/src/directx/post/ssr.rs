@@ -11,14 +11,10 @@ use concinnity_core::render::post::device::{PostExtent, PostPassDevice};
 use concinnity_core::render::post::ssr::settings::SsrSettings;
 use concinnity_core::render::post::ssr::{SsrInputs, SsrPass, target_desc};
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::context::DxContext;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::post::post_device::{DxPostDevice, PostPipeline, PostTarget};
-
-// HDR-format reflection targets: the resolve's and the reflection composite's.
-pub(crate) const SSR_OUTPUT_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
 // The reflection target's graph label, carried into debug naming.
 const TARGET_LABEL: &str = "ssr_reflection";
@@ -108,7 +104,7 @@ impl DxContext {
             .as_ref()
             .filter(|_| self.reflection_resolve_active())
         {
-            Some(rc) => &rc.output,
+            Some(rc) => rc.output().resource(),
             None => self.hdr_scene_target(),
         }
     }
@@ -121,7 +117,7 @@ impl DxContext {
             .as_ref()
             .filter(|_| self.reflection_resolve_active())
         {
-            Some(rc) => rc.output_rtv,
+            Some(rc) => rc.output().rtv(),
             None => self.hdr_scene_rtv(),
         }
     }
@@ -141,7 +137,7 @@ impl DxContext {
         if let Some(rc) = self.reflection_composite.as_ref()
             && self.reflection_resolve_active()
         {
-            return rc.output_srv_gpu;
+            return rc.output().srv_gpu();
         }
         self.targets.hdr.srv_gpu
     }
@@ -207,6 +203,6 @@ impl DxContext {
             tracing::error!("SSR resolve: {e}");
             return;
         }
-        self.encode_reflection_composite(cmd, resolve.output.srv_gpu());
+        self.encode_reflection_composite(cmd, frame_idx, resolve.output.srv_gpu());
     }
 }

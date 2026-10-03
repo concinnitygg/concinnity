@@ -133,17 +133,16 @@ pub(super) fn build_targets(
     );
 
     // Transient pool: the graph-owned transient render targets. `bloom_top`
-    // (bloom mip 0) is always managed; `ao_output` is placed only when SSAO is
-    // on (else `resource_for` returns None and the main pass binding 6 falls
-    // back to `ssao_white`). Built before the bloom chain, SSAO and the
-    // G-buffer, which read their placed resources back by label.
+    // (the bloom chain's top octave) is always managed; `ao_output` is placed
+    // only when SSAO is on (else `resource_for` returns None and the main pass
+    // binding 6 falls back to `ssao_white`). Built before the bloom chain, SSAO
+    // and the G-buffer, which read their placed resources back by label.
     let transient_pool = TransientResourcePool::build(
         hw.alloc.device(),
         hw.alloc.queue(),
         &plan_pool_slots(
             PoolGates {
                 ssao: features.ssao_enabled,
-                bloom: true,
                 gbuffer: features.gbuffer_enabled,
             },
             (render_w, render_h),

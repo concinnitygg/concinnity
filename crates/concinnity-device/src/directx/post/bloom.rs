@@ -1,433 +1,118 @@
-//! Bloom post-process: prefilter + downsample chain + additive upsample chain.
-//! Owns the per-mip render targets, the three PSOs they share (all using the
-//! shared single-source fullscreen-triangle VS), the root signature, and the
-//! `encode_bloom` per-frame encoder.
-//!
-//! Mirrors src/metal/post/bloom.rs: same mip-count clamp (4..=6), same
-//! Karis 13-tap prefilter, same plain 13-tap downsample + 9-tap tent upsample.
+//! DirectX's share of bloom: the view of the pool's top octave the chain writes
+//! through, and the one state change the chain owns. The chain itself -- its
+//! pipelines, the octaves below the top, and every draw -- is written once in
+//! `concinnity_core::render::post::bloom` and reaches D3D12 through
+//! `DxPostDevice`.
 
-use concinnity_core::gfx::render_types::PostProcessParams;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::fullscreen;
-use windows::Win32::Foundation::RECT;
+use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::post::bloom::{BloomPass, BloomPipelines, top_extent};
+use concinnity_core::render::post::device::PostExtent;
+use concinnity_core::render::render_graph::PixelFormat;
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::Common::*;
 
-use crate::directx::builtin_shaders;
-use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::DxContext;
-use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
-use crate::directx::error::map_hresult;
-use crate::directx::pso::{Blend, GraphicsPso};
-use crate::directx::root_constants::RootConstants;
-use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
-use crate::directx::texture::{HDR_FORMAT, transition_barrier};
+use crate::directx::post::post_device::{DxPostDevice, PooledTarget, PostPipeline, PostTarget};
+use crate::directx::texture::transition_barrier;
 
-// Bloom mip chain + pipelines. `mips[0]` is half-res; each subsequent mip
-// halves again. The prefilter + downsample + upsample passes accumulate a soft
-// glow into `mips[0]`, which the composite samples. Skipped entirely when
-// `post_process.bloom_intensity` is 0.
-pub(in crate::directx) struct BloomState {
-    pub mips: Vec<ID3D12Resource>,
-    pub mip_rtvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
-    pub mip_srv_gpus: Vec<SrvSlot>,
-    pub mip_extents: Vec<(u32, u32)>,
-    pub root_sig: ID3D12RootSignature,
-    pub pso_prefilter: ID3D12PipelineState,
-    pub pso_downsample: ID3D12PipelineState,
-    pub pso_upsample: ID3D12PipelineState,
+// The chain and the pool's `bloom_top` it writes, viewed through the post block.
+pub(in crate::directx) struct BloomResources {
+    pass: BloomPass<PostPipeline, PostTarget>,
+    top: PooledTarget,
 }
 
-// Shader compilation
-
-// Compiled bloom-chain shader bytecode. All three passes share the
-// single-source fullscreen-triangle vertex shader.
-pub(in crate::directx) struct BloomShaders {
-    pub vs: Vec<u8>,
-    pub prefilter_ps: Vec<u8>,
-    pub downsample_ps: Vec<u8>,
-    pub upsample_ps: Vec<u8>,
-}
-
-// Compile the bloom prefilter / downsample / upsample shaders.
-pub(in crate::directx) fn compile_bloom_shaders(hot_reload: bool) -> RenderResult<BloomShaders> {
-    Ok(BloomShaders {
-        vs: builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?,
-        prefilter_ps: builtin_shaders::BLOOM_PREFILTER.compile(hot_reload)?,
-        downsample_ps: builtin_shaders::BLOOM_DOWNSAMPLE.compile(hot_reload)?,
-        upsample_ps: builtin_shaders::BLOOM_UPSAMPLE.compile(hot_reload)?,
-    })
-}
-
-// Root signature + PSO
-
-// Root signature for the bloom-chain passes: one SRV descriptor table at t0
-// (the pass's source image), six 32-bit root constants at b0
-// (`PostProcessParams`, read only by the prefilter), and a static linear-clamp
-// sampler at s0. Shared by the prefilter, downsample, and upsample PSOs.
-pub(in crate::directx) fn create_bloom_root_signature(
-    device: &ID3D12Device,
-) -> RenderResult<ID3D12RootSignature> {
-    RootSig::new()
-        // [0] source image SRV (t0)
-        .srv_table(0, 1, Visibility::Pixel)
-        // [1] PostProcessParams at b0
-        .constants::<PostProcessParams>(0, Visibility::Pixel)
-        .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
-        .build(device, "bloom root sig")
-}
-
-// PSO for a bloom-chain pass: a vertex-buffer-less fullscreen triangle that
-// samples one source mip and writes an `HDR_FORMAT` bloom mip. No input
-// layout, no depth. `additive` enables one-to-one additive blending, set for
-// the upsample passes so each coarser mip accumulates onto the finer one.
-pub(in crate::directx) fn create_bloom_pso(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
-    vs: &[u8],
-    ps: &[u8],
-    rtv_format: DXGI_FORMAT,
-    additive: bool,
-) -> RenderResult<ID3D12PipelineState> {
-    let blend = if additive {
-        Blend::Additive
-    } else {
-        Blend::Opaque
-    };
-    GraphicsPso::fullscreen(root_sig, vs, ps, rtv_format, blend).build(device, "bloom")
-}
-
-// Targets
-
-// Number of mip levels in the bloom chain for an HDR target of the given
-// resolution. Clamped to 4..=6: enough octaves for a wide soft glow without
-// spending a dozen render passes on sub-pixel mips. Mirrors `bloom_mip_count`
-// in vulkan/texture.rs.
-pub(in crate::directx) fn bloom_mip_count(width: u32, height: u32) -> u32 {
-    let min_dim = width.min(height).max(1);
-    // mip 0 is already half-res, so subtract one octave before clamping.
-    let levels = (min_dim as f32).log2().floor() as i32 - 1;
-    levels.clamp(4, 6) as u32
-}
-
-// Bloom mip chain: the mip render targets paired with their (width, height).
-type BloomMips = (Vec<ID3D12Resource>, Vec<(u32, u32)>);
-
-// Create the bloom mip chain for an HDR target of `width`x`height`. `mips[i]`
-// has resolution `(width >> (i+1), height >> (i+1))`, floored at one texel, so
-// `mips[0]` is half-res. `mips[0]` (`bloom_top`) is the transient pool's placed
-// resource passed in as `top` (so the graph can alias its memory); the finer
-// mips are committed single-sample `HDR_FORMAT` color targets usable as both a
-// render target and a sampled texture, created in the PIXEL_SHADER_RESOURCE
-// state so the composite pass can bind `mips[0]` even when bloom is disabled and
-// the bloom passes never run.
-pub(in crate::directx) fn create_bloom_mips(
-    device: &ID3D12Device,
-    width: u32,
-    height: u32,
-    top: ID3D12Resource,
-) -> RenderResult<BloomMips> {
-    let full_w = width.max(1);
-    let full_h = height.max(1);
-    let count = bloom_mip_count(full_w, full_h);
-    create_bloom_mips_at(device, full_w, full_h, count as usize, top)
-}
-
-// Same shape as [`create_bloom_mips`], but with an explicit `count` so the
-// resize handler can recreate the chain at the new resolution while keeping
-// the SRV/RTV-heap-slot layout (which was sized for the init-time count)
-// stable. The trailing mips fall to `1×1` once `(w >> i) < 1`, harmless,
-// the bloom passes still sample them and the composite ignores them.
-pub(in crate::directx) fn create_bloom_mips_at(
-    device: &ID3D12Device,
-    width: u32,
-    height: u32,
-    count: usize,
-    top: ID3D12Resource,
-) -> RenderResult<BloomMips> {
-    let full_w = width.max(1);
-    let full_h = height.max(1);
-    let heap_props = D3D12_HEAP_PROPERTIES {
-        Type: D3D12_HEAP_TYPE_DEFAULT,
-        ..Default::default()
-    };
-    let clear_value = D3D12_CLEAR_VALUE {
-        Format: HDR_FORMAT,
-        Anonymous: D3D12_CLEAR_VALUE_0 { Color: [0.0; 4] },
-    };
-    let mut mips = Vec::with_capacity(count);
-    let mut extents = Vec::with_capacity(count);
-    // mip 0 (`bloom_top`) is the pool-owned placed resource; the finer octaves
-    // below stay committed. The pool sizes it from the graph's own
-    // `DrawableScaled(0.5)` desc, which resolves to the same half-extent.
-    let (tw, th) = ((full_w.max(1) >> 1).max(1), (full_h.max(1) >> 1).max(1));
-    mips.push(top);
-    extents.push((tw, th));
-    for i in 1..count {
-        let mw = (full_w >> (i + 1)).max(1);
-        let mh = (full_h >> (i + 1)).max(1);
-        let desc = D3D12_RESOURCE_DESC {
-            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-            Width: mw as u64,
-            Height: mh,
-            DepthOrArraySize: 1,
-            MipLevels: 1,
-            Format: HDR_FORMAT,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
-            ..Default::default()
-        };
-        let mut res_opt: Option<ID3D12Resource> = None;
-        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
-        // new COM object lands in a binding that owns it.
-        unsafe {
-            device.CreateCommittedResource(
-                &heap_props,
-                D3D12_HEAP_FLAG_NONE,
-                &desc,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                Some(&clear_value),
-                &mut res_opt,
-            )
-        }
-        .map_err(|e| map_hresult(e.code(), &format!("create bloom mip {i}")))?;
-        mips.push(
-            res_opt.ok_or_else(|| RenderError::Other(format!("bloom mip {i} returned None")))?,
-        );
-        extents.push((mw, mh));
-    }
-    Ok((mips, extents))
-}
-
-// Write an `HDR_FORMAT` single-sample Texture2D render-target view at the
-// given heap slot, used for the bloom mips.
-pub(in crate::directx) fn write_color_rtv(
-    device: &ID3D12Device,
-    resource: &ID3D12Resource,
-    rtv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-) {
-    let rtv_desc = D3D12_RENDER_TARGET_VIEW_DESC {
-        Format: HDR_FORMAT,
-        ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
-        ..Default::default()
-    };
-    // SAFETY: the view descriptor and the resource it names are live for the call, and the
-    // destination handle addresses a slot this context reserved for the view in a heap it owns.
-    unsafe { device.CreateRenderTargetView(resource, Some(&rtv_desc), rtv_cpu) };
-}
-
-// Encoder
-
-// The bloom chain orchestration lives once in `gfx::fullscreen`; this impl binds
-// + draws each sub-pass in D3D12. `Args` is the scene-color SRV the prefilter
-// samples (post-TAA when TAA is on, the HDR scene SRV otherwise). Each sub-pass
-// transitions its destination mip to RENDER_TARGET for the draw and back to
-// PIXEL_SHADER_RESOURCE so the next pass (or composite) can sample it; every mip
-// therefore ends the frame back in its created state.
-impl fullscreen::BloomEncoder for DxContext {
-    type Rec = ID3D12GraphicsCommandList;
-    type Args = SrvSlot;
-
-    fn bloom_mip_count(&self) -> usize {
-        self.bloom.mips.len()
+impl BloomResources {
+    // Build the chain for an output of `output`, over the pool's `top`.
+    pub(in crate::directx) fn new(
+        device: &DxPostDevice,
+        output: PostExtent,
+        top: &ID3D12Resource,
+    ) -> RenderResult<Self> {
+        Ok(Self {
+            pass: BloomPass::new(device, output)?,
+            top: view_top(device, output, top)?,
+        })
     }
 
-    fn begin_bloom(&self, cmd: &Self::Rec, _scene_srv: &Self::Args) -> RenderResult<()> {
-        let post = self.post_process;
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.SetGraphicsRootSignature(&self.bloom.root_sig);
-            cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
-            cmd.IASetPrimitiveTopology(
-                windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-            );
-            // The bloom shaders build the fullscreen triangle from SV_VertexID.
-            cmd.IASetVertexBuffers(0, None);
-            cmd.IASetIndexBuffer(None);
-            // Root arguments survive the PSO switches between sub-passes, and
-            // the root signature bound just above is the chain's only one, so
-            // the tunables are pushed once here rather than per sub-pass.
-            cmd.set_graphics_root_constants(1, &post);
-        }
-        Ok(())
-    }
-
-    fn bloom_prefilter(&self, cmd: &Self::Rec, scene_srv: &Self::Args) -> RenderResult<()> {
-        // Mip 0 is the graph's `bloom_top`, so it arrives in RENDER_TARGET and
-        // must leave in it. In between the downsample chain samples it, which is
-        // the one state change this node owns.
-        let after = if self.bloom.mips.len() > 1 {
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
-        } else {
-            D3D12_RESOURCE_STATE_RENDER_TARGET
-        };
-        self.bloom_run_pass(
-            cmd,
-            BloomSubPass {
-                dst: 0,
-                src_srv: *scene_srv,
-                pso: &self.bloom.pso_prefilter,
-                before: D3D12_RESOURCE_STATE_RENDER_TARGET,
-                after,
-            },
-        );
-        Ok(())
-    }
-
-    fn bloom_downsample(
-        &self,
-        cmd: &Self::Rec,
-        _scene_srv: &Self::Args,
-        dst: usize,
+    // Recreate the octaves for a new output and view the rebuilt pool's `top`.
+    // The caller has already idled the device.
+    pub(in crate::directx) fn resize(
+        &mut self,
+        device: &DxPostDevice,
+        output: PostExtent,
+        top: &ID3D12Resource,
     ) -> RenderResult<()> {
-        self.bloom_run_pass(
-            cmd,
-            BloomSubPass {
-                dst,
-                src_srv: self.bloom.mip_srv_gpus[dst - 1],
-                pso: &self.bloom.pso_downsample,
-                before: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                after: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            },
-        );
+        self.pass.resize(device, output)?;
+        self.repoint_top(device, output, top)
+    }
+
+    // View the pool's `top` after a rebuild relocated it.
+    pub(in crate::directx) fn repoint_top(
+        &mut self,
+        device: &DxPostDevice,
+        output: PostExtent,
+        top: &ID3D12Resource,
+    ) -> RenderResult<()> {
+        self.top = view_top(device, output, top)?;
         Ok(())
     }
 
-    fn bloom_upsample(
-        &self,
-        cmd: &Self::Rec,
-        _scene_srv: &Self::Args,
-        dst: usize,
-    ) -> RenderResult<()> {
-        // The chain walks back down to mip 0, whose last write hands
-        // `bloom_top` back to the graph in RENDER_TARGET.
-        let after = if dst == 0 {
-            D3D12_RESOURCE_STATE_RENDER_TARGET
-        } else {
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
-        };
-        self.bloom_run_pass(
-            cmd,
-            BloomSubPass {
-                dst,
-                src_srv: self.bloom.mip_srv_gpus[dst + 1],
-                pso: &self.bloom.pso_upsample,
-                before: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                after,
-            },
-        );
-        Ok(())
+    // The glow the composite samples.
+    pub(in crate::directx) fn top_srv_gpu(&self) -> SrvSlot {
+        self.top.srv_gpu()
+    }
+
+    pub(in crate::directx) fn swap_pipelines(&mut self, pipelines: BloomPipelines<PostPipeline>) {
+        self.pass.swap_pipelines(pipelines);
     }
 }
 
-// One bloom sub-pass: which mip it renders into, what it samples, and the states
-// that mip is in on either side of it. Every mip but 0 rests sampled inside the
-// chain; mip 0 is the graph's `bloom_top` and rests in RENDER_TARGET at the node
-// boundary, so it is the only one whose `before` and `after` differ from the
-// rest.
-struct BloomSubPass<'a> {
-    dst: usize,
-    src_srv: SrvSlot,
-    pso: &'a ID3D12PipelineState,
-    before: D3D12_RESOURCE_STATES,
-    after: D3D12_RESOURCE_STATES,
+fn view_top(
+    device: &DxPostDevice,
+    output: PostExtent,
+    top: &ID3D12Resource,
+) -> RenderResult<PooledTarget> {
+    device.pooled_target(top, PixelFormat::Rgba16Float, top_extent(output))
 }
 
 impl DxContext {
-    // Encode the bloom prefilter, downsample, and additive upsample passes via
-    // the shared `gfx::fullscreen` driver. On return `bloom_mips[0]` holds the
-    // accumulated soft glow the composite pass samples. Called only when
-    // `post_process.bloom_intensity > 0`, and after the HDR resolve (and the TAA
-    // resolve, if any) so the prefilter can sample `scene_srv`.
+    // Encode the chain over `scene_srv` (post-TAA when TAA is on, the HDR scene
+    // otherwise). On return `bloom_top` holds the glow the composite samples.
+    // Called only when `post_process.bloom_intensity > 0`.
     pub(in crate::directx) fn encode_bloom(
         &self,
         cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
         scene_srv: SrvSlot,
-    ) {
-        // D3D12's sub-passes cannot fail (every mip, descriptor and PSO was
-        // built at init), so the chain's Result is always Ok here.
-        let _ = fullscreen::encode_bloom_chain(self, cmd, scene_srv);
-    }
-
-    // One fullscreen-triangle bloom sub-pass: sample `src_srv`, render into
-    // bloom mip `dst` with `pso` bound, opening from the mip's `before` state
-    // and closing into its `after`. A sub-pass whose mip is already a render
-    // target on both sides (mip 0, handed over by the graph) emits neither.
-    fn bloom_run_pass(&self, cmd: &ID3D12GraphicsCommandList, pass: BloomSubPass<'_>) {
-        let BloomSubPass {
-            dst,
-            src_srv,
-            pso,
-            before,
-            after,
-        } = pass;
-        let (mw, mh) = self.bloom.mip_extents[dst];
-        if before != D3D12_RESOURCE_STATE_RENDER_TARGET {
-            let to_rt = transition_barrier(
-                &self.bloom.mips[dst],
-                before,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-            );
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe { cmd.ResourceBarrier(&[to_rt]) };
-        }
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
+    ) -> RenderResult<()> {
+        let Some(bloom) = &self.bloom else {
+            return Ok(());
+        };
+        let device = self.post_device(frame_idx);
+        let (pass, bloom_top) = (&bloom.pass, &bloom.top);
+        // `bloom_top` arrives in RENDER_TARGET, the graph's state for this node's
+        // write, and must leave in it. Between the prefilter and the last
+        // upsample the downsample chain samples it, which is the one state
+        // change this node owns.
+        pass.encode_prefilter(
+            &device,
+            cmd,
+            scene_srv,
+            bloom_top.attachment(),
+            &self.post_process,
+        )?;
+        let sampled = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        let target = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        // SAFETY: the command list is in the recording state and the pooled
+        // resource is live for the frame it records.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&self.bloom.mip_rtvs[dst]), false, None);
-            let vp = D3D12_VIEWPORT {
-                TopLeftX: 0.0,
-                TopLeftY: 0.0,
-                Width: mw as f32,
-                Height: mh as f32,
-                MinDepth: 0.0,
-                MaxDepth: 1.0,
-            };
-            cmd.RSSetViewports(&[vp]);
-            let scissor = RECT {
-                left: 0,
-                top: 0,
-                right: mw as i32,
-                bottom: mh as i32,
-            };
-            cmd.RSSetScissorRects(&[scissor]);
-            cmd.SetPipelineState(pso);
-            cmd.set_graphics_srv_table(0, src_srv);
-            cmd.DrawInstanced(3, 1, 0, 0);
-        }
-        if after != D3D12_RESOURCE_STATE_RENDER_TARGET {
-            let from_rt = transition_barrier(
-                &self.bloom.mips[dst],
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-                after,
-            );
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe { cmd.ResourceBarrier(&[from_rt]) };
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::bloom_mip_count;
-
-    #[test]
-    fn bloom_mip_count_clamps_to_four_to_six() {
-        // Common HD resolutions land in the wide-glow sweet spot (6 octaves).
-        assert_eq!(bloom_mip_count(1920, 1080), 6);
-        assert_eq!(bloom_mip_count(1280, 720), 6);
-        // Smaller resolutions earn fewer octaves before the clamp.
-        assert_eq!(bloom_mip_count(64, 64), 5);
-        // Floor: ridiculously small resolutions still get four octaves.
-        assert_eq!(bloom_mip_count(16, 16), 4);
-        assert_eq!(bloom_mip_count(1, 1), 4);
-        assert_eq!(bloom_mip_count(0, 0), 4);
+            cmd.ResourceBarrier(&[transition_barrier(bloom_top.resource(), target, sampled)])
+        };
+        pass.encode_chain(&device, cmd, bloom_top.srv_gpu())?;
+        // SAFETY: as above.
+        unsafe {
+            cmd.ResourceBarrier(&[transition_barrier(bloom_top.resource(), sampled, target)])
+        };
+        pass.encode_last_upsample(&device, cmd, bloom_top.attachment())
     }
 }

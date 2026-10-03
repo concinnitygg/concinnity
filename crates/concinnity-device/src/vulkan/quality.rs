@@ -31,6 +31,7 @@ use concinnity_core::render::post::rt_reflections;
 use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::context::VkContext;
+use super::post::SsaoResources;
 
 impl VkContext {
     // Bring the toggle-controlled features to match `q`, applied between frames
@@ -87,6 +88,8 @@ impl VkContext {
             // them before the pre-pass framebuffers can reference them. Rebuild
             // with the G-buffer gate on first; the `rebuild_swapchain` later in
             // this call rebuilds the pool once more and re-points every reader.
+            // The cached framebuffers name pooled views, so they go first.
+            self.post.cache.forget_views();
             self.targets.transient_pool.rebuild(
                 &super::transient_pool::TransientPoolGpu {
                     instance: &self.hw.instance,
@@ -99,7 +102,6 @@ impl VkContext {
                 &plan_pool_slots(
                     PoolGates {
                         ssao: self.ssao.is_some(),
-                        bloom: self.post_process.bloom_intensity > 0.0,
                         gbuffer: true,
                     },
                     (
@@ -223,54 +225,22 @@ impl VkContext {
         }
 
         // SSAO. Its occlusion target is the transient pool's per-frame
-        // `ao_output`, which only exists while SSAO is on, so turning it on means
-        // rebuilding the pool (to add `ao_output`) before constructing the SSAO
-        // resources. `rebuild_swapchain` below rebuilds the pool again from the
-        // now-Some `self.ssao`, then re-points binding 6 at the rebuilt views.
-        if desired_ssao && self.ssao.is_none() {
-            self.targets.transient_pool.rebuild(
-                &super::transient_pool::TransientPoolGpu {
-                    instance: &self.hw.instance,
-                    device: &self.hw.device,
-                    physical_device: self.hw.physical_device,
-                    command_pool: self.commands.command_pool,
-                    queue: self.hw.graphics_queue,
-                },
-                self.frames_in_flight,
-                &plan_pool_slots(
-                    PoolGates {
-                        ssao: true,
-                        bloom: self.post_process.bloom_intensity > 0.0,
-                        gbuffer: self.gbuffer.is_some(),
-                    },
-                    (
-                        self.targets.render_extent.width,
-                        self.targets.render_extent.height,
-                    ),
-                    (self.swapchain.extent.width, self.swapchain.extent.height),
-                )?,
-            )?;
-            let settings = q.ssao.expect("desired_ssao implies ssao settings");
-            let ao_views = self
-                .targets
-                .transient_pool
-                .views_for_frames("ao_output", self.frames_in_flight);
-            let ssao = super::post::ssao::SsaoResources::new(
-                &super::post::ssao::SsaoDeviceCtx {
-                    alloc: &self.hw.alloc,
-                    device: &self.hw.device,
-                },
-                self.targets.render_extent.width,
-                self.targets.render_extent.height,
-                self.frames_in_flight,
-                settings,
-                &ao_views,
-                self.hot_reload.enabled,
-            )?;
-            self.ssao = Some(ssao);
-        } else if !desired_ssao && self.ssao.is_some() {
-            let mut ssao = self.ssao.take().expect("ssao present");
-            ssao.destroy(&self.hw.device);
+        // `ao_output`, which only exists while SSAO is on; `rebuild_swapchain`
+        // below rebuilds the pool from the now-toggled `self.ssao` and re-points
+        // binding 6 at the rebuilt views. The pass reads its output per frame.
+        match (q.ssao, self.ssao.is_some()) {
+            (Some(settings), false) => {
+                let ssao =
+                    SsaoResources::new(&self.post_device(0), settings, self.targets.render_extent)?;
+                self.ssao = Some(ssao);
+            }
+            (None, true) => {
+                // The cached framebuffers name the raw occlusion's view, so they
+                // go before it does.
+                self.post.cache.forget_views();
+                self.ssao = None;
+            }
+            _ => {}
         }
 
         // Ray-traced reflections. Turning on builds the scene acceleration
@@ -304,8 +274,8 @@ impl VkContext {
         // Rebuild every target + rewire every reader / the composite chain via
         // the resize path. It rebuilds the transient pool + bloom from the
         // reconciled `self.ssao`, rebuilds each `Some` feature's targets, and
-        // re-points the bloom prefilter + composite scene input down the
-        // upscale > TAA > reflection-composite > HDR priority chain.
+        // re-points the composite scene input down the upscale > TAA >
+        // reflection-composite > HDR priority chain.
         self.rebuild_swapchain()
     }
 

@@ -33,9 +33,9 @@
 //!
 //! Bundled passes:
 //!   * `PassId::SsaoBlur` dispatches the bundled `encode_ssao` (which
-//!     internally encodes the SSAO pre-pass + GTAO kernel + depth-aware
-//!     blur). `PassId::SsaoPrepass` / `PassId::SsaoKernel` stay
-//!     timing-only and the executor rejects them as graph nodes.
+//!     internally encodes the GTAO kernel + depth-aware blur).
+//!     `PassId::SsaoPrepass` / `PassId::SsaoKernel` stay timing-only and the
+//!     executor rejects them as graph nodes.
 //!
 //! `PassId::ParticlesSim` and `PassId::ParticlesDraw` are two nodes with their
 //! own command lists: the sim integrates every live emitter's pool and the draw
@@ -1081,7 +1081,7 @@ impl DxContext {
             "scene_pre_taa" => self
                 .reflection_composite
                 .as_ref()
-                .map(|rc| (&rc.output, SAMPLED)),
+                .map(|rc| (rc.output().resource(), SAMPLED)),
             // The post-TAA scene. Two mutually exclusive writers back it, and
             // only one is driven: the TAA resolve writes this frame's ping-pong
             // history slot, which rests sampled like any other color target,
@@ -1170,12 +1170,12 @@ impl DxContext {
                 self.encode_skin(cmd, params.frame_idx);
             }
             PassId::SsaoBlur => {
-                self.encode_ssao(cmd, params.fov_y_radians, params.aspect);
+                self.encode_ssao(cmd, params.frame_idx, params.fov_y_radians, params.aspect)?;
             }
             PassId::SsaoPrepass | PassId::SsaoKernel => {
                 return Err(RenderError::Other(format!(
                     "graph executor (directx): pass {} is bundled inside SsaoBlur \
-                     (encode_ssao encodes all three SSAO sub-passes); it \
+                     (encode_ssao encodes the SSAO kernel and blur); it \
                      should not appear as its own graph node",
                     pass_id.name()
                 )));
@@ -1288,7 +1288,7 @@ impl DxContext {
                 self.encode_taa(cmd, params.frame_idx);
             }
             PassId::Bloom => {
-                self.encode_bloom(cmd, params.scene_srv);
+                self.encode_bloom(cmd, params.frame_idx, params.scene_srv)?;
             }
             PassId::Composite => {
                 // Composite is run inline on the outer "end" cmd list

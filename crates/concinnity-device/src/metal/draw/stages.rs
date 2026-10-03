@@ -370,10 +370,8 @@ impl MtlContext {
             hdr_sample_count: self.targets.hdr.sample_count,
             bindless_cull_enabled,
             auto_exposure_enabled: self.auto_exposure.pipelines.is_some(),
-            // Gated on the pipelines existing: a scene-less world builds none
-            // (its 1x1 bloom targets stay untouched black).
-            bloom_enabled: self.post_process.bloom_intensity > 0.0
-                && self.bloom_pipelines.is_some(),
+            // Gated on the chain existing: a scene-less world builds none.
+            bloom_enabled: self.post_process.bloom_intensity > 0.0 && self.bloom.is_some(),
             // Velocity runs whenever something reprojects through it: TAA,
             // the upscaler, or the SSGI accumulation. TaaResolve / Upscale /
             // Ssgi declare a read edge on it for ordering.

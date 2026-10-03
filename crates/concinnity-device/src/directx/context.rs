@@ -41,7 +41,7 @@ use super::fog::*;
 use super::geometry_upload::{GeometryDest, GeometryUploads};
 use super::hot_reload::HotReloadState;
 use super::particle::ParticleState;
-use super::post::bloom::BloomState;
+use super::post::bloom::BloomResources;
 use super::post::gbuffer::GbufferResources;
 use super::post::ssao::*;
 use super::post::ssr::*;
@@ -733,10 +733,11 @@ pub(crate) struct DxContext {
     pub(super) text: TextState,
     pub(super) composite: CompositeState,
 
-    // Bloom mip chain + pipelines. The mips are shared across frame slots; the
-    // command queue runs frames serially, so a frame's bloom writes never race
-    // a prior frame's composite read.
-    pub(super) bloom: BloomState,
+    // The shared bloom chain and the view of the pool's `bloom_top` it writes.
+    // The octaves are shared across frame slots; the command queue runs frames
+    // serially, so a frame's bloom writes never race a prior frame's composite
+    // read. `None` only while a resize rebuilds it.
+    pub(super) bloom: Option<BloomResources>,
     // Post-process tunables (bloom / exposure / vignette). Drives whether the
     // bloom chain runs and feeds the bloom-prefilter + composite root constants.
     pub(super) post_process: render_types::PostProcessParams,
@@ -783,7 +784,7 @@ pub(crate) struct DxContext {
     // post stack consumes via `scene_srv_for_post`. `Some` when SSR resolve or RT is
     // authored (both feed it).
     pub(super) reflection_composite:
-        Option<super::post::reflection_composite::ReflectionCompositeResources>,
+        Option<super::post::reflection_composite::DxReflectionCompositePass>,
 
     // Hardware ray-traced reflections (DXR). `rt_reflections` (output target +
     // RtParams UBO + root sig + flat/textured PSOs) and `rt.accel` (BLAS/TLAS +

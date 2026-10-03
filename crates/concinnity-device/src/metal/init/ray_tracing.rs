@@ -113,7 +113,7 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
 }
 
 // RT reflections: the inline ray-trace resolve pipelines, built only when RT
-// reflections are on. They write into `ssr.targets.output`, reusing the SSR
+// reflections are on. They write into `ssr.reflection`, reusing the SSR
 // pre-pass G-buffer. The flat variant is the non-bindless fallback; the textured
 // variant samples the bindless albedo pool. The compute-skinning pipeline
 // deforms skinned vertices into a buffer the BVH can trace; built under the

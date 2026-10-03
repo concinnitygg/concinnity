@@ -29,11 +29,7 @@ use super::init::pipelines::{
 };
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
 use super::post::post_device::MtlPostDevice;
-use super::post::{
-    build_bloom_pipelines, build_gbuffer_bindless_pipeline, build_reflection_blur_pipeline,
-    build_reflection_composite_pipeline, build_rt_reflection_pipeline, build_ssao_pipeline,
-};
-use crate::metal::builtin_shaders::{SSAO_BLUR, SSAO_KERNEL};
+use super::post::{build_gbuffer_bindless_pipeline, build_rt_reflection_pipeline};
 
 // Rebuild a built-in pipeline only when it is currently live. Expands to
 // `if $cond { Some($build?) } else { None }`: the rebuild-then-swap pattern
@@ -135,11 +131,6 @@ impl MtlContext {
         // any compile error leaves the running session rendering with the
         // previous shader source.
         let post = build_post_pipeline(device, self.hw.swap_pixel_format, hr)?;
-        let bloom = rebuild_if_live!(
-            self.bloom_pipelines.is_some(),
-            build_bloom_pipelines(device, hr)
-        );
-
         let text = rebuild_if_live!(
             self.text.pipeline_state.is_some(),
             build_text_pipeline(device, self.hw.swap_pixel_format, hr)
@@ -156,6 +147,10 @@ impl MtlContext {
         let taa = rebuild_if_live!(
             self.taa.pass.is_some(),
             concinnity_core::render::post::taa::build_pipeline(&post_device)
+        );
+        let bloom = rebuild_if_live!(
+            self.bloom.is_some(),
+            concinnity_core::render::post::bloom::build_pipelines(&post_device)
         );
         // The main pass rebuilds together with the GPU cull and the bindless
         // argument encoders, whose layouts come from the same sources. A world
@@ -204,13 +199,9 @@ impl MtlContext {
 
         // The shadow pipeline needs the static vertex layout.
         let static_vdesc = static_vertex_descriptor();
-        let ssao_kernel = rebuild_if_live!(
-            self.ssao.kernel_pipeline.is_some(),
-            build_ssao_pipeline(device, &SSAO_KERNEL, hr)
-        );
-        let ssao_blur = rebuild_if_live!(
-            self.ssao.blur_pipeline.is_some(),
-            build_ssao_pipeline(device, &SSAO_BLUR, hr)
+        let ssao = rebuild_if_live!(
+            self.ssao.pass.is_some(),
+            concinnity_core::render::post::ssao::build_pipelines(&post_device)
         );
         // The G-buffer pipeline builds its own two-stream vertex descriptor
         // internally.
@@ -223,12 +214,8 @@ impl MtlContext {
             concinnity_core::render::post::ssr::build_pipeline(&post_device)
         );
         let reflection_composite = rebuild_if_live!(
-            self.ssr.composite_pipeline.is_some(),
-            build_reflection_composite_pipeline(device, hr)
-        );
-        let reflection_blur = rebuild_if_live!(
-            self.ssr.blur_pipeline.is_some(),
-            build_reflection_blur_pipeline(device, hr)
+            self.ssr.composite.is_some(),
+            concinnity_core::render::post::reflection_composite::build_pipelines(&post_device)
         );
         let ssgi = rebuild_if_live!(
             self.ssgi.pass.is_some(),
@@ -268,8 +255,8 @@ impl MtlContext {
         // point the next frame's draw calls bind the freshly compiled
         // pipelines.
         self.composite.pipeline = post;
-        if let Some(b) = bloom {
-            self.bloom_pipelines = Some(b);
+        if let (Some(p), Some(pass)) = (bloom, self.bloom.as_mut()) {
+            pass.swap_pipelines(p);
         }
         if let Some(p) = text {
             self.text.pipeline_state = Some(p);
@@ -311,11 +298,8 @@ impl MtlContext {
         if let Some(p) = fog {
             self.fog.pipeline = Some(p);
         }
-        if let Some(p) = ssao_kernel {
-            self.ssao.kernel_pipeline = Some(p);
-        }
-        if let Some(p) = ssao_blur {
-            self.ssao.blur_pipeline = Some(p);
+        if let (Some(p), Some(pass)) = (ssao, self.ssao.pass.as_mut()) {
+            pass.swap_pipelines(p);
         }
         if let Some(p) = gbuffer_bindless {
             self.gbuffer.bindless_pipeline = Some(p);
@@ -323,11 +307,8 @@ impl MtlContext {
         if let (Some(p), Some(resolve)) = (ssr_resolve, self.ssr.resolve.as_mut()) {
             resolve.swap_pipeline(p);
         }
-        if let Some(p) = reflection_composite {
-            self.ssr.composite_pipeline = Some(p);
-        }
-        if let Some(p) = reflection_blur {
-            self.ssr.blur_pipeline = Some(p);
+        if let (Some(p), Some(pass)) = (reflection_composite, self.ssr.composite.as_mut()) {
+            pass.swap_pipelines(p);
         }
         if let (Some(p), Some(pass)) = (ssgi, self.ssgi.pass.as_mut()) {
             pass.swap_pipelines(p);

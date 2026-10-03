@@ -14,13 +14,13 @@ use concinnity_core::render::planar_reflection::PlanarReflectors;
 use super::ray_tracing::RtResources;
 use super::{Features, InitGpu};
 use crate::vulkan::context::{
-    AutoExposureState, BloomState, CompositeState, DecalState, FogState, HDR_FORMAT, VkCull,
-    VkDescriptors, VkGeometry, VkSceneAssets, VkTargets,
+    AutoExposureState, CompositeState, DecalState, FogState, HDR_FORMAT, VkCull, VkDescriptors,
+    VkGeometry, VkSceneAssets, VkTargets,
 };
 use crate::vulkan::global_set::GlobalBindings;
 use crate::vulkan::planar::PlanarReflectionSet;
 use crate::vulkan::post::PostSupport;
-use crate::vulkan::post::bloom::rebind_bloom_input0;
+use crate::vulkan::post::bloom::composite_bloom_view;
 use crate::vulkan::post::gbuffer::GbufferResources;
 use crate::vulkan::post::post_device::{PostQueue, VkPostDevice, VkPostProbes};
 use crate::vulkan::post::ssao::SsaoResources;
@@ -99,7 +99,7 @@ pub(super) fn build_upscale(
 // The device every shared post pass builds its pipelines and targets
 // through at init. Nothing encodes before the context exists, so it
 // carries the global set's layout but none of its per-frame sets.
-fn shared_post_device<'a>(
+pub(super) fn shared_post_device<'a>(
     gpu: &InitGpu<'a>,
     post_support: &'a PostSupport,
     scene: &'a VkSceneAssets,
@@ -155,7 +155,7 @@ pub(super) fn build_screen_space(
         hw,
         command_pool,
         frames,
-        hot_reload,
+        ..
     } = *gpu;
     let (device, alloc) = (&hw.device, &hw.alloc);
     let ScreenSpaceInputs {
@@ -166,22 +166,18 @@ pub(super) fn build_screen_space(
         descriptors,
     } = inputs;
     let render_extent = targets.render_extent;
-    // SSAO (GTAO): pre-pass + kernel + blur. The transient image pool was built
-    // with the render targets (before the bloom chain); it already holds this
-    // frame's pooled `ao_output` views when SSAO is on.
-    let ssao = if let Some(settings) = post.ssao {
-        let ao_views = targets.transient_pool.views_for_frames("ao_output", frames);
-        Some(crate::vulkan::post::ssao::SsaoResources::new(
-            &crate::vulkan::post::ssao::SsaoDeviceCtx { alloc, device },
-            render_extent.width,
-            render_extent.height,
-            frames,
+    let post_support = crate::vulkan::post::PostSupport::new(device, frames)?;
+    let init_post_device = shared_post_device(gpu, &post_support, scene, descriptors);
+
+    // SSAO (GTAO): the shared kernel + blur. Its blurred output is the transient
+    // pool's per-frame `ao_output`, read per frame.
+    let ssao = match post.ssao {
+        Some(settings) => Some(SsaoResources::new(
+            &init_post_device,
             settings,
-            &ao_views,
-            hot_reload,
-        )?)
-    } else {
-        None
+            render_extent,
+        )?),
+        None => None,
     };
 
     // SSR (screen-space reflections): depth + normal + roughness pre-pass
@@ -189,8 +185,6 @@ pub(super) fn build_screen_space(
     // with SSGI and RT, so `SsrResources` is built whenever any of them is
     // on; its settings stay `None` unless SSR itself is authored, and the
     // resolve runs only when it is and RT did not take its graph slot.
-    let post_support = crate::vulkan::post::PostSupport::new(device, frames)?;
-    let init_post_device = shared_post_device(gpu, &post_support, scene, descriptors);
     let ssr = if post.ssr.is_some() || post.ssgi.is_some() || features.rt_wanted {
         Some(crate::vulkan::post::ssr::SsrResources::new(
             &init_post_device,
@@ -258,7 +252,6 @@ pub(super) struct SceneInputWiring<'a> {
     pub(super) scene: &'a VkSceneAssets,
     pub(super) descriptors: &'a VkDescriptors,
     pub(super) composite: &'a CompositeState,
-    pub(super) bloom: &'a BloomState,
     pub(super) screen: &'a ScreenSpace,
     pub(super) upscale: Option<&'a dyn VkUpscaleBackend>,
 }
@@ -275,16 +268,15 @@ pub(super) fn build_taa_and_wire_scene_inputs(
         scene,
         descriptors,
         composite,
-        bloom,
         screen,
         upscale,
     } = inputs;
     let init_post_device = shared_post_device(gpu, &screen.post, scene, descriptors);
-    // When TAA is on the history resolve produces a post-TAA scene image;
-    // the bloom prefilter and composite pass must sample that instead of the
-    // raw HDR resolve, so their binding-0 descriptor is re-pointed at the
-    // per-frame TAA output image. The resolve's own inputs need no wiring:
-    // it allocates its set per frame from the shared post arena.
+    // When TAA is on the history resolve produces a post-TAA scene image; the
+    // composite pass must sample that instead of the raw HDR resolve, so its
+    // binding-0 descriptor is re-pointed at the per-frame TAA output image. The
+    // resolve's and the bloom prefilter's own inputs need no wiring: they
+    // allocate their sets per frame from the shared post arena.
     let taa = if features.taa_enabled {
         let taa = TaaResources::new(&init_post_device, frames, targets.render_extent)?;
         for (i, &set) in composite.sets.iter().enumerate() {
@@ -292,12 +284,9 @@ pub(super) fn build_taa_and_wire_scene_inputs(
                 device,
                 set,
                 taa.output_view(i),
-                bloom.mips[i][0].view,
+                composite_bloom_view(&targets.transient_pool, scene.ssao_white.view, i),
                 scene.color_lut.view,
             );
-        }
-        for (i, frame_sets) in bloom.input_sets.iter().enumerate() {
-            rebind_bloom_input0(device, frame_sets[0], taa.output_view(i));
         }
         Some(taa)
     } else {
@@ -305,8 +294,8 @@ pub(super) fn build_taa_and_wire_scene_inputs(
     };
 
     // Temporal upscaling overrides the scene input: when FSR is active the
-    // bloom prefilter + composite sample its reconstructed swapchain-res
-    // output (a single shared image), not the per-frame TAA output. TAA
+    // composite samples its reconstructed swapchain-res output (a single
+    // shared image), not the per-frame TAA output. TAA
     // resources are forced built under upscaling (for the velocity pre-pass)
     // and the TAA block above pointed the sets at the TAA output, so this
     // override is the final word; the TAA *resolve* is dropped from the
@@ -318,23 +307,9 @@ pub(super) fn build_taa_and_wire_scene_inputs(
                 device,
                 set,
                 up_output_view,
-                bloom.mips[i][0].view,
+                composite_bloom_view(&targets.transient_pool, scene.ssao_white.view, i),
                 scene.color_lut.view,
             );
-        }
-        for frame_sets in &bloom.input_sets {
-            rebind_bloom_input0(device, frame_sets[0], up_output_view);
-        }
-    }
-
-    // Re-point the SSAO kernel/blur's G-buffer descriptors at the merged
-    // pre-pass's per-frame views now that the merged buffer exists. RT was
-    // already wired to the unified views at its construction, and the shared
-    // post passes read those views per frame, so they need no wiring.
-    if let Some(gb) = &screen.gbuffer {
-        let nd_views = gb.normal_depth_views();
-        if let Some(ssao) = &screen.ssao {
-            ssao.wire_kernel_and_blur_sets_gbuffer(device, &nd_views);
         }
     }
 
@@ -583,7 +558,7 @@ pub(super) fn build_world_effects(
         let (scene_views, scene_images): (Vec<vk::ImageView>, Vec<vk::Image>) = (0..frames)
             .map(|i| {
                 if let Some(c) = rt.composite.as_ref() {
-                    (c.output.view, c.output.image)
+                    (c.output().view(), c.output().image().image)
                 } else {
                     (
                         targets.hdr_resolve_images[i].view,

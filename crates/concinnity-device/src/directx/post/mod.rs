@@ -1,17 +1,17 @@
 //! Post-process effects for the D3D12 backend, each owning pipeline + targets +
 //! per-frame encoder co-located in one file:
 //!
-//!   bloom.rs    prefilter + downsample + additive upsample
-//!   gbuffer.rs  unified normal+depth / roughness / velocity MRT pre-pass
-//!   taa.rs    velocity pre-pass + history-resolve
-//!   ssao.rs   GTAO depth+normal pre-pass + horizon kernel + depth-aware blur
-//!   ssr.rs    depth+normal+roughness pre-pass + fullscreen ray-march resolve
-//!   ssgi.rs   the settings + inputs of the shared SSGI trace and composite
+//!   bloom.rs                the pooled top octave + state change of the shared bloom chain
+//!   gbuffer.rs              unified normal+depth / roughness / velocity MRT pre-pass
+//!   taa.rs                  the jitter counter + inputs of the shared TAA resolve
+//!   ssao.rs                 the settings + pooled output of the shared SSAO kernel and blur
+//!   ssr.rs                  the reflection target + inputs of the shared SSR resolve
+//!   reflection_composite.rs the inputs of the shared roughness blur + composite
+//!   ssgi.rs                 the settings + inputs of the shared SSGI trace and composite
 //!
 //! Mirrors src/metal/post/ (same per-effect file shape).
 
 pub(in crate::directx) mod bloom;
-pub(in crate::directx) mod fullscreen;
 pub(in crate::directx) mod gbuffer;
 pub(in crate::directx) mod reflection_composite;
 pub(in crate::directx) mod rt_reflections;

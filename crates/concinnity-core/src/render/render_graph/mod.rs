@@ -30,6 +30,7 @@ mod view_mask;
 pub(crate) use builder::GraphBuilder;
 pub(crate) use compile::GraphError;
 pub use compile::{CompiledGraph, CompiledPass, CompiledResource};
+pub(crate) use frame::bloom_top_desc;
 pub use frame::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z, FrameGraphInputs, build_frame_graph};
 pub use passes::{PASS_COUNT, PASS_NAMES, PassId};
 pub use schedule::{CrossQueueWait, PassQueue};

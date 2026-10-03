@@ -13,17 +13,21 @@
 use crate::directx::descriptor_slot::SrvSlot;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use windows::Win32::Graphics::Direct3D12::*;
 
 // Descriptor sets the shared passes may hold at once: one per target, plus one
-// per level of a target with several. The temporal resolve's ring, the
-// reflection target, and the indirect-light trace, accumulation ring and depth
-// pyramids (each level of those addressed alone) take about twenty.
-pub(in crate::directx) const POST_TARGET_SLOTS: usize = 32;
+// per level of a target with several, plus one per pooled transient a pass
+// writes. With every pass on they hold 28: the indirect-light trace's rings and
+// depth pyramids 14, the bloom chain and its pooled top 7, the temporal
+// resolve's ring 2, the reflection composite 2, SSAO's raw and pooled
+// occlusion 2, and the reflection target 1. A pass recreating its targets
+// creates the new ones before it drops the old, so this leaves room for the
+// widest of those to overlap.
+pub(in crate::directx) const POST_TARGET_SLOTS: usize = 48;
 
 // The occupancy mask is one bit per slot.
-const _: () = assert!(POST_TARGET_SLOTS <= u32::BITS as usize);
+const _: () = assert!(POST_TARGET_SLOTS <= u64::BITS as usize);
 
 // One post target's descriptors: the shader-visible SRV a consumer samples it
 // through, and the RTV the pass writes it through. The slot returns to the
@@ -37,13 +41,14 @@ pub(in crate::directx) struct PostTargetDescriptors {
 
 // A held slot, released on drop.
 struct SlotLease {
-    used: Arc<AtomicU32>,
+    used: Arc<AtomicU64>,
     index: usize,
 }
 
 impl Drop for SlotLease {
     fn drop(&mut self) {
-        self.used.fetch_and(!(1 << self.index), Ordering::Relaxed);
+        self.used
+            .fetch_and(!(1u64 << self.index), Ordering::Relaxed);
     }
 }
 
@@ -54,7 +59,7 @@ pub(in crate::directx) struct PostDescriptors {
     srv_size: usize,
     rtv_base: D3D12_CPU_DESCRIPTOR_HANDLE,
     rtv_size: usize,
-    used: Arc<AtomicU32>,
+    used: Arc<AtomicU64>,
 }
 
 impl PostDescriptors {
@@ -72,7 +77,7 @@ impl PostDescriptors {
             srv_size,
             rtv_base,
             rtv_size,
-            used: Arc::new(AtomicU32::new(0)),
+            used: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -88,7 +93,7 @@ impl PostDescriptors {
             }
             match self.used.compare_exchange_weak(
                 current,
-                current | (1 << i),
+                current | (1u64 << i),
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {

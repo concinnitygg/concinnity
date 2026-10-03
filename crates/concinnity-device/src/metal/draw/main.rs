@@ -102,8 +102,8 @@ impl FacePass<'_> {
 impl MtlContext {
     // 1.0 when a reflection-resolve pass (SSR resolve or RT reflections) will
     // composite over this frame's HDR target, else 0.0. Mirrors the
-    // `scene_input` gate in draw/mod.rs (both resolves write `ssr.targets.output`
-    // and the graph picks RT over SSR). The forward shader reads it from
+    // `scene_input` gate in draw/pass_uniforms.rs (both resolves feed the
+    // reflection composite's output and the graph picks RT over SSR). The forward shader reads it from
     // `ViewUniforms.reflections_enabled` to hand glossy specular to that resolve.
     fn reflection_resolve_active(&self) -> f32 {
         if self.ssr.settings.is_some() || self.rt.accel.is_some() {

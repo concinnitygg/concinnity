@@ -1,636 +1,102 @@
-//! SSAO (GTAO) for the Vulkan backend. Owns the GTAO horizon-search kernel
-//! pipeline, the depth-aware blur pipeline, and the `encode_ssao` per-frame
-//! encoder. The depth + normal the kernel / blur sample come from the unified
-//! G-buffer pre-pass; the kernel / blur sets are wired to its per-frame views
-//! by `init.rs`.
+//! Vulkan's share of SSAO (GTAO), which is the settings and where the kernel's
+//! inputs and the blur's output come from this frame. The kernel and blur --
+//! their pipelines, the raw occlusion between them and both draws -- are written
+//! once in `concinnity_core::render::post::ssao` and reach Vulkan through
+//! `VkPostDevice`. The depth + normal they read come from the unified G-buffer
+//! pre-pass.
 //!
-//! The main pass samples `SsaoResources::ao` (the blurred occlusion) at set 0
+//! The main pass samples the blurred occlusion, the pool's `ao_output`, at set 0
 //! binding 6 to modulate its ambient term; when SSAO is disabled the renderer
 //! binds the 1×1 `ssao_white` fallback at that slot so the multiplier is a
-//! pass-through 1.0. Mirrors src/directx/post/ssao.rs.
+//! pass-through 1.0.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::SsaoParams;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::ssao;
+use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::post::ssao::settings::SsaoSettings;
+use concinnity_core::render::post::ssao::{OCCLUSION_FORMAT, SsaoInputs, SsaoPass};
 
-use super::super::allocator::DeviceAllocator;
 use super::super::context::VkContext;
-use super::super::descriptor_layout::PoolSizes;
-use super::super::pipeline::*;
-use super::super::resources::{
-    alloc_descriptor_sets, create_descriptor_set_layout, source_set_bindings, write_source_set,
+use crate::vulkan::post::pass_cache::AttachmentRest;
+use crate::vulkan::post::post_device::{
+    PostPipeline, PostTarget, VkAttachment, VkPostDevice, post_extent,
 };
-use super::super::texture::*;
-use crate::vulkan::builtin_shaders::CompileProgram;
-use crate::vulkan::owned::{
-    OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
-    OwnedSampler, OwnedSetLayout, VkDevice,
-};
-use crate::vulkan::record::Recorder;
-
-// Single-channel occlusion target format. 1.0 = unoccluded; the main pass
-// multiplies the ambient term by this value.
-pub(in crate::vulkan) const SSAO_OCCLUSION_FORMAT: vk::Format = vk::Format::R8_UNORM;
 
 // SSAO resources held by `VkContext` when `PostProcessConfig.ssao` is on.
-// All `vk::*` handles are owned by this struct and freed on `destroy`.
 pub(in crate::vulkan) struct SsaoResources {
     // Resolved authored tunables; turned into a per-frame `SsaoParams` push.
-    pub(in crate::vulkan) settings: ssao::SsaoSettings,
-
-    // The kernel pass writes `ao_raw` through this render pass: it discards
-    // on load (UNDEFINED) and stores SHADER_READ_ONLY so the blur can sample
-    // ao_raw. `ao_raw` is SSAO-internal (not a graph resource), so it stays
-    // render-pass-driven.
-    pub(in crate::vulkan) fullscreen_render_pass: OwnedRenderPass,
-
-    // The blur pass writes `ao` (the graph's `ao_output`) through this render
-    // pass. `ao`'s layout transitions are graph-driven, so this pass performs
-    // none: it keeps `ao` in COLOR_ATTACHMENT_OPTIMAL (initial == final) and
-    // the executor emits ao_output's `barriers_before` around it
-    // (UNDEFINED -> COLOR_ATTACHMENT before SsaoBlur, COLOR_ATTACHMENT ->
-    // SHADER_READ before Main).
-    pub(in crate::vulkan) blur_render_pass: OwnedRenderPass,
-
-    // Kernel pipeline (GTAO horizon search): fullscreen triangle reading
-    // the G-buffer, writing the raw R8 occlusion target.
-    pub(in crate::vulkan) _kernel_set_layout: OwnedSetLayout,
-    pub(in crate::vulkan) kernel_layout: OwnedPipelineLayout,
-    pub(in crate::vulkan) kernel_pso: OwnedPipeline,
-
-    // Blur pipeline: fullscreen triangle reading raw occlusion + G-buffer
-    // depth, writing the final blurred occlusion target.
-    pub(in crate::vulkan) _blur_set_layout: OwnedSetLayout,
-    pub(in crate::vulkan) blur_layout: OwnedPipelineLayout,
-    pub(in crate::vulkan) blur_pso: OwnedPipeline,
-
-    // Per-frame kernel / blur sets. The kernel set binding 0 and the blur set
-    // binding 1 sample the unified pre-pass G-buffer normal+depth (a per-frame
-    // target), so these sets are per-frame too (one slot per frame in flight).
-    // The blur set binding 0 samples the SSAO-internal raw AO, a single shared
-    // target.
-    pub(in crate::vulkan) kernel_sets: Vec<vk::DescriptorSet>,
-    pub(in crate::vulkan) blur_sets: Vec<vk::DescriptorSet>,
-    pub(in crate::vulkan) _descriptor_pool: OwnedDescriptorPool,
-
-    // Linear-clamp sampler for the kernel/blur G-buffer / raw-AO reads.
-    pub(in crate::vulkan) sampler: OwnedSampler,
-
-    // Resolution-dependent targets (rebuilt on swapchain resize). `ao_raw` is
-    // SSAO-internal (the kernel's raw occlusion, sampled by the blur). The
-    // blurred `ao_output` the main pass samples is the graph's transient and is
-    // owned by `VkContext::transient_pool`, per frame in flight; there is one
-    // `blur_framebuffers` entry per frame, each built from that frame's pooled
-    // `ao_output` view passed in at build time.
-    pub(in crate::vulkan) ao_raw: GpuImage,
-    pub(in crate::vulkan) kernel_framebuffer: OwnedFramebuffer,
-    pub(in crate::vulkan) blur_framebuffers: Vec<OwnedFramebuffer>,
-}
-
-// SPIR-V blobs for every SSAO pipeline. Produced by
-// [`compile_ssao_shaders`]; consumed by `SsaoResources::new` at init and by
-// `rebuild_ssao_pipelines` during shader hot-reload. Mirrors
-// [`crate::vulkan::post::bloom::BloomShaders`].
-pub(in crate::vulkan) struct SsaoShaders {
-    pub fullscreen_vs: Vec<u8>,
-    pub kernel_fs: Vec<u8>,
-    pub blur_fs: Vec<u8>,
-}
-
-// Compile the SSAO stages from `src/render/shaders/ssao.hlsl` plus the shared
-// single-source fullscreen vertex. `hot_reload` routes each source resolve
-// through the disk-first path so dev-loop edits take effect on the next
-// pipeline build. Called from `SsaoResources::new` at init and by the Vulkan
-// shader hot-reload path.
-pub(in crate::vulkan) fn compile_ssao_shaders(hot_reload: bool) -> RenderResult<SsaoShaders> {
-    use super::super::builtin_shaders;
-    Ok(SsaoShaders {
-        fullscreen_vs: builtin_shaders::FULLSCREEN_VERT.compile(hot_reload)?,
-        kernel_fs: builtin_shaders::SSAO_KERNEL.compile(hot_reload)?,
-        blur_fs: builtin_shaders::SSAO_BLUR.compile(hot_reload)?,
-    })
-}
-
-// Replacement SSAO pipelines built by the hot-reload pass. Each lines up
-// 1:1 with the matching field on [`SsaoResources`]. Mirrors
-// `directx::post::ssao::RebuiltSsaoPipelines`.
-pub(in crate::vulkan) struct RebuiltSsaoPipelines {
-    pub kernel: OwnedPipeline,
-    pub blur: OwnedPipeline,
-}
-
-// Rebuild every live SSAO pipeline from disk-resident GLSL source against
-// the existing layouts + render pass. Returns the freshly built handles;
-// the caller is responsible for destroying the displaced pipelines only
-// after this call succeeds (any compile / pipeline-create failure short-
-// circuits with the previous handles untouched). Called by the Vulkan
-// shader hot-reload path.
-pub(in crate::vulkan) fn rebuild_ssao_pipelines(
-    device: &VkDevice,
-    ssao: &SsaoResources,
-    hot_reload: bool,
-) -> RenderResult<RebuiltSsaoPipelines> {
-    let shaders = compile_ssao_shaders(hot_reload)?;
-    let kernel = create_fullscreen_pipeline(
-        device,
-        ssao.fullscreen_render_pass.handle(),
-        ssao.kernel_layout.handle(),
-        &shaders.fullscreen_vs,
-        &shaders.kernel_fs,
-    )?;
-    let blur = create_fullscreen_pipeline(
-        device,
-        ssao.blur_render_pass.handle(),
-        ssao.blur_layout.handle(),
-        &shaders.fullscreen_vs,
-        &shaders.blur_fs,
-    )?;
-    Ok(RebuiltSsaoPipelines { kernel, blur })
-}
-
-impl SsaoResources {
-    // Swap the freshly-built pipelines into the live resources. The caller
-    // has already `device_wait_idle`'d so the old pipelines are not in
-    // flight. Driven by the Vulkan shader hot-reload pass after every
-    // replacement successfully compiled.
-    pub(in crate::vulkan) fn swap_pipelines(&mut self, rebuilt: RebuiltSsaoPipelines) {
-        self.kernel_pso = rebuilt.kernel;
-        self.blur_pso = rebuilt.blur;
-    }
-}
-
-// Kernel render pass: one R8_UNORM color attachment, no depth. The
-// fullscreen triangle overwrites every pixel so `DONT_CARE` is safe on load.
-// Ends shader-readable so the blur can sample the raw occlusion it writes.
-fn create_fullscreen_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass> {
-    let attachment = vk::AttachmentDescription::default()
-        .format(SSAO_OCCLUSION_FORMAT)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-    let color_ref = vk::AttachmentReference::default()
-        .attachment(0)
-        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-    let subpass = vk::SubpassDescription::default()
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(std::slice::from_ref(&color_ref));
-    let dep = vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::FRAGMENT_SHADER,
-        )
-        .src_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
-    let info = vk::RenderPassCreateInfo::default()
-        .attachments(std::slice::from_ref(&attachment))
-        .subpasses(std::slice::from_ref(&subpass))
-        .dependencies(std::slice::from_ref(&dep));
-    device
-        .create_render_pass(&info)
-        .map_err(|e| crate::vulkan::error::map_vk_result(e, "SSAO fullscreen render pass"))
-}
-
-// Blur render pass: same R8_UNORM color attachment as the kernel pass, but
-// it performs no layout transition. `ao` (the graph's `ao_output`) enters and
-// leaves in COLOR_ATTACHMENT_OPTIMAL; the executor emits ao_output's
-// graph-derived barriers around the SsaoBlur and Main passes. The
-// SUBPASS_EXTERNAL dependency is kept identical to the kernel pass so the
-// write-after-read hazard against the previous frame's main-pass sample of
-// `ao` stays guarded.
-fn create_blur_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass> {
-    let attachment = vk::AttachmentDescription::default()
-        .format(SSAO_OCCLUSION_FORMAT)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-        .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-    let color_ref = vk::AttachmentReference::default()
-        .attachment(0)
-        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-    let subpass = vk::SubpassDescription::default()
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(std::slice::from_ref(&color_ref));
-    let dep = vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::FRAGMENT_SHADER,
-        )
-        .src_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
-    let info = vk::RenderPassCreateInfo::default()
-        .attachments(std::slice::from_ref(&attachment))
-        .subpasses(std::slice::from_ref(&subpass))
-        .dependencies(std::slice::from_ref(&dep));
-    device
-        .create_render_pass(&info)
-        .map_err(|e| crate::vulkan::error::map_vk_result(e, "SSAO blur render pass"))
-}
-
-// Allocate an R8_UNORM target usable as both color attachment and sampled
-// texture. No pre-transition: the render pass declares an `UNDEFINED`
-// initial layout.
-fn create_ao_target(
-    alloc: &DeviceAllocator,
-    device: &VkDevice,
-    width: u32,
-    height: u32,
-) -> RenderResult<GpuImage> {
-    let pooled = create_image(
-        alloc,
-        &super::super::texture::ImageSpec {
-            width,
-            height,
-            format: SSAO_OCCLUSION_FORMAT,
-            tiling: vk::ImageTiling::OPTIMAL,
-            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            samples: vk::SampleCountFlags::TYPE_1,
-        },
-    )?;
-    let view = create_image_view(
-        device,
-        pooled.image(),
-        SSAO_OCCLUSION_FORMAT,
-        vk::ImageAspectFlags::COLOR,
-    )?;
-    Ok(GpuImage::from_pooled(pooled, view))
-}
-
-// Build a fullscreen kernel/blur pipeline. No vertex input (the
-// fullscreen triangle is procedural in the VS); no depth; no blend; writes
-// the R8 occlusion target.
-fn create_fullscreen_pipeline(
-    device: &VkDevice,
-    render_pass: vk::RenderPass,
-    layout: vk::PipelineLayout,
-    vert_spv: &[u8],
-    frag_spv: &[u8],
-) -> RenderResult<OwnedPipeline> {
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
-    let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .line_width(1.0)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE);
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-    let depth = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(false)
-        .depth_write_enable(false)
-        .depth_compare_op(vk::CompareOp::ALWAYS);
-    let blend_attach = vk::PipelineColorBlendAttachmentState::default()
-        .color_write_mask(vk::ColorComponentFlags::R)
-        .blend_enable(false);
-    let blend = vk::PipelineColorBlendStateCreateInfo::default()
-        .attachments(std::slice::from_ref(&blend_attach));
-    let dyn_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dyn_states);
-
-    let info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vert_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth)
-        .color_blend_state(&blend)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass)
-        .subpass(0);
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| crate::vulkan::error::map_vk_result(e, "create ssao fullscreen pso"))?;
-    Ok(pipeline)
-}
-
-// The Vulkan device handles every SSAO target builder threads through: the
-// instance, logical device, and physical device used to allocate images. Bundled
-// because they always travel together through `new` / `build_targets` / `rebuild`.
-#[derive(Clone, Copy)]
-pub(in crate::vulkan) struct SsaoDeviceCtx<'a> {
-    pub alloc: &'a DeviceAllocator,
-    pub device: &'a VkDevice,
+    pub(in crate::vulkan) settings: SsaoSettings,
+    pass: SsaoPass<PostPipeline, PostTarget>,
 }
 
 impl SsaoResources {
     pub(in crate::vulkan) fn new(
-        ctx: &SsaoDeviceCtx,
-        width: u32,
-        height: u32,
-        frames: usize,
-        settings: ssao::SsaoSettings,
-        ao_views: &[vk::ImageView],
-        hot_reload: bool,
+        device: &VkPostDevice,
+        settings: SsaoSettings,
+        extent: vk::Extent2D,
     ) -> RenderResult<Self> {
-        let device = ctx.device;
-        let fullscreen_render_pass = create_fullscreen_render_pass(device)?;
-        let blur_render_pass = create_blur_render_pass(device)?;
-
-        // Kernel set 0: the G-buffer and its sampler. Blur set 0: ao_raw + the
-        // G-buffer, then their samplers.
-        let kernel_bindings = source_set_bindings(1);
-        let blur_bindings = source_set_bindings(2);
-        let kernel_set_layout = create_descriptor_set_layout(device, &kernel_bindings)?;
-        let blur_set_layout = create_descriptor_set_layout(device, &blur_bindings)?;
-
-        // Pipeline layouts.
-        let params_push = vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-            .offset(0)
-            .size(std::mem::size_of::<SsaoParams>() as u32);
-        let kernel_set_layouts = [kernel_set_layout.handle()];
-        let kernel_layout = device
-            .create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::default()
-                    .set_layouts(&kernel_set_layouts)
-                    .push_constant_ranges(std::slice::from_ref(&params_push)),
-            )
-            .map_err(|e| crate::vulkan::error::map_vk_result(e, "ssao kernel layout"))?;
-
-        let blur_set_layouts = [blur_set_layout.handle()];
-        let blur_layout = device
-            .create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::default().set_layouts(&blur_set_layouts),
-            )
-            .map_err(|e| crate::vulkan::error::map_vk_result(e, "ssao blur layout"))?;
-
-        // Pipelines.
-        let shaders = compile_ssao_shaders(hot_reload)?;
-        let kernel_pso = create_fullscreen_pipeline(
-            device,
-            fullscreen_render_pass.handle(),
-            kernel_layout.handle(),
-            &shaders.fullscreen_vs,
-            &shaders.kernel_fs,
-        )?;
-        let blur_pso = create_fullscreen_pipeline(
-            device,
-            blur_render_pass.handle(),
-            blur_layout.handle(),
-            &shaders.fullscreen_vs,
-            &shaders.blur_fs,
-        )?;
-
-        // Descriptor pool: `frames` kernel sets + `frames` blur sets. The
-        // kernel/blur sets are per-frame so each binds its own frame's unified
-        // G-buffer normal+depth.
-        let pool_sizes = PoolSizes::default()
-            .sets(&kernel_bindings, frames as u32)
-            .sets(&blur_bindings, frames as u32)
-            .build();
-        let descriptor_pool = device
-            .create_descriptor_pool(
-                &vk::DescriptorPoolCreateInfo::default()
-                    .pool_sizes(&pool_sizes)
-                    .max_sets(frames as u32 * 2),
-            )
-            .map_err(|e| crate::vulkan::error::map_vk_result(e, "ssao descriptor pool"))?;
-
-        let kernel_layouts: Vec<_> = (0..frames).map(|_| kernel_set_layout.handle()).collect();
-        let kernel_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &kernel_layouts)?;
-        let blur_layouts: Vec<_> = (0..frames).map(|_| blur_set_layout.handle()).collect();
-        let blur_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &blur_layouts)?;
-
-        // Dedicated linear-clamp sampler for kernel/blur reads.
-        let sampler = create_sampler_linear_clamp(device)?;
-
-        // Resolution-dependent targets + framebuffers.
-        let mut me = Self {
+        Ok(Self {
             settings,
-            fullscreen_render_pass,
-            blur_render_pass,
-            _kernel_set_layout: kernel_set_layout,
-            kernel_layout,
-            kernel_pso,
-            _blur_set_layout: blur_set_layout,
-            blur_layout,
-            blur_pso,
-            kernel_sets,
-            blur_sets,
-            _descriptor_pool: descriptor_pool,
-            sampler,
-            // Placeholder GpuImage; replaced by build_targets below. The
-            // blurred `ao_output` lives in the transient pool, not here.
-            ao_raw: GpuImage::null(),
-            kernel_framebuffer: OwnedFramebuffer::null(),
-            blur_framebuffers: Vec::new(),
-        };
-        me.build_targets(ctx, width, height, ao_views)?;
-        // The kernel/blur normal+depth bindings are re-pointed at the unified
-        // pre-pass per-frame views by the caller before the first frame; the
-        // raw-AO view stands in until then so every binding is valid.
-        me.wire_kernel_and_blur_sets(device, &[]);
-        Ok(me)
+            pass: SsaoPass::new(device, post_extent(extent))?,
+        })
     }
 
-    // Allocate or re-allocate the resolution-dependent targets + framebuffers
-    // at the given extent. Caller has either just constructed `self` (raw
-    // fields are `NULL`) or already idled the device + destroyed the previous
-    // targets via `destroy_targets`.
-    fn build_targets(
-        &mut self,
-        ctx: &SsaoDeviceCtx,
-        width: u32,
-        height: u32,
-        ao_views: &[vk::ImageView],
-    ) -> RenderResult<()> {
-        let SsaoDeviceCtx { alloc, device } = ctx;
-        let w = width.max(1);
-        let h = height.max(1);
-        self.ao_raw = create_ao_target(alloc, device, w, h)?;
-
-        self.kernel_framebuffer = device
-            .create_framebuffer(
-                &vk::FramebufferCreateInfo::default()
-                    .render_pass(self.fullscreen_render_pass.handle())
-                    .attachments(std::slice::from_ref(&self.ao_raw.view))
-                    .width(w)
-                    .height(h)
-                    .layers(1),
-            )
-            .map_err(|e| crate::vulkan::error::map_vk_result(e, "ssao kernel framebuffer"))?;
-        // One blur framebuffer per frame in flight, each bound to that frame's
-        // pooled `ao_output` view.
-        let mut blur_framebuffers = Vec::with_capacity(ao_views.len());
-        for &ao_view in ao_views {
-            let fb = device
-                .create_framebuffer(
-                    &vk::FramebufferCreateInfo::default()
-                        .render_pass(self.blur_render_pass.handle())
-                        .attachments(std::slice::from_ref(&ao_view))
-                        .width(w)
-                        .height(h)
-                        .layers(1),
-                )
-                .map_err(|e| crate::vulkan::error::map_vk_result(e, "ssao blur framebuffer"))?;
-            blur_framebuffers.push(fb);
-        }
-        self.blur_framebuffers = blur_framebuffers;
-        Ok(())
-    }
-
-    // Wire the per-frame kernel + blur descriptor sets to the current G-buffer /
-    // raw-AO views. Called after `build_targets` (init or resize) so the
-    // descriptor-set targets stay in sync with the underlying images.
-    //
-    // `gbuffer_views` carries the unified pre-pass's per-frame normal+depth
-    // views; kernel/blur set `i` binds slot `i`. When empty (the init pre-wire
-    // before the caller re-points them) the raw-AO view stands in so the binding
-    // is always a valid `SHADER_READ_ONLY` image. The blur set binding 0 always
-    // samples the SSAO-internal raw AO (a single shared target).
-    fn wire_kernel_and_blur_sets(&self, device: &VkDevice, gbuffer_views: &[vk::ImageView]) {
-        let sampler = self.sampler.handle();
-        for f in 0..self.kernel_sets.len() {
-            let gb_view = if gbuffer_views.is_empty() {
-                self.ao_raw.view
-            } else {
-                gbuffer_views[f % gbuffer_views.len()]
-            };
-            write_source_set(device, self.kernel_sets[f], &[(gb_view, sampler)]);
-            write_source_set(
-                device,
-                self.blur_sets[f],
-                &[(self.ao_raw.view, sampler), (gb_view, sampler)],
-            );
-        }
-    }
-
-    // Re-point the per-frame kernel/blur G-buffer bindings at the unified
-    // pre-pass per-frame normal+depth views. Called by the caller (init /
-    // resize) when the unified G-buffer pre-pass is active. Mirrors the SSR
-    // resolve / SSGI re-points.
-    pub(in crate::vulkan) fn wire_kernel_and_blur_sets_gbuffer(
-        &self,
-        device: &VkDevice,
-        gbuffer_views: &[vk::ImageView],
-    ) {
-        self.wire_kernel_and_blur_sets(device, gbuffer_views);
-    }
-
-    fn destroy_targets(&mut self, _device: &VkDevice) {
-        if !self.kernel_framebuffer.is_null() {
-            self.kernel_framebuffer = OwnedFramebuffer::null();
-            self.blur_framebuffers.clear();
-            self.ao_raw = GpuImage::null();
-            // `ao_output` is pool-owned (per frame); the pool frees it.
-        }
-    }
-
-    // Rebuild the resolution-dependent targets at a new swapchain extent and
-    // re-wire the kernel + blur descriptor sets. The caller has already
-    // idled the device.
+    // Recreate the raw occlusion at a new render resolution. The caller has
+    // already idled the device.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        ctx: &SsaoDeviceCtx,
-        width: u32,
-        height: u32,
-        gbuffer_views: &[vk::ImageView],
-        ao_views: &[vk::ImageView],
+        device: &VkPostDevice,
+        extent: vk::Extent2D,
     ) -> RenderResult<()> {
-        let device = ctx.device;
-        self.destroy_targets(device);
-        self.build_targets(ctx, width, height, ao_views)?;
-        self.wire_kernel_and_blur_sets(device, gbuffer_views);
-        Ok(())
+        self.pass.resize(device, post_extent(extent))
     }
 
-    // Destroy every SSAO resource. The caller has already idled the device.
-    pub(in crate::vulkan) fn destroy(&mut self, device: &VkDevice) {
-        self.destroy_targets(device);
+    // Swap in freshly built pipelines after a hot reload.
+    pub(in crate::vulkan) fn swap_pipelines(
+        &mut self,
+        pipelines: concinnity_core::render::post::ssao::SsaoPipelines<PostPipeline>,
+    ) {
+        self.pass.swap_pipelines(pipelines);
     }
 }
 
-// Encoder
 impl VkContext {
-    // Encode the GTAO horizon-search kernel and the depth-aware blur over the
-    // unified pre-pass's normal+depth G-buffer. Called from `record_frame`
-    // before `cmd_begin_render_pass(main_render_pass)` so the main fragment
-    // shader sees the fresh blurred occlusion via set 0 binding 6. No-op when
-    // SSAO is disabled.
+    // Encode the GTAO kernel and the depth-aware blur over the unified
+    // pre-pass's normal+depth into this slot's pooled `ao_output`, ahead of the
+    // main pass that samples it via set 0 binding 6. No-op when SSAO is
+    // disabled.
     pub(in crate::vulkan) fn encode_ssao(
         &self,
-        rec: &Recorder<'_>,
+        cmd: vk::CommandBuffer,
         frame_idx: usize,
         fov_y_radians: f32,
         aspect: f32,
-    ) {
+    ) -> RenderResult<()> {
         let Some(ssao) = &self.ssao else {
-            return;
+            return Ok(());
         };
-        let extent = self.targets.render_extent;
-        let params = ssao.settings.params(fov_y_radians, aspect);
-        let area = vk::Rect2D::default().extent(extent);
-
-        // Kernel: GTAO horizon search over the G-buffer -> raw R8 AO. The
-        // fullscreen kernel uses a positive-height viewport; the kernel shader's
-        // UV map ((pos+1)/2) lines up with the upright G-buffer.
-        rec.begin_render_pass(
-            &ssao.fullscreen_render_pass,
-            &ssao.kernel_framebuffer,
-            area,
-            &[],
-        );
-        rec.set_full_viewport(extent);
-        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &ssao.kernel_pso);
-        rec.bind_descriptor_sets(
-            vk::PipelineBindPoint::GRAPHICS,
-            &ssao.kernel_layout,
-            0,
-            std::slice::from_ref(&ssao.kernel_sets[frame_idx]),
-            &[],
-        );
-        rec.push_constants(
-            &ssao.kernel_layout,
-            vk::ShaderStageFlags::FRAGMENT,
-            0,
-            &params,
-        );
-        rec.draw_fullscreen_triangle();
-        rec.end_render_pass();
-
-        // Blur: depth-aware smoothing of raw AO -> final blurred AO. `ao`'s
-        // layout transitions are graph-driven: the executor emits ao_output's
-        // barriers_before (UNDEFINED -> COLOR_ATTACHMENT before this pass,
-        // COLOR_ATTACHMENT -> SHADER_READ before Main), and this render pass
-        // keeps `ao` in COLOR_ATTACHMENT_OPTIMAL throughout.
-        rec.begin_render_pass(
-            &ssao.blur_render_pass,
-            &ssao.blur_framebuffers[frame_idx],
-            area,
-            &[],
-        );
-        rec.set_full_viewport(extent);
-        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &ssao.blur_pso);
-        rec.bind_descriptor_sets(
-            vk::PipelineBindPoint::GRAPHICS,
-            &ssao.blur_layout,
-            0,
-            std::slice::from_ref(&ssao.blur_sets[frame_idx]),
-            &[],
-        );
-        rec.draw_fullscreen_triangle();
-        rec.end_render_pass();
+        let gbuffer = self.gbuffer.as_ref().ok_or_else(|| {
+            RenderError::Other("SSAO enabled but the G-buffer pre-pass is missing".into())
+        })?;
+        let view = self
+            .targets
+            .transient_pool
+            .view_for("ao_output", frame_idx)
+            .ok_or_else(|| RenderError::Other("ao_output missing from transient pool".into()))?;
+        ssao.pass.encode(
+            &self.post_device(frame_idx),
+            &cmd,
+            SsaoInputs {
+                normal_depth: gbuffer.normal_depth_view(frame_idx),
+                output: VkAttachment {
+                    view,
+                    extent: self.targets.render_extent,
+                    format: OCCLUSION_FORMAT,
+                    // The executor moves `ao_output` into the attachment layout
+                    // ahead of this pass and out before the main pass samples it.
+                    rest: AttachmentRest::Graph,
+                },
+            },
+            &ssao.settings.params(fov_y_radians, aspect),
+        )
     }
 }

@@ -46,9 +46,6 @@ use crate::vulkan::owned::{
 // attachment + sampled image on desktop GPUs.
 pub(super) const HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
-// MAX_BLOOM_MIPS now lives in `crate::vulkan::post::bloom` (re-exported as
-// `crate::vulkan::post::MAX_BLOOM_MIPS`).
-
 // Cascaded-shadow-map resources, grouped off the flat `VkContext` field soup
 // (mirrors the DirectX backend's `self.shadow`). The barrier executor resolves
 // `shadow_map` through `build_barrier_registry`, so moving these fields behind
@@ -726,8 +723,9 @@ pub(super) struct ParticleState {
 // Composite (post-process) pass: tonemaps the HDR resolve image onto the
 // swapchain, with the text overlay drawn here too, post-tonemap. The
 // framebuffers are one per swapchain image; `sets` is one per frame-in-flight
-// slot, binding the matching HDR resolve image (binding 0), bloom mip 0
-// (binding 1), and the 3D color LUT (binding 2), read through the post sampler.
+// slot, binding the matching HDR resolve image (binding 0), the bloom chain's
+// top octave (binding 1), and the 3D color LUT (binding 2), read through the
+// post sampler.
 pub(super) struct CompositeState {
     pub render_pass: OwnedRenderPass,
     pub framebuffers: Vec<OwnedFramebuffer>,
@@ -735,30 +733,6 @@ pub(super) struct CompositeState {
     pub pipeline_layout: OwnedPipelineLayout,
     pub _set_layout: OwnedSetLayout,
     pub sets: Vec<vk::DescriptorSet>,
-}
-
-// Bloom chain. The mips, framebuffers, and input descriptor sets are all
-// per-frame-in-flight slot (outer Vec): concurrent slots must not share a bloom
-// target. Render passes / pipelines / layouts are slot-agnostic. `mips` is
-// `[frame][mip]`, largest first, with mip 0 at half the HDR resolution;
-// `mip_extents` is shared across frame slots. `blend_framebuffers` has one fewer
-// entry than `write_framebuffers` (the smallest mip is never upsampled into).
-// `input_sets` is `[frame][input]`: input 0 binds the HDR resolve image, input
-// `1 + m` binds bloom mip `m`.
-pub(super) struct BloomState {
-    pub write_pass: OwnedRenderPass,
-    pub blend_pass: OwnedRenderPass,
-    pub pipeline_prefilter: OwnedPipeline,
-    pub pipeline_downsample: OwnedPipeline,
-    pub pipeline_upsample: OwnedPipeline,
-    pub pipeline_layout: OwnedPipelineLayout,
-    pub set_layout: OwnedSetLayout,
-    pub descriptor_pool: OwnedDescriptorPool,
-    pub mips: Vec<Vec<GpuImage>>,
-    pub mip_extents: Vec<vk::Extent2D>,
-    pub write_framebuffers: Vec<Vec<OwnedFramebuffer>>,
-    pub blend_framebuffers: Vec<Vec<OwnedFramebuffer>>,
-    pub input_sets: Vec<Vec<vk::DescriptorSet>>,
 }
 
 // HUD text pass: the glyph atlases with their set layout and one set per atlas,
@@ -1117,8 +1091,8 @@ pub(crate) struct VkContext {
     // HUD text pass. See [`TextState`].
     pub(super) text: TextState,
 
-    // Bloom chain. See [`BloomState`].
-    pub(super) bloom: BloomState,
+    // The shared bloom chain. `None` only once torn down.
+    pub(super) bloom: Option<VkBloomPass>,
     // Post-process tunables (bloom intensity / threshold / knee, exposure,
     // vignette). Drives whether the bloom passes run and feeds the composite
     // + bloom-prefilter push constants.
@@ -1168,7 +1142,7 @@ pub(crate) struct VkContext {
     // target, then this blurs by roughness and composites over the scene into
     // `reflection_composite.output` -- the scene image the post stack consumes in
     // place of the raw resolve output. Mirrors `DxContext::reflection_composite`.
-    pub(super) reflection_composite: Option<ReflectionCompositeResources>,
+    pub(super) reflection_composite: Option<VkReflectionCompositePass>,
 
     // Screen-space global illumination. `Some` only when the world's
     // `PostProcessConfig` selected `indirect_lighting: ssgi`. The pyramid,
@@ -1956,21 +1930,15 @@ impl VkContext {
         // Composite pass resources (the LUT retires through the allocator).
         self.scene.color_lut = GpuImage::null();
 
-        // Bloom resources (mips + framebuffers freed by
-        // destroy_swapchain_resources above).
-
         // The shared post passes' framebuffers, before the targets whose views
-        // they name, then the TAA resolve itself (pipeline + accumulation
-        // images).
+        // they name, then the TAA resolve and the bloom chain themselves
+        // (pipelines + targets).
         self.post.cache.destroy();
         self.taa = None;
+        self.bloom = None;
 
-        // SSAO resources (pre-pass + kernel + blur). The blur framebuffer
-        // references the pool's `ao_output` view, so SSAO is torn down before
-        // the transient pool below (framebuffers before their views).
-        if let Some(mut ssao) = self.ssao.take() {
-            ssao.destroy(device);
-        }
+        // SSAO resources (kernel + blur pipelines and the raw occlusion).
+        self.ssao = None;
         self.scene.ssao_white = GpuImage::null();
 
         // Transient image pool (the graph-owned transients, e.g. `ao_output`).
@@ -1980,9 +1948,7 @@ impl VkContext {
         self.ssr = None;
 
         // Reflection composite (roughness blur + composite of the SSR/RT output).
-        if let Some(mut rc) = self.reflection_composite.take() {
-            rc.destroy(device);
-        }
+        self.reflection_composite = None;
 
         // SSGI resources (pyramids, accumulation and pipelines).
         self.ssgi = None;

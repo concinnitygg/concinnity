@@ -1,8 +1,6 @@
 //! Screen-space ambient occlusion (GTAO) configuration. Backend-agnostic
 //! resolve of the authored `PostProcessConfig` SSAO fields into clamped
-//! settings, plus the per-frame GPU uniform. The horizon-search arc integral
-//! itself lives in each backend's shader; this module owns only the parameter
-//! math so it can be unit-tested without a GPU.
+//! settings, plus the per-frame GPU uniform.
 
 use crate::components::PostProcessConfig;
 use crate::gfx::camera::view_ray_scale;

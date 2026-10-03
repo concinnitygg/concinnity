@@ -51,18 +51,6 @@ impl GpuImage {
         self.pooled.attach_view(view);
         self.aux_views.push(view);
     }
-
-    // Wrap handles owned elsewhere (e.g. the transient pool), so a mip chain
-    // can index owned and borrowed images uniformly. Dropping it releases
-    // nothing.
-    pub(super) fn borrowed(image: vk::Image, view: vk::ImageView) -> Self {
-        Self {
-            image,
-            view,
-            aux_views: Vec::new(),
-            pooled: PooledImage::null(),
-        }
-    }
 }
 
 // Find a memory type index that satisfies both the type filter and required properties.

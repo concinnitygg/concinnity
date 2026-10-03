@@ -1,5 +1,5 @@
 //! Composite (post-process) pass + text overlay. The post-process pipeline
-//! reads `scene_color`, the bloom mip-0 target, and the 3D color-grading LUT,
+//! reads `scene_color`, the bloom chain's top octave, and the 3D color-grading LUT,
 //! then writes ACES tonemap + gamma + FXAA into the drawable. Text is drawn
 //! after in the same render pass so it sits on top of the tonemapped image in
 //! display-referred LDR space; its geometry comes from sub-ranges of this
@@ -39,6 +39,8 @@ use crate::metal::scoped_encoder::ScopedEncoder;
 struct CompositePass<'a> {
     ctx: &'a MtlContext,
     scene_color: &'a ProtocolObject<dyn MTLTexture>,
+    // The pool's `bloom_top`, fetched once the pass is known to run.
+    bloom_top: &'a ProtocolObject<dyn MTLTexture>,
     // The window's content size in logical points, which the text vertices are
     // in and the text shader divides by. Read once for the pass: every label
     // scales against it.
@@ -60,9 +62,10 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
     fn composite_draw(&self, enc: &Self::Rec, _args: &()) {
         enc.set_pipeline(&self.ctx.composite.pipeline);
         enc.set_fragment_texture(self.scene_color, 0);
-        // Bloom mip 0 at texture(1). Always bound so the binding resolves;
-        // the shader skips the sample when bloom_intensity == 0.
-        enc.set_fragment_texture(self.ctx.targets.bloom.mips[0].as_ref(), 1);
+        // The bloom chain's top octave at texture(1). Always bound so the
+        // binding resolves; the shader skips the sample when
+        // bloom_intensity == 0.
+        enc.set_fragment_texture(self.bloom_top, 1);
         // 3D color-grading LUT at texture(2). Always bound -- an identity
         // LUT stands in when the world declares no ColorLut.
         enc.set_fragment_texture(self.ctx.scene.color_lut.as_ref(), 2);
@@ -250,6 +253,7 @@ impl MtlContext {
                 None => (logical.0.max(0.0) as u32, logical.1.max(0.0) as u32),
             }
         };
+        let bloom_top = self.targets.transient_pool.bloom_top()?;
         // Opening the encoder is what begins the pass, and the guard ends it
         // however this function leaves, including on a failed text draw: a
         // render encoder left open crashes at commit.
@@ -265,6 +269,7 @@ impl MtlContext {
         let pass = CompositePass {
             ctx: self,
             scene_color: scene_color.as_ref(),
+            bloom_top,
             logical,
             framebuffer,
             // A G-buffer channel view swaps the fragment onto its visualization

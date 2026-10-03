@@ -22,7 +22,7 @@ use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_core::input::keymap;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
-use concinnity_core::render::post::ssao::SsaoSettings;
+use concinnity_core::render::post::ssao::settings::SsaoSettings;
 use concinnity_core::render::post::ssgi::settings::SsgiSettings;
 use concinnity_core::render::post::ssr::settings::SsrSettings;
 use concinnity_core::render::{backend, overlay_maps, scene_flow, snapshot, text};

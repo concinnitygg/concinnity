@@ -63,10 +63,9 @@ pub(super) fn build_render_targets(
 
     // Transient image pool: the graph-owned transients (`ao_output`,
     // `bloom_top`, and the three G-buffer color channels). Built before the
-    // bloom chain so bloom mip 0 binds the pooled `bloom_top` image, before
-    // SSAO so its blur framebuffers + the main pass binding 6 bind the pooled
-    // `ao_output`, and before the G-buffer pre-pass so its framebuffers bind
-    // the pooled MRT channels.
+    // composite and the main pass bind its `bloom_top` and `ao_output`, and
+    // before the G-buffer pre-pass so its framebuffers bind the pooled MRT
+    // channels.
     let transient_pool = crate::vulkan::transient_pool::TransientImagePool::build(
         &crate::vulkan::transient_pool::TransientPoolGpu {
             instance: &hw.instance,
@@ -79,7 +78,6 @@ pub(super) fn build_render_targets(
         &plan_pool_slots(
             PoolGates {
                 ssao: ssao_enabled,
-                bloom: features.bloom_on,
                 gbuffer: features.gbuffer_enabled,
             },
             (render_extent.width, render_extent.height),

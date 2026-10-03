@@ -214,21 +214,6 @@ impl<'a> Recorder<'a> {
         };
     }
 
-    // Viewport and scissor covering `extent`, which is what every fullscreen
-    // pass sets and what a geometry pass resets to.
-    pub(in crate::vulkan) fn set_full_viewport(&self, extent: vk::Extent2D) {
-        let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: extent.width as f32,
-            height: extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-        self.set_viewport(&viewport);
-        self.set_scissor(&vk::Rect2D::default().extent(extent));
-    }
-
     pub(in crate::vulkan) fn draw(
         &self,
         vertex_count: u32,
@@ -246,11 +231,6 @@ impl<'a> Recorder<'a> {
                 first_instance,
             )
         };
-    }
-
-    // The fullscreen triangle every post pass draws.
-    pub(in crate::vulkan) fn draw_fullscreen_triangle(&self) {
-        self.draw(3, 1, 0, 0);
     }
 
     pub(in crate::vulkan) fn dispatch(&self, x: u32, y: u32, z: u32) {

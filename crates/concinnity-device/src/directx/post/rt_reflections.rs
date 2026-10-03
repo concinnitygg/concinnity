@@ -452,6 +452,6 @@ impl DxContext {
 
         // Blur the reflection by roughness and composite it over the scene into the
         // reflection-composite output (the scene the post stack then consumes).
-        self.encode_reflection_composite(cmd, reflection_srv);
+        self.encode_reflection_composite(cmd, frame_idx, reflection_srv);
     }
 }

@@ -79,7 +79,8 @@ impl DxContext {
     // / downsample / upsample), GPU-cull compute, auto-exposure (build +
     // average), projected-decal, transparent (glass + water), volumetric-fog, the
     // unified G-buffer pre-pass (static / instanced / skinned), SSAO (kernel,
-    // blur), SSR (resolve), TAA (resolve), and bucket 0 of the GPU-driven main
+    // blur), SSR (resolve), the reflection composite (blur, composite), TAA
+    // (resolve), and bucket 0 of the GPU-driven main
     // pass when it is live (rebuilt from the world default Shader's pair where
     // the world declares one). The shadow PSO is out of scope here.
     pub(super) fn reload_shaders(&mut self) -> RenderResult<()> {
@@ -124,41 +125,11 @@ impl DxContext {
             )
         });
 
-        // Bloom (always live).
-        let bloom_shaders = super::post::bloom::compile_bloom_shaders(hr)?;
-        let bloom_prefilter = super::context::dump_on_err(
-            info_queue,
-            super::post::bloom::create_bloom_pso(
-                device,
-                &self.bloom.root_sig,
-                &bloom_shaders.vs,
-                &bloom_shaders.prefilter_ps,
-                super::texture::HDR_FORMAT,
-                false,
-            ),
-        )?;
-        let bloom_downsample = super::context::dump_on_err(
-            info_queue,
-            super::post::bloom::create_bloom_pso(
-                device,
-                &self.bloom.root_sig,
-                &bloom_shaders.vs,
-                &bloom_shaders.downsample_ps,
-                super::texture::HDR_FORMAT,
-                false,
-            ),
-        )?;
-        let bloom_upsample = super::context::dump_on_err(
-            info_queue,
-            super::post::bloom::create_bloom_pso(
-                device,
-                &self.bloom.root_sig,
-                &bloom_shaders.vs,
-                &bloom_shaders.upsample_ps,
-                super::texture::HDR_FORMAT,
-                true,
-            ),
-        )?;
+        // Bloom (live outside a resize).
+        let bloom_rebuilt = rebuild_if_live!(
+            self.bloom.is_some(),
+            concinnity_core::render::post::bloom::build_pipelines(&self.post_device(0))
+        );
 
         // Bucket 0 of the GPU-driven main pass, from the engine's freshly
         // compiled pair; a world default Shader's own pair is spliced into the
@@ -312,12 +283,10 @@ impl DxContext {
             .transpose()?;
 
         // SSAO (only when PostProcessConfig opted in).
-        let ssao_rebuilt = self
-            .ssao
-            .resources
-            .as_ref()
-            .map(|ssao| super::post::ssao::rebuild_ssao_pipelines(device, ssao, hr, info_queue))
-            .transpose()?;
+        let ssao_rebuilt = rebuild_if_live!(
+            self.ssao.resources.is_some(),
+            concinnity_core::render::post::ssao::build_pipelines(&self.post_device(0))
+        );
 
         // SSR (only when the resolve itself is authored).
         let ssr_rebuilt = rebuild_if_live!(
@@ -350,15 +319,12 @@ impl DxContext {
             .transpose()?;
 
         // Reflection composite (blur + composite PSOs); only when built.
-        let refl_composite_rebuilt = self
-            .reflection_composite
-            .as_ref()
-            .map(|rc| {
-                super::post::reflection_composite::rebuild_reflection_composite_pipelines(
-                    device, rc, hr, info_queue,
-                )
-            })
-            .transpose()?;
+        let refl_composite_rebuilt = rebuild_if_live!(
+            self.reflection_composite.is_some(),
+            concinnity_core::render::post::reflection_composite::build_pipelines(
+                &self.post_device(0)
+            )
+        );
 
         // All builds succeeded; swap into the live context. After this
         // point the next frame's draw calls bind the freshly compiled
@@ -367,9 +333,9 @@ impl DxContext {
         if let Some(p) = text_pso {
             self.text.pso = Some(p);
         }
-        self.bloom.pso_prefilter = bloom_prefilter;
-        self.bloom.pso_downsample = bloom_downsample;
-        self.bloom.pso_upsample = bloom_upsample;
+        if let (Some(rebuilt), Some(bloom)) = (bloom_rebuilt, self.bloom.as_mut()) {
+            bloom.swap_pipelines(rebuilt);
+        }
         if let Some((p, engine_pair)) = bindless_main_pso {
             self.cull.main_bindless_pso = Some(p);
             self.cull.bindless_main_shaders = engine_pair;
@@ -405,7 +371,7 @@ impl DxContext {
             fog.froxel_pso = froxel;
         }
         if let (Some(rebuilt), Some(ssao)) = (ssao_rebuilt, self.ssao.resources.as_mut()) {
-            swap_ssao_pipelines(ssao, rebuilt);
+            ssao.swap_pipelines(rebuilt);
         }
         if let (Some(rebuilt), Some(ssr)) = (ssr_rebuilt, self.ssr.as_mut()) {
             ssr.swap_pipeline(rebuilt);
@@ -419,24 +385,13 @@ impl DxContext {
         if let (Some(rebuilt), Some(rc)) =
             (refl_composite_rebuilt, self.reflection_composite.as_mut())
         {
-            super::post::reflection_composite::swap_reflection_composite_pipelines(rc, rebuilt);
+            rc.swap_pipelines(rebuilt);
         }
         if let (Some(rebuilt), Some(taa)) = (taa_rebuilt, self.taa.as_mut()) {
             taa.pass.swap_pipeline(rebuilt);
         }
         Ok(())
     }
-}
-
-// Per-resource swap helpers; keep the field assignments in one place so the
-// reload pass reads as a list of "swap this subsystem" intents.
-
-fn swap_ssao_pipelines(
-    ssao: &mut super::post::ssao::SsaoResources,
-    rebuilt: super::post::ssao::RebuiltSsaoPipelines,
-) {
-    ssao.kernel_pso = rebuilt.kernel_pso;
-    ssao.blur_pso = rebuilt.blur_pso;
 }
 
 // World-Shader runtime hot-swap (RenderBackend::update_world_shader)

@@ -18,19 +18,16 @@ use objc2_metal::{
 };
 
 use crate::metal::builtin_shaders::{FULLSCREEN_VERT, ShaderProgram, entry_function};
-use crate::metal::context::MtlContext;
 use crate::metal::encode::RenderEncode;
 
 // Blend configuration for a fullscreen pass's single color attachment.
 #[derive(Clone, Copy)]
 pub(crate) enum FullscreenBlend {
     // No blending; the fragment output replaces the destination. Used by every
-    // pass that writes a fresh target (SSAO kernel/blur, SSR resolve, TAA
-    // resolve, the SSGI pyramid and trace, the bloom prefilter/downsample, the composite).
+    // pass that writes a fresh target.
     Replace,
     // Additive accumulation (`src·1 + dst·1`). Used where a pass layers an
-    // extra term onto content it loaded: the bloom upsample chain and the
-    // SSGI composite.
+    // extra term onto content it loaded, such as the bloom upsample chain.
     Additive,
     // Premultiplied "over" (`src·1 + dst·(1 − srcA)`): the fragment already
     // folded coverage into its color, so the source factor is `One`. Used by
@@ -176,16 +173,4 @@ pub(in crate::metal) fn encode_fullscreen_pass(
     }
     enc.endEncoding();
     Ok(())
-}
-
-impl MtlContext {
-    // `encode_fullscreen_pass` against this context's own timing resources.
-    pub(in crate::metal) fn fullscreen_pass(
-        &self,
-        cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        pass: FullscreenPass,
-        bind: impl FnOnce(&ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>),
-    ) -> RenderResult<()> {
-        encode_fullscreen_pass(cmd_buf, self.diagnostics.pass_timing.as_ref(), pass, bind)
-    }
 }

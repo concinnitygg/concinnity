@@ -1,9 +1,9 @@
-//! Screen-space reflections: the reflection targets the SSR and ray-traced
-//! resolves write, the roughness-aware blur + composite that blends them over
-//! the scene, and where the resolve's inputs come from this frame. The resolve
-//! itself -- its pipeline and its draw -- is written once in
+//! Screen-space reflections: the reflection target the SSR and ray-traced
+//! resolves write, and where the resolve's inputs come from this frame. The
+//! resolve itself -- its pipeline and its draw -- is written once in
 //! `concinnity_core::render::post::ssr` and reaches Metal through
-//! `MtlPostDevice`.
+//! `MtlPostDevice`; the composite that blends the target over the scene is in
+//! `reflection_composite.rs`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::metal::error::allocation_failed;
@@ -13,156 +13,62 @@ use concinnity_core::render::post::ssr::settings::SsrSettings;
 use concinnity_core::render::post::ssr::{SsrInputs, SsrPass};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{
-    MTLDevice as _, MTLLoadAction, MTLPixelFormat, MTLRenderPipelineState, MTLTexture,
-    MTLTextureUsage,
-};
+use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureUsage};
 
-use crate::metal::builtin_shaders::{REFLECTION_BLUR, REFLECTION_COMPOSITE};
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
-use crate::metal::encode::RenderEncode;
-use crate::metal::post::fullscreen::{
-    FullscreenBlend, FullscreenPass, PassTimer, build_fullscreen_pipeline,
-    set_fragment_sampler_range,
-};
 use crate::metal::post::post_device::MtlPostPipeline;
+use crate::metal::post::reflection_composite::MtlReflectionCompositePass;
 
 // The shared resolve, holding Metal's own pipeline handle.
 pub(crate) type MtlSsrPass = SsrPass<MtlPostPipeline>;
 
 // All screen-space-reflection feature state grouped into one unit: the
-// resolved tunables, the reflection targets, and the pipelines that fill them.
-// `targets` is `Some` when SSR, SSGI, *or* RT reflections are on (they share
-// the G-buffer pre-pass output and RT reuses `targets.reflection`); `settings`
-// and `resolve` are `Some` only when SSR itself is on.
+// resolved tunables, the reflection target, the resolve that fills it, and the
+// composite that blends it over the scene. `reflection` is `Some` when SSR,
+// SSGI, *or* RT reflections are on (RT writes it too); `settings` and `resolve`
+// are `Some` only when SSR itself is on, and `composite` when SSR or RT is.
 pub(crate) struct SsrState {
     pub settings: Option<SsrSettings>,
-    pub targets: Option<SsrTargets>,
-    pub resolve: Option<MtlSsrPass>,
-    // Roughness-aware blur + composite of the reflection target over the scene.
-    // Shared by the SSR and RT-reflection resolves (both write the reflection
-    // target, then run this). Built whenever the reflection targets exist.
-    pub composite_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // First half of the composite: the roughness blur, run at reduced resolution
-    // into `SsrTargets::blur`. Built alongside `composite_pipeline`.
-    pub blur_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // Per-axis divisors the reflection and blur targets are sized by. Held so a
-    // resize recreates them at the same reduced resolutions.
-    pub scales: ReflectionScales,
-}
-
-// Per-axis render-resolution divisors for the reflection targets. `trace`
-// sizes the target the resolve writes (the ray-traced trace resolution when
-// RT reflections run, else 1); `blur` sizes the roughness blur target, from the
-// world's `reflection_blur_resolution`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ReflectionScales {
-    pub trace: u32,
-    pub blur: u32,
-}
-
-// Pipelines
-
-// Build the reflection composite pipeline: the full-resolution second pass that
-// lerps the sharp reflection against the upsampled half-res blur by roughness
-// and composites it over the scene, writing the `RGBA16Float` scene output the
-// SSR / RT resolve used to write directly. Shared by both reflection paths.
-pub(crate) fn build_reflection_composite_pipeline(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    hot_reload: bool,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_fullscreen_pipeline(
-        device,
-        &REFLECTION_COMPOSITE,
-        MTLPixelFormat::RGBA16Float,
-        FullscreenBlend::Replace,
-        hot_reload,
-    )
-}
-
-// Build the reflection blur pipeline: the reduced-resolution first pass that
-// weight-averages the reflection target over the roughness cone into the blur
-// target the composite then upsamples. The expensive multi-tap blur runs here.
-pub(crate) fn build_reflection_blur_pipeline(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    hot_reload: bool,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    build_fullscreen_pipeline(
-        device,
-        &REFLECTION_BLUR,
-        MTLPixelFormat::RGBA16Float,
-        FullscreenBlend::Replace,
-        hot_reload,
-    )
-}
-
-// Targets
-
-// The targets the reflection resolves and their composite write. The
-// view-space normal / linear depth / roughness they read come from the unified
-// G-buffer pre-pass (`metal/post/gbuffer.rs`). Single-sample, full render
-// resolution except the blur; created when a reflection path is enabled and
-// rebuilt with the HDR targets on resize.
-pub(crate) struct SsrTargets {
     // Reflection target (`RGBA16Float`): the SSR / RT resolve writes reflected
-    // radiance in `.rgb` and the Fresnel/gloss composite weight in `.a` here,
-    // and the reflection composite blurs + composites it into `output`. Sized
-    // at render / `ReflectionScales::trace`.
-    pub reflection: Retained<ProtocolObject<dyn MTLTexture>>,
-    // Scene with reflections composited in. Becomes the scene color the TAA /
-    // bloom / composite passes consume when SSR or RT reflections are on.
-    pub output: Retained<ProtocolObject<dyn MTLTexture>>,
-    // Reduced-resolution roughness blur of `reflection` (the blur pass writes it,
-    // the composite pass upsamples it). Sized at render / `ReflectionScales::blur`.
-    pub blur: Retained<ProtocolObject<dyn MTLTexture>>,
+    // radiance in `.rgb` and the Fresnel/gloss composite weight in `.a` here.
+    // Sized at render / `trace_scale`.
+    pub reflection: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+    pub resolve: Option<MtlSsrPass>,
+    pub composite: Option<MtlReflectionCompositePass>,
+    // Per-axis render-resolution divisor of the reflection target: the
+    // ray-traced trace resolution when RT reflections run, else 1. Held so a
+    // resize recreates it at the same reduced resolution.
+    pub trace_scale: u32,
 }
 
-// Create or recreate the reflection + resolve-output targets at `width`x`height`,
-// with the reflection and blur targets reduced by `scales`. The blur is
-// low-frequency (a widening glossy cone), so running it reduced and
-// bilinear-upsampling in the composite is visually free; a reduced reflection
-// target is upsampled depth- and normal-aware by the composite.
-pub(crate) fn create_ssr_targets(
+// Create or recreate the reflection target at `width`x`height` divided by
+// `trace_scale`. A reduced target is upsampled depth- and normal-aware by the
+// composite.
+pub(crate) fn create_reflection_target(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     width: u32,
     height: u32,
-    scales: ReflectionScales,
-) -> RenderResult<SsrTargets> {
-    let make_at = |w: u32, h: u32| -> Option<Retained<ProtocolObject<dyn MTLTexture>>> {
-        let desc = TextureDesc {
-            format: MTLPixelFormat::RGBA16Float,
-            width: w as usize,
-            height: h as usize,
-            usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
-            ..Default::default()
-        }
-        .build();
-        device.newTextureWithDescriptor(&desc)
-    };
-    let reduced = |scale: u32| {
-        let s = scale.max(1);
-        ((width / s).max(1), (height / s).max(1))
-    };
-    let (rw, rh) = reduced(scales.trace);
-    let (bw, bh) = reduced(scales.blur);
-    let reflection = make_at(rw, rh).ok_or_else(|| allocation_failed("reflection texture"))?;
-    let output = make_at(width.max(1), height.max(1))
-        .ok_or_else(|| allocation_failed("SSR output texture"))?;
-    let blur = make_at(bw, bh).ok_or_else(|| allocation_failed("reflection blur texture"))?;
-    Ok(SsrTargets {
-        reflection,
-        output,
-        blur,
-    })
+    trace_scale: u32,
+) -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {
+    let s = trace_scale.max(1);
+    let desc = TextureDesc {
+        format: MTLPixelFormat::RGBA16Float,
+        width: (width / s).max(1) as usize,
+        height: (height / s).max(1) as usize,
+        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+        ..Default::default()
+    }
+    .build();
+    device
+        .newTextureWithDescriptor(&desc)
+        .ok_or_else(|| allocation_failed("reflection texture"))
 }
-
-// Encoders
 
 impl MtlContext {
     // Encode the SSR resolve into the reflection target, then blur and composite
-    // it over `hdr_resolve` into the targets' `output`. Runs after the main pass;
-    // only called when SSR is on.
+    // it over `hdr_resolve` into the composite's output. Runs after the main
+    // pass; only called when SSR is on.
     pub(in crate::metal) fn encode_ssr_resolve(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -170,8 +76,8 @@ impl MtlContext {
     ) -> RenderResult<u32> {
         // The pre-pass channels are pool-owned, so they are fetched here rather
         // than cached: a pool rebuild repacks every slot.
-        let (Some(targets), Some(resolve), Some(normal_depth), Some(roughness)) = (
-            &self.ssr.targets,
+        let (Some(reflection), Some(resolve), Some(normal_depth), Some(roughness)) = (
+            &self.ssr.reflection,
             &self.ssr.resolve,
             self.gbuffer_normal_depth(),
             self.gbuffer_roughness(),
@@ -182,7 +88,7 @@ impl MtlContext {
             &self.post_device(),
             cmd_buf,
             SsrInputs {
-                target: targets.reflection.as_ref(),
+                target: reflection.as_ref(),
                 scene: self.targets.hdr.hdr_resolve.as_ref(),
                 normal_depth,
                 roughness,
@@ -195,64 +101,5 @@ impl MtlContext {
         )?;
         self.encode_reflection_composite(cmd_buf)?;
         Ok(0)
-    }
-
-    // Blur the reflection target by surface roughness and composite it over
-    // `hdr_resolve` into `ssr_targets.output`. Shared by the SSR and
-    // RT-reflection resolves: both write the reflection target first, then call
-    // this. A no-op (leaves `output` untouched) when the composite pipeline or
-    // G-buffer is absent, which only happens when no reflection path is active.
-    pub(in crate::metal) fn encode_reflection_composite(
-        &self,
-        cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-    ) -> RenderResult<()> {
-        let (targets, composite_ps, blur_ps, gb_normal_depth, gb_roughness) = match (
-            &self.ssr.targets,
-            &self.ssr.composite_pipeline,
-            &self.ssr.blur_pipeline,
-            self.gbuffer_normal_depth(),
-            self.gbuffer_roughness(),
-        ) {
-            (Some(t), Some(cp), Some(bp), Some(n), Some(r)) => (t, cp, bp, n, r),
-            _ => return Ok(()),
-        };
-        // Pass 1: the roughness blur, at reduced resolution into `blur`. Times the
-        // span start; the composite below times its end (both under one slot).
-        self.fullscreen_pass(
-            cmd_buf,
-            FullscreenPass {
-                target: targets.blur.as_ref(),
-                load: MTLLoadAction::DontCare,
-                timer: PassTimer::First(crate::metal::pass_timing::PassId::ReflectionComposite),
-                pipeline: blur_ps,
-                label: "reflection blur",
-            },
-            |enc| {
-                enc.set_fragment_texture(targets.reflection.as_ref(), 0);
-                enc.set_fragment_texture(gb_roughness, 1);
-                set_fragment_sampler_range(enc, &self.composite.sampler, 0, 2);
-            },
-        )?;
-        // Pass 2: lerp the sharp full-res reflection against the upsampled blur by
-        // roughness, then composite over the scene into `output`.
-        self.fullscreen_pass(
-            cmd_buf,
-            FullscreenPass {
-                target: targets.output.as_ref(),
-                load: MTLLoadAction::DontCare,
-                timer: PassTimer::Last(crate::metal::pass_timing::PassId::ReflectionComposite),
-                pipeline: composite_ps,
-                label: "reflection composite",
-            },
-            |enc| {
-                enc.set_fragment_texture(targets.reflection.as_ref(), 0);
-                enc.set_fragment_texture(self.targets.hdr.hdr_resolve.as_ref(), 1);
-                enc.set_fragment_texture(gb_normal_depth, 2);
-                enc.set_fragment_texture(gb_roughness, 3);
-                enc.set_fragment_texture(targets.blur.as_ref(), 4);
-                set_fragment_sampler_range(enc, &self.composite.sampler, 0, 5);
-            },
-        )?;
-        Ok(())
     }
 }

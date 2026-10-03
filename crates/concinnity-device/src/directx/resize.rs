@@ -7,13 +7,9 @@
 //!
 //! Mirrors the Vulkan `rebuild_swapchain` flow in src/vulkan/swapchain.rs: a
 //! `wait_idle` gate, a wholesale drop + recreate, then per-effect resource
-//! rebuilds (TAA / SSAO / SSR / bloom).
-//!
-//! Bloom mip count is held fixed at init's value rather than recomputed at the
-//! new resolution. `bloom_mip_count` only changes for very small windows (<128
-//! pixels in the smaller dimension), and keeping the count stable keeps the
-//! SRV/RTV heap layout stable so everything past the bloom block stays at its
-//! originally-allocated slot.
+//! rebuilds (TAA / SSAO / SSR / bloom). The shared post passes take their
+//! targets' descriptors from the post block, so a pass whose target count
+//! follows the resolution (the bloom chain's octaves) moves no other slot.
 
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
@@ -23,11 +19,11 @@ use windows::Win32::Graphics::Dxgi::*;
 use crate::directx::context::{DxContext, FRAMES};
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
-use crate::directx::post::bloom::{create_bloom_mips_at, write_color_rtv};
 use crate::directx::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_resolve_target, create_main_depth_texture,
     write_hdr_srv,
 };
+use concinnity_core::render::post::device::PostExtent;
 
 impl DxContext {
     // Poll the window state and, if the client area resized since the last
@@ -274,10 +270,10 @@ impl DxContext {
         }
 
         // Rebuild the transient pool (`bloom_top` + `ao_output`) at the new
-        // resolution up front, before the consumers below read it back: the
-        // bloom chain takes its pooled `mips[0]` and SSAO re-points its
-        // `ao_output` RTV/SRV from it. The device is idle at the top of resize,
-        // so dropping the old placed resources + heaps is sound.
+        // resolution up front, before the consumers below read it back: bloom
+        // and SSAO re-view their pooled targets from it. The device is idle at
+        // the top of resize, so dropping the old placed resources + heaps is
+        // sound.
         let ssao_enabled = self.ssao.resources.is_some();
         let gbuffer_enabled = self.gbuffer.is_some();
         self.targets.transient_pool.rebuild(
@@ -286,7 +282,6 @@ impl DxContext {
             &plan_pool_slots(
                 PoolGates {
                     ssao: ssao_enabled,
-                    bloom: true,
                     gbuffer: gbuffer_enabled,
                 },
                 (render_w, render_h),
@@ -294,34 +289,22 @@ impl DxContext {
             )?,
         )?;
 
-        // 4) Bloom mip chain. Keep the count fixed at the init-time value
-        //    (`self.bloom.mips.len()`) so the heap layout past the bloom
-        //    block (LUT, TAA SRVs, SSAO SRVs, ...) stays anchored. `mips[0]`
-        //    (`bloom_top`) is the pooled placed resource; the finer mips are
-        //    committed.
-        let bloom_count = self.bloom.mips.len();
-        if bloom_count > 0 {
-            let bloom_top = self
-                .targets
-                .transient_pool
-                .resource_for("bloom_top")
-                .ok_or_else(|| {
-                    RenderError::Other("transient pool missing bloom_top on resize".into())
-                })?
-                .clone();
-            let new_mips =
-                create_bloom_mips_at(&self.hw.device, new_w, new_h, bloom_count, bloom_top)?;
-            self.bloom.mips = new_mips.0;
-            self.bloom.mip_extents = new_mips.1;
-            // Rewrite each mip's RTV + SRV into the existing slots.
-            for i in 0..bloom_count {
-                write_color_rtv(&self.hw.device, &self.bloom.mips[i], self.bloom.mip_rtvs[i]);
-                write_hdr_srv(
-                    &self.hw.device,
-                    &self.bloom.mips[i],
-                    srv_cpu_of(self.bloom.mip_srv_gpus[i]),
-                );
-            }
+        // 4) Bloom: the octaves below the pool's top one, and the view of the
+        //    rebuilt `bloom_top`.
+        let bloom_top = self
+            .targets
+            .transient_pool
+            .resource_for("bloom_top")
+            .ok_or_else(|| RenderError::Other("transient pool missing bloom_top on resize".into()))?
+            .clone();
+        let output = PostExtent {
+            width: new_w,
+            height: new_h,
+        };
+        if let Some(mut bloom) = self.bloom.take() {
+            let r = bloom.resize(&self.post_device(0), output, &bloom_top);
+            self.bloom = Some(bloom);
+            r?;
         }
 
         // 5) TAA: velocity + private depth + ping-pong history. Rebuild
@@ -335,24 +318,25 @@ impl DxContext {
             r?;
         }
 
-        // 6) SSAO: pre-pass G-buffer + private depth + raw/blurred AO. The
-        // blurred `ao_output` is pooled and was rebuilt above; SSAO rewrites its
-        // RTV + SRV from the new pooled resource.
+        // 6) SSAO: the raw occlusion. The blurred `ao_output` is pooled and was
+        // rebuilt above; SSAO re-views it.
         if let Some(ao_resource) = self
             .targets
             .transient_pool
             .resource_for("ao_output")
             .cloned()
-            && let Some(ssao) = self.ssao.resources.as_mut()
+            && let Some(mut ssao) = self.ssao.resources.take()
         {
-            ssao.resize_to(
-                &self.hw.device,
-                render_w,
-                render_h,
-                srv_cpu_base,
-                srv_gpu_base,
+            let r = ssao.resize(
+                &self.post_device(0),
+                PostExtent {
+                    width: render_w,
+                    height: render_h,
+                },
                 &ao_resource,
-            )?;
+            );
+            self.ssao.resources = Some(ssao);
+            r?;
         }
 
         // 7) SSR: the reflection target the resolve writes.
@@ -399,17 +383,18 @@ impl DxContext {
         }
 
         // 7-refl) Reflection composite: the full-res composited output + the
-        //     reduced-res roughness blur. Re-uses its pre-reserved RTV/SRV slots,
-        //     so the live scene binding (which points at the output SRV slot) stays
-        //     valid after the in-place descriptor rewrite.
-        if let Some(rc) = self.reflection_composite.as_mut() {
-            rc.resize_to(
-                &self.hw.device,
-                render_w,
-                render_h,
-                srv_cpu_base,
-                srv_gpu_base,
-            )?;
+        //     reduced-res roughness blur. Every consumer reads the output's SRV
+        //     per frame, so the new targets need no re-bind.
+        if let Some(mut rc) = self.reflection_composite.take() {
+            let r = rc.resize(
+                &self.post_device(0),
+                PostExtent {
+                    width: render_w,
+                    height: render_h,
+                },
+            );
+            self.reflection_composite = Some(rc);
+            r?;
         }
 
         // 7a) Raymarch: recreate the `hdr_resolve_copy` scene snapshot at

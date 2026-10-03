@@ -5,11 +5,12 @@
 //! draw is checked against its program's declaration and then recorded, so a
 //! test can assert what a pass drew, into what, through which binds.
 
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 
-use crate::render::error::RenderResult;
+use crate::render::error::{RenderError, RenderResult};
 use crate::render::render_graph::{PixelFormat, TextureDesc};
 
 use super::device::{
@@ -61,11 +62,18 @@ pub(crate) struct MockTarget {
 pub(crate) struct MockDevice {
     pub targets: RefCell<Vec<MockTarget>>,
     pub draws: RefCell<Vec<MockDraw>>,
+    // How many more targets may be created before creation fails.
+    create_budget: Cell<Option<usize>>,
 }
 
 impl MockDevice {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Let `n` more targets be created, then fail every creation after them.
+    pub(crate) fn fail_creates_after(&self, n: usize) {
+        self.create_budget.set(Some(n));
     }
 
     fn level(&self, target: usize, level: u32) -> RenderResult<MockTexture> {
@@ -101,6 +109,12 @@ impl PostPassDevice for MockDevice {
         desc: &TextureDesc,
         extent: PostExtent,
     ) -> RenderResult<usize> {
+        if let Some(budget) = self.create_budget.get() {
+            let Some(left) = budget.checked_sub(1) else {
+                return Err(RenderError::Other(format!("{label}: creation failed")));
+            };
+            self.create_budget.set(Some(left));
+        }
         let mut targets = self.targets.borrow_mut();
         targets.push(MockTarget {
             label,

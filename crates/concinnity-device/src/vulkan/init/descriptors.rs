@@ -110,7 +110,7 @@ fn create_descriptor_pool(
             vk::DescriptorType::UNIFORM_BUFFER,
             gbuffer_sets_count + history_sets_count,
         )
-        // Text atlas + per-frame composite (6: HDR resolve + bloom mip 0 + 3D
+        // Text atlas + per-frame composite (6: HDR resolve + bloom top octave + 3D
         // color LUT + the 3 view-mode G-buffer channels), each with a sampler,
         // and the per-frame bindless texture pool, which has none.
         .add(

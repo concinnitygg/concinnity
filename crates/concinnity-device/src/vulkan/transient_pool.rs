@@ -270,18 +270,9 @@ impl TransientImagePool {
         self.lookup(label, frame).map(|p| p.view)
     }
 
-    // Every frame-in-flight view for `label`, frames `0..frames` in order.
-    // Empty when the label is unmanaged. When the label is managed the pool
-    // holds one image per frame, so the result has exactly `frames` entries.
-    pub(super) fn views_for_frames(&self, label: &str, frames: usize) -> Vec<vk::ImageView> {
-        (0..frames)
-            .filter_map(|f| self.view_for(label, f))
-            .collect()
-    }
-
     // Every (image, view) pair for `label`, frames `0..frames` in order. Empty
-    // when unmanaged; one entry per frame when managed. Used to hand a per-frame
-    // pooled image to a feature that wraps it (bloom mip 0).
+    // when unmanaged; one entry per frame when managed. Used to hand the
+    // per-frame pooled G-buffer channels to the pre-pass that renders them.
     pub(super) fn pairs_for_frames(
         &self,
         label: &str,
@@ -451,6 +442,8 @@ pub(in crate::vulkan) fn sample_count(samples: u32) -> vk::SampleCountFlags {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::render::post::device::PostExtent;
+    use concinnity_core::render::post::{bloom, ssao};
     use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 
     #[test]
@@ -460,7 +453,6 @@ mod tests {
         // would silently mis-back the image that feature binds.
         let gates = PoolGates {
             ssao: true,
-            bloom: true,
             gbuffer: true,
         };
         let slots = plan_pool_slots(gates, (1024, 768), (1920, 1080)).expect("plans");
@@ -474,13 +466,10 @@ mod tests {
         };
 
         // `ao_output` follows the render extent; `bloom_top` is half the
-        // output extent, which is what `create_bloom_chain` sizes mip 0 to.
+        // output extent, the octave above the bloom chain's own.
         let ao = member("ao_output");
         assert_eq!((ao.width, ao.height), (1024, 768));
-        assert_eq!(
-            image_format(ao.format),
-            super::super::post::ssao::SSAO_OCCLUSION_FORMAT
-        );
+        assert_eq!(ao.format, ssao::OCCLUSION_FORMAT);
         assert_eq!(image_aspect(ao.format), vk::ImageAspectFlags::COLOR);
         assert_eq!(
             image_usage(ao.usage),
@@ -488,11 +477,13 @@ mod tests {
         );
 
         let bloom = member("bloom_top");
-        assert_eq!((bloom.width, bloom.height), (960, 540));
-        assert_eq!(
-            image_format(bloom.format),
-            super::super::context::HDR_FORMAT
-        );
+        let output = PostExtent {
+            width: 1920,
+            height: 1080,
+        };
+        let top = bloom::top_extent(output);
+        assert_eq!((bloom.width, bloom.height), (top.width, top.height));
+        assert_eq!(bloom.format, bloom::chain_desc(output).format);
 
         // The G-buffer color channels. A format divergence here would silently
         // mis-back an MRT attachment the pre-pass render pass declares, which is

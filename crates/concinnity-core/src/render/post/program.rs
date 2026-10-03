@@ -19,7 +19,9 @@
 
 use crate::render::shader_programs::ShaderProgram;
 use crate::render::shader_programs::shared::{
-    SSGI_COMPOSITE, SSGI_DEPTH, SSGI_REDUCE, SSGI_TRACE, SSR_RESOLVE, TAA_FRAG,
+    BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, REFLECTION_BLUR, REFLECTION_COMPOSITE,
+    SSAO_BLUR, SSAO_KERNEL, SSGI_COMPOSITE, SSGI_DEPTH, SSGI_REDUCE, SSGI_TRACE, SSR_RESOLVE,
+    TAA_FRAG,
 };
 
 /// A fullscreen post-pass fragment program. The vertex stage is always
@@ -44,6 +46,27 @@ pub enum PostProgram {
     /// `ssgi_composite_fragment` from `ssgi.hlsl`: the depth-aware upsample the
     /// accumulated term is blended into the scene through.
     SsgiComposite,
+    /// `bloom_prefilter_fragment` from `bloom.hlsl`: the soft-knee threshold of
+    /// the scene into the top bloom octave.
+    BloomPrefilter,
+    /// `bloom_downsample_fragment` from `bloom.hlsl`: one octave reduced into
+    /// the next.
+    BloomDownsample,
+    /// `bloom_upsample_fragment` from `bloom.hlsl`: one octave expanded into the
+    /// octave above it.
+    BloomUpsample,
+    /// `reflection_blur_fragment` from `reflection.hlsl`: the reduced-resolution
+    /// roughness blur of the reflection target.
+    ReflectionBlur,
+    /// `reflection_composite_fragment` from `reflection.hlsl`: the reflection
+    /// blended over the scene by roughness.
+    ReflectionComposite,
+    /// `ssao_kernel_fragment` from `ssao.hlsl`: the ambient-occlusion horizon
+    /// search.
+    SsaoKernel,
+    /// `ssao_blur_fragment` from `ssao.hlsl`: the depth-aware blur of that
+    /// occlusion.
+    SsaoBlur,
 }
 
 /// What a post program binds: the resource counts every backend derives its
@@ -66,13 +89,20 @@ pub struct PostProgramBindings {
 
 impl PostProgram {
     /// Every post program, in declaration order.
-    pub const ALL: [PostProgram; 6] = [
+    pub const ALL: [PostProgram; 13] = [
         PostProgram::TaaResolve,
         PostProgram::SsrResolve,
         PostProgram::SsgiDepth,
         PostProgram::SsgiReduce,
         PostProgram::SsgiTrace,
         PostProgram::SsgiComposite,
+        PostProgram::BloomPrefilter,
+        PostProgram::BloomDownsample,
+        PostProgram::BloomUpsample,
+        PostProgram::ReflectionBlur,
+        PostProgram::ReflectionComposite,
+        PostProgram::SsaoKernel,
+        PostProgram::SsaoBlur,
     ];
 
     /// The pass name a backend reports when this program's pipeline fails to
@@ -85,6 +115,13 @@ impl PostProgram {
             PostProgram::SsgiReduce => "ssgi reduce",
             PostProgram::SsgiTrace => "ssgi trace",
             PostProgram::SsgiComposite => "ssgi composite",
+            PostProgram::BloomPrefilter => "bloom prefilter",
+            PostProgram::BloomDownsample => "bloom downsample",
+            PostProgram::BloomUpsample => "bloom upsample",
+            PostProgram::ReflectionBlur => "reflection blur",
+            PostProgram::ReflectionComposite => "reflection composite",
+            PostProgram::SsaoKernel => "ssao kernel",
+            PostProgram::SsaoBlur => "ssao blur",
         }
     }
 
@@ -97,6 +134,13 @@ impl PostProgram {
             PostProgram::SsgiReduce => &SSGI_REDUCE,
             PostProgram::SsgiTrace => &SSGI_TRACE,
             PostProgram::SsgiComposite => &SSGI_COMPOSITE,
+            PostProgram::BloomPrefilter => &BLOOM_PREFILTER,
+            PostProgram::BloomDownsample => &BLOOM_DOWNSAMPLE,
+            PostProgram::BloomUpsample => &BLOOM_UPSAMPLE,
+            PostProgram::ReflectionBlur => &REFLECTION_BLUR,
+            PostProgram::ReflectionComposite => &REFLECTION_COMPOSITE,
+            PostProgram::SsaoKernel => &SSAO_KERNEL,
+            PostProgram::SsaoBlur => &SSAO_BLUR,
         }
     }
 
@@ -128,23 +172,53 @@ impl PostProgram {
             PostProgram::SsgiTrace => ssgi(6),
             // accumulation, pyramid, G-buffer; `SsgiParams`.
             PostProgram::SsgiComposite => ssgi(3),
+            // The scene; the prefix of `PostProcessParams` it reads.
+            PostProgram::BloomPrefilter => sources(1, BLOOM_PREFILTER_CONSTANTS),
+            // The octave it reduces or expands; no constants.
+            PostProgram::BloomDownsample | PostProgram::BloomUpsample => sources(1, 0),
+            // reflection, roughness.
+            PostProgram::ReflectionBlur => sources(2, 0),
+            // reflection, scene, normal+depth, roughness, blur.
+            PostProgram::ReflectionComposite => sources(5, 0),
+            // The G-buffer; `SsaoParams`.
+            PostProgram::SsaoKernel => sources(
+                1,
+                core::mem::size_of::<crate::gfx::render_types::SsaoParams>(),
+            ),
+            // raw occlusion, G-buffer; no constants.
+            PostProgram::SsaoBlur => sources(2, 0),
         }
+    }
+}
+
+/// Bytes of `PostProcessParams` the bloom prefilter declares: the leading
+/// bloom, exposure, vignette and grade fields, up to the display-output flags
+/// only the composite reads.
+pub const BLOOM_PREFILTER_CONSTANTS: usize =
+    core::mem::offset_of!(crate::gfx::render_types::PostProcessParams, hdr_output);
+
+// A program reading `textures` sources and `constants` bytes, without the
+// probe set.
+const fn sources(textures: usize, constants: usize) -> PostProgramBindings {
+    PostProgramBindings {
+        textures,
+        constants,
+        probes: false,
     }
 }
 
 // An SSGI program's bindings: `textures` sources and the `SsgiParams` block.
 const fn ssgi(textures: usize) -> PostProgramBindings {
-    PostProgramBindings {
+    sources(
         textures,
-        constants: core::mem::size_of::<crate::gfx::render_types::SsgiParams>(),
-        probes: false,
-    }
+        core::mem::size_of::<crate::gfx::render_types::SsgiParams>(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::render_types::{SsgiParams, SsrParams};
+    use crate::gfx::render_types::{PostProcessParams, SsaoParams, SsgiParams, SsrParams};
     use crate::render::shaders;
     use crate::render::uniforms::TaaParams;
     use alloc::vec::Vec;
@@ -380,7 +454,7 @@ mod tests {
         // The other half of the contract. The blocks themselves are pinned to
         // the shaders by `shader_layout`'s reflection mirrors, so pinning the
         // declaration to the block reaches the source through them.
-        use core::mem::size_of;
+        use core::mem::{offset_of, size_of};
         let blocks = [
             (PostProgram::TaaResolve, size_of::<TaaParams>()),
             (PostProgram::SsrResolve, size_of::<SsrParams>()),
@@ -388,6 +462,18 @@ mod tests {
             (PostProgram::SsgiReduce, 0),
             (PostProgram::SsgiTrace, size_of::<SsgiParams>()),
             (PostProgram::SsgiComposite, size_of::<SsgiParams>()),
+            // The shader declares `PostProcessParams` through `lut_strength`,
+            // which `shader_layout`'s bloom mirror holds field by field.
+            (
+                PostProgram::BloomPrefilter,
+                offset_of!(PostProcessParams, lut_strength) + size_of::<f32>(),
+            ),
+            (PostProgram::BloomDownsample, 0),
+            (PostProgram::BloomUpsample, 0),
+            (PostProgram::ReflectionBlur, 0),
+            (PostProgram::ReflectionComposite, 0),
+            (PostProgram::SsaoKernel, size_of::<SsaoParams>()),
+            (PostProgram::SsaoBlur, 0),
         ];
         for (program, size) in blocks {
             assert_eq!(program.bindings().constants, size, "{program:?}");

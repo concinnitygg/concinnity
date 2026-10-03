@@ -1,7 +1,7 @@
 //! Composite + text overlay: tonemap (and optionally LUT-grade) the HDR scene
 //! target onto the swapchain backbuffer, then layer the text vertices on top.
 //! The composite pass samples `scene_srv` (the post-TAA image when TAA is on,
-//! the HDR scene SRV otherwise) plus bloom mip 0; the text pass appends each
+//! the HDR scene SRV otherwise) plus the bloom top octave; the text pass appends each
 //! label's vertex / index geometry into this frame slot's persistent upload
 //! buffer (see [`TextUploadRing`]) and binds sub-views into it, so no per-frame
 //! GPU buffers are allocated.
@@ -94,8 +94,13 @@ impl fullscreen::CompositeEncoder for DxContext {
             // Root param [0]: scene SRV (t0): the TAA output when TAA is on,
             // the HDR scene target otherwise.
             cmd.set_graphics_srv_table(0, args.scene_srv);
-            // Root param [1]: bloom mip 0 SRV (t1).
-            cmd.set_graphics_srv_table(1, self.bloom.mip_srv_gpus[0]);
+            // Root param [1]: the bloom chain's top octave (t1). The shader
+            // skips the sample while bloom is off, but the table must be valid.
+            let bloom = self
+                .bloom
+                .as_ref()
+                .map_or(self.ssao.white_srv_gpu, |b| b.top_srv_gpu());
+            cmd.set_graphics_srv_table(1, bloom);
             // Root param [2]: CompositeParams (the post-process tunables plus
             // the scene-transition fade, matching the root-sig declaration).
             // Pushed verbatim so the HLSL cbuffer reads the same byte order as

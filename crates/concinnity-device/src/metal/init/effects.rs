@@ -10,7 +10,8 @@ use concinnity_core::render::backend_init::PostSettings;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
-use concinnity_core::render::post::ssao::SsaoSettings;
+use concinnity_core::render::post::ssao::SsaoPass;
+use concinnity_core::render::post::ssao::settings::SsaoSettings;
 use concinnity_core::render::post::ssgi::SsgiPass;
 use concinnity_core::render::post::ssgi::settings::SsgiSettings;
 use concinnity_core::render::post::ssr::SsrPass;
@@ -22,15 +23,13 @@ use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
 use super::InitGpu;
 use crate::metal::allocator::DeviceAllocator;
 use crate::metal::auto_exposure::{AutoExposureGpu, build_auto_exposure_pipelines};
-use crate::metal::builtin_shaders::{SSAO_BLUR, SSAO_KERNEL};
 use crate::metal::context::{CompositeState, MtlSceneAssets};
 use crate::metal::error::allocation_failed;
 use crate::metal::post::post_device::MtlPostDevice;
 use crate::metal::post::{
-    GBufferState, MetalFXUpscaler, ReflectionScales, SsaoState, SsgiState, SsrState, TaaState,
-    UpscaleState, build_gbuffer_bindless_pipeline, build_reflection_blur_pipeline,
-    build_reflection_composite_pipeline, build_ssao_pipeline, build_taa_pass,
-    create_gbuffer_targets, create_ssao_targets, create_ssr_targets, temporal_scaler_supported,
+    GBufferState, MetalFXUpscaler, SsaoState, SsgiState, SsrState, TaaState, UpscaleState,
+    build_gbuffer_bindless_pipeline, build_reflection_composite, build_taa_pass,
+    create_gbuffer_targets, create_reflection_target, temporal_scaler_supported,
 };
 use crate::metal::texture::create_fallback_texture;
 
@@ -48,7 +47,7 @@ pub(in crate::metal) struct EffectSettings<'a> {
     pub auto_exposure: &'a Option<AutoExposureSettings>,
     // Per-axis divisor for the roughness-aware reflection blur target, resolved
     // from the world's `reflection_blur_resolution`. Sizes the blur target at
-    // render / this; stored on `SsrState` so resize reuses it.
+    // render / this; held by the composite so resize reuses it.
     pub reflection_blur_scale: u32,
     pub auto_exposure_bias_ev: f32,
 }
@@ -183,89 +182,80 @@ pub(in crate::metal) fn build_taa(
     })
 }
 
-// SSAO (GTAO): the horizon-search kernel, the depth-aware blur, and their
-// occlusion targets, built only when SSAO is on. The depth + normal the kernel
-// reads come from the unified G-buffer pre-pass, so SSAO builds no pre-pass of
-// its own; the white fallback is always present.
+// SSAO (GTAO): the shared kernel + blur and their raw-occlusion target, built
+// only when SSAO is on. The depth + normal the kernel reads come from the
+// unified G-buffer pre-pass, so SSAO builds no pre-pass of its own; the white
+// fallback is always present.
 pub(in crate::metal) fn build_ssao(
+    post_device: &MtlPostDevice,
     alloc: &DeviceAllocator,
     settings: &EffectSettings,
     render: (u32, u32),
-    hot_reload: bool,
 ) -> RenderResult<SsaoState> {
-    let device = alloc.device();
-    let (ssao_targets, ssao_kernel_pipeline, ssao_blur_pipeline) = if settings.ssao.is_some() {
-        (
-            Some(create_ssao_targets(device, render.0, render.1)?),
-            Some(build_ssao_pipeline(device, &SSAO_KERNEL, hot_reload)?),
-            Some(build_ssao_pipeline(device, &SSAO_BLUR, hot_reload)?),
-        )
-    } else {
-        (None, None, None)
+    let pass = match settings.ssao {
+        Some(_) => Some(SsaoPass::new(
+            post_device,
+            PostExtent {
+                width: render.0,
+                height: render.1,
+            },
+        )?),
+        None => None,
     };
     Ok(SsaoState {
         settings: *settings.ssao,
-        targets: ssao_targets,
-        kernel_pipeline: ssao_kernel_pipeline,
-        blur_pipeline: ssao_blur_pipeline,
+        pass,
         white: create_fallback_texture(alloc)?,
     })
 }
 
-// SSR: the reflection targets, built when SSR *or* SSGI *or* RT reflections
-// is on (all three need the G-buffer the unified pre-pass produces; RT
-// reuses `ssr_targets.reflection`). The shared resolve is built only when
-// SSR itself is on.
+// SSR: the reflection target, built when SSR *or* SSGI *or* RT reflections is
+// on (all three need the G-buffer the unified pre-pass produces; RT writes the
+// target too). The shared resolve is built only when SSR itself is on, and the
+// composite that blends the target over the scene when SSR or RT is.
 pub(in crate::metal) fn build_ssr(
     post_device: &MtlPostDevice,
     settings: &EffectSettings,
     render: (u32, u32),
 ) -> RenderResult<SsrState> {
-    let (device, hot_reload) = (post_device.device, post_device.hot_reload);
+    let device = post_device.device;
     // The reflection target is reduced only when the ray-traced resolve is what
     // fills it; the SSR resolve keeps it at render resolution.
-    let scales = ReflectionScales {
-        trace: settings
-            .rt_reflection
-            .filter(|_| crate::metal::raytrace::raytracing_supported(device))
-            .map_or(1, |rt| rt.divisor.max(1)),
-        blur: settings.reflection_blur_scale.max(1),
+    let trace_scale = settings
+        .rt_reflection
+        .filter(|_| crate::metal::raytrace::raytracing_supported(device))
+        .map_or(1, |rt| rt.divisor.max(1));
+    let reflection = if settings.reflections() {
+        Some(create_reflection_target(
+            device,
+            render.0,
+            render.1,
+            trace_scale,
+        )?)
+    } else {
+        None
     };
-    let (ssr_targets, ssr_resolve, ssr_composite_pipeline, ssr_blur_pipeline) =
-        if settings.reflections() {
-            let ssr_resolve = if settings.ssr.is_some() {
-                Some(SsrPass::new(post_device)?)
-            } else {
-                None
-            };
-            // The reflection composite (roughness blur + blend over the scene)
-            // runs for both SSR and RT reflections; both write the reflection
-            // target it reads. SSGI alone needs the G-buffer but no composite.
-            // The blur is its reduced-resolution first pass.
-            let (composite, blur) = if settings.ssr.is_some() || settings.rt_reflection.is_some() {
-                (
-                    Some(build_reflection_composite_pipeline(device, hot_reload)?),
-                    Some(build_reflection_blur_pipeline(device, hot_reload)?),
-                )
-            } else {
-                (None, None)
-            };
-            (
-                Some(create_ssr_targets(device, render.0, render.1, scales)?),
-                ssr_resolve,
-                composite,
-                blur,
-            )
-        } else {
-            (None, None, None, None)
-        };
+    let resolve = if settings.ssr.is_some() {
+        Some(SsrPass::new(post_device)?)
+    } else {
+        None
+    };
+    // SSGI alone needs the G-buffer but no composite.
+    let composite = if settings.ssr.is_some() || settings.rt_reflection.is_some() {
+        Some(build_reflection_composite(
+            post_device,
+            settings.reflection_blur_scale,
+            render,
+        )?)
+    } else {
+        None
+    };
     Ok(SsrState {
         settings: *settings.ssr,
-        targets: ssr_targets,
-        resolve: ssr_resolve,
-        composite_pipeline: ssr_composite_pipeline,
-        blur_pipeline: ssr_blur_pipeline,
-        scales,
+        reflection,
+        resolve,
+        composite,
+        trace_scale,
     })
 }
 

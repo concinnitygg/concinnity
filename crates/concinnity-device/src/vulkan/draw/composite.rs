@@ -1,6 +1,6 @@
 //! Composite (post-process) pass + text overlay. The post-process pipeline
 //! reads the post-stack scene texture (TAA output > SSR output > HDR resolve,
-//! wired to `composite.sets` at init / on resize), the bloom mip-0 target, and
+//! wired to `composite.sets` at init / on resize), the bloom top octave, and
 //! the 3D color-grading LUT, then writes ACES tonemap + gamma + FXAA into the
 //! swapchain image. Text is drawn after in the same render pass so it sits on
 //! top of the tonemapped image in display-referred LDR space.

@@ -10,7 +10,7 @@ use crate::gfx::render_types::PostProcessTunables;
 use crate::render::backend_init::ShadowCadence;
 use crate::render::error::{RenderError, RenderResult};
 use crate::render::post::rt_reflections::RtReflectionSettings;
-use crate::render::post::ssao::SsaoSettings;
+use crate::render::post::ssao::settings::SsaoSettings;
 use crate::render::post::ssgi::settings::SsgiSettings;
 use crate::render::post::ssr::settings::SsrSettings;
 use crate::render::volumetric_fog::FogSettings;

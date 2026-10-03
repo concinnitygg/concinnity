@@ -11,7 +11,7 @@
 //! unconditionally at init, see `init/mod.rs`) or drops it. The next frame's draw
 //! adapts. The one coupling is SSAO's `ao_output`, which lives in the transient
 //! pool only while SSAO is on and shares a heap region with `bloom_top`; toggling
-//! it rebuilds the pool + the bloom mip chain, mirroring the resize path.
+//! it rebuilds the pool and re-views both, mirroring the resize path.
 //!
 //! Ray-traced reflections toggle the same way, with two extra costs: turning them
 //! on builds the scene acceleration structure (`build_rt_accel`, a one-shot
@@ -31,11 +31,12 @@ use concinnity_core::render::post::rt_reflections;
 use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 use windows::Win32::Graphics::Direct3D12::*;
 
+use concinnity_core::render::post::device::PostExtent;
+
 use super::context::DxContext;
-use super::post::bloom::{create_bloom_mips_at, write_color_rtv};
 use super::post::gbuffer::GbufferSlots;
-use super::post::reflection_composite::ReflectionCompositeSlots;
-use super::texture::write_hdr_srv;
+use super::post::reflection_composite::build_reflection_composite;
+use super::post::ssao::SsaoResources;
 use crate::directx::descriptor_slot::SrvSlot;
 
 // The fixed descriptor-heap slots the live-toggleable effects build into. Minted
@@ -46,13 +47,8 @@ use crate::directx::descriptor_slot::SrvSlot;
 // the resources behind them but never moves the slots.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct QualitySlotHandles {
-    pub ssao_ao_raw_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub ssao_ao_raw_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
-    pub ssao_ao_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub ssao_ao_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
     pub rt_output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub rt_output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
-    pub refl_composite: ReflectionCompositeSlots,
     pub gbuffer: GbufferSlots,
     pub glass_reflection: super::transparent::GlassReflectionSlots,
 }
@@ -231,22 +227,19 @@ impl DxContext {
         // Reflection composite: the on-screen target the SSR/RT resolve writes its
         // radiance+weight into, then blurs/blends over the scene by roughness.
         // Present whenever a resolve can composite (SSR resolve or RT), mirroring
-        // the init `ssr_settings || rt_reflection_settings` gate, and built into the
-        // unconditionally-reserved refl_composite slots. Without this reconcile a
+        // the init `ssr_settings || rt_reflection_settings` gate, with its targets
+        // taken from the post block. Without this reconcile a
         // live RT/SSR enable on a world that authored neither leaves it `None`, so
         // `encode_reflection_composite` early-returns and the resolve's reflection
         // is computed but never shown (`scene_srv_for_post` / glass / the forward
         // `reflections_enabled` fade all gate on its presence).
         let refl_composite_needed = desired_ssr || desired_rt;
         if refl_composite_needed && self.reflection_composite.is_none() {
-            let rc = super::post::reflection_composite::ReflectionCompositeResources::new(
-                &self.hw.device,
+            let rc = build_reflection_composite(
+                &self.post_device(0),
+                q.reflection_blur_scale,
                 render_w,
                 render_h,
-                q.reflection_blur_scale,
-                slots.refl_composite,
-                self.hw.info_queue.as_ref(),
-                hot_reload,
             )?;
             self.reflection_composite = Some(rc);
         } else if !refl_composite_needed && self.reflection_composite.is_some() {
@@ -275,9 +268,9 @@ impl DxContext {
 
         // SSAO. Its blurred `ao_output` is a transient-pool resource that only
         // exists while SSAO is on and shares a heap region with `bloom_top`, so a
-        // toggle rebuilds the pool (relocating `bloom_top` -> rebuild the bloom
-        // mip chain) and, on a turn-on, constructs the SSAO resources from the
-        // freshly pooled `ao_output`. The main pass's occlusion binding
+        // toggle rebuilds the pool (relocating `bloom_top`, which bloom re-views)
+        // and, on a turn-on, constructs the SSAO resources over the freshly
+        // pooled `ao_output`. The main pass's occlusion binding
         // (`ssao_ao_srv_gpu`) falls back to the 1x1 white slot when off, so a
         // turn-off needs no rewire beyond dropping the resources.
         let ssao_was = self.ssao.resources.is_some();
@@ -293,22 +286,14 @@ impl DxContext {
                 })?
                 .clone();
             let settings = q.ssao.expect("desired_ssao implies ssao settings");
-            let ssao = super::post::ssao::SsaoResources::new(
-                super::post::ssao::SsaoDeviceCtx {
-                    device: &self.hw.device,
-                    info_queue: self.hw.info_queue.as_ref(),
-                },
-                render_w,
-                render_h,
+            let ssao = SsaoResources::new(
+                &self.post_device(0),
                 settings,
-                super::post::ssao::SsaoDescriptorHandles {
-                    ao_raw_rtv: slots.ssao_ao_raw_rtv,
-                    ao_raw_srv: slots.ssao_ao_raw_srv,
-                    ao_rtv: slots.ssao_ao_rtv,
-                    ao_srv: slots.ssao_ao_srv,
+                PostExtent {
+                    width: render_w,
+                    height: render_h,
                 },
                 &ao_resource,
-                hot_reload,
             )?;
             self.ssao.resources = Some(ssao);
         } else if !desired_ssao && ssao_was {
@@ -384,7 +369,6 @@ impl DxContext {
             &plan_pool_slots(
                 PoolGates {
                     ssao: ssao_enabled,
-                    bloom: true,
                     gbuffer: gbuffer_enabled,
                 },
                 (
@@ -414,48 +398,40 @@ impl DxContext {
                 gbuffer.repoint_pooled(&device, srv_cpu_base, srv_gpu_base, &pooled);
             }
         }
-        let bloom_count = self.bloom.mips.len();
-        if bloom_count > 0 {
-            let bloom_top = self
-                .targets
-                .transient_pool
-                .resource_for("bloom_top")
-                .ok_or_else(|| {
-                    RenderError::Other("transient pool missing bloom_top after rebuild".to_string())
-                })?
-                .clone();
-            let (mips, extents) = create_bloom_mips_at(
-                &self.hw.device,
-                self.targets.extent.output_width,
-                self.targets.extent.output_height,
-                bloom_count,
-                bloom_top,
-            )?;
-            self.bloom.mips = mips;
-            self.bloom.mip_extents = extents;
-            // Rewrite each mip's RTV + SRV into its existing (fixed) slot. The
-            // SRV CPU handle is derived from the stored GPU handle the same way
-            // the resize path does (the slot never moves).
-            // SAFETY: a property query on a live descriptor heap; it only reads.
-            let srv_cpu_base = unsafe {
-                self.descriptors
-                    .srv_heap
-                    .GetCPUDescriptorHandleForHeapStart()
-            };
-            let srv_gpu_base = SrvSlot::at(
-                &self.descriptors.srv_heap,
-                self.descriptors.srv_descriptor_size,
-                0,
-            );
-            let srv_cpu_of = |gpu: SrvSlot| gpu.cpu_in(srv_cpu_base, srv_gpu_base);
-            for i in 0..bloom_count {
-                write_color_rtv(&self.hw.device, &self.bloom.mips[i], self.bloom.mip_rtvs[i]);
-                write_hdr_srv(
-                    &self.hw.device,
-                    &self.bloom.mips[i],
-                    srv_cpu_of(self.bloom.mip_srv_gpus[i]),
-                );
-            }
+        self.repoint_pooled_post_targets()
+    }
+
+    // View the rebuilt pool's `bloom_top` and `ao_output` from the passes that
+    // write them.
+    fn repoint_pooled_post_targets(&mut self) -> RenderResult<()> {
+        let pool = &self.targets.transient_pool;
+        let bloom_top = pool
+            .resource_for("bloom_top")
+            .ok_or_else(|| {
+                RenderError::Other("transient pool missing bloom_top after rebuild".to_string())
+            })?
+            .clone();
+        let ao_output = pool.resource_for("ao_output").cloned();
+        let extent = &self.targets.extent;
+        let output = PostExtent {
+            width: extent.output_width,
+            height: extent.output_height,
+        };
+        let render = PostExtent {
+            width: extent.render_width,
+            height: extent.render_height,
+        };
+        if let Some(mut bloom) = self.bloom.take() {
+            let r = bloom.repoint_top(&self.post_device(0), output, &bloom_top);
+            self.bloom = Some(bloom);
+            r?;
+        }
+        if let Some(ao_output) = ao_output
+            && let Some(mut ssao) = self.ssao.resources.take()
+        {
+            let r = ssao.repoint_output(&self.post_device(0), render, &ao_output);
+            self.ssao.resources = Some(ssao);
+            r?;
         }
         Ok(())
     }

@@ -7,7 +7,10 @@ use concinnity_core::render::error::RenderResult;
 
 use super::InitGpu;
 use crate::directx::context::{DxRayTracing, DxSceneAssets, DxTargets};
-use crate::directx::post::reflection_composite::ReflectionCompositeResources;
+use crate::directx::post::post_device::DxPostDevice;
+use crate::directx::post::reflection_composite::{
+    DxReflectionCompositePass, build_reflection_composite as build_composite,
+};
 use crate::directx::post::rt_reflections::{
     RtBuildContext, RtBuildInit, RtOutputDescriptors, RtReflectionsResources,
 };
@@ -15,31 +18,24 @@ use crate::directx::quality::QualitySlotHandles;
 use crate::directx::raytrace;
 use crate::directx::transparent::TransparentResources;
 
-// Reflection composite: `output` is the scene-with-reflections the post stack
-// consumes; `blur` is the reduced-res roughness blur. Built when SSR resolve
-// or RT is authored (both feed the same composite); the slots stay reserved
-// either way for a live reflection enable.
+// Reflection composite: its output is the scene-with-reflections the post stack
+// consumes. Built when SSR resolve or RT is authored (both feed the same
+// composite); its targets come from the post block, so a live reflection
+// enable builds it the same way.
 pub(super) fn build_reflection_composite(
-    gpu: &InitGpu<'_>,
-    slots: &QualitySlotHandles,
+    device: &DxPostDevice,
     targets: &DxTargets,
     post: &PostSettings,
-) -> RenderResult<Option<ReflectionCompositeResources>> {
-    let hw = gpu.hw;
-    let reflection_composite = if post.ssr.is_some() || post.rt_reflections.is_some() {
-        Some(ReflectionCompositeResources::new(
-            &hw.device,
-            targets.extent.render_width,
-            targets.extent.render_height,
-            post.reflection_blur_scale,
-            slots.refl_composite,
-            hw.info_queue.as_ref(),
-            gpu.hot_reload,
-        )?)
-    } else {
-        None
-    };
-    Ok(reflection_composite)
+) -> RenderResult<Option<DxReflectionCompositePass>> {
+    if post.ssr.is_none() && post.rt_reflections.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(build_composite(
+        device,
+        post.reflection_blur_scale,
+        targets.extent.render_width,
+        targets.extent.render_height,
+    )?))
 }
 
 // RT reflections: build the pipelines + output target only when authored AND

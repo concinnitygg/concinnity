@@ -554,11 +554,6 @@ impl VkContext {
         // inert. Mirrors Metal's `prepare_particle_pass` hoist.
         let particle_frame = self.prepare_particle_pass(params.elapsed);
 
-        // Point the reflection composite's binding 0 at the resolve that will
-        // feed it, on `&mut self` before the fan-out. The view only moves on a
-        // resize / quality rebuild, so in the steady state this writes nothing.
-        self.prepare_reflection_composite(params.frame_idx);
-
         // Composite stays on the main thread (it writes the swapchain image
         // and allocates + drops transient text buffers through the RefCell
         // device allocator); every other pass fans onto a `jobs::pool()`
@@ -1028,7 +1023,7 @@ impl VkContext {
                 // unified pre-pass's normal+depth. The SsaoPrepass / SsaoKernel
                 // PassIds stay timing-only (rejected as graph nodes below) like
                 // Metal's same pattern.
-                self.encode_ssao(rec, params.frame_idx, params.fov_y_radians, params.aspect);
+                self.encode_ssao(cmd, params.frame_idx, params.fov_y_radians, params.aspect)?;
             }
             PassId::SsaoPrepass | PassId::SsaoKernel => {
                 return Err(RenderError::Other(format!(
@@ -1082,7 +1077,7 @@ impl VkContext {
                 self.encode_upscale(cmd, params)?;
             }
             PassId::Bloom => {
-                self.encode_bloom(cmd, params.frame_idx);
+                self.encode_bloom(cmd, params.frame_idx)?;
             }
             PassId::Shadow => {
                 self.encode_shadow_pass(cmd, params.frame_idx, params.cam_pos, params.elapsed);

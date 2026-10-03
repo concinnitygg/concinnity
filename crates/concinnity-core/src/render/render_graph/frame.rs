@@ -1185,10 +1185,10 @@ fn velocity_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     )
 }
 
-fn bloom_top_desc() -> TextureDesc {
-    // bloom_top is `bloom_targets.mips[0]`, the bloom chain's half-resolution
-    // top octave; the prefilter pass writes into it and the upsample chain
-    // accumulates back into it for Composite to sample.
+pub(crate) fn bloom_top_desc() -> TextureDesc {
+    // bloom_top is the bloom chain's half-resolution top octave; the prefilter
+    // pass writes into it and the upsample chain accumulates back into it for
+    // Composite to sample.
     //
     // Half the *drawable* extent, not half the render resolution: every backend
     // builds its bloom chain from the output extent, so under temporal
@@ -1222,7 +1222,8 @@ fn planar_mirrors_desc(inputs: &FrameGraphInputs) -> TextureDesc {
 fn scene_color_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     // The engine-owned scene_color texture the post stack consumes is
     // single-sample at HDR dims regardless of whether the per-frame
-    // resolution lands on taa_targets / ssr_targets.output / hdr_resolve.
+    // resolution lands on the TAA history / the reflection composite's output /
+    // hdr_resolve.
     render_res_2d(inputs, PixelFormat::Rgba16Float, TextureUsage::SHADER_READ)
 }
 

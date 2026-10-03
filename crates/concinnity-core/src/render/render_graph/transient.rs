@@ -198,16 +198,14 @@ pub fn pooled(label: &str) -> bool {
 
 /// The feature gates a backend's transient pool is built for, i.e. the ones it
 /// is rebuilt on. Everything else `planning_inputs` forces live.
+///
+/// The bloom chain's top octave is always pooled: bloom toggles per frame off
+/// the post-process intensity while the composite binds the top octave either
+/// way, so a pool built at init or resize cannot gate on it.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PoolGates {
     /// SSAO is built, so `ao_output` exists.
     pub ssao: bool,
-    /// The bloom chain's top octave is managed. Metal and DirectX pass `true`
-    /// unconditionally: they toggle bloom per frame off the post-process
-    /// intensity while the composite binds mip 0 either way, so a pool built at
-    /// init / resize cannot gate on it. Vulkan rebuilds on the flag and passes
-    /// the real value.
-    pub bloom: bool,
     /// The unified G-buffer pre-pass is built, so its color channels exist.
     pub gbuffer: bool,
 }
@@ -233,7 +231,7 @@ pub fn plan_pool_slots(
     build.hdr_width = render_extent.0;
     build.hdr_height = render_extent.1;
     build.ssao_enabled = gates.ssao;
-    build.bloom_enabled = gates.bloom;
+    build.bloom_enabled = true;
     // The pre-pass exists only where the backend built its targets, so
     // `planning_inputs` cannot force it on the way it does the passes that are
     // purely a matter of world content: it has to follow the build. This gate
@@ -519,7 +517,6 @@ mod tests {
 
     const ALL_GATES: PoolGates = PoolGates {
         ssao: true,
-        bloom: true,
         gbuffer: true,
     };
 

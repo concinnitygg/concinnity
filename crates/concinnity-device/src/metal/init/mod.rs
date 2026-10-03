@@ -5,7 +5,7 @@
 //!   bootstrap.rs     window, MTKView, device, command queues, EDR negotiation.
 //!   effects.rs       upscaler, TAA, SSAO, SSR, G-buffer pre-pass, SSGI, auto-exposure.
 //!   scene_assets.rs  geometry, light tables, LTC, textures, samplers, IBL, color LUT.
-//!   targets.rs       depth states, HDR scene target, transient pool, bloom mips.
+//!   targets.rs       depth states, HDR scene target, transient pool.
 //!   scene_data.rs    clustered light binning.
 //!   shadow.rs        cascade and spot shadow states.
 //!   cull/            bindless main pass, compute cull, Hi-Z, GPU-driven shadow,
@@ -13,7 +13,7 @@
 //!   arg_buffers.rs   bindless texture and sampler blocks, probe cube encoder.
 //!   text.rs          text atlases and pipeline.
 //!   composite.rs     composite pipeline and sampler.
-//!   bloom.rs         bloom pipelines.
+//!   bloom.rs         the bloom chain.
 //!   world_fx.rs      decals, fog, particles, water, glass, planar reflections, raymarch.
 //!   ray_tracing.rs   RT reflection pipelines, acceleration structure.
 //!   commands.rs      frame rings, pass timing diagnostics.
@@ -233,12 +233,11 @@ impl MtlContext {
         let arg_buffers = arg_buffers::build_arg_buffers(&gpu, &cull, &scene, &shadow)?;
         let text = text::build_text(&gpu, &media.text_atlases)?;
         let composite = composite::build_composite(&gpu)?;
-        let bloom_pipelines = bloom::build_bloom(&gpu, features.scene)?;
-
         let post_device = effects::post_device(&gpu, &composite, &scene);
+        let bloom = bloom::build_bloom(&post_device, features.scene, features.output)?;
         let settings = EffectSettings::from_post(&post);
         let taa = effects::build_taa(&post_device, features.taa_enabled, features.render)?;
-        let ssao = effects::build_ssao(&hw.allocator, &settings, features.render, hot_reload)?;
+        let ssao = effects::build_ssao(&post_device, &hw.allocator, &settings, features.render)?;
         let ssr = effects::build_ssr(&post_device, &settings, features.render)?;
         let gbuffer = effects::build_gbuffer(
             &hw.device,
@@ -299,7 +298,7 @@ impl MtlContext {
             text,
             targets,
             composite,
-            bloom_pipelines,
+            bloom,
             post_process: features.post_process,
             taa,
             prev_view_proj: IDENTITY,

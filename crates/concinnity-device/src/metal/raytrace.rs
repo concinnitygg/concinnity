@@ -91,7 +91,7 @@ pub(crate) struct RtState {
     // Resolved + clamped tunables. `Some` only when the world's
     // `PostProcessConfig` sets `ray_traced_reflections` AND the GPU supports
     // ray tracing; gates the RT pass. RT takes precedence over SSR resolve
-    // and reuses `ssr.targets.output` as its resolve target.
+    // and reuses `ssr.reflection` as its resolve target.
     pub settings: Option<RtReflectionSettings>,
     // Scene acceleration structure (BLAS/TLAS) + geometry table. `Some` only
     // when RT reflections are on and the scene has resident geometry; updated

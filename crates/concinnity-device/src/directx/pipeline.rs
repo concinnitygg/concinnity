@@ -125,7 +125,7 @@ fn text_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
 // Composite (post-process) pipeline
 //
 // A vertex-buffer-less fullscreen triangle samples the off-screen FP16 HDR
-// scene target, composites the bloom mip, applies an exposure multiplier, the
+// scene target, composites the bloom top octave, applies an exposure multiplier, the
 // Narkowicz ACES tonemap + gamma 2.2 encode, a single FXAA 3.11-style edge
 // pass, a 3D-LUT color grade, and a radial vignette, then writes the
 // swapchain backbuffer. Ships from `src/render/shaders/composite.hlsl`, paired with
@@ -140,20 +140,20 @@ pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u
 
 // Root signature for the composite pass: a 1-SRV descriptor table at t0 (the
 // scene target: the HDR resolve, or the TAA output when TAA is on), a 1-SRV
-// table at t1 (bloom mip 0), `CompositeParams` as 32-bit root constants
+// table at t1 (the bloom top octave), `CompositeParams` as 32-bit root constants
 // at b0, a 1-SRV descriptor table at t2 (the 3D
 // color-grading LUT), one each at t3 / t4 / t5 (the G-buffer normal+depth,
 // roughness, and SSAO channels the debug view modes visualize), and static
 // linear-clamp samplers at s0..s5 -- one per source, each the sampler half of a
 // source's texture/sampler pair in the single source. The
-// scene SRV is its own table (separate from bloom mip 0) so the runtime can
+// scene SRV is its own table (separate from the bloom top octave) so the runtime can
 // re-point it at the per-frame TAA output without the two needing to be
 // heap-contiguous. Clamp keeps the FXAA neighbor taps from wrapping at screen
 // edges and the LUT taps inside the cube.
 pub(super) fn create_composite_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
-    // [0] scene (t0), [1] bloom mip 0 (t1).
+    // [0] scene (t0), [1] the bloom top octave (t1).
     let sig = RootSig::new()
         .srv_table(0, 1, Visibility::Pixel)
         .srv_table(1, 1, Visibility::Pixel)
@@ -164,7 +164,7 @@ pub(super) fn create_composite_root_signature(
         // was 8.
         .constants::<render_types::CompositeParams>(0, Visibility::Pixel)
         // [3] The 3D color-grading LUT (t2) is a separate, non-contiguous heap
-        // slot (it sits after the bloom mips), so it needs its own table.
+        // slot, so it needs its own table.
         .srv_table(2, 1, Visibility::Pixel);
     // [4..6] The G-buffer channel sources the debug view modes visualize (t3
     // normal + depth, t4 roughness, t5 the blurred SSAO occlusion). Each is a

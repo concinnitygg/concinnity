@@ -3,9 +3,9 @@
 //! allocator(s), and per-frame encoder(s) co-located; mirrors the Metal
 //! `metal/post/` shape:
 //!
-//!   bloom.rs    prefilter + downsample/upsample mip chain
-//!   reflection_composite.rs  roughness blur + composite of the SSR/RT reflection
-//!   ssao.rs     GTAO depth+normal pre-pass + horizon-search kernel + blur
+//!   bloom.rs    the inputs of the shared bloom chain
+//!   reflection_composite.rs  the reflection path + inputs of the shared composite
+//!   ssao.rs     the settings + inputs of the shared SSAO kernel and blur
 //!   ssgi.rs     the settings + inputs of the shared SSGI trace and composite
 //!   ssr.rs      the reflection target + inputs of the shared SSR resolve
 //!   taa.rs      the TAA jitter counter + inputs over the shared resolve
@@ -17,7 +17,6 @@
 //!   upscale/    temporal upscaling (FSR / DLSS / XeSS) behind VkUpscaleBackend
 
 pub(in crate::vulkan) mod bloom;
-pub(in crate::vulkan) mod fullscreen;
 pub(in crate::vulkan) mod gbuffer;
 pub(in crate::vulkan) mod reflection_composite;
 pub(in crate::vulkan) mod rt_reflections;
@@ -31,8 +30,9 @@ pub(in crate::vulkan) mod post_device;
 pub(in crate::vulkan) mod set_arena;
 pub(in crate::vulkan) mod upscale;
 
+pub(in crate::vulkan) use bloom::VkBloomPass;
 pub(in crate::vulkan) use gbuffer::GbufferResources;
-pub(in crate::vulkan) use reflection_composite::ReflectionCompositeResources;
+pub(in crate::vulkan) use reflection_composite::VkReflectionCompositePass;
 pub(in crate::vulkan) use rt_reflections::RtReflectionsResources;
 pub(in crate::vulkan) use ssao::SsaoResources;
 pub(in crate::vulkan) use ssgi::SsgiResources;

@@ -32,7 +32,6 @@ use crate::directx::context::dump_on_err;
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::post::descriptors::{PostDescriptors, PostTargetDescriptors};
-use crate::directx::post::fullscreen::FullscreenExtent;
 use crate::directx::pso::GraphicsPso;
 use crate::directx::root_constants::RootConstants;
 use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
@@ -40,6 +39,13 @@ use crate::directx::texture::{
     create_rt_chain, subresource_transition_barrier, write_level_rtv, write_levels_srv,
 };
 use crate::directx::transient_pool::dxgi_format;
+
+// Pixel dimensions of a draw's target, which are its viewport and scissor.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct FullscreenExtent {
+    pub width: u32,
+    pub height: u32,
+}
 
 // The registers a probe-reading program declares its ProbeSet and the cluster
 // params at, after the constants at b0.
@@ -93,6 +99,47 @@ impl PostTarget {
     // The shader-visible handle a consumer samples this target through.
     pub(in crate::directx) fn srv_gpu(&self) -> SrvSlot {
         self.descriptors.srv_gpu
+    }
+
+    // The resource, for a consumer that copies from it or barriers it itself.
+    pub(in crate::directx) fn resource(&self) -> &ID3D12Resource {
+        &self.resource
+    }
+
+    // The render-target view of its top level.
+    pub(in crate::directx) fn rtv(&self) -> D3D12_CPU_DESCRIPTOR_HANDLE {
+        self.descriptors.rtv
+    }
+}
+
+// A transient-pool resource a shared post pass writes, viewed through
+// descriptors from the post block. The pool owns the memory and repacks it on
+// a rebuild, so the view is recreated after every rebuild rather than kept.
+pub(in crate::directx) struct PooledTarget {
+    resource: ID3D12Resource,
+    descriptors: PostTargetDescriptors,
+    extent: FullscreenExtent,
+}
+
+impl PooledTarget {
+    // The shader-visible handle a consumer samples it through.
+    pub(in crate::directx) fn srv_gpu(&self) -> SrvSlot {
+        self.descriptors.srv_gpu
+    }
+
+    // The resource, for a consumer that barriers it itself.
+    pub(in crate::directx) fn resource(&self) -> &ID3D12Resource {
+        &self.resource
+    }
+
+    // As a draw's color target.
+    pub(in crate::directx) fn attachment(&self) -> DxAttachment<'_> {
+        DxAttachment {
+            resource: &self.resource,
+            subresource: 0,
+            rtv: self.descriptors.rtv,
+            extent: self.extent,
+        }
     }
 }
 
@@ -396,6 +443,30 @@ impl PostPassDevice for DxPostDevice<'_> {
             }
         }
         Ok(())
+    }
+}
+
+impl DxPostDevice<'_> {
+    // View `resource`, a single-level `format` texture of `extent` the transient
+    // pool holds, through a slot of the post block.
+    pub(in crate::directx) fn pooled_target(
+        &self,
+        resource: &ID3D12Resource,
+        format: PixelFormat,
+        extent: PostExtent,
+    ) -> RenderResult<PooledTarget> {
+        let format = dxgi_format(format);
+        let descriptors = self.descriptors.allocate()?;
+        write_levels_srv(self.device, resource, descriptors.srv_cpu, format, (0, 1));
+        write_level_rtv(self.device, resource, descriptors.rtv, format, 0);
+        Ok(PooledTarget {
+            resource: resource.clone(),
+            descriptors,
+            extent: FullscreenExtent {
+                width: extent.width,
+                height: extent.height,
+            },
+        })
     }
 }
 

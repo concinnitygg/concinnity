@@ -677,8 +677,7 @@ impl MtlContext {
         // The bloom chain reads `scene_color`: at drawable size when the
         // upscaler runs, otherwise at native (= render) resolution. Sized
         // off `want_w/h` either way.
-        let bloom_changed =
-            want_w != self.targets.bloom.width || want_h != self.targets.bloom.height;
+        let bloom_changed = (want_w, want_h) != self.targets.output;
         // Whether the unified G-buffer pre-pass runs, derived once so the pool
         // and the pre-pass's own depth target below cannot disagree about it.
         // Same expression as `EffectSettings::gbuffer_needed`.
@@ -690,30 +689,37 @@ impl MtlContext {
             || self.upscale.scaler.is_some();
         // The transient pool backs `ao_output` and the G-buffer channels (all
         // render-resolution) plus `bloom_top` (half output-resolution), so
-        // either extent moving invalidates it. The bloom chain then rebuilds
-        // around the pool's fresh top mip. Nothing else caches a pooled handle:
+        // either extent moving invalidates it. Nothing caches a pooled handle:
         // the per-frame bindless argument buffer re-encodes `ao_output` itself
-        // and every G-buffer consumer fetches its channel by label at encode
-        // time, which is what makes a rebuild's slot repack harmless here.
+        // and every other consumer fetches its texture by label at encode time,
+        // which is what makes a rebuild's slot repack harmless here.
         if render_changed || bloom_changed {
             self.targets.transient_pool.rebuild(
                 &self.hw.device,
                 &render_graph::plan_pool_slots(
                     render_graph::PoolGates {
                         ssao: self.ssao.settings.is_some(),
-                        bloom: true,
                         gbuffer: needs_gbuffer,
                     },
                     (render_w, render_h),
                     (want_w, want_h),
                 )?,
             )?;
-            self.targets.bloom = super::post::create_bloom_targets(
-                &self.hw.device,
-                want_w,
-                want_h,
-                self.targets.transient_pool.bloom_top()?,
-            )?;
+        }
+        if bloom_changed {
+            if let Some(mut bloom) = self.bloom.take() {
+                let r = bloom.resize(
+                    &self.post_device(),
+                    PostExtent {
+                        width: want_w,
+                        height: want_h,
+                    },
+                );
+                self.bloom = Some(bloom);
+                r?;
+            }
+            // Recorded only once the chain matches, so a failed resize retries.
+            self.targets.output = (want_w, want_h);
         }
         // The TAA history + velocity buffers are render-resolution. Stale
         // history can't be reprojected into the new resolution, so mark
@@ -731,31 +737,33 @@ impl MtlContext {
             r?;
         }
         // The SSAO kernel's raw-occlusion target is render-resolution. Its depth
-        // + normal input now comes from the unified G-buffer pre-pass (below),
-        // so SSAO owns no G-buffer of its own; its blurred output is the pool's
-        // `ao_output`, rebuilt above.
-        if render_changed && self.ssao.settings.is_some() {
-            self.ssao.targets = Some(super::post::create_ssao_targets(
+        // + normal input comes from the unified G-buffer pre-pass (below), and
+        // its blurred output is the pool's `ao_output`, rebuilt above.
+        let render_extent = PostExtent {
+            width: render_w,
+            height: render_h,
+        };
+        if render_changed && let Some(mut ssao) = self.ssao.pass.take() {
+            let r = ssao.resize(&self.post_device(), render_extent);
+            self.ssao.pass = Some(ssao);
+            r?;
+        }
+        // The reflection target and the composite's output and blur are
+        // render-resolution. The reflection target exists when SSR, SSGI, *or*
+        // RT reflections are on (RT writes it too). The acceleration structure
+        // is resolution-independent, so it is not rebuilt here.
+        if render_changed && self.ssr.reflection.is_some() {
+            self.ssr.reflection = Some(super::post::create_reflection_target(
                 &self.hw.device,
                 render_w,
                 render_h,
+                self.ssr.trace_scale,
             )?);
         }
-        // The SSR resolve-output target is render-resolution. Rebuilt when SSR,
-        // SSGI, *or* RT reflections are on (RT reuses `ssr_targets.output`). The
-        // acceleration structure is resolution-independent, so it is not
-        // rebuilt here.
-        if render_changed
-            && (self.ssr.settings.is_some()
-                || self.ssgi.settings.is_some()
-                || self.rt.settings.is_some())
-        {
-            self.ssr.targets = Some(super::post::create_ssr_targets(
-                &self.hw.device,
-                render_w,
-                render_h,
-                self.ssr.scales,
-            )?);
+        if render_changed && let Some(mut composite) = self.ssr.composite.take() {
+            let r = composite.resize(&self.post_device(), render_extent);
+            self.ssr.composite = Some(composite);
+            r?;
         }
         // The pre-pass's depth attachment is render-resolution and stays
         // feature-owned; its three color channels were rebuilt with the pool

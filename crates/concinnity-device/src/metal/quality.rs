@@ -162,15 +162,9 @@ impl MtlContext {
         self.taa.enabled = effects.taa.enabled;
         self.taa.pass = effects.taa.pass;
         self.ssao = effects.ssao;
+        // The bloom chain and the composite fetch the rebuilt pool's
+        // `bloom_top` by label each frame, so nothing holds the old one.
         self.targets.transient_pool = effects.transient_pool;
-        // The rebuilt pool holds a fresh `bloom_top`, so the bloom chain's top
-        // mip (a handle into the old pool) is stale. Re-point it rather than
-        // rebuilding the chain: the extent is unchanged, so the mips below it
-        // are still correct.
-        match self.targets.transient_pool.bloom_top() {
-            Ok(top) => self.targets.bloom.mips[0] = top,
-            Err(e) => first_err = Some(e.context("bloom top mip")),
-        }
         self.ssr = effects.ssr;
         self.gbuffer = effects.gbuffer;
         self.ssgi = effects.ssgi;
@@ -242,10 +236,10 @@ impl MtlContext {
 
     // Build the toggle-controlled effects (see [`QualityEffects`]) in the order
     // init builds them. Render dimensions come from the live HDR targets
-    // (render-resolution, already post-upscale). Output dimensions come from the
-    // live bloom chain, which was built at them; the rebuilt pool sizes
-    // `bloom_top` off the same pair, so the new top mip drops back into the chain
-    // unchanged. The RT acceleration structure is the caller's responsibility.
+    // (render-resolution, already post-upscale). Output dimensions are the ones
+    // the live bloom chain was built at, so the rebuilt pool's `bloom_top` is
+    // the octave above it. The RT acceleration structure is the caller's
+    // responsibility.
     fn build_quality_effects(
         &self,
         settings: &EffectSettings,
@@ -263,11 +257,11 @@ impl MtlContext {
             hot_reload,
         };
         let render = (self.targets.hdr.width, self.targets.hdr.height);
-        let output = (self.targets.bloom.width, self.targets.bloom.height);
+        let output = self.targets.output;
         let gbuffer_enabled = settings.gbuffer_needed(needs_velocity);
         Ok(QualityEffects {
             taa: build_taa(&post_device, taa_enabled, render)?,
-            ssao: build_ssao(&self.hw.allocator, settings, render, hot_reload)?,
+            ssao: build_ssao(&post_device, &self.hw.allocator, settings, render)?,
             transient_pool: build_transient_pool(
                 device,
                 settings.ssao.is_some(),

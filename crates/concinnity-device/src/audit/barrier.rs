@@ -199,7 +199,7 @@ const AUDITS: &[BackendAudit] = &[
             (
                 "render_pass.rs",
                 ".final_layout(",
-                9,
+                8,
                 Reason::AttachmentLayout,
             ),
             ("decal.rs", ".final_layout(", 1, Reason::AttachmentLayout),
@@ -222,21 +222,9 @@ const AUDITS: &[BackendAudit] = &[
                 Reason::AttachmentLayout,
             ),
             (
-                "post/reflection_composite.rs",
-                ".final_layout(",
-                1,
-                Reason::AttachmentLayout,
-            ),
-            (
                 "post/rt_reflections.rs",
                 ".final_layout(",
                 1,
-                Reason::AttachmentLayout,
-            ),
-            (
-                "post/ssao.rs",
-                ".final_layout(",
-                2,
                 Reason::AttachmentLayout,
             ),
             (
@@ -282,42 +270,33 @@ const AUDITS: &[BackendAudit] = &[
             // called on the way in and on the way out.
             ("post/ssgi.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
             // The shared post seam's bracket for a target private to its pass
-            // (`PostTargetState::Pass`): the SSR reflection target and the SSGI
-            // gather target, which rest readable and never cross a node boundary.
+            // (`PostTargetState::Pass`): the SSR reflection target, the SSGI
+            // gather target, SSAO's raw occlusion, the reflection blur and the
+            // bloom octaves below the top, which rest readable and never cross a
+            // node boundary.
             (
                 "post/post_device.rs",
                 ".ResourceBarrier(",
                 2,
                 Reason::IntraPass,
             ),
-            // The same shape in two more bundled nodes, on targets the graph does
-            // not model because they never cross a node boundary: SSAO's raw
-            // occlusion, which its own blur consumes, and the RT reflection
-            // radiance the roughness composite consumes.
-            ("post/ssao.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
             // The model-history ring's snapshot dispatch: a UAV barrier over a
             // buffer, which lives in COMMON and is promoted implicitly at each
             // use, so it claims no state and crosses no node boundary.
             ("post/gbuffer.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
+            // The same bracket in one more bundled node, on a target the graph
+            // does not model because it never crosses a node boundary: the RT
+            // reflection radiance the roughness composite consumes.
             (
                 "post/rt_reflections.rs",
                 ".ResourceBarrier(",
                 2,
                 Reason::IntraPass,
             ),
-            // The bloom octave chain, which writes mip N while sampling mip N+1.
-            // The graph drives mip 0 (`bloom_top`) across the node boundary;
-            // these order the steps within it.
+            // The bloom chain's top octave. The graph drives `bloom_top` across
+            // the node boundary in RENDER_TARGET; the downsample chain samples it
+            // between the prefilter and the last upsample, so the node borrows it.
             ("post/bloom.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
-            // The hand-written fullscreen bracket, used only by a target that
-            // lives inside one node: the reflection blur. Callers whose target
-            // the graph drives take `bind_fullscreen_rt` instead.
-            (
-                "post/fullscreen.rs",
-                ".ResourceBarrier(",
-                2,
-                Reason::IntraPass,
-            ),
             ("allocator.rs", ".ResourceBarrier(", 1, Reason::Upload),
             // The staged geometry copies' submit brackets the shared buffers in
             // COPY_DEST; its test reads a destination back through the same pair.

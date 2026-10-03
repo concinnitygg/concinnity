@@ -7,11 +7,15 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::retire_pool::RetirePool;
 
 use super::InitGpu;
+use super::effects::shared_post_device;
 use crate::vulkan::context::{
     VkCull, VkDescriptors, VkGeometry, VkRayTracing, VkSceneAssets, VkTargets,
 };
+use crate::vulkan::post::PostSupport;
 use crate::vulkan::post::gbuffer::GbufferResources;
-use crate::vulkan::post::reflection_composite::ReflectionCompositeResources;
+use crate::vulkan::post::reflection_composite::{
+    ReflectionPath, VkReflectionCompositePass, build_reflection_composite,
+};
 use crate::vulkan::post::rt_reflections::RtReflectionsResources;
 
 pub(super) struct RtInputs<'a> {
@@ -23,13 +27,14 @@ pub(super) struct RtInputs<'a> {
     pub(super) descriptors: &'a VkDescriptors,
     pub(super) cull: &'a VkCull,
     pub(super) post: &'a PostSettings,
+    pub(super) post_support: &'a PostSupport,
     pub(super) rt_wanted: bool,
 }
 
 pub(super) struct RtResources {
     pub(super) state: VkRayTracing,
     pub(super) reflections: Option<RtReflectionsResources>,
-    pub(super) composite: Option<ReflectionCompositeResources>,
+    pub(super) composite: Option<VkReflectionCompositePass>,
     pub(super) seethrough_mesh_indices: Vec<usize>,
     pub(super) has_seethrough_meshes: bool,
 }
@@ -54,6 +59,7 @@ pub(super) fn build_rt_reflections(
         descriptors,
         cull,
         post,
+        post_support,
         rt_wanted,
     } = inputs;
     let (hdr_resolve_images, render_extent) = (&targets.hdr_resolve_images, targets.render_extent);
@@ -176,33 +182,18 @@ pub(super) fn build_rt_reflections(
     // write radiance+weight into their output target; this blurs by roughness
     // and composites over the scene into its own output, which then replaces
     // the raw resolve output as the scene image every downstream pass samples.
-    let composite_opt = if crate::vulkan::post::reflection_composite::ReflectionPath::new(
-        post.ssr.is_some(),
-        rt_opt.is_some(),
-        rt_accel_opt.is_some(),
-    )
-    .composite
-    {
-        let gb = gbuffer
-            .as_ref()
-            .expect("a reflection path implies the unified G-buffer pre-pass");
-        Some(
-            crate::vulkan::post::reflection_composite::ReflectionCompositeResources::new(
-                &gpu.upload(),
-                render_extent.width,
-                render_extent.height,
-                frames,
+    let composite_opt =
+        if ReflectionPath::new(post.ssr.is_some(), rt_opt.is_some(), rt_accel_opt.is_some())
+            .composite
+        {
+            Some(build_reflection_composite(
+                &shared_post_device(gpu, post_support, scene, descriptors),
                 post.reflection_blur_scale,
-                &crate::vulkan::post::reflection_composite::CompositeInputs::new(
-                    hdr_resolve_images,
-                    gb,
-                ),
-                hot_reload,
-            )?,
-        )
-    } else {
-        None
-    };
+                render_extent,
+            )?)
+        } else {
+            None
+        };
     Ok(RtResources {
         state: VkRayTracing {
             accel: rt_accel_opt,

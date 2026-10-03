@@ -35,13 +35,6 @@ impl<T: Copy + PartialEq> WireCache<T> {
         }
     }
 
-    // What `frame_idx` was last wired with, or `None` when it has never been
-    // wired (or is out of range). For callers that want to assert a set holds
-    // what they are about to draw against.
-    pub(in crate::vulkan) fn current(&self, frame_idx: usize) -> Option<T> {
-        self.wired.get(frame_idx).copied().flatten()
-    }
-
     // Forget every slot, so the next frame rewires unconditionally. Called when
     // the sets themselves are reallocated or their bindings rewritten out of
     // band.
@@ -85,18 +78,6 @@ mod tests {
         assert!(cache.changed(0, 8u32));
         assert!(!cache.changed(0, 8u32));
         assert!(cache.changed(0, 7u32));
-    }
-
-    #[test]
-    fn current_reports_what_a_slot_holds() {
-        let mut cache = WireCache::new(2);
-        assert_eq!(cache.current(0), None);
-        cache.changed(0, 7u32);
-        assert_eq!(cache.current(0), Some(7));
-        assert_eq!(cache.current(1), None);
-        assert_eq!(cache.current(9), None);
-        cache.reset();
-        assert_eq!(cache.current(0), None);
     }
 
     #[test]

@@ -18,7 +18,7 @@ use crate::gfx::render_types::{
 use crate::render::decal::DecalRecord;
 use crate::render::particles::ParticleEmitterRecord;
 use crate::render::post::rt_reflections::RtReflectionSettings;
-use crate::render::post::ssao::SsaoSettings;
+use crate::render::post::ssao::settings::SsaoSettings;
 use crate::render::post::ssgi::settings::SsgiSettings;
 use crate::render::post::ssr::settings::SsrSettings;
 use crate::render::rt_geom::RtDynamicMode;

@@ -215,13 +215,13 @@ impl MtlContext {
             None
         };
         // `scene_input` is the engine-owned texture the post-decoration stack
-        // treats as the pre-TAA scene: `ssr_targets.output` when a reflection
-        // path is live, else the raw `hdr_resolve`.
+        // treats as the pre-TAA scene: the reflection composite's output when a
+        // reflection path is live, else the raw `hdr_resolve`.
         //
-        // `output` is the *composited* scene, not the reflection. Both the SSR
-        // and the RT resolve write radiance into `ssr_targets.reflection`, then
-        // call the shared `encode_reflection_composite`, which blends that over
-        // `hdr_resolve` into `output`. Worth stating precisely: the DirectX
+        // That output is the *composited* scene, not the reflection. Both the
+        // SSR and the RT resolve write radiance into `ssr.reflection`, then call
+        // the shared `encode_reflection_composite`, which blends that over
+        // `hdr_resolve` into the output. Worth stating precisely: the DirectX
         // equivalent split the two apart and left its upscaler reading the
         // radiance buffer as if it were the scene.
         //
@@ -231,12 +231,15 @@ impl MtlContext {
         //   - otherwise just the pre-TAA scene (no temporal stage).
         let scene_input = if self.ssr.settings.is_some() || self.rt.accel.is_some() {
             self.ssr
-                .targets
+                .composite
                 .as_ref()
                 .ok_or_else(|| {
-                    error::RenderError::Other("reflections enabled but SSR targets missing".into())
+                    error::RenderError::Other(
+                        "reflections enabled but the reflection composite is missing".into(),
+                    )
                 })?
-                .output
+                .output()
+                .texture()
                 .clone()
         } else {
             self.targets.hdr.hdr_resolve.clone()

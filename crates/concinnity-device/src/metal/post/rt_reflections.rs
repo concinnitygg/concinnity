@@ -6,7 +6,7 @@
 //! the result over the scene with the same Fresnel/gloss weighting SSR uses.
 //!
 //! It occupies the SSR-resolve slot in the frame graph (reads hdr_resolve, writes
-//! scene_pre_taa, which aliases `ssr_targets.output`) and is mutually exclusive
+//! scene_pre_taa, the reflection composite's output) and is mutually exclusive
 //! with SSR resolve. Like SSGI it relies on the SSR pre-pass G-buffer, so the
 //! pre-pass is forced on whenever RT reflections are enabled.
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -38,7 +38,7 @@ const RT_POOL_SAMPLER_INDEX: usize = 5;
 // Build one RT-reflection pipeline from the given single-source variant: a
 // fullscreen-triangle pass that traces a reflection ray and writes reflected
 // radiance + composite weight into a single-sample `RGBA16Float` target (the
-// same `ssr_targets.output` SSR resolve would write). Two variants exist:
+// same `ssr.reflection` the SSR resolve would write). Two variants exist:
 // `RT_REFLECTIONS_FRAG` (flat tint) and `RT_REFLECTIONS_FRAG_TEXTURED` (samples
 // the bindless albedo pool). Built only when RT reflections are enabled and the
 // GPU supports ray tracing: the metallib carries a real ray query, which a
@@ -61,7 +61,7 @@ impl MtlContext {
     // Encode the RT-reflection resolve: a fullscreen pass that traces each
     // glossy pixel's reflection ray against the scene BVH and writes the
     // reflected radiance + composite weight into the reflection target, then
-    // runs the shared roughness-aware blur + composite into `ssr_targets.output`.
+    // runs the shared roughness-aware blur + composite into its output.
     // Runs after the main pass in the SSR-resolve slot; only called when RT
     // reflections are on and the acceleration structure + pipeline are live.
     // Returns `Ok(0)` (a no-op) when any required resource is missing: the engine
@@ -73,8 +73,8 @@ impl MtlContext {
         rt_params: &render_types::RtParams,
         bindless_tex_args: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     ) -> RenderResult<u32> {
-        let (targets, accel, gb_normal_depth, gb_roughness) = match (
-            &self.ssr.targets,
+        let (reflection, accel, gb_normal_depth, gb_roughness) = match (
+            &self.ssr.reflection,
             &self.rt.accel,
             self.gbuffer_normal_depth(),
             self.gbuffer_roughness(),
@@ -111,7 +111,7 @@ impl MtlContext {
         // declares.
         unsafe {
             let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
-            ca.setTexture(Some(targets.reflection.as_ref()));
+            ca.setTexture(Some(reflection.as_ref()));
             ca.setLoadAction(MTLLoadAction::DontCare);
             ca.setStoreAction(MTLStoreAction::Store);
         }

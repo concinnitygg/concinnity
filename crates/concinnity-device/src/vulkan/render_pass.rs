@@ -1,5 +1,5 @@
-//! Vulkan render-pass construction for the main, shadow, composite, and
-//! bloom passes.
+//! Vulkan render-pass construction for the main, shadow, and composite
+//! passes.
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;
@@ -344,66 +344,3 @@ pub(super) fn create_composite_render_pass(
 // frame-in-flight). Returns `(msaa_color, depth, hdr_resolve)`; `msaa_color`
 // is empty when MSAA is disabled, in which case the main pass renders
 // straight into the resolve image.
-// A bloom-chain render pass: one single-sample HDR color attachment, no
-// depth. With `load` set the attachment is loaded (the additive upsample
-// blends onto existing content) and its initial layout is the
-// shader-readable layout the prior write pass left it in; otherwise the
-// attachment is discarded on load. Either way it ends `SHADER_READ_ONLY`.
-pub(super) fn create_bloom_render_pass(
-    device: &VkDevice,
-    format: vk::Format,
-    load: bool,
-) -> RenderResult<OwnedRenderPass> {
-    let attachment = vk::AttachmentDescription::default()
-        .format(format)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .load_op(if load {
-            vk::AttachmentLoadOp::LOAD
-        } else {
-            vk::AttachmentLoadOp::DONT_CARE
-        })
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(if load {
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
-        } else {
-            vk::ImageLayout::UNDEFINED
-        })
-        .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-
-    let color_ref = vk::AttachmentReference::default()
-        .attachment(0)
-        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-
-    let subpass = vk::SubpassDescription::default()
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(std::slice::from_ref(&color_ref));
-
-    // Order this pass after the prior bloom pass: its fragment shader samples
-    // the mip the prior pass wrote, and (in the LOAD case) its own attachment
-    // was also written by an earlier pass.
-    let dependency = vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::FRAGMENT_SHADER,
-        )
-        .dst_access_mask(
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                | vk::AccessFlags::COLOR_ATTACHMENT_READ
-                | vk::AccessFlags::SHADER_READ,
-        );
-
-    let rp_info = vk::RenderPassCreateInfo::default()
-        .attachments(std::slice::from_ref(&attachment))
-        .subpasses(std::slice::from_ref(&subpass))
-        .dependencies(std::slice::from_ref(&dependency));
-
-    device
-        .create_render_pass(&rp_info)
-        .map_err(|e| super::error::map_vk_result(e, "bloom render pass"))
-}

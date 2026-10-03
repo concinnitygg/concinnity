@@ -389,12 +389,13 @@ fn resting_state(m: &TransientTexture) -> D3D12_RESOURCE_STATES {
 mod tests {
     use super::super::post::gbuffer::GBUFFER_ROUGHNESS_CLEAR;
     use super::*;
+    use concinnity_core::render::post::device::PostExtent;
+    use concinnity_core::render::post::{bloom, ssao};
     use concinnity_core::render::render_graph::{self, PoolGates, plan_pool_slots};
 
     fn planned(render: (u32, u32), output: (u32, u32)) -> Vec<TransientSlot> {
         let gates = PoolGates {
             ssao: true,
-            bloom: true,
             gbuffer: true,
         };
         plan_pool_slots(gates, render, output).expect("plans")
@@ -466,14 +467,11 @@ mod tests {
         };
 
         // `ao_output` follows the render extent; `bloom_top` is half the output
-        // extent, which is what `create_bloom_mips` sizes mip 0 to.
+        // extent, the octave above the bloom chain's own.
         let ao = member("ao_output");
         let ao_desc = rt_desc(&ao);
         assert_eq!((ao_desc.Width, ao_desc.Height), (1024, 768));
-        assert_eq!(
-            ao_desc.Format,
-            super::super::post::ssao::SSAO_OCCLUSION_FORMAT
-        );
+        assert_eq!(ao_desc.Format, dxgi_format(ssao::OCCLUSION_FORMAT));
         assert_eq!(ao_desc.MipLevels, 1);
         assert_eq!(ao_desc.SampleDesc.Count, 1);
         assert_eq!(ao_desc.Dimension, D3D12_RESOURCE_DIMENSION_TEXTURE2D);
@@ -486,8 +484,19 @@ mod tests {
 
         let bloom = member("bloom_top");
         let bloom_desc = rt_desc(&bloom);
-        assert_eq!((bloom_desc.Width, bloom_desc.Height), (960, 540));
-        assert_eq!(bloom_desc.Format, super::super::texture::HDR_FORMAT);
+        let output = PostExtent {
+            width: 1920,
+            height: 1080,
+        };
+        let top = bloom::top_extent(output);
+        assert_eq!(
+            (bloom_desc.Width, bloom_desc.Height),
+            (u64::from(top.width), top.height)
+        );
+        assert_eq!(
+            bloom_desc.Format,
+            dxgi_format(bloom::chain_desc(output).format)
+        );
 
         // The G-buffer color targets. A format divergence here would silently
         // mis-back the resource the pre-pass MRT binds, and the render-target

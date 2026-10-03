@@ -11,14 +11,10 @@ use super::context::*;
 use super::descriptor_layout::SSAO_BINDING;
 use super::device::*;
 use super::hiz::{HiZDeviceCtx, HiZTarget};
-use super::post::bloom::{
-    BloomDeviceContext, alloc_bloom_input_sets, create_bloom_chain, create_bloom_framebuffers,
-    rebind_bloom_input0,
-};
+use super::post::bloom::composite_bloom_view;
 use super::post::gbuffer::{GbufferDeviceCtx, GbufferExtent, GbufferQueueCtx};
-use super::post::reflection_composite::CompositeInputs;
+use super::post::post_device::post_extent;
 use super::post::rt_reflections::RtStaticInputs;
-use super::post::ssao::SsaoDeviceCtx;
 use super::post::upscale::UpscalerGpu;
 use super::raymarch::RaymarchDeviceContext;
 use super::set_writes::SetWrites;
@@ -55,12 +51,7 @@ impl VkContext {
         // (the HDR scene the SSGI composite writes) or rebuilt along with them.
         self.post.cache.forget_views();
         self.composite.framebuffers.clear();
-        self.bloom.write_framebuffers.clear();
-        self.bloom.blend_framebuffers.clear();
-        // Dropping the attachment images (and the bloom mips; a borrowed
-        // pooled mip 0 releases nothing) retires them through the allocator.
-        self.bloom.mips.clear();
-        self.bloom.mip_extents.clear();
+        // Dropping the attachment images retires them through the allocator.
         self.targets.color_images.clear();
         self.targets.depth_images.clear();
         self.targets.hdr_resolve_images.clear();
@@ -199,11 +190,10 @@ impl VkContext {
         };
         self.targets.render_extent = render_ext;
 
-        // Rebuild the transient image pool before the off-screen attachments /
-        // bloom chain / SSAO targets that bind its images. `ao_output` is
+        // Rebuild the transient image pool before the off-screen attachments and
+        // the SSAO and composite bindings that read its images. `ao_output` is
         // render-res, `bloom_top` is half the output (swapchain) extent; both are
-        // per frame in flight. `bloom_top_pairs` feeds the bloom chain's mip 0
-        // below (empty when bloom is off, so mip 0 is committed instead).
+        // per frame in flight.
         self.targets.transient_pool.rebuild(
             &super::transient_pool::TransientPoolGpu {
                 instance: &self.hw.instance,
@@ -216,18 +206,12 @@ impl VkContext {
             &plan_pool_slots(
                 PoolGates {
                     ssao: self.ssao.is_some(),
-                    bloom: self.post_process.bloom_intensity > 0.0,
                     gbuffer: self.gbuffer.is_some(),
                 },
                 (render_ext.width, render_ext.height),
                 (ext.width, ext.height),
             )?,
         )?;
-        let bloom_top_pairs = self
-            .targets
-            .transient_pool
-            .pairs_for_frames("bloom_top", self.frames_in_flight);
-
         self.swapchain.image_views =
             create_swapchain_image_views(&self.hw.device, &self.swapchain.images, fmt)?;
 
@@ -262,52 +246,13 @@ impl VkContext {
             ext,
         )?;
 
-        // Rebuild the bloom chain at the new resolution.
-        let (bloom_mips, bloom_mip_extents) = create_bloom_chain(
-            &BloomDeviceContext {
-                alloc: &self.hw.alloc,
-                device: &self.hw.device,
-                command_pool: self.commands.command_pool,
-                queue: self.hw.graphics_queue,
-            },
-            ext,
-            self.frames_in_flight,
-            &bloom_top_pairs,
-        )?;
-        self.bloom.mips = bloom_mips;
-        self.bloom.mip_extents = bloom_mip_extents;
-        let (bloom_write_framebuffers, bloom_blend_framebuffers) = create_bloom_framebuffers(
-            &self.hw.device,
-            self.bloom.write_pass.handle(),
-            self.bloom.blend_pass.handle(),
-            &self.bloom.mips,
-            &self.bloom.mip_extents,
-        )?;
-        self.bloom.write_framebuffers = bloom_write_framebuffers;
-        self.bloom.blend_framebuffers = bloom_blend_framebuffers;
-
-        // The bloom input sets reference the destroyed mips; reset the pool
-        // (the octave count may have changed) and re-allocate. wait_idle()
-        // above guarantees none are still in flight.
-        // SAFETY: `descriptor_pool` was created from this device and every set allocated from it is
-        // dropped here; the caller has already idled the device, so none is still in use.
-        unsafe {
-            self.hw
-                .device
-                .reset_descriptor_pool(
-                    self.bloom.descriptor_pool.handle(),
-                    vk::DescriptorPoolResetFlags::empty(),
-                )
-                .map_err(|e| super::error::map_vk_result(e, "reset bloom pool"))?;
+        // Rebuild the octaves below the bloom chain's top at the new output
+        // resolution; the top itself is the pool's, rebuilt above.
+        if let Some(mut bloom) = self.bloom.take() {
+            let rebuilt = bloom.resize(&self.post_device(0), post_extent(ext));
+            self.bloom = Some(bloom);
+            rebuilt?;
         }
-        self.bloom.input_sets = alloc_bloom_input_sets(
-            &self.hw.device,
-            self.bloom.descriptor_pool.handle(),
-            self.bloom.set_layout.handle(),
-            self.post.sampler.handle(),
-            &self.targets.hdr_resolve_images,
-            &self.bloom.mips,
-        )?;
 
         self.rebuild_screen_space_targets(render_ext)?;
         self.rebuild_scene_pass_targets(render_ext)?;
@@ -315,7 +260,7 @@ impl VkContext {
     }
 
     // Rebuild the unified G-buffer and every screen-space reader of it at the new
-    // render resolution, and re-point the bloom prefilter at the scene image.
+    // render resolution.
     fn rebuild_screen_space_targets(&mut self, render_ext: vk::Extent2D) -> RenderResult<()> {
         // Rebuild the unified G-buffer pre-pass targets at the new resolution
         // *first*: every reader (SSR resolve, SSAO, SSGI, RT, TAA velocity, FSR)
@@ -351,9 +296,7 @@ impl VkContext {
 
         // Rebuild the SSR reflection target and the SSGI trace targets at the
         // new resolution. Both passes read the rebuilt HDR resolve and G-buffer
-        // views per frame, so nothing else needs re-pointing. The bloom
-        // prefilter samples the reflection composite output (re-pointed in the
-        // composite rebuild below), not the raw resolve output.
+        // views per frame, so nothing else needs re-pointing.
         if let Some(mut ssr) = self.ssr.take() {
             let rebuilt = ssr.rebuild(&self.post_device(0), render_ext);
             self.ssr = Some(ssr);
@@ -398,62 +341,22 @@ impl VkContext {
                     roughness_views: &rough_views,
                 },
             )?;
-            // The bloom prefilter samples the reflection composite output (re-pointed
-            // in the composite rebuild below), not the raw RT output.
             self.rt_reflections = Some(rt);
         }
 
-        // Rebuild the reflection composite's output + blur targets at the new
-        // resolution + re-wire its static bindings (the rebuilt HDR resolves +
-        // G-buffer views moved), then re-point the bloom prefilter input 0 at its
-        // output (the scene image; TAA / upscale override below). The reflection
-        // binding is re-pointed per encode, so the resolve rebuilds need no extra
-        // wiring here.
+        // Rebuild the reflection composite's output + blur targets and the TAA
+        // accumulation images at the new resolution. Every shared post pass
+        // reads its inputs per frame, so nothing else needs re-pointing.
+        // `wait_idle()` above guarantees none of these are still in flight.
         if let Some(mut rc) = self.reflection_composite.take() {
-            let gb = self
-                .gbuffer
-                .as_ref()
-                .expect("a reflection path forces the unified G-buffer pre-pass");
-            rc.rebuild(
-                &super::texture::GpuUploadContext {
-                    alloc: &self.hw.alloc,
-                    device: &self.hw.device,
-                    command_pool: self.commands.command_pool,
-                    queue: self.hw.graphics_queue,
-                },
-                render_ext.width,
-                render_ext.height,
-                &CompositeInputs::new(&self.targets.hdr_resolve_images, gb),
-            )?;
-            for frame_sets in &self.bloom.input_sets {
-                rebind_bloom_input0(&self.hw.device, frame_sets[0], rc.output.view);
-            }
+            let rebuilt = rc.resize(&self.post_device(0), post_extent(render_ext));
             self.reflection_composite = Some(rc);
+            rebuilt?;
         }
-
-        // Rebuild the TAA accumulation images at the new resolution. When TAA is
-        // on the bloom prefilter + composite sample its output image; otherwise
-        // they sample the raw HDR resolve (or the reflection composite's output
-        // when a reflection path is on but TAA is off). The resolve's own inputs
-        // need no re-point: it writes its descriptor set per frame from what it
-        // holds then. `wait_idle()` above guarantees none of these are still in
-        // flight.
         if let Some(mut taa) = self.taa.take() {
-            taa.rebuild(&self.post_device(0), render_ext)?;
-            for (i, frame_sets) in self.bloom.input_sets.iter().enumerate() {
-                rebind_bloom_input0(&self.hw.device, frame_sets[0], taa.output_view(i));
-            }
+            let rebuilt = taa.rebuild(&self.post_device(0), render_ext);
             self.taa = Some(taa);
-        }
-
-        // Temporal upscaling: bloom prefilter samples the FSR output (the
-        // reconstructed swapchain-res scene), overriding the SSR / TAA rebinds
-        // above. A single shared image, so every frame's set points at it.
-        if let Some(up) = &self.upscale {
-            let up_output_view = up.output_image().view;
-            for frame_sets in &self.bloom.input_sets {
-                rebind_bloom_input0(&self.hw.device, frame_sets[0], up_output_view);
-            }
+            rebuilt?;
         }
         Ok(())
     }
@@ -692,33 +595,13 @@ impl VkContext {
     // Rebuild SSAO, re-point the composite sets at the rebuilt scene inputs, and
     // match the render-finished semaphores to the new swapchain image count.
     fn rebuild_ssao_and_composite_inputs(&mut self, render_ext: vk::Extent2D) -> RenderResult<()> {
-        // Rebuild the SSAO targets against the per-frame pooled `ao_output` views
-        // (the transient pool was already rebuilt above). SSAO's stale blur
-        // framebuffers are torn down inside `ssao.rebuild` (the device is idle,
-        // so freeing the pool views ahead of those framebuffers is sound).
-        let frames = self.frames_in_flight;
+        // Rebuild SSAO's raw occlusion at the new resolution. Its G-buffer input
+        // and its pooled `ao_output` (the pool was rebuilt above) are read per
+        // frame.
         if let Some(mut ssao) = self.ssao.take() {
-            // SSAO kernel/blur sample the unified G-buffer's per-frame normal+depth
-            // views (rebuilt above) when present, else SSAO's own pre-pass target.
-            let nd_views = match self.gbuffer.as_ref() {
-                Some(gb) => gb.normal_depth_views(),
-                None => Vec::new(),
-            };
-            let ao_views = self
-                .targets
-                .transient_pool
-                .views_for_frames("ao_output", frames);
-            ssao.rebuild(
-                &SsaoDeviceCtx {
-                    alloc: &self.hw.alloc,
-                    device: &self.hw.device,
-                },
-                render_ext.width,
-                render_ext.height,
-                &nd_views,
-                &ao_views,
-            )?;
+            let rebuilt = ssao.rebuild(&self.post_device(0), render_ext);
             self.ssao = Some(ssao);
+            rebuilt?;
         }
         // Every global set's SSAO binding follows the rebuilt pool: this frame's
         // `ao_output`, or the 1x1 white fallback when SSAO is off.
@@ -726,21 +609,15 @@ impl VkContext {
 
         // Re-point the composite descriptor sets at the rebuilt scene-input
         // image (FSR upscale output > TAA output > reflection composite output >
-        // HDR resolve) + bloom mip 0. The 3D color LUT is resolution-independent,
-        // so it survives the resize untouched and is just re-bound at binding 2.
+        // HDR resolve) + the pool's bloom top octave. The 3D color LUT is
+        // resolution-independent, so it survives the resize untouched and is
+        // just re-bound at binding 2.
         for (i, &set) in self.composite.sets.iter().enumerate() {
-            let scene_view = if let Some(up) = &self.upscale {
-                up.output_image().view
-            } else if let Some(taa) = &self.taa {
-                taa.output_view(i)
-            } else {
-                self.post_scene_image(i).view
-            };
             write_composite_set(
                 &self.hw.device,
                 set,
-                scene_view,
-                self.bloom.mips[i][0].view,
+                self.scene_color_view(i),
+                composite_bloom_view(&self.targets.transient_pool, self.scene.ssao_white.view, i),
                 self.scene.color_lut.view,
             );
             // The view-mode channel sources are resolution-dependent too, so
@@ -1128,7 +1005,7 @@ pub(super) fn create_composite_framebuffers(
 }
 
 // Write a composite descriptor set: binding 0 = HDR resolve image,
-// binding 1 = bloom mip 0, binding 2 = the 3D color-grading LUT. Their
+// binding 1 = the bloom top octave, binding 2 = the 3D color-grading LUT. Their
 // samplers are written once, when the set is allocated.
 pub(super) fn write_composite_set(
     device: &VkDevice,

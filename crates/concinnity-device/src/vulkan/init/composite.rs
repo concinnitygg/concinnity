@@ -7,11 +7,12 @@ use concinnity_core::render::error::RenderResult;
 
 use super::InitGpu;
 use crate::vulkan::context::{
-    BloomState, CompositeState, SwapchainState, VkDescriptors, VkSceneAssets, VkTargets,
+    CompositeState, SwapchainState, VkDescriptors, VkSceneAssets, VkTargets,
 };
 use crate::vulkan::owned::OwnedSampler;
 use crate::vulkan::pipeline::{compile_composite_shaders, create_composite_pipeline};
-use crate::vulkan::post::reflection_composite::ReflectionCompositeResources;
+use crate::vulkan::post::bloom::composite_bloom_view;
+use crate::vulkan::post::reflection_composite::VkReflectionCompositePass;
 use crate::vulkan::render_pass::create_composite_render_pass;
 use crate::vulkan::resources::{
     alloc_descriptor_sets, create_descriptor_set_layout, source_set_bindings,
@@ -25,11 +26,10 @@ const COMPOSITE_SOURCES: u32 = 6;
 pub(super) struct CompositeInputs<'a> {
     pub(super) swapchain: &'a SwapchainState,
     pub(super) descriptors: &'a VkDescriptors,
-    pub(super) bloom: &'a BloomState,
     pub(super) scene: &'a VkSceneAssets,
     pub(super) targets: &'a VkTargets,
     pub(super) sampler: &'a OwnedSampler,
-    pub(super) reflection_composite: Option<&'a ReflectionCompositeResources>,
+    pub(super) reflection_composite: Option<&'a VkReflectionCompositePass>,
 }
 
 pub(super) fn build_composite(
@@ -46,7 +46,6 @@ pub(super) fn build_composite(
     let CompositeInputs {
         swapchain,
         descriptors,
-        bloom,
         scene,
         targets,
         sampler,
@@ -60,7 +59,7 @@ pub(super) fn build_composite(
         swapchain.extent,
     )?;
     // Composite set (set 0 for composite pass): HDR resolve image at
-    // binding 0, bloom mip 0 at binding 1, the 3D color LUT at binding 2,
+    // binding 0, the bloom top octave at binding 1, the 3D color LUT at binding 2,
     // then the G-buffer channels the debug view modes visualize (3 =
     // normal+depth, 4 = roughness, 5 = SSAO occlusion), and each source's
     // sampler at binding 6 + its own.
@@ -92,7 +91,7 @@ pub(super) fn build_composite(
 
     // Composite sets (one per frame-in-flight slot): binding 0 = the
     // scene image (SSR output when SSR is on, else this slot's HDR
-    // resolve), binding 1 = that slot's bloom mip 0, binding 2 = the
+    // resolve), binding 1 = that slot's bloom top octave, binding 2 = the
     // shared 3D color LUT. The TAA wiring later overrides binding 0 to
     // the TAA output when TAA is on.
     let composite_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
@@ -107,13 +106,13 @@ pub(super) fn build_composite(
         // HDR resolve (a SSGI-only build composited its bounce into the latter
         // upstream). The TAA / upscale wiring overrides this later.
         let scene_view = reflection_composite
-            .map(|c| c.output.view)
+            .map(|c| c.output().view())
             .unwrap_or(targets.hdr_resolve_images[i].view);
         write_composite_set(
             device,
             set,
             scene_view,
-            bloom.mips[i][0].view,
+            composite_bloom_view(&targets.transient_pool, scene.ssao_white.view, i),
             scene.color_lut.view,
         );
         (COMPOSITE_SOURCES..2 * COMPOSITE_SOURCES)

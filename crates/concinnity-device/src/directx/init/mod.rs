@@ -14,7 +14,7 @@
 //!   text.rs          text atlases and pipeline.
 //!   composite.rs     composite pipeline.
 //!   ray_tracing.rs   reflection composite, RT reflections, acceleration structure.
-//!   bloom.rs         bloom mip chain and pipelines.
+//!   bloom.rs         the shared bloom chain.
 //!   commands.rs      command lists, frame sync, timestamp queries.
 //!
 //! `heap_layout.rs` holds every heap's slot layout, `pipelines.rs` the main-pass
@@ -29,7 +29,6 @@ use self::heap_layout::{RtvHeapLayout, SrvHeapParams};
 use super::context::*;
 use super::geometry_upload::GeometryUploads;
 use super::hot_reload::HotReloadState;
-use super::post::bloom::bloom_mip_count;
 use super::resources::skinning::SkinnedState;
 
 mod adapter;
@@ -225,18 +224,14 @@ impl DxContext {
 
         let planar = effects::plan_planar(&fx, planar);
         let planar_slots = planar.assignment.slots.clone();
-        let bloom_count = bloom_mip_count(output.0, output.1) as usize;
-        let rtv = RtvHeapLayout::compute(bloom_count, features.msaa_samples);
+        let rtv = RtvHeapLayout::compute(features.msaa_samples);
         let swapchain = heaps::build_swapchain(&gpu, swapchain, &rtv, vsync)?;
         let descriptors = descriptors::build_descriptors(
             &gpu,
             &SrvHeapParams {
                 n_atlases: media.text_atlases.len(),
-                bloom_count,
-                ssao_srv_extra: heap_layout::SSAO_TARGETS,
                 gbuffer_srv_extra: heap_layout::GBUFFER_TARGETS,
                 rt_output_srv_extra: heap_layout::RT_OUTPUT_TARGETS,
-                refl_composite_srv_extra: heap_layout::REFL_COMPOSITE_TARGETS,
                 planar_resolve_srv_extra: planar.planes().len(),
                 // Albedo and normal maps share ONE handle-indexed pool: the real
                 // textures (a 1x1 white fallback stands in when there are none)
@@ -309,21 +304,12 @@ impl DxContext {
         let post_descriptors = descriptors::build_post_descriptors(&descriptors, &swapchain, &rtv);
         let quality_slots =
             effects::build_quality_slots(&gpu, &descriptors, &swapchain, &targets, &rtv);
-        let reflection_composite =
-            ray_tracing::build_reflection_composite(&gpu, &quality_slots, &targets, &post)?;
-        let bloom = bloom::build_bloom(
-            &gpu,
-            bloom::BloomInputs {
-                descriptors: &descriptors,
-                swapchain: &swapchain,
-                rtv: &rtv,
-                targets: &targets,
-                output,
-            },
-        )?;
         let post_device = effects::post_device(&gpu, &descriptors, &post_descriptors);
+        let reflection_composite =
+            ray_tracing::build_reflection_composite(&post_device, &targets, &post)?;
+        let bloom = bloom::build_bloom(&post_device, &targets, output)?;
         let taa = effects::build_taa(&post_device, &features, &targets)?;
-        let ssao = effects::build_ssao(&gpu, &descriptors, &targets, &quality_slots, post.ssao)?;
+        let ssao = effects::build_ssao(&gpu, &post_device, &descriptors, &targets, post.ssao)?;
         let ssr = effects::build_ssr(&post_device, &targets, &post)?;
         let ssgi = effects::build_ssgi(&post_device, &targets, &post)?;
         let rt_reflections =
@@ -419,7 +405,7 @@ impl DxContext {
             cull,
             text,
             composite,
-            bloom,
+            bloom: Some(bloom),
             post_process: features.post_process,
             gbuffer,
             taa,

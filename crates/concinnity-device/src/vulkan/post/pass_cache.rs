@@ -5,10 +5,11 @@
 //! the three; caching that object here is what lets the passes above the seam
 //! stop owning one each.
 //!
-//! A render pass is compatible with any target of the same format and load
-//! action, so it keys on those two alone; a framebuffer binds one image view, so
-//! it keys on the view. Both caches are append-only for the life of a swapchain,
-//! which bounds them at one entry per (format, load) and one per live target.
+//! A render pass is compatible with any target of the same format, so it keys on
+//! that, the load action and where the attachment's layout rests; a framebuffer
+//! binds one image view, so it keys on the view. Both caches are append-only for
+//! the life of a swapchain, which bounds them at one entry per key and one per
+//! live target.
 
 use ash::vk;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -19,24 +20,52 @@ use std::sync::Mutex;
 use crate::vulkan::owned::{OwnedFramebuffer, OwnedRenderPass, VkDevice};
 use crate::vulkan::transient_pool::image_format;
 
-// A cached render pass's key: everything a pass's compatibility depends on.
+// Where an attachment's layout rests between passes, which decides the layouts
+// its render pass opens and closes it in.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(in crate::vulkan) enum AttachmentRest {
+    // Shader-readable, with the render pass moving it in and back out. Every
+    // post target and the HDR scene rest here.
+    Sampled,
+    // In the color-attachment layout, with the graph executor moving it in and
+    // out around the pass, so the render pass leaves it where it found it.
+    Graph,
+}
+
+// A cached render pass's key: its attachment's format, load and layouts.
 #[derive(Copy, Clone, PartialEq, Eq)]
 struct PassKey {
     format: PixelFormat,
     load: PostLoadOp,
+    rest: AttachmentRest,
 }
 
-// How a pass under `load` opens its attachment: the load op and the layout the
-// attachment arrives in. A discarding load begins `UNDEFINED`, because nothing
-// the target holds survives a full-coverage draw; a preserving load begins
-// shader-readable, where every post target and the scene it blends into rest.
-fn attachment_open(load: PostLoadOp) -> (vk::AttachmentLoadOp, vk::ImageLayout) {
-    match load {
-        PostLoadOp::DontCare => (vk::AttachmentLoadOp::DONT_CARE, vk::ImageLayout::UNDEFINED),
-        PostLoadOp::Load => (
-            vk::AttachmentLoadOp::LOAD,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        ),
+// How a pass under `load` opens an attachment resting at `rest`: the load op and
+// the layout the attachment arrives in. A discarding load of a sampled
+// attachment begins `UNDEFINED`, because nothing the target holds survives a
+// full-coverage draw; a preserving one begins shader-readable, where it rests.
+// A graph-driven attachment arrives in the attachment layout either way.
+fn attachment_open(
+    load: PostLoadOp,
+    rest: AttachmentRest,
+) -> (vk::AttachmentLoadOp, vk::ImageLayout) {
+    let op = match load {
+        PostLoadOp::DontCare => vk::AttachmentLoadOp::DONT_CARE,
+        PostLoadOp::Load => vk::AttachmentLoadOp::LOAD,
+    };
+    let layout = match (rest, load) {
+        (AttachmentRest::Graph, _) => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        (AttachmentRest::Sampled, PostLoadOp::DontCare) => vk::ImageLayout::UNDEFINED,
+        (AttachmentRest::Sampled, PostLoadOp::Load) => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+    };
+    (op, layout)
+}
+
+// The layout a pass leaves an attachment resting at `rest` in.
+fn attachment_close(rest: AttachmentRest) -> vk::ImageLayout {
+    match rest {
+        AttachmentRest::Sampled => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        AttachmentRest::Graph => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
     }
 }
 
@@ -51,19 +80,16 @@ fn attachment_access() -> vk::AccessFlags {
         | vk::AccessFlags::SHADER_READ
 }
 
-// The single color attachment a fullscreen post pass writes. It ends
-// shader-readable because every consumer of a post target samples it.
+// The single color attachment a fullscreen post pass writes. A sampled one
+// ends shader-readable because every consumer of a post target samples it.
 //
 // The `EXTERNAL` dependency orders the subpass after the writes it samples *and*
 // after the previous frame's read of the slot it is about to overwrite, which is
 // what lets a temporal pass ping-pong without a hand-written cross-frame
 // barrier.
-fn create_render_pass(
-    device: &VkDevice,
-    format: PixelFormat,
-    load: PostLoadOp,
-) -> RenderResult<OwnedRenderPass> {
-    let (load_op, initial) = attachment_open(load);
+fn create_render_pass(device: &VkDevice, key: PassKey) -> RenderResult<OwnedRenderPass> {
+    let PassKey { format, load, rest } = key;
+    let (load_op, initial) = attachment_open(load, rest);
     let attachment = vk::AttachmentDescription::default()
         .format(image_format(format))
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -72,7 +98,7 @@ fn create_render_pass(
         .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
         .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
         .initial_layout(initial)
-        .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        .final_layout(attachment_close(rest));
     let color_ref = vk::AttachmentReference::default()
         .attachment(0)
         .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
@@ -119,14 +145,16 @@ impl PostPassCache {
         Self::default()
     }
 
-    // The render pass for a target of `format` under `load`, built on first ask.
+    // The render pass for a target of `format` under `load` resting at `rest`,
+    // built on first ask.
     pub(in crate::vulkan) fn render_pass(
         &self,
         device: &VkDevice,
         format: PixelFormat,
         load: PostLoadOp,
+        rest: AttachmentRest,
     ) -> RenderResult<vk::RenderPass> {
-        let key = PassKey { format, load };
+        let key = PassKey { format, load, rest };
         let mut passes = self
             .passes
             .lock()
@@ -134,7 +162,7 @@ impl PostPassCache {
         if let Some((_, rp)) = passes.iter().find(|(k, _)| *k == key) {
             return Ok(rp.handle());
         }
-        let rp = create_render_pass(device, format, load)?;
+        let rp = create_render_pass(device, key)?;
         let handle = rp.handle();
         passes.push((key, rp));
         Ok(handle)
@@ -200,15 +228,37 @@ mod tests {
     #[test]
     fn a_preserving_load_begins_readable_and_a_discarding_one_undefined() {
         assert_eq!(
-            attachment_open(PostLoadOp::Load),
+            attachment_open(PostLoadOp::Load, AttachmentRest::Sampled),
             (
                 vk::AttachmentLoadOp::LOAD,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
             )
         );
         assert_eq!(
-            attachment_open(PostLoadOp::DontCare),
+            attachment_open(PostLoadOp::DontCare, AttachmentRest::Sampled),
             (vk::AttachmentLoadOp::DONT_CARE, vk::ImageLayout::UNDEFINED)
+        );
+        assert_eq!(
+            attachment_close(AttachmentRest::Sampled),
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+        );
+    }
+
+    #[test]
+    fn a_graph_driven_attachment_stays_in_the_attachment_layout() {
+        // The executor moves `ao_output` into the attachment layout ahead of the
+        // pass and out of it before the forward pass samples it; a render pass
+        // that also moved it would leave the executor's next barrier naming a
+        // layout the image is no longer in.
+        for load in [PostLoadOp::DontCare, PostLoadOp::Load] {
+            assert_eq!(
+                attachment_open(load, AttachmentRest::Graph).1,
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
+            );
+        }
+        assert_eq!(
+            attachment_close(AttachmentRest::Graph),
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
         );
     }
 

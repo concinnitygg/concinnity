@@ -69,7 +69,7 @@ impl DxDescriptors {
 }
 
 // The shared post passes' descriptor block: SRVs after the color LUT, RTVs
-// after the bloom mips.
+// after the HDR scene target's.
 pub(super) fn build_post_descriptors(
     descriptors: &DxDescriptors,
     swapchain: &SwapchainState,

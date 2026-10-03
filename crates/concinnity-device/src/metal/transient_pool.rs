@@ -136,12 +136,10 @@ impl TransientTexturePool {
         self.lookup(label).map(|t| t.texture.as_ref())
     }
 
-    // The pooled `bloom_top` (bloom mip 0) as an owned handle for the bloom
-    // chain to hold. Always managed, so a missing entry is a build bug rather
-    // than a disabled feature.
-    pub(super) fn bloom_top(&self) -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {
-        self.lookup("bloom_top")
-            .map(|t| t.texture.clone())
+    // The pooled `bloom_top`, the bloom chain's top octave. Always managed, so a
+    // missing entry is a build bug rather than a disabled feature.
+    pub(super) fn bloom_top(&self) -> RenderResult<&ProtocolObject<dyn MTLTexture>> {
+        self.texture_for("bloom_top")
             .ok_or_else(|| RenderError::Other("bloom_top missing from transient pool".to_string()))
     }
 
@@ -168,7 +166,8 @@ impl TransientTexturePool {
     // until the GPU retires that frame; the heaps released here are only those
     // no frame still references. The caller rebinds the new textures into the
     // affected consumers (the per-frame bindless argument buffer re-encodes
-    // `ao_output` itself; the bloom chain re-reads `bloom_top`).
+    // `ao_output` itself; the bloom chain and the composite re-read
+    // `bloom_top`).
     pub(super) fn rebuild(
         &mut self,
         device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
@@ -300,6 +299,8 @@ impl MtlContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::render::post::device::PostExtent;
+    use concinnity_core::render::post::{bloom, ssao};
     use concinnity_core::render::render_graph::{self, PoolGates, plan_pool_slots};
 
     #[test]
@@ -310,7 +311,6 @@ mod tests {
         // mis-backs the texture that feature binds.
         let gates = PoolGates {
             ssao: true,
-            bloom: true,
             gbuffer: true,
         };
         let slots = plan_pool_slots(gates, (1024, 768), (1024, 768)).expect("plans");
@@ -323,10 +323,7 @@ mod tests {
         };
 
         let ao = texture_descriptor_for(member("ao_output"));
-        assert_eq!(
-            ao.pixelFormat(),
-            super::super::post::ssao::SSAO_OCCLUSION_FORMAT
-        );
+        assert_eq!(ao.pixelFormat(), pixel_format(ssao::OCCLUSION_FORMAT));
         assert_eq!((ao.width(), ao.height()), (1024, 768));
         assert_eq!(ao.textureType(), MTLTextureType::Type2D);
         assert_eq!(ao.mipmapLevelCount(), 1);
@@ -336,10 +333,14 @@ mod tests {
             MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0
         );
 
-        // Half the *output* extent, which is what `create_bloom_targets` sizes
-        // its mip 0 to.
+        // Half the *output* extent: the octave above the chain's quarter-output
+        // base, in the format the chain renders.
         let bloom = texture_descriptor_for(member("bloom_top"));
-        assert_eq!(bloom.pixelFormat(), super::super::post::bloom::BLOOM_FORMAT);
+        let chain = bloom::chain_desc(PostExtent {
+            width: 1024,
+            height: 768,
+        });
+        assert_eq!(bloom.pixelFormat(), pixel_format(chain.format));
         assert_eq!((bloom.width(), bloom.height()), (512, 384));
     }
 

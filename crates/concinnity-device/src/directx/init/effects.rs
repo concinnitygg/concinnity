@@ -12,7 +12,8 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use concinnity_core::render::particles::{self, ParticleEmitterRecord};
 use concinnity_core::render::planar_reflection::PlanarReflectors;
-use concinnity_core::render::post::ssao::SsaoSettings;
+use concinnity_core::render::post::device::PostExtent;
+use concinnity_core::render::post::ssao::settings::SsaoSettings;
 use concinnity_core::render::volumetric_fog::FogSettings;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -31,8 +32,7 @@ use crate::directx::planar::PlanarReflectionSet;
 use crate::directx::post::descriptors::PostDescriptors;
 use crate::directx::post::gbuffer::{GbufferResources, GbufferSlots};
 use crate::directx::post::post_device::DxPostDevice;
-use crate::directx::post::reflection_composite::ReflectionCompositeSlots;
-use crate::directx::post::ssao::{SsaoDescriptorHandles, SsaoDeviceCtx, SsaoResources, SsaoState};
+use crate::directx::post::ssao::{SsaoResources, SsaoState};
 use crate::directx::post::ssgi::SsgiResources;
 use crate::directx::post::ssr::SsrResources;
 use crate::directx::post::taa::TaaResources;
@@ -113,18 +113,8 @@ pub(super) fn build_quality_slots(
     let dsv_descriptor_size =
         heaps::descriptor_size(&gpu.hw.device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
     QualitySlotHandles {
-        ssao_ao_raw_rtv: swapchain.rtv(rtv.ssao_base_slot),
-        ssao_ao_raw_srv: srv(layout.ssao_srv_base_slot),
-        ssao_ao_rtv: swapchain.rtv(rtv.ssao_base_slot + 1),
-        ssao_ao_srv: srv(layout.ssao_srv_base_slot + 1),
         rt_output_rtv: swapchain.rtv(rtv.rt_output_slot),
         rt_output_srv: srv(layout.rt_output_srv_slot),
-        refl_composite: ReflectionCompositeSlots {
-            output_rtv: swapchain.rtv(rtv.refl_composite_base_slot),
-            output_srv: srv(layout.refl_composite_srv_base_slot),
-            blur_rtv: swapchain.rtv(rtv.refl_composite_base_slot + 1),
-            blur_srv: srv(layout.refl_composite_srv_base_slot + 1),
-        },
         gbuffer: GbufferSlots {
             normal_depth_rtv: swapchain.rtv(rtv.gbuffer_base_slot),
             normal_depth_srv: srv(layout.gbuffer_srv_base_slot),
@@ -195,13 +185,13 @@ pub(super) fn build_taa(
 }
 
 // SSAO: 1x1 white fallback always populated so the main pass binds a
-// pass-through occlusion when SSAO is off. The real SSAO targets sit in
-// the slots before it.
+// pass-through occlusion when SSAO is off. The shared kernel and blur take
+// their targets' descriptors from the post block.
 pub(super) fn build_ssao(
     gpu: &InitGpu<'_>,
+    post_device: &DxPostDevice<'_>,
     descriptors: &DxDescriptors,
     targets: &DxTargets,
-    slots: &QualitySlotHandles,
     settings: Option<SsaoSettings>,
 ) -> RenderResult<SsaoState> {
     let hw = gpu.hw;
@@ -209,32 +199,27 @@ pub(super) fn build_ssao(
     let white_slot = descriptors.layout.ssao_white_srv_slot;
     let ssao_white = create_fallback_white_resource(&hw.alloc)?;
     write_texture_srv(device, &ssao_white, descriptors.slot_cpu(white_slot));
-    let ssao = if let Some(settings) = settings {
-        let ao_resource = targets
-            .transient_pool
-            .resource_for("ao_output")
-            .ok_or_else(|| {
-                RenderError::Other("transient pool missing ao_output while SSAO is enabled".into())
-            })?;
-        Some(SsaoResources::new(
-            SsaoDeviceCtx {
-                device,
-                info_queue: hw.info_queue.as_ref(),
-            },
-            targets.extent.render_width,
-            targets.extent.render_height,
-            settings,
-            SsaoDescriptorHandles {
-                ao_raw_rtv: slots.ssao_ao_raw_rtv,
-                ao_raw_srv: slots.ssao_ao_raw_srv,
-                ao_rtv: slots.ssao_ao_rtv,
-                ao_srv: slots.ssao_ao_srv,
-            },
-            ao_resource,
-            gpu.hot_reload,
-        )?)
-    } else {
-        None
+    let ssao = match settings {
+        Some(settings) => {
+            let ao_output = targets
+                .transient_pool
+                .resource_for("ao_output")
+                .ok_or_else(|| {
+                    RenderError::Other(
+                        "transient pool missing ao_output while SSAO is enabled".into(),
+                    )
+                })?;
+            Some(SsaoResources::new(
+                post_device,
+                settings,
+                PostExtent {
+                    width: targets.extent.render_width,
+                    height: targets.extent.render_height,
+                },
+                ao_output,
+            )?)
+        }
+        None => None,
     };
     Ok(SsaoState {
         resources: ssao,
