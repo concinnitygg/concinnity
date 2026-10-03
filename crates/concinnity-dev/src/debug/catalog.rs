@@ -152,8 +152,26 @@ pub(crate) fn verb_list() -> String {
         .join(", ")
 }
 
-/// The `setting` values `quality-set` accepts.
-pub(crate) const QUALITY_TOGGLE_NAMES: [&str; 6] = SettingKey::names(SettingKey::QUALITY_TOGGLES);
+/// The `setting` values `quality-set` accepts: the master preset, then the
+/// feature toggles and the cycle knobs.
+pub(crate) const QUALITY_SET_NAMES: [&str; 12] = quality_set_names();
+
+const fn quality_set_names() -> [&'static str; 12] {
+    let toggles = SettingKey::names(SettingKey::QUALITY_TOGGLES);
+    let cycles = SettingKey::names(SettingKey::QUALITY_CYCLES);
+    let mut names = [SettingKey::GraphicsQuality.as_str(); 12];
+    let mut i = 0;
+    while i < toggles.len() {
+        names[1 + i] = toggles[i];
+        i += 1;
+    }
+    let mut i = 0;
+    while i < cycles.len() {
+        names[1 + toggles.len() + i] = cycles[i];
+        i += 1;
+    }
+    names
+}
 
 const COMMANDS: &[Command] = &[
     Command {
@@ -460,13 +478,13 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "quality-set",
-        description: "Flip one quality feature toggle live, the way the settings menu does.",
+        description: "Step the quality preset, a quality feature toggle, or a quality knob live, the way the settings menu does.",
         access: Access::Mutating,
         params: &[
             required(
                 "setting",
-                Kind::Choice(&QUALITY_TOGGLE_NAMES),
-                "Quality toggle key.",
+                Kind::Choice(&QUALITY_SET_NAMES),
+                "Quality setting key.",
             ),
             optional(
                 "op",

@@ -171,6 +171,12 @@ mod tests {
     }
 
     #[test]
+    fn cycle_rows_follow_the_core_cycle_order() {
+        let keys: Vec<SettingKey> = QUALITY_CYCLES.iter().map(|row| row.key).collect();
+        assert_eq!(keys, SettingKey::QUALITY_CYCLES);
+    }
+
+    #[test]
     fn cycle_rows_are_unique_static_option_rows() {
         let mut seen = std::collections::HashSet::new();
         for row in &QUALITY_CYCLES {

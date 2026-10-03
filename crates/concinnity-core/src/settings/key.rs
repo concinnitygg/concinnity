@@ -206,6 +206,16 @@ impl SettingKey {
         SettingKey::AutoExposure,
     ];
 
+    /// The quality cycle knobs (Video "Quality" group). Each picks how a feature
+    /// the backend builds runs, so a change rebuilds it.
+    pub const QUALITY_CYCLES: [SettingKey; 5] = [
+        SettingKey::AaMode,
+        SettingKey::SsgiResolution,
+        SettingKey::SsgiRays,
+        SettingKey::RtReflectionResolution,
+        SettingKey::ReflectionBlurResolution,
+    ];
+
     /// The setting named by `key`, or `None` if no setting has that name.
     pub fn parse(key: &str) -> Option<SettingKey> {
         SettingKey::ALL.into_iter().find(|k| k.as_str() == key)
@@ -225,6 +235,11 @@ impl SettingKey {
     /// Whether this is one of the [`QUALITY_TOGGLES`](Self::QUALITY_TOGGLES).
     pub fn is_quality_toggle(self) -> bool {
         Self::QUALITY_TOGGLES.contains(&self)
+    }
+
+    /// Whether this is one of the [`QUALITY_CYCLES`](Self::QUALITY_CYCLES).
+    pub fn is_quality_cycle(self) -> bool {
+        Self::QUALITY_CYCLES.contains(&self)
     }
 }
 

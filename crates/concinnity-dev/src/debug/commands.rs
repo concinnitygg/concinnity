@@ -337,9 +337,10 @@ pub(super) fn handle_camera_set(queue: &RuntimeQueue, text: &str) -> String {
     )
 }
 
-// Flip a quality feature toggle. `setting` is one of the toggle keys (ssao / ssr
-// / ray_traced_reflections / ssgi / auto_exposure); `op` cycles it (next | prev,
-// both flip the toggle). Defaults match the decal / camera request shape.
+// Step a quality setting. `setting` is the master preset, a feature toggle (ssao
+// / ssr / ray_traced_reflections / ssgi / auto_exposure / ...), or a cycle knob
+// (aa_mode / reflection_blur_resolution / ...); `op` steps it (next | prev, both
+// flip a toggle). Defaults match the decal / camera request shape.
 #[derive(serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct QualitySetRequest {
@@ -356,7 +357,7 @@ impl Default for QualitySetRequest {
     }
 }
 
-// Toggle a Quality-group setting live by injecting the same `SettingCommand`
+// Step a Quality-group setting live by injecting the same `SettingCommand`
 // the settings menu emits, so the engine runs its real `apply_quality_settings`
 // rebuild. `cn debug` only; lets a headless harness exercise the live toggle
 // path and screenshot the result. The reply fires once the command is queued
@@ -378,12 +379,12 @@ pub(super) fn handle_quality_set(queue: &RuntimeQueue, text: &str) -> String {
             ));
         }
     };
-    let Some(setting) = SettingKey::parse(&req.setting).filter(|key| key.is_quality_toggle())
+    let Some(setting) = SettingKey::parse(&req.setting).filter(|key| is_quality_setting(*key))
     else {
         return error_reply(&format!(
-            "quality-set: '{}' is not a quality toggle (use {})",
+            "quality-set: '{}' is not a quality setting (use {})",
             req.setting,
-            super::catalog::QUALITY_TOGGLE_NAMES.join(" | ")
+            super::catalog::QUALITY_SET_NAMES.join(" | ")
         ));
     };
     run_with_reply(
@@ -393,6 +394,11 @@ pub(super) fn handle_quality_set(queue: &RuntimeQueue, text: &str) -> String {
         |reply| WorldCommand::QualitySet { setting, op, reply },
         |()| serde_json::json!({ "ok": true, "queued": true }).to_string(),
     )
+}
+
+// Whether `quality-set` steps `key`.
+fn is_quality_setting(key: SettingKey) -> bool {
+    key == SettingKey::GraphicsQuality || key.is_quality_toggle() || key.is_quality_cycle()
 }
 
 // Rebind a movement action to a key. `setting` is the engine key
@@ -1059,19 +1065,53 @@ mod tests {
         );
     }
 
-    // Only the five feature toggles are reachable: an AA mode or a display
-    // setting is refused before anything is queued, so it is never persisted.
+    // Only the Quality group is reachable: a display or slider setting is
+    // refused before anything is queued, so it is never persisted.
     #[test]
-    fn quality_set_rejects_a_key_outside_the_toggles() {
+    fn quality_set_rejects_a_key_outside_the_quality_group() {
         let queue = RuntimeQueue::default();
-        for key in ["taa", "aa_mode", "vsync"] {
+        for key in ["taa", "vsync", "exposure", "render_scale"] {
             let body = format!(r#"{{"setting":"{key}"}}"#);
             assert_err_reply(
                 &handle_quality_set(&queue, &body),
-                "is not a quality toggle",
+                "is not a quality setting",
             );
         }
         assert!(queue.drain().is_empty());
+    }
+
+    #[test]
+    fn quality_set_names_are_exactly_the_settings_it_steps() {
+        let names = super::super::catalog::QUALITY_SET_NAMES;
+        for name in names {
+            let key = SettingKey::parse(name).expect("a setting key");
+            assert!(is_quality_setting(key), "{name}");
+        }
+        let stepped = SettingKey::ALL
+            .into_iter()
+            .filter(|key| is_quality_setting(*key))
+            .count();
+        assert_eq!(stepped, names.len());
+    }
+
+    #[test]
+    fn quality_set_queues_a_knob_and_the_preset() {
+        for name in ["reflection_blur_resolution", "graphics_quality"] {
+            let body = format!(r#"{{"setting":"{name}","op":"prev"}}"#);
+            let reply = drive_runtime_handler(
+                move |q| handle_quality_set(q, &body),
+                |cmd| match cmd {
+                    RuntimeCommand::World(WorldCommand::QualitySet { setting, op, reply }) => {
+                        assert_eq!(setting.as_str(), name);
+                        assert!(matches!(op, SettingOp::Prev));
+                        let _ = reply.send(Ok(()));
+                        None
+                    }
+                    other => Some(other),
+                },
+            );
+            assert!(reply.contains(r#""queued":true"#), "{name}: {reply}");
+        }
     }
 
     #[test]

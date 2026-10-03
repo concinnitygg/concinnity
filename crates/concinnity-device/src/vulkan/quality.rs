@@ -47,7 +47,8 @@ impl VkContext {
         // device (or XeSS) did not enable the ray-query extensions at creation,
         // so it cannot build the acceleration structure at runtime -- the toggle
         // no-ops with a warning and RT stays whatever it launched as.
-        let desired_rt = q.rt_reflections.is_some() && self.hw.rt_capable;
+        let rt_settings = q.rt_reflections.filter(|_| self.hw.rt_capable);
+        let desired_rt = rt_settings.is_some();
         if q.rt_reflections.is_some() && !self.hw.rt_capable {
             tracing::warn!(
                 "ray-traced reflections requested but the device is not RT-capable \
@@ -57,7 +58,6 @@ impl VkContext {
         let desired_ssr = q.ssr.is_some();
         let desired_ssgi = q.ssgi.is_some();
         let desired_ssao = q.ssao.is_some();
-        let desired_ae = q.auto_exposure.is_some();
         // TAA resources are forced present while temporal upscaling is active
         // (the upscaler consumes the velocity pre-pass); the TAA resolve is then
         // dropped from the graph. Mirrors the init `taa_enabled` derivation.
@@ -175,8 +175,9 @@ impl VkContext {
             (Some(settings), Some(live)) => settings.gi_scale != live.settings.gi_scale,
             _ => false,
         };
-        if (desired_ssgi && self.ssgi.is_none()) || ssgi_rescaled {
-            let settings = q.ssgi.expect("desired_ssgi implies ssgi settings");
+        if let Some(settings) = q.ssgi
+            && (self.ssgi.is_none() || ssgi_rescaled)
+        {
             if ssgi_rescaled {
                 self.post.cache.forget_views();
                 self.ssgi = None;
@@ -197,11 +198,9 @@ impl VkContext {
         // Auto-exposure. When it turns off the static authored EV drives exposure
         // again (the GraphicsSystem re-pushes `update_post_process` after this
         // call), so only the GPU state is swapped here.
-        if desired_ae && self.auto_exposure.resources.is_none() {
-            let settings = q
-                .auto_exposure
-                .as_ref()
-                .expect("desired_ae implies auto-exposure settings");
+        if let Some(settings) = q.auto_exposure.as_ref()
+            && self.auto_exposure.resources.is_none()
+        {
             let resources = crate::vulkan::auto_exposure::AutoExposureResources::new(
                 &self.hw.alloc,
                 &self.hw.device,
@@ -213,12 +212,9 @@ impl VkContext {
             self.auto_exposure.state = Some(auto_exposure::AutoExposureState::new(settings));
             self.auto_exposure.settings = q.auto_exposure;
             self.auto_exposure.bias_ev = q.auto_exposure_bias_ev;
-        } else if !desired_ae && self.auto_exposure.resources.is_some() {
-            let mut ae = self
-                .auto_exposure
-                .resources
-                .take()
-                .expect("auto-exposure present");
+        } else if q.auto_exposure.is_none()
+            && let Some(mut ae) = self.auto_exposure.resources.take()
+        {
             ae.destroy(&self.hw.device);
             self.auto_exposure.settings = None;
             self.auto_exposure.state = None;
@@ -250,20 +246,19 @@ impl VkContext {
         // `rebuild_swapchain` below then rebuilds the RT output target; the
         // per-frame TLAS / geometry descriptors are wired by the next
         // `rt_dynamic_update`.
-        if let (true, Some(settings), Some(rt)) =
-            (desired_rt, q.rt_reflections, self.rt_reflections.as_mut())
-        {
+        match (rt_settings, self.rt_reflections.as_mut()) {
             // Already live: take the new trace resolution / shadow choice, which
             // `rebuild_swapchain` below sizes the output target from.
-            rt.settings = settings;
-        } else if desired_rt && self.rt_reflections.is_none() {
-            self.build_rt_runtime(q.rt_reflections.expect("desired_rt implies settings"))?;
-        } else if !desired_rt && self.rt_reflections.is_some() {
-            if let Some(mut rt) = self.rt_reflections.take() {
-                rt.destroy(&self.hw.device);
+            (Some(settings), Some(rt)) => rt.settings = settings,
+            (Some(settings), None) => self.build_rt_runtime(settings)?,
+            (None, Some(_)) => {
+                if let Some(mut rt) = self.rt_reflections.take() {
+                    rt.destroy(&self.hw.device);
+                }
+                self.rt.destroy_accels();
+                self.rt.skin = None;
             }
-            self.rt.destroy_accels();
-            self.rt.skin = None;
+            (None, None) => {}
         }
 
         // The composite follows the ACTUAL post-build RT state, so a failed RT
@@ -284,9 +279,9 @@ impl VkContext {
     // `rt_reflections` `None` and the renderer falls back to the SSR resolve when
     // authored (a soft failure, returns `Ok`), while an empty scene or an
     // AS-build error leaves only `rt.accel` `None` until a topology change seeds
-    // it. The caller has ensured the unified G-buffer pre-pass exists and drained
-    // the device (`wait_idle`). `rebuild_swapchain` refreshes the output target
-    // after.
+    // it. The pass samples the unified G-buffer pre-pass, so without one the
+    // enable is skipped the same way. The caller has drained the device
+    // (`wait_idle`); `rebuild_swapchain` refreshes the output target after.
     fn build_rt_runtime(
         &mut self,
         settings: rt_reflections::RtReflectionSettings,
@@ -297,10 +292,13 @@ impl VkContext {
             .iter()
             .map(|i| i.view)
             .collect();
-        let gb = self
-            .gbuffer
-            .as_ref()
-            .expect("RT enable forces the unified G-buffer pre-pass on");
+        let Some(gb) = self.gbuffer.as_ref() else {
+            tracing::warn!(
+                "RT reflections need the unified G-buffer pre-pass, which is missing \
+                 (keeping SSR)"
+            );
+            return Ok(());
+        };
         let nd_views = gb.normal_depth_views();
         let rough_views = gb.roughness_views();
         // The textured hit variant indexes the bindless pool, so it compiles

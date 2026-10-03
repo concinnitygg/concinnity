@@ -151,6 +151,33 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
         Ok(())
     }
 
+    /// Whether `blur_scale` sizes the blur differently from the live one.
+    pub fn blur_scale_differs(&self, blur_scale: u32) -> bool {
+        blur_scale.max(1) != self.blur_scale
+    }
+
+    /// Recreate the blur at a new divisor for a render resolution of `extent`,
+    /// keeping the old blur if creation fails. Returns whether it was recreated,
+    /// which is only when [`Self::blur_scale_differs`]. The caller has already
+    /// idled the device.
+    pub fn set_blur_scale<D>(
+        &mut self,
+        device: &D,
+        blur_scale: u32,
+        extent: PostExtent,
+    ) -> RenderResult<bool>
+    where
+        D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
+    {
+        if !self.blur_scale_differs(blur_scale) {
+            return Ok(false);
+        }
+        let blur_scale = blur_scale.max(1);
+        self.blur = device.create_target(BLUR_LABEL, &blur_desc(blur_scale), extent)?;
+        self.blur_scale = blur_scale;
+        Ok(true)
+    }
+
     /// Swap in freshly built pipelines. Driven by shader hot reload; the caller
     /// has already idled the device.
     pub fn swap_pipelines(&mut self, pipelines: ReflectionCompositePipelines<Pipeline>) {
@@ -405,6 +432,87 @@ mod tests {
         let targets = device.targets.borrow();
         assert_eq!(targets[OUTPUT].extent, EXTENT);
         assert_eq!(targets[BLUR].extent.width, EXTENT.width / 4);
+    }
+
+    #[test]
+    fn a_new_blur_scale_recreates_only_the_blur() {
+        let device = MockDevice::new();
+        let mut pass = ReflectionCompositePass::new(&device, 2, EXTENT).expect("pass");
+        assert!(pass.blur_scale_differs(4));
+        assert!(pass.set_blur_scale(&device, 4, EXTENT).expect("rescale"));
+        assert_eq!(pass.blur_scale(), 4);
+        let targets = device.targets.borrow();
+        assert_eq!(targets.len(), 3);
+        assert_eq!(targets[2].label, BLUR_LABEL);
+        assert_eq!(
+            targets[2].extent,
+            PostExtent {
+                width: 320,
+                height: 180
+            }
+        );
+        drop(targets);
+        let draws = encode_frame(&device, &pass);
+        assert_eq!(draws[0].target, MockTexture::Target(2));
+        assert_eq!(draws[1].target, MockTexture::Target(OUTPUT));
+        assert_eq!(sources(&draws[1])[4], MockTexture::Target(2));
+    }
+
+    #[test]
+    fn the_live_blur_scale_is_a_no_op() {
+        let device = MockDevice::new();
+        let mut pass = ReflectionCompositePass::new(&device, 2, EXTENT).expect("pass");
+        assert!(!pass.blur_scale_differs(2));
+        assert!(!pass.set_blur_scale(&device, 2, EXTENT).expect("rescale"));
+        assert_eq!(device.targets.borrow().len(), 2);
+    }
+
+    #[test]
+    fn a_zero_blur_scale_matches_a_live_full_resolution_blur() {
+        let device = MockDevice::new();
+        let mut pass = ReflectionCompositePass::new(&device, 1, EXTENT).expect("pass");
+        assert!(!pass.blur_scale_differs(0));
+        assert!(!pass.set_blur_scale(&device, 0, EXTENT).expect("rescale"));
+        assert!(pass.set_blur_scale(&device, 2, EXTENT).expect("rescale"));
+        assert!(pass.set_blur_scale(&device, 0, EXTENT).expect("rescale"));
+        assert_eq!(pass.blur_scale(), 1);
+        assert_eq!(
+            device.targets.borrow().last().map(|t| t.extent),
+            Some(EXTENT)
+        );
+    }
+
+    #[test]
+    fn a_failed_rescale_keeps_the_old_blur_and_scale() {
+        let device = MockDevice::new();
+        let mut pass = ReflectionCompositePass::new(&device, 2, EXTENT).expect("pass");
+        device.fail_creates_after(0);
+        assert!(pass.set_blur_scale(&device, 4, EXTENT).is_err());
+        assert_eq!(pass.blur_scale(), 2);
+        assert!(pass.blur_scale_differs(4));
+        let draws = encode_frame(&device, &pass);
+        assert_eq!(draws[0].target, MockTexture::Target(BLUR));
+        assert_eq!(sources(&draws[1])[4], MockTexture::Target(BLUR));
+    }
+
+    #[test]
+    fn a_resize_after_a_rescale_keeps_the_new_scale() {
+        let device = MockDevice::new();
+        let mut pass = ReflectionCompositePass::new(&device, 2, EXTENT).expect("pass");
+        pass.set_blur_scale(&device, 4, EXTENT).expect("rescale");
+        let resized = PostExtent {
+            width: 2560,
+            height: 1440,
+        };
+        pass.resize(&device, resized).expect("resize");
+        let targets = device.targets.borrow();
+        assert_eq!(
+            targets.last().map(|t| t.extent),
+            Some(PostExtent {
+                width: 640,
+                height: 360
+            })
+        );
     }
 
     #[test]

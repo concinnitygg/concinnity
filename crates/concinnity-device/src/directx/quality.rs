@@ -70,7 +70,8 @@ impl DxContext {
         // RT is gated on the GPU reporting the DXR 1.1 tier: a non-DXR GPU cannot
         // build the acceleration structure, so the toggle no-ops with a warning
         // and RT stays whatever it launched as (persisted for the next launch).
-        let desired_rt = q.rt_reflections.is_some() && self.hw.rt_capable;
+        let rt_settings = q.rt_reflections.filter(|_| self.hw.rt_capable);
+        let desired_rt = rt_settings.is_some();
         if q.rt_reflections.is_some() && !self.hw.rt_capable {
             tracing::warn!(
                 "ray-traced reflections requested but the GPU does not report DXR \
@@ -163,8 +164,9 @@ impl DxContext {
             (Some(settings), Some(live)) => settings.gi_scale != live.settings.gi_scale,
             _ => false,
         };
-        if (desired_ssgi && self.ssgi.is_none()) || ssgi_rescaled {
-            let settings = q.ssgi.expect("desired_ssgi implies ssgi settings");
+        if let Some(settings) = q.ssgi
+            && (self.ssgi.is_none() || ssgi_rescaled)
+        {
             if ssgi_rescaled {
                 self.ssgi = None;
             }
@@ -187,32 +189,33 @@ impl DxContext {
         // (`gbuffer_needed` folds in `desired_rt`). Turning off drops both
         // (their COM resources release on drop); `scene_srv_for_post` falls back
         // to the SSR resolve / HDR dynamically next frame, so no rewire is needed.
-        if let (true, Some(settings), Some(rt)) =
-            (desired_rt, q.rt_reflections, self.rt_reflections.as_mut())
-        {
-            // Already live: take the new trace resolution / shadow choice and
-            // resize the output target to it (the device is idle).
-            let resized = settings.divisor != rt.settings.divisor;
-            rt.settings = settings;
-            if resized {
-                let heap = &self.descriptors.srv_heap;
-                // SAFETY: a property query on a live descriptor heap; it only reads.
-                let srv_cpu_base = unsafe { heap.GetCPUDescriptorHandleForHeapStart() };
-                let srv_gpu_base = SrvSlot::at(heap, self.descriptors.srv_descriptor_size, 0);
-                rt.resize_to(
-                    &self.hw.device,
-                    render_w,
-                    render_h,
-                    srv_cpu_base,
-                    srv_gpu_base,
-                )?;
+        match (rt_settings, self.rt_reflections.as_mut()) {
+            (Some(settings), Some(rt)) => {
+                // Already live: take the new trace resolution / shadow choice and
+                // resize the output target to it (the device is idle).
+                let resized = settings.divisor != rt.settings.divisor;
+                rt.settings = settings;
+                if resized {
+                    let heap = &self.descriptors.srv_heap;
+                    // SAFETY: a property query on a live descriptor heap; it only reads.
+                    let srv_cpu_base = unsafe { heap.GetCPUDescriptorHandleForHeapStart() };
+                    let srv_gpu_base = SrvSlot::at(heap, self.descriptors.srv_descriptor_size, 0);
+                    rt.resize_to(
+                        &self.hw.device,
+                        render_w,
+                        render_h,
+                        srv_cpu_base,
+                        srv_gpu_base,
+                    )?;
+                }
             }
-        } else if desired_rt && self.rt_reflections.is_none() {
-            self.build_rt_runtime(q.rt_reflections.expect("desired_rt implies settings"))?;
-        } else if !desired_rt && self.rt_reflections.is_some() {
-            self.rt_reflections = None;
-            self.rt.accel = None;
-            self.rt.skin = None;
+            (Some(settings), None) => self.build_rt_runtime(settings)?,
+            (None, Some(_)) => {
+                self.rt_reflections = None;
+                self.rt.accel = None;
+                self.rt.skin = None;
+            }
+            (None, None) => {}
         }
 
         // The glass reflection pre-pass follows the live RT trace divisor.
@@ -232,7 +235,9 @@ impl DxContext {
         // live RT/SSR enable on a world that authored neither leaves it `None`, so
         // `encode_reflection_composite` early-returns and the resolve's reflection
         // is computed but never shown (`scene_srv_for_post` / glass / the forward
-        // `reflections_enabled` fade all gate on its presence).
+        // `reflections_enabled` fade all gate on its presence). A live composite
+        // takes a new blur resolution in place; every consumer reads its targets'
+        // descriptors per frame, so the new blur needs no re-bind.
         let refl_composite_needed = desired_ssr || desired_rt;
         if refl_composite_needed && self.reflection_composite.is_none() {
             let rc = build_reflection_composite(
@@ -244,6 +249,17 @@ impl DxContext {
             self.reflection_composite = Some(rc);
         } else if !refl_composite_needed && self.reflection_composite.is_some() {
             self.reflection_composite = None;
+        } else if let Some(mut rc) = self.reflection_composite.take() {
+            let r = rc.set_blur_scale(
+                &self.post_device(0),
+                q.reflection_blur_scale,
+                PostExtent {
+                    width: render_w,
+                    height: render_h,
+                },
+            );
+            self.reflection_composite = Some(rc);
+            r?;
         }
 
         // Auto-exposure. Needs no descriptor-heap slots (own root UAVs +
@@ -275,7 +291,9 @@ impl DxContext {
         // turn-off needs no rewire beyond dropping the resources.
         let ssao_was = self.ssao.resources.is_some();
         let gbuffer_enabled = self.gbuffer.is_some();
-        if desired_ssao && !ssao_was {
+        if let Some(settings) = q.ssao
+            && !ssao_was
+        {
             self.rebuild_transient_pool_and_consumers(true, gbuffer_enabled)?;
             let ao_resource = self
                 .targets
@@ -285,7 +303,6 @@ impl DxContext {
                     RenderError::Other("transient pool missing ao_output after SSAO enable".into())
                 })?
                 .clone();
-            let settings = q.ssao.expect("desired_ssao implies ssao settings");
             let ssao = SsaoResources::new(
                 &self.post_device(0),
                 settings,

@@ -99,15 +99,29 @@ impl VkContext {
     }
 
     // Bring the composite in line with the authored SSR and the live RT state,
-    // building it at `blur_scale` when a resolve feeds it. The caller idles the
-    // device first and rebuilds the swapchain after.
+    // building it at `blur_scale` when a resolve feeds it, or moving a live one
+    // to `blur_scale`. The caller idles the device first and rebuilds the
+    // swapchain after.
     pub(in crate::vulkan) fn reconcile_reflection_composite(
         &mut self,
         blur_scale: u32,
     ) -> RenderResult<()> {
         self.release_unfed_reflection_composite();
-        if !self.reflection_path().composite || self.reflection_composite.is_some() {
+        if !self.reflection_path().composite {
             return Ok(());
+        }
+        if let Some(mut rc) = self.reflection_composite.take() {
+            if rc.blur_scale_differs(blur_scale) {
+                // The cached framebuffers name the blur about to drop.
+                self.post.cache.forget_views();
+            }
+            let rescaled = rc.set_blur_scale(
+                &self.post_device(0),
+                blur_scale,
+                post_extent(self.targets.render_extent),
+            );
+            self.reflection_composite = Some(rc);
+            return rescaled.map(|_| ());
         }
         let rc = build_reflection_composite(
             &self.post_device(0),
