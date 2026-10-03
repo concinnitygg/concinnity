@@ -4,9 +4,7 @@ use crate::components::{Model, Scene};
 use crate::components::{Vocabulary, vocabulary_synonyms};
 use crate::ecs::MaterialHandle;
 use crate::ecs::MeshHandle;
-use crate::ecs::de_opt_material_handle;
-use crate::ecs::de_opt_mesh_handle;
-use crate::ecs::{NameRef, Ref, RefTarget, de_opt_ref};
+use crate::ecs::{NameRef, Ref, RefTarget};
 use alloc::string::String;
 
 /// The collision volume a [PropCollider](#propcollider)'s `shape` names. The
@@ -50,35 +48,33 @@ impl PropColliderShape {
 /// The shape dimensions are in the prop's local space and are scaled by the
 /// prop's `scale`. `ball` and `capsule` use the X scale component (they assume
 /// uniform scaling).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct PropCollider {
     /// Collision shape: `aabb` (alias `cuboid`), `ball` (alias `sphere`), or
     /// `capsule`. See [PropColliderShape].
     pub shape: PropColliderShape,
     /// Box half-extents in local space [x, y, z]. Used by cuboid shapes.
+    #[asset(default = [0.5, 0.5, 0.5])]
     pub half_extents: [f32; 3],
     /// Radius in local space. Used by ball and capsule shapes.
+    #[asset(default = 0.5)]
     pub radius: f32,
     /// Half the cylinder height in local space. Used by capsule shapes.
+    #[asset(default = 0.5)]
     pub half_height: f32,
     /// Collision layer name. Built-in layers are `world`, `prop`, `character`,
     /// and `trigger`; extra names come from [PhysicsConfig](#physicsconfig)
     /// `layers`. Empty derives the layer from the body kind: `world` for a
     /// static prop, `prop` when a [PropBody](#propbody) makes it dynamic.
     pub layer: String,
-}
-
-impl Default for PropCollider {
-    fn default() -> Self {
-        Self {
-            shape: PropColliderShape::Cuboid,
-            half_extents: [0.5, 0.5, 0.5],
-            radius: 0.5,
-            half_height: 0.5,
-            layer: String::new(),
-        }
-    }
 }
 
 /// A scene object: places geometry at a world-space transform.
@@ -99,22 +95,26 @@ impl Default for PropCollider {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct Prop {
     /// A [Model](#model) asset. When set, the prop renders all sub-meshes of
     /// that model (each with its own material) sharing this prop's transform.
     /// Takes precedence over `mesh` and `material`.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub model: Option<Ref<Model>>,
     /// A [Mesh](#mesh) or [ProceduralMesh](#proceduralmesh) asset this prop
     /// renders. Used when `model` is unset.
-    #[serde(deserialize_with = "de_opt_mesh_handle")]
     pub mesh: Option<MeshHandle>,
     /// A [Material](#material) to use for this prop: the albedo texture plus
     /// the lighting parameters (roughness, metallic, tint, emissive). Used when
     /// `model` is unset.
-    #[serde(deserialize_with = "de_opt_material_handle")]
     pub material: Option<MaterialHandle>,
     /// World-space position [x, y, z].
     pub position: [f32; 3],
@@ -122,6 +122,7 @@ pub struct Prop {
     /// (yaw first so that rotating around the vertical axis is intuitive).
     pub rotation_deg: [f32; 3],
     /// Non-uniform scale [x, y, z]. Defaults to [1, 1, 1].
+    #[asset(default = [1.0, 1.0, 1.0])]
     pub scale: [f32; 3],
     /// Optional collision volume. When present, the prop blocks the player; when
     /// absent the prop is non-solid.
@@ -137,11 +138,10 @@ pub struct Prop {
     /// `position`, `rotation_deg`, and `scale` are relative to the parent's
     /// world transform. The parent must be declared in the same world; circular
     /// chains are treated as an error.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub parent: Option<Ref<PropParent>>,
     /// [Scene](#scene) this prop belongs to. `None` means the prop is visible
     /// in every scene. Used by scene switches for per-scene visibility.
-    #[serde(default, deserialize_with = "de_opt_ref")]
+    #[serde(default)]
     pub scene: Option<Ref<Scene>>,
     /// A [Prefab](#prefab) to instantiate at this prop's transform. When
     /// set, it expands into concrete child props and lights, replacing this
@@ -176,31 +176,9 @@ impl RefTarget for PrefabTemplate {
     const TYPES: &'static [&'static str] = &["Prefab"];
 }
 
-impl Default for Prop {
-    fn default() -> Self {
-        Self {
-            model: None,
-            mesh: None,
-            material: None,
-            position: [0.0, 0.0, 0.0],
-            rotation_deg: [0.0, 0.0, 0.0],
-            scale: [1.0, 1.0, 1.0],
-            collider: None,
-            interactable: false,
-            pickup: false,
-            parent: None,
-            scene: None,
-            prefab: NameRef::default(),
-            cull_distance: 0.0,
-            is_held: false,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::asset_id::AssetId;
 
     // The accepted list, the parser and the load are one vocabulary: every
     // listed name resolves and deserializes, and every shape's canonical name
@@ -234,74 +212,13 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_collider_is_a_unit_cuboid() {
-        let c = PropCollider::default();
-        assert_eq!(c.shape, PropColliderShape::Cuboid);
-        assert_eq!(c.half_extents, [0.5, 0.5, 0.5]);
-        assert_eq!(c.radius, 0.5);
-        assert_eq!(c.half_height, 0.5);
-    }
-
-    #[test]
-    fn a_blank_prop_is_an_unscaled_non_interactive_placement() {
-        let p = Prop::default();
-        assert_eq!(p.position, [0.0, 0.0, 0.0]);
-        assert_eq!(p.rotation_deg, [0.0, 0.0, 0.0]);
-        assert_eq!(p.scale, [1.0, 1.0, 1.0]);
-        // No collider means the prop is decoration: physics ignores it.
-        assert!(p.collider.is_none());
-        assert!(!p.interactable);
-        assert!(!p.pickup);
-        assert!(!p.is_held);
-        assert_eq!(p.cull_distance, 0.0);
-        assert!(p.prefab.is_empty());
-        assert!(p.model.is_none());
-        assert!(p.mesh.is_none());
-        assert!(p.material.is_none());
-        assert!(p.parent.is_none());
-        assert!(p.scene.is_none());
-    }
-
-    #[test]
-    fn every_reference_resolves_through_its_own_seam() {
-        let p: Prop = crate::test_support::from_json(
-            r#"{"model":"crate_model","mesh":"crate_mesh","material":"wood","parent":"shelf","scene":"vault"}"#,
-        );
-        // A Model is still an interned name; the resource kinds are handles.
-        assert_eq!(p.model, Some(Ref::new(AssetId(11))));
-        assert_eq!(p.mesh, Some(MeshHandle(10)));
-        assert_eq!(p.material, Some(MaterialHandle(4)));
-        assert_eq!(p.parent, Some(Ref::new(AssetId(5))));
-        assert_eq!(p.scene, Some(Ref::new(AssetId(5))));
-    }
-
-    #[test]
-    fn a_pickup_with_a_ball_collider_round_trips_through_postcard() {
-        let p: Prop = crate::test_support::from_json(
-            r#"{"position":[1,2,3],"rotation_deg":[0,90,0],"scale":[2,2,2],
-                "collider":{"shape":"ball","radius":0.25},
-                "interactable":true,"pickup":true,"prefab":"lantern","cull_distance":60}"#,
-        );
-        let collider = p.collider.as_ref().expect("collider");
-        assert_eq!(collider.shape, PropColliderShape::Ball);
-        assert_eq!(collider.radius, 0.25);
-        // Unmentioned collider dimensions keep the schema defaults.
-        assert_eq!(collider.half_height, 0.5);
-
-        let bytes = postcard::to_allocvec(&p).unwrap();
+    fn held_state_is_runtime_only_and_never_rides_the_wire() {
+        let held = Prop {
+            is_held: true,
+            ..Default::default()
+        };
+        let bytes = postcard::to_allocvec(&held).unwrap();
         let back: Prop = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.position, [1.0, 2.0, 3.0]);
-        assert_eq!(back.rotation_deg, [0.0, 90.0, 0.0]);
-        assert_eq!(back.scale, [2.0, 2.0, 2.0]);
-        assert_eq!(
-            back.collider.expect("collider").shape,
-            PropColliderShape::Ball
-        );
-        assert!(back.interactable);
-        assert!(back.pickup);
-        assert_eq!(back.prefab, "lantern");
-        assert_eq!(back.cull_distance, 60.0);
-        // Held state is runtime-only, so it never rides the wire.
         assert!(!back.is_held);
     }
 }

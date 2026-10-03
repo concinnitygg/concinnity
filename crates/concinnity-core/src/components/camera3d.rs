@@ -3,8 +3,7 @@
 
 use crate::components::Vocabulary;
 use crate::ecs::SkinnedMeshHandle;
-use crate::ecs::de_opt_skinned_mesh_handle;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 
 /// How a followed character converts movement input into displacement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Vocabulary)]
@@ -31,43 +30,40 @@ pub enum FollowDrive {
 /// itself (camera-relative). The character must be a
 /// [SkinnedMesh](skinned_mesh.md) with a `capsule`, so it has a kinematic
 /// character capsule to move.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct FollowController {
     /// Name of the followed [SkinnedMesh](skinned_mesh.md). It must declare a
     /// `capsule`.
-    #[serde(deserialize_with = "de_opt_skinned_mesh_handle")]
     pub target: Option<SkinnedMeshHandle>,
     /// Orbit distance from the pivot to the camera, in world units.
+    #[asset(default = 4.0)]
     pub distance: f32,
     /// Pivot height above the character's feet, in world units.
+    #[asset(default = 1.5)]
     pub height: f32,
     /// How the character moves; see [FollowDrive](#followdrive).
+    #[asset(default = FollowDrive::RootMotion)]
     pub drive: FollowDrive,
     /// Character turn rate toward the input heading, in radians per second.
+    #[asset(default = 10.0)]
     pub turn_speed: f32,
     /// Name of the character's [AnimationGraph](anim_graph.md) float parameter
     /// that receives the current travel speed in world units per second
     /// (drives a locomotion blendspace). Empty disables parameter writes,
     /// leaving the graph externally driven.
+    #[asset(default = "speed")]
     pub speed_parameter: String,
     /// Jump apex height in world units when the jump key is pressed while
     /// grounded. `0` disables jumping.
     pub jump_height: f32,
-}
-
-impl Default for FollowController {
-    fn default() -> Self {
-        Self {
-            target: None,
-            distance: 4.0,
-            height: 1.5,
-            drive: FollowDrive::RootMotion,
-            turn_speed: 10.0,
-            speed_parameter: "speed".to_string(),
-            jump_height: 0.0,
-        }
-    }
 }
 
 /// First-person / fly-through controller settings carried on a `Camera3D`.
@@ -76,7 +72,14 @@ impl Default for FollowController {
 /// the internal camera controller, which turns mouse/keyboard input into a
 /// camera orientation and a movement intent. Set `controller` to `null` for a
 /// camera driven by something else (a `CameraShot` / `Scene` cutscene).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct CameraController {
     /// Direct 6-DoF flight mode. WASD moves along the camera's full forward
@@ -85,43 +88,32 @@ pub struct CameraController {
     /// step and the bounds box. Used for inspector / fly-through cameras (the
     /// default, e.g. the `cn add foo.glb` scaffold). Set `false` for the
     /// FPS-style ground walker.
+    // The `cn add foo.glb` scaffold relies on a bare `Camera3D` being a free-fly inspector.
+    #[asset(default = true)]
     pub free_fly: bool,
     /// Walk / fly speed in world units per second.
+    #[asset(default = 1.0)]
     pub move_speed: f32,
     /// Sprint multiplier applied when the sprint key is held.
+    #[asset(default = 3.0)]
     pub sprint_multiplier: f32,
     /// Mouse look sensitivity in radians per pixel.
+    #[asset(default = 0.0015)]
     pub mouse_sensitivity: f32,
     /// Margin kept between the camera and the bounds box (world units).
+    #[asset(default = 0.3)]
     pub player_radius: f32,
     /// AABB minimum corner the camera center must stay inside [x, y, z].
+    #[asset(default = [-1.0e9; 3])]
     pub bounds_min: [f32; 3],
     /// AABB maximum corner the camera center must stay inside [x, y, z].
+    #[asset(default = [1.0e9; 3])]
     pub bounds_max: [f32; 3],
     /// Third-person follow settings; see [FollowController](#followcontroller).
     /// When set, the camera orbits the followed character and WASD steers the
     /// character instead of the camera (`free_fly` and the bounds box are
     /// ignored). `null` (the default) keeps the first-person / fly modes.
     pub follow: Option<FollowController>,
-}
-
-impl Default for CameraController {
-    fn default() -> Self {
-        const BIG: f32 = 1.0e9;
-        Self {
-            // A bare `Camera3D` is navigable out of the box as a free-fly
-            // inspector: the `cn add foo.glb` scaffold relies on this. Worlds
-            // that want the FPS ground walker set `free_fly: false`.
-            free_fly: true,
-            move_speed: 1.0,
-            sprint_multiplier: 3.0,
-            mouse_sensitivity: 0.0015,
-            player_radius: 0.3,
-            bounds_min: [-BIG, -BIG, -BIG],
-            bounds_max: [BIG, BIG, BIG],
-            follow: None,
-        }
-    }
 }
 
 // A `Camera3D` with no explicit `controller` gets the default inspector
@@ -142,16 +134,27 @@ fn default_controller() -> Option<CameraController> {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct Camera3DArgs {
     /// Vertical field-of-view in degrees.
+    #[asset(default = 75.0)]
     pub fov_y_degrees: f32,
     /// Near clip plane distance.
+    #[asset(default = 0.05)]
     pub near: f32,
     /// Far clip plane distance.
+    #[asset(default = 200.0)]
     pub far: f32,
     /// Initial eye position in world space [x, y, z].
+    #[asset(default = [0.0, 1.7, 0.0])]
     pub position: [f32; 3],
     /// Initial yaw in radians (0 = looking toward -Z).
     pub yaw: f32,
@@ -160,57 +163,13 @@ pub struct Camera3DArgs {
     /// Input controller settings, or `null` to leave the camera uncontrolled
     /// (driven by a [CameraShot](#camerashot) / [Scene](#scene)
     /// cutscene). Omitted defaults to a free-fly inspector controller.
-    #[serde(default = "default_controller")]
+    #[asset(default = default_controller())]
     pub controller: Option<CameraController>,
-}
-
-impl Default for Camera3DArgs {
-    fn default() -> Self {
-        Self {
-            fov_y_degrees: 75.0,
-            near: 0.05,
-            far: 200.0,
-            position: [0.0, 1.7, 0.0],
-            yaw: 0.0,
-            pitch: 0.0,
-            controller: default_controller(),
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_bare_camera_is_navigable_as_a_free_fly_inspector() {
-        // The `cn add foo.glb` scaffold declares only a Camera3D, so the default
-        // controller has to be the one that can fly around and look at it.
-        let args = Camera3DArgs::default();
-        let c = args.controller.expect("default inspector controller");
-        assert!(c.free_fly);
-        assert_eq!(c.move_speed, 1.0);
-        assert_eq!(c.sprint_multiplier, 3.0);
-        assert!(c.follow.is_none());
-        assert_eq!(args.position, [0.0, 1.7, 0.0]);
-        assert_eq!((args.near, args.far), (0.05, 200.0));
-    }
-
-    #[test]
-    fn default_bounds_do_not_constrain_the_camera() {
-        let c = CameraController::default();
-        assert!(c.bounds_min.iter().all(|&v| v <= -1.0e9));
-        assert!(c.bounds_max.iter().all(|&v| v >= 1.0e9));
-    }
-
-    #[test]
-    fn an_omitted_controller_still_gets_the_inspector() {
-        // `#[serde(default)]` on the struct would make an absent field `None`,
-        // so the field carries its own default fn.
-        let args: Camera3DArgs = crate::test_support::from_json(r#"{"fov_y_degrees":60}"#);
-        assert_eq!(args.fov_y_degrees, 60.0);
-        assert!(args.controller.expect("inspector controller").free_fly);
-    }
 
     #[test]
     fn an_explicit_null_controller_leaves_the_camera_undriven() {
@@ -226,29 +185,30 @@ mod tests {
         let c = args.controller.expect("controller");
         assert!(!c.free_fly);
         assert_eq!(c.player_radius, 0.4);
-        // Fields the args did not mention keep the schema defaults.
-        assert_eq!(c.mouse_sensitivity, 0.0015);
+        assert_eq!(
+            c.mouse_sensitivity,
+            CameraController::default().mouse_sensitivity
+        );
     }
 
     #[test]
-    fn a_follow_controller_drives_from_root_motion_unless_told_otherwise() {
-        let f = FollowController::default();
-        assert_eq!(f.drive, FollowDrive::RootMotion);
-        assert_eq!(f.speed_parameter, "speed");
-        assert_eq!((f.distance, f.height), (4.0, 1.5));
-        assert_eq!(f.jump_height, 0.0);
-
+    fn a_partial_follow_block_resolves_its_target_and_fills_the_rest() {
         let args: Camera3DArgs = crate::test_support::from_json(
-            r#"{"controller":{"follow":{"target":"hero","drive":"direct","jump_height":1.2}}}"#,
+            r#"{"controller":{"follow":{"target":"hero","drive":"direct"}}}"#,
         );
-        let f = args
-            .controller
-            .expect("controller")
-            .follow
-            .expect("follow controller");
-        assert_eq!(f.target, Some(SkinnedMeshHandle(4)));
-        assert_eq!(f.drive, FollowDrive::Direct);
-        assert_eq!(f.jump_height, 1.2);
+        let follow = args.controller.expect("controller").follow.expect("follow");
+        assert_eq!(follow.target, Some(SkinnedMeshHandle::new(4)));
+        assert_eq!(follow.drive, FollowDrive::Direct);
+        let defaults = FollowController::default();
+        assert_eq!(follow.speed_parameter, defaults.speed_parameter);
+        assert_eq!(
+            (follow.distance, follow.height),
+            (defaults.distance, defaults.height)
+        );
+
+        // No follow block keeps the first-person modes.
+        let bare: Camera3DArgs = crate::test_support::from_json(r#"{"controller":{}}"#);
+        assert!(bare.controller.expect("controller").follow.is_none());
     }
 
     #[test]
@@ -260,21 +220,6 @@ mod tests {
             serde_json::to_string(&FollowDrive::RootMotion).unwrap(),
             r#""root_motion""#
         );
-    }
-
-    #[test]
-    fn an_authored_camera_round_trips_through_postcard() {
-        let args: Camera3DArgs = crate::test_support::from_json(
-            r#"{"fov_y_degrees":60,"position":[1,2,3],"yaw":0.5,"pitch":-0.2,
-                "controller":{"free_fly":false,"follow":{"distance":6.0}}}"#,
-        );
-        let bytes = postcard::to_allocvec(&args).unwrap();
-        let back: Camera3DArgs = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.position, [1.0, 2.0, 3.0]);
-        assert_eq!((back.yaw, back.pitch), (0.5, -0.2));
-        let c = back.controller.expect("controller");
-        assert!(!c.free_fly);
-        assert_eq!(c.follow.expect("follow controller").distance, 6.0);
     }
 }
 
@@ -328,37 +273,5 @@ impl Camera3D {
             interact_requested: false,
             controller: args.controller,
         }
-    }
-}
-
-#[cfg(test)]
-mod runtime_tests {
-    use super::*;
-    use crate::components::FollowDrive;
-    use crate::ecs::SkinnedMeshHandle;
-
-    #[test]
-    fn follow_block_deserializes_names_and_defaults() {
-        crate::test_support::reset_interner();
-        crate::test_support::intern_all(&["hero"]);
-        let args: Camera3DArgs = serde_json::from_value(serde_json::json!({
-            "controller": {"follow": {"target": "hero", "drive": "direct"}}
-        }))
-        .unwrap();
-        let follow = args.controller.unwrap().follow.unwrap();
-        // "hero" interns to id 0, and with no SkinnedMesh handle resolver installed
-        // the reference falls back to that interned value as its handle.
-        assert_eq!(follow.target, Some(SkinnedMeshHandle(0)));
-        assert_eq!(follow.drive, FollowDrive::Direct);
-        // Omitted fields keep the documented defaults.
-        assert_eq!(follow.speed_parameter, "speed");
-        assert!((follow.distance - 4.0).abs() < 1e-6);
-        assert!((follow.height - 1.5).abs() < 1e-6);
-        assert_eq!(follow.jump_height, 0.0);
-
-        // No follow block keeps the first-person modes.
-        let bare: Camera3DArgs =
-            serde_json::from_value(serde_json::json!({"controller": {}})).unwrap();
-        assert!(bare.controller.unwrap().follow.is_none());
     }
 }

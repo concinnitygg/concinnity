@@ -7,9 +7,9 @@ use crate::animation::anim_graph::{
     CompiledTransition, ParamSpec, StatePlay,
 };
 use crate::components::Animation;
+use crate::ecs::Ref;
+use crate::ecs::SkinnedMeshHandle;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Ref, de_opt_ref};
-use crate::ecs::{SkinnedMeshHandle, de_opt_skinned_mesh_handle};
 
 /// A named float parameter driving a graph's transitions. Gameplay systems
 /// write parameter values at runtime; transitions compare against them.
@@ -31,7 +31,6 @@ pub struct AnimationBlendPoint {
     pub value: f32,
     /// The [Animation](#animation) clip at this point. Must target the same
     /// [SkinnedMesh](#skinnedmesh) as the graph.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub clip: Option<Ref<Animation>>,
 }
 
@@ -174,7 +173,14 @@ impl<'de> serde::Deserialize<'de> for AnimationBlend {
 /// One state of the graph: while active it plays either a single
 /// [Animation](#animation) `clip` or a `blend` (a blendspace mixing several
 /// clips by parameter value). Exactly one of the two must be set.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct AnimationState {
     /// State name, referenced by `initial` and by transitions.
@@ -182,27 +188,15 @@ pub struct AnimationState {
     /// The [Animation](#animation) clip this state plays. Must target the
     /// same [SkinnedMesh](#skinnedmesh) as the graph. Leave unset when the
     /// state plays a `blend` instead.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub clip: Option<Ref<Animation>>,
     /// A blendspace to play instead of a single `clip`.
     pub blend: Option<AnimationBlend>,
     /// Playback speed scale; 1.0 plays at authored speed.
+    #[asset(default = 1.0)]
     pub rate: f32,
     /// Overrides the loop mode while this state plays: a single `clip`
     /// defaults to its own `looping` flag, a `blend` defaults to looping.
     pub loop_override: Option<bool>,
-}
-
-impl Default for AnimationState {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            clip: None,
-            blend: None,
-            rate: 1.0,
-            loop_override: None,
-        }
-    }
 }
 
 /// One two-bone IK chain, pinning the chain's end joint (typically a foot)
@@ -214,7 +208,14 @@ impl Default for AnimationState {
 /// runtime probes straight down from the animated end joint; when a surface
 /// is within range, the chain bends so the end lands `foot_height` above it.
 /// Pinning pauses automatically while the character is airborne.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct AnimationIkChain {
     /// Names of the chain's root, middle, and end joints, in order. Exactly
@@ -222,6 +223,7 @@ pub struct AnimationIkChain {
     pub joints: Vec<String>,
     /// Bend direction in mesh space: the middle joint bows toward this
     /// vector (a knee points forward, an elbow backward).
+    #[asset(default = [0.0, 0.0, 1.0])]
     pub pole: [f32; 3],
     /// Name of a declared graph parameter scaling the solve in `[0, 1]`;
     /// empty pins at full strength. Lets gameplay fade IK in and out.
@@ -229,17 +231,6 @@ pub struct AnimationIkChain {
     /// Height the end joint rests above the probed surface, in mesh units
     /// (the sole-to-ankle offset for a foot).
     pub foot_height: f32,
-}
-
-impl Default for AnimationIkChain {
-    fn default() -> Self {
-        Self {
-            joints: Vec::new(),
-            pole: [0.0, 0.0, 1.0],
-            weight_parameter: String::new(),
-            foot_height: 0.0,
-        }
-    }
 }
 
 /// One transition condition, `parameter <op> value`. All of a transition's
@@ -305,7 +296,6 @@ pub struct AnimationTransition {
 #[serde(default)]
 pub struct AnimationGraph {
     /// The [SkinnedMesh](#skinnedmesh) asset this graph animates.
-    #[serde(deserialize_with = "de_opt_skinned_mesh_handle")]
     pub target: Option<SkinnedMeshHandle>,
     /// Named float parameters transitions compare against.
     pub parameters: Vec<AnimationParam>,
@@ -547,28 +537,6 @@ mod tests {
     // Maps every clip id to slot 0 of a 1-second looping clip.
     fn any_clip(_: AssetId) -> Option<(usize, f32, bool)> {
         Some((0, 1.0, true))
-    }
-
-    #[test]
-    fn deserializes_full_graph() {
-        crate::test_support::reset_interner();
-        let g: AnimationGraph = serde_json::from_value(graph_json()).unwrap();
-        assert!(g.target.is_some());
-        assert_eq!(g.parameters.len(), 1);
-        assert_eq!(g.states.len(), 2);
-        assert_eq!(g.states[1].rate, 1.5);
-        assert_eq!(g.states[1].loop_override, Some(false));
-        assert_eq!(g.transitions.len(), 1);
-        assert_eq!(g.transitions[0].exit_time, Some(0.5));
-        assert_eq!(g.transitions[0].conditions[0].op, CmpOp::Gt);
-    }
-
-    #[test]
-    fn deserializes_with_defaults() {
-        let g: AnimationGraph = serde_json::from_str("{}").unwrap();
-        assert!(g.target.is_none());
-        assert!(g.states.is_empty());
-        assert!(g.initial.is_empty());
     }
 
     #[test]

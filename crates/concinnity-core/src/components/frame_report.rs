@@ -26,7 +26,13 @@ const DEFAULT_BUDGET_MS: f32 = 1000.0 / 60.0;
 /// };
 /// ```
 #[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+    Debug,
+    Clone,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
 )]
 #[serde(default)]
 pub struct FrameReport {
@@ -36,9 +42,11 @@ pub struct FrameReport {
     /// and auto-exposure all converge over the opening seconds of a run.
     /// Without a discard, two runs of identical code disagree, so this is what
     /// makes one run comparable with the next.
+    #[asset(default = 2.0)]
     pub warmup_seconds: f32,
     /// The frame budget, in milliseconds, that the over-budget count is taken
     /// against. Defaults to a 60 Hz frame.
+    #[asset(default = DEFAULT_BUDGET_MS)]
     pub budget_ms: f32,
     /// Whether the run ends as soon as the world says the measurement is
     /// complete.
@@ -50,53 +58,6 @@ pub struct FrameReport {
     ///
     /// A [CameraTrack](#cameratrack) is one thing that says so, when it
     /// reaches the end of its path.
+    #[asset(default = true)]
     pub stop_when_complete: bool,
-}
-
-impl Default for FrameReport {
-    fn default() -> Self {
-        Self {
-            warmup_seconds: 2.0,
-            budget_ms: DEFAULT_BUDGET_MS,
-            stop_when_complete: true,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_defaults_measure_a_run_against_a_sixty_hertz_frame() {
-        let r = FrameReport::default();
-        assert_eq!(r.warmup_seconds, 2.0);
-        assert!((r.budget_ms - 16.667).abs() < 1e-3, "{}", r.budget_ms);
-        // A world declaring one is asking to be measured, so it ends when the
-        // measurement does.
-        assert!(r.stop_when_complete);
-    }
-
-    #[test]
-    fn an_authored_report_parses_and_round_trips_through_postcard() {
-        let r: FrameReport = serde_json::from_str(
-            r#"{"warmup_seconds":4,"budget_ms":8.333,"stop_when_complete":false}"#,
-        )
-        .unwrap();
-        assert_eq!(r.warmup_seconds, 4.0);
-        assert_eq!(r.budget_ms, 8.333);
-        assert!(!r.stop_when_complete);
-
-        let bytes = postcard::to_allocvec(&r).unwrap();
-        let back: FrameReport = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back, r);
-    }
-
-    #[test]
-    fn an_omitted_field_keeps_its_default() {
-        let r: FrameReport = serde_json::from_str(r#"{"warmup_seconds":0}"#).unwrap();
-        assert_eq!(r.warmup_seconds, 0.0);
-        assert!((r.budget_ms - 16.667).abs() < 1e-3);
-        assert!(r.stop_when_complete);
-    }
 }

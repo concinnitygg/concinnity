@@ -102,7 +102,7 @@ pub fn intern_all(names: &[&str]) {
 mod tests {
     use super::*;
     use concinnity_core::components::Prop;
-    use concinnity_core::ecs::{Ref, de_opt_ref};
+    use concinnity_core::ecs::Ref;
 
     #[test]
     fn intern_is_idempotent_and_dense() {
@@ -222,20 +222,20 @@ mod tests {
     }
 
     #[test]
-    fn opt_ref_resolves_a_name_and_treats_empty_as_none() {
+    fn opt_ref_resolves_a_name_and_treats_null_as_none() {
         reset_interner();
         intern_all(&["mesh_a"]);
 
         #[derive(serde::Deserialize)]
         struct Holder {
-            #[serde(default, deserialize_with = "de_opt_ref")]
+            #[serde(default)]
             r: Option<Ref<Prop>>,
         }
 
         let named: Holder = serde_json::from_str("{\"r\":\"mesh_a\"}").unwrap();
         assert_eq!(named.r, Some(Ref::new(AssetId(0))));
-        let empty: Holder = serde_json::from_str("{\"r\":\"\"}").unwrap();
-        assert_eq!(empty.r, None);
+        let null: Holder = serde_json::from_str("{\"r\":null}").unwrap();
+        assert_eq!(null.r, None);
         let by_id: Holder = serde_json::from_str("{\"r\":5}").unwrap();
         assert_eq!(by_id.r, Some(Ref::new(AssetId(5))));
     }

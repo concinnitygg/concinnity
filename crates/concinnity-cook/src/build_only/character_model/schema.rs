@@ -1,7 +1,6 @@
 //! Character-model schema: a body conforming to a CharacterSchema.
 
 use concinnity_core::components::CharacterCapsule;
-use concinnity_core::ecs::de_opt_material_handle;
 use concinnity_core::ecs::{MaterialHandle, NameRef};
 
 use super::character_schema::CharacterSchema;
@@ -39,7 +38,6 @@ pub struct CharacterModel {
     /// Which skinned mesh of `source` to import, in file order.
     pub skin_index: u32,
     /// [Material](#material) of the emitted mesh.
-    #[serde(deserialize_with = "de_opt_material_handle")]
     pub material: Option<MaterialHandle>,
     /// World-space position.
     pub position: [f32; 3],
@@ -99,7 +97,10 @@ mod tests {
     fn install_len_resolvers() {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
-            concinnity_core::ecs::resolver::set_material_handle_resolver(|n| Some(n.len() as u32));
+            concinnity_core::ecs::set_handle_resolver(
+                concinnity_core::ecs::HandleKind::Material,
+                |_, n| Some(n.len() as u32),
+            );
         });
     }
 
@@ -112,7 +113,7 @@ mod tests {
                 "capsule":{"half_height":0.9,"radius":0.3}}"#,
         )
         .unwrap();
-        assert_eq!(m.material, Some(MaterialHandle(4)));
+        assert_eq!(m.material, Some(MaterialHandle::new(4)));
         let bytes = postcard::to_allocvec(&m).unwrap();
         let back: CharacterModel = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.schema, "humanoid");

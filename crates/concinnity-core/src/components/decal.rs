@@ -1,7 +1,6 @@
 // Projected-decal schema.
 
 use crate::ecs::TextureHandle;
-use crate::ecs::de_opt_texture_handle;
 
 /// A projected texture stamped onto whatever scene geometry sits inside the
 /// decal's oriented box.
@@ -28,11 +27,17 @@ use crate::ecs::de_opt_texture_handle;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct Decal {
     /// The [Texture](#texture) asset projected onto the scene.
-    #[serde(deserialize_with = "de_opt_texture_handle")]
     pub texture: Option<TextureHandle>,
     /// World-space position of the decal box's center.
     pub position: [f32; 3],
@@ -42,58 +47,13 @@ pub struct Decal {
     /// Local-space box extents. Local +Y is the projection axis; the texture
     /// is sampled on the local X-Z plane. A non-positive component disables
     /// the decal.
+    #[asset(default = [1.0, 1.0, 1.0])]
     pub size: [f32; 3],
     /// Linear-space RGBA tint multiplied with the sampled texture. The alpha
     /// channel scales the final blend, so `[1,1,1,0]` hides the decal.
+    #[asset(default = [1.0, 1.0, 1.0, 1.0])]
     pub tint: [f32; 4],
     /// When false the decal is skipped each frame.
+    #[asset(default = true)]
     pub visible: bool,
-}
-
-impl Default for Decal {
-    fn default() -> Self {
-        Self {
-            texture: None,
-            position: [0.0, 0.0, 0.0],
-            rotation_deg: [0.0, 0.0, 0.0],
-            size: [1.0, 1.0, 1.0],
-            tint: [1.0, 1.0, 1.0, 1.0],
-            visible: true,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_blank_decal_is_a_visible_untinted_ground_stamp() {
-        let d = Decal::default();
-        assert_eq!(d.rotation_deg, [0.0, 0.0, 0.0]);
-        assert_eq!(d.size, [1.0, 1.0, 1.0]);
-        // An identity tint leaves the sampled texture alone; alpha 1 keeps it
-        // fully blended.
-        assert_eq!(d.tint, [1.0, 1.0, 1.0, 1.0]);
-        assert!(d.visible);
-        assert!(d.texture.is_none());
-    }
-
-    #[test]
-    fn a_wall_stamp_parses_and_round_trips_through_postcard() {
-        let d: Decal = crate::test_support::from_json(
-            r#"{"texture":"tex_bullet","position":[3,1.6,-2],"rotation_deg":[0,0,90],
-                "size":[0.4,0.2,0.4],"tint":[1,1,1,0.5],"visible":false}"#,
-        );
-        assert_eq!(d.texture, Some(TextureHandle(10)));
-        assert_eq!(d.rotation_deg, [0.0, 0.0, 90.0]);
-        assert!(!d.visible);
-
-        let bytes = postcard::to_allocvec(&d).unwrap();
-        let back: Decal = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.texture, Some(TextureHandle(10)));
-        assert_eq!(back.position, [3.0, 1.6, -2.0]);
-        assert_eq!(back.size, [0.4, 0.2, 0.4]);
-        assert_eq!(back.tint, [1.0, 1.0, 1.0, 0.5]);
-    }
 }

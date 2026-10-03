@@ -98,9 +98,9 @@ pub use component::{
 
 // Typed asset references and the authoring tables derived from field types.
 pub use asset_fields::{ActionField, AssetFields, EnumField, FieldTable, RefField, ReferenceField};
-pub use concinnity_derive::AssetFields;
+pub use concinnity_derive::{AssetDefault, AssetFields};
 pub use name_ref::NameRef;
-pub use reference::{AnyAsset, Ref, RefTarget, de_opt_ref};
+pub use reference::{AnyAsset, Ref, RefTarget};
 
 // Systems' view of the world during a tick.
 pub use context::PipelineContext;
@@ -167,16 +167,10 @@ pub use locator::PayloadLocator;
 // components and the resource tables address resources by them.
 pub use handle::{
     AudioClipHandle, ColorLutHandle, CubemapTextureHandle, EnvironmentMapHandle, FontHandle,
-    MaterialHandle, MeshHandle, ShaderHandle, SkinnedMeshHandle, TextureHandle,
-    de_audio_clip_handle_vec, de_opt_audio_clip_handle, de_opt_font_handle, de_opt_material_handle,
-    de_opt_mesh_handle, de_opt_shader_handle, de_opt_skinned_mesh_handle, de_opt_texture_handle,
-    de_texture_handle,
+    Handle, HandleKind, HandleSpace, MaterialHandle, MeshHandle, ShaderHandle, SingleTypeSpace,
+    SkinnedMeshHandle, TextureHandle,
 };
-pub use resolver::{
-    set_audio_clip_handle_resolver, set_font_handle_resolver, set_material_handle_resolver,
-    set_mesh_handle_resolver, set_shader_handle_resolver, set_skinned_mesh_handle_resolver,
-    set_texture_handle_resolver,
-};
+pub use resolver::set_handle_resolver;
 
 // The blob record schema (the component defs stream + the resource stream) is
 // owned by the `blob` format module; re-exported here so the runtime, cook, and

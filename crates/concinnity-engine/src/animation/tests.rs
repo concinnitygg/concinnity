@@ -106,7 +106,7 @@ fn graph_world() -> World {
 fn hero() -> SkinnedMeshHandle {
     // The authored "hero" references deserialize through the resolver's
     // interner fallback, so the handle carries the interned id.
-    SkinnedMeshHandle(intern("hero").0)
+    SkinnedMeshHandle::new(intern("hero").0)
 }
 
 // Match the system back out of the world for report assertions.
@@ -144,11 +144,11 @@ fn graph_init_seeds_params_and_initial_state() {
 // on the first point at default, split across the bracketing pair mid-range.
 #[test]
 fn blendspace_weights_follow_the_parameter() {
-    let target = SkinnedMeshHandle(intern("hero_blend").0);
+    let target = SkinnedMeshHandle::new(intern("hero_blend").0);
     let mut world = World::new();
     for (name, duration) in [("bl_idle", 1.0), ("bl_walk", 0.8), ("bl_run", 0.6)] {
         let mut a = clip(duration);
-        a.target = Some(SkinnedMeshHandle(target.0));
+        a.target = Some(SkinnedMeshHandle::new(target.0));
         add_named(&mut world, name, a);
     }
     let g: AnimationGraph = serde_json::from_value(serde_json::json!({
@@ -250,12 +250,12 @@ fn mode_mismatched_commands_are_rejected() {
 
     let mut flat_world = World::new();
     let mut a = clip(1.0);
-    a.target = Some(SkinnedMeshHandle(intern("flat_hero").0));
+    a.target = Some(SkinnedMeshHandle::new(intern("flat_hero").0));
     flat_world.add_component(a);
     flat_world.start(SYSTEMS).unwrap();
     flat_world.step();
     with_anim(&mut flat_world, |anim| {
-        let target = SkinnedMeshHandle(intern("flat_hero").0);
+        let target = SkinnedMeshHandle::new(intern("flat_hero").0);
         anim.apply_crossfade(target, vec![0.5], 0.0, 0.0).unwrap();
         let err = anim.queue_param(target, "speed", 1.0).unwrap_err();
         assert!(err.contains("anim-crossfade"));
@@ -268,7 +268,7 @@ fn mode_mismatched_commands_are_rejected() {
 // carrying the mesh-local displacement; clips without one stay silent.
 #[test]
 fn root_motion_clip_publishes_displacement_events() {
-    let target = SkinnedMeshHandle(intern("hero_rm").0);
+    let target = SkinnedMeshHandle::new(intern("hero_rm").0);
     let mut world = World::new();
     let a: Animation = serde_json::from_value(serde_json::json!({
         "target": "hero_rm",
@@ -315,7 +315,7 @@ fn root_motion_events_emit_in_handle_order() {
     let mut world = World::new();
     let mut handles = Vec::new();
     for name in ["rm_ord_c", "rm_ord_a", "rm_ord_b"] {
-        handles.push(SkinnedMeshHandle(intern(name).0));
+        handles.push(SkinnedMeshHandle::new(intern(name).0));
         let a: Animation = serde_json::from_value(serde_json::json!({
             "target": name,
             "duration": 1.0,
@@ -359,7 +359,7 @@ fn root_motion_events_emit_in_handle_order() {
 fn ik_pins_the_foot_to_a_raised_ledge() {
     use concinnity_core::animation::skeleton::{Joint, JointPose, Skeleton};
 
-    let target = SkinnedMeshHandle(intern("hero_ik").0);
+    let target = SkinnedMeshHandle::new(intern("hero_ik").0);
     let mut world = World::new();
 
     // A leg hanging from x = 0.6: hip at y = 2, knee at y = 1, foot at
@@ -457,7 +457,7 @@ fn ik_pins_the_foot_to_a_raised_ledge() {
 
 #[test]
 fn rig_capsule_follows_root_motion() {
-    let target = SkinnedMeshHandle(intern("hero_rig").0);
+    let target = SkinnedMeshHandle::new(intern("hero_rig").0);
     let mut world = World::new();
     let a: Animation = serde_json::from_value(serde_json::json!({
         "target": "hero_rig",
@@ -533,7 +533,7 @@ fn graph_freezes_while_menu_open() {
 // was, resuming continues the clip from the pose it froze on.
 #[test]
 fn a_paused_frame_does_not_advance_clip_time() {
-    let target = SkinnedMeshHandle(intern("pause_skip").0);
+    let target = SkinnedMeshHandle::new(intern("pause_skip").0);
     let slide = || -> Animation {
         serde_json::from_value(serde_json::json!({
             "target": "pause_skip",
@@ -590,7 +590,7 @@ fn runtime_clip(duration: f32) -> skeleton::AnimationClip {
 // A single flat clip targeting `target`, weight 1.
 fn flat_clip(target: SkinnedMeshHandle) -> Animation {
     let mut a = clip(1.0);
-    a.target = Some(SkinnedMeshHandle(target.0));
+    a.target = Some(SkinnedMeshHandle::new(target.0));
     a
 }
 
@@ -598,7 +598,7 @@ fn flat_clip(target: SkinnedMeshHandle) -> Animation {
 // target or an out-of-range slot without mutating anything.
 #[test]
 fn apply_reloaded_clip_reseats_a_flat_slot_and_rejects_bad_targets() {
-    let target = SkinnedMeshHandle(intern("flat_reload").0);
+    let target = SkinnedMeshHandle::new(intern("flat_reload").0);
     let mut world = World::new();
     world.add_component(flat_clip(target));
     world.start(SYSTEMS).unwrap();
@@ -611,7 +611,7 @@ fn apply_reloaded_clip_reseats_a_flat_slot_and_rejects_bad_targets() {
         );
         assert!(
             !anim.apply_reloaded_clip(
-                SkinnedMeshHandle(intern("nobody").0),
+                SkinnedMeshHandle::new(intern("nobody").0),
                 0,
                 runtime_clip(1.0),
                 1.0
@@ -679,7 +679,7 @@ fn single_joint_pose(target: SkinnedMeshHandle) -> SkeletonPose {
 // matrix per joint, at full strength regardless of the clip's weight.
 #[test]
 fn flat_single_clip_samples_the_pose() {
-    let target = SkinnedMeshHandle(intern("flat_single_pose").0);
+    let target = SkinnedMeshHandle::new(intern("flat_single_pose").0);
     let mut world = World::new();
     world.add_component(flat_clip(target));
     world.add_component(single_joint_pose(target));
@@ -699,7 +699,7 @@ fn flat_single_clip_samples_the_pose() {
 // steps and the blended pose is written every frame.
 #[test]
 fn flat_fade_in_blends_multiple_clips_into_the_pose() {
-    let target = SkinnedMeshHandle(intern("flat_blend_pose").0);
+    let target = SkinnedMeshHandle::new(intern("flat_blend_pose").0);
     let mut world = World::new();
     // One clip requests a fade-in, so init builds a startup weight ramp.
     let mut faded = flat_clip(target);
@@ -729,7 +729,7 @@ fn morph_base_layer_composes_with_clip_morph_tracks() {
     use concinnity_core::animation::proportions::ProportionLayer;
     use concinnity_core::components::MorphKey;
 
-    let target = SkinnedMeshHandle(intern("morph_base_pose").0);
+    let target = SkinnedMeshHandle::new(intern("morph_base_pose").0);
     let mut world = World::new();
     let mut a = flat_clip(target);
     a.morph_track = vec![
@@ -757,7 +757,7 @@ fn morph_base_layer_composes_with_clip_morph_tracks() {
     assert_eq!(weights[1], 1.0, "base + clip clamps at 1");
 
     // Without a morph track, the base layer stays in place.
-    let target = SkinnedMeshHandle(intern("morph_base_only").0);
+    let target = SkinnedMeshHandle::new(intern("morph_base_only").0);
     let mut world = World::new();
     world.add_component(flat_clip(target));
     world.add_component(
@@ -777,7 +777,7 @@ fn proportions_apply_to_the_sampled_pose() {
     use concinnity_core::animation::proportions::ProportionLayer;
     use concinnity_core::components::JointProportion;
 
-    let target = SkinnedMeshHandle(intern("proportioned_pose").0);
+    let target = SkinnedMeshHandle::new(intern("proportioned_pose").0);
     let mut world = World::new();
     world.add_component(flat_clip(target));
     let pose = single_joint_pose(target);

@@ -27,8 +27,8 @@ pub fn text_label(
         .set("align", align)
 }
 
-/// A settings/menu TextLabel: `content` in `font` at `pos` ([x, y], window
-/// pixels), colored `color` (RGB) and scaled by `scale`. `centered` is pinned
+/// A settings/menu TextLabel: `content` in `font` (the built-in font when
+/// empty) at `pos` ([x, y], window pixels), colored `color` (RGB) and scaled by `scale`. `centered` is pinned
 /// false so the engine's default-font pass never recenters a menu label onto the
 /// viewport center (the menu lays labels out itself); chain
 /// `.set("align", "center")` for a label centered on `x` with real font metrics.
@@ -40,9 +40,10 @@ pub(crate) fn menu_label(
     color: [f32; 3],
     scale: f32,
 ) -> AssetSpec {
+    let font = font.into();
     AssetSpec::new(name, "TextLabel")
         .set("content", content.into())
-        .set("font", font.into())
+        .set("font", (!font.is_empty()).then_some(font))
         .set("x", pos[0])
         .set("y", pos[1])
         .set("color", color)
@@ -92,6 +93,13 @@ mod tests {
         assert_eq!(field("centered"), Some(&ArgValue::Bool(false)));
         // No align by default; a centered variant chains `.set("align", ...)`.
         assert!(field("align").is_none());
+    }
+
+    #[test]
+    fn a_menu_label_with_no_font_leaves_the_reference_unset() {
+        let l = menu_label("row", "Vsync", "", [0.0, 0.0], [1.0, 1.0, 1.0], 1.0);
+        let font = l.fields.iter().find(|(key, _)| key == "font");
+        assert_eq!(font.map(|(_, v)| v), Some(&ArgValue::Null));
     }
 
     #[test]

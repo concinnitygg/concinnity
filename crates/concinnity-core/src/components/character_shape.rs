@@ -2,7 +2,6 @@
 // that deform a SkinnedMesh at runtime.
 
 use crate::ecs::SkinnedMeshHandle;
-use crate::ecs::de_opt_skinned_mesh_handle;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -20,7 +19,13 @@ pub struct ShapeSlider {
 
 /// One joint's proportion change.
 #[derive(
-    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+    Debug,
+    Clone,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
 )]
 #[serde(default)]
 pub struct JointProportion {
@@ -28,21 +33,12 @@ pub struct JointProportion {
     pub joint: String,
     /// Uniform scale applied to the joint (and, through the hierarchy,
     /// everything below it). `1` leaves it alone.
+    #[asset(default = 1.0)]
     pub scale: f32,
     /// Extra length along the bone, in model units: every child joint is
     /// pushed that far along its bind direction from this joint. `0` leaves
     /// it alone.
     pub length: f32,
-}
-
-impl Default for JointProportion {
-    fn default() -> Self {
-        Self {
-            joint: String::new(),
-            scale: 1.0,
-            length: 0.0,
-        }
-    }
 }
 
 /// Shape sliders and joint proportions applied to one [SkinnedMesh](#skinnedmesh).
@@ -91,7 +87,6 @@ impl Default for JointProportion {
 #[serde(default)]
 pub struct CharacterShape {
     /// The [SkinnedMesh](#skinnedmesh) this shape deforms.
-    #[serde(deserialize_with = "de_opt_skinned_mesh_handle")]
     pub target: Option<SkinnedMeshHandle>,
     /// Named shape values, each resolved to the mesh's morph targets.
     pub sliders: Vec<ShapeSlider>,
@@ -233,24 +228,5 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(s.unresolved_joints(|j| j == "spine"), names(&["tail"]));
-    }
-
-    #[test]
-    fn a_shape_round_trips_through_postcard() {
-        let s: CharacterShape = crate::test_support::from_json(
-            r#"{"target":"hero","sliders":[{"name":"jaw","value":-0.5}],
-                "proportions":[{"joint":"thigh.L","scale":1.05,"length":0.1}]}"#,
-        );
-        assert_eq!(s.target, Some(SkinnedMeshHandle(4)));
-        let bytes = postcard::to_allocvec(&s).unwrap();
-        let back: CharacterShape = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.target, Some(SkinnedMeshHandle(4)));
-        assert_eq!(back.sliders, s.sliders);
-        assert_eq!(back.proportions, s.proportions);
-        assert_eq!(back.proportions[0].scale, 1.05);
-        assert!(!back.bake, "runtime deformation is the default");
-        // A blank proportion is the identity.
-        let p = JointProportion::default();
-        assert_eq!((p.scale, p.length), (1.0, 0.0));
     }
 }

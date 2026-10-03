@@ -20,16 +20,18 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::ecs::handle::HandleKind;
+
 /// A name -> dense id resolver.
 pub(crate) type ResolveFn = fn(&str) -> u32;
 
-/// A name -> per-kind resource-handle resolver. Returns the resource's dense
-/// handle, or `None` when the name is not a known resource of that kind in the
-/// current build (or no build map is installed). Unlike the name interner a
-/// handle is not assignable on demand: it is a position in the build's
-/// declaration-ordered resource table, so a name with no matching resource has
-/// no handle.
-pub(crate) type HandleResolveFn = fn(&str) -> Option<u32>;
+/// A name -> resource-handle resolver, given the handle space to resolve in.
+/// Returns the resource's dense handle, or `None` when the name is not a known
+/// resource of that space in the current build (or no build map is installed).
+/// Unlike the name interner a handle is not assignable on demand: it is a
+/// position in the build's declaration-ordered resource table, so a name with
+/// no matching resource has no handle.
+pub(crate) type HandleResolveFn = fn(HandleKind, &str) -> Option<u32>;
 
 // An atomically-installable `ResolveFn` slot. Holds the function pointer as a
 // `usize` (0 = unset): written once at install, only read afterward.
@@ -57,8 +59,8 @@ impl NameResolverSlot {
 }
 
 // An atomically-installable `HandleResolveFn` slot. Same install-once /
-// read-many discipline as `NameResolverSlot`; one instance backs each per-kind
-// handle resolver.
+// read-many discipline as `NameResolverSlot`; one instance backs each handle
+// space.
 struct HandleResolverSlot(AtomicUsize);
 
 impl HandleResolverSlot {
@@ -70,7 +72,7 @@ impl HandleResolverSlot {
         self.0.store(f as usize, Ordering::Release);
     }
 
-    fn resolve(&self, name: &str) -> Option<u32> {
+    fn resolve(&self, kind: HandleKind, name: &str) -> Option<u32> {
         let v = self.0.load(Ordering::Acquire);
         if v == 0 {
             return None;
@@ -78,7 +80,7 @@ impl HandleResolverSlot {
         // SAFETY: `v` is non-zero here, so it is a `HandleResolveFn` address
         // stored by `set`; the transmute reverses that exact `fn as usize`.
         let f: HandleResolveFn = unsafe { core::mem::transmute::<usize, HandleResolveFn>(v) };
-        f(name)
+        f(kind, name)
     }
 }
 
@@ -121,98 +123,58 @@ pub(crate) fn resolve_name(name: &str) -> Option<u32> {
     RESOLVER.with(|slot| slot.get()).map(|f| f(name))
 }
 
-// One slot / install / resolve triple per resource kind, each backed by the
-// current build's declaration-ordered handle map for that kind.
-macro_rules! handle_resolver {
-    (
-        $(#[$extra:meta])*
-        $slot:ident, $noun:literal, $set_fn:ident, $resolve_fn:ident $(,)?
-    ) => {
-        #[cfg(not(test))]
-        static $slot: HandleResolverSlot = HandleResolverSlot::new();
+// One handle resolver slot per handle space, indexed by `HandleKind`.
+#[cfg(not(test))]
+static HANDLE_RESOLVERS: [HandleResolverSlot; HandleKind::COUNT] =
+    [const { HandleResolverSlot::new() }; HandleKind::COUNT];
 
-        // Per-thread under test, for the reason given on the name slot above:
-        // some tests install a stand-in and others pin what happens with none
-        // installed, which a process-wide slot cannot serve at the same time.
-        #[cfg(test)]
-        std::thread_local! {
-            static $slot: core::cell::Cell<Option<HandleResolveFn>> =
-                const { core::cell::Cell::new(None) };
+// Per-thread under test, for the reason given on the name slot above: some
+// tests install a stand-in and others pin what happens with none installed,
+// which a process-wide slot cannot serve at the same time.
+#[cfg(test)]
+std::thread_local! {
+    static HANDLE_RESOLVERS: core::cell::Cell<[Option<HandleResolveFn>; HandleKind::COUNT]> =
+        const { core::cell::Cell::new([None; HandleKind::COUNT]) };
+}
+
+/// Install the name -> handle resolver for one handle space. Called by
+/// concinnity-cook, backed by the current build's declaration-ordered handle
+/// map. Idempotent; the last writer wins.
+#[cfg(not(test))]
+pub fn set_handle_resolver(kind: HandleKind, f: HandleResolveFn) {
+    if let Some(slot) = HANDLE_RESOLVERS.get(kind.index()) {
+        slot.set(f);
+    }
+}
+
+/// Install the name -> handle resolver for one handle space.
+#[cfg(test)]
+pub fn set_handle_resolver(kind: HandleKind, f: HandleResolveFn) {
+    HANDLE_RESOLVERS.with(|slots| {
+        let mut table = slots.get();
+        if let Some(slot) = table.get_mut(kind.index()) {
+            *slot = Some(f);
         }
-
-        #[doc = concat!(
-            "Install the name -> ", $noun,
-            "-handle resolver. Called by concinnity-cook, backed by the current ",
-            "build's declaration-ordered ", $noun,
-            " handle map. Idempotent; the last writer wins."
-        )]
-        $(#[$extra])*
-        #[cfg(not(test))]
-        pub fn $set_fn(f: HandleResolveFn) {
-            $slot.set(f);
-        }
-
-        #[cfg(test)]
-        #[doc = concat!("Install the name -> ", $noun, "-handle resolver.")]
-        pub fn $set_fn(f: HandleResolveFn) {
-            $slot.with(|slot| slot.set(Some(f)));
-        }
-
-        #[doc = concat!(
-            "Resolve a ", $noun,
-            " reference name to its dense handle value via the installed ",
-            "resolver. `None` means either no resolver is installed or the name ",
-            "is not a declared ", $noun,
-            "; the caller decides whether to fall back (a validation context) ",
-            "or to fail (a real build)."
-        )]
-        #[cfg(not(test))]
-        pub(crate) fn $resolve_fn(name: &str) -> Option<u32> {
-            $slot.resolve(name)
-        }
-
-        #[cfg(test)]
-        pub(crate) fn $resolve_fn(name: &str) -> Option<u32> {
-            $slot.with(|slot| slot.get()).and_then(|f| f(name))
-        }
-    };
+        slots.set(table);
+    });
 }
 
-handle_resolver! {
-    TEXTURE_HANDLE_RESOLVER, "texture",
-    set_texture_handle_resolver, resolve_texture_handle,
+/// Resolve a reference name to its dense handle in `kind`'s space via the
+/// installed resolver. `None` means either no resolver is installed or the
+/// name is not a declared resource of that space; the caller decides whether
+/// to fall back (a validation context) or to fail (a real build).
+#[cfg(not(test))]
+pub(crate) fn resolve_handle(kind: HandleKind, name: &str) -> Option<u32> {
+    HANDLE_RESOLVERS
+        .get(kind.index())
+        .and_then(|slot| slot.resolve(kind, name))
 }
-handle_resolver! {
-    AUDIO_CLIP_HANDLE_RESOLVER, "audio-clip",
-    set_audio_clip_handle_resolver, resolve_audio_clip_handle,
-}
-handle_resolver! {
-    FONT_HANDLE_RESOLVER, "font",
-    set_font_handle_resolver, resolve_font_handle,
-}
-handle_resolver! {
-    /// The mesh-source handle space is shared across every geometry-producing
-    /// kind (Mesh, ProceduralMesh, VoxelChunk, and mesh-kind File), so one
-    /// resolver serves them all.
-    MESH_HANDLE_RESOLVER, "mesh",
-    set_mesh_handle_resolver, resolve_mesh_handle,
-}
-handle_resolver! {
-    MATERIAL_HANDLE_RESOLVER, "material",
-    set_material_handle_resolver, resolve_material_handle,
-}
-handle_resolver! {
-    /// A SkinnedMesh stays an ECS component, but its authored references
-    /// (`Animation.target`, `AnimationGraph.target`, `FollowController.target`)
-    /// resolve to its dense handle so they no longer carry an interned id.
-    SKINNED_MESH_HANDLE_RESOLVER, "skinned-mesh",
-    set_skinned_mesh_handle_resolver, resolve_skinned_mesh_handle,
-}
-handle_resolver! {
-    /// A Shader stays an ECS component, but a Material's authored `shader`
-    /// reference resolves to its dense handle so the runtime never scans by name.
-    SHADER_HANDLE_RESOLVER, "shader",
-    set_shader_handle_resolver, resolve_shader_handle,
+
+#[cfg(test)]
+pub(crate) fn resolve_handle(kind: HandleKind, name: &str) -> Option<u32> {
+    HANDLE_RESOLVERS
+        .with(|slots| slots.get().get(kind.index()).copied().flatten())
+        .and_then(|f| f(kind, name))
 }
 
 #[cfg(test)]
@@ -222,7 +184,7 @@ mod tests {
     // the test harness runs them in (installs are idempotent, last-writer-wins).
     use super::*;
     use crate::ecs::asset_id::AssetId;
-    use crate::ecs::{Ref, RefTarget, de_opt_ref};
+    use crate::ecs::{Ref, RefTarget};
     use crate::test_support::{install_resolvers, len_handle_resolver, len_name_resolver};
 
     struct Clip;
@@ -243,12 +205,12 @@ mod tests {
         assert_eq!(name_slot.resolve("floor"), Some(5));
 
         let handle_slot = HandleResolverSlot::new();
-        assert_eq!(handle_slot.resolve("floor"), None);
+        assert_eq!(handle_slot.resolve(HandleKind::Texture, "floor"), None);
         handle_slot.set(len_handle_resolver);
-        assert_eq!(handle_slot.resolve("floor"), Some(5));
+        assert_eq!(handle_slot.resolve(HandleKind::Texture, "floor"), Some(5));
         // A handle resolver may also answer "no such resource of this kind",
         // which the name interner slot has no way to express.
-        assert_eq!(handle_slot.resolve("unknown_x"), None);
+        assert_eq!(handle_slot.resolve(HandleKind::Texture, "unknown_x"), None);
     }
 
     #[test]
@@ -272,47 +234,24 @@ mod tests {
     }
 
     #[test]
-    fn every_handle_seam_resolves_through_its_own_slot() {
-        // One slot per kind: a name is a position in that kind's declaration-
-        // ordered table, so the kinds never share an answer by accident.
+    fn every_handle_space_resolves_through_its_own_slot() {
+        // One slot per space: a name is a position in that space's declaration-
+        // ordered table, so the spaces never share an answer by accident.
         install_resolvers();
-        set_texture_handle_resolver(len_handle_resolver);
-        set_audio_clip_handle_resolver(len_handle_resolver);
-        set_font_handle_resolver(len_handle_resolver);
-        set_mesh_handle_resolver(len_handle_resolver);
-        set_material_handle_resolver(len_handle_resolver);
-        set_skinned_mesh_handle_resolver(len_handle_resolver);
-        set_shader_handle_resolver(len_handle_resolver);
-
-        assert_eq!(resolve_texture_handle("floor"), Some(5));
-        assert_eq!(resolve_audio_clip_handle("floor"), Some(5));
-        assert_eq!(resolve_font_handle("floor"), Some(5));
-        assert_eq!(resolve_mesh_handle("floor"), Some(5));
-        assert_eq!(resolve_material_handle("floor"), Some(5));
-        assert_eq!(resolve_skinned_mesh_handle("floor"), Some(5));
-        assert_eq!(resolve_shader_handle("floor"), Some(5));
+        fn textures_only(kind: HandleKind, name: &str) -> Option<u32> {
+            (kind == HandleKind::Texture).then_some(name.len() as u32)
+        }
+        set_handle_resolver(HandleKind::Texture, textures_only);
+        set_handle_resolver(HandleKind::Shader, textures_only);
+        assert_eq!(resolve_handle(HandleKind::Texture, "floor"), Some(5));
+        assert_eq!(resolve_handle(HandleKind::Shader, "floor"), None);
 
         // A handle is not assignable on demand: a name the build declares no
-        // resource of that kind for has none, even with a resolver installed.
-        assert_eq!(resolve_texture_handle("unknown_x"), None);
-        assert_eq!(resolve_shader_handle("unknown_x"), None);
-    }
-
-    #[test]
-    fn the_optional_ref_helper_resolves_a_name() {
-        set_name_resolver(len_name_resolver);
-
-        #[derive(serde::Deserialize)]
-        struct Typed {
-            #[serde(default, deserialize_with = "de_opt_ref")]
-            r: Option<Ref<Clip>>,
+        // resource of that space for has none, even with a resolver installed.
+        for kind in HandleKind::ALL {
+            set_handle_resolver(*kind, len_handle_resolver);
+            assert_eq!(resolve_handle(*kind, "floor"), Some(5));
+            assert_eq!(resolve_handle(*kind, "unknown_x"), None);
         }
-
-        assert_eq!(
-            serde_json::from_str::<Typed>("{\"r\":\"mesh_a\"}")
-                .unwrap()
-                .r,
-            Some(Ref::new(AssetId(6)))
-        );
     }
 }

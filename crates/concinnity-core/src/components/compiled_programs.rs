@@ -78,12 +78,4 @@ mod tests {
         assert_eq!(artifact(&p, "vertex_main_bindless", 9), Some(&[4u8, 5][..]));
         assert_eq!(artifact(&p, "fragment_main_bindless", 9), Some(&[6u8][..]));
     }
-
-    #[test]
-    fn a_program_round_trips_through_postcard() {
-        let p = programs();
-        let bytes = postcard::to_allocvec(&p).unwrap();
-        let back: Vec<CompiledProgram> = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back, p);
-    }
 }

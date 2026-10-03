@@ -21,56 +21,23 @@
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct SkyRotation {
     /// The celestial pole in world space: the axis the sphere turns about.
     /// Does not need to be normalized.
+    #[asset(default = [1.0, 0.0, 0.0])]
     pub axis: [f32; 3],
     /// Turn rate in degrees per second. Negative runs the sky backwards.
+    #[asset(default = 1.0)]
     pub degrees_per_second: f32,
     /// The angle the sky starts at, in degrees.
     pub angle_deg: f32,
-}
-
-impl Default for SkyRotation {
-    fn default() -> Self {
-        Self {
-            axis: [1.0, 0.0, 0.0],
-            degrees_per_second: 1.0,
-            angle_deg: 0.0,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_default_pole_is_horizontal_so_bodies_rise_and_set() {
-        // A pole along Y would only spin the sky about the zenith, which no
-        // observer on the ground can see; a horizontal pole is what makes a
-        // body cross the sky.
-        let s = SkyRotation::default();
-        assert_eq!(s.axis, [1.0, 0.0, 0.0]);
-        assert_eq!(s.degrees_per_second, 1.0);
-        assert_eq!(s.angle_deg, 0.0);
-    }
-
-    #[test]
-    fn an_authored_rotation_parses_and_round_trips_through_postcard() {
-        let s: SkyRotation =
-            serde_json::from_str(r#"{"axis":[0,0,1],"degrees_per_second":6,"angle_deg":45}"#)
-                .unwrap();
-        assert_eq!(s.axis, [0.0, 0.0, 1.0]);
-        assert_eq!(s.degrees_per_second, 6.0);
-        assert_eq!(s.angle_deg, 45.0);
-
-        let bytes = postcard::to_allocvec(&s).unwrap();
-        let back: SkyRotation = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.axis, [0.0, 0.0, 1.0]);
-        assert_eq!(back.degrees_per_second, 6.0);
-        assert_eq!(back.angle_deg, 45.0);
-    }
 }

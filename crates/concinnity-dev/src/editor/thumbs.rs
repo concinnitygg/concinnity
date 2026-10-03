@@ -119,7 +119,7 @@ fn load(names: &[(String, String)], png: &dyn Fn(&str) -> Option<Vec<u8>>) -> Th
         let Some((w, h, rgba)) = png(key).and_then(|bytes| decode_png(&bytes)) else {
             continue;
         };
-        let handle = TextureHandle(HANDLE_BASE + set.images.len() as u32);
+        let handle = TextureHandle::new(HANDLE_BASE + set.images.len() as u32);
         set.by_name.insert(
             name.clone(),
             Thumb {

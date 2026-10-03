@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn the_baked_atlas_decodes_with_printable_ascii() {
-        let font = load(FontHandle(0)).expect("the baked atlas decodes");
+        let font = load(FontHandle::new(0)).expect("the baked atlas decodes");
         let loaded = &font.loaded;
 
         // The size build.rs bakes at, which is what a font-less label draws at
@@ -81,7 +81,13 @@ mod tests {
     // error screen uploads it alone, while a world appends it after its own.
     #[test]
     fn the_face_takes_its_handle_as_its_atlas_slot() {
-        assert_eq!(load(FontHandle(0)).expect("decodes").loaded.atlas_slot, 0);
-        assert_eq!(load(FontHandle(3)).expect("decodes").loaded.atlas_slot, 3);
+        assert_eq!(
+            load(FontHandle::new(0)).expect("decodes").loaded.atlas_slot,
+            0
+        );
+        assert_eq!(
+            load(FontHandle::new(3)).expect("decodes").loaded.atlas_slot,
+            3
+        );
     }
 }

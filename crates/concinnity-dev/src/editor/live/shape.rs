@@ -88,10 +88,10 @@ mod tests {
                 "sliders": [{ "name": "weight", "value": 0.4 }],
                 "proportions": [{ "joint": "spine", "scale": 1.1, "length": 0.0 }],
             })),
-            SkinnedMeshHandle(3),
+            SkinnedMeshHandle::new(3),
         )
         .expect("shape values build");
-        assert_eq!(shape.target, Some(SkinnedMeshHandle(3)));
+        assert_eq!(shape.target, Some(SkinnedMeshHandle::new(3)));
         assert_eq!(shape.sliders.len(), 1);
         assert_eq!(shape.proportions[0].scale, 1.1);
         assert!(!shape.bake, "a live re-seed never flattens");
@@ -103,7 +103,7 @@ mod tests {
     fn absent_lists_build_an_empty_shape() {
         let shape = shape_of(
             &args(json!({ "target": "hero_mesh" })),
-            SkinnedMeshHandle(0),
+            SkinnedMeshHandle::new(0),
         )
         .expect("an empty shape builds");
         assert!(shape.sliders.is_empty() && shape.proportions.is_empty());
@@ -114,7 +114,7 @@ mod tests {
         assert!(
             shape_of(
                 &args(json!({ "sliders": "not a list" })),
-                SkinnedMeshHandle(0)
+                SkinnedMeshHandle::new(0)
             )
             .is_none()
         );

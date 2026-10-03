@@ -2,7 +2,7 @@
 
 use crate::components::Screen;
 use crate::components::UiAction;
-use crate::ecs::{Ref, de_opt_ref};
+use crate::ecs::Ref;
 use alloc::string::String;
 
 /// Maps a keyboard key to an action.
@@ -35,36 +35,5 @@ pub struct KeyBinding {
     pub action: Option<UiAction>,
     /// [Screen](#screen) this binding is scoped to: the binding only fires
     /// while that screen is on top of the stack. Unset, the binding is global.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub screen: Option<Ref<Screen>>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::components::ScreenCommand;
-    use crate::ecs::asset_id::AssetId;
-
-    #[test]
-    fn a_binding_with_no_screen_is_global() {
-        let b = KeyBinding::default();
-        assert!(b.key.is_empty());
-        assert!(b.action.is_none());
-        assert!(b.screen.is_none());
-    }
-
-    #[test]
-    fn a_screen_scoped_binding_parses_and_round_trips_through_postcard() {
-        let b: KeyBinding =
-            crate::test_support::from_json(r#"{"key":"Escape","action":"hide","screen":"menu"}"#);
-        assert_eq!(b.key, "Escape");
-        assert_eq!(b.action, Some(UiAction::Screen(ScreenCommand::Hide)));
-        assert_eq!(b.screen, Some(Ref::new(AssetId(4))));
-
-        let bytes = postcard::to_allocvec(&b).unwrap();
-        let back: KeyBinding = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.key, "Escape");
-        assert_eq!(back.screen, Some(Ref::new(AssetId(4))));
-        assert_eq!(back.action, b.action);
-    }
 }

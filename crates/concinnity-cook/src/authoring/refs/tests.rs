@@ -60,11 +60,11 @@ fn list_and_nested_references_are_derived() {
 }
 
 #[test]
-fn empty_and_absent_fields_are_omitted() {
+fn null_and_absent_fields_are_omitted() {
     let refs = referenced_names(&asset(
         "p",
         RegisteredType::Prop,
-        serde_json::json!({"model":""}),
+        serde_json::json!({"model":null}),
     ));
     assert!(refs.is_empty());
 }

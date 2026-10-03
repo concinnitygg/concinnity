@@ -143,7 +143,7 @@ mod tests {
                 length: 0.0,
             }],
         );
-        let pose = SkeletonPose::new(SkinnedMeshHandle(1), SkinnedIndex(3), skeleton)
+        let pose = SkeletonPose::new(SkinnedMeshHandle::new(1), SkinnedIndex(3), skeleton)
             .with_shape(vec![0.25, 0.5], layer);
         assert_eq!(pose.morph_weights, [0.25, 0.5]);
         // Root doubled: its skinning matrix is a pure scale of 2 (bind is

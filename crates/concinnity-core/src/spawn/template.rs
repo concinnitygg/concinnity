@@ -370,7 +370,7 @@ mod tests {
             ctx.insert(
                 template,
                 SkeletonPose::new(
-                    SkinnedMeshHandle(10),
+                    SkinnedMeshHandle::new(10),
                     SkinnedIndex(0),
                     Skeleton::new(Vec::new()),
                 ),
@@ -392,7 +392,7 @@ mod tests {
             let first_slot = ctx.get::<SkeletonPose>(first).unwrap().skinned_index;
             assert_eq!(
                 ctx.get::<SkeletonPose>(first).unwrap().mesh_id,
-                SkinnedMeshHandle(10),
+                SkinnedMeshHandle::new(10),
                 "the instance shares the template's mesh id so it animates with it"
             );
 
@@ -428,7 +428,7 @@ mod tests {
             ctx.insert(
                 template,
                 SkeletonPose::new(
-                    SkinnedMeshHandle(10),
+                    SkinnedMeshHandle::new(10),
                     SkinnedIndex(0),
                     Skeleton::new(Vec::new()),
                 ),

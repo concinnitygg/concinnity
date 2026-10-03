@@ -103,17 +103,17 @@ mod tests {
     #[test]
     fn a_material_reads_the_row_after_its_handle() {
         assert_eq!(row_of(None), NO_MATERIAL_ROW);
-        assert_eq!(row_of(Some(MaterialHandle(0))), 1);
-        assert_eq!(row_of(Some(MaterialHandle(6))), 7);
+        assert_eq!(row_of(Some(MaterialHandle::new(0))), 1);
+        assert_eq!(row_of(Some(MaterialHandle::new(6))), 7);
 
         let rows = rows([params(10.0), params(20.0)]);
         assert_eq!(rows.len(), 3);
         assert_eq!(
-            rows[row_of(Some(MaterialHandle(0))) as usize].values,
+            rows[row_of(Some(MaterialHandle::new(0))) as usize].values,
             params(10.0)
         );
         assert_eq!(
-            rows[row_of(Some(MaterialHandle(1))) as usize].values,
+            rows[row_of(Some(MaterialHandle::new(1))) as usize].values,
             params(20.0)
         );
     }
@@ -139,10 +139,10 @@ mod tests {
     #[test]
     fn draws_sharing_a_material_share_its_row() {
         let draws = [
-            Some(MaterialHandle(1)),
+            Some(MaterialHandle::new(1)),
             None,
-            Some(MaterialHandle(1)),
-            Some(MaterialHandle(0)),
+            Some(MaterialHandle::new(1)),
+            Some(MaterialHandle::new(0)),
         ];
         let table = MaterialParamTable::new(rows([params(1.0), params(2.0)]), 1);
         assert_eq!(table.rows().len(), 3, "zero row plus one per material");

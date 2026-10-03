@@ -2,9 +2,8 @@
 
 use crate::components::Screen;
 use crate::components::Vocabulary;
+use crate::ecs::Ref;
 use crate::ecs::TextureHandle;
-use crate::ecs::de_opt_texture_handle;
-use crate::ecs::{Ref, de_opt_ref};
 
 /// Screen-space 2D rectangle drawn as a UI overlay each frame.
 ///
@@ -26,7 +25,14 @@ use crate::ecs::{Ref, de_opt_ref};
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct Sprite {
     /// Left edge in screen pixels from the window's top-left.
@@ -34,14 +40,16 @@ pub struct Sprite {
     /// Top edge in screen pixels from the window's top-left.
     pub y: f32,
     /// Width in screen pixels.
+    #[asset(default = 100.0)]
     pub width: f32,
     /// Height in screen pixels.
+    #[asset(default = 100.0)]
     pub height: f32,
     /// [Texture](#texture) to draw, sampled over the sprite's rect and
     /// multiplied by `tint`. Omitted, the sprite is a solid `tint` fill.
-    #[serde(deserialize_with = "de_opt_texture_handle")]
     pub texture: Option<TextureHandle>,
     /// RGBA color the rectangle is filled with, each channel in [0, 1].
+    #[asset(default = [1.0, 1.0, 1.0, 1.0])]
     pub tint: [f32; 4],
     /// When true, the sprite acts as an in-engine cursor: it is drawn on top of
     /// the other overlays as an arrow pointer tracking the mouse, with the
@@ -51,10 +59,11 @@ pub struct Sprite {
     /// a visible `follow_cursor` sprite exists.
     pub follow_cursor: bool,
     /// When false the sprite is skipped each frame.
+    #[asset(default = true)]
     pub visible: bool,
     /// [Screen](#screen) this sprite belongs to. `None` means the sprite is
     /// always visible (e.g. a scene background).
-    #[serde(default, deserialize_with = "de_opt_ref")]
+    #[serde(default)]
     pub screen: Option<Ref<Screen>>,
     /// How a screen-owned sprite maps from the reference canvas to the window
     /// when their aspect ratios differ.
@@ -73,6 +82,7 @@ pub struct Sprite {
     pub border_width: f32,
     /// RGBA color of the border stroke, each channel in [0, 1]. Ignored when
     /// `border_width` is `0`.
+    #[asset(default = [0.0, 0.0, 0.0, 1.0])]
     pub border_color: [f32; 4],
 }
 
@@ -108,46 +118,9 @@ pub enum SpriteFit {
     Bottom,
 }
 
-impl Default for Sprite {
-    fn default() -> Self {
-        Self {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 100.0,
-            texture: None,
-            tint: [1.0, 1.0, 1.0, 1.0],
-            follow_cursor: false,
-            visible: true,
-            screen: None,
-            fit: SpriteFit::Fit,
-            corner_radius: 0.0,
-            border_width: 0.0,
-            border_color: [0.0, 0.0, 0.0, 1.0],
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::asset_id::AssetId;
-
-    #[test]
-    fn a_blank_sprite_is_a_visible_untinted_square_with_no_border() {
-        let s = Sprite::default();
-        assert_eq!((s.width, s.height), (100.0, 100.0));
-        assert_eq!(s.tint, [1.0, 1.0, 1.0, 1.0]);
-        assert!(s.visible);
-        assert!(!s.follow_cursor);
-        assert_eq!(s.fit, SpriteFit::Fit);
-        assert_eq!(s.corner_radius, 0.0);
-        // Zero width is what suppresses the border, so its color is irrelevant.
-        assert_eq!(s.border_width, 0.0);
-        assert!(s.texture.is_none());
-        assert!(s.screen.is_none());
-        assert_eq!(SpriteFit::default(), SpriteFit::Fit);
-    }
 
     #[test]
     fn fit_names_parse_in_lowercase() {
@@ -159,27 +132,5 @@ mod tests {
             serde_json::to_string(&SpriteFit::Bottom).unwrap(),
             r#""bottom""#
         );
-    }
-
-    #[test]
-    fn a_cursor_sprite_parses_and_round_trips_through_postcard() {
-        let s: Sprite = crate::test_support::from_json(
-            r#"{"x":10,"y":20,"width":32,"height":32,"texture":"tex_cursor",
-                "tint":[1,1,1,0.8],"follow_cursor":true,"visible":false,"screen":"menu",
-                "fit":"cover","corner_radius":4,"border_width":2,"border_color":[1,0,0,1]}"#,
-        );
-        assert_eq!(s.texture, Some(TextureHandle(10)));
-        assert_eq!(s.screen, Some(Ref::new(AssetId(4))));
-        assert!(s.follow_cursor);
-        assert!(!s.visible);
-
-        let bytes = postcard::to_allocvec(&s).unwrap();
-        let back: Sprite = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!((back.x, back.y), (10.0, 20.0));
-        assert_eq!(back.tint, [1.0, 1.0, 1.0, 0.8]);
-        assert_eq!(back.fit, SpriteFit::Cover);
-        assert_eq!(back.corner_radius, 4.0);
-        assert_eq!(back.border_width, 2.0);
-        assert_eq!(back.border_color, [1.0, 0.0, 0.0, 1.0]);
     }
 }

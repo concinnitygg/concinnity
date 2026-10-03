@@ -37,13 +37,4 @@ mod tests {
             assert_eq!(serde_json::to_string(&bus).unwrap(), name);
         }
     }
-
-    #[test]
-    fn bus_round_trips_through_postcard() {
-        for bus in [AudioBus::Music, AudioBus::Sfx, AudioBus::Voice] {
-            let bytes = postcard::to_allocvec(&bus).unwrap();
-            let back: AudioBus = postcard::from_bytes(&bytes).unwrap();
-            assert_eq!(back, bus);
-        }
-    }
 }

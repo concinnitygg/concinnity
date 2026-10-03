@@ -17,52 +17,24 @@ use crate::ecs::asset_id::AssetId;
 ///
 /// The spawner's own `Transform` (its position) is where copies appear, so place
 /// the spawner where you want the stream to originate.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct SpawnerArgs {
     /// The [Prop](#prop) placement to copy on each spawn.
+    #[asset(default = Ref::new(AssetId::default()))]
     pub template: Ref<Prop>,
     /// Seconds between spawns.
+    #[asset(default = 1.0)]
     pub interval: f32,
     /// Seconds each spawned copy lives before auto-removal; 0 keeps it forever.
     pub lifetime: f32,
-}
-
-impl Default for SpawnerArgs {
-    fn default() -> Self {
-        Self {
-            template: Ref::new(AssetId::default()),
-            interval: 1.0,
-            lifetime: 0.0,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_blank_spawner_ticks_once_a_second_and_never_expires_its_copies() {
-        let s = SpawnerArgs::default();
-        assert_eq!(s.interval, 1.0);
-        // Zero lifetime means the copy lives until something despawns it.
-        assert_eq!(s.lifetime, 0.0);
-        assert_eq!(s.template, AssetId::default());
-    }
-
-    #[test]
-    fn an_authored_spawner_parses_and_round_trips_through_postcard() {
-        let s: SpawnerArgs =
-            crate::test_support::from_json(r#"{"template":"spark","interval":0.25,"lifetime":3}"#);
-        assert_eq!(s.template, AssetId(5));
-        assert_eq!(s.interval, 0.25);
-
-        let bytes = postcard::to_allocvec(&s).unwrap();
-        let back: SpawnerArgs = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.template, AssetId(5));
-        assert_eq!(back.lifetime, 3.0);
-    }
 }
 
 /// The runtime `Spawner`: the authored fields of

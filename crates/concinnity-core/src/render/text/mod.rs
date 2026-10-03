@@ -519,7 +519,7 @@ mod tests {
 
     fn wrapped(content: &str, width: f32, max_lines: u32) -> Vec<String> {
         let font = even_font();
-        let mut label = make_label(FontHandle(0), content, 0.0);
+        let mut label = make_label(FontHandle::new(0), content, 0.0);
         label.wrap_width = width;
         label.max_lines = max_lines;
         laid_out(&label, &font)
@@ -577,7 +577,7 @@ mod tests {
     // unwrapped text.
     #[test]
     fn a_wrapped_label_draws_and_measures_the_lines_it_wrapped_to() {
-        let font_id = FontHandle(0);
+        let font_id = FontHandle::new(0);
         let mut fonts = FontSet::default();
         fonts.insert(font_id, even_font());
         let mut label = make_label(font_id, "aa bb cc", 0.0);
@@ -609,8 +609,8 @@ mod tests {
     fn a_label_naming_no_font_draws_with_the_fallback() {
         let g = make_glyph(8, 8, 10.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
-        let mut label = make_label(FontHandle(0), "A", 0.0);
+        fonts.insert(FontHandle::new(0), make_font(&[('A', g)]));
+        let mut label = make_label(FontHandle::new(0), "A", 0.0);
         label.font = None;
 
         // With no fallback there is no face to lay the glyphs out with.
@@ -618,7 +618,7 @@ mod tests {
         assert!(calls.is_empty());
         assert!(measure_label_box(&label, &fonts).is_none());
 
-        fonts.set_fallback(FontHandle(0));
+        fonts.set_fallback(FontHandle::new(0));
         let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         assert!(measure_label_box(&label, &fonts).is_some());
@@ -631,11 +631,11 @@ mod tests {
         let wide = make_glyph(8, 8, 20.0);
         let narrow = make_glyph(8, 8, 5.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', wide)]));
-        fonts.insert(FontHandle(1), make_font(&[('A', narrow)]));
-        fonts.set_fallback(FontHandle(0));
+        fonts.insert(FontHandle::new(0), make_font(&[('A', wide)]));
+        fonts.insert(FontHandle::new(1), make_font(&[('A', narrow)]));
+        fonts.set_fallback(FontHandle::new(0));
 
-        let label = make_label(FontHandle(1), "AA", 0.0);
+        let label = make_label(FontHandle::new(1), "AA", 0.0);
         assert_eq!(measure_label_box(&label, &fonts).unwrap().w, 10.0);
     }
 
@@ -645,17 +645,17 @@ mod tests {
     fn an_unloaded_font_falls_back() {
         let g = make_glyph(8, 8, 10.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
-        fonts.set_fallback(FontHandle(0));
+        fonts.insert(FontHandle::new(0), make_font(&[('A', g)]));
+        fonts.set_fallback(FontHandle::new(0));
 
-        let label = make_label(FontHandle(99), "A", 0.0);
+        let label = make_label(FontHandle::new(99), "A", 0.0);
         assert!(measure_label_box(&label, &fonts).is_some());
     }
 
     #[test]
     fn unknown_font_produces_no_call() {
         let fonts = FontSet::default();
-        let label = make_label(FontHandle(99), "hello", 0.0);
+        let label = make_label(FontHandle::new(99), "hello", 0.0);
         assert!(build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0],).is_empty());
     }
 
@@ -663,8 +663,8 @@ mod tests {
     fn single_glyph_produces_quad() {
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
-        let label = make_label(FontHandle(0), "A", 0.0);
+        fonts.insert(FontHandle::new(0), make_font(&[('A', g)]));
+        let label = make_label(FontHandle::new(0), "A", 0.0);
         let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4);
@@ -676,8 +676,8 @@ mod tests {
     fn background_prepends_a_box_quad() {
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
-        let mut label = make_label(FontHandle(0), "A", 0.0);
+        fonts.insert(FontHandle::new(0), make_font(&[('A', g)]));
+        let mut label = make_label(FontHandle::new(0), "A", 0.0);
         label.background = [0.0, 0.3, 0.1, 0.85];
         label.padding = 4.0;
         let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
@@ -712,8 +712,8 @@ mod tests {
         // of the full em line box, which left a large gap above the caps).
         let g = make_glyph(10, 12, 11.0); // bearing_y = 12, no descent
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
-        let mut label = make_label(FontHandle(0), "A", 0.0);
+        fonts.insert(FontHandle::new(0), make_font(&[('A', g)]));
+        let mut label = make_label(FontHandle::new(0), "A", 0.0);
         label.background = [0.1, 0.1, 0.1, 1.0];
         label.padding = 4.0;
         let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
@@ -737,8 +737,8 @@ mod tests {
     fn background_with_empty_content_draws_nothing() {
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
-        let mut label = make_label(FontHandle(0), "", 0.0);
+        fonts.insert(FontHandle::new(0), make_font(&[('A', g)]));
+        let mut label = make_label(FontHandle::new(0), "", 0.0);
         label.background = [0.0, 0.3, 0.1, 0.85];
         // A blanked label (e.g. a toggled-off HUD chip) draws no box.
         assert!(build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0],).is_empty());
@@ -749,9 +749,9 @@ mod tests {
         let space = make_glyph(0, 0, 8.0);
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[(' ', space), ('A', g)]));
+        fonts.insert(FontHandle::new(0), make_font(&[(' ', space), ('A', g)]));
         // Two spaces then 'A': only 'A' produces geometry.
-        let label = make_label(FontHandle(0), "  A", 0.0);
+        let label = make_label(FontHandle::new(0), "  A", 0.0);
         let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4);
@@ -775,8 +775,8 @@ mod tests {
         };
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('X', zero), ('A', g)]));
-        let label = make_label(FontHandle(0), "XA", 0.0);
+        fonts.insert(FontHandle::new(0), make_font(&[('X', zero), ('A', g)]));
+        let label = make_label(FontHandle::new(0), "XA", 0.0);
         let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4); // only 'A'
@@ -790,8 +790,8 @@ mod tests {
         // down by one line height (font size_px * scale = 16).
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
-        let label = make_label(FontHandle(0), "A\nA", 0.0);
+        fonts.insert(FontHandle::new(0), make_font(&[('A', g)]));
+        let label = make_label(FontHandle::new(0), "A\nA", 0.0);
         let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         // Two glyphs -> two quads -> 8 vertices, 12 indices.
@@ -813,8 +813,8 @@ mod tests {
     fn centered_label_is_repositioned() {
         let g = make_glyph(10, 12, 20.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
-        let mut label = make_label(FontHandle(0), "A", 0.0);
+        fonts.insert(FontHandle::new(0), make_font(&[('A', g)]));
+        let mut label = make_label(FontHandle::new(0), "A", 0.0);
         label.centered = true;
         // Viewport 200×100; glyph advance=20, size_px=16, cap_px=12 ('A' bearing).
         // Auto-scale: sw = 200*0.85/20 = 8.5, sh = 100*0.85/16 = 5.3125 -> scale = 5.3125
@@ -838,10 +838,10 @@ mod tests {
         // None) at the same coordinates stays put.
         let g = make_glyph(10, 12, 20.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
+        fonts.insert(FontHandle::new(0), make_font(&[('A', g)]));
 
-        let hud = make_label(FontHandle(0), "A", 100.0); // view == None
-        let mut overlay_label = make_label(FontHandle(0), "A", 100.0);
+        let hud = make_label(FontHandle::new(0), "A", 100.0); // view == None
+        let mut overlay_label = make_label(FontHandle::new(0), "A", 100.0);
         overlay_label.y = 100.0;
         overlay_label.screen = Some(Ref::new(AssetId(5)));
 
@@ -867,8 +867,8 @@ mod tests {
     fn measure_label_box_grows_text_by_padding() {
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', g), ('B', g)]));
-        let mut label = make_label(FontHandle(0), "AB", 0.0);
+        fonts.insert(FontHandle::new(0), make_font(&[('A', g), ('B', g)]));
+        let mut label = make_label(FontHandle::new(0), "AB", 0.0);
         label.padding = 4.0;
         let b = measure_label_box(&label, &fonts).unwrap();
         // text width = 2 * advance(11) = 22, grown by padding on both sides.
@@ -888,13 +888,13 @@ mod tests {
     fn measure_label_box_skips_hidden_and_unloaded() {
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
+        fonts.insert(FontHandle::new(0), make_font(&[('A', g)]));
         // Hidden label → None even with a loaded font.
-        let mut hidden = make_label(FontHandle(0), "A", 0.0);
+        let mut hidden = make_label(FontHandle::new(0), "A", 0.0);
         hidden.visible = false;
         assert!(measure_label_box(&hidden, &fonts).is_none());
         // Visible label whose font isn't loaded → None.
-        let orphan = make_label(FontHandle(99), "A", 0.0);
+        let orphan = make_label(FontHandle::new(99), "A", 0.0);
         assert!(measure_label_box(&orphan, &fonts).is_none());
     }
 
@@ -906,9 +906,9 @@ mod tests {
         // when right-aligned.
         let g = make_glyph(10, 12, 10.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
+        fonts.insert(FontHandle::new(0), make_font(&[('A', g)]));
         let first_x = |align: TextAlign| {
-            let mut l = make_label(FontHandle(0), "AA", 100.0);
+            let mut l = make_label(FontHandle::new(0), "AA", 100.0);
             l.align = align;
             build_text_calls(core::slice::from_ref(&l), &fonts, [0.0, 0.0])[0].vertices[0].pos[0]
         };
@@ -924,8 +924,8 @@ mod tests {
         // viewport the overlay is identity, so the scissor equals the band.
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
-        let label = make_label(FontHandle(0), "A", 0.0);
+        fonts.insert(FontHandle::new(0), make_font(&[('A', g)]));
+        let label = make_label(FontHandle::new(0), "A", 0.0);
         let band = [10.0, 20.0, 300.0, 40.0];
         let placed = |placement| {
             let mut out = crate::render::call_buffer::TextCallBuffer::default();
@@ -962,10 +962,10 @@ mod tests {
         // distinct origin.
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[('A', g)]));
+        fonts.insert(FontHandle::new(0), make_font(&[('A', g)]));
         let vp = (1024.0, 768.0);
         let first_y = |fit: SpriteFit| {
-            let mut l = make_label(FontHandle(0), "A", 100.0);
+            let mut l = make_label(FontHandle::new(0), "A", 100.0);
             l.y = 600.0;
             l.screen = Some(Ref::new(AssetId(5)));
             l.fit = fit;
@@ -988,9 +988,9 @@ mod tests {
         let space = make_glyph(0, 0, 7.0);
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[(' ', space), ('A', g)]));
+        fonts.insert(FontHandle::new(0), make_font(&[(' ', space), ('A', g)]));
         // '?' has no metric; it consumes one space advance before 'A'.
-        let label = make_label(FontHandle(0), "?A", 0.0);
+        let label = make_label(FontHandle::new(0), "?A", 0.0);
         let calls = build_text_calls(core::slice::from_ref(&label), &fonts, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].vertices.len(), 4); // only 'A' draws a quad
@@ -1004,9 +1004,9 @@ mod tests {
         let space = make_glyph(0, 0, 7.0);
         let g = make_glyph(10, 12, 11.0);
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), make_font(&[(' ', space), ('A', g)]));
-        let known = make_label(FontHandle(0), "A", 0.0);
-        let with_missing = make_label(FontHandle(0), "?A", 0.0);
+        fonts.insert(FontHandle::new(0), make_font(&[(' ', space), ('A', g)]));
+        let known = make_label(FontHandle::new(0), "A", 0.0);
+        let with_missing = make_label(FontHandle::new(0), "?A", 0.0);
         let wk = measure_label_box(&known, &fonts).unwrap().w;
         let wm = measure_label_box(&with_missing, &fonts).unwrap().w;
         // The '?' contributes exactly one space advance (7) of extra width.
@@ -1031,7 +1031,7 @@ mod tests {
     // One color per drawn glyph quad, skipping the background box.
     fn glyph_colors(label: &TextLabel) -> Vec<[f32; 3]> {
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), even_font());
+        fonts.insert(FontHandle::new(0), even_font());
         let calls = build_text_calls(core::slice::from_ref(label), &fonts, [400.0, 400.0]);
         let skip = if label.background[3] > 0.0 { 4 } else { 0 };
         let quads = calls[0].vertices[skip..].chunks(4);
@@ -1048,7 +1048,7 @@ mod tests {
 
     #[test]
     fn color_runs_color_their_glyphs_and_the_rest_take_the_label_color() {
-        let mut label = make_label(FontHandle(0), "ab cd", 0.0);
+        let mut label = make_label(FontHandle::new(0), "ab cd", 0.0);
         colored(&mut label, &[(1, 3, RED)]);
         assert_eq!(glyph_colors(&label), [W, RED, RED, RED, W]);
         label.background = [0.0, 0.0, 0.0, 1.0];
@@ -1061,7 +1061,7 @@ mod tests {
 
     #[test]
     fn a_newline_counts_as_a_character() {
-        let mut label = make_label(FontHandle(0), "ab\ncd", 0.0);
+        let mut label = make_label(FontHandle::new(0), "ab\ncd", 0.0);
         colored(&mut label, &[(3, 1, RED)]);
         assert_eq!(glyph_colors(&label), [W, W, RED, W]);
     }
@@ -1069,13 +1069,13 @@ mod tests {
     #[test]
     fn color_runs_follow_their_characters_through_wrapping() {
         // "aa bb cc" wraps to "aa bb" / "cc": the space at the break is gone.
-        let mut label = make_label(FontHandle(0), "aa bb cc", 0.0);
+        let mut label = make_label(FontHandle::new(0), "aa bb cc", 0.0);
         label.wrap_width = 50.0;
         colored(&mut label, &[(3, 2, BLUE), (6, 2, RED)]);
         assert_eq!(glyph_colors(&label), [W, W, W, BLUE, BLUE, RED, RED]);
 
         // A word split mid-way keeps every character's color across the split.
-        let mut label = make_label(FontHandle(0), "aaaaaaaa", 0.0);
+        let mut label = make_label(FontHandle::new(0), "aaaaaaaa", 0.0);
         label.wrap_width = 50.0;
         colored(&mut label, &[(4, 2, RED)]);
         assert_eq!(glyph_colors(&label), [W, W, W, W, RED, RED, W, W]);
@@ -1084,7 +1084,7 @@ mod tests {
     #[test]
     fn an_ellipsis_takes_the_color_of_the_text_it_hides() {
         // Two lines of "aa bb" / "cc dd ..." cut to "aa bb" / "cc...".
-        let mut label = make_label(FontHandle(0), "aa bb cc dd ee ff", 0.0);
+        let mut label = make_label(FontHandle::new(0), "aa bb cc dd ee ff", 0.0);
         label.wrap_width = 50.0;
         label.max_lines = 2;
         colored(&mut label, &[(7, 1, BLUE), (8, 3, RED)]);
@@ -1097,9 +1097,9 @@ mod tests {
     #[test]
     fn alignment_and_measure_do_not_depend_on_color_runs() {
         let mut fonts = FontSet::default();
-        fonts.insert(FontHandle(0), even_font());
+        fonts.insert(FontHandle::new(0), even_font());
         for align in [TextAlign::Left, TextAlign::Center, TextAlign::Right] {
-            let mut plain = make_label(FontHandle(0), "aa bb cc", 100.0);
+            let mut plain = make_label(FontHandle::new(0), "aa bb cc", 100.0);
             plain.align = align;
             plain.wrap_width = 50.0;
             plain.background = [0.0, 0.0, 0.0, 1.0];
@@ -1125,7 +1125,7 @@ mod tests {
     // covers rather than failing the label.
     #[test]
     fn a_run_past_the_content_colors_what_is_there() {
-        let mut label = make_label(FontHandle(0), "ab", 0.0);
+        let mut label = make_label(FontHandle::new(0), "ab", 0.0);
         colored(&mut label, &[(1, 9, RED), (20, 2, BLUE)]);
         assert_eq!(glyph_colors(&label), [W, RED]);
     }

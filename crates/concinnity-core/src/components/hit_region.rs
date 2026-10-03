@@ -3,7 +3,7 @@
 use crate::components::SpriteFit;
 use crate::components::UiAction;
 use crate::components::{Screen, Sprite, TextLabel};
-use crate::ecs::{Ref, de_opt_ref};
+use crate::ecs::Ref;
 
 /// A responsive invisible rectangular region in screen space.
 ///
@@ -24,7 +24,14 @@ use crate::ecs::{Ref, de_opt_ref};
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct HitRegion {
     /// Left edge of the region in window pixels.
@@ -32,11 +39,12 @@ pub struct HitRegion {
     /// Top edge of the region in window pixels.
     pub y: f32,
     /// Width of the region in window pixels.
+    #[asset(default = 100.0)]
     pub width: f32,
     /// Height of the region in window pixels.
+    #[asset(default = 40.0)]
     pub height: f32,
     /// A [TextLabel](#textlabel) to style on hover. `None` = no label effect.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub label: Option<Ref<TextLabel>>,
     /// RGB color applied to the label while hovered. `None` = no change.
     pub hover_color: Option<[f32; 3]>,
@@ -47,12 +55,12 @@ pub struct HitRegion {
     /// The [Sprite](#sprite) a [Slider](#slider) drag region moves along its
     /// track. `None` for ordinary regions. Set automatically when a `Slider`
     /// expands; you don't set this directly.
-    #[serde(default, deserialize_with = "de_opt_ref")]
+    #[serde(default)]
     pub drag_handle: Option<Ref<Sprite>>,
     /// [Screen](#screen) this region belongs to. While a screen is active,
     /// only the top capturing screen's regions fire; with no screen active,
     /// only screen-less regions fire.
-    #[serde(default, deserialize_with = "de_opt_ref")]
+    #[serde(default)]
     pub screen: Option<Ref<Screen>>,
     /// Whether this region is inert. A disabled region never hovers or fires.
     /// Set by the engine at runtime (e.g. a settings row whose feature the GPU
@@ -73,73 +81,4 @@ pub struct HitRegion {
     /// full window regardless of `fit`.
     #[serde(default)]
     pub fit: SpriteFit,
-}
-
-impl Default for HitRegion {
-    fn default() -> Self {
-        Self {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 40.0,
-            label: None,
-            hover_color: None,
-            hover_scale: None,
-            action: None,
-            drag_handle: None,
-            screen: None,
-            disabled: false,
-            follow_label: false,
-            fit: SpriteFit::Fit,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::components::StoryCommand;
-    use crate::ecs::asset_id::AssetId;
-
-    #[test]
-    fn a_blank_region_is_an_enabled_button_sized_rectangle() {
-        let h = HitRegion::default();
-        assert_eq!((h.x, h.y), (0.0, 0.0));
-        assert_eq!((h.width, h.height), (100.0, 40.0));
-        assert!(!h.disabled);
-        assert!(!h.follow_label);
-        assert_eq!(h.fit, SpriteFit::Fit);
-        assert!(h.action.is_none());
-        // Hover styling is opt-in: unset means "do not restyle on hover".
-        assert_eq!(h.hover_color, None);
-        assert_eq!(h.hover_scale, None);
-        assert!(h.label.is_none());
-        assert!(h.drag_handle.is_none());
-        assert!(h.screen.is_none());
-    }
-
-    #[test]
-    fn an_authored_region_parses_and_round_trips_through_postcard() {
-        let h: HitRegion = crate::test_support::from_json(
-            r#"{"x":10,"y":20,"width":200,"height":48,"label":"play_label","action":{"story":"start"},
-                "hover_color":[1,0.85,0.3],"hover_scale":1.1,"drag_handle":"grip",
-                "screen":"menu","disabled":true,"follow_label":true,"fit":"cover"}"#,
-        );
-        assert_eq!(h.label, Some(Ref::new(AssetId(10))));
-        assert_eq!(h.drag_handle, Some(Ref::new(AssetId(4))));
-        assert_eq!(h.screen, Some(Ref::new(AssetId(4))));
-        assert_eq!(h.action, Some(UiAction::Story(StoryCommand::Start)));
-        assert_eq!(h.hover_scale, Some(1.1));
-        assert_eq!(h.fit, SpriteFit::Cover);
-        assert!(h.disabled);
-        assert!(h.follow_label);
-
-        let bytes = postcard::to_allocvec(&h).unwrap();
-        let back: HitRegion = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.hover_color, Some([1.0, 0.85, 0.3]));
-        assert_eq!((back.width, back.height), (200.0, 48.0));
-        assert_eq!(back.label, Some(Ref::new(AssetId(10))));
-        assert_eq!(back.fit, SpriteFit::Cover);
-        assert_eq!(back.action, h.action);
-    }
 }

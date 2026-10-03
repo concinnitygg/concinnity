@@ -216,7 +216,7 @@ mod tests {
             ctx.insert(
                 skinned,
                 SkeletonPose::new(
-                    SkinnedMeshHandle(1),
+                    SkinnedMeshHandle::new(1),
                     SkinnedIndex(4),
                     Skeleton::new(Vec::new()),
                 ),

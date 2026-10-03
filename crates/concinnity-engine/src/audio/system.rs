@@ -233,7 +233,7 @@ impl System for AudioSystem {
         // Snapshot the emitters, then the clip payload locators indexed by
         // AudioClipHandle. The `AudioClipTable` resource is built from the blob's
         // resource stream, dense in handle order, so index N is the clip with
-        // `AudioClipHandle(N)`. Collecting this owned Vec releases the resource
+        // `AudioClipHandle::new(N)`. Collecting this owned Vec releases the resource
         // borrow before the `read_payload` calls below.
         let emitter_snaps: Vec<(Entity, AudioEmitter)> = ctx
             .query_with_entity::<AudioEmitter>()
@@ -293,7 +293,7 @@ impl System for AudioSystem {
                 .clip_locators
                 .iter()
                 .enumerate()
-                .filter_map(|(i, loc)| loc.as_ref().map(|_| AudioClipHandle(i as u32)))
+                .filter_map(|(i, loc)| loc.as_ref().map(|_| AudioClipHandle::new(i as u32)))
                 .collect();
             for clip in clips {
                 if !self.queue_clip(ctx, clip) {
@@ -520,7 +520,7 @@ mod tests {
         // Add an audio clip whose payload is `bytes`, returning its handle (its
         // record order, which the table indexes by).
         fn clip(&mut self, bytes: &[u8]) -> AudioClipHandle {
-            let handle = AudioClipHandle(self.clips.len() as u32);
+            let handle = AudioClipHandle::new(self.clips.len() as u32);
             let offset = self.section.len() as u64;
             self.section.extend_from_slice(bytes);
             self.clips.push(ResourceRecord {

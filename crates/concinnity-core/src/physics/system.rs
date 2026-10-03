@@ -932,7 +932,7 @@ mod tests {
         let mut camera = controlled_camera();
         camera.controller = Some(CameraController {
             follow: Some(FollowController {
-                target: Some(SkinnedMeshHandle(1)),
+                target: Some(SkinnedMeshHandle::new(1)),
                 ..FollowController::default()
             }),
             ..CameraController::default()
@@ -1377,7 +1377,7 @@ mod tests {
         ];
         let mut world = World::new();
         world.push(CharacterRig::new(
-            SkinnedMeshHandle(1),
+            SkinnedMeshHandle::new(1),
             crate::gfx::render_types::SkinnedIndex(0),
             identity,
             0.6,

@@ -45,7 +45,7 @@ impl SkinnedMeshNameIndex {
         self.0
             .get(&name_id)
             .copied()
-            .unwrap_or(SkinnedMeshHandle(name_id.0))
+            .unwrap_or(SkinnedMeshHandle::new(name_id.0))
     }
 }
 
@@ -56,15 +56,15 @@ mod tests {
     #[test]
     fn known_name_returns_its_handle() {
         let mut map = HashMap::new();
-        map.insert(AssetId(10), SkinnedMeshHandle(0));
-        map.insert(AssetId(20), SkinnedMeshHandle(1));
+        map.insert(AssetId(10), SkinnedMeshHandle::new(0));
+        map.insert(AssetId(20), SkinnedMeshHandle::new(1));
         let index = SkinnedMeshNameIndex(map);
-        assert_eq!(index.get(AssetId(20)), SkinnedMeshHandle(1));
+        assert_eq!(index.get(AssetId(20)), SkinnedMeshHandle::new(1));
     }
 
     #[test]
     fn unknown_name_falls_back_to_the_id_value() {
         let index = SkinnedMeshNameIndex::default();
-        assert_eq!(index.get(AssetId(42)), SkinnedMeshHandle(42));
+        assert_eq!(index.get(AssetId(42)), SkinnedMeshHandle::new(42));
     }
 }

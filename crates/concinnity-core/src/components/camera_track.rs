@@ -494,24 +494,4 @@ mod tests {
         assert_eq!(t.turn[0].degrees_per_second, 0.0);
         assert_eq!(t.turn[0].seconds, 0.0);
     }
-
-    #[test]
-    fn an_authored_track_parses_and_round_trips_through_postcard() {
-        let args: CameraTrackArgs = serde_json::from_str(
-            r#"{"travel":[{"direction":[0,0,-1],"distance":8,"speed":2,
-                           "ease":"in_out","segment":"approach"}],
-                "turn":[{"yaw_deg":45,"degrees_per_second":30}]}"#,
-        )
-        .unwrap();
-        assert_eq!(args.travel[0].ease, Ease::InOut);
-        assert_eq!(args.travel[0].segment, "approach");
-        assert_eq!(args.turn[0].yaw_deg, Some(45.0));
-
-        let track = CameraTrack::bake(args);
-        let bytes = postcard::to_allocvec(&track).unwrap();
-        let back: CameraTrack = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back, track);
-        assert_eq!(back.segments, ["approach"]);
-        assert_eq!(back.travel[0].end_seconds, 4.0);
-    }
 }

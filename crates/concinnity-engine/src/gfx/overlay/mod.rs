@@ -398,7 +398,7 @@ mod tests {
     };
     use concinnity_core::gfx::font;
 
-    const FONT: FontHandle = FontHandle(0);
+    const FONT: FontHandle = FontHandle::new(0);
     const SCREEN: AssetId = AssetId(50);
     // The reference canvas the overlay authors against, so a backdrop sized to
     // it counts as full-canvas.

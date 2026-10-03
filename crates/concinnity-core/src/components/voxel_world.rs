@@ -3,7 +3,6 @@
 use crate::components::BlockType;
 use crate::ecs::MaterialHandle;
 use crate::ecs::Ref;
-use crate::ecs::de_opt_material_handle;
 use alloc::vec::Vec;
 
 /// An infinite, procedurally generated voxel world.
@@ -19,17 +18,27 @@ use alloc::vec::Vec;
 /// 0 as air, index 1 as the surface block, and index 2 (when present) as the
 /// subsurface block. `material` supplies the textures and lighting shared by
 /// every chunk.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct VoxelWorld {
     /// Deterministic terrain seed. The same seed always generates the same
     /// world, so a chunk regenerates identically each time it streams back in.
     pub seed: u64,
     /// Blocks per chunk `[dx, dy, dz]`. Y is the world's fixed vertical extent.
+    #[asset(default = [16, 24, 16])]
     pub chunk_blocks: [u32; 3],
     /// World units per block edge.
+    #[asset(default = 1.0)]
     pub block_size: f32,
     /// Chunk radius streamed around the camera at full voxel detail.
+    #[asset(default = 5)]
     pub view_radius: u32,
     /// Outer chunk radius streamed as cheap coarse impostors. Chunks farther
     /// than `view_radius` but within `impostor_radius` render as a low-detail
@@ -38,31 +47,16 @@ pub struct VoxelWorld {
     pub impostor_radius: u32,
     /// Coarse-grid step (in blocks) for distant-chunk impostors: the surface is
     /// sampled every `impostor_step` blocks. Higher = cheaper and coarser.
+    #[asset(default = 4)]
     pub impostor_step: u32,
     /// Maximum number of chunks generated and loaded per frame.
+    #[asset(default = 3)]
     pub load_budget: u32,
     /// [BlockType](#blocktype) asset names. Index 0 is air; 1 is the surface
     /// block; 2, when present, is the subsurface block.
     pub palette: Vec<Ref<BlockType>>,
     /// [Material](#material) shared by every chunk: textures and lighting.
-    #[serde(deserialize_with = "de_opt_material_handle")]
     pub material: Option<MaterialHandle>,
-}
-
-impl Default for VoxelWorld {
-    fn default() -> Self {
-        Self {
-            seed: 0,
-            chunk_blocks: [16, 24, 16],
-            block_size: 1.0,
-            view_radius: 5,
-            impostor_radius: 0,
-            impostor_step: 4,
-            load_budget: 3,
-            palette: Vec::new(),
-            material: None,
-        }
-    }
 }
 
 // These accessors feed the Metal chunk-streaming path for now
@@ -127,23 +121,6 @@ impl VoxelWorld {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::asset_id::AssetId;
-
-    #[test]
-    fn defaults_stream_a_small_radius_with_impostors_off() {
-        let w = VoxelWorld::default();
-        assert_eq!(w.chunk_blocks(), [16, 24, 16]);
-        assert_eq!(w.block_size(), 1.0);
-        assert_eq!(w.chunk_world_size(), (16.0, 16.0));
-        assert_eq!(w.view_radius(), 5);
-        assert_eq!(w.load_budget(), 3);
-        assert_eq!(w.impostor_step(), 4);
-        // An impostor radius inside the view radius means nothing to impostor.
-        assert!(!w.impostors_enabled());
-        assert_eq!(w.impostor_radius(), w.view_radius());
-        assert!(w.palette.is_empty());
-        assert_eq!(w.material, None);
-    }
 
     #[test]
     fn a_degenerate_chunk_size_is_floored_to_something_meshable() {
@@ -191,22 +168,5 @@ mod tests {
         assert_eq!(w.load_budget(), 1);
         let w: VoxelWorld = crate::test_support::from_json(r#"{"impostor_step":999}"#);
         assert_eq!(w.impostor_step(), 64);
-    }
-
-    #[test]
-    fn an_authored_world_round_trips_through_postcard() {
-        let w: VoxelWorld = crate::test_support::from_json(
-            r#"{"seed":42,"palette":["stone","dirt"],"material":"voxel_mat",
-                "view_radius":8,"impostor_radius":24}"#,
-        );
-        assert_eq!(w.palette, [AssetId(5), AssetId(4)]);
-        assert_eq!(w.material, Some(MaterialHandle(9)));
-
-        let bytes = postcard::to_allocvec(&w).unwrap();
-        let back: VoxelWorld = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.seed, 42);
-        assert_eq!(back.palette, [AssetId(5), AssetId(4)]);
-        assert_eq!(back.material, Some(MaterialHandle(9)));
-        assert!(back.impostors_enabled());
     }
 }

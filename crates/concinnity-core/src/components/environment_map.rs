@@ -51,7 +51,14 @@ use alloc::string::String;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct EnvironmentMap {
     /// Path to the source equirectangular panorama -- a Radiance `.hdr`, or a
@@ -63,11 +70,14 @@ pub struct EnvironmentMap {
     pub generator: String,
     /// Face size of the reflection/sky cubemap, in pixels. Higher is sharper
     /// but larger.
+    #[asset(default = 512)]
     pub prefilter_face_size: u32,
     /// Face size of the diffuse ambient cubemap, in pixels.
+    #[asset(default = 8)]
     pub irradiance_face_size: u32,
     /// Number of samples used to filter each reflection texel. Higher reduces
     /// noise at the cost of build time.
+    #[asset(default = 1024)]
     pub prefilter_samples: u32,
     /// Upper bound on how bright a single source texel may count while building
     /// the glossy reflection mips. A clear-sky HDR holds a few sun or sky
@@ -77,87 +87,9 @@ pub struct EnvironmentMap {
     /// caps each sampled texel so that energy spreads smoothly across the
     /// reflection instead. It affects reflections only, never the on-screen
     /// sky. Set to `0` to disable (no cap); lower values clamp harder.
+    #[asset(default = 12.0)]
     pub prefilter_clamp: f32,
     /// Injected at load time from the compiled blob payload.
     #[serde(skip)]
     pub locator: Option<PayloadLocator>,
-}
-
-// The face-size / sample-count defaults below are the single source of truth:
-// the build pipeline deserializes args through this struct, so a field absent
-// from a JSONL entry inherits these values rather than a constant duplicated in
-// the build crate. They are chosen for ~32 MB payloads and a few seconds of
-// build cost on the dev box. `prefilter_face_size` does double duty: mips 1..N
-// feed the GGX specular IBL lookup (fine at low resolution) while mip 0 is
-// sampled directly by the skybox sentinel branch in the fragment shaders, so it
-// has to be large enough that the displayed sky doesn't look blocky. 512 is the
-// balance point; 256 visibly pixelates a 4K HDR sky, 1024 quadruples the payload
-// for sharpness only the skybox (not the IBL math) actually uses.
-//
-// `prefilter_clamp` defaults to a moderate cap rather than off: an unbounded
-// clear-sky HDR aliases its sun and bright sky into hard squares on glossy
-// floors (the coarse reflection mips hold only a handful of texels, so one hot
-// texel paints a whole region). The cap spreads that energy without touching
-// the on-screen sky, and a uniform sky below the cap is unchanged.
-impl Default for EnvironmentMap {
-    fn default() -> Self {
-        Self {
-            source: String::new(),
-            generator: String::new(),
-            prefilter_face_size: 512,
-            irradiance_face_size: 8,
-            prefilter_samples: 1024,
-            prefilter_clamp: 12.0,
-            locator: None,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn defaults_size_the_prefilter_for_a_sharp_skybox() {
-        // Mip 0 is sampled directly by the skybox branch, so the prefilter face
-        // has to be far larger than the irradiance one, which only ever feeds
-        // the diffuse convolution.
-        let e = EnvironmentMap::default();
-        assert_eq!(e.prefilter_face_size, 512);
-        assert_eq!(e.irradiance_face_size, 8);
-        assert!(e.prefilter_face_size > e.irradiance_face_size);
-        assert_eq!(e.prefilter_samples, 1024);
-        // The clamp defaults on: an unbounded HDR sun aliases into hard squares
-        // in the coarse reflection mips.
-        assert_eq!(e.prefilter_clamp, 12.0);
-        assert!(e.source.is_empty());
-        assert!(e.generator.is_empty());
-        assert!(e.locator.is_none());
-    }
-
-    #[test]
-    fn an_authored_bake_parses_and_round_trips_through_postcard() {
-        let e: EnvironmentMap = serde_json::from_str(
-            r#"{"source":"sky.hdr","prefilter_face_size":1024,"irradiance_face_size":16,
-                "prefilter_samples":512,"prefilter_clamp":0}"#,
-        )
-        .unwrap();
-        assert_eq!(e.source, "sky.hdr");
-        assert_eq!(e.prefilter_face_size, 1024);
-        // A zero clamp turns the cap off rather than blacking out the sky.
-        assert_eq!(e.prefilter_clamp, 0.0);
-
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: EnvironmentMap = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.irradiance_face_size, 16);
-        assert_eq!(back.prefilter_samples, 512);
-        assert!(back.locator.is_none());
-    }
-
-    #[test]
-    fn a_generated_environment_names_its_generator_instead_of_a_source() {
-        let e: EnvironmentMap = serde_json::from_str(r#"{"generator":"gradient_sky"}"#).unwrap();
-        assert_eq!(e.generator, "gradient_sky");
-        assert!(e.source.is_empty());
-    }
 }

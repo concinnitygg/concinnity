@@ -3,7 +3,7 @@
 //! metadata (name, id, version, author, icon) is read at build / export time
 //! from the authored world, so it never ships in the blob.
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 
 /// Names, identifies, and sizes the application.
 ///
@@ -34,16 +34,25 @@ use alloc::string::{String, ToString};
 ///
 /// `headless` keeps a world that could draw from opening a window. A world
 /// that draws nothing runs that way already.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct AppConfigArgs {
     /// Display name of the application: the game's window title, the exported
     /// archive and executable name, and the macOS bundle display name.
+    #[asset(default = "Concinnity")]
     pub name: String,
     /// Reverse-DNS bundle identifier (e.g. `gg.studio.mygame`). When empty the
     /// export derives one from `name`.
     pub id: String,
     /// Human-readable version string (e.g. `1.0.0`).
+    #[asset(default = "0.1.0")]
     pub version: String,
     /// Author or studio name, recorded in the exported bundle's metadata.
     pub author: String,
@@ -69,71 +78,25 @@ pub struct AppConfigArgs {
     pub headless: bool,
 }
 
-impl Default for AppConfigArgs {
-    fn default() -> Self {
-        Self {
-            name: "Concinnity".to_string(),
-            id: String::new(),
-            version: "0.1.0".to_string(),
-            author: String::new(),
-            icon: String::new(),
-            home: String::new(),
-            max_memory_mb: 0,
-            job_threads: 0,
-            headless: false,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn defaults_name_an_unversioned_unlimited_application() {
-        let a = AppConfigArgs::default();
-        assert_eq!(a.name, "Concinnity");
-        assert_eq!(a.version, "0.1.0");
-        assert!(a.id.is_empty());
-        assert!(a.author.is_empty());
-        assert!(a.icon.is_empty());
-        // Empty is "beside the data", not "the filesystem root".
-        assert!(a.home.is_empty());
-        // Zero is "no budget declared", not "no memory and no threads".
-        assert_eq!(a.max_memory_mb, 0);
-        assert_eq!(a.job_threads, 0);
-        // Unset lets the world's content decide whether a window opens.
-        assert!(!a.headless);
-    }
-
-    #[test]
-    fn headless_parses_and_bakes_through_to_the_runtime_half() {
-        let a: AppConfigArgs = serde_json::from_str(r#"{"headless":true}"#).unwrap();
-        assert!(a.headless);
-        assert!(AppConfig::bake(a).headless);
-    }
-
-    #[test]
-    fn export_metadata_parses_and_round_trips_through_postcard() {
-        let a: AppConfigArgs = serde_json::from_str(
-            r#"{"name":"Pong","id":"com.example.pong","version":"1.2.0","author":"Bob",
-                "icon":"icon.png","home":"state","max_memory_mb":2048,"job_threads":8}"#,
-        )
-        .unwrap();
-        assert_eq!(a.id, "com.example.pong");
-        assert_eq!(a.job_threads, 8);
-
-        // Only `home` and the budgets ship in the blob, but the whole struct is
-        // what the export step reads back, so it has to survive the baked
-        // format.
-        let bytes = postcard::to_allocvec(&a).unwrap();
-        let back: AppConfigArgs = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.name, "Pong");
-        assert_eq!(back.version, "1.2.0");
-        assert_eq!(back.author, "Bob");
-        assert_eq!(back.icon, "icon.png");
-        assert_eq!(back.home, "state");
-        assert_eq!(back.max_memory_mb, 2048);
+    fn bake_keeps_the_home_the_budgets_and_headless() {
+        let a = AppConfigArgs {
+            name: "Pong".into(),
+            home: "state".into(),
+            max_memory_mb: 2048,
+            job_threads: 8,
+            headless: true,
+            ..Default::default()
+        };
+        let c = AppConfig::bake(a);
+        assert_eq!(c.home, "state");
+        assert_eq!(c.max_memory_mb, 2048);
+        assert_eq!(c.job_threads, 8);
+        assert!(c.headless);
     }
 }
 

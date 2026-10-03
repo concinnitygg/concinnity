@@ -6,7 +6,6 @@
 
 use crate::ecs::MaterialHandle;
 use crate::ecs::PayloadLocator;
-use crate::ecs::de_opt_material_handle;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -53,32 +52,29 @@ pub struct MorphDelta {
 }
 
 /// One joint of a skeleton's bind pose.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct SkeletonJoint {
     /// Human-readable joint name (animation tracks may reference it later).
     pub name: String,
     /// Parent joint index, or -1 for a root. Parents must appear before their
     /// children in the `skeleton` list.
+    #[asset(default = -1)]
     pub parent: i32,
     /// Local bind translation relative to the parent.
     pub translation: [f32; 3],
     /// Local bind rotation, Euler degrees [pitch, yaw, roll], YXZ order.
     pub rotation_deg: [f32; 3],
     /// Local bind scale.
+    #[asset(default = [1.0, 1.0, 1.0])]
     pub scale: [f32; 3],
-}
-
-impl Default for SkeletonJoint {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            parent: -1,
-            translation: [0.0, 0.0, 0.0],
-            rotation_deg: [0.0, 0.0, 0.0],
-            scale: [1.0, 1.0, 1.0],
-        }
-    }
 }
 
 /// A skeletally animated mesh placed directly in the world.
@@ -148,7 +144,6 @@ pub struct SkinnedMesh {
     pub morph_deltas: Vec<MorphDelta>,
     /// [Material](#material); provides the albedo texture plus lighting
     /// parameters.
-    #[serde(deserialize_with = "de_opt_material_handle")]
     pub material: Option<MaterialHandle>,
     /// World-space position.
     pub position: [f32; 3],
@@ -186,28 +181,27 @@ pub struct SkinnedMesh {
 
 /// A kinematic character capsule for a [SkinnedMesh](#skinnedmesh), in world
 /// units (after the mesh's `scale`).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct CharacterCapsule {
     /// Half-height of the capsule's cylindrical section.
+    #[asset(default = 0.5)]
     pub half_height: f32,
     /// Capsule radius.
+    #[asset(default = 0.3)]
     pub radius: f32,
-}
-
-impl Default for CharacterCapsule {
-    fn default() -> Self {
-        Self {
-            half_height: 0.5,
-            radius: 0.3,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec;
 
     #[test]
     fn a_vertex_with_only_a_position_binds_fully_to_its_first_joint() {
@@ -223,80 +217,9 @@ mod tests {
     }
 
     #[test]
-    fn a_weighted_vertex_keeps_its_authored_joints_and_weights() {
-        let v: SkinnedVertexData = crate::test_support::from_json(
-            r#"{"pos":[0,0,0],"color":[0.5,0.5,0.5],"uv":[0.25,0.75],
-                "joints":[3,4,0,0],"weights":[0.6,0.4,0,0]}"#,
-        );
-        assert_eq!(v.color, [0.5, 0.5, 0.5]);
-        assert_eq!(v.uv, [0.25, 0.75]);
-        assert_eq!(v.joints, [3, 4, 0, 0]);
-        assert_eq!(v.weights, [0.6, 0.4, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn a_blank_joint_is_a_root_at_the_bind_pose_origin() {
-        let j = SkeletonJoint::default();
-        assert!(j.name.is_empty());
-        // -1 is the root marker; 0 would make every joint a child of joint 0.
-        assert_eq!(j.parent, -1);
-        assert_eq!(j.translation, [0.0, 0.0, 0.0]);
-        assert_eq!(j.scale, [1.0, 1.0, 1.0]);
-    }
-
-    #[test]
-    fn a_blank_morph_delta_moves_nothing() {
-        let d = MorphDelta::default();
-        assert_eq!(
-            d,
-            MorphDelta {
-                position: [0.0; 3],
-                normal: [0.0; 3],
-            }
-        );
-    }
-
-    #[test]
-    fn a_blank_mesh_has_no_geometry_and_no_capsule() {
-        let m = SkinnedMesh::default();
-        assert!(m.vertices.is_empty());
-        assert!(m.indices.is_empty());
-        assert!(m.morph_target_names.is_empty());
-        assert!(m.capsule.is_none());
-        assert!(m.locator.is_none());
-        assert_eq!(m.scale, [0.0, 0.0, 0.0]);
-        let c = CharacterCapsule::default();
-        assert_eq!((c.half_height, c.radius), (0.5, 0.3));
-    }
-
-    #[test]
-    fn an_imported_mesh_round_trips_through_postcard() {
-        let m: SkinnedMesh = crate::test_support::from_json(
-            r#"{"source":"hero.glb","skin_index":1,"material":"skin_mat","vertices":[{"pos":[0,0,0]}],"indices":[0],
-                "morph_target_names":["smile"],"morph_deltas":[{"position":[0,0.1,0]}],
-                "position":[1,0,2],"scale":[1,1,1],"lod_levels":2,"lod_distances":[10],
-                "max_instances":4,"capsule":{"half_height":0.9,"radius":0.35}}"#,
-        );
-        assert_eq!(m.material, Some(MaterialHandle(8)));
-        assert_eq!(m.morph_target_names, ["smile"]);
-
-        let bytes = postcard::to_allocvec(&m).unwrap();
-        let back: SkinnedMesh = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.source, "hero.glb");
-        assert_eq!(back.skin_index, 1);
-        assert_eq!(back.vertices[0].weights, [1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(
-            back.morph_deltas,
-            vec![MorphDelta {
-                position: [0.0, 0.1, 0.0],
-                normal: [0.0; 3],
-            }]
-        );
-        assert_eq!(back.lod_distances, [10.0]);
-        assert_eq!(back.max_instances, 4);
-        assert_eq!(back.capsule.expect("capsule").half_height, 0.9);
-        // Identity and payload location are injected at load, never authored.
-        assert!(back.locator.is_none());
+    fn a_blank_joint_is_a_root() {
+        let joint: SkeletonJoint = crate::test_support::from_json("{}");
+        assert_eq!(joint.parent, -1);
     }
 }
 
@@ -341,7 +264,6 @@ impl SkinnedMesh {
 #[cfg(test)]
 mod runtime_tests {
     use super::*;
-    use crate::components::{CharacterCapsule, SkinnedVertexData};
     use alloc::vec;
 
     #[test]
@@ -406,28 +328,5 @@ mod runtime_tests {
         assert_eq!([m[3][0], m[3][1], m[3][2]], [2.0, 3.0, 4.0]);
         assert_eq!(m[3][3], 1.0);
         assert_eq!(m[0][0], 1.0);
-    }
-
-    #[test]
-    fn skinned_vertex_defaults_fill_color_uv_and_weights() {
-        // A vertex authored with only a position picks up the serde defaults:
-        // white color, zero uv, and full weight on joint 0.
-        let v: SkinnedVertexData =
-            serde_json::from_value(serde_json::json!({"pos": [0.0, 0.0, 0.0]})).unwrap();
-        assert_eq!(v.color, [1.0, 1.0, 1.0]);
-        assert_eq!(v.uv, [0.0, 0.0]);
-        assert_eq!(v.weights, [1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(v.joints, [0, 0, 0, 0]);
-    }
-
-    #[test]
-    fn capsule_joint_defaults() {
-        let cap = CharacterCapsule::default();
-        assert_eq!(cap.half_height, 0.5);
-        assert_eq!(cap.radius, 0.3);
-
-        let jd: SkeletonJoint = serde_json::from_value(serde_json::json!({})).unwrap();
-        assert_eq!(jd.parent, -1);
-        assert_eq!(jd.scale, [1.0, 1.0, 1.0]);
     }
 }

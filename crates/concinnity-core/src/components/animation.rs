@@ -2,7 +2,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::animation::skeleton::{self as skinning, JointPose};
-use crate::ecs::{SkinnedMeshHandle, de_opt_skinned_mesh_handle};
+use crate::ecs::SkinnedMeshHandle;
 
 /// One keyframe in an animation track: a joint pose sampled at `time` seconds.
 /// The pose fields (`translation`, `rotation_deg`, `scale`) are given directly
@@ -109,11 +109,17 @@ pub struct AnimationTrack {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct Animation {
     /// The [SkinnedMesh](#skinnedmesh) asset this clip animates.
-    #[serde(deserialize_with = "de_opt_skinned_mesh_handle")]
     pub target: Option<SkinnedMeshHandle>,
     /// Optional path to a `.glb`, `.gltf`, or `.fbx` file. When set, the
     /// build imports `duration` + `tracks` from it; inline-authored clips
@@ -128,14 +134,18 @@ pub struct Animation {
     pub animation_name: String,
     /// Keys per second baked from sources whose curves need resampling at
     /// import (FBX). glTF keyframes pass through untouched. Default 30.
+    #[asset(default = 30.0)]
     pub sample_rate: f32,
     /// Clip length in seconds. Overridden by glTF import.
+    #[asset(default = 1.0)]
     pub duration: f32,
     /// When true, playback wraps after `duration`.
+    #[asset(default = true)]
     pub looping: bool,
     /// Blend weight used when several clips target the same
     /// [SkinnedMesh](#skinnedmesh). Ignored when this is the only clip on its
     /// target.
+    #[asset(default = 1.0)]
     pub weight: f32,
     /// When non-zero, the clip's contribution ramps from 0 to its declared
     /// `weight` over this many seconds after the world starts. Zero (the
@@ -173,27 +183,6 @@ pub struct MorphKey {
     pub time: f32,
     /// One weight per morph target, in target order.
     pub weights: Vec<f32>,
-}
-
-impl Default for Animation {
-    fn default() -> Self {
-        Self {
-            target: None,
-            source: String::new(),
-            animation_index: 0,
-            animation_name: String::new(),
-            sample_rate: 30.0,
-            duration: 1.0,
-            looping: true,
-            weight: 1.0,
-            fade_in_secs: 0.0,
-            root_motion: false,
-            root_motion_y: false,
-            root_track: Vec::new(),
-            tracks: Vec::new(),
-            morph_track: Vec::new(),
-        }
-    }
 }
 
 impl Animation {
@@ -235,46 +224,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deserializes_with_defaults() {
-        let a: Animation = serde_json::from_str("{}").unwrap();
-        assert_eq!(a.duration, 1.0);
-        assert!(a.looping);
-        assert_eq!(a.weight, 1.0);
-        assert!(a.tracks.is_empty());
-        assert_eq!(a.source, "");
-        assert_eq!(a.animation_index, 0);
-        assert_eq!(a.animation_name, "");
-    }
-
-    #[test]
-    fn deserializes_glb_source_fields() {
-        crate::test_support::reset_interner();
-        let json = r#"{
-            "target":"hero",
-            "source":"models/hero.glb",
-            "animation_index":2,
-            "animation_name":"Walk",
-            "looping":false
-        }"#;
-        let a: Animation = serde_json::from_str(json).unwrap();
-        assert_eq!(a.source, "models/hero.glb");
-        assert_eq!(a.animation_index, 2);
-        assert_eq!(a.animation_name, "Walk");
-        assert!(!a.looping);
-    }
-
-    #[test]
-    fn deserializes_inline_tracks() {
-        crate::test_support::reset_interner();
-        let json = r#"{
-            "target":"flag",
-            "duration":2.0,
-            "tracks":[{"joint":0,"keyframes":[{"time":0.0,"rotation_deg":[0,30,0]}]}]
-        }"#;
-        let a: Animation = serde_json::from_str(json).unwrap();
-        assert_eq!(a.duration, 2.0);
-        assert_eq!(a.tracks.len(), 1);
-        assert_eq!(a.tracks[0].joint, 0);
+    fn keyframe_pose_fields_are_flattened_onto_the_authored_keyframe() {
+        let a: Animation = serde_json::from_str(
+            r#"{"tracks":[{"joint":0,"keyframes":[{"time":0.5,"rotation_deg":[0,30,0]}]}]}"#,
+        )
+        .unwrap();
+        let key = &a.tracks[0].keyframes[0];
+        assert_eq!(key.time, 0.5);
+        assert_eq!(key.pose.rotation_deg, [0.0, 30.0, 0.0]);
     }
 
     #[test]

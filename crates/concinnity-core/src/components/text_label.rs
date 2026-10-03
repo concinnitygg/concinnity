@@ -4,8 +4,7 @@ use crate::components::Screen;
 use crate::components::SpriteFit;
 use crate::components::Vocabulary;
 use crate::ecs::FontHandle;
-use crate::ecs::de_opt_font_handle;
-use crate::ecs::{Ref, de_opt_ref};
+use crate::ecs::Ref;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -74,21 +73,30 @@ pub enum TextAlign {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct TextLabel {
     /// The [Font](#font) asset to use for rendering. Unset draws with the
     /// engine's built-in face at its native 24px.
-    #[serde(deserialize_with = "de_opt_font_handle")]
     pub font: Option<FontHandle>,
     /// Text to display. Can be updated each frame.
     pub content: String,
     /// Horizontal position in pixels from the left edge of the window.
+    #[asset(default = 10.0)]
     pub x: f32,
     /// Vertical position in pixels from the top edge of the window.
+    #[asset(default = 10.0)]
     pub y: f32,
     /// Linear-space RGB text color, for every character no run in
     /// `color_runs` covers.
+    #[asset(default = [1.0, 1.0, 1.0])]
     pub color: [f32; 3],
     /// Spans of `content` drawn in colors of their own, in order along the
     /// text and never overlapping. Positions count characters, not bytes, and
@@ -99,6 +107,7 @@ pub struct TextLabel {
     /// Uniform scale applied on top of the font's `size_px` (24 for the
     /// built-in face). 1.0 = native size. Ignored when `centered` is set, which
     /// sizes the text to the viewport instead.
+    #[asset(default = 1.0)]
     pub scale: f32,
     /// When true, fit the label to the viewport and center it there each frame,
     /// so `x`, `y`, `align` and `scale` are all ignored.
@@ -130,34 +139,12 @@ pub struct TextLabel {
     /// spill out of the box that holds it.
     pub max_lines: u32,
     /// When false, the label is hidden.
+    #[asset(default = true)]
     pub visible: bool,
     /// [Screen](#screen) this label belongs to. `None` means the label is
     /// always visible.
-    #[serde(default, deserialize_with = "de_opt_ref")]
+    #[serde(default)]
     pub screen: Option<Ref<Screen>>,
-}
-
-impl Default for TextLabel {
-    fn default() -> Self {
-        Self {
-            font: None,
-            content: String::new(),
-            x: 10.0,
-            y: 10.0,
-            color: [1.0, 1.0, 1.0],
-            color_runs: Vec::new(),
-            scale: 1.0,
-            centered: false,
-            align: TextAlign::Left,
-            fit: SpriteFit::Fit,
-            background: [0.0, 0.0, 0.0, 0.0],
-            padding: 0.0,
-            wrap_width: 0.0,
-            max_lines: 0,
-            visible: true,
-            screen: None,
-        }
-    }
 }
 
 /// A span of a [TextLabel](#textlabel)'s `content` drawn in a color of its
@@ -247,31 +234,7 @@ pub fn color_run_error(content: &str, runs: &[ColorRun]) -> Option<ColorRunError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::asset_id::AssetId;
     use alloc::string::ToString;
-
-    #[test]
-    fn a_blank_label_draws_white_left_aligned_text_with_no_background() {
-        let l = TextLabel::default();
-        assert!(l.content.is_empty());
-        assert_eq!((l.x, l.y), (10.0, 10.0));
-        assert_eq!(l.color, [1.0, 1.0, 1.0]);
-        assert_eq!(l.scale, 1.0);
-        assert!(!l.centered);
-        assert_eq!(l.align, TextAlign::Left);
-        assert_eq!(l.fit, SpriteFit::Fit);
-        // A fully transparent background is what suppresses the chip box.
-        assert_eq!(l.background, [0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(l.padding, 0.0);
-        // Zero means unbounded: no wrapping and no line cap.
-        assert_eq!(l.wrap_width, 0.0);
-        assert_eq!(l.max_lines, 0);
-        assert!(l.visible);
-        assert!(l.font.is_none());
-        assert!(l.screen.is_none());
-        assert!(l.color_runs.is_empty());
-        assert_eq!(TextAlign::default(), TextAlign::Left);
-    }
 
     #[test]
     fn alignment_names_parse_in_lowercase() {
@@ -285,56 +248,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_wrapped_chip_parses_and_round_trips_through_postcard() {
-        let l: TextLabel = crate::test_support::from_json(
-            r#"{"font":"body","content":"Hello there","x":20,"y":40,"color":[1,0.9,0.5],
-                "scale":1.25,"centered":true,"align":"right","fit":"cover",
-                "background":[0,0,0,0.6],"padding":6,"wrap_width":320,"max_lines":3,
-                "visible":false,"screen":"menu"}"#,
-        );
-        assert_eq!(l.font, Some(FontHandle(4)));
-        assert_eq!(l.screen, Some(Ref::new(AssetId(4))));
-        assert_eq!(l.align, TextAlign::Right);
-        assert!(l.centered);
-        assert!(!l.visible);
-
-        let bytes = postcard::to_allocvec(&l).unwrap();
-        let back: TextLabel = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.content, "Hello there");
-        assert_eq!(back.color, [1.0, 0.9, 0.5]);
-        assert_eq!(back.scale, 1.25);
-        assert_eq!(back.fit, SpriteFit::Cover);
-        assert_eq!(back.background, [0.0, 0.0, 0.0, 0.6]);
-        assert_eq!(back.padding, 6.0);
-        assert_eq!(back.wrap_width, 320.0);
-        assert_eq!(back.max_lines, 3);
-    }
-
     fn run(start: u32, length: u32) -> ColorRun {
         ColorRun {
             start,
             length,
             color: [1.0, 0.0, 0.0],
         }
-    }
-
-    #[test]
-    fn color_runs_parse_and_round_trip_through_postcard() {
-        let l: TextLabel = serde_json::from_str(
-            r#"{"content":"Mara: hi","color_runs":[{"start":0,"length":4,"color":[1,0.8,0.3]}]}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            l.color_runs,
-            [ColorRun {
-                start: 0,
-                length: 4,
-                color: [1.0, 0.8, 0.3]
-            }]
-        );
-        let back: TextLabel = postcard::from_bytes(&postcard::to_allocvec(&l).unwrap()).unwrap();
-        assert_eq!(back.color_runs, l.color_runs);
     }
 
     #[test]

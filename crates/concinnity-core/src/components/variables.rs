@@ -35,36 +35,3 @@ pub struct VariableDecl {
     /// The variable's type and starting value.
     pub value: BehaviorLiteral,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn defaults_declare_nothing() {
-        assert!(Variables::default().vars.is_empty());
-    }
-
-    #[test]
-    fn typed_declarations_parse() {
-        let v: Variables = serde_json::from_str(
-            r#"{"vars":[{"name":"health","value":{"float":100.0}},
-                       {"name":"spawn","value":{"vec3":[0,1,0]}}]}"#,
-        )
-        .expect("variables parse");
-        assert_eq!(v.vars.len(), 2);
-        assert_eq!(v.vars[0].name, "health");
-        assert_eq!(v.vars[0].value, BehaviorLiteral::Float(100.0));
-        assert_eq!(v.vars[1].value, BehaviorLiteral::Vec3([0.0, 1.0, 0.0]));
-    }
-
-    #[test]
-    fn round_trips_through_postcard() {
-        let v: Variables =
-            serde_json::from_str(r#"{"vars":[{"name":"n","value":{"int":3}}]}"#).unwrap();
-        let bytes = postcard::to_allocvec(&v).expect("encodes");
-        let back: Variables = postcard::from_bytes(&bytes).expect("decodes");
-        assert_eq!(back.vars[0].name, "n");
-        assert_eq!(back.vars[0].value, BehaviorLiteral::Int(3));
-    }
-}

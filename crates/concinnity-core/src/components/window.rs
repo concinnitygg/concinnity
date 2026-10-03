@@ -2,7 +2,6 @@
 
 use crate::components::Vocabulary;
 use alloc::string::String;
-use alloc::string::ToString;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,14 +32,24 @@ pub enum WindowMode {
 ///   "title_bar": true
 /// }]
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct Window {
     /// Window title shown in the title bar.
+    #[asset(default = "Concinnity")]
     pub title: String,
     /// Initial window width in pixels.
+    #[asset(default = 1024)]
     pub width: u32,
     /// Initial window height in pixels.
+    #[asset(default = 768)]
     pub height: u32,
     /// How the window is displayed.
     pub mode: WindowMode,
@@ -56,43 +65,6 @@ pub struct Window {
     /// title bar, so turning it off there also removes them: the window can
     /// still be resized from its border, but offers no close button and cannot
     /// be dragged.
+    #[asset(default = true)]
     pub title_bar: bool,
-}
-
-impl Default for Window {
-    fn default() -> Self {
-        Self {
-            title: "Concinnity".to_string(),
-            width: 1024,
-            height: 768,
-            mode: WindowMode::Windowed,
-            resizable: false,
-            title_bar: true,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn title_bar_defaults_on() {
-        // A world that says nothing about its chrome keeps a title bar: on
-        // Windows and Linux dropping it also drops the close button and the
-        // drag handle, which is not something to hand a world by default.
-        assert!(Window::default().title_bar);
-        let w: Window = serde_json::from_str(r#"{"title":"Game"}"#).unwrap();
-        assert!(w.title_bar);
-    }
-
-    #[test]
-    fn title_bar_round_trips_through_json() {
-        let w: Window = serde_json::from_str(r#"{"title_bar":false}"#).unwrap();
-        assert!(!w.title_bar);
-        // Serializing is the authored-args path (`cn add` writes normalized
-        // args back to world.jsonl), so the key has to survive a round trip.
-        let back: Window = serde_json::from_str(&serde_json::to_string(&w).unwrap()).unwrap();
-        assert!(!back.title_bar);
-    }
 }

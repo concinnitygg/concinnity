@@ -85,6 +85,10 @@ impl Serialize for AssetId {
     }
 }
 
+// What a reference reads as when it is written as an empty name.
+pub(crate) const EMPTY_REFERENCE: &str =
+    "empty reference name: omit the key or write null to reference nothing";
+
 pub(super) struct AssetIdVisitor;
 
 impl Visitor<'_> for AssetIdVisitor {
@@ -101,6 +105,9 @@ impl Visitor<'_> for AssetIdVisitor {
         Ok(AssetId(v as u32))
     }
     fn visit_str<E: de::Error>(self, v: &str) -> Result<AssetId, E> {
+        if v.is_empty() {
+            return Err(E::custom(EMPTY_REFERENCE));
+        }
         resolve_name(v).map(AssetId).ok_or_else(|| {
             E::custom(format!(
                 "no asset-name resolver installed to resolve reference {v:?}"
@@ -157,6 +164,15 @@ mod tests {
         // the baked path reads the id straight through with no visitor to
         // fall back on.
         assert!(postcard::from_bytes::<AssetId>(&[]).is_err());
+    }
+
+    #[test]
+    fn an_empty_name_is_refused_rather_than_resolved() {
+        crate::test_support::install_resolvers();
+        let err = serde_json::from_str::<AssetId>("\"\"")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("empty reference name"), "{err}");
     }
 
     #[test]

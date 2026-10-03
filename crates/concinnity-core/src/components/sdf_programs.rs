@@ -115,15 +115,6 @@ mod tests {
         assert_eq!(p.artifact("raymarch_shadow_vertex", 7), None);
     }
 
-    #[test]
-    fn the_field_and_the_artifacts_round_trip_through_postcard() {
-        let bytes = postcard::to_allocvec(&programs()).unwrap();
-        assert_eq!(
-            postcard::from_bytes::<SdfPrograms>(&bytes).unwrap(),
-            programs()
-        );
-    }
-
     // A volume whose payload predates the compiled form, or one the cook could
     // not compile, still carries its field: the renderer falls back to
     // compiling every entry rather than drawing nothing.

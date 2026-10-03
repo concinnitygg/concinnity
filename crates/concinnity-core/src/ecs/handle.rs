@@ -3,327 +3,273 @@
 //! A resource (a mesh, texture, material, ...) is shared, compiled data the
 //! runtime addresses by a dense integer index into a per-kind resource table.
 //! Each kind has its own `0..N` index space, assigned by cook in declaration
-//! order. The handle is a newtype per kind so a `TextureHandle` cannot be passed
-//! where a `MeshHandle` is expected. Like `AssetId`, a handle serializes as a
-//! bare `u32`.
+//! order. [`Handle<K>`] is tagged with its space `K`, so a [`TextureHandle`]
+//! cannot be passed where a [`MeshHandle`] is expected. Like `AssetId`, a handle
+//! serializes as a bare `u32`.
 //!
-//! These are the runtime replacement for the per-reference `AssetId` a component
-//! carries today: cook resolves the name to the resource's handle at build time,
-//! so the runtime never scans to resolve a reference.
+//! Cook resolves a reference name to the resource's handle at build time, so
+//! the runtime never scans to resolve a reference.
 
 use core::fmt;
+use core::hash::{Hash, Hasher};
+use core::marker::PhantomData;
 
 use alloc::format;
 use serde::de::{self, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use alloc::vec::Vec;
+use crate::ecs::asset_fields::ReferenceField;
+use crate::ecs::resolver::{resolve_handle, resolve_name};
 
-use crate::ecs::resolver::{
-    resolve_audio_clip_handle, resolve_font_handle, resolve_material_handle, resolve_mesh_handle,
-    resolve_name, resolve_shader_handle, resolve_skinned_mesh_handle, resolve_texture_handle,
-};
-
-macro_rules! resource_handles {
-    ( $( $(#[$m:meta])* $name:ident ),+ $(,)? ) => {
-        $(
-            $(#[$m])*
-            #[derive(
-                Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default,
-                Serialize, Deserialize,
-            )]
-            #[serde(transparent)]
-            pub struct $name(
-                /// The handle's index into its per-kind resource table.
-                pub u32,
-            );
-
-            impl $name {
-                /// The handle's index into its per-kind resource table.
-                pub fn index(self) -> usize {
-                    self.0 as usize
-                }
-            }
-        )+
-    };
+/// A dense index space resources are assigned handles in.
+pub trait HandleSpace: 'static {
+    /// Which space this is.
+    const KIND: HandleKind;
 }
 
-resource_handles! {
-    /// Index into the runtime mesh table.
-    MeshHandle,
-    /// Index into the runtime texture table.
-    TextureHandle,
-    /// Index into the runtime material table.
-    MaterialHandle,
-    /// Index into the runtime font table.
-    FontHandle,
-    /// Index into the runtime audio-clip table.
-    AudioClipHandle,
-    /// Index into the runtime cubemap-texture table.
-    CubemapTextureHandle,
-    /// Index into the runtime environment-map table.
-    EnvironmentMapHandle,
-    /// Index into the runtime color-LUT table.
-    ColorLutHandle,
-    /// Index into the runtime skinned-mesh table.
-    SkinnedMeshHandle,
-    /// Index into the runtime shader table.
-    ShaderHandle,
+/// A handle space holding a single asset type, so a reference into it names
+/// an asset of that type.
+pub trait SingleTypeSpace: HandleSpace {
+    /// The registry name of the asset type the space holds.
+    const TYPE: &'static str;
 }
 
-// The handles an authored field names a resource by, and the resource type
-// each resolves to. A mesh handle is absent: its target set depends on a
-// File's kind, which a type cannot state, so its fields keep a structured check.
-macro_rules! handle_ref_targets {
-    ( $( $handle:ident => $target:literal ),+ $(,)? ) => {
-        $(
-            impl crate::ecs::ReferenceField for $handle {
-                const TARGETS: &'static [&'static str] = &[$target];
-            }
-        )+
-    };
-}
-
-handle_ref_targets! {
-    TextureHandle => "Texture",
-    MaterialHandle => "Material",
-    ShaderHandle => "Shader",
-    FontHandle => "Font",
-    AudioClipHandle => "AudioClip",
-    SkinnedMeshHandle => "SkinnedMesh",
-}
-
-// One reference-resolution seam and `deserialize_with` helper per resource
-// kind. A real build has the declaration-ordered handle map installed, so a
-// name resolves to the resource's handle. Outside a build (single-asset
-// validation, the editor's add form) the map is absent; fall back to the name
-// interner so the reference still parses to *a* handle value -- one that is
-// never used to index a resource table in those contexts. `None` only when
-// neither resolver is installed at all.
-macro_rules! handle_ref_de {
-    (
-        $(#[$extra:meta])*
-        $handle:ident, $article:literal, $noun:literal,
-        $resolve:ident, $ref_fn:ident, $opt_fn:ident $(,)?
-    ) => {
-        fn $ref_fn(name: &str) -> Option<u32> {
-            $resolve(name).or_else(|| resolve_name(name))
+macro_rules! handle_spaces {
+    ( $( $(#[$m:meta])* $space:ident => $alias:ident, $noun:literal $(, $ty:literal)? ; )+ ) => {
+        /// Which dense index space a [`Handle`] addresses.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        pub enum HandleKind {
+            $( $(#[$m])* $space, )+
         }
 
-        #[doc = concat!(
-            "`serde` `deserialize_with` helper for an optional ", $noun,
-            " reference field."
-        )]
-        ///
-        #[doc = concat!(
-            "Mirrors [`de_opt_ref`](crate::ecs::de_opt_ref) ",
-            "but resolves to a [`",
-            stringify!($handle),
-            "`]: an integer is an already-resolved handle (the compiled-args / ",
-            "runtime form); a name string is resolved through the installed ",
-            $noun,
-            "-handle resolver; an empty string or null is `None`. Apply with ",
-            "`#[serde(default, deserialize_with = \"concinnity_core::ecs::",
-            stringify!($opt_fn),
-            "\")]`."
-        )]
-        $(#[$extra])*
-        pub fn $opt_fn<'de, D>(d: D) -> Result<Option<$handle>, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            // A non-self-describing format (postcard, the baked blob form)
-            // carries the already-resolved handle; names only appear in
-            // human-readable input.
-            if !d.is_human_readable() {
-                return Option::<$handle>::deserialize(d);
+        impl HandleKind {
+            /// Every handle space.
+            pub const ALL: &'static [HandleKind] = &[$(HandleKind::$space),+];
+
+            /// How many handle spaces there are.
+            pub const COUNT: usize = Self::ALL.len();
+
+            /// The space's name, the asset type it is named after.
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $( HandleKind::$space => stringify!($space), )+
+                }
             }
 
-            struct OptVisitor;
+            /// The lowercase noun diagnostics name the space by.
+            pub const fn noun(self) -> &'static str {
+                match self {
+                    $( HandleKind::$space => $noun, )+
+                }
+            }
+        }
 
-            impl Visitor<'_> for OptVisitor {
-                type Value = Option<$handle>;
+        /// The marker types naming each handle space.
+        pub mod space {
+            $(
+                $(#[$m])*
+                #[derive(Debug)]
+                pub enum $space {}
 
-                fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    f.write_str(concat!(
-                        $article, " ", $noun,
-                        " handle integer, reference name string, or null"
-                    ))
+                impl super::HandleSpace for $space {
+                    const KIND: super::HandleKind = super::HandleKind::$space;
                 }
 
-                fn visit_unit<E: de::Error>(self) -> Result<Option<$handle>, E> {
-                    Ok(None)
-                }
-                fn visit_none<E: de::Error>(self) -> Result<Option<$handle>, E> {
-                    Ok(None)
-                }
-                fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<$handle>, E> {
-                    Ok(Some($handle(v as u32)))
-                }
-                fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<$handle>, E> {
-                    Ok(Some($handle(v as u32)))
-                }
-                fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<$handle>, E> {
-                    if v.is_empty() {
-                        return Ok(None);
+                $(
+                    impl super::SingleTypeSpace for $space {
+                        const TYPE: &'static str = $ty;
                     }
-                    $ref_fn(v).map(|h| Some($handle(h))).ok_or_else(|| {
-                        E::custom(format!(
-                            concat!(
-                                "no ", $noun,
-                                "-handle resolver installed to resolve reference {:?}"
-                            ),
-                            v
-                        ))
-                    })
-                }
-                fn visit_string<E: de::Error>(
-                    self,
-                    v: alloc::string::String,
-                ) -> Result<Option<$handle>, E> {
-                    self.visit_str(&v)
-                }
-            }
-
-            d.deserialize_any(OptVisitor)
+                )?
+            )+
         }
+
+        $(
+            #[doc = concat!("An index into the runtime ", $noun, " table.")]
+            pub type $alias = Handle<space::$space>;
+        )+
     };
 }
 
-handle_ref_de! {
-    TextureHandle, "a", "texture",
-    resolve_texture_handle, resolve_texture_ref, de_opt_texture_handle,
-}
-handle_ref_de! {
-    ShaderHandle, "a", "shader",
-    resolve_shader_handle, resolve_shader_ref, de_opt_shader_handle,
-}
-handle_ref_de! {
-    MaterialHandle, "a", "material",
-    resolve_material_handle, resolve_material_ref, de_opt_material_handle,
-}
-handle_ref_de! {
-    /// The handle addresses the shared mesh-source space (Mesh / ProceduralMesh /
-    /// VoxelChunk / mesh-kind File).
-    MeshHandle, "a", "mesh",
-    resolve_mesh_handle, resolve_mesh_ref, de_opt_mesh_handle,
-}
-handle_ref_de! {
-    /// Used by the SkinnedMesh correlation references (`Animation.target`,
-    /// `AnimationGraph.target`, `FollowController.target`): a SkinnedMesh stays an ECS
-    /// component, but its authored references bake to its dense handle instead of
-    /// an interned id.
-    SkinnedMeshHandle, "a", "skinned-mesh",
-    resolve_skinned_mesh_handle, resolve_skinned_mesh_ref, de_opt_skinned_mesh_handle,
-}
-handle_ref_de! {
-    FontHandle, "a", "font",
-    resolve_font_handle, resolve_font_ref, de_opt_font_handle,
-}
-handle_ref_de! {
-    AudioClipHandle, "an", "audio-clip",
-    resolve_audio_clip_handle, resolve_audio_clip_ref, de_opt_audio_clip_handle,
+handle_spaces! {
+    /// The shared mesh-source space: Mesh, ProceduralMesh, VoxelChunk, and
+    /// mesh-kind File. Which types a reference may name depends on a File's
+    /// kind, so mesh references keep a structured check.
+    Mesh => MeshHandle, "mesh";
+    /// Textures.
+    Texture => TextureHandle, "texture", "Texture";
+    /// Materials.
+    Material => MaterialHandle, "material", "Material";
+    /// Fonts.
+    Font => FontHandle, "font", "Font";
+    /// Audio clips.
+    AudioClip => AudioClipHandle, "audio-clip", "AudioClip";
+    /// Cubemap textures.
+    CubemapTexture => CubemapTextureHandle, "cubemap-texture", "CubemapTexture";
+    /// Environment maps.
+    EnvironmentMap => EnvironmentMapHandle, "environment-map", "EnvironmentMap";
+    /// Color lookup tables.
+    ColorLut => ColorLutHandle, "color-lut", "ColorLut";
+    /// Skinned meshes. A SkinnedMesh's authored references bake to its dense
+    /// handle rather than an interned id.
+    SkinnedMesh => SkinnedMeshHandle, "skinned-mesh", "SkinnedMesh";
+    /// Shaders. A Shader is a component, but a Material's `shader` reference
+    /// bakes to a dense declaration-order index.
+    Shader => ShaderHandle, "shader", "Shader";
 }
 
-/// `serde` `deserialize_with` helper for a required texture reference field.
-///
-/// Like [`de_opt_texture_handle`] but for a non-optional [`TextureHandle`]: an
-/// integer is an already-resolved handle (the compiled-args / runtime form); a
-/// name string is resolved through the installed texture-handle resolver. Used
-/// by the compiled `StoryImage.texture`, which always names a texture. Apply
-/// with `#[serde(deserialize_with = "concinnity_core::ecs::de_texture_handle")]`.
-pub fn de_texture_handle<'de, D>(d: D) -> Result<TextureHandle, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    if !d.is_human_readable() {
-        return TextureHandle::deserialize(d);
+impl HandleKind {
+    pub(crate) const fn index(self) -> usize {
+        self as usize
     }
 
-    struct HandleVisitor;
+    /// The resource kind whose table this space indexes, or `None` for a space
+    /// a component owns (shaders).
+    pub fn resource_kind(self) -> Option<crate::blob::ResourceKind> {
+        crate::blob::ResourceKind::parse(self.name())
+    }
+}
 
-    impl Visitor<'_> for HandleVisitor {
-        type Value = TextureHandle;
+/// A dense index into the resource table of handle space `K`.
+///
+/// Deserializes from an integer (an already resolved handle, the compiled and
+/// baked forms) or from a reference name, which resolves through the handle
+/// resolver installed for `K`'s space and falls back to the name interner
+/// outside a build. Serializes as the bare index.
+#[repr(transparent)]
+pub struct Handle<K: HandleSpace>(
+    /// The handle's index into its space's resource table.
+    pub u32,
+    PhantomData<fn() -> K>,
+);
 
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a texture handle integer or reference name string")
-        }
+impl<K: HandleSpace> Handle<K> {
+    /// The handle at `index`.
+    pub const fn new(index: u32) -> Self {
+        Self(index, PhantomData)
+    }
 
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<TextureHandle, E> {
-            Ok(TextureHandle(v as u32))
+    /// The handle's index into its space's resource table.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+// Hand-written so no impl asks anything of the space marker, which is never a
+// value.
+impl<K: HandleSpace> Clone for Handle<K> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<K: HandleSpace> Copy for Handle<K> {}
+
+impl<K: HandleSpace> Default for Handle<K> {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+impl<K: HandleSpace> PartialEq for Handle<K> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<K: HandleSpace> Eq for Handle<K> {}
+
+impl<K: HandleSpace> PartialOrd for Handle<K> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<K: HandleSpace> Ord for Handle<K> {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+impl<K: HandleSpace> Hash for Handle<K> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl<K: HandleSpace> fmt::Debug for Handle<K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}Handle({})", K::KIND.name(), self.0)
+    }
+}
+
+impl<K: HandleSpace> Serialize for Handle<K> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.0)
+    }
+}
+
+impl<'de, K: HandleSpace> Deserialize<'de> for Handle<K> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // A non-self-describing format (postcard, the baked blob form) carries
+        // the already-resolved handle; names only appear in human-readable input.
+        if !d.is_human_readable() {
+            return u32::deserialize(d).map(Self::new);
         }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<TextureHandle, E> {
-            Ok(TextureHandle(v as u32))
+        d.deserialize_any(HandleVisitor(K::KIND)).map(Self::new)
+    }
+}
+
+impl<K: SingleTypeSpace> ReferenceField for Handle<K> {
+    const TARGETS: &'static [&'static str] = &[K::TYPE];
+}
+
+struct HandleVisitor(HandleKind);
+
+impl Visitor<'_> for HandleVisitor {
+    type Value = u32;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let noun = self.0.noun();
+        let article = if noun.starts_with(['a', 'e', 'i', 'o', 'u']) {
+            "an"
+        } else {
+            "a"
+        };
+        write!(
+            f,
+            "{article} {noun} handle integer or reference name string"
+        )
+    }
+
+    fn visit_u64<E: de::Error>(self, v: u64) -> Result<u32, E> {
+        Ok(v as u32)
+    }
+
+    fn visit_i64<E: de::Error>(self, v: i64) -> Result<u32, E> {
+        Ok(v as u32)
+    }
+
+    // A build has the declaration-ordered handle map installed, so a name
+    // resolves to the resource's handle. Outside a build (single-asset
+    // validation, the editor's add form) the map is absent; the name interner
+    // still gives the reference *a* value, one never used to index a table.
+    fn visit_str<E: de::Error>(self, v: &str) -> Result<u32, E> {
+        if v.is_empty() {
+            return Err(E::custom(crate::ecs::asset_id::EMPTY_REFERENCE));
         }
-        fn visit_str<E: de::Error>(self, v: &str) -> Result<TextureHandle, E> {
-            resolve_texture_ref(v).map(TextureHandle).ok_or_else(|| {
+        resolve_handle(self.0, v)
+            .or_else(|| resolve_name(v))
+            .ok_or_else(|| {
                 E::custom(format!(
-                    "no texture-handle resolver installed to resolve reference {v:?}"
+                    "no {}-handle resolver installed to resolve reference {v:?}",
+                    self.0.noun()
                 ))
             })
-        }
-        fn visit_string<E: de::Error>(self, v: alloc::string::String) -> Result<TextureHandle, E> {
-            self.visit_str(&v)
-        }
     }
 
-    d.deserialize_any(HandleVisitor)
-}
-
-/// `serde` `deserialize_with` helper for a list of audio-clip reference fields.
-///
-/// Each element is either an already-resolved handle integer or a name string
-/// resolved through the installed audio-clip-handle resolver, so the compiled /
-/// runtime form (integers) and the authoring form (names) both parse. Apply with
-/// `#[serde(default, deserialize_with =
-/// "concinnity_core::ecs::de_audio_clip_handle_vec")]`.
-pub fn de_audio_clip_handle_vec<'de, D>(d: D) -> Result<Vec<AudioClipHandle>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    if !d.is_human_readable() {
-        return Vec::<AudioClipHandle>::deserialize(d);
+    fn visit_string<E: de::Error>(self, v: alloc::string::String) -> Result<u32, E> {
+        self.visit_str(&v)
     }
-
-    struct VecVisitor;
-
-    impl<'de> Visitor<'de> for VecVisitor {
-        type Value = Vec<AudioClipHandle>;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a list of audio-clip handle integers or reference name strings")
-        }
-
-        fn visit_seq<A>(self, mut seq: A) -> Result<Vec<AudioClipHandle>, A::Error>
-        where
-            A: de::SeqAccess<'de>,
-        {
-            let mut out = Vec::new();
-            // Each element is one optional audio-clip reference; drop the `None`
-            // (empty / null) entries so a list never carries a dangling handle.
-            while let Some(handle) = seq.next_element_seed(OneRef)? {
-                if let Some(handle) = handle {
-                    out.push(handle);
-                }
-            }
-            Ok(out)
-        }
-    }
-
-    // Deserialize one list element via the same integer-or-name path as
-    // `de_opt_audio_clip_handle`.
-    struct OneRef;
-    impl<'de> de::DeserializeSeed<'de> for OneRef {
-        type Value = Option<AudioClipHandle>;
-        fn deserialize<D2>(self, d: D2) -> Result<Option<AudioClipHandle>, D2::Error>
-        where
-            D2: Deserializer<'de>,
-        {
-            de_opt_audio_clip_handle(d)
-        }
-    }
-
-    d.deserialize_seq(VecVisitor)
 }
 
 #[cfg(test)]
@@ -331,359 +277,160 @@ mod tests {
     use super::*;
     use alloc::string::ToString;
     use alloc::vec;
+    use alloc::vec::Vec;
 
-    #[test]
-    fn handle_serializes_as_a_bare_u32() {
-        // Same wire form as AssetId: a bare integer, not a one-tuple.
-        let json = serde_json::to_string(&TextureHandle(7)).unwrap();
-        assert_eq!(json, "7");
-        let back: TextureHandle = serde_json::from_str("7").unwrap();
-        assert_eq!(back, TextureHandle(7));
-    }
+    use crate::test_support::{from_json, install_resolvers};
 
-    #[test]
-    fn index_is_the_inner_value() {
-        assert_eq!(MeshHandle(0).index(), 0);
-        assert_eq!(MeshHandle(42).index(), 42);
-    }
-
-    #[test]
-    fn per_kind_handles_are_distinct_types_with_independent_values() {
-        // A round-trip through a small table keyed by the raw index works the
-        // same for each kind; the types just keep the spaces from mixing.
-        let table = ["a", "b", "c"];
-        assert_eq!(table[TextureHandle(1).index()], "b");
-        assert_eq!(table[MeshHandle(2).index()], "c");
-    }
-
-    use crate::test_support::{NoneDeserializer, len_handle_resolver};
-
-    #[derive(serde::Deserialize)]
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
     struct Holder {
-        #[serde(default, deserialize_with = "de_opt_texture_handle")]
+        #[serde(default)]
         tex: Option<TextureHandle>,
+        #[serde(default)]
+        clips: Vec<AudioClipHandle>,
     }
 
     #[test]
-    fn de_opt_texture_handle_reads_an_already_resolved_integer() {
-        // The compiled-args / runtime path: refs are integers, no resolver
-        // needed (mirrors an already-resolved AssetId reference).
-        let h: Holder = serde_json::from_str("{\"tex\":7}").unwrap();
-        assert_eq!(h.tex, Some(TextureHandle(7)));
+    fn a_handle_serializes_as_a_bare_u32() {
+        assert_eq!(serde_json::to_string(&TextureHandle::new(7)).unwrap(), "7");
+        let back: TextureHandle = serde_json::from_str("7").unwrap();
+        assert_eq!(back, TextureHandle::new(7));
+        assert_eq!(size_of::<MeshHandle>(), size_of::<u32>());
+        assert_eq!(size_of::<Option<MeshHandle>>(), size_of::<Option<u32>>());
     }
 
     #[test]
-    fn de_opt_texture_handle_resolves_a_name_through_the_seam() {
-        crate::test_support::install_resolvers();
-        let h: Holder = serde_json::from_str("{\"tex\":\"floor\"}").unwrap();
-        assert_eq!(h.tex, Some(TextureHandle(5)));
-    }
-
-    #[test]
-    fn de_opt_texture_handle_treats_empty_null_and_missing_as_none() {
-        assert!(
-            serde_json::from_str::<Holder>("{\"tex\":\"\"}")
-                .unwrap()
-                .tex
-                .is_none()
-        );
-        assert!(
-            serde_json::from_str::<Holder>("{\"tex\":null}")
-                .unwrap()
-                .tex
-                .is_none()
-        );
-        assert!(serde_json::from_str::<Holder>("{}").unwrap().tex.is_none());
-    }
-
-    #[derive(Debug, serde::Deserialize)]
-    struct AudioHolder {
-        #[serde(default, deserialize_with = "de_opt_audio_clip_handle")]
-        clip: Option<AudioClipHandle>,
-        #[serde(default, deserialize_with = "de_audio_clip_handle_vec")]
-        sounds: Vec<AudioClipHandle>,
-    }
-
-    #[test]
-    fn de_opt_audio_clip_handle_reads_integers_and_resolves_names() {
-        crate::test_support::install_resolvers();
-        // Already-resolved integer passes through; a name resolves via the seam.
-        let h: AudioHolder = serde_json::from_str("{\"clip\":7}").unwrap();
-        assert_eq!(h.clip, Some(AudioClipHandle(7)));
-        let h: AudioHolder = serde_json::from_str("{\"clip\":\"theme\"}").unwrap();
-        assert_eq!(h.clip, Some(AudioClipHandle(5)));
-        // Empty, null, and missing are None.
-        assert!(
-            serde_json::from_str::<AudioHolder>("{\"clip\":\"\"}")
-                .unwrap()
-                .clip
-                .is_none()
-        );
-        assert!(
-            serde_json::from_str::<AudioHolder>("{}")
-                .unwrap()
-                .clip
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn de_audio_clip_handle_vec_resolves_mixed_and_drops_empties() {
-        crate::test_support::install_resolvers();
-        // A mix of integers and names; empty entries drop out.
-        let h: AudioHolder = serde_json::from_str("{\"sounds\":[3,\"door\",\"\"]}").unwrap();
-        assert_eq!(h.sounds, vec![AudioClipHandle(3), AudioClipHandle(4)]);
-        // Missing defaults to an empty list.
-        assert!(
-            serde_json::from_str::<AudioHolder>("{}")
-                .unwrap()
-                .sounds
-                .is_empty()
-        );
-    }
-
-    #[derive(serde::Deserialize)]
-    struct TargetHolder {
-        #[serde(default, deserialize_with = "de_opt_skinned_mesh_handle")]
-        target: Option<SkinnedMeshHandle>,
-    }
-
-    // The baked blob form: postcard is not self-describing, so every helper
-    // must read the plain resolved value instead of probing with a visitor.
-    #[test]
-    fn handle_helpers_round_trip_through_postcard() {
-        #[derive(serde::Serialize, serde::Deserialize)]
-        struct BakedHolder {
-            #[serde(default, deserialize_with = "de_opt_texture_handle")]
-            tex: Option<TextureHandle>,
-            #[serde(deserialize_with = "de_texture_handle")]
-            stage: TextureHandle,
-            #[serde(default, deserialize_with = "de_opt_mesh_handle")]
-            mesh: Option<MeshHandle>,
-            #[serde(default, deserialize_with = "de_opt_material_handle")]
-            material: Option<MaterialHandle>,
-            #[serde(default, deserialize_with = "de_opt_skinned_mesh_handle")]
-            target: Option<SkinnedMeshHandle>,
-            #[serde(default, deserialize_with = "de_opt_font_handle")]
-            font: Option<FontHandle>,
-            #[serde(default, deserialize_with = "de_opt_audio_clip_handle")]
-            clip: Option<AudioClipHandle>,
-            #[serde(default, deserialize_with = "de_audio_clip_handle_vec")]
-            sounds: Vec<AudioClipHandle>,
-            #[serde(default, deserialize_with = "de_opt_shader_handle")]
-            shader: Option<ShaderHandle>,
-        }
-        let holder = BakedHolder {
-            tex: Some(TextureHandle(3)),
-            stage: TextureHandle(9),
-            mesh: None,
-            material: Some(MaterialHandle(1)),
-            target: Some(SkinnedMeshHandle(2)),
-            font: None,
-            clip: Some(AudioClipHandle(4)),
-            sounds: alloc::vec![AudioClipHandle(5), AudioClipHandle(6)],
-            shader: Some(ShaderHandle(8)),
-        };
-        let bytes = postcard::to_allocvec(&holder).unwrap();
-        let back: BakedHolder = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.tex, holder.tex);
-        assert_eq!(back.stage, holder.stage);
-        assert_eq!(back.mesh, holder.mesh);
-        assert_eq!(back.material, holder.material);
-        assert_eq!(back.target, holder.target);
-        assert_eq!(back.font, holder.font);
-        assert_eq!(back.clip, holder.clip);
-        assert_eq!(back.sounds, holder.sounds);
-        assert_eq!(back.shader, holder.shader);
-    }
-
-    #[test]
-    fn de_opt_skinned_mesh_handle_reads_integers_and_resolves_names() {
-        crate::test_support::install_resolvers();
-        // The correlation-reference seam (Animation/AnimationGraph/FollowController
-        // `target`): an already-resolved integer passes through, a name resolves
-        // through the installed skinned-mesh resolver, empty/null/missing are None.
-        let h: TargetHolder = serde_json::from_str("{\"target\":3}").unwrap();
-        assert_eq!(h.target, Some(SkinnedMeshHandle(3)));
-        let h: TargetHolder = serde_json::from_str("{\"target\":\"hero\"}").unwrap();
-        assert_eq!(h.target, Some(SkinnedMeshHandle(4)));
-        assert!(
-            serde_json::from_str::<TargetHolder>("{\"target\":\"\"}")
-                .unwrap()
-                .target
-                .is_none()
-        );
-        assert!(
-            serde_json::from_str::<TargetHolder>("{}")
-                .unwrap()
-                .target
-                .is_none()
-        );
-    }
-
-    // Every optional-handle helper accepts the same set of input forms. One
-    // generated case set per kind keeps them from drifting apart as kinds are
-    // added, and pins the diagnostic each one produces for a wrong-typed field.
-    macro_rules! opt_handle_cases {
-        ($name:ident, $helper:literal, $helper_fn:path, $handle:ident, $expected:literal) => {
-            #[test]
-            fn $name() {
-                crate::test_support::install_resolvers();
-
-                #[derive(Debug, serde::Deserialize)]
-                struct Holder {
-                    #[serde(default, deserialize_with = $helper)]
-                    r: Option<$handle>,
-                }
-                let parse = |s: &str| serde_json::from_str::<Holder>(s).unwrap().r;
-
-                // The compiled-args / runtime form: an already-resolved integer.
-                assert_eq!(parse(r#"{"r":6}"#), Some($handle(6)));
-                // A signed integer takes the same path, narrowed to handle width.
-                assert_eq!(parse(r#"{"r":-1}"#), Some($handle(u32::MAX)));
-                // The authoring form: a name resolved through the installed seam.
-                assert_eq!(parse(r#"{"r":"floor"}"#), Some($handle(5)));
-                // A name the build declares no resource of this kind for falls
-                // back to the interner, so single-asset validation still parses.
-                assert_eq!(parse(r#"{"r":"unknown_x"}"#), Some($handle(9)));
-                // An owned string, the form the serde_json::Value bridge hands over.
-                assert_eq!(
-                    serde_json::from_value::<Holder>(serde_json::json!({"r": "wall"}))
-                        .unwrap()
-                        .r,
-                    Some($handle(4))
-                );
-                // Empty, null, and missing are all absent.
-                assert_eq!(parse(r#"{"r":""}"#), None);
-                assert_eq!(parse(r#"{"r":null}"#), None);
-                assert_eq!(parse("{}"), None);
-                // As is a `None` reported by an option-aware format.
-                assert_eq!($helper_fn(NoneDeserializer).unwrap(), None);
-                // A wrong-typed field names what the field accepts.
-                let err = serde_json::from_str::<Holder>(r#"{"r":true}"#)
-                    .unwrap_err()
-                    .to_string();
-                assert!(err.contains($expected), "{err}");
-            }
-        };
-    }
-
-    opt_handle_cases!(
-        opt_texture_handle_accepts_every_form,
-        "de_opt_texture_handle",
-        de_opt_texture_handle,
-        TextureHandle,
-        "a texture handle integer, reference name string, or null"
-    );
-    opt_handle_cases!(
-        opt_shader_handle_accepts_every_form,
-        "de_opt_shader_handle",
-        de_opt_shader_handle,
-        ShaderHandle,
-        "a shader handle integer, reference name string, or null"
-    );
-    opt_handle_cases!(
-        opt_material_handle_accepts_every_form,
-        "de_opt_material_handle",
-        de_opt_material_handle,
-        MaterialHandle,
-        "a material handle integer, reference name string, or null"
-    );
-    opt_handle_cases!(
-        opt_mesh_handle_accepts_every_form,
-        "de_opt_mesh_handle",
-        de_opt_mesh_handle,
-        MeshHandle,
-        "a mesh handle integer, reference name string, or null"
-    );
-    opt_handle_cases!(
-        opt_skinned_mesh_handle_accepts_every_form,
-        "de_opt_skinned_mesh_handle",
-        de_opt_skinned_mesh_handle,
-        SkinnedMeshHandle,
-        "a skinned-mesh handle integer, reference name string, or null"
-    );
-    opt_handle_cases!(
-        opt_font_handle_accepts_every_form,
-        "de_opt_font_handle",
-        de_opt_font_handle,
-        FontHandle,
-        "a font handle integer, reference name string, or null"
-    );
-    opt_handle_cases!(
-        opt_audio_clip_handle_accepts_every_form,
-        "de_opt_audio_clip_handle",
-        de_opt_audio_clip_handle,
-        AudioClipHandle,
-        "an audio-clip handle integer, reference name string, or null"
-    );
-
-    #[derive(Debug, serde::Deserialize)]
-    struct StageHolder {
-        #[serde(deserialize_with = "de_texture_handle")]
-        stage: TextureHandle,
-    }
-
-    #[test]
-    fn required_texture_handle_accepts_integers_and_names() {
-        crate::test_support::install_resolvers();
-        let parse = |s: &str| serde_json::from_str::<StageHolder>(s).unwrap().stage;
-
-        assert_eq!(parse(r#"{"stage":6}"#), TextureHandle(6));
-        assert_eq!(parse(r#"{"stage":-1}"#), TextureHandle(u32::MAX));
-        assert_eq!(parse(r#"{"stage":"floor"}"#), TextureHandle(5));
-        // A name with no declared texture falls back to the interner.
-        assert_eq!(parse(r#"{"stage":"unknown_x"}"#), TextureHandle(9));
+    fn integers_are_already_resolved_handles() {
+        assert_eq!(from_json::<TextureHandle>("6"), TextureHandle::new(6));
         assert_eq!(
-            serde_json::from_value::<StageHolder>(serde_json::json!({"stage": "wall"}))
-                .unwrap()
-                .stage,
-            TextureHandle(4)
+            from_json::<TextureHandle>("-1"),
+            TextureHandle::new(u32::MAX)
         );
     }
 
     #[test]
-    fn required_texture_handle_rejects_a_missing_or_wrong_typed_field() {
-        // Unlike the optional helper there is no `None` to fall back to, so an
-        // absent or wrong-typed reference is an error naming what it accepts.
-        let err = serde_json::from_str::<StageHolder>("{}")
+    fn a_name_resolves_through_its_own_space() {
+        install_resolvers();
+        fn only_shaders(kind: HandleKind, name: &str) -> Option<u32> {
+            (kind == HandleKind::Shader).then_some(name.len() as u32 + 100)
+        }
+        for kind in HandleKind::ALL {
+            crate::ecs::resolver::set_handle_resolver(*kind, only_shaders);
+        }
+        let shader: ShaderHandle = serde_json::from_str("\"water\"").unwrap();
+        assert_eq!(shader, ShaderHandle::new(105));
+        // The texture space declares no "water", so the interner answers.
+        let texture: TextureHandle = serde_json::from_str("\"water\"").unwrap();
+        assert_eq!(texture, TextureHandle::new(5));
+    }
+
+    #[test]
+    fn a_name_no_resource_declares_falls_back_to_the_interner() {
+        assert_eq!(from_json::<MeshHandle>("\"floor\""), MeshHandle::new(5));
+        assert_eq!(from_json::<MeshHandle>("\"unknown_x\""), MeshHandle::new(9));
+        // An owned string, the form the serde_json::Value bridge hands over.
+        let owned: MeshHandle = serde_json::from_value(serde_json::json!("wall")).unwrap();
+        assert_eq!(owned, MeshHandle::new(4));
+    }
+
+    #[test]
+    fn null_and_missing_are_none_and_an_empty_name_is_an_error() {
+        let h: Holder = from_json("{\"tex\":null}");
+        assert_eq!(h.tex, None);
+        let h: Holder = from_json("{}");
+        assert_eq!(h.tex, None);
+        assert!(h.clips.is_empty());
+
+        install_resolvers();
+        let err = serde_json::from_str::<Holder>("{\"tex\":\"\"}")
             .unwrap_err()
             .to_string();
-        assert!(err.contains("missing field `stage`"), "{err}");
-        let err = serde_json::from_str::<StageHolder>(r#"{"stage":true}"#)
+        assert!(err.contains("empty reference name"), "{err}");
+        // An empty name inside a list is refused the same way, not dropped.
+        let err = serde_json::from_str::<Holder>("{\"clips\":[\"door\",\"\"]}")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("empty reference name"), "{err}");
+    }
+
+    #[test]
+    fn a_list_mixes_integers_and_names() {
+        let h: Holder = from_json("{\"clips\":[3,\"door\",\"unknown_x\"]}");
+        assert_eq!(
+            h.clips,
+            vec![
+                AudioClipHandle::new(3),
+                AudioClipHandle::new(4),
+                AudioClipHandle::new(9)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_wrong_typed_field_names_what_the_space_accepts() {
+        let err = serde_json::from_str::<TextureHandle>("true")
             .unwrap_err()
             .to_string();
         assert!(
             err.contains("a texture handle integer or reference name string"),
             "{err}"
         );
-    }
-
-    #[test]
-    fn audio_clip_handle_vec_rejects_a_non_list() {
-        let err = serde_json::from_str::<AudioHolder>(r#"{"sounds":5}"#)
+        let err = serde_json::from_str::<AudioClipHandle>("1.5")
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("a list of audio-clip handle integers or reference name strings"),
+            err.contains("an audio-clip handle integer or reference name string"),
             "{err}"
         );
     }
 
     #[test]
-    fn audio_clip_handle_vec_resolves_owned_strings() {
-        crate::test_support::install_resolvers();
-        // The serde_json::Value bridge hands each element over as an owned string.
-        let h: AudioHolder =
-            serde_json::from_value(serde_json::json!({"sounds": ["door", "unknown_x"]})).unwrap();
-        assert_eq!(h.sounds, vec![AudioClipHandle(4), AudioClipHandle(9)]);
+    fn round_trips_through_postcard_as_the_bare_index() {
+        let h = Holder {
+            tex: Some(TextureHandle::new(3)),
+            clips: vec![AudioClipHandle::new(5), AudioClipHandle::new(6)],
+        };
+        let bytes = postcard::to_allocvec(&h).unwrap();
+        assert_eq!(
+            bytes,
+            postcard::to_allocvec(&(Some(3u32), [5u32, 6].as_slice())).unwrap()
+        );
+        let back: Holder = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.tex, h.tex);
+        assert_eq!(back.clips, h.clips);
     }
 
     #[test]
-    fn handles_default_to_zero_and_order_by_index() {
-        // The derived ordering is the index ordering the resource tables use.
-        assert_eq!(TextureHandle::default(), TextureHandle(0));
-        assert!(MeshHandle(1) < MeshHandle(2));
-        assert_eq!(len_handle_resolver("unknown_floor"), None);
+    fn handles_order_by_index_and_print_their_space() {
+        assert_eq!(TextureHandle::default(), TextureHandle::new(0));
+        assert!(MeshHandle::new(1) < MeshHandle::new(2));
+        assert_eq!(MeshHandle::new(42).index(), 42);
+        assert_eq!(
+            alloc::format!("{:?}", SkinnedMeshHandle::new(3)),
+            "SkinnedMeshHandle(3)"
+        );
+    }
+
+    #[test]
+    fn every_space_but_shaders_indexes_a_resource_table() {
+        for kind in HandleKind::ALL {
+            assert_eq!(
+                kind.resource_kind().is_none(),
+                *kind == HandleKind::Shader,
+                "{kind:?}"
+            );
+        }
+        assert_eq!(HandleKind::ALL.len(), HandleKind::COUNT);
+        for (i, kind) in HandleKind::ALL.iter().enumerate() {
+            assert_eq!(kind.index(), i);
+        }
+    }
+
+    #[test]
+    fn a_single_type_space_names_its_type_as_the_reference_target() {
+        assert_eq!(<TextureHandle as ReferenceField>::TARGETS, ["Texture"]);
+        assert_eq!(
+            <Option<SkinnedMeshHandle> as ReferenceField>::TARGETS,
+            ["SkinnedMesh"]
+        );
     }
 }

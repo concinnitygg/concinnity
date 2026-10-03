@@ -1195,7 +1195,7 @@ mod tests {
         let (recorded, mut gs) = system_with_backend();
         let air = AssetId(1);
         let ground = AssetId(2);
-        let handle = MaterialHandle(0);
+        let handle = MaterialHandle::new(0);
         let mut material = MaterialUniforms::DEFAULT;
         material.roughness = 0.25;
 

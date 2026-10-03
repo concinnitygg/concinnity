@@ -63,8 +63,8 @@ mod tests {
     }
 
     #[test]
-    fn empty_string_source_is_treated_as_absent() {
-        let err = check("p", &serde_json::json!({ "model": "" })).unwrap_err();
+    fn a_null_source_is_treated_as_absent() {
+        let err = check("p", &serde_json::json!({ "model": null })).unwrap_err();
         assert!(err.contains("requires either"), "got: {err}");
     }
 }

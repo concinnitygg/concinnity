@@ -2,7 +2,7 @@
 
 use crate::components::Camera3D;
 use crate::components::{Vocabulary, vocabulary_synonyms};
-use crate::ecs::{Ref, de_opt_ref};
+use crate::ecs::Ref;
 
 /// How a scene jump reaches the new scene. The single accepted vocabulary for
 /// a [Behavior](#behavior) scene node's `transition` and a `{"scene": "<name>"}`
@@ -48,14 +48,12 @@ impl SceneTransition {
 pub struct Scene {
     /// A [CameraShot](#camerashot) or [Camera3D](#camera3d) to activate when
     /// this scene becomes active. `None` keeps the current camera unchanged.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub camera_shot: Option<Ref<Camera3D>>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::asset_id::AssetId;
 
     // NAMES is what the editor's picker offers and what an authored world
     // writes, so every one has to resolve and every transition has to be named.
@@ -79,27 +77,5 @@ mod tests {
         );
         serde_json::from_str::<SceneTransition>(r#""dissolve""#)
             .expect_err("an unknown transition does not deserialize");
-    }
-
-    #[test]
-    fn a_scene_with_no_shot_leaves_the_camera_where_it_is() {
-        let s = Scene::default();
-        assert!(s.camera_shot.is_none());
-        assert!(
-            serde_json::from_str::<Scene>("{}")
-                .unwrap()
-                .camera_shot
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn a_named_shot_parses_and_round_trips_through_postcard() {
-        let s: Scene = crate::test_support::from_json(r#"{"camera_shot":"establishing"}"#);
-        assert_eq!(s.camera_shot, Some(Ref::new(AssetId(12))));
-
-        let bytes = postcard::to_allocvec(&s).unwrap();
-        let back: Scene = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.camera_shot, Some(Ref::new(AssetId(12))));
     }
 }

@@ -125,7 +125,7 @@ mod tests {
     fn world_with_pose() -> World {
         let mut world = World::new();
         world.add_component(SkeletonPose::new(
-            SkinnedMeshHandle(0),
+            SkinnedMeshHandle::new(0),
             SkinnedIndex(0),
             chain(),
         ));
@@ -139,17 +139,17 @@ mod tests {
     #[test]
     fn target_lists_the_pose_joints_and_published_morph_names() {
         let world = world_with_pose();
-        let t = target(&world, SkinnedMeshHandle(0)).expect("pose present");
+        let t = target(&world, SkinnedMeshHandle::new(0)).expect("pose present");
         assert_eq!(t.morph_names, ["jaw+", "jaw-"]);
         assert_eq!(t.joint_names, ["root", "head"]);
-        assert!(target(&world, SkinnedMeshHandle(1)).is_none());
+        assert!(target(&world, SkinnedMeshHandle::new(1)).is_none());
     }
 
     #[test]
     fn apply_reseeds_the_pose_and_reports_a_missing_target() {
         let mut world = world_with_pose();
         let shape = CharacterShape {
-            target: Some(SkinnedMeshHandle(0)),
+            target: Some(SkinnedMeshHandle::new(0)),
             sliders: vec![ShapeSlider {
                 name: "jaw".into(),
                 value: -0.5,

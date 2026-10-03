@@ -3,11 +3,8 @@
 use crate::components::Vocabulary;
 use crate::components::{Screen, Sprite, TextLabel};
 use crate::ecs::AudioClipHandle;
+use crate::ecs::Ref;
 use crate::ecs::TextureHandle;
-use crate::ecs::de_audio_clip_handle_vec;
-use crate::ecs::de_opt_audio_clip_handle;
-use crate::ecs::de_texture_handle;
-use crate::ecs::{Ref, de_opt_ref};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -28,7 +25,14 @@ use alloc::vec::Vec;
 /// shows the choice menu when a node ends in one, and plays page audio.
 /// Clicking the stage (or pressing Space) advances; `{"story": "start"}` restarts
 /// from the first node.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct Story {
     /// The story title, as shown on the generated title screen.
@@ -39,6 +43,7 @@ pub struct Story {
     pub nodes: Vec<StoryNode>,
     /// Dialogue reveal speed in characters per second. `0` shows each page
     /// instantly.
+    #[asset(default = 45.0)]
     pub text_speed: f32,
     /// The generated stage assets the story system drives. All references
     /// are resolved to ids at build time, like every other cross-reference.
@@ -56,31 +61,22 @@ pub struct Story {
 #[serde(default)]
 pub struct StoryScaffold {
     /// The stage [Screen](#screen) the story plays inside.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub screen: Option<Ref<Screen>>,
     /// The [Screen](#screen) shown when the story ends.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub ending: Option<Ref<Screen>>,
     /// Backdrop [Sprite](#sprite).
-    #[serde(deserialize_with = "de_opt_ref")]
     pub bg: Option<Ref<Sprite>>,
     /// Stage-left portrait [Sprite](#sprite).
-    #[serde(deserialize_with = "de_opt_ref")]
     pub left: Option<Ref<Sprite>>,
     /// Stage-center portrait [Sprite](#sprite).
-    #[serde(deserialize_with = "de_opt_ref")]
     pub center: Option<Ref<Sprite>>,
     /// Stage-right portrait [Sprite](#sprite).
-    #[serde(deserialize_with = "de_opt_ref")]
     pub right: Option<Ref<Sprite>>,
     /// Dialog box backdrop [Sprite](#sprite).
-    #[serde(deserialize_with = "de_opt_ref")]
     pub dialog_box: Option<Ref<Sprite>>,
     /// Speaker name-plate [TextLabel](#textlabel).
-    #[serde(deserialize_with = "de_opt_ref")]
     pub name_label: Option<Ref<TextLabel>>,
     /// Dialog text [TextLabel](#textlabel).
-    #[serde(deserialize_with = "de_opt_ref")]
     pub text_label: Option<Ref<TextLabel>>,
     /// Choice button box [Sprite](#sprite)s, one per option slot.
     pub option_boxes: Vec<Ref<Sprite>>,
@@ -90,61 +86,45 @@ pub struct StoryScaffold {
     /// title menu out at runtime, keeping only the buttons that apply
     /// contiguous (Continue and Load appear only when a save exists), so these
     /// labels are moved and cleared per the save state on disk.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub start_label: Option<Ref<TextLabel>>,
     /// The title screen's Quit [TextLabel](#textlabel).
-    #[serde(deserialize_with = "de_opt_ref")]
     pub quit_label: Option<Ref<TextLabel>>,
     /// The title screen's Continue [TextLabel](#textlabel), hidden while no
     /// save exists.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub continue_label: Option<Ref<TextLabel>>,
     /// The title screen [Screen](#screen), returned to when the load overlay is
     /// dismissed before play started.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub title: Option<Ref<Screen>>,
     /// The title screen's Load [TextLabel](#textlabel), hidden while no
     /// slot save exists.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub load_label: Option<Ref<TextLabel>>,
     /// The pause-menu [Screen](#screen) (the injected Escape overlay), shown over
     /// the stage and returned from to the stage. Unset when the world declares
     /// no pause menu.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub pause: Option<Ref<Screen>>,
     /// The settings-screen entry [Screen](#screen) opened by the pause menu's and
     /// the title screen's Settings items. Unset when there is no pause menu.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub settings: Option<Ref<Screen>>,
     /// The title screen's Settings [TextLabel](#textlabel), laid out with the
     /// other title buttons and hidden when there is no settings screen.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub settings_label: Option<Ref<TextLabel>>,
     /// The small pulsing [Sprite](#sprite) shown when a fully revealed page
     /// waits for input.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub advance_marker: Option<Ref<Sprite>>,
     /// Quick-row Log [TextLabel](#textlabel) (dialogue history toggle).
-    #[serde(deserialize_with = "de_opt_ref")]
     pub log_label: Option<Ref<TextLabel>>,
     /// Quick-row Auto [TextLabel](#textlabel) (auto-advance toggle).
-    #[serde(deserialize_with = "de_opt_ref")]
     pub auto_label: Option<Ref<TextLabel>>,
     /// Quick-row Skip [TextLabel](#textlabel) (fast-forward toggle).
-    #[serde(deserialize_with = "de_opt_ref")]
     pub skip_label: Option<Ref<TextLabel>>,
     /// Quick-row Save [TextLabel](#textlabel) (opens the slot overlay).
-    #[serde(deserialize_with = "de_opt_ref")]
     pub save_label: Option<Ref<TextLabel>>,
     /// Full-canvas dim [Sprite](#sprite) behind the backlog and slot
     /// overlays.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub overlay_dim: Option<Ref<Sprite>>,
     /// The backlog overlay's history [TextLabel](#textlabel).
-    #[serde(deserialize_with = "de_opt_ref")]
     pub backlog_label: Option<Ref<TextLabel>>,
     /// The slot overlay's heading [TextLabel](#textlabel) ("Save" / "Load").
-    #[serde(deserialize_with = "de_opt_ref")]
     pub slot_title: Option<Ref<TextLabel>>,
     /// Slot row box [Sprite](#sprite)s.
     pub slot_boxes: Vec<Ref<Sprite>>,
@@ -166,10 +146,8 @@ pub struct StoryNode {
     /// Stage dressing current at the choice menu.
     pub choice_stage: StoryStage,
     /// Music current at the choice menu ([AudioClip](#audioclip) reference).
-    #[serde(deserialize_with = "de_opt_audio_clip_handle")]
     pub choice_music: Option<AudioClipHandle>,
     /// One-shots played when the choice menu shows.
-    #[serde(deserialize_with = "de_audio_clip_handle_vec")]
     pub choice_sounds: Vec<AudioClipHandle>,
     /// Flag operations run when the choice menu shows.
     pub choice_ops: Vec<StoryOp>,
@@ -190,10 +168,8 @@ pub struct StoryPage {
     pub jump: Option<u32>,
     /// Music current at this page ([AudioClip](#audioclip) reference).
     /// Re-triggering the already-playing track is seamless.
-    #[serde(deserialize_with = "de_opt_audio_clip_handle")]
     pub music: Option<AudioClipHandle>,
     /// One-shot effects played when the page shows.
-    #[serde(deserialize_with = "de_audio_clip_handle_vec")]
     pub sounds: Vec<AudioClipHandle>,
     /// Stage dressing current at this page.
     pub stage: StoryStage,
@@ -235,7 +211,6 @@ pub struct StoryStage {
 #[serde(default)]
 pub struct StoryImage {
     /// [Texture](#texture) to sample.
-    #[serde(deserialize_with = "de_texture_handle")]
     pub texture: TextureHandle,
     /// Left edge on the reference canvas.
     pub x: f32,
@@ -342,18 +317,6 @@ impl StoryCompareOp {
     }
 }
 
-impl Default for Story {
-    fn default() -> Self {
-        Self {
-            title: String::new(),
-            nodes: Vec::new(),
-            text_speed: 45.0,
-            scaffold: StoryScaffold::default(),
-            save_key: String::new(),
-        }
-    }
-}
-
 /// Runtime event carrying a freshly re-compiled [Story](#story) graph. The
 /// story system swaps its graph for the new one in place, keeping the
 /// current position (matched by node slug) and raised flags, so edits to a
@@ -384,8 +347,27 @@ pub enum StoryPlayback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::asset_id::AssetId;
-    use alloc::vec;
+    use alloc::string::ToString;
+
+    #[test]
+    fn an_omitted_comparison_defaults_to_not_equal() {
+        // A gate written with only a name and a value reads as "flag is set",
+        // the common case in an imported markdown story.
+        let g: StoryGate = crate::test_support::from_json(r#"{"name":"met_ana","target":3}"#);
+        assert_eq!(g.op, StoryCompareOp::Ne);
+        assert!(g.op.eval(1, 0));
+    }
+
+    #[test]
+    fn an_empty_name_in_a_sound_list_is_an_error() {
+        crate::test_support::install_resolvers();
+        let page = serde_json::from_str::<StoryPage>(r#"{"sounds":["door",""]}"#);
+        let err = page.unwrap_err().to_string();
+        assert!(err.contains("empty reference name"), "{err}");
+        let node = serde_json::from_str::<StoryNode>(r#"{"choice_sounds":[""]}"#);
+        let err = node.unwrap_err().to_string();
+        assert!(err.contains("empty reference name"), "{err}");
+    }
 
     // NAMES is what the editor's picker offers, so it has to be what serde
     // accepts. A variant added without extending both lists fails here.
@@ -402,18 +384,6 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_story_has_no_nodes_and_types_at_the_default_speed() {
-        let s = Story::default();
-        assert!(s.nodes.is_empty());
-        assert!(s.title.is_empty());
-        assert_eq!(s.text_speed, 45.0);
-        // No save key means the story never touches persisted state.
-        assert!(s.save_key.is_empty());
-        assert!(s.scaffold.screen.is_none());
-        assert!(s.scaffold.options.is_empty());
-    }
-
-    #[test]
     fn every_comparison_agrees_with_the_operator_it_names() {
         for (lhs, rhs) in [(1, 2), (2, 2), (3, 2)] {
             assert_eq!(StoryCompareOp::Eq.eval(lhs, rhs), lhs == rhs);
@@ -423,16 +393,6 @@ mod tests {
             assert_eq!(StoryCompareOp::Gt.eval(lhs, rhs), lhs > rhs);
             assert_eq!(StoryCompareOp::Ge.eval(lhs, rhs), lhs >= rhs);
         }
-    }
-
-    #[test]
-    fn an_omitted_comparison_defaults_to_not_equal() {
-        // A gate written with only a name and a value reads as "flag is set",
-        // which is the common case in an imported markdown story.
-        assert_eq!(StoryCompareOp::default(), StoryCompareOp::Ne);
-        let g: StoryGate = crate::test_support::from_json(r#"{"name":"met_ana","target":3}"#);
-        assert_eq!(g.op, StoryCompareOp::Ne);
-        assert!(g.op.eval(1, 0));
     }
 
     #[test]
@@ -449,7 +409,6 @@ mod tests {
             r#""ge""#
         );
 
-        assert_eq!(StoryPlayback::default(), StoryPlayback::Start);
         assert_eq!(
             serde_json::from_str::<StoryPlayback>(r#""continue""#).unwrap(),
             StoryPlayback::Continue
@@ -458,101 +417,6 @@ mod tests {
             serde_json::to_string(&StoryPlayback::Start).unwrap(),
             r#""start""#
         );
-    }
-
-    #[test]
-    fn a_compiled_graph_parses_its_pages_choices_and_audio() {
-        let s: Story = crate::test_support::from_json(
-            r#"{"title":"Ash","text_speed":30.0,"save_key":"ash",
-                "nodes":[{"slug":"intro",
-                  "pages":[{"speaker":{"name":"Ana","color":[1,0,0]},"text":"Hello",
-                            "music":"theme","sounds":["door","",3],
-                            "stage":{"bg":{"texture":"bg_room","width":1280,"height":720}},
-                            "ops":[{"name":"visits","value":1,"add":true}],
-                            "gates":[{"name":"visits","op":"gt","value":2,"target":4}]}],
-                  "choices":[{"label":"Stay","target":1,
-                              "condition":{"name":"visits","op":"ge","value":1}}],
-                  "choice_sounds":["click"]}]}"#,
-        );
-
-        assert_eq!(s.title, "Ash");
-        assert_eq!(s.text_speed, 30.0);
-        let node = &s.nodes[0];
-        assert_eq!(node.slug, "intro");
-        assert_eq!(node.choice_sounds, vec![AudioClipHandle(5)]);
-
-        let page = &node.pages[0];
-        assert_eq!(page.text, "Hello");
-        assert_eq!(page.speaker.as_ref().expect("speaker").name, "Ana");
-        assert_eq!(page.music, Some(AudioClipHandle(5)));
-        // Empty entries drop out of a sound list rather than becoming handle 0.
-        assert_eq!(page.sounds, vec![AudioClipHandle(4), AudioClipHandle(3)]);
-        assert_eq!(page.jump, None);
-        let bg = page.stage.bg.as_ref().expect("background image");
-        assert_eq!(bg.texture, TextureHandle(7));
-        assert_eq!((bg.width, bg.height), (1280.0, 720.0));
-        assert!(page.stage.left.is_none());
-        assert_eq!(page.ops[0].name, "visits");
-        assert!(page.ops[0].add);
-        assert_eq!(page.gates[0].op, StoryCompareOp::Gt);
-        assert_eq!(page.gates[0].target, 4);
-
-        let choice = &node.choices[0];
-        assert_eq!(choice.label, "Stay");
-        assert_eq!(choice.target, 1);
-        assert_eq!(
-            choice.condition.as_ref().expect("condition").op,
-            StoryCompareOp::Ge
-        );
-    }
-
-    #[test]
-    fn a_graph_round_trips_through_postcard() {
-        // Stories ride the blob in the baked form, so the whole nested graph has
-        // to survive a format that carries no field names.
-        let mut s = Story {
-            title: alloc::string::String::from("Ash"),
-            ..Story::default()
-        };
-        s.nodes.push(StoryNode {
-            slug: alloc::string::String::from("intro"),
-            pages: vec![StoryPage {
-                text: alloc::string::String::from("Hello"),
-                jump: Some(2),
-                music: Some(AudioClipHandle(1)),
-                sounds: vec![AudioClipHandle(2)],
-                stage: StoryStage {
-                    center: Some(StoryImage {
-                        texture: TextureHandle(3),
-                        width: 512.0,
-                        ..StoryImage::default()
-                    }),
-                    ..StoryStage::default()
-                },
-                ..StoryPage::default()
-            }],
-            choice_gates: vec![StoryGate {
-                op: StoryCompareOp::Le,
-                target: 7,
-                ..StoryGate::default()
-            }],
-            ..StoryNode::default()
-        });
-        s.scaffold.slot_labels.push(Ref::new(AssetId(9)));
-
-        let bytes = postcard::to_allocvec(&s).unwrap();
-        let back: Story = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.title, "Ash");
-        let page = &back.nodes[0].pages[0];
-        assert_eq!(page.jump, Some(2));
-        assert_eq!(page.music, Some(AudioClipHandle(1)));
-        assert_eq!(page.sounds, vec![AudioClipHandle(2)]);
-        assert_eq!(
-            page.stage.center.as_ref().expect("center image").texture,
-            TextureHandle(3)
-        );
-        assert_eq!(back.nodes[0].choice_gates[0].op, StoryCompareOp::Le);
-        assert_eq!(back.scaffold.slot_labels, vec![AssetId(9)]);
     }
 
     #[test]

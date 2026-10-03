@@ -123,7 +123,7 @@ mod tests {
             scale: [2.0, 2.0, 2.0],
         };
         let rig = CharacterRig::new(
-            SkinnedMeshHandle(1),
+            SkinnedMeshHandle::new(1),
             SkinnedIndex(0),
             pose.to_matrix(),
             0.5,
@@ -140,7 +140,7 @@ mod tests {
         // Facing yaw pi/2: local -Z travel becomes world -X (the camera
         // convention, where yaw 0 looks down -Z).
         let mut rig = CharacterRig::new(
-            SkinnedMeshHandle(1),
+            SkinnedMeshHandle::new(1),
             SkinnedIndex(0),
             crate::transform::IDENTITY,
             0.5,
@@ -165,7 +165,7 @@ mod tests {
             scale: [1.0, 1.0, 1.0],
         };
         let mut rig = CharacterRig::new(
-            SkinnedMeshHandle(1),
+            SkinnedMeshHandle::new(1),
             SkinnedIndex(0),
             pose.to_matrix(),
             0.5,
@@ -185,7 +185,7 @@ mod tests {
             scale: [1.0, 1.0, 1.0],
         };
         let mut rig = CharacterRig::new(
-            SkinnedMeshHandle(1),
+            SkinnedMeshHandle::new(1),
             SkinnedIndex(0),
             pose.to_matrix(),
             0.5,

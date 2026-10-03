@@ -446,7 +446,7 @@ mod tests {
         );
         world.add_component(AudioCue {
             screen: Some(Ref::new(screen)),
-            clip: Some(AudioClipHandle(0)),
+            clip: Some(AudioClipHandle::new(0)),
             ..Default::default()
         });
         world.start(SYSTEMS).unwrap();

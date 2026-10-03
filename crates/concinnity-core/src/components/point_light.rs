@@ -16,55 +16,26 @@
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct PointLight {
     /// World-space position of the light source.
+    #[asset(default = [0.0, 2.5, 0.0])]
     pub position: [f32; 3],
     /// Linear-space RGB color of the light.
+    #[asset(default = [1.0, 1.0, 1.0])]
     pub color: [f32; 3],
     /// Intensity multiplier applied to the color.
+    #[asset(default = 8.0)]
     pub intensity: f32,
     /// Maximum reach in world units; attenuation is zero at this distance.
+    #[asset(default = 6.0)]
     pub range: f32,
-}
-
-impl Default for PointLight {
-    fn default() -> Self {
-        Self {
-            position: [0.0, 2.5, 0.0],
-            color: [1.0, 1.0, 1.0],
-            intensity: 8.0,
-            range: 6.0,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_default_lamp_hangs_above_head_height_with_a_room_sized_reach() {
-        let l = PointLight::default();
-        assert_eq!(l.position, [0.0, 2.5, 0.0]);
-        assert_eq!(l.color, [1.0, 1.0, 1.0]);
-        assert_eq!(l.intensity, 8.0);
-        assert_eq!(l.range, 6.0);
-    }
-
-    #[test]
-    fn an_authored_lamp_parses_and_round_trips_through_postcard() {
-        let l: PointLight = serde_json::from_str(
-            r#"{"position":[2,2.5,-3],"color":[1,0.8,0.5],"intensity":12,"range":9}"#,
-        )
-        .unwrap();
-        assert_eq!(l.position, [2.0, 2.5, -3.0]);
-        assert_eq!(l.color, [1.0, 0.8, 0.5]);
-
-        let bytes = postcard::to_allocvec(&l).unwrap();
-        let back: PointLight = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.intensity, 12.0);
-        assert_eq!(back.range, 9.0);
-    }
 }

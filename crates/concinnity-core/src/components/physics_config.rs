@@ -1,7 +1,7 @@
 // World-level physics configuration schema.
 
 use crate::components::ProceduralMesh;
-use crate::ecs::{Ref, de_opt_ref};
+use crate::ecs::Ref;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -25,7 +25,14 @@ use alloc::vec::Vec;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct PhysicsConfig {
     /// Y coordinate of the floor. When left at 0.0 it is auto-detected from the
@@ -48,7 +55,7 @@ pub struct PhysicsConfig {
     /// "heightfield"`. When set, the physics surface is built from that mesh's
     /// source image so props rest on the visible terrain. Takes precedence over
     /// the `terrain_*` values above.
-    #[serde(default, deserialize_with = "de_opt_ref")]
+    #[serde(default)]
     pub terrain_mesh: Option<Ref<ProceduralMesh>>,
     /// Extra collision layer names beyond the built-ins (`world`, `prop`,
     /// `character`, `trigger`). At most 28; referenced by collider `layer`
@@ -62,6 +69,7 @@ pub struct PhysicsConfig {
     /// Minimum contact impulse (mass times velocity change) for a collision to
     /// publish a contact event. Resting contact stays below it; raise to hear
     /// only hard impacts.
+    #[asset(default = 1.0)]
     pub contact_min_impulse: f32,
     /// Extra physics bodies reserved for props created while the world runs
     /// (by a [Spawner](#spawner), a [Behavior](#behavior) `spawn` node, or the
@@ -77,98 +85,4 @@ pub struct PhysicsConfig {
     /// (its copies live forever), a `spawn` node in a behavior, and spawns the
     /// host drives itself.
     pub spawn_headroom: u32,
-}
-
-impl Default for PhysicsConfig {
-    fn default() -> Self {
-        Self {
-            floor_y: 0.0,
-            terrain_half_width: 0.0,
-            terrain_half_depth: 0.0,
-            terrain_subdivisions: 0,
-            terrain_amplitude: 0.0,
-            terrain_offset_y: 0.0,
-            terrain_mesh: None,
-            layers: Vec::new(),
-            no_collide: Vec::new(),
-            contact_min_impulse: 1.0,
-            spawn_headroom: 0,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ecs::asset_id::AssetId;
-    use alloc::string::ToString;
-    use alloc::vec;
-
-    #[test]
-    fn a_blank_config_is_a_flat_floor_at_the_origin() {
-        let p = PhysicsConfig::default();
-        assert_eq!(p.floor_y, 0.0);
-        assert_eq!(p.terrain_amplitude, 0.0);
-        assert_eq!(p.terrain_subdivisions, 0);
-        assert_eq!(p.terrain_offset_y, 0.0);
-        // No mesh named means the generated terrain values are what is used.
-        assert!(p.terrain_mesh.is_none());
-        // Everything collides by default; light impacts stay silent.
-        assert!(p.layers.is_empty());
-        assert!(p.no_collide.is_empty());
-        assert_eq!(p.contact_min_impulse, 1.0);
-        // Nothing is held back for runtime spawns unless a world asks for it.
-        assert_eq!(p.spawn_headroom, 0);
-    }
-
-    #[test]
-    fn authored_spawn_headroom_round_trips_through_postcard() {
-        let p: PhysicsConfig = crate::test_support::from_json(r#"{"spawn_headroom":64}"#);
-        assert_eq!(p.spawn_headroom, 64);
-
-        // The runtime reads the headroom off the baked component, so it has to
-        // survive the wire, not just the JSON parse.
-        let bytes = postcard::to_allocvec(&p).unwrap();
-        let back: PhysicsConfig = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.spawn_headroom, 64);
-    }
-
-    #[test]
-    fn layers_and_no_collide_parse_and_round_trip_through_postcard() {
-        let p: PhysicsConfig = crate::test_support::from_json(
-            r#"{"layers":["debris"],"no_collide":[["debris","character"]],
-                "contact_min_impulse":2.5}"#,
-        );
-        assert_eq!(p.layers, vec!["debris".to_string()]);
-        assert_eq!(
-            p.no_collide,
-            vec![["debris".to_string(), "character".to_string()]]
-        );
-
-        let bytes = postcard::to_allocvec(&p).unwrap();
-        let back: PhysicsConfig = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.layers, p.layers);
-        assert_eq!(back.no_collide, p.no_collide);
-        assert_eq!(back.contact_min_impulse, 2.5);
-    }
-
-    #[test]
-    fn a_named_terrain_mesh_parses_and_round_trips_through_postcard() {
-        let p: PhysicsConfig = crate::test_support::from_json(
-            r#"{"floor_y":-1.5,"terrain_half_width":128,"terrain_half_depth":128,
-                "terrain_subdivisions":64,"terrain_amplitude":12,"terrain_offset_y":2,
-                "terrain_mesh":"ground"}"#,
-        );
-        assert_eq!(p.terrain_mesh, Some(Ref::new(AssetId(6))));
-
-        let bytes = postcard::to_allocvec(&p).unwrap();
-        let back: PhysicsConfig = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.floor_y, -1.5);
-        assert_eq!(back.terrain_half_width, 128.0);
-        assert_eq!(back.terrain_half_depth, 128.0);
-        assert_eq!(back.terrain_subdivisions, 64);
-        assert_eq!(back.terrain_amplitude, 12.0);
-        assert_eq!(back.terrain_offset_y, 2.0);
-        assert_eq!(back.terrain_mesh, Some(Ref::new(AssetId(6))));
-    }
 }

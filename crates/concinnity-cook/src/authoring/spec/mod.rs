@@ -82,6 +82,11 @@ impl From<String> for ArgValue {
         ArgValue::Str(v)
     }
 }
+impl<T: Into<ArgValue>> From<Option<T>> for ArgValue {
+    fn from(v: Option<T>) -> Self {
+        v.map_or(ArgValue::Null, Into::into)
+    }
+}
 impl<const N: usize> From<[f32; N]> for ArgValue {
     fn from(v: [f32; N]) -> Self {
         ArgValue::floats(&v)

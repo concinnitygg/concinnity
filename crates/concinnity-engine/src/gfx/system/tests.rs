@@ -178,7 +178,7 @@ impl WorldBuilder {
         // next mesh handle; the Prop below references it by that handle, as cook
         // resolves a `.mesh` name. `mesh`'s asset id is unused.
         let _ = mesh;
-        let mesh_handle = MeshHandle(self.mesh_records.len() as u32);
+        let mesh_handle = MeshHandle::new(self.mesh_records.len() as u32);
         self.mesh_records
             .push(concinnity_core::ecs::ResourceRecord {
                 resource_kind: concinnity_core::ecs::ResourceKind::Mesh,
@@ -188,7 +188,7 @@ impl WorldBuilder {
             });
         let tex_loc = self.payload(&texture_payload(2, 2));
         // Textures are resources now: the payload rides the resource stream at
-        // the next texture handle. The Material references `TextureHandle(0)` (the
+        // the next texture handle. The Material references `TextureHandle::new(0)` (the
         // first texture) regardless of any texture's asset id.
         let handle = self.texture_records.len() as u32;
         self.texture_records
@@ -204,7 +204,7 @@ impl WorldBuilder {
         let _ = mat;
         let mat_handle = self.material_records.len() as u32;
         let mat_bytes = postcard::to_allocvec(&Material {
-            albedo: Some(TextureHandle(0)),
+            albedo: Some(TextureHandle::new(0)),
             ..Default::default()
         })
         .unwrap();
@@ -219,7 +219,7 @@ impl WorldBuilder {
             prop,
             Prop {
                 mesh: Some(mesh_handle),
-                material: Some(MaterialHandle(mat_handle)),
+                material: Some(MaterialHandle::new(mat_handle)),
                 position: [1.0, 2.0, 3.0],
                 ..Default::default()
             },
@@ -3260,7 +3260,7 @@ fn a_world_whose_text_names_its_fonts_registers_no_fallback() {
         AssetId(800),
         TextLabel {
             content: "Hello, world!".to_string(),
-            font: Some(FontHandle(font)),
+            font: Some(FontHandle::new(font)),
             visible: true,
             ..Default::default()
         },
@@ -3301,7 +3301,7 @@ fn fonts_and_sprite_textures_share_the_text_atlas_pool() {
         b.push_identified(
             AssetId(id),
             Sprite {
-                texture: Some(TextureHandle(sprite_tex)),
+                texture: Some(TextureHandle::new(sprite_tex)),
                 visible: true,
                 ..Default::default()
             },
@@ -3325,14 +3325,16 @@ fn fonts_and_sprite_textures_share_the_text_atlas_pool() {
     // A font's handle IS its atlas slot, so the pool's leading slots are the
     // fonts in handle order.
     assert_eq!(overlay.fonts.len(), 2);
-    let face = |h| overlay.fonts.get(FontHandle(h)).expect("loaded");
+    let face = |h| overlay.fonts.get(FontHandle::new(h)).expect("loaded");
     assert_eq!(face(0).atlas_slot, 0, "font handle 0 owns atlas slot 0");
     assert_eq!(face(1).atlas_slot, 1);
     assert_eq!(face(1).atlas_w, 64);
     assert_eq!(face(0).size_px, 32.0);
     // The sprite texture lands after the fonts.
     assert_eq!(
-        overlay.sprite_texture_slots.get(&TextureHandle(sprite_tex)),
+        overlay
+            .sprite_texture_slots
+            .get(&TextureHandle::new(sprite_tex)),
         Some(&2),
         "the sprite texture is appended after the font atlases"
     );
@@ -3347,7 +3349,7 @@ fn a_sprite_with_an_unknown_texture_keeps_its_tint() {
     b.push_identified(
         AssetId(810),
         Sprite {
-            texture: Some(TextureHandle(99)),
+            texture: Some(TextureHandle::new(99)),
             visible: true,
             ..Default::default()
         },
@@ -3587,8 +3589,8 @@ fn instanced_prop_bakes_its_instances_into_one_cluster() {
     b.push_identified(
         AssetId(820),
         InstancedProp {
-            mesh: Some(MeshHandle(0)),
-            material: Some(MaterialHandle(0)),
+            mesh: Some(MeshHandle::new(0)),
+            material: Some(MaterialHandle::new(0)),
             instances: (0..3)
                 .map(|i| InstanceTransform {
                     position: [i as f32 * 2.0, 0.0, 0.0],
@@ -3634,7 +3636,7 @@ fn one_shot_world_fx_are_resolved_and_drained_at_init() {
     b.push_identified(
         AssetId(830),
         Decal {
-            texture: Some(TextureHandle(0)),
+            texture: Some(TextureHandle::new(0)),
             size: [1.0; 3],
             visible: true,
             ..Default::default()
@@ -3643,7 +3645,7 @@ fn one_shot_world_fx_are_resolved_and_drained_at_init() {
     b.push_identified(
         AssetId(831),
         ParticleEmitter {
-            texture: Some(TextureHandle(0)),
+            texture: Some(TextureHandle::new(0)),
             max_particles: 16,
             visible: true,
             ..Default::default()
@@ -3882,7 +3884,7 @@ fn skinned_mesh_world_uploads_geometry_and_publishes_poses() {
         &mut b,
         RIGGED,
         SkinnedMesh {
-            material: Some(MaterialHandle(0)),
+            material: Some(MaterialHandle::new(0)),
             position: [5.0, 0.0, 0.0],
             capsule: Some(CharacterCapsule {
                 half_height: 0.9,
@@ -3996,7 +3998,7 @@ fn a_skinned_mesh_with_an_unknown_material_fails_init() {
         &mut b,
         AssetId(843),
         SkinnedMesh {
-            material: Some(MaterialHandle(99)),
+            material: Some(MaterialHandle::new(99)),
             ..Default::default()
         },
         3,
@@ -4135,7 +4137,7 @@ impl WorldBuilder {
                 payload: None,
                 data_bytes: postcard::to_allocvec(&mat).unwrap(),
             });
-        MaterialHandle(handle)
+        MaterialHandle::new(handle)
     }
 }
 
@@ -4156,16 +4158,16 @@ fn every_material_texture_reference_resolves_to_its_shared_pool_slot() {
         .map(|_| b.push_resource(ResourceKind::Texture, &texture_payload(2, 2)))
         .collect();
     let mat = b.push_material(Material {
-        albedo: Some(TextureHandle(slots[0])),
-        normal_map: Some(TextureHandle(slots[1])),
-        emissive_map: Some(TextureHandle(slots[2])),
-        orm_map: Some(TextureHandle(slots[3])),
+        albedo: Some(TextureHandle::new(slots[0])),
+        normal_map: Some(TextureHandle::new(slots[1])),
+        emissive_map: Some(TextureHandle::new(slots[2])),
+        orm_map: Some(TextureHandle::new(slots[3])),
         ..Default::default()
     });
     b.push_identified(
         AssetId(850),
         Prop {
-            mesh: Some(MeshHandle(0)),
+            mesh: Some(MeshHandle::new(0)),
             material: Some(mat),
             ..Default::default()
         },
@@ -4196,7 +4198,7 @@ fn every_material_texture_reference_resolves_to_its_shared_pool_slot() {
 // role guards independently.
 #[test]
 fn a_material_texture_handle_past_the_pool_fails_init() {
-    let out_of_range = Some(TextureHandle(99));
+    let out_of_range = Some(TextureHandle::new(99));
     let cases: Vec<(&str, Material)> = vec![
         (
             "albedo",
@@ -4286,8 +4288,8 @@ fn an_instanced_vertex_shader_payload_reaches_the_backend() {
     b.push_identified(
         AssetId(851),
         InstancedProp {
-            mesh: Some(MeshHandle(0)),
-            material: Some(MaterialHandle(0)),
+            mesh: Some(MeshHandle::new(0)),
+            material: Some(MaterialHandle::new(0)),
             instances: vec![InstanceTransform {
                 position: [0.0; 3],
                 rotation_deg: [0.0; 3],
@@ -4650,7 +4652,7 @@ fn story_stage_images_are_resident_before_any_sprite_references_them() {
         .collect();
     let image = |slot: u32| {
         Some(StoryImage {
-            texture: TextureHandle(slot),
+            texture: TextureHandle::new(slot),
             ..Default::default()
         })
     };
@@ -4693,7 +4695,7 @@ fn story_stage_images_are_resident_before_any_sprite_references_them() {
         assert!(
             overlay
                 .sprite_texture_slots
-                .contains_key(&TextureHandle(*slot)),
+                .contains_key(&TextureHandle::new(*slot)),
             "stage texture {slot} never became resident"
         );
     }
@@ -4780,7 +4782,7 @@ fn skinned_mesh_joins_the_pick_index_when_opted_in() {
         &mut b,
         BODY,
         SkinnedMesh {
-            material: Some(MaterialHandle(0)),
+            material: Some(MaterialHandle::new(0)),
             position: [5.0, 0.0, 0.0],
             ..Default::default()
         },

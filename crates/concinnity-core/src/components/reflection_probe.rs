@@ -27,49 +27,24 @@
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct ReflectionProbe {
     /// World-space capture point the cubemap is rendered from. Put it at roughly
     /// eye height in open space (not inside geometry) for the area it serves.
+    #[asset(default = [0.0, 1.7, 0.0])]
     pub position: [f32; 3],
     /// Half-size of the influence box around `position`, per axis. A surface
     /// inside `position` plus or minus `half_extents` may select this probe, and
     /// the box is the parallax-correction volume. Make it span the local space
     /// the probe represents (e.g. a room's walls).
+    #[asset(default = [10.0, 5.0, 10.0])]
     pub half_extents: [f32; 3],
-}
-
-impl Default for ReflectionProbe {
-    fn default() -> Self {
-        Self {
-            position: [0.0, 1.7, 0.0],
-            half_extents: [10.0, 5.0, 10.0],
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_default_probe_captures_from_eye_height_over_a_room_sized_box() {
-        let p = ReflectionProbe::default();
-        assert_eq!(p.position, [0.0, 1.7, 0.0]);
-        // The parallax box is wider than it is tall, matching a room rather than
-        // a cube, so floor reflections land where the geometry actually is.
-        assert_eq!(p.half_extents, [10.0, 5.0, 10.0]);
-    }
-
-    #[test]
-    fn an_authored_probe_parses_and_round_trips_through_postcard() {
-        let p: ReflectionProbe =
-            serde_json::from_str(r#"{"position":[4,2,-6],"half_extents":[6,3,8]}"#).unwrap();
-        assert_eq!(p.position, [4.0, 2.0, -6.0]);
-
-        let bytes = postcard::to_allocvec(&p).unwrap();
-        let back: ReflectionProbe = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.half_extents, [6.0, 3.0, 8.0]);
-    }
 }

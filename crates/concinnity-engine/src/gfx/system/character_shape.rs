@@ -159,7 +159,7 @@ mod tests {
         );
         assert!((half - 1.5).abs() < 1e-5 && (radius - 0.6).abs() < 1e-5);
         let pose = seed_pose(
-            SkinnedMeshHandle(0),
+            SkinnedMeshHandle::new(0),
             SkinnedIndex(0),
             skeleton,
             Some(layers),
@@ -179,7 +179,12 @@ mod tests {
         };
         let layers = resolve(&shape, &chain(), &["jaw".to_string()]);
         assert!(layers.morph_base.is_empty());
-        let pose = seed_pose(SkinnedMeshHandle(0), SkinnedIndex(0), chain(), Some(layers));
+        let pose = seed_pose(
+            SkinnedMeshHandle::new(0),
+            SkinnedIndex(0),
+            chain(),
+            Some(layers),
+        );
         assert!(pose.morph_weights.is_empty());
     }
 }

@@ -119,7 +119,7 @@ mod tests {
         for value in [
             json!({"group_toggle": 3}),
             json!({"setting": {"key": "master_volume", "verb": "drag"}}),
-            json!({"show": ""}),
+            json!({"show": null}),
             json!("teleport"),
             json!(null),
         ] {

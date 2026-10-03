@@ -41,6 +41,11 @@ impl<T: RefTarget> NameRef<T> {
     pub fn is_empty(&self) -> bool {
         self.name.is_empty()
     }
+
+    /// The referenced asset's `$id`, or `None` when the field names nothing.
+    pub fn name(&self) -> Option<&str> {
+        (!self.name.is_empty()).then_some(self.name.as_str())
+    }
 }
 
 impl<T: RefTarget> core::ops::Deref for NameRef<T> {
@@ -181,6 +186,8 @@ mod tests {
         let h: Holder = serde_json::from_str(r#"{"screen":null,"any":[null]}"#).unwrap();
         assert!(h.screen.is_empty() && h.any[0].is_empty());
         assert!(NameRef::<Screen>::from("").is_empty());
+        assert_eq!(NameRef::<Screen>::from("").name(), None);
+        assert_eq!(NameRef::<Screen>::from("menu").name(), Some("menu"));
     }
 
     #[test]

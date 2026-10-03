@@ -8,17 +8,16 @@
 //!
 //! Deserialization matches a bare [`AssetId`]: an integer is an already
 //! resolved id (the compiled-args and baked forms), and a `$id` string goes
-//! through the installed name resolver. [`de_opt_ref`] adds the optional form,
-//! where an empty string or null is `None`.
+//! through the installed name resolver. An optional reference is an
+//! `Option<Ref<T>>` with `#[serde(default)]`, absent when null or omitted.
 
 use core::fmt;
 use core::hash::{Hash, Hasher};
 use core::marker::PhantomData;
 
-use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::ecs::asset_id::{AssetId, AssetIdVisitor};
+use crate::ecs::asset_id::AssetId;
 
 /// What a [`Ref<T>`] may point at: the registry names of the asset types that
 /// satisfy it.
@@ -139,57 +138,6 @@ impl<'de, T: RefTarget> Deserialize<'de> for Ref<T> {
     }
 }
 
-/// `serde` `deserialize_with` helper for an optional [`Ref<T>`] field.
-///
-/// Accepts a `$id` string (resolved), an integer id, an empty string, or null;
-/// the latter two are `None`. Apply with `#[serde(default, deserialize_with =
-/// "de_opt_ref")]` so a missing field is also `None`.
-pub fn de_opt_ref<'de, D, T>(d: D) -> Result<Option<Ref<T>>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: RefTarget,
-{
-    // A non-self-describing format (postcard, the baked blob form) carries the
-    // already-resolved id; names only appear in human-readable input.
-    if !d.is_human_readable() {
-        return Option::<Ref<T>>::deserialize(d);
-    }
-    d.deserialize_any(OptVisitor).map(|id| id.map(Ref::new))
-}
-
-struct OptVisitor;
-
-impl Visitor<'_> for OptVisitor {
-    type Value = Option<AssetId>;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("an asset reference name string, id integer, or null")
-    }
-
-    fn visit_unit<E: de::Error>(self) -> Result<Option<AssetId>, E> {
-        Ok(None)
-    }
-    fn visit_none<E: de::Error>(self) -> Result<Option<AssetId>, E> {
-        Ok(None)
-    }
-    fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<AssetId>, E> {
-        AssetIdVisitor.visit_u64(v).map(Some)
-    }
-    fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<AssetId>, E> {
-        AssetIdVisitor.visit_i64(v).map(Some)
-    }
-    fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<AssetId>, E> {
-        if v.is_empty() {
-            Ok(None)
-        } else {
-            AssetIdVisitor.visit_str(v).map(Some)
-        }
-    }
-    fn visit_string<E: de::Error>(self, v: alloc::string::String) -> Result<Option<AssetId>, E> {
-        self.visit_str(&v)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,7 +151,7 @@ mod tests {
 
     #[derive(Debug, serde::Serialize, serde::Deserialize)]
     struct Holder {
-        #[serde(default, deserialize_with = "de_opt_ref")]
+        #[serde(default)]
         r: Option<Ref<Texture>>,
     }
 
@@ -238,22 +186,17 @@ mod tests {
     }
 
     #[test]
-    fn an_optional_ref_treats_empty_null_and_missing_as_none() {
+    fn an_optional_ref_is_none_when_null_or_missing_and_refuses_an_empty_name() {
         crate::test_support::install_resolvers();
         let parse = |json: &str| serde_json::from_str::<Holder>(json).unwrap().r;
-        assert_eq!(parse("{\"r\":\"\"}"), None);
         assert_eq!(parse("{\"r\":null}"), None);
         assert_eq!(parse("{}"), None);
         assert_eq!(parse("{\"r\":5}"), Some(Ref::new(AssetId(5))));
-        assert_eq!(parse("{\"r\":-1}"), Some(Ref::new(AssetId(u32::MAX))));
         assert_eq!(parse("{\"r\":\"floor\"}"), Some(Ref::new(AssetId(5))));
-        let owned = serde_json::from_value::<Holder>(serde_json::json!({"r": ""}));
-        assert_eq!(owned.unwrap().r, None);
-        let owned = serde_json::from_value::<Holder>(serde_json::json!({"r": "wall"}));
-        assert_eq!(owned.unwrap().r, Some(Ref::new(AssetId(4))));
-        // A `None` reported by an option-aware format, rather than a null unit.
-        let none = de_opt_ref::<_, Texture>(crate::test_support::NoneDeserializer);
-        assert_eq!(none.unwrap(), None);
+        let err = serde_json::from_str::<Holder>("{\"r\":\"\"}")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("empty reference name"), "{err}");
     }
 
     #[test]
@@ -261,9 +204,9 @@ mod tests {
         #[derive(serde::Serialize, serde::Deserialize)]
         struct Baked {
             plain: Ref<Texture>,
-            #[serde(default, deserialize_with = "de_opt_ref")]
+            #[serde(default)]
             opt: Option<Ref<Texture>>,
-            #[serde(default, deserialize_with = "de_opt_ref")]
+            #[serde(default)]
             none: Option<Ref<Texture>>,
             list: alloc::vec::Vec<Ref<Texture>>,
         }
@@ -294,13 +237,6 @@ mod tests {
             .to_string();
         assert!(
             err.contains("an asset id integer or a name string"),
-            "{err}"
-        );
-        let err = serde_json::from_str::<Holder>("{\"r\":true}")
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("an asset reference name string, id integer, or null"),
             "{err}"
         );
     }

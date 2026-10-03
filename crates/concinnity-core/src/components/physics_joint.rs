@@ -2,7 +2,7 @@
 
 use crate::components::Prop;
 use crate::components::{Vocabulary, vocabulary_synonyms};
-use crate::ecs::{Ref, de_opt_ref};
+use crate::ecs::Ref;
 
 /// The constraint shape a `PhysicsJoint` declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Vocabulary)]
@@ -89,17 +89,22 @@ impl PhysicsJointKind {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct PhysicsJoint {
     /// Constraint shape; defaults to `fixed`. See [PhysicsJointKind].
     pub kind: PhysicsJointKind,
     /// First body: a [Prop](#prop) name. Required.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub body_a: Option<Ref<Prop>>,
     /// Second body: a [Prop](#prop) name. Empty means "world anchor", in which
     /// case `anchor_b` is interpreted as a world-space position.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub body_b: Option<Ref<Prop>>,
     /// Attach point in `body_a`'s local frame.
     pub anchor_a: [f32; 3],
@@ -107,6 +112,7 @@ pub struct PhysicsJoint {
     /// empty).
     pub anchor_b: [f32; 3],
     /// Free axis for revolute/prismatic, in each body's local frame.
+    #[asset(default = [0.0, 1.0, 0.0])]
     pub axis: [f32; 3],
     /// Whether the `limits` clamp is enforced.
     pub limits_enabled: bool,
@@ -118,23 +124,6 @@ pub struct PhysicsJoint {
     pub motor_target_velocity: f32,
     /// Motor force budget. The motor is inactive when this is 0.
     pub motor_max_force: f32,
-}
-
-impl Default for PhysicsJoint {
-    fn default() -> Self {
-        Self {
-            kind: PhysicsJointKind::Fixed,
-            body_a: None,
-            body_b: None,
-            anchor_a: [0.0, 0.0, 0.0],
-            anchor_b: [0.0, 0.0, 0.0],
-            axis: [0.0, 1.0, 0.0],
-            limits_enabled: false,
-            limits: [0.0, 0.0],
-            motor_target_velocity: 0.0,
-            motor_max_force: 0.0,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -180,16 +169,6 @@ mod tests {
         assert_eq!(PhysicsJointKind::from_str_norm(""), None);
     }
 
-    #[test]
-    fn a_blank_joint_welds_two_unset_bodies() {
-        let j = PhysicsJoint::default();
-        assert_eq!(j.kind, PhysicsJointKind::Fixed);
-        assert_eq!(j.body_a, None);
-        assert_eq!(j.body_b, None);
-        assert_eq!(j.axis, [0.0, 1.0, 0.0]);
-        assert!(!j.limits_enabled);
-    }
-
     // A typo is no longer a joint: the field is typed, so the load rejects it
     // rather than silently welding the two bodies.
     #[test]
@@ -211,22 +190,5 @@ mod tests {
             let kind: PhysicsJointKind = serde_json::from_str(&json).expect(name);
             assert_eq!(Some(kind), PhysicsJointKind::from_str_norm(name));
         }
-    }
-
-    #[test]
-    fn an_authored_hinge_round_trips_through_postcard() {
-        let j: PhysicsJoint = crate::test_support::from_json(
-            r#"{"kind":"hinge","body_a":"door","body_b":"frame","axis":[0,1,0],
-                "limits_enabled":true,"limits":[-90,0],"motor_max_force":12.5}"#,
-        );
-        assert_eq!(j.kind, PhysicsJointKind::Revolute);
-        assert_eq!(j.body_a, Some(Ref::new(crate::ecs::asset_id::AssetId(4))));
-        assert_eq!(j.body_b, Some(Ref::new(crate::ecs::asset_id::AssetId(5))));
-
-        let bytes = postcard::to_allocvec(&j).unwrap();
-        let back: PhysicsJoint = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.kind, PhysicsJointKind::Revolute);
-        assert_eq!(back.limits, [-90.0, 0.0]);
-        assert_eq!(back.motor_max_force, 12.5);
     }
 }

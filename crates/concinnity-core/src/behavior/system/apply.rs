@@ -288,7 +288,7 @@ mod tests {
                 Effect::Visible(entity, false),
                 Effect::Wake(entity),
                 Effect::Sound(PlayCue {
-                    clip: AudioClipHandle(1),
+                    clip: AudioClipHandle::new(1),
                     kind: CueKind::Sound,
                     volume: 1.0,
                     priority: 0,

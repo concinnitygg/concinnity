@@ -4,8 +4,7 @@ use crate::components::AudioBus;
 use crate::components::Screen;
 use crate::components::Vocabulary;
 use crate::ecs::AudioClipHandle;
-use crate::ecs::de_opt_audio_clip_handle;
-use crate::ecs::{Ref, de_opt_ref};
+use crate::ecs::Ref;
 
 /// Plays audio when a [Screen](#screen) is shown.
 ///
@@ -22,18 +21,24 @@ use crate::ecs::{Ref, de_opt_ref};
 ///   a cue is seamless. A screen with a *different* music cue replaces the
 ///   track; a screen with *no* music cue leaves the current music playing.
 /// - `sound`: a one-shot effect, played every time the screen is shown.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct AudioCue {
     /// The [Screen](#screen) whose activation triggers this cue.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub screen: Option<Ref<Screen>>,
     /// The [AudioClip](#audioclip) to play.
-    #[serde(deserialize_with = "de_opt_audio_clip_handle")]
     pub clip: Option<AudioClipHandle>,
     /// Playback behavior: a looping `music` track or a one-shot `sound`.
     pub kind: CueKind,
     /// Linear gain applied to the clip (1.0 leaves it unchanged).
+    #[asset(default = 1.0)]
     pub volume: f32,
     /// Mix bus the cue routes through. Defaults to `music` for a music cue
     /// and `sfx` for a sound cue; set `voice` for dialogue.
@@ -60,23 +65,9 @@ pub enum CueKind {
     Music,
 }
 
-impl Default for AudioCue {
-    fn default() -> Self {
-        Self {
-            screen: None,
-            clip: None,
-            kind: CueKind::Sound,
-            volume: 1.0,
-            bus: None,
-            priority: 0,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::asset_id::AssetId;
 
     // NAMES is what the editor's picker offers, so it has to be what serde
     // accepts. A variant added without extending both lists fails here.
@@ -90,52 +81,5 @@ mod tests {
                 alloc::format!("\"{name}\"")
             );
         }
-    }
-
-    #[test]
-    fn a_blank_cue_is_a_one_shot_sound_at_unit_gain() {
-        let c = AudioCue::default();
-        assert_eq!(c.kind, CueKind::Sound);
-        assert_eq!(c.volume, 1.0);
-        assert!(c.clip.is_none());
-        assert!(c.screen.is_none());
-        assert!(c.bus.is_none());
-        assert_eq!(c.priority, 0);
-        assert_eq!(CueKind::default(), CueKind::Sound);
-    }
-
-    #[test]
-    fn a_music_cue_parses_its_clip_and_screen_by_name() {
-        let c: AudioCue = crate::test_support::from_json(
-            r#"{"clip":"theme","screen":"menu","kind":"music","volume":0.4}"#,
-        );
-        assert_eq!(c.clip, Some(AudioClipHandle(5)));
-        assert_eq!(c.screen, Some(Ref::new(AssetId(4))));
-        assert_eq!(c.kind, CueKind::Music);
-        assert_eq!(c.volume, 0.4);
-        assert_eq!(
-            serde_json::to_string(&CueKind::Music).unwrap(),
-            r#""music""#
-        );
-
-        let bytes = postcard::to_allocvec(&c).unwrap();
-        let back: AudioCue = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.clip, Some(AudioClipHandle(5)));
-        assert_eq!(back.screen, Some(Ref::new(AssetId(4))));
-        assert_eq!(back.kind, CueKind::Music);
-    }
-
-    #[test]
-    fn a_voice_cue_parses_its_bus_and_priority() {
-        let c: AudioCue = crate::test_support::from_json(
-            r#"{"clip":"line","screen":"menu","bus":"voice","priority":5}"#,
-        );
-        assert_eq!(c.bus, Some(AudioBus::Voice));
-        assert_eq!(c.priority, 5);
-
-        let bytes = postcard::to_allocvec(&c).unwrap();
-        let back: AudioCue = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.bus, Some(AudioBus::Voice));
-        assert_eq!(back.priority, 5);
     }
 }

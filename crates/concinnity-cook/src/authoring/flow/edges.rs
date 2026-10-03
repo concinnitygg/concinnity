@@ -122,8 +122,7 @@ fn walk_body(body: Option<&Value>, moves: &mut Vec<Move>) {
     }
 }
 
-// A non-empty string field. An empty one names nothing, which is how an author
-// writes "no screen" and "no action" alike.
+// A non-empty string field. A null, absent, or empty one names nothing.
 fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key)?.as_str().filter(|s| !s.is_empty())
 }
@@ -291,7 +290,7 @@ mod tests {
         let world = [asset(
             RegisteredType::Behavior,
             "empty",
-            json!({"do": [{"scene": {}}, {"screen": {"screen": ""}}]}),
+            json!({"do": [{"scene": {}}, {"screen": {"screen": null}}]}),
         )];
         assert!(flow_edges(&world).is_empty());
     }

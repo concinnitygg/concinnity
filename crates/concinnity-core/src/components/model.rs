@@ -2,18 +2,16 @@
 
 use crate::ecs::MaterialHandle;
 use crate::ecs::MeshHandle;
-use crate::ecs::de_opt_material_handle;
-use crate::ecs::de_opt_mesh_handle;
 use alloc::vec::Vec;
 
 /// One geometric part of a Model, referencing a mesh and its surface material.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 pub struct SubMeshRef {
     /// A [Mesh](#mesh) or [ProceduralMesh](#proceduralmesh) asset.
-    #[serde(default, deserialize_with = "de_opt_mesh_handle")]
+    #[serde(default)]
     pub mesh: Option<MeshHandle>,
     /// A [Material](#material) asset.  `None` uses the default material.
-    #[serde(default, deserialize_with = "de_opt_material_handle")]
+    #[serde(default)]
     pub material: Option<MaterialHandle>,
 }
 
@@ -45,7 +43,7 @@ mod tests {
     #[test]
     fn a_sub_mesh_may_declare_geometry_without_a_material() {
         let s: SubMeshRef = crate::test_support::from_json(r#"{"mesh":"body"}"#);
-        assert_eq!(s.mesh, Some(MeshHandle(4)));
+        assert_eq!(s.mesh, Some(MeshHandle::new(4)));
         // No material means the sub-mesh inherits whatever the prop supplies.
         assert_eq!(s.material, None);
         let s: SubMeshRef = crate::test_support::from_json("{}");
@@ -63,9 +61,9 @@ mod tests {
 
         let bytes = postcard::to_allocvec(&m).unwrap();
         let back: Model = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.meshes[0].mesh, Some(MeshHandle(4)));
-        assert_eq!(back.meshes[0].material, Some(MaterialHandle(4)));
-        assert_eq!(back.meshes[1].mesh, Some(MeshHandle(4)));
-        assert_eq!(back.meshes[1].material, Some(MaterialHandle(5)));
+        assert_eq!(back.meshes[0].mesh, Some(MeshHandle::new(4)));
+        assert_eq!(back.meshes[0].material, Some(MaterialHandle::new(4)));
+        assert_eq!(back.meshes[1].mesh, Some(MeshHandle::new(4)));
+        assert_eq!(back.meshes[1].material, Some(MaterialHandle::new(5)));
     }
 }

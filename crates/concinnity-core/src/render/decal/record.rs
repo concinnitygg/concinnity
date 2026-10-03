@@ -220,7 +220,7 @@ mod tests {
         // The cook-assigned handle value is the albedo pool slot; an in-range
         // handle passes through, an out-of-range one drops the decal.
         let d = Decal {
-            texture: Some(crate::ecs::TextureHandle(3)),
+            texture: Some(crate::ecs::TextureHandle::new(3)),
             ..Default::default()
         };
         let recs = build_decal_records(&[&d], 5);
@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(recs[0].texture_slot, 3);
 
         let past = Decal {
-            texture: Some(crate::ecs::TextureHandle(9)),
+            texture: Some(crate::ecs::TextureHandle::new(9)),
             ..Default::default()
         };
         assert!(build_decal_records(&[&past], 5).is_empty());

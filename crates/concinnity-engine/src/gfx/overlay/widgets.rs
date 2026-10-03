@@ -424,7 +424,7 @@ mod tests {
         s.chars().count() as f32 * 10.0
     }
 
-    const FONT: FontHandle = FontHandle(0);
+    const FONT: FontHandle = FontHandle::new(0);
 
     fn make_glyph(advance_px: f32) -> font::GlyphMetrics {
         font::GlyphMetrics {

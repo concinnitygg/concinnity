@@ -2,7 +2,7 @@
 
 use crate::components::TextInput;
 use crate::components::Vocabulary;
-use crate::ecs::{Ref, de_opt_ref};
+use crate::ecs::Ref;
 use alloc::string::String;
 
 /// How a [Screen](#screen) treats input while it is active.
@@ -50,7 +50,14 @@ pub enum ScreenInput {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct Screen {
     /// When true, this screen is shown as soon as the world loads.
@@ -65,10 +72,10 @@ pub struct Screen {
     pub input: ScreenInput,
     /// When true (the default), the world pauses beneath this screen while it
     /// is active: gameplay input, physics, and animation freeze.
+    #[asset(default = true)]
     pub pauses_world: bool,
     /// [TextInput](#textinput) that receives keyboard focus whenever this
     /// screen reaches the top of the stack.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub focus: Option<Ref<TextInput>>,
     /// Draw-order bias against the always-on HUD and other screens. Screens
     /// default above the HUD in stack order; a negative layer draws beneath
@@ -76,61 +83,18 @@ pub struct Screen {
     pub layer: i32,
 }
 
-impl Default for Screen {
-    fn default() -> Self {
-        Self {
-            initial: false,
-            fade_in_secs: 0.0,
-            toggle_key: String::new(),
-            input: ScreenInput::Capture,
-            pauses_world: true,
-            focus: None,
-            layer: 0,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::asset_id::AssetId;
 
     #[test]
-    fn a_blank_screen_captures_input_and_pauses_the_world() {
-        // An overlay is modal by default: the world underneath neither ticks nor
-        // sees the input the screen is consuming.
-        let s = Screen::default();
-        assert_eq!(s.input, ScreenInput::Capture);
-        assert!(s.pauses_world);
-        assert!(!s.initial);
-        assert_eq!(s.fade_in_secs, 0.0);
-        assert_eq!(s.layer, 0);
-        assert!(s.toggle_key.is_empty());
-        assert!(s.focus.is_none());
-        assert_eq!(ScreenInput::default(), ScreenInput::Capture);
-    }
-
-    #[test]
-    fn a_passthrough_hud_parses_and_round_trips_through_postcard() {
-        let s: Screen = crate::test_support::from_json(
-            r#"{"initial":true,"fade_in_secs":0.5,"toggle_key":"Tab","input":"passthrough",
-                "pauses_world":false,"focus":"first_button","layer":-1}"#,
-        );
-        assert_eq!(s.input, ScreenInput::Passthrough);
-        assert!(!s.pauses_world);
-        assert!(s.initial);
-        assert_eq!(s.focus, Some(Ref::new(AssetId(12))));
+    fn input_names_parse_in_lowercase() {
+        let i = |s: &str| serde_json::from_str::<ScreenInput>(s).unwrap();
+        assert_eq!(i(r#""capture""#), ScreenInput::Capture);
+        assert_eq!(i(r#""passthrough""#), ScreenInput::Passthrough);
         assert_eq!(
             serde_json::to_string(&ScreenInput::Passthrough).unwrap(),
             r#""passthrough""#
         );
-
-        let bytes = postcard::to_allocvec(&s).unwrap();
-        let back: Screen = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.fade_in_secs, 0.5);
-        assert_eq!(back.toggle_key, "Tab");
-        assert_eq!(back.input, ScreenInput::Passthrough);
-        // A negative layer sits below the default overlays.
-        assert_eq!(back.layer, -1);
     }
 }

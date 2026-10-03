@@ -174,8 +174,8 @@ mod tests {
     use concinnity_core::components::AnimationGraph;
     use concinnity_host::thread::asset_id;
 
-    const TARGET: SkinnedMeshHandle = SkinnedMeshHandle(1);
-    const MISSING: SkinnedMeshHandle = SkinnedMeshHandle(9);
+    const TARGET: SkinnedMeshHandle = SkinnedMeshHandle::new(1);
+    const MISSING: SkinnedMeshHandle = SkinnedMeshHandle::new(9);
     // The interned mesh name a command addresses, deliberately different from
     // the handle so the index translation is observable.
     const NAME: AssetId = AssetId(77);

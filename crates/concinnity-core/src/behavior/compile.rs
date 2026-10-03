@@ -479,15 +479,15 @@ mod tests {
     fn a_resolvable_name_compiles_to_the_node_it_denotes() {
         assert!(matches!(
             op(BehaviorNode::Sound {
-                clip: Some(AudioClipHandle(2)),
+                clip: Some(AudioClipHandle::new(2)),
                 kind: CueKind::Music,
                 volume: 0.5,
             }),
             COp::Sound {
-                clip: AudioClipHandle(2),
+                clip,
                 kind: CueKind::Music,
                 volume: 0.5,
-            }
+            } if clip == AudioClipHandle::new(2)
         ));
         assert!(matches!(
             op(BehaviorNode::Scene {

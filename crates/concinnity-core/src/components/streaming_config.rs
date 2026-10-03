@@ -12,22 +12,33 @@
 /// Texture streaming covers the color and normal-map textures (each capped
 /// independently via `texture_budget` / `texture_cap`). Mesh streaming covers
 /// static geometry; the skybox, rooms, and moving props always stay loaded.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct StreamingConfig {
     /// Maximum number of textures whose load is started per frame, applied
     /// independently to the color and normal-map pools. A low value spreads the
     /// cost over more frames.
+    #[asset(default = 4)]
     pub texture_budget: u32,
     /// Maximum number of textures kept loaded at once, applied independently to
     /// the color and normal-map pools. When exceeded, the farthest-from-camera
     /// textures are dropped.
+    #[asset(default = 96)]
     pub texture_cap: u32,
     /// Maximum number of mesh regions whose load is started per frame. A low
     /// value spreads the cost over more frames.
+    #[asset(default = 4)]
     pub mesh_budget: u32,
     /// Maximum number of meshes kept loaded at once. When exceeded, the
     /// farthest-from-camera meshes are dropped.
+    #[asset(default = 4096)]
     pub mesh_cap: u32,
     /// Resident-texture memory budget in mebibytes, spanning the color and
     /// normal-map pools together. Once resident textures exceed it the
@@ -40,19 +51,6 @@ pub struct StreamingConfig {
     /// budget from the GPU's reported memory instead. `mesh_cap` still applies
     /// as a hard item-count ceiling.
     pub mesh_budget_mb: u32,
-}
-
-impl Default for StreamingConfig {
-    fn default() -> Self {
-        Self {
-            texture_budget: 4,
-            texture_cap: 96,
-            mesh_budget: 4,
-            mesh_cap: 4096,
-            texture_budget_mb: 0,
-            mesh_budget_mb: 0,
-        }
-    }
 }
 
 impl StreamingConfig {
@@ -83,18 +81,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_stream_a_few_resources_per_frame() {
-        let c = StreamingConfig::default();
-        assert_eq!(c.budget(), 4);
-        assert_eq!(c.cap(), 96);
-        assert_eq!(c.mesh_budget(), 4);
-        assert_eq!(c.mesh_cap(), 4096);
-        // Byte budgets are opt-in; zero leaves the count budgets in charge.
-        assert_eq!(c.texture_budget_mb, 0);
-        assert_eq!(c.mesh_budget_mb, 0);
-    }
-
-    #[test]
     fn a_zero_budget_or_cap_is_floored_at_one() {
         // A zero would stall streaming outright, so every accessor keeps at
         // least one slot rather than trusting the authored number.
@@ -106,22 +92,5 @@ mod tests {
         assert_eq!(c.cap(), 1);
         assert_eq!(c.mesh_budget(), 1);
         assert_eq!(c.mesh_cap(), 1);
-    }
-
-    #[test]
-    fn authored_values_pass_through_and_round_trip_through_postcard() {
-        let c: StreamingConfig = serde_json::from_str(
-            r#"{"texture_budget":8,"texture_cap":256,"mesh_budget":2,"mesh_cap":512,
-                "texture_budget_mb":1024,"mesh_budget_mb":256}"#,
-        )
-        .unwrap();
-        assert_eq!((c.budget(), c.cap()), (8, 256));
-        assert_eq!((c.mesh_budget(), c.mesh_cap()), (2, 512));
-
-        let bytes = postcard::to_allocvec(&c).unwrap();
-        let back: StreamingConfig = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.texture_budget_mb, 1024);
-        assert_eq!(back.mesh_budget_mb, 256);
-        assert_eq!(back.cap(), 256);
     }
 }

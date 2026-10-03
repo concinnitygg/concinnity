@@ -27,7 +27,7 @@ pub fn append_mesh(ctx: &mut PipelineContext, id: AssetId, payload: Vec<u8>) -> 
     if let Some(payloads) = ctx.resource_mut::<RuntimeMeshPayloads>() {
         payloads.push(id, payload);
     }
-    MeshHandle(handle as u32)
+    MeshHandle::new(handle as u32)
 }
 
 /// Install `material` into the world's material table and return its handle.
@@ -41,7 +41,7 @@ pub fn append_material(ctx: &mut PipelineContext, material: Material) -> Materia
     let table = ctx
         .resource_mut::<MaterialTable>()
         .expect("the table was just ensured");
-    MaterialHandle(table.append(ResourceEntry {
+    MaterialHandle::new(table.append(ResourceEntry {
         payload: None,
         data_bytes: bytes,
     }))
@@ -56,7 +56,7 @@ pub fn append_environment_map(ctx: &mut PipelineContext, payload: Vec<u8>) -> En
     let table = ctx
         .resource_mut::<EnvironmentMapTable>()
         .expect("the table was just ensured");
-    EnvironmentMapHandle(table.append(ResourceEntry::baked(payload)))
+    EnvironmentMapHandle::new(table.append(ResourceEntry::baked(payload)))
 }
 
 /// Install a baked glyph-atlas `payload` into the world's font table and
@@ -68,7 +68,7 @@ pub fn append_font(ctx: &mut PipelineContext, payload: Vec<u8>) -> FontHandle {
     let table = ctx
         .resource_mut::<FontTable>()
         .expect("the table was just ensured");
-    FontHandle(table.append(ResourceEntry::baked(payload)))
+    FontHandle::new(table.append(ResourceEntry::baked(payload)))
 }
 
 // How many mesh handles the build handed out: the four compiled blocks,

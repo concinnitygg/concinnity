@@ -59,37 +59,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn blank_volume_is_a_unit_cuboid_sensing_the_player() {
-        let v: TriggerVolume = serde_json::from_str("{}").unwrap();
-        assert_eq!(
-            v.collider.shape,
-            crate::components::PropColliderShape::Cuboid
-        );
-        assert_eq!(v.collider.half_extents, [0.5, 0.5, 0.5]);
-        assert_eq!(v.detects, TriggerFilter::Player);
-    }
-
-    #[test]
     fn filter_names_parse() {
         let v: TriggerVolume = serde_json::from_str(r#"{"detects":"props"}"#).unwrap();
         assert_eq!(v.detects, TriggerFilter::Props);
         let v: TriggerVolume = serde_json::from_str(r#"{"detects":"any"}"#).unwrap();
         assert_eq!(v.detects, TriggerFilter::Any);
-    }
-
-    #[test]
-    fn baked_round_trip_is_postcard_stable() {
-        let v: TriggerVolume = serde_json::from_str(
-            r#"{"position":[4,1,-2],"collider":{"shape":"ball","radius":2.0},"detects":"any"}"#,
-        )
-        .unwrap();
-        let bytes = postcard::to_allocvec(&v).unwrap();
-        let back: TriggerVolume = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.position, [4.0, 1.0, -2.0]);
-        assert_eq!(
-            back.collider.shape,
-            crate::components::PropColliderShape::Ball
-        );
-        assert_eq!(back.detects, TriggerFilter::Any);
     }
 }

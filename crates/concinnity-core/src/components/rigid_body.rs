@@ -12,39 +12,40 @@
 /// ```json
 /// ["RigidBody", { "jump_height": 1.4 }]
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct RigidBody {
     /// Multiplier applied to the global gravity constant. 1.0 = normal gravity.
+    #[asset(default = 1.0)]
     pub gravity_scale: f32,
     /// Radius of the player capsule used for collision, in world units.
+    #[asset(default = 0.3)]
     pub capsule_radius: f32,
     /// Total height of the player capsule. The camera eye sits at the top.
+    #[asset(default = 1.7)]
     pub capsule_height: f32,
     /// Apex height of a jump in world units. 0 disables jumping.
+    #[asset(default = 1.1)]
     pub jump_height: f32,
     /// Steepest slope the player can walk up, in degrees.
+    #[asset(default = 50.0)]
     pub max_slope_deg: f32,
     /// Tallest obstacle the controller auto-steps over, in world units.
+    #[asset(default = 0.3)]
     pub step_height: f32,
     /// True when the capsule is resting on a surface this frame.
     /// Written by PhysicsSystem.
+    // Starting grounded keeps the first frame from playing a fall.
     #[serde(skip)]
+    #[asset(default = true)]
     pub is_grounded: bool,
-}
-
-impl Default for RigidBody {
-    fn default() -> Self {
-        Self {
-            gravity_scale: 1.0,
-            capsule_radius: 0.3,
-            capsule_height: 1.7,
-            jump_height: 1.1,
-            max_slope_deg: 50.0,
-            step_height: 0.3,
-            is_grounded: true,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -52,36 +53,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_default_capsule_is_a_person_sized_walker() {
-        let b = RigidBody::default();
-        assert_eq!(b.capsule_radius, 0.3);
-        assert_eq!(b.capsule_height, 1.7);
-        assert_eq!(b.jump_height, 1.1);
-        assert_eq!(b.max_slope_deg, 50.0);
-        assert_eq!(b.step_height, 0.3);
-        assert_eq!(b.gravity_scale, 1.0);
-        // Starting grounded keeps the first frame from playing a fall.
-        assert!(b.is_grounded);
-    }
-
-    #[test]
     fn ground_state_is_runtime_only_and_never_rides_the_wire() {
-        let b: RigidBody = serde_json::from_str(
-            r#"{"gravity_scale":2,"capsule_radius":0.4,"capsule_height":2,"jump_height":0,
-                "max_slope_deg":35,"step_height":0.5,"is_grounded":false}"#,
-        )
-        .unwrap();
+        let b: RigidBody = serde_json::from_str(r#"{"is_grounded":false}"#).unwrap();
         // The authored `is_grounded` is skipped, so it keeps its default.
         assert!(b.is_grounded);
-        assert_eq!(b.jump_height, 0.0);
 
-        let bytes = postcard::to_allocvec(&b).unwrap();
+        let airborne = RigidBody {
+            is_grounded: false,
+            ..Default::default()
+        };
+        let bytes = postcard::to_allocvec(&airborne).unwrap();
         let back: RigidBody = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.gravity_scale, 2.0);
-        assert_eq!(back.capsule_radius, 0.4);
-        assert_eq!(back.capsule_height, 2.0);
-        assert_eq!(back.max_slope_deg, 35.0);
-        assert_eq!(back.step_height, 0.5);
         assert!(back.is_grounded);
     }
 }

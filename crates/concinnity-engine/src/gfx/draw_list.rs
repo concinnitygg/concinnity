@@ -1093,7 +1093,7 @@ mod tests {
         let mesh_geometry = vec![unit_quad_mesh()];
 
         let inst = InstancedProp {
-            mesh: Some(MeshHandle(0)),
+            mesh: Some(MeshHandle::new(0)),
             material: None,
             cull_distance: 0.0,
             instances: vec![
@@ -1170,7 +1170,7 @@ mod tests {
         let mesh_geometry = vec![unit_quad_mesh()];
 
         let inst = InstancedProp {
-            mesh: Some(MeshHandle(0)),
+            mesh: Some(MeshHandle::new(0)),
             material: None,
             cull_distance: 0.0,
             instances: Vec::new(),
@@ -1212,7 +1212,7 @@ mod tests {
         let items = vec![RenderableItem {
             asset_id: None,
             model: None,
-            mesh: Some(MeshHandle(0)),
+            mesh: Some(MeshHandle::new(0)),
             material: None,
             cull_distance: 0.0,
             is_dynamic: false,
@@ -1251,8 +1251,8 @@ mod tests {
         use concinnity_core::components::{Collider, MeshRenderer, Pickup, PropCollider};
 
         let mut prop = make_prop([0.0; 3]);
-        prop.mesh = Some(MeshHandle(10));
-        prop.material = Some(MaterialHandle(20));
+        prop.mesh = Some(MeshHandle::new(10));
+        prop.material = Some(MaterialHandle::new(20));
         prop.cull_distance = 50.0;
         prop.pickup = true;
         prop.collider = Some(PropCollider::default());
@@ -1279,8 +1279,8 @@ mod tests {
             RenderableItem {
                 asset_id: Some(AssetId(7)),
                 model: None,
-                mesh: Some(MeshHandle(10)),
-                material: Some(MaterialHandle(20)),
+                mesh: Some(MeshHandle::new(10)),
+                material: Some(MaterialHandle::new(20)),
                 cull_distance: 50.0,
                 is_dynamic: true,
             }
@@ -1293,7 +1293,7 @@ mod tests {
             model: None,
             // A `.mesh` handle indexes the dense geometry slice directly, so a
             // test item's handle is the geometry index it draws.
-            mesh: Some(MeshHandle(mesh.0)),
+            mesh: Some(MeshHandle::new(mesh.0)),
             material: None,
             cull_distance: 0.0,
             is_dynamic: false,
@@ -1322,11 +1322,11 @@ mod tests {
             AssetId(1),
             vec![
                 SubMeshRef {
-                    mesh: Some(MeshHandle(0)),
-                    material: Some(MaterialHandle(20)),
+                    mesh: Some(MeshHandle::new(0)),
+                    material: Some(MaterialHandle::new(20)),
                 },
                 SubMeshRef {
-                    mesh: Some(MeshHandle(1)),
+                    mesh: Some(MeshHandle::new(1)),
                     material: None,
                 },
             ],
@@ -1334,7 +1334,7 @@ mod tests {
 
         let mut material_map = std::collections::HashMap::new();
         material_map.insert(
-            MaterialHandle(20),
+            MaterialHandle::new(20),
             MaterialEntry {
                 albedo_slot: 3,
                 normal_map_slot: 4,
@@ -1426,7 +1426,7 @@ mod tests {
             half_width: 8.0,
             half_depth: 10.0,
             ceiling_height: 3.5,
-            texture: Some(TextureHandle(6)),
+            texture: Some(TextureHandle::new(6)),
             wall_texture: None,
             floor_texture: None,
             ceiling_texture: None,
@@ -1480,7 +1480,7 @@ mod tests {
         let item = RenderableItem {
             asset_id: None,
             model: None,
-            mesh: Some(MeshHandle(0)),
+            mesh: Some(MeshHandle::new(0)),
             material: None,
             cull_distance: 0.0,
             is_dynamic: false,
@@ -1551,7 +1551,7 @@ mod tests {
         model_bad_geo.insert(
             AssetId(1),
             vec![SubMeshRef {
-                mesh: Some(MeshHandle(999)),
+                mesh: Some(MeshHandle::new(999)),
                 material: None,
             }],
         );
@@ -1572,8 +1572,8 @@ mod tests {
         model_bad_mat.insert(
             AssetId(1),
             vec![SubMeshRef {
-                mesh: Some(MeshHandle(0)),
-                material: Some(MaterialHandle(404)),
+                mesh: Some(MeshHandle::new(0)),
+                material: Some(MaterialHandle::new(404)),
             }],
         );
         assert!(none(DrawListInputs {
@@ -1603,7 +1603,7 @@ mod tests {
 
         // Single-mesh item referencing a material absent from the material_map.
         let mut item_bad_mat = mesh_item(AssetId(0));
-        item_bad_mat.material = Some(MaterialHandle(404));
+        item_bad_mat.material = Some(MaterialHandle::new(404));
         assert!(none(DrawListInputs {
             items: &[item_bad_mat],
             instanced_props: &[],
@@ -1638,7 +1638,7 @@ mod tests {
 
         // InstancedProp mesh id has no geometry.
         let inst_bad_mesh = InstancedProp {
-            mesh: Some(MeshHandle(999)),
+            mesh: Some(MeshHandle::new(999)),
             material: None,
             cull_distance: 0.0,
             instances: vec![InstanceTransform::default()],
@@ -1657,8 +1657,8 @@ mod tests {
 
         // InstancedProp material absent from the material_map.
         let inst_bad_mat = InstancedProp {
-            mesh: Some(MeshHandle(0)),
-            material: Some(MaterialHandle(404)),
+            mesh: Some(MeshHandle::new(0)),
+            material: Some(MaterialHandle::new(404)),
             cull_distance: 0.0,
             instances: vec![InstanceTransform::default()],
         };

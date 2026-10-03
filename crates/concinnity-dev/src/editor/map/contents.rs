@@ -26,8 +26,8 @@ pub(super) fn unplaced(assets: &[WorldJsonlAsset], places: &[Place]) -> String {
 }
 
 // The place an entry sits in, the way `build_only::membership` spells it: a
-// `scene` on scene-scoped content, a `screen` on an overlay element. An empty
-// one names nothing, which is how an author writes "bound to no place".
+// `scene` on scene-scoped content, a `screen` on an overlay element. A null or
+// absent one names nothing: the entry is bound to no place.
 fn names(asset: &WorldJsonlAsset) -> Option<&str> {
     ["scene", "screen"].into_iter().find_map(|key| {
         asset
@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn an_empty_membership_arg_names_no_place() {
         let world = [
-            asset(RegisteredType::Prop, "a", json!({"scene": ""})),
+            asset(RegisteredType::Prop, "a", json!({"scene": null})),
             asset(RegisteredType::Prop, "b", json!({"mesh": "bistro"})),
         ];
         assert_eq!(held_by(&world, "bistro"), "");

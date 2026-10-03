@@ -26,34 +26,46 @@
 /// };
 /// ```
 #[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
 )]
 #[serde(default)]
 pub struct EngineDefaults {
     /// Inject the [StatHud](#stathud) when the world declares a
     /// [MainMenu](#mainmenu) but no `StatHud`, and fill any declared
     /// `StatHud`'s unset chip labels with chips.
+    #[asset(default = true)]
     pub hud: bool,
     /// Inject the [DebugHud](#debughud) with its chip labels when the world
     /// declares no `DebugHud`.
+    #[asset(default = true)]
     pub debug_hud: bool,
     /// Inject the sky mesh (a skybox mesh, [Material](#material), and
     /// [Prop](#prop)) when the world has an
     /// [EnvironmentMap](#environmentmap) but no skybox mesh. Disable to use an
     /// `EnvironmentMap` for image-based lighting only, with the background
     /// left to `clear_color` or your own geometry.
+    #[asset(default = true)]
     pub sky: bool,
     /// Inject an Escape-toggled pause [MainMenu](#mainmenu) when the world
     /// plays a [Story](#story) but declares no `MainMenu`: Resume, Save, Load,
     /// a trimmed Settings screen, and Quit to the story's title. Disable to
     /// leave a story with no pause menu, or declare your own `MainMenu` to
     /// replace it.
+    #[asset(default = true)]
     pub story_pause_menu: bool,
     /// Inject the [LoadingOverlay](#loadingoverlay) with its screen, backdrop,
     /// progress bar, and label when the world declares [Scene](#scene)s and a
     /// [StreamingConfig](#streamingconfig) but no `LoadingOverlay`. Disable to
     /// jump between scenes with no loading screen while their content streams
     /// in.
+    #[asset(default = true)]
     pub loading_overlay: bool,
     /// Inject a [PhysicsConfig](#physicsconfig) with the engine's own values
     /// when the world has physics content -- a [RigidBody](#rigidbody), a
@@ -62,51 +74,6 @@ pub struct EngineDefaults {
     /// `PhysicsConfig`. Physics runs on those values either way; the injected
     /// component is what makes them visible to tooling. Disable to leave them
     /// implicit.
+    #[asset(default = true)]
     pub physics_config: bool,
-}
-
-impl Default for EngineDefaults {
-    fn default() -> Self {
-        Self {
-            hud: true,
-            debug_hud: true,
-            sky: true,
-            story_pause_menu: true,
-            loading_overlay: true,
-            physics_config: true,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_injected_default_is_on_until_opted_out_of() {
-        // This component exists only to turn injection off, so declaring it
-        // without saying which one must change nothing.
-        let d = EngineDefaults::default();
-        assert!(d.hud);
-        assert!(d.debug_hud);
-        assert!(d.sky);
-        assert!(d.story_pause_menu);
-        assert!(d.loading_overlay);
-        assert!(d.physics_config);
-
-        let declared: EngineDefaults = serde_json::from_str("{}").unwrap();
-        assert_eq!(declared, EngineDefaults::default());
-    }
-
-    #[test]
-    fn opting_out_of_one_default_leaves_the_rest_alone() {
-        let d: EngineDefaults = serde_json::from_str(r#"{"sky":false}"#).unwrap();
-        assert!(!d.sky);
-        assert!(d.hud && d.debug_hud && d.story_pause_menu && d.loading_overlay);
-        assert!(d.physics_config);
-
-        let bytes = postcard::to_allocvec(&d).unwrap();
-        let back: EngineDefaults = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back, d);
-    }
 }

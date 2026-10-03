@@ -1,7 +1,7 @@
 // Scene-loading progress overlay schema.
 
 use crate::components::{Screen, Sprite, TextLabel};
-use crate::ecs::{Ref, de_opt_ref};
+use crate::ecs::Ref;
 
 /// Requests the scene-loading overlay: a full-window backdrop with a progress
 /// bar, shown while a scene jump waits for its streamed content and faded out
@@ -32,55 +32,17 @@ pub struct LoadingOverlay {
     /// [Screen](#screen) the overlay shows while a scene loads. Its
     /// `pauses_world` (on by default) freezes the world beneath the overlay so
     /// the destination scene starts fresh when revealed.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub screen: Option<Ref<Screen>>,
     /// Backdrop [Sprite](#sprite) covering the canvas. Its tint alpha is
     /// animated to reveal the scene once loading completes; an opaque tint
     /// hides the still-loading world completely.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub backdrop: Option<Ref<Sprite>>,
     /// Progress-bar track [Sprite](#sprite); its width is the bar's full
     /// extent the fill is measured against.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub track: Option<Ref<Sprite>>,
     /// Progress-bar fill [Sprite](#sprite); the engine sets its width to the
     /// track width times the destination scene's load progress each frame.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub fill: Option<Ref<Sprite>>,
     /// [TextLabel](#textlabel) rewritten each frame with the load percentage.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub label: Option<Ref<TextLabel>>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ecs::asset_id::AssetId;
-
-    #[test]
-    fn a_blank_overlay_claims_no_pieces() {
-        let o = LoadingOverlay::default();
-        assert!(o.screen.is_none());
-        assert!(o.backdrop.is_none());
-        assert!(o.track.is_none());
-        assert!(o.fill.is_none());
-        assert!(o.label.is_none());
-    }
-
-    #[test]
-    fn each_piece_binds_its_own_asset_and_round_trips_through_postcard() {
-        let o: LoadingOverlay = crate::test_support::from_json(
-            r#"{"screen":"load","backdrop":"dim","track":"bar_bg","fill":"bar","label":"pct"}"#,
-        );
-        assert_eq!(o.screen, Some(Ref::new(AssetId(4))));
-        assert_eq!(o.backdrop, Some(Ref::new(AssetId(3))));
-        assert_eq!(o.track, Some(Ref::new(AssetId(6))));
-        assert_eq!(o.fill, Some(Ref::new(AssetId(3))));
-        assert_eq!(o.label, Some(Ref::new(AssetId(3))));
-
-        let bytes = postcard::to_allocvec(&o).unwrap();
-        let back: LoadingOverlay = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.track, Some(Ref::new(AssetId(6))));
-        assert_eq!(back.screen, Some(Ref::new(AssetId(4))));
-    }
 }

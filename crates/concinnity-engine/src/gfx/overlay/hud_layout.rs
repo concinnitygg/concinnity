@@ -156,7 +156,7 @@ mod tests {
     use concinnity_core::ecs::{FontHandle, World};
     use concinnity_core::gfx::font;
 
-    const FONT: FontHandle = FontHandle(0);
+    const FONT: FontHandle = FontHandle::new(0);
     // An authored position no layout pass should ever produce, so an untouched
     // label is unmistakable.
     const SENTINEL: f32 = -999.0;
@@ -286,7 +286,7 @@ mod tests {
         hidden.visible = false;
         w.push_identified(AssetId(2), hidden);
         let mut orphan = chip("aaaa");
-        orphan.font = Some(FontHandle(99));
+        orphan.font = Some(FontHandle::new(99));
         w.push_identified(AssetId(3), orphan);
         w.push_identified(AssetId(4), chip("aaaaaa"));
         w.push(LayoutContainer {
@@ -363,7 +363,7 @@ mod tests {
         w.push_identified(AssetId(1), chip("aa"));
         w.push_identified(AssetId(2), chip(""));
         let mut orphan = chip("aaaa");
-        orphan.font = Some(FontHandle(99));
+        orphan.font = Some(FontHandle::new(99));
         w.push_identified(AssetId(3), orphan);
         w.push_identified(AssetId(4), chip("aaaa"));
         position_debug_hud(

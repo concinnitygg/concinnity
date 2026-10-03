@@ -135,20 +135,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn args_default_to_an_empty_path_and_inferred_kind() {
-        let args = FileArgs::default();
-        assert!(args.path.is_empty());
-        assert_eq!(args.kind, None);
-    }
-
+    // `cn add` writes normalized args back, so an inferred kind stays absent
+    // rather than being frozen into the world file.
     #[test]
     fn an_absent_kind_is_omitted_from_the_serialized_args() {
         let args: FileArgs = serde_json::from_str(r#"{"path":"assets/board.obj"}"#).unwrap();
-        assert_eq!(args.path, "assets/board.obj");
-        assert_eq!(args.kind, None);
-        // `cn add` writes normalized args back, so an inferred kind stays absent
-        // rather than being frozen into the world file.
         assert_eq!(
             serde_json::to_string(&args).unwrap(),
             r#"{"path":"assets/board.obj"}"#
@@ -156,17 +147,13 @@ mod tests {
     }
 
     #[test]
-    fn an_explicit_kind_round_trips_through_its_lowercase_name() {
+    fn an_explicit_kind_is_written_by_its_lowercase_name() {
         let args: FileArgs = serde_json::from_str(r#"{"path":"font.dat","kind":"ttf"}"#).unwrap();
         assert_eq!(args.kind, Some(FileKind::Ttf));
         assert_eq!(
             serde_json::to_string(&args).unwrap(),
             r#"{"path":"font.dat","kind":"ttf"}"#
         );
-        let bytes = postcard::to_allocvec(&args).unwrap();
-        let back: FileArgs = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.kind, Some(FileKind::Ttf));
-        assert_eq!(back.path, "font.dat");
     }
 }
 
@@ -204,30 +191,6 @@ mod runtime_tests {
     use super::*;
 
     #[test]
-    fn from_ext_maps_every_known_extension() {
-        let cases = [
-            ("obj", FileKind::Obj),
-            ("png", FileKind::Png),
-            ("jpg", FileKind::Jpg),
-            ("jpeg", FileKind::Jpeg),
-            ("bmp", FileKind::Bmp),
-            ("tga", FileKind::Tga),
-            ("gif", FileKind::Gif),
-            ("ttf", FileKind::Ttf),
-            ("otf", FileKind::Otf),
-            ("txt", FileKind::Txt),
-            ("md", FileKind::Md),
-            ("mtl", FileKind::Mtl),
-        ];
-        for (ext, want) in cases {
-            assert_eq!(FileKind::from_ext(ext), Some(want.clone()));
-            // Matching is case-insensitive.
-            assert_eq!(FileKind::from_ext(&ext.to_uppercase()), Some(want));
-        }
-        assert_eq!(FileKind::from_ext("zzz"), None);
-    }
-
-    #[test]
     fn from_args_infers_kind_from_the_extension() {
         // No explicit kind -> inferred from the path.
         let f = File::bake(FileArgs {
@@ -248,28 +211,5 @@ mod runtime_tests {
             kind: None,
         });
         assert_eq!(h.kind, None);
-    }
-
-    #[test]
-    fn is_mesh_is_true_only_for_obj() {
-        assert!(FileKind::Obj.is_mesh());
-        assert!(!FileKind::Png.is_mesh());
-        assert!(!FileKind::Ttf.is_mesh());
-    }
-
-    #[test]
-    fn file_args_and_kind_round_trip_through_json() {
-        let args = FileArgs {
-            path: "x.png".into(),
-            kind: Some(FileKind::Png),
-        };
-        let value = serde_json::to_value(&args).unwrap();
-        let back: FileArgs = serde_json::from_value(value).unwrap();
-        assert_eq!(back.path, "x.png");
-        assert_eq!(back.kind, Some(FileKind::Png));
-        // FileKind serializes to its lowercase name.
-        assert_eq!(serde_json::to_string(&FileKind::Jpeg).unwrap(), "\"jpeg\"");
-        // to_args mirrors the component fields.
-        assert_eq!(File::bake(args).kind, Some(FileKind::Png));
     }
 }

@@ -9,17 +9,10 @@
 //! spaces, the resolver seams a reference name deserializes through, and the
 //! per-type compile dispatch.
 
-use concinnity_core::blob::ResourceKind;
 use concinnity_core::components::Material;
 use concinnity_core::components::SkeletonJoint;
 use concinnity_core::components::SkinnedMesh;
-use concinnity_core::ecs::set_audio_clip_handle_resolver;
-use concinnity_core::ecs::set_font_handle_resolver;
-use concinnity_core::ecs::set_material_handle_resolver;
-use concinnity_core::ecs::set_mesh_handle_resolver;
-use concinnity_core::ecs::set_shader_handle_resolver;
-use concinnity_core::ecs::set_skinned_mesh_handle_resolver;
-use concinnity_core::ecs::set_texture_handle_resolver;
+use concinnity_core::ecs::{HandleKind, set_handle_resolver};
 use concinnity_core::resource::ResourceHandles;
 use concinnity_host::thread::asset_id;
 use serde::Deserialize;
@@ -263,54 +256,33 @@ pub(crate) fn assign_mesh_source_handles(
     }));
 }
 
-// The current build's handle map, consulted by the per-kind resource-handle
-// resolver seams. One map holds every kind's handles; each seam closure reads it
-// with its own `ResourceKind`. Thread-local so parallel builds (and the interner
-// they share) stay isolated, exactly like `concinnity_host::thread::asset_id`'s
-// interner.
+// The current build's handle map, consulted by the resource-handle resolver.
+// One map holds every space's handles. Thread-local so parallel builds (and the
+// interner they share) stay isolated, exactly like
+// `concinnity_host::thread::asset_id`'s interner.
 thread_local! {
     static RESOURCE_HANDLES: RefCell<ResourceHandles> = RefCell::new(ResourceHandles::default());
 }
 
-// Install the per-kind resource-handle resolver seams so a
-// reference name deserializes to its dense handle value. Each closure is
-// non-capturing (the map is a thread-local static), so it coerces to the plain
-// `fn` pointer the seam holds; it resolves a name to its `AssetId` through the
-// shared build interner, then looks up that resource's handle for its kind. An
-// unknown name yields `None`, letting the deserializer fall back or fail as its
-// context requires. Idempotent and cheap after the first call.
+// Install a resource-handle resolver for every handle space, so a reference
+// name deserializes to its dense handle value. The resolver is a plain `fn`
+// (the map is a thread-local static): it resolves a name to its `AssetId`
+// through the shared build interner, then looks up that resource's handle in
+// the requested space. An unknown name yields `None`, letting the deserializer
+// fall back or fail as its context requires. Idempotent and cheap after the
+// first call.
 pub(crate) fn ensure_resource_handle_resolvers() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        set_texture_handle_resolver(|name| {
-            let id = asset_id::intern(name);
-            RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::Texture, id))
-        });
-        set_audio_clip_handle_resolver(|name| {
-            let id = asset_id::intern(name);
-            RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::AudioClip, id))
-        });
-        set_font_handle_resolver(|name| {
-            let id = asset_id::intern(name);
-            RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::Font, id))
-        });
-        set_mesh_handle_resolver(|name| {
-            let id = asset_id::intern(name);
-            RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::Mesh, id))
-        });
-        set_material_handle_resolver(|name| {
-            let id = asset_id::intern(name);
-            RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::Material, id))
-        });
-        set_skinned_mesh_handle_resolver(|name| {
-            let id = asset_id::intern(name);
-            RESOURCE_HANDLES.with(|h| h.borrow().get(ResourceKind::SkinnedMesh, id))
-        });
-        set_shader_handle_resolver(|name| {
-            let id = asset_id::intern(name);
-            RESOURCE_HANDLES.with(|h| h.borrow().shader(id))
-        });
+        for kind in HandleKind::ALL {
+            set_handle_resolver(*kind, resolve_resource_handle);
+        }
     });
+}
+
+fn resolve_resource_handle(kind: HandleKind, name: &str) -> Option<u32> {
+    let id = asset_id::intern(name);
+    RESOURCE_HANDLES.with(|h| h.borrow().handle(kind, id))
 }
 
 // Install this build's handle map so resource references resolve to handles
@@ -331,6 +303,7 @@ pub(crate) fn reset_resource_handles() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::blob::ResourceKind;
     use concinnity_core::components::AudioCue;
     use concinnity_core::components::AudioEmitter;
     use concinnity_core::components::Decal;
@@ -439,7 +412,7 @@ mod tests {
             .reserialize_args(&serde_json::json!({"material": "wood"}))
             .unwrap();
         let prop: Prop = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(prop.material, Some(MaterialHandle(1)));
+        assert_eq!(prop.material, Some(MaterialHandle::new(1)));
 
         // A name no material declared has no slot to point at, so it falls back
         // to the interned id rather than failing the parse.
@@ -449,7 +422,7 @@ mod tests {
         let prop: Prop = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(
             prop.material,
-            Some(MaterialHandle(
+            Some(MaterialHandle::new(
                 asset_id::intern("granite").0 as usize as u32
             ))
         );
@@ -491,7 +464,7 @@ mod tests {
             .compile_payload(&serde_json::json!({"shader": "shader_b"}), None)
             .unwrap();
         let mat: Material = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(mat.shader, Some(ShaderHandle(1)));
+        assert_eq!(mat.shader, Some(ShaderHandle::new(1)));
 
         // An unreferenced shader field stays None.
         let bytes = RegisteredType::Material
@@ -534,18 +507,18 @@ mod tests {
         use concinnity_core::ecs::TextureHandle;
         assert_eq!(
             bake(serde_json::json!({"albedo": "tex_b"})).albedo,
-            Some(TextureHandle(1))
+            Some(TextureHandle::new(1))
         );
         assert_eq!(
             bake(serde_json::json!({"albedo": "tex_a"})).albedo,
-            Some(TextureHandle(0))
+            Some(TextureHandle::new(0))
         );
 
         let decal_bytes = RegisteredType::Decal
             .reserialize_args(&serde_json::json!({"texture": "tex_b"}))
             .unwrap();
         let decal: Decal = postcard::from_bytes(&decal_bytes).unwrap();
-        assert_eq!(decal.texture, Some(TextureHandle(1)));
+        assert_eq!(decal.texture, Some(TextureHandle::new(1)));
     }
 
     // The same invariant for audio clips: an audio-clip reference name resolves
@@ -587,15 +560,15 @@ mod tests {
         };
         assert_eq!(
             clip_field(RegisteredType::AudioEmitter, "clip_a"),
-            Some(AudioClipHandle(0))
+            Some(AudioClipHandle::new(0))
         );
         assert_eq!(
             clip_field(RegisteredType::AudioEmitter, "clip_b"),
-            Some(AudioClipHandle(1))
+            Some(AudioClipHandle::new(1))
         );
         assert_eq!(
             clip_field(RegisteredType::AudioCue, "clip_b"),
-            Some(AudioClipHandle(1))
+            Some(AudioClipHandle::new(1))
         );
     }
 

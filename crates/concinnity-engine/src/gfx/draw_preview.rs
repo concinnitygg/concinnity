@@ -75,7 +75,7 @@ pub(crate) fn material_handle(world: &World, name: AssetId) -> Option<MaterialHa
         .0
         .iter()
         .position(|&id| id == name.0)?;
-    Some(MaterialHandle(handle as u32))
+    Some(MaterialHandle::new(handle as u32))
 }
 
 /// The material `entity`'s draw slots currently render with. `None` for an
@@ -206,7 +206,7 @@ mod tests {
     fn materials() -> (Vec<ResourceEntry>, Vec<u32>) {
         let steel = Material {
             roughness: 0.5,
-            albedo: Some(TextureHandle(1)),
+            albedo: Some(TextureHandle::new(1)),
             ..Default::default()
         };
         let glass = Material {
@@ -333,7 +333,7 @@ mod tests {
         let steel = material(&f.world, AssetId(10)).expect("steel is loaded");
         assert_eq!(steel.entry.uniforms.roughness, 0.5);
         assert_eq!(steel.entry.albedo_slot, 1);
-        assert_eq!(steel.handle, Some(MaterialHandle(0)));
+        assert_eq!(steel.handle, Some(MaterialHandle::new(0)));
         assert!(material(&f.world, AssetId(99)).is_none());
     }
 
@@ -362,7 +362,7 @@ mod tests {
         );
         assert_eq!(
             f.world.get::<MeshRenderer>(entity).and_then(|r| r.material),
-            Some(MaterialHandle(0))
+            Some(MaterialHandle::new(0))
         );
     }
 
@@ -429,10 +429,10 @@ mod tests {
                 .handle
                 .is_none()
         );
-        let glassy = f.prop(Some(MaterialHandle(1)));
+        let glassy = f.prop(Some(MaterialHandle::new(1)));
         assert_eq!(
             drawn_material(&f.world, glassy).expect("glass").handle,
-            Some(MaterialHandle(1))
+            Some(MaterialHandle::new(1))
         );
         let model_backed = f.world.push(ModelRenderer::default());
         assert!(drawn_material(&f.world, model_backed).is_none());
@@ -462,7 +462,7 @@ mod tests {
     fn a_material_referencing_a_missing_texture_declines() {
         let mut f = Fixture::new();
         let broken = Material {
-            albedo: Some(TextureHandle(9)),
+            albedo: Some(TextureHandle::new(9)),
             ..Default::default()
         };
         f.world.insert_resource(MaterialTable(vec![ResourceEntry {
@@ -479,7 +479,7 @@ mod tests {
     fn the_shader_reference_travels_with_the_material() {
         let mut f = Fixture::new();
         let shaded = Material {
-            shader: Some(ShaderHandle(3)),
+            shader: Some(ShaderHandle::new(3)),
             ..Default::default()
         };
         f.world.insert_resource(MaterialTable(vec![ResourceEntry {

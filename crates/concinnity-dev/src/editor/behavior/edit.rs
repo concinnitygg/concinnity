@@ -165,7 +165,7 @@ pub(crate) fn apply_text(args: &mut Value, row: &Row, text: &str) -> Result<(), 
             let verb = palette::verb_of(&current);
             match palette::shape(verb) {
                 Shape::Literal => palette::single(verb, literal_payload(verb, text)?),
-                Shape::Name => palette::single(verb, Value::String(text.to_string())),
+                Shape::Name => palette::single(verb, palette::name_body(verb, text)),
                 _ => return Err("this row has no value to type".to_string()),
             }
         }

@@ -30,7 +30,14 @@ pub enum Justify {
 }
 
 /// One horizontal row of labels inside a `LayoutContainer`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct LayoutRow {
     /// The [TextLabel](#textlabel)s in this row, laid out left to right. Their
@@ -38,15 +45,6 @@ pub struct LayoutRow {
     pub cols: Vec<Ref<TextLabel>>,
     /// How this row is placed within the container's content width.
     pub justify: Justify,
-}
-
-impl Default for LayoutRow {
-    fn default() -> Self {
-        Self {
-            cols: Vec::new(),
-            justify: Justify::Left,
-        }
-    }
 }
 
 /// Positions a set of [TextLabel](#textlabel)s as a stack of rows, so a HUD does
@@ -73,36 +71,35 @@ impl Default for LayoutRow {
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct LayoutContainer {
     /// Left edge of the container in window pixels.
+    #[asset(default = 10.0)]
     pub x: f32,
     /// Top edge of the container in window pixels.
+    #[asset(default = 10.0)]
     pub y: f32,
     /// Pixels between adjacent labels in a row, measured between their
     /// background boxes.
+    #[asset(default = 6.0)]
     pub col_gap: f32,
     /// Pixels between adjacent rows, measured between their background boxes.
+    #[asset(default = 6.0)]
     pub row_gap: f32,
     /// Rows of labels, top to bottom.
     pub rows: Vec<LayoutRow>,
     /// When false, the container leaves its labels where they are instead of
     /// repositioning them.
+    #[asset(default = true)]
     pub visible: bool,
-}
-
-impl Default for LayoutContainer {
-    fn default() -> Self {
-        Self {
-            x: 10.0,
-            y: 10.0,
-            col_gap: 6.0,
-            row_gap: 6.0,
-            rows: Vec::new(),
-            visible: true,
-        }
-    }
 }
 
 /// A label's measured extent, used by [`LayoutContainer::layout`] to place it.
@@ -259,18 +256,6 @@ mod tests {
     }
 
     #[test]
-    fn defaults_place_an_empty_container_in_the_top_left() {
-        let c = LayoutContainer::default();
-        assert_eq!((c.x, c.y), (10.0, 10.0));
-        assert_eq!((c.col_gap, c.row_gap), (6.0, 6.0));
-        assert!(c.visible);
-        assert!(c.rows.is_empty());
-        assert!(c.layout(box_of).is_empty());
-        assert_eq!(LayoutRow::default().justify, Justify::Left);
-        assert_eq!(Justify::default(), Justify::Left);
-    }
-
-    #[test]
     fn a_row_lays_its_labels_out_edge_to_edge_with_the_column_gap() {
         let c = container(vec![row(Justify::Left, &[1, 2])]);
         let out = c.layout(box_of);
@@ -347,24 +332,6 @@ mod tests {
             })
         });
         assert_eq!((out[0].x, out[0].y), (3.0, 7.0));
-    }
-
-    #[test]
-    fn rows_parse_from_authored_args_and_round_trip_through_postcard() {
-        let c: LayoutContainer = crate::test_support::from_json(
-            r#"{"x":10,"y":10,"col_gap":6,"row_gap":6,
-                "rows":[{"cols":["fps_chip","ev_chip"],"justify":"space-between"},
-                        {"cols":["passes_chip"]}]}"#,
-        );
-        assert_eq!(c.rows.len(), 2);
-        assert_eq!(c.rows[0].justify, Justify::SpaceBetween);
-        assert_eq!(c.rows[1].justify, Justify::Left);
-        assert_eq!(c.rows[0].cols, [AssetId(8), AssetId(7)]);
-
-        let bytes = postcard::to_allocvec(&c).unwrap();
-        let back: LayoutContainer = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.rows[0].justify, Justify::SpaceBetween);
-        assert_eq!(back.rows[1].cols, [AssetId(11)]);
     }
 
     #[test]

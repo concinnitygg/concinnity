@@ -619,9 +619,9 @@ mod tests {
     #[test]
     fn textured_sprite_emits_real_uvs_and_its_slot() {
         let mut s = sprite(10.0, 20.0, 100.0, 50.0, [1.0, 0.9, 0.8, 0.75]);
-        s.texture = Some(TextureHandle(42));
+        s.texture = Some(TextureHandle::new(42));
         let mut slots = no_slots();
-        slots.insert(TextureHandle(42), 3);
+        slots.insert(TextureHandle::new(42), 3);
         let calls = build_sprite_calls(core::slice::from_ref(&s), Some(0), &slots, [0.0, 0.0]);
         assert_eq!(calls.len(), 1);
         // The call binds the sprite texture's atlas slot, not the font's.
@@ -753,7 +753,7 @@ mod tests {
     #[test]
     fn textured_sprite_without_a_loaded_texture_falls_back_to_fill() {
         let mut s = sprite(0.0, 0.0, 10.0, 10.0, [0.2, 0.3, 0.4, 1.0]);
-        s.texture = Some(TextureHandle(42));
+        s.texture = Some(TextureHandle::new(42));
         // The texture never made it into the atlas pool: solid-fill sentinel.
         let calls = build_sprite_calls(core::slice::from_ref(&s), Some(5), &no_slots(), [0.0, 0.0]);
         assert_eq!(calls[0].atlas_slot, 5);

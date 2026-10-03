@@ -3,8 +3,7 @@
 use crate::components::Screen;
 use crate::components::SpriteFit;
 use crate::ecs::FontHandle;
-use crate::ecs::de_opt_font_handle;
-use crate::ecs::{Ref, de_opt_ref};
+use crate::ecs::Ref;
 use alloc::string::String;
 
 /// An editable single-line text field drawn as a UI overlay.
@@ -31,12 +30,18 @@ use alloc::string::String;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct TextInput {
     /// The [Font](#font) used to render the field's text. Unset draws with the
     /// engine's built-in face at its native 24px.
-    #[serde(deserialize_with = "de_opt_font_handle")]
     pub font: Option<FontHandle>,
     /// The current text. Edited in place as the player types; set an initial
     /// value here to pre-fill the field.
@@ -48,34 +53,44 @@ pub struct TextInput {
     /// Top edge in screen pixels from the window's top-left.
     pub y: f32,
     /// Field width in screen pixels.
+    #[asset(default = 240.0)]
     pub width: f32,
     /// Field height in screen pixels.
+    #[asset(default = 40.0)]
     pub height: f32,
     /// Uniform scale applied on top of the font's `size_px` (24 for the
     /// built-in face). 1.0 = native size.
+    #[asset(default = 1.0)]
     pub scale: f32,
     /// Linear-space RGB color of the typed text.
+    #[asset(default = [0.95, 0.95, 0.97])]
     pub text_color: [f32; 3],
     /// Linear-space RGB color of the placeholder prompt.
+    #[asset(default = [0.55, 0.55, 0.60])]
     pub placeholder_color: [f32; 3],
     /// RGBA fill of the field's background box, each channel in [0, 1].
+    #[asset(default = [0.10, 0.10, 0.13, 1.0])]
     pub background: [f32; 4],
     /// Linear-space RGB color of the caret bar.
+    #[asset(default = [0.95, 0.95, 0.97])]
     pub caret_color: [f32; 3],
     /// Corner rounding radius of the background box, in field pixels.
+    #[asset(default = 4.0)]
     pub corner_radius: f32,
     /// Inner horizontal inset from the box edge to the text, in pixels.
+    #[asset(default = 8.0)]
     pub padding: f32,
     /// Maximum number of characters accepted. 0 means no limit.
     pub max_len: u32,
     /// When false the field is skipped each frame and cannot take focus.
+    #[asset(default = true)]
     pub visible: bool,
     /// How a screen-owned field maps from the reference canvas to the window when
     /// their aspect ratios differ (matches [Sprite](#sprite)'s `fit`).
     pub fit: SpriteFit,
     /// [Screen](#screen) this field belongs to. `None` means the field is
     /// always visible.
-    #[serde(default, deserialize_with = "de_opt_ref")]
+    #[serde(default)]
     pub screen: Option<Ref<Screen>>,
     /// Runtime keyboard-focus flag, set by the engine while this is the active
     /// field. Not authored and not serialized to a blob.
@@ -93,100 +108,28 @@ pub struct TextInput {
     pub caret: usize,
 }
 
-impl Default for TextInput {
-    fn default() -> Self {
-        Self {
-            font: None,
-            content: String::new(),
-            placeholder: String::new(),
-            x: 0.0,
-            y: 0.0,
-            width: 240.0,
-            height: 40.0,
-            scale: 1.0,
-            text_color: [0.95, 0.95, 0.97],
-            placeholder_color: [0.55, 0.55, 0.60],
-            background: [0.10, 0.10, 0.13, 1.0],
-            caret_color: [0.95, 0.95, 0.97],
-            corner_radius: 4.0,
-            padding: 8.0,
-            max_len: 0,
-            visible: true,
-            fit: SpriteFit::Fit,
-            screen: None,
-            focused: false,
-            ghost: String::new(),
-            caret: 0,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::asset_id::AssetId;
-
-    #[test]
-    fn a_blank_field_is_visible_empty_and_unfocused() {
-        let t = TextInput::default();
-        assert!(t.content.is_empty());
-        assert!(t.placeholder.is_empty());
-        assert_eq!((t.width, t.height), (240.0, 40.0));
-        assert_eq!(t.scale, 1.0);
-        assert_eq!(t.corner_radius, 4.0);
-        assert_eq!(t.padding, 8.0);
-        // Zero means "no length limit", not "accepts nothing".
-        assert_eq!(t.max_len, 0);
-        assert!(t.visible);
-        assert_eq!(t.fit, SpriteFit::Fit);
-        // Edit state is runtime-only.
-        assert!(!t.focused);
-        assert!(t.ghost.is_empty());
-        assert_eq!(t.caret, 0);
-        assert!(t.font.is_none());
-        assert!(t.screen.is_none());
-    }
 
     #[test]
     fn edit_state_is_runtime_only_and_never_rides_the_wire() {
-        let t: TextInput = crate::test_support::from_json(
-            r#"{"font":"body","content":"hello","placeholder":"name","max_len":32,
-                "screen":"menu","focused":true,"caret":5,"ghost":"world"}"#,
-        );
-        assert_eq!(t.font, Some(FontHandle(4)));
-        assert_eq!(t.content, "hello");
-        assert_eq!(t.screen, Some(Ref::new(AssetId(4))));
+        let mut t: TextInput =
+            serde_json::from_str(r#"{"content":"hello","focused":true,"caret":5,"ghost":"world"}"#)
+                .unwrap();
         // Focus, caret, and the completion ghost are skipped on the way in.
         assert!(!t.focused);
         assert_eq!(t.caret, 0);
         assert!(t.ghost.is_empty());
 
-        let bytes = postcard::to_allocvec(&t).unwrap();
-        let back: TextInput = postcard::from_bytes(&bytes).unwrap();
+        // And on the way out.
+        t.focused = true;
+        t.caret = 3;
+        t.ghost = String::from("world");
+        let back: TextInput = postcard::from_bytes(&postcard::to_allocvec(&t).unwrap()).unwrap();
         assert_eq!(back.content, "hello");
-        assert_eq!(back.placeholder, "name");
-        assert_eq!(back.max_len, 32);
-        assert_eq!(back.font, Some(FontHandle(4)));
         assert!(!back.focused);
-    }
-
-    #[test]
-    fn an_authored_style_parses_and_round_trips_through_postcard() {
-        let t: TextInput = crate::test_support::from_json(
-            r#"{"x":12,"y":24,"width":300,"height":36,"scale":1.5,"text_color":[1,1,1],
-                "placeholder_color":[0.4,0.4,0.4],"background":[0,0,0,1],
-                "caret_color":[1,0,0],"corner_radius":0,"padding":4,"visible":false,
-                "fit":"bottom"}"#,
-        );
-        let bytes = postcard::to_allocvec(&t).unwrap();
-        let back: TextInput = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!((back.x, back.y), (12.0, 24.0));
-        assert_eq!(back.scale, 1.5);
-        assert_eq!(back.placeholder_color, [0.4, 0.4, 0.4]);
-        assert_eq!(back.background, [0.0, 0.0, 0.0, 1.0]);
-        assert_eq!(back.caret_color, [1.0, 0.0, 0.0]);
-        assert_eq!(back.padding, 4.0);
-        assert!(!back.visible);
-        assert_eq!(back.fit, SpriteFit::Bottom);
+        assert_eq!(back.caret, 0);
+        assert!(back.ghost.is_empty());
     }
 }

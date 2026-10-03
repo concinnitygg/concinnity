@@ -170,8 +170,8 @@ mod tests {
 
         // A mesh-backed child: material, collider, interactable, scene, parent.
         let mut panel = prop();
-        panel.mesh = Some(MeshHandle(101));
-        panel.material = Some(MaterialHandle(102));
+        panel.mesh = Some(MeshHandle::new(101));
+        panel.material = Some(MaterialHandle::new(102));
         panel.collider = Some(PropCollider::default());
         panel.interactable = true;
         panel.scene = Some(Ref::new(AssetId(200)));
@@ -202,8 +202,8 @@ mod tests {
             .collect();
         assert_eq!(meshes.len(), 1);
         let (panel_e, mesh_id, material_id, panel_pos, panel_rot) = meshes[0];
-        assert_eq!(mesh_id, Some(MeshHandle(101)));
-        assert_eq!(material_id, Some(MaterialHandle(102)));
+        assert_eq!(mesh_id, Some(MeshHandle::new(101)));
+        assert_eq!(material_id, Some(MaterialHandle::new(102)));
         assert_eq!(panel_pos, [4.0, 5.0, 6.0]);
         assert_eq!(panel_rot, [0.0, 90.0, 0.0]);
 
@@ -235,11 +235,11 @@ mod tests {
         // Child declared BEFORE its parent: the two-pass resolution still links.
         let mut world = World::new();
         let mut child = prop();
-        child.mesh = Some(MeshHandle(10));
+        child.mesh = Some(MeshHandle::new(10));
         child.parent = Some(Ref::new(AssetId(2)));
         world.push_identified(AssetId(1), child);
         let mut parent = prop();
-        parent.mesh = Some(MeshHandle(11));
+        parent.mesh = Some(MeshHandle::new(11));
         world.push_identified(AssetId(2), parent);
 
         world.start(SYSTEMS).expect("start");
@@ -251,13 +251,13 @@ mod tests {
         // The child (mesh 10) points at the parent entity.
         assert_eq!(by_parent.len(), 1);
         let (parent_e, child_mesh) = by_parent[0];
-        assert_eq!(child_mesh, Some(MeshHandle(10)));
+        assert_eq!(child_mesh, Some(MeshHandle::new(10)));
         // That parent entity is the one holding mesh 11.
         let parent_mesh = world
             .join2::<MeshRenderer, Transform>()
             .find(|(e, _, _)| *e == parent_e)
             .map(|(_, m, _)| m.mesh);
-        assert_eq!(parent_mesh, Some(Some(MeshHandle(11))));
+        assert_eq!(parent_mesh, Some(Some(MeshHandle::new(11))));
     }
 
     // The pass drains the Prop column but keeps each entity on its per-instance
@@ -266,7 +266,7 @@ mod tests {
     fn decomposed_default_drains_prop_keeping_components() {
         let mut world = World::new();
         let mut a = prop();
-        a.mesh = Some(MeshHandle(10));
+        a.mesh = Some(MeshHandle::new(10));
         world.push_identified(AssetId(1), a);
         let mut b = prop();
         b.model = Some(Ref::new(AssetId(20)));
@@ -288,11 +288,11 @@ mod tests {
     fn prop_body_decomposes_to_body_dynamics_on_the_owner() {
         let mut world = World::new();
         let mut crate_prop = prop();
-        crate_prop.mesh = Some(MeshHandle(10));
+        crate_prop.mesh = Some(MeshHandle::new(10));
         crate_prop.collider = Some(PropCollider::default());
         world.push_identified(AssetId(1), crate_prop);
         let mut wall = prop();
-        wall.mesh = Some(MeshHandle(11));
+        wall.mesh = Some(MeshHandle::new(11));
         wall.collider = Some(PropCollider::default());
         world.push_identified(AssetId(2), wall);
         world.add_component(PropBody {
@@ -309,7 +309,7 @@ mod tests {
             .map(|(_, b, m)| (m.mesh, b.mass))
             .collect();
         // Only the PropBody's owner is dynamic, with its authored values.
-        assert_eq!(dynamics, vec![(Some(MeshHandle(10)), 4.0)]);
+        assert_eq!(dynamics, vec![(Some(MeshHandle::new(10)), 4.0)]);
     }
 
     // Despawning an entity removes every component on it: the pass drains the

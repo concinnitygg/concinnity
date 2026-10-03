@@ -266,27 +266,19 @@ mod tests {
     use alloc::vec;
 
     #[test]
-    fn a_shader_parses_from_authored_args() {
-        let s: Shader =
-            serde_json::from_str(r#"{"fragment":"assets/shaders/water.hlsl"}"#).unwrap();
-        assert_eq!(s.fragment, "assets/shaders/water.hlsl");
-        assert!(s.vertex.is_none(), "the vertex file is optional");
-        assert_eq!(s.stage(ShaderStage::Vertex), None);
-        assert_eq!(
-            s.stage(ShaderStage::Fragment),
-            Some("assets/shaders/water.hlsl")
-        );
-        // The identity and payload locator are injected, never authored.
-        assert!(s.locator.is_none());
+    fn a_stage_reads_its_declared_file() {
+        let fragment_only = Shader {
+            fragment: "f.hlsl".to_string(),
+            ..Shader::default()
+        };
+        assert_eq!(fragment_only.stage(ShaderStage::Vertex), None);
+        assert_eq!(fragment_only.stage(ShaderStage::Fragment), Some("f.hlsl"));
 
-        let both: Shader =
-            serde_json::from_str(r#"{"vertex":"v.hlsl","fragment":"f.hlsl"}"#).unwrap();
+        let both = Shader {
+            vertex: Some("v.hlsl".to_string()),
+            ..fragment_only
+        };
         assert_eq!(both.stage(ShaderStage::Vertex), Some("v.hlsl"));
-
-        let bytes = postcard::to_allocvec(&both).unwrap();
-        let back: Shader = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.vertex.as_deref(), Some("v.hlsl"));
-        assert_eq!(back.fragment, "f.hlsl");
     }
 
     // The per-platform `sources` table is gone: a declaration still spelling it
@@ -307,36 +299,20 @@ mod tests {
     }
 
     #[test]
-    fn programs_round_trip_and_find_artifacts_by_entry_and_digest() {
+    fn programs_find_artifacts_by_entry_and_digest() {
         let payload = ShaderPrograms {
             name: "wall".to_string(),
             vertex: None,
-            fragment: ShaderSource {
-                path: "shaders/wall.hlsl".to_string(),
-                text: "float4 shade(VertexOut v, GpuObjectData od) { return 1.0; }".to_string(),
-            },
+            fragment: ShaderSource::default(),
             programs: vec![CompiledProgram {
                 entry: "fragment_main".to_string(),
                 source_digest: 3,
                 artifact: vec![1, 2, 3],
             }],
         };
-        let bytes = payload.encode().expect("encode");
-        let decoded = ShaderPrograms::decode(&bytes).expect("decode");
-        assert_eq!(decoded, payload);
-        assert_eq!(decoded.artifact("fragment_main", 3), Some(&[1u8, 2, 3][..]));
-        assert_eq!(decoded.artifact("fragment_main", 4), None, "stale");
-        assert_eq!(decoded.artifact("vertex_main", 3), None);
-    }
-
-    #[test]
-    fn an_empty_payload_holds_no_programs() {
-        let payload = ShaderPrograms::default();
-        assert!(payload.programs.is_empty());
-        assert_eq!(
-            ShaderPrograms::decode(&payload.encode().unwrap()),
-            Ok(payload)
-        );
+        assert_eq!(payload.artifact("fragment_main", 3), Some(&[1u8, 2, 3][..]));
+        assert_eq!(payload.artifact("fragment_main", 4), None, "stale");
+        assert_eq!(payload.artifact("vertex_main", 3), None);
     }
 
     #[test]

@@ -223,7 +223,7 @@ mod tests {
     // A file-backed Animation targeting a SkinnedMesh named "reload_hero".
     fn file_backed_animation(source: &str, animation_name: &str) -> Animation {
         Animation {
-            target: Some(SkinnedMeshHandle(intern("reload_hero").0)),
+            target: Some(SkinnedMeshHandle::new(intern("reload_hero").0)),
             source: source.to_string(),
             animation_name: animation_name.to_string(),
             ..Default::default()

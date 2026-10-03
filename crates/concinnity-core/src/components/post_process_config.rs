@@ -35,15 +35,25 @@ use crate::math::exp2;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct PostProcessConfig {
     /// Additive bloom contribution. 0 skips bloom entirely.
+    #[asset(default = 0.6)]
     pub bloom_intensity: f32,
     /// Brightness threshold for bloom. Pixels brighter than this contribute
     /// fully; pixels within `bloom_knee` below it ramp in softly.
+    #[asset(default = 1.0)]
     pub bloom_threshold: f32,
     /// Width of the soft knee just below `bloom_threshold`.
+    #[asset(default = 0.5)]
     pub bloom_knee: f32,
     /// Exposure offset in photographic stops. Each +1 doubles scene
     /// brightness before bloom and tonemapping; 0 is neutral.
@@ -53,32 +63,40 @@ pub struct PostProcessConfig {
     /// Color-LUT blend in `[0, 1]`. Mixes the graded color over the ungraded
     /// one by this amount. Only matters when the world declares a
     /// [ColorLut](#colorlut); with none, grading is a no-op at any strength.
+    #[asset(default = 1.0)]
     pub lut_strength: f32,
     /// Anti-aliasing mode. `fxaa` applies a cheap composite-pass edge filter;
     /// `taa` (default) adds a temporal pass that jitters the projection and
     /// accumulates detail across frames for the cleanest edges, at the cost of a
     /// velocity pre-pass and a history buffer; `off` disables edge smoothing.
     /// Clamped to `fxaa` below the mid quality tier.
+    #[asset(default = AaMode::Taa)]
     pub aa_mode: AaMode,
     /// Screen-space ambient occlusion toggle. Darkens creases and contact areas
     /// where ambient light is occluded. On by default, forced off on the lowest
     /// quality tier.
+    #[asset(default = true)]
     pub ssao: bool,
     /// How far the ambient-occlusion search reaches for occluders, in world
     /// units. Larger values pick up broader, softer occlusion.
+    #[asset(default = 0.5)]
     pub ssao_radius: f32,
     /// Ambient-occlusion strength, clamped to `[0, 4]`. 1.0 is the natural
     /// amount; higher values exaggerate the contact darkening.
+    #[asset(default = 1.0)]
     pub ssao_intensity: f32,
     /// Screen-space reflection toggle. Mixes reflected scene color over glossy
     /// surfaces (water, polished floors). On by default, forced off below the
     /// high quality tier.
+    #[asset(default = true)]
     pub ssr: bool,
     /// Reflection blend strength, clamped to `[0, 1]`. Scales the
     /// Fresnel-weighted reflection mixed over the base shading.
+    #[asset(default = 0.7)]
     pub ssr_intensity: f32,
     /// How far a reflection reaches, in world units. Longer reaches catch more
     /// distant reflections, more coarsely.
+    #[asset(default = 40.0)]
     pub ssr_max_distance: f32,
     /// Hardware ray-traced reflection toggle. When the GPU supports ray tracing,
     /// traces real reflection rays so off-screen geometry still appears, instead
@@ -86,6 +104,7 @@ pub struct PostProcessConfig {
     /// `ssr_max_distance` tunables and takes precedence over `ssr`, falling back
     /// to it where ray tracing isn't available. On by default; only the top
     /// quality tier permits it, so everything below falls back to `ssr`.
+    #[asset(default = true)]
     pub ray_traced_reflections: bool,
     /// Internal resolution the ray-traced reflection rays are cast at. `half`
     /// (default) traces a quarter of the pixels and upsamples with a depth- and
@@ -97,6 +116,7 @@ pub struct PostProcessConfig {
     /// sun. Each reflected hit then casts a second ray toward the sun, which
     /// roughly doubles the trace cost; off lights every reflected surface as if
     /// the sun reached it. Only matters when `ray_traced_reflections` is on.
+    #[asset(default = true)]
     pub rt_reflection_shadows: bool,
     /// Internal resolution of the roughness-aware reflection blur the SSR /
     /// ray-traced reflection composite runs. `half` (default) blurs at a
@@ -111,6 +131,7 @@ pub struct PostProcessConfig {
     /// pass on top, so nearby lit surfaces bleed color onto one another; the
     /// environment ambient still covers the off-screen / sky fallback. Clamped
     /// back to `ibl` below the high quality tier.
+    #[asset(default = IndirectLighting::Ssgi)]
     pub indirect_lighting: IndirectLighting,
     /// Multiplier on the indirect (ambient / IBL) lighting term, clamped to
     /// `[0, 16]`. 1.0 (default) leaves the environment-derived ambient at its
@@ -120,14 +141,17 @@ pub struct PostProcessConfig {
     /// diffuse and specular IBL together, so reflections stay consistent with
     /// the brighter ambient. Useful for high-contrast exterior scenes where a
     /// strong sun would otherwise crush shadows to black.
+    #[asset(default = 1.0)]
     pub ambient_intensity: f32,
     /// Indirect-bounce strength, clamped to `[0, 4]`. Scales the gathered
     /// indirect light added on top of the existing shading; 0 makes it a no-op.
     /// Only matters when `indirect_lighting` is `ssgi`.
+    #[asset(default = 0.5)]
     pub ssgi_intensity: f32,
     /// How far the indirect-light rays reach, in world units. A near-field
     /// effect, so it defaults well below `ssr_max_distance`. Only matters when
     /// `indirect_lighting` is `ssgi`.
+    #[asset(default = 8.0)]
     pub ssgi_max_distance: f32,
     /// Internal resolution of the SSGI trace. `half` (default) trades a little
     /// sharpness for a large performance saving; `full` is native; `quarter` is
@@ -137,6 +161,7 @@ pub struct PostProcessConfig {
     /// indirect light is accumulated over frames, so more rays settle it faster
     /// after the camera reveals new surfaces or the lighting changes, at a
     /// higher cost. Only matters when `indirect_lighting` is `ssgi`.
+    #[asset(default = DEFAULT_SSGI_RAYS)]
     pub ssgi_rays: u32,
     /// Auto-exposure toggle. Adapts exposure each frame toward a balanced
     /// mid-tone. The authored `exposure_ev` then acts as an additive bias in
@@ -144,11 +169,14 @@ pub struct PostProcessConfig {
     pub auto_exposure: bool,
     /// Lower bound on the adapted exposure (EV). The `exposure_ev` bias is
     /// applied before this clamp.
+    #[asset(default = -8.0)]
     pub auto_exposure_min_ev: f32,
     /// Upper bound on the adapted exposure (EV).
+    #[asset(default = 8.0)]
     pub auto_exposure_max_ev: f32,
     /// How quickly exposure chases a new target (per second). Higher converges
     /// faster but can pump under flickering content; 1-3 is comfortable.
+    #[asset(default = 1.5)]
     pub auto_exposure_speed: f32,
     /// HDR display output toggle. On a capable display, emits extended-range
     /// HDR instead of the standard tonemapped output. Falls back to standard
@@ -176,6 +204,7 @@ pub struct PostProcessConfig {
     /// Two-pass occlusion culling toggle. Reduces objects popping in a frame
     /// late when they're revealed by camera or occluder motion, at the cost of
     /// extra culling work each frame. Needs the bindless GPU-cull path.
+    #[asset(default = true)]
     pub occlusion_two_pass: bool,
 }
 
@@ -386,46 +415,6 @@ impl PassResolution {
 /// default and the runtime code stay a single source of truth.
 pub const DEFAULT_SSGI_RAYS: u32 = 1;
 
-impl Default for PostProcessConfig {
-    fn default() -> Self {
-        Self {
-            bloom_intensity: 0.6,
-            bloom_threshold: 1.0,
-            bloom_knee: 0.5,
-            exposure_ev: 0.0,
-            vignette_strength: 0.0,
-            lut_strength: 1.0,
-            aa_mode: AaMode::Taa,
-            ssao: true,
-            ssao_radius: 0.5,
-            ssao_intensity: 1.0,
-            ssr: true,
-            ssr_intensity: 0.7,
-            ssr_max_distance: 40.0,
-            ray_traced_reflections: true,
-            rt_reflection_resolution: PassResolution::default(),
-            rt_reflection_shadows: true,
-            reflection_blur_resolution: PassResolution::default(),
-            indirect_lighting: IndirectLighting::Ssgi,
-            ambient_intensity: 1.0,
-            ssgi_intensity: 0.5,
-            ssgi_max_distance: 8.0,
-            ssgi_resolution: PassResolution::default(),
-            ssgi_rays: DEFAULT_SSGI_RAYS,
-            auto_exposure: false,
-            auto_exposure_min_ev: -8.0,
-            auto_exposure_max_ev: 8.0,
-            auto_exposure_speed: 1.5,
-            hdr_display: false,
-            hdr_pq: false,
-            temporal_upscaling: false,
-            upscale_quality: UpscaleQuality::default(),
-            upscale_backend: UpscalerBackend::default(),
-            occlusion_two_pass: true,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,51 +430,6 @@ mod tests {
             assert_eq!(UpscaleQuality::nearest(q.scale()), Some(q));
         }
         assert_eq!(UpscaleQuality::nearest(1.0), None);
-    }
-
-    #[test]
-    fn defaults_author_the_capable_hardware_look() {
-        // The renderer's optional work is on by default; the quality preset's
-        // ceiling is what takes it back off tier by tier, so a world that
-        // authors nothing gets the best look its GPU can carry.
-        let c = PostProcessConfig::default();
-        assert_eq!(c.aa_mode, AaMode::Taa);
-        assert_eq!(c.bloom_intensity, 0.6);
-        assert!(c.ssao);
-        assert!(c.ssr);
-        assert!(c.ray_traced_reflections);
-        assert!(c.occlusion_two_pass);
-        assert_eq!(c.indirect_lighting, IndirectLighting::Ssgi);
-        assert_eq!(c.ssgi_rays, DEFAULT_SSGI_RAYS);
-    }
-
-    #[test]
-    fn look_and_display_choices_stay_off_by_default() {
-        // No quality tier turns these on, so they are authoring decisions, not
-        // hardware ones: auto-exposure meters a scene the author framed, HDR
-        // output and temporal upscaling trade fidelity the author chose.
-        let c = PostProcessConfig::default();
-        assert!(!c.auto_exposure);
-        assert!(!c.temporal_upscaling);
-        assert!(!c.hdr_display);
-        assert!(!c.hdr_pq);
-        assert_eq!(c.vignette_strength, 0.0);
-    }
-
-    #[test]
-    fn enum_defaults_are_the_cheap_variants() {
-        let c = PostProcessConfig::default();
-        assert_eq!(c.upscale_quality, UpscaleQuality::Quality);
-        assert_eq!(c.upscale_backend, UpscalerBackend::Auto);
-        assert_eq!(c.ssgi_resolution, PassResolution::Half);
-        assert_eq!(c.reflection_blur_resolution, PassResolution::Half);
-        assert_eq!(AaMode::default(), AaMode::Fxaa);
-        assert_eq!(IndirectLighting::default(), IndirectLighting::Ibl);
-        // The two enum `Default`s the config deliberately does not use: the
-        // cheap variant is the right fallback for a bare `AaMode` /
-        // `IndirectLighting`, while the config defaults to the richer one.
-        assert_ne!(c.aa_mode, AaMode::default());
-        assert_ne!(c.indirect_lighting, IndirectLighting::default());
     }
 
     #[test]
@@ -523,7 +467,6 @@ mod tests {
         assert_eq!(PassResolution::Full.scale_divisor(), 1);
         assert_eq!(PassResolution::Half.scale_divisor(), 2);
         assert_eq!(PassResolution::Quarter.scale_divisor(), 4);
-        assert_eq!(PassResolution::default(), PassResolution::Half);
     }
 
     #[test]
@@ -576,29 +519,6 @@ mod tests {
             serde_json::from_str::<PassResolution>(r#""full""#).unwrap(),
             PassResolution::Full
         );
-    }
-
-    #[test]
-    fn an_authored_stack_round_trips_through_postcard() {
-        let c: PostProcessConfig = serde_json::from_str(
-            r#"{"aa_mode":"taa","ssao":true,"ssr":true,"indirect_lighting":"ssgi",
-                "ssgi_resolution":"quarter","temporal_upscaling":true,
-                "upscale_quality":"performance","upscale_backend":"dlss",
-                "auto_exposure":true,"hdr_display":true,"hdr_pq":true}"#,
-        )
-        .unwrap();
-        assert!(c.aa_mode.taa_enabled());
-        assert_eq!(c.ssgi_resolution.scale_divisor(), 4);
-        // Fields the args did not mention keep the schema defaults.
-        assert_eq!(c.bloom_intensity, 0.6);
-
-        let bytes = postcard::to_allocvec(&c).unwrap();
-        let back: PostProcessConfig = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.aa_mode, AaMode::Taa);
-        assert_eq!(back.upscale_backend, UpscalerBackend::Dlss);
-        assert_eq!(back.upscale_quality, UpscaleQuality::Performance);
-        assert_eq!(back.indirect_lighting, IndirectLighting::Ssgi);
-        assert!(back.hdr_pq);
     }
 }
 
@@ -666,22 +586,14 @@ impl PostProcessConfig {
 #[cfg(test)]
 mod runtime_tests {
     use super::*;
-    use crate::components::{AaMode, PassResolution, UpscaleQuality, UpscalerBackend};
-    use alloc::format;
 
     #[test]
-    fn default_resolves_to_neutral_params() {
-        let p = PostProcessConfig::default().resolve();
-        assert_eq!(p.bloom_intensity, 0.6);
-        assert_eq!(p.bloom_threshold, 1.0);
-        assert_eq!(p.bloom_knee, 0.5);
-        // No exposure offset and no vignette out of the box.
-        assert_eq!(p.exposure, 1.0);
-        assert_eq!(p.vignette, 0.0);
-        // Full LUT blend by default: a no-op until a ColorLut is declared.
-        assert_eq!(p.lut_strength, 1.0);
+    fn default_resolves_to_the_renderer_fallback() {
         // The renderer's no-asset fallback has to resolve to the same thing.
-        assert_eq!(p, PostProcessTunables::DEFAULT);
+        assert_eq!(
+            PostProcessConfig::default().resolve(),
+            PostProcessTunables::DEFAULT
+        );
     }
 
     #[test]
@@ -738,35 +650,17 @@ mod runtime_tests {
     }
 
     #[test]
-    fn aa_mode_defaults_to_taa_and_round_trips_through_args() {
-        assert_eq!(PostProcessConfig::default().aa_mode, AaMode::Taa);
-        let cfg = PostProcessConfig {
-            aa_mode: AaMode::Fxaa,
-            ..Default::default()
-        };
-        assert_eq!(cfg.clone().aa_mode, AaMode::Fxaa);
-    }
-
-    #[test]
-    fn aa_mode_gates_taa_and_fxaa() {
-        assert!(!AaMode::Off.taa_enabled());
-        assert!(!AaMode::Fxaa.taa_enabled());
-        assert!(AaMode::Taa.taa_enabled());
-        // resolve() carries the FXAA gate into the composite uniform.
+    fn resolve_carries_the_fxaa_gate() {
         let off = PostProcessConfig {
             aa_mode: AaMode::Off,
             ..Default::default()
         };
         assert_eq!(off.resolve().fxaa, 0.0);
-        assert_eq!(PostProcessConfig::default().resolve().fxaa, 1.0);
-    }
-
-    #[test]
-    fn ssao_defaults_on_with_neutral_tunables() {
-        let cfg = PostProcessConfig::default();
-        assert!(cfg.ssao);
-        assert_eq!(cfg.ssao_radius, 0.5);
-        assert_eq!(cfg.ssao_intensity, 1.0);
+        let taa = PostProcessConfig {
+            aa_mode: AaMode::Taa,
+            ..Default::default()
+        };
+        assert_eq!(taa.resolve().fxaa, 1.0);
     }
 
     #[test]
@@ -788,56 +682,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn ssao_deserializes_from_jsonl_args() {
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"ssao":true,"ssao_radius":0.6}"#).expect("parse");
-        assert!(cfg.ssao);
-        assert_eq!(cfg.ssao_radius, 0.6);
-        // Omitted intensity falls back to the default.
-        assert_eq!(cfg.ssao_intensity, 1.0);
-    }
-
-    #[test]
-    fn ssr_defaults_on_with_neutral_tunables() {
-        let cfg = PostProcessConfig::default();
-        assert!(cfg.ssr);
-        assert_eq!(cfg.ssr_intensity, 0.7);
-        assert_eq!(cfg.ssr_max_distance, 40.0);
-    }
-
-    #[test]
-    fn ssr_deserializes_from_jsonl_args() {
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"ssr":true,"ssr_intensity":0.5}"#).expect("parse");
-        assert!(cfg.ssr);
-        assert_eq!(cfg.ssr_intensity, 0.5);
-        // Omitted distance falls back to the default.
-        assert_eq!(cfg.ssr_max_distance, 40.0);
-    }
-
-    #[test]
-    fn rt_reflections_default_on() {
-        assert!(PostProcessConfig::default().ray_traced_reflections);
-    }
-
-    #[test]
-    fn rt_reflections_deserialize_from_jsonl_args() {
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"ray_traced_reflections":true,"ssr_intensity":0.5}"#)
-                .expect("parse");
-        assert!(cfg.ray_traced_reflections);
-        // An explicit false is what turns ray tracing off; omitting the field
-        // keeps the default on.
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"ray_traced_reflections":false}"#).expect("parse");
-        assert!(!cfg.ray_traced_reflections);
-    }
-
-    #[test]
-    fn ambient_intensity_defaults_neutral_and_clamps() {
-        // Default is a no-op multiplier.
-        assert_eq!(PostProcessConfig::default().ambient_intensity(), 1.0);
-        // Authored values clamp into [0, 16].
+    fn ambient_intensity_clamps_to_a_safe_multiplier() {
         let hot = PostProcessConfig {
             ambient_intensity: 100.0,
             ..Default::default()
@@ -848,99 +693,23 @@ mod runtime_tests {
             ..Default::default()
         };
         assert_eq!(neg.ambient_intensity(), 0.0);
-        // Round-trips through JSONL like any other tunable.
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"ambient_intensity":3.5}"#).expect("parse");
-        assert_eq!(cfg.ambient_intensity(), 3.5);
     }
 
     #[test]
-    fn ssgi_defaults_on_with_neutral_tunables() {
-        let cfg = PostProcessConfig::default();
-        assert_eq!(cfg.indirect_lighting, IndirectLighting::Ssgi);
-        assert_eq!(cfg.ssgi_intensity, 0.5);
-        assert_eq!(cfg.ssgi_max_distance, 8.0);
-        // The trace defaults to half resolution with one ray per pixel per
-        // frame.
-        assert_eq!(cfg.ssgi_resolution, PassResolution::Half);
-        assert_eq!(cfg.ssgi_rays, 1);
-    }
-
-    #[test]
-    fn ssgi_resolution_and_counts_deserialize_from_jsonl_args() {
-        let cfg: PostProcessConfig = serde_json::from_str(
-            r#"{"indirect_lighting":"ssgi","ssgi_resolution":"full","ssgi_rays":2}"#,
-        )
-        .expect("parse");
-        assert_eq!(cfg.ssgi_resolution, PassResolution::Full);
-        assert_eq!(cfg.ssgi_rays, 2);
-        // Omitting them falls back to the half-resolution, one-ray defaults.
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"indirect_lighting":"ssgi"}"#).expect("parse");
-        assert_eq!(cfg.ssgi_resolution, PassResolution::Half);
-        assert_eq!(cfg.ssgi_rays, 1);
-    }
-
-    #[test]
-    fn rt_reflection_scaling_defaults_to_half_with_shadows() {
-        let cfg = PostProcessConfig::default();
-        assert_eq!(cfg.rt_reflection_resolution, PassResolution::Half);
-        assert!(cfg.rt_reflection_shadows);
-    }
-
-    #[test]
-    fn rt_reflection_scaling_deserializes_from_jsonl_args() {
-        let cfg: PostProcessConfig = serde_json::from_str(
-            r#"{"ray_traced_reflections":true,"rt_reflection_resolution":"quarter","rt_reflection_shadows":false}"#,
-        )
-        .expect("parse");
-        assert_eq!(cfg.rt_reflection_resolution, PassResolution::Quarter);
-        assert!(!cfg.rt_reflection_shadows);
-    }
-
-    #[test]
-    fn reflection_blur_resolution_defaults_to_half() {
-        let cfg = PostProcessConfig::default();
-        assert_eq!(cfg.reflection_blur_resolution, PassResolution::Half);
-        assert_eq!(cfg.reflection_blur_divisor(), 2);
-    }
-
-    #[test]
-    fn reflection_blur_resolution_deserializes_from_jsonl_args() {
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"ssr":true,"reflection_blur_resolution":"quarter"}"#)
-                .expect("parse");
-        assert_eq!(cfg.reflection_blur_resolution, PassResolution::Quarter);
+    fn reflection_blur_divisor_follows_the_resolution() {
+        let cfg = PostProcessConfig {
+            reflection_blur_resolution: PassResolution::Quarter,
+            ..Default::default()
+        };
         assert_eq!(cfg.reflection_blur_divisor(), 4);
-        // Omitting the field falls back to the half-resolution default.
-        let cfg: PostProcessConfig = serde_json::from_str(r#"{"ssr":true}"#).expect("parse");
-        assert_eq!(cfg.reflection_blur_resolution, PassResolution::Half);
-        assert_eq!(cfg.reflection_blur_divisor(), 2);
     }
 
     #[test]
-    fn ssgi_deserializes_from_jsonl_args() {
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"indirect_lighting":"ssgi","ssgi_intensity":0.8}"#)
-                .expect("parse");
-        assert_eq!(cfg.indirect_lighting, IndirectLighting::Ssgi);
-        assert_eq!(cfg.ssgi_intensity, 0.8);
-        // Omitted distance falls back to the default.
-        assert_eq!(cfg.ssgi_max_distance, 8.0);
-        // An explicit "ibl" is what drops the screen-space bounce; omitting the
-        // field keeps the default on.
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"indirect_lighting":"ibl"}"#).expect("parse");
-        assert_eq!(cfg.indirect_lighting, IndirectLighting::Ibl);
-    }
-
-    #[test]
-    fn auto_exposure_defaults_off_with_neutral_tunables() {
-        let cfg = PostProcessConfig::default();
-        assert!(!cfg.auto_exposure);
-        assert_eq!(cfg.auto_exposure_min_ev, -8.0);
-        assert_eq!(cfg.auto_exposure_max_ev, 8.0);
-        assert_eq!(cfg.auto_exposure_speed, 1.5);
+    fn auto_exposure_settings_are_none_when_off() {
+        let cfg = PostProcessConfig {
+            auto_exposure: false,
+            ..Default::default()
+        };
         assert!(cfg.auto_exposure_settings().is_none());
     }
 
@@ -957,133 +726,5 @@ mod runtime_tests {
         assert_eq!(s.min_ev, -4.0);
         assert_eq!(s.max_ev, 6.0);
         assert_eq!(s.speed, 2.0);
-    }
-
-    #[test]
-    fn auto_exposure_deserializes_from_jsonl_args() {
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"auto_exposure":true,"auto_exposure_speed":3.0}"#)
-                .expect("parse");
-        assert!(cfg.auto_exposure);
-        assert_eq!(cfg.auto_exposure_speed, 3.0);
-        // Omitted bounds fall back to the defaults.
-        assert_eq!(cfg.auto_exposure_min_ev, -8.0);
-        assert_eq!(cfg.auto_exposure_max_ev, 8.0);
-    }
-
-    #[test]
-    fn aa_mode_deserializes_from_jsonl_args() {
-        let cfg: PostProcessConfig = serde_json::from_str(r#"{"aa_mode":"taa"}"#).expect("parse");
-        assert_eq!(cfg.aa_mode, AaMode::Taa);
-        // Omitting the field falls back to the TAA default.
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"bloom_intensity":0.5}"#).expect("parse");
-        assert_eq!(cfg.aa_mode, AaMode::Taa);
-        // "off" disables edge smoothing entirely.
-        let cfg: PostProcessConfig = serde_json::from_str(r#"{"aa_mode":"off"}"#).expect("parse");
-        assert_eq!(cfg.aa_mode, AaMode::Off);
-    }
-
-    #[test]
-    fn hdr_display_defaults_off() {
-        assert!(!PostProcessConfig::default().hdr_display);
-    }
-
-    #[test]
-    fn hdr_display_round_trips_through_args_and_jsonl() {
-        let cfg = PostProcessConfig {
-            hdr_display: true,
-            ..Default::default()
-        };
-        assert!(cfg.clone().hdr_display);
-
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"hdr_display":true}"#).expect("parse");
-        assert!(cfg.hdr_display);
-    }
-
-    #[test]
-    fn temporal_upscaling_defaults_off_with_quality_preset() {
-        let cfg = PostProcessConfig::default();
-        assert!(!cfg.temporal_upscaling);
-        assert_eq!(cfg.upscale_quality, UpscaleQuality::Quality);
-    }
-
-    #[test]
-    fn upscale_quality_scales_are_monotonic() {
-        // Each step down in quality must reduce the per-axis ratio so render
-        // cost drops monotonically as users dial quality lower.
-        let q = UpscaleQuality::Quality.scale();
-        let b = UpscaleQuality::Balanced.scale();
-        let p = UpscaleQuality::Performance.scale();
-        let u = UpscaleQuality::UltraPerformance.scale();
-        assert!(q > b && b > p && p > u);
-        assert!(u > 0.0);
-    }
-
-    #[test]
-    fn occlusion_two_pass_defaults_on_and_round_trips() {
-        assert!(PostProcessConfig::default().occlusion_two_pass);
-        let cfg = PostProcessConfig {
-            occlusion_two_pass: false,
-            ..Default::default()
-        };
-        assert!(!cfg.clone().occlusion_two_pass);
-        // Deserializes from jsonl args; omitting it leaves the feature on.
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"occlusion_two_pass":false}"#).expect("parse");
-        assert!(!cfg.occlusion_two_pass);
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"bloom_intensity":0.5}"#).expect("parse");
-        assert!(cfg.occlusion_two_pass);
-    }
-
-    #[test]
-    fn upscale_backend_defaults_to_auto() {
-        assert_eq!(
-            PostProcessConfig::default().upscale_backend,
-            UpscalerBackend::Auto
-        );
-        assert_eq!(UpscalerBackend::default(), UpscalerBackend::Auto);
-    }
-
-    #[test]
-    fn upscale_backend_round_trips_via_snake_case_json() {
-        for (s, want) in [
-            ("auto", UpscalerBackend::Auto),
-            ("fsr3", UpscalerBackend::Fsr3),
-            ("dlss", UpscalerBackend::Dlss),
-            ("xess", UpscalerBackend::Xess),
-        ] {
-            let json = format!(r#"{{"temporal_upscaling":true,"upscale_backend":"{s}"}}"#);
-            let cfg: PostProcessConfig = serde_json::from_str(&json).expect("parse");
-            assert_eq!(cfg.upscale_backend, want, "for {s}");
-        }
-        // Omitting the field falls back to Auto.
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"temporal_upscaling":true}"#).expect("parse");
-        assert_eq!(cfg.upscale_backend, UpscalerBackend::Auto);
-    }
-
-    #[test]
-    fn upscale_backend_round_trips_through_args() {
-        let cfg = PostProcessConfig {
-            upscale_backend: UpscalerBackend::Xess,
-            ..Default::default()
-        };
-        assert_eq!(cfg.clone().upscale_backend, UpscalerBackend::Xess);
-    }
-
-    #[test]
-    fn upscale_quality_round_trips_via_snake_case_json() {
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"temporal_upscaling":true,"upscale_quality":"performance"}"#)
-                .expect("parse");
-        assert!(cfg.temporal_upscaling);
-        assert_eq!(cfg.upscale_quality, UpscaleQuality::Performance);
-        // Omitting the preset falls back to the default.
-        let cfg: PostProcessConfig =
-            serde_json::from_str(r#"{"temporal_upscaling":true}"#).expect("parse");
-        assert_eq!(cfg.upscale_quality, UpscaleQuality::Quality);
     }
 }

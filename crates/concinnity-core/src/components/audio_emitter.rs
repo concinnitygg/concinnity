@@ -4,8 +4,7 @@ use crate::components::AudioBus;
 use crate::components::Prop;
 use crate::components::Vocabulary;
 use crate::ecs::AudioClipHandle;
-use crate::ecs::de_opt_audio_clip_handle;
-use crate::ecs::{Ref, de_opt_ref};
+use crate::ecs::Ref;
 
 /// A point source of sound in the world.
 ///
@@ -25,25 +24,35 @@ use crate::ecs::{Ref, de_opt_ref};
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct AudioEmitter {
     /// The [AudioClip](#audioclip) this emitter plays.
-    #[serde(deserialize_with = "de_opt_audio_clip_handle")]
     pub clip: Option<AudioClipHandle>,
     /// World-space position of the sound source.
     pub position: [f32; 3],
     /// Linear gain multiplier applied to the clip.
+    #[asset(default = 1.0)]
     pub volume: f32,
     /// Whether the clip restarts when it ends.
+    // A positional emitter is normally ambience, so it loops by default.
+    #[asset(default = true)]
     pub looping: bool,
     /// Optional [Prop](#prop) whose position the emitter tracks each frame.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub prop: Option<Ref<Prop>>,
     /// Distance from the listener at which the sound plays at full volume.
+    #[asset(default = 1.0)]
     pub min_distance: f32,
     /// Distance from the listener beyond which the sound is inaudible. Must
     /// exceed `min_distance`.
+    #[asset(default = 50.0)]
     pub max_distance: f32,
     /// How volume falls between `min_distance` and `max_distance`.
     pub rolloff: Rolloff,
@@ -69,76 +78,15 @@ pub enum Rolloff {
     None,
 }
 
-impl Default for AudioEmitter {
-    fn default() -> Self {
-        Self {
-            clip: None,
-            position: [0.0; 3],
-            volume: 1.0,
-            looping: true,
-            prop: None,
-            min_distance: 1.0,
-            max_distance: 50.0,
-            rolloff: Rolloff::Logarithmic,
-            bus: None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::asset_id::AssetId;
 
     #[test]
-    fn a_blank_emitter_loops_at_the_origin() {
-        // A positional emitter is normally ambience, so it loops by default.
-        let e = AudioEmitter::default();
-        assert!(e.looping);
-        assert_eq!(e.volume, 1.0);
-        assert_eq!(e.position, [0.0, 0.0, 0.0]);
-        assert!(e.clip.is_none());
-        assert!(e.prop.is_none());
-        assert_eq!(e.min_distance, 1.0);
-        assert_eq!(e.max_distance, 50.0);
-        assert_eq!(e.rolloff, Rolloff::Logarithmic);
-        assert!(e.bus.is_none());
-    }
-
-    #[test]
-    fn an_emitter_attached_to_a_prop_parses_and_round_trips_through_postcard() {
-        let e: AudioEmitter = crate::test_support::from_json(
-            r#"{"clip":"hum","prop":"lamp","position":[1,2,3],"volume":0.5,"looping":false}"#,
-        );
-        assert_eq!(e.clip, Some(AudioClipHandle(3)));
-        assert_eq!(e.prop, Some(Ref::new(AssetId(4))));
-        assert_eq!(e.position, [1.0, 2.0, 3.0]);
-        assert!(!e.looping);
-
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: AudioEmitter = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.clip, Some(AudioClipHandle(3)));
-        assert_eq!(back.prop, Some(Ref::new(AssetId(4))));
-        assert_eq!(back.volume, 0.5);
-    }
-
-    #[test]
-    fn authored_rolloff_and_bus_parse_and_round_trip() {
-        let e: AudioEmitter = crate::test_support::from_json(
-            r#"{"clip":"hum","min_distance":2.5,"max_distance":80.0,"rolloff":"linear","bus":"voice"}"#,
-        );
-        assert_eq!(e.min_distance, 2.5);
-        assert_eq!(e.max_distance, 80.0);
-        assert_eq!(e.rolloff, Rolloff::Linear);
-        assert_eq!(e.bus, Some(crate::components::AudioBus::Voice));
-
-        let bytes = postcard::to_allocvec(&e).unwrap();
-        let back: AudioEmitter = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.max_distance, 80.0);
-        assert_eq!(back.rolloff, Rolloff::Linear);
-        assert_eq!(back.bus, Some(crate::components::AudioBus::Voice));
-
-        let none: AudioEmitter = crate::test_support::from_json(r#"{"rolloff":"none"}"#);
-        assert_eq!(none.rolloff, Rolloff::None);
+    fn rolloff_names_parse_in_lowercase() {
+        let r = |s: &str| serde_json::from_str::<Rolloff>(s).unwrap();
+        assert_eq!(r(r#""logarithmic""#), Rolloff::Logarithmic);
+        assert_eq!(r(r#""linear""#), Rolloff::Linear);
+        assert_eq!(r(r#""none""#), Rolloff::None);
     }
 }

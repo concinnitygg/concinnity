@@ -57,7 +57,7 @@ fn pose_world(count: usize) -> World {
         world.insert(
             entity,
             SkeletonPose {
-                mesh_id: SkinnedMeshHandle(i as u32),
+                mesh_id: SkinnedMeshHandle::new(i as u32),
                 skinned_index: SkinnedIndex::from_usize(i),
                 skeleton: skeleton::Skeleton::new(Vec::new()),
                 joint_matrices: vec![model_at(i); JOINTS],

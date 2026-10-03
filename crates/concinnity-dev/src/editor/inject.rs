@@ -495,7 +495,7 @@ mod tests {
         world.push_identified(
             AssetId(0),
             TextLabel {
-                font: Some(FontHandle(99)),
+                font: Some(FontHandle::new(99)),
                 ..Default::default()
             },
         );
@@ -505,10 +505,10 @@ mod tests {
         // Two faces appended: the HUD face the panels use, then the code face.
         let fonts = world.resource::<FontTable>().expect("the faces were baked");
         assert_eq!(fonts.len(), 2);
-        let baked = FontHandle(0);
+        let baked = FontHandle::new(0);
         let code = super::super::panels::story_panel::code_label_ids()[0];
         let code = world.get_by_id::<TextLabel>(code).unwrap();
-        assert_eq!(code.font, Some(FontHandle(1)));
+        assert_eq!(code.font, Some(FontHandle::new(1)));
         assert_eq!(code.scale, super::super::code_font::SCALE);
         let save = world.get_by_id::<TextLabel>(hud::SAVE_LABEL).unwrap();
         assert_eq!(save.font, Some(baked));
@@ -556,12 +556,12 @@ mod tests {
         assert_eq!(s.tint, [1.0, 0.0, 0.0, 1.0]);
         assert!(s.visible);
 
-        let t = text_field("name", Some(FontHandle(9)));
+        let t = text_field("name", Some(FontHandle::new(9)));
         assert_eq!(t.placeholder, "name");
         assert_eq!(t.background, [0.14, 0.15, 0.20, 1.0]);
         assert_eq!(t.max_len, 48);
         assert!(!t.visible);
-        assert_eq!(t.font, Some(FontHandle(9)));
+        assert_eq!(t.font, Some(FontHandle::new(9)));
 
         let c = centered_label("SAVE", [0.0, 0.0, 88.0, 88.0], None);
         assert_eq!(c.content, "SAVE");

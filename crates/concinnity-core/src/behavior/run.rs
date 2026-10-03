@@ -1261,7 +1261,7 @@ mod tests {
         let run = Run::default();
         let effects = run.exec(&[
             node(COp::Sound {
-                clip: AudioClipHandle(3),
+                clip: AudioClipHandle::new(3),
                 kind: CueKind::Music,
                 volume: 0.5,
             }),
@@ -1284,7 +1284,7 @@ mod tests {
         };
         assert_eq!(
             (cue.clip, cue.kind, cue.volume),
-            (AudioClipHandle(3), CueKind::Music, 0.5)
+            (AudioClipHandle::new(3), CueKind::Music, 0.5)
         );
         assert_eq!(*scene, AssetId(1));
         assert_eq!(*transition, SceneTransition::FadeBlack);

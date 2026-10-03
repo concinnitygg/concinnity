@@ -23,7 +23,7 @@ fn a_prop_scoped_behavior_fires_once_started() {
     world.push_identified(
         AssetId(1),
         Prop {
-            mesh: Some(MeshHandle(10)),
+            mesh: Some(MeshHandle::new(10)),
             scale: [1.0; 3],
             ..Default::default()
         },
@@ -83,7 +83,7 @@ fn a_behavior_moves_a_prop_the_simulation_owns() {
     world.push_identified(
         AssetId(1),
         Prop {
-            mesh: Some(MeshHandle(10)),
+            mesh: Some(MeshHandle::new(10)),
             position: [0.0, 5.0, 0.0],
             scale: [1.0; 3],
             collider: Some(PropCollider {
@@ -197,7 +197,7 @@ fn a_distance_gate_on_the_queried_camera_decides_by_where_the_camera_is() {
     world.push_identified(
         AssetId(1),
         Prop {
-            mesh: Some(MeshHandle(10)),
+            mesh: Some(MeshHandle::new(10)),
             scale: [1.0; 3],
             ..Default::default()
         },

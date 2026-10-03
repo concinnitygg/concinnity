@@ -16,7 +16,14 @@ use alloc::vec::Vec;
 /// `solid: false` (typically named `air`); cells whose palette entry is
 /// non-solid emit no faces. Faces are only emitted between a solid block and
 /// either an empty neighbor or the outside of the chunk.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct VoxelChunk {
     /// [BlockType](#blocktype) asset names. `blocks[i]` is an index into this list.
@@ -24,68 +31,18 @@ pub struct VoxelChunk {
     /// Chunk dimensions `[dx, dy, dz]` in blocks.
     pub dim: [u32; 3],
     /// World units per block edge.
+    #[asset(default = 1.0)]
     pub block_size: f32,
     /// Flat block array, length `dx*dy*dz`. Index = `x + y*dx + z*dx*dy`.
     pub blocks: Vec<u32>,
     /// Number of level-of-detail versions to generate, including the original.
     /// `1` (the default) generates none.
+    #[asset(default = 1)]
     pub lod_levels: u32,
     /// Camera distances at which to switch to each lower-detail version; empty
     /// lets the build choose defaults.
-    #[serde(default)]
     pub lod_distances: Vec<f32>,
     /// Injected at load time from the compiled blob payload.
     #[serde(skip)]
     pub locator: Option<PayloadLocator>,
-}
-
-impl Default for VoxelChunk {
-    fn default() -> Self {
-        Self {
-            palette: Vec::new(),
-            dim: [0, 0, 0],
-            block_size: 1.0,
-            blocks: Vec::new(),
-            lod_levels: 1,
-            lod_distances: Vec::new(),
-            locator: None,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ecs::asset_id::AssetId;
-
-    #[test]
-    fn a_blank_chunk_is_empty_with_meter_sized_blocks() {
-        let c = VoxelChunk::default();
-        assert_eq!(c.dim, [0, 0, 0]);
-        assert_eq!(c.block_size, 1.0);
-        assert!(c.blocks.is_empty());
-        assert!(c.palette.is_empty());
-        assert_eq!(c.lod_levels, 1);
-        assert!(c.lod_distances.is_empty());
-        assert!(c.locator.is_none());
-    }
-
-    #[test]
-    fn an_authored_chunk_parses_and_round_trips_through_postcard() {
-        let c: VoxelChunk = crate::test_support::from_json(
-            r#"{"palette":["air","stone"],"dim":[2,1,2],"block_size":0.5,
-                "blocks":[0,1,1,0],"lod_levels":2,"lod_distances":[16]}"#,
-        );
-        assert_eq!(c.palette, [AssetId(3), AssetId(5)]);
-        // The block list indexes the palette, one entry per cell in `dim`.
-        assert_eq!(c.blocks.len() as u32, c.dim[0] * c.dim[1] * c.dim[2]);
-
-        let bytes = postcard::to_allocvec(&c).unwrap();
-        let back: VoxelChunk = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.dim, [2, 1, 2]);
-        assert_eq!(back.block_size, 0.5);
-        assert_eq!(back.blocks, [0, 1, 1, 0]);
-        assert_eq!(back.lod_levels, 2);
-        assert_eq!(back.lod_distances, [16.0]);
-    }
 }

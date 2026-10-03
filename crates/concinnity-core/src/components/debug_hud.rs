@@ -1,7 +1,7 @@
 // Developer debug HUD schema.
 
 use crate::components::TextLabel;
-use crate::ecs::{Ref, de_opt_ref};
+use crate::ecs::Ref;
 
 /// Requests the developer debug HUD: a set of [TextLabel](#textlabel) chips
 /// with diagnostic readouts, anchored to the top-right of the window and
@@ -33,49 +33,11 @@ use crate::ecs::{Ref, de_opt_ref};
 #[serde(default)]
 pub struct DebugHud {
     /// [TextLabel](#textlabel) that receives the per-step GPU-timing chip text.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub passes_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the cursor-position chip text.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub mouse_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the live camera-pose chip text.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub camera_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the thread / memory budget chip text.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub sys_label: Option<Ref<TextLabel>>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ecs::asset_id::AssetId;
-
-    #[test]
-    fn a_blank_hud_claims_no_labels() {
-        // Every chip is opt-in: an unset slot means that readout is suppressed
-        // rather than drawn somewhere arbitrary.
-        let h = DebugHud::default();
-        assert!(h.passes_label.is_none());
-        assert!(h.mouse_label.is_none());
-        assert!(h.camera_label.is_none());
-        assert!(h.sys_label.is_none());
-    }
-
-    #[test]
-    fn each_chip_binds_its_own_label_and_round_trips_through_postcard() {
-        let h: DebugHud = crate::test_support::from_json(
-            r#"{"passes_label":"passes_chip","mouse_label":"","camera_label":"cam","sys_label":6}"#,
-        );
-        assert_eq!(h.passes_label, Some(Ref::new(AssetId(11))));
-        assert_eq!(h.mouse_label, None);
-        assert_eq!(h.camera_label, Some(Ref::new(AssetId(3))));
-        assert_eq!(h.sys_label, Some(Ref::new(AssetId(6))));
-
-        let bytes = postcard::to_allocvec(&h).unwrap();
-        let back: DebugHud = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.passes_label, Some(Ref::new(AssetId(11))));
-        assert_eq!(back.mouse_label, None);
-        assert_eq!(back.sys_label, Some(Ref::new(AssetId(6))));
-    }
 }

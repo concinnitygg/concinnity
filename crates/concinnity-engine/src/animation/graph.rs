@@ -185,7 +185,7 @@ mod tests {
     // The handle an authored `"target": "<name>"` reference deserializes to:
     // the resolver's interner fallback puts the interned id in the handle.
     fn handle(name: &str) -> SkinnedMeshHandle {
-        SkinnedMeshHandle(intern(name).0)
+        SkinnedMeshHandle::new(intern(name).0)
     }
 
     fn is_graph(targets: &BTreeMap<SkinnedMeshHandle, TargetState>, t: SkinnedMeshHandle) -> bool {

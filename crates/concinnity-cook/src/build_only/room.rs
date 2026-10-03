@@ -142,11 +142,11 @@ mod tests {
         assert_eq!(assets.len(), 1);
     }
 
-    // An empty texture string names no generator, so nothing is created.
+    // A null texture names no generator, so nothing is created.
     #[test]
-    fn empty_texture_field_creates_nothing() {
+    fn a_null_texture_field_creates_nothing() {
         let mut assets =
-            vec![serde_json::json!({"type":"Room","args":{"$id":"r","wall_texture":""}})];
+            vec![serde_json::json!({"type":"Room","args":{"$id":"r","wall_texture":null}})];
         expand_room_textures(&mut assets);
         assert_eq!(assets.len(), 1);
     }

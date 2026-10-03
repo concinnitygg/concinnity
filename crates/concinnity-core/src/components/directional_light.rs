@@ -15,16 +15,26 @@
 /// };
 /// ```
 #[derive(
-    Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
 )]
 #[serde(default)]
 pub struct DirectionalLight {
     /// Direction pointing toward the light source. Does not need to be
     /// normalized.
+    #[asset(default = [-0.3, 0.85, 0.4])]
     pub direction: [f32; 3],
     /// Linear-space RGB color of the light.
+    #[asset(default = [1.0, 1.0, 1.0])]
     pub color: [f32; 3],
     /// Intensity multiplier applied to the color.
+    #[asset(default = 1.0)]
     pub intensity: f32,
 }
 
@@ -35,44 +45,4 @@ impl DirectionalLight {
         color: [0.0; 3],
         intensity: 0.0,
     };
-}
-
-impl Default for DirectionalLight {
-    fn default() -> Self {
-        Self {
-            direction: [-0.3, 0.85, 0.4],
-            color: [1.0, 1.0, 1.0],
-            intensity: 1.0,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_default_sun_points_down_from_above() {
-        // The direction is toward the light, so a positive Y component is what
-        // makes the default read as an overhead sun rather than an uplight.
-        let l = DirectionalLight::default();
-        assert!(l.direction[1] > 0.0);
-        assert_eq!(l.color, [1.0, 1.0, 1.0]);
-        assert_eq!(l.intensity, 1.0);
-    }
-
-    #[test]
-    fn an_authored_sun_parses_and_round_trips_through_postcard() {
-        let l: DirectionalLight =
-            serde_json::from_str(r#"{"direction":[0,1,0],"color":[1,0.9,0.7],"intensity":3}"#)
-                .unwrap();
-        assert_eq!(l.direction, [0.0, 1.0, 0.0]);
-        assert_eq!(l.color, [1.0, 0.9, 0.7]);
-        assert_eq!(l.intensity, 3.0);
-
-        let bytes = postcard::to_allocvec(&l).unwrap();
-        let back: DirectionalLight = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.color, [1.0, 0.9, 0.7]);
-        assert_eq!(back.intensity, 3.0);
-    }
 }

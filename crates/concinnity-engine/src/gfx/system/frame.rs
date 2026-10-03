@@ -679,7 +679,7 @@ mod tests {
 
     fn bare_pose(skinned_index: u32, joints: usize) -> SkeletonPose {
         SkeletonPose {
-            mesh_id: SkinnedMeshHandle(0),
+            mesh_id: SkinnedMeshHandle::new(0),
             skinned_index: SkinnedIndex(skinned_index),
             skeleton: skeleton::Skeleton::new(Vec::new()),
             joint_matrices: vec![translated(1.0); joints],

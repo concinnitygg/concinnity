@@ -5,7 +5,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields};
 
-use crate::owned_file::is_owned_file;
+use crate::asset_attrs::asset_attrs;
 use crate::schema::{AuthoredField, struct_schema};
 use crate::serde_attrs::{container_attrs, field_attrs};
 
@@ -57,7 +57,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let mut probes = Vec::new();
     for AuthoredField { field, key, .. } in &authored {
         let ty = &field.ty;
-        let owned = is_owned_file(&field.attrs)?;
+        let owned = asset_attrs(&field.attrs)?.owned_file;
         if owned && key.is_empty() {
             return Err(syn::Error::new_spanned(
                 field,

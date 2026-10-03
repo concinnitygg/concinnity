@@ -60,7 +60,7 @@ fn a_rendering_world_gets_the_debug_hud_its_chips_and_a_font() {
         "the face is baked, not compiled"
     );
     for chip in &chips {
-        assert_eq!(chip.font, Some(crate::ecs::FontHandle(0)));
+        assert_eq!(chip.font, Some(crate::ecs::FontHandle::new(0)));
     }
     for id in ids::<TextLabel>(&world) {
         assert!(named.contains(&Some(Ref::new(id))));
@@ -159,8 +159,8 @@ fn an_environment_map_gets_the_sky() {
     assert!(payloads.get(ids::<ProceduralMesh>(&world)[0]).is_some());
 
     let prop = world.query::<Prop>().next().expect("the sky prop");
-    assert_eq!(prop.mesh, Some(crate::ecs::MeshHandle(0)));
-    assert_eq!(prop.material, Some(crate::ecs::MaterialHandle(0)));
+    assert_eq!(prop.mesh, Some(crate::ecs::MeshHandle::new(0)));
+    assert_eq!(prop.material, Some(crate::ecs::MaterialHandle::new(0)));
     assert_eq!(
         world.resource::<MaterialTable>().expect("materials").len(),
         1
@@ -193,7 +193,7 @@ fn the_baked_sky_mesh_trails_every_build_assigned_handle() {
     complete(&mut world).unwrap();
 
     let prop = world.query::<Prop>().next().expect("the sky prop");
-    assert_eq!(prop.mesh, Some(crate::ecs::MeshHandle(3)));
+    assert_eq!(prop.mesh, Some(crate::ecs::MeshHandle::new(3)));
 }
 
 #[test]

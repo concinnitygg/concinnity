@@ -577,11 +577,11 @@ mod tests {
         let model = Model {
             meshes: vec![
                 SubMeshRef {
-                    mesh: Some(MeshHandle(0)),
-                    material: Some(MaterialHandle(0)),
+                    mesh: Some(MeshHandle::new(0)),
+                    material: Some(MaterialHandle::new(0)),
                 },
                 SubMeshRef {
-                    mesh: Some(MeshHandle(1)),
+                    mesh: Some(MeshHandle::new(1)),
                     material: None,
                 },
             ],
@@ -617,7 +617,7 @@ mod tests {
         let mut broken = result;
         let orphan = Model {
             meshes: vec![SubMeshRef {
-                mesh: Some(MeshHandle(99)),
+                mesh: Some(MeshHandle::new(99)),
                 material: None,
             }],
         };

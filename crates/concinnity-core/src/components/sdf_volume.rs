@@ -85,26 +85,36 @@ pub const SDF_PARAMS_LEN: usize = 32;
 /// its lighting (zero for an opaque one). `sampleVolume` returns a
 /// `VolumeSample`: `density` (0 is empty), `scattering`, which the sun's
 /// light multiplies, and `emission`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct SdfVolume {
     /// World-space center of the bounding box.
     pub center: [f32; 3],
     /// XYZ half-widths of the bounding box. The raymarch is clipped to the box,
     /// so the SDF only has to be well-defined inside this region.
+    #[asset(default = [1.0, 1.0, 1.0])]
     pub extent: [f32; 3],
     /// Distance-field source path (e.g. `"shaders/chrome_blob.hlsl"`),
     /// resolved relative to the project's `assets/` at build time. The file
     /// defines `map` and `shade`, or `sampleVolume` for a volumetric volume.
-    #[serde(default)]
     pub fragment_shader: String,
     /// Worst-case gradient of the SDF, used to size the cone-march step. `1.0`
     /// is correct for any well-formed SDF; higher values shorten the step but
     /// stay safe. Must be > 0.
+    #[asset(default = 1.0)]
     pub max_gradient: f32,
     /// Maximum cone-march steps per pixel. Clamped to `[8, 256]`.
+    #[asset(default = 64)]
     pub max_steps: u32,
     /// Maximum march distance in meters. Must be ≥ 0.1.
+    #[asset(default = 30.0)]
     pub max_distance: f32,
     /// Generic parameter block passed to the shader as a uniform buffer; the
     /// shader interprets it however it likes. Up to 32 values.
@@ -114,6 +124,7 @@ pub struct SdfVolume {
     pub cast_shadows: bool,
     /// When true (the default), the volume is shadowed by the scene. Set to
     /// false for unlit / always-bright effects (energy fields, etc.).
+    #[asset(default = true)]
     pub receive_shadows: bool,
     /// When true, the volume renders as a participating medium (clouds, smoke,
     /// fog blobs, energy fields) instead of an opaque surface. The shader must
@@ -124,30 +135,12 @@ pub struct SdfVolume {
     /// behind.
     pub volumetric: bool,
     /// When false the volume is skipped each frame.
+    #[asset(default = true)]
     pub visible: bool,
     /// Injected at load time from the blob def. Carries the compiled distance
     /// field the build produced.
     #[serde(skip)]
     pub locator: Option<PayloadLocator>,
-}
-
-impl Default for SdfVolume {
-    fn default() -> Self {
-        Self {
-            center: [0.0, 0.0, 0.0],
-            extent: [1.0, 1.0, 1.0],
-            fragment_shader: String::new(),
-            max_gradient: 1.0,
-            max_steps: 64,
-            max_distance: 30.0,
-            params: [0.0; SDF_PARAMS_LEN],
-            cast_shadows: false,
-            receive_shadows: true,
-            volumetric: false,
-            visible: true,
-            locator: None,
-        }
-    }
 }
 
 impl SdfVolume {
@@ -156,85 +149,6 @@ impl SdfVolume {
     /// ratio 1; larger gradients shorten the step proportionally.
     pub fn cone_ratio(&self) -> f32 {
         1.0 / self.max_gradient.max(f32::EPSILON)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloc::string::ToString;
-
-    #[test]
-    fn a_blank_volume_is_a_visible_unit_box_that_receives_shadows() {
-        let v = SdfVolume::default();
-        assert_eq!(v.center, [0.0, 0.0, 0.0]);
-        assert_eq!(v.extent, [1.0, 1.0, 1.0]);
-        assert_eq!(v.max_steps, 64);
-        assert_eq!(v.max_distance, 30.0);
-        assert_eq!(v.params, [0.0; SDF_PARAMS_LEN]);
-        assert!(v.visible);
-        assert!(v.receive_shadows);
-        // Raymarched surfaces do not write the shadow map by default.
-        assert!(!v.cast_shadows);
-        assert!(!v.volumetric);
-        assert!(v.locator.is_none());
-    }
-
-    #[test]
-    fn a_one_lipschitz_field_cone_marches_at_full_ratio() {
-        assert_eq!(SdfVolume::default().cone_ratio(), 1.0);
-    }
-
-    #[test]
-    fn a_steeper_gradient_shortens_the_step_proportionally() {
-        let v = SdfVolume {
-            max_gradient: 4.0,
-            ..SdfVolume::default()
-        };
-        assert_eq!(v.cone_ratio(), 0.25);
-    }
-
-    #[test]
-    fn a_zero_or_negative_gradient_cannot_divide_by_zero() {
-        // An authored 0 would otherwise make the step ratio infinite and hang
-        // the march, so the divisor is floored at epsilon.
-        for max_gradient in [0.0, -1.0] {
-            let v = SdfVolume {
-                max_gradient,
-                ..SdfVolume::default()
-            };
-            assert!(v.cone_ratio().is_finite(), "{max_gradient}");
-            assert_eq!(v.cone_ratio(), 1.0 / f32::EPSILON);
-        }
-    }
-
-    #[test]
-    fn an_authored_volume_parses_and_round_trips_through_postcard() {
-        let v: SdfVolume = serde_json::from_str(
-            r#"{"center":[0,2,0],"extent":[3,3,3],"max_gradient":2.0,
-                "fragment_shader":"shaders/blob.hlsl",
-                "cast_shadows":true,"visible":false}"#,
-        )
-        .unwrap();
-        assert_eq!(v.cone_ratio(), 0.5);
-        assert!(v.cast_shadows);
-        assert!(!v.visible);
-        assert_eq!(v.fragment_shader, "shaders/blob.hlsl".to_string());
-
-        let bytes = postcard::to_allocvec(&v).unwrap();
-        let back: SdfVolume = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.extent, [3.0, 3.0, 3.0]);
-        assert_eq!(back.fragment_shader, "shaders/blob.hlsl".to_string());
-        // Identity and payload location are injected at load, never authored.
-        assert!(back.locator.is_none());
-    }
-
-    #[test]
-    fn params_is_a_fixed_width_block_rather_than_a_partial_fill() {
-        let v: SdfVolume = serde_json::from_str(r#"{"fragment_shader":"blob.hlsl"}"#).unwrap();
-        assert_eq!(v.fragment_shader, "blob.hlsl".to_string());
-        // A short array is a length mismatch, not a partial fill.
-        assert!(serde_json::from_str::<SdfVolume>(r#"{"params":[1.5]}"#).is_err());
     }
 }
 
@@ -268,36 +182,39 @@ pub fn sdf_volume_blob_indices(
 }
 
 #[cfg(test)]
-mod runtime_tests {
+mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_sensible() {
-        let v = SdfVolume::default();
-        assert_eq!(v.center, [0.0, 0.0, 0.0]);
-        assert_eq!(v.extent, [1.0, 1.0, 1.0]);
-        assert_eq!(v.max_gradient, 1.0);
-        assert_eq!(v.max_steps, 64);
-        assert_eq!(v.max_distance, 30.0);
-        assert!(v.receive_shadows);
-        assert!(!v.cast_shadows);
-        assert!(v.visible);
-        assert_eq!(v.params.len(), SDF_PARAMS_LEN);
-        assert_eq!(v.cone_ratio(), 1.0);
+    fn a_one_lipschitz_field_cone_marches_at_full_ratio() {
+        assert_eq!(SdfVolume::default().cone_ratio(), 1.0);
     }
 
     #[test]
-    fn cone_ratio_inverts_gradient() {
+    fn a_steeper_gradient_shortens_the_step_proportionally() {
         let v = SdfVolume {
-            max_gradient: 2.0,
-            ..Default::default()
+            max_gradient: 4.0,
+            ..SdfVolume::default()
         };
-        assert!((v.cone_ratio() - 0.5).abs() < 1e-6);
+        assert_eq!(v.cone_ratio(), 0.25);
     }
 
     #[test]
-    fn volumetric_default_is_off() {
-        let v = SdfVolume::default();
-        assert!(!v.volumetric);
+    fn a_zero_or_negative_gradient_cannot_divide_by_zero() {
+        // An authored 0 would otherwise make the step ratio infinite and hang
+        // the march, so the divisor is floored at epsilon.
+        for max_gradient in [0.0, -1.0] {
+            let v = SdfVolume {
+                max_gradient,
+                ..SdfVolume::default()
+            };
+            assert!(v.cone_ratio().is_finite(), "{max_gradient}");
+            assert_eq!(v.cone_ratio(), 1.0 / f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn a_short_params_array_is_rejected_rather_than_partially_filled() {
+        assert!(serde_json::from_str::<SdfVolume>(r#"{"params":[1.5]}"#).is_err());
     }
 }

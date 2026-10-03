@@ -3,13 +3,14 @@
 //! Internal to the engine: `concinnity-core` and `concinnity-cook` derive with
 //! it, and nothing re-exports it past them.
 //!
-//! Both derives also emit the type's static schema (`concinnity_core::ecs::schema`)
+//! `AssetFields` and `Vocabulary` also emit the type's static schema (`concinnity_core::ecs::schema`)
 //! behind `#[cfg(feature = "schema")]`, which resolves in the deriving crate:
 //! a crate that derives declares a `schema` feature enabling core's.
 
+mod asset_attrs;
+mod asset_default;
 mod asset_fields;
 mod docs;
-mod owned_file;
 mod schema;
 mod serde_attrs;
 mod vocabulary;
@@ -28,11 +29,24 @@ use proc_macro::TokenStream;
 ///
 /// `#[asset(owned_file)]` on a path field records it as a file the asset owns:
 /// its authored source, which belongs to that asset rather than being shared
-/// content other assets may read.
+/// content other assets may read. `#[asset(default = ...)]` is read by
+/// `AssetDefault`.
 #[proc_macro_derive(AssetFields, attributes(serde, asset))]
 pub fn derive_asset_fields(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
     asset_fields::expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Generate `Default` for a struct with named fields from each field's
+/// `#[asset(default = <expr>)]`; a field without one takes its type's own
+/// `Default`. A string literal converts into the field, so an owned string
+/// states its text directly.
+#[proc_macro_derive(AssetDefault, attributes(asset))]
+pub fn derive_asset_default(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+    asset_default::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

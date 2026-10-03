@@ -408,11 +408,21 @@ pub(crate) fn literal_default(verb: &str) -> Value {
     single(verb, literal_body(&Value::Null, verb))
 }
 
+// The body of a name-shaped expression reading `text`. A `named` entity is an
+// asset reference, so naming nothing is null rather than an empty name.
+pub(crate) fn name_body(verb: &str, text: &str) -> Value {
+    if verb == "named" && text.is_empty() {
+        Value::Null
+    } else {
+        Value::String(text.to_string())
+    }
+}
+
 pub(crate) fn expr_default(verb: &str) -> Value {
     match shape(verb) {
         Shape::Unit => json!(verb),
         Shape::Literal => literal_default(verb),
-        Shape::Name => single(verb, json!("")),
+        Shape::Name => single(verb, name_body(verb, "")),
         Shape::Unary => single(verb, unary_operand(verb)),
         Shape::List => single(verb, json!([])),
         Shape::Binary => single(verb, binary_operands(verb)),
@@ -466,6 +476,10 @@ pub(crate) fn swap_expr(current: &Value, verb: &str) -> Value {
     match to {
         Shape::Unit => json!(verb),
         Shape::Literal => single(verb, literal_body(body.unwrap_or(&Value::Null), verb)),
+        Shape::Name => single(
+            verb,
+            name_body(verb, body.and_then(Value::as_str).unwrap_or("")),
+        ),
         _ => single(verb, body.cloned().unwrap_or(Value::Null)),
     }
 }
@@ -608,6 +622,15 @@ mod tests {
             swap_expr(&var, "local"),
             serde_json::json!({"local": "health"})
         );
+    }
+
+    #[test]
+    fn an_empty_name_swapped_to_named_names_nothing() {
+        let var = serde_json::json!({"var": ""});
+        assert_eq!(swap_expr(&var, "named"), serde_json::json!({"named": null}));
+        let named = serde_json::json!({"named": null});
+        assert_eq!(swap_expr(&named, "var"), serde_json::json!({"var": ""}));
+        assert_eq!(swap_expr(&named, "named"), named);
     }
 
     #[test]

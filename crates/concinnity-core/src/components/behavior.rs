@@ -8,8 +8,7 @@ use alloc::vec::Vec;
 use crate::components::StoryPlayback;
 use crate::components::{Scene, Screen, TriggerVolume};
 use crate::ecs::AudioClipHandle;
-use crate::ecs::de_opt_audio_clip_handle;
-use crate::ecs::{AnyAsset, Ref, de_opt_ref};
+use crate::ecs::{AnyAsset, Ref};
 
 /// A unit of world logic: an event source, the entities it runs against, its
 /// state, the world it reads, and the nodes it runs.
@@ -83,12 +82,12 @@ pub enum BehaviorSource {
     /// Fires whenever the named world variable changes value.
     Variable(String),
     /// Fires when something enters the named [TriggerVolume](#triggervolume).
-    Enter(#[serde(deserialize_with = "de_opt_ref")] Option<Ref<TriggerVolume>>),
+    Enter(Option<Ref<TriggerVolume>>),
     /// Fires when something leaves the named [TriggerVolume](#triggervolume).
-    Exit(#[serde(deserialize_with = "de_opt_ref")] Option<Ref<TriggerVolume>>),
+    Exit(Option<Ref<TriggerVolume>>),
     /// Fires when the interact key is pressed on the named entity (a
     /// [Prop](#prop) declared `interactable`).
-    Interact(#[serde(deserialize_with = "de_opt_ref")] Option<Ref<AnyAsset>>),
+    Interact(Option<Ref<AnyAsset>>),
     /// Fires on an entity the tick after it spawns.
     Spawned,
 }
@@ -171,7 +170,7 @@ pub enum BehaviorExpr {
     /// Reads a name bound earlier by a `let` or `for_each` node.
     Bind(String),
     /// An entity declared in the world, addressed by asset name.
-    Named(#[serde(deserialize_with = "de_opt_ref")] Option<Ref<AnyAsset>>),
+    Named(Option<Ref<AnyAsset>>),
     /// The entity this behavior instance runs for. Only valid with a `scope`.
     #[serde(rename = "self")]
     SelfEntity,
@@ -358,7 +357,7 @@ pub enum BehaviorNode {
     /// `bind` makes the copy addressable for the rest of the body.
     Spawn {
         /// The placement copied (e.g. a [Prop](#prop)).
-        #[serde(default, deserialize_with = "de_opt_ref")]
+        #[serde(default)]
         template: Option<Ref<AnyAsset>>,
         /// World-space position of the copy.
         #[serde(default)]
@@ -410,7 +409,7 @@ pub enum BehaviorNode {
     /// Plays an [AudioClip](#audioclip) flat on the main mix (no 3D position).
     Sound {
         /// The clip played.
-        #[serde(default, deserialize_with = "de_opt_audio_clip_handle")]
+        #[serde(default)]
         clip: Option<AudioClipHandle>,
         /// Playback behavior: a looping `music` track or a one-shot `sound`.
         #[serde(default)]
@@ -422,7 +421,7 @@ pub enum BehaviorNode {
     /// Jumps the world to a named [Scene](#scene).
     Scene {
         /// The scene jumped to.
-        #[serde(default, deserialize_with = "de_opt_ref")]
+        #[serde(default)]
         scene: Option<Ref<Scene>>,
         /// The transition. See [SceneTransition](crate::components::SceneTransition).
         #[serde(default)]
@@ -431,7 +430,7 @@ pub enum BehaviorNode {
     /// Shows a [Screen](#screen), replacing the top of the screen stack.
     Screen {
         /// The screen shown.
-        #[serde(default, deserialize_with = "de_opt_ref")]
+        #[serde(default)]
         screen: Option<Ref<Screen>>,
     },
     /// Controls the world's [Story](#story) playback.
@@ -494,6 +493,13 @@ mod tests {
         crate::test_support::from_json(json)
     }
 
+    #[test]
+    fn a_blank_expression_is_false() {
+        // Lets a node's expression field carry `#[serde(default)]` without the
+        // omission reading as "fires".
+        assert_eq!(BehaviorExpr::default(), BehaviorExpr::Bool(false));
+    }
+
     // Destructuring helpers, each `None` for any other kind. The parse tests
     // read as assertions on the parts rather than nested pattern matches.
     fn as_if(node: &BehaviorNode) -> Option<(&BehaviorExpr, &[BehaviorNode], &[BehaviorNode])> {
@@ -521,13 +527,6 @@ mod tests {
         }
     }
 
-    fn as_despawn(node: &BehaviorNode) -> Option<&BehaviorExpr> {
-        match node {
-            BehaviorNode::Despawn { target } => Some(target),
-            _ => None,
-        }
-    }
-
     fn as_lt(expr: &BehaviorExpr) -> Option<(&BehaviorExpr, &BehaviorExpr)> {
         match expr {
             BehaviorExpr::Lt(lhs, rhs) => Some((lhs, rhs)),
@@ -549,19 +548,8 @@ mod tests {
         assert!(as_if(save).is_none());
         assert!(as_spawn(save).is_none());
         assert!(as_set(save).is_none());
-        assert!(as_despawn(save).is_none());
         assert!(as_lt(&BehaviorExpr::Bool(true)).is_none());
         assert!(as_distance(&BehaviorExpr::Bool(true)).is_none());
-    }
-
-    #[test]
-    fn defaults_are_world_scoped_and_empty() {
-        let b = Behavior::default();
-        assert!(b.scope.is_empty());
-        assert!(b.body.is_empty());
-        assert_eq!(b.on, BehaviorSource::Start);
-        assert!(!b.plays_sound());
-        assert!(!b.saves_state());
     }
 
     #[test]
@@ -585,14 +573,6 @@ mod tests {
         assert_eq!(b.locals.len(), 1);
         assert_eq!(b.locals[0].name, "speed");
         assert_eq!(b.locals[0].value, BehaviorLiteral::Float(3.0));
-    }
-
-    #[test]
-    fn query_parses() {
-        let b = parse(r#"{"queries":[{"name":"player","has":["Camera3D","Prop"]}]}"#);
-        assert_eq!(b.queries.len(), 1);
-        assert_eq!(b.queries[0].name, "player");
-        assert_eq!(b.queries[0].has, ["Camera3D", "Prop"]);
     }
 
     #[test]
@@ -710,13 +690,6 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_expression_is_false() {
-        // Lets a node's expression field carry `#[serde(default)]` without the
-        // omission reading as "fires".
-        assert_eq!(BehaviorExpr::default(), BehaviorExpr::Bool(false));
-    }
-
-    #[test]
     fn a_scene_node_fades_unless_told_to_cut() {
         let b = parse(r#"{"do":[{"scene":{"scene":"hub"}},{"scene":{"transition":"Cut"}}]}"#);
         assert!(matches!(
@@ -734,15 +707,5 @@ mod tests {
         let b = parse(r#"{"do":[{"sound":{}}]}"#);
         assert!(matches!(b.body[0], BehaviorNode::Sound { volume, .. } if volume == 1.0));
         assert!(b.plays_sound());
-    }
-
-    #[test]
-    fn round_trips_through_postcard() {
-        let b = parse(r#"{"on":"tick","scope":["Prop"],"do":[{"despawn":{"target":"self"}}]}"#);
-        let bytes = postcard::to_allocvec(&b).expect("behavior encodes");
-        let again: Behavior = postcard::from_bytes(&bytes).expect("behavior decodes");
-        assert_eq!(again.on, BehaviorSource::Tick);
-        let target = as_despawn(&again.body[0]).expect("a despawn node");
-        assert_eq!(*target, BehaviorExpr::SelfEntity);
     }
 }

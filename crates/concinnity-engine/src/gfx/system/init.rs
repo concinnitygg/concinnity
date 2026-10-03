@@ -477,7 +477,7 @@ impl GraphicsSystem {
         let mut skinned_name_index: std::collections::HashMap<AssetId, SkinnedMeshHandle> =
             std::collections::HashMap::new();
         for (handle, entry) in skinned_table.0.iter().enumerate() {
-            let handle = SkinnedMeshHandle(handle as u32);
+            let handle = SkinnedMeshHandle::new(handle as u32);
             let (name_id, sm): (u32, SkinnedMesh) = match postcard::from_bytes(&entry.data_bytes) {
                 Ok(t) => t,
                 Err(e) => {
@@ -826,7 +826,7 @@ impl GraphicsSystem {
                     return None;
                 }
             };
-            let handle = MaterialHandle(material_handle as u32);
+            let handle = MaterialHandle::new(material_handle as u32);
             params.push(mat.params);
             match crate::gfx::material_entry::of(handle, &mat, texture_count) {
                 Ok(entry) => {
@@ -1239,7 +1239,7 @@ impl GraphicsSystem {
                         metrics.into_iter().map(|m| (m.char_code, m)).collect();
                     let size_px = size_px as f32;
                     self.loaded_fonts.insert(
-                        FontHandle(slot as u32),
+                        FontHandle::new(slot as u32),
                         text::LoadedFont {
                             atlas_slot: slot,
                             cap_px: text::derive_cap_px(&metrics_map, size_px),
@@ -1266,7 +1266,7 @@ impl GraphicsSystem {
         // samples.
         if font_less_text(ctx) {
             let slot = text_atlas_data.len();
-            let handle = FontHandle(slot as u32);
+            let handle = FontHandle::new(slot as u32);
             match crate::gfx::builtin_font::load(handle) {
                 Some(builtin) => {
                     text_atlas_data.push(builtin.atlas);

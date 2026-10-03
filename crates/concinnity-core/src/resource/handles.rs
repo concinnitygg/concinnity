@@ -24,8 +24,8 @@
 use alloc::vec::Vec;
 use hashbrown::HashMap;
 
-use crate::ecs::ResourceKind;
 use crate::ecs::asset_id::AssetId;
+use crate::ecs::{HandleKind, ResourceKind};
 
 /// Which block of the shared mesh-source handle space an asset belongs to.
 ///
@@ -128,6 +128,14 @@ impl ResourceHandles {
     pub fn shader_count(&self) -> u32 {
         self.shader_next
     }
+
+    /// The handle a resource received in handle space `kind`, if any.
+    pub fn handle(&self, kind: HandleKind, id: AssetId) -> Option<u32> {
+        match kind.resource_kind() {
+            Some(resource) => self.get(resource, id),
+            None => self.shader(id),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -212,5 +220,19 @@ mod tests {
         assert_eq!(handles.shader(AssetId(8)), Some(1));
         assert_eq!(handles.shader(AssetId(9)), None);
         assert_eq!(handles.shader_count(), 2);
+    }
+
+    #[test]
+    fn a_handle_space_reads_its_own_table() {
+        let mut handles = ResourceHandles::default();
+        handles.assign(ResourceKind::Texture, AssetId(3));
+        handles.assign(ResourceKind::Material, AssetId(3));
+        handles.assign(ResourceKind::Material, AssetId(4));
+        handles.assign_shader(AssetId(4));
+        assert_eq!(handles.handle(HandleKind::Texture, AssetId(3)), Some(0));
+        assert_eq!(handles.handle(HandleKind::Material, AssetId(4)), Some(1));
+        assert_eq!(handles.handle(HandleKind::Shader, AssetId(4)), Some(0));
+        assert_eq!(handles.handle(HandleKind::Shader, AssetId(3)), None);
+        assert_eq!(handles.handle(HandleKind::Font, AssetId(3)), None);
     }
 }

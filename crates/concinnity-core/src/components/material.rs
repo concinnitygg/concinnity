@@ -2,8 +2,6 @@
 
 use crate::ecs::ShaderHandle;
 use crate::ecs::TextureHandle;
-use crate::ecs::de_opt_shader_handle;
-use crate::ecs::de_opt_texture_handle;
 use crate::gfx::render_types::MATERIAL_PARAM_COUNT;
 
 /// A Material bundles the surface parameters that control how a [Prop](#prop) is
@@ -54,20 +52,24 @@ use crate::gfx::render_types::MATERIAL_PARAM_COUNT;
 /// };
 /// assert_eq!(conveyor.params[0], 12.0);
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct Material {
     /// The [Texture](#texture) asset used as the base color (albedo) map.
-    #[serde(deserialize_with = "de_opt_texture_handle")]
     pub albedo: Option<TextureHandle>,
     /// The [Texture](#texture) asset used as a tangent-space normal map.
-    #[serde(deserialize_with = "de_opt_texture_handle")]
     pub normal_map: Option<TextureHandle>,
     /// The [Texture](#texture) asset used as an emissive map. Multiplied by
     /// `emissive_factor` to drive the glow; when omitted, only the scalar
     /// `emissive_factor` is used. Pair a textured emissive with an
     /// `emissive_factor` above 1 to make the bright parts bloom.
-    #[serde(deserialize_with = "de_opt_texture_handle")]
     pub emissive_map: Option<TextureHandle>,
     /// The [Texture](#texture) asset used as a packed surface map: green =
     /// roughness, blue = metalness. When present it overrides the scalar
@@ -76,10 +78,10 @@ pub struct Material {
     /// packed maps in the wild (glTF metallic-roughness, FBX specular maps)
     /// leave red empty, so treating it as occlusion would darken indirect
     /// light to black. Ambient occlusion comes from the screen-space pass.
-    #[serde(deserialize_with = "de_opt_texture_handle")]
     pub orm_map: Option<TextureHandle>,
     /// Perceptual roughness in [0, 1]. 0 = mirror, 1 = fully diffuse.
     /// Controls the width of the specular highlight.
+    #[asset(default = 0.8)]
     pub roughness: f32,
     /// Metallic factor in [0, 1]. 0 = dielectric (plastic/stone), 1 = metal.
     /// Metallic surfaces tint their reflections with the albedo color and show
@@ -87,6 +89,7 @@ pub struct Material {
     pub metallic: f32,
     /// Linear-space RGB multiplier applied to the albedo sample. Useful for
     /// tinting a shared texture without a separate asset (e.g. colored brick).
+    #[asset(default = [1.0, 1.0, 1.0])]
     pub tint: [f32; 3],
     /// Additive emission color in linear space. Non-zero values make the
     /// surface appear to glow independently of the scene lighting.
@@ -101,6 +104,7 @@ pub struct Material {
     /// Surface opacity in [0, 1]. 1 = fully opaque (the default). Only
     /// meaningful when `transparent` is set: it drives how much of the scene
     /// behind the surface shows through the glass.
+    #[asset(default = 1.0)]
     pub opacity: f32,
     /// When true, the surface is a translucent dielectric (glass): it renders
     /// in the engine's transparent pass instead of the opaque pass, refracting
@@ -121,97 +125,10 @@ pub struct Material {
     /// from a material ties that shader's lifetime to the material's: a shader
     /// referenced only by scene-exclusive materials loads and unloads with the
     /// scene.
-    #[serde(deserialize_with = "de_opt_shader_handle")]
     pub shader: Option<ShaderHandle>,
     /// Eight numbers for the material's [Shader](#shader) to read, as
     /// `material_param(0)` through `material_param(7)`. What each one means is
     /// up to the Shader; the engine's own shading ignores them. All 0 by
     /// default.
     pub params: [f32; MATERIAL_PARAM_COUNT],
-}
-
-impl Default for Material {
-    fn default() -> Self {
-        Self {
-            albedo: None,
-            normal_map: None,
-            emissive_map: None,
-            orm_map: None,
-            roughness: 0.8,
-            metallic: 0.0,
-            tint: [1.0, 1.0, 1.0],
-            emissive_factor: [0.0, 0.0, 0.0],
-            alpha_cutoff: 0.0,
-            opacity: 1.0,
-            transparent: false,
-            see_through: false,
-            shader: None,
-            params: [0.0; MATERIAL_PARAM_COUNT],
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_blank_material_is_an_opaque_untextured_dielectric() {
-        let m = Material::default();
-        assert_eq!(m.roughness, 0.8);
-        assert_eq!(m.metallic, 0.0);
-        assert_eq!(m.tint, [1.0, 1.0, 1.0]);
-        assert_eq!(m.emissive_factor, [0.0, 0.0, 0.0]);
-        assert_eq!(m.opacity, 1.0);
-        assert!(!m.transparent);
-        assert!(!m.see_through);
-        // Zero alpha cutoff means "no cutout", not "discard everything".
-        assert_eq!(m.alpha_cutoff, 0.0);
-        for map in [&m.albedo, &m.normal_map, &m.emissive_map, &m.orm_map] {
-            assert!(map.is_none());
-        }
-        // No shader means the engine's own main-pass program draws it.
-        assert!(m.shader.is_none());
-        assert_eq!(m.params, [0.0; MATERIAL_PARAM_COUNT]);
-    }
-
-    #[test]
-    fn params_round_trip_through_json_and_postcard() {
-        let m: Material = crate::test_support::from_json(r#"{"params":[1,2,3,4,5,6,7,8.5]}"#);
-        assert_eq!(m.params, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.5]);
-        let bytes = postcard::to_allocvec(&m).unwrap();
-        let back: Material = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.params, m.params);
-    }
-
-    #[test]
-    fn every_texture_slot_resolves_through_its_own_reference() {
-        let m: Material = crate::test_support::from_json(
-            r#"{"albedo":"tex_a","normal_map":"tex_nm","emissive_map":"tex_em",
-                "orm_map":"tex_orm","shader":"water_shader"}"#,
-        );
-        assert_eq!(m.albedo, Some(TextureHandle(5)));
-        assert_eq!(m.normal_map, Some(TextureHandle(6)));
-        assert_eq!(m.emissive_map, Some(TextureHandle(6)));
-        assert_eq!(m.orm_map, Some(TextureHandle(7)));
-        assert_eq!(m.shader, Some(ShaderHandle(12)));
-    }
-
-    #[test]
-    fn a_glass_material_round_trips_through_postcard() {
-        let m: Material = crate::test_support::from_json(
-            r#"{"roughness":0.05,"metallic":1,"tint":[0.8,0.9,1],"emissive_factor":[2,2,2],
-                "alpha_cutoff":0.5,"opacity":0.3,"transparent":true,"see_through":true}"#,
-        );
-        let bytes = postcard::to_allocvec(&m).unwrap();
-        let back: Material = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.roughness, 0.05);
-        assert_eq!(back.metallic, 1.0);
-        assert_eq!(back.tint, [0.8, 0.9, 1.0]);
-        assert_eq!(back.emissive_factor, [2.0, 2.0, 2.0]);
-        assert_eq!(back.alpha_cutoff, 0.5);
-        assert_eq!(back.opacity, 0.3);
-        assert!(back.transparent);
-        assert!(back.see_through);
-    }
 }

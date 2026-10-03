@@ -442,14 +442,14 @@ fn stage_dressing_applies_to_sprites() {
     let mut story = two_page_story();
     story.nodes[0].pages[0].stage = StoryStage {
         bg: Some(StoryImage {
-            texture: TextureHandle(intern("s_img0").0),
+            texture: TextureHandle::new(intern("s_img0").0),
             x: 0.0,
             y: 0.0,
             width: 1280.0,
             height: 720.0,
         }),
         center: Some(StoryImage {
-            texture: TextureHandle(intern("s_img1").0),
+            texture: TextureHandle::new(intern("s_img1").0),
             x: 412.0,
             y: 20.0,
             width: 456.0,
@@ -463,7 +463,7 @@ fn stage_dressing_applies_to_sprites() {
 
     let bg = intern("s_stage_bg");
     let sprite = world.get_by_id::<Sprite>(bg).unwrap();
-    assert_eq!(sprite.texture, Some(TextureHandle(intern("s_img0").0)));
+    assert_eq!(sprite.texture, Some(TextureHandle::new(intern("s_img0").0)));
     let center = intern("s_stage_center");
     let sprite = world.get_by_id::<Sprite>(center).unwrap();
     assert!(sprite.visible);
@@ -488,8 +488,8 @@ fn page_audio_sends_play_cues() {
     let mut story = two_page_story();
     // The story graph carries pre-resolved AudioClipHandles (cook resolves the
     // clip names at build time); a hand-built graph sets them directly.
-    story.nodes[0].pages[0].music = Some(AudioClipHandle(0));
-    story.nodes[0].pages[0].sounds = vec![AudioClipHandle(1)];
+    story.nodes[0].pages[0].music = Some(AudioClipHandle::new(0));
+    story.nodes[0].pages[0].sounds = vec![AudioClipHandle::new(1)];
     let mut world = story_world(story);
     world.start(SYSTEMS).unwrap();
     world.step();
@@ -501,7 +501,7 @@ fn page_audio_sends_play_cues() {
         .copied()
         .collect();
     assert_eq!(cues.len(), 2);
-    assert_eq!(cues[0].clip, AudioClipHandle(0));
+    assert_eq!(cues[0].clip, AudioClipHandle::new(0));
     assert_eq!(cues[0].kind, CueKind::Music);
     assert_eq!(cues[1].kind, CueKind::Sound);
 }
@@ -1841,7 +1841,7 @@ fn skip_snaps_a_freshly_entered_page_to_full() {
 // events.
 #[test]
 fn choice_menu_fires_its_one_shot_sounds() {
-    let click = AudioClipHandle(0);
+    let click = AudioClipHandle::new(0);
     let mut world = story_world(one_choice_story("Go", vec![click]));
     world.start(SYSTEMS).unwrap();
     world.step();

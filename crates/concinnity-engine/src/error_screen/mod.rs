@@ -18,7 +18,7 @@ use concinnity_core::render::text::{FontSet, build_text_calls};
 
 // The single atlas slot the embedded face occupies: this screen uploads it
 // alone, with no world fonts beside it.
-const FONT_HANDLE: FontHandle = FontHandle(0);
+const FONT_HANDLE: FontHandle = FontHandle::new(0);
 
 // Identity view: the screen draws overlay text only, so no camera is involved.
 const IDENTITY_VIEW: [[f32; 4]; 4] = [

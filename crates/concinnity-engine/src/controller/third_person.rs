@@ -386,7 +386,7 @@ mod tests {
         let controller = CameraController {
             move_speed: 2.0,
             follow: Some(FollowController {
-                target: Some(SkinnedMeshHandle(intern(target).0)),
+                target: Some(SkinnedMeshHandle::new(intern(target).0)),
                 distance: 4.0,
                 height: 1.5,
                 drive,
@@ -422,7 +422,7 @@ mod tests {
         // The authored "hero" references below deserialize through the
         // resolver's interner fallback, so the handle carries the interned id;
         // the components this seeds must use the same value.
-        let target = SkinnedMeshHandle(intern("hero").0);
+        let target = SkinnedMeshHandle::new(intern("hero").0);
         let mut world = World::new();
         world.add_component(follow_camera("hero", drive, jump_height));
         world.add_component(CharacterRig::new(

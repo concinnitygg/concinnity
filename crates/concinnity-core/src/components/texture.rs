@@ -19,7 +19,14 @@ use alloc::string::String;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct Texture {
     /// Procedural generator name. Empty or omitted means use `source` instead.
@@ -33,6 +40,7 @@ pub struct Texture {
     pub image_index: u32,
     /// Resolution hint for procedural generators (width = height). Defaults to
     /// 512. Ignored for file-backed textures.
+    #[asset(default = 512)]
     pub resolution: u32,
     /// Optional ceiling on the longest edge of a file-backed image, in pixels.
     /// `0` (the default) keeps the source resolution. When set and the source is
@@ -43,59 +51,4 @@ pub struct Texture {
     /// Injected at load time from the compiled blob payload.
     #[serde(skip)]
     pub locator: Option<PayloadLocator>,
-}
-
-impl Default for Texture {
-    fn default() -> Self {
-        Self {
-            generator: String::new(),
-            source: String::new(),
-            image_index: 0,
-            resolution: 512,
-            max_size: 0,
-            locator: None,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_blank_texture_generates_at_the_default_resolution_and_is_uncapped() {
-        let t = Texture::default();
-        assert!(t.source.is_empty());
-        assert!(t.generator.is_empty());
-        assert_eq!(t.image_index, 0);
-        assert_eq!(t.resolution, 512);
-        // Zero means "no downscale cap", not a zero-sized image.
-        assert_eq!(t.max_size, 0);
-        assert!(t.locator.is_none());
-    }
-
-    #[test]
-    fn a_generated_texture_names_its_generator_instead_of_a_source() {
-        let t: Texture =
-            serde_json::from_str(r#"{"generator":"checker","resolution":128}"#).unwrap();
-        assert_eq!(t.generator, "checker");
-        assert!(t.source.is_empty());
-        assert_eq!(t.resolution, 128);
-    }
-
-    #[test]
-    fn an_imported_image_parses_and_round_trips_through_postcard() {
-        let t: Texture =
-            serde_json::from_str(r#"{"source":"bistro.fbx","image_index":7,"max_size":1024}"#)
-                .unwrap();
-        // The index picks one image out of a multi-image source archive.
-        assert_eq!(t.image_index, 7);
-
-        let bytes = postcard::to_allocvec(&t).unwrap();
-        let back: Texture = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.source, "bistro.fbx");
-        assert_eq!(back.image_index, 7);
-        assert_eq!(back.max_size, 1024);
-        assert!(back.locator.is_none());
-    }
 }

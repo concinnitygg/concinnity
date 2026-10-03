@@ -44,7 +44,7 @@ struct Top {
     count: u32,
     #[serde(default)]
     flag: bool,
-    #[serde(deserialize_with = "crate::ecs::de_opt_ref")]
+    #[serde(deserialize_with = "read_label")]
     label: Option<Ref<TextLabel>>,
     texture: TextureHandle,
     table: alloc::collections::BTreeMap<String, f32>,

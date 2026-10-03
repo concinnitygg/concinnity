@@ -148,10 +148,10 @@ pub mod cook;
 pub mod stored;
 pub mod validate;
 
-// Serde / default / round-trip coverage for the generated data-only
-// components, gathered here after their per-type modules were removed.
 #[cfg(test)]
 mod component_tests;
+#[cfg(test)]
+mod registry_tests;
 
 pub use animation::{Animation, AnimationTrack, Keyframe, MorphKey};
 pub use animation_graph::{
@@ -368,38 +368,10 @@ pub(crate) fn path_extension(path: &str) -> Option<&str> {
 // Bounds and capacities the engine reads off the schema. Not vocabulary: they
 // declare nothing, so they stay out of both namespaces.
 pub use post_process_config::DEFAULT_SSGI_RAYS;
+
 #[cfg(test)]
 mod tests {
-    // Uniform, low-level checks over the small data-only asset types: their
-    // derive impls, custom Defaults, arg round-trips, injection hooks,
-    // source_path branches, and cross-reference declarations. Kept in one place
-    // because the checks are identical in shape across many one-file components.
     use super::*;
-    use crate::ecs::{Component, PayloadLocator};
-
-    // Round-trip an asset's defaults through its baked form and the Component
-    // hooks. One call executes the type's Default, serialization, `from_baked`,
-    // `inject_locator`, and the frame-exactness check.
-    fn exercise<C: Component + Default + serde::Serialize>() {
-        let bytes = postcard::to_allocvec(&C::default()).expect("default serializes");
-        let mut comp = C::from_baked(&bytes).expect("baked bytes deserialize");
-        comp.inject_locator(PayloadLocator {
-            blob_index: 0,
-            offset: 0,
-            len: 0,
-        });
-
-        // A record written by a schema carrying a field this build no longer
-        // reads leaves the tail of its frame unread. `from_baked` takes the
-        // whole frame or fails.
-        let mut widened = bytes.clone();
-        widened.push(0);
-        assert!(
-            C::from_baked(&widened).is_err(),
-            "{} accepted a record with an unread trailing byte",
-            core::any::type_name::<C>()
-        );
-    }
 
     #[test]
     fn path_extension_matches_std_path_semantics() {
@@ -411,18 +383,5 @@ mod tests {
         assert_eq!(path_extension("plain"), None);
         assert_eq!(path_extension(".bashrc"), None);
         assert_eq!(path_extension("dir.v2/plain"), None);
-    }
-
-    #[test]
-    fn simple_assets_round_trip_defaults() {
-        exercise::<Scene>();
-        exercise::<Model>();
-        exercise::<ProceduralMesh>();
-        exercise::<WaterSurface>();
-        exercise::<Decal>();
-        exercise::<CharacterShape>();
-        exercise::<ParticleEmitter>();
-        exercise::<VoxelWorld>();
-        exercise::<VoxelChunk>();
     }
 }

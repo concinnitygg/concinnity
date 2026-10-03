@@ -2,8 +2,7 @@
 
 use crate::components::Prop;
 use crate::ecs::AudioClipHandle;
-use crate::ecs::de_opt_audio_clip_handle;
-use crate::ecs::{Ref, de_opt_ref};
+use crate::ecs::Ref;
 
 /// Makes a companion [Prop](#prop) a dynamic physics body.
 ///
@@ -15,87 +14,42 @@ use crate::ecs::{Ref, de_opt_ref};
 /// ```json
 /// ["PropBody", { "prop_name": "crate_a", "mass": 4.0, "friction": 0.6 }]
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct PropBody {
     /// The [Prop](#prop) this body drives. Must match a Prop declared in the
     /// same world.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub prop_name: Option<Ref<Prop>>,
     /// Mass in kilograms. 0 lets the simulation derive mass from the collider
     /// shape and a default density.
     pub mass: f32,
     /// Friction coefficient used for contacts with this body.
+    #[asset(default = 0.5)]
     pub friction: f32,
     /// Bounciness in [0, 1]. 0 is fully inelastic.
     pub restitution: f32,
     /// Multiplier applied to world gravity for this body. 1.0 is normal.
+    #[asset(default = 1.0)]
     pub gravity_scale: f32,
     /// Linear velocity damping, modeling air drag.
+    #[asset(default = 0.05)]
     pub linear_damping: f32,
     /// Optional [AudioClip](#audioclip) played at the contact point when this
     /// body collides hard enough to pass the world's `contact_min_impulse`
     /// (see [PhysicsConfig](#physicsconfig)). Louder impacts play louder.
-    #[serde(deserialize_with = "de_opt_audio_clip_handle")]
     pub impact_clip: Option<AudioClipHandle>,
     /// Linear gain applied to the impact clip at full impulse.
+    #[asset(default = 1.0)]
     pub impact_volume: f32,
     /// Start the body asleep: it holds its authored pose, ignoring gravity,
     /// until something strikes it or a [Behavior](#behavior)'s `wake` node
     /// wakes it. A body leaning on an awake one wakes with it.
     pub asleep: bool,
-}
-
-impl Default for PropBody {
-    fn default() -> Self {
-        Self {
-            prop_name: None,
-            mass: 0.0,
-            friction: 0.5,
-            restitution: 0.0,
-            gravity_scale: 1.0,
-            linear_damping: 0.05,
-            impact_clip: None,
-            impact_volume: 1.0,
-            asleep: false,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ecs::asset_id::AssetId;
-
-    #[test]
-    fn a_blank_body_falls_under_full_gravity_without_bouncing() {
-        let b = PropBody::default();
-        assert_eq!(b.gravity_scale, 1.0);
-        assert_eq!(b.friction, 0.5);
-        assert_eq!(b.restitution, 0.0);
-        assert_eq!(b.linear_damping, 0.05);
-        // Zero mass means "derive it from the collider", not "massless".
-        assert_eq!(b.mass, 0.0);
-        assert!(b.prop_name.is_none());
-        assert!(!b.asleep);
-    }
-
-    #[test]
-    fn a_bouncy_floating_body_parses_and_round_trips_through_postcard() {
-        let b: PropBody = crate::test_support::from_json(
-            r#"{"prop_name":"ball","mass":2.5,"friction":0.1,"restitution":0.9,
-                "gravity_scale":0,"linear_damping":0.2,"asleep":true}"#,
-        );
-        assert_eq!(b.prop_name, Some(Ref::new(AssetId(4))));
-        assert_eq!(b.gravity_scale, 0.0);
-
-        let bytes = postcard::to_allocvec(&b).unwrap();
-        let back: PropBody = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.prop_name, Some(Ref::new(AssetId(4))));
-        assert_eq!(back.mass, 2.5);
-        assert_eq!(back.friction, 0.1);
-        assert_eq!(back.restitution, 0.9);
-        assert_eq!(back.linear_damping, 0.2);
-        assert!(back.asleep);
-    }
 }

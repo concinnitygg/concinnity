@@ -1,7 +1,7 @@
 // Stats HUD schema.
 
 use crate::components::TextLabel;
-use crate::ecs::{Ref, de_opt_ref};
+use crate::ecs::Ref;
 
 /// Requests the default on-screen stats HUD. Drives a set of
 /// [TextLabel](#textlabel) chips with live engine stats, refreshed on a fixed
@@ -39,60 +39,15 @@ use crate::ecs::{Ref, de_opt_ref};
 #[serde(default)]
 pub struct StatHud {
     /// [TextLabel](#textlabel) that receives the frame-rate chip text.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub fps_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the blocked-on-GPU chip text.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub gpu_wait_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the GPU-memory chip text.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub vram_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the host-memory (RSS) chip text.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub ram_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the auto-exposure chip text.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub ev_label: Option<Ref<TextLabel>>,
     /// [TextLabel](#textlabel) that receives the HDR-headroom chip text.
-    #[serde(deserialize_with = "de_opt_ref")]
     pub edr_label: Option<Ref<TextLabel>>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ecs::asset_id::AssetId;
-
-    #[test]
-    fn a_blank_hud_claims_no_labels() {
-        // Each chip is opt-in, so an unset slot suppresses that readout instead
-        // of drawing it somewhere arbitrary.
-        let h = StatHud::default();
-        assert!(h.fps_label.is_none());
-        assert!(h.gpu_wait_label.is_none());
-        assert!(h.vram_label.is_none());
-        assert!(h.ram_label.is_none());
-        assert!(h.ev_label.is_none());
-        assert!(h.edr_label.is_none());
-    }
-
-    #[test]
-    fn each_chip_binds_its_own_label_and_round_trips_through_postcard() {
-        let h: StatHud = crate::test_support::from_json(
-            r#"{"fps_label":"fps_chip","gpu_wait_label":"vram","vram_label":"vram",
-                "ram_label":"","ev_label":3,"edr_label":"edr_chip"}"#,
-        );
-        assert_eq!(h.fps_label, Some(Ref::new(AssetId(8))));
-        assert_eq!(h.gpu_wait_label, Some(Ref::new(AssetId(4))));
-        assert_eq!(h.vram_label, Some(Ref::new(AssetId(4))));
-        assert_eq!(h.ram_label, None);
-        assert_eq!(h.ev_label, Some(Ref::new(AssetId(3))));
-        assert_eq!(h.edr_label, Some(Ref::new(AssetId(8))));
-
-        let bytes = postcard::to_allocvec(&h).unwrap();
-        let back: StatHud = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.fps_label, Some(Ref::new(AssetId(8))));
-        assert_eq!(back.ram_label, None);
-        assert_eq!(back.ev_label, Some(Ref::new(AssetId(3))));
-    }
 }

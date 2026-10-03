@@ -7,45 +7,37 @@
 //! JSON sees.
 
 use concinnity_core::components::Texture;
+use concinnity_core::ecs::Ref;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     AudioClipHandle, FontHandle, MaterialHandle, MeshHandle, ShaderHandle, SkinnedMeshHandle,
-    TextureHandle, de_audio_clip_handle_vec, de_opt_audio_clip_handle, de_opt_font_handle,
-    de_opt_material_handle, de_opt_mesh_handle, de_opt_shader_handle, de_opt_skinned_mesh_handle,
-    de_opt_texture_handle, de_texture_handle,
+    TextureHandle,
 };
-use concinnity_core::ecs::{Ref, de_opt_ref};
 
 #[derive(Debug, serde::Deserialize)]
 struct Optional {
-    #[serde(default, deserialize_with = "de_opt_ref")]
+    #[serde(default)]
     r: Option<Ref<Texture>>,
 }
 
 #[derive(serde::Deserialize)]
 struct Handles {
-    #[serde(default, deserialize_with = "de_opt_texture_handle")]
+    #[serde(default)]
     tex: Option<TextureHandle>,
-    #[serde(default, deserialize_with = "de_opt_mesh_handle")]
+    #[serde(default)]
     mesh: Option<MeshHandle>,
-    #[serde(default, deserialize_with = "de_opt_material_handle")]
+    #[serde(default)]
     material: Option<MaterialHandle>,
-    #[serde(default, deserialize_with = "de_opt_shader_handle")]
+    #[serde(default)]
     shader: Option<ShaderHandle>,
-    #[serde(default, deserialize_with = "de_opt_skinned_mesh_handle")]
+    #[serde(default)]
     target: Option<SkinnedMeshHandle>,
-    #[serde(default, deserialize_with = "de_opt_font_handle")]
+    #[serde(default)]
     font: Option<FontHandle>,
-    #[serde(default, deserialize_with = "de_opt_audio_clip_handle")]
+    #[serde(default)]
     clip: Option<AudioClipHandle>,
-    #[serde(default, deserialize_with = "de_audio_clip_handle_vec")]
+    #[serde(default)]
     sounds: Vec<AudioClipHandle>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct Stage {
-    #[serde(deserialize_with = "de_texture_handle")]
-    texture: TextureHandle,
 }
 
 fn handles_error(json: &str) -> String {
@@ -72,8 +64,8 @@ fn a_reference_name_is_a_deserialization_error() {
 }
 
 #[test]
-fn every_handle_kind_names_itself_in_the_error() {
-    // The kind is in the message because each has its own seam: knowing which
+fn every_handle_space_names_itself_in_the_error() {
+    // The space is in the message because each has its own seam: knowing which
     // one is missing is the whole diagnostic.
     for (json, kind) in [
         (r#"{"tex":"floor"}"#, "texture"),
@@ -89,14 +81,6 @@ fn every_handle_kind_names_itself_in_the_error() {
         let expected = format!("no {kind}-handle resolver installed");
         assert!(err.contains(&expected), "{json}: {err}");
     }
-
-    let err = serde_json::from_str::<Stage>(r#"{"texture":"bg"}"#)
-        .unwrap_err()
-        .to_string();
-    assert!(
-        err.contains("no texture-handle resolver installed"),
-        "{err}"
-    );
 }
 
 #[test]
@@ -113,24 +97,21 @@ fn already_resolved_integers_still_parse() {
             "sounds":[1,2]}"#,
     )
     .unwrap();
-    assert_eq!(h.tex, Some(TextureHandle(3)));
-    assert_eq!(h.mesh, Some(MeshHandle(4)));
-    assert_eq!(h.material, Some(MaterialHandle(5)));
-    assert_eq!(h.shader, Some(ShaderHandle(6)));
-    assert_eq!(h.target, Some(SkinnedMeshHandle(7)));
-    assert_eq!(h.font, Some(FontHandle(8)));
-    assert_eq!(h.clip, Some(AudioClipHandle(9)));
-    assert_eq!(h.sounds, vec![AudioClipHandle(1), AudioClipHandle(2)]);
+    assert_eq!(h.tex, Some(TextureHandle::new(3)));
+    assert_eq!(h.mesh, Some(MeshHandle::new(4)));
+    assert_eq!(h.material, Some(MaterialHandle::new(5)));
+    assert_eq!(h.shader, Some(ShaderHandle::new(6)));
+    assert_eq!(h.target, Some(SkinnedMeshHandle::new(7)));
+    assert_eq!(h.font, Some(FontHandle::new(8)));
+    assert_eq!(h.clip, Some(AudioClipHandle::new(9)));
     assert_eq!(
-        serde_json::from_str::<Stage>(r#"{"texture":2}"#)
-            .unwrap()
-            .texture,
-        TextureHandle(2)
+        h.sounds,
+        vec![AudioClipHandle::new(1), AudioClipHandle::new(2)]
     );
 
-    let bytes = postcard::to_allocvec(&MaterialHandle(9)).unwrap();
+    let bytes = postcard::to_allocvec(&MaterialHandle::new(9)).unwrap();
     assert_eq!(
         postcard::from_bytes::<MaterialHandle>(&bytes).unwrap(),
-        MaterialHandle(9)
+        MaterialHandle::new(9)
     );
 }

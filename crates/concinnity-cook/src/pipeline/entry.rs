@@ -375,7 +375,7 @@ mod tests {
 
         let baked: Prop = postcard::from_bytes(&prop.args_bytes).unwrap();
         // The `mesh` reference resolved to box's handle (0).
-        assert_eq!(baked.mesh, Some(MeshHandle(0)));
+        assert_eq!(baked.mesh, Some(MeshHandle::new(0)));
         // The `scene` reference resolved to Scene `day`'s id (1).
         assert_eq!(baked.scene, Some(Ref::new(AssetId(1))));
     }

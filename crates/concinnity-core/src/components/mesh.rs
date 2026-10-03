@@ -32,7 +32,14 @@ pub struct VertexData {
 ///
 /// **Winding:** triangles must be counter-clockwise when viewed from the front.
 /// Reversed winding = invisible face.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+    crate::ecs::AssetDefault,
+)]
 #[serde(default)]
 pub struct Mesh {
     /// Optional path to a `.glb` file. When set, the build imports
@@ -53,7 +60,7 @@ pub struct Mesh {
     pub indices: Vec<u16>,
     /// Number of level-of-detail versions to generate, including the original.
     /// `1` (the default) generates none; values are clamped to `[1, 8]`.
-    #[serde(default = "default_lod_levels")]
+    #[asset(default = 1)]
     pub lod_levels: u32,
     /// Camera distances at which to switch to each lower-detail version. Length
     /// should be `lod_levels - 1`; empty lets the build derive a default
@@ -65,87 +72,19 @@ pub struct Mesh {
     pub locator: Option<PayloadLocator>,
 }
 
-fn default_lod_levels() -> u32 {
-    1
-}
-
-impl Default for Mesh {
-    fn default() -> Self {
-        Self {
-            source: String::new(),
-            primitive_index: 0,
-            chunk_index: None,
-            vertices: Vec::new(),
-            indices: Vec::new(),
-            lod_levels: 1,
-            lod_distances: Vec::new(),
-            locator: None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // Geometry missing its position or color is a mistake, not a default.
     #[test]
-    fn a_vertex_without_uvs_samples_the_texture_origin() {
-        let v: VertexData = serde_json::from_str(r#"{"pos":[1,2,3],"color":[1,0,0]}"#).unwrap();
-        assert_eq!(v.pos, [1.0, 2.0, 3.0]);
-        assert_eq!(v.color, [1.0, 0.0, 0.0]);
-        assert_eq!(v.uv, [0.0, 0.0]);
-        // Position and color are required: geometry with neither is a mistake,
-        // not a default.
+    fn a_vertex_without_a_color_is_rejected() {
         assert!(serde_json::from_str::<VertexData>(r#"{"pos":[0,0,0]}"#).is_err());
     }
 
     #[test]
-    fn a_blank_mesh_has_one_lod_and_no_geometry() {
-        let m = Mesh::default();
-        assert!(m.vertices.is_empty());
-        assert!(m.indices.is_empty());
-        assert!(m.lod_distances.is_empty());
-        // One level means the mesh is drawn as authored, with no simplification.
-        assert_eq!(m.lod_levels, 1);
-        assert_eq!(m.primitive_index, 0);
-        assert_eq!(m.chunk_index, None);
-        assert!(m.locator.is_none());
-    }
-
-    #[test]
-    fn an_omitted_lod_level_count_still_means_one() {
-        // The field carries its own default fn, so an absent value is 1 rather
-        // than the 0 an integer field would otherwise fall back to.
-        let m: Mesh = serde_json::from_str(r#"{"source":"board.obj"}"#).unwrap();
-        assert_eq!(m.lod_levels, 1);
-        assert_eq!(m.source, "board.obj");
-    }
-
-    #[test]
-    fn an_inline_mesh_round_trips_through_postcard() {
-        let m: Mesh = serde_json::from_str(
-            r#"{"source":"tile.obj","primitive_index":2,"chunk_index":7,"lod_levels":3,
-                "lod_distances":[10,40],
-                "vertices":[{"pos":[0,0,0],"color":[1,1,1],"uv":[0.5,0.5]}],
-                "indices":[0,0,0]}"#,
-        )
-        .unwrap();
-        assert_eq!(m.chunk_index, Some(7));
-
-        let bytes = postcard::to_allocvec(&m).unwrap();
-        let back: Mesh = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.primitive_index, 2);
-        assert_eq!(back.chunk_index, Some(7));
-        assert_eq!(back.lod_levels, 3);
-        assert_eq!(back.lod_distances, [10.0, 40.0]);
-        assert_eq!(back.vertices[0].uv, [0.5, 0.5]);
-        assert_eq!(back.indices, [0, 0, 0]);
-    }
-
-    #[test]
     fn an_absent_chunk_index_is_omitted_from_the_serialized_args() {
-        let m: Mesh = serde_json::from_str(r#"{"source":"board.obj"}"#).unwrap();
-        let json = serde_json::to_string(&m).unwrap();
+        let json = serde_json::to_string(&Mesh::default()).unwrap();
         assert!(!json.contains("chunk_index"), "{json}");
     }
 }

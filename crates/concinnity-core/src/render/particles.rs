@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn out_of_range_texture_handle_drops_emitter() {
         let e = ParticleEmitter {
-            texture: Some(crate::ecs::TextureHandle(999)),
+            texture: Some(crate::ecs::TextureHandle::new(999)),
             ..Default::default()
         };
         assert!(build_particle_records(&[&e], 0).is_empty());
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn emitter_texture_handle_is_used_directly_as_the_slot() {
         let e = ParticleEmitter {
-            texture: Some(crate::ecs::TextureHandle(2)),
+            texture: Some(crate::ecs::TextureHandle::new(2)),
             ..Default::default()
         };
         let recs = build_particle_records(&[&e], 5);

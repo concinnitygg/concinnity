@@ -51,8 +51,8 @@ fn material_value(palette_name: &str, entry: &PaletteEntry) -> serde_json::Value
         "type": "Material",
         "args": {
             "$id": format!("{}_{}", palette_name, entry.alias),
-            "albedo":          entry.albedo,
-            "normal_map":      entry.normal_map,
+            "albedo":          entry.albedo.name(),
+            "normal_map":      entry.normal_map.name(),
             "roughness":       entry.roughness,
             "metallic":        entry.metallic,
             "tint":            entry.tint,
@@ -276,7 +276,7 @@ mod tests {
         let names: Vec<String> = assets.iter().map(asset_name).collect();
         assert_eq!(names, ["pal_floor", "pal_wall", "pal_beam", "pal_trim"]);
         assert_eq!(assets[0]["args"]["albedo"], "tex_wood");
-        assert_eq!(assets[0]["args"]["normal_map"], "");
+        assert_eq!(assets[0]["args"]["normal_map"], serde_json::Value::Null);
         assert_eq!(
             assets[0]["args"]["tint"],
             serde_json::json!([1.0, 1.0, 1.0])

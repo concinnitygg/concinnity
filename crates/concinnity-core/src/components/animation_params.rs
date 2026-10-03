@@ -43,7 +43,7 @@ mod tests {
 
     #[test]
     fn set_writes_in_range_and_ignores_out_of_range() {
-        let mut p = AnimationParams::new(SkinnedMeshHandle(1), vec![0.0, 1.0]);
+        let mut p = AnimationParams::new(SkinnedMeshHandle::new(1), vec![0.0, 1.0]);
         p.set(0, 3.5);
         assert_eq!(p.values, vec![3.5, 1.0]);
         p.set(5, 9.0);
