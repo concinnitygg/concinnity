@@ -293,6 +293,11 @@ pub(crate) fn install_resource_handles(handles: ResourceHandles) {
     RESOURCE_HANDLES.with(|h| *h.borrow_mut() = handles);
 }
 
+// A copy of this thread's installed handle map, for installing on another thread.
+pub(crate) fn current_resource_handles() -> ResourceHandles {
+    RESOURCE_HANDLES.with(|h| h.borrow().clone())
+}
+
 // Clear the thread-local handle map. Call at the start of a build so a prior
 // build's map cannot leak into this one (mirrors `reset_interner`).
 pub(crate) fn reset_resource_handles() {

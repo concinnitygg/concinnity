@@ -5,10 +5,13 @@ use concinnity_core::blob::{MeshBoundsRecord, SceneGroup};
 use concinnity_core::components::FileKind;
 use concinnity_core::ecs::{BlobAssetDef, ResourceRecord};
 use concinnity_host::thread::asset_id;
+use rayon::prelude::*;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::dispatch::build_asset;
-use super::progress::{BuildStage, Progress};
+use super::partition::ResourceJob;
+use super::progress::{BuildStage, Progress, StageProgress};
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 use crate::blob::PayloadPacker;
@@ -169,8 +172,7 @@ fn mesh_bounds_record(handle: u32, bytes: &[u8]) -> Option<MeshBoundsRecord> {
 #[derive(Clone, Copy)]
 pub(in crate::pipeline) struct PackContext<'a> {
     pub(in crate::pipeline) assets: &'a [WorldJsonlAsset],
-    pub(in crate::pipeline) resource_jobs:
-        &'a [(usize, crate::authoring::registry::RegisteredType, u32)],
+    pub(in crate::pipeline) resource_jobs: &'a [ResourceJob],
     pub(in crate::pipeline) partition: &'a crate::compile::scene_partition::ScenePartition,
     pub(in crate::pipeline) mesh_source_handles: &'a concinnity_core::resource::ResourceHandles,
     pub(in crate::pipeline) max_blob_bytes: u64,
@@ -185,9 +187,6 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     named_src: &[usize],
     pack_ctx: PackContext<'_>,
 ) -> std::io::Result<CompiledOutput> {
-    use rayon::prelude::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     let PackContext {
         assets,
         resource_jobs,
@@ -225,7 +224,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     // Snapshot each job's inputs so the parallel compile borrows nothing from
     // `named`, which is mutated afterwards to record payload locators. The raw
     // discriminant stays alongside the type because the payload cache keys on it.
-    let jobs: Vec<(usize, String, RegisteredType, u8)> = compiled
+    let jobs: Vec<ComponentJob> = compiled
         .iter()
         .map(|&(idx, ct)| {
             let (name, def) = &named[idx];
@@ -233,138 +232,45 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         })
         .collect();
 
-    // Compile assets in parallel. Each job is independent (it reads only its
-    // own args and produces its own payload bytes) and the payload cache is
-    // content-addressed, so concurrent hits and stores never collide. The
-    // collected order follows `jobs`, so packing below stays deterministic.
+    // Compile component and resource payloads in parallel, both streams at
+    // once, on a pool sharing this thread's name and handle tables. Each job is
+    // independent (it reads only its own args and produces its own payload
+    // bytes) and the payload cache is content-addressed, so concurrent hits and
+    // stores never collide. Each collect follows its job order, so packing
+    // below stays deterministic.
     let cache_hits = AtomicUsize::new(0);
     let stage = progress.stage(
         BuildStage::Compile,
         (jobs.len() + resource_jobs.len()) as u32,
     );
-    let pending: Vec<(usize, Vec<u8>)> = jobs
-        .par_iter()
-        .map(
-            |(idx, name, ct, discriminant)| -> std::io::Result<(usize, Vec<u8>)> {
-                let ct = *ct;
-                stage.begin(name);
-
-                // The job carries the `named` index; map it to its source asset
-                // via `named_src` (`named` is not 1:1 with `assets` once resource
-                // assets are partitioned out).
-                let asset_args = &assets[named_src[*idx]].args;
-
-                let ctx = crate::asset::BuildCtx {
-                    name: name.as_str(),
-                    platform,
-                    assets_dir,
-                    all_assets: assets,
-                };
-                let build = build_asset(ct).ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!(
-                            "Asset '{name}' is marked Compiled but has no BuildAsset impl (RegisteredType {ct:?})"
-                        ),
-                    )
-                })?;
-
-                // GLB-sourced Mesh / SkinnedMesh assets are probed before
-                // desugar; honor those results here so the .glb parse really
-                // is skipped on cache hits. On a miss the precomputed key is
-                // used at store time, keeping the next build's probe valid.
-                let reused = |bytes: Vec<u8>| {
-                    cache_hits.fetch_add(1, Ordering::Relaxed);
-                    stage.end(name, true);
-                    Ok((*idx, bytes))
-                };
-                if let Some(entry) = mesh_cache.get(name) {
-                    if let Some(bytes) = &entry.bytes {
-                        return reused(bytes.clone());
-                    }
-                    let compiled_bytes = (build.compile)(asset_args, &ctx)?;
-                    crate::cache::store(PAYLOAD, &entry.key, &compiled_bytes);
-                    stage.end(name, false);
-                    return Ok((*idx, compiled_bytes));
-                }
-
-                // Reuse a cached payload when the asset's inputs are unchanged;
-                // otherwise compile and populate the cache for the next build.
-                let inputs = (build.cache_inputs)(asset_args, &ctx);
-                let key = crate::cache::payload_key(*discriminant, asset_args, &ctx, &inputs);
-                if let Some(bytes) = crate::cache::load(PAYLOAD, &key) {
-                    return reused(bytes);
-                }
-                let compiled_bytes = (build.compile)(asset_args, &ctx)?;
-                crate::cache::store(PAYLOAD, &key, &compiled_bytes);
-                stage.end(name, false);
-                Ok((*idx, compiled_bytes))
+    let shared = CompileShared {
+        assets,
+        named_src,
+        assets_dir,
+        platform,
+        mesh_cache,
+        stage: &stage,
+        cache_hits: &cache_hits,
+    };
+    let (pending, resource_pending) = super::build_pool::build_pool()?.install(|| {
+        rayon::join(
+            || {
+                jobs.par_iter()
+                    .map(|job| compile_component(job, &shared))
+                    .collect::<std::io::Result<Vec<_>>>()
+            },
+            || {
+                resource_jobs
+                    .par_iter()
+                    .map(|job| compile_resource(job, &shared))
+                    .collect::<std::io::Result<Vec<_>>>()
             },
         )
-        .collect::<std::io::Result<Vec<_>>>()?;
+    });
+    let (pending, resource_pending) = (pending?, resource_pending?);
 
-    let component_hits = cache_hits.into_inner();
-
-    // Compile the resource-stream payloads (AudioClip today). Few and cheap, so
-    // this stays serial; the content-addressed payload cache still short-circuits
-    // an unchanged source. Bypasses the `BuildAsset`/`RegisteredType` path a
-    // component takes -- a resource is no longer a component.
-    let mut resource_hits = 0usize;
-    let mut resource_pending: Vec<PendingResource> = Vec::new();
-    for (asset_idx, rt, handle) in resource_jobs {
-        let asset = &assets[*asset_idx];
-        stage.begin(&asset.id);
-        let ctx = crate::asset::BuildCtx {
-            name: asset.id.as_str(),
-            platform,
-            assets_dir,
-            all_assets: assets,
-        };
-        let extra_data = rt.compile_data(&asset.id, &asset.args)?.unwrap_or_default();
-        // A glTF/FBX-sourced mesh was probed before desugar; honor that result so
-        // the source parse really is skipped on a hit and the pre-desugar key is
-        // reused at store time (same contract as the component gltf-cache path).
-        let (bytes, reused) = if let Some(entry) = mesh_cache.get(&asset.id) {
-            match &entry.bytes {
-                Some(bytes) => (bytes.clone(), true),
-                None => {
-                    let compiled = rt.compile_payload(&asset.args, assets_dir)?;
-                    crate::cache::store(PAYLOAD, &entry.key, &compiled);
-                    (compiled, false)
-                }
-            }
-        } else {
-            // Every resource asset compiles identically on every backend, so its
-            // entry is shared across a DirectX and a Vulkan cook.
-            let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args, assets_dir));
-            let key = crate::cache::payload_key(
-                RESOURCE_CACHE_DISC_BASE + job_resource_kind(*rt) as u8,
-                &asset.args,
-                &ctx,
-                &inputs,
-            );
-            match crate::cache::load(PAYLOAD, &key) {
-                Some(bytes) => (bytes, true),
-                None => {
-                    let compiled = rt.compile_payload(&asset.args, assets_dir)?;
-                    crate::cache::store(PAYLOAD, &key, &compiled);
-                    (compiled, false)
-                }
-            }
-        };
-        resource_hits += usize::from(reused);
-        stage.end(&asset.id, reused);
-        resource_pending.push(PendingResource {
-            kind: job_resource_kind(*rt),
-            handle: *handle,
-            bytes,
-            is_data: rt.is_data(),
-            extra_data,
-        });
-    }
-
-    let cache_hits = component_hits + resource_hits;
-    let cache_misses = (pending.len() - component_hits) + (resource_pending.len() - resource_hits);
+    let cache_hits = cache_hits.into_inner();
+    let cache_misses = pending.len() + resource_pending.len() - cache_hits;
 
     // Ownership of each payload, precomputed so the packing loops below can
     // mutate `named` freely. Resource jobs and `resource_pending` are
@@ -500,6 +406,145 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         resources,
         cache_hits,
         cache_misses,
+    })
+}
+
+// A component def queued for compile: its index in `named`, its name, its type,
+// and the raw discriminant the payload cache keys on.
+type ComponentJob = (usize, String, RegisteredType, u8);
+
+// What every compile job reads besides its own args, plus the progress counter
+// and cache-hit tally they all share.
+struct CompileShared<'a> {
+    assets: &'a [WorldJsonlAsset],
+    named_src: &'a [usize],
+    assets_dir: Option<&'a Path>,
+    platform: concinnity_core::platform::Platform,
+    mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
+    stage: &'a StageProgress<'a>,
+    cache_hits: &'a AtomicUsize,
+}
+
+// Compile one component payload, or serve it from the probe or the payload
+// cache when its inputs are unchanged.
+fn compile_component(
+    (idx, name, ct, discriminant): &ComponentJob,
+    shared: &CompileShared<'_>,
+) -> std::io::Result<(usize, Vec<u8>)> {
+    let ct = *ct;
+    shared.stage.begin(name);
+
+    // The job carries the `named` index; map it to its source asset via
+    // `named_src` (`named` is not 1:1 with `assets` once resource assets are
+    // partitioned out).
+    let asset_args = &shared.assets[shared.named_src[*idx]].args;
+
+    let ctx = crate::asset::BuildCtx {
+        name: name.as_str(),
+        platform: shared.platform,
+        assets_dir: shared.assets_dir,
+        all_assets: shared.assets,
+    };
+    let build = build_asset(ct).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "Asset '{name}' is marked Compiled but has no BuildAsset impl (RegisteredType {ct:?})"
+            ),
+        )
+    })?;
+
+    // GLB-sourced Mesh / SkinnedMesh assets are probed before desugar; honor
+    // those results here so the .glb parse really is skipped on cache hits. On
+    // a miss the precomputed key is used at store time, keeping the next
+    // build's probe valid.
+    let reused = |bytes: Vec<u8>| {
+        shared.cache_hits.fetch_add(1, Ordering::Relaxed);
+        shared.stage.end(name, true);
+        Ok((*idx, bytes))
+    };
+    if let Some(entry) = shared.mesh_cache.get(name) {
+        if let Some(bytes) = &entry.bytes {
+            return reused(bytes.clone());
+        }
+        let compiled_bytes = (build.compile)(asset_args, &ctx)?;
+        crate::cache::store(PAYLOAD, &entry.key, &compiled_bytes);
+        shared.stage.end(name, false);
+        return Ok((*idx, compiled_bytes));
+    }
+
+    // Reuse a cached payload when the asset's inputs are unchanged; otherwise
+    // compile and populate the cache for the next build.
+    let inputs = (build.cache_inputs)(asset_args, &ctx);
+    let key = crate::cache::payload_key(*discriminant, asset_args, &ctx, &inputs);
+    if let Some(bytes) = crate::cache::load(PAYLOAD, &key) {
+        return reused(bytes);
+    }
+    let compiled_bytes = (build.compile)(asset_args, &ctx)?;
+    crate::cache::store(PAYLOAD, &key, &compiled_bytes);
+    shared.stage.end(name, false);
+    Ok((*idx, compiled_bytes))
+}
+
+// Compile one resource-stream payload, or serve it from the probe or the
+// payload cache when its inputs are unchanged. Bypasses the
+// `BuildAsset`/`RegisteredType` path a component takes, since a resource is
+// not a component.
+fn compile_resource(
+    (asset_idx, rt, handle): &ResourceJob,
+    shared: &CompileShared<'_>,
+) -> std::io::Result<PendingResource> {
+    let asset = &shared.assets[*asset_idx];
+    shared.stage.begin(&asset.id);
+    let ctx = crate::asset::BuildCtx {
+        name: asset.id.as_str(),
+        platform: shared.platform,
+        assets_dir: shared.assets_dir,
+        all_assets: shared.assets,
+    };
+    let extra_data = rt.compile_data(&asset.id, &asset.args)?.unwrap_or_default();
+    // A glTF/FBX-sourced mesh was probed before desugar; honor that result so
+    // the source parse really is skipped on a hit and the pre-desugar key is
+    // reused at store time (same contract as the component gltf-cache path).
+    let (bytes, reused) = if let Some(entry) = shared.mesh_cache.get(&asset.id) {
+        match &entry.bytes {
+            Some(bytes) => (bytes.clone(), true),
+            None => {
+                let compiled = rt.compile_payload(&asset.args, shared.assets_dir)?;
+                crate::cache::store(PAYLOAD, &entry.key, &compiled);
+                (compiled, false)
+            }
+        }
+    } else {
+        // Every resource asset compiles identically on every backend, so its
+        // entry is shared across a DirectX and a Vulkan cook.
+        let inputs =
+            crate::asset::CacheInputs::extra(rt.source_files(&asset.args, shared.assets_dir));
+        let key = crate::cache::payload_key(
+            RESOURCE_CACHE_DISC_BASE + job_resource_kind(*rt) as u8,
+            &asset.args,
+            &ctx,
+            &inputs,
+        );
+        match crate::cache::load(PAYLOAD, &key) {
+            Some(bytes) => (bytes, true),
+            None => {
+                let compiled = rt.compile_payload(&asset.args, shared.assets_dir)?;
+                crate::cache::store(PAYLOAD, &key, &compiled);
+                (compiled, false)
+            }
+        }
+    };
+    if reused {
+        shared.cache_hits.fetch_add(1, Ordering::Relaxed);
+    }
+    shared.stage.end(&asset.id, reused);
+    Ok(PendingResource {
+        kind: job_resource_kind(*rt),
+        handle: *handle,
+        bytes,
+        is_data: rt.is_data(),
+        extra_data,
     })
 }
 
@@ -825,6 +870,126 @@ mod tests {
             component.len + resource.len,
             "both compiled payloads land in the blob"
         );
+    }
+
+    // Resource payloads compile in parallel, but the records come back in job
+    // order with the bytes a serial compile on the calling thread produces.
+    // Materials resolve texture names through the build's handle map and a
+    // SkinnedMesh bakes its interned name, so a worker that cannot see this
+    // thread's tables would bake different bytes.
+    #[test]
+    fn parallel_resource_compile_matches_a_serial_compile_in_job_order() {
+        use concinnity_core::ecs::asset_id::AssetId;
+        use concinnity_host::thread::asset_id;
+
+        let tri = serde_json::json!({
+            "vertices": [{"pos": [0.0, 0.0, 0.0]}, {"pos": [1.0, 0.0, 0.0]}, {"pos": [0.0, 1.0, 0.0]}],
+            "indices": [0, 1, 2],
+        });
+        let assets = vec![
+            wja("floor_tex", RegisteredType::Texture, serde_json::json!({})),
+            wja("moss_tex", RegisteredType::Texture, serde_json::json!({})),
+            wja(
+                "stone",
+                RegisteredType::Material,
+                serde_json::json!({"albedo": "moss_tex", "roughness": 0.3}),
+            ),
+            wja(
+                "ball",
+                RegisteredType::Mesh,
+                serde_json::json!({"generator": "sphere", "radius": 1.0}),
+            ),
+            wja("hero", RegisteredType::SkinnedMesh, tri),
+            wja(
+                "moss",
+                RegisteredType::Material,
+                serde_json::json!({"albedo": "floor_tex"}),
+            ),
+            wja(
+                "pebble",
+                RegisteredType::Mesh,
+                serde_json::json!({"generator": "sphere", "radius": 0.25}),
+            ),
+            wja(
+                "wood",
+                RegisteredType::Material,
+                serde_json::json!({"albedo": "moss_tex", "metallic": 0.5}),
+            ),
+        ];
+
+        let names: Vec<&str> = assets.iter().map(|a| a.id.as_str()).collect();
+        asset_id::reset_interner();
+        asset_id::intern_all(&names);
+        let handles = concinnity_core::resource::ResourceHandles::from_assets(
+            assets.iter().enumerate().filter_map(|(i, a)| {
+                a.asset_type
+                    .resource_kind()
+                    .map(|kind| (AssetId(i as u32), kind))
+            }),
+        );
+        crate::resource_handles::reset_resource_handles();
+        crate::resource_handles::install_resource_handles(handles.clone());
+        let resource_jobs: Vec<ResourceJob> = (2..assets.len())
+            .map(|i| {
+                let rt = assets[i].asset_type;
+                let kind = rt.resource_kind().unwrap();
+                (i, rt, handles.get(kind, AssetId(i as u32)).unwrap())
+            })
+            .collect();
+
+        let out = compile_and_pack_payloads(
+            &mut [],
+            &[],
+            PackContext {
+                platform: concinnity_core::platform::Platform::Metal,
+                assets: &assets,
+                resource_jobs: &resource_jobs,
+                partition: &crate::compile::scene_partition::partition_scenes(&assets),
+                mesh_source_handles: &handles,
+                max_blob_bytes: 1 << 20,
+                assets_dir: None,
+                mesh_cache: &Default::default(),
+                progress: Progress::none(),
+            },
+        )
+        .expect("inline resources compile");
+        assert_eq!((out.cache_hits, out.cache_misses), (0, resource_jobs.len()));
+        assert_eq!(out.resources.len(), resource_jobs.len());
+
+        for (&(i, rt, handle), record) in resource_jobs.iter().zip(&out.resources) {
+            let asset = &assets[i];
+            let payload = rt.compile_payload(&asset.args, None).unwrap();
+            let extra = rt.compile_data(&asset.id, &asset.args).unwrap();
+            assert_eq!(
+                record.resource_kind,
+                rt.resource_kind().unwrap(),
+                "{}",
+                asset.id
+            );
+            assert_eq!(record.handle, handle, "{}", asset.id);
+            if rt.is_data() {
+                assert!(record.payload.is_none(), "{}", asset.id);
+                assert_eq!(record.data_bytes, payload, "{}", asset.id);
+            } else {
+                let loc = record.payload.as_ref().expect("payload locator");
+                let start = loc.offset as usize;
+                let packed = &out.blobs[loc.blob_index as usize][start..start + loc.len as usize];
+                assert_eq!(packed, payload.as_slice(), "{}", asset.id);
+                assert_eq!(record.data_bytes, extra.unwrap_or_default(), "{}", asset.id);
+            }
+        }
+
+        // The reference itself resolved through the build's tables rather than
+        // a fallback: stone's albedo is moss_tex's handle, hero bakes its id.
+        let stone: concinnity_core::components::Material =
+            postcard::from_bytes(&out.resources[0].data_bytes).unwrap();
+        assert_eq!(
+            stone.albedo,
+            Some(concinnity_core::ecs::TextureHandle::new(1))
+        );
+        let (hero_id, _): (u32, concinnity_core::components::SkinnedMesh) =
+            postcard::from_bytes(&out.resources[2].data_bytes).unwrap();
+        assert_eq!(hero_id, 4);
     }
 
     // A world whose assets all carry inline args produces no payload sections

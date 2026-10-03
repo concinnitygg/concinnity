@@ -9,11 +9,13 @@
 //! The submodules follow that order: `desugar` rewrites source-backed assets
 //! into inline data, `partition` splits components from resources, `hot_reload_sources` records
 //! each texture and mesh handle's file, `pack` compiles and packs the payloads
-//! through `dispatch`, `lock_provenance` records each resource for the lock
+//! through `dispatch` on a `build_pool` that shares the build's name and handle
+//! tables, `lock_provenance` records each resource for the lock
 //! file, and `entry` is the sequence the public entry points drive, reporting
 //! each stage through `progress`. `validate` is the compile-free half, for
 //! callers that only want the checks.
 
+mod build_pool;
 mod desugar;
 mod dispatch;
 mod entry;

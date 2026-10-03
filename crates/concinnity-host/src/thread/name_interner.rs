@@ -34,6 +34,7 @@ struct Span {
 //
 // Generic over the name hasher so the collision path can be tested; every
 // caller outside this module's tests takes the default.
+#[derive(Clone)]
 pub(crate) struct NameInterner<S = RandomState> {
     blob: String,
     spans: Vec<Span>,

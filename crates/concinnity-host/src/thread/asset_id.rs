@@ -86,6 +86,22 @@ pub fn prime_name_table(pairs: &[(u32, String)]) -> bool {
     INTERNER.with(|i| i.borrow_mut().prime(pairs))
 }
 
+/// A copy of one thread's interner, for giving another thread the same ids.
+#[derive(Clone)]
+pub struct InternerSnapshot(NameInterner);
+
+/// Copy the current thread's interner.
+pub fn snapshot() -> InternerSnapshot {
+    InternerSnapshot(INTERNER.with(|i| i.borrow().clone()))
+}
+
+/// Replace the current thread's interner with a copy of `snapshot`, so names
+/// resolve here to the ids they had on the thread it was taken from.
+pub fn install_snapshot(snapshot: &InternerSnapshot) {
+    ensure_name_resolver();
+    INTERNER.with(|i| *i.borrow_mut() = snapshot.0.clone());
+}
+
 /// Pre-intern a batch of names in order so identity ids are dense and follow
 /// world.jsonl declaration order.
 pub fn intern_all(names: &[&str]) {
@@ -209,6 +225,41 @@ mod tests {
         // A populated interner is authoritative; priming over it is refused.
         assert!(!prime_name_table(&[(0, "other".to_string())]));
         assert_eq!(intern("floor"), AssetId(0));
+    }
+
+    // A snapshot carries this thread's ids, sparse slots included, to a thread
+    // whose own interner has never seen them.
+    #[test]
+    fn an_installed_snapshot_resolves_names_to_the_source_threads_ids() {
+        reset_interner();
+        prime_name_table(&[(0, "floor".to_string()), (3, "lamp".to_string())]);
+        intern("wall");
+        let snap = snapshot();
+
+        let resolved = std::thread::spawn(move || {
+            install_snapshot(&snap);
+            (
+                lookup("floor"),
+                lookup("lamp"),
+                lookup("wall"),
+                name_of(AssetId(1)),
+                intern("chair"),
+            )
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(
+            resolved,
+            (
+                Some(AssetId(0)),
+                Some(AssetId(3)),
+                Some(AssetId(4)),
+                None,
+                AssetId(5)
+            )
+        );
+        assert_eq!(lookup("chair"), None, "the source thread is untouched");
     }
 
     // Integration: a name string deserializes to a dense id through the resolver
