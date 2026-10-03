@@ -225,6 +225,13 @@ const MAIN_VERTEX_ATTRS: [vk::VertexInputAttributeDescription; 5] = [
     attr(4, vk::Format::R32G32_SFLOAT, 48),
 ];
 
+// The shadow pass reads only position and the sky-marking color, so the
+// optimizer strips the other attributes from its interface. Binding just those
+// keeps the validation layer from warning about unconsumed attributes; the
+// binding keeps the full 56-byte `Vertex` stride.
+const SHADOW_VERTEX_ATTRS: [vk::VertexInputAttributeDescription; 2] =
+    [MAIN_VERTEX_ATTRS[0], MAIN_VERTEX_ATTRS[3]];
+
 // TextVertex (32 bytes): pos(vec2) + uv(vec2) + color(vec3) + mode(float).
 const TEXT_VERTEX_BINDING: [vk::VertexInputBindingDescription; 1] = vertex_binding(32);
 const TEXT_VERTEX_ATTRS: [vk::VertexInputAttributeDescription; 4] = [
@@ -420,11 +427,7 @@ pub(super) fn create_shadow_pipeline(
             ..Raster::default()
         },
         vertex_bindings: &MAIN_VERTEX_BINDING,
-        // `shadow.vert` only reads position, so the optimizer strips the other
-        // attributes from its interface. Binding just location 0 keeps the
-        // validation layer from warning about unconsumed attributes; the binding
-        // keeps the full 56-byte `Vertex` stride.
-        vertex_attributes: &MAIN_VERTEX_ATTRS[..1],
+        vertex_attributes: &SHADOW_VERTEX_ATTRS,
         ..GraphicsPipelineDesc::fullscreen(vert_spv, &[], layout, render_pass, &[])
     }
     .build(device, "shadow")
@@ -471,8 +474,9 @@ pub(super) fn create_composite_pipeline(
 #[cfg(test)]
 mod tests {
     use super::{
-        CompileProgram, compile_bindless_shaders, compile_cull_shader, compile_cull_shader_phase2,
-        compile_shadow_bindless_vs, compile_shadow_cull_shader, is_spirv, spirv_words, world_entry,
+        CompileProgram, SHADOW_VERTEX_ATTRS, compile_bindless_shaders, compile_cull_shader,
+        compile_cull_shader_phase2, compile_shadow_bindless_vs, compile_shadow_cull_shader,
+        is_spirv, spirv_words, world_entry,
     };
 
     // Whole words become native-endian u32s, matching the raw reinterpretation
@@ -528,6 +532,48 @@ mod tests {
         concinnity_shader::require_dxc!();
         let vs = compile_shadow_bindless_vs(false).expect("shadow bindless VS compiles");
         assert!(is_spirv(&vs), "shadow bindless VS is valid SPIR-V");
+    }
+
+    // The `Location` of every `Input` variable a SPIR-V module declares, sorted.
+    fn input_locations(words: &[u32]) -> Vec<u32> {
+        const OP_DECORATE: u32 = 71;
+        const OP_VARIABLE: u32 = 59;
+        const DECORATION_LOCATION: u32 = 30;
+        const STORAGE_INPUT: u32 = 1;
+        let mut locations = std::collections::HashMap::new();
+        let mut inputs = Vec::new();
+        let mut at = 5;
+        while at < words.len() {
+            let count = (words[at] >> 16) as usize;
+            let op = words.get(at + 1..at + count.max(1)).unwrap_or(&[]);
+            match words[at] & 0xFFFF {
+                OP_DECORATE if op.len() >= 3 && op[1] == DECORATION_LOCATION => {
+                    locations.insert(op[0], op[2]);
+                }
+                OP_VARIABLE if op.len() >= 3 && op[2] == STORAGE_INPUT => inputs.push(op[1]),
+                _ => {}
+            }
+            at += count.max(1);
+        }
+        let mut found: Vec<u32> = inputs
+            .iter()
+            .filter_map(|id| locations.get(id).copied())
+            .collect();
+        found.sort_unstable();
+        found
+    }
+
+    // The shadow pipeline binds exactly the vertex attributes its shader reads:
+    // a missing one is a validation error at pipeline creation, an extra one a
+    // warning.
+    #[test]
+    fn the_shadow_pipeline_binds_what_its_shader_reads() {
+        concinnity_shader::require_dxc!();
+        let vs = compile_shadow_bindless_vs(false).expect("shadow bindless VS compiles");
+        let words = spirv_words(&vs).expect("whole words");
+        let mut bound: Vec<u32> = SHADOW_VERTEX_ATTRS.iter().map(|a| a.location).collect();
+        bound.sort_unstable();
+        assert_eq!(input_locations(&words), bound);
     }
 
     // The bindless main shaders compile to valid SPIR-V from the embedded

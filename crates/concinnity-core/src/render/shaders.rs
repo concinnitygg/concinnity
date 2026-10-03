@@ -203,4 +203,11 @@ mod tests {
         assert!(GBUFFER_PREPASS.contains("o.view_depth = 0.0"));
         assert_eq!(GBUFFER_PREPASS.matches("gb_sky_pin(").count(), 2);
     }
+
+    // The sky shell has no finite bounds, so the shadow cull draws it into
+    // every view; a shell that reaches a cascade would shadow the whole scene.
+    #[test]
+    fn the_shadow_pass_drops_the_sky() {
+        assert!(SHADOW.contains("color.b > 1.5"));
+    }
 }
