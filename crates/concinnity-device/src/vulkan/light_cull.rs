@@ -13,8 +13,9 @@ use concinnity_core::render::error::RenderResult;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::descriptor_layout::{Binding, PoolSizes};
-use super::pipeline::{SHADER_ENTRY, spv_module};
+use super::pipeline_desc::compute_pipeline;
 use super::resources::create_descriptor_set_layout;
+use super::set_writes::SetWrites;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
@@ -65,15 +66,15 @@ impl VkLightCull {
         frame: usize,
         records: vk::DescriptorBufferInfo,
     ) {
-        let write = vk::WriteDescriptorSet::default()
-            .dst_set(self.sets[frame])
-            .dst_binding(PROBE_RECORDS_BINDING)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(std::slice::from_ref(&records));
-        // SAFETY: the write and the buffer info it borrows are live for the call,
-        // the set and buffer belong to this device, and the caller guarantees no
-        // submission still references the set.
-        unsafe { device.update_descriptor_sets(&[write], &[]) };
+        SetWrites::new(self.sets[frame])
+            .buffer(
+                PROBE_RECORDS_BINDING,
+                vk::DescriptorType::STORAGE_BUFFER,
+                records.buffer,
+                records.offset,
+                records.range,
+            )
+            .apply(device);
     }
 
     // Destroy every owned GPU object. Called from `VkContext::drop` after
@@ -145,16 +146,7 @@ pub(in crate::vulkan) fn build_light_cull(
         .map_err(|e| super::error::map_vk_result(e, "light cull pipeline layout"))?;
 
     let spirv = super::builtin_shaders::LIGHT_CULL.compile(hot_reload)?;
-    let module = spv_module(device, &spirv)?;
-    let stage = vk::PipelineShaderStageCreateInfo::default()
-        .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(module.handle())
-        .name(SHADER_ENTRY);
-    let pipeline_info = vk::ComputePipelineCreateInfo::default()
-        .stage(stage)
-        .layout(pipeline_layout.handle());
-    let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &pipeline_info)
-        .map_err(|e| super::error::map_vk_result(e, "light cull pipeline"))?;
+    let pipeline = compute_pipeline(device, pipeline_layout.handle(), &spirv, "light cull")?;
 
     // One compute set per frame, each pointing at that frame's params UBO.
     let f = frames as u32;
@@ -177,38 +169,11 @@ pub(in crate::vulkan) fn build_light_cull(
         .map_err(|e| super::error::map_vk_result(e, "light cull descriptor sets"))?;
 
     for (i, &set) in sets.iter().enumerate() {
-        let params_info = vk::DescriptorBufferInfo::default()
-            .buffer(params_buffers[i].buffer())
-            .offset(0)
-            .range(params_size);
-        let lights_info = vk::DescriptorBufferInfo::default()
-            .buffer(local_light_buffer)
-            .offset(0)
-            .range(local_light_size);
-        let list_info = vk::DescriptorBufferInfo::default()
-            .buffer(cluster_buffer.buffer())
-            .offset(0)
-            .range(cluster_list_size());
-        let writes = [
-            vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(std::slice::from_ref(&params_info)),
-            vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(std::slice::from_ref(&lights_info)),
-            vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(2)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(std::slice::from_ref(&list_info)),
-        ];
-        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
-        // set and resource it names belongs to this device.
-        unsafe { device.update_descriptor_sets(&writes, &[]) };
+        SetWrites::new(set)
+            .uniform_buffer(0, params_buffers[i].buffer(), params_size)
+            .storage_buffer(1, local_light_buffer, local_light_size)
+            .storage_buffer(2, cluster_buffer.buffer(), cluster_list_size())
+            .apply(device);
     }
 
     Ok(VkLightCull {

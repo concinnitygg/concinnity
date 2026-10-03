@@ -28,9 +28,10 @@ use crate::directx::com;
 use crate::directx::context::DxContext;
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
-use crate::directx::error::{map_hresult, map_pso_hresult};
-use crate::directx::pipeline::serialize_desc_and_create;
-use crate::directx::root_constants::{RootConstants, root_dwords};
+use crate::directx::error::map_hresult;
+use crate::directx::pso::compute_pso;
+use crate::directx::root_constants::RootConstants;
+use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::transition_barrier;
 
 // The compute cull kernel and its root signature, plus two-pass occlusion's
@@ -183,90 +184,16 @@ pub(in crate::directx) fn compile_cull_shader_shadow(hot_reload: bool) -> Render
 pub(in crate::directx) fn create_cull_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
-    let hiz_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 2, // t2
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let params = [
-        // [0] Root constants b0: CullParams (planes + cam_pos + object_count +
-        //     prev_view_proj + hiz metadata)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: root_dwords::<CullParams>(),
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [1] Root SRV t0: StructuredBuffer<GpuObjectData>
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [2] Root SRV t1: StructuredBuffer<GpuDrawArgs>
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [3] Descriptor table SRV t2: Hi-Z Texture2D<float> covering all mips
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &hiz_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [4] Root UAV u0: RWStructuredBuffer<IndirectCommand>
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_UAV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [5] Root UAV u1: RWStructuredBuffer<uint> cull_status (two-pass)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_UAV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-    ];
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-        ..Default::default()
-    };
-    serialize_desc_and_create(device, &desc, "cull root sig")
+    use Visibility::All;
+    RootSig::new()
+        // [0] b0 CullParams (planes + cam_pos + object_count + prev_view_proj + hiz metadata)
+        .constants::<CullParams>(0, All)
+        .srv(0, All) // [1] t0 StructuredBuffer<GpuObjectData>
+        .srv(1, All) // [2] t1 StructuredBuffer<GpuDrawArgs>
+        .srv_table(2, 1, All) // [3] t2 Hi-Z Texture2D<float> covering all mips
+        .uav(0, All) // [4] u0 RWStructuredBuffer<IndirectCommand>
+        .uav(1, All) // [5] u1 RWStructuredBuffer<uint> cull_status (two-pass)
+        .build(device, "cull root sig")
 }
 
 // Compute pipeline state for the GPU-cull kernel.
@@ -275,18 +202,7 @@ pub(in crate::directx) fn create_cull_pso(
     root_sig: &ID3D12RootSignature,
     cs: &[u8],
 ) -> RenderResult<ID3D12PipelineState> {
-    let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        CS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: cs.as_ptr() as _,
-            BytecodeLength: cs.len(),
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_compute(device, &desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create cull PSO"))
+    compute_pso(device, root_sig, cs, "cull")
 }
 
 // Command signature for the GPU-driven main pass `ExecuteIndirect`: each

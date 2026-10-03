@@ -19,9 +19,10 @@ use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{DxContext, FRAMES};
 use crate::directx::descriptor_slot::DescriptorTables;
-use crate::directx::error::{map_hresult, map_pso_hresult};
-use crate::directx::pipeline::serialize_desc_and_create;
-use crate::directx::root_constants::{RootConstants, root_dwords};
+use crate::directx::error::map_hresult;
+use crate::directx::pso::compute_pso;
+use crate::directx::root_constants::RootConstants;
+use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::{create_uav_buffer, transition_barrier, uav_barrier};
 
 // Auto-exposure (EV adaptation) state. `resources` is `Some` only when the
@@ -110,11 +111,10 @@ impl AutoExposureResources {
         let (build_cs, average_cs) = compile_auto_exposure_shaders(hot_reload)?;
 
         let build_root_sig = create_build_root_signature(device)?;
-        let build_pso =
-            create_compute_pso(device, &build_root_sig, &build_cs, "auto-exposure build")?;
+        let build_pso = compute_pso(device, &build_root_sig, &build_cs, "auto-exposure build")?;
 
         let average_root_sig = create_average_root_signature(device)?;
-        let average_pso = create_compute_pso(
+        let average_pso = compute_pso(
             device,
             &average_root_sig,
             &average_cs,
@@ -176,124 +176,24 @@ impl AutoExposureResources {
 // the histogram (u0). The HDR SRV needs a descriptor table because root SRVs
 // are limited to raw / structured buffers, not Texture2D.
 fn create_build_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let hdr_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // t0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let params = [
+    RootSig::new()
         // [0] Root constants b0: AutoExposureParams.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: root_dwords::<AutoExposureParams>(),
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
+        .constants::<AutoExposureParams>(0, Visibility::All)
         // [1] Descriptor table SRV t0: HDR texture.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &hdr_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
+        .srv_table(0, 1, Visibility::All)
         // [2] Root UAV u0: histogram.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_UAV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-    ];
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-        ..Default::default()
-    };
-    serialize_desc_and_create(device, &desc, "auto-exposure build root sig")
+        .uav(0, Visibility::All)
+        .build(device, "auto-exposure build root sig")
 }
 
 // Root signature for the average kernel: 4 root constants (b0), root UAV for
 // the histogram (u0, read + clear), root UAV for the output (u1, write-once).
 fn create_average_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let params = [
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: root_dwords::<AutoExposureParams>(),
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_UAV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_UAV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-    ];
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-        ..Default::default()
-    };
-    serialize_desc_and_create(device, &desc, "auto-exposure average root sig")
-}
-
-// Compute pipeline state for one of the auto-exposure kernels. Exposed to
-// the DirectX shader hot-reload pass so it can rebuild both PSOs against the
-// existing root signatures.
-pub(in crate::directx) fn create_compute_pso(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
-    cs: &[u8],
-    label: &str,
-) -> RenderResult<ID3D12PipelineState> {
-    let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        CS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: cs.as_ptr() as _,
-            BytecodeLength: cs.len(),
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_compute(device, &desc) }
-        .map_err(|e| map_pso_hresult(e.code(), &format!("create {label} PSO")))
+    RootSig::new()
+        .constants::<AutoExposureParams>(0, Visibility::All)
+        .uav(0, Visibility::All)
+        .uav(1, Visibility::All)
+        .build(device, "auto-exposure average root sig")
 }
 
 impl DxContext {

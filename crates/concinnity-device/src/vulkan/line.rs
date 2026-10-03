@@ -18,7 +18,10 @@ use concinnity_core::render::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
-use super::pipeline::GraphicsStages;
+use super::descriptor_layout::{Binding, PoolSizes};
+use super::pipeline_desc::{Blend, GraphicsPipelineDesc};
+use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use super::set_writes::SetWrites;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
@@ -129,7 +132,7 @@ impl LineResources {
             extent,
         } = targets;
         let render_pass = create_line_render_pass(device, hdr_format)?;
-        let view_set_layout = create_line_set_layout(device)?;
+        let view_set_layout = create_descriptor_set_layout(device, &view_set_bindings())?;
         let pipeline_layout = create_line_pipeline_layout(device, view_set_layout.handle())?;
 
         let (vert_spv, frag_spv) = compile_line_shaders(hot_reload, msaa)?;
@@ -155,20 +158,12 @@ impl LineResources {
 
         let descriptor_pool = create_line_descriptor_pool(device, frames)?;
         let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
-        let info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool.handle())
-            .set_layouts(&view_layouts);
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let view_sets = unsafe { device.allocate_descriptor_sets(&info) }
-            .map_err(|e| super::error::map_vk_result(e, "line descriptor sets"))?;
+        let view_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &view_layouts)?;
         for (i, &set) in view_sets.iter().enumerate() {
-            write_view_set(
-                device,
-                set,
-                view_ubos[i].buffer(),
-                depth_views[i.min(depth_views.len().saturating_sub(1))],
-            );
+            SetWrites::new(set)
+                .uniform_buffer(0, view_ubos[i].buffer(), view_size)
+                .sampled_image(1, depth_views[i.min(depth_views.len().saturating_sub(1))])
+                .apply(device);
         }
 
         let mut framebuffers = Vec::with_capacity(frames);
@@ -214,17 +209,9 @@ impl LineResources {
             )?);
         }
         for (i, &set) in self.view_sets.iter().enumerate() {
-            let depth_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(depth_views[i.min(depth_views.len().saturating_sub(1))]);
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .image_info(std::slice::from_ref(&depth_info));
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+            SetWrites::new(set)
+                .sampled_image(1, depth_views[i.min(depth_views.len().saturating_sub(1))])
+                .apply(device);
         }
         Ok(())
     }
@@ -318,23 +305,14 @@ fn create_line_render_pass(device: &VkDevice, format: vk::Format) -> RenderResul
         .map_err(|e| super::error::map_vk_result(e, "line render pass"))
 }
 
-fn create_line_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
-    let bindings = [
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-    ];
-    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    device
-        .create_descriptor_set_layout(&info)
-        .map_err(|e| super::error::map_vk_result(e, "line view set layout"))
+// The per-frame view set: the LineView UBO and the main depth.
+fn view_set_bindings() -> [Binding; 2] {
+    use vk::DescriptorType as T;
+    let frag = vk::ShaderStageFlags::FRAGMENT;
+    [
+        (0, T::UNIFORM_BUFFER, vk::ShaderStageFlags::VERTEX | frag),
+        (1, T::SAMPLED_IMAGE, frag),
+    ]
 }
 
 fn create_line_pipeline_layout(
@@ -353,52 +331,15 @@ fn create_line_descriptor_pool(
     frames: usize,
 ) -> RenderResult<OwnedDescriptorPool> {
     let frames = frames as u32;
-    let sizes = [
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: frames,
-        },
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::SAMPLED_IMAGE,
-            descriptor_count: frames,
-        },
-    ];
+    let sizes = PoolSizes::default()
+        .sets(&view_set_bindings(), frames)
+        .build();
     let info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(frames)
         .pool_sizes(&sizes);
     device
         .create_descriptor_pool(&info)
         .map_err(|e| super::error::map_vk_result(e, "line descriptor pool"))
-}
-
-fn write_view_set(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    view_ubo: vk::Buffer,
-    depth_view: vk::ImageView,
-) {
-    let view_info = vk::DescriptorBufferInfo::default()
-        .buffer(view_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<LineView>() as u64);
-    let depth_info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(depth_view);
-    let writes = [
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(std::slice::from_ref(&view_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .image_info(std::slice::from_ref(&depth_info)),
-    ];
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
 fn compile_line_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
@@ -428,6 +369,8 @@ pub(in crate::vulkan) fn rebuild_line_pipeline(
     )
 }
 
+// Alpha-blended ribbons into the SINGLE-SAMPLE resolved HDR. No culling: a
+// ribbon faces the camera, but its winding depends on which way the line runs.
 fn create_line_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,
@@ -435,8 +378,6 @@ fn create_line_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
     // `LineVertex` (position, edge, color) at 32 bytes, asserted by
     // `line_vertex_layout_matches_shaders`.
     let bindings = [vk::VertexInputBindingDescription::default()
@@ -460,58 +401,18 @@ fn create_line_pipeline(
             .format(vk::Format::R32G32B32A32_SFLOAT)
             .offset(16),
     ];
-    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
-        .vertex_binding_descriptions(&bindings)
-        .vertex_attribute_descriptions(&attrs);
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        // No culling: a ribbon faces the camera, but its winding depends on
-        // which way the line runs.
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .line_width(1.0);
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        // The pass writes the SINGLE-SAMPLE resolved HDR, not the MSAA color.
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(false)
-        .depth_write_enable(false);
-    let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-        .blend_enable(true)
-        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .color_blend_op(vk::BlendOp::ADD)
-        .src_alpha_blend_factor(vk::BlendFactor::SRC_ALPHA)
-        .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .alpha_blend_op(vk::BlendOp::ADD)
-        .color_write_mask(vk::ColorComponentFlags::RGBA);
-    let blend_attachments = [blend_attachment];
-    let blend_state = vk::PipelineColorBlendStateCreateInfo::default()
-        .logic_op_enable(false)
-        .attachments(&blend_attachments);
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-    let info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vertex_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth_stencil)
-        .color_blend_state(&blend_state)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass);
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| super::error::map_vk_result(e, "create line pipeline"))?;
-    Ok(pipeline)
+    GraphicsPipelineDesc {
+        vertex_bindings: &bindings,
+        vertex_attributes: &attrs,
+        ..GraphicsPipelineDesc::fullscreen(
+            vert_spv,
+            frag_spv,
+            layout,
+            render_pass,
+            &[Blend::AlphaOver],
+        )
+    }
+    .build(device, "line")
 }
 
 // Encoder

@@ -9,8 +9,10 @@ use concinnity_core::render::fullscreen;
 
 use super::super::allocator::DeviceAllocator;
 use super::super::context::*;
-use super::super::pipeline::GraphicsStages;
+use super::super::pipeline_desc::{Blend, GraphicsPipelineDesc};
+use super::super::record::cmd_push_constants;
 use super::super::resources::{alloc_descriptor_sets, write_source_set};
+use super::super::set_writes::SetWrites;
 use super::super::texture::*;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{OwnedFramebuffer, OwnedPipeline, VkDevice};
@@ -51,73 +53,13 @@ pub(in crate::vulkan) fn create_bloom_pipeline(
     frag_spv: &[u8],
     additive: bool,
 ) -> RenderResult<OwnedPipeline> {
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
-
-    let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-        .primitive_restart_enable(false);
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .depth_clamp_enable(false)
-        .rasterizer_discard_enable(false)
-        .polygon_mode(vk::PolygonMode::FILL)
-        .line_width(1.0)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .depth_bias_enable(false);
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        .sample_shading_enable(false)
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(false)
-        .depth_write_enable(false)
-        .depth_compare_op(vk::CompareOp::ALWAYS);
-
-    let color_blend_attach = if additive {
-        vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::ONE)
-            .dst_color_blend_factor(vk::BlendFactor::ONE)
-            .color_blend_op(vk::BlendOp::ADD)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ONE)
-            .alpha_blend_op(vk::BlendOp::ADD)
+    let blend = if additive {
+        Blend::Additive
     } else {
-        vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(false)
+        Blend::Opaque
     };
-
-    let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
-        .logic_op_enable(false)
-        .attachments(std::slice::from_ref(&color_blend_attach));
-
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-    let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vert_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth_stencil)
-        .color_blend_state(&color_blend)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass)
-        .subpass(0);
-
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
-        .map_err(|e| crate::vulkan::error::map_vk_result(e, "create bloom pipeline"))?;
-
-    Ok(pipeline)
+    GraphicsPipelineDesc::fullscreen(vert_spv, frag_spv, layout, render_pass, &[blend])
+        .build(device, "bloom")
 }
 
 // Number of mip levels in the bloom chain for an HDR target of the given
@@ -296,17 +238,7 @@ pub(in crate::vulkan) fn rebind_bloom_input0(
 
 // Point bloom input `set`'s image binding at `view`.
 fn write_bloom_input(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
-    let img_info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(view);
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(0)
-        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-        .image_info(std::slice::from_ref(&img_info));
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+    SetWrites::new(set).sampled_image(0, view).apply(device);
 }
 
 // Allocate + wire the bloom input descriptor sets. Per frame slot there is
@@ -356,12 +288,12 @@ impl fullscreen::BloomEncoder for VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            self.hw.device.cmd_push_constants(
+            cmd_push_constants(
+                &self.hw.device,
                 *cmd,
                 self.bloom.pipeline_layout.handle(),
                 vk::ShaderStageFlags::FRAGMENT,
-                0,
-                bytemuck::bytes_of(&self.post_process),
+                &self.post_process,
             );
         }
         Ok(())

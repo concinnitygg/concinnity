@@ -19,7 +19,7 @@ pub const AUTO_EXPOSURE_PUSH_BYTES: u32 = 16;
 /// The GPU-cull push constant (cull.hlsl): six already-normalized frustum
 /// planes (xyz = normal, w = d), the camera position sharing its 16-byte slot with
 /// the build-time object count, then the shader-bucket routing (120 B total).
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct CullParams {
     /// Frustum planes, each `(normal.xyz, d)`.

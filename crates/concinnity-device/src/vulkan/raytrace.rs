@@ -71,7 +71,11 @@ use concinnity_core::render::uniforms::SkinParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkGeometry;
-use super::pipeline::{SHADER_ENTRY, spv_module};
+use super::descriptor_layout::{Binding, PoolSizes};
+use super::pipeline_desc::compute_pipeline;
+use super::record::cmd_push_constants;
+use super::resources::create_descriptor_set_layout;
+use super::set_writes::SetWrites;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
@@ -1041,30 +1045,25 @@ pub(in crate::vulkan) fn build_rt_skin(
         .ok()
 }
 
+// The skin kernel's five storage buffers: src verts (0), joint palette (1),
+// deformed output (2), morph deltas (3), morph weights (4).
+fn skin_set() -> [Binding; 5] {
+    std::array::from_fn(|b| {
+        (
+            b as u32,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::COMPUTE,
+        )
+    })
+}
+
 pub(super) fn build_skin_pipeline(
     alloc: &DeviceAllocator,
     device: &VkDevice,
     hot_reload: bool,
 ) -> RenderResult<SkinPipeline> {
     let spv = super::builtin_shaders::RT_SKIN.compile(hot_reload)?;
-    let module = spv_module(device, &spv)?;
-
-    // Five storage buffers: src verts (0), joint palette (1), deformed output
-    // (2), morph deltas (3), morph weights (4).
-    let bindings: Vec<vk::DescriptorSetLayoutBinding> = (0..5u32)
-        .map(|b| {
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(b)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-        })
-        .collect();
-    let set_layout = device
-        .create_descriptor_set_layout(
-            &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
-        )
-        .map_err(|e| super::error::map_vk_result(e, "rt skin descriptor set layout"))?;
+    let set_layout = create_descriptor_set_layout(device, &skin_set())?;
 
     let pc = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
@@ -1079,16 +1078,7 @@ pub(super) fn build_skin_pipeline(
         )
         .map_err(|e| super::error::map_vk_result(e, "rt skin pipeline layout"))?;
 
-    let stage = vk::PipelineShaderStageCreateInfo::default()
-        .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(module.handle())
-        .name(SHADER_ENTRY);
-    let info = vk::ComputePipelineCreateInfo::default()
-        .stage(stage)
-        .layout(pipeline_layout.handle());
-    let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info);
-    let pipeline =
-        pipeline.map_err(|e| super::error::map_vk_result(e, "create rt skin pipeline"))?;
+    let pipeline = compute_pipeline(device, pipeline_layout.handle(), &spv, "rt skin")?;
 
     // Sized to one `MorphEntry` so even a stray read of slot 0 stays in
     // bounds; `target_count == 0` keeps it unread.
@@ -2006,56 +1996,16 @@ impl RtAccelData {
                 continue;
             }
             frame_wired[obj_idx] = want;
-            let src_info = vk::DescriptorBufferInfo::default()
-                .buffer(skinned.vertex_buffer)
-                .offset(0)
-                .range(vk::WHOLE_SIZE);
-            let pal_info = vk::DescriptorBufferInfo::default()
-                .buffer(joint_buffer)
-                .offset(0)
-                .range(vk::WHOLE_SIZE);
-            let dst_info = vk::DescriptorBufferInfo::default()
-                .buffer(deformed.buffer)
-                .offset(0)
-                .range(vk::WHOLE_SIZE);
-            let set = frame_sets[obj_idx];
             // The RT skin runs at bind pose (before per-frame morph weights
             // exist); morphing happens in the per-frame main fold. Bindings 3/4
             // take the dummy SSBO and target_count is 0, so they go unread.
-            let dummy_info = vk::DescriptorBufferInfo::default()
-                .buffer(skin.morph_dummy)
-                .offset(0)
-                .range(vk::WHOLE_SIZE);
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&src_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(1)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&pal_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(2)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&dst_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(3)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&dummy_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(4)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&dummy_info)),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
+            SetWrites::new(frame_sets[obj_idx])
+                .storage_buffer(0, skinned.vertex_buffer, vk::WHOLE_SIZE)
+                .storage_buffer(1, joint_buffer, vk::WHOLE_SIZE)
+                .storage_buffer(2, deformed.buffer, vk::WHOLE_SIZE)
+                .storage_buffer(3, skin.morph_dummy, vk::WHOLE_SIZE)
+                .storage_buffer(4, skin.morph_dummy, vk::WHOLE_SIZE)
+                .apply(device);
         }
 
         // Stage 1: skin dispatch per visible skinned object onto `cmd`.
@@ -2080,15 +2030,6 @@ impl RtAccelData {
                 joint_count: obj.joint_count.max(1) as u32,
                 target_count: 0,
             };
-            // SAFETY: `SkinParams` is `#[repr(C)]` with only 4-byte scalar fields, so it has no
-            // padding and all 16 of its bytes are initialized; the slice borrows it and does not
-            // outlive it.
-            let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &params as *const SkinParams as *const u8,
-                    std::mem::size_of::<SkinParams>(),
-                )
-            };
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
@@ -2100,12 +2041,12 @@ impl RtAccelData {
                     std::slice::from_ref(&frame_sets[obj_idx]),
                     &[],
                 );
-                device.cmd_push_constants(
+                cmd_push_constants(
+                    device,
                     cmd,
                     pipeline_layout,
                     vk::ShaderStageFlags::COMPUTE,
-                    0,
-                    bytes,
+                    &params,
                 );
                 device.cmd_dispatch(cmd, (obj.vertex_count as u32).div_ceil(64), 1, 1);
             }
@@ -2361,13 +2302,11 @@ pub(super) fn ensure_skin_sets(
     // has completed (the per-frame fence gated the frame at the top of
     // `draw_frame`), so freeing the old pool here is safe.
     let total = (frames * object_count) as u32;
-    let pool_size = vk::DescriptorPoolSize::default()
-        .ty(vk::DescriptorType::STORAGE_BUFFER)
-        .descriptor_count(total * 5);
+    let pool_sizes = PoolSizes::default().sets(&skin_set(), total).build();
     let pool = device
         .create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
-                .pool_sizes(std::slice::from_ref(&pool_size))
+                .pool_sizes(&pool_sizes)
                 .max_sets(total),
         )
         .map_err(|e| super::error::map_vk_result(e, "skin descriptor pool"))?;
@@ -2591,35 +2530,11 @@ impl super::context::VkContext {
         // unread.
         for f in 0..frames {
             for o in 0..n {
-                let set = skin.sets[f][o];
-                let pal_info = vk::DescriptorBufferInfo::default()
-                    .buffer(self.skinned.joint_buffers[f][o].buffer())
-                    .offset(0)
-                    .range(vk::WHOLE_SIZE);
-                let dummy_info = vk::DescriptorBufferInfo::default()
-                    .buffer(skin.morph_dummy)
-                    .offset(0)
-                    .range(vk::WHOLE_SIZE);
-                let writes = [
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(1)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(&pal_info)),
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(3)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(&dummy_info)),
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(4)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(&dummy_info)),
-                ];
-                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-                // every set and resource it names belongs to this device.
-                unsafe { device.update_descriptor_sets(&writes, &[]) };
+                SetWrites::new(skin.sets[f][o])
+                    .storage_buffer(1, self.skinned.joint_buffers[f][o].buffer(), vk::WHOLE_SIZE)
+                    .storage_buffer(3, skin.morph_dummy, vk::WHOLE_SIZE)
+                    .storage_buffer(4, skin.morph_dummy, vk::WHOLE_SIZE)
+                    .apply(&device);
             }
         }
 
@@ -2672,29 +2587,10 @@ impl super::context::VkContext {
         let src_buffer = self.skinned.vertex_buffer.buffer();
         for (f, deformed_buf) in deformed.iter().enumerate() {
             for &set in sets[f].iter().take(n) {
-                let src_info = vk::DescriptorBufferInfo::default()
-                    .buffer(src_buffer)
-                    .offset(0)
-                    .range(vk::WHOLE_SIZE);
-                let dst_info = vk::DescriptorBufferInfo::default()
-                    .buffer(deformed_buf.buffer)
-                    .offset(0)
-                    .range(vk::WHOLE_SIZE);
-                let writes = [
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(0)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(&src_info)),
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(2)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(&dst_info)),
-                ];
-                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-                // every set and resource it names belongs to this device.
-                unsafe { self.hw.device.update_descriptor_sets(&writes, &[]) };
+                SetWrites::new(set)
+                    .storage_buffer(0, src_buffer, vk::WHOLE_SIZE)
+                    .storage_buffer(2, deformed_buf.buffer, vk::WHOLE_SIZE)
+                    .apply(&self.hw.device);
             }
         }
 
@@ -2744,15 +2640,6 @@ impl super::context::VkContext {
                     .copied()
                     .unwrap_or(0),
             };
-            // SAFETY: `SkinParams` is `#[repr(C)]` with only 4-byte scalar fields, so it has no
-            // padding and all 16 of its bytes are initialized; the slice borrows it and does not
-            // outlive it.
-            let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &params as *const SkinParams as *const u8,
-                    std::mem::size_of::<SkinParams>(),
-                )
-            };
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
@@ -2764,12 +2651,12 @@ impl super::context::VkContext {
                     std::slice::from_ref(&frame_sets[o]),
                     &[],
                 );
-                device.cmd_push_constants(
+                cmd_push_constants(
+                    device,
                     cmd,
                     skin.pipeline_layout.handle(),
                     vk::ShaderStageFlags::COMPUTE,
-                    0,
-                    bytes,
+                    &params,
                 );
                 device.cmd_dispatch(cmd, (obj.vertex_count as u32).div_ceil(64), 1, 1);
             }

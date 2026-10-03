@@ -19,8 +19,10 @@ use concinnity_core::render::spot_shadow;
 use super::shadow::ShadowView;
 use crate::vulkan::allocator::{DeviceAllocator, PooledBuffer};
 use crate::vulkan::context::{VkContext, VkSpotShadow};
+use crate::vulkan::descriptor_layout::{PoolSizes, shadow_global_set};
 use crate::vulkan::owned::VkDevice;
 use crate::vulkan::resources::alloc_descriptor_sets;
+use crate::vulkan::set_writes::SetWrites;
 use crate::vulkan::texture::GpuImage;
 
 // Everything `build_spot_shadow` needs from init. Grouped so the builder takes
@@ -113,9 +115,9 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
     // separate from the shared pool so the slice count does not have to be
     // threaded into the main pool sizing.
     let set_count = framebuffers.len().max(1) as u32;
-    let pool_sizes = [vk::DescriptorPoolSize::default()
-        .ty(vk::DescriptorType::UNIFORM_BUFFER)
-        .descriptor_count(set_count)];
+    let pool_sizes = PoolSizes::default()
+        .sets(&shadow_global_set(), set_count)
+        .build();
     let descriptor_pool = device
         .create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
@@ -127,18 +129,15 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
     let layouts: Vec<_> = (0..set_count).map(|_| set_layout).collect();
     let sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &layouts)?;
     for (i, &set) in sets.iter().enumerate() {
-        let info = vk::DescriptorBufferInfo::default()
-            .buffer(ubo.buffer())
-            .offset(i as u64 * stride)
-            .range(size_of::<ShadowUniforms>() as u64);
-        let write = vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(std::slice::from_ref(&info));
-        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
-        // set and resource it names belongs to this device.
-        unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+        SetWrites::new(set)
+            .buffer(
+                0,
+                vk::DescriptorType::UNIFORM_BUFFER,
+                ubo.buffer(),
+                i as u64 * stride,
+                size_of::<ShadowUniforms>() as u64,
+            )
+            .apply(device);
     }
 
     Ok(VkSpotShadow {

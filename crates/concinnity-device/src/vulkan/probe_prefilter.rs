@@ -29,11 +29,15 @@ use concinnity_core::render::reflection_probe::PrefilterPlan;
 use concinnity_core::render::uniforms::ProbePrefilterParams;
 
 use super::allocator::{DeviceAllocator, PooledImage};
+use super::descriptor_layout::{Binding, PoolSizes};
 use super::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSampler, OwnedSetLayout, VkDevice,
 };
+use super::pipeline_desc::compute_pipeline;
 use super::probe_set::{self, CubeImage};
-use super::resources::alloc_descriptor_sets;
+use super::record::cmd_push_constants;
+use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use super::set_writes::SetWrites;
 
 // Color format of the capture and the probe cube array.
 pub(super) const PROBE_CUBE_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
@@ -76,21 +80,8 @@ pub(super) struct ProbePrefilterPipelines {
 impl ProbePrefilterPipelines {
     pub(super) fn new(device: &VkDevice, hot_reload: bool) -> RenderResult<Self> {
         use super::builtin_shaders::CompileProgram;
-        let mip_set_layout = create_set_layout(
-            device,
-            &[
-                vk::DescriptorType::STORAGE_IMAGE,
-                vk::DescriptorType::STORAGE_IMAGE,
-            ],
-        )?;
-        let ggx_set_layout = create_set_layout(
-            device,
-            &[
-                vk::DescriptorType::SAMPLED_IMAGE,
-                vk::DescriptorType::SAMPLER,
-                vk::DescriptorType::STORAGE_IMAGE,
-            ],
-        )?;
+        let mip_set_layout = create_descriptor_set_layout(device, &mip_set())?;
+        let ggx_set_layout = create_descriptor_set_layout(device, &ggx_set())?;
         let push = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
             .offset(0)
@@ -98,19 +89,19 @@ impl ProbePrefilterPipelines {
         let mip_pipeline_layout = create_pipeline_layout(device, mip_set_layout.handle(), push)?;
         let ggx_pipeline_layout = create_pipeline_layout(device, ggx_set_layout.handle(), push)?;
 
-        let mip0 = create_compute_pipeline(
+        let mip0 = compute_pipeline(
             device,
             mip_pipeline_layout.handle(),
             &super::builtin_shaders::PROBE_MIP0.compile(hot_reload)?,
             "probe_mip0",
         )?;
-        let downsample = create_compute_pipeline(
+        let downsample = compute_pipeline(
             device,
             mip_pipeline_layout.handle(),
             &super::builtin_shaders::PROBE_DOWNSAMPLE.compile(hot_reload)?,
             "probe_downsample",
         )?;
-        let ggx = create_compute_pipeline(
+        let ggx = compute_pipeline(
             device,
             ggx_pipeline_layout.handle(),
             &super::builtin_shaders::PROBE_GGX.compile(hot_reload)?,
@@ -209,24 +200,23 @@ impl PrefilterGpu {
         let mip0_set = mip_sets.remove(0);
         let downsample_sets = mip_sets;
 
-        write_storage_pair(device, mip0_set, capture_mip_views[0], probe_mip_views[0]);
+        SetWrites::new(mip0_set)
+            .storage_image(0, capture_mip_views[0])
+            .storage_image(1, probe_mip_views[0])
+            .apply(device);
         for (step, &set) in downsample_sets.iter().enumerate() {
             let dst = step + 1;
-            write_storage_pair(
-                device,
-                set,
-                capture_mip_views[dst - 1],
-                capture_mip_views[dst],
-            );
+            SetWrites::new(set)
+                .storage_image(0, capture_mip_views[dst - 1])
+                .storage_image(1, capture_mip_views[dst])
+                .apply(device);
         }
         for (step, &set) in ggx_sets.iter().enumerate() {
-            write_ggx_set(
-                device,
-                set,
-                capture_cube_view,
-                pipelines.sampler.handle(),
-                probe_mip_views[step + 1],
-            );
+            SetWrites::new(set)
+                .sampled_image(0, capture_cube_view)
+                .sampler(1, pipelines.sampler.handle())
+                .storage_image(2, probe_mip_views[step + 1])
+                .apply(device);
         }
 
         Ok(PrefilterGpu {
@@ -430,38 +420,38 @@ impl super::context::VkContext {
                 std::slice::from_ref(&set),
                 &[],
             );
-            self.hw.device.cmd_push_constants(
+            cmd_push_constants(
+                &self.hw.device,
                 cmd,
                 layout,
                 vk::ShaderStageFlags::COMPUTE,
-                0,
-                bytemuck::bytes_of(params),
+                params,
             );
             self.hw.device.cmd_dispatch(cmd, groups, groups, 6);
         }
     }
 }
 
-fn create_set_layout(
-    device: &VkDevice,
-    types: &[vk::DescriptorType],
-) -> RenderResult<OwnedSetLayout> {
-    let binds: Vec<_> = types
-        .iter()
-        .enumerate()
-        .map(|(i, &ty)| {
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(i as u32)
-                .descriptor_type(ty)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-        })
-        .collect();
-    device
-        .create_descriptor_set_layout(
-            &vk::DescriptorSetLayoutCreateInfo::default().bindings(&binds),
-        )
-        .map_err(|e| super::error::map_vk_result(e, "probe prefilter set layout"))
+// The mirror-mip copy and the downsample: the source and destination mips, both
+// storage images.
+fn mip_set() -> [Binding; 2] {
+    let compute = vk::ShaderStageFlags::COMPUTE;
+    [
+        (0, vk::DescriptorType::STORAGE_IMAGE, compute),
+        (1, vk::DescriptorType::STORAGE_IMAGE, compute),
+    ]
+}
+
+// The GGX kernel: the sampled capture pyramid, its sampler, and the destination
+// mip.
+fn ggx_set() -> [Binding; 3] {
+    use vk::DescriptorType as T;
+    let compute = vk::ShaderStageFlags::COMPUTE;
+    [
+        (0, T::SAMPLED_IMAGE, compute),
+        (1, T::SAMPLER, compute),
+        (2, T::STORAGE_IMAGE, compute),
+    ]
 }
 
 fn create_pipeline_layout(
@@ -483,18 +473,10 @@ fn create_pipeline_layout(
 // destination mip past 0.
 fn create_pool(device: &VkDevice, steps: usize) -> RenderResult<OwnedDescriptorPool> {
     let steps = steps as u32;
-    let sizes = [
-        // mip0 (2) + downsample (2 each) + GGX dst (1 each).
-        vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::STORAGE_IMAGE)
-            .descriptor_count(2 + 3 * steps),
-        vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(steps),
-        vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::SAMPLER)
-            .descriptor_count(steps),
-    ];
+    let sizes = PoolSizes::default()
+        .sets(&mip_set(), 1 + steps)
+        .sets(&ggx_set(), steps)
+        .build();
     device
         .create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()
@@ -502,74 +484,6 @@ fn create_pool(device: &VkDevice, steps: usize) -> RenderResult<OwnedDescriptorP
                 .max_sets(1 + 2 * steps),
         )
         .map_err(|e| super::error::map_vk_result(e, "probe prefilter descriptor pool"))
-}
-
-// Bindings 0 and 1 of a mirror-copy or downsample set: the source mip and the
-// destination mip, both storage images.
-fn write_storage_pair(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    src: vk::ImageView,
-    dst: vk::ImageView,
-) {
-    let src_info = storage_info(src);
-    let dst_info = storage_info(dst);
-    let writes = [
-        storage_write(set, 0, std::slice::from_ref(&src_info)),
-        storage_write(set, 1, std::slice::from_ref(&dst_info)),
-    ];
-    // SAFETY: `writes` and the image infos it borrows are live for the call, and every handle they
-    // name belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
-}
-
-// The GGX set: the sampled capture pyramid, its sampler, and the destination mip.
-fn write_ggx_set(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    cube: vk::ImageView,
-    sampler: vk::Sampler,
-    dst: vk::ImageView,
-) {
-    let cube_info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(cube);
-    let sampler_info = vk::DescriptorImageInfo::default().sampler(sampler);
-    let dst_info = storage_info(dst);
-    let writes = [
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .image_info(std::slice::from_ref(&cube_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::SAMPLER)
-            .image_info(std::slice::from_ref(&sampler_info)),
-        storage_write(set, 2, std::slice::from_ref(&dst_info)),
-    ];
-    // SAFETY: `writes` and the image infos it borrows are live for the call, and every handle they
-    // name belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
-}
-
-fn storage_info(view: vk::ImageView) -> vk::DescriptorImageInfo {
-    vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::GENERAL)
-        .image_view(view)
-}
-
-fn storage_write<'a>(
-    set: vk::DescriptorSet,
-    binding: u32,
-    info: &'a [vk::DescriptorImageInfo],
-) -> vk::WriteDescriptorSet<'a> {
-    vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(binding)
-        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-        .image_info(info)
 }
 
 // Order one storage-image write before the next dispatch's read of it. The next
@@ -638,22 +552,4 @@ fn transition(
             std::slice::from_ref(&barrier),
         );
     }
-}
-
-fn create_compute_pipeline(
-    device: &VkDevice,
-    layout: vk::PipelineLayout,
-    spv: &[u8],
-    label: &str,
-) -> RenderResult<OwnedPipeline> {
-    let module = super::pipeline::spv_module(device, spv)?;
-    let stage = vk::PipelineShaderStageCreateInfo::default()
-        .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(module.handle())
-        .name(super::pipeline::SHADER_ENTRY);
-    let info = vk::ComputePipelineCreateInfo::default()
-        .stage(stage)
-        .layout(layout);
-    crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
-        .map_err(|e| super::error::map_vk_result(e, &format!("create {label} pipeline")))
 }

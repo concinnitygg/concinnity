@@ -25,6 +25,7 @@ use concinnity_core::gfx::render_types;
 
 use super::super::context::VkContext;
 use crate::vulkan::owned::VkDevice;
+use crate::vulkan::record::cmd_push_constants;
 
 // One depth-only shadow view to draw from a cull-written indirect buffer: the
 // set 0 holding its `ShadowUniforms`, which of their `light_vps` the vertex
@@ -214,12 +215,12 @@ impl VkContext {
                 &[view.uniforms_set, self.cull.bindless_sets[frame_idx]],
                 &[],
             );
-            device.cmd_push_constants(
+            cmd_push_constants(
+                device,
                 cmd,
                 sb_layout.handle(),
                 vk::ShaderStageFlags::VERTEX,
-                0,
-                &view.vp_index.to_ne_bytes(),
+                &view.vp_index,
             );
 
             // Static + instance prefix against the static VB/IB.

@@ -16,7 +16,6 @@
 
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::device::PostBlend;
 use concinnity_core::render::post::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -29,9 +28,8 @@ use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
-use crate::directx::pipeline::{
-    create_blended_composite_pso, root_cbv, root_srv, serialize_desc_and_create,
-};
+use crate::directx::pso::{Blend, GraphicsPso};
+use crate::directx::root_sig::{Range, RootSig, SamplerState, Visibility};
 use crate::directx::texture::{
     HDR_FORMAT, create_rt_target, transition_barrier, write_format_rtv, write_format_srv,
 };
@@ -75,99 +73,56 @@ fn compile_rt_shaders(hot_reload: bool) -> RenderResult<RtShaders> {
 // params CBV b5, the per-cluster lists t12). Four static samplers: linear-clamp
 // s0, cube linear-clamp s1, linear-repeat s2, and the probe cube sampler s3.
 fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let table_range = |reg: u32| D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: reg,
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let scene_range = table_range(4); // t4
-    let gbuffer_range = table_range(5); // t5
-    let rough_range = table_range(6); // t6
-    let cube_range = table_range(7); // t7
-    let pool_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: u32::MAX, // unbounded bindless pool
-        BaseShaderRegister: 0,    // t0
-        RegisterSpace: 1,         // space1
-        OffsetInDescriptorsFromTableStart: 0,
-    };
-    // The reflection-probe cube array at t10, clear of the trace's own SRVs; the
-    // miss fallback box-projects it when ProbeSet.count > 0.
-    let probe_cube_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 10, // t10
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
+    use Visibility::Pixel;
+    RootSig::new()
+        .cbv(0, Pixel) // [0] b0 RtParams
+        .srv(0, Pixel) // [1] t0 TLAS
+        .srv(1, Pixel) // [2] t1 vertex buffer (raw)
+        .srv(2, Pixel) // [3] t2 index buffer (raw)
+        .srv(3, Pixel) // [4] t3 geometry table (structured)
+        .srv_table(4, 1, Pixel) // [5] t4 scene
+        .srv_table(5, 1, Pixel) // [6] t5 gbuffer normal+depth
+        .srv_table(6, 1, Pixel) // [7] t6 roughness
+        .srv_table(7, 1, Pixel) // [8] t7 prefilter cube
+        .table(&[Range::bindless_srv(1)], Pixel) // [9] t0,space1 bindless pool
+        .srv(8, Pixel) // [10] t8 deformed skinned verts (raw)
+        .srv(9, Pixel) // [11] t9 skinned indices (raw)
+        // [12] t10 reflection-probe cube array, clear of the trace's own SRVs;
+        // the miss fallback box-projects it when ProbeSet.count > 0.
+        .srv_table(10, 1, Pixel)
+        .cbv(4, Pixel) // [13] b4 ProbeSet
+        .srv(11, Pixel) // [14] t11 reflection-probe records
+        .cbv(5, Pixel) // [15] b5 ClusterParams
+        .srv(12, Pixel) // [16] t12 cluster lists
+        .static_sampler(SamplerState::LinearClamp, 0, Pixel)
+        .static_sampler(SamplerState::LinearClamp, 1, Pixel)
+        .static_sampler(SamplerState::LinearWrap, 2, Pixel)
+        // s3: cube mip-linear clamp for the reflection-probe cube array, matching
+        // the s1 prefilter sampler. The array rides split from its sampler here
+        // because D3D12 binds a shader sampler array only through a descriptor
+        // table.
+        .static_sampler(SamplerState::LinearClamp, 3, Pixel)
+        .build(device, "rt reflections root sig")
+}
 
-    let table = |range: &D3D12_DESCRIPTOR_RANGE| D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                NumDescriptorRanges: 1,
-                pDescriptorRanges: range,
-            },
-        },
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+// The flat and textured PSOs over the shared root signature.
+fn create_rt_psos(
+    device: &ID3D12Device,
+    info_queue: Option<&ID3D12InfoQueue>,
+    root_sig: &ID3D12RootSignature,
+    shaders: &RtShaders,
+) -> RenderResult<RebuiltRtPipelines> {
+    let pso = |ps: &[u8], label: &str| {
+        dump_on_err(
+            info_queue,
+            GraphicsPso::fullscreen(root_sig, &shaders.vs, ps, HDR_FORMAT, Blend::Opaque)
+                .build(device, label),
+        )
     };
-
-    let params = [
-        root_cbv(0),              // [0] b0 RtParams
-        root_srv(0),              // [1] t0 TLAS
-        root_srv(1),              // [2] t1 vertex buffer (raw)
-        root_srv(2),              // [3] t2 index buffer (raw)
-        root_srv(3),              // [4] t3 geometry table (structured)
-        table(&scene_range),      // [5] t4 scene
-        table(&gbuffer_range),    // [6] t5 gbuffer normal+depth
-        table(&rough_range),      // [7] t6 roughness
-        table(&cube_range),       // [8] t7 prefilter cube
-        table(&pool_range),       // [9] t0,space1 bindless pool
-        root_srv(8),              // [10] t8 deformed skinned verts (raw)
-        root_srv(9),              // [11] t9 skinned indices (raw)
-        table(&probe_cube_range), // [12] t10 reflection-probe cube array
-        root_cbv(4),              // [13] b4 ProbeSet
-        root_srv(11),             // [14] t11 reflection-probe records
-        root_cbv(5),              // [15] b5 ClusterParams
-        root_srv(12),             // [16] t12 cluster lists
-    ];
-
-    let linear_clamp = |reg: u32| D3D12_STATIC_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-        BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ShaderRegister: reg,
-        RegisterSpace: 0,
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        ..Default::default()
-    };
-    let repeat = D3D12_STATIC_SAMPLER_DESC {
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-        ShaderRegister: 2, // s2
-        ..linear_clamp(2)
-    };
-    // s3: cube mip-linear clamp for the reflection-probe cube array, matching the
-    // s1 prefilter sampler. The array rides split from its sampler here because
-    // D3D12 binds a shader sampler array only through a descriptor table.
-    let samplers = [linear_clamp(0), linear_clamp(1), repeat, linear_clamp(3)];
-
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: samplers.len() as u32,
-        pStaticSamplers: samplers.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-    };
-    serialize_desc_and_create(device, &desc, "rt reflections root sig")
+    Ok(RebuiltRtPipelines {
+        flat_pso: pso(&shaders.flat_ps, "rt reflections flat")?,
+        textured_pso: pso(&shaders.textured_ps, "rt reflections textured")?,
+    })
 }
 
 // Resources
@@ -271,30 +226,10 @@ impl RtReflectionsResources {
 
         let shaders = compile_rt_shaders(hot_reload)?;
         let root_sig = dump_on_err(info_queue, create_rt_root_signature(device))?;
-        let flat_pso = dump_on_err(
-            info_queue,
-            create_blended_composite_pso(
-                device,
-                &root_sig,
-                &shaders.vs,
-                &shaders.flat_ps,
-                HDR_FORMAT,
-                PostBlend::Replace,
-                "rt reflections flat",
-            ),
-        )?;
-        let textured_pso = dump_on_err(
-            info_queue,
-            create_blended_composite_pso(
-                device,
-                &root_sig,
-                &shaders.vs,
-                &shaders.textured_ps,
-                HDR_FORMAT,
-                PostBlend::Replace,
-                "rt reflections textured",
-            ),
-        )?;
+        let RebuiltRtPipelines {
+            flat_pso,
+            textured_pso,
+        } = create_rt_psos(device, info_queue, &root_sig, &shaders)?;
 
         Ok(Self {
             settings,
@@ -347,35 +282,12 @@ pub(in crate::directx) fn rebuild_rt_reflections_pipelines(
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
 ) -> RenderResult<RebuiltRtPipelines> {
-    let shaders = compile_rt_shaders(hot_reload)?;
-    let flat_pso = dump_on_err(
+    create_rt_psos(
+        device,
         info_queue,
-        create_blended_composite_pso(
-            device,
-            &rt.root_sig,
-            &shaders.vs,
-            &shaders.flat_ps,
-            HDR_FORMAT,
-            PostBlend::Replace,
-            "rt reflections flat",
-        ),
-    )?;
-    let textured_pso = dump_on_err(
-        info_queue,
-        create_blended_composite_pso(
-            device,
-            &rt.root_sig,
-            &shaders.vs,
-            &shaders.textured_ps,
-            HDR_FORMAT,
-            PostBlend::Replace,
-            "rt reflections textured",
-        ),
-    )?;
-    Ok(RebuiltRtPipelines {
-        flat_pso,
-        textured_pso,
-    })
+        &rt.root_sig,
+        &compile_rt_shaders(hot_reload)?,
+    )
 }
 
 // Swap freshly compiled RT PSOs into the live resources after a hot-reload.

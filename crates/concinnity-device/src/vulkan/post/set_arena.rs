@@ -18,17 +18,19 @@ use ash::vk;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::sync::Mutex;
 
+use crate::vulkan::descriptor_layout::PoolSizes;
 use crate::vulkan::error::map_vk_result;
 use crate::vulkan::owned::{OwnedDescriptorPool, VkDevice};
+use crate::vulkan::resources::source_set_bindings;
 
 // Sets one frame's post passes may allocate. Six fullscreen post passes exist,
 // none allocating more than one set per frame, so this is roughly double the
 // ceiling and leaves room for a pass to gain a second.
 const SETS_PER_FRAME: u32 = 16;
 
-// Sources those sets may hold in total, each an image and a sampler. The
-// widest post pass binds a handful, so eight per set covers every one of them.
-const SOURCES_PER_FRAME: u32 = SETS_PER_FRAME * 8;
+// Sources one set may hold, each an image and a sampler. The widest post pass
+// binds a handful, so eight covers every one of them.
+const SOURCES_PER_SET: u32 = 8;
 
 // A per-frame descriptor pool ring for the shared post passes.
 pub(in crate::vulkan) struct PostSetArena {
@@ -45,15 +47,9 @@ struct PoolSlot {
 impl PostSetArena {
     // A pool per frame in flight.
     pub(in crate::vulkan) fn new(device: &VkDevice, frames: usize) -> RenderResult<Self> {
-        let sizes = [
-            vk::DescriptorType::SAMPLED_IMAGE,
-            vk::DescriptorType::SAMPLER,
-        ]
-        .map(|ty| {
-            vk::DescriptorPoolSize::default()
-                .ty(ty)
-                .descriptor_count(SOURCES_PER_FRAME)
-        });
+        let sizes = PoolSizes::default()
+            .sets(&source_set_bindings(SOURCES_PER_SET), SETS_PER_FRAME)
+            .build();
         let mut slots = Vec::with_capacity(frames.max(1));
         for _ in 0..frames.max(1) {
             let pool = device

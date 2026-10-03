@@ -49,9 +49,11 @@ use super::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
-use crate::directx::error::{map_hresult, map_pso_hresult};
+use crate::directx::error::map_hresult;
 use crate::directx::init::heap_layout::GLASS_REFLECTION_SRV_SLOTS;
-use crate::directx::pipeline::{main_input_layout, root_cbv, root_srv, serialize_desc_and_create};
+use crate::directx::pipeline::main_input_layout;
+use crate::directx::pso::{Blend, Depth, GraphicsPso, Raster};
+use crate::directx::root_sig::{Range, RootSig, SamplerState, Visibility};
 use crate::directx::texture::{
     HDR_FORMAT, create_hdr_resolve_target, create_main_depth_texture, create_rt_target,
     transition_barrier, upload_buffer, write_format_rtv,
@@ -421,106 +423,28 @@ const PROBE_RECORDS_ROOT_BASE: u32 = 8;
 const PROBE_RECORDS_ROOT_RT: u32 = 17;
 
 fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let scene_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // t0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let depth_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 1, // t1
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // t2: the sky IBL prefilter cube (the reflection fallback where no probe covers).
-    let prefilter_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 2, // t2
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // t20: the reflection-probe cube array, box-projected when ProbeSet.count > 0.
-    // Clear of the RT signature's trace SRVs, so both signatures agree.
-    let probe_cube_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 20, // t20
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // t3: this record's planar reflection resolve (the sharp mirror render), bound
-    // per record. A valid SRV is always bound (the scene snapshot stands in for
-    // records with no planar slot); the shader only samples it when `planar > 0.5`.
-    let planar_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 3, // t3
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // A root CBV every stage reads.
-    let cbv_all = |reg: u32| D3D12_ROOT_PARAMETER {
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        ..root_cbv(reg)
-    };
-    let table = |range: &D3D12_DESCRIPTOR_RANGE| D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                NumDescriptorRanges: 1,
-                pDescriptorRanges: range,
-            },
-        },
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-    };
-    let params = [
-        cbv_all(0),               // [0] b0 TransparentView
-        cbv_all(1),               // [1] b1 per-record params
-        table(&scene_range),      // [2] t0 scene copy
-        table(&depth_range),      // [3] t1 depth
-        table(&prefilter_range),  // [4] t2 prefilter cube
-        table(&probe_cube_range), // [5] t20 probe cubes
-        root_cbv(4),              // [6] b4 ProbeSet
-        table(&planar_range),     // [7] t3 planar resolve
-        root_srv(21),             // [8] t21 probe records
-        root_cbv(6),              // [9] b6 ClusterParams
-        root_srv(22),             // [10] t22 cluster lists
-    ];
-    debug_assert_eq!(params.len() as u32 - 4, PLANAR_ROOT_BASE);
-    debug_assert_eq!(params.len() as u32 - 3, PROBE_RECORDS_ROOT_BASE);
-    // s0: linear-clamp for the scene snapshot / depth. s2: cube mip-linear clamp for
-    // the prefilter + probe cube array.
-    let samp = D3D12_STATIC_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-        BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ShaderRegister: 0,
-        RegisterSpace: 0,
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        ..Default::default()
-    };
-    let cube_samp = D3D12_STATIC_SAMPLER_DESC {
-        ShaderRegister: 2, // s2
-        ..samp
-    };
-    let samplers = [samp, cube_samp];
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: samplers.len() as u32,
-        pStaticSamplers: samplers.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
-    };
-    serialize_desc_and_create(device, &desc, "transparent root sig")
+    use Visibility::{All, Pixel};
+    let sig = RootSig::new()
+        .cbv(0, All) // [0] b0 TransparentView
+        .cbv(1, All) // [1] b1 per-record params
+        .srv_table(0, 1, Pixel) // [2] t0 scene copy
+        .srv_table(1, 1, Pixel) // [3] t1 depth
+        .srv_table(2, 1, Pixel) // [4] t2 sky prefilter cube, the fallback where no probe covers
+        .srv_table(20, 1, Pixel) // [5] t20 probe cubes, box-projected when ProbeSet.count > 0
+        .cbv(4, Pixel) // [6] b4 ProbeSet
+        // [7] t3 planar resolve: a valid SRV is always bound (the scene snapshot
+        // stands in for records with no planar slot); sampled only when `planar > 0.5`.
+        .srv_table(3, 1, Pixel)
+        .srv(21, Pixel) // [8] t21 probe records
+        .cbv(6, Pixel) // [9] b6 ClusterParams
+        .srv(22, Pixel) // [10] t22 cluster lists
+        // s0: the scene snapshot / depth. s2: the prefilter + probe cube array.
+        .static_sampler(SamplerState::LinearClamp, 0, Pixel)
+        .static_sampler(SamplerState::LinearClamp, 2, Pixel)
+        .input_layout();
+    debug_assert_eq!(sig.len() - 4, PLANAR_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 3, PROBE_RECORDS_ROOT_BASE);
+    sig.build(device, "transparent root sig")
 }
 
 // PSO for a transparent producer. Writes the single-sample post-SSR scene target
@@ -568,81 +492,22 @@ fn transparent_pso(
     (vs, ps): (&[u8], &[u8]),
     output: TransparentOutput,
 ) -> RenderResult<ID3D12PipelineState> {
-    let blend = output == TransparentOutput::Scene;
-    let layout = main_input_layout();
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        InputLayout: D3D12_INPUT_LAYOUT_DESC {
-            pInputElementDescs: layout.as_ptr(),
-            NumElements: layout.len() as u32,
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = HDR_FORMAT;
-            a
-        },
-        DSVFormat: if blend {
-            DXGI_FORMAT_UNKNOWN
-        } else {
-            DXGI_FORMAT_D32_FLOAT
-        },
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: false.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: (!blend).into(),
-            DepthWriteMask: if blend {
-                D3D12_DEPTH_WRITE_MASK_ZERO
-            } else {
-                D3D12_DEPTH_WRITE_MASK_ALL
-            },
-            DepthFunc: D3D12_COMPARISON_FUNC_LESS,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-                    BlendEnable: blend.into(),
-                    SrcBlend: D3D12_BLEND_SRC_ALPHA,
-                    DestBlend: D3D12_BLEND_INV_SRC_ALPHA,
-                    BlendOp: D3D12_BLEND_OP_ADD,
-                    SrcBlendAlpha: D3D12_BLEND_SRC_ALPHA,
-                    DestBlendAlpha: D3D12_BLEND_INV_SRC_ALPHA,
-                    BlendOpAlpha: D3D12_BLEND_OP_ADD,
-                    RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    ..Default::default()
-                };
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
+    let (blend, depth_format, depth) = match output {
+        TransparentOutput::Scene => (Blend::AlphaOver, DXGI_FORMAT_UNKNOWN, Depth::Off),
+        TransparentOutput::ReflectionLayer => {
+            (Blend::Opaque, DXGI_FORMAT_D32_FLOAT, Depth::LESS_WRITE)
+        }
     };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create transparent PSO"))
+    let layout = main_input_layout();
+    GraphicsPso::new(root_sig, vs, ps)
+        .input_layout(&layout)
+        .target(HDR_FORMAT, blend)
+        .depth(depth_format, depth)
+        .raster(Raster {
+            depth_clip: false,
+            ..Raster::default()
+        })
+        .build(device, "transparent")
 }
 
 // Root signature for the RT PSOs (binds 1:1 with the `CN_BACKEND_DIRECTX`
@@ -677,97 +542,36 @@ fn transparent_pso(
 fn create_transparent_rt_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
-    let table_range = |reg: u32, space: u32, count: u32| D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: count,
-        BaseShaderRegister: reg,
-        RegisterSpace: space,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let scene_range = table_range(0, 0, 1); // t0
-    let depth_range = table_range(1, 0, 1); // t1
-    let prefilter_range = table_range(2, 0, 1); // t2
-    let probe_cube_range = table_range(20, 0, 1); // t20
-    let planar_range = table_range(3, 0, 1); // t3
-    let reflection_range = table_range(11, 0, 2); // t11..t12
-    let pool_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: u32::MAX, // unbounded bindless pool
-        BaseShaderRegister: 0,    // t0
-        RegisterSpace: 1,         // space1
-        OffsetInDescriptorsFromTableStart: 0,
-    };
-
-    // A root CBV every stage reads.
-    let cbv_all = |reg: u32| D3D12_ROOT_PARAMETER {
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        ..root_cbv(reg)
-    };
-    let table = |range: &D3D12_DESCRIPTOR_RANGE| D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                NumDescriptorRanges: 1,
-                pDescriptorRanges: range,
-            },
-        },
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-    };
-
-    let params = [
-        cbv_all(0),               // [0] b0 TransparentView (vertex reads vp)
-        cbv_all(1),               // [1] b1 per-record params (water's vertex reads it)
-        table(&scene_range),      // [2] t0 scene copy
-        table(&depth_range),      // [3] t1 depth
-        table(&prefilter_range),  // [4] t2 prefilter cube
-        table(&probe_cube_range), // [5] t20 probe cubes
-        root_cbv(4),              // [6] b4 ProbeSet
-        root_cbv(5),              // [7] b5 RtParams
-        root_srv(4),              // [8] t4 TLAS
-        root_srv(5),              // [9] t5 verts
-        root_srv(6),              // [10] t6 indices
-        root_srv(10),             // [11] t10 geom table
-        root_srv(8),              // [12] t8 skinned verts
-        root_srv(9),              // [13] t9 skinned indices
-        table(&pool_range),       // [14] t0,space1 bindless pool
-        table(&planar_range),     // [15] t3 planar resolve
-        table(&reflection_range), // [16] t11..t12 glass reflection layers
-        root_srv(21),             // [17] t21 probe records
-        root_cbv(6),              // [18] b6 ClusterParams
-        root_srv(22),             // [19] t22 cluster lists
-    ];
-    debug_assert_eq!(params.len() as u32 - 5, PLANAR_ROOT_RT);
-    debug_assert_eq!(params.len() as u32 - 4, GLASS_REFLECTION_ROOT_RT);
-    debug_assert_eq!(params.len() as u32 - 3, PROBE_RECORDS_ROOT_RT);
-
-    let linear = |addr: D3D12_TEXTURE_ADDRESS_MODE, reg: u32| D3D12_STATIC_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: addr,
-        AddressV: addr,
-        AddressW: addr,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-        BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ShaderRegister: reg,
-        RegisterSpace: 0,
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        ..Default::default()
-    };
-    let samplers = [
-        linear(D3D12_TEXTURE_ADDRESS_MODE_CLAMP, 0), // s0 scene / depth
-        linear(D3D12_TEXTURE_ADDRESS_MODE_WRAP, 1),  // s1 hit albedo / normal map
-        linear(D3D12_TEXTURE_ADDRESS_MODE_CLAMP, 2), // s2 prefilter + probe cubes
-    ];
-
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: samplers.len() as u32,
-        pStaticSamplers: samplers.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
-    };
-    serialize_desc_and_create(device, &desc, "transparent rt root sig")
+    use Visibility::{All, Pixel};
+    let sig = RootSig::new()
+        .cbv(0, All) // [0] b0 TransparentView (vertex reads vp)
+        .cbv(1, All) // [1] b1 per-record params (water's vertex reads it)
+        .srv_table(0, 1, Pixel) // [2] t0 scene copy
+        .srv_table(1, 1, Pixel) // [3] t1 depth
+        .srv_table(2, 1, Pixel) // [4] t2 prefilter cube
+        .srv_table(20, 1, Pixel) // [5] t20 probe cubes
+        .cbv(4, Pixel) // [6] b4 ProbeSet
+        .cbv(5, Pixel) // [7] b5 RtParams
+        .srv(4, Pixel) // [8] t4 TLAS
+        .srv(5, Pixel) // [9] t5 verts
+        .srv(6, Pixel) // [10] t6 indices
+        .srv(10, Pixel) // [11] t10 geom table
+        .srv(8, Pixel) // [12] t8 skinned verts
+        .srv(9, Pixel) // [13] t9 skinned indices
+        .table(&[Range::bindless_srv(1)], Pixel) // [14] t0,space1 bindless pool
+        .srv_table(3, 1, Pixel) // [15] t3 planar resolve
+        .srv_table(11, 2, Pixel) // [16] t11..t12 glass reflection layers
+        .srv(21, Pixel) // [17] t21 probe records
+        .cbv(6, Pixel) // [18] b6 ClusterParams
+        .srv(22, Pixel) // [19] t22 cluster lists
+        .static_sampler(SamplerState::LinearClamp, 0, Pixel) // s0 scene / depth
+        .static_sampler(SamplerState::LinearWrap, 1, Pixel) // s1 hit albedo / normal map
+        .static_sampler(SamplerState::LinearClamp, 2, Pixel) // s2 prefilter + probe cubes
+        .input_layout();
+    debug_assert_eq!(sig.len() - 5, PLANAR_ROOT_RT);
+    debug_assert_eq!(sig.len() - 4, GLASS_REFLECTION_ROOT_RT);
+    debug_assert_eq!(sig.len() - 3, PROBE_RECORDS_ROOT_RT);
+    sig.build(device, "transparent rt root sig")
 }
 
 // The per-frame RtParams upload ring, built alongside the RT root signature.

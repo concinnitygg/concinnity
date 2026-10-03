@@ -27,9 +27,10 @@ use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::descriptor_slot::SrvSlot;
-use crate::directx::error::{map_hresult, map_pso_hresult};
-use crate::directx::pipeline::serialize_and_create_root_sig;
-use crate::directx::root_constants::{RootConstants, root_dwords};
+use crate::directx::error::map_hresult;
+use crate::directx::pso::{Blend, Depth, GraphicsPso, compute_pso};
+use crate::directx::root_constants::RootConstants;
+use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::{create_main_depth_texture, write_format_rtv, write_format_srv};
 
 // Normal+depth target: rgb = unit view-space normal, a = positive linear view
@@ -71,70 +72,13 @@ fn create_gbuffer_pso(
     ps: &[u8],
     layout: &[D3D12_INPUT_ELEMENT_DESC],
 ) -> RenderResult<ID3D12PipelineState> {
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        InputLayout: D3D12_INPUT_LAYOUT_DESC {
-            pInputElementDescs: layout.as_ptr(),
-            NumElements: layout.len() as u32,
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 3,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = GBUFFER_NORMAL_DEPTH_FORMAT;
-            a[1] = GBUFFER_ROUGHNESS_FORMAT;
-            a[2] = GBUFFER_VELOCITY_FORMAT;
-            a
-        },
-        DSVFormat: DXGI_FORMAT_D32_FLOAT,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: true.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: true.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ALL,
-            DepthFunc: D3D12_COMPARISON_FUNC_LESS,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                let mt = D3D12_RENDER_TARGET_BLEND_DESC {
-                    BlendEnable: false.into(),
-                    RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    ..Default::default()
-                };
-                arr[0] = mt;
-                arr[1] = mt;
-                arr[2] = mt;
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create gbuffer prepass PSO"))
+    GraphicsPso::new(root_sig, vs, ps)
+        .input_layout(layout)
+        .target(GBUFFER_NORMAL_DEPTH_FORMAT, Blend::Opaque)
+        .target(GBUFFER_ROUGHNESS_FORMAT, Blend::Opaque)
+        .target(GBUFFER_VELOCITY_FORMAT, Blend::Opaque)
+        .depth(DXGI_FORMAT_D32_FLOAT, Depth::LESS_WRITE)
+        .build(device, "gbuffer prepass")
 }
 
 // Vertex input layout for the GPU-driven (bindless) G-buffer pre-pass: the
@@ -196,65 +140,19 @@ fn gbuffer_bindless_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
 fn create_gbuffer_bindless_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
-    let params = [
-        // [0] Root constant b0: object id (set per command by the command sig).
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: 1,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        // [1] Root CBV b1: GbView (jittered_vp + cur_vp + prev_vp + view).
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        // [2] Root SRV t0: per-frame StructuredBuffer<GpuObjectData>.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        // [3] Root SRV t1: the previous frame's model-history slot.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        // [4] Root SRV t2: this frame's draw args, read for `NO_HISTORY`.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 2,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-    ];
-    serialize_and_create_root_sig(device, &params, "gbuffer bindless root sig")
+    RootSig::new()
+        // [0] b0: object id (set per command by the command sig).
+        .constant_dwords(0, 1, Visibility::Vertex)
+        // [1] b1: GbView (jittered_vp + cur_vp + prev_vp + view).
+        .cbv(1, Visibility::Vertex)
+        // [2] t0: per-frame StructuredBuffer<GpuObjectData>.
+        .srv(0, Visibility::Vertex)
+        // [3] t1: the previous frame's model-history slot.
+        .srv(1, Visibility::Vertex)
+        // [4] t2: this frame's draw args, read for `NO_HISTORY`.
+        .srv(2, Visibility::Vertex)
+        .input_layout()
+        .build(device, "gbuffer bindless root sig")
 }
 
 // Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.hlsl.
@@ -278,43 +176,15 @@ fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
 // `model_history.hlsl` declares b0/t0/u0, which is what these three parameters
 // bind.
 fn create_model_history_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let params = [
-        // [0] Root constants b0: ModelHistoryParams (record count + padding).
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: root_dwords::<ModelHistoryParams>(),
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [1] Root SRV t0: this frame's StructuredBuffer<GpuObjectData>.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [2] Root UAV u0: this frame's model-history slot.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_UAV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-    ];
-    serialize_and_create_root_sig(device, &params, "model history root sig")
+    RootSig::new()
+        // [0] b0: ModelHistoryParams (record count + padding).
+        .constants::<ModelHistoryParams>(0, Visibility::All)
+        // [1] t0: this frame's StructuredBuffer<GpuObjectData>.
+        .srv(0, Visibility::All)
+        // [2] u0: this frame's model-history slot.
+        .uav(0, Visibility::All)
+        .input_layout()
+        .build(device, "model history root sig")
 }
 
 // Build the model-history snapshot kernel: the compute PSO and its root
@@ -328,7 +198,7 @@ pub(in crate::directx) fn build_model_history(
     let root_sig = dump_on_err(info_queue, create_model_history_root_signature(device))?;
     let pso = dump_on_err(
         info_queue,
-        crate::directx::cull::create_cull_pso(device, &root_sig, &cs),
+        compute_pso(device, &root_sig, &cs, "model history"),
     )?;
     Ok((root_sig, pso))
 }

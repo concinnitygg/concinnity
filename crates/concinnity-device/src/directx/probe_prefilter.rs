@@ -32,12 +32,12 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::builtin_shaders::CompileProgram;
 use super::com;
 use super::context::DxContext;
-use super::error::map_pso_hresult;
-use super::pipeline::serialize_desc_and_create;
 use super::probe_set::{CubeResource, create_cube_resource, write_cube_mip_uav};
+use super::pso::compute_pso;
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
-use crate::directx::root_constants::{RootConstants, root_dwords};
+use crate::directx::root_constants::RootConstants;
+use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
 
 /// Color format of the capture and the probe cube array.
 pub(in crate::directx) const PROBE_CUBE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -89,19 +89,19 @@ impl ProbePrefilterPipelines {
         use super::builtin_shaders;
         let mip_root = create_mip_root_signature(device)?;
         let ggx_root = create_ggx_root_signature(device)?;
-        let mip0 = create_pso(
+        let mip0 = compute_pso(
             device,
             &mip_root,
             &builtin_shaders::PROBE_MIP0.compile(hot_reload)?,
             "probe_mip0",
         )?;
-        let downsample = create_pso(
+        let downsample = compute_pso(
             device,
             &mip_root,
             &builtin_shaders::PROBE_DOWNSAMPLE.compile(hot_reload)?,
             "probe_downsample",
         )?;
-        let ggx = create_pso(
+        let ggx = compute_pso(
             device,
             &ggx_root,
             &builtin_shaders::PROBE_GGX.compile(hot_reload)?,
@@ -361,118 +361,25 @@ impl DxContext {
 // per-mip UAVs are contiguous in the heap, which is what lets one range cover the
 // pair.
 fn create_mip_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let uav_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
-        NumDescriptors: 2,
-        BaseShaderRegister: 0, // u0..u1
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let params = [root_constants(), descriptor_table(&uav_range)];
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-        ..Default::default()
-    };
-    serialize_desc_and_create(device, &desc, "probe prefilter mip root sig")
+    RootSig::new()
+        .constants::<ProbePrefilterParams>(0, Visibility::All)
+        .uav_table(0, 2, Visibility::All) // u0..u1
+        .build(device, "probe prefilter mip root sig")
 }
 
 // Root signature for the GGX kernel: root constants at b0, the sampled capture
 // pyramid at t0, the destination mip at u0, and the linear-clamp mipmapped
 // sampler at s0 as a static sampler (a shader sampler needs no heap of its own
-// when it never varies).
+// when it never varies). The solid-angle lod the kernel computes is fractional,
+// so the trilinear filter is what makes the level selection continuous.
 fn create_ggx_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // t0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let uav_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // u0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let params = [
-        root_constants(),
-        descriptor_table(&srv_range),
-        descriptor_table(&uav_range),
-    ];
-    // The solid-angle lod the kernel computes is fractional, so the trilinear
-    // filter is what makes the level selection continuous.
-    let sampler = D3D12_STATIC_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-        BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ShaderRegister: 0,
-        RegisterSpace: 0,
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        ..Default::default()
-    };
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: 1,
-        pStaticSamplers: &sampler,
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-    };
-    serialize_desc_and_create(device, &desc, "probe prefilter ggx root sig")
-}
-
-fn root_constants() -> D3D12_ROOT_PARAMETER {
-    D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            Constants: D3D12_ROOT_CONSTANTS {
-                ShaderRegister: 0,
-                RegisterSpace: 0,
-                Num32BitValues: root_dwords::<ProbePrefilterParams>(),
-            },
-        },
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-    }
-}
-
-fn descriptor_table(range: &D3D12_DESCRIPTOR_RANGE) -> D3D12_ROOT_PARAMETER {
-    D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                NumDescriptorRanges: 1,
-                pDescriptorRanges: range,
-            },
-        },
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-    }
-}
-
-fn create_pso(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
-    cs: &[u8],
-    label: &str,
-) -> RenderResult<ID3D12PipelineState> {
-    let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        CS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: cs.as_ptr() as _,
-            BytecodeLength: cs.len(),
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature and shader
-    // bytecode whose raw pointers it borrows.
-    unsafe { super::pso_library::create_compute(device, &desc) }
-        .map_err(|e| map_pso_hresult(e.code(), &format!("create {label} PSO")))
+    use Visibility::All;
+    RootSig::new()
+        .constants::<ProbePrefilterParams>(0, All)
+        .srv_table(0, 1, All) // t0
+        .uav_table(0, 1, All) // u0
+        .static_sampler(SamplerState::LinearClamp, 0, All)
+        .build(device, "probe prefilter ggx root sig")
 }
 
 // All-mips TEXTURECUBE SRV, the shape a sampler reads.

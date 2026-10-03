@@ -18,6 +18,7 @@ use super::descriptor_layout::{
 use super::light_cull::VkLightCull;
 use super::owned::VkDevice;
 use super::probe_set::{PROBE_CUBES_LAYOUT, ProbeSetGpu};
+use super::set_writes::SetWrites;
 
 // The engine's shadow, cube and linear sampler objects.
 #[derive(Clone, Copy)]
@@ -216,16 +217,14 @@ impl GlobalDescriptor {
         }
     }
 
-    fn write(&self, set: vk::DescriptorSet) -> vk::WriteDescriptorSet<'_> {
-        let write = vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(self.binding)
-            .descriptor_type(self.ty);
+    fn add_to<'a>(&self, writes: SetWrites<'a>) -> SetWrites<'a> {
+        let (b, i) = (&self.buffer, &self.image);
         match self.ty {
             vk::DescriptorType::UNIFORM_BUFFER | vk::DescriptorType::STORAGE_BUFFER => {
-                write.buffer_info(std::slice::from_ref(&self.buffer))
+                writes.buffer(self.binding, self.ty, b.buffer, b.offset, b.range)
             }
-            _ => write.image_info(std::slice::from_ref(&self.image)),
+            vk::DescriptorType::SAMPLER => writes.sampler(self.binding, i.sampler),
+            _ => writes.sampled_image_in(self.binding, i.image_view, i.image_layout),
         }
     }
 }
@@ -267,21 +266,19 @@ impl GlobalSetContents {
         ]
     }
 
-    // The descriptor `binding` is written with.
-    fn descriptor(&self, binding: u32) -> GlobalDescriptor {
+    // The descriptor `binding` is written with, if the set declares it.
+    fn descriptor(&self, binding: u32) -> Option<GlobalDescriptor> {
         self.descriptors()
             .into_iter()
             .find(|d| d.binding == binding)
-            .unwrap_or_else(|| panic!("global set 0 declares no binding {binding}"))
     }
 
     // Write every binding of global set `set`.
     pub(in crate::vulkan) fn write(&self, device: &VkDevice, set: vk::DescriptorSet) {
-        let descriptors = self.descriptors();
-        let writes = descriptors.each_ref().map(|d| d.write(set));
-        // SAFETY: `writes` and the infos it borrows from `descriptors` are live for
-        // the call, and the set and every handle it names belong to this device.
-        unsafe { device.update_descriptor_sets(&writes, &[]) };
+        self.descriptors()
+            .iter()
+            .fold(SetWrites::new(set), |w, d| d.add_to(w))
+            .apply(device);
     }
 
     // Write only binding `binding` of global set `set`, for a rewire after the
@@ -292,12 +289,11 @@ impl GlobalSetContents {
         set: vk::DescriptorSet,
         binding: u32,
     ) {
-        let descriptor = self.descriptor(binding);
-        let write = descriptor.write(set);
-        // SAFETY: the write and the info it borrows from `descriptor` are live for
-        // the call, and the set and the handle it names belong to this device;
-        // callers rewrite only sets no submitted frame still reads.
-        unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+        let Some(descriptor) = self.descriptor(binding) else {
+            tracing::error!("global set 0 declares no binding {binding}");
+            return;
+        };
+        descriptor.add_to(SetWrites::new(set)).apply(device);
     }
 }
 
@@ -413,7 +409,9 @@ mod tests {
     fn a_binding_rewrite_matches_the_whole_set_write() {
         let contents = numbered_contents();
         for d in contents.descriptors() {
-            let one = contents.descriptor(d.binding);
+            let one = contents
+                .descriptor(d.binding)
+                .expect("every written binding is declared");
             assert_eq!((one.binding, one.ty), (d.binding, d.ty));
             assert_eq!(raw_handle(&one), raw_handle(&d), "binding {}", d.binding);
             assert_eq!(one.image.image_layout, d.image.image_layout);
@@ -421,9 +419,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "declares no binding")]
     fn a_rewrite_of_an_undeclared_binding_is_refused() {
-        null_contents().descriptor(u32::MAX);
+        assert!(null_contents().descriptor(u32::MAX).is_none());
     }
 
     // The probe cube array is read in the layout it lives in; every other image

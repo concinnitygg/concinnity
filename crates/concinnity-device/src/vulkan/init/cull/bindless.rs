@@ -10,10 +10,11 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use super::CullPlan;
 use crate::vulkan::context::{VkDescriptors, VkSceneAssets, VkTargets};
 use crate::vulkan::init::InitGpu;
-use crate::vulkan::material_params::{self, MATERIAL_PARAMS_BINDING, VkMaterialParams};
+use crate::vulkan::material_params::{MATERIAL_PARAMS_BINDING, VkMaterialParams};
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout};
 use crate::vulkan::pipeline::*;
 use crate::vulkan::resources::alloc_descriptor_sets;
+use crate::vulkan::set_writes::SetWrites;
 
 // The bindless static pass; `None`/empty when the bindless path is inactive.
 pub(super) struct BindlessPass {
@@ -184,28 +185,16 @@ pub(super) fn build_bindless_pass(
             pool_infos.resize(bindless_pool_size, tail);
         }
         for (i, &set) in sets.iter().enumerate() {
-            let buf_info = vk::DescriptorBufferInfo::default()
-                .buffer(buffers[i].buffer())
-                .offset(0)
-                .range(object_buffer_size);
             let params_info = params.descriptor(i);
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&buf_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(1)
-                    .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                    .image_info(&pool_infos),
-                material_params::write(set, &params_info),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
+            SetWrites::new(set)
+                .storage_buffer(0, buffers[i].buffer(), object_buffer_size)
+                .images(1, vk::DescriptorType::SAMPLED_IMAGE, &pool_infos)
+                .storage_buffer(
+                    MATERIAL_PARAMS_BINDING,
+                    params_info.buffer,
+                    params_info.range,
+                )
+                .apply(device);
         }
 
         (

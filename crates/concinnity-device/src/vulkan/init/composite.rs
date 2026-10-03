@@ -14,8 +14,9 @@ use crate::vulkan::pipeline::{compile_composite_shaders, create_composite_pipeli
 use crate::vulkan::post::reflection_composite::ReflectionCompositeResources;
 use crate::vulkan::render_pass::create_composite_render_pass;
 use crate::vulkan::resources::{
-    alloc_descriptor_sets, create_descriptor_set_layout, source_set_bindings, write_samplers,
+    alloc_descriptor_sets, create_descriptor_set_layout, source_set_bindings,
 };
+use crate::vulkan::set_writes::SetWrites;
 use crate::vulkan::swapchain::{create_composite_framebuffers, write_composite_set};
 
 // Sources the composite fragment samples, each through a sampler of its own.
@@ -115,12 +116,9 @@ pub(super) fn build_composite(
             bloom.mips[i][0].view,
             scene.color_lut.view,
         );
-        write_samplers(
-            device,
-            set,
-            COMPOSITE_SOURCES,
-            &[sampler.handle(); COMPOSITE_SOURCES as usize],
-        );
+        (COMPOSITE_SOURCES..2 * COMPOSITE_SOURCES)
+            .fold(SetWrites::new(set), |w, b| w.sampler(b, sampler.handle()))
+            .apply(device);
     }
     Ok(CompositeState {
         render_pass,

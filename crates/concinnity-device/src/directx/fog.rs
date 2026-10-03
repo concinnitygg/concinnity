@@ -33,8 +33,9 @@ use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
-use crate::directx::error::{map_hresult, map_pso_hresult};
-use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::error::map_hresult;
+use crate::directx::pso::{Blend, GraphicsPso, Raster, compute_pso};
+use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
 use crate::directx::texture::HDR_FORMAT;
 
 // Volumetric fog. All fields `None`/default until the world declares a
@@ -101,83 +102,18 @@ pub(in crate::directx) fn rebuild_fog_froxel_pso(
 //   [3] table  t1     froxel volume SRV (Texture3D<float4>)
 // Static linear-clamp sampler s0 for the trilinear volume sample.
 fn create_fog_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let depth_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // t0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let volume_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 1, // t1
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let params = [
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &depth_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &volume_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
-    let volume_sampler = D3D12_STATIC_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-        MaxLOD: f32::MAX,
-        ShaderRegister: 0,
-        RegisterSpace: 0,
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        ..Default::default()
-    };
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: 1,
-        pStaticSamplers: &volume_sampler,
-        // The fullscreen pass uses SV_VertexID; no input assembler is needed.
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-    };
-    serialize_desc_and_create(device, &desc, "fog root sig")
+    // The fullscreen pass uses SV_VertexID; no input assembler is needed.
+    RootSig::new()
+        .cbv(0, Visibility::Pixel)
+        .cbv(1, Visibility::Pixel)
+        .srv_table(0, 1, Visibility::Pixel)
+        .srv_table(1, 1, Visibility::Pixel)
+        .static_sampler(
+            SamplerState::LinearClampTransparentBorder,
+            0,
+            Visibility::Pixel,
+        )
+        .build(device, "fog root sig")
 }
 
 // Froxel compute root signature:
@@ -186,98 +122,19 @@ fn create_fog_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSi
 //   [2] root CBV b2   ShadowUniforms    (per-frame, shared with Main / Shadow)
 //   [3] table  t0     shadow map SRV (Texture2DArray<float>)
 //   [4] table  u0     froxel volume UAV (RWTexture3D<float4>)
-// Static comparison sampler s0 for the shadow tap.
+// Static comparison sampler s0 for the shadow tap, matching the existing
+// `shadow_sampler_gpu` static sampler. Clamp on every axis so cascades that
+// fail their NDC bounds check fall back to 1.0 via the explicit
+// `if (any(uv < 0.0)...)` guard in the kernel anyway.
 fn create_fog_froxel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let shadow_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // t0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let volume_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // u0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let params = [
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 2,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &shadow_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &volume_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-    ];
-    // Comparison sampler matching the existing `shadow_sampler_gpu` static
-    // sampler. Clamp on every axis so cascades that fail their NDC bounds
-    // check fall back to 1.0 via the explicit `if (any(uv < 0.0)...)` guard
-    // in the kernel anyway.
-    let shadow_sampler = D3D12_STATIC_SAMPLER_DESC {
-        Filter: D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_LESS_EQUAL,
-        MaxLOD: f32::MAX,
-        ShaderRegister: 0,
-        RegisterSpace: 0,
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        ..Default::default()
-    };
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: 1,
-        pStaticSamplers: &shadow_sampler,
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-    };
-    serialize_desc_and_create(device, &desc, "fog froxel root sig")
+    RootSig::new()
+        .cbv(0, Visibility::All)
+        .cbv(1, Visibility::All)
+        .cbv(2, Visibility::All)
+        .srv_table(0, 1, Visibility::All)
+        .uav_table(0, 1, Visibility::All)
+        .static_sampler(SamplerState::CompareLessEqual, 0, Visibility::All)
+        .build(device, "fog froxel root sig")
 }
 
 // PSO for the fog pass. Writes the resolved HDR target with `(scattered,
@@ -291,67 +148,12 @@ fn create_fog_pso(
     vs: &[u8],
     ps: &[u8],
 ) -> RenderResult<ID3D12PipelineState> {
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        // No input layout; the fullscreen triangle is emitted by SV_VertexID.
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = HDR_FORMAT;
-            a
-        },
-        DSVFormat: DXGI_FORMAT_UNKNOWN,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: false.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: false.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ZERO,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-                    BlendEnable: true.into(),
-                    SrcBlend: D3D12_BLEND_ONE,
-                    DestBlend: D3D12_BLEND_INV_SRC_ALPHA,
-                    BlendOp: D3D12_BLEND_OP_ADD,
-                    SrcBlendAlpha: D3D12_BLEND_ONE,
-                    DestBlendAlpha: D3D12_BLEND_INV_SRC_ALPHA,
-                    BlendOpAlpha: D3D12_BLEND_OP_ADD,
-                    RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    ..Default::default()
-                };
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create fog PSO"))
+    GraphicsPso::fullscreen(root_sig, vs, ps, HDR_FORMAT, Blend::PremultipliedOver)
+        .raster(Raster {
+            depth_clip: false,
+            ..Raster::default()
+        })
+        .build(device, "fog")
 }
 
 // Compute PSO for the froxel kernel.
@@ -360,18 +162,7 @@ fn create_fog_froxel_pso(
     root_sig: &ID3D12RootSignature,
     cs: &[u8],
 ) -> RenderResult<ID3D12PipelineState> {
-    let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        CS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: cs.as_ptr() as _,
-            BytecodeLength: cs.len(),
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_compute(device, &desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create fog froxel PSO"))
+    compute_pso(device, root_sig, cs, "fog froxel")
 }
 
 // Create the 3D `RGBA16Float` froxel volume. Rests in `PIXEL_SHADER_RESOURCE`

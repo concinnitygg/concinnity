@@ -23,10 +23,11 @@ use concinnity_core::render::error::RenderResult;
 
 use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::descriptor_layout::PoolSizes;
-use super::super::pipeline::*;
+use super::super::pipeline_desc::{Blend, GraphicsPipelineDesc};
 use super::super::resources::{
     alloc_descriptor_sets, create_descriptor_set_layout, source_set_bindings, write_source_set,
 };
+use super::super::set_writes::SetWrites;
 use super::super::texture::*;
 use super::gbuffer::GbufferResources;
 use crate::vulkan::builtin_shaders::CompileProgram;
@@ -256,49 +257,8 @@ fn create_composite_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
-    let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .line_width(1.0)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE);
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-    let depth = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(false)
-        .depth_write_enable(false)
-        .depth_compare_op(vk::CompareOp::ALWAYS);
-    let blend_attach = vk::PipelineColorBlendAttachmentState::default()
-        .color_write_mask(vk::ColorComponentFlags::RGBA)
-        .blend_enable(false);
-    let blend = vk::PipelineColorBlendStateCreateInfo::default()
-        .attachments(std::slice::from_ref(&blend_attach));
-    let dyn_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dyn_states);
-
-    let info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vert_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth)
-        .color_blend_state(&blend)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass)
-        .subpass(0);
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| crate::vulkan::error::map_vk_result(e, "create reflection composite pso"))?;
-    Ok(pipeline)
+    GraphicsPipelineDesc::fullscreen(vert_spv, frag_spv, layout, render_pass, &[Blend::Opaque])
+        .build(device, "reflection composite")
 }
 
 impl ReflectionCompositeResources {
@@ -519,23 +479,9 @@ impl ReflectionCompositeResources {
         if !self.wired_reflection.changed(frame_idx, view) {
             return;
         }
-        let refl = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(view);
-        let write = |set: vk::DescriptorSet| {
-            vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .image_info(std::slice::from_ref(&refl))
-        };
-        let writes = [
-            write(self.blur_sets[frame_idx]),
-            write(self.composite_sets[frame_idx]),
-        ];
-        // SAFETY: `writes` and the image info it borrows are live for the call, and every set and
-        // resource it names belongs to this device.
-        unsafe { device.update_descriptor_sets(&writes, &[]) };
+        for set in [self.blur_sets[frame_idx], self.composite_sets[frame_idx]] {
+            SetWrites::new(set).sampled_image(0, view).apply(device);
+        }
     }
 
     // Swap freshly-built pipelines into the live resources after a hot-reload.
@@ -827,8 +773,8 @@ mod tests {
         concinnity_shader::require_dxc!();
         let shaders = super::compile_reflection_composite_shaders(false)
             .expect("reflection composite shaders compile");
-        assert!(super::is_spirv(&shaders.vs));
-        assert!(super::is_spirv(&shaders.blur_fs));
-        assert!(super::is_spirv(&shaders.composite_fs));
+        assert!(crate::vulkan::pipeline::is_spirv(&shaders.vs));
+        assert!(crate::vulkan::pipeline::is_spirv(&shaders.blur_fs));
+        assert!(crate::vulkan::pipeline::is_spirv(&shaders.composite_fs));
     }
 }

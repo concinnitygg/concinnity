@@ -15,7 +15,6 @@
 //! that target's SRV. Mirrors src/metal/post/ssr.rs (the composite half).
 
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::builtin_shaders;
@@ -23,9 +22,10 @@ use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
-use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
 use crate::directx::post::fullscreen::FullscreenExtent;
 use crate::directx::post::ssr::SSR_OUTPUT_FORMAT;
+use crate::directx::pso::{Blend, GraphicsPso};
+use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
 use crate::directx::texture::{create_rt_target, write_format_rtv, write_format_srv};
 
 // The blur pass runs at render-resolution / `blur_scale`. The blur is low-
@@ -67,54 +67,41 @@ fn srv_table_root_sig(
     count: u32,
     name: &str,
 ) -> RenderResult<ID3D12RootSignature> {
-    let ranges: Vec<D3D12_DESCRIPTOR_RANGE> = (0..count)
-        .map(|i| D3D12_DESCRIPTOR_RANGE {
-            RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-            NumDescriptors: 1,
-            BaseShaderRegister: i,
-            RegisterSpace: 0,
-            OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-        })
-        .collect();
-    let params: Vec<D3D12_ROOT_PARAMETER> = ranges
-        .iter()
-        .map(|r| D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: r,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        })
-        .collect();
+    let sig = (0..count).fold(RootSig::new(), |sig, reg| {
+        sig.srv_table(reg, 1, Visibility::Pixel)
+    });
     // One linear-clamp sampler per input (reflection / scene / G-buffer / blur).
     // Identical descriptors; the split is the shader's, not the pass's.
-    let samplers: Vec<D3D12_STATIC_SAMPLER_DESC> = (0..count)
-        .map(|reg| D3D12_STATIC_SAMPLER_DESC {
-            Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-            AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-            AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-            AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-            ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-            BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
-            MinLOD: 0.0,
-            MaxLOD: f32::MAX,
-            ShaderRegister: reg,
-            RegisterSpace: 0,
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-            ..Default::default()
+    (0..count)
+        .fold(sig, |sig, reg| {
+            sig.static_sampler(SamplerState::LinearClamp, reg, Visibility::Pixel)
         })
-        .collect();
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: samplers.len() as u32,
-        pStaticSamplers: samplers.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
+        .build(device, name)
+}
+
+// The blur and composite PSOs over their root signatures.
+fn create_psos(
+    device: &ID3D12Device,
+    info_queue: Option<&ID3D12InfoQueue>,
+    blur_root_sig: &ID3D12RootSignature,
+    composite_root_sig: &ID3D12RootSignature,
+    shaders: &ReflCompShaders,
+) -> RenderResult<RebuiltReflectionComposite> {
+    let pso = |root_sig: &ID3D12RootSignature, ps: &[u8], label: &str| {
+        dump_on_err(
+            info_queue,
+            GraphicsPso::fullscreen(root_sig, &shaders.vs, ps, SSR_OUTPUT_FORMAT, Blend::Opaque)
+                .build(device, label),
+        )
     };
-    serialize_desc_and_create(device, &desc, name)
+    Ok(RebuiltReflectionComposite {
+        blur_pso: pso(blur_root_sig, &shaders.blur_ps, "reflection blur")?,
+        composite_pso: pso(
+            composite_root_sig,
+            &shaders.composite_ps,
+            "reflection composite",
+        )?,
+    })
 }
 
 // Resources
@@ -196,29 +183,15 @@ impl ReflectionCompositeResources {
             info_queue,
             srv_table_root_sig(device, 5, "reflection composite root sig"),
         )?;
-        let blur_pso = dump_on_err(
+        let RebuiltReflectionComposite {
+            blur_pso,
+            composite_pso,
+        } = create_psos(
+            device,
             info_queue,
-            create_blended_composite_pso(
-                device,
-                &blur_root_sig,
-                &shaders.vs,
-                &shaders.blur_ps,
-                SSR_OUTPUT_FORMAT,
-                PostBlend::Replace,
-                "reflection blur",
-            ),
-        )?;
-        let composite_pso = dump_on_err(
-            info_queue,
-            create_blended_composite_pso(
-                device,
-                &composite_root_sig,
-                &shaders.vs,
-                &shaders.composite_ps,
-                SSR_OUTPUT_FORMAT,
-                PostBlend::Replace,
-                "reflection composite",
-            ),
+            &blur_root_sig,
+            &composite_root_sig,
+            &shaders,
         )?;
 
         Ok(Self {
@@ -288,35 +261,13 @@ pub(in crate::directx) fn rebuild_reflection_composite_pipelines(
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
 ) -> RenderResult<RebuiltReflectionComposite> {
-    let shaders = compile_refl_composite_shaders(hot_reload)?;
-    let blur_pso = dump_on_err(
+    create_psos(
+        device,
         info_queue,
-        create_blended_composite_pso(
-            device,
-            &rc.blur_root_sig,
-            &shaders.vs,
-            &shaders.blur_ps,
-            SSR_OUTPUT_FORMAT,
-            PostBlend::Replace,
-            "reflection blur",
-        ),
-    )?;
-    let composite_pso = dump_on_err(
-        info_queue,
-        create_blended_composite_pso(
-            device,
-            &rc.composite_root_sig,
-            &shaders.vs,
-            &shaders.composite_ps,
-            SSR_OUTPUT_FORMAT,
-            PostBlend::Replace,
-            "reflection composite",
-        ),
-    )?;
-    Ok(RebuiltReflectionComposite {
-        blur_pso,
-        composite_pso,
-    })
+        &rc.blur_root_sig,
+        &rc.composite_root_sig,
+        &compile_refl_composite_shaders(hot_reload)?,
+    )
 }
 
 pub(in crate::directx) fn swap_reflection_composite_pipelines(

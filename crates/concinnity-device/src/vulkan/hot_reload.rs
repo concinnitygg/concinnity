@@ -12,13 +12,13 @@ use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::sync::atomic::Ordering;
 
-use super::auto_exposure::{AutoExposureResources, compile_auto_exposure_shaders};
 use super::context::VkContext;
 use super::pipeline::{
     build_bucket_pipeline, compile_bindless_shaders, compile_composite_shaders,
     compile_cull_shader, compile_cull_shader_phase2, compile_text_shaders,
-    create_composite_pipeline, create_cull_pipeline, create_text_pipeline,
+    create_composite_pipeline, create_text_pipeline,
 };
+use super::pipeline_desc::compute_pipeline;
 use super::post::bloom::{compile_bloom_shaders, create_bloom_pipeline};
 use super::post::ssao::rebuild_ssao_pipelines;
 
@@ -154,11 +154,13 @@ impl VkContext {
             .as_ref()
             .map(|kernels| {
                 let layout = kernels.pipeline_layout.handle();
-                let pipeline = create_cull_pipeline(device, layout, &compile_cull_shader(hr)?)?;
+                let pipeline = compute_pipeline(device, layout, &compile_cull_shader(hr)?, "cull")?;
                 let phase2 = kernels
                     .pipeline_phase2
                     .as_ref()
-                    .map(|_| create_cull_pipeline(device, layout, &compile_cull_shader_phase2(hr)?))
+                    .map(|_| {
+                        compute_pipeline(device, layout, &compile_cull_shader_phase2(hr)?, "cull")
+                    })
                     .transpose()?;
                 Ok::<_, RenderError>((pipeline, phase2))
             })
@@ -171,27 +173,13 @@ impl VkContext {
             .map(|hiz| hiz.recompile_pipelines(device, hr))
             .transpose()?;
 
-        // Auto-exposure (gated on the post-process config). Builds the histogram
-        // + average compute pipelines; the trailing `.map` tuples them so the
-        // whole build is one Result expression for the macro.
+        // Auto-exposure (gated on the post-process config): the histogram build
+        // + average compute pipelines.
         let auto_exposure_pipelines = self
             .auto_exposure
             .resources
             .as_ref()
-            .map(|ae| {
-                let (build_cs, average_cs) = compile_auto_exposure_shaders(hr)?;
-                let build = AutoExposureResources::create_compute_pipeline(
-                    device,
-                    ae.build_pipeline_layout(),
-                    &build_cs,
-                )?;
-                AutoExposureResources::create_compute_pipeline(
-                    device,
-                    ae.average_pipeline_layout(),
-                    &average_cs,
-                )
-                .map(|average| (build, average))
-            })
+            .map(|ae| ae.rebuild_pipelines(device, hr))
             .transpose()?;
 
         // Decal (always built when DecalResources exists, which is

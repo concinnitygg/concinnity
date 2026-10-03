@@ -26,7 +26,10 @@ use concinnity_core::transform::mat4_inverse;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::context::VkContext;
-use super::pipeline::{GraphicsStages, SHADER_ENTRY, spv_module};
+use super::descriptor_layout::{Binding, PoolSizes};
+use super::pipeline_desc::{Blend, GraphicsPipelineDesc, compute_pipeline};
+use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use super::set_writes::SetWrites;
 use super::texture::{
     LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
 };
@@ -155,7 +158,7 @@ impl FogResources {
             sampler: shadow_sampler,
         } = shadow;
         let render_pass = create_fog_render_pass(device, hdr_format)?;
-        let view_set_layout = create_fog_set_layout(device)?;
+        let view_set_layout = create_descriptor_set_layout(device, &fog_set_bindings())?;
         let pipeline_layout = create_fog_pipeline_layout(device, view_set_layout.handle())?;
 
         let (vert_spv, frag_spv) = compile_fog_shaders(hot_reload, msaa)?;
@@ -168,12 +171,16 @@ impl FogResources {
         )?;
 
         // Froxel compute pipeline.
-        let froxel_set_layout = create_froxel_set_layout(device)?;
+        let froxel_set_layout = create_descriptor_set_layout(device, &froxel_set_bindings())?;
         let froxel_pipeline_layout =
             create_froxel_pipeline_layout(device, froxel_set_layout.handle())?;
         let froxel_spv = compile_fog_froxel_shader(hot_reload)?;
-        let froxel_pipeline =
-            create_compute_pipeline(device, froxel_pipeline_layout.handle(), &froxel_spv)?;
+        let froxel_pipeline = compute_pipeline(
+            device,
+            froxel_pipeline_layout.handle(),
+            &froxel_spv,
+            "fog froxel",
+        )?;
 
         // The shared 3D volume + its storage (compute write) + sampled
         // (fragment read) views. Rest it in SHADER_READ_ONLY so the first
@@ -309,17 +316,9 @@ impl FogResources {
         }
         let last_depth = depth_views.len().saturating_sub(1);
         for (i, &set) in self.view_sets.iter().enumerate() {
-            let depth_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(depth_views[i.min(last_depth)]);
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .image_info(std::slice::from_ref(&depth_info));
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+            SetWrites::new(set)
+                .sampled_image(1, depth_views[i.min(last_depth)])
+                .apply(device);
         }
         Ok(())
     }
@@ -405,88 +404,33 @@ fn create_fog_render_pass(device: &VkDevice, format: vk::Format) -> RenderResult
         .map_err(|e| super::error::map_vk_result(e, "fog render pass"))
 }
 
-fn create_fog_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
-    let bindings = [
-        // 0: FogParams UBO.
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-        // 1: scene depth, read by texel.
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-        // 2: FogFroxelParams UBO.
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(2)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-        // 3: froxel volume.
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(3)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-        // 4: the volume's sampler.
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(4)
-            .descriptor_type(vk::DescriptorType::SAMPLER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-    ];
-    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    device
-        .create_descriptor_set_layout(&info)
-        .map_err(|e| super::error::map_vk_result(e, "fog set layout"))
+// The fog-render view set: FogParams UBO, the scene depth (read by texel),
+// FogFroxelParams UBO, the froxel volume and the volume's sampler.
+fn fog_set_bindings() -> [Binding; 5] {
+    use vk::DescriptorType as T;
+    let frag = vk::ShaderStageFlags::FRAGMENT;
+    [
+        (0, T::UNIFORM_BUFFER, frag),
+        (1, T::SAMPLED_IMAGE, frag),
+        (2, T::UNIFORM_BUFFER, frag),
+        (3, T::SAMPLED_IMAGE, frag),
+        (4, T::SAMPLER, frag),
+    ]
 }
 
-fn create_froxel_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
-    let bindings = [
-        // 0: FogParams UBO.
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        // 1: FogFroxelParams UBO.
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        // 2: ShadowUniforms UBO.
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(2)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        // 3: shadow map array.
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(3)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        // 4: froxel volume image3D (storage).
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(4)
-            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        // 5: the shadow map's compare sampler.
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(5)
-            .descriptor_type(vk::DescriptorType::SAMPLER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-    ];
-    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    device
-        .create_descriptor_set_layout(&info)
-        .map_err(|e| super::error::map_vk_result(e, "fog froxel set layout"))
+// The froxel compute set: FogParams, FogFroxelParams and ShadowUniforms UBOs,
+// the shadow map array, the volume storage image and the shadow compare sampler.
+fn froxel_set_bindings() -> [Binding; 6] {
+    use vk::DescriptorType as T;
+    let compute = vk::ShaderStageFlags::COMPUTE;
+    [
+        (0, T::UNIFORM_BUFFER, compute),
+        (1, T::UNIFORM_BUFFER, compute),
+        (2, T::UNIFORM_BUFFER, compute),
+        (3, T::SAMPLED_IMAGE, compute),
+        (4, T::STORAGE_IMAGE, compute),
+        (5, T::SAMPLER, compute),
+    ]
 }
 
 fn create_fog_pipeline_layout(
@@ -516,49 +460,16 @@ fn create_fog_descriptor_pool(
     frames: usize,
 ) -> RenderResult<OwnedDescriptorPool> {
     let f = frames as u32;
-    let sizes = [
-        // view: FogParams + FogFroxelParams (2). froxel: FogParams +
-        // FogFroxelParams + ShadowUniforms (3).
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: 5 * f,
-        },
-        // view: depth + volume (2). froxel: shadow map (1).
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::SAMPLED_IMAGE,
-            descriptor_count: 3 * f,
-        },
-        // view: the volume's sampler (1). froxel: the shadow compare sampler (1).
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::SAMPLER,
-            descriptor_count: 2 * f,
-        },
-        // froxel: volume storage (1).
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::STORAGE_IMAGE,
-            descriptor_count: f,
-        },
-    ];
+    let sizes = PoolSizes::default()
+        .sets(&fog_set_bindings(), f)
+        .sets(&froxel_set_bindings(), f)
+        .build();
     let info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(2 * f)
         .pool_sizes(&sizes);
     device
         .create_descriptor_pool(&info)
         .map_err(|e| super::error::map_vk_result(e, "fog descriptor pool"))
-}
-
-fn alloc_descriptor_sets(
-    device: &VkDevice,
-    pool: vk::DescriptorPool,
-    layouts: &[vk::DescriptorSetLayout],
-) -> RenderResult<Vec<vk::DescriptorSet>> {
-    let info = vk::DescriptorSetAllocateInfo::default()
-        .descriptor_pool(pool)
-        .set_layouts(layouts);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.allocate_descriptor_sets(&info) }
-        .map_err(|e| super::error::map_vk_result(e, "fog descriptor sets"))
 }
 
 // The five bindings of a per-frame fog-render view set: the FogParams +
@@ -580,46 +491,13 @@ fn write_view_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogViewBi
         volume_view,
         volume_sampler,
     } = bindings;
-    let params_info = vk::DescriptorBufferInfo::default()
-        .buffer(params_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<FogParams>() as u64);
-    let depth_info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(depth_view);
-    let froxel_info = vk::DescriptorBufferInfo::default()
-        .buffer(froxel_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<FogFroxelParams>() as u64);
-    let volume_info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(volume_view);
-    let writes = [
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(std::slice::from_ref(&params_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .image_info(std::slice::from_ref(&depth_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(2)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(std::slice::from_ref(&froxel_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(3)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .image_info(std::slice::from_ref(&volume_info)),
-    ];
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
-    super::resources::write_samplers(device, set, 4, &[volume_sampler]);
+    SetWrites::new(set)
+        .uniform_buffer(0, params_ubo, std::mem::size_of::<FogParams>() as u64)
+        .sampled_image(1, depth_view)
+        .uniform_buffer(2, froxel_ubo, std::mem::size_of::<FogFroxelParams>() as u64)
+        .sampled_image(3, volume_view)
+        .sampler(4, volume_sampler)
+        .apply(device);
 }
 
 // The six bindings of a per-frame froxel compute set: the FogParams,
@@ -644,55 +522,14 @@ fn write_froxel_set(device: &VkDevice, set: vk::DescriptorSet, bindings: FogFrox
         shadow_sampler,
         volume_storage_view,
     } = bindings;
-    let params_info = vk::DescriptorBufferInfo::default()
-        .buffer(params_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<FogParams>() as u64);
-    let froxel_info = vk::DescriptorBufferInfo::default()
-        .buffer(froxel_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<FogFroxelParams>() as u64);
-    let shadow_info = vk::DescriptorBufferInfo::default()
-        .buffer(shadow_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<ShadowUniforms>() as u64);
-    let shadow_map_info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(shadow_map_view);
-    let volume_info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::GENERAL)
-        .image_view(volume_storage_view);
-    let writes = [
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(std::slice::from_ref(&params_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(std::slice::from_ref(&froxel_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(2)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(std::slice::from_ref(&shadow_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(3)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .image_info(std::slice::from_ref(&shadow_map_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(4)
-            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .image_info(std::slice::from_ref(&volume_info)),
-    ];
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
-    super::resources::write_samplers(device, set, 5, &[shadow_sampler]);
+    SetWrites::new(set)
+        .uniform_buffer(0, params_ubo, std::mem::size_of::<FogParams>() as u64)
+        .uniform_buffer(1, froxel_ubo, std::mem::size_of::<FogFroxelParams>() as u64)
+        .uniform_buffer(2, shadow_ubo, std::mem::size_of::<ShadowUniforms>() as u64)
+        .sampled_image(3, shadow_map_view)
+        .storage_image(4, volume_storage_view)
+        .sampler(5, shadow_sampler)
+        .apply(device);
 }
 
 // Create the shared 3D RGBA16F froxel volume (STORAGE | SAMPLED, GPU-local).
@@ -790,27 +627,16 @@ pub(in crate::vulkan) fn rebuild_fog_froxel_pipeline(
     hot_reload: bool,
 ) -> RenderResult<OwnedPipeline> {
     let spv = compile_fog_froxel_shader(hot_reload)?;
-    create_compute_pipeline(device, fog.froxel_pipeline_layout.handle(), &spv)
+    compute_pipeline(
+        device,
+        fog.froxel_pipeline_layout.handle(),
+        &spv,
+        "fog froxel",
+    )
 }
 
-fn create_compute_pipeline(
-    device: &VkDevice,
-    layout: vk::PipelineLayout,
-    spv: &[u8],
-) -> RenderResult<OwnedPipeline> {
-    let module = spv_module(device, spv)?;
-    let stage = vk::PipelineShaderStageCreateInfo::default()
-        .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(module.handle())
-        .name(SHADER_ENTRY);
-    let info = vk::ComputePipelineCreateInfo::default()
-        .stage(stage)
-        .layout(layout);
-    let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
-        .map_err(|e| super::error::map_vk_result(e, "create fog froxel pipeline"))?;
-    Ok(pipeline)
-}
-
+// The fog pass composites `(scattered, 1 - T)` over the SINGLE-SAMPLE resolved
+// HDR target (`final = scattered + transmittance * scene`) regardless of MSAA.
 fn create_fog_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,
@@ -818,61 +644,14 @@ fn create_fog_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
-    // Fullscreen triangle is emitted by gl_VertexIndex; no vertex buffer.
-    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .line_width(1.0);
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        // The fog pass writes the SINGLE-SAMPLE resolved HDR target, not
-        // the MSAA color, regardless of whether the main pass uses MSAA.
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(false)
-        .depth_write_enable(false);
-    let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-        .blend_enable(true)
-        // (scattered, 1 - T) over scene: dst = src + (1 - src.a) * dst,
-        // resolving to `final = scattered + transmittance * scene`. Matches
-        // the DirectX / Metal blend.
-        .src_color_blend_factor(vk::BlendFactor::ONE)
-        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .color_blend_op(vk::BlendOp::ADD)
-        .src_alpha_blend_factor(vk::BlendFactor::ONE)
-        .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .alpha_blend_op(vk::BlendOp::ADD)
-        .color_write_mask(vk::ColorComponentFlags::RGBA);
-    let blend_attachments = [blend_attachment];
-    let blend_state = vk::PipelineColorBlendStateCreateInfo::default()
-        .logic_op_enable(false)
-        .attachments(&blend_attachments);
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-    let info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vertex_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth_stencil)
-        .color_blend_state(&blend_state)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass);
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| super::error::map_vk_result(e, "create fog pipeline"))?;
-    Ok(pipeline)
+    GraphicsPipelineDesc::fullscreen(
+        vert_spv,
+        frag_spv,
+        layout,
+        render_pass,
+        &[Blend::PremultipliedOver],
+    )
+    .build(device, "fog")
 }
 
 // Encoder

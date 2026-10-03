@@ -32,10 +32,9 @@ use concinnity_core::render::rt_accel::seed_wanted;
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::{HDR_FORMAT, VkContext};
 use super::super::descriptor_layout::{Binding, PoolSizes};
-use super::super::pipeline::*;
-use super::super::resources::{
-    alloc_descriptor_sets, create_descriptor_set_layout, write_samplers,
-};
+use super::super::pipeline_desc::{Blend, GraphicsPipelineDesc};
+use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use super::super::set_writes::SetWrites;
 use super::super::texture::*;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
@@ -220,49 +219,8 @@ fn create_rt_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
-    let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .line_width(1.0)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE);
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-    let depth = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(false)
-        .depth_write_enable(false)
-        .depth_compare_op(vk::CompareOp::ALWAYS);
-    let blend_attach = vk::PipelineColorBlendAttachmentState::default()
-        .color_write_mask(vk::ColorComponentFlags::RGBA)
-        .blend_enable(false);
-    let blend = vk::PipelineColorBlendStateCreateInfo::default()
-        .attachments(std::slice::from_ref(&blend_attach));
-    let dyn_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dyn_states);
-
-    let info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vert_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth)
-        .color_blend_state(&blend)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass)
-        .subpass(0);
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| crate::vulkan::error::map_vk_result(e, "create rt reflections pso"))?;
-    Ok(pipeline)
+    GraphicsPipelineDesc::fullscreen(vert_spv, frag_spv, layout, render_pass, &[Blend::Opaque])
+        .build(device, "rt reflections")
 }
 
 // Replacement RT pipelines built by the hot-reload pass.
@@ -461,7 +419,11 @@ impl RtReflectionsResources {
         let sampler = create_sampler_linear_clamp(device)?;
         let screen = sampler.handle();
         for &set in &resolve_sets {
-            write_samplers(device, set, 11, &[screen, screen, screen]);
+            SetWrites::new(set)
+                .sampler(11, screen)
+                .sampler(12, screen)
+                .sampler(13, screen)
+                .apply(device);
         }
 
         // 1-element dummy storage buffer for the skinned-index binding when there
@@ -562,30 +524,11 @@ impl RtReflectionsResources {
         vertex_buffer: vk::Buffer,
         index_buffer: vk::Buffer,
     ) {
-        let verts_info = vk::DescriptorBufferInfo::default()
-            .buffer(vertex_buffer)
-            .offset(0)
-            .range(vk::WHOLE_SIZE);
-        let indices_info = vk::DescriptorBufferInfo::default()
-            .buffer(index_buffer)
-            .offset(0)
-            .range(vk::WHOLE_SIZE);
         for &set in &self.resolve_sets {
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(3)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&verts_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(4)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&indices_info)),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
+            SetWrites::new(set)
+                .storage_buffer(3, vertex_buffer, vk::WHOLE_SIZE)
+                .storage_buffer(4, index_buffer, vk::WHOLE_SIZE)
+                .apply(device);
         }
     }
 
@@ -609,45 +552,16 @@ impl RtReflectionsResources {
         debug_assert_eq!(gbuffer_views.len(), frames);
         debug_assert_eq!(roughness_views.len(), frames);
         for (i, &set) in self.resolve_sets.iter().enumerate() {
-            let gb_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(gbuffer_views[i]);
-            let rough_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(roughness_views[i]);
-            let ubo_info = vk::DescriptorBufferInfo::default()
-                .buffer(self.params_buffers[i].buffer())
-                .offset(0)
-                .range(std::mem::size_of::<RtParams>() as vk::DeviceSize);
-            let scene_view = hdr_resolve_views[i];
-            let scene_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(scene_view);
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                    .buffer_info(std::slice::from_ref(&ubo_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(5)
-                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                    .image_info(std::slice::from_ref(&scene_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(6)
-                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                    .image_info(std::slice::from_ref(&gb_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(7)
-                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                    .image_info(std::slice::from_ref(&rough_info)),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
+            SetWrites::new(set)
+                .uniform_buffer(
+                    0,
+                    self.params_buffers[i].buffer(),
+                    size_of::<RtParams>() as vk::DeviceSize,
+                )
+                .sampled_image(5, hdr_resolve_views[i])
+                .sampled_image(6, gbuffer_views[i])
+                .sampled_image(7, roughness_views[i])
+                .apply(device);
         }
     }
 
@@ -680,55 +594,17 @@ impl RtReflectionsResources {
             deformed_verts: deformed,
             skinned_indices,
         } = accel;
-        let set = self.resolve_sets[frame_idx];
-        let accels = [tlas];
-        let mut accel_write = vk::WriteDescriptorSetAccelerationStructureKHR::default()
-            .acceleration_structures(&accels);
-        let mut tlas_write = vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-            .push_next(&mut accel_write);
-        // `push_next` does not set the count for an acceleration-structure write.
-        tlas_write.descriptor_count = 1;
-        let geom_info = vk::DescriptorBufferInfo::default()
-            .buffer(geom_buffer)
-            .offset(0)
-            .range(geom_size);
-        let geom_write = vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(2)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(std::slice::from_ref(&geom_info));
-        let deformed_info = vk::DescriptorBufferInfo::default()
-            .buffer(deformed)
-            .offset(0)
-            .range(vk::WHOLE_SIZE);
-        let deformed_write = vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(9)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(std::slice::from_ref(&deformed_info));
         let sidx_buffer = if skinned_indices != vk::Buffer::null() {
             skinned_indices
         } else {
             self.dummy_ssbo.buffer()
         };
-        let sidx_info = vk::DescriptorBufferInfo::default()
-            .buffer(sidx_buffer)
-            .offset(0)
-            .range(vk::WHOLE_SIZE);
-        let sidx_write = vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(10)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(std::slice::from_ref(&sidx_info));
-        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
-        // set and resource it names belongs to this device.
-        unsafe {
-            device
-                .update_descriptor_sets(&[tlas_write, geom_write, deformed_write, sidx_write], &[])
-        };
+        SetWrites::new(self.resolve_sets[frame_idx])
+            .acceleration_structure(1, tlas)
+            .storage_buffer(2, geom_buffer, geom_size)
+            .storage_buffer(9, deformed, vk::WHOLE_SIZE)
+            .storage_buffer(10, sidx_buffer, vk::WHOLE_SIZE)
+            .apply(device);
     }
 
     fn destroy_targets(&mut self, _device: &VkDevice) {
@@ -1124,8 +1000,8 @@ mod tests {
     fn rt_reflections_shaders_compile() {
         concinnity_shader::require_dxc!();
         let shaders = super::compile_rt_shaders(false, 4).expect("rt shaders compile");
-        assert!(super::is_spirv(&shaders.vs));
-        assert!(super::is_spirv(&shaders.flat_fs));
+        assert!(crate::vulkan::pipeline::is_spirv(&shaders.vs));
+        assert!(crate::vulkan::pipeline::is_spirv(&shaders.flat_fs));
         assert!(shaders.textured_fs.is_some(), "pool_size>0 builds textured");
         // pool_size 0 builds only the flat variant.
         let flat_only = super::compile_rt_shaders(false, 0).expect("rt flat compiles");

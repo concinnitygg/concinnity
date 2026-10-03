@@ -35,6 +35,7 @@ mod particle;
 mod pipeline;
 mod pipeline_builder;
 mod pipeline_cache;
+mod pipeline_desc;
 mod planar;
 mod post;
 mod probe;
@@ -47,6 +48,7 @@ mod record;
 mod render_pass;
 mod resources;
 mod screenshot;
+mod set_writes;
 mod swapchain;
 #[cfg(test)]
 mod test_gpu;

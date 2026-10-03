@@ -9,6 +9,7 @@ use concinnity_core::render::shadow_bias;
 
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{OwnedPipeline, VkDevice};
+use crate::vulkan::pipeline_desc::{Blend, Depth, DepthBias, GraphicsPipelineDesc, Raster};
 
 // The uniform and push-constant layouts are the `.hlsl` sources' own, held
 // to the `#[repr(C)]` mirrors by `crate::shader_layout`.
@@ -73,27 +74,6 @@ pub(super) fn compile_shadow_cull_shader(hot_reload: bool) -> RenderResult<Vec<u
 // Compile the GPU-driven shadow pass's depth-only bindless vertex shader.
 pub(super) fn compile_shadow_bindless_vs(hot_reload: bool) -> RenderResult<Vec<u8>> {
     super::builtin_shaders::SHADOW_VERT_BINDLESS.compile(hot_reload)
-}
-
-// Create the GPU-cull compute pipeline. `layout` must include the cull
-// descriptor set (set 0: object SSBO, draw-args SSBO, indirect-command SSBO)
-// and the `CullParams` push-constant range.
-pub(super) fn create_cull_pipeline(
-    device: &VkDevice,
-    layout: vk::PipelineLayout,
-    spv: &[u8],
-) -> RenderResult<OwnedPipeline> {
-    let module = spv_module(device, spv)?;
-    let stage = vk::PipelineShaderStageCreateInfo::default()
-        .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(module.handle())
-        .name(SHADER_ENTRY);
-    let info = vk::ComputePipelineCreateInfo::default()
-        .stage(stage)
-        .layout(layout);
-    let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
-        .map_err(|e| super::error::map_vk_result(e, "create cull pipeline"))?;
-    Ok(pipeline)
 }
 
 // A shader module scoped to pipeline creation: destroyed on drop, so the
@@ -214,78 +194,45 @@ pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u
     Ok((vert, frag))
 }
 
-// Vertex binding and attribute descriptions for the full Vertex struct (56 bytes).
-fn main_vertex_input() -> (
-    [vk::VertexInputBindingDescription; 1],
-    [vk::VertexInputAttributeDescription; 5],
-) {
-    let binding = vk::VertexInputBindingDescription::default()
-        .binding(0)
-        .stride(56)
-        .input_rate(vk::VertexInputRate::VERTEX);
-    let attrs = [
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(0)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(0),
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(1)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(12),
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(2)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(24),
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(3)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(36),
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(4)
-            .format(vk::Format::R32G32_SFLOAT)
-            .offset(48),
-    ];
-    ([binding], attrs)
+const fn vertex_binding(stride: u32) -> [vk::VertexInputBindingDescription; 1] {
+    [vk::VertexInputBindingDescription {
+        binding: 0,
+        stride,
+        input_rate: vk::VertexInputRate::VERTEX,
+    }]
 }
 
-// TextVertex binding (32 bytes): pos(vec2) + uv(vec2) + color(vec3) + mode(float).
-fn text_vertex_input() -> (
-    [vk::VertexInputBindingDescription; 1],
-    [vk::VertexInputAttributeDescription; 4],
-) {
-    let binding = vk::VertexInputBindingDescription::default()
-        .binding(0)
-        .stride(32)
-        .input_rate(vk::VertexInputRate::VERTEX);
-    let attrs = [
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(0)
-            .format(vk::Format::R32G32_SFLOAT)
-            .offset(0),
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(1)
-            .format(vk::Format::R32G32_SFLOAT)
-            .offset(8),
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(2)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(16),
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(3)
-            .format(vk::Format::R32_SFLOAT)
-            .offset(28),
-    ];
-    ([binding], attrs)
+const fn attr(
+    location: u32,
+    format: vk::Format,
+    offset: u32,
+) -> vk::VertexInputAttributeDescription {
+    vk::VertexInputAttributeDescription {
+        location,
+        binding: 0,
+        format,
+        offset,
+    }
 }
+
+// The full Vertex struct (56 bytes).
+const MAIN_VERTEX_BINDING: [vk::VertexInputBindingDescription; 1] = vertex_binding(56);
+const MAIN_VERTEX_ATTRS: [vk::VertexInputAttributeDescription; 5] = [
+    attr(0, vk::Format::R32G32B32_SFLOAT, 0),
+    attr(1, vk::Format::R32G32B32_SFLOAT, 12),
+    attr(2, vk::Format::R32G32B32_SFLOAT, 24),
+    attr(3, vk::Format::R32G32B32_SFLOAT, 36),
+    attr(4, vk::Format::R32G32_SFLOAT, 48),
+];
+
+// TextVertex (32 bytes): pos(vec2) + uv(vec2) + color(vec3) + mode(float).
+const TEXT_VERTEX_BINDING: [vk::VertexInputBindingDescription; 1] = vertex_binding(32);
+const TEXT_VERTEX_ATTRS: [vk::VertexInputAttributeDescription; 4] = [
+    attr(0, vk::Format::R32G32_SFLOAT, 0),
+    attr(1, vk::Format::R32G32_SFLOAT, 8),
+    attr(2, vk::Format::R32G32B32_SFLOAT, 16),
+    attr(3, vk::Format::R32_SFLOAT, 28),
+];
 
 // Render pass, pipeline layout, and the vertex + fragment SPIR-V a mesh
 // pipeline (main / instanced / skinned) is built against. Borrows the shader
@@ -429,82 +376,27 @@ fn create_main_pipeline_filled(
     _surface_format: vk::Format,
     polygon_mode: vk::PolygonMode,
 ) -> RenderResult<OwnedPipeline> {
-    let MeshPipelineTargets {
-        render_pass,
-        layout,
-        vert_spv,
-        frag_spv,
-    } = targets;
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
-
-    let (bindings, attrs) = main_vertex_input();
-    let vert_input = vk::PipelineVertexInputStateCreateInfo::default()
-        .vertex_binding_descriptions(&bindings)
-        .vertex_attribute_descriptions(&attrs);
-
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-        .primitive_restart_enable(false);
-
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .depth_clamp_enable(false)
-        .rasterizer_discard_enable(false)
-        .polygon_mode(polygon_mode)
-        .line_width(1.0)
-        // Match Metal's default + DirectX (no back-face culling) so meshes
-        // with mixed winding (particularly procedural floor / ceiling planes
-        // whose triangles have a -Y normal under the unsigned plane order)
-        // render from both sides. Vulkan's pipeline-default was BACK, which
-        // hid the showcase floor while leaving every solid mesh visible.
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .depth_bias_enable(false);
-
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        .sample_shading_enable(false)
-        .rasterization_samples(msaa);
-
-    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(true)
-        .depth_write_enable(true)
-        .depth_compare_op(vk::CompareOp::LESS)
-        .depth_bounds_test_enable(false)
-        .stencil_test_enable(false);
-
-    let color_blend_attach = vk::PipelineColorBlendAttachmentState::default()
-        .color_write_mask(vk::ColorComponentFlags::RGBA)
-        .blend_enable(false);
-
-    let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
-        .logic_op_enable(false)
-        .attachments(std::slice::from_ref(&color_blend_attach));
-
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-    let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vert_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth_stencil)
-        .color_blend_state(&color_blend)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass)
-        .subpass(0);
-
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
-        .map_err(|e| super::error::map_vk_result(e, "create main pipeline"))?;
-
-    Ok(pipeline)
+    GraphicsPipelineDesc {
+        depth: Depth::LESS_WRITE,
+        // No back-face culling, matching Metal's default and DirectX, so meshes
+        // with mixed winding (procedural floor / ceiling planes) render from
+        // both sides.
+        raster: Raster {
+            polygon_mode,
+            ..Raster::default()
+        },
+        samples: msaa,
+        vertex_bindings: &MAIN_VERTEX_BINDING,
+        vertex_attributes: &MAIN_VERTEX_ATTRS,
+        ..GraphicsPipelineDesc::fullscreen(
+            targets.vert_spv,
+            targets.frag_spv,
+            targets.layout,
+            targets.render_pass,
+            &[Blend::Opaque],
+        )
+    }
+    .build(device, "main")
 }
 
 pub(super) fn create_shadow_pipeline(
@@ -513,81 +405,29 @@ pub(super) fn create_shadow_pipeline(
     layout: vk::PipelineLayout,
     vert_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
-    let vert_mod = spv_module(device, vert_spv)?;
-
-    let stages = [vk::PipelineShaderStageCreateInfo::default()
-        .stage(vk::ShaderStageFlags::VERTEX)
-        .module(vert_mod.handle())
-        .name(SHADER_ENTRY)];
-
-    // `shadow.vert` only reads position (it writes depth-only NDC), so the
-    // optimizer strips the other attributes from its interface. Bind just
-    // location 0 so the pipeline matches the shader and the validation layer
-    // does not warn about unconsumed attributes. The binding keeps the full
-    // 56-byte `Vertex` stride; the omitted attributes are simply not fetched.
-    let (bindings, attrs) = main_vertex_input();
-    let vert_input = vk::PipelineVertexInputStateCreateInfo::default()
-        .vertex_binding_descriptions(&bindings)
-        .vertex_attribute_descriptions(&attrs[..1]);
-
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-        .primitive_restart_enable(false);
-
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .depth_clamp_enable(false)
-        .rasterizer_discard_enable(false)
-        .polygon_mode(vk::PolygonMode::FILL)
-        .line_width(1.0)
-        // Match Metal's default + DirectX (no back-face culling) so meshes
-        // with mixed winding (particularly procedural floor / ceiling planes
-        // whose triangles have a -Y normal under the unsigned plane order)
-        // render from both sides. Vulkan's pipeline-default was BACK, which
-        // hid the showcase floor while leaving every solid mesh visible.
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .depth_bias_enable(true)
-        .depth_bias_constant_factor(shadow_bias::RASTER_CONSTANT)
-        .depth_bias_slope_factor(shadow_bias::RASTER_SLOPE)
-        // The clamp needs the optional depthBiasClamp feature; `bias_clamp` is
-        // 0.0 (unclamped) on a device without it.
-        .depth_bias_clamp(device.depth_bias_clamp());
-
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        .sample_shading_enable(false)
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-
-    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(true)
-        .depth_write_enable(true)
-        .depth_compare_op(vk::CompareOp::LESS)
-        .depth_bounds_test_enable(false)
-        .stencil_test_enable(false);
-
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-    let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vert_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth_stencil)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass)
-        .subpass(0);
-
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
-        .map_err(|e| super::error::map_vk_result(e, "create shadow pipeline"))?;
-
-    Ok(pipeline)
+    GraphicsPipelineDesc {
+        frag: None,
+        color_targets: &[],
+        depth: Depth::LESS_WRITE,
+        raster: Raster {
+            // The clamp needs the optional depthBiasClamp feature; it is 0.0
+            // (unclamped) on a device without it.
+            bias: Some(DepthBias {
+                constant: shadow_bias::RASTER_CONSTANT,
+                clamp: device.depth_bias_clamp(),
+                slope: shadow_bias::RASTER_SLOPE,
+            }),
+            ..Raster::default()
+        },
+        vertex_bindings: &MAIN_VERTEX_BINDING,
+        // `shadow.vert` only reads position, so the optimizer strips the other
+        // attributes from its interface. Binding just location 0 keeps the
+        // validation layer from warning about unconsumed attributes; the binding
+        // keeps the full 56-byte `Vertex` stride.
+        vertex_attributes: &MAIN_VERTEX_ATTRS[..1],
+        ..GraphicsPipelineDesc::fullscreen(vert_spv, &[], layout, render_pass, &[])
+    }
+    .build(device, "shadow")
 }
 
 pub(super) fn create_text_pipeline(
@@ -598,77 +438,20 @@ pub(super) fn create_text_pipeline(
     frag_spv: &[u8],
     msaa: vk::SampleCountFlags,
 ) -> RenderResult<OwnedPipeline> {
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
-
-    let (bindings, attrs) = text_vertex_input();
-    let vert_input = vk::PipelineVertexInputStateCreateInfo::default()
-        .vertex_binding_descriptions(&bindings)
-        .vertex_attribute_descriptions(&attrs);
-
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-        .primitive_restart_enable(false);
-
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .depth_clamp_enable(false)
-        .rasterizer_discard_enable(false)
-        .polygon_mode(vk::PolygonMode::FILL)
-        .line_width(1.0)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .depth_bias_enable(false);
-
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        .sample_shading_enable(false)
-        .rasterization_samples(msaa);
-
-    // No depth test for text overlay; always draws on top.
-    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(false)
-        .depth_write_enable(false)
-        .depth_compare_op(vk::CompareOp::ALWAYS);
-
-    // Standard over-compositing alpha blend.
-    let blend_attach = vk::PipelineColorBlendAttachmentState::default()
-        .color_write_mask(vk::ColorComponentFlags::RGBA)
-        .blend_enable(true)
-        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .color_blend_op(vk::BlendOp::ADD)
-        .src_alpha_blend_factor(vk::BlendFactor::SRC_ALPHA)
-        .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .alpha_blend_op(vk::BlendOp::ADD);
-
-    let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
-        .logic_op_enable(false)
-        .attachments(std::slice::from_ref(&blend_attach));
-
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-    let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vert_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth_stencil)
-        .color_blend_state(&color_blend)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass)
-        .subpass(0);
-
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
-        .map_err(|e| super::error::map_vk_result(e, "create text pipeline"))?;
-
-    Ok(pipeline)
+    // No depth test: the text overlay always draws on top.
+    GraphicsPipelineDesc {
+        samples: msaa,
+        vertex_bindings: &TEXT_VERTEX_BINDING,
+        vertex_attributes: &TEXT_VERTEX_ATTRS,
+        ..GraphicsPipelineDesc::fullscreen(
+            vert_spv,
+            frag_spv,
+            layout,
+            render_pass,
+            &[Blend::AlphaOver],
+        )
+    }
+    .build(device, "text")
 }
 
 // Build the composite (post-process) pipeline: a vertex-buffer-less fullscreen
@@ -681,68 +464,8 @@ pub(super) fn create_composite_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
-
-    // No vertex input: the fullscreen triangle is generated from gl_VertexIndex.
-    let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
-
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-        .primitive_restart_enable(false);
-
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .depth_clamp_enable(false)
-        .rasterizer_discard_enable(false)
-        .polygon_mode(vk::PolygonMode::FILL)
-        .line_width(1.0)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .depth_bias_enable(false);
-
-    // The composite pass always renders to the single-sample swapchain image.
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        .sample_shading_enable(false)
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-
-    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(false)
-        .depth_write_enable(false)
-        .depth_compare_op(vk::CompareOp::ALWAYS);
-
-    let color_blend_attach = vk::PipelineColorBlendAttachmentState::default()
-        .color_write_mask(vk::ColorComponentFlags::RGBA)
-        .blend_enable(false);
-
-    let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
-        .logic_op_enable(false)
-        .attachments(std::slice::from_ref(&color_blend_attach));
-
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-    let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vert_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth_stencil)
-        .color_blend_state(&color_blend)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass)
-        .subpass(0);
-
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &pipeline_info)
-        .map_err(|e| super::error::map_vk_result(e, "create composite pipeline"))?;
-
-    Ok(pipeline)
+    GraphicsPipelineDesc::fullscreen(vert_spv, frag_spv, layout, render_pass, &[Blend::Opaque])
+        .build(device, "composite")
 }
 
 #[cfg(test)]

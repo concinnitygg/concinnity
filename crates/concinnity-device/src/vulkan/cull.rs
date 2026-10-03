@@ -20,6 +20,8 @@ use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams};
+
+use crate::vulkan::record::cmd_push_constants;
 use concinnity_core::transform::IDENTITY;
 
 use super::context::VkContext;
@@ -175,13 +177,6 @@ impl VkContext {
         for (i, p) in frustum.planes.iter().enumerate() {
             params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
         }
-        // SAFETY: `CullParams` is `repr(C)` and `CULL_PUSH_CONSTANT_BYTES` wide.
-        let push_bytes = unsafe {
-            std::slice::from_raw_parts(
-                &params as *const CullParams as *const u8,
-                std::mem::size_of::<CullParams>(),
-            )
-        };
         // SAFETY: `cmd` is in the recording state, and every handle and slice the commands name is
         // live for the call.
         unsafe {
@@ -216,12 +211,12 @@ impl VkContext {
                     &[],
                 );
             }
-            device.cmd_push_constants(
+            cmd_push_constants(
+                device,
                 cmd,
                 layout.handle(),
                 vk::ShaderStageFlags::COMPUTE,
-                0,
-                push_bytes,
+                &params,
             );
             // One invocation per build-time object, 64-wide local groups.
             device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
@@ -329,10 +324,6 @@ impl VkContext {
                 for (i, p) in frustum.planes.iter().enumerate() {
                     params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
                 }
-                let push_bytes = std::slice::from_raw_parts(
-                    &params as *const CullParams as *const u8,
-                    std::mem::size_of::<CullParams>(),
-                );
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
@@ -341,12 +332,12 @@ impl VkContext {
                     std::slice::from_ref(set),
                     &[],
                 );
-                device.cmd_push_constants(
+                cmd_push_constants(
+                    device,
                     cmd,
                     layout.handle(),
                     vk::ShaderStageFlags::COMPUTE,
-                    0,
-                    push_bytes,
+                    &params,
                 );
                 device.cmd_dispatch(cmd, object_count.div_ceil(64), 1, 1);
             }
@@ -407,13 +398,6 @@ impl VkContext {
         for (i, p) in frustum.planes.iter().enumerate() {
             params.planes[i] = [p.normal[0], p.normal[1], p.normal[2], p.d];
         }
-        // SAFETY: `CullParams` is `repr(C)` and `CULL_PUSH_CONSTANT_BYTES` wide.
-        let push_bytes = unsafe {
-            std::slice::from_raw_parts(
-                &params as *const CullParams as *const u8,
-                std::mem::size_of::<CullParams>(),
-            )
-        };
 
         // Project AABBs through this frame's un-jittered VP against the pyramid
         // `HizBuild` just rebuilt from this frame's depth. `hiz_enabled = 1`:
@@ -447,12 +431,12 @@ impl VkContext {
                 std::slice::from_ref(&hiz.read_sets2[frame_idx]),
                 &[],
             );
-            device.cmd_push_constants(
+            cmd_push_constants(
+                device,
                 cmd,
                 layout.handle(),
                 vk::ShaderStageFlags::COMPUTE,
-                0,
-                push_bytes,
+                &params,
             );
             device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
         }

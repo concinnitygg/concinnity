@@ -21,6 +21,7 @@ use super::post::rt_reflections::RtStaticInputs;
 use super::post::ssao::SsaoDeviceCtx;
 use super::post::upscale::UpscalerGpu;
 use super::raymarch::RaymarchDeviceContext;
+use super::set_writes::SetWrites;
 use super::texture::*;
 use super::transparent::{TransparentDeviceCtx, TransparentRebuildTargets};
 use crate::vulkan::owned::{OwnedFramebuffer, VkDevice};
@@ -1167,22 +1168,13 @@ fn write_composite_images(
     first: u32,
     views: &[vk::ImageView],
 ) {
-    let infos: Vec<_> = views
+    views
         .iter()
-        .map(|&view| {
-            vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(view)
+        .zip(first..)
+        .fold(SetWrites::new(set), |w, (&view, b)| {
+            w.sampled_image(b, view)
         })
-        .collect();
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(first)
-        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-        .image_info(&infos);
-    // SAFETY: the write and the image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+        .apply(device);
 }
 
 // Create one framebuffer per cascade slice of the array shadow map. Each

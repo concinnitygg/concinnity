@@ -35,8 +35,13 @@ use concinnity_core::transform::mat4_inverse;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
+use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline::GraphicsStages;
+use super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc, Raster};
+use super::record::cmd_push_constants;
 use super::render_pass::create_main_render_pass_two_pass;
+use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use super::set_writes::SetWrites;
 use super::texture::{
     GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
     one_shot_submit, transition_image_layout_range,
@@ -343,56 +348,37 @@ fn create_raymarch_render_pass_single(
         .map_err(|e| super::error::map_vk_result(e, "raymarch render pass"))
 }
 
-fn create_view_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
-    let vert_frag = vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT;
+// The per-frame view set: three UBOs, the four sampled images and, past an
+// unused binding 7, their three samplers.
+fn view_set_bindings() -> [Binding; 10] {
+    use vk::DescriptorType as T;
     let frag = vk::ShaderStageFlags::FRAGMENT;
-    let ubo = |b: u32, stages: vk::ShaderStageFlags| {
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(b)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(stages)
-    };
-    let binding = |b: u32, ty: vk::DescriptorType| {
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(b)
-            .descriptor_type(ty)
-            .descriptor_count(1)
-            .stage_flags(frag)
-    };
-    let tex = |b: u32| binding(b, vk::DescriptorType::SAMPLED_IMAGE);
-    let sampler = |b: u32| binding(b, vk::DescriptorType::SAMPLER);
-    let bindings = [
-        ubo(0, vert_frag), // RaymarchView
-        ubo(1, frag),      // RaymarchLights
-        ubo(2, frag),      // RaymarchShadow
-        tex(3),            // shadow_map
-        tex(4),            // irradiance cube
-        tex(5),            // prefilter cube
-        tex(6),            // scene_color snapshot
-        sampler(8),        // the shadow map's compare sampler
-        sampler(9),        // the cubes' sampler
-        sampler(10),       // the snapshot's sampler
-    ];
-    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    device
-        .create_descriptor_set_layout(&info)
-        .map_err(|e| super::error::map_vk_result(e, "raymarch view set layout"))
+    let vert_frag = vk::ShaderStageFlags::VERTEX | frag;
+    [
+        (0, T::UNIFORM_BUFFER, vert_frag), // RaymarchView
+        (1, T::UNIFORM_BUFFER, frag),      // RaymarchLights
+        (2, T::UNIFORM_BUFFER, frag),      // RaymarchShadow
+        (3, T::SAMPLED_IMAGE, frag),       // shadow_map
+        (4, T::SAMPLED_IMAGE, frag),       // irradiance cube
+        (5, T::SAMPLED_IMAGE, frag),       // prefilter cube
+        (6, T::SAMPLED_IMAGE, frag),       // scene_color snapshot
+        (8, T::SAMPLER, frag),             // the shadow map's compare sampler
+        (9, T::SAMPLER, frag),             // the cubes' sampler
+        (10, T::SAMPLER, frag),            // the snapshot's sampler
+    ]
 }
 
-fn create_volume_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
-    let binding = vk::DescriptorSetLayoutBinding::default()
-        .binding(0)
-        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-        .descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT);
-    let info =
-        vk::DescriptorSetLayoutCreateInfo::default().bindings(std::slice::from_ref(&binding));
-    device
-        .create_descriptor_set_layout(&info)
-        .map_err(|e| super::error::map_vk_result(e, "raymarch volume set layout"))
+// The per-volume set: its `RaymarchVolumeUniforms`.
+fn volume_set_bindings() -> [Binding; 1] {
+    [(
+        0,
+        vk::DescriptorType::UNIFORM_BUFFER,
+        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+    )]
 }
 
+// Room for `frames` view sets, one set per volume and, when any volume casts
+// shadows, `frames` shadow view sets.
 fn create_descriptor_pool(
     device: &VkDevice,
     frames: usize,
@@ -401,26 +387,12 @@ fn create_descriptor_pool(
 ) -> RenderResult<OwnedDescriptorPool> {
     let f = frames as u32;
     let v = volumes as u32;
-    // Shadow view sets (when any volume casts shadows): 3 UBOs each per frame.
     let shadow_sets = if has_shadow { f } else { 0 };
-    let sizes = [
-        // view: RaymarchView + Lights + Shadow (3) per frame; volume: 1 each;
-        // shadow view: 3 per frame.
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: 3 * f + v + 3 * shadow_sets,
-        },
-        // view: shadow_map + irradiance + prefilter + scene_color (4) per frame.
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::SAMPLED_IMAGE,
-            descriptor_count: 4 * f,
-        },
-        // view: shadow compare + cube + scene samplers (3) per frame.
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::SAMPLER,
-            descriptor_count: 3 * f,
-        },
-    ];
+    let sizes = PoolSizes::default()
+        .sets(&view_set_bindings(), f)
+        .sets(&volume_set_bindings(), v)
+        .sets(&shadow_view_set_bindings(), shadow_sets)
+        .build();
     let info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(f + v + shadow_sets)
         .pool_sizes(&sizes);
@@ -433,25 +405,15 @@ fn create_descriptor_pool(
 // (view_time), lights (sun direction), and the cascade light VPs. No texture
 // bindings (the shadow march never samples), so the shadow map being written
 // this pass is never also bound as a descriptor.
-fn create_shadow_view_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
+fn shadow_view_set_bindings() -> [Binding; 3] {
     let frag = vk::ShaderStageFlags::FRAGMENT;
-    let vert_frag = vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT;
-    let ubo = |b: u32, stages: vk::ShaderStageFlags| {
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(b)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(stages)
-    };
-    let bindings = [
-        ubo(0, frag),      // RaymarchView (view_time)
-        ubo(1, frag),      // RaymarchLights (sun direction)
-        ubo(2, vert_frag), // RaymarchShadow (light VPs)
-    ];
-    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    device
-        .create_descriptor_set_layout(&info)
-        .map_err(|e| super::error::map_vk_result(e, "raymarch shadow view set layout"))
+    let vert_frag = vk::ShaderStageFlags::VERTEX | frag;
+    let ubo = vk::DescriptorType::UNIFORM_BUFFER;
+    [
+        (0, ubo, frag),      // RaymarchView (view_time)
+        (1, ubo, frag),      // RaymarchLights (sun direction)
+        (2, ubo, vert_frag), // RaymarchShadow (light VPs)
+    ]
 }
 
 fn write_shadow_view_set(
@@ -461,46 +423,11 @@ fn write_shadow_view_set(
     light_ubo: vk::Buffer,
     shadow_ubo: vk::Buffer,
 ) {
-    let view_info = vk::DescriptorBufferInfo::default()
-        .buffer(view_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<RaymarchView>() as u64);
-    let light_info = vk::DescriptorBufferInfo::default()
-        .buffer(light_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<LightUniforms>() as u64);
-    let shadow_info = vk::DescriptorBufferInfo::default()
-        .buffer(shadow_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<ShadowUniforms>() as u64);
-    let ubo = |b: u32| {
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(b)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-    };
-    let writes = [
-        ubo(0).buffer_info(std::slice::from_ref(&view_info)),
-        ubo(1).buffer_info(std::slice::from_ref(&light_info)),
-        ubo(2).buffer_info(std::slice::from_ref(&shadow_info)),
-    ];
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
-}
-
-fn alloc_sets(
-    device: &VkDevice,
-    pool: vk::DescriptorPool,
-    layouts: &[vk::DescriptorSetLayout],
-) -> RenderResult<Vec<vk::DescriptorSet>> {
-    let info = vk::DescriptorSetAllocateInfo::default()
-        .descriptor_pool(pool)
-        .set_layouts(layouts);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.allocate_descriptor_sets(&info) }
-        .map_err(|e| super::error::map_vk_result(e, "raymarch descriptor sets"))
+    SetWrites::new(set)
+        .uniform_buffer(0, view_ubo, size_of::<RaymarchView>() as u64)
+        .uniform_buffer(1, light_ubo, size_of::<LightUniforms>() as u64)
+        .uniform_buffer(2, shadow_ubo, size_of::<ShadowUniforms>() as u64)
+        .apply(device);
 }
 
 // The three UBOs bound into one per-frame view set: the per-frame RaymarchView,
@@ -549,77 +476,72 @@ fn write_view_set(
         snapshot_view,
         scene_sampler,
     } = textures;
-    let view_info = vk::DescriptorBufferInfo::default()
-        .buffer(view_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<RaymarchView>() as u64);
-    let light_info = vk::DescriptorBufferInfo::default()
-        .buffer(light_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<LightUniforms>() as u64);
-    let shadow_info = vk::DescriptorBufferInfo::default()
-        .buffer(shadow_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<ShadowUniforms>() as u64);
-    let images = [
-        shadow_map_view,
-        irradiance_view,
-        prefilter_view,
-        snapshot_view,
-    ]
-    .map(|view| {
-        vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(view)
-    });
-
-    let ubo = |b: u32| {
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(b)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-    };
-    let writes = [
-        ubo(0).buffer_info(std::slice::from_ref(&view_info)),
-        ubo(1).buffer_info(std::slice::from_ref(&light_info)),
-        ubo(2).buffer_info(std::slice::from_ref(&shadow_info)),
-        // Bindings 3..6, consecutive and of one type.
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(3)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .image_info(&images),
-    ];
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
-    super::resources::write_samplers(
-        device,
-        set,
-        8,
-        &[shadow_sampler, cube_sampler, scene_sampler],
-    );
+    SetWrites::new(set)
+        .uniform_buffer(0, view_ubo, size_of::<RaymarchView>() as u64)
+        .uniform_buffer(1, light_ubo, size_of::<LightUniforms>() as u64)
+        .uniform_buffer(2, shadow_ubo, size_of::<ShadowUniforms>() as u64)
+        .sampled_image(3, shadow_map_view)
+        .sampled_image(4, irradiance_view)
+        .sampled_image(5, prefilter_view)
+        .sampled_image(6, snapshot_view)
+        .sampler(8, shadow_sampler)
+        .sampler(9, cube_sampler)
+        .sampler(10, scene_sampler)
+        .apply(device);
 }
 
 fn write_volume_set(device: &VkDevice, set: vk::DescriptorSet, volume_ubo: vk::Buffer) {
-    let info = vk::DescriptorBufferInfo::default()
-        .buffer(volume_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<RaymarchVolumeUniforms>() as u64);
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(0)
-        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-        .buffer_info(std::slice::from_ref(&info));
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+    SetWrites::new(set)
+        .uniform_buffer(0, volume_ubo, size_of::<RaymarchVolumeUniforms>() as u64)
+        .apply(device);
 }
 
-// Build a per-volume raymarch graphics pipeline. Front-face culled (back faces
-// of the proxy cube rasterize regardless of camera position), depth-tested
-// LESS_OR_EQUAL with depth write (the fragment writes `gl_FragDepth`), opaque
-// (no blend). Negative-height viewport is applied dynamically at encode time.
+// Cube proxy VB: the 56-byte engine `Vertex`, position (location 0) only.
+const CUBE_VERTEX_BINDINGS: [vk::VertexInputBindingDescription; 1] =
+    [vk::VertexInputBindingDescription {
+        binding: 0,
+        stride: size_of::<Vertex>() as u32,
+        input_rate: vk::VertexInputRate::VERTEX,
+    }];
+const CUBE_VERTEX_ATTRIBUTES: [vk::VertexInputAttributeDescription; 1] =
+    [vk::VertexInputAttributeDescription {
+        location: 0,
+        binding: 0,
+        format: vk::Format::R32G32B32_SFLOAT,
+        offset: 0,
+    }];
+
+// Front-face cull. The main and shadow passes render with a negative-height
+// (Y-flipped) viewport; under that flip the proxy's near faces wind CCW, so
+// culling them as the front face leaves the back faces to rasterize (matches
+// the DirectX CULL_FRONT path).
+const CUBE_RASTER: Raster = Raster {
+    cull: vk::CullModeFlags::FRONT,
+    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+    polygon_mode: vk::PolygonMode::FILL,
+    bias: None,
+};
+
+// A pipeline drawing the front-culled cube proxy into `color_targets`.
+fn cube_proxy<'a>(
+    vert_spv: &'a [u8],
+    frag_spv: &'a [u8],
+    layout: vk::PipelineLayout,
+    render_pass: vk::RenderPass,
+    color_targets: &'a [Blend],
+) -> GraphicsPipelineDesc<'a> {
+    GraphicsPipelineDesc {
+        raster: CUBE_RASTER,
+        vertex_bindings: &CUBE_VERTEX_BINDINGS,
+        vertex_attributes: &CUBE_VERTEX_ATTRIBUTES,
+        ..GraphicsPipelineDesc::fullscreen(vert_spv, frag_spv, layout, render_pass, color_targets)
+    }
+}
+
+// Build a per-volume raymarch graphics pipeline: depth-tested LESS_OR_EQUAL
+// with depth write (the fragment overrides `gl_FragDepth`, so downstream passes
+// see the raymarched surface), opaque. Negative-height viewport is applied
+// dynamically at encode time.
 fn create_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,
@@ -628,70 +550,15 @@ fn create_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
-
-    // Cube proxy VB: the 56-byte engine `Vertex`, position (location 0) only.
-    let binding = vk::VertexInputBindingDescription::default()
-        .binding(0)
-        .stride(std::mem::size_of::<Vertex>() as u32)
-        .input_rate(vk::VertexInputRate::VERTEX);
-    let attribute = vk::VertexInputAttributeDescription::default()
-        .location(0)
-        .binding(0)
-        .format(vk::Format::R32G32B32_SFLOAT)
-        .offset(0);
-    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
-        .vertex_binding_descriptions(std::slice::from_ref(&binding))
-        .vertex_attribute_descriptions(std::slice::from_ref(&attribute));
-
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-    // Front-face cull. The main pass renders with a negative-height (Y-flipped)
-    // viewport; under that flip the proxy's near faces wind CCW, so culling them
-    // as the front face leaves the back faces to rasterize (matches the DirectX
-    // CULL_FRONT path).
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .cull_mode(vk::CullModeFlags::FRONT)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .line_width(1.0);
-    let multisample =
-        vk::PipelineMultisampleStateCreateInfo::default().rasterization_samples(msaa_samples);
-    // Depth test against the existing scene depth; write hit depth (the fragment
-    // overrides `gl_FragDepth`) so downstream passes see the raymarched surface.
-    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(true)
-        .depth_write_enable(true)
-        .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
-    let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-        .blend_enable(false)
-        .color_write_mask(vk::ColorComponentFlags::RGBA);
-    let blend_attachments = [blend_attachment];
-    let blend_state = vk::PipelineColorBlendStateCreateInfo::default()
-        .logic_op_enable(false)
-        .attachments(&blend_attachments);
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-    let info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vertex_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth_stencil)
-        .color_blend_state(&blend_state)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass);
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| super::error::map_vk_result(e, "create raymarch pipeline"))?;
-    Ok(pipeline)
+    GraphicsPipelineDesc {
+        depth: Depth::Test {
+            compare: vk::CompareOp::LESS_OR_EQUAL,
+            write: true,
+        },
+        samples: msaa_samples,
+        ..cube_proxy(vert_spv, frag_spv, layout, render_pass, &[Blend::Opaque])
+    }
+    .build(device, "raymarch")
 }
 
 // Build the volumetric variant of the per-volume pipeline. Same cube proxy +
@@ -711,18 +578,9 @@ fn create_volumetric_pipeline(
     let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
     let stages = modules.infos();
 
-    let binding = vk::VertexInputBindingDescription::default()
-        .binding(0)
-        .stride(std::mem::size_of::<Vertex>() as u32)
-        .input_rate(vk::VertexInputRate::VERTEX);
-    let attribute = vk::VertexInputAttributeDescription::default()
-        .location(0)
-        .binding(0)
-        .format(vk::Format::R32G32B32_SFLOAT)
-        .offset(0);
     let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
-        .vertex_binding_descriptions(std::slice::from_ref(&binding))
-        .vertex_attribute_descriptions(std::slice::from_ref(&attribute));
+        .vertex_binding_descriptions(&CUBE_VERTEX_BINDINGS)
+        .vertex_attribute_descriptions(&CUBE_VERTEX_ATTRIBUTES);
 
     let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
@@ -787,61 +645,11 @@ fn create_shadow_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
-
-    let binding = vk::VertexInputBindingDescription::default()
-        .binding(0)
-        .stride(std::mem::size_of::<Vertex>() as u32)
-        .input_rate(vk::VertexInputRate::VERTEX);
-    let attribute = vk::VertexInputAttributeDescription::default()
-        .location(0)
-        .binding(0)
-        .format(vk::Format::R32G32B32_SFLOAT)
-        .offset(0);
-    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
-        .vertex_binding_descriptions(std::slice::from_ref(&binding))
-        .vertex_attribute_descriptions(std::slice::from_ref(&attribute));
-
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-    // Same front-face cull as the main pass: under the shadow pass's
-    // negative-height viewport the proxy's near faces wind CCW, so culling them
-    // leaves the back faces to seed the from-light ray.
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .cull_mode(vk::CullModeFlags::FRONT)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .line_width(1.0);
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(true)
-        .depth_write_enable(true)
-        .depth_compare_op(vk::CompareOp::LESS);
-    // No color attachment in the shadow render pass.
-    let blend_state = vk::PipelineColorBlendStateCreateInfo::default().logic_op_enable(false);
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-    let info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vertex_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth_stencil)
-        .color_blend_state(&blend_state)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(shadow_render_pass);
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| super::error::map_vk_result(e, "create raymarch shadow pipeline"))?;
-    Ok(pipeline)
+    GraphicsPipelineDesc {
+        depth: Depth::LESS_WRITE,
+        ..cube_proxy(vert_spv, frag_spv, layout, shadow_render_pass, &[])
+    }
+    .build(device, "raymarch shadow")
 }
 
 // Create the pre-raymarch HDR scene snapshot (SAMPLED | TRANSFER_DST, GPU-local)
@@ -1076,8 +884,8 @@ impl RaymarchResources {
             )
         };
 
-        let view_set_layout = create_view_set_layout(device)?;
-        let volume_set_layout = create_volume_set_layout(device)?;
+        let view_set_layout = create_descriptor_set_layout(device, &view_set_bindings())?;
+        let volume_set_layout = create_descriptor_set_layout(device, &volume_set_bindings())?;
         let set_layouts = [view_set_layout.handle(), volume_set_layout.handle()];
         let pipeline_layout = {
             let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
@@ -1107,7 +915,7 @@ impl RaymarchResources {
         let descriptor_pool =
             create_descriptor_pool(device, frames, sdf_volumes.len(), has_shadow)?;
         let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
-        let view_sets = alloc_sets(device, descriptor_pool.handle(), &view_layouts)?;
+        let view_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &view_layouts)?;
         for (i, &set) in view_sets.iter().enumerate() {
             write_view_set(
                 device,
@@ -1138,7 +946,8 @@ impl RaymarchResources {
         let mut shadow_view_ubos: Vec<PooledBuffer> = Vec::new();
         let mut shadow_view_sets: Vec<vk::DescriptorSet> = Vec::new();
         if has_shadow {
-            shadow_view_set_layout = create_shadow_view_set_layout(device)?;
+            shadow_view_set_layout =
+                create_descriptor_set_layout(device, &shadow_view_set_bindings())?;
             let set_layouts = [shadow_view_set_layout.handle(), volume_set_layout.handle()];
             let push = vk::PushConstantRange::default()
                 .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
@@ -1161,7 +970,8 @@ impl RaymarchResources {
             let shadow_layouts: Vec<_> = (0..frames)
                 .map(|_| shadow_view_set_layout.handle())
                 .collect();
-            shadow_view_sets = alloc_sets(device, descriptor_pool.handle(), &shadow_layouts)?;
+            shadow_view_sets =
+                alloc_descriptor_sets(device, descriptor_pool.handle(), &shadow_layouts)?;
             for (i, &set) in shadow_view_sets.iter().enumerate() {
                 write_shadow_view_set(
                     device,
@@ -1210,7 +1020,7 @@ impl RaymarchResources {
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?;
             volume_ubo.write_val(0, &uniforms);
-            let volume_set = alloc_sets(
+            let volume_set = alloc_descriptor_sets(
                 device,
                 descriptor_pool.handle(),
                 &[volume_set_layout.handle()],
@@ -1292,17 +1102,9 @@ impl RaymarchResources {
         );
         drop(old);
         for &set in &self.view_sets {
-            let info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(self.snapshot.view);
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(6)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .image_info(std::slice::from_ref(&info));
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+            SetWrites::new(set)
+                .sampled_image(6, self.snapshot.view)
+                .apply(device);
         }
         Ok(())
     }
@@ -1319,28 +1121,11 @@ impl RaymarchResources {
         irradiance_view: vk::ImageView,
         prefilter_view: vk::ImageView,
     ) {
-        let irr_info = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(irradiance_view);
-        let pre_info = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(prefilter_view);
         for &set in &self.view_sets {
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(4)
-                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                    .image_info(std::slice::from_ref(&irr_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(5)
-                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                    .image_info(std::slice::from_ref(&pre_info)),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
+            SetWrites::new(set)
+                .sampled_image(4, irradiance_view)
+                .sampled_image(5, prefilter_view)
+                .apply(device);
         }
     }
 
@@ -1454,15 +1239,12 @@ impl VkContext {
                 std::slice::from_ref(&rm.shadow_view_sets[frame_idx]),
                 &[],
             );
-            device.cmd_push_constants(
+            cmd_push_constants(
+                device,
                 cmd,
                 rm.shadow_pipeline_layout.handle(),
                 vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                0,
-                std::slice::from_raw_parts(
-                    &push as *const RaymarchShadowCascade as *const u8,
-                    std::mem::size_of::<RaymarchShadowCascade>(),
-                ),
+                &push,
             );
             for vol in &rm.volumes {
                 let Some(shadow_pipeline) = vol.shadow_pipeline.as_ref() else {

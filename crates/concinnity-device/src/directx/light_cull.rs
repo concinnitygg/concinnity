@@ -15,8 +15,9 @@ use super::com;
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::DxContext;
-use crate::directx::error::{map_hresult, map_pso_hresult};
-use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::error::map_hresult;
+use crate::directx::pso::compute_pso;
+use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::create_uav_buffer;
 
 // Byte stride between the two `ClusterParams` slots in a frame's constant
@@ -67,59 +68,16 @@ pub(in crate::directx) fn compile_light_cull_shader(hot_reload: bool) -> RenderR
 pub(in crate::directx) fn create_light_cull_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
-    let params = [
+    RootSig::new()
         // [0] Root CBV b0: ClusterParams
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
+        .cbv(0, Visibility::All)
         // [1] Root SRV t0: StructuredBuffer<GpuLight>
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
+        .srv(0, Visibility::All)
         // [2] Root UAV u0: RWStructuredBuffer<uint> cluster_list
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_UAV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
+        .uav(0, Visibility::All)
         // [3] Root SRV t1: StructuredBuffer<ProbeUniforms> probe_records
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-    ];
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-        ..Default::default()
-    };
-    serialize_desc_and_create(device, &desc, "light cull root sig")
+        .srv(1, Visibility::All)
+        .build(device, "light cull root sig")
 }
 
 // Compute pipeline state for the light-cull kernel.
@@ -128,18 +86,7 @@ pub(in crate::directx) fn create_light_cull_pso(
     root_sig: &ID3D12RootSignature,
     cs: &[u8],
 ) -> RenderResult<ID3D12PipelineState> {
-    let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        CS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: cs.as_ptr() as _,
-            BytecodeLength: cs.len(),
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_compute(device, &desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create light cull PSO"))
+    compute_pso(device, root_sig, cs, "light cull")
 }
 
 // Allocate the per-cluster list buffer. Created in `COMMON` (D3D12

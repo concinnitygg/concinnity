@@ -18,7 +18,10 @@ use concinnity_core::render::uniforms::AutoExposureParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
-use super::pipeline::{SHADER_ENTRY, spv_module};
+use super::descriptor_layout::{Binding, PoolSizes};
+use super::pipeline_desc::compute_pipeline;
+use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use super::set_writes::SetWrites;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
@@ -26,11 +29,8 @@ use crate::vulkan::owned::{
 use crate::vulkan::record::Recorder;
 use concinnity_core::render::uniforms::vulkan::AUTO_EXPOSURE_PUSH_BYTES;
 
-// Compile the auto-exposure build + average compute kernels. Used at init
-// and by shader hot-reload to rebuild the two compute pipelines.
-pub(in crate::vulkan) fn compile_auto_exposure_shaders(
-    hot_reload: bool,
-) -> RenderResult<(Vec<u8>, Vec<u8>)> {
+// Compile the auto-exposure build + average compute kernels.
+fn compile_auto_exposure_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
     let build_cs = super::builtin_shaders::AUTO_EXPOSURE_BUILD.compile(hot_reload)?;
     let average_cs = super::builtin_shaders::AUTO_EXPOSURE_AVERAGE.compile(hot_reload)?;
     Ok((build_cs, average_cs))
@@ -84,10 +84,8 @@ impl AutoExposureResources {
         hdr_resolve_views: &[vk::ImageView],
         hot_reload: bool,
     ) -> RenderResult<Self> {
-        // Build descriptor set layout: 0 = the HDR image, read by texel,
-        // 1 = histogram SSBO.
-        let build_set_layout = create_build_set_layout(device)?;
-        let average_set_layout = create_average_set_layout(device)?;
+        let build_set_layout = create_descriptor_set_layout(device, &build_set_bindings())?;
+        let average_set_layout = create_descriptor_set_layout(device, &average_set_bindings())?;
 
         let push_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
@@ -111,11 +109,12 @@ impl AutoExposureResources {
             )
             .map_err(|e| super::error::map_vk_result(e, "auto-exposure average pipeline layout"))?;
 
-        let (build_spv, average_spv) = compile_auto_exposure_shaders(hot_reload)?;
-        let build_pipeline =
-            create_compute_pipeline(device, build_pipeline_layout.handle(), &build_spv)?;
-        let average_pipeline =
-            create_compute_pipeline(device, average_pipeline_layout.handle(), &average_spv)?;
+        let (build_pipeline, average_pipeline) = create_pipelines(
+            device,
+            build_pipeline_layout.handle(),
+            average_pipeline_layout.handle(),
+            hot_reload,
+        )?;
 
         // Histogram + output buffers (device-local).
         let histogram_bytes = (HISTOGRAM_BINS * std::mem::size_of::<u32>()) as vk::DeviceSize;
@@ -141,17 +140,11 @@ impl AutoExposureResources {
             )?);
         }
 
-        // Descriptor pool: enough for `frames` build sets + 1 average set.
-        let pool_sizes = [
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::SAMPLED_IMAGE,
-                descriptor_count: frames as u32,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::STORAGE_BUFFER,
-                descriptor_count: (frames + 2) as u32,
-            },
-        ];
+        // Descriptor pool: `frames` build sets + 1 average set.
+        let pool_sizes = PoolSizes::default()
+            .sets(&build_set_bindings(), frames as u32)
+            .sets(&average_set_bindings(), 1)
+            .build();
         let descriptor_pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -160,29 +153,14 @@ impl AutoExposureResources {
             )
             .map_err(|e| super::error::map_vk_result(e, "auto-exposure descriptor pool"))?;
 
-        // Allocate build sets (one per frame) + average set.
         let build_set_layouts: Vec<_> = (0..frames).map(|_| build_set_layout.handle()).collect();
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let build_sets = unsafe {
-            device.allocate_descriptor_sets(
-                &vk::DescriptorSetAllocateInfo::default()
-                    .descriptor_pool(descriptor_pool.handle())
-                    .set_layouts(&build_set_layouts),
-            )
-        }
-        .map_err(|e| super::error::map_vk_result(e, "auto-exposure build sets"))?;
-        let avg_layouts_single = [average_set_layout.handle()];
-        // SAFETY: the create-info and every slice it borrows are live for the call, and each handle
-        // it names belongs to this device.
-        let average_set = unsafe {
-            device.allocate_descriptor_sets(
-                &vk::DescriptorSetAllocateInfo::default()
-                    .descriptor_pool(descriptor_pool.handle())
-                    .set_layouts(&avg_layouts_single),
-            )
-        }
-        .map_err(|e| super::error::map_vk_result(e, "auto-exposure average set"))?[0];
+        let build_sets =
+            alloc_descriptor_sets(device, descriptor_pool.handle(), &build_set_layouts)?;
+        let average_set = alloc_descriptor_sets(
+            device,
+            descriptor_pool.handle(),
+            &[average_set_layout.handle()],
+        )?[0];
 
         // Write each build set's HDR sampled image + histogram bindings.
         let last_view_idx = hdr_resolve_views.len().saturating_sub(1);
@@ -190,13 +168,10 @@ impl AutoExposureResources {
             let view = hdr_resolve_views[i.min(last_view_idx)];
             write_build_set(device, set, view, histogram_buffer.buffer());
         }
-        // Write the average set's histogram + output bindings.
-        write_average_set(
-            device,
-            average_set,
-            histogram_buffer.buffer(),
-            output_buffer.buffer(),
-        );
+        SetWrites::new(average_set)
+            .storage_buffer(0, histogram_buffer.buffer(), vk::WHOLE_SIZE)
+            .storage_buffer(1, output_buffer.buffer(), vk::WHOLE_SIZE)
+            .apply(device);
 
         Ok(Self {
             build_pipeline,
@@ -214,20 +189,24 @@ impl AutoExposureResources {
         })
     }
 
-    // Pipeline layout for the build kernel. Exposed so the shader
-    // hot-reload pass can rebuild the pipeline against the existing layout.
-    pub(in crate::vulkan) fn build_pipeline_layout(&self) -> vk::PipelineLayout {
-        self.build_pipeline_layout.handle()
+    // Recompile both kernels and build them against the existing pipeline
+    // layouts. Driven by the shader hot-reload pass.
+    pub(in crate::vulkan) fn rebuild_pipelines(
+        &self,
+        device: &VkDevice,
+        hot_reload: bool,
+    ) -> RenderResult<(OwnedPipeline, OwnedPipeline)> {
+        create_pipelines(
+            device,
+            self.build_pipeline_layout.handle(),
+            self.average_pipeline_layout.handle(),
+            hot_reload,
+        )
     }
-    // Pipeline layout for the average kernel. Same purpose as
-    // [`Self::build_pipeline_layout`].
-    pub(in crate::vulkan) fn average_pipeline_layout(&self) -> vk::PipelineLayout {
-        self.average_pipeline_layout.handle()
-    }
+
     // Swap the freshly-built build + average pipelines into the live
     // resources. The caller has already `device_wait_idle`'d so the old
-    // pipelines are not in flight. Driven by the Vulkan shader hot-reload
-    // pass after every replacement successfully compiled.
+    // pipelines are not in flight.
     pub(in crate::vulkan) fn swap_pipelines(
         &mut self,
         build_pipeline: OwnedPipeline,
@@ -235,18 +214,6 @@ impl AutoExposureResources {
     ) {
         self.build_pipeline = build_pipeline;
         self.average_pipeline = average_pipeline;
-    }
-
-    // Construct a compute pipeline (build or average) against the existing
-    // pipeline layout. Exposed so the shader hot-reload pass can rebuild
-    // either kernel without re-creating the descriptor set layout +
-    // pipeline layout. Mirrors `directx::auto_exposure::create_compute_pso`.
-    pub(in crate::vulkan) fn create_compute_pipeline(
-        device: &VkDevice,
-        layout: vk::PipelineLayout,
-        spv: &[u8],
-    ) -> RenderResult<OwnedPipeline> {
-        create_compute_pipeline(device, layout, spv)
     }
 
     // Rewrite the per-frame build sets' HDR sampled-image binding after a
@@ -275,42 +242,22 @@ impl AutoExposureResources {
     }
 }
 
-fn create_build_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
-    let bindings = [
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-    ];
-    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    device
-        .create_descriptor_set_layout(&info)
-        .map_err(|e| super::error::map_vk_result(e, "auto-exposure build set layout"))
+// Build set: the HDR image, read by texel, and the histogram SSBO.
+fn build_set_bindings() -> [Binding; 2] {
+    let compute = vk::ShaderStageFlags::COMPUTE;
+    [
+        (0, vk::DescriptorType::SAMPLED_IMAGE, compute),
+        (1, vk::DescriptorType::STORAGE_BUFFER, compute),
+    ]
 }
 
-fn create_average_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
-    let bindings = [
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-    ];
-    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    device
-        .create_descriptor_set_layout(&info)
-        .map_err(|e| super::error::map_vk_result(e, "auto-exposure average set layout"))
+// Average set: the histogram SSBO and the output SSBO.
+fn average_set_bindings() -> [Binding; 2] {
+    let compute = vk::ShaderStageFlags::COMPUTE;
+    [
+        (0, vk::DescriptorType::STORAGE_BUFFER, compute),
+        (1, vk::DescriptorType::STORAGE_BUFFER, compute),
+    ]
 }
 
 fn write_build_set(
@@ -319,77 +266,28 @@ fn write_build_set(
     view: vk::ImageView,
     histogram: vk::Buffer,
 ) {
-    let img = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(view);
-    let hist = vk::DescriptorBufferInfo::default()
-        .buffer(histogram)
-        .offset(0)
-        .range(vk::WHOLE_SIZE);
-    let writes = [
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .image_info(std::slice::from_ref(&img)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(std::slice::from_ref(&hist)),
-    ];
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
+    SetWrites::new(set)
+        .sampled_image(0, view)
+        .storage_buffer(1, histogram, vk::WHOLE_SIZE)
+        .apply(device);
 }
 
-fn write_average_set(
+// The build + average compute pipelines against their layouts.
+fn create_pipelines(
     device: &VkDevice,
-    set: vk::DescriptorSet,
-    histogram: vk::Buffer,
-    output: vk::Buffer,
-) {
-    let hist = vk::DescriptorBufferInfo::default()
-        .buffer(histogram)
-        .offset(0)
-        .range(vk::WHOLE_SIZE);
-    let out = vk::DescriptorBufferInfo::default()
-        .buffer(output)
-        .offset(0)
-        .range(vk::WHOLE_SIZE);
-    let writes = [
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(std::slice::from_ref(&hist)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(std::slice::from_ref(&out)),
-    ];
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
-}
-
-fn create_compute_pipeline(
-    device: &VkDevice,
-    layout: vk::PipelineLayout,
-    spv: &[u8],
-) -> RenderResult<OwnedPipeline> {
-    let module = spv_module(device, spv)?;
-    let stage = vk::PipelineShaderStageCreateInfo::default()
-        .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(module.handle())
-        .name(SHADER_ENTRY);
-    let info = vk::ComputePipelineCreateInfo::default()
-        .stage(stage)
-        .layout(layout);
-    let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
-        .map_err(|e| super::error::map_vk_result(e, "create auto-exposure pipeline"))?;
-    Ok(pipeline)
+    build_layout: vk::PipelineLayout,
+    average_layout: vk::PipelineLayout,
+    hot_reload: bool,
+) -> RenderResult<(OwnedPipeline, OwnedPipeline)> {
+    let (build_spv, average_spv) = compile_auto_exposure_shaders(hot_reload)?;
+    let build = compute_pipeline(device, build_layout, &build_spv, "auto-exposure build")?;
+    let average = compute_pipeline(
+        device,
+        average_layout,
+        &average_spv,
+        "auto-exposure average",
+    )?;
+    Ok((build, average))
 }
 
 impl VkContext {

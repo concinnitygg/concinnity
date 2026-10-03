@@ -28,6 +28,25 @@ use ash::vk;
 
 use super::owned::{OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass};
 
+// Push one `#[repr(C)]` block at offset 0 onto a raw command buffer. Typed, so
+// the byte length comes from the value rather than from a pointer cast beside a
+// hand-written size.
+//
+// # Safety
+// `cmd` must be in the recording state, and `cmd` and `layout` must belong to
+// `device` and be live for the call.
+pub(in crate::vulkan) unsafe fn cmd_push_constants<T: bytemuck::NoUninit>(
+    device: &ash::Device,
+    cmd: vk::CommandBuffer,
+    layout: vk::PipelineLayout,
+    stages: vk::ShaderStageFlags,
+    value: &T,
+) {
+    // SAFETY: the caller upholds the recording state and handle liveness, and the bytes are
+    // `value`'s own, borrowed for the call.
+    unsafe { device.cmd_push_constants(cmd, layout, stages, 0, bytemuck::bytes_of(value)) };
+}
+
 // A command buffer in the recording state.
 //
 // Borrows the raw device rather than sharing the owning handle: recording never

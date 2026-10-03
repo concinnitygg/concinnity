@@ -12,6 +12,7 @@ use concinnity_core::render::rt_geom;
 use concinnity_core::transform::IDENTITY;
 
 use super::super::context::*;
+use super::super::set_writes::SetWrites;
 
 impl VkContext {
     // Upload skinned-mesh geometry and the per-(frame, object) joint buffers.
@@ -223,7 +224,6 @@ impl VkContext {
         use std::collections::HashMap;
 
         let n = self.state.skinned.draw_objects.len();
-        let device = self.hw.device.clone();
         let frames = self.frames_in_flight.max(1);
 
         let mut delta_unique: Vec<super::super::allocator::PooledBuffer> = Vec::new();
@@ -295,29 +295,10 @@ impl VkContext {
                         Some(b) => b.buffer(),
                         None => dummy,
                     };
-                    let delta_info = vk::DescriptorBufferInfo::default()
-                        .buffer(delta_buf)
-                        .offset(0)
-                        .range(vk::WHOLE_SIZE);
-                    let weight_info = vk::DescriptorBufferInfo::default()
-                        .buffer(weight_buf)
-                        .offset(0)
-                        .range(vk::WHOLE_SIZE);
-                    let writes = [
-                        vk::WriteDescriptorSet::default()
-                            .dst_set(set)
-                            .dst_binding(3)
-                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                            .buffer_info(std::slice::from_ref(&delta_info)),
-                        vk::WriteDescriptorSet::default()
-                            .dst_set(set)
-                            .dst_binding(4)
-                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                            .buffer_info(std::slice::from_ref(&weight_info)),
-                    ];
-                    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call,
-                    // and every set and resource it names belongs to this device.
-                    unsafe { device.update_descriptor_sets(&writes, &[]) };
+                    SetWrites::new(set)
+                        .storage_buffer(3, delta_buf, vk::WHOLE_SIZE)
+                        .storage_buffer(4, weight_buf, vk::WHOLE_SIZE)
+                        .apply(&self.hw.device);
                 }
             }
         }

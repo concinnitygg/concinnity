@@ -35,8 +35,10 @@ use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{PoolSizes, global_set};
 use super::draw::ViewUniforms;
 use super::global_set::{GlobalBindings, GlobalSetContents};
+use super::material_params::MATERIAL_PARAMS_BINDING;
 use super::probe_prefilter::PrefilterGpu;
-use super::resources::{alloc_descriptor_sets, write_storage_buffer};
+use super::resources::alloc_descriptor_sets;
+use super::set_writes::SetWrites;
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
 use concinnity_core::render::uniforms::vulkan::CullParams;
@@ -370,19 +372,9 @@ impl VkContext {
         if let Some(&tail) = pool_infos.last() {
             pool_infos.resize(self.cull.bindless_pool_size, tail);
         }
-        let write = vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .dst_array_element(0)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .image_info(&pool_infos);
-        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
-        // set and resource it names belongs to this device.
-        unsafe {
-            self.hw
-                .device
-                .update_descriptor_sets(std::slice::from_ref(&write), &[])
-        };
+        SetWrites::new(set)
+            .images(1, vk::DescriptorType::SAMPLED_IMAGE, &pool_infos)
+            .apply(&self.hw.device);
     }
 
     // Submit one cube face of the in-flight probe: a fresh command buffer that culls
@@ -832,14 +824,6 @@ impl VkContext {
         let (pipeline, layout) = (&kernels.pipeline, &kernels.pipeline_layout);
         let device = &self.hw.device;
         let params = capture_cull_params(frustum, cam_pos, self.cull_count() as u32);
-        // SAFETY: `CullParams` is `repr(C)` and matches the push-constant block
-        // cull.hlsl declares (pinned by the layout test in `core::render`).
-        let push = unsafe {
-            std::slice::from_raw_parts(
-                &params as *const CullParams as *const u8,
-                std::mem::size_of::<CullParams>(),
-            )
-        };
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
@@ -862,7 +846,13 @@ impl VkContext {
                     &[],
                 );
             }
-            device.cmd_push_constants(cmd, layout.handle(), vk::ShaderStageFlags::COMPUTE, 0, push);
+            crate::vulkan::record::cmd_push_constants(
+                device,
+                cmd,
+                layout.handle(),
+                vk::ShaderStageFlags::COMPUTE,
+                &params,
+            );
             device.cmd_dispatch(cmd, (self.cull_count() as u32).div_ceil(64), 1, 1);
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -1290,8 +1280,8 @@ impl BakeResources {
         )?;
 
         // Snapshot lighting (so all faces share one set) and six per-face view UBOs.
-        let light = make_ubo_bytes(alloc, light_bytes(&ctx.uniforms.light_uniforms))?;
-        let shadow = make_ubo_bytes(alloc, shadow_bytes(&ctx.shadow.uniforms))?;
+        let light = make_ubo_bytes(alloc, bytemuck::bytes_of(&ctx.uniforms.light_uniforms))?;
+        let shadow = make_ubo_bytes(alloc, bytemuck::bytes_of(&ctx.shadow.uniforms))?;
         let view_size = std::mem::size_of::<ViewUniforms>() as u64;
         let mut view_bufs = Vec::with_capacity(PROBE_FACE_COUNT);
         for _ in 0..PROBE_FACE_COUNT {
@@ -1346,10 +1336,12 @@ impl BakeResources {
             pool.handle(),
             std::slice::from_ref(&cull_kernels.set_layout.handle()),
         )?[0];
-        write_storage_buffer(device, cull_set, 0, object_buf.buffer(), object_size);
-        write_storage_buffer(device, cull_set, 1, draw_args_buf.buffer(), args_size);
-        write_storage_buffer(device, cull_set, 2, indirect_buf.buffer(), indirect_size);
-        write_storage_buffer(device, cull_set, 3, status_buf.buffer(), status_size);
+        SetWrites::new(cull_set)
+            .storage_buffer(0, object_buf.buffer(), object_size)
+            .storage_buffer(1, draw_args_buf.buffer(), args_size)
+            .storage_buffer(2, indirect_buf.buffer(), indirect_size)
+            .storage_buffer(3, status_buf.buffer(), status_size)
+            .apply(device);
 
         // The material parameter table as the bake starts, for every face.
         let params_buf = ctx
@@ -1373,31 +1365,11 @@ impl BakeResources {
             PROBE_FACE_COUNT
         ];
         let bindless_sets = alloc_descriptor_sets(device, pool.handle(), &bindless_layouts)?;
-        {
-            let obj_info = vk::DescriptorBufferInfo::default()
-                .buffer(object_buf.buffer())
-                .offset(0)
-                .range(object_size);
-            let params_info = vk::DescriptorBufferInfo::default()
-                .buffer(params_buf.buffer())
-                .offset(0)
-                .range(vk::WHOLE_SIZE);
-            let writes: Vec<vk::WriteDescriptorSet> = bindless_sets
-                .iter()
-                .flat_map(|&set| {
-                    [
-                        vk::WriteDescriptorSet::default()
-                            .dst_set(set)
-                            .dst_binding(0)
-                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                            .buffer_info(std::slice::from_ref(&obj_info)),
-                        super::material_params::write(set, &params_info),
-                    ]
-                })
-                .collect();
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
+        for &set in &bindless_sets {
+            SetWrites::new(set)
+                .storage_buffer(0, object_buf.buffer(), object_size)
+                .storage_buffer(MATERIAL_PARAMS_BINDING, params_buf.buffer(), vk::WHOLE_SIZE)
+                .apply(device);
         }
 
         // Bake Hi-Z set (cull set 1), hiz_enabled = 0.
@@ -1474,30 +1446,6 @@ fn make_ubo_bytes(
     Ok(buf)
 }
 
-fn light_bytes(u: &render_types::LightUniforms) -> &[u8] {
-    // SAFETY: `LightUniforms` is `#[repr(C)]` over 4-byte scalars and fixed-size arrays of them, so
-    // it has no padding and every byte is initialized; the slice borrows it and does not outlive
-    // it.
-    unsafe {
-        std::slice::from_raw_parts(
-            u as *const _ as *const u8,
-            std::mem::size_of::<render_types::LightUniforms>(),
-        )
-    }
-}
-
-fn shadow_bytes(u: &render_types::ShadowUniforms) -> &[u8] {
-    // SAFETY: `ShadowUniforms` is `#[repr(C)]` over 4-byte scalars and fixed-size arrays of them,
-    // so it has no padding and every byte is initialized; the slice borrows it and does not outlive
-    // it.
-    unsafe {
-        std::slice::from_raw_parts(
-            u as *const _ as *const u8,
-            std::mem::size_of::<render_types::ShadowUniforms>(),
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1521,13 +1469,7 @@ mod tests {
     #[test]
     fn the_capture_push_covers_the_whole_shader_block() {
         let p = capture_cull_params(&Frustum::from_view_projection(IDENTITY), [1.0, 2.0, 3.0], 4);
-        // SAFETY: `repr(C)`, read as its own bytes.
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                &p as *const CullParams as *const u8,
-                std::mem::size_of::<CullParams>(),
-            )
-        };
+        let bytes = bytemuck::bytes_of(&p);
         assert_eq!(bytes.len(), 120, "cull.hlsl's push_constant block is 120 B");
         // The two routing fields live in the last 8 bytes: the exact span a
         // 112-byte push left undefined.

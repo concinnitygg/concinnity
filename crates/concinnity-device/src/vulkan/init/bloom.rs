@@ -8,6 +8,7 @@ use concinnity_core::render::error::RenderResult;
 
 use super::InitGpu;
 use crate::vulkan::context::{BloomState, HDR_FORMAT, VkTargets};
+use crate::vulkan::descriptor_layout::PoolSizes;
 use crate::vulkan::owned::OwnedSampler;
 use crate::vulkan::post::bloom::{
     BloomDeviceContext, MAX_BLOOM_MIPS, alloc_bloom_input_sets, compile_bloom_shaders,
@@ -42,7 +43,8 @@ pub(super) fn build_bloom(gpu: &InitGpu<'_>, inputs: BloomInputs<'_>) -> RenderR
     let blend_pass = create_bloom_render_pass(device, HDR_FORMAT, true)?;
     // Bloom set (set 0 for every bloom pass): the single input image and its
     // sampler.
-    let set_layout = create_descriptor_set_layout(device, &source_set_bindings(1))?;
+    let set_bindings = source_set_bindings(1);
+    let set_layout = create_descriptor_set_layout(device, &set_bindings)?;
     // Post-process push constant: the full `PostProcessParams` struct,
     // fragment-stage. Read by the bloom-prefilter shader.
     let post_pc_range = vk::PushConstantRange::default()
@@ -114,15 +116,9 @@ pub(super) fn build_bloom(gpu: &InitGpu<'_>, inputs: BloomInputs<'_>) -> RenderR
     // (the octave count can shift on resize) from the main pool. Sized for
     // the worst case (`MAX_BLOOM_MIPS + 1` sets per frame).
     let bloom_pool_capacity = frames as u32 * (MAX_BLOOM_MIPS + 1);
-    let bloom_pool_sizes = [
-        vk::DescriptorType::SAMPLED_IMAGE,
-        vk::DescriptorType::SAMPLER,
-    ]
-    .map(|ty| {
-        vk::DescriptorPoolSize::default()
-            .ty(ty)
-            .descriptor_count(bloom_pool_capacity)
-    });
+    let bloom_pool_sizes = PoolSizes::default()
+        .sets(&set_bindings, bloom_pool_capacity)
+        .build();
     let descriptor_pool = device
         .create_descriptor_pool(
             &vk::DescriptorPoolCreateInfo::default()

@@ -11,6 +11,7 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 
 use super::super::context::*;
 use super::super::descriptor_layout::{IRRADIANCE_CUBE_BINDING, PREFILTER_CUBE_BINDING};
+use super::super::set_writes::SetWrites;
 use super::super::texture::{
     GpuUploadContext, StreamedUploadRetire, upload_texture_image, upload_texture_image_deferred,
 };
@@ -20,22 +21,9 @@ impl VkContext {
     // Keeps the bindless texture pool in sync with a streamed texture swap; the
     // pool is one handle-indexed image set (albedo + normal maps share it).
     fn write_pool_image(&self, set: vk::DescriptorSet, index: u32, view: vk::ImageView) {
-        let info = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(view);
-        let write = vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .dst_array_element(index)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .image_info(std::slice::from_ref(&info));
-        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
-        // set and resource it names belongs to this device.
-        unsafe {
-            self.hw
-                .device
-                .update_descriptor_sets(std::slice::from_ref(&write), &[])
-        };
+        SetWrites::new(set)
+            .sampled_image_at(1, index, view, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .apply(&self.hw.device);
     }
 
     // Re-point every descriptor that samples texture-pool `slot` and may be
@@ -205,21 +193,9 @@ impl VkContext {
         let new_view = new_lut.view;
         let old = std::mem::replace(&mut self.scene.color_lut, new_lut);
         for &set in &self.composite.sets {
-            let info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(new_view);
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(2)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .image_info(std::slice::from_ref(&info));
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe {
-                self.hw
-                    .device
-                    .update_descriptor_sets(std::slice::from_ref(&write), &[])
-            };
+            SetWrites::new(set)
+                .sampled_image(2, new_view)
+                .apply(&self.hw.device);
         }
         drop(old);
         Ok(())

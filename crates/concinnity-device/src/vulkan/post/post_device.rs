@@ -22,9 +22,10 @@ use crate::vulkan::allocator::DeviceAllocator;
 use crate::vulkan::builtin_shaders::{self, CompileProgram};
 use crate::vulkan::error::map_vk_result;
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice};
-use crate::vulkan::pipeline::GraphicsStages;
+use crate::vulkan::pipeline_desc::{Blend, GraphicsPipelineDesc};
 use crate::vulkan::post::pass_cache::PostPassCache;
 use crate::vulkan::post::set_arena::PostSetArena;
+use crate::vulkan::set_writes::SetWrites;
 use crate::vulkan::texture::{
     GpuImage, LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
 };
@@ -158,26 +159,6 @@ fn compile(program: PostProgram, hot_reload: bool) -> RenderResult<(Vec<u8>, Vec
     Ok((vert, program.program().compile(hot_reload)?))
 }
 
-fn blend_attachment(blend: PostBlend) -> vk::PipelineColorBlendAttachmentState {
-    let base = vk::PipelineColorBlendAttachmentState::default()
-        .color_write_mask(vk::ColorComponentFlags::RGBA);
-    match blend {
-        PostBlend::Replace => base.blend_enable(false),
-        PostBlend::Additive => base
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::ONE)
-            .dst_color_blend_factor(vk::BlendFactor::ONE)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ONE),
-        PostBlend::PremultipliedOver => base
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::ONE)
-            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA),
-    }
-}
-
 impl VkPostDevice<'_> {
     // The descriptor set layout for `n` sources, fragment-visible: their
     // sampled images at bindings `0..n` and their samplers at `n..2n`. Derived
@@ -200,65 +181,6 @@ impl VkPostDevice<'_> {
             PostSampler::LinearClamp => self.sampler,
             PostSampler::LinearCube => self.cube_sampler,
         }
-    }
-
-    // The graphics pipeline itself: a vertex-buffer-less fullscreen triangle
-    // into one color attachment, no depth, dynamic viewport and scissor. Every
-    // fullscreen post pass has this shape, which is why it is built once here
-    // instead of once per effect.
-    fn build_pipeline(
-        &self,
-        shaders: (Vec<u8>, Vec<u8>),
-        render_pass: vk::RenderPass,
-        layout: vk::PipelineLayout,
-        blend: PostBlend,
-    ) -> RenderResult<OwnedPipeline> {
-        let (vert_spv, frag_spv) = shaders;
-        let modules = GraphicsStages::new(self.device, &vert_spv, &frag_spv)?;
-        let stages = modules.infos();
-        let vert_input = vk::PipelineVertexInputStateCreateInfo::default();
-        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-            .primitive_restart_enable(false);
-        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-            .viewport_count(1)
-            .scissor_count(1);
-        let raster = vk::PipelineRasterizationStateCreateInfo::default()
-            .depth_clamp_enable(false)
-            .rasterizer_discard_enable(false)
-            .polygon_mode(vk::PolygonMode::FILL)
-            .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::NONE)
-            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-            .depth_bias_enable(false);
-        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-            .sample_shading_enable(false)
-            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-            .depth_test_enable(false)
-            .depth_write_enable(false)
-            .depth_compare_op(vk::CompareOp::ALWAYS);
-        let attach = blend_attachment(blend);
-        let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
-            .logic_op_enable(false)
-            .attachments(std::slice::from_ref(&attach));
-        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-        let info = vk::GraphicsPipelineCreateInfo::default()
-            .stages(&stages)
-            .vertex_input_state(&vert_input)
-            .input_assembly_state(&input_assembly)
-            .viewport_state(&viewport_state)
-            .rasterization_state(&raster)
-            .multisample_state(&multisample)
-            .depth_stencil_state(&depth_stencil)
-            .color_blend_state(&color_blend)
-            .dynamic_state(&dynamic)
-            .layout(layout)
-            .render_pass(render_pass)
-            .subpass(0);
-        crate::vulkan::pipeline_cache::create_graphics_pipeline(self.device, &info)
-            .map_err(|e| map_vk_result(e, "create post pipeline"))
     }
 }
 
@@ -299,8 +221,17 @@ impl PostPassDevice for VkPostDevice<'_> {
         let render_pass = self
             .cache
             .render_pass(self.device, format, PostLoadOp::DontCare)?;
-        let shaders = compile(program, self.hot_reload)?;
-        let pipeline = self.build_pipeline(shaders, render_pass, layout.handle(), blend)?;
+        // Every fullscreen post pass has the same pipeline shape, which is why it
+        // is built once here instead of once per effect.
+        let (vert, frag) = compile(program, self.hot_reload)?;
+        let pipeline = GraphicsPipelineDesc::fullscreen(
+            &vert,
+            &frag,
+            layout.handle(),
+            render_pass,
+            &[Blend::from(blend)],
+        )
+        .build(self.device, "post")?;
         Ok(PostPipeline {
             pipeline,
             layout,
@@ -455,12 +386,15 @@ impl PostPassDevice for VkPostDevice<'_> {
         let set = self
             .arena
             .alloc(self.device, self.frame, pipe.set_layout.handle())?;
-        let mut sources =
-            [(vk::ImageView::null(), vk::Sampler::null()); crate::vulkan::resources::MAX_SOURCES];
-        for (source, b) in sources.iter_mut().zip(draw.binds) {
-            *source = (b.texture, self.sampler_for(b.sampler));
-        }
-        crate::vulkan::resources::write_source_set(self.device, set, &sources[..draw.binds.len()]);
+        let n = draw.binds.len() as u32;
+        draw.binds
+            .iter()
+            .zip(0..)
+            .fold(SetWrites::new(set), |w, (b, i)| {
+                w.sampled_image(i, b.texture)
+                    .sampler(n + i, self.sampler_for(b.sampler))
+            })
+            .apply(self.device);
 
         let extent = target.extent;
         let rp_begin = vk::RenderPassBeginInfo::default()

@@ -26,7 +26,6 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSpawnState};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtin_shaders;
@@ -35,8 +34,9 @@ use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
-use crate::directx::error::{map_hresult, map_pso_hresult};
-use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::error::map_hresult;
+use crate::directx::pso::{Blend, GraphicsPso, Raster, compute_pso};
+use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
 use crate::directx::texture::{
     HDR_FORMAT, create_uav_buffer, transition_barrier, write_texture_srv,
 };
@@ -120,45 +120,11 @@ pub(in crate::directx) struct ParticleEmitterGpuState {
 //   [1] root UAV u0 : pool (RWStructuredBuffer<Particle>)
 //   [2] root UAV u1 : spawn_counter (RWByteAddressBuffer)
 fn create_simulate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let params = [
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_UAV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_UAV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-    ];
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-        ..Default::default()
-    };
-    serialize_desc_and_create(device, &desc, "particle simulate root sig")
+    RootSig::new()
+        .cbv(0, Visibility::All)
+        .uav(0, Visibility::All)
+        .uav(1, Visibility::All)
+        .build(device, "particle simulate root sig")
 }
 
 // Graphics root signature for `particle_vertex` + `particle_fragment`. The two
@@ -170,96 +136,16 @@ fn create_simulate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12R
 //   [3] descriptor table SRV t1 : emitter albedo texture
 //   [4] descriptor table SRV t2 : main depth (Texture2D[MS]<float>)
 //   static sampler s0 : linear clamp
+// The vertex shader emits the quad from SV_VertexID; no input layout.
 fn create_render_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let albedo_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 1, // t1
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let depth_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 2, // t2
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let params = [
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0, // t0
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &albedo_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &depth_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
-    let samp = D3D12_STATIC_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-        BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ShaderRegister: 0,
-        RegisterSpace: 0,
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        ..Default::default()
-    };
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: 1,
-        pStaticSamplers: &samp,
-        // The vertex shader emits the quad from SV_VertexID; no input layout.
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-    };
-    serialize_desc_and_create(device, &desc, "particle render root sig")
+    RootSig::new()
+        .cbv(0, Visibility::Vertex)
+        .cbv(1, Visibility::All)
+        .srv(0, Visibility::Vertex)
+        .srv_table(1, 1, Visibility::Pixel)
+        .srv_table(2, 1, Visibility::Pixel)
+        .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
+        .build(device, "particle render root sig")
 }
 
 fn create_simulate_pso(
@@ -267,88 +153,24 @@ fn create_simulate_pso(
     root_sig: &ID3D12RootSignature,
     cs: &[u8],
 ) -> RenderResult<ID3D12PipelineState> {
-    let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        CS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: cs.as_ptr() as _,
-            BytecodeLength: cs.len(),
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_compute(device, &desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create particle simulate PSO"))
+    compute_pso(device, root_sig, cs, "particle simulate")
 }
 
+// No input layout; the vertex shader reads the pool by SV_InstanceID and
+// synthesizes the quad corner from SV_VertexID.
 fn create_render_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
     vs: &[u8],
     ps: &[u8],
 ) -> RenderResult<ID3D12PipelineState> {
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        // No input layout; the vertex shader reads the pool by SV_InstanceID
-        // and synthesizes the quad corner from SV_VertexID.
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = HDR_FORMAT;
-            a
-        },
-        DSVFormat: DXGI_FORMAT_UNKNOWN,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: false.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: false.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ZERO,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-                    BlendEnable: true.into(),
-                    SrcBlend: D3D12_BLEND_SRC_ALPHA,
-                    DestBlend: D3D12_BLEND_INV_SRC_ALPHA,
-                    BlendOp: D3D12_BLEND_OP_ADD,
-                    SrcBlendAlpha: D3D12_BLEND_SRC_ALPHA,
-                    DestBlendAlpha: D3D12_BLEND_INV_SRC_ALPHA,
-                    BlendOpAlpha: D3D12_BLEND_OP_ADD,
-                    RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    ..Default::default()
-                };
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create particle render PSO"))
+    GraphicsPso::new(root_sig, vs, ps)
+        .target(HDR_FORMAT, Blend::AlphaOver)
+        .raster(Raster {
+            depth_clip: false,
+            ..Raster::default()
+        })
+        .build(device, "particle render")
 }
 
 // Pipelines + per-frame uniform rings shared across emitters. Owned by

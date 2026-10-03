@@ -14,6 +14,7 @@ use crate::vulkan::descriptor_layout::{
 use crate::vulkan::global_set::GlobalBindings;
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedSetLayout};
 use crate::vulkan::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use crate::vulkan::set_writes::SetWrites;
 
 // The device's plain per-stage budget for samplers and sampled images, which
 // the bindless texture pool is sized against.
@@ -190,19 +191,10 @@ fn write_shadow_global_sets(
     let shadow_global_layouts: Vec<_> = (0..frames).map(|_| layout).collect();
     let shadow_global_sets = alloc_descriptor_sets(device, pool.handle(), &shadow_global_layouts)?;
     let shadow_ubo_size = std::mem::size_of::<ShadowUniforms>() as u64;
-    for (i, &set) in shadow_global_sets.iter().enumerate() {
-        let su_info = vk::DescriptorBufferInfo::default()
-            .buffer(shadow.ubos[i].buffer())
-            .offset(0)
-            .range(shadow_ubo_size);
-        let write = vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(std::slice::from_ref(&su_info));
-        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-        // every set and resource it names belongs to this device.
-        unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+    for (&set, ubo) in shadow_global_sets.iter().zip(&shadow.ubos) {
+        SetWrites::new(set)
+            .uniform_buffer(0, ubo.buffer(), shadow_ubo_size)
+            .apply(device);
     }
     Ok(shadow_global_sets)
 }

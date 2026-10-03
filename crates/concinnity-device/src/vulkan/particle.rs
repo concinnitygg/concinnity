@@ -32,7 +32,11 @@ use std::cell::Cell;
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
-use super::pipeline::{GraphicsStages, SHADER_ENTRY, spv_module};
+use super::descriptor_layout::{Binding, PoolSizes};
+use super::pipeline_desc::{Blend, GraphicsPipelineDesc, compute_pipeline};
+use super::record::cmd_push_constants;
+use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use super::set_writes::SetWrites;
 use super::texture::GpuUploadContext;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
@@ -178,8 +182,9 @@ impl ParticleResources {
             extent,
         } = targets;
         let render_pass = create_render_pass(device, HDR_FORMAT)?;
-        let compute_set_layout = create_compute_set_layout(device)?;
-        let (view_set_layout, emitter_set_layout) = create_render_set_layouts(device)?;
+        let compute_set_layout = create_descriptor_set_layout(device, &compute_set_bindings())?;
+        let view_set_layout = create_descriptor_set_layout(device, &view_set_bindings())?;
+        let emitter_set_layout = create_descriptor_set_layout(device, &emitter_set_bindings())?;
         let compute_pipeline_layout =
             create_compute_pipeline_layout(device, compute_set_layout.handle())?;
         let render_pipeline_layout = create_render_pipeline_layout(
@@ -189,8 +194,12 @@ impl ParticleResources {
         )?;
 
         let (cs_spv, vs_spv, fs_spv) = compile_particle_shaders(hot_reload, msaa)?;
-        let compute_pipeline =
-            create_compute_pipeline(device, compute_pipeline_layout.handle(), &cs_spv)?;
+        let compute_pipeline = compute_pipeline(
+            device,
+            compute_pipeline_layout.handle(),
+            &cs_spv,
+            "particle compute",
+        )?;
         let render_pipeline = create_render_pipeline(
             device,
             render_pass.handle(),
@@ -219,8 +228,10 @@ impl ParticleResources {
         let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
         let view_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &view_layouts)?;
         for (i, &set) in view_sets.iter().enumerate() {
-            write_view_set(device, set, view_ubos[i].buffer());
-            write_depth_binding(device, set, frame_view(depth_views, i));
+            SetWrites::new(set)
+                .uniform_buffer(0, view_ubos[i].buffer(), view_size)
+                .sampled_image(1, frame_view(depth_views, i))
+                .apply(device);
         }
 
         // Per-frame framebuffers (one per frame slot binding that slot's
@@ -297,7 +308,12 @@ impl ParticleResources {
         hot_reload: bool,
     ) -> RenderResult<(OwnedPipeline, OwnedPipeline)> {
         let (cs_spv, vs_spv, fs_spv) = compile_particle_shaders(hot_reload, self.msaa)?;
-        let cp = create_compute_pipeline(device, self.compute_pipeline_layout.handle(), &cs_spv)?;
+        let cp = compute_pipeline(
+            device,
+            self.compute_pipeline_layout.handle(),
+            &cs_spv,
+            "particle compute",
+        )?;
         let rp = create_render_pipeline(
             device,
             self.render_pass.handle(),
@@ -375,19 +391,17 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
     let compute_set = sets[0];
     let render_set = sets[1];
 
-    // Write the pool + counter bindings on the compute set (set 0).
-    write_compute_set(
-        device,
-        compute_set,
-        pool_buffer.buffer(),
-        pool_bytes,
-        counter_buffer.buffer(),
-    );
-    // Write the pool binding on the render set (set 1, binding 0) and the
-    // albedo's sampler (binding 2), which never changes. The albedo image
-    // (binding 1) is written by `add_emitter` from the live texture pool.
-    write_render_pool_binding(device, render_set, pool_buffer.buffer(), pool_bytes);
-    super::resources::write_samplers(device, render_set, 2, &[resources.sampler.handle()]);
+    SetWrites::new(compute_set)
+        .storage_buffer(0, pool_buffer.buffer(), pool_bytes)
+        .storage_buffer(1, counter_buffer.buffer(), counter_bytes)
+        .apply(device);
+    // The render set's pool binding and the albedo's sampler never change. The
+    // albedo image (binding 1) is written by `add_emitter` from the live
+    // texture pool.
+    SetWrites::new(render_set)
+        .storage_buffer(0, pool_buffer.buffer(), pool_bytes)
+        .sampler(2, resources.sampler.handle())
+        .apply(device);
 
     Ok(ParticleEmitterGpuState {
         pool_buffer,
@@ -451,67 +465,34 @@ fn create_render_pass(device: &VkDevice, format: vk::Format) -> RenderResult<Own
         .map_err(|e| super::error::map_vk_result(e, "particle render pass"))
 }
 
-fn create_compute_set_layout(device: &VkDevice) -> RenderResult<OwnedSetLayout> {
-    let bindings = [
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE),
-    ];
-    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-    device
-        .create_descriptor_set_layout(&info)
-        .map_err(|e| super::error::map_vk_result(e, "particle compute set layout"))
+// Compute set 0: the pool SSBO and the spawn-counter SSBO.
+fn compute_set_bindings() -> [Binding; 2] {
+    let compute = vk::ShaderStageFlags::COMPUTE;
+    [
+        (0, vk::DescriptorType::STORAGE_BUFFER, compute),
+        (1, vk::DescriptorType::STORAGE_BUFFER, compute),
+    ]
 }
 
-fn create_render_set_layouts(device: &VkDevice) -> RenderResult<(OwnedSetLayout, OwnedSetLayout)> {
-    // set 0: per-frame ParticleView UBO (vertex) + main depth (fragment).
-    let view_bindings = [
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-    ];
-    let view_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&view_bindings);
-    let view_set_layout = device
-        .create_descriptor_set_layout(&view_info)
-        .map_err(|e| super::error::map_vk_result(e, "particle view set layout"))?;
+// Render set 0, per frame: the ParticleView UBO (vertex) and the main depth
+// (fragment).
+fn view_set_bindings() -> [Binding; 2] {
+    use vk::DescriptorType as T;
+    [
+        (0, T::UNIFORM_BUFFER, vk::ShaderStageFlags::VERTEX),
+        (1, T::SAMPLED_IMAGE, vk::ShaderStageFlags::FRAGMENT),
+    ]
+}
 
-    // set 1: per-emitter (pool SSBO, albedo, the albedo's sampler).
-    let emitter_bindings = [
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(2)
-            .descriptor_type(vk::DescriptorType::SAMPLER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-    ];
-    let emitter_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&emitter_bindings);
-    let emitter_set_layout = device
-        .create_descriptor_set_layout(&emitter_info)
-        .map_err(|e| super::error::map_vk_result(e, "particle emitter set layout"))?;
-    Ok((view_set_layout, emitter_set_layout))
+// Render set 1, per emitter: the pool SSBO, the albedo and its sampler.
+fn emitter_set_bindings() -> [Binding; 3] {
+    use vk::DescriptorType as T;
+    let frag = vk::ShaderStageFlags::FRAGMENT;
+    [
+        (0, T::STORAGE_BUFFER, vk::ShaderStageFlags::VERTEX),
+        (1, T::SAMPLED_IMAGE, frag),
+        (2, T::SAMPLER, frag),
+    ]
 }
 
 // Push-constant range covering the full 112-byte `ParticleParams` block.
@@ -559,66 +540,18 @@ fn create_render_pipeline_layout(
 fn create_descriptor_pool(device: &VkDevice, frames: usize) -> RenderResult<OwnedDescriptorPool> {
     let frames = frames as u32;
     let max_emitters = MAX_EMITTERS as u32;
-    // Pool sizing:
-    //   - UNIFORM_BUFFER: `frames` (one ParticleView UBO per frame slot)
-    //   - STORAGE_BUFFER: `2 * MAX_EMITTERS` for compute (pool + counter)
-    //                     + `MAX_EMITTERS` for render (pool, read-only)
-    //   - SAMPLED_IMAGE: `MAX_EMITTERS` (one albedo per emitter)
-    //                    + `frames` (one main depth per frame slot)
-    //   - SAMPLER: `MAX_EMITTERS` (one albedo sampler per emitter)
-    let sizes = [
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: frames,
-        },
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::STORAGE_BUFFER,
-            descriptor_count: 3 * max_emitters,
-        },
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::SAMPLED_IMAGE,
-            descriptor_count: max_emitters + frames,
-        },
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::SAMPLER,
-            descriptor_count: max_emitters,
-        },
-    ];
+    // One view set per frame slot, one compute + one render set per emitter.
+    let sizes = PoolSizes::default()
+        .sets(&view_set_bindings(), frames)
+        .sets(&compute_set_bindings(), max_emitters)
+        .sets(&emitter_set_bindings(), max_emitters)
+        .build();
     let info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(frames + 2 * max_emitters)
         .pool_sizes(&sizes);
     device
         .create_descriptor_pool(&info)
         .map_err(|e| super::error::map_vk_result(e, "particle descriptor pool"))
-}
-
-fn alloc_descriptor_sets(
-    device: &VkDevice,
-    pool: vk::DescriptorPool,
-    layouts: &[vk::DescriptorSetLayout],
-) -> RenderResult<Vec<vk::DescriptorSet>> {
-    let info = vk::DescriptorSetAllocateInfo::default()
-        .descriptor_pool(pool)
-        .set_layouts(layouts);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.allocate_descriptor_sets(&info) }
-        .map_err(|e| super::error::map_vk_result(e, "particle descriptor sets"))
-}
-
-fn write_view_set(device: &VkDevice, set: vk::DescriptorSet, view_ubo: vk::Buffer) {
-    let info = vk::DescriptorBufferInfo::default()
-        .buffer(view_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<ParticleView>() as u64);
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(0)
-        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-        .buffer_info(std::slice::from_ref(&info));
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
 }
 
 // The main depth view for frame slot `i`, clamped to the last one when there
@@ -629,69 +562,9 @@ fn frame_view(views: &[vk::ImageView], i: usize) -> vk::ImageView {
 
 // The main depth, which the fragment reads by texel.
 fn write_depth_binding(device: &VkDevice, set: vk::DescriptorSet, depth_view: vk::ImageView) {
-    let info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(depth_view);
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(1)
-        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-        .image_info(std::slice::from_ref(&info));
-    // SAFETY: `write` and the image info it borrows are live for the call, and every set and
-    // resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
-}
-
-fn write_compute_set(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    pool_buffer: vk::Buffer,
-    pool_bytes: u64,
-    counter_buffer: vk::Buffer,
-) {
-    let pool_info = vk::DescriptorBufferInfo::default()
-        .buffer(pool_buffer)
-        .offset(0)
-        .range(pool_bytes);
-    let counter_info = vk::DescriptorBufferInfo::default()
-        .buffer(counter_buffer)
-        .offset(0)
-        .range(std::mem::size_of::<u32>() as u64);
-    let writes = [
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(std::slice::from_ref(&pool_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(std::slice::from_ref(&counter_info)),
-    ];
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
-}
-
-fn write_render_pool_binding(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    pool_buffer: vk::Buffer,
-    pool_bytes: u64,
-) {
-    let info = vk::DescriptorBufferInfo::default()
-        .buffer(pool_buffer)
-        .offset(0)
-        .range(pool_bytes);
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(0)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .buffer_info(std::slice::from_ref(&info));
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+    SetWrites::new(set)
+        .sampled_image(1, depth_view)
+        .apply(device);
 }
 
 fn create_sampler(device: &VkDevice) -> RenderResult<OwnedSampler> {
@@ -709,24 +582,9 @@ fn create_sampler(device: &VkDevice) -> RenderResult<OwnedSampler> {
         .map_err(|e| super::error::map_vk_result(e, "particle sampler"))
 }
 
-fn create_compute_pipeline(
-    device: &VkDevice,
-    layout: vk::PipelineLayout,
-    spv: &[u8],
-) -> RenderResult<OwnedPipeline> {
-    let module = spv_module(device, spv)?;
-    let stage = vk::PipelineShaderStageCreateInfo::default()
-        .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(module.handle())
-        .name(SHADER_ENTRY);
-    let info = vk::ComputePipelineCreateInfo::default()
-        .stage(stage)
-        .layout(layout);
-    let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
-        .map_err(|e| super::error::map_vk_result(e, "create particle compute pipeline"))?;
-    Ok(pipeline)
-}
-
+// One alpha-blended billboard quad per instance: the vertex shader emits the
+// quad from gl_VertexIndex and reads the particle from the pool by
+// gl_InstanceIndex, so there are no vertex buffers.
 fn create_render_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,
@@ -734,58 +592,17 @@ fn create_render_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
-    // No vertex buffers: the vertex shader emits the quad from
-    // gl_VertexIndex and reads the particle from the pool by
-    // gl_InstanceIndex.
-    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_STRIP);
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .line_width(1.0);
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(false)
-        .depth_write_enable(false);
-    let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-        .blend_enable(true)
-        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .color_blend_op(vk::BlendOp::ADD)
-        .src_alpha_blend_factor(vk::BlendFactor::SRC_ALPHA)
-        .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .alpha_blend_op(vk::BlendOp::ADD)
-        .color_write_mask(vk::ColorComponentFlags::RGBA);
-    let blend_attachments = [blend_attachment];
-    let blend_state = vk::PipelineColorBlendStateCreateInfo::default()
-        .logic_op_enable(false)
-        .attachments(&blend_attachments);
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-    let info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vertex_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth_stencil)
-        .color_blend_state(&blend_state)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass);
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| super::error::map_vk_result(e, "create particle render pipeline"))?;
-    Ok(pipeline)
+    GraphicsPipelineDesc {
+        topology: vk::PrimitiveTopology::TRIANGLE_STRIP,
+        ..GraphicsPipelineDesc::fullscreen(
+            vert_spv,
+            frag_spv,
+            layout,
+            render_pass,
+            &[Blend::AlphaOver],
+        )
+    }
+    .build(device, "particle render")
 }
 
 // Zero-initialize a DEVICE_LOCAL buffer by recording a `vkCmdFillBuffer`
@@ -1011,15 +828,12 @@ impl VkContext {
                     std::slice::from_ref(&gpu.compute_set),
                     &[],
                 );
-                device.cmd_push_constants(
+                cmd_push_constants(
+                    device,
                     cmd,
                     resources.compute_pipeline_layout.handle(),
                     vk::ShaderStageFlags::COMPUTE,
-                    0,
-                    std::slice::from_raw_parts(
-                        params as *const ParticleParams as *const u8,
-                        PARTICLE_PUSH_BYTES as usize,
-                    ),
+                    params,
                 );
                 let groups = rec.max_particles.div_ceil(64);
                 device.cmd_dispatch(cmd, groups, 1, 1);
@@ -1162,15 +976,12 @@ impl VkContext {
                     std::slice::from_ref(&gpu.render_set),
                     &[],
                 );
-                device.cmd_push_constants(
+                cmd_push_constants(
+                    device,
                     cmd,
                     resources.render_pipeline_layout.handle(),
                     vk::ShaderStageFlags::VERTEX,
-                    0,
-                    std::slice::from_raw_parts(
-                        params as *const ParticleParams as *const u8,
-                        PARTICLE_PUSH_BYTES as usize,
-                    ),
+                    params,
                 );
                 device.cmd_draw(cmd, 4, rec.max_particles, 0, 0);
             }
@@ -1394,17 +1205,7 @@ impl VkContext {
 // Point an emitter's render set at albedo `view`. Its sampler was written with
 // the set.
 fn write_render_albedo_binding(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
-    let info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(view);
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(1)
-        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-        .image_info(std::slice::from_ref(&info));
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+    SetWrites::new(set).sampled_image(1, view).apply(device);
 }
 
 #[cfg(test)]

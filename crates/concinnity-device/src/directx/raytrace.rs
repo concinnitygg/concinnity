@@ -54,10 +54,12 @@ use windows::core::Interface;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use super::context::{DxGeometry, FRAMES};
-use super::error::{map_hresult, map_pso_hresult};
+use super::error::map_hresult;
 use super::texture::{create_uav_buffer, transition_barrier};
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::root_constants::{RootConstants, root_dwords};
+use crate::directx::pso::compute_pso;
+use crate::directx::root_constants::RootConstants;
+use crate::directx::root_sig::{RootSig, Visibility};
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + color + uv = 14 floats). The BLAS reads positions at this stride and the
@@ -407,82 +409,15 @@ pub(super) struct SkinPipeline {
 // SRV (t1), the deformed output as a root UAV (u0), the morph deltas as a root
 // SRV (t2), and the morph weights as a root SRV (t3).
 fn create_skin_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let params = [
-        // [0] b0 SkinParams root constants
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: root_dwords::<SkinParams>(),
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [1] t0 skinned vertex buffer (raw)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [2] t1 joint palette (structured)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [3] u0 deformed output (raw)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_UAV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [4] t2 morph deltas (raw, dense target-major)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 2,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [5] t3 morph weights (raw, one f32 per target)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 3,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-    ];
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-        ..Default::default()
-    };
-    super::pipeline::serialize_desc_and_create(device, &desc, "rt skin root sig")
+    use Visibility::All;
+    RootSig::new()
+        .constants::<SkinParams>(0, All) // [0] b0 SkinParams
+        .srv(0, All) // [1] t0 skinned vertex buffer (raw)
+        .srv(1, All) // [2] t1 joint palette (structured)
+        .uav(0, All) // [3] u0 deformed output (raw)
+        .srv(2, All) // [4] t2 morph deltas (raw, dense target-major)
+        .srv(3, All) // [5] t3 morph weights (raw, one f32 per target)
+        .build(device, "rt skin root sig")
 }
 
 // Build the `rt_skin` compute pipeline (root signature + PSO). dxc emits it
@@ -493,18 +428,7 @@ fn create_skin_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootS
 fn build_skin_pipeline(device: &ID3D12Device, hot_reload: bool) -> RenderResult<SkinPipeline> {
     let cs = super::builtin_shaders::RT_SKIN.compile(hot_reload)?;
     let root_sig = create_skin_root_signature(device)?;
-    let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(&root_sig),
-        CS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: cs.as_ptr() as _,
-            BytecodeLength: cs.len(),
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    let pso = unsafe { crate::directx::pso_library::create_compute(device, &desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create rt skin PSO"))?;
+    let pso = compute_pso(device, &root_sig, &cs, "rt skin")?;
     Ok(SkinPipeline { root_sig, pso })
 }
 

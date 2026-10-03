@@ -203,30 +203,15 @@ impl DxContext {
             let (spd_single_cs, spd_msaa_cs, spd_tail_cs) = super::hiz::compile_hiz_shaders(hr)?;
             let spd_single_pso = super::context::dump_on_err(
                 info_queue,
-                super::auto_exposure::create_compute_pso(
-                    device,
-                    &hiz.root_sig,
-                    &spd_single_cs,
-                    "hiz spd_single",
-                ),
+                super::pso::compute_pso(device, &hiz.root_sig, &spd_single_cs, "hiz spd_single"),
             )?;
             let spd_msaa_pso = super::context::dump_on_err(
                 info_queue,
-                super::auto_exposure::create_compute_pso(
-                    device,
-                    &hiz.root_sig,
-                    &spd_msaa_cs,
-                    "hiz spd_msaa",
-                ),
+                super::pso::compute_pso(device, &hiz.root_sig, &spd_msaa_cs, "hiz spd_msaa"),
             )?;
             let spd_tail_pso = super::context::dump_on_err(
                 info_queue,
-                super::auto_exposure::create_compute_pso(
-                    device,
-                    &hiz.tail_root_sig,
-                    &spd_tail_cs,
-                    "hiz spd_tail",
-                ),
+                super::pso::compute_pso(device, &hiz.tail_root_sig, &spd_tail_cs, "hiz spd_tail"),
             )?;
             Some((spd_single_pso, spd_msaa_pso, spd_tail_pso))
         } else {
@@ -240,7 +225,7 @@ impl DxContext {
             let (build_cs, average_cs) = super::auto_exposure::compile_auto_exposure_shaders(hr)?;
             let build_pso = super::context::dump_on_err(
                 info_queue,
-                super::auto_exposure::create_compute_pso(
+                super::pso::compute_pso(
                     device,
                     ae.build_root_sig(),
                     &build_cs,
@@ -249,7 +234,7 @@ impl DxContext {
             )?;
             let average_pso = super::context::dump_on_err(
                 info_queue,
-                super::auto_exposure::create_compute_pso(
+                super::pso::compute_pso(
                     device,
                     ae.average_root_sig(),
                     &average_cs,

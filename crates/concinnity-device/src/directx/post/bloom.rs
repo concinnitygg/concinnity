@@ -15,13 +15,13 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::com;
 use crate::directx::context::DxContext;
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
-use crate::directx::error::{map_hresult, map_pso_hresult};
-use crate::directx::pipeline::serialize_desc_and_create;
-use crate::directx::root_constants::{RootConstants, root_dwords};
+use crate::directx::error::map_hresult;
+use crate::directx::pso::{Blend, GraphicsPso};
+use crate::directx::root_constants::RootConstants;
+use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
 
 // Bloom mip chain + pipelines. `mips[0]` is half-res; each subsequent mip
@@ -69,60 +69,13 @@ pub(in crate::directx) fn compile_bloom_shaders(hot_reload: bool) -> RenderResul
 pub(in crate::directx) fn create_bloom_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
-    let srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // t0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let params = [
-        // [0] Descriptor table: source image SRV (t0)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [1] Root constants: PostProcessParams at b0
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: root_dwords::<PostProcessParams>(),
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
-    let static_sampler = D3D12_STATIC_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-        BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ShaderRegister: 0, // s0
-        RegisterSpace: 0,
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        ..Default::default()
-    };
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: 1,
-        pStaticSamplers: &static_sampler,
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-    };
-    serialize_desc_and_create(device, &desc, "bloom root sig")
+    RootSig::new()
+        // [0] source image SRV (t0)
+        .srv_table(0, 1, Visibility::Pixel)
+        // [1] PostProcessParams at b0
+        .constants::<PostProcessParams>(0, Visibility::Pixel)
+        .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
+        .build(device, "bloom root sig")
 }
 
 // PSO for a bloom-chain pass: a vertex-buffer-less fullscreen triangle that
@@ -137,69 +90,12 @@ pub(in crate::directx) fn create_bloom_pso(
     rtv_format: DXGI_FORMAT,
     additive: bool,
 ) -> RenderResult<ID3D12PipelineState> {
-    let blend_rt = D3D12_RENDER_TARGET_BLEND_DESC {
-        BlendEnable: additive.into(),
-        SrcBlend: D3D12_BLEND_ONE,
-        DestBlend: D3D12_BLEND_ONE,
-        BlendOp: D3D12_BLEND_OP_ADD,
-        SrcBlendAlpha: D3D12_BLEND_ONE,
-        DestBlendAlpha: D3D12_BLEND_ONE,
-        BlendOpAlpha: D3D12_BLEND_OP_ADD,
-        RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-        ..Default::default()
+    let blend = if additive {
+        Blend::Additive
+    } else {
+        Blend::Opaque
     };
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = rtv_format;
-            a
-        },
-        DSVFormat: DXGI_FORMAT_UNKNOWN,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: true.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: false.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ZERO,
-            DepthFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = blend_rt;
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create bloom PSO"))
+    GraphicsPso::fullscreen(root_sig, vs, ps, rtv_format, blend).build(device, "bloom")
 }
 
 // Targets

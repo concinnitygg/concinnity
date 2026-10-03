@@ -16,10 +16,10 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::com;
 use crate::directx::context::dump_on_err;
-use crate::directx::error::map_pso_hresult;
-use crate::directx::pipeline::{main_input_layout, serialize_and_create_root_sig};
+use crate::directx::pipeline::main_input_layout;
+use crate::directx::pso::{Blend, Depth, DepthBias, GraphicsPso, Raster};
+use crate::directx::root_sig::{Range, RootSig, Visibility};
 use crate::directx::texture::HDR_FORMAT;
 
 // Shader compilation
@@ -71,321 +71,59 @@ pub(in crate::directx) fn compile_shadow_bindless_vs(hot_reload: bool) -> Render
 pub(super) fn create_main_bindless_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
-    let shadow_srv_ranges = [
-        D3D12_DESCRIPTOR_RANGE {
-            RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-            NumDescriptors: 1,
-            BaseShaderRegister: 0, // t0
-            RegisterSpace: 0,
-            OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-        },
-        D3D12_DESCRIPTOR_RANGE {
-            RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-            NumDescriptors: 2,
-            BaseShaderRegister: 5, // t5..t6
-            RegisterSpace: 0,
-            OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-        },
-    ];
-    // Unbounded bindless pool: `Texture2D tex_pool[] : register(t0, space1)`.
-    // The table base GPU handle points at the per-object SRV region (heap slot
-    // `object_base_slot`), so pool index `2*i` / `2*i+1` resolves to object
-    // `i`'s albedo / normal SRV.
-    let pool_srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: u32::MAX, // unbounded
-        BaseShaderRegister: 0,    // t0
-        RegisterSpace: 1,         // space1
-        OffsetInDescriptorsFromTableStart: 0,
-    };
-    let shadow_sampler_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // s0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let linear_cube_sampler_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
-        NumDescriptors: 2,
-        BaseShaderRegister: 1, // s1..s2
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // [9] table: SSAO occlusion SRV at t4.
-    let ssao_srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 4, // t4
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // [10] table: the reflection-probe cube array at t7
-    // (`TextureCubeArray probe_cubes : register(t7)`), one descriptor however many
-    // cubes it holds.
-    let probe_cube_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 7, // t7
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // [16] table: spot shadow depth array at t16, one register past the spot
-    // shadow records at t15.
-    let spot_shadow_srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 16, // t16
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // [18] table: the area-light LTC tables, past the spot shadow array.
-    let ltc_srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 2,
-        BaseShaderRegister: 18, // t18..t19
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-
-    let params = [
-        // [0] Root constant: per-draw object id at b0 (1 DWORD).
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: 1,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [1] Root CBV: view UBO at b1
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [2] Root CBV: light UBO at b2
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 2,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [3] Root CBV: shadow UBO at b3
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 3,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [4] Descriptor table: shadow map array (t0) + IBL cubes (t5..t6)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: shadow_srv_ranges.len() as u32,
-                    pDescriptorRanges: shadow_srv_ranges.as_ptr(),
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [5] Descriptor table: unbounded bindless texture pool (t0, space1)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &pool_srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [6] Descriptor table: shadow comparison sampler (s0)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &shadow_sampler_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [7] Descriptor table: linear repeat (s1) + cube sampler (s2)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &linear_cube_sampler_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [8] Root SRV: per-frame StructuredBuffer<GpuObjectData> at t3
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 3,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        // [9] Descriptor table: SSAO occlusion SRV (t4)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &ssao_srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [10] Descriptor table: reflection-probe cube array (t7)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &probe_cube_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [11] Root CBV: the ProbeSet (live probe count) at b4.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 4, // b4
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [12] Root SRV: per-scene StructuredBuffer<GpuLight> at t1 (matches
+    use Visibility::{All, Pixel};
+    RootSig::new()
+        // [0] per-draw object id at b0 (1 DWORD).
+        .constant_dwords(0, 1, All)
+        // [1] view UBO at b1
+        .cbv(1, All)
+        // [2] light UBO at b2
+        .cbv(2, Pixel)
+        // [3] shadow UBO at b3
+        .cbv(3, Pixel)
+        // [4] shadow map array (t0) + IBL cubes (t5..t6)
+        .table(&[Range::srv(0, 1), Range::srv(5, 2)], Pixel)
+        // [5] Unbounded bindless pool: `Texture2D tex_pool[] : register(t0,
+        // space1)`. The table base GPU handle points at the per-object SRV region
+        // (heap slot `object_base_slot`), so pool index `2*i` / `2*i+1` resolves
+        // to object `i`'s albedo / normal SRV.
+        .table(&[Range::bindless_srv(1)], Pixel)
+        // [6] shadow comparison sampler (s0)
+        .sampler_table(0, 1, Pixel)
+        // [7] linear repeat (s1) + cube sampler (s2)
+        .sampler_table(1, 2, Pixel)
+        // [8] per-frame StructuredBuffer<GpuObjectData> at t3
+        .srv(3, All)
+        // [9] SSAO occlusion SRV (t4)
+        .srv_table(4, 1, Pixel)
+        // [10] the reflection-probe cube array at t7 (`TextureCubeArray
+        // probe_cubes : register(t7)`), one descriptor however many cubes it holds.
+        .srv_table(7, 1, Pixel)
+        // [11] the ProbeSet (live probe count) at b4.
+        .cbv(4, Pixel)
+        // [12] per-scene StructuredBuffer<GpuLight> at t1 (matches
         // main_bindless.hlsl's CN_BACKEND_DIRECTX block).
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [13] Root CBV: ClusterParams at b5 (b4 is the ProbeSet cbuffer).
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 5,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [14] Root SRV: per-cluster light-index lists at t2.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 2,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [15] Root SRV: per-slice StructuredBuffer<SpotShadowData> at t15.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 15, // t15
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [16] table: spot shadow depth array at t16.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &spot_shadow_srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [17] Root SRV: per-scene StructuredBuffer<AreaLightData> at t17.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 17, // t17
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [18] table: the area-light LTC tables at t18..t19.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &ltc_srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [19] Root SRV: the reflection-probe records at t8.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 8, // t8
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [20] Root SRV: the material parameter table at t20, which either
-        // world hook may read.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 20, // t20
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-    ];
-
-    serialize_and_create_root_sig(device, &params, "main bindless root sig")
+        .srv(1, Pixel)
+        // [13] ClusterParams at b5 (b4 is the ProbeSet cbuffer).
+        .cbv(5, Pixel)
+        // [14] per-cluster light-index lists at t2.
+        .srv(2, Pixel)
+        // [15] per-slice StructuredBuffer<SpotShadowData> at t15.
+        .srv(15, Pixel)
+        // [16] spot shadow depth array at t16, one register past the spot shadow
+        // records at t15.
+        .srv_table(16, 1, Pixel)
+        // [17] per-scene StructuredBuffer<AreaLightData> at t17.
+        .srv(17, Pixel)
+        // [18] the area-light LTC tables at t18..t19, past the spot shadow array.
+        .srv_table(18, 2, Pixel)
+        // [19] the reflection-probe records at t8.
+        .srv(8, Pixel)
+        // [20] the material parameter table at t20, which either world hook may
+        // read.
+        .srv(20, All)
+        .input_layout()
+        .build(device, "main bindless root sig")
 }
 
 // Root signature for the GPU-driven shadow pass's depth-only bindless pipeline.
@@ -399,56 +137,17 @@ pub(super) fn create_main_bindless_root_signature(
 pub(in crate::directx) fn create_shadow_bindless_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
-    let params = [
-        // [0] Root constant b0: object id (set per command by the command sig).
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: 1,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        // [1] Root CBV b1: shadow UBO (light_vps[4] + cascade_splits).
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 1,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        // [2] Root constant b2: cascade index (set per cascade's ExecuteIndirect).
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 2,
-                    RegisterSpace: 0,
-                    Num32BitValues: 1,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        // [3] Root SRV t0: per-frame StructuredBuffer<GpuObjectData>.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_SRV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-    ];
-
-    serialize_and_create_root_sig(device, &params, "shadow bindless root sig")
+    RootSig::new()
+        // [0] b0: object id (set per command by the command sig).
+        .constant_dwords(0, 1, Visibility::Vertex)
+        // [1] b1: shadow UBO (light_vps[4] + cascade_splits).
+        .cbv(1, Visibility::Vertex)
+        // [2] b2: cascade index (set per cascade's ExecuteIndirect).
+        .constant_dwords(2, 1, Visibility::Vertex)
+        // [3] t0: per-frame StructuredBuffer<GpuObjectData>.
+        .srv(0, Visibility::Vertex)
+        .input_layout()
+        .build(device, "shadow bindless root sig")
 }
 
 // PSO builders
@@ -463,15 +162,7 @@ pub(in crate::directx) fn create_main_pso(
     rtv_format: DXGI_FORMAT,
     sample_count: u32,
 ) -> RenderResult<ID3D12PipelineState> {
-    create_main_pso_filled(
-        device,
-        root_sig,
-        vs,
-        ps,
-        rtv_format,
-        sample_count,
-        D3D12_FILL_MODE_SOLID,
-    )
+    create_main_pso_filled(device, root_sig, vs, ps, rtv_format, sample_count, false)
 }
 
 // The Wireframe view mode's variant of `create_main_pso`. D3D12 fill mode is
@@ -485,15 +176,7 @@ pub(in crate::directx) fn create_main_pso_wireframe(
     rtv_format: DXGI_FORMAT,
     sample_count: u32,
 ) -> RenderResult<ID3D12PipelineState> {
-    create_main_pso_filled(
-        device,
-        root_sig,
-        vs,
-        ps,
-        rtv_format,
-        sample_count,
-        D3D12_FILL_MODE_WIREFRAME,
-    )
+    create_main_pso_filled(device, root_sig, vs, ps, rtv_format, sample_count, true)
 }
 
 fn create_main_pso_filled(
@@ -503,74 +186,21 @@ fn create_main_pso_filled(
     ps: &[u8],
     rtv_format: DXGI_FORMAT,
     sample_count: u32,
-    fill_mode: D3D12_FILL_MODE,
+    wireframe: bool,
 ) -> RenderResult<ID3D12PipelineState> {
     let layout = main_input_layout();
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        InputLayout: D3D12_INPUT_LAYOUT_DESC {
-            pInputElementDescs: layout.as_ptr(),
-            NumElements: layout.len() as u32,
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = rtv_format;
-            a
-        },
-        DSVFormat: DXGI_FORMAT_D32_FLOAT,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: sample_count,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: fill_mode,
-            // Match Metal's default (no culling) so meshes with mixed winding
-            // (e.g. procedural floor/ceiling planes) render from both sides.
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthBias: 0,
-            DepthBiasClamp: 0.0,
-            SlopeScaledDepthBias: 0.0,
-            DepthClipEnable: true.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: true.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ALL,
-            DepthFunc: D3D12_COMPARISON_FUNC_LESS,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-                    BlendEnable: false.into(),
-                    RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    ..Default::default()
-                };
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create main PSO"))
+    GraphicsPso::new(root_sig, vs, ps)
+        .input_layout(&layout)
+        .target(rtv_format, Blend::Opaque)
+        .depth(DXGI_FORMAT_D32_FLOAT, Depth::LESS_WRITE)
+        .samples(sample_count)
+        // No culling, matching Metal's default, so meshes with mixed winding
+        // (e.g. procedural floor/ceiling planes) render from both sides.
+        .raster(Raster {
+            wireframe,
+            ..Raster::default()
+        })
+        .build(device, "main")
 }
 
 pub(in crate::directx) fn create_shadow_pso(
@@ -579,53 +209,20 @@ pub(in crate::directx) fn create_shadow_pso(
     vs: &[u8],
 ) -> RenderResult<ID3D12PipelineState> {
     let layout = main_input_layout();
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        InputLayout: D3D12_INPUT_LAYOUT_DESC {
-            pInputElementDescs: layout.as_ptr(),
-            NumElements: layout.len() as u32,
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 0,
-        DSVFormat: DXGI_FORMAT_D32_FLOAT,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            // Match Metal: shadow pass also uses no culling so double-sided
-            // procedural meshes cast shadows correctly.
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthBias: shadow_bias::RASTER_CONSTANT as i32,
-            DepthBiasClamp: shadow_bias::RASTER_CLAMP,
-            SlopeScaledDepthBias: shadow_bias::RASTER_SLOPE,
-            DepthClipEnable: true.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: true.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ALL,
-            DepthFunc: D3D12_COMPARISON_FUNC_LESS,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create shadow PSO"))
+    GraphicsPso::new(root_sig, vs, &[])
+        .input_layout(&layout)
+        .depth(DXGI_FORMAT_D32_FLOAT, Depth::LESS_WRITE)
+        // No culling, matching Metal, so double-sided procedural meshes cast
+        // shadows correctly.
+        .raster(Raster {
+            bias: DepthBias {
+                constant: shadow_bias::RASTER_CONSTANT as i32,
+                clamp: shadow_bias::RASTER_CLAMP,
+                slope: shadow_bias::RASTER_SLOPE,
+            },
+            ..Raster::default()
+        })
+        .build(device, "shadow")
 }
 
 // Material-referenced world shader pipelines

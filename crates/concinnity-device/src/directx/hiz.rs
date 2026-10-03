@@ -32,13 +32,13 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::com;
 use crate::directx::context::dump_on_err;
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
-use crate::directx::error::{map_hresult, map_pso_hresult};
-use crate::directx::pipeline::serialize_desc_and_create;
-use crate::directx::root_constants::{RootConstants, root_dwords};
+use crate::directx::error::map_hresult;
+use crate::directx::pso::compute_pso;
+use crate::directx::root_constants::RootConstants;
+use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::uav_barrier;
 
 // UAV descriptors one SPD dispatch binds, one per level it can write.
@@ -93,44 +93,6 @@ pub(in crate::directx) fn compile_hiz_shaders(hot_reload: bool) -> RenderResult<
     Ok((single, msaa, tail))
 }
 
-// Root signatures for the two SPD dispatches. Both take the params as root
-// constants at b0 and a table of `HIZ_SPD_UAVS` contiguous per-mip UAVs at
-// u0..u6; phase 1 adds the main-depth SRV at t0 ahead of it. The per-mip UAVs
-// sit contiguously in the heap, which is what lets one range cover a whole
-// dispatch's levels: phase 1 bases its table on mip 0, the tail on mip 6.
-fn hiz_root_params(
-    srv_range: &D3D12_DESCRIPTOR_RANGE,
-    uav_range: &D3D12_DESCRIPTOR_RANGE,
-    with_srv: bool,
-) -> Vec<D3D12_ROOT_PARAMETER> {
-    let table = |range: &D3D12_DESCRIPTOR_RANGE| D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                NumDescriptorRanges: 1,
-                pDescriptorRanges: range,
-            },
-        },
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-    };
-    let mut params = vec![D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            Constants: D3D12_ROOT_CONSTANTS {
-                ShaderRegister: 0,
-                RegisterSpace: 0,
-                Num32BitValues: root_dwords::<HizSpdParams>(),
-            },
-        },
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-    }];
-    if with_srv {
-        params.push(table(srv_range));
-    }
-    params.push(table(uav_range));
-    params
-}
-
 pub(in crate::directx) fn create_hiz_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
@@ -143,53 +105,22 @@ pub(in crate::directx) fn create_hiz_tail_root_signature(
     create_hiz_signature(device, false, "hiz spd tail root sig")
 }
 
+// Root signatures for the two SPD dispatches. Both take the params as root
+// constants at b0 and a table of `HIZ_SPD_UAVS` contiguous per-mip UAVs at
+// u0..u6; phase 1 adds the main-depth SRV at t0 ahead of it. The per-mip UAVs
+// sit contiguously in the heap, which is what lets one range cover a whole
+// dispatch's levels: phase 1 bases its table on mip 0, the tail on mip 6.
 fn create_hiz_signature(
     device: &ID3D12Device,
     with_srv: bool,
     label: &str,
 ) -> RenderResult<ID3D12RootSignature> {
-    let srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // t0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let uav_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
-        NumDescriptors: HIZ_SPD_UAVS,
-        BaseShaderRegister: 0, // u0..u6
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let params = hiz_root_params(&srv_range, &uav_range, with_srv);
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-        ..Default::default()
-    };
-    serialize_desc_and_create(device, &desc, label)
-}
-
-fn create_hiz_pso(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
-    cs: &[u8],
-    label: &str,
-) -> RenderResult<ID3D12PipelineState> {
-    let desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        CS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: cs.as_ptr() as _,
-            BytecodeLength: cs.len(),
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_compute(device, &desc) }
-        .map_err(|e| map_pso_hresult(e.code(), &format!("create {label} PSO")))
+    let mut sig = RootSig::new().constants::<HizSpdParams>(0, Visibility::All);
+    if with_srv {
+        sig = sig.srv_table(0, 1, Visibility::All);
+    }
+    sig.uav_table(0, HIZ_SPD_UAVS, Visibility::All)
+        .build(device, label)
 }
 
 // Mip count for a Hi-Z of size (w, h): `floor(log2(max(w, h))) + 1`. Power-
@@ -367,15 +298,15 @@ impl HiZResources {
         let tail_root_sig = dump_on_err(info_queue, create_hiz_tail_root_signature(device))?;
         let spd_single_pso = dump_on_err(
             info_queue,
-            create_hiz_pso(device, &root_sig, &spd_single_cs, "hiz spd_single"),
+            compute_pso(device, &root_sig, &spd_single_cs, "hiz spd_single"),
         )?;
         let spd_msaa_pso = dump_on_err(
             info_queue,
-            create_hiz_pso(device, &root_sig, &spd_msaa_cs, "hiz spd_msaa"),
+            compute_pso(device, &root_sig, &spd_msaa_cs, "hiz spd_msaa"),
         )?;
         let spd_tail_pso = dump_on_err(
             info_queue,
-            create_hiz_pso(device, &tail_root_sig, &spd_tail_cs, "hiz spd_tail"),
+            compute_pso(device, &tail_root_sig, &spd_tail_cs, "hiz spd_tail"),
         )?;
 
         let texture = create_hiz_texture(device, width, height, mip_count)?;

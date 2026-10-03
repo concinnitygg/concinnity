@@ -31,12 +31,11 @@ use crate::directx::com;
 use crate::directx::context::dump_on_err;
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
-use crate::directx::pipeline::{
-    create_blended_composite_pso, root_cbv, root_srv, serialize_desc_and_create,
-};
 use crate::directx::post::descriptors::{PostDescriptors, PostTargetDescriptors};
 use crate::directx::post::fullscreen::FullscreenExtent;
+use crate::directx::pso::GraphicsPso;
 use crate::directx::root_constants::RootConstants;
+use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
 use crate::directx::texture::{
     create_rt_chain, subresource_transition_barrier, write_level_rtv, write_levels_srv,
 };
@@ -166,29 +165,6 @@ fn compile(program: PostProgram, hot_reload: bool) -> RenderResult<(Vec<u8>, Vec
     ))
 }
 
-fn srv_range(register: u32, count: u32) -> D3D12_DESCRIPTOR_RANGE {
-    D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: count,
-        BaseShaderRegister: register,
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    }
-}
-
-fn table_parameter(range: &D3D12_DESCRIPTOR_RANGE) -> D3D12_ROOT_PARAMETER {
-    D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                NumDescriptorRanges: 1,
-                pDescriptorRanges: range,
-            },
-        },
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-    }
-}
-
 // A root signature for `bindings`: one single-SRV table per source, a 32-bit
 // constant block at b0 when the program declares constants, and for a
 // probe-reading program the cube array table, a root CBV for the ProbeSet, a
@@ -202,54 +178,27 @@ fn create_root_signature(
     bindings: PostProgramBindings,
 ) -> RenderResult<ID3D12RootSignature> {
     let textures = bindings.textures as u32;
-    let ranges: Vec<D3D12_DESCRIPTOR_RANGE> = (0..textures).map(|reg| srv_range(reg, 1)).collect();
-    // The cube array takes the next texture register after the declared sources.
-    let probe_range = srv_range(textures, 1);
-    let mut params: Vec<D3D12_ROOT_PARAMETER> = ranges.iter().map(table_parameter).collect();
+    let mut sig = (0..textures).fold(RootSig::new(), |sig, reg| {
+        sig.srv_table(reg, 1, Visibility::Pixel)
+    });
     if bindings.constants > 0 {
-        params.push(D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: bindings.constants.div_ceil(4) as u32,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        });
+        let dwords = bindings.constants.div_ceil(4) as u32;
+        sig = sig.constant_dwords(0, dwords, Visibility::Pixel);
     }
     if bindings.probes {
-        params.push(table_parameter(&probe_range));
-        params.push(root_cbv(PROBE_SET_REGISTER));
-        params.push(root_srv(textures + 1));
-        params.push(root_cbv(CLUSTER_PARAMS_REGISTER));
-        params.push(root_srv(textures + 2));
+        // The cube array takes the next texture register after the declared sources.
+        sig = sig
+            .srv_table(textures, 1, Visibility::Pixel)
+            .cbv(PROBE_SET_REGISTER, Visibility::Pixel)
+            .srv(textures + 1, Visibility::Pixel)
+            .cbv(CLUSTER_PARAMS_REGISTER, Visibility::Pixel)
+            .srv(textures + 2, Visibility::Pixel);
     }
-    let samplers: Vec<D3D12_STATIC_SAMPLER_DESC> = (0..textures + u32::from(bindings.probes))
-        .map(|reg| D3D12_STATIC_SAMPLER_DESC {
-            Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-            AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-            AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-            AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-            ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-            BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
-            MinLOD: 0.0,
-            MaxLOD: f32::MAX,
-            ShaderRegister: reg,
-            RegisterSpace: 0,
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-            ..Default::default()
+    (0..textures + u32::from(bindings.probes))
+        .fold(sig, |sig, reg| {
+            sig.static_sampler(SamplerState::LinearClamp, reg, Visibility::Pixel)
         })
-        .collect();
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: samplers.len() as u32,
-        pStaticSamplers: samplers.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-    };
-    serialize_desc_and_create(device, &desc, "post root sig")
+        .build(device, "post root sig")
 }
 
 impl PostPassDevice for DxPostDevice<'_> {
@@ -273,15 +222,8 @@ impl PostPassDevice for DxPostDevice<'_> {
         let (vs, ps) = compile(program, self.hot_reload)?;
         let pso = dump_on_err(
             self.info_queue,
-            create_blended_composite_pso(
-                self.device,
-                &root_sig,
-                &vs,
-                &ps,
-                dxgi_format(format),
-                blend,
-                program.label(),
-            ),
+            GraphicsPso::fullscreen(&root_sig, &vs, &ps, dxgi_format(format), blend.into())
+                .build(self.device, program.label()),
         )?;
         Ok(PostPipeline {
             pso,

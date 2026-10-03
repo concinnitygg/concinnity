@@ -23,7 +23,10 @@ use concinnity_core::render::uniforms::DecalView;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
-use super::pipeline::GraphicsStages;
+use super::descriptor_layout::{Binding, PoolSizes};
+use super::pipeline_desc::{Blend, GraphicsPipelineDesc, Raster};
+use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout, source_set_bindings};
+use super::set_writes::SetWrites;
 use super::texture::GpuImage;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
@@ -161,7 +164,8 @@ impl DecalResources {
             extent,
         } = targets;
         let render_pass = create_decal_render_pass(device, hdr_format)?;
-        let (view_set_layout, albedo_set_layout) = create_decal_set_layouts(device)?;
+        let view_set_layout = create_descriptor_set_layout(device, &view_set_bindings())?;
+        let albedo_set_layout = create_descriptor_set_layout(device, &source_set_bindings(1))?;
         let pipeline_layout = create_decal_pipeline_layout(
             device,
             view_set_layout.handle(),
@@ -223,13 +227,23 @@ impl DecalResources {
         let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
         let view_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &view_layouts)?;
         for (i, &set) in view_sets.iter().enumerate() {
-            write_view_set(
-                device,
-                set,
-                view_ubos[i].buffer(),
-                params_ubos[i].buffer(),
-                depth_views[i.min(depth_views.len().saturating_sub(1))],
-            );
+            // The dynamic params binding windows one PARAMS_STRIDE slot at the
+            // offset given at bind time.
+            SetWrites::new(set)
+                .uniform_buffer(
+                    0,
+                    view_ubos[i].buffer(),
+                    std::mem::size_of::<DecalView>() as u64,
+                )
+                .buffer(
+                    1,
+                    vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
+                    params_ubos[i].buffer(),
+                    0,
+                    PARAMS_STRIDE,
+                )
+                .sampled_image(2, depth_views[i.min(depth_views.len().saturating_sub(1))])
+                .apply(device);
         }
 
         // Per-decal albedo sets (MAX_DECALS sets, pre-allocated).
@@ -240,7 +254,7 @@ impl DecalResources {
         // The sampler never changes, so it is written once here; a decal's
         // albedo image is written when the decal takes the slot.
         for &set in &albedo_sets {
-            super::resources::write_samplers(device, set, 1, &[sampler]);
+            SetWrites::new(set).sampler(1, sampler).apply(device);
         }
 
         // Per-frame framebuffers (one per frame slot binding that slot's
@@ -307,17 +321,9 @@ impl DecalResources {
         // Re-point each per-frame view set's depth binding (binding 2)
         // at the rebuilt depth view.
         for (i, &set) in self.view_sets.iter().enumerate() {
-            let depth_info = vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .image_view(depth_views[i.min(depth_views.len().saturating_sub(1))]);
-            let write = vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(2)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .image_info(std::slice::from_ref(&depth_info));
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+            SetWrites::new(set)
+                .sampled_image(2, depth_views[i.min(depth_views.len().saturating_sub(1))])
+                .apply(device);
         }
         Ok(())
     }
@@ -398,37 +404,16 @@ fn create_decal_render_pass(
         .map_err(|e| super::error::map_vk_result(e, "decal render pass"))
 }
 
-fn create_decal_set_layouts(device: &VkDevice) -> RenderResult<(OwnedSetLayout, OwnedSetLayout)> {
-    // set 0: per-frame view UBO + per-decal params dynamic UBO + depth.
-    let view_bindings = [
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(2)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-    ];
-    let view_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&view_bindings);
-    let view_set_layout = device
-        .create_descriptor_set_layout(&view_info)
-        .map_err(|e| super::error::map_vk_result(e, "decal view set layout"))?;
-
-    // set 1: per-decal albedo and its sampler.
-    let albedo_set_layout = super::resources::create_descriptor_set_layout(
-        device,
-        &super::resources::source_set_bindings(1),
-    )?;
-
-    Ok((view_set_layout, albedo_set_layout))
+// Set 0, per frame: the view UBO, the per-decal params dynamic UBO and the
+// main depth.
+fn view_set_bindings() -> [Binding; 3] {
+    use vk::DescriptorType as T;
+    let vert_frag = vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT;
+    [
+        (0, T::UNIFORM_BUFFER, vert_frag),
+        (1, T::UNIFORM_BUFFER_DYNAMIC, vert_frag),
+        (2, T::SAMPLED_IMAGE, vk::ShaderStageFlags::FRAGMENT),
+    ]
 }
 
 fn create_decal_pipeline_layout(
@@ -449,93 +434,16 @@ fn create_decal_descriptor_pool(
 ) -> RenderResult<OwnedDescriptorPool> {
     let frames = frames as u32;
     let max_decals = MAX_DECALS as u32;
-    // Pool sizing: FRAMES sets for view + (MAX_DECALS) sets for albedo.
-    //   - UNIFORM_BUFFER: FRAMES (one DecalView per frame slot)
-    //   - UNIFORM_BUFFER_DYNAMIC: FRAMES (one params ring per frame slot)
-    //   - SAMPLED_IMAGE: FRAMES (depth) + MAX_DECALS (albedo)
-    //   - SAMPLER: MAX_DECALS (albedo)
-    let sizes = [
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::UNIFORM_BUFFER,
-            descriptor_count: frames,
-        },
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
-            descriptor_count: frames,
-        },
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::SAMPLED_IMAGE,
-            descriptor_count: frames + max_decals,
-        },
-        vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::SAMPLER,
-            descriptor_count: max_decals,
-        },
-    ];
+    let sizes = PoolSizes::default()
+        .sets(&view_set_bindings(), frames)
+        .sets(&source_set_bindings(1), max_decals)
+        .build();
     let info = vk::DescriptorPoolCreateInfo::default()
         .max_sets(frames + max_decals)
         .pool_sizes(&sizes);
     device
         .create_descriptor_pool(&info)
         .map_err(|e| super::error::map_vk_result(e, "decal descriptor pool"))
-}
-
-fn alloc_descriptor_sets(
-    device: &VkDevice,
-    pool: vk::DescriptorPool,
-    layouts: &[vk::DescriptorSetLayout],
-) -> RenderResult<Vec<vk::DescriptorSet>> {
-    let info = vk::DescriptorSetAllocateInfo::default()
-        .descriptor_pool(pool)
-        .set_layouts(layouts);
-    // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
-    // names belongs to this device.
-    unsafe { device.allocate_descriptor_sets(&info) }
-        .map_err(|e| super::error::map_vk_result(e, "decal descriptor sets"))
-}
-
-fn write_view_set(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    view_ubo: vk::Buffer,
-    params_ubo: vk::Buffer,
-    depth_view: vk::ImageView,
-) {
-    let view_info = vk::DescriptorBufferInfo::default()
-        .buffer(view_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<DecalView>() as u64);
-    let params_info = vk::DescriptorBufferInfo::default()
-        .buffer(params_ubo)
-        .offset(0)
-        // Dynamic-offset descriptor binds a window of `range` bytes
-        // starting at the offset supplied at cmd_bind_descriptor_sets
-        // time. Setting range to PARAMS_STRIDE means each per-decal bind
-        // touches exactly one slot.
-        .range(PARAMS_STRIDE);
-    let depth_info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(depth_view);
-    let writes = [
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .buffer_info(std::slice::from_ref(&view_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
-            .buffer_info(std::slice::from_ref(&params_info)),
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(2)
-            .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-            .image_info(std::slice::from_ref(&depth_info)),
-    ];
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
 fn compile_decal_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
@@ -566,6 +474,9 @@ pub(in crate::vulkan) fn rebuild_decal_pipeline(
     )
 }
 
+// A unit cube with front faces culled, so the back faces still rasterize when
+// the camera is inside the decal volume, alpha-blended into the SINGLE-SAMPLE
+// resolved HDR regardless of the main pass's MSAA. Mirrors DirectX / Metal.
 fn create_decal_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,
@@ -573,8 +484,6 @@ fn create_decal_pipeline(
     vert_spv: &[u8],
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
     let bindings = [vk::VertexInputBindingDescription::default()
         .binding(0)
         .stride(12) // vec3 position
@@ -584,63 +493,22 @@ fn create_decal_pipeline(
         .binding(0)
         .format(vk::Format::R32G32B32_SFLOAT)
         .offset(0)];
-    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
-        .vertex_binding_descriptions(&bindings)
-        .vertex_attribute_descriptions(&attrs);
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        // Cull front faces: the camera may be inside the decal volume.
-        // With back-face culling on (the default) entering the volume
-        // would make the unit cube disappear; culling the front face
-        // keeps the back faces rasterized in both cases. Mirrors
-        // DirectX / Metal.
-        .cull_mode(vk::CullModeFlags::FRONT)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .line_width(1.0);
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        // The decal pass writes the SINGLE-SAMPLE resolved HDR, not the
-        // MSAA color. Sample count here matches the attachment, not the
-        // main pass's MSAA count.
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(false)
-        .depth_write_enable(false);
-    let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-        .blend_enable(true)
-        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .color_blend_op(vk::BlendOp::ADD)
-        .src_alpha_blend_factor(vk::BlendFactor::SRC_ALPHA)
-        .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .alpha_blend_op(vk::BlendOp::ADD)
-        .color_write_mask(vk::ColorComponentFlags::RGBA);
-    let blend_attachments = [blend_attachment];
-    let blend_state = vk::PipelineColorBlendStateCreateInfo::default()
-        .logic_op_enable(false)
-        .attachments(&blend_attachments);
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-    let info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vertex_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth_stencil)
-        .color_blend_state(&blend_state)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass);
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| super::error::map_vk_result(e, "create decal pipeline"))?;
-    Ok(pipeline)
+    GraphicsPipelineDesc {
+        raster: Raster {
+            cull: vk::CullModeFlags::FRONT,
+            ..Raster::default()
+        },
+        vertex_bindings: &bindings,
+        vertex_attributes: &attrs,
+        ..GraphicsPipelineDesc::fullscreen(
+            vert_spv,
+            frag_spv,
+            layout,
+            render_pass,
+            &[Blend::AlphaOver],
+        )
+    }
+    .build(device, "decal")
 }
 
 // Helpers for upload + casting
@@ -892,17 +760,7 @@ impl VkContext {
 
 // Point a decal's albedo set at `view`. Its sampler was written with the set.
 fn write_albedo_image(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
-    let info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(view);
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(0)
-        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-        .image_info(std::slice::from_ref(&info));
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+    SetWrites::new(set).sampled_image(0, view).apply(device);
 }
 
 // Wire authored decals into the runtime state at init.

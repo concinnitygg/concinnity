@@ -28,8 +28,10 @@ use concinnity_core::transform::IDENTITY;
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::VkContext;
-use super::super::pipeline::*;
+use super::super::descriptor_layout::Binding;
+use super::super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc, compute_pipeline};
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use super::super::set_writes::SetWrites;
 use super::super::texture::*;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
@@ -148,95 +150,10 @@ fn create_prepass_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass
         .map_err(|e| crate::vulkan::error::map_vk_result(e, "gbuffer prepass render pass"))
 }
 
-// Render pass + pipeline layout a pre-pass pipeline binds against.
-#[derive(Clone, Copy)]
-struct PrepassPipelineTargets {
-    render_pass: vk::RenderPass,
-    layout: vk::PipelineLayout,
-}
-
-// The compiled SPIR-V + vertex input layout a pre-pass pipeline is built from.
-struct PrepassPipelineShaders<'a> {
-    vert_spv: &'a [u8],
-    frag_spv: &'a [u8],
-    bindings: &'a [vk::VertexInputBindingDescription],
-    attrs: &'a [vk::VertexInputAttributeDescription],
-}
-
-// Build a pre-pass pipeline. Three MRT color targets (normal+depth, roughness,
-// velocity) over a private depth buffer; same no-cull / LESS depth as the main
-// pass.
-fn create_prepass_pipeline(
-    device: &VkDevice,
-    targets: PrepassPipelineTargets,
-    shaders: PrepassPipelineShaders,
-) -> RenderResult<OwnedPipeline> {
-    let PrepassPipelineTargets {
-        render_pass,
-        layout,
-    } = targets;
-    let PrepassPipelineShaders {
-        vert_spv,
-        frag_spv,
-        bindings,
-        attrs,
-    } = shaders;
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
-    let vert_input = vk::PipelineVertexInputStateCreateInfo::default()
-        .vertex_binding_descriptions(bindings)
-        .vertex_attribute_descriptions(attrs);
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .line_width(1.0)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE);
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-    let depth = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(true)
-        .depth_write_enable(true)
-        .depth_compare_op(vk::CompareOp::LESS);
-    // All three attachments must be byte-identical without `independentBlend`
-    // enabled at device creation. The R8 roughness target stores only R, so a
-    // uniform RGBA write-mask is the smallest-diff way to satisfy the spec.
-    let blend_attaches = [
-        vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(false),
-        vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(false),
-        vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)
-            .blend_enable(false),
-    ];
-    let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attaches);
-    let dyn_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dyn_states);
-
-    let info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vert_input)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth)
-        .color_blend_state(&blend)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass)
-        .subpass(0);
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| crate::vulkan::error::map_vk_result(e, "create gbuffer prepass pso"))?;
-    Ok(pipeline)
-}
+// The pre-pass's three MRT targets: normal+depth, roughness, velocity. All three
+// must be byte-identical without `independentBlend` enabled at device creation;
+// the R8 roughness target stores only R under the uniform RGBA write mask.
+const PREPASS_TARGETS: [Blend; 3] = [Blend::Opaque; 3];
 
 // Vertex input for the GPU-driven (bindless) G-buffer pre-pass: the current
 // attributes the VS reads (position 0, normal 1, skybox-sentinel color 3) on
@@ -245,43 +162,36 @@ fn create_prepass_pipeline(
 // both (prev_pos == cur_pos), the skinned tail binds the current deformed buffer
 // to binding 0 and the previous-frame deformed buffer to binding 1. Tangent + UV
 // are unused (the pre-pass samples no textures).
-fn vertex_56_dual_input() -> (
-    [vk::VertexInputBindingDescription; 2],
-    [vk::VertexInputAttributeDescription; 4],
-) {
-    let bindings = [
-        vk::VertexInputBindingDescription::default()
-            .binding(0)
-            .stride(56)
-            .input_rate(vk::VertexInputRate::VERTEX),
-        vk::VertexInputBindingDescription::default()
-            .binding(1)
-            .stride(56)
-            .input_rate(vk::VertexInputRate::VERTEX),
-    ];
-    let attrs = [
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(0)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(0),
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(1)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(12),
-        vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(3)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(36),
-        vk::VertexInputAttributeDescription::default()
-            .binding(1)
-            .location(5)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(0),
-    ];
-    (bindings, attrs)
+const VERTEX_56_DUAL_BINDINGS: [vk::VertexInputBindingDescription; 2] = [
+    vk::VertexInputBindingDescription {
+        binding: 0,
+        stride: 56,
+        input_rate: vk::VertexInputRate::VERTEX,
+    },
+    vk::VertexInputBindingDescription {
+        binding: 1,
+        stride: 56,
+        input_rate: vk::VertexInputRate::VERTEX,
+    },
+];
+const VERTEX_56_DUAL_ATTRIBUTES: [vk::VertexInputAttributeDescription; 4] = [
+    position_attribute(0, 0, 0),
+    position_attribute(0, 1, 12),
+    position_attribute(0, 3, 36),
+    position_attribute(1, 5, 0),
+];
+
+const fn position_attribute(
+    binding: u32,
+    location: u32,
+    offset: u32,
+) -> vk::VertexInputAttributeDescription {
+    vk::VertexInputAttributeDescription {
+        location,
+        binding,
+        format: vk::Format::R32G32B32_SFLOAT,
+        offset,
+    }
 }
 
 // GPU-driven G-buffer pre-pass resources, built when the bindless cull path is
@@ -384,45 +294,27 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
 
     // Set 0: GbView UBO (binding 0), the previous frame's model-history slot
     // (binding 1) and this frame's draw args (binding 2), all VERTEX.
-    let set_layout = create_descriptor_set_layout(
-        device,
-        &[
-            (
-                0,
-                vk::DescriptorType::UNIFORM_BUFFER,
-                vk::ShaderStageFlags::VERTEX,
-            ),
-            (
-                1,
-                vk::DescriptorType::STORAGE_BUFFER,
-                vk::ShaderStageFlags::VERTEX,
-            ),
-            (
-                2,
-                vk::DescriptorType::STORAGE_BUFFER,
-                vk::ShaderStageFlags::VERTEX,
-            ),
-        ],
-    )?;
+    let set_layout =
+        create_descriptor_set_layout(device, &history_set_bindings(vk::ShaderStageFlags::VERTEX))?;
     let layouts = [set_layout.handle(), bindless_set_layout];
     let pipeline_layout = device
         .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts))
         .map_err(|e| crate::vulkan::error::map_vk_result(e, "gbuffer bindless pipeline layout"))?;
 
-    let (bindings, attrs) = vertex_56_dual_input();
-    let pipeline = create_prepass_pipeline(
-        device,
-        PrepassPipelineTargets {
-            render_pass: gb.prepass_render_pass.handle(),
-            layout: pipeline_layout.handle(),
-        },
-        PrepassPipelineShaders {
-            vert_spv: &vs,
-            frag_spv: &fs,
-            bindings: &bindings,
-            attrs: &attrs,
-        },
-    )?;
+    // Same no-cull / LESS depth as the main pass, over a private depth buffer.
+    let pipeline = GraphicsPipelineDesc {
+        depth: Depth::LESS_WRITE,
+        vertex_bindings: &VERTEX_56_DUAL_BINDINGS,
+        vertex_attributes: &VERTEX_56_DUAL_ATTRIBUTES,
+        ..GraphicsPipelineDesc::fullscreen(
+            &vs,
+            &fs,
+            pipeline_layout.handle(),
+            gb.prepass_render_pass.handle(),
+            &PREPASS_TARGETS,
+        )
+    }
+    .build(device, "gbuffer prepass")?;
 
     // Per-frame model-history SSBOs, sized for `n_cull` column-major `float4x4`
     // records, parallel to the object buffer. Device-local: only the snapshot
@@ -446,38 +338,15 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
     let sets = alloc_descriptor_sets(device, descriptor_pool, &set_layouts)?;
     for (f, &set) in sets.iter().enumerate() {
-        let view_info = vk::DescriptorBufferInfo::default()
-            .buffer(gb.view_ubo_buffers[f].buffer())
-            .offset(0)
-            .range(GBUFFER_VIEW_UBO_SIZE);
-        let pm_info = vk::DescriptorBufferInfo::default()
-            .buffer(prev_model_buffers[(f + frames - 1) % frames].buffer())
-            .offset(0)
-            .range(buf_size);
-        let da_info = vk::DescriptorBufferInfo::default()
-            .buffer(draw_args_buffers[f].buffer())
-            .offset(0)
-            .range(draw_args_size);
-        let writes = [
-            vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(std::slice::from_ref(&view_info)),
-            vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(std::slice::from_ref(&pm_info)),
-            vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(2)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(std::slice::from_ref(&da_info)),
-        ];
-        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
-        // set and resource it names belongs to this device.
-        unsafe { device.update_descriptor_sets(&writes, &[]) };
+        SetWrites::new(set)
+            .uniform_buffer(0, gb.view_ubo_buffers[f].buffer(), GBUFFER_VIEW_UBO_SIZE)
+            .storage_buffer(
+                1,
+                prev_model_buffers[(f + frames - 1) % frames].buffer(),
+                buf_size,
+            )
+            .storage_buffer(2, draw_args_buffers[f].buffer(), draw_args_size)
+            .apply(device);
     }
 
     let history = build_model_history(
@@ -497,6 +366,17 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
         prev_model_buffers,
         history,
     })
+}
+
+// A UBO at binding 0 and two storage buffers at 1 and 2, read by `stages`: the
+// shape of both the pre-pass's set 0 and the snapshot kernel's.
+fn history_set_bindings(stages: vk::ShaderStageFlags) -> [Binding; 3] {
+    use vk::DescriptorType as T;
+    [
+        (0, T::UNIFORM_BUFFER, stages),
+        (1, T::STORAGE_BUFFER, stages),
+        (2, T::STORAGE_BUFFER, stages),
+    ]
 }
 
 // Sizing for the snapshot kernel's per-frame sets.
@@ -521,31 +401,13 @@ fn build_model_history(
     let ModelHistoryScene { n_cull, frames } = scene;
     let cs = super::super::builtin_shaders::MODEL_HISTORY.compile(hot_reload)?;
 
-    let set_layout = create_descriptor_set_layout(
-        device,
-        &[
-            (
-                0,
-                vk::DescriptorType::UNIFORM_BUFFER,
-                vk::ShaderStageFlags::COMPUTE,
-            ),
-            (
-                1,
-                vk::DescriptorType::STORAGE_BUFFER,
-                vk::ShaderStageFlags::COMPUTE,
-            ),
-            (
-                2,
-                vk::DescriptorType::STORAGE_BUFFER,
-                vk::ShaderStageFlags::COMPUTE,
-            ),
-        ],
-    )?;
+    let set_layout =
+        create_descriptor_set_layout(device, &history_set_bindings(vk::ShaderStageFlags::COMPUTE))?;
     let layouts = [set_layout.handle()];
     let pipeline_layout = device
         .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts))
         .map_err(|e| crate::vulkan::error::map_vk_result(e, "model history pipeline layout"))?;
-    let pipeline = create_cull_pipeline(device, pipeline_layout.handle(), &cs)?;
+    let pipeline = compute_pipeline(device, pipeline_layout.handle(), &cs, "model history")?;
 
     // The record count never moves for a built world, so one host-visible UBO
     // serves every frame's set.
@@ -567,38 +429,11 @@ fn build_model_history(
     let sets = alloc_descriptor_sets(device, descriptor_pool, &set_layouts)?;
     for (i, &set) in sets.iter().enumerate() {
         let (f, slot) = (i / frames, i % frames);
-        let p_info = vk::DescriptorBufferInfo::default()
-            .buffer(params_buf.buffer())
-            .offset(0)
-            .range(params_size);
-        let o_info = vk::DescriptorBufferInfo::default()
-            .buffer(object_buffers[f].buffer())
-            .offset(0)
-            .range(object_size);
-        let h_info = vk::DescriptorBufferInfo::default()
-            .buffer(history_buffers[slot].buffer())
-            .offset(0)
-            .range(history_size);
-        let writes = [
-            vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(std::slice::from_ref(&p_info)),
-            vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(std::slice::from_ref(&o_info)),
-            vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(2)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(std::slice::from_ref(&h_info)),
-        ];
-        // SAFETY: `writes` and the buffer infos it borrows are live for the call, and every set
-        // and resource it names belongs to this device.
-        unsafe { device.update_descriptor_sets(&writes, &[]) };
+        SetWrites::new(set)
+            .uniform_buffer(0, params_buf.buffer(), params_size)
+            .storage_buffer(1, object_buffers[f].buffer(), object_size)
+            .storage_buffer(2, history_buffers[slot].buffer(), history_size)
+            .apply(device);
     }
 
     Ok(ModelHistoryPipeline {

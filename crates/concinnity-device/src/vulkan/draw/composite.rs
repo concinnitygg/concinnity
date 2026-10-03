@@ -18,6 +18,7 @@ use concinnity_core::render::fullscreen;
 use concinnity_core::render::fullscreen::TextBindCache;
 
 use super::super::context::VkContext;
+use super::super::record::cmd_push_constants;
 use super::super::upload_ring::UPLOAD_ALIGN;
 
 // Per-invocation binding context for the composite pass. `pub` because it is the
@@ -97,15 +98,12 @@ impl fullscreen::CompositeEncoder for VkContext {
                 },
                 far: self.state.view.far,
             };
-            device.cmd_push_constants(
+            cmd_push_constants(
+                device,
                 *cmd,
                 self.composite.pipeline_layout.handle(),
                 vk::ShaderStageFlags::FRAGMENT,
-                0,
-                std::slice::from_raw_parts(
-                    &composite as *const CompositeParams as *const u8,
-                    std::mem::size_of::<CompositeParams>(),
-                ),
+                &composite,
             );
             // Fullscreen triangle: three vertices, no vertex buffer.
             device.cmd_draw(*cmd, 3, 1, 0, 0);
@@ -138,15 +136,12 @@ impl fullscreen::CompositeEncoder for VkContext {
                 vk::PipelineBindPoint::GRAPHICS,
                 text_pipeline.handle(),
             );
-            self.hw.device.cmd_push_constants(
+            cmd_push_constants(
+                &self.hw.device,
                 *cmd,
                 self.text.pipeline_layout.handle(),
                 vk::ShaderStageFlags::VERTEX,
-                0,
-                std::slice::from_raw_parts(
-                    &text_push as *const TextUniforms as *const u8,
-                    std::mem::size_of::<TextUniforms>(),
-                ),
+                &text_push,
             );
         }
         true

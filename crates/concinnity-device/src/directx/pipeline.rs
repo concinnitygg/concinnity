@@ -1,6 +1,4 @@
 //! Cross-cutting D3D12 pipeline helpers shared by every pass:
-//!   * Root-signature helpers (`serialize_and_create_root_sig`,
-//!     `serialize_desc_and_create`, `root_cbv`, `root_srv`).
 //!   * Vertex input layouts referenced by main + shadow + velocity + SSAO
 //!     pre-pass + text pipelines (`main_input_layout`, `text_input_layout`).
 //!   * The text overlay pipeline (`create_text_root_signature`,
@@ -13,102 +11,13 @@
 //! main + shadow in directx/init/pipelines.rs.
 
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
-use super::com;
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::error::{map_hresult, map_pso_hresult};
-use crate::directx::root_constants::root_dwords;
-
-// Shared root-signature helpers
-
-// A pixel-visible root descriptor of `kind` at `register`, space 0.
-fn root_descriptor(kind: D3D12_ROOT_PARAMETER_TYPE, register: u32) -> D3D12_ROOT_PARAMETER {
-    D3D12_ROOT_PARAMETER {
-        ParameterType: kind,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            Descriptor: D3D12_ROOT_DESCRIPTOR {
-                ShaderRegister: register,
-                RegisterSpace: 0,
-            },
-        },
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-    }
-}
-
-// A pixel-visible root CBV at `b{register}`.
-pub(super) fn root_cbv(register: u32) -> D3D12_ROOT_PARAMETER {
-    root_descriptor(D3D12_ROOT_PARAMETER_TYPE_CBV, register)
-}
-
-// A pixel-visible root SRV at `t{register}`.
-pub(super) fn root_srv(register: u32) -> D3D12_ROOT_PARAMETER {
-    root_descriptor(D3D12_ROOT_PARAMETER_TYPE_SRV, register)
-}
-
-pub(super) fn serialize_and_create_root_sig(
-    device: &ID3D12Device,
-    params: &[D3D12_ROOT_PARAMETER],
-    label: &str,
-) -> RenderResult<ID3D12RootSignature> {
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
-        ..Default::default()
-    };
-    serialize_desc_and_create(device, &desc, label)
-}
-
-pub(super) fn serialize_desc_and_create(
-    device: &ID3D12Device,
-    desc: &D3D12_ROOT_SIGNATURE_DESC,
-    label: &str,
-) -> RenderResult<ID3D12RootSignature> {
-    let mut blob: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
-    let mut error: Option<windows::Win32::Graphics::Direct3D::ID3DBlob> = None;
-    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
-    // COM object lands in a binding that owns it.
-    unsafe {
-        windows::Win32::Graphics::Direct3D12::D3D12SerializeRootSignature(
-            desc,
-            windows::Win32::Graphics::Direct3D12::D3D_ROOT_SIGNATURE_VERSION_1,
-            &mut blob,
-            Some(&mut error),
-        )
-    }
-    .map_err(|e| {
-        let msg = error
-            .as_ref()
-            .map(|b| {
-                // SAFETY: a property query on a live `ID3DBlob`; it only reads.
-                let p = unsafe { b.GetBufferPointer() } as *const u8;
-                // SAFETY: a property query on a live `ID3DBlob`; it only reads.
-                let n = unsafe { b.GetBufferSize() };
-                // SAFETY: `ID3DBlob` owns a non-null buffer of `GetBufferSize()` bytes that stays
-                // live while `b` is held, and the text is copied out before the blob is released.
-                String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(p, n) }).into_owned()
-            })
-            .unwrap_or_default();
-        map_hresult(e.code(), &format!("serialize {label}: {msg}"))
-    })?;
-
-    let b = blob.ok_or_else(|| RenderError::Other(format!("{label}: no blob after serialize")))?;
-    // SAFETY: a property query on a live `ID3DBlob`; it only reads.
-    let ptr = unsafe { b.GetBufferPointer() };
-    // SAFETY: a property query on a live `ID3DBlob`; it only reads.
-    let len = unsafe { b.GetBufferSize() };
-    // SAFETY: `ID3DBlob` owns a non-null buffer of `GetBufferSize()` bytes that stays live while
-    // `b` is held, and `b` outlives the `CreateRootSignature` call that reads the slice.
-    let sig_bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) };
-
-    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
-    // COM object lands in a binding that owns it.
-    unsafe { device.CreateRootSignature(0, sig_bytes) }
-        .map_err(|e| map_hresult(e.code(), &format!("create {label}")))
-}
+use crate::directx::pso::{Blend, GraphicsPso};
+use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
 
 // Shared vertex input layouts
 //
@@ -244,149 +153,34 @@ pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u
 pub(super) fn create_composite_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
-    let scene_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // t0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let bloom_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 1, // t1
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // The 3D color-grading LUT SRV is a separate, non-contiguous heap slot
-    // (it sits after the bloom mips), so it needs its own descriptor table.
-    let lut_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 2, // t2
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    // The G-buffer channel sources the debug view modes visualize (t3 normal +
-    // depth, t4 roughness, t5 the blurred SSAO occlusion). Each is a separate
-    // non-contiguous heap slot, so each needs its own table. The fragment
-    // references all three statically, so they are bound every frame (the SSAO
-    // white 1x1 stands in when no G-buffer was built).
-    let channel_ranges = [3u32, 4, 5].map(|reg| D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: reg,
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    });
-    let params = [
-        // [0] Descriptor table: scene SRV (t0)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &scene_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [1] Descriptor table: bloom mip 0 SRV (t1)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &bloom_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [2] Root constants: CompositeParams (the 9 PostProcessParams tunables,
-        // the scene-transition fade, and the view-mode + far pair) at b0. The
-        // count must cover the whole struct: constants past `Num32BitValues`
-        // read as zero in the shader, which silently disabled the `fxaa` flag
-        // while this was 8.
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: root_dwords::<render_types::CompositeParams>(),
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [3] Descriptor table: 3D color-grading LUT SRV (t2)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &lut_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [4] G-buffer normal + depth SRV (t3)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &channel_ranges[0],
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [5] G-buffer roughness SRV (t4)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &channel_ranges[1],
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [6] Blurred SSAO occlusion SRV (t5)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &channel_ranges[2],
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
+    // [0] scene (t0), [1] bloom mip 0 (t1).
+    let sig = RootSig::new()
+        .srv_table(0, 1, Visibility::Pixel)
+        .srv_table(1, 1, Visibility::Pixel)
+        // [2] CompositeParams (the 9 PostProcessParams tunables, the
+        // scene-transition fade, and the view-mode + far pair) at b0. The count
+        // must cover the whole struct: constants past `Num32BitValues` read as
+        // zero in the shader, which silently disabled the `fxaa` flag while this
+        // was 8.
+        .constants::<render_types::CompositeParams>(0, Visibility::Pixel)
+        // [3] The 3D color-grading LUT (t2) is a separate, non-contiguous heap
+        // slot (it sits after the bloom mips), so it needs its own table.
+        .srv_table(2, 1, Visibility::Pixel);
+    // [4..6] The G-buffer channel sources the debug view modes visualize (t3
+    // normal + depth, t4 roughness, t5 the blurred SSAO occlusion). Each is a
+    // separate non-contiguous heap slot, so each needs its own table. The
+    // fragment references all three statically, so they are bound every frame
+    // (the SSAO white 1x1 stands in when no G-buffer was built).
+    let sig = [3u32, 4, 5]
+        .into_iter()
+        .fold(sig, |sig, reg| sig.srv_table(reg, 1, Visibility::Pixel));
     // s0..s5: scene, bloom, LUT, and the three channel-view sources. Identical
     // descriptors; the split is the shader's, not the pass's.
-    let static_samplers = [0u32, 1, 2, 3, 4, 5].map(|reg| D3D12_STATIC_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-        BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ShaderRegister: reg,
-        RegisterSpace: 0,
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        ..Default::default()
-    });
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: static_samplers.len() as u32,
-        pStaticSamplers: static_samplers.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-    };
-    serialize_desc_and_create(device, &desc, "composite root sig")
+    (0u32..6)
+        .fold(sig, |sig, reg| {
+            sig.static_sampler(SamplerState::LinearClamp, reg, Visibility::Pixel)
+        })
+        .build(device, "composite root sig")
 }
 
 // PSO for the composite pass: a vertex-buffer-less fullscreen triangle that
@@ -399,113 +193,7 @@ pub(super) fn create_composite_pso(
     ps: &[u8],
     rtv_format: DXGI_FORMAT,
 ) -> RenderResult<ID3D12PipelineState> {
-    create_blended_composite_pso(
-        device,
-        root_sig,
-        vs,
-        ps,
-        rtv_format,
-        concinnity_core::render::post::device::PostBlend::Replace,
-        "composite",
-    )
-}
-
-// The blend state a fullscreen post pass's single color attachment runs under.
-fn blend_target(
-    blend: concinnity_core::render::post::device::PostBlend,
-) -> D3D12_RENDER_TARGET_BLEND_DESC {
-    use concinnity_core::render::post::device::PostBlend;
-    let mask = D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8;
-    let (src, dst) = match blend {
-        PostBlend::Replace => {
-            return D3D12_RENDER_TARGET_BLEND_DESC {
-                BlendEnable: false.into(),
-                RenderTargetWriteMask: mask,
-                ..Default::default()
-            };
-        }
-        PostBlend::Additive => (D3D12_BLEND_ONE, D3D12_BLEND_ONE),
-        PostBlend::PremultipliedOver => (D3D12_BLEND_ONE, D3D12_BLEND_INV_SRC_ALPHA),
-    };
-    D3D12_RENDER_TARGET_BLEND_DESC {
-        BlendEnable: true.into(),
-        SrcBlend: src,
-        DestBlend: dst,
-        BlendOp: D3D12_BLEND_OP_ADD,
-        SrcBlendAlpha: src,
-        DestBlendAlpha: dst,
-        BlendOpAlpha: D3D12_BLEND_OP_ADD,
-        RenderTargetWriteMask: mask,
-        ..Default::default()
-    }
-}
-
-// As `create_composite_pso`, with the attachment's blend chosen by the caller.
-// Every fullscreen post pass builds its pipeline through this; `label` names the
-// pass in the failure message.
-pub(super) fn create_blended_composite_pso(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
-    vs: &[u8],
-    ps: &[u8],
-    rtv_format: DXGI_FORMAT,
-    blend: concinnity_core::render::post::device::PostBlend,
-    label: &str,
-) -> RenderResult<ID3D12PipelineState> {
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        // No input layout; the vertex shader generates the triangle from
-        // SV_VertexID.
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = rtv_format;
-            a
-        },
-        DSVFormat: DXGI_FORMAT_UNKNOWN,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: true.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: false.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ZERO,
-            DepthFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = blend_target(blend);
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| map_pso_hresult(e.code(), &format!("create {label} PSO")))
+    GraphicsPso::fullscreen(root_sig, vs, ps, rtv_format, Blend::Opaque).build(device, "composite")
 }
 
 // Text overlay pipeline
@@ -524,59 +212,15 @@ pub(super) fn compile_text_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, V
 pub(super) fn create_text_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
-    let atlas_srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // t0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let text_sampler_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // s0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-
-    let params = [
-        // [0] Root constants: `TextUniforms` at b0
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: root_dwords::<render_types::TextUniforms>(),
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        // [1] Descriptor table: atlas SRV (t0)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &atlas_srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        // [2] Descriptor table: text sampler (s0)
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &text_sampler_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
-
-    serialize_and_create_root_sig(device, &params, "text root sig")
+    RootSig::new()
+        // [0] `TextUniforms` at b0
+        .constants::<render_types::TextUniforms>(0, Visibility::Vertex)
+        // [1] atlas SRV (t0)
+        .srv_table(0, 1, Visibility::Pixel)
+        // [2] text sampler (s0)
+        .sampler_table(0, 1, Visibility::Pixel)
+        .input_layout()
+        .build(device, "text root sig")
 }
 
 pub(super) fn create_text_pso(
@@ -588,70 +232,9 @@ pub(super) fn create_text_pso(
     sample_count: u32,
 ) -> RenderResult<ID3D12PipelineState> {
     let layout = text_input_layout();
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        InputLayout: D3D12_INPUT_LAYOUT_DESC {
-            pInputElementDescs: layout.as_ptr(),
-            NumElements: layout.len() as u32,
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = rtv_format;
-            a
-        },
-        DSVFormat: DXGI_FORMAT_UNKNOWN,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: sample_count,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: true.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: false.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ZERO,
-            DepthFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-                    BlendEnable: true.into(),
-                    SrcBlend: D3D12_BLEND_SRC_ALPHA,
-                    DestBlend: D3D12_BLEND_INV_SRC_ALPHA,
-                    BlendOp: D3D12_BLEND_OP_ADD,
-                    SrcBlendAlpha: D3D12_BLEND_SRC_ALPHA,
-                    DestBlendAlpha: D3D12_BLEND_INV_SRC_ALPHA,
-                    BlendOpAlpha: D3D12_BLEND_OP_ADD,
-                    RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    ..Default::default()
-                };
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create text PSO"))
+    GraphicsPso::new(root_sig, vs, ps)
+        .input_layout(&layout)
+        .target(rtv_format, Blend::AlphaOver)
+        .samples(sample_count)
+        .build(device, "text")
 }

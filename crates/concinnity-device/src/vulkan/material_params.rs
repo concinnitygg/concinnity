@@ -85,15 +85,3 @@ impl VkContext {
         }
     }
 }
-
-// The write that points binding `MATERIAL_PARAMS_BINDING` of `set` at `info`.
-pub(in crate::vulkan) fn write(
-    set: vk::DescriptorSet,
-    info: &vk::DescriptorBufferInfo,
-) -> vk::WriteDescriptorSet<'_> {
-    vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(MATERIAL_PARAMS_BINDING)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .buffer_info(std::slice::from_ref(info))
-}

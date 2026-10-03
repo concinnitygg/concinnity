@@ -10,7 +10,6 @@
 
 use concinnity_core::gfx::render_types::SsaoParams;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::device::PostBlend;
 use concinnity_core::render::post::ssao;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -22,8 +21,9 @@ use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
-use crate::directx::pipeline::{create_blended_composite_pso, serialize_desc_and_create};
-use crate::directx::root_constants::{RootConstants, root_dwords};
+use crate::directx::pso::{Blend, GraphicsPso};
+use crate::directx::root_constants::RootConstants;
+use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
 use crate::directx::texture::{
     create_rt_target, transition_barrier, write_format_rtv, write_format_srv,
 };
@@ -75,124 +75,50 @@ fn compile_ssao_shaders(hot_reload: bool) -> RenderResult<SsaoShaders> {
 // a 1-SRV descriptor table at t0 (the pre-pass G-buffer), and a static
 // linear-clamp sampler at s0.
 fn create_ssao_kernel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let gbuffer_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // t0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let params = [
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: root_dwords::<SsaoParams>(),
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &gbuffer_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
-    let static_sampler = D3D12_STATIC_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-        BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ShaderRegister: 0,
-        RegisterSpace: 0,
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        ..Default::default()
-    };
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: 1,
-        pStaticSamplers: &static_sampler,
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-    };
-    serialize_desc_and_create(device, &desc, "ssao kernel root sig")
+    RootSig::new()
+        .constants::<SsaoParams>(0, Visibility::Pixel)
+        .srv_table(0, 1, Visibility::Pixel)
+        .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
+        .build(device, "ssao kernel root sig")
 }
 
 // Root signature for the depth-aware blur pass: two 1-SRV descriptor tables
 // (raw occlusion at t0, G-buffer at t1) and static linear-clamp samplers at
 // s0 / s1 -- one per source, which is how the single source declares them.
 fn create_ssao_blur_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let ao_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // t0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
+    RootSig::new()
+        .srv_table(0, 1, Visibility::Pixel)
+        .srv_table(1, 1, Visibility::Pixel)
+        .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
+        .static_sampler(SamplerState::LinearClamp, 1, Visibility::Pixel)
+        .build(device, "ssao blur root sig")
+}
+
+// The kernel and blur PSOs over their root signatures.
+fn create_ssao_psos(
+    device: &ID3D12Device,
+    info_queue: Option<&ID3D12InfoQueue>,
+    kernel_root_sig: &ID3D12RootSignature,
+    blur_root_sig: &ID3D12RootSignature,
+    shaders: &SsaoShaders,
+) -> RenderResult<RebuiltSsaoPipelines> {
+    let pso = |root_sig: &ID3D12RootSignature, ps: &[u8], label: &str| {
+        dump_on_err(
+            info_queue,
+            GraphicsPso::fullscreen(
+                root_sig,
+                &shaders.fullscreen_vs,
+                ps,
+                SSAO_OCCLUSION_FORMAT,
+                Blend::Opaque,
+            )
+            .build(device, label),
+        )
     };
-    let gbuffer_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 1, // t1
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let params = [
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &ao_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &gbuffer_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
-    // s0 / s1: raw occlusion, G-buffer. Identical descriptors; the split is the
-    // shader's, not the pass's.
-    let static_samplers = [0u32, 1].map(|reg| D3D12_STATIC_SAMPLER_DESC {
-        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
-        BorderColor: D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
-        MinLOD: 0.0,
-        MaxLOD: f32::MAX,
-        ShaderRegister: reg,
-        RegisterSpace: 0,
-        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        ..Default::default()
-    });
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: static_samplers.len() as u32,
-        pStaticSamplers: static_samplers.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_NONE,
-    };
-    serialize_desc_and_create(device, &desc, "ssao blur root sig")
+    Ok(RebuiltSsaoPipelines {
+        kernel_pso: pso(kernel_root_sig, &shaders.kernel_ps, "ssao kernel")?,
+        blur_pso: pso(blur_root_sig, &shaders.blur_ps, "ssao blur")?,
+    })
 }
 
 // Resources
@@ -274,30 +200,16 @@ impl SsaoResources {
         // Pipelines.
         let shaders = compile_ssao_shaders(hot_reload)?;
         let kernel_root_sig = dump_on_err(info_queue, create_ssao_kernel_root_signature(device))?;
-        let kernel_pso = dump_on_err(
-            info_queue,
-            create_blended_composite_pso(
-                device,
-                &kernel_root_sig,
-                &shaders.fullscreen_vs,
-                &shaders.kernel_ps,
-                SSAO_OCCLUSION_FORMAT,
-                PostBlend::Replace,
-                "ssao kernel",
-            ),
-        )?;
         let blur_root_sig = dump_on_err(info_queue, create_ssao_blur_root_signature(device))?;
-        let blur_pso = dump_on_err(
+        let RebuiltSsaoPipelines {
+            kernel_pso,
+            blur_pso,
+        } = create_ssao_psos(
+            device,
             info_queue,
-            create_blended_composite_pso(
-                device,
-                &blur_root_sig,
-                &shaders.fullscreen_vs,
-                &shaders.blur_ps,
-                SSAO_OCCLUSION_FORMAT,
-                PostBlend::Replace,
-                "ssao blur",
-            ),
+            &kernel_root_sig,
+            &blur_root_sig,
+            &shaders,
         )?;
 
         Ok(Self {
@@ -369,35 +281,13 @@ pub(in crate::directx) fn rebuild_ssao_pipelines(
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
 ) -> RenderResult<RebuiltSsaoPipelines> {
-    let shaders = compile_ssao_shaders(hot_reload)?;
-    let kernel_pso = dump_on_err(
+    create_ssao_psos(
+        device,
         info_queue,
-        create_blended_composite_pso(
-            device,
-            &ssao.kernel_root_sig,
-            &shaders.fullscreen_vs,
-            &shaders.kernel_ps,
-            SSAO_OCCLUSION_FORMAT,
-            PostBlend::Replace,
-            "ssao kernel",
-        ),
-    )?;
-    let blur_pso = dump_on_err(
-        info_queue,
-        create_blended_composite_pso(
-            device,
-            &ssao.blur_root_sig,
-            &shaders.fullscreen_vs,
-            &shaders.blur_ps,
-            SSAO_OCCLUSION_FORMAT,
-            PostBlend::Replace,
-            "ssao blur",
-        ),
-    )?;
-    Ok(RebuiltSsaoPipelines {
-        kernel_pso,
-        blur_pso,
-    })
+        &ssao.kernel_root_sig,
+        &ssao.blur_root_sig,
+        &compile_ssao_shaders(hot_reload)?,
+    )
 }
 
 // Encoder

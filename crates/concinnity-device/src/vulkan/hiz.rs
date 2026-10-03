@@ -42,8 +42,10 @@ use ash::vk;
 use concinnity_core::render::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
-use super::pipeline::{SHADER_ENTRY, spv_module};
-use super::resources::alloc_descriptor_sets;
+use super::descriptor_layout::{Binding, PoolSizes};
+use super::pipeline_desc::compute_pipeline;
+use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use super::set_writes::SetWrites;
 use super::texture::{
     LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
 };
@@ -205,27 +207,9 @@ fn build_hiz_pipelines(
         super::builtin_shaders::HIZ_SPD_SINGLE.compile(hot_reload)?
     };
     let tail_spv = super::builtin_shaders::HIZ_SPD_TAIL.compile(hot_reload)?;
-    let phase1 = create_compute_pipeline(device, spd_layout, &phase1_spv)?;
-    let tail = create_compute_pipeline(device, spd_tail_layout, &tail_spv)?;
+    let phase1 = compute_pipeline(device, spd_layout, &phase1_spv, "hiz")?;
+    let tail = compute_pipeline(device, spd_tail_layout, &tail_spv, "hiz")?;
     Ok((phase1, tail))
-}
-
-fn create_compute_pipeline(
-    device: &VkDevice,
-    layout: vk::PipelineLayout,
-    spv: &[u8],
-) -> RenderResult<OwnedPipeline> {
-    let module = spv_module(device, spv)?;
-    let stage = vk::PipelineShaderStageCreateInfo::default()
-        .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(module.handle())
-        .name(SHADER_ENTRY);
-    let info = vk::ComputePipelineCreateInfo::default()
-        .stage(stage)
-        .layout(layout);
-    let pipeline = crate::vulkan::pipeline_cache::create_compute_pipeline(device, &info)
-        .map_err(|e| super::error::map_vk_result(e, "create hiz pipeline"))?;
-    Ok(pipeline)
 }
 
 // Vulkan device + one-shot submission context threaded into the Hi-Z resource
@@ -291,14 +275,7 @@ impl HiZResources {
             device,
             &[(0, vk::DescriptorType::STORAGE_IMAGE, hiz_spd::LEVELS)],
         )?;
-        // Cull-read (set 1 of the cull pipeline): the Hi-Z image + UBO.
-        let read_set_layout = create_set_layout(
-            device,
-            &[
-                (0, vk::DescriptorType::SAMPLED_IMAGE),
-                (1, vk::DescriptorType::UNIFORM_BUFFER),
-            ],
-        )?;
+        let read_set_layout = create_descriptor_set_layout(device, &read_set_bindings())?;
 
         // Pipeline layouts (shared 16-byte push range for both build kernels).
         let push_range = vk::PushConstantRange::default()
@@ -450,45 +427,41 @@ impl HiZResources {
             alloc_descriptor_sets(device, self.descriptor_pool.handle(), &read_layouts2)?;
 
         // The mip array each dispatch binds. Elements past the last live mip
-        // repeat it so the array is fully populated.
-        let bound = |base_mip: u32| -> Vec<vk::ImageView> {
+        // repeat it so the array is fully populated even where the kernel's
+        // `level_count` stops it writing through those elements.
+        let bound = |base_mip: u32| -> Vec<vk::DescriptorImageInfo> {
             Plan::bound_mips(base_mip, mip_count)
-                .map(|m| mip_views[m as usize])
+                .map(|m| {
+                    vk::DescriptorImageInfo::default()
+                        .image_layout(vk::ImageLayout::GENERAL)
+                        .image_view(mip_views[m as usize])
+                })
                 .collect()
         };
         // Phase-1 sets: binding 0 = that frame's main depth, binding 1 = mips 0..6.
         let phase1_mips = bound(0);
         for (i, &set) in spd_sets.iter().enumerate() {
             let depth = depth_views[i.min(depth_views.len().saturating_sub(1))];
-            write_sampled_image(device, set, 0, depth);
-            write_storage_image_array(device, set, 1, &phase1_mips);
+            SetWrites::new(set)
+                .sampled_image(0, depth)
+                .images(1, vk::DescriptorType::STORAGE_IMAGE, &phase1_mips)
+                .apply(device);
         }
         // Tail set: mips 6..12, the first of which is the level it reduces.
         let tail_mips = bound(hiz_spd::LEVELS - 1);
         for &set in &spd_tail_sets {
-            write_storage_image_array(device, set, 0, &tail_mips);
+            SetWrites::new(set)
+                .images(0, vk::DescriptorType::STORAGE_IMAGE, &tail_mips)
+                .apply(device);
         }
-        // Read sets: binding 0 = the all-mips Hi-Z view, binding 1 = cull UBO.
-        for (i, &set) in read_sets.iter().enumerate() {
-            write_sampled_image(device, set, 0, sampled_view);
-            write_uniform_buffer(
-                device,
-                set,
-                1,
-                self.cull_ubos[i].buffer(),
-                std::mem::size_of::<CullHizParams>() as u64,
-            );
+        // Read sets: the all-mips Hi-Z view and the per-frame cull UBO; the
+        // phase-2 sets bind the phase-2 ring.
+        let ubo_size = std::mem::size_of::<CullHizParams>() as u64;
+        for (&set, ubo) in read_sets.iter().zip(&self.cull_ubos) {
+            write_read_set(device, set, sampled_view, ubo.buffer(), ubo_size);
         }
-        // Phase-2 read sets: same pyramid view, the phase-2 per-frame UBO.
-        for (i, &set) in read_sets2.iter().enumerate() {
-            write_sampled_image(device, set, 0, sampled_view);
-            write_uniform_buffer(
-                device,
-                set,
-                1,
-                self.cull_ubos2[i].buffer(),
-                std::mem::size_of::<CullHizParams>() as u64,
-            );
+        for (&set, ubo) in read_sets2.iter().zip(&self.cull_ubos2) {
+            write_read_set(device, set, sampled_view, ubo.buffer(), ubo_size);
         }
 
         // Replacing the pooled image drops the previous lease: the old pyramid
@@ -582,11 +555,11 @@ impl crate::vulkan::context::VkContext {
             std::slice::from_ref(&spd_set),
             &[],
         );
-        rec.push_constant_bytes(
+        rec.push_constants(
             &hiz.spd_pipeline_layout,
             vk::ShaderStageFlags::COMPUTE,
             0,
-            as_bytes(&plan.phase1.params),
+            &plan.phase1.params,
         );
         rec.dispatch(plan.phase1.groups.0, plan.phase1.groups.1, 1);
 
@@ -614,30 +587,28 @@ impl crate::vulkan::context::VkContext {
             std::slice::from_ref(&tail_set),
             &[],
         );
-        rec.push_constant_bytes(
+        rec.push_constants(
             &hiz.spd_tail_pipeline_layout,
             vk::ShaderStageFlags::COMPUTE,
             0,
-            as_bytes(&tail.params),
+            &tail.params,
         );
         rec.dispatch(tail.groups.0, tail.groups.1, 1);
     }
 }
 
-fn as_bytes<T: bytemuck::NoUninit>(v: &T) -> &[u8] {
-    bytemuck::bytes_of(v)
+// Cull-read set (set 1 of the cull pipeline): the Hi-Z image, read by texel
+// coordinate so no sampler is bound, and the cull UBO.
+fn read_set_bindings() -> [Binding; 2] {
+    let compute = vk::ShaderStageFlags::COMPUTE;
+    [
+        (0, vk::DescriptorType::SAMPLED_IMAGE, compute),
+        (1, vk::DescriptorType::UNIFORM_BUFFER, compute),
+    ]
 }
 
-fn create_set_layout(
-    device: &VkDevice,
-    bindings: &[(u32, vk::DescriptorType)],
-) -> RenderResult<OwnedSetLayout> {
-    let counted: Vec<_> = bindings.iter().map(|&(b, ty)| (b, ty, 1)).collect();
-    create_set_layout_counted(device, &counted)
-}
-
-// The same, with an explicit descriptor count per binding: the SPD sets bind
-// their destination mips as one array.
+// A compute set layout with an explicit descriptor count per binding: the SPD
+// sets bind their destination mips as one array.
 fn create_set_layout_counted(
     device: &VkDevice,
     bindings: &[(u32, vk::DescriptorType, u32)],
@@ -683,21 +654,12 @@ fn create_pool(
     // Two-pass occlusion adds one extra cull-read set per frame (phase 2),
     // each with an image + a UBO descriptor.
     let read_rings = if two_pass { 2 } else { 1 };
-    let sizes = [
-        // cull-read Hi-Z (frames per read ring) + phase-1 depth (frames), both
-        // read by coordinate.
-        vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::SAMPLED_IMAGE)
-            .descriptor_count(read_rings * f + f),
-        // One mip array per phase-1 set (frames) plus the tail's.
-        vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::STORAGE_IMAGE)
-            .descriptor_count((f + 1) * hiz_spd::LEVELS),
-        // cull-read UBO (frames per read ring).
-        vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(read_rings * f),
-    ];
+    // Phase 1 adds its depth (frames) and a mip array per set, as does the tail.
+    let sizes = PoolSizes::default()
+        .sets(&read_set_bindings(), read_rings * f)
+        .add(vk::DescriptorType::SAMPLED_IMAGE, f)
+        .add(vk::DescriptorType::STORAGE_IMAGE, (f + 1) * hiz_spd::LEVELS)
+        .build();
     // phase 1 (frames) + cull-read (frames per read ring) + the one tail set.
     let max_sets = (1 + read_rings) * f + 1;
     device
@@ -735,8 +697,7 @@ pub(super) fn off_camera_read_set(
     )?;
     ubo.write_val(0, &params);
     let set = alloc_descriptor_sets(device, pool, std::slice::from_ref(&layout))?[0];
-    write_sampled_image(device, set, 0, view);
-    write_uniform_buffer(device, set, 1, ubo.buffer(), size);
+    write_read_set(device, set, view, ubo.buffer(), size);
     Ok((set, ubo))
 }
 
@@ -748,76 +709,20 @@ pub(super) fn rewrite_read_set_view(
     set: vk::DescriptorSet,
     view: vk::ImageView,
 ) {
-    write_sampled_image(device, set, 0, view);
+    SetWrites::new(set).sampled_image(0, view).apply(device);
 }
 
-// Sampled-image write: both the phase-1 kernel and the cull read their image by
-// texel coordinate, so only the view is bound.
-fn write_sampled_image(
+fn write_read_set(
     device: &VkDevice,
     set: vk::DescriptorSet,
-    binding: u32,
     view: vk::ImageView,
+    ubo: vk::Buffer,
+    ubo_size: u64,
 ) {
-    let info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(view);
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(binding)
-        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-        .image_info(std::slice::from_ref(&info));
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
-}
-
-// Write a whole storage-image array into one binding. Views past the last live
-// mip repeat it, because a bound array must be fully populated even where the
-// kernel's `level_count` stops it writing through those elements.
-fn write_storage_image_array(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    binding: u32,
-    views: &[vk::ImageView],
-) {
-    let infos: Vec<_> = views
-        .iter()
-        .map(|&view| {
-            vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::GENERAL)
-                .image_view(view)
-        })
-        .collect();
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(binding)
-        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-        .image_info(&infos);
-    // SAFETY: `write` and the image infos it borrows are live for the call, and every set and
-    // resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
-}
-
-fn write_uniform_buffer(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    binding: u32,
-    buffer: vk::Buffer,
-    range: u64,
-) {
-    let info = vk::DescriptorBufferInfo::default()
-        .buffer(buffer)
-        .offset(0)
-        .range(range);
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(binding)
-        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-        .buffer_info(std::slice::from_ref(&info));
-    // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every set
-    // and resource it names belongs to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+    SetWrites::new(set)
+        .sampled_image(0, view)
+        .uniform_buffer(1, ubo, ubo_size)
+        .apply(device);
 }
 
 #[cfg(test)]

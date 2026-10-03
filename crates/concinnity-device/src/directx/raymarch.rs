@@ -61,8 +61,10 @@ use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
 use crate::directx::error::{map_hresult, map_pso_hresult};
-use crate::directx::pipeline::{main_input_layout, serialize_desc_and_create};
+use crate::directx::pipeline::main_input_layout;
+use crate::directx::pso::{Blend, CompareOp, Cull, Depth, GraphicsPso, Raster};
 use crate::directx::root_constants::RootConstants;
+use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::{
     HDR_FORMAT, create_fallback_white_resource, create_hdr_resolve_target, transition_barrier,
 };
@@ -191,63 +193,16 @@ pub(in crate::directx) struct RaymarchResources {
 //   [4] Descriptor table SRV  t0..t3     : shadow / IBL / scene fallback
 //   [5] Descriptor table Sampler s0..s2  : shadow_samp / cube_samp / scene_samp
 fn create_raymarch_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let srv_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 4,
-        BaseShaderRegister: 0, // t0..t3 (shadow_map, irradiance, prefilter, scene_color)
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let samp_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
-        NumDescriptors: 3,
-        BaseShaderRegister: 0, // s0..s2
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let cbv = |reg: u32, vis: D3D12_SHADER_VISIBILITY| D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            Descriptor: D3D12_ROOT_DESCRIPTOR {
-                ShaderRegister: reg,
-                RegisterSpace: 0,
-            },
-        },
-        ShaderVisibility: vis,
-    };
-    let params = [
-        cbv(0, D3D12_SHADER_VISIBILITY_ALL),
-        cbv(1, D3D12_SHADER_VISIBILITY_ALL),
-        cbv(2, D3D12_SHADER_VISIBILITY_PIXEL),
-        cbv(3, D3D12_SHADER_VISIBILITY_PIXEL),
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &srv_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &samp_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
-        ..Default::default()
-    };
-    serialize_desc_and_create(device, &desc, "raymarch root sig")
+    use Visibility::{All, Pixel};
+    RootSig::new()
+        .cbv(0, All)
+        .cbv(1, All)
+        .cbv(2, Pixel)
+        .cbv(3, Pixel)
+        .srv_table(0, 4, Pixel) // t0..t3 (shadow_map, irradiance, prefilter, scene_color)
+        .sampler_table(0, 3, Pixel) // s0..s2
+        .input_layout()
+        .build(device, "raymarch root sig")
 }
 
 // Build the per-volume PSO. Front-face culled so back faces of the
@@ -264,88 +219,36 @@ fn create_raymarch_pso(
     msaa_samples: u32,
 ) -> RenderResult<ID3D12PipelineState> {
     let input_layout = main_input_layout();
-    let mut rasterizer = D3D12_RASTERIZER_DESC {
-        FillMode: D3D12_FILL_MODE_SOLID,
-        CullMode: D3D12_CULL_MODE_FRONT,
-        FrontCounterClockwise: windows::core::BOOL(0),
-        DepthBias: 0,
-        DepthBiasClamp: 0.0,
-        SlopeScaledDepthBias: 0.0,
-        DepthClipEnable: windows::core::BOOL(1),
-        MultisampleEnable: windows::core::BOOL(if msaa_samples > 1 { 1 } else { 0 }),
-        AntialiasedLineEnable: windows::core::BOOL(0),
-        ForcedSampleCount: 0,
-        ConservativeRaster: D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
-    };
-    // No depth bias.
-    rasterizer.DepthBias = 0;
-
-    let mut blend = D3D12_BLEND_DESC {
-        AlphaToCoverageEnable: windows::core::BOOL(0),
-        IndependentBlendEnable: windows::core::BOOL(0),
-        RenderTarget: [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8],
-    };
-    blend.RenderTarget[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-        BlendEnable: windows::core::BOOL(0),
-        LogicOpEnable: windows::core::BOOL(0),
-        SrcBlend: D3D12_BLEND_ONE,
-        DestBlend: D3D12_BLEND_ZERO,
-        BlendOp: D3D12_BLEND_OP_ADD,
-        SrcBlendAlpha: D3D12_BLEND_ONE,
-        DestBlendAlpha: D3D12_BLEND_ZERO,
-        BlendOpAlpha: D3D12_BLEND_OP_ADD,
-        LogicOp: D3D12_LOGIC_OP_NOOP,
-        RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-    };
-
     // Hardware z-test against the existing MSAA main depth, and write
     // hit depth back via `SV_DepthLessEqual` so downstream
     // depth-sampling passes (decals, fog, SSR) see the raymarched
     // surface. Renders into the MSAA `hdr_color` target so the depth
     // sample-count matches; the encoder re-resolves `hdr_color →
     // hdr_resolve` after the pass.
-    let depth_stencil = D3D12_DEPTH_STENCIL_DESC {
-        DepthEnable: windows::core::BOOL(1),
-        DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ALL,
-        DepthFunc: D3D12_COMPARISON_FUNC_LESS_EQUAL,
-        StencilEnable: windows::core::BOOL(0),
-        ..Default::default()
-    };
+    GraphicsPso::new(root_sig, vs, ps)
+        .input_layout(&input_layout)
+        .target(HDR_FORMAT, Blend::Opaque)
+        .depth(
+            DXGI_FORMAT_D32_FLOAT,
+            Depth::Test {
+                compare: CompareOp::LessEqual,
+                write: true,
+            },
+        )
+        .samples(msaa_samples.max(1))
+        .raster(proxy_raster(msaa_samples > 1))
+        .build(device, "raymarch")
+}
 
-    let mut rtv_formats = [DXGI_FORMAT_UNKNOWN; 8];
-    rtv_formats[0] = HDR_FORMAT;
-    let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        BlendState: blend,
-        SampleMask: u32::MAX,
-        RasterizerState: rasterizer,
-        DepthStencilState: depth_stencil,
-        InputLayout: D3D12_INPUT_LAYOUT_DESC {
-            pInputElementDescs: input_layout.as_ptr(),
-            NumElements: input_layout.len() as u32,
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: rtv_formats,
-        DSVFormat: DXGI_FORMAT_D32_FLOAT,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: msaa_samples.max(1),
-            Quality: 0,
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create raymarch PSO"))
+// The proxy cube's rasterizer: clockwise front faces culled, so the back faces
+// rasterize.
+fn proxy_raster(multisample: bool) -> Raster {
+    Raster {
+        cull: Cull::Front,
+        front_ccw: false,
+        multisample,
+        ..Raster::default()
+    }
 }
 
 // Returns the wrapped HLSL for a single volume + the asset label used
@@ -489,47 +392,22 @@ fn compile_volume_volumetric_pso(
 //   [1] CBV b1 (SdfVolumeUniforms)       : root descriptor
 //   [2] CBV b2 (RaymarchLights)          : root descriptor
 //   [3] CBV b3 (RaymarchShadowUniforms)  : root descriptor
-//   [4] Root constants b4 (cascade_idx)  : 1 DWORD
+//   [4] Root constants b4 (cascade_idx)  : 4 DWORDs
 fn create_raymarch_shadow_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
-    let cbv = |reg: u32, vis: D3D12_SHADER_VISIBILITY| D3D12_ROOT_PARAMETER {
-        ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-        Anonymous: D3D12_ROOT_PARAMETER_0 {
-            Descriptor: D3D12_ROOT_DESCRIPTOR {
-                ShaderRegister: reg,
-                RegisterSpace: 0,
-            },
-        },
-        ShaderVisibility: vis,
-    };
-    let params = [
-        cbv(0, D3D12_SHADER_VISIBILITY_ALL),
-        cbv(1, D3D12_SHADER_VISIBILITY_ALL),
+    use Visibility::{All, Pixel};
+    RootSig::new()
+        .cbv(0, All)
+        .cbv(1, All)
         // Lights cbuffer is read by the pixel stage only (ray dir).
-        cbv(2, D3D12_SHADER_VISIBILITY_PIXEL),
+        .cbv(2, Pixel)
         // Shadow VPs read by both stages (VS projects through the
         // cascade VP, PS reprojects the hit through the same matrix).
-        cbv(3, D3D12_SHADER_VISIBILITY_ALL),
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 4,
-                    RegisterSpace: 0,
-                    Num32BitValues: 4,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-    ];
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
-        ..Default::default()
-    };
-    serialize_desc_and_create(device, &desc, "raymarch shadow root sig")
+        .cbv(3, All)
+        .constants::<[u32; 4]>(4, All)
+        .input_layout()
+        .build(device, "raymarch shadow root sig")
 }
 
 // Build the depth-only shadow PSO for one volume. No RTV, no MSAA
@@ -545,60 +423,11 @@ fn create_raymarch_shadow_pso(
     ps: &[u8],
 ) -> RenderResult<ID3D12PipelineState> {
     let input_layout = main_input_layout();
-    let rasterizer = D3D12_RASTERIZER_DESC {
-        FillMode: D3D12_FILL_MODE_SOLID,
-        CullMode: D3D12_CULL_MODE_FRONT,
-        FrontCounterClockwise: windows::core::BOOL(0),
-        DepthBias: 0,
-        DepthBiasClamp: 0.0,
-        SlopeScaledDepthBias: 0.0,
-        DepthClipEnable: windows::core::BOOL(1),
-        MultisampleEnable: windows::core::BOOL(0),
-        AntialiasedLineEnable: windows::core::BOOL(0),
-        ForcedSampleCount: 0,
-        ConservativeRaster: D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
-    };
-
-    let depth_stencil = D3D12_DEPTH_STENCIL_DESC {
-        DepthEnable: windows::core::BOOL(1),
-        DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ALL,
-        DepthFunc: D3D12_COMPARISON_FUNC_LESS,
-        StencilEnable: windows::core::BOOL(0),
-        ..Default::default()
-    };
-
-    let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        BlendState: D3D12_BLEND_DESC::default(),
-        SampleMask: u32::MAX,
-        RasterizerState: rasterizer,
-        DepthStencilState: depth_stencil,
-        InputLayout: D3D12_INPUT_LAYOUT_DESC {
-            pInputElementDescs: input_layout.as_ptr(),
-            NumElements: input_layout.len() as u32,
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 0,
-        RTVFormats: [DXGI_FORMAT_UNKNOWN; 8],
-        DSVFormat: DXGI_FORMAT_D32_FLOAT,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create raymarch shadow PSO"))
+    GraphicsPso::new(root_sig, vs, ps)
+        .input_layout(&input_layout)
+        .depth(DXGI_FORMAT_D32_FLOAT, Depth::LESS_WRITE)
+        .raster(proxy_raster(false))
+        .build(device, "raymarch shadow")
 }
 
 // Compile and link the per-volume shadow PSO. Mirrors `compile_volume_pso`

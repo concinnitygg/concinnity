@@ -8,13 +8,15 @@ use concinnity_core::render::error::RenderResult;
 
 use super::CullPlan;
 use super::bindless::BindlessPass;
-use super::compute::ComputeCull;
+use super::compute::{ComputeCull, cull_set_bindings};
 use crate::vulkan::allocator::PooledBuffer;
 use crate::vulkan::context::{VkDescriptors, VkShadow};
 use crate::vulkan::init::InitGpu;
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout};
 use crate::vulkan::pipeline::*;
-use crate::vulkan::resources::alloc_descriptor_sets;
+use crate::vulkan::pipeline_desc::compute_pipeline;
+use crate::vulkan::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use crate::vulkan::set_writes::SetWrites;
 
 // The GPU-driven shadow pass; `None`/empty unless the bindless cull path is
 // active and shadows are enabled.
@@ -79,20 +81,7 @@ pub(super) fn build_shadow_cull(
     {
         let cascades = render_types::NUM_SHADOW_CASCADES;
         // Lean shadow cull set layout: objects(0) + draw-args(1) + commands(2).
-        let sc_bindings: Vec<_> = (0..3u32)
-            .map(|b| {
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(b)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::COMPUTE)
-            })
-            .collect();
-        let sc_set_layout = device
-            .create_descriptor_set_layout(
-                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&sc_bindings),
-            )
-            .map_err(|e| crate::vulkan::error::map_vk_result(e, "shadow cull set layout"))?;
+        let sc_set_layout = create_descriptor_set_layout(device, &cull_set_bindings::<3>())?;
 
         let sc_push = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::COMPUTE)
@@ -107,7 +96,7 @@ pub(super) fn build_shadow_cull(
             )
             .map_err(|e| crate::vulkan::error::map_vk_result(e, "shadow cull pipeline layout"))?;
         let sc_spv = compile_shadow_cull_shader(hot_reload)?;
-        let sc_pipeline = create_cull_pipeline(device, sc_pl.handle(), &sc_spv)?;
+        let sc_pipeline = compute_pipeline(device, sc_pl.handle(), &sc_spv, "shadow cull")?;
 
         // Depth-only bindless shadow graphics pipeline: shadow-global set 0 +
         // the bindless GpuObjectData set 1 + a cascade-index push constant.
@@ -217,38 +206,11 @@ impl ViewCullInputs<'_> {
             let set_layouts: Vec<_> = (0..views).map(|_| self.set_layout).collect();
             let sets = alloc_descriptor_sets(device, self.pool, &set_layouts)?;
             for (v, &set) in sets.iter().enumerate() {
-                let obj_info = vk::DescriptorBufferInfo::default()
-                    .buffer(self.object_buffers[f].buffer())
-                    .offset(0)
-                    .range(object_buffer_size);
-                let arg_info = vk::DescriptorBufferInfo::default()
-                    .buffer(self.draw_args_buffers[f].buffer())
-                    .offset(0)
-                    .range(draw_args_size);
-                let cmd_info = vk::DescriptorBufferInfo::default()
-                    .buffer(bufs[v].buffer())
-                    .offset(0)
-                    .range(indirect_size);
-                let writes = [
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(0)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(&obj_info)),
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(1)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(&arg_info)),
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(2)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(&cmd_info)),
-                ];
-                // SAFETY: `writes` and the buffer/image infos it borrows are live for the call,
-                // and every set and resource it names belongs to this device.
-                unsafe { device.update_descriptor_sets(&writes, &[]) };
+                SetWrites::new(set)
+                    .storage_buffer(0, self.object_buffers[f].buffer(), object_buffer_size)
+                    .storage_buffer(1, self.draw_args_buffers[f].buffer(), draw_args_size)
+                    .storage_buffer(2, bufs[v].buffer(), indirect_size)
+                    .apply(device);
             }
             all_bufs.push(bufs);
             all_sets.push(sets);

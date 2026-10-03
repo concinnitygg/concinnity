@@ -40,8 +40,9 @@ use concinnity_core::render::uniforms::GlassMeshParams;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{Binding, PoolSizes};
-use super::pipeline::GraphicsStages;
-use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout, write_samplers};
+use super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc};
+use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
+use super::set_writes::SetWrites;
 use super::texture::{
     GpuImage, GpuUploadContext, ImageSpec, LayoutTransition, SubresourceRange, create_image,
     create_image_view, one_shot_submit, transition_image_layout_range, upload_texture,
@@ -480,19 +481,10 @@ impl TransparentRt {
     // static verts (3) + u32 indices (4). The TLAS / geom table / skinned buffers
     // (1/2/5/6) are filled by `wire_dynamic`. Called once at init.
     fn wire_static(&self, device: &VkDevice, vertex_buffer: vk::Buffer, index_buffer: vk::Buffer) {
-        for (i, &set) in self.sets.iter().enumerate() {
-            let ubo_info = vk::DescriptorBufferInfo::default()
-                .buffer(self.params_buffers[i].buffer())
-                .offset(0)
-                .range(std::mem::size_of::<RtParams>() as vk::DeviceSize);
-            let writes = [vk::WriteDescriptorSet::default()
-                .dst_set(set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(std::slice::from_ref(&ubo_info))];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
+        for (&set, params) in self.sets.iter().zip(&self.params_buffers) {
+            SetWrites::new(set)
+                .uniform_buffer(0, params.buffer(), size_of::<RtParams>() as vk::DeviceSize)
+                .apply(device);
         }
         self.rewire_geometry(device, vertex_buffer, index_buffer);
     }
@@ -506,30 +498,11 @@ impl TransparentRt {
         vertex_buffer: vk::Buffer,
         index_buffer: vk::Buffer,
     ) {
-        let verts_info = vk::DescriptorBufferInfo::default()
-            .buffer(vertex_buffer)
-            .offset(0)
-            .range(vk::WHOLE_SIZE);
-        let indices_info = vk::DescriptorBufferInfo::default()
-            .buffer(index_buffer)
-            .offset(0)
-            .range(vk::WHOLE_SIZE);
         for &set in &self.sets {
-            let writes = [
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(3)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&verts_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(4)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(&indices_info)),
-            ];
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
+            SetWrites::new(set)
+                .storage_buffer(3, vertex_buffer, vk::WHOLE_SIZE)
+                .storage_buffer(4, index_buffer, vk::WHOLE_SIZE)
+                .apply(device);
         }
     }
 
@@ -553,55 +526,17 @@ impl TransparentRt {
             deformed,
             skinned_indices,
         } = dynamic;
-        let set = self.sets[frame_idx];
-        let accels = [tlas];
-        let mut accel_write = vk::WriteDescriptorSetAccelerationStructureKHR::default()
-            .acceleration_structures(&accels);
-        let mut tlas_write = vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(1)
-            .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-            .push_next(&mut accel_write);
-        // `push_next` does not set the count for an acceleration-structure write.
-        tlas_write.descriptor_count = 1;
-        let geom_info = vk::DescriptorBufferInfo::default()
-            .buffer(geom_buffer)
-            .offset(0)
-            .range(geom_size);
-        let geom_write = vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(2)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(std::slice::from_ref(&geom_info));
-        let deformed_info = vk::DescriptorBufferInfo::default()
-            .buffer(deformed)
-            .offset(0)
-            .range(vk::WHOLE_SIZE);
-        let deformed_write = vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(5)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(std::slice::from_ref(&deformed_info));
         let sidx_buffer = if skinned_indices != vk::Buffer::null() {
             skinned_indices
         } else {
             self.dummy_ssbo.buffer()
         };
-        let sidx_info = vk::DescriptorBufferInfo::default()
-            .buffer(sidx_buffer)
-            .offset(0)
-            .range(vk::WHOLE_SIZE);
-        let sidx_write = vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(6)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(std::slice::from_ref(&sidx_info));
-        // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and every
-        // set and resource it names belongs to this device.
-        unsafe {
-            device
-                .update_descriptor_sets(&[tlas_write, geom_write, deformed_write, sidx_write], &[])
-        };
+        SetWrites::new(self.sets[frame_idx])
+            .acceleration_structure(1, tlas)
+            .storage_buffer(2, geom_buffer, geom_size)
+            .storage_buffer(5, deformed, vk::WHOLE_SIZE)
+            .storage_buffer(6, sidx_buffer, vk::WHOLE_SIZE)
+            .apply(device);
     }
 
     fn destroy(&mut self, _device: &VkDevice) {
@@ -1015,42 +950,20 @@ fn write_view_set_statics(
     view_ubo: vk::Buffer,
     sampler: vk::Sampler,
 ) {
-    let view_info = vk::DescriptorBufferInfo::default()
-        .buffer(view_ubo)
-        .offset(0)
-        .range(std::mem::size_of::<TransparentView>() as u64);
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(0)
-        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-        .buffer_info(std::slice::from_ref(&view_info));
-    // SAFETY: the write and the buffer info it borrows are live for the call, and the set and
-    // buffer belong to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
-    write_samplers(device, set, 5, &[sampler]);
+    SetWrites::new(set)
+        .uniform_buffer(0, view_ubo, size_of::<TransparentView>() as u64)
+        .sampler(5, sampler)
+        .apply(device);
 }
 
 // Write the view set's images, which a resize replaces.
 fn write_view_set_images(device: &VkDevice, set: vk::DescriptorSet, inputs: ViewSetImages) {
-    let images = [
-        inputs.snapshot_view,
-        inputs.depth_view,
-        inputs.reflection[0],
-        inputs.reflection[1],
-    ]
-    .map(|view| {
-        vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(view)
-    });
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(1)
-        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-        .image_info(&images);
-    // SAFETY: the write and the image infos it borrows are live for the call, and the set and
-    // every view belong to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+    SetWrites::new(set)
+        .sampled_image(1, inputs.snapshot_view)
+        .sampled_image(2, inputs.depth_view)
+        .sampled_image(3, inputs.reflection[0])
+        .sampled_image(4, inputs.reflection[1])
+        .apply(device);
 }
 
 // Write a record's params set: its uniform block (binding 0), the planar
@@ -1087,35 +1000,22 @@ fn write_params_set_at(
     planar_view: vk::ImageView,
     sampler: vk::Sampler,
 ) {
-    let info = vk::DescriptorBufferInfo::default()
-        .buffer(params_ubo)
-        .offset(params_offset)
-        .range(params_size);
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(0)
-        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-        .buffer_info(std::slice::from_ref(&info));
-    // SAFETY: the write and the buffer info it borrows are live for the call, and the set and
-    // buffer belong to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
-    write_planar_view(device, set, planar_view);
-    write_samplers(device, set, 2, &[sampler]);
+    SetWrites::new(set)
+        .buffer(
+            0,
+            vk::DescriptorType::UNIFORM_BUFFER,
+            params_ubo,
+            params_offset,
+            params_size,
+        )
+        .sampled_image(1, planar_view)
+        .sampler(2, sampler)
+        .apply(device);
 }
 
 // Point a params set's planar binding (1) at `view`.
 fn write_planar_view(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
-    let info = vk::DescriptorImageInfo::default()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(view);
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(1)
-        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-        .image_info(std::slice::from_ref(&info));
-    // SAFETY: the write and the image info it borrows are live for the call, and the set and
-    // view belong to this device.
-    unsafe { device.update_descriptor_sets(std::slice::from_ref(&write), &[]) };
+    SetWrites::new(set).sampled_image(1, view).apply(device);
 }
 
 // Which attributes of the standard engine `Vertex` a transparent vertex stage
@@ -1210,80 +1110,36 @@ fn transparent_pipeline(
         frag_spv,
         vertex_input,
     } = shaders;
-    let blend = output == TransparentOutput::Scene;
-    let modules = GraphicsStages::new(device, vert_spv, frag_spv)?;
-    let stages = modules.infos();
-
-    let binding = vk::VertexInputBindingDescription::default()
-        .binding(0)
-        .stride(std::mem::size_of::<Vertex>() as u32)
-        .input_rate(vk::VertexInputRate::VERTEX);
-    let attr = |location: u32, offset: u32| {
-        vk::VertexInputAttributeDescription::default()
-            .location(location)
-            .binding(0)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(offset)
+    let binding = [vk::VertexInputBindingDescription {
+        binding: 0,
+        stride: size_of::<Vertex>() as u32,
+        input_rate: vk::VertexInputRate::VERTEX,
+    }];
+    let attr = |location: u32, offset: u32| vk::VertexInputAttributeDescription {
+        location,
+        binding: 0,
+        format: vk::Format::R32G32B32_SFLOAT,
+        offset,
     };
     // Normal sits at byte 12 of `Vertex`, after the position.
     let attributes: &[vk::VertexInputAttributeDescription] = match vertex_input {
         TransparentVertexInput::Position => &[attr(0, 0)],
         TransparentVertexInput::PositionAndNormal => &[attr(0, 0), attr(1, 12)],
     };
-    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default()
-        .vertex_binding_descriptions(std::slice::from_ref(&binding))
-        .vertex_attribute_descriptions(attributes);
-
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-    let raster = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .line_width(1.0);
-    // The scene target is single-sample regardless of the main pass's MSAA.
-    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
     // The scene pass has no depth attachment (the fragment shader does the manual
-    // occlusion test); a reflection layer keeps its nearest surface.
-    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(!blend)
-        .depth_write_enable(!blend)
-        .depth_compare_op(vk::CompareOp::LESS);
-    let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-        .blend_enable(blend)
-        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .color_blend_op(vk::BlendOp::ADD)
-        .src_alpha_blend_factor(vk::BlendFactor::SRC_ALPHA)
-        .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .alpha_blend_op(vk::BlendOp::ADD)
-        .color_write_mask(vk::ColorComponentFlags::RGBA);
-    let blend_attachments = [blend_attachment];
-    let blend_state = vk::PipelineColorBlendStateCreateInfo::default()
-        .logic_op_enable(false)
-        .attachments(&blend_attachments);
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-    let info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vertex_input_state)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&raster)
-        .multisample_state(&multisample)
-        .depth_stencil_state(&depth_stencil)
-        .color_blend_state(&blend_state)
-        .dynamic_state(&dynamic)
-        .layout(layout)
-        .render_pass(render_pass);
-    let pipeline = crate::vulkan::pipeline_cache::create_graphics_pipeline(device, &info)
-        .map_err(|e| super::error::map_vk_result(e, "create transparent pipeline"))?;
-    Ok(pipeline)
+    // occlusion test); a reflection layer keeps its nearest surface. Either
+    // target is single-sample regardless of the main pass's MSAA.
+    let (blend, depth) = match output {
+        TransparentOutput::Scene => (Blend::AlphaOver, Depth::Off),
+        TransparentOutput::ReflectionLayer => (Blend::Opaque, Depth::LESS_WRITE),
+    };
+    GraphicsPipelineDesc {
+        depth,
+        vertex_bindings: &binding,
+        vertex_attributes: attributes,
+        ..GraphicsPipelineDesc::fullscreen(vert_spv, frag_spv, layout, render_pass, &[blend])
+    }
+    .build(device, "transparent")
 }
 
 // Create the pre-transparent HDR scene snapshot (SAMPLED | TRANSFER_DST,

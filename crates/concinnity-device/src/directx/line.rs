@@ -25,8 +25,9 @@ use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
-use crate::directx::error::{map_hresult, map_pso_hresult};
-use crate::directx::pipeline::serialize_desc_and_create;
+use crate::directx::error::map_hresult;
+use crate::directx::pso::{Blend, GraphicsPso, Raster};
+use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::HDR_FORMAT;
 use crate::directx::upload_ring::{UPLOAD_ALIGN, UploadRing};
 
@@ -150,43 +151,11 @@ pub(in crate::directx) fn rebuild_line_pso(
 //   [1] table  t0     scene depth SRV (Texture2D[MS]<float>)
 // No sampler: the fragment shader `Load`s the depth texel under the pixel.
 fn create_line_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
-    let depth_range = D3D12_DESCRIPTOR_RANGE {
-        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-        NumDescriptors: 1,
-        BaseShaderRegister: 0, // t0
-        RegisterSpace: 0,
-        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
-    };
-    let params = [
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &depth_range,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
-    let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: params.len() as u32,
-        pParameters: params.as_ptr(),
-        NumStaticSamplers: 0,
-        pStaticSamplers: std::ptr::null(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
-    };
-    serialize_desc_and_create(device, &desc, "line root sig")
+    RootSig::new()
+        .cbv(0, Visibility::All)
+        .srv_table(0, 1, Visibility::Pixel)
+        .input_layout()
+        .build(device, "line root sig")
 }
 
 // Vertex input elements for the line pass (32-byte `LineVertex` struct),
@@ -235,70 +204,14 @@ fn create_line_pso(
     ps: &[u8],
 ) -> RenderResult<ID3D12PipelineState> {
     let layout = line_input_layout();
-    let pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-        pRootSignature: com::borrowed(root_sig),
-        VS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: vs.as_ptr() as _,
-            BytecodeLength: vs.len(),
-        },
-        PS: D3D12_SHADER_BYTECODE {
-            pShaderBytecode: ps.as_ptr() as _,
-            BytecodeLength: ps.len(),
-        },
-        InputLayout: D3D12_INPUT_LAYOUT_DESC {
-            pInputElementDescs: layout.as_ptr(),
-            NumElements: layout.len() as u32,
-        },
-        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-        NumRenderTargets: 1,
-        RTVFormats: {
-            let mut a = [DXGI_FORMAT_UNKNOWN; 8];
-            a[0] = HDR_FORMAT;
-            a
-        },
-        DSVFormat: DXGI_FORMAT_UNKNOWN,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        SampleMask: u32::MAX,
-        RasterizerState: D3D12_RASTERIZER_DESC {
-            FillMode: D3D12_FILL_MODE_SOLID,
-            CullMode: D3D12_CULL_MODE_NONE,
-            FrontCounterClockwise: true.into(),
-            DepthClipEnable: false.into(),
-            ..Default::default()
-        },
-        DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-            DepthEnable: false.into(),
-            DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ZERO,
-            StencilEnable: false.into(),
-            ..Default::default()
-        },
-        BlendState: D3D12_BLEND_DESC {
-            RenderTarget: {
-                let mut arr = [D3D12_RENDER_TARGET_BLEND_DESC::default(); 8];
-                arr[0] = D3D12_RENDER_TARGET_BLEND_DESC {
-                    BlendEnable: true.into(),
-                    SrcBlend: D3D12_BLEND_SRC_ALPHA,
-                    DestBlend: D3D12_BLEND_INV_SRC_ALPHA,
-                    BlendOp: D3D12_BLEND_OP_ADD,
-                    SrcBlendAlpha: D3D12_BLEND_SRC_ALPHA,
-                    DestBlendAlpha: D3D12_BLEND_INV_SRC_ALPHA,
-                    BlendOpAlpha: D3D12_BLEND_OP_ADD,
-                    RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    ..Default::default()
-                };
-                arr
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    // SAFETY: `desc` outlives this synchronous call, and so do the root signature, shader bytecode
-    // and input-element array whose raw pointers it borrows.
-    unsafe { crate::directx::pso_library::create_graphics(device, &pso_desc) }
-        .map_err(|e| map_pso_hresult(e.code(), "create line PSO"))
+    GraphicsPso::new(root_sig, vs, ps)
+        .target(HDR_FORMAT, Blend::AlphaOver)
+        .input_layout(&layout)
+        .raster(Raster {
+            depth_clip: false,
+            ..Raster::default()
+        })
+        .build(device, "line")
 }
 
 // Byte length of `vertex_count` ribbon vertices, as the `u32` a vertex buffer

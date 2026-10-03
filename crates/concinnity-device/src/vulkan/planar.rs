@@ -36,7 +36,8 @@ use super::draw::ViewUniforms;
 use super::global_set::{GlobalBindings, GlobalSetContents};
 use super::graph_exec::GraphFrameParams;
 use super::probe::FaceArea;
-use super::resources::{alloc_descriptor_sets, write_storage_buffer};
+use super::resources::alloc_descriptor_sets;
+use super::set_writes::SetWrites;
 use super::texture::{
     GpuImage, ImageSpec, create_image, create_image_view, one_shot_submit, transition_image_layout,
 };
@@ -462,28 +463,12 @@ impl PlanarReflectionSet {
         let cull_sets = alloc_descriptor_sets(device, pool.handle(), &cull_layouts)?;
         for (i, &set) in cull_sets.iter().enumerate() {
             let frame = i % frames;
-            write_storage_buffer(
-                device,
-                set,
-                0,
-                cull.frame_object_buffers[frame].buffer(),
-                object_range,
-            );
-            write_storage_buffer(
-                device,
-                set,
-                1,
-                cull.frame_draw_args_buffers[frame].buffer(),
-                args_range,
-            );
-            write_storage_buffer(
-                device,
-                set,
-                2,
-                cull_indirect_bufs[i].buffer(),
-                indirect_size,
-            );
-            write_storage_buffer(device, set, 3, cull_status_bufs[i].buffer(), status_size);
+            SetWrites::new(set)
+                .storage_buffer(0, cull.frame_object_buffers[frame].buffer(), object_range)
+                .storage_buffer(1, cull.frame_draw_args_buffers[frame].buffer(), args_range)
+                .storage_buffer(2, cull_indirect_bufs[i].buffer(), indirect_size)
+                .storage_buffer(3, cull_status_bufs[i].buffer(), status_size)
+                .apply(device);
         }
 
         // The Hi-Z set (cull set 1) with hiz_enabled = 0: a frustum-only reflected

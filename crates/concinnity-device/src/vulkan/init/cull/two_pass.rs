@@ -8,13 +8,16 @@ use concinnity_core::render::error::RenderResult;
 
 use super::CullPlan;
 use super::bindless::BindlessPass;
-use super::compute::ComputeCull;
+use super::compute::{ComputeCull, main_cull_set};
 use crate::vulkan::context::HDR_FORMAT;
+use crate::vulkan::descriptor_layout::PoolSizes;
 use crate::vulkan::init::InitGpu;
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedPipeline, OwnedRenderPass};
 use crate::vulkan::pipeline::*;
+use crate::vulkan::pipeline_desc::compute_pipeline;
 use crate::vulkan::render_pass::create_main_render_pass_two_pass;
 use crate::vulkan::resources::alloc_descriptor_sets;
+use crate::vulkan::set_writes::SetWrites;
 
 // The two-pass occlusion resources; `None`/empty unless the world requested
 // two-pass occlusion and the bindless cull path is active.
@@ -91,7 +94,7 @@ pub(super) fn build_two_pass_cull(
 
         // Phase-2 cull pipeline (`main_phase2` entry, shared layout).
         let cs2 = compile_cull_shader_phase2(hot_reload)?;
-        let pipeline2 = create_cull_pipeline(device, pipeline_layout.handle(), &cs2)?;
+        let pipeline2 = compute_pipeline(device, pipeline_layout.handle(), &cs2, "cull phase-2")?;
 
         // Second indirect-command buffers (device-local, GPU-written).
         let mut ind2_buffers = Vec::with_capacity(frames);
@@ -105,52 +108,27 @@ pub(super) fn build_two_pass_cull(
 
         // Dedicated descriptor pool for the per-frame phase-2 cull sets
         // (4 storage buffers each), kept off the shared pool's exact sizing.
-        let pool_size = vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(4 * n_frames);
+        let pool_sizes = PoolSizes::default()
+            .sets(&main_cull_set(), n_frames)
+            .build();
         let pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
-                    .pool_sizes(std::slice::from_ref(&pool_size))
+                    .pool_sizes(&pool_sizes)
                     .max_sets(n_frames),
             )
             .map_err(|e| crate::vulkan::error::map_vk_result(e, "two-pass cull descriptor pool"))?;
         let set_layouts2: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
         let sets2 = alloc_descriptor_sets(device, pool.handle(), &set_layouts2)?;
         for (i, &set) in sets2.iter().enumerate() {
-            let obj_info = vk::DescriptorBufferInfo::default()
-                .buffer(object_buffers[i].buffer())
-                .offset(0)
-                .range(object_buffer_size);
-            let arg_info = vk::DescriptorBufferInfo::default()
-                .buffer(draw_args_buffers[i].buffer())
-                .offset(0)
-                .range(draw_args_size);
-            // Binding 2: the *second* indirect buffer (Cull2 writes it).
-            let cmd_info = vk::DescriptorBufferInfo::default()
-                .buffer(ind2_buffers[i].buffer())
-                .offset(0)
-                .range(indirect_size);
-            // Binding 3: the cull-status buffer (phase 1 wrote it; read here).
-            let status_info = vk::DescriptorBufferInfo::default()
-                .buffer(cull_status_buffers[i].buffer())
-                .offset(0)
-                .range(status_size);
-            let infos = [obj_info, arg_info, cmd_info, status_info];
-            let writes: Vec<_> = infos
-                .iter()
-                .enumerate()
-                .map(|(b, info)| {
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(set)
-                        .dst_binding(b as u32)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(info))
-                })
-                .collect();
-            // SAFETY: `writes` and the buffer/image infos it borrows are live for the call, and
-            // every set and resource it names belongs to this device.
-            unsafe { device.update_descriptor_sets(&writes, &[]) };
+            // Binding 2 is the second indirect buffer, which Cull2 writes; binding 3 the
+            // cull status phase 1 wrote.
+            SetWrites::new(set)
+                .storage_buffer(0, object_buffers[i].buffer(), object_buffer_size)
+                .storage_buffer(1, draw_args_buffers[i].buffer(), draw_args_size)
+                .storage_buffer(2, ind2_buffers[i].buffer(), indirect_size)
+                .storage_buffer(3, cull_status_buffers[i].buffer(), status_size)
+                .apply(device);
         }
 
         // Phase-1 (STORE MSAA color) + phase-2 (LOAD color + depth) main
