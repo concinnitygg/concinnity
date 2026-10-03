@@ -10,8 +10,9 @@
 //! into inline data, `partition` splits components from resources, `hot_reload_sources` records
 //! each texture and mesh handle's file, `pack` compiles and packs the payloads
 //! through `dispatch`, `lock_provenance` records each resource for the lock
-//! file, and `entry` is the sequence the public entry points drive. `validate` is the compile-free half,
-//! for callers that only want the checks.
+//! file, and `entry` is the sequence the public entry points drive, reporting
+//! each stage through `progress`. `validate` is the compile-free half, for
+//! callers that only want the checks.
 
 mod desugar;
 mod dispatch;
@@ -20,6 +21,7 @@ mod hot_reload_sources;
 mod lock_provenance;
 mod pack;
 mod partition;
+mod progress;
 mod result;
 mod validate;
 
@@ -27,9 +29,11 @@ mod validate;
 mod fixtures;
 
 pub use entry::{
-    BuildProgress, build_compiled, build_compiled_with_progress, build_from_path, build_loaded,
-    build_pipeline_from_str, write_blobs_to, write_build_outputs,
+    BuildReport, ThumbnailReport, build_compiled, build_compiled_with_progress, build_from_path,
+    build_loaded, build_pipeline_from_str, write_blobs_to, write_build_outputs,
 };
+pub use progress::{BuildProgress, BuildStage, ProgressFn};
+pub(crate) use progress::{Progress, StageProgress};
 pub use result::{MeshSourceInfo, PipelineResult, TextureSourceInfo};
 pub use validate::{validate_asset, validate_world_jsonl};
 

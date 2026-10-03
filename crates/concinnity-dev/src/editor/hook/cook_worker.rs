@@ -26,12 +26,15 @@ impl EditorHook {
             // other stages leave the bar indeterminate. The bounded pool
             // keeps the compile from fanning onto rayon's global pool
             // against the render thread.
-            let report = |p: concinnity_cook::BuildProgress| {
-                if p.stage == "compile" {
-                    op.set(p.done, p.total);
-                } else {
-                    op.set(0, 0);
-                }
+            let report = |p: concinnity_cook::BuildProgress<'_>| match p {
+                concinnity_cook::BuildProgress::Started { .. } => op.set(0, 0),
+                concinnity_cook::BuildProgress::ItemFinished {
+                    stage: concinnity_cook::BuildStage::Compile,
+                    done,
+                    total,
+                    ..
+                } => op.set(done, total),
+                _ => {}
             };
             let outcome = pool()
                 .install(|| crate::authoring::build_world_str_to_disk(&content, Some(&report)));

@@ -680,6 +680,16 @@ const GENERATED_WORLD: &str = concat!(
     "\n",
 );
 
+// The line a build's status gives its compile step, which says how many
+// payloads the build cache held.
+fn compile_step(out: &Output) -> String {
+    stderr(out)
+        .lines()
+        .find(|line| line.contains("Compile"))
+        .unwrap_or_default()
+        .to_string()
+}
+
 // The payload cache has to be transparent: replaying a hit must reproduce the
 // bytes the miss produced, or a world cooks differently depending on whether
 // the machine happens to hold a cache entry. Driving the binary twice is the
@@ -689,18 +699,18 @@ fn assert_warm_build_reproduces_the_cold_one(project: &Project) {
     let cold = project.cn(&["build"]);
     expect_ok(&cold, "cold build");
     assert!(
-        stdout(&cold).contains("0 reused"),
+        !compile_step(&cold).contains("cached"),
         "the first build should find an empty cache: {}",
-        stdout(&cold)
+        stderr(&cold)
     );
     let cold_blob = project.blob();
 
     let warm = project.cn(&["build"]);
     expect_ok(&warm, "warm build");
     assert!(
-        stdout(&warm).contains("0 compiled"),
+        compile_step(&warm).contains("all cached"),
         "the second build should replay every payload: {}",
-        stdout(&warm)
+        stderr(&warm)
     );
     let warm_blob = project.blob();
 

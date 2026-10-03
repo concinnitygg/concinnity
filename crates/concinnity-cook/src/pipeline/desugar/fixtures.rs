@@ -2,6 +2,12 @@
 //! and the synthetic FBX documents the FBX passes read.
 
 use crate::pipeline::pack::MeshCacheEntry;
+use crate::pipeline::progress::{BuildStage, StageProgress};
+
+// The import stage of a pass driven outside a build, reporting nowhere.
+pub(super) fn quiet() -> StageProgress<'static> {
+    StageProgress::silent(BuildStage::Import)
+}
 
 // A cache map that claims a compiled payload is already in hand for the
 // named asset, so every desugar pass must skip its source parse.

@@ -8,6 +8,7 @@ use super::super::pack::MeshCacheEntry;
 use super::skin_index_arg;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
+use crate::pipeline::progress::StageProgress;
 
 // Expand glTF-sourced SkinnedMesh assets in place: parse the referenced .glb
 // and write the imported geometry + skeleton into the asset's inline
@@ -20,6 +21,7 @@ pub(in crate::pipeline) fn desugar_gltf_skinned_meshes(
     assets: &mut [WorldJsonlAsset],
     mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
     assets_dir: Option<&Path>,
+    progress: &StageProgress<'_>,
 ) -> std::io::Result<()> {
     for asset in assets.iter_mut() {
         if asset.asset_type != RegisteredType::SkinnedMesh {
@@ -48,6 +50,12 @@ pub(in crate::pipeline) fn desugar_gltf_skinned_meshes(
             continue;
         }
 
+        let item = if source.is_empty() {
+            asset.id.clone()
+        } else {
+            source.clone()
+        };
+        progress.begin(&item);
         let invalid = |msg: String| std::io::Error::new(std::io::ErrorKind::InvalidData, msg);
         let imported = match character_model {
             Some(arg) => {
@@ -128,6 +136,7 @@ pub(in crate::pipeline) fn desugar_gltf_skinned_meshes(
             imported.skeleton.len(),
             imported.morph_target_names.len()
         );
+        progress.end(&item, false);
     }
     Ok(())
 }
@@ -141,6 +150,7 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
     assets: &mut [WorldJsonlAsset],
     mesh_cache: &std::collections::HashMap<String, MeshCacheEntry>,
     assets_dir: Option<&Path>,
+    progress: &StageProgress<'_>,
 ) -> std::io::Result<()> {
     use concinnity_core::components::VertexData;
     use std::collections::HashMap;
@@ -192,6 +202,7 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
             .and_then(|v| v.as_u64())
             .map(|n| n as usize);
 
+        progress.begin(&source);
         if !parsed_cache.contains_key(&source) {
             let doc = crate::import::glb::parse_glb(&source, assets_dir).map_err(|e| {
                 std::io::Error::new(
@@ -290,6 +301,7 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
                 ilen,
             ),
         }
+        progress.end(&source, false);
     }
     Ok(())
 }
@@ -297,7 +309,7 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::desugar::fixtures::{hit_cache, morphing_skinned_glb};
+    use crate::pipeline::desugar::fixtures::{hit_cache, morphing_skinned_glb, quiet};
     use crate::pipeline::fixtures::{wja, write_fixture};
 
     #[test]
@@ -308,7 +320,8 @@ mod tests {
             wja("inline", RegisteredType::SkinnedMesh, inline_args.clone()),
             wja("cached", RegisteredType::SkinnedMesh, cached_args.clone()),
         ];
-        desugar_gltf_skinned_meshes(&mut assets, &hit_cache("cached"), None).expect("desugar");
+        desugar_gltf_skinned_meshes(&mut assets, &hit_cache("cached"), None, &quiet())
+            .expect("desugar");
         // No source: untouched. Cache hit: the missing .glb is never parsed
         // and the args stay pre-desugar so the next probe key matches.
         assert_eq!(assets[0].args, inline_args);
@@ -331,7 +344,8 @@ mod tests {
             RegisteredType::SkinnedMesh,
             serde_json::json!({"source": src}),
         )];
-        desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None).expect("desugar");
+        desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None, &quiet())
+            .expect("desugar");
 
         let args = &assets[0].args;
         assert_eq!(args["vertices"].as_array().unwrap().len(), 3);
@@ -355,7 +369,8 @@ mod tests {
             RegisteredType::SkinnedMesh,
             serde_json::json!({"source": src}),
         )];
-        desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None).expect("desugar");
+        desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None, &quiet())
+            .expect("desugar");
 
         let args = &assets[0].args;
         assert_eq!(args["morph_target_names"], serde_json::json!(["bulge"]));
@@ -370,7 +385,7 @@ mod tests {
             RegisteredType::SkinnedMesh,
             serde_json::json!({"source": "/no/such/hero.glb"}),
         )];
-        let err = desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None)
+        let err = desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None, &quiet())
             .expect_err("missing .glb");
         assert!(err.to_string().contains("Asset 'hero'"), "got: {err}");
     }
@@ -385,7 +400,7 @@ mod tests {
             wja("cached", RegisteredType::Mesh, cached_args.clone()),
             wja("inline", RegisteredType::Mesh, inline_args.clone()),
         ];
-        desugar_gltf_meshes(&mut assets, &hit_cache("cached"), None).expect("desugar");
+        desugar_gltf_meshes(&mut assets, &hit_cache("cached"), None, &quiet()).expect("desugar");
         assert_eq!(
             assets[0].args, fbx_args,
             ".fbx sources belong to the fbx pass"
@@ -401,8 +416,8 @@ mod tests {
             RegisteredType::Mesh,
             serde_json::json!({"source": "/no/such/scene.glb"}),
         )];
-        let err =
-            desugar_gltf_meshes(&mut assets, &Default::default(), None).expect_err("missing .glb");
+        let err = desugar_gltf_meshes(&mut assets, &Default::default(), None, &quiet())
+            .expect_err("missing .glb");
         assert!(err.to_string().contains("Asset 'crate_mesh'"), "got: {err}");
     }
 
@@ -426,7 +441,7 @@ mod tests {
             RegisteredType::Mesh,
             serde_json::json!({"source": gltf.to_str().unwrap(), "primitive_index": 0}),
         )];
-        desugar_gltf_meshes(&mut assets, &Default::default(), None).expect("desugar");
+        desugar_gltf_meshes(&mut assets, &Default::default(), None, &quiet()).expect("desugar");
         let vertices = assets[0].args.get("vertices").expect("inline vertices");
         assert_eq!(vertices.as_array().unwrap().len(), 3);
         assert_eq!(
@@ -463,7 +478,7 @@ mod tests {
                 serde_json::json!({"source": src, "primitive_index": 0}),
             ),
         ];
-        desugar_gltf_meshes(&mut assets, &Default::default(), None).expect("desugar");
+        desugar_gltf_meshes(&mut assets, &Default::default(), None, &quiet()).expect("desugar");
         for asset in &assets {
             assert_eq!(asset.args["vertices"].as_array().unwrap().len(), 3);
             assert_eq!(asset.args["indices"].as_array().unwrap().len(), 3);
@@ -486,7 +501,7 @@ mod tests {
                 args[k] = v.clone();
             }
             let mut assets = vec![wja("ghost", RegisteredType::Mesh, args)];
-            let err = desugar_gltf_meshes(&mut assets, &Default::default(), None)
+            let err = desugar_gltf_meshes(&mut assets, &Default::default(), None, &quiet())
                 .expect_err("primitive 7 does not exist");
             let msg = err.to_string();
             assert!(msg.contains("Asset 'ghost'"), "got: {msg}");
@@ -512,7 +527,7 @@ mod tests {
             )
         };
         let mut assets = vec![chunk("part_a"), chunk("part_b")];
-        desugar_gltf_meshes(&mut assets, &Default::default(), None).expect("desugar");
+        desugar_gltf_meshes(&mut assets, &Default::default(), None, &quiet()).expect("desugar");
         for asset in &assets {
             assert_eq!(asset.args["vertices"].as_array().unwrap().len(), 3);
         }
@@ -534,7 +549,7 @@ mod tests {
             RegisteredType::Mesh,
             serde_json::json!({"source": src, "chunk_index": 0}),
         )];
-        desugar_gltf_meshes(&mut assets, &Default::default(), None).expect("desugar");
+        desugar_gltf_meshes(&mut assets, &Default::default(), None, &quiet()).expect("desugar");
         assert_eq!(assets[0].args["vertices"].as_array().unwrap().len(), 3);
 
         let mut past_end = vec![wja(
@@ -542,7 +557,7 @@ mod tests {
             RegisteredType::Mesh,
             serde_json::json!({"source": src, "chunk_index": 9}),
         )];
-        let err = desugar_gltf_meshes(&mut past_end, &Default::default(), None)
+        let err = desugar_gltf_meshes(&mut past_end, &Default::default(), None, &quiet())
             .expect_err("chunk 9 does not exist");
         let msg = err.to_string();
         assert!(msg.contains("Asset 'chunk9'"), "got: {msg}");
@@ -568,7 +583,8 @@ mod tests {
                 serde_json::json!({"source": src, "skin_index": 1}),
             ),
         ];
-        desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None).expect("desugar");
+        desugar_gltf_skinned_meshes(&mut assets, &Default::default(), None, &quiet())
+            .expect("desugar");
 
         // Each asset inlines its own part's geometry.
         assert_eq!(

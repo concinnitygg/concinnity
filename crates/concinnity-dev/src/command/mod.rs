@@ -18,7 +18,7 @@ mod version;
 mod world_path;
 
 pub use add::add;
-pub use build::build;
+pub use build::{Verbosity, build};
 pub use check::check;
 pub use explain::explain;
 pub use list::list;

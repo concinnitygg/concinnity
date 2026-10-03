@@ -8,7 +8,7 @@ use concinnity_host::thread::asset_id;
 use std::path::Path;
 
 use super::dispatch::build_asset;
-use super::entry::BuildProgress;
+use super::progress::{BuildStage, Progress};
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
 use crate::blob::PayloadPacker;
@@ -177,7 +177,7 @@ pub(in crate::pipeline) struct PackContext<'a> {
     pub(in crate::pipeline) assets_dir: Option<&'a Path>,
     pub(in crate::pipeline) platform: concinnity_core::platform::Platform,
     pub(in crate::pipeline) mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
-    pub(in crate::pipeline) progress: Option<&'a (dyn Fn(BuildProgress) + Sync)>,
+    pub(in crate::pipeline) progress: Progress<'a>,
 }
 
 pub(in crate::pipeline) fn compile_and_pack_payloads(
@@ -238,23 +238,16 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     // content-addressed, so concurrent hits and stores never collide. The
     // collected order follows `jobs`, so packing below stays deterministic.
     let cache_hits = AtomicUsize::new(0);
-    let compile_total = jobs.len() as u32;
-    let compiled_count = AtomicUsize::new(0);
-    let report_one = || {
-        if let Some(p) = progress {
-            let done = compiled_count.fetch_add(1, Ordering::Relaxed) as u32 + 1;
-            p(BuildProgress {
-                stage: "compile",
-                done,
-                total: compile_total,
-            });
-        }
-    };
+    let stage = progress.stage(
+        BuildStage::Compile,
+        (jobs.len() + resource_jobs.len()) as u32,
+    );
     let pending: Vec<(usize, Vec<u8>)> = jobs
         .par_iter()
         .map(
             |(idx, name, ct, discriminant)| -> std::io::Result<(usize, Vec<u8>)> {
                 let ct = *ct;
+                stage.begin(name);
 
                 // The job carries the `named` index; map it to its source asset
                 // via `named_src` (`named` is not 1:1 with `assets` once resource
@@ -280,13 +273,18 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
                 // desugar; honor those results here so the .glb parse really
                 // is skipped on cache hits. On a miss the precomputed key is
                 // used at store time, keeping the next build's probe valid.
+                let reused = |bytes: Vec<u8>| {
+                    cache_hits.fetch_add(1, Ordering::Relaxed);
+                    stage.end(name, true);
+                    Ok((*idx, bytes))
+                };
                 if let Some(entry) = mesh_cache.get(name) {
                     if let Some(bytes) = &entry.bytes {
-                        cache_hits.fetch_add(1, Ordering::Relaxed);
-                        return Ok((*idx, bytes.clone()));
+                        return reused(bytes.clone());
                     }
                     let compiled_bytes = (build.compile)(asset_args, &ctx)?;
                     crate::cache::store(PAYLOAD, &entry.key, &compiled_bytes);
+                    stage.end(name, false);
                     return Ok((*idx, compiled_bytes));
                 }
 
@@ -295,15 +293,14 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
                 let inputs = (build.cache_inputs)(asset_args, &ctx);
                 let key = crate::cache::payload_key(*discriminant, asset_args, &ctx, &inputs);
                 if let Some(bytes) = crate::cache::load(PAYLOAD, &key) {
-                    cache_hits.fetch_add(1, Ordering::Relaxed);
-                    return Ok((*idx, bytes));
+                    return reused(bytes);
                 }
                 let compiled_bytes = (build.compile)(asset_args, &ctx)?;
                 crate::cache::store(PAYLOAD, &key, &compiled_bytes);
+                stage.end(name, false);
                 Ok((*idx, compiled_bytes))
             },
         )
-        .inspect(|_| report_one())
         .collect::<std::io::Result<Vec<_>>>()?;
 
     let component_hits = cache_hits.into_inner();
@@ -316,6 +313,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
     let mut resource_pending: Vec<PendingResource> = Vec::new();
     for (asset_idx, rt, handle) in resource_jobs {
         let asset = &assets[*asset_idx];
+        stage.begin(&asset.id);
         let ctx = crate::asset::BuildCtx {
             name: asset.id.as_str(),
             platform,
@@ -326,16 +324,13 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         // A glTF/FBX-sourced mesh was probed before desugar; honor that result so
         // the source parse really is skipped on a hit and the pre-desugar key is
         // reused at store time (same contract as the component gltf-cache path).
-        let bytes = if let Some(entry) = mesh_cache.get(&asset.id) {
+        let (bytes, reused) = if let Some(entry) = mesh_cache.get(&asset.id) {
             match &entry.bytes {
-                Some(bytes) => {
-                    resource_hits += 1;
-                    bytes.clone()
-                }
+                Some(bytes) => (bytes.clone(), true),
                 None => {
                     let compiled = rt.compile_payload(&asset.args, assets_dir)?;
                     crate::cache::store(PAYLOAD, &entry.key, &compiled);
-                    compiled
+                    (compiled, false)
                 }
             }
         } else {
@@ -349,17 +344,16 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
                 &inputs,
             );
             match crate::cache::load(PAYLOAD, &key) {
-                Some(bytes) => {
-                    resource_hits += 1;
-                    bytes
-                }
+                Some(bytes) => (bytes, true),
                 None => {
                     let compiled = rt.compile_payload(&asset.args, assets_dir)?;
                     crate::cache::store(PAYLOAD, &key, &compiled);
-                    compiled
+                    (compiled, false)
                 }
             }
         };
+        resource_hits += usize::from(reused);
+        stage.end(&asset.id, reused);
         resource_pending.push(PendingResource {
             kind: job_resource_kind(*rt),
             handle: *handle,
@@ -635,7 +629,7 @@ mod tests {
                 max_blob_bytes: 1024,
                 assets_dir: None,
                 mesh_cache: &cache,
-                progress: None,
+                progress: Progress::none(),
             },
         )
         .expect("probed payloads need no compiler");
@@ -721,7 +715,7 @@ mod tests {
                 max_blob_bytes: 1 << 20,
                 assets_dir: None,
                 mesh_cache: &cache,
-                progress: None,
+                progress: Progress::none(),
             },
         )
         .expect("probed payloads need no compiler");
@@ -762,7 +756,7 @@ mod tests {
                 max_blob_bytes: 1 << 20,
                 assets_dir: None,
                 mesh_cache: &Default::default(),
-                progress: None,
+                progress: Progress::none(),
             },
         )
         .expect("box compiles");
@@ -815,7 +809,7 @@ mod tests {
                 max_blob_bytes: 1 << 20,
                 assets_dir: None,
                 mesh_cache: &cache,
-                progress: None,
+                progress: Progress::none(),
             },
         )
         .expect("a probe miss compiles");
@@ -858,7 +852,7 @@ mod tests {
                 max_blob_bytes: 1024,
                 assets_dir: None,
                 mesh_cache: &Default::default(),
-                progress: None,
+                progress: Progress::none(),
             },
         )
         .expect("pack");
@@ -905,7 +899,7 @@ mod tests {
                 max_blob_bytes: 1024,
                 assets_dir: None,
                 mesh_cache: &Default::default(),
-                progress: None,
+                progress: Progress::none(),
             },
         )
         .expect("pack");
@@ -957,7 +951,7 @@ mod tests {
                 max_blob_bytes: 8,
                 assets_dir: None,
                 mesh_cache: &cache,
-                progress: None,
+                progress: Progress::none(),
             },
         )
         .expect("pack");

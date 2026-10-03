@@ -16,6 +16,8 @@
 
 use concinnity_cook::asset_api::{AssetRequest, create_asset_def};
 use concinnity_cook::authoring::registry::RegisteredType;
+
+use crate::build_status::Verbosity;
 use concinnity_cook::authoring::world::{
     WORLD_JSONL, args_with_id, entry_errors, entry_handle, entry_id, parse_entry,
     patch_world_jsonl_to, set_entry_id, take_entry_id,
@@ -104,7 +106,8 @@ pub(crate) fn add_to_path(
         Ok(())
     })?;
 
-    match super::build_world_file(&tmp_path) {
+    let built = super::build_world_file_as(&tmp_path, world_path, Verbosity::Normal);
+    match built {
         Ok(()) => std::fs::rename(&tmp_path, world_path).inspect_err(|_e| {
             let _ = std::fs::remove_file(&tmp_path);
         }),

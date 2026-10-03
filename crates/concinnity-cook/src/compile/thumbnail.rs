@@ -19,7 +19,7 @@ use concinnity_core::gfx::raster;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
-use crate::pipeline::PipelineResult;
+use crate::pipeline::{BuildStage, PipelineResult, Progress, StageProgress, ThumbnailReport};
 
 // Folded into every key: bump when the rendering itself changes so stale
 // images re-bake. Version history:
@@ -33,20 +33,11 @@ const THUMB_SIZE: u32 = 128;
 // The neutral surface color mesh previews shade with.
 const MESH_COLOR: [f32; 3] = [0.72, 0.72, 0.75];
 
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct ThumbReport {
-    pub baked: usize,
-    pub reused: usize,
-    // Resources with no bakeable preview (unsupported compressed format,
-    // undecodable payload). The browser falls back to a typed icon.
-    pub skipped: usize,
-}
-
 // What one bake produced: the images the segment does not already hold, the
 // whole set's name -> key map, and the counts.
 #[derive(Debug, Default)]
 pub(crate) struct ThumbBake {
-    pub report: ThumbReport,
+    pub report: ThumbnailReport,
     pub images: Vec<(String, Vec<u8>)>,
     pub names: Vec<(String, String)>,
 }
@@ -54,19 +45,48 @@ pub(crate) struct ThumbBake {
 // Bake into the build cache segment, holding what it produced for the flush
 // that follows. Every step is best effort: with no state root nothing is
 // stored, which costs the editor its previews and never a build.
-pub(crate) fn bake_thumbnails(result: &PipelineResult) -> ThumbReport {
-    let bake = collect(result, &crate::cache::thumbnails::holds);
+pub(crate) fn bake_thumbnails(result: &PipelineResult, progress: Progress<'_>) -> ThumbnailReport {
+    let stage = progress.stage(BuildStage::Thumbnails, candidates(result));
+    let bake = collect(result, &crate::cache::thumbnails::holds, &stage);
     crate::cache::thumbnails::hold(&bake.images, &bake.names);
     crate::cache::flush();
     bake.report
 }
 
+// How many assets a bake visits: every one it renders, reuses, or skips.
+fn candidates(result: &PipelineResult) -> u32 {
+    let resources: usize = [
+        ResourceKind::Texture,
+        ResourceKind::Material,
+        ResourceKind::Mesh,
+        ResourceKind::EnvironmentMap,
+    ]
+    .into_iter()
+    .map(|kind| records_of(result, kind).count())
+    .sum();
+    let models = model_discriminant()
+        .map(|disc| {
+            result
+                .defs
+                .iter()
+                .filter(|d| d.discriminant == disc)
+                .count()
+        })
+        .unwrap_or(0);
+    (resources + models) as u32
+}
+
 // Render every previewable asset, asking `held` whether the segment already
-// carries the key each one hashes to. No I/O: the caller decides what to do
-// with the images.
-pub(crate) fn collect(result: &PipelineResult, held: &dyn Fn(&str) -> bool) -> ThumbBake {
+// carries the key each one hashes to, and reporting each asset to `stage` as
+// it is done. No I/O: the caller decides what to do with the images.
+pub(crate) fn collect(
+    result: &PipelineResult,
+    held: &dyn Fn(&str) -> bool,
+    stage: &StageProgress<'_>,
+) -> ThumbBake {
     let mut out = Collector {
         held,
+        stage,
         seen: HashSet::new(),
         bake: ThumbBake::default(),
     };
@@ -76,11 +96,11 @@ pub(crate) fn collect(result: &PipelineResult, held: &dyn Fn(&str) -> bool) -> T
     // Textures first: material swatches sample their averages.
     for (record, name) in records_of(result, ResourceKind::Texture) {
         let Some(bytes) = payload_of(result, record) else {
-            out.skip();
+            out.skip(name);
             continue;
         };
         let Some((w, h, rgba)) = texture_preview(bytes) else {
-            out.skip();
+            out.skip(name);
             continue;
         };
         texture_tints.insert(record.handle, average_color(&rgba));
@@ -91,7 +111,7 @@ pub(crate) fn collect(result: &PipelineResult, held: &dyn Fn(&str) -> bool) -> T
     let mut material_colors: HashMap<u32, [f32; 3]> = HashMap::new();
     for (record, name) in records_of(result, ResourceKind::Material) {
         let Ok(mat) = postcard::from_bytes::<Material>(&record.data_bytes) else {
-            out.skip();
+            out.skip(name);
             continue;
         };
         let albedo = mat
@@ -114,13 +134,13 @@ pub(crate) fn collect(result: &PipelineResult, held: &dyn Fn(&str) -> bool) -> T
 
     for (record, name) in records_of(result, ResourceKind::Mesh) {
         let Some(bytes) = payload_of(result, record) else {
-            out.skip();
+            out.skip(name);
             continue;
         };
         let Ok((verts, indices, _)) =
             concinnity_core::gfx::mesh_payload::deserialize_with_lods(bytes)
         else {
-            out.skip();
+            out.skip(name);
             continue;
         };
         let img = raster::shade_mesh(&verts, &indices, THUMB_SIZE, MESH_COLOR);
@@ -132,11 +152,11 @@ pub(crate) fn collect(result: &PipelineResult, held: &dyn Fn(&str) -> bool) -> T
 
     for (record, name) in records_of(result, ResourceKind::EnvironmentMap) {
         let Some(bytes) = payload_of(result, record) else {
-            out.skip();
+            out.skip(name);
             continue;
         };
         let Some((w, h, rgba)) = envmap_preview(bytes) else {
-            out.skip();
+            out.skip(name);
             continue;
         };
         out.add(name, key_of(&[b"envmap", &hash_bytes(bytes)]), w, h, &rgba);
@@ -149,6 +169,7 @@ pub(crate) fn collect(result: &PipelineResult, held: &dyn Fn(&str) -> bool) -> T
 // answered for reach it as reuse.
 struct Collector<'a> {
     held: &'a dyn Fn(&str) -> bool,
+    stage: &'a StageProgress<'a>,
     seen: HashSet<String>,
     bake: ThumbBake,
 }
@@ -157,16 +178,18 @@ impl Collector<'_> {
     // Index `name` against `key`, encoding the image unless the segment (or an
     // earlier asset of this same bake) already carries it.
     fn add(&mut self, name: &str, key: String, width: u32, height: u32, rgba: &[u8]) {
-        if self.seen.contains(&key) || (self.held)(&key) {
+        let reused = self.seen.contains(&key) || (self.held)(&key);
+        if reused {
             self.bake.report.reused += 1;
         } else {
             let Some(png) = encode_png(width, height, rgba) else {
-                self.skip();
+                self.skip(name);
                 return;
             };
             self.bake.images.push((key.clone(), png));
             self.bake.report.baked += 1;
         }
+        self.stage.end(name, reused);
         self.seen.insert(key.clone());
         self.bake.names.push((name.to_string(), key));
     }
@@ -174,8 +197,9 @@ impl Collector<'_> {
     // An asset with no bakeable preview: it is counted, and left out of the
     // map so a consumer falls back to a typed icon rather than to a key that
     // addresses nothing.
-    fn skip(&mut self) {
+    fn skip(&mut self, name: &str) {
         self.bake.report.skipped += 1;
+        self.stage.end(name, false);
     }
 }
 
@@ -209,9 +233,7 @@ fn collect_models(
             mesh_payloads.insert(*handle, bytes);
         }
     }
-    let Some(model_disc) =
-        crate::authoring::registry::RegisteredType::parse("Model").and_then(|t| t.discriminant())
-    else {
+    let Some(model_disc) = model_discriminant() else {
         return;
     };
     for (def, name) in result.defs.iter().zip(result.names.iter()) {
@@ -219,7 +241,7 @@ fn collect_models(
             continue;
         }
         let Ok(model) = postcard::from_bytes::<Model>(&def.args_bytes) else {
-            out.skip();
+            out.skip(name);
             continue;
         };
         let mut key_inputs: Vec<Vec<u8>> = vec![b"model".to_vec()];
@@ -242,7 +264,7 @@ fn collect_models(
             decoded.push((verts, indices, color));
         }
         if decoded.is_empty() {
-            out.skip();
+            out.skip(name);
             continue;
         }
         let parts: Vec<raster::MeshPart> = decoded
@@ -257,6 +279,10 @@ fn collect_models(
         let inputs: Vec<&[u8]> = key_inputs.iter().map(|v| v.as_slice()).collect();
         out.add(name, key_of(&inputs), img.width, img.height, &img.rgba);
     }
+}
+
+fn model_discriminant() -> Option<u8> {
+    crate::authoring::registry::RegisteredType::parse("Model").and_then(|t| t.discriminant())
 }
 
 // The payload bytes a component def's locator points at.
@@ -462,6 +488,10 @@ mod tests {
         result
     }
 
+    fn quiet() -> StageProgress<'static> {
+        StageProgress::silent(BuildStage::Thumbnails)
+    }
+
     // Every key a bake produced, the reuse lookup a later bake asks against.
     fn held_by(bake: &ThumbBake) -> HashSet<String> {
         bake.images.iter().map(|(key, _)| key.clone()).collect()
@@ -487,7 +517,7 @@ mod tests {
     #[test]
     fn bakes_pngs_and_an_index_then_reuses_on_rebake() {
         let result = textured_meshed_result();
-        let bake = collect(&result, &|_| false);
+        let bake = collect(&result, &|_| false, &quiet());
         assert_eq!(bake.report.baked, 2, "texture + mesh");
         assert_eq!(bake.report.reused, 0);
 
@@ -501,7 +531,7 @@ mod tests {
         }
 
         let held = held_by(&bake);
-        let again = collect(&result, &|key| held.contains(key));
+        let again = collect(&result, &|key| held.contains(key), &quiet());
         assert_eq!(again.report.baked, 0, "unchanged content re-bakes nothing");
         assert_eq!(again.report.reused, 2);
         assert_eq!(
@@ -519,7 +549,7 @@ mod tests {
         result.resources.push(tex);
         result.resource_locks.push(lock("red_tex_copy", "Texture"));
 
-        let bake = collect(&result, &|_| false);
+        let bake = collect(&result, &|_| false, &quiet());
         assert_eq!(bake.report.baked, 2, "texture + mesh");
         assert_eq!(bake.report.reused, 1, "the second texture reuses the first");
         assert_eq!(bake.names.len(), 3);
@@ -541,7 +571,7 @@ mod tests {
             data_bytes: postcard::to_allocvec(&mat).unwrap(),
         });
         result.resource_locks.push(lock("plaster", "Material"));
-        let bake = collect(&result, &|_| false);
+        let bake = collect(&result, &|_| false, &quiet());
         assert_eq!(bake.report.baked, 3);
         assert!(!key_for(&bake, "plaster").is_empty());
     }
@@ -608,7 +638,7 @@ mod tests {
         result.names = vec!["crate_model".to_string(), "proc_ball".to_string()];
         result.mesh_component_names = vec![(1, "proc_ball".to_string())];
 
-        let bake = collect(&result, &|_| false);
+        let bake = collect(&result, &|_| false, &quiet());
         // Texture + mesh + material + model.
         assert_eq!(bake.report.baked, 4, "{:?}", bake.report);
         assert!(!image_for(&bake, "crate_model").is_empty());
@@ -622,7 +652,7 @@ mod tests {
             }],
         };
         broken.defs[0].args_bytes = postcard::to_allocvec(&orphan).unwrap();
-        let bake = collect(&broken, &|_| false);
+        let bake = collect(&broken, &|_| false, &quiet());
         assert_eq!(bake.report.baked, 3);
         assert_eq!(bake.report.skipped, 1);
     }
@@ -633,7 +663,7 @@ mod tests {
         result.payloads = vec![vec![0u8; 16]];
         result.resources = vec![record(ResourceKind::Texture, 0, 0, 0, 16)];
         result.resource_locks = vec![lock("broken", "Texture")];
-        let bake = collect(&result, &|_| false);
+        let bake = collect(&result, &|_| false, &quiet());
         assert_eq!(bake.report.baked, 0);
         assert_eq!(bake.report.skipped, 1);
         assert!(bake.names.is_empty(), "a skipped asset is not indexed");
@@ -645,14 +675,43 @@ mod tests {
         result.payloads = vec![vec![0u8; 4]];
         result.resources = vec![record(ResourceKind::Mesh, 0, 0, 2, 100)];
         result.resource_locks = vec![lock("truncated", "Mesh")];
-        let bake = collect(&result, &|_| false);
+        let bake = collect(&result, &|_| false, &quiet());
         assert_eq!(
             bake.report,
-            ThumbReport {
+            ThumbnailReport {
                 baked: 0,
                 reused: 0,
                 skipped: 1
             }
+        );
+    }
+
+    // The stage's total counts every asset the bake visits, so its last
+    // report reaches it.
+    #[test]
+    fn a_bake_reports_each_candidate_once() {
+        use crate::pipeline::BuildProgress;
+        let result = textured_meshed_result();
+        let finished = std::sync::Mutex::new(Vec::new());
+        let sink = |p: BuildProgress<'_>| {
+            if let BuildProgress::ItemFinished {
+                item, done, total, ..
+            } = p
+            {
+                finished
+                    .lock()
+                    .unwrap()
+                    .push((item.to_string(), done, total));
+            }
+        };
+        let stage = Progress::new(Some(&sink)).stage(BuildStage::Thumbnails, candidates(&result));
+        collect(&result, &|_| false, &stage);
+        assert_eq!(
+            finished.into_inner().unwrap(),
+            [
+                ("red_tex".to_string(), 1, 2),
+                ("box_mesh".to_string(), 2, 2)
+            ]
         );
     }
 }

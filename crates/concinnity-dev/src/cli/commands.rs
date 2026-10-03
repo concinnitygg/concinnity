@@ -316,6 +316,10 @@ pub(crate) struct NewArgs {
 pub(crate) struct BuildArgs {
     #[command(flatten)]
     pub(crate) world: WorldArg,
+
+    /// Also show the build's informational messages, such as each imported mesh
+    #[arg(short, long)]
+    pub(crate) verbose: bool,
 }
 
 #[derive(Debug, clap::Args)]

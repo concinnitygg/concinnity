@@ -10,13 +10,14 @@ use std::path::Path;
 
 use super::desugar::{
     desugar_animation_imports, desugar_fbx_meshes, desugar_fbx_skinned_meshes, desugar_gltf_meshes,
-    desugar_gltf_skinned_meshes, desugar_root_motion,
+    desugar_gltf_skinned_meshes, desugar_root_motion, pending_imports,
 };
 use super::errors_to_io;
 use super::hot_reload_sources::hot_reload_sources;
 use super::lock_provenance::lock_provenance;
 use super::pack::{PackContext, compile_and_pack_payloads, probe_mesh_payload_cache};
 use super::partition::{Partitioned, partition_components};
+use super::progress::{BuildStage, Progress, ProgressFn, StageProgress};
 use super::result::PipelineResult;
 use crate::authoring::world::WorldJsonlAsset;
 
@@ -29,12 +30,40 @@ pub fn build_from_path(
     tree: &crate::paths::StateTree,
     json_path: &str,
     platform: Platform,
-) -> std::io::Result<()> {
+) -> std::io::Result<BuildReport> {
     let content = std::fs::read_to_string(json_path)?;
     let source = crate::authoring::world::WorldSource::file(&content, Path::new(json_path));
     let loaded =
         crate::build_only::prepare_world(source, Some(&tree.assets_dir())).map_err(errors_to_io)?;
-    build_loaded(tree, loaded, platform)
+    build_loaded(tree, loaded, platform, None)
+}
+
+/// What a build wrote, and how much of it the build cache already held.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BuildReport {
+    /// Each blob file written, with its size on disk in bytes.
+    pub blobs: Vec<(std::path::PathBuf, u64)>,
+    /// The `world-lock.json` written beside the blobs.
+    pub lock: std::path::PathBuf,
+    /// Payloads the build cache already held.
+    pub cache_hits: usize,
+    /// Payloads compiled by this build.
+    pub cache_misses: usize,
+    /// Default assets the build injected, recorded in the lock.
+    pub injected: usize,
+    /// The preview thumbnails this build rendered and reused.
+    pub thumbnails: ThumbnailReport,
+}
+
+/// The thumbnails a build rendered, reused, and could not preview.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ThumbnailReport {
+    /// Thumbnails rendered by this build.
+    pub baked: usize,
+    /// Thumbnails the build cache already held.
+    pub reused: usize,
+    /// Assets with no previewable payload.
+    pub skipped: usize,
 }
 
 /// Compile a world that already passed
@@ -45,34 +74,15 @@ pub fn build_loaded(
     tree: &crate::paths::StateTree,
     loaded: crate::build_only::LoadedWorld,
     platform: Platform,
-) -> std::io::Result<()> {
+    progress: Option<ProgressFn<'_>>,
+) -> std::io::Result<BuildReport> {
     let assets_dir = tree.assets_dir();
-    let result = build_compiled(loaded.assets, Some(&assets_dir), platform)?;
-
-    let pack_result = write_build_outputs(tree, &result, &loaded.injected, &loaded.shadowed)?;
-    for (blob_idx, path) in pack_result.blob_paths.iter().enumerate() {
-        let payload_bytes = result.payloads.get(blob_idx).map(|b| b.len()).unwrap_or(0);
-        println!("Wrote {} ({} payload bytes)", path, payload_bytes);
-    }
-
-    if result.cache_hits + result.cache_misses > 0 {
-        println!(
-            "Build cache: {} reused, {} compiled",
-            result.cache_hits, result.cache_misses
-        );
-    }
-
-    let lock = tree.world_lock_path();
-    if !loaded.injected.is_empty() {
-        println!(
-            "Injected {} default asset(s) (see {})",
-            loaded.injected.len(),
-            lock.display()
-        );
-    }
-    println!("Wrote {}", lock.display());
-
-    Ok(())
+    let result =
+        build_compiled_with_progress(loaded.assets, Some(&assets_dir), platform, progress)?;
+    let mut report =
+        write_build_outputs(tree, &result, &loaded.injected, &loaded.shadowed, progress)?;
+    report.injected = loaded.injected.len();
+    Ok(report)
 }
 
 /// Write a compiled world's blob files, naming the primary blob `primary`.
@@ -96,19 +106,27 @@ pub fn write_blobs_to(
     )
 }
 
-/// Write the blobs and world-lock.json for a compiled world into `tree`: the
-/// shared build tail used by the CLI and the FFI host. The lock records each
-/// asset under its real name plus every injected default with its full args.
+/// Write the blobs and world-lock.json for a compiled world into `tree`, then
+/// render its thumbnails: the shared build tail used by the CLI and the
+/// editor. The lock records each asset under its real name plus every
+/// injected default with its full args. The report's `injected` is left for
+/// the caller, which holds the loaded world.
 pub fn write_build_outputs(
     tree: &crate::paths::StateTree,
     result: &PipelineResult,
     injected: &[crate::build_only::InjectedAsset],
     shadowed: &[crate::build_only::ShadowedAsset],
-) -> std::io::Result<crate::blob::PackResult> {
+    progress: Option<ProgressFn<'_>>,
+) -> std::io::Result<BuildReport> {
+    let progress = Progress::new(progress);
+    let stage = progress.stage(BuildStage::Write, result.payloads.len() as u32);
     let pack_result = write_blobs_to(
         result,
         &concinnity_host::store::blob::primary_in(&tree.data_dir()),
     )?;
+    for path in &pack_result.blob_paths {
+        stage.end(path, false);
+    }
     let named_refs: Vec<(&str, &BlobAssetDef)> = result
         .names
         .iter()
@@ -123,17 +141,26 @@ pub fn write_build_outputs(
         shadowed,
         &pack_result.blob_paths,
     )?;
+    let blobs = pack_result
+        .blob_paths
+        .iter()
+        .map(|path| {
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            (std::path::PathBuf::from(path), size)
+        })
+        .collect();
     // Thumbnails are a best-effort side product: they are rendered after the
     // blobs the build exists to produce, and land in the build cache segment
     // beside the payloads they were rendered from.
-    let thumbs = crate::compile::thumbnail::bake_thumbnails(result);
-    if thumbs.baked > 0 {
-        println!(
-            "Baked {} thumbnail(s) ({} reused)",
-            thumbs.baked, thumbs.reused
-        );
-    }
-    Ok(pack_result)
+    let thumbnails = crate::compile::thumbnail::bake_thumbnails(result, progress);
+    Ok(BuildReport {
+        blobs,
+        lock: tree.world_lock_path(),
+        cache_hits: result.cache_hits,
+        cache_misses: result.cache_misses,
+        injected: 0,
+        thumbnails,
+    })
 }
 
 /// Run the full build pipeline on an in-memory JSONL string without writing any
@@ -149,19 +176,6 @@ pub fn build_pipeline_from_str(
     build_compiled(loaded.assets, assets_dir, platform)
 }
 
-/// A progress report from the compile pipeline: the stage's name and its
-/// done / total counts. `total == 0` marks a stage that cannot count its work
-/// (progress there is indeterminate).
-#[derive(Debug, Clone, Copy)]
-pub struct BuildProgress {
-    /// The stage's name.
-    pub stage: &'static str,
-    /// Work completed in this stage.
-    pub done: u32,
-    /// Total work in this stage; 0 when the stage cannot count it.
-    pub total: u32,
-}
-
 /// Compile an already-prepared world (expanded + structurally and semantically
 /// validated) into in-memory blobs. This is the compile-only stage; it assumes
 /// the assets have passed crate::build_only::prepare_world, which should have been
@@ -175,22 +189,15 @@ pub fn build_compiled(
     build_compiled_with_progress(assets, assets_dir, platform, None)
 }
 
-/// [`build_compiled`] with a progress callback. The callback fires from the
-/// desugar stage and, concurrently, from the parallel payload compile (hence
-/// `Sync`); it must be cheap and non-blocking.
+/// [`build_compiled`] reporting the import and compile stages through
+/// `progress`.
 pub fn build_compiled_with_progress(
     mut assets: Vec<WorldJsonlAsset>,
     assets_dir: Option<&Path>,
     platform: Platform,
-    progress: Option<&(dyn Fn(BuildProgress) + Sync)>,
+    progress: Option<ProgressFn<'_>>,
 ) -> std::io::Result<PipelineResult> {
-    if let Some(p) = progress {
-        p(BuildProgress {
-            stage: "desugar",
-            done: 0,
-            total: 0,
-        });
-    }
+    let progress = Progress::new(progress);
 
     // Cache probe runs before desugar. For every glTF-sourced Mesh /
     // SkinnedMesh, hash the un-desugared args + referenced .glb and look up
@@ -200,17 +207,21 @@ pub fn build_compiled_with_progress(
     // step stores the freshly produced payload, so the next build's probe
     // can re-use it.
     let mesh_cache = probe_mesh_payload_cache(&assets, assets_dir, platform);
+    let imports = match pending_imports(&assets, &mesh_cache) {
+        0 => StageProgress::silent(BuildStage::Import),
+        pending => progress.stage(BuildStage::Import, pending),
+    };
 
     // Expand any glTF-sourced SkinnedMesh and Mesh assets into inline geometry
     // before anything else looks at their args. Animations expand after the
     // skinned-mesh pass so an importer that wanted to share state could read
     // already-imported skeletons; today both passes parse the .glb fresh,
     // but the ordering keeps that option open without an API churn.
-    desugar_gltf_skinned_meshes(&mut assets, &mesh_cache, assets_dir)?;
-    desugar_fbx_skinned_meshes(&mut assets, &mesh_cache)?;
-    desugar_gltf_meshes(&mut assets, &mesh_cache, assets_dir)?;
-    desugar_fbx_meshes(&mut assets, &mesh_cache)?;
-    desugar_animation_imports(&mut assets, assets_dir)?;
+    desugar_gltf_skinned_meshes(&mut assets, &mesh_cache, assets_dir, &imports)?;
+    desugar_fbx_skinned_meshes(&mut assets, &mesh_cache, &imports)?;
+    desugar_gltf_meshes(&mut assets, &mesh_cache, assets_dir, &imports)?;
+    desugar_fbx_meshes(&mut assets, &mesh_cache, &imports)?;
+    desugar_animation_imports(&mut assets, assets_dir, &imports)?;
     desugar_root_motion(&mut assets)?;
     crate::compile::character_shape::warn_unresolved(&assets);
     crate::compile::character::bake::bake_shapes(&mut assets, |name| {
@@ -583,7 +594,7 @@ mod tests {
             resource_locks: Vec::new(),
         };
         assert!(
-            write_build_outputs(output.tree(), &result, &[], &[]).is_err(),
+            write_build_outputs(output.tree(), &result, &[], &[], None).is_err(),
             "an unwritable lock must fail the build"
         );
     }

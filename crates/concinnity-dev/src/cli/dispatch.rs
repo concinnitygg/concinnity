@@ -12,7 +12,14 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
     match cli.resolved_command() {
         Commands::Init => command::init(),
         Commands::New(args) => command::new(&args.path),
-        Commands::Build(args) => command::build(args.world.file()),
+        Commands::Build(args) => command::build(
+            args.world.file(),
+            if args.verbose {
+                command::Verbosity::Verbose
+            } else {
+                command::Verbosity::Normal
+            },
+        ),
         Commands::Run(args) => concinnity_engine::app::run(
             tree,
             concinnity_engine::app::run::RunOptions {

@@ -20,6 +20,8 @@ use concinnity_engine::resource::TextureSources;
 use concinnity_engine::resource::install_resource_tables;
 use concinnity_host::store::blob::BlobData;
 
+use crate::build_status::{BuildStatus, Verbosity};
+
 // Load, validate, and (when server credentials are present) fetch the missing
 // source files for a world. The returned LoadedWorld has passed the full
 // validation front half and is ready for concinnity_cook::build_compiled.
@@ -202,16 +204,44 @@ pub(crate) fn build_world_from_path(world_path: &str) -> std::io::Result<World> 
     build_world_from_str(WorldSource::file(&content, Path::new(world_path)))
 }
 
-// Compile the world file at `json_path` into the project's state tree, printing
-// every validation error before failing. The CLI commands that rebuild a world
-// file go through here.
+// Compile the world file at `json_path` into the project's state tree, showing
+// the build's status as it runs and printing every validation error before
+// failing. The CLI commands that rebuild a world file go through here.
 pub(crate) fn build_world_file(json_path: &str) -> std::io::Result<()> {
+    build_world_file_as(json_path, json_path, Verbosity::Normal)
+}
+
+// `build_world_file` with the world named `shown` in the status, for a build
+// of a staged copy that stands in for it.
+pub(crate) fn build_world_file_as(
+    json_path: &str,
+    shown: &str,
+    verbosity: Verbosity,
+) -> std::io::Result<()> {
     let tree = crate::project::require()?;
     let content = std::fs::read_to_string(json_path)?;
+    let platform = crate::cook_platform();
+    let status = BuildStatus::start(shown, platform, verbosity);
     let source = WorldSource::file(&content, Path::new(json_path));
-    let loaded = concinnity_cook::prepare_world(source, Some(&tree.assets_dir()))
-        .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
-    concinnity_cook::build_loaded(&tree, loaded, crate::cook_platform())
+    let loaded = match concinnity_cook::prepare_world(source, Some(&tree.assets_dir())) {
+        Ok(loaded) => loaded,
+        Err(errs) => {
+            status.fail_validation(&errs);
+            return Err(crate::authoring::validation_failed(errs.len()));
+        }
+    };
+    status.loaded(&loaded);
+    let report = |p: concinnity_cook::BuildProgress<'_>| status.progress(p);
+    match concinnity_cook::build_loaded(&tree, loaded, platform, Some(&report)) {
+        Ok(built) => {
+            status.finish(&built);
+            Ok(())
+        }
+        Err(e) => {
+            status.fail();
+            Err(e)
+        }
+    }
 }
 
 // Compile world content and write the blobs + world-lock.json to the open
@@ -220,7 +250,7 @@ pub(crate) fn build_world_file(json_path: &str) -> std::io::Result<()> {
 // not. `progress` feeds their operation card.
 pub(crate) fn build_world_str_to_disk(
     content: &str,
-    progress: Option<&(dyn Fn(concinnity_cook::BuildProgress) + Sync)>,
+    progress: Option<concinnity_cook::ProgressFn<'_>>,
 ) -> std::io::Result<()> {
     let loaded = prepare(content.into())?;
     let result = concinnity_cook::build_compiled_with_progress(
@@ -229,18 +259,12 @@ pub(crate) fn build_world_str_to_disk(
         crate::cook_platform(),
         progress,
     )?;
-    if let Some(p) = progress {
-        p(concinnity_cook::BuildProgress {
-            stage: "write",
-            done: 0,
-            total: 0,
-        });
-    }
     concinnity_cook::write_build_outputs(
         &crate::project::require()?,
         &result,
         &loaded.injected,
         &loaded.shadowed,
+        progress,
     )?;
     Ok(())
 }

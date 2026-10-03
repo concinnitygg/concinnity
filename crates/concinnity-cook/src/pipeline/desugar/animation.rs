@@ -8,6 +8,7 @@ use std::path::Path;
 use super::skin_index_arg;
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
+use crate::pipeline::progress::StageProgress;
 
 // Skin selector per SkinnedMesh asset name. An Animation resolves its channels
 // against its target's skeleton, so it inherits the target's selector rather
@@ -32,6 +33,7 @@ fn skin_index_by_target(assets: &[WorldJsonlAsset]) -> std::collections::HashMap
 pub(in crate::pipeline) fn desugar_animation_imports(
     assets: &mut [WorldJsonlAsset],
     assets_dir: Option<&Path>,
+    progress: &StageProgress<'_>,
 ) -> std::io::Result<()> {
     let skin_by_target = skin_index_by_target(assets);
 
@@ -67,6 +69,7 @@ pub(in crate::pipeline) fn desugar_animation_imports(
             .copied()
             .unwrap_or(0);
 
+        progress.begin(&source);
         let imported = if source.to_lowercase().ends_with(".fbx") {
             let sample_rate = asset
                 .args
@@ -180,6 +183,7 @@ pub(in crate::pipeline) fn desugar_animation_imports(
             imported.tracks.len(),
             imported.morph_track.len(),
         );
+        progress.end(&source, false);
     }
     Ok(())
 }
@@ -252,7 +256,7 @@ pub(in crate::pipeline) fn desugar_root_motion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::desugar::fixtures::{morphing_skinned_glb, skinned_fbx};
+    use crate::pipeline::desugar::fixtures::{morphing_skinned_glb, quiet, skinned_fbx};
     use crate::pipeline::fixtures::{wja, write_fixture};
 
     // Animation with no `source` is left byte-for-byte unchanged: the
@@ -269,7 +273,7 @@ mod tests {
             asset_type: RegisteredType::Animation,
             args: original.clone(),
         }];
-        desugar_animation_imports(&mut assets, None).expect("desugar succeeds");
+        desugar_animation_imports(&mut assets, None, &quiet()).expect("desugar succeeds");
         assert_eq!(assets[0].args, original);
     }
 
@@ -332,7 +336,7 @@ mod tests {
             RegisteredType::Animation,
             serde_json::json!({"source": src, "animation_index": 0}),
         )];
-        desugar_animation_imports(&mut assets, None).expect("desugar");
+        desugar_animation_imports(&mut assets, None, &quiet()).expect("desugar");
 
         let morph = assets[0].args["morph_track"]
             .as_array()
@@ -363,7 +367,7 @@ mod tests {
         // The clip carries no selector of its own; resolving it against the
         // target's skin is what keeps the joint indices in the same space.
         assert_eq!(skin_index_by_target(&assets).get("hair"), Some(&1));
-        desugar_animation_imports(&mut assets, None).expect("desugar");
+        desugar_animation_imports(&mut assets, None, &quiet()).expect("desugar");
         assert!(
             !assets[1].args["tracks"]
                 .as_array()
@@ -402,7 +406,7 @@ mod tests {
             RegisteredType::Animation,
             serde_json::json!({"source": src, "sample_rate": 10.0}),
         )];
-        desugar_animation_imports(&mut assets, None).expect("desugar");
+        desugar_animation_imports(&mut assets, None, &quiet()).expect("desugar");
 
         let args = &assets[0].args;
         assert!(
@@ -430,7 +434,8 @@ mod tests {
             RegisteredType::Animation,
             serde_json::json!({"source": src, "animation_name": "sprint"}),
         )];
-        let err = desugar_animation_imports(&mut assets, None).expect_err("no 'sprint' clip");
+        let err =
+            desugar_animation_imports(&mut assets, None, &quiet()).expect_err("no 'sprint' clip");
         let msg = err.to_string();
         assert!(msg.contains("Asset 'run'"), "got: {msg}");
         assert!(msg.contains("FBX import failed"), "got: {msg}");
@@ -443,7 +448,7 @@ mod tests {
             RegisteredType::Animation,
             serde_json::json!({"source": "/no/such/anim.glb"}),
         )];
-        let err = desugar_animation_imports(&mut assets, None).expect_err("missing .glb");
+        let err = desugar_animation_imports(&mut assets, None, &quiet()).expect_err("missing .glb");
         assert!(err.to_string().contains("Asset 'walk'"), "got: {err}");
     }
 
@@ -456,7 +461,7 @@ mod tests {
             RegisteredType::Animation,
             serde_json::json!({"source": "/no/such/anim.glb", "animation_name": "Run"}),
         )];
-        let err = desugar_animation_imports(&mut assets, None).expect_err("missing .glb");
+        let err = desugar_animation_imports(&mut assets, None, &quiet()).expect_err("missing .glb");
         assert!(err.to_string().contains("Asset 'run'"), "got: {err}");
     }
 
@@ -476,7 +481,7 @@ mod tests {
             RegisteredType::Animation,
             serde_json::json!({"source": src, "animation_index": 0}),
         )];
-        desugar_animation_imports(&mut assets, None).expect("desugar");
+        desugar_animation_imports(&mut assets, None, &quiet()).expect("desugar");
 
         let args = &assets[0].args;
         assert_eq!(args["duration"], 1.0);
@@ -505,7 +510,7 @@ mod tests {
             RegisteredType::Animation,
             serde_json::json!({"source": src, "animation_name": "wave"}),
         )];
-        desugar_animation_imports(&mut assets, None).expect("desugar");
+        desugar_animation_imports(&mut assets, None, &quiet()).expect("desugar");
         assert_eq!(assets[0].args["tracks"].as_array().unwrap().len(), 1);
 
         let mut missing = vec![wja(
@@ -513,7 +518,7 @@ mod tests {
             RegisteredType::Animation,
             serde_json::json!({"source": src, "animation_name": "sprint"}),
         )];
-        let err = desugar_animation_imports(&mut missing, None)
+        let err = desugar_animation_imports(&mut missing, None, &quiet())
             .expect_err("the file has no 'sprint' clip");
         let msg = err.to_string();
         assert!(

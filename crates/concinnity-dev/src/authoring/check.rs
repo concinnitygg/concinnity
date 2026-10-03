@@ -33,9 +33,15 @@ pub(crate) fn report_validation_errors(errors: &[String]) -> std::io::Error {
         eprintln!("error:   {}", e);
     }
     eprintln!("\nvalidation failed ({} error(s))", errors.len());
+    validation_failed(errors.len())
+}
+
+/// The error a world that failed validation with `count` errors returns, once
+/// they have been shown.
+pub(crate) fn validation_failed(count: usize) -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::InvalidData,
-        format!("validation failed with {} error(s)", errors.len()),
+        format!("validation failed with {count} error(s)"),
     )
 }
 

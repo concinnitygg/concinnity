@@ -17,6 +17,8 @@ pub fn cook_platform() -> concinnity_core::platform::Platform {
 
 // Authoring / in-memory build.
 mod authoring;
+// The live status a world build shows on the terminal.
+mod build_status;
 
 // The in-engine editor HUD, the localhost debug server, the MCP transport it
 // speaks, and the interpreted run loop.
