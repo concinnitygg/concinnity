@@ -40,7 +40,9 @@ impl VkContext {
     pub(crate) fn apply_quality_settings(&mut self, q: QualitySettings) -> RenderResult<()> {
         // Every teardown / rebuild below frees or replaces GPU resources a prior
         // frame may still reference; drain the device first so the swap is safe.
+        // Idle, a replaced resource's range is reused by its successor.
         self.wait_idle();
+        let _idle = self.hw.alloc.idle_scope();
 
         // Desired enabled state per feature, from the resolved QualitySettings.
         // RT is additionally gated on the device being RT-capable: a non-capable

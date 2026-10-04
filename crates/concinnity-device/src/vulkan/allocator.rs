@@ -42,6 +42,11 @@
 //! cloneable so a resource can be held by a ring slot and the live field that
 //! reads it at once.
 //!
+//! A caller that has idled the device can open an `IdleScope`, inside which a
+//! dropped resource's range is placeable at once. A rebuild that replaces its
+//! targets then refills the ranges the old ones held instead of opening blocks
+//! beside them and stranding the old ranges as holes.
+//!
 //! The `Rc` behind the leases is main-thread state, on the same invariant as
 //! `unsafe impl Send for VkContext`: the context migrates between threads but is
 //! only ever used from one at a time, and workers given `&VkContext` only read
@@ -87,6 +92,7 @@ struct PoolKey {
 // One block: the device allocation plus its persistent mapping, if any.
 struct Block {
     memory: vk::DeviceMemory,
+    size: u64,
     // Base of the block's mapping, or null when the memory type is not
     // host-visible.
     mapped: *mut u8,
@@ -142,16 +148,27 @@ struct Inner {
     // index, which wraps.
     frame: u64,
     retire_depth: u64,
+    // Open `IdleScope`s. Nonzero means no command buffer is in flight.
+    idle_scopes: u32,
 }
 
 impl Inner {
     // Return a lease's range to its pool and queue its handles, both withheld
     // until enough frames have ticked that no in-flight command buffer can
-    // reference them.
+    // reference them. Inside an `IdleScope` the range is placeable at once; the
+    // handles still wait, for the scope's close.
     fn release(&mut self, lease: &mut Lease) {
-        let retire = self.frame + self.retire_depth;
+        let idle = self.idle_scopes > 0;
+        let retire = if idle {
+            self.frame
+        } else {
+            self.frame + self.retire_depth
+        };
         if let Some(pool) = self.pools.get_mut(&lease.key) {
             pool.placement.free(lease.placement, lease.size, retire);
+            if idle {
+                pool.placement.reclaim(self.frame);
+            }
         }
         self.retired.push(
             self.frame,
@@ -425,6 +442,7 @@ impl DeviceAllocator {
                 pools: HashMap::new(),
                 retired: RetirePool::new(),
                 frame: 0,
+                idle_scopes: 0,
                 // One tick beyond the frames in flight, matching the streamed
                 // upload retire discipline: a resource replaced between frames
                 // must outlive the submission that was already in flight.
@@ -559,6 +577,20 @@ impl DeviceAllocator {
         self.advance(depth);
     }
 
+    // Open a window in which dropped resources free their ranges immediately,
+    // for a caller that has just idled the device and is about to replace
+    // resources. Everything already awaiting retirement is retired on entry, and
+    // whatever the scope drops is destroyed when the last open scope closes.
+    // Close it before the next frame records: a submission that is not
+    // waited on would break the idle premise.
+    pub(super) fn idle_scope(&self) -> IdleScope {
+        self.reclaim_idle();
+        self.inner.borrow_mut().idle_scopes += 1;
+        IdleScope {
+            alloc: self.clone(),
+        }
+    }
+
     fn advance(&self, ticks: u64) {
         let mut inner = self.inner.borrow_mut();
         inner.frame += ticks;
@@ -577,7 +609,10 @@ impl DeviceAllocator {
         for pool in inner.pools.values_mut() {
             for block_index in pool.placement.take_empty_blocks() {
                 if let Some(block) = pool.blocks.get_mut(block_index).and_then(Option::take) {
-                    tracing::debug!("allocator: released empty block {block_index}");
+                    tracing::debug!(
+                        "allocator: released empty {} KiB block {block_index}",
+                        block.size / 1024,
+                    );
                     // SAFETY: the handle was created from this device and is destroyed exactly
                     // once; the caller has already waited for the device to go idle, so no
                     // submission still references it.
@@ -679,10 +714,15 @@ impl DeviceAllocator {
             device_address,
         )?;
         let index = pool.placement.add_block(block_bytes);
+        let block = Block {
+            memory,
+            size: block_bytes,
+            mapped,
+        };
         if index == pool.blocks.len() {
-            pool.blocks.push(Some(Block { memory, mapped }));
+            pool.blocks.push(Some(block));
         } else {
-            pool.blocks[index] = Some(Block { memory, mapped });
+            pool.blocks[index] = Some(block);
         }
         let placement = pool
             .placement
@@ -790,6 +830,24 @@ impl DeviceAllocator {
             std::ptr::null_mut()
         };
         Ok((memory, mapped))
+    }
+}
+
+// An open `DeviceAllocator::idle_scope`. Closes on drop.
+pub(super) struct IdleScope {
+    alloc: DeviceAllocator,
+}
+
+impl Drop for IdleScope {
+    fn drop(&mut self) {
+        let closed = {
+            let mut inner = self.alloc.inner.borrow_mut();
+            inner.idle_scopes = inner.idle_scopes.saturating_sub(1);
+            inner.idle_scopes == 0
+        };
+        if closed {
+            self.alloc.reclaim_idle();
+        }
     }
 }
 
@@ -1220,6 +1278,149 @@ mod tests {
         pool.placement.reclaim(1);
         assert_eq!(pool.placement.take_empty_blocks().len(), 2);
         assert_eq!(pool.next_block_bytes(1024, 1), FIRST_BLOCK_BYTES);
+    }
+
+    // An `Inner` holding one pool with one block, and a lease on `size` bytes
+    // of it. No device: `release` only touches placement state and the queue.
+    fn leased_inner(size: u64) -> (Rc<RefCell<Inner>>, Lease) {
+        let key = PoolKey {
+            memory_type: 0,
+            kind: ResourceKind::Linear,
+            device_address: false,
+        };
+        let mut pool = Pool::new();
+        let block = pool.placement.add_block(FIRST_BLOCK_BYTES);
+        let placement = pool.placement.alloc_in(block, size, 1).unwrap();
+        let inner = Rc::new(RefCell::new(Inner {
+            pools: HashMap::from([(key, pool)]),
+            retired: RetirePool::new(),
+            frame: 0,
+            retire_depth: 3,
+            idle_scopes: 0,
+        }));
+        let lease = Lease {
+            owner: Rc::downgrade(&inner),
+            key,
+            placement,
+            size,
+            handle: PooledHandle::Buffer(vk::Buffer::null()),
+            views: RefCell::new(Vec::new()),
+        };
+        (inner, lease)
+    }
+
+    fn placeable(inner: &Rc<RefCell<Inner>>, size: u64) -> bool {
+        let mut inner = inner.borrow_mut();
+        let pool = inner.pools.values_mut().next().unwrap();
+        pool.placement.alloc(size, 1).is_some()
+    }
+
+    #[test]
+    fn a_release_outside_an_idle_scope_withholds_the_range() {
+        let (inner, lease) = leased_inner(FIRST_BLOCK_BYTES);
+        drop(lease);
+        assert!(!placeable(&inner, FIRST_BLOCK_BYTES));
+        assert_eq!(inner.borrow().retired.len(), 1);
+    }
+
+    #[test]
+    fn a_release_inside_an_idle_scope_frees_the_range_at_once() {
+        let (inner, lease) = leased_inner(FIRST_BLOCK_BYTES);
+        inner.borrow_mut().idle_scopes = 1;
+        drop(lease);
+        assert!(placeable(&inner, FIRST_BLOCK_BYTES));
+        // The handles still wait for the scope to close.
+        assert_eq!(inner.borrow().retired.len(), 1);
+    }
+
+    #[test]
+    fn an_idle_scope_refills_a_replaced_range_instead_of_opening_a_block() {
+        let Some(gpu) = test_gpu() else {
+            return;
+        };
+        let alloc = test_allocator(&gpu);
+        // The anchor keeps the first block alive and the big buffer fills most
+        // of it, so a replacement only fits where the old one was.
+        let anchor = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        let big_size = 3 * 1024 * 1024;
+        let mut big = alloc
+            .create_buffer(big_size, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        {
+            let _idle = alloc.idle_scope();
+            for _ in 0..4 {
+                drop(big);
+                big = alloc
+                    .create_buffer(big_size, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+                    .unwrap();
+                assert_eq!(alloc.stats().block_count, 1);
+            }
+        }
+        // Without the scope the same replacement opens a second block.
+        drop(big);
+        let again = alloc
+            .create_buffer(big_size, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        assert_eq!(alloc.stats().block_count, 2);
+        drop(anchor);
+        drop(again);
+        alloc.destroy();
+    }
+
+    #[test]
+    fn opening_an_idle_scope_retires_frees_already_pending() {
+        let Some(gpu) = test_gpu() else {
+            return;
+        };
+        let alloc = test_allocator(&gpu);
+        let anchor = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        let big_size = 3 * 1024 * 1024;
+        let big = alloc
+            .create_buffer(big_size, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        drop(big);
+        let idle = alloc.idle_scope();
+        assert_eq!(alloc.inner.borrow().retired.len(), 0);
+        let again = alloc
+            .create_buffer(big_size, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        assert_eq!(alloc.stats().block_count, 1);
+        drop(anchor);
+        drop(again);
+        drop(idle);
+        alloc.destroy();
+    }
+
+    #[test]
+    fn only_the_outermost_idle_scope_destroys_dropped_handles() {
+        let Some(gpu) = test_gpu() else {
+            return;
+        };
+        let alloc = test_allocator(&gpu);
+        let a = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        let b = alloc
+            .create_buffer(1024, vk::BufferUsageFlags::TRANSFER_SRC, HOST)
+            .unwrap();
+        let outer = alloc.idle_scope();
+        {
+            let _inner = alloc.idle_scope();
+            drop(a);
+        }
+        // The outer scope is still open: the handles wait, and a later drop
+        // still frees its range at once.
+        assert_eq!(alloc.inner.borrow().retired.len(), 1);
+        drop(b);
+        assert_eq!(alloc.stats().in_use_bytes, 0);
+        drop(outer);
+        assert_eq!(alloc.inner.borrow().retired.len(), 0);
+        assert_eq!(alloc.inner.borrow().idle_scopes, 0);
+        alloc.destroy();
     }
 
     #[test]

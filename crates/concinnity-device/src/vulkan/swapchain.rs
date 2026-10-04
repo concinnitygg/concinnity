@@ -97,6 +97,7 @@ impl VkContext {
             return Ok(());
         }
         self.wait_idle();
+        let _idle = self.hw.alloc.idle_scope();
         // The previous swapchain's images are about to be destroyed; invalidate
         // the screenshot read-back index until the next present repopulates it.
         self.swapchain.last_present_index = None;
