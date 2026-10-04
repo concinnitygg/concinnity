@@ -4,7 +4,7 @@
 // and the EMA live here, so both can be unit-tested without a GPU.
 
 use super::AutoExposureSettings;
-use crate::math::exp;
+use crate::math::{exp, exp2};
 
 /// Lowest log2(luminance) the histogram bins span. Pixels darker than this fall
 /// in bin 0. Roughly matches a moonlit interior at the dim end.
@@ -73,6 +73,48 @@ impl AutoExposureState {
         self.current_ev = (self.current_ev + (target - self.current_ev) * blend)
             .clamp(settings.min_ev, settings.max_ev);
         self.current_ev
+    }
+}
+
+/// A renderer's auto-exposure on the CPU: the tunables, the authored bias, and
+/// the adapted EV that each frame's GPU measurement moves.
+#[derive(Debug, Clone, Copy)]
+pub struct ExposureAdaptation {
+    /// The clamped tunables. A live quality change replaces them in place.
+    pub settings: AutoExposureSettings,
+    /// Authored EV bias, in stops, added to the adapted target.
+    pub bias_ev: f32,
+    state: AutoExposureState,
+}
+
+impl ExposureAdaptation {
+    /// Adaptation starting from the midpoint of the settings' clamp range.
+    pub fn new(settings: AutoExposureSettings, bias_ev: f32) -> Self {
+        Self {
+            settings,
+            bias_ev,
+            state: AutoExposureState::new(&settings),
+        }
+    }
+
+    /// The EV currently applied.
+    pub fn current_ev(&self) -> f32 {
+        self.state.current_ev
+    }
+
+    /// Step one frame of `dt` seconds from the GPU's measured average log2
+    /// luminance, returning the linear exposure multiplier the post passes
+    /// apply. A non-finite measurement reads as the histogram's floor.
+    pub fn step(&mut self, measured_log_lum: f32, dt: f32) -> f32 {
+        let measured = if measured_log_lum.is_finite() {
+            measured_log_lum
+        } else {
+            LUM_LOG2_MIN
+        };
+        let ev = self
+            .state
+            .update(measured, self.bias_ev, &self.settings, dt);
+        exp2(ev)
     }
 }
 
@@ -191,6 +233,45 @@ mod tests {
         // SDR settles at 0.0; HDR at log2(0.18) ≈ -2.47.
         assert!(state_sdr.current_ev.abs() < 1.0e-3);
         assert!((state_hdr.current_ev - HDR_MIDDLE_GRAY_LOG2).abs() < 1.0e-3);
+    }
+
+    #[test]
+    fn adaptation_starts_mid_range_and_returns_linear_exposure() {
+        let settings = AutoExposureSettings::resolve(-4.0, 2.0, 10.0, false);
+        let mut adaptation = ExposureAdaptation::new(settings, 0.0);
+        assert_eq!(adaptation.current_ev(), -1.0);
+        let mut exposure = 0.0;
+        for _ in 0..500 {
+            exposure = adaptation.step(1.0, 1.0 / 60.0);
+        }
+        assert!((adaptation.current_ev() + 1.0).abs() < 1.0e-3);
+        assert!((exposure - 0.5).abs() < 1.0e-3, "2^-1, got {exposure}");
+    }
+
+    #[test]
+    fn adaptation_reads_a_non_finite_measurement_as_the_floor() {
+        let settings = AutoExposureSettings::resolve(-20.0, 20.0, 1000.0, false);
+        let mut nan = ExposureAdaptation::new(settings, 0.0);
+        let mut floor = nan;
+        for measured in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let got = nan.step(measured, 1.0);
+            let want = floor.step(LUM_LOG2_MIN, 1.0);
+            assert_eq!(got, want);
+            assert!(got.is_finite());
+        }
+    }
+
+    #[test]
+    fn adaptation_carries_the_bias_and_live_settings() {
+        let settings = AutoExposureSettings::resolve(-8.0, 8.0, 10.0, false);
+        let mut adaptation = ExposureAdaptation::new(settings, 1.0);
+        for _ in 0..500 {
+            adaptation.step(0.0, 1.0 / 60.0);
+        }
+        assert!((adaptation.current_ev() - 1.0).abs() < 1.0e-3);
+        adaptation.settings = AutoExposureSettings::resolve(-8.0, 0.5, 10.0, false);
+        adaptation.step(0.0, 1.0 / 60.0);
+        assert!(adaptation.current_ev() <= 0.5);
     }
 
     #[test]

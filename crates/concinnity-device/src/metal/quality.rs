@@ -105,8 +105,8 @@ impl MtlContext {
             cur.intensity = live.intensity;
             cur.max_distance = live.max_distance;
         }
-        if let (Some(live), Some(cur)) = (q.auto_exposure, self.auto_exposure.settings.as_mut()) {
-            *cur = live;
+        if let (Some(live), Some(cur)) = (q.auto_exposure, self.auto_exposure.adaptation.as_mut()) {
+            cur.settings = live;
         }
     }
 

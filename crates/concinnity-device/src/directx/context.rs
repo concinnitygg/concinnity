@@ -17,6 +17,7 @@ use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights;
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection;
+use concinnity_core::render::post::reflection_path::ReflectionPath;
 use concinnity_core::render::probe_book::ProbeBook;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::retire_pool::RetirePool;
@@ -376,13 +377,11 @@ pub(super) struct ProbeState {
     // record buffers. Distinct from `env_map` so the skybox + diffuse irradiance
     // keep the sky.
     pub gpu: super::probe_set::ProbeSetGpu,
-    // The probe whose six cube faces are currently rendering on the GPU (one at a
-    // time, spread one face per frame). Owns the reserved-ring-slot capture
-    // resources until its faces have landed in the capture cube.
-    pub rendering: Option<super::probe::RenderingBake>,
-    // The prior probe whose capture is convolving into its cube on the GPU, one
-    // destination mip per frame.
-    pub prefiltering: Option<super::probe::PrefilteringBake>,
+    // At most one probe whose six cube faces are rendering on the GPU (one face
+    // per frame, into the reserved-ring-slot capture resources) and one prior
+    // probe whose capture is convolving into its cube, one destination mip per
+    // frame.
+    pub bake: super::probe::DxProbeBake,
     // The three convolution kernels and their root signatures, built at init under
     // the same gate the bake needs. `None` disables baking.
     pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
@@ -398,8 +397,7 @@ impl ProbeState {
         Self {
             book: ProbeBook::new(),
             gpu,
-            rendering: None,
-            prefiltering: None,
+            bake: super::probe::DxProbeBake::default(),
             prefilter,
         }
     }
@@ -955,7 +953,7 @@ impl DxContext {
         let gpu_wait = self.wait_frame_slot(frame)?;
         // Staged geometry writes go ahead of everything this frame submits.
         self.flush_geometry_uploads()?;
-        self.service_background_work(elapsed, near, far, frame);
+        self.service_background_work(elapsed, frame);
         let timings = self.read_gpu_timings(frame);
         self.begin_frame_stats(&gpu_wait, timings);
 
@@ -1143,7 +1141,18 @@ impl DxContext {
     // `FrameGraphInputs::rt_reflections_enabled` in `record_frame::seed_inputs`
     // and the `scene_srv_for_post` precedence.
     pub(super) fn rt_reflections_active(&self) -> bool {
-        self.rt_reflections.is_some() && self.rt.accel.is_some()
+        self.reflection_path().rt_trace
+    }
+
+    // Which reflection stages run this frame, from the authored SSR resolve and
+    // the live RT pass and BVH. This backend reads the composite's output only
+    // while a resolve writes it, so the RT node never runs without a BVH.
+    pub(super) fn reflection_path(&self) -> ReflectionPath {
+        ReflectionPath::new(
+            self.ssr.as_ref().is_some_and(|s| s.resolve.is_some()),
+            self.rt_reflections.is_some(),
+            self.rt.accel.is_some(),
+        )
     }
 
     // True when a reflection resolve (SSR resolve or RT reflections) runs this
@@ -1154,7 +1163,7 @@ impl DxContext {
     // `ViewUniforms::reflections_enabled`) to hand glossy dielectric specular to
     // that resolve instead of double-counting the forward probe reflection.
     pub(super) fn reflection_resolve_active(&self) -> bool {
-        self.rt_reflections_active() || self.ssr.as_ref().and_then(|s| s.resolve.as_ref()).is_some()
+        self.reflection_path().resolves()
     }
 
     // The single-sample scene target the render graph drives as `hdr_resolve`:
@@ -1516,8 +1525,8 @@ impl DxContext {
             res.settings.intensity = live.intensity;
             res.settings.max_distance = live.max_distance;
         }
-        if let (Some(live), Some(cur)) = (q.auto_exposure, self.auto_exposure.settings.as_mut()) {
-            *cur = live;
+        if let (Some(live), Some(cur)) = (q.auto_exposure, self.auto_exposure.adaptation.as_mut()) {
+            cur.settings = live;
         }
     }
 

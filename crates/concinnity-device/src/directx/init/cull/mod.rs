@@ -111,7 +111,9 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     Ok(CullState {
         main_bindless_root_sig: Some(bindless.root_sig),
         main_bindless_pso: Some(bindless.pso),
-        world_pipelines: bindless.world_pipelines,
+        world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines::new(
+            bindless.world_pipelines,
+        ),
         bucket_stride: plan.n_cull,
         bindless_main_shaders: bindless.shaders,
         object_buffer_resources: bindless.object_buffers,

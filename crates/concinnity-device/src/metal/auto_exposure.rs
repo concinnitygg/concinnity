@@ -19,7 +19,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
+use concinnity_core::gfx::auto_exposure::ExposureAdaptation;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::*;
 use objc2::rc::Retained;
@@ -42,13 +42,10 @@ use super::scoped_encoder::ScopedEncoder;
 // `PostProcessConfig` turns auto-exposure on; otherwise the static-exposure
 // path drives `post_process.exposure` directly and these stay `None`.
 pub(crate) struct AutoExposureGpu {
-    pub settings: Option<AutoExposureSettings>,
-    // EMA-tracked adapted EV, updated each frame from the previous frame's
-    // GPU-measured average log-luminance.
-    pub state: Option<AutoExposureState>,
-    // Authored `exposure_ev` carried through as an additive bias (in stops)
-    // on the adapted EV. 0.0 when auto-exposure is off.
-    pub bias_ev: f32,
+    // The tunables, the authored `exposure_ev` bias and the EMA-tracked adapted
+    // EV, updated each frame from the previous frame's GPU-measured average
+    // log-luminance.
+    pub adaptation: Option<ExposureAdaptation>,
     pub pipelines: Option<AutoExposurePipelines>,
     // 256-bin global histogram the build kernel accumulates into (shared
     // storage so the average kernel can read + clear it in one pass).
@@ -72,13 +69,10 @@ impl MtlContext {
     // elapsed to derive a frame `dt`; on the first frame `dt` is 0 so the
     // EMA snaps to the initial state (midpoint of the clamp range).
     pub(super) fn update_auto_exposure(&mut self, elapsed: f32, slot: usize) {
-        let Some(settings) = self.auto_exposure.settings.as_ref().copied() else {
+        let Some(adaptation) = self.auto_exposure.adaptation.as_mut() else {
             return;
         };
-        let Some(output_buf) = self.auto_exposure.outputs.get(slot).cloned() else {
-            return;
-        };
-        let Some(state) = self.auto_exposure.state.as_mut() else {
+        let Some(output_buf) = self.auto_exposure.outputs.get(slot) else {
             return;
         };
 
@@ -94,22 +88,15 @@ impl MtlContext {
             let ptr = output_buf.contents().as_ptr() as *const f32;
             ptr.read()
         };
-        let avg_log_lum = if avg_log_lum.is_finite() {
-            avg_log_lum
-        } else {
-            auto_exposure::LUM_LOG2_MIN
-        };
 
         let dt = (elapsed - self.auto_exposure.last_elapsed).max(0.0);
         self.auto_exposure.last_elapsed = elapsed;
 
-        let adapted_ev = state.update(avg_log_lum, self.auto_exposure.bias_ev, &settings, dt);
         // `self.post_process.exposure` is the linear multiplier the post pass
         // and bloom prefilter consume; it already folds in the authored
         // exposure_ev when auto-exposure is off, so we only overwrite it here
-        // when the GPU path owns the value. `state.update` already folds the
-        // bias into `adapted_ev`'s target; re-adding it would double the bias.
-        self.post_process.exposure = adapted_ev.exp2();
+        // when the GPU path owns the value.
+        self.post_process.exposure = adaptation.step(avg_log_lum, dt);
     }
 
     // Encode the auto-exposure histogram passes against `hdr_resolve`. The

@@ -70,7 +70,7 @@ impl VkContext {
     // declares no extra shaders, which collapses the indirect buffer to the
     // single region every pass used before buckets existed.
     pub(in crate::vulkan) fn shader_bucket_count(&self) -> usize {
-        1 + self.cull.world_pipelines.len()
+        self.cull.world_pipelines.bucket_count()
     }
 
     // Byte offset of shader bucket `b`'s command region in an indirect buffer.

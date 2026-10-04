@@ -1,8 +1,7 @@
 //! Reflection probe capture math: the six cube-face view-projection matrices a
 //! probe renders the scene through, plus the load-time conversion of the
 //! captured faces into the prefiltered IBL payload the environment sampler
-//! consumes. Backend-agnostic; the Metal backend drives the actual scene render
-//! into each face (see metal/probe.rs). DirectX / Vulkan can reuse this math.
+//! consumes. Backend-agnostic; each backend renders the scene into the faces.
 //!
 //! Face order and orientation come from [`crate::gfx::cubemap`], the one home of
 //! the engine's cube convention. Each face's view-projection is built so that
@@ -25,11 +24,21 @@ fn perspective_90(near: f32, far: f32) -> [[f32; 4]; 4] {
     perspective_rh(FRAC_PI_2, 1.0, near, far)
 }
 
-/// The view-projection for cube face `face` (0..6) captured from `eye`.
-pub fn face_view_projection(eye: [f32; 3], face: usize, near: f32, far: f32) -> [[f32; 4]; 4] {
+/// Near plane of every probe face. The capture is independent of the live
+/// camera's clip range, so a probe sees the same scene whatever the camera's
+/// near and far planes are.
+pub const CAPTURE_NEAR: f32 = 0.05;
+
+/// Far plane of every probe face. The cube is sampled by direction, so the far
+/// plane only bounds what the capture sees and sets its depth precision.
+pub const CAPTURE_FAR: f32 = 2000.0;
+
+/// The view-projection for cube face `face` (0..6) captured from `eye`, over
+/// [`CAPTURE_NEAR`]..[`CAPTURE_FAR`].
+pub fn face_view_projection(eye: [f32; 3], face: usize) -> [[f32; 4]; 4] {
     let b = FACE_BASIS[face];
     let view = view_from_basis(eye, b[0], b[1], b[2]);
-    mat4_mul(perspective_90(near, far), view)
+    mat4_mul(perspective_90(CAPTURE_NEAR, CAPTURE_FAR), view)
 }
 
 /// The world->view matrix alone for cube face `face`, captured from `eye`. The
@@ -142,8 +151,9 @@ pub enum BakePhase {
     Prefiltering,
 }
 
-/// What the renderer should do this frame to advance the asynchronous bake. The
-/// renderer maps each variant to a side effect: `StartNext` builds the next
+/// What one bake slot should do this frame.
+/// [`ProbeBake`](crate::render::probe_bake::ProbeBake) maps each variant to a
+/// step of the backend's device: `StartNext` builds the next
 /// placement's capture buffers + targets (no face submitted yet), `RenderFace`
 /// submits one cube face (the six are spread one-per-frame so no single frame
 /// pays the whole capture), `StartPrefilter` releases the capture's draw
@@ -166,7 +176,7 @@ pub enum BakeAction {
     Install,
 }
 
-/// What the renderer knows this frame about the bake in flight, as the pure
+/// What is known this frame about the bake in flight, as the pure
 /// transition table below reads it. Defaulted so a call site naming one slot's
 /// signals leaves the other slot's at "nothing happening" rather than spelling
 /// out a row of `false`.
@@ -181,8 +191,7 @@ pub struct BakeSignals {
     pub mips_done: bool,
     /// A placement is still waiting to bake.
     pub queue_pending: bool,
-    /// The world can bake this frame (bindless plus geometry present plus a
-    /// non-empty cull).
+    /// A capture can start this frame.
     pub eligible: bool,
     /// Cube faces remain to submit.
     pub more_faces: bool,
@@ -1051,7 +1060,7 @@ mod tests {
             (0.7, -0.4),
         ];
         for face in 0..6 {
-            let vp = face_view_projection(eye, face, 0.05, 100.0);
+            let vp = face_view_projection(eye, face);
             for &(u, v) in &samples {
                 let d = face_dir(face, u, v);
                 let p = [eye[0] + d[0], eye[1] + d[1], eye[2] + d[2]];
@@ -1066,6 +1075,39 @@ mod tests {
                     -v
                 );
             }
+        }
+    }
+
+    // Depth in [0, 1] of the point `distance` along face `face`'s axis.
+    fn face_depth(face: usize, distance: f32) -> f32 {
+        let eye = [4.0, 1.0, -2.0];
+        let d = face_dir(face, 0.0, 0.0);
+        let p = [
+            eye[0] + d[0] * distance,
+            eye[1] + d[1] * distance,
+            eye[2] + d[2] * distance,
+        ];
+        let vp = face_view_projection(eye, face);
+        let pv = [p[0], p[1], p[2], 1.0];
+        let (mut z, mut w) = (0.0, 0.0);
+        for k in 0..4 {
+            z += vp[k][2] * pv[k];
+            w += vp[k][3] * pv[k];
+        }
+        z / w
+    }
+
+    // The capture keeps geometry from just past the near plane out to well
+    // beyond any camera's far plane, and clips only past its own range.
+    #[test]
+    fn every_face_captures_the_fixed_range() {
+        for face in 0..6 {
+            for distance in [CAPTURE_NEAR * 1.5, 1.0, 250.0, CAPTURE_FAR * 0.95] {
+                let z = face_depth(face, distance);
+                assert!((0.0..=1.0).contains(&z), "face {face} at {distance}: z {z}");
+            }
+            assert!(face_depth(face, CAPTURE_FAR * 1.05) > 1.0, "face {face}");
+            assert!(face_depth(face, CAPTURE_NEAR * 0.5) < 0.0, "face {face}");
         }
     }
 
@@ -1097,8 +1139,11 @@ mod tests {
         // capture builds ViewUniforms from the two separately).
         let eye = [1.0, 2.0, -3.0];
         for face in 0..6 {
-            let vp = face_view_projection(eye, face, 0.1, 50.0);
-            let comp = mat4_mul(perspective_90(0.1, 50.0), face_view_matrix(eye, face));
+            let vp = face_view_projection(eye, face);
+            let comp = mat4_mul(
+                perspective_90(CAPTURE_NEAR, CAPTURE_FAR),
+                face_view_matrix(eye, face),
+            );
             for c in 0..4 {
                 for r in 0..4 {
                     assert!(
@@ -1456,7 +1501,7 @@ mod tests {
         // The center texel of each face projects to the NDC origin.
         let eye = [0.0, 0.0, 0.0];
         for face in 0..6 {
-            let vp = face_view_projection(eye, face, 0.05, 100.0);
+            let vp = face_view_projection(eye, face);
             let d = face_dir(face, 0.0, 0.0);
             let (nx, ny, w) = project(vp, d);
             assert!(w > 0.0);

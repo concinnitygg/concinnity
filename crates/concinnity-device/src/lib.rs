@@ -27,6 +27,9 @@ pub mod metal;
 pub(crate) mod object_counts;
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod png_encode;
+// How the reflection-probe bake is logged, the same on every backend.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
+pub(crate) mod probe_report;
 #[cfg(backend_vk)]
 pub(crate) mod vulkan;
 // Native Win32 window/input/display-mode layer shared by the HWND-rendering

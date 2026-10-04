@@ -417,7 +417,7 @@ impl MtlContext {
             // skipped here too, so depth and velocity never carry geometry the
             // color pass leaves out.
             for (b, icb) in self.cull.icbs.iter().enumerate() {
-                if !self.world_shader_resident(b) {
+                if !self.cull.world_pipelines.resident(b) {
                     continue;
                 }
                 // SAFETY: the prefix spans the static + instance + chunk command

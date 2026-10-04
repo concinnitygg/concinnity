@@ -11,7 +11,6 @@
 //! `metal/auto_exposure.rs` and `directx/auto_exposure.rs`.
 
 use ash::vk;
-use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::uniforms::AutoExposureParams;
@@ -302,13 +301,10 @@ impl VkContext {
     // `elapsed` is the total elapsed seconds since startup; the per-call
     // diff drives `dt` for the EMA.
     pub(in crate::vulkan) fn update_auto_exposure(&mut self, elapsed: f32, frame_idx: usize) {
-        let Some(settings) = self.auto_exposure.settings else {
+        let Some(adaptation) = self.auto_exposure.adaptation.as_mut() else {
             return;
         };
         let Some(resources) = self.auto_exposure.resources.as_ref() else {
-            return;
-        };
-        let Some(state) = self.auto_exposure.state.as_mut() else {
             return;
         };
         let Some(readback) = resources.readback_buffers.get(frame_idx) else {
@@ -322,20 +318,13 @@ impl VkContext {
         // SAFETY: `ptr` is the HOST_COHERENT mapping of this slot's output buffer, which holds one
         // f32; the fence wait above gated the GPU write, so the value is committed and initialized.
         let avg_log_lum = unsafe { ptr.read() };
-        let avg_log_lum = if avg_log_lum.is_finite() {
-            avg_log_lum
-        } else {
-            auto_exposure::LUM_LOG2_MIN
-        };
 
         let dt = (elapsed - self.auto_exposure.last_elapsed).max(0.0);
         self.auto_exposure.last_elapsed = elapsed;
 
-        let adapted_ev = state.update(avg_log_lum, self.auto_exposure.bias_ev, &settings, dt);
         // `self.post_process.exposure` is the linear multiplier the bloom
-        // prefilter and composite consume. `state.update` already folds the
-        // bias into the target EV; re-adding it would double the bias.
-        self.post_process.exposure = adapted_ev.exp2();
+        // prefilter and composite consume.
+        self.post_process.exposure = adaptation.step(avg_log_lum, dt);
     }
 
     // Encode the auto-exposure histogram passes against the current frame's

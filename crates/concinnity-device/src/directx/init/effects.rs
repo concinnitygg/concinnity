@@ -476,21 +476,20 @@ pub(super) fn build_auto_exposure(
     post: &PostSettings,
 ) -> RenderResult<AutoExposureState> {
     let hw = gpu.hw;
-    let (resources, state) = if let Some(settings) = post.auto_exposure.as_ref() {
+    let (resources, adaptation) = if let Some(settings) = post.auto_exposure.as_ref() {
         let resources = dump_on_err(
             hw.info_queue.as_ref(),
             crate::directx::auto_exposure::AutoExposureResources::new(&hw.alloc, gpu.hot_reload),
         )?;
-        let state = auto_exposure::AutoExposureState::new(settings);
-        (Some(resources), Some(state))
+        let adaptation =
+            auto_exposure::ExposureAdaptation::new(*settings, post.auto_exposure_bias_ev);
+        (Some(resources), Some(adaptation))
     } else {
         (None, None)
     };
     Ok(AutoExposureState {
         resources,
-        settings: post.auto_exposure,
-        state,
-        bias_ev: post.auto_exposure_bias_ev,
+        adaptation,
         last_elapsed: 0.0,
     })
 }

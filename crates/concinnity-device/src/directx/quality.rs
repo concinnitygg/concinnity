@@ -27,6 +27,7 @@
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::render::backend::QualitySettings;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::post::reflection_path::ReflectionPath;
 use concinnity_core::render::post::rt_reflections;
 use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -229,16 +230,17 @@ impl DxContext {
 
         // Reflection composite: the on-screen target the SSR/RT resolve writes its
         // radiance+weight into, then blurs/blends over the scene by roughness.
-        // Present whenever a resolve can composite (SSR resolve or RT), mirroring
-        // the init `ssr_settings || rt_reflection_settings` gate, with its targets
-        // taken from the post block. Without this reconcile a
+        // Present whenever a resolve can composite (`ReflectionPath::composite`,
+        // the gate init builds it under), with its targets taken from the post
+        // block. Without this reconcile a
         // live RT/SSR enable on a world that authored neither leaves it `None`, so
         // `encode_reflection_composite` early-returns and the resolve's reflection
         // is computed but never shown (`scene_srv_for_post` / glass / the forward
         // `reflections_enabled` fade all gate on its presence). A live composite
         // takes a new blur resolution in place; every consumer reads its targets'
         // descriptors per frame, so the new blur needs no re-bind.
-        let refl_composite_needed = desired_ssr || desired_rt;
+        let refl_composite_needed =
+            ReflectionPath::new(desired_ssr, desired_rt, self.rt.accel.is_some()).composite;
         if refl_composite_needed && self.reflection_composite.is_none() {
             let rc = build_reflection_composite(
                 &self.post_device(0),
@@ -270,16 +272,12 @@ impl DxContext {
             let resources =
                 super::auto_exposure::AutoExposureResources::new(&self.hw.alloc, hot_reload)?;
             self.auto_exposure.resources = Some(resources);
-            self.auto_exposure.state = q
-                .auto_exposure
-                .as_ref()
-                .map(auto_exposure::AutoExposureState::new);
-            self.auto_exposure.settings = q.auto_exposure;
-            self.auto_exposure.bias_ev = q.auto_exposure_bias_ev;
+            self.auto_exposure.adaptation = q.auto_exposure.map(|settings| {
+                auto_exposure::ExposureAdaptation::new(settings, q.auto_exposure_bias_ev)
+            });
         } else if !desired_ae && self.auto_exposure.resources.is_some() {
             self.auto_exposure.resources = None;
-            self.auto_exposure.settings = None;
-            self.auto_exposure.state = None;
+            self.auto_exposure.adaptation = None;
         }
 
         // SSAO. Its blurred `ao_output` is a transient-pool resource that only

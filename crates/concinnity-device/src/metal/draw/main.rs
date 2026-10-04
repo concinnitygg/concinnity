@@ -21,6 +21,7 @@
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PixelRect;
+use concinnity_core::render::post::reflection_path::ReflectionPath;
 use concinnity_core::render::uniforms::ViewUniforms;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -106,11 +107,22 @@ impl MtlContext {
     // reflection composite's output and the graph picks RT over SSR). The forward shader reads it from
     // `ViewUniforms.reflections_enabled` to hand glossy specular to that resolve.
     fn reflection_resolve_active(&self) -> f32 {
-        if self.ssr.settings.is_some() || self.rt.accel.is_some() {
+        if self.reflection_path().resolves() {
             1.0
         } else {
             0.0
         }
+    }
+
+    // Which reflection stages run this frame, from the authored SSR and the
+    // live RT pass and BVH. This backend reads the composite's output only while
+    // a resolve writes it, so the RT node never runs without a BVH.
+    pub(in crate::metal) fn reflection_path(&self) -> ReflectionPath {
+        ReflectionPath::new(
+            self.ssr.settings.is_some(),
+            self.rt.settings.is_some(),
+            self.rt.accel.is_some(),
+        )
     }
 
     // The frame's unlit flag for ViewUniforms, from the viewport view mode.
@@ -536,7 +548,7 @@ impl MtlContext {
                     // A bucket whose Shader is not resident yet (its scene has
                     // not pinned) has no pipeline: skip it until warmup builds
                     // one rather than drawing it with the wrong program.
-                    let Some(pso) = self.world_pipeline(b) else {
+                    let Some(pso) = self.cull.world_pipelines.get(b) else {
                         continue;
                     };
                     enc.set_pipeline(pso);

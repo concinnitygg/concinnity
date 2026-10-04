@@ -14,9 +14,10 @@ use crate::vulkan::context::{
 use crate::vulkan::post::PostSupport;
 use crate::vulkan::post::gbuffer::GbufferResources;
 use crate::vulkan::post::reflection_composite::{
-    ReflectionPath, VkReflectionCompositePass, build_reflection_composite,
+    VkReflectionCompositePass, build_reflection_composite,
 };
 use crate::vulkan::post::rt_reflections::RtReflectionsResources;
+use concinnity_core::render::post::reflection_path::ReflectionPath;
 
 pub(super) struct RtInputs<'a> {
     pub(super) world: &'a SceneData<'a>,

@@ -136,8 +136,6 @@ impl MtlContext {
             frame_id,
             cam_pos,
             elapsed,
-            near,
-            far,
             world_hidden,
             skinned_joint_bufs: &skinned_joint_bufs,
             texture_signature,

@@ -33,7 +33,7 @@ impl DxContext {
         programs: &concinnity_core::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
-        let slot = self.world_pipeline_slot(bucket)?;
+        self.cull.world_pipelines.slot(bucket)?;
         let targets = self.world_pso_targets().ok_or_else(|| {
             RenderError::Other("shader buckets need the bindless main pass".into())
         })?;
@@ -51,8 +51,9 @@ impl DxContext {
                 programs,
             )?,
         };
-        self.evict_world_shader(bucket);
-        self.cull.world_pipelines[slot] = Some(pso);
+        if let Some(displaced) = self.cull.world_pipelines.install(bucket, pso)? {
+            self.hw.alloc.retire(displaced);
+        }
         Ok(())
     }
 
@@ -74,8 +75,8 @@ impl DxContext {
             self.update_default_world_shader(programs, prepared)?;
             return Ok(PipelineSwap::Swapped);
         }
-        self.world_pipeline_slot(bucket)?;
-        if !self.world_shader_resident(bucket as usize) {
+        self.cull.world_pipelines.slot(bucket)?;
+        if !self.cull.world_pipelines.resident(bucket as usize) {
             return Ok(PipelineSwap::NotResident);
         }
         self.install_world_shader(bucket, programs, prepared)?;
@@ -122,29 +123,9 @@ impl DxContext {
     // which holds it until every frame in flight that recorded against it has
     // finished.
     pub(in crate::directx) fn evict_world_shader(&mut self, bucket: u32) {
-        let Ok(slot) = self.world_pipeline_slot(bucket) else {
-            return;
-        };
-        if let Some(pso) = self.cull.world_pipelines[slot].take() {
+        if let Some(pso) = self.cull.world_pipelines.evict(bucket) {
             self.hw.alloc.retire(pso);
         }
-    }
-
-    // Whether a bucket's draws can render this frame: bucket 0 is the world
-    // default program, every other bucket needs its pipeline installed.
-    pub(in crate::directx) fn world_shader_resident(&self, bucket: usize) -> bool {
-        bucket == 0
-            || matches!(
-                self.cull.world_pipelines.get(bucket.wrapping_sub(1)),
-                Some(Some(_))
-            )
-    }
-
-    pub(in crate::directx) fn world_pipeline(&self, bucket: usize) -> Option<&ID3D12PipelineState> {
-        self.cull
-            .world_pipelines
-            .get(bucket.checked_sub(1)?)?
-            .as_ref()
     }
 
     // Issue the bucket 1.. regions of `indirect`, each under its own material
@@ -161,7 +142,7 @@ impl DxContext {
         max_count: u32,
     ) -> u32 {
         self.for_each_resident_bucket(|bucket| {
-            let Some(pso) = self.world_pipeline(bucket) else {
+            let Some(pso) = self.cull.world_pipelines.get(bucket) else {
                 return;
             };
             // Every bucket shares the bindless root signature, so the Wireframe
@@ -197,10 +178,7 @@ impl DxContext {
     // wrong program.
     fn for_each_resident_bucket(&self, mut f: impl FnMut(usize)) -> u32 {
         let mut issued = 0;
-        for bucket in 1..self.shader_bucket_count() {
-            if !self.world_shader_resident(bucket) {
-                continue;
-            }
+        for bucket in self.cull.world_pipelines.resident_buckets() {
             f(bucket);
             issued += 1;
         }
@@ -227,18 +205,5 @@ impl DxContext {
                 0,
             );
         }
-    }
-
-    fn world_pipeline_slot(&self, bucket: u32) -> RenderResult<usize> {
-        let slot = (bucket as usize).checked_sub(1).ok_or_else(|| {
-            RenderError::Other("shader bucket 0 is the world default program".into())
-        })?;
-        if slot >= self.cull.world_pipelines.len() {
-            return Err(RenderError::Other(format!(
-                "shader bucket {bucket} is past the world's {} shader pipeline(s)",
-                self.cull.world_pipelines.len()
-            )));
-        }
-        Ok(slot)
     }
 }

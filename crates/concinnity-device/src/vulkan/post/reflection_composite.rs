@@ -1,5 +1,8 @@
-//! Vulkan's share of the reflection composite: which reflection path feeds it,
-//! when it exists, and where its inputs come from this frame. The roughness blur
+//! Vulkan's share of the reflection composite: when it exists, and where its
+//! inputs come from this frame. Which resolve feeds it is the shared
+//! `ReflectionPath` table, which this backend reads with `rt_node`: its post
+//! stack reads the composite's output as the scene every frame, so the RT node
+//! keeps writing it while the BVH is missing. The roughness blur
 //! and the composite -- their pipelines, their targets and both draws -- are
 //! written once in `concinnity_core::render::post::reflection_composite` and
 //! reach Vulkan through `VkPostDevice`.
@@ -13,6 +16,7 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::reflection_composite::{
     ReflectionCompositeInputs, ReflectionCompositePass,
 };
+use concinnity_core::render::post::reflection_path::ReflectionPath;
 
 use super::super::context::VkContext;
 use super::super::texture::GpuImage;
@@ -31,38 +35,9 @@ pub(in crate::vulkan) fn build_reflection_composite(
     ReflectionCompositePass::new(device, blur_scale, post_extent(extent))
 }
 
-// Which reflection stages run. The composite exists whenever the RT pass or an
-// authored SSR resolve can feed it, so a BVH coming or going never rebuilds it.
-// RT takes the resolve slot while its BVH is live. Without one the SSR resolve
-// covers when authored, and otherwise the RT node keeps the composite fed with
-// an empty reflection, which leaves the scene as it was.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::vulkan) struct ReflectionPath {
-    pub(in crate::vulkan) rt_trace: bool,
-    pub(in crate::vulkan) rt_node: bool,
-    pub(in crate::vulkan) ssr_resolve: bool,
-    pub(in crate::vulkan) composite: bool,
-}
-
-impl ReflectionPath {
-    pub(in crate::vulkan) fn new(ssr_authored: bool, rt_pass: bool, bvh_live: bool) -> Self {
-        let rt_trace = rt_pass && bvh_live;
-        Self {
-            rt_trace,
-            rt_node: rt_trace || (rt_pass && !ssr_authored),
-            ssr_resolve: ssr_authored && !rt_trace,
-            composite: rt_pass || ssr_authored,
-        }
-    }
-
-    // Whether a resolve composites reflections over the scene this frame, which
-    // is when the forward pass hands it the glossy dielectric specular.
-    pub(in crate::vulkan) fn resolves(&self) -> bool {
-        self.rt_trace || self.ssr_resolve
-    }
-}
-
 impl VkContext {
+    // Which reflection stages run this frame, from the authored SSR and the live
+    // RT pass and BVH.
     pub(in crate::vulkan) fn reflection_path(&self) -> ReflectionPath {
         ReflectionPath::new(
             self.ssr_authored(),
@@ -163,78 +138,6 @@ impl VkContext {
             },
         ) {
             tracing::error!("reflection composite: {e}");
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::ReflectionPath;
-
-    #[test]
-    fn a_live_trace_takes_the_resolve_slot_from_authored_ssr() {
-        let path = ReflectionPath::new(true, true, true);
-        assert!(path.rt_trace && path.rt_node);
-        assert!(!path.ssr_resolve);
-        assert!(path.composite && path.resolves());
-    }
-
-    #[test]
-    fn authored_ssr_covers_while_the_rt_pass_has_no_bvh() {
-        let path = ReflectionPath::new(true, true, false);
-        assert!(!path.rt_trace && !path.rt_node);
-        assert!(path.ssr_resolve);
-        assert!(path.composite && path.resolves());
-    }
-
-    #[test]
-    fn authored_ssr_resolves_without_rt() {
-        for bvh_live in [false, true] {
-            let path = ReflectionPath::new(true, false, bvh_live);
-            assert!(!path.rt_trace && !path.rt_node);
-            assert!(path.ssr_resolve);
-            assert!(path.composite && path.resolves());
-        }
-    }
-
-    #[test]
-    fn rt_alone_traces_its_live_bvh() {
-        let path = ReflectionPath::new(false, true, true);
-        assert!(path.rt_trace && path.rt_node);
-        assert!(!path.ssr_resolve);
-        assert!(path.composite && path.resolves());
-    }
-
-    #[test]
-    fn rt_alone_without_a_bvh_feeds_the_composite_nothing() {
-        // The RT node still runs, so the composite stays fed, but it traces
-        // nothing and the forward pass keeps its own specular.
-        let path = ReflectionPath::new(false, true, false);
-        assert!(!path.rt_trace && path.rt_node);
-        assert!(!path.ssr_resolve);
-        assert!(path.composite && !path.resolves());
-    }
-
-    #[test]
-    fn no_resolve_leaves_no_composite() {
-        // RT off or unsupported without authored SSR, or a SSGI-only world.
-        for bvh_live in [false, true] {
-            let path = ReflectionPath::new(false, false, bvh_live);
-            assert!(!path.rt_trace && !path.rt_node && !path.ssr_resolve);
-            assert!(!path.composite && !path.resolves());
-        }
-    }
-
-    #[test]
-    fn at_most_one_resolve_node_runs() {
-        for bits in 0..8u8 {
-            let path = ReflectionPath::new(bits & 1 != 0, bits & 2 != 0, bits & 4 != 0);
-            assert!(!(path.rt_node && path.ssr_resolve), "{bits:03b}: {path:?}");
-            assert_eq!(
-                path.composite,
-                path.rt_node || path.ssr_resolve,
-                "{bits:03b}"
-            );
         }
     }
 }

@@ -212,7 +212,9 @@ pub(super) fn build_cull(
         bindless_set_layout: bindless.set_layout,
         bindless_pool_size: plan.bindless_pool_size,
         bindless_update_after_bind: plan.bindless_uab,
-        world_pipelines,
+        world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines::new(
+            world_pipelines,
+        ),
         bucket_stride: plan.n_cull,
         bindless_main_spv: bindless.main_spv,
         bindless_sets: bindless.sets,

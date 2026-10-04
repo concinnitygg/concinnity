@@ -6,7 +6,35 @@
 //! backends so the policy lives once next to the CSM math in `csm.rs`.
 
 use crate::components::ShadowUpdate;
-use crate::gfx::render_types::NUM_SHADOW_CASCADES;
+use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
+use crate::render::backend_init::ShadowCadence;
+use crate::render::csm::{self, ShadowUniformInputs};
+
+/// The camera a frame's cascades are fit to.
+#[derive(Clone, Copy, Debug)]
+pub struct CascadeCamera {
+    /// World-to-view matrix, column-major.
+    pub view: [[f32; 4]; 4],
+    /// World-space position.
+    pub position: [f32; 3],
+    /// Vertical field of view, in radians.
+    pub fov_y_rad: f32,
+    /// Viewport width over height.
+    pub aspect: f32,
+    /// Near plane.
+    pub near: f32,
+    /// Far plane, which caps the shadow distance.
+    pub far: f32,
+}
+
+/// The directional light a renderer's cascades are cast from.
+#[derive(Clone, Copy, Debug)]
+pub struct CascadeLight {
+    /// Unit vector pointing toward the light.
+    pub dir_to_source: [f32; 3],
+    /// Per-cascade shadow map edge, in texels.
+    pub map_size: u32,
+}
 
 /// Round-robin clock + primed-set state for the cascade re-render schedule. One
 /// per renderer; `next_mask` advances it once per frame and returns which
@@ -34,6 +62,40 @@ impl ShadowCascadeScheduler {
             select_cascade_mask(update, self.clock, self.primed_mask, active_cascades);
         self.clock = self.clock.wrapping_add(1);
         self.primed_mask = primed;
+        mask
+    }
+
+    /// Advance the schedule one frame and refresh `uniforms` for it: the splits
+    /// and cascade count always, and the light view-projection of each cascade
+    /// that re-renders this frame. A skipped cascade keeps the projection its
+    /// slice was last rendered with, so every slice is sampled the way it was
+    /// drawn. Returns the re-render mask.
+    pub fn refresh(
+        &mut self,
+        uniforms: &mut ShadowUniforms,
+        cadence: &ShadowCadence,
+        light: CascadeLight,
+        camera: CascadeCamera,
+    ) -> u32 {
+        let fresh = csm::compute_shadow_uniforms(ShadowUniformInputs {
+            view: camera.view,
+            cam_pos: camera.position,
+            fov_y_rad: camera.fov_y_rad,
+            aspect: camera.aspect,
+            near: camera.near,
+            shadow_distance: (cadence.distance as f32).min(camera.far),
+            light_dir_to_source: light.dir_to_source,
+            shadow_map_size: light.map_size,
+            active_cascades: cadence.cascades,
+        });
+        let mask = self.next_mask(cadence.update, cadence.cascades);
+        uniforms.cascade_splits = fresh.cascade_splits;
+        uniforms.active_cascades = fresh.active_cascades;
+        for (i, vp) in uniforms.light_vps.iter_mut().enumerate() {
+            if mask & (1u32 << i) != 0 {
+                *vp = fresh.light_vps[i];
+            }
+        }
         mask
     }
 }
@@ -77,9 +139,103 @@ fn select_cascade_mask(
 
 #[cfg(test)]
 mod tests {
-    use super::{ShadowCascadeScheduler, select_cascade_mask};
+    use super::{
+        CascadeCamera, CascadeLight, ShadowCadence, ShadowCascadeScheduler, select_cascade_mask,
+    };
     use crate::components::ShadowUpdate;
-    use crate::gfx::render_types::NUM_SHADOW_CASCADES;
+    use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
+    use crate::render::csm;
+    use crate::transform::IDENTITY;
+
+    fn camera(x: f32, far: f32) -> CascadeCamera {
+        let mut view = IDENTITY;
+        view[3][0] = -x;
+        CascadeCamera {
+            view,
+            position: [x, 0.0, 0.0],
+            fov_y_rad: 1.0,
+            aspect: 16.0 / 9.0,
+            near: 0.1,
+            far,
+        }
+    }
+
+    const LIGHT: CascadeLight = CascadeLight {
+        dir_to_source: [0.3, 1.0, 0.2],
+        map_size: 1024,
+    };
+
+    fn cadence_of(update: ShadowUpdate, distance: u32) -> ShadowCadence {
+        ShadowCadence {
+            update,
+            distance,
+            cascades: NUM_SHADOW_CASCADES as u32,
+        }
+    }
+
+    fn expected(camera: CascadeCamera, cadence: &ShadowCadence) -> ShadowUniforms {
+        csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
+            view: camera.view,
+            cam_pos: camera.position,
+            fov_y_rad: camera.fov_y_rad,
+            aspect: camera.aspect,
+            near: camera.near,
+            shadow_distance: (cadence.distance as f32).min(camera.far),
+            light_dir_to_source: LIGHT.dir_to_source,
+            shadow_map_size: LIGHT.map_size,
+            active_cascades: cadence.cascades,
+        })
+    }
+
+    #[test]
+    fn refresh_keeps_the_projection_of_every_skipped_cascade() {
+        let cadence = cadence_of(ShadowUpdate::Hybrid, 80);
+        let mut scheduler = ShadowCascadeScheduler::default();
+        let mut uniforms = csm::empty_shadow_uniforms();
+        let first = scheduler.refresh(&mut uniforms, &cadence, LIGHT, camera(0.0, 500.0));
+        assert_eq!(first, ALL, "the first frame primes every cascade");
+
+        let before = uniforms;
+        let moved = camera(25.0, 500.0);
+        let mask = scheduler.refresh(&mut uniforms, &cadence, LIGHT, moved);
+        assert_ne!(mask, ALL);
+        let fresh = expected(moved, &cadence);
+        let stale = (0..NUM_SHADOW_CASCADES)
+            .any(|i| mask & (1 << i) == 0 && fresh.light_vps[i] != before.light_vps[i]);
+        assert!(stale, "the move changes a skipped cascade's projection");
+        for i in 0..NUM_SHADOW_CASCADES {
+            let want = if mask & (1 << i) != 0 {
+                fresh.light_vps[i]
+            } else {
+                before.light_vps[i]
+            };
+            assert_eq!(uniforms.light_vps[i], want, "cascade {i}");
+        }
+        assert_eq!(uniforms.cascade_splits, fresh.cascade_splits);
+        assert_eq!(uniforms.active_cascades, fresh.active_cascades);
+    }
+
+    #[test]
+    fn refresh_caps_the_shadow_distance_at_the_far_plane() {
+        let cadence = cadence_of(ShadowUpdate::EveryFrame, 400);
+        let near_far = camera(0.0, 60.0);
+        let mut uniforms = csm::empty_shadow_uniforms();
+        ShadowCascadeScheduler::default().refresh(&mut uniforms, &cadence, LIGHT, near_far);
+        let capped = expected(near_far, &cadence_of(ShadowUpdate::EveryFrame, 60));
+        assert_eq!(uniforms.cascade_splits, capped.cascade_splits);
+    }
+
+    #[test]
+    fn refresh_returns_the_schedule_it_advanced() {
+        let cadence = cadence_of(ShadowUpdate::Hybrid, 80);
+        let mut refreshed = ShadowCascadeScheduler::default();
+        let mut stepped = ShadowCascadeScheduler::default();
+        let mut uniforms = csm::empty_shadow_uniforms();
+        for _ in 0..8 {
+            let got = refreshed.refresh(&mut uniforms, &cadence, LIGHT, camera(0.0, 500.0));
+            assert_eq!(got, stepped.next_mask(cadence.update, cadence.cascades));
+        }
+    }
 
     const ALL: u32 = (1u32 << NUM_SHADOW_CASCADES) - 1;
 

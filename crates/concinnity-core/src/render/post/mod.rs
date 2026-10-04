@@ -40,6 +40,9 @@ pub mod program;
 /// written once.
 pub mod reflection_composite;
 
+/// Which reflection resolve runs each frame, and whether the composite exists.
+pub mod reflection_path;
+
 /// Screen-space ambient occlusion: the kernel and blur, written once.
 pub mod ssao;
 

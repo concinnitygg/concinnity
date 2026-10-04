@@ -553,7 +553,7 @@ impl VkContext {
 
         // An in-flight probe bake's Hi-Z set captured the same destroyed view
         // at bake start; re-point it too or its next face binds a freed view.
-        if let (Some(bake), Some(hiz)) = (self.probe.rendering.as_ref(), self.cull.hiz.as_ref()) {
+        if let (Some(bake), Some(hiz)) = (self.probe.bake.capture(), self.cull.hiz.as_ref()) {
             bake.rewrite_hiz_view(&self.hw.device, hiz.read_set_view());
         }
 

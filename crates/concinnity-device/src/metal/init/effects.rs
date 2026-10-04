@@ -5,7 +5,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::auto_exposure::{AutoExposureSettings, AutoExposureState};
+use concinnity_core::gfx::auto_exposure::{AutoExposureSettings, ExposureAdaptation};
 use concinnity_core::render::backend_init::PostSettings;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::PostExtent;
@@ -325,28 +325,20 @@ pub(in crate::metal) fn build_auto_exposure(
     frames_in_flight: usize,
     hot_reload: bool,
 ) -> RenderResult<AutoExposureGpu> {
-    let (pipelines, histogram, outputs, state, bias_ev) =
+    let (pipelines, histogram, outputs, adaptation) =
         if let Some(ae_settings) = settings.auto_exposure.as_ref() {
             let pipelines = build_auto_exposure_pipelines(device, hot_reload)?;
             let hist = make_auto_exposure_histogram(device)?;
             let outputs = (0..frames_in_flight.max(1))
                 .map(|_| make_auto_exposure_output(device))
                 .collect::<Result<Vec<_>, _>>()?;
-            let state = AutoExposureState::new(ae_settings);
-            (
-                Some(pipelines),
-                Some(hist),
-                outputs,
-                Some(state),
-                settings.auto_exposure_bias_ev,
-            )
+            let adaptation = ExposureAdaptation::new(*ae_settings, settings.auto_exposure_bias_ev);
+            (Some(pipelines), Some(hist), outputs, Some(adaptation))
         } else {
-            (None, None, Vec::new(), None, 0.0)
+            (None, None, Vec::new(), None)
         };
     Ok(AutoExposureGpu {
-        settings: *settings.auto_exposure,
-        state,
-        bias_ev,
+        adaptation,
         pipelines,
         histogram,
         outputs,

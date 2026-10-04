@@ -4,7 +4,9 @@
 
 mod state;
 
-pub use state::{AutoExposureState, HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN};
+pub use state::{
+    AutoExposureState, ExposureAdaptation, HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN,
+};
 
 // Smallest legal EMA speed. A zero or negative speed would freeze adaptation
 // at the initial EV, so the authored value is floored here.

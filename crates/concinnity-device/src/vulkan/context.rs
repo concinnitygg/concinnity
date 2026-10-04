@@ -366,7 +366,8 @@ pub(super) struct VkCull {
     // GPU-culled command buffer through the shared bindless pipeline layout.
     // `None` marks a bucket whose Shader is not resident yet: its scene has not
     // pinned, so the pass skips those draws (see `world_shaders.rs`).
-    pub(super) world_pipelines: Vec<Option<OwnedPipeline>>,
+    pub(super) world_pipelines:
+        concinnity_core::render::world_pipelines::WorldPipelines<OwnedPipeline>,
     // Commands reserved per shader-bucket region in the indirect buffers, fixed at
     // init to the record capacity the buffers were sized for. Bucket `b`'s region
     // starts at command `b * bucket_stride`.
@@ -670,14 +671,12 @@ pub(super) struct FogState {
 // Auto-exposure (EV adaptation). `resources` is `Some` only when
 // `PostProcessConfig.auto_exposure` is enabled; it holds the build + average
 // compute pipelines, histogram + output buffers, and the per-frame readback
-// buffers. `state` carries the EMA target, `settings` the clamped tunables,
-// `bias_ev` the authored EV bias added to the target, and `last_elapsed` the
-// previous frame's elapsed time used to derive `dt` for the EMA.
+// buffers. `adaptation` carries the tunables, the authored EV bias and the EMA
+// target, and `last_elapsed` the previous frame's elapsed time used to derive
+// `dt` for the EMA.
 pub(super) struct AutoExposureState {
     pub resources: Option<crate::vulkan::auto_exposure::AutoExposureResources>,
-    pub settings: Option<auto_exposure::AutoExposureSettings>,
-    pub state: Option<auto_exposure::AutoExposureState>,
-    pub bias_ev: f32,
+    pub adaptation: Option<auto_exposure::ExposureAdaptation>,
     pub last_elapsed: f32,
 }
 
@@ -753,9 +752,7 @@ pub(super) struct TextState {
 }
 
 // Scene-captured reflection probes and the staggered bake that fills them,
-// driven each frame by `bake_pending_probes` (the shared
-// `reflection_probe::next_bake_action` transition table). Mirrors DirectX /
-// Metal.
+// driven each frame by `bake_pending_probes` through the shared `ProbeBake`.
 pub(super) struct ProbeState {
     // Placements (declared `ReflectionProbe`s or an auto-seeded grid), supplied
     // once after construction via `set_reflection_probes`, the record of every
@@ -766,11 +763,10 @@ pub(super) struct ProbeState {
     // record buffers. Distinct from `env_map`; sampled only by the specular
     // reflection term.
     pub gpu: super::probe_set::ProbeSetGpu,
-    // At most one probe is `rendering` (six faces submitting one per frame, on
-    // per-face fences) and one `prefiltering` (its capture convolving into its
-    // cube on the GPU, one destination mip per frame).
-    pub rendering: Option<super::probe::RenderingBake>,
-    pub prefiltering: Option<super::probe::PrefilteringBake>,
+    // At most one probe capturing (six faces submitting one per frame, on
+    // per-face fences) and one convolving into its cube on the GPU, one
+    // destination mip per frame.
+    pub bake: super::probe::VkProbeBake,
     // The three convolution kernels and the layouts they bind, built at init under
     // the same gate the bake needs. `None` disables baking.
     pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
@@ -786,8 +782,7 @@ impl ProbeState {
         Self {
             book: ProbeBook::new(),
             gpu,
-            rendering: None,
-            prefiltering: None,
+            bake: super::probe::VkProbeBake::default(),
             prefilter,
         }
     }
@@ -1714,8 +1709,7 @@ impl VkContext {
     // are skipped (the value still persists for the next launch). SSAO / SSR /
     // auto-exposure are fully scalar, so they are replaced wholesale; SSGI's trace
     // resolution sizes its targets and rides `apply_quality_settings` with its ray
-    // count, so only its scalar intensity / distance are updated. Auto-exposure settings live flat on the context here
-    // (`auto_exposure.settings`), not inside a resources struct as on Metal.
+    // count, so only its scalar intensity / distance are updated.
     pub(crate) fn update_quality_params(&mut self, q: backend::QualitySettings) {
         if let (Some(live), Some(cur)) = (q.ssao, self.ssao.as_mut().map(|s| &mut s.settings)) {
             *cur = live;
@@ -1729,8 +1723,8 @@ impl VkContext {
             cur.intensity = live.intensity;
             cur.max_distance = live.max_distance;
         }
-        if let (Some(live), Some(cur)) = (q.auto_exposure, self.auto_exposure.settings.as_mut()) {
-            *cur = live;
+        if let (Some(live), Some(cur)) = (q.auto_exposure, self.auto_exposure.adaptation.as_mut()) {
+            cur.settings = live;
         }
     }
 
@@ -1875,10 +1869,11 @@ impl VkContext {
         // Abandon any in-flight staggered probe bake: free both slots' command
         // buffers (before `self.commands` is destroyed below) + fences + targets.
         // `wait_idle` above retired their GPU work.
-        if let Some(rendering) = self.probe.rendering.take() {
+        let (rendering, prefiltering) = self.probe.bake.take();
+        if let Some(rendering) = rendering {
             rendering.destroy(device, self.commands.command_pool);
         }
-        if let Some(prefiltering) = self.probe.prefiltering.take() {
+        if let Some(prefiltering) = prefiltering {
             prefiltering.destroy(device, self.commands.command_pool);
         }
 

@@ -41,17 +41,6 @@ pub(in crate::metal) struct ShadowView<'a> {
 }
 
 impl MtlContext {
-    // Choose which shadow cascades to re-render this frame and advance the
-    // round-robin clock. Delegates to the shared `ShadowCascadeScheduler`
-    // (`gfx::shadow_schedule`, unit-tested there). Called once per frame from
-    // draw_frame; the result is stashed in `shadow.render_mask` for
-    // encode_shadow_pass and used to gate which cascade VPs refresh.
-    pub(in crate::metal) fn next_shadow_cascade_mask(&mut self) -> u32 {
-        self.shadow
-            .scheduler
-            .next_mask(self.shadow.cadence.update, self.shadow.cadence.cascades)
-    }
-
     // pub(in crate::metal) so the render-graph executor in
     // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
     pub(in crate::metal) fn encode_shadow_pass(

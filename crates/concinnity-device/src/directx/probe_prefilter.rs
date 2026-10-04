@@ -120,10 +120,10 @@ impl ProbePrefilterPipelines {
 /// One bake's capture cube and the probe-array cube it convolves into. Their
 /// descriptors live in the SRV heap's reserved probe-prefilter block, which [`PrefilterGpu::new`]
 /// rewrites for each bake. One block for every bake is what serializes them on
-/// this backend: `bake_pending_probes` starts a capture only once the prefiltering
-/// slot is empty, and the install that empties it is gated on the fence covering
-/// the prior bake's last dispatch, so nothing in flight still binds the block when
-/// it is rewritten.
+/// this backend: a capture starts only once the prefiltering slot is empty, and
+/// the install that empties it is gated on the fence covering the prior bake's
+/// last dispatch, so nothing in flight still binds the block when it is
+/// rewritten.
 pub(in crate::directx) struct PrefilterGpu {
     capture: ID3D12Resource,
     // The cube of the probe cube array the convolution writes.

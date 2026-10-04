@@ -8,6 +8,7 @@ use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::SkinnedVertex;
 use concinnity_core::gfx::render_types::*;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::geometry_repack;
 use concinnity_core::render::rt_geom;
 use concinnity_core::transform::IDENTITY;
 
@@ -137,63 +138,34 @@ impl VkContext {
         vertices: &[SkinnedVertex],
         indices: &[u16],
     ) -> RenderResult<()> {
-        let obj = self
-            .state
-            .skinned
-            .draw_objects
-            .get(skinned_index.index())
-            .ok_or_else(|| {
-                RenderError::Other(format!(
-                    "update_skinned_mesh_geometry: skinned object {} out of range",
-                    skinned_index
-                ))
-            })?;
-        if indices.len() != obj.index_count {
-            return Err(RenderError::Other(format!(
-                "update_skinned_mesh_geometry: skinned {} expects {} indices, got {} \
-                 (in-place path is size-matched only; size changes route through \
-                 rebuild_skinned_geometry)",
-                skinned_index,
-                obj.index_count,
-                indices.len()
-            )));
-        }
         if self.skinned.vertex_buffer.is_null() || self.skinned.index_buffer.is_null() {
-            return Err(concinnity_core::render::error::RenderError::Other(
+            return Err(RenderError::Other(
                 "update_skinned_mesh_geometry: no skinned vertex/index buffer (was \
                  upload_skinned called?)"
                     .to_string(),
             ));
         }
-        let v_byte_off =
-            (vertex_base as usize).saturating_mul(std::mem::size_of::<SkinnedVertex>());
-        let v_byte_len = std::mem::size_of_val(vertices);
-        let v_buf_len = self.skinned.vertex_buffer_bytes as usize;
-        if v_byte_off + v_byte_len > v_buf_len {
-            return Err(RenderError::Other(format!(
-                "update_skinned_mesh_geometry: vertex region [{}, {}) overruns skinned \
-                 vertex buffer length {}",
-                v_byte_off,
-                v_byte_off + v_byte_len,
-                v_buf_len
-            )));
-        }
-        let i_byte_off = (obj.index_offset * std::mem::size_of::<u32>()) as u64;
-        let rebased: Vec<u32> = indices
-            .iter()
-            .map(|&i| u32::from(i) + vertex_base)
-            .collect();
+        let write = geometry_repack::place_skinned_update(
+            &self.state.skinned.draw_objects,
+            skinned_index,
+            vertex_base,
+            vertices.len(),
+            indices,
+            self.skinned.vertex_buffer_bytes as usize,
+        )?;
 
         self.wait_idle();
 
-        let vert_bytes = bytemuck::cast_slice(vertices);
         self.write_geometry_region(
             self.skinned.vertex_buffer.buffer(),
-            v_byte_off as u64,
-            vert_bytes,
+            write.vertex_offset,
+            bytemuck::cast_slice(vertices),
         )?;
-        let idx_bytes = bytemuck::cast_slice(&rebased);
-        self.write_geometry_region(self.skinned.index_buffer.buffer(), i_byte_off, idx_bytes)?;
+        self.write_geometry_region(
+            self.skinned.index_buffer.buffer(),
+            write.index_offset,
+            bytemuck::cast_slice(&write.indices),
+        )?;
         Ok(())
     }
 

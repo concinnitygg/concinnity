@@ -7,7 +7,6 @@
 
 use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::render::backend;
-use concinnity_core::render::backend::SkinnedIndex;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::geometry_repack;
 use concinnity_core::render::rt_geom;
@@ -230,8 +229,6 @@ impl DxContext {
         &mut self,
         changes: Vec<backend::SkinnedDrawGeometryUpdate>,
     ) -> RenderResult<Vec<backend::SkinnedSlotLayout>> {
-        use std::collections::HashMap;
-
         let v_buf = self.skinned.vertex_buffer.clone().ok_or_else(|| {
             RenderError::Other(
                 "rebuild_skinned_geometry: no skinned vertex buffer (was upload_skinned called?)"
@@ -246,9 +243,6 @@ impl DxContext {
         })?;
 
         self.wait_idle();
-
-        let mut change_map: HashMap<SkinnedIndex, backend::SkinnedDrawGeometryUpdate> =
-            changes.into_iter().map(|c| (c.skinned_index, c)).collect();
 
         // Read the live skinned buffers back to CPU memory via READBACK
         // staging. Same one-shot pattern as `rebuild_static_geometry`.
@@ -300,114 +294,21 @@ impl DxContext {
         let old_vertices: Vec<SkinnedVertex> = read_typed_vec(&v_readback, old_v_count)?;
         let old_indices: Vec<u32> = read_typed_vec(&i_readback, old_i_count)?;
 
-        // Walk every skinned slot, appending new or unchanged-and-rebased
-        // geometry into the fresh CPU buffers.
-        let mut new_vertices: Vec<SkinnedVertex> = Vec::new();
-        let mut new_indices: Vec<u32> = Vec::new();
-        let mut layouts: Vec<backend::SkinnedSlotLayout> =
-            Vec::with_capacity(self.state.skinned.draw_objects.len());
-        // Captured per-slot new layout (applied to `skinned_draw_objects`
-        // after the read-only walk to avoid aliasing `self`).
-        let mut new_per_slot: Vec<(SkinnedIndex, u32, usize, usize, usize)> =
-            Vec::with_capacity(self.state.skinned.draw_objects.len());
-
-        for (i, obj) in self.state.skinned.draw_objects.iter().enumerate() {
-            let skinned_index = SkinnedIndex::from_usize(i);
-            let new_v_base = new_vertices.len() as u32;
-            let new_i_off = new_indices.len();
-
-            if let Some(change) = change_map.remove(&skinned_index) {
-                let new_v_count = change.vertices.len();
-                let new_i_count = change.indices.len();
-                new_vertices.extend_from_slice(&change.vertices);
-                for &local in &change.indices {
-                    new_indices.push(u32::from(local) + new_v_base);
-                }
-                layouts.push(backend::SkinnedSlotLayout {
-                    skinned_index,
-                    vertex_base: new_v_base,
-                    vertex_count: new_v_count,
-                    index_count: new_i_count,
-                });
-                new_per_slot.push((
-                    skinned_index,
-                    new_v_base,
-                    new_v_count,
-                    new_i_off,
-                    new_i_count,
-                ));
-            } else {
-                // Unchanged slot: copy current geometry verbatim, rebasing
-                // its absolute indices from the old vertex_base onto the new
-                // one.
-                let v_start = obj.vertex_base as usize;
-                let v_end = v_start + obj.vertex_count;
-                if v_end > old_vertices.len() {
-                    return Err(RenderError::Other(format!(
-                        "rebuild_skinned_geometry: slot {} vertex region [{}, {}) \
-                         out of bounds (buffer has {} vertices)",
-                        skinned_index,
-                        v_start,
-                        v_end,
-                        old_vertices.len()
-                    )));
-                }
-                new_vertices.extend_from_slice(&old_vertices[v_start..v_end]);
-                let i_end = obj.index_offset + obj.index_count;
-                if i_end > old_indices.len() {
-                    return Err(RenderError::Other(format!(
-                        "rebuild_skinned_geometry: slot {} index region [{}, {}) \
-                         out of bounds (buffer has {} indices)",
-                        skinned_index,
-                        obj.index_offset,
-                        i_end,
-                        old_indices.len()
-                    )));
-                }
-                let old_base = obj.vertex_base;
-                // `idx - old_base + new_v_base`: the subtraction is still
-                // checked because a stale index below the slot's own base
-                // means the readback and the draw objects disagree.
-                for &abs in &old_indices[obj.index_offset..i_end] {
-                    let local = abs.checked_sub(old_base).ok_or_else(|| {
-                        RenderError::Other(format!(
-                            "rebuild_skinned_geometry: stale index {abs} below \
-                             vertex_base {old_base} on slot {skinned_index}"
-                        ))
-                    })?;
-                    new_indices.push(local + new_v_base);
-                }
-                layouts.push(backend::SkinnedSlotLayout {
-                    skinned_index,
-                    vertex_base: new_v_base,
-                    vertex_count: obj.vertex_count,
-                    index_count: obj.index_count,
-                });
-                new_per_slot.push((
-                    skinned_index,
-                    new_v_base,
-                    obj.vertex_count,
-                    new_i_off,
-                    obj.index_count,
-                ));
-            }
-        }
-
-        if !change_map.is_empty() {
+        let repacked = geometry_repack::repack_skinned_geometry(
+            &self.state.skinned.draw_objects,
+            &old_vertices,
+            &old_indices,
+            changes,
+        )?;
+        if repacked.ignored_changes > 0 {
             tracing::warn!(
                 "rebuild_skinned_geometry: {} change(s) targeted skinned indices not \
                  in skinned_draw_objects (ignored)",
-                change_map.len()
+                repacked.ignored_changes
             );
         }
-
-        if new_vertices.is_empty() || new_indices.is_empty() {
-            return Err(RenderError::Other(
-                "rebuild_skinned_geometry: post-rebuild buffers would be empty (no \
-                 skinned draws to ship)"
-                    .into(),
-            ));
-        }
+        let new_vertices = &repacked.vertices;
+        let new_indices = &repacked.indices;
 
         // Allocate new DEFAULT-heap buffers + UPLOAD staging copies and ship
         // the rebuilt contents in a single one-shot submit.
@@ -435,8 +336,8 @@ impl DxContext {
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
-        write_upload_buffer(&v_upload, bytemuck::cast_slice(&new_vertices))?;
-        write_upload_buffer(&i_upload, bytemuck::cast_slice(&new_indices))?;
+        write_upload_buffer(&v_upload, bytemuck::cast_slice(new_vertices))?;
+        write_upload_buffer(&i_upload, bytemuck::cast_slice(new_indices))?;
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| unsafe {
@@ -457,13 +358,7 @@ impl DxContext {
 
         // Commit: rewrite per-slot layouts, repoint the live views at the
         // new buffers, and drop the old buffer COM references.
-        for (skinned_index, v_base, v_count, i_off, i_count) in new_per_slot {
-            let obj = &mut self.state.skinned.draw_objects[skinned_index.index()];
-            obj.vertex_base = v_base;
-            obj.vertex_count = v_count;
-            obj.index_offset = i_off;
-            obj.index_count = i_count;
-        }
+        repacked.apply_to(&mut self.state.skinned.draw_objects);
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_vbuf),
             SizeInBytes: new_v_bytes as u32,
@@ -476,7 +371,7 @@ impl DxContext {
         };
         self.skinned.vertex_buffer = Some(new_vbuf);
         self.skinned.index_buffer = Some(new_ibuf);
-        Ok(layouts)
+        Ok(repacked.layouts())
     }
 }
 

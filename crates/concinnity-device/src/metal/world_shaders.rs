@@ -6,10 +6,7 @@
 // those scenes pin and unpin, handing over a pipeline its worker already built.
 
 use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
-use objc2_metal::MTLRenderPipelineState;
+use concinnity_core::render::error::RenderResult;
 use std::sync::Arc;
 
 use super::MtlContext;
@@ -27,7 +24,7 @@ impl MtlContext {
         programs: &concinnity_core::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
-        let slot = self.world_pipeline_slot(bucket)?;
+        self.cull.world_pipelines.slot(bucket)?;
         let pso = match world_shader_for(prepared, self.pipeline_targets()) {
             Some(pso) => pso,
             None => build_bucket_pipeline(
@@ -39,7 +36,7 @@ impl MtlContext {
                 self.targets.hdr.sample_count,
             )?,
         };
-        self.cull.world_pipelines[slot] = Some(pso);
+        self.cull.world_pipelines.install(bucket, pso)?;
         Ok(())
     }
 
@@ -59,8 +56,8 @@ impl MtlContext {
             self.update_default_world_shader(programs, prepared)?;
             return Ok(PipelineSwap::Swapped);
         }
-        self.world_pipeline_slot(bucket)?;
-        if !self.world_shader_resident(bucket as usize) {
+        self.cull.world_pipelines.slot(bucket)?;
+        if !self.cull.world_pipelines.resident(bucket as usize) {
             return Ok(PipelineSwap::NotResident);
         }
         self.install_world_shader(bucket, programs, prepared)?;
@@ -90,43 +87,6 @@ impl MtlContext {
     // Metal's alone: DirectX and Vulkan command lists do NOT keep a pipeline
     // alive, so their evict drains the device first.
     pub(super) fn evict_world_shader(&mut self, bucket: u32) {
-        if let Ok(slot) = self.world_pipeline_slot(bucket) {
-            self.cull.world_pipelines[slot] = None;
-        }
-    }
-
-    // Whether a bucket's draws can render this frame: bucket 0 is the world
-    // default program, every other bucket needs its pipeline installed.
-    pub(super) fn world_shader_resident(&self, bucket: usize) -> bool {
-        bucket == 0
-            || matches!(
-                self.cull.world_pipelines.get(bucket.wrapping_sub(1)),
-                Some(Some(_))
-            )
-    }
-
-    pub(super) fn world_pipeline(
-        &self,
-        bucket: usize,
-    ) -> Option<&Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-        self.cull
-            .world_pipelines
-            .get(bucket.checked_sub(1)?)?
-            .as_ref()
-    }
-
-    // A bucket outside the world's table is a scene-authoring mistake, not a
-    // device failure, so it stays `Other` whatever the pipeline build would say.
-    fn world_pipeline_slot(&self, bucket: u32) -> RenderResult<usize> {
-        let slot = (bucket as usize).checked_sub(1).ok_or_else(|| {
-            RenderError::Other("shader bucket 0 is the world default program".into())
-        })?;
-        if slot >= self.cull.world_pipelines.len() {
-            return Err(RenderError::Other(format!(
-                "shader bucket {bucket} is past the world's {} shader pipeline(s)",
-                self.cull.world_pipelines.len()
-            )));
-        }
-        Ok(slot)
+        self.cull.world_pipelines.evict(bucket);
     }
 }

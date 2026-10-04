@@ -70,7 +70,9 @@ pub(crate) struct CullState {
     // while the bucket's Shader is not resident -- init defers a shader owned
     // by a scene other than the start scene, and `install_world_shader` builds
     // it when that scene pins. Draws carrying a `None` bucket are skipped.
-    pub world_pipelines: super::init::pipelines::WorldPipelineTable,
+    pub world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines<
+        Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    >,
     // The phase-1 decision kernel (`cull.hlsl`). `Some` only when `bindless`
     // is set; every other pipeline here is `Some` exactly when it is.
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,

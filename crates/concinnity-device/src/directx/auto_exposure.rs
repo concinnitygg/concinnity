@@ -28,15 +28,12 @@ use crate::directx::texture::{create_uav_buffer, transition_barrier, uav_barrier
 // Auto-exposure (EV adaptation) state. `resources` is `Some` only when the
 // world's `PostProcessConfig` opts in; it holds the histogram + average compute
 // PSOs, the histogram UAV, the output UAV, and the per-frame readback buffers.
-// `state` carries the EMA target; `settings` carries the clamped tunables;
-// `bias_ev` is the authored EV bias added to the target; `last_elapsed` is the
-// previous frame's elapsed time used to derive `dt` for the EMA. Mirrors the
-// Metal pattern.
+// `adaptation` carries the clamped tunables, the authored EV bias and the EMA
+// target; `last_elapsed` is the previous frame's elapsed time used to derive
+// `dt` for the EMA.
 pub(in crate::directx) struct AutoExposureState {
     pub resources: Option<AutoExposureResources>,
-    pub settings: Option<auto_exposure::AutoExposureSettings>,
-    pub state: Option<auto_exposure::AutoExposureState>,
-    pub bias_ev: f32,
+    pub adaptation: Option<auto_exposure::ExposureAdaptation>,
     pub last_elapsed: f32,
 }
 
@@ -208,13 +205,10 @@ impl DxContext {
     // `elapsed` is the total elapsed seconds since startup; the per-call diff
     // drives `dt` for the EMA.
     pub(super) fn update_auto_exposure(&mut self, elapsed: f32, frame_idx: usize) {
-        let Some(settings) = self.auto_exposure.settings else {
+        let Some(adaptation) = self.auto_exposure.adaptation.as_mut() else {
             return;
         };
         let Some(resources) = self.auto_exposure.resources.as_ref() else {
-            return;
-        };
-        let Some(state) = self.auto_exposure.state.as_mut() else {
             return;
         };
         let Some(&ptr) = resources.readback_ptrs.get(frame_idx) else {
@@ -228,22 +222,15 @@ impl DxContext {
         // buffer, which holds one `f32`, and the fence wait ahead of this call retired the compute
         // pass that wrote it.
         let avg_log_lum = unsafe { ptr.read() };
-        let avg_log_lum = if avg_log_lum.is_finite() {
-            avg_log_lum
-        } else {
-            auto_exposure::LUM_LOG2_MIN
-        };
 
         let dt = (elapsed - self.auto_exposure.last_elapsed).max(0.0);
         self.auto_exposure.last_elapsed = elapsed;
 
-        let adapted_ev = state.update(avg_log_lum, self.auto_exposure.bias_ev, &settings, dt);
         // `self.post_process.exposure` is the linear multiplier the bloom
         // prefilter and composite consume; it already folds in the authored
         // exposure_ev when auto-exposure is off, so we only overwrite it here
-        // when the GPU path owns the value. `state.update` already folds the
-        // bias into the target; re-adding it would double the bias.
-        self.post_process.exposure = adapted_ev.exp2();
+        // when the GPU path owns the value.
+        self.post_process.exposure = adaptation.step(avg_log_lum, dt);
     }
 
     // Resource the histogram_build kernel samples through `hdr_srv_gpu`: the

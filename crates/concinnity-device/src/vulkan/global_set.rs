@@ -131,7 +131,7 @@ impl VkContext {
         if let Some(planar) = self.planar_reflection.as_ref() {
             planar.rewrite_global_binding(device, &bindings, binding);
         }
-        if let Some(rendering) = self.probe.rendering.as_ref() {
+        if let Some(rendering) = self.probe.bake.capture() {
             rendering.rewrite_global_binding(device, &bindings, binding);
         }
     }

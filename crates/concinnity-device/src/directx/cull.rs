@@ -56,7 +56,8 @@ pub(in crate::directx) struct CullState {
     // GPU-culled command buffer through the bindless root signature. `None`
     // marks a bucket whose Shader is not resident yet: its scene has not pinned,
     // so the pass skips those draws (see `world_shaders.rs`).
-    pub world_pipelines: Vec<Option<ID3D12PipelineState>>,
+    pub world_pipelines:
+        concinnity_core::render::world_pipelines::WorldPipelines<ID3D12PipelineState>,
     // Commands reserved per shader-bucket region in the indirect buffers, fixed
     // at init to the record capacity the buffers were sized for. Bucket `b`'s
     // region starts at command `b * bucket_stride`.
@@ -366,7 +367,7 @@ impl DxContext {
     // declares no extra shaders, which collapses the indirect buffer to the
     // single region every pass used before buckets existed.
     pub(in crate::directx) fn shader_bucket_count(&self) -> usize {
-        1 + self.cull.world_pipelines.len()
+        self.cull.world_pipelines.bucket_count()
     }
 
     // Byte offset of shader bucket `b`'s command region in an indirect buffer.

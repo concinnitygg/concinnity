@@ -229,7 +229,7 @@ impl MtlContext {
         //   - the upscaler's output (drawable-res) when MetalFX is on,
         //   - the TAA resolve target when TAA is on,
         //   - otherwise just the pre-TAA scene (no temporal stage).
-        let scene_input = if self.ssr.settings.is_some() || self.rt.accel.is_some() {
+        let scene_input = if self.reflection_path().resolves() {
             self.ssr
                 .composite
                 .as_ref()

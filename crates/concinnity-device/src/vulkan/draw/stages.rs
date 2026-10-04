@@ -3,13 +3,12 @@
 
 use ash::vk;
 use concinnity_core::components;
-use concinnity_core::gfx::render_types;
 use concinnity_core::profile;
 use concinnity_core::profile::PassTiming;
-use concinnity_core::render::csm;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::pass_timing;
+use concinnity_core::render::shadow_schedule::{CascadeCamera, CascadeLight};
 
 use super::upload_shadow_uniforms;
 use crate::gpu_wait::GpuWait;
@@ -99,9 +98,7 @@ impl VkContext {
         // this frame's slot fence wait, before `record_frame` -- so any cube it
         // installs (a binding-8 rewrite + `probe.set.count` bump) is picked up by this
         // frame's `record_frame` ProbeSet upload + rendering. Non-fatal.
-        if let Err(e) = self.bake_pending_probes() {
-            tracing::warn!("reflection probe bake step failed: {e}");
-        }
+        self.bake_pending_probes();
 
         // Auto-exposure: step the EMA from a previous frame's GPU
         // measurement before any pipeline reads `post_process.exposure`.
@@ -201,7 +198,11 @@ impl VkContext {
             // stays blank. The value is the EV the most recent
             // `update_auto_exposure` EMA step settled on (the multiplier the
             // post stack pushes is `2^ev`). Mirrors `DxContext` / `MtlContext`.
-            auto_exposure_ev: self.auto_exposure.state.as_ref().map(|s| s.current_ev),
+            auto_exposure_ev: self
+                .auto_exposure
+                .adaptation
+                .as_ref()
+                .map(|a| a.current_ev()),
             // EDR headroom for the StatHud `EDR x.X` chip, taken from the
             // `HdrOutputMode` resolved at init. `Some` only on the HDR path
             // (Vulkan has no portable max-EDR query, so the value is the
@@ -341,36 +342,25 @@ impl VkContext {
             extent.width as f32 / extent.height as f32
         };
         if self.shadow.enabled() {
-            let fresh = csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
+            let camera = CascadeCamera {
                 view: self.state.view.matrix,
-                cam_pos,
+                position: cam_pos,
                 fov_y_rad: fov_y_radians,
                 aspect: cascade_aspect,
                 near,
-                shadow_distance: (self.shadow.cadence.distance as f32).min(far),
-                light_dir_to_source: self.shadow.light_dir,
-                shadow_map_size: self.shadow.map_size,
-                active_cascades: self.shadow.cadence.cascades,
-            });
-            // Advance the cascade schedule and refresh only this frame's
-            // cascades' light VPs; skipped cascades keep the VP + depth their
-            // slice was last rendered with, so the Main pass samples each cascade
-            // consistently. Splits depend only on the camera range (not which
-            // cascades render), so always refresh. encode_shadow_pass
-            // re-rasterizes only the masked slices.
-            let update = self.shadow.cadence.update;
-            let mask = self
-                .shadow
-                .scheduler
-                .next_mask(update, self.shadow.cadence.cascades);
-            self.shadow.render_mask = mask;
-            self.shadow.uniforms.cascade_splits = fresh.cascade_splits;
-            self.shadow.uniforms.active_cascades = fresh.active_cascades;
-            for i in 0..render_types::NUM_SHADOW_CASCADES {
-                if mask & (1u32 << i) != 0 {
-                    self.shadow.uniforms.light_vps[i] = fresh.light_vps[i];
-                }
-            }
+                far,
+            };
+            let shadow = &mut self.shadow;
+            let light = CascadeLight {
+                dir_to_source: shadow.light_dir,
+                map_size: shadow.map_size,
+            };
+            // Skipped cascades keep the VP + depth their slice was last rendered
+            // with; encode_shadow_pass re-rasterizes only the masked slices.
+            shadow.render_mask =
+                shadow
+                    .scheduler
+                    .refresh(&mut shadow.uniforms, &shadow.cadence, light, camera);
             upload_shadow_uniforms(&self.shadow.ubos[frame_idx], &self.shadow.uniforms);
         }
 

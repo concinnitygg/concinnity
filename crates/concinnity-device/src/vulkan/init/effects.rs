@@ -634,7 +634,7 @@ pub(super) fn build_world_effects(
     // `PostProcessConfig` opted in. With auto-exposure off every
     // field below is None and the static authored EV continues to
     // drive `post_process.exposure` unchanged.
-    let (auto_exposure, auto_exposure_state) = if let Some(settings) = post.auto_exposure.as_ref() {
+    let (auto_exposure, adaptation) = if let Some(settings) = post.auto_exposure.as_ref() {
         let resources = crate::vulkan::auto_exposure::AutoExposureResources::new(
             alloc,
             device,
@@ -642,8 +642,9 @@ pub(super) fn build_world_effects(
             &hdr_resolve_views,
             hot_reload,
         )?;
-        let state = auto_exposure::AutoExposureState::new(settings);
-        (Some(resources), Some(state))
+        let adaptation =
+            auto_exposure::ExposureAdaptation::new(*settings, post.auto_exposure_bias_ev);
+        (Some(resources), Some(adaptation))
     } else {
         (None, None)
     };
@@ -668,9 +669,7 @@ pub(super) fn build_world_effects(
         transparent,
         auto_exposure: AutoExposureState {
             resources: auto_exposure,
-            settings: post.auto_exposure,
-            state: auto_exposure_state,
-            bias_ev: post.auto_exposure_bias_ev,
+            adaptation,
             last_elapsed: 0.0,
         },
     })

@@ -211,15 +211,15 @@ impl VkContext {
                 self.hot_reload.enabled,
             )?;
             self.auto_exposure.resources = Some(resources);
-            self.auto_exposure.state = Some(auto_exposure::AutoExposureState::new(settings));
-            self.auto_exposure.settings = q.auto_exposure;
-            self.auto_exposure.bias_ev = q.auto_exposure_bias_ev;
+            self.auto_exposure.adaptation = Some(auto_exposure::ExposureAdaptation::new(
+                *settings,
+                q.auto_exposure_bias_ev,
+            ));
         } else if q.auto_exposure.is_none()
             && let Some(mut ae) = self.auto_exposure.resources.take()
         {
             ae.destroy(&self.hw.device);
-            self.auto_exposure.settings = None;
-            self.auto_exposure.state = None;
+            self.auto_exposure.adaptation = None;
         }
 
         // SSAO. Its occlusion target is the transient pool's per-frame

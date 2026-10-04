@@ -99,15 +99,13 @@ pub(super) struct ProbeState {
     // This frame's copy of the book's records, written by `build_probe_records`.
     // `None` before the first frame builds one.
     pub records_buf: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    // The probe currently rendering its six cube faces on the GPU (one at a
-    // time; owns the reserved-ring-slot buffers + capture targets). The render
-    // thread never blocks: the faces are submitted without `waitUntilCompleted`
-    // and a completion handler flags GPU completion. `None` when idle.
-    pub rendering: Option<super::probe::RenderingBake>,
-    // The probe whose capture is convolving into its cube on the GPU (one at a
-    // time), one destination mip per frame. It overlaps the next probe's render,
-    // which shortens the bake warm-up. `None` when idle.
-    pub prefiltering: Option<super::probe::PrefilteringBake>,
+    // At most one probe rendering its six cube faces on the GPU (owning the
+    // reserved-ring-slot buffers + capture targets; the faces are submitted without
+    // `waitUntilCompleted` and a completion handler flags GPU completion) and one
+    // whose capture is convolving into its cube, one destination mip per frame. The
+    // convolution overlaps the next probe's render, which shortens the bake
+    // warm-up.
+    pub bake: super::probe::MtlProbeBake,
     // The three convolution kernels, built at init under the same gate the bake
     // needs (the bindless cull pipeline). `None` disables baking.
     pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
@@ -133,7 +131,7 @@ pub(super) struct ShadowState {
     pub map_size: u32,
     pub cadence: backend_init::ShadowCadence,
     // Round-robin clock + primed-set for the cascade schedule; advanced once per
-    // frame by `next_shadow_cascade_mask`.
+    // frame by `update_shadow_schedule`.
     pub scheduler: shadow_schedule::ShadowCascadeScheduler,
     // Cascades re-rendered this frame (bit `i` = cascade `i`). Computed in
     // draw_frame and read by encode_shadow_pass so the two agree on which slices
@@ -1188,7 +1186,11 @@ impl MtlContext {
         // Surface the auto-exposure EMA state. `None` when the world did not
         // opt in to auto-exposure (the static-exposure path leaves the field
         // empty so the StatHud chip stays blank).
-        stats.auto_exposure_ev = self.auto_exposure.state.as_ref().map(|s| s.current_ev);
+        stats.auto_exposure_ev = self
+            .auto_exposure
+            .adaptation
+            .as_ref()
+            .map(|a| a.current_ev());
         // Surface the active panel's EDR headroom. `None` on SDR: both the
         // world-opt-out case and the request-on-an-SDR-display fallback case
         // map to the same blank chip.

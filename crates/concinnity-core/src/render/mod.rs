@@ -49,6 +49,7 @@ pub mod particles;
 pub mod pass_timing;
 pub mod planar_reflection;
 pub mod post;
+pub mod probe_bake;
 pub mod probe_book;
 pub mod range_alloc;
 pub mod reflection_probe;
@@ -81,3 +82,4 @@ pub mod transparent;
 pub mod uniforms;
 
 pub mod volumetric_fog;
+pub mod world_pipelines;

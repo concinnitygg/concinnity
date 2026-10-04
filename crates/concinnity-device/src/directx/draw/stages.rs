@@ -4,13 +4,13 @@
 use concinnity_core::components;
 use concinnity_core::gfx::jitter;
 use concinnity_core::gfx::projection::perspective_rh;
-use concinnity_core::gfx::render_types::{self, LineVertex};
+use concinnity_core::gfx::render_types::LineVertex;
 use concinnity_core::profile;
 use concinnity_core::profile::PassTiming;
-use concinnity_core::render::csm;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::{self, FrameGraphInputs};
+use concinnity_core::render::shadow_schedule::{CascadeCamera, CascadeLight};
 use concinnity_core::transform::mat4_mul;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -117,20 +117,12 @@ impl DxContext {
     }
 
     // Probe bake and auto-exposure steps that need the slot's GPU work retired.
-    pub(in crate::directx) fn service_background_work(
-        &mut self,
-        elapsed: f32,
-        near: f32,
-        far: f32,
-        frame: usize,
-    ) {
+    pub(in crate::directx) fn service_background_work(&mut self, elapsed: f32, frame: usize) {
         // Advance the staggered reflection-probe bake. Called after the frame-slot
         // fence wait (so any in-flight capture resources are safe to recycle) and
         // before the frame's passes record. Non-fatal: a failure is logged and the
         // frame proceeds with whatever probes have baked.
-        if let Err(e) = self.bake_pending_probes(near, far) {
-            tracing::warn!("reflection probe bake step failed: {e}");
-        }
+        self.bake_pending_probes();
 
         // Auto-exposure EMA step. The `wait_frame_slot` fence wait ensured the GPU work
         // that wrote this slot's readback buffer has completed, so the read
@@ -225,7 +217,11 @@ impl DxContext {
             // chip. `None` when the world stayed on the authored static
             // exposure; the chip blanks itself in that case. Mirrors
             // `MtlContext::render_stats`.
-            auto_exposure_ev: self.auto_exposure.state.as_ref().map(|s| s.current_ev),
+            auto_exposure_ev: self
+                .auto_exposure
+                .adaptation
+                .as_ref()
+                .map(|a| a.current_ev()),
             // Captured from the resolved `HdrOutputMode` at init. `None` on
             // the SDR path (chip blanks). Mirrors `MtlContext::render_stats`.
             max_edr: self.hw.max_edr(),
@@ -248,32 +244,24 @@ impl DxContext {
         // and encode_shadow_pass re-rasterizes only the masked slices. Mirrors
         // Metal; no-op (mask stays 0, uniforms stay empty) when shadows are off.
         if !self.shadow.dsvs.is_empty() {
-            let aspect = self.targets.extent.render_width.max(1) as f32
-                / self.targets.extent.render_height.max(1) as f32;
-            let fresh = csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
+            let camera = CascadeCamera {
                 view: self.state.view.matrix,
-                cam_pos,
+                position: cam_pos,
                 fov_y_rad: fov_y_radians,
-                aspect,
+                aspect: self.targets.extent.render_width.max(1) as f32
+                    / self.targets.extent.render_height.max(1) as f32,
                 near,
-                shadow_distance: (self.shadow.cadence.distance as f32).min(far),
-                light_dir_to_source: self.shadow.light_dir,
-                shadow_map_size: self.shadow.map_size,
-                active_cascades: self.shadow.cadence.cascades,
-            });
-            let update = self.shadow.cadence.update;
-            let mask = self
-                .shadow
-                .scheduler
-                .next_mask(update, self.shadow.cadence.cascades);
-            self.shadow.render_mask = mask;
-            self.shadow.uniforms.cascade_splits = fresh.cascade_splits;
-            self.shadow.uniforms.active_cascades = fresh.active_cascades;
-            for i in 0..render_types::NUM_SHADOW_CASCADES {
-                if mask & (1u32 << i) != 0 {
-                    self.shadow.uniforms.light_vps[i] = fresh.light_vps[i];
-                }
-            }
+                far,
+            };
+            let shadow = &mut self.shadow;
+            let light = CascadeLight {
+                dir_to_source: shadow.light_dir,
+                map_size: shadow.map_size,
+            };
+            shadow.render_mask =
+                shadow
+                    .scheduler
+                    .refresh(&mut shadow.uniforms, &shadow.cadence, light, camera);
         }
 
         // Spot shadow refresh schedule. Prime-then-round-robin over the slices,
@@ -447,6 +435,7 @@ impl DxContext {
         // pre-pass still runs; FSR consumes its motion vectors.
         let upscale_on = self.upscale.backend.is_some();
         let taa_on = self.taa.is_some() && !upscale_on;
+        let reflection_path = self.reflection_path();
         let seed_inputs = FrameGraphInputs {
             shadow_enabled: !self.shadow.dsvs.is_empty(),
             shadow_map_size: self.shadow.map_size,
@@ -457,10 +446,8 @@ impl DxContext {
             bloom_enabled: self.post_process.bloom_intensity > 0.0,
             velocity_enabled: self.reads_motion(),
             taa_enabled: taa_on,
-            // Only the SSR *resolve* is gated here; `self.ssr` is also `Some`
-            // for a SSGI-only world (which reuses the pre-pass G-buffer), so
-            // key off the resolve half rather than the bundle's presence.
-            ssr_enabled: self.ssr.as_ref().is_some_and(|s| s.resolve.is_some()),
+            // The SSR resolve, which a live RT trace takes the slot from.
+            ssr_enabled: reflection_path.ssr_resolve,
             // The SSR depth + normal pre-pass feeds SSR resolve *and* SSGI, so
             // `SsrResources` (and thus this flag) is on whenever either is.
             ssr_prepass_enabled: self.ssr.is_some(),
@@ -522,9 +509,8 @@ impl DxContext {
             // the world authored `ray_traced_reflections`, the GPU supports the
             // DXR tier, and the DXC compile + acceleration-structure build
             // succeeded (`rt_reflections` + `rt.accel` both live). The shared
-            // builder then seeds `RtReflections` in the SsrResolve slot and omits
-            // `SsrResolve`; otherwise it falls back to SSR.
-            rt_reflections_enabled: self.rt_reflections_active(),
+            // builder then seeds `RtReflections` in the SsrResolve slot.
+            rt_reflections_enabled: reflection_path.rt_trace,
             // One jittered traversal writes normal+depth, roughness, and motion
             // for every screen-space consumer, replacing the separate SSR /
             // SSAO / velocity geometry pre-passes. On whenever the G-buffer

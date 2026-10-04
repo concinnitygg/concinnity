@@ -1,5 +1,7 @@
-//! The CPU half of a static-geometry rebuild: repacking the shared vertex and
-//! index buffers when a reloaded mesh no longer fits its draw slot.
+//! The CPU half of a geometry rebuild: repacking the shared vertex and index
+//! buffers when a reloaded mesh no longer fits its draw slot. The skinned
+//! buffers have their own repack, [`repack_skinned_geometry`], and the bounds of
+//! a size-matched in-place write, [`place_skinned_update`].
 //!
 //! Every draw keeps its index convention. A draw with `base_vertex == 0` holds
 //! absolute indices, which are rebased onto its new vertex region; any other
@@ -17,6 +19,13 @@ use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{DrawIndex, DrawObject, LodSlice};
 use crate::render::backend::DrawGeometryUpdate;
 use crate::render::error::{RenderError, RenderResult};
+
+mod skinned;
+
+pub use skinned::{
+    RepackedSkinnedGeometry, SkinnedRegion, SkinnedSlotWrite, place_skinned_update,
+    repack_skinned_geometry,
+};
 
 /// Where one draw's geometry lands in the repacked buffers.
 #[derive(Clone, Debug)]

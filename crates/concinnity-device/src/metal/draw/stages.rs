@@ -7,10 +7,10 @@ use concinnity_core::gfx::projection::perspective_rh;
 use concinnity_core::gfx::render_types::{self, LineVertex};
 use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
 use concinnity_core::profile;
-use concinnity_core::render::csm;
 use concinnity_core::render::error;
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::render_graph::{self, FrameGraphInputs};
+use concinnity_core::render::shadow_schedule::{CascadeCamera, CascadeLight};
 use concinnity_core::render::volumetric_fog::FogSettings;
 use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
@@ -67,8 +67,6 @@ pub(super) struct SceneBufferArgs<'a> {
     pub(super) frame_id: u64,
     pub(super) cam_pos: [f32; 3],
     pub(super) elapsed: f32,
-    pub(super) near: f32,
-    pub(super) far: f32,
     pub(super) world_hidden: bool,
     pub(super) skinned_joint_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
     // This frame's `bindless_texture_signature`.
@@ -256,30 +254,25 @@ impl MtlContext {
             }
         };
         if self.shadow.enabled {
-            let fresh = csm::compute_shadow_uniforms(csm::ShadowUniformInputs {
+            let camera = CascadeCamera {
                 view: self.state.view.matrix,
-                cam_pos,
+                position: cam_pos,
                 fov_y_rad: fov_y_radians,
                 aspect: cascade_aspect,
                 near,
-                shadow_distance: (self.shadow.cadence.distance as f32).min(far),
-                light_dir_to_source: self.shadow.light_dir,
-                shadow_map_size: self.shadow.map_size,
-                active_cascades: self.shadow.cadence.cascades,
-            });
-            // Pick this frame's cascades and refresh only their VPs; cascades
-            // skipped this frame keep the VP their slice was rendered with so
-            // the Main pass samples each slice consistently. Splits depend only
-            // on the camera near/far range (not position), so always take fresh.
-            let mask = self.next_shadow_cascade_mask();
-            self.shadow.render_mask = mask;
-            self.shadow.uniforms.cascade_splits = fresh.cascade_splits;
-            self.shadow.uniforms.active_cascades = fresh.active_cascades;
-            for i in 0..render_types::NUM_SHADOW_CASCADES {
-                if mask & (1u32 << i) != 0 {
-                    self.shadow.uniforms.light_vps[i] = fresh.light_vps[i];
-                }
-            }
+                far,
+            };
+            let shadow = &mut self.shadow;
+            let light = CascadeLight {
+                dir_to_source: shadow.light_dir,
+                map_size: shadow.map_size,
+            };
+            // Cascades skipped this frame keep the VP their slice was rendered
+            // with, so the Main pass samples each slice consistently.
+            shadow.render_mask =
+                shadow
+                    .scheduler
+                    .refresh(&mut shadow.uniforms, &shadow.cadence, light, camera);
         }
 
         // Spot shadow slices refresh on their own prime-then-round-robin clock;
@@ -362,6 +355,7 @@ impl MtlContext {
             view_mode,
             show,
         } = args;
+        let reflection_path = self.reflection_path();
         let graph_inputs = FrameGraphInputs {
             shadow_enabled: self.shadow.enabled,
             shadow_map_size: self.shadow.map_size,
@@ -377,7 +371,7 @@ impl MtlContext {
             // Ssgi declare a read edge on it for ordering.
             velocity_enabled: velocity_active,
             taa_enabled: self.taa.enabled,
-            ssr_enabled: self.ssr.settings.is_some(),
+            ssr_enabled: reflection_path.ssr_resolve,
             particles_enabled: self.particle.pipelines.is_some()
                 && !self.particle.records.is_empty()
                 && !self.particle.emitter_state.is_empty(),
@@ -427,10 +421,9 @@ impl MtlContext {
             ssgi_enabled: self.ssgi.settings.is_some_and(|s| s.contributes()),
             // RT reflections run when the scene acceleration structure is live
             // (RT requested + GPU supports it + scene has geometry). The builder
-            // inserts the RtReflections pass in the SsrResolve slot and, when
-            // both are on, picks it over SsrResolve (RT takes precedence; SSR is
-            // the cross-backend fallback).
-            rt_reflections_enabled: self.rt.accel.is_some(),
+            // inserts the RtReflections pass in the SsrResolve slot, which a live
+            // trace takes from SSR.
+            rt_reflections_enabled: reflection_path.rt_trace,
             // Metal collapses the SSR / SSAO / velocity pre-passes into one
             // GBufferPrepass node; the other backends keep them separate.
             gbuffer_prepass_enabled: true,
@@ -631,8 +624,6 @@ impl MtlContext {
             frame_id,
             cam_pos,
             elapsed,
-            near,
-            far,
             world_hidden,
             skinned_joint_bufs,
             texture_signature,
@@ -713,7 +704,10 @@ impl MtlContext {
             // face, or start or hand off a capture. Every face samples through
             // this frame's texture arguments, so it never reads a texture that
             // streaming has since replaced.
-            self.advance_probe_capture(elapsed, near, far, bindless_tex_args.as_ref());
+            self.advance_probe_capture(&crate::metal::probe::ProbeFrame {
+                elapsed,
+                tex_args: bindless_tex_args.clone(),
+            });
             // Keep the RT acceleration structure current with this frame's
             // transforms before any pass reads `rt_accel`. The default `Auto` mode
             // rebuilds the TLAS only when a participating prop actually moved; a
