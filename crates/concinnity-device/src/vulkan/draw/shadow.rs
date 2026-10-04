@@ -22,8 +22,10 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::depth::DepthConvention;
 
 use super::super::context::VkContext;
+use crate::vulkan::depth;
 use crate::vulkan::owned::VkDevice;
 use crate::vulkan::record::cmd_push_constants;
 
@@ -151,12 +153,7 @@ impl VkContext {
             width: size,
             height: size,
         };
-        let clear_depth = vk::ClearValue {
-            depth_stencil: vk::ClearDepthStencilValue {
-                depth: 1.0,
-                stencil: 0,
-            },
-        };
+        let clear_depth = depth::clear_value(DepthConvention::Shadow);
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(self.shadow.render_pass.handle())
             .framebuffer(framebuffer)

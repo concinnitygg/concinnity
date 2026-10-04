@@ -240,19 +240,14 @@ impl VkContext {
         let Some(sets) = self.cull.shadow_cull_sets.get(frame_idx) else {
             return;
         };
-        let mut views = [(
-            vk::DescriptorSet::null(),
-            Frustum::from_view_projection(IDENTITY),
-        ); render_types::NUM_SHADOW_CASCADES];
+        let mut views = [(vk::DescriptorSet::null(), Frustum::from_shadow(IDENTITY));
+            render_types::NUM_SHADOW_CASCADES];
         let mut kept = 0;
         for (c, &set) in sets.iter().enumerate() {
             if render_mask & (1u32 << c) == 0 {
                 continue;
             }
-            views[kept] = (
-                set,
-                Frustum::from_view_projection(self.shadow.uniforms.light_vps[c]),
-            );
+            views[kept] = (set, Frustum::from_shadow(self.shadow.uniforms.light_vps[c]));
             kept += 1;
         }
         self.encode_view_culls(cmd, &views[..kept], cam_pos);
@@ -271,10 +266,8 @@ impl VkContext {
         let Some(sets) = self.cull.spot_cull_sets.get(frame_idx) else {
             return;
         };
-        let mut views = [(
-            vk::DescriptorSet::null(),
-            Frustum::from_view_projection(IDENTITY),
-        ); render_types::MAX_SHADOWED_SPOTS];
+        let mut views = [(vk::DescriptorSet::null(), Frustum::from_shadow(IDENTITY));
+            render_types::MAX_SHADOWED_SPOTS];
         let mut kept = 0;
         for slice in self.spot_shadow.refreshed_slices() {
             let slice = slice as usize;

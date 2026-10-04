@@ -15,6 +15,7 @@
 
 use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
 use concinnity_core::render::backend_init::ShadowCadence;
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::shadow_schedule;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -192,7 +193,13 @@ impl DxContext {
         // SAFETY: the command list is in the recording state, and the DSV names a live slice.
         unsafe {
             cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
-            cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
+            cmd.ClearDepthStencilView(
+                dsv,
+                D3D12_CLEAR_FLAG_DEPTH,
+                DepthConvention::Shadow.clear(),
+                0,
+                None,
+            );
         }
     }
 

@@ -2,6 +2,7 @@
 // All texture uploads use an upload heap (CPU-visible) that is copied to a
 // default heap (GPU-local) via CopyTextureRegion on a one-shot command list.
 
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::mipmap;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -11,6 +12,7 @@ use windows::core::Interface;
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::com;
 use super::error::map_hresult;
+use crate::directx::depth::optimized_clear;
 use crate::directx::descriptor_slot::SrvSlot;
 
 // GPU resource handle
@@ -726,15 +728,7 @@ pub(super) fn create_main_depth_texture(
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
     };
-    let clear_value = D3D12_CLEAR_VALUE {
-        Format: DXGI_FORMAT_D32_FLOAT,
-        Anonymous: D3D12_CLEAR_VALUE_0 {
-            DepthStencil: D3D12_DEPTH_STENCIL_VALUE {
-                Depth: 1.0,
-                Stencil: 0,
-            },
-        },
-    };
+    let clear_value = optimized_clear(DepthConvention::Camera);
     let mut flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
     if !shader_readable {
         flags |= D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
@@ -809,15 +803,7 @@ pub(super) fn create_shadow_map_array(
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
     };
-    let clear_value = D3D12_CLEAR_VALUE {
-        Format: DXGI_FORMAT_D32_FLOAT,
-        Anonymous: D3D12_CLEAR_VALUE_0 {
-            DepthStencil: D3D12_DEPTH_STENCIL_VALUE {
-                Depth: 1.0,
-                Stencil: 0,
-            },
-        },
-    };
+    let clear_value = optimized_clear(DepthConvention::Shadow);
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: size as u64,

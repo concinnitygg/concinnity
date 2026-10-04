@@ -258,11 +258,8 @@ impl MtlContext {
             // near-plane clip, so the frustum also rejects geometry behind the
             // reflector. A frame with no cull records has no mirror to fill, and
             // the face render then draws nothing.
-            let mirror_frustum = Frustum::from_view_projection(crop.crop_view_projection(
-                m.view_proj,
-                set.width,
-                set.height,
-            ));
+            let mirror_frustum =
+                Frustum::from_camera(crop.crop_view_projection(m.view_proj, set.width, set.height));
             let icb_override = match (params.object_buffer, params.draw_args_buffer) {
                 (Some(object_buffer), Some(draw_args_buffer)) => {
                     self.encode_mirror_cull(

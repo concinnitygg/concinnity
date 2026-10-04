@@ -30,6 +30,7 @@
 // which includes the base instance the cull wrote there.
 
 {OBJECT_COMMON}
+{DEPTH_CONVENTION}
 
 // Layout matches `GBufferView` / `GbViewUniforms` (4 x float4x4, 256 B).
 struct GbView
@@ -138,12 +139,13 @@ GbVertexOut gb_project(float4x4 model, float4 cur_world, float4 prev_world, floa
 
 // Skybox vertices carry a blue channel of 2.0: pin them to the far plane so the
 // sky never occludes scene geometry, and zero their depth so the sky reads as
-// "no geometry" to every screen-space pass while still writing its motion.
+// "no geometry" to every screen-space pass while still writing its motion. The
+// pin must match the forward pass's, since the upscalers read this depth.
 GbVertexOut gb_sky_pin(GbVertexOut o, float3 color)
 {
     if (color.b > 1.5)
     {
-        o.position.z = o.position.w * (1.0 - 1e-6);
+        o.position.z = depth_pin_far(o.position.w);
         o.view_depth = 0.0;
     }
     return o;

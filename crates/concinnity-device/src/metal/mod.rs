@@ -9,6 +9,7 @@ mod context;
 mod cull;
 mod cull_readback;
 mod decal;
+mod depth;
 mod descriptors;
 mod encode;
 mod error;

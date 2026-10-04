@@ -41,6 +41,8 @@
 // constant-buffer float3 at 16 bytes, so a literal transcription would shift
 // every following field on Metal alone.
 
+{DEPTH_CONVENTION}
+
 static const uint NUM_SHADOW_CASCADES = 4u;
 
 struct FogParams
@@ -178,7 +180,7 @@ float fog_shadow_factor(float3 world_pos, float view_depth)
     // Explicit LOD, not an implicit one. A compute kernel has no fragment quad
     // to derive a mip from -- neighboring threads are unrelated froxel columns
     // -- and the cascade array has one mip, so level zero is the same tap.
-    return shadow_map.SampleCmpLevelZero(shadow_samp, uv_layer, ndc.z - bias);
+    return shadow_map.SampleCmpLevelZero(shadow_samp, uv_layer, shadow_depth_offset_near(ndc.z, bias));
 }
 
 // World-space position at a froxel center. `z_slice` is a floating-point slab
@@ -196,7 +198,7 @@ float3 froxel_to_world(uint x, uint y, float z_slice)
     // Un-project a far-plane direction, then walk that ray to the requested
     // view-space z. Cheaper than inverting a per-froxel matrix and correct for
     // any perspective projection.
-    float4 clip_far = float4(ndc_xy, 1.0, 1.0);
+    float4 clip_far = float4(ndc_xy, DEPTH_FAR, 1.0);
     float4 world_far = mul(fog.inv_vp, clip_far);
     world_far /= world_far.w;
     float3 ray = normalize(world_far.xyz - fog.cam_pos.xyz);
@@ -313,13 +315,13 @@ float4 fog_fragment(
     float2 uv = sv_pos.xy / fog.viewport;
     float2 ndc_xy = float2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
 
-    // Reconstruct view-space depth at the pixel. depth == 1.0 (skybox, or never
-    // written) maps to the far edge of the volume, so the sky takes fog
-    // integrated across the whole volume.
+    // Reconstruct view-space depth at the pixel. A cleared pixel (no surface)
+    // maps to the far edge of the volume, so it takes fog integrated across the
+    // whole volume.
     float view_z;
-    if (depth < 1.0)
+    if (depth_is_written(depth))
     {
-        float4 world = mul(fog.inv_vp, float4(ndc_xy, depth, 1.0));
+        float4 world = depth_unproject(fog.inv_vp, ndc_xy, depth);
         world /= world.w;
         view_z = -mul(froxel.view, float4(world.xyz, 1.0)).z;
     }

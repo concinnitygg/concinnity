@@ -785,7 +785,7 @@ impl DxContext {
             }
             regions[kept] = RegionCull {
                 region: c,
-                frustum: Frustum::from_view_projection(*light_vp),
+                frustum: Frustum::from_shadow(*light_vp),
                 eye: cam_pos,
             };
             kept += 1;

@@ -22,6 +22,7 @@
 // leads, so Metal declares its own texture block. The samplers agree again.
 
 {RAYMARCH_TYPES}
+{DEPTH_CONVENTION}
 
 // The cascade index is a push constant on Vulkan, root constants on the shadow
 // family's D3D signature, and a plain buffer on Metal.
@@ -57,7 +58,7 @@ float rasterized_distance(float2 px, float3 cam, float4 sv_pos)
     // Metal clip space is y-down after the projection flip the engine applies,
     // so re-mirror Y to match the inv_vp the CPU built from the unflipped one.
     ndc_xy.y = -ndc_xy.y;
-    float4 world = mul(view_cb.inv_vp, float4(ndc_xy, depth_ndc, 1.0));
+    float4 world = depth_unproject(view_cb.inv_vp, ndc_xy, depth_ndc);
     world /= max(world.w, 1e-6);
     return length(world.xyz - cam);
 }
@@ -149,7 +150,7 @@ struct RaymarchVertexIn
 
 struct RaymarchVertexOut
 {
-    // A pixel shader that writes SV_DepthLessEqual without running at sample
+    // A pixel shader that writes a conservative depth without running at sample
     // frequency must declare its position input centroid; DXIL validation
     // rejects the plain one. The position is already non-perspective, so
     // `centroid` alone is what validates.
@@ -183,7 +184,7 @@ struct RaymarchFragOut
     // Writing a nearer depth keeps early-Z while letting the hit composite
     // against rasterized geometry, and feeds the raymarched surface's depth to
     // the passes downstream that sample it.
-    float depth : SV_DepthLessEqual;
+    float depth : CAMERA_DEPTH_CONSERVATIVE;
 };
 
 [shader("pixel")]
@@ -314,7 +315,7 @@ RaymarchVertexOut raymarch_shadow_vertex(RaymarchVertexIn v)
 }
 
 [shader("pixel")]
-float raymarch_shadow_fragment(RaymarchVertexOut input) : SV_DepthLessEqual
+float raymarch_shadow_fragment(RaymarchVertexOut input) : SHADOW_DEPTH_CONSERVATIVE
 {
     // `dir_i.xyz` is L, surface to light, which is what `shadePbrSun` reads from
     // the same field; incoming light travels along -L, so the shadow ray does.
@@ -338,7 +339,7 @@ float raymarch_shadow_fragment(RaymarchVertexOut input) : SV_DepthLessEqual
     // Reprojecting through the same cascade matrix the vertex rasterized with
     // shares the rasterized casters' depth space in this slice. The march is
     // bounded by the box exit, so the hit is never behind the back face and the
-    // SV_DepthLessEqual contract holds.
+    // conservative-depth contract holds.
     float3 hit_pos = origin + ray_dir * hit.t;
     float4 hit_clip = mul(SHADOW_UNI.light_vps[cascade_cb.cascade_idx], float4(hit_pos, 1.0));
     return hit_clip.z / max(hit_clip.w, 1e-6);

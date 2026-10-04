@@ -27,6 +27,8 @@
 //                                             (probe_common.hlsl)
 //   ltc_matrix_sample / ltc_magnitude_sample  the area-light lookup tables
 
+{DEPTH_CONVENTION}
+
 // ---- Constants ----
 
 static const float PI = 3.14159265359;
@@ -97,10 +99,11 @@ VertexOut project_vertex(float4x4 model, float3 pos, float3 normal, float3 tange
 
     // Skybox sentinel (blue channel 2.0): pin to the far plane so the sky is
     // never clipped by the camera far plane and always renders behind scene
-    // geometry. Every forward vertex path needs it.
+    // geometry. Every forward vertex path needs it, and the G-buffer pre-pass
+    // pins it identically (`gb_sky_pin`).
     if (color.b > 1.5)
     {
-        o.position.z = o.position.w * (1.0 - 1e-6);
+        o.position.z = depth_pin_far(o.position.w);
     }
     return o;
 }
@@ -204,7 +207,7 @@ float sample_spot_shadow(int shadow_index, float3 world_pos, float3 normal, floa
         return 1.0;
     }
 
-    float ref = ndc.z - sd.depth_bias;
+    float ref = shadow_depth_offset_near(ndc.z, sd.depth_bias);
     float angle = hash_rotation(screen_xy);
     float ca = cos(angle);
     float sa = sin(angle);
@@ -321,7 +324,7 @@ float sample_cascade_pcf(int cascade, float3 world_pos, float2 screen_xy)
         return 1.0;
     }
 
-    float ref = ndc.z - cascade_depth_bias(cascade);
+    float ref = shadow_depth_offset_near(ndc.z, cascade_depth_bias(cascade));
 
     float angle = hash_rotation(screen_xy);
     float ca = cos(angle);

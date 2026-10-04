@@ -31,6 +31,8 @@
 #define USE_MSAA 0
 #endif
 
+{DEPTH_CONVENTION}
+
 {PROBE_TYPES}
 {RT_TYPES}
 
@@ -168,7 +170,7 @@ float3 glass_mesh_reflection(float3 world_pos, float3 view_dir, float3 normal, f
 bool glass_mesh_occluded(float2 full_position, float depth)
 {
     int2 pixel = min(int2(full_position), int2(max(view.viewport, (float2)(1.0))) - int2(1, 1));
-    return glass_mesh_scene_depth(pixel) < depth;
+    return depth_in_front(glass_mesh_scene_depth(pixel), depth);
 }
 
 [shader("pixel")]

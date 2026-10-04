@@ -21,6 +21,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::transparent;
 use concinnity_core::render::uniforms::TransparentView;
@@ -37,6 +38,7 @@ use objc2_metal::{
 use super::context::MtlContext;
 use super::encode::RenderEncode;
 use super::scoped_encoder::ScopedEncoder;
+use crate::metal::depth::clear_depth;
 
 // One translucent draw recorded for the transparent pass. Self-contained
 // except for the shared [`TransparentView`], which `encode_transparent` binds
@@ -357,7 +359,7 @@ impl MtlContext {
                     let da = desc.depthAttachment();
                     da.setTexture(Some(targets.depth.as_ref()));
                     da.setLoadAction(MTLLoadAction::Clear);
-                    da.setClearDepth(1.0);
+                    da.setClearDepth(clear_depth(DepthConvention::Camera));
                     da.setStoreAction(MTLStoreAction::DontCare);
                 }
                 if layer == 0

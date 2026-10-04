@@ -22,6 +22,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::{GBufferView, ModelHistoryParams};
 use concinnity_core::transform::IDENTITY;
@@ -34,6 +35,7 @@ use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layou
 use super::super::set_writes::SetWrites;
 use super::super::texture::*;
 use crate::vulkan::builtin_shaders::CompileProgram;
+use crate::vulkan::depth;
 use crate::vulkan::owned::{
     OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout, VkDevice,
 };
@@ -303,7 +305,7 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
 
     // Same no-cull / LESS depth as the main pass, over a private depth buffer.
     let pipeline = GraphicsPipelineDesc {
-        depth: Depth::LESS_WRITE,
+        depth: Depth::camera_write(),
         vertex_bindings: &VERTEX_56_DUAL_BINDINGS,
         vertex_attributes: &VERTEX_56_DUAL_ATTRIBUTES,
         ..GraphicsPipelineDesc::fullscreen(
@@ -779,12 +781,7 @@ impl VkContext {
             vk::ClearValue {
                 color: vk::ClearColorValue { float32: [0.0; 4] },
             },
-            vk::ClearValue {
-                depth_stencil: vk::ClearDepthStencilValue {
-                    depth: 1.0,
-                    stencil: 0,
-                },
-            },
+            depth::clear_value(DepthConvention::Camera),
         ];
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(gb.prepass_render_pass.handle())

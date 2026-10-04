@@ -7,8 +7,10 @@
 //! effect is a single unit the other backends can mirror.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use crate::metal::depth::clear_depth;
 use crate::metal::error::allocation_failed;
 use concinnity_core::gfx::mesh_payload::Vertex;
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::GBufferView;
 use objc2::rc::Retained;
@@ -309,7 +311,7 @@ impl MtlContext {
             let da = desc.depthAttachment();
             da.setTexture(Some(targets.depth.as_ref()));
             da.setLoadAction(MTLLoadAction::Clear);
-            da.setClearDepth(1.0);
+            da.setClearDepth(clear_depth(DepthConvention::Camera));
             // Stored (not DontCare): the MetalFX upscaler samples this depth.
             da.setStoreAction(MTLStoreAction::Store);
         }

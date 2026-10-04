@@ -142,7 +142,7 @@ impl PlanarReflectors {
 mod tests {
     use super::*;
     use crate::components::WaterWave;
-    use crate::gfx::projection::perspective_rh;
+    use crate::render::depth::camera_projection;
     use crate::transform::mat4_mul;
     use alloc::vec;
 
@@ -153,7 +153,7 @@ mod tests {
             [0.0, 0.0, 1.0, 0.0],
             [-eye[0], -eye[1], -eye[2], 1.0],
         ];
-        mat4_mul(perspective_rh(1.2, 1.5, 0.1, 200.0), view)
+        mat4_mul(camera_projection(1.2, 1.5, 0.1, 200.0), view)
     }
 
     fn budget(planes: usize) -> PlanarBudget {

@@ -21,6 +21,8 @@
 #define USE_MSAA 0
 #endif
 
+{DEPTH_CONVENTION}
+
 // Per-frame view inputs, 144 B. Mirrors `DecalView` in each backend's uniforms
 // module.
 struct DecalView
@@ -106,11 +108,10 @@ float4 decal_fragment(DecalVertexOut i) : SV_Target
     {
         discard;
     }
-    // 1.0 is the cleared / "no geometry" sentinel: the main pass left this
-    // pixel empty (the sky writes near-far-plane depth instead). Nothing to
-    // project onto.
+    // A cleared pixel means the main pass left it empty (the sky writes
+    // near-far-plane depth instead). Nothing to project onto.
     float depth = decal_scene_depth(pixel);
-    if (depth >= 1.0)
+    if (depth_is_cleared(depth))
     {
         discard;
     }

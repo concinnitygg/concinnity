@@ -13,8 +13,10 @@
 //! itself only deals with the HDR pass.
 
 use ash::vk;
+use concinnity_core::render::depth::DepthConvention;
 
 use super::super::context::VkContext;
+use crate::vulkan::depth;
 
 impl VkContext {
     // Encode the main HDR scene pass for frame slot `frame_idx` into the
@@ -68,12 +70,7 @@ impl VkContext {
                 float32: [r, g, b, a],
             },
         };
-        let clear_depth = vk::ClearValue {
-            depth_stencil: vk::ClearDepthStencilValue {
-                depth: 1.0,
-                stencil: 0,
-            },
-        };
+        let clear_depth = depth::clear_value(DepthConvention::Camera);
         let clears: &[vk::ClearValue] = if self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1
         {
             &[clear_color, clear_depth, vk::ClearValue::default()]

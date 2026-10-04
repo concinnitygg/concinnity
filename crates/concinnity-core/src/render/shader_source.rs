@@ -80,6 +80,9 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // offset is shared by the main pass and the raymarched surfaces, and a
     // row placed ahead of theirs would leave the marker unreplaced.
     ("{SHADOW_BIAS}", "shadow_bias.hlsl"),
+    // DEPTH_CONVENTION trails every fragment that carries it (MAIN_SHADING,
+    // RAYMARCH_COMMON), for the same reason.
+    ("{DEPTH_CONVENTION}", "depth_convention.hlsl"),
     // The two hooks a world Shader defines, with the engine's own shading as
     // the default. A world compile passes its files as caller splices for the
     // same markers, which take precedence over these rows.

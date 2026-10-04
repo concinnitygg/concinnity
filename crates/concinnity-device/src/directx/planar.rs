@@ -28,6 +28,7 @@
 //! (the bindless face render omits the skinned tail), exactly like the probe capture.
 
 use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::{self, PlanarReflectors};
 use concinnity_core::transform::mat4_inverse;
@@ -46,6 +47,7 @@ use super::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_sampled_target, create_uav_buffer,
     transition_barrier, write_format_rtv, write_hdr_srv,
 };
+use crate::directx::depth::optimized_clear;
 use crate::directx::descriptor_slot::SrvSlot;
 
 // The engine capacity ceiling for distinct reflection planes: the count the
@@ -526,7 +528,7 @@ impl DxContext {
             if let Some(cull) = culls.get_mut(kept) {
                 *cull = RegionCull {
                     region: slot,
-                    frustum: Frustum::from_view_projection(crop.crop_view_projection(
+                    frustum: Frustum::from_camera(crop.crop_view_projection(
                         m.view_proj,
                         set.width,
                         set.height,
@@ -692,15 +694,7 @@ fn create_planar_depth(
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
     };
-    let clear_value = D3D12_CLEAR_VALUE {
-        Format: DXGI_FORMAT_D32_FLOAT,
-        Anonymous: D3D12_CLEAR_VALUE_0 {
-            DepthStencil: D3D12_DEPTH_STENCIL_VALUE {
-                Depth: 1.0,
-                Stencil: 0,
-            },
-        },
-    };
+    let clear_value = optimized_clear(DepthConvention::Camera);
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: width as u64,

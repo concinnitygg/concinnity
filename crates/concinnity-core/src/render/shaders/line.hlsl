@@ -23,6 +23,8 @@
 #define USE_MSAA 0
 #endif
 
+{DEPTH_CONVENTION}
+
 // Per-frame view inputs, 80 B. Mirrors `LineView` in each backend's uniforms
 // module.
 struct LineView
@@ -97,7 +99,7 @@ float4 line_fragment(LineVertexOut i) : SV_Target
     // exactly on a surface (a ground-plane axis) from z-fighting itself into a
     // dashed mess.
     float scene_z = line_scene_depth(int2(i.position.xy));
-    float occlusion = (i.position.z > scene_z + 1e-6) ? view.occluded_alpha : 1.0;
+    float occlusion = depth_behind(i.position.z, depth_offset_far(scene_z, 1e-6)) ? view.occluded_alpha : 1.0;
 
     float alpha = i.color.a * coverage * occlusion;
     if (alpha <= 0.002)

@@ -1,11 +1,12 @@
 // Hi-Z (depth-mip pyramid) builder. One kernel per compile, selected by a
 // define so each variant declares exactly the resources it binds:
 //
-//   HIZ_INIT_MSAA   - hiz_init_msaa: read the MSAA main depth taking MAX over
-//                     sample_count samples, write into HiZ mip 0.
+//   HIZ_INIT_MSAA   - hiz_init_msaa: read the MSAA main depth keeping the
+//                     farthest of sample_count samples, write into HiZ mip 0.
 //   HIZ_INIT_SINGLE - hiz_init_single: same for a single-sample main depth.
-//   HIZ_DOWNSAMPLE  - hiz_downsample: MAX-reduce 2x2 texels of the previous
-//                     HiZ mip (bound as a single-level view) into the next.
+//   HIZ_DOWNSAMPLE  - hiz_downsample: reduce 2x2 texels of the previous HiZ mip
+//                     (bound as a single-level view) to the farthest, into the
+//                     next.
 //   HIZ_SPD_MSAA    - hiz_spd_msaa: read the MSAA main depth and produce mips
 //                     0..5 in one dispatch.
 //   HIZ_SPD_SINGLE  - hiz_spd_single: same for a single-sample main depth.
@@ -24,12 +25,14 @@
 // The SPD trio is Vulkan and DirectX only, where `register()` names the D3D
 // slot and `[[vk::binding]]` the descriptor.
 //
-// The MAX reduction is correct because the engine uses standard (not reverse)
-// depth: a Hi-Z texel storing the MAX represents the farthest visible surface
-// in that region, so the cull can only be conservative.
+// Every reduction keeps the farthest depth (`depth_farther`), so a Hi-Z texel
+// bounds the farthest visible surface in its region and the cull can only be
+// conservative.
 //
 // Both source and destination mips are single-level R32F views, so each
 // downsample reads mip M and writes mip M+1 without aliasing the same texels.
+
+{DEPTH_CONVENTION}
 
 #if defined(HIZ_SPD_MSAA) || defined(HIZ_SPD_SINGLE) || defined(HIZ_SPD_TAIL)
 
@@ -154,10 +157,10 @@ void hiz_init_msaa(uint3 tid : SV_DispatchThreadID)
     {
         return;
     }
-    float d = 0.0;
+    float d = DEPTH_NEAR;
     for (uint s = 0u; s < params.sample_count; ++s)
     {
-        d = max(d, load_depth_sample(src_depth, tid.xy, s));
+        d = depth_farther(d, load_depth_sample(src_depth, tid.xy, s));
     }
     dst_mip[tid.xy] = d;
 }
@@ -189,17 +192,18 @@ void hiz_downsample(uint3 tid : SV_DispatchThreadID)
     src_hiz.GetDimensions(src_size.x, src_size.y);
     uint sx = tid.x * 2u;
     uint sy = tid.y * 2u;
-    // For odd source dimensions the right/bottom edge loses a texel, but
-    // max-reduction is conservative so dropping a half-row is harmless: it can
-    // only make the cull more conservative, never wrongly cull a visible
-    // object. Clamp the +1 taps so an odd edge reuses the in-bounds texel.
+    // For odd source dimensions the right/bottom edge loses a texel, but the
+    // farthest-depth reduction is conservative so dropping a half-row is
+    // harmless: it can only make the cull more conservative, never wrongly cull
+    // a visible object. Clamp the +1 taps so an odd edge reuses the in-bounds
+    // texel.
     uint sx1 = min(sx + 1u, src_size.x - 1u);
     uint sy1 = min(sy + 1u, src_size.y - 1u);
     float d0 = src_hiz[uint2(sx, sy)];
     float d1 = src_hiz[uint2(sx1, sy)];
     float d2 = src_hiz[uint2(sx, sy1)];
     float d3 = src_hiz[uint2(sx1, sy1)];
-    dst_mip[tid.xy] = max(max(d0, d1), max(d2, d3));
+    dst_mip[tid.xy] = depth_farther(depth_farther(d0, d1), depth_farther(d2, d3));
 }
 
 #endif
@@ -216,10 +220,10 @@ uint2 spd_level_size(uint level)
     return max(base >> level, uint2(1u, 1u));
 }
 
-// Out-of-range texels reduce as 0.0, the identity for MAX over standard depth,
-// so a level whose footprint runs past the edge takes the max of the real
-// texels alone. That can only lower the stored occluder depth, which makes the
-// cull more permissive and never wrongly rejects a visible object.
+// Out-of-range texels reduce as DEPTH_NEAR, the identity of `depth_farther`,
+// so a level whose footprint runs past the edge takes the farthest of the real
+// texels alone. That can only pull the stored occluder depth nearer, which
+// makes the cull more permissive and never wrongly rejects a visible object.
 void spd_store(uint level, uint2 coord, float v)
 {
     if (level < params.level_count && all(coord < spd_level_size(level)))
@@ -228,9 +232,9 @@ void spd_store(uint level, uint2 coord, float v)
     }
 }
 
-float spd_max4(float a, float b, float c, float d)
+float spd_farthest4(float a, float b, float c, float d)
 {
-    return max(max(a, b), max(c, d));
+    return depth_farther(depth_farther(a, b), depth_farther(c, d));
 }
 
 // Reduce one tile of the base level, already loaded as this thread's 2x2 patch,
@@ -254,7 +258,7 @@ void spd_reduce(float src[2][2], uint2 group_id, uint2 tid, bool write_base)
         }
     }
 
-    float carried = spd_max4(src[0][0], src[0][1], src[1][0], src[1][1]);
+    float carried = spd_farthest4(src[0][0], src[0][1], src[1][0], src[1][1]);
     spd_store(1u, group_id * uint(HIZ_SPD_TILE / 2) + tid, carried);
 
     // Levels 2..5 cross threads. Each round reads four neighbors out of
@@ -271,10 +275,10 @@ void spd_reduce(float src[2][2], uint2 group_id, uint2 tid, bool write_base)
         if (active)
         {
             uint2 src_id = tid * 2u;
-            carried = spd_max4(spd_tile[src_id.y][src_id.x],
-                               spd_tile[src_id.y][src_id.x + 1u],
-                               spd_tile[src_id.y + 1u][src_id.x],
-                               spd_tile[src_id.y + 1u][src_id.x + 1u]);
+            carried = spd_farthest4(spd_tile[src_id.y][src_id.x],
+                                    spd_tile[src_id.y][src_id.x + 1u],
+                                    spd_tile[src_id.y + 1u][src_id.x],
+                                    spd_tile[src_id.y + 1u][src_id.x + 1u]);
             spd_store(level, group_id * max(uint(HIZ_SPD_TILE) >> level, 1u) + tid, carried);
         }
         GroupMemoryBarrierWithGroupSync();
@@ -308,12 +312,12 @@ void hiz_spd_msaa(uint3 group_id : SV_GroupID, uint3 tid : SV_GroupThreadID)
         for (uint i = 0u; i < 2u; ++i)
         {
             uint2 coord = spd_src_coord(group_id.xy, tid.xy, i, j);
-            float d = 0.0;
+            float d = DEPTH_NEAR;
             if (all(coord < base))
             {
                 for (uint n = 0u; n < params.sample_count; ++n)
                 {
-                    d = max(d, load_depth_sample(src_depth, coord, n));
+                    d = depth_farther(d, load_depth_sample(src_depth, coord, n));
                 }
             }
             src[j][i] = d;
@@ -337,7 +341,7 @@ void hiz_spd_single(uint3 group_id : SV_GroupID, uint3 tid : SV_GroupThreadID)
         for (uint i = 0u; i < 2u; ++i)
         {
             uint2 coord = spd_src_coord(group_id.xy, tid.xy, i, j);
-            src[j][i] = all(coord < base) ? src_depth.Load(int3(int2(coord), 0)) : 0.0;
+            src[j][i] = all(coord < base) ? src_depth.Load(int3(int2(coord), 0)) : DEPTH_NEAR;
         }
     }
     spd_reduce(src, group_id.xy, tid.xy, true);
@@ -358,7 +362,7 @@ void hiz_spd_tail(uint3 group_id : SV_GroupID, uint3 tid : SV_GroupThreadID)
         for (uint i = 0u; i < 2u; ++i)
         {
             uint2 coord = spd_src_coord(group_id.xy, tid.xy, i, j);
-            src[j][i] = all(coord < base) ? spd_mips[0][coord] : 0.0;
+            src[j][i] = all(coord < base) ? spd_mips[0][coord] : DEPTH_NEAR;
         }
     }
     // The base level is already final -- phase 1 wrote it -- and rewriting it

@@ -38,6 +38,7 @@
 //! order or barriers.
 
 use crate::gfx::render_types::NUM_SHADOW_CASCADES;
+use crate::render::depth::DepthConvention;
 
 use super::{
     BufferDesc, BufferUsage, CompiledGraph, GraphBuilder, GraphError, PassId, PassKind,
@@ -1021,6 +1022,7 @@ fn shadow_map_desc(size: u32) -> TextureDesc {
         TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
     )
     .with_array_layers(NUM_SHADOW_CASCADES as u32)
+    .with_depth_convention(DepthConvention::Shadow)
 }
 
 fn spot_shadow_map_desc(slice_size: u32, slices: u32) -> TextureDesc {
@@ -1031,6 +1033,7 @@ fn spot_shadow_map_desc(slice_size: u32, slices: u32) -> TextureDesc {
         TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
     )
     .with_array_layers(slices.max(1))
+    .with_depth_convention(DepthConvention::Shadow)
 }
 
 fn hdr_color_desc(inputs: &FrameGraphInputs) -> TextureDesc {

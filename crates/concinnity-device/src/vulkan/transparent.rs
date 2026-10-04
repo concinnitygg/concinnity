@@ -27,6 +27,7 @@ use ash::vk;
 use concinnity_core::components::{GlassPanel, WaterSurface};
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen::align_up;
 use concinnity_core::render::post::rt_reflections::RtParamsInputs;
@@ -48,6 +49,7 @@ use super::texture::{
     create_image_view, one_shot_submit, transition_image_layout_range, upload_texture,
 };
 use super::wire_cache::WireCache;
+use crate::vulkan::depth;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSetLayout, VkDevice,
@@ -1131,7 +1133,7 @@ fn transparent_pipeline(
     // target is single-sample regardless of the main pass's MSAA.
     let (blend, depth) = match output {
         TransparentOutput::Scene => (Blend::AlphaOver, Depth::Off),
-        TransparentOutput::ReflectionLayer => (Blend::Opaque, Depth::LESS_WRITE),
+        TransparentOutput::ReflectionLayer => (Blend::Opaque, Depth::camera_write()),
     };
     GraphicsPipelineDesc {
         depth,
@@ -2290,12 +2292,7 @@ impl VkContext {
             vk::ClearValue {
                 color: vk::ClearColorValue { float32: [0.0; 4] },
             },
-            vk::ClearValue {
-                depth_stencil: vk::ClearDepthStencilValue {
-                    depth: 1.0,
-                    stencil: 0,
-                },
-            },
+            depth::clear_value(DepthConvention::Camera),
         ];
         for layer in 0..2 {
             let rp_begin = vk::RenderPassBeginInfo::default()

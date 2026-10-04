@@ -13,6 +13,7 @@
 use concinnity_core::components;
 use concinnity_core::gfx::render_types::{ShadowUniforms, SpotShadowData};
 use concinnity_core::render::csm;
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -23,6 +24,7 @@ use objc2_metal::{
 
 use super::shadow::ShadowView;
 use crate::metal::context::MtlContext;
+use crate::metal::depth::clear_depth;
 use crate::metal::scoped_encoder::ScopedEncoder;
 
 impl MtlContext {
@@ -64,7 +66,7 @@ impl MtlContext {
             depth_attach.setSlice(slice as usize);
             depth_attach.setLoadAction(MTLLoadAction::Clear);
             depth_attach.setStoreAction(MTLStoreAction::Store);
-            depth_attach.setClearDepth(1.0);
+            depth_attach.setClearDepth(clear_depth(DepthConvention::Shadow));
 
             // Timing spans the first to the last slice actually rendered, the
             // same shape the cascade pass uses.

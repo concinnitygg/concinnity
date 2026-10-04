@@ -2,6 +2,9 @@
 //!
 //! Given a column-major view-projection matrix the six clip-space planes are
 //! extracted using the Gribb-Hartmann method (left/right/bottom/top/near/far).
+//! [`Frustum::from_camera`] and [`Frustum::from_shadow`] take a camera or a
+//! shadow view-projection and share one extraction for a matrix that maps near
+//! to device depth 0 and far to 1.
 //! `Frustum::intersects_aabb` returns false only when an axis-aligned bounding
 //! box is fully outside at least one plane.  False positives are acceptable for
 //! culling (a few extra draws), false negatives are not, so the test treats
@@ -26,9 +29,22 @@ pub struct Frustum {
 }
 
 impl Frustum {
-    /// Build a frustum from a column-major view-projection matrix.
-    /// `vp[col][row]`: same layout used by the renderer's ViewUniforms.
-    pub fn from_view_projection(vp: [[f32; 4]; 4]) -> Self {
+    /// The frustum of a camera view-projection: the main camera, a reflection
+    /// probe face or a planar reflection. `vp[col][row]`, column-major, the
+    /// layout the renderer's ViewUniforms use.
+    pub fn from_camera(vp: [[f32; 4]; 4]) -> Self {
+        Self::from_standard_depth(vp)
+    }
+
+    /// The frustum of a shadow view-projection: a directional cascade or a spot
+    /// slice. Same layout as [`Frustum::from_camera`].
+    pub fn from_shadow(vp: [[f32; 4]; 4]) -> Self {
+        Self::from_standard_depth(vp)
+    }
+
+    // Gribb-Hartmann extraction for a projection that maps near to device depth
+    // 0 and far to 1.
+    fn from_standard_depth(vp: [[f32; 4]; 4]) -> Self {
         // Row r of vp = [vp[0][r], vp[1][r], vp[2][r], vp[3][r]].
         let row = |r: usize| -> [f32; 4] { [vp[0][r], vp[1][r], vp[2][r], vp[3][r]] };
         let r0 = row(0);
@@ -157,15 +173,35 @@ mod tests {
     #[test]
     fn identity_vp_contains_origin_aabb() {
         // Identity VP defines the [-1,1]^3 clip cube as the visible region.
-        let f = Frustum::from_view_projection(identity4());
+        let f = Frustum::from_camera(identity4());
         assert!(f.intersects_aabb([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]));
     }
 
     #[test]
     fn identity_vp_rejects_far_aabb() {
-        let f = Frustum::from_view_projection(identity4());
+        let f = Frustum::from_camera(identity4());
         // entirely past the right clip plane
         assert!(!f.intersects_aabb([5.0, -0.5, -0.5], [6.0, 0.5, 0.5]));
+    }
+
+    fn plane_bits(f: &Frustum) -> [[u32; 4]; 6] {
+        f.planes
+            .map(|p| [p.normal[0], p.normal[1], p.normal[2], p.d].map(f32::to_bits))
+    }
+
+    // Each convention's entry point extracts exactly the planes the standard
+    // extraction does, for a perspective and an orthographic matrix alike.
+    #[test]
+    fn the_entry_points_match_the_standard_extraction() {
+        let vps = [
+            crate::gfx::projection::perspective_rh(1.2, 1.6, 0.1, 500.0),
+            crate::gfx::projection::ortho_rh(-4.0, 6.0, -3.0, 5.0, -2.0, 9.0),
+        ];
+        for vp in vps {
+            let standard = plane_bits(&Frustum::from_standard_depth(vp));
+            assert_eq!(plane_bits(&Frustum::from_camera(vp)), standard);
+            assert_eq!(plane_bits(&Frustum::from_shadow(vp)), standard);
+        }
     }
 
     #[test]

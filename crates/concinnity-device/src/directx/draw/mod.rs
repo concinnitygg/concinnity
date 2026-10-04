@@ -324,7 +324,7 @@ impl DxContext {
             );
         }
 
-        let frustum = Frustum::from_view_projection(vp_mat);
+        let frustum = Frustum::from_camera(vp_mat);
 
         let (view_gva, light_gva, local_lights_gva) = (
             com::gpu_va(&self.uniforms.view_ubo_resources[frame_idx]),

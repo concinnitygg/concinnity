@@ -26,6 +26,7 @@
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::probe_bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
 use concinnity_core::render::probe_book::ProbeBook;
@@ -41,6 +42,7 @@ use super::probe_prefilter::PrefilterGpu;
 use super::resources::alloc_descriptor_sets;
 use super::set_writes::SetWrites;
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
+use crate::vulkan::depth;
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
 use concinnity_core::render::uniforms::vulkan::CullParams;
 
@@ -276,7 +278,7 @@ impl VkContext {
             }
         }
         let vp = reflection_probe::face_view_projection(eye, face);
-        let frustum = Frustum::from_view_projection(vp);
+        let frustum = Frustum::from_camera(vp);
         self.encode_probe_cull(cmd, cull_set, hiz_set, &frustum, eye);
         self.encode_main_into_face(
             cmd,
@@ -546,12 +548,7 @@ impl VkContext {
                 float32: [r, g, b, a],
             },
         };
-        let clear_depth = vk::ClearValue {
-            depth_stencil: vk::ClearDepthStencilValue {
-                depth: 1.0,
-                stencil: 0,
-            },
-        };
+        let clear_depth = depth::clear_value(DepthConvention::Camera);
         let clears: &[vk::ClearValue] = if self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1
         {
             &[clear_color, clear_depth, vk::ClearValue::default()]
@@ -1267,7 +1264,7 @@ mod tests {
     // material carries a world shader -- so it is pinned rather than eyeballed.
     #[test]
     fn a_capture_cull_routes_every_record_into_one_region() {
-        let p = capture_cull_params(&Frustum::from_view_projection(IDENTITY), [0.0; 3], 12);
+        let p = capture_cull_params(&Frustum::from_camera(IDENTITY), [0.0; 3], 12);
         assert_eq!(p.bucket_count, 1, "one region, whatever the world declares");
         assert_eq!(p.object_count, 12);
         assert_eq!(p.bucket_stride, 12, "stride names the region capacity");
@@ -1280,7 +1277,7 @@ mod tests {
     // That is how the mirror render lost its draws.
     #[test]
     fn the_capture_push_covers_the_whole_shader_block() {
-        let p = capture_cull_params(&Frustum::from_view_projection(IDENTITY), [1.0, 2.0, 3.0], 4);
+        let p = capture_cull_params(&Frustum::from_camera(IDENTITY), [1.0, 2.0, 3.0], 4);
         let bytes = bytemuck::bytes_of(&p);
         assert_eq!(bytes.len(), 120, "cull.hlsl's push_constant block is 120 B");
         // The two routing fields live in the last 8 bytes: the exact span a

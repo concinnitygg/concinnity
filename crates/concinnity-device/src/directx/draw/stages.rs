@@ -3,10 +3,10 @@
 
 use concinnity_core::components;
 use concinnity_core::gfx::jitter;
-use concinnity_core::gfx::projection::perspective_rh;
 use concinnity_core::gfx::render_types::LineVertex;
 use concinnity_core::profile;
 use concinnity_core::profile::PassTiming;
+use concinnity_core::render::depth::camera_projection;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::{self, FrameGraphInputs};
@@ -553,7 +553,7 @@ impl DxContext {
         height: u32,
     ) -> FrameProjection {
         // Compute the camera VPs the main + velocity passes consume.
-        let proj = perspective_rh(fov_y_radians, aspect, near, far);
+        let proj = camera_projection(fov_y_radians, aspect, near, far);
         // Un-jittered camera VP, fed to the velocity pre-pass so the stored
         // motion vector is free of the sub-pixel projection jitter.
         let cur_vp = mat4_mul(proj, self.state.view.matrix);

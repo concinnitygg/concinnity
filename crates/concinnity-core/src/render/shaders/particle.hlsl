@@ -30,6 +30,8 @@
 #define USE_MSAA 0
 #endif
 
+{DEPTH_CONVENTION}
+
 {PARTICLE_TYPES}
 
 // Per-frame view inputs to the render pass, 96 B. Mirrors `ParticleView` in
@@ -144,7 +146,7 @@ float4 particle_fragment(ParticleVertexOut i) : SV_Target
         discard;
     }
     // Manual depth test: a sprite behind opaque scene geometry draws nothing.
-    if (i.position.z > particle_scene_depth(int2(i.position.xy)))
+    if (depth_behind(i.position.z, particle_scene_depth(int2(i.position.xy))))
     {
         discard;
     }

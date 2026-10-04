@@ -659,12 +659,12 @@ impl MtlContext {
         // back faces visible; inside → front faces behind camera, only
         // back faces in view.)
         enc.setCullMode(MTLCullMode::Front);
-        // Standard forward-render depth state: compare = less, write
-        // = on. The fragment shader's `[[depth(less)]]` output further
-        // gates: even if the rasterized proxy fragment passes the
-        // depth test, the actual raymarch hit depth has to be < the
-        // existing value to commit.
-        enc.set_depth_stencil(self.targets.depth_state.as_ref());
+        // The inclusive camera test with write, matching the Vulkan and
+        // DirectX surface pipelines. The fragment shader's conservative
+        // depth output further gates: even if the rasterized proxy fragment
+        // passes the depth test, the actual raymarch hit has to pass against
+        // the existing value to commit.
+        enc.set_depth_stencil(self.targets.depth_state_inclusive.as_ref());
 
         // Per-frame view at buffer(0); same value for vertex + fragment.
         enc.set_vertex_value(view, 0);
@@ -722,16 +722,15 @@ impl MtlContext {
             enc.set_pipeline(&vol.pipeline);
             // Volumetric media are translucent and must not write depth, but
             // they should still be occluded by nearer opaque geometry. Bind the
-            // read-only `LessEqual` state (no write): matching the DirectX
-            // volumetric PSO's `DepthFunc=LESS_EQUAL, WriteMask=ZERO`. Passing
-            // `None` here would trip Metal's validation layer
+            // read-only state (no write), matching the DirectX volumetric PSO.
+            // Passing `None` here would trip Metal's validation layer
             // (`setDepthStencilState(nil)` is illegal). Opaque SDF surfaces keep
             // the write-on state so they composite into the depth buffer
             // downstream passes sample.
             if vol.volumetric {
                 enc.set_depth_stencil(self.targets.depth_state_read_only.as_ref());
             } else {
-                enc.set_depth_stencil(self.targets.depth_state.as_ref());
+                enc.set_depth_stencil(self.targets.depth_state_inclusive.as_ref());
             }
             enc.set_vertex_value(&vol.uniforms, 1);
             enc.set_fragment_value(&vol.uniforms, 1);
@@ -824,10 +823,10 @@ impl MtlContext {
                 ns_string!("raymarch shadow"),
             );
             // Front-face cull → exactly one fragment per texel inside the box's
-            // light-space projection. Same depth state (compare = less, write
-            // on) as the rasterized casters so the two layers composite.
+            // light-space projection. Same depth state as the rasterized
+            // casters so the two layers composite.
             enc.setCullMode(MTLCullMode::Front);
-            enc.set_depth_stencil(self.targets.depth_state.as_ref());
+            enc.set_depth_stencil(self.targets.shadow_depth_state.as_ref());
 
             let cascade = RaymarchShadowCascade {
                 cascade_idx: cascade_idx as u32,
@@ -889,7 +888,7 @@ mod tests {
             [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let f = Frustum::from_view_projection(identity);
+        let f = Frustum::from_camera(identity);
         assert!(volume_in_frustum([0.0, 0.0, 0.0], [0.5, 0.5, 0.5], &f));
         assert!(!volume_in_frustum([10.0, 0.0, 0.0], [0.5, 0.5, 0.5], &f));
         // A box the camera sits inside (origin within its extent) still

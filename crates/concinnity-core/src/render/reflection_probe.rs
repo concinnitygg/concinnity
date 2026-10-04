@@ -10,9 +10,10 @@
 
 use crate::bake::environment_map as em;
 use crate::gfx::cubemap::FACE_BASIS;
-use crate::gfx::projection::{perspective_rh, view_from_basis};
+use crate::gfx::projection::view_from_basis;
 use crate::math::vec3::dot;
 use crate::math::{ceil, floor, powi, round, sqrt};
+use crate::render::depth::camera_projection;
 use crate::render::uniforms::ProbePrefilterParams;
 use crate::transform::mat4_mul;
 use alloc::vec;
@@ -21,7 +22,7 @@ use core::f32::consts::FRAC_PI_2;
 
 // One cube face: a 90-degree vertical field of view at a square aspect.
 fn perspective_90(near: f32, far: f32) -> [[f32; 4]; 4] {
-    perspective_rh(FRAC_PI_2, 1.0, near, far)
+    camera_projection(FRAC_PI_2, 1.0, near, far)
 }
 
 /// Near plane of every probe face. The capture is independent of the live

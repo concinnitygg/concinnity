@@ -26,9 +26,9 @@ use objc2_metal::{
 use super::allocator::{DeviceAllocator, PooledTexture};
 use super::builtin_shaders;
 use super::context::MtlContext;
+use super::depth::Depth;
 use super::descriptors::{TextureDesc, VertexAttr, VertexLayout, vertex_descriptor};
 use super::error::allocation_failed;
-use super::init::pipelines::make_depth_state;
 use super::texture::upload_texture;
 use super::transparent::{TransparentDraw, bytes_of};
 
@@ -253,7 +253,7 @@ impl GlassReflectionTargets {
             depth: reduced_target(device, MTLPixelFormat::Depth32Float, width, height)
                 .ok_or_else(|| allocation_failed("the glass reflection depth"))?,
             empty: upload_texture(alloc, 1, 1, &[0u8; 4])?,
-            depth_state: make_depth_state(device)?,
+            depth_state: Depth::camera_write().state(device)?,
         })
     }
 

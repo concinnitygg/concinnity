@@ -22,10 +22,11 @@
 //! all use RH view matrices with [0, 1] depth in their orthographic
 //! projections, so the same VPs are valid for every backend's shadow sampling.
 
-use crate::gfx::projection::{look_at, ortho_rh};
+use crate::gfx::projection::look_at;
 use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
 use crate::math::vec3::{add, cross, dot, length_sq, normalize_clamped, scale, sub};
 use crate::math::{powf, round, sqrt, tan};
+use crate::render::depth::shadow_ortho;
 use crate::transform::IDENTITY;
 use crate::transform::mat4_mul;
 
@@ -195,7 +196,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         let caster_extent = shadow_far;
         let light_eye = add(center, scale(l_to, radius));
         let light_view = look_at(light_eye, center, up_l);
-        let proj = ortho_rh(
+        let proj = shadow_ortho(
             -radius,
             radius,
             -radius,

@@ -3,7 +3,7 @@
 //!   * The shared vertex descriptor (interleaved [pos, normal, tangent, color, uv]).
 //!   * The main static pipeline, the world shader bucket pipelines, and the
 //!     bindless argument encoders and sampler block.
-//!   * The cascade shadow pipelines and the shared depth-stencil states.
+//!   * The cascade shadow pipelines.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::components::ShaderPrograms;
@@ -14,9 +14,9 @@ use concinnity_core::render::world_pipelines::WorldPipelines;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLArgumentBuffersTier, MTLArgumentEncoder, MTLCompareFunction, MTLDepthStencilDescriptor,
-    MTLDepthStencilState, MTLDevice, MTLFunction, MTLPixelFormat, MTLRenderPipelineDescriptor,
-    MTLRenderPipelineState, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
+    MTLArgumentBuffersTier, MTLArgumentEncoder, MTLDevice, MTLFunction, MTLPixelFormat,
+    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLVertexDescriptor, MTLVertexFormat,
+    MTLVertexStepFunction,
 };
 
 use crate::metal::context::{BINDLESS_SAMPLER_ARG_BUFFER_INDEX, BINDLESS_TEXTURE_ARG_BUFFER_INDEX};
@@ -303,32 +303,4 @@ pub(crate) fn build_shadow_bindless_pipeline(
     device
         .newRenderPipelineStateWithDescriptor_error(&shadow_pipeline_desc)
         .map_err(|e| RenderError::ShaderCompile(format!("shadow bindless pipeline state: {e:?}")))
-}
-
-// Depth-stencil state: less-than test, writes enabled (shared for main and
-// shadow pass).
-pub(crate) fn make_depth_state(
-    device: &ProtocolObject<dyn MTLDevice>,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLDepthStencilState>>> {
-    let depth_desc = MTLDepthStencilDescriptor::new();
-    depth_desc.setDepthCompareFunction(MTLCompareFunction::Less);
-    depth_desc.setDepthWriteEnabled(true);
-    device
-        .newDepthStencilStateWithDescriptor(&depth_desc)
-        .ok_or_else(|| RenderError::Other("failed to create depth stencil state".into()))
-}
-
-// Read-only depth-stencil state: less-or-equal test, no write. Translucent
-// passes (volumetric raymarch) bind this so they early-z against nearer
-// opaque geometry without touching the depth buffer. A non-nil state is
-// required: Metal's validation layer asserts on `setDepthStencilState(nil)`.
-pub(crate) fn make_depth_state_read_only(
-    device: &ProtocolObject<dyn MTLDevice>,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLDepthStencilState>>> {
-    let depth_desc = MTLDepthStencilDescriptor::new();
-    depth_desc.setDepthCompareFunction(MTLCompareFunction::LessEqual);
-    depth_desc.setDepthWriteEnabled(false);
-    device
-        .newDepthStencilStateWithDescriptor(&depth_desc)
-        .ok_or_else(|| RenderError::Other("failed to create read-only depth stencil state".into()))
 }

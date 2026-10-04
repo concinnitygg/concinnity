@@ -62,7 +62,7 @@ use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
 use crate::directx::error::{map_hresult, map_pso_hresult};
 use crate::directx::pipeline::main_input_layout;
-use crate::directx::pso::{Blend, CompareOp, Cull, Depth, GraphicsPso, Raster};
+use crate::directx::pso::{Blend, Cull, Depth, GraphicsPso, Raster};
 use crate::directx::root_constants::RootConstants;
 use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::{
@@ -228,13 +228,7 @@ fn create_raymarch_pso(
     GraphicsPso::new(root_sig, vs, ps)
         .input_layout(&input_layout)
         .target(HDR_FORMAT, Blend::Opaque)
-        .depth(
-            DXGI_FORMAT_D32_FLOAT,
-            Depth::Test {
-                compare: CompareOp::LessEqual,
-                write: true,
-            },
-        )
+        .depth(DXGI_FORMAT_D32_FLOAT, Depth::camera_write_inclusive())
         .samples(msaa_samples.max(1))
         .raster(proxy_raster(msaa_samples > 1))
         .build(device, "raymarch")
@@ -275,7 +269,7 @@ fn compile_volume_pso(
 // Volumetric variant of the raymarch PSO: same root signature + same
 // vertex layout (cube proxy back faces), but the color output
 // alpha-blends over the existing scene and the depth stencil keeps
-// early-z (DepthFunc LESS_EQUAL) without writing: volumetrics are
+// early-z through the read-only camera test: volumetrics are
 // translucent and never update the depth buffer.
 fn create_raymarch_volumetric_pso(
     device: &ID3D12Device,
@@ -319,13 +313,7 @@ fn create_raymarch_volumetric_pso(
 
     // Early-z against the bbox far face, but no depth write: the
     // medium doesn't occlude itself or update SSR/decal depth.
-    let depth_stencil = D3D12_DEPTH_STENCIL_DESC {
-        DepthEnable: windows::core::BOOL(1),
-        DepthWriteMask: D3D12_DEPTH_WRITE_MASK_ZERO,
-        DepthFunc: D3D12_COMPARISON_FUNC_LESS_EQUAL,
-        StencilEnable: windows::core::BOOL(0),
-        ..Default::default()
-    };
+    let depth_stencil = Depth::camera_read_only().raw();
 
     let mut rtv_formats = [DXGI_FORMAT_UNKNOWN; 8];
     rtv_formats[0] = HDR_FORMAT;
@@ -425,7 +413,7 @@ fn create_raymarch_shadow_pso(
     let input_layout = main_input_layout();
     GraphicsPso::new(root_sig, vs, ps)
         .input_layout(&input_layout)
-        .depth(DXGI_FORMAT_D32_FLOAT, Depth::LESS_WRITE)
+        .depth(DXGI_FORMAT_D32_FLOAT, Depth::shadow_write())
         .raster(proxy_raster(false))
         .build(device, "raymarch shadow")
 }

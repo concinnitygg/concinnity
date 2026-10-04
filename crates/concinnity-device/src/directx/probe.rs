@@ -39,6 +39,7 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PixelRect;
 use concinnity_core::render::probe_bake::{
@@ -58,6 +59,7 @@ use super::probe_prefilter::PrefilterGpu;
 use super::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_resolve_target, transition_barrier,
 };
+use crate::directx::depth::optimized_clear;
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 
@@ -389,7 +391,7 @@ impl DxContext {
         );
 
         let vp = reflection_probe::face_view_projection(eye, face);
-        let frustum = Frustum::from_view_projection(vp);
+        let frustum = Frustum::from_camera(vp);
 
         // A fresh allocator + list per face, held until the fence proves the face
         // retired, so no in-flight allocator is ever reset.
@@ -721,7 +723,13 @@ impl DxContext {
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&rtv), false, Some(&dsv));
             cmd.ClearRenderTargetView(rtv, &self.state.view.clear_color, Some(&[scissor]));
-            cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, Some(&[scissor]));
+            cmd.ClearDepthStencilView(
+                dsv,
+                D3D12_CLEAR_FLAG_DEPTH,
+                DepthConvention::Camera.clear(),
+                0,
+                Some(&[scissor]),
+            );
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
                 TopLeftY: 0.0,
@@ -954,15 +962,7 @@ fn create_bake_depth(
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
     };
-    let clear_value = D3D12_CLEAR_VALUE {
-        Format: DXGI_FORMAT_D32_FLOAT,
-        Anonymous: D3D12_CLEAR_VALUE_0 {
-            DepthStencil: D3D12_DEPTH_STENCIL_VALUE {
-                Depth: 1.0,
-                Stencil: 0,
-            },
-        },
-    };
+    let clear_value = optimized_clear(DepthConvention::Camera);
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: size as u64,

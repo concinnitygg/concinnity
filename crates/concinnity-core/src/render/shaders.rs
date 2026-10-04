@@ -19,6 +19,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("composite.hlsl", COMPOSITE),
     ("cull.hlsl", CULL),
     ("decal.hlsl", DECAL),
+    ("depth_convention.hlsl", DEPTH_CONVENTION),
     ("fog.hlsl", FOG),
     ("fullscreen.hlsl", FULLSCREEN),
     ("gbuffer_prepass.hlsl", GBUFFER_PREPASS),
@@ -85,6 +86,8 @@ pub const COMPOSITE: &str = include_str!("shaders/composite.hlsl");
 pub const CULL: &str = include_str!("shaders/cull.hlsl");
 /// `decal.hlsl`.
 pub const DECAL: &str = include_str!("shaders/decal.hlsl");
+/// `depth_convention.hlsl`.
+pub const DEPTH_CONVENTION: &str = include_str!("shaders/depth_convention.hlsl");
 /// `fog.hlsl`.
 pub const FOG: &str = include_str!("shaders/fog.hlsl");
 /// `fullscreen.hlsl`.
@@ -187,7 +190,7 @@ mod tests {
     #[test]
     fn the_vertex_path_pins_sky_to_the_far_plane() {
         assert!(MAIN_SHADING.contains("color.b > 1.5"));
-        assert!(MAIN_SHADING.contains("o.position.z = o.position.w"));
+        assert!(MAIN_SHADING.contains("o.position.z = depth_pin_far(o.position.w)"));
     }
 
     // The pre-pass rasterizes the same visible set the main pass does, sky
@@ -199,7 +202,7 @@ mod tests {
     #[test]
     fn the_prepass_pins_sky_to_the_far_plane() {
         assert!(GBUFFER_PREPASS.contains("color.b > 1.5"));
-        assert!(GBUFFER_PREPASS.contains("position.z = o.position.w"));
+        assert!(GBUFFER_PREPASS.contains("o.position.z = depth_pin_far(o.position.w)"));
         assert!(GBUFFER_PREPASS.contains("o.view_depth = 0.0"));
         assert_eq!(GBUFFER_PREPASS.matches("gb_sky_pin(").count(), 2);
     }

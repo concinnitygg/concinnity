@@ -384,7 +384,7 @@ fn create_main_pipeline_filled(
     polygon_mode: vk::PolygonMode,
 ) -> RenderResult<OwnedPipeline> {
     GraphicsPipelineDesc {
-        depth: Depth::LESS_WRITE,
+        depth: Depth::camera_write(),
         // No back-face culling, matching Metal's default and DirectX, so meshes
         // with mixed winding (procedural floor / ceiling planes) render from
         // both sides.
@@ -415,7 +415,7 @@ pub(super) fn create_shadow_pipeline(
     GraphicsPipelineDesc {
         frag: None,
         color_targets: &[],
-        depth: Depth::LESS_WRITE,
+        depth: Depth::shadow_write(),
         raster: Raster {
             // The clamp needs the optional depthBiasClamp feature; it is 0.0
             // (unclamped) on a device without it.

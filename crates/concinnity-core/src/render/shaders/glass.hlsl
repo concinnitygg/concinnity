@@ -43,6 +43,8 @@
 #define USE_MSAA 0
 #endif
 
+{DEPTH_CONVENTION}
+
 {PROBE_TYPES}
 
 #ifdef GLASS_RT
@@ -210,7 +212,7 @@ float3 glass_rt_reflection(float3 world_pos, float3 view_dir, float3 normal, flo
 bool glass_occluded(float2 full_position, float depth)
 {
     int2 pixel = min(int2(full_position), int2(max(view.viewport, (float2)(1.0))) - int2(1, 1));
-    return glass_scene_depth(pixel) < depth;
+    return depth_in_front(glass_scene_depth(pixel), depth);
 }
 
 [shader("pixel")]
@@ -267,7 +269,7 @@ float4 glass_fragment(GlassVertexOut i) : SV_Target
     // same viewport convention the main pass used, so the fragment position
     // lines up with the stored texel.
     int2 pixel = min(int2(i.position.xy), int2(max(view.viewport, (float2)(1.0))) - int2(1, 1));
-    if (glass_scene_depth(pixel) < i.position.z)
+    if (depth_in_front(glass_scene_depth(pixel), i.position.z))
     {
         discard;
     }

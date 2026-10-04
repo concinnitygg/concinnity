@@ -2,6 +2,7 @@
 //! geometry behind the plane never leaks into the reflection.
 
 use crate::math::vec3::length;
+use crate::render::depth::camera_oblique_projection;
 use crate::transform::{Mat4, mat4_inverse, mat4_mul};
 
 type Vec4 = [f32; 4];
@@ -24,10 +25,6 @@ fn transpose(m: Mat4) -> Mat4 {
         }
     }
     out
-}
-
-fn dot4(a: Vec4, b: Vec4) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 }
 
 // Normalize a plane so its normal is unit length (scaling d to match). A zero
@@ -80,58 +77,6 @@ pub(crate) fn plane_in_view(plane_world: Vec4, view: Mat4) -> Vec4 {
     mat_vec(transpose(mat4_inverse(view)), plane_world)
 }
 
-// Oblique near-plane clipping (Lengyel) for a [0, 1]-depth perspective matrix.
-// Replaces the projection's z (depth) row so the near clip plane coincides with
-// `clip_plane` (given in the projection's view space), clipping everything on the
-// negative side of that plane. The far plane is preserved by scaling against the
-// frustum corner the plane faces.
-//
-// Derivation for this depth convention: the near plane is `z_row . p = 0`, so the
-// new z-row is `alpha * C` for the clip plane C (any alpha keeps the near plane at
-// C). Picking the far frustum corner q = inv(P) . (sgn(Cx), sgn(Cy), 1, 1) and
-// requiring it to land on the far plane (ndc.z = 1, i.e. z_row.q = w_row.q = -q.z)
-// gives alpha = -q.z / (C . q). For this projection q has the closed form below
-// (q.z = -1), so alpha = 1 / (C . q).
-pub(crate) fn oblique_projection(proj: Mat4, clip_plane: Vec4) -> Mat4 {
-    let xs = proj[0][0];
-    let ys = proj[1][1];
-    let zs = proj[2][2]; // z-row's z component
-    let zs_near = proj[3][2]; // z-row's w component (= zs * near)
-    if xs.abs() < 1e-12 || ys.abs() < 1e-12 || zs_near.abs() < 1e-12 {
-        return proj;
-    }
-
-    let sgn = |v: f32| {
-        if v > 0.0 {
-            1.0
-        } else if v < 0.0 {
-            -1.0
-        } else {
-            0.0
-        }
-    };
-    // Back-projected far frustum corner toward the clip plane.
-    let q: Vec4 = [
-        sgn(clip_plane[0]) / xs,
-        sgn(clip_plane[1]) / ys,
-        -1.0,
-        (1.0 + zs) / zs_near,
-    ];
-    let denom = dot4(clip_plane, q);
-    if denom.abs() < 1e-12 {
-        return proj;
-    }
-    let alpha = 1.0 / denom;
-
-    let mut out = proj;
-    // Replace the z (depth) row: row index 2 across all four columns.
-    out[0][2] = alpha * clip_plane[0];
-    out[1][2] = alpha * clip_plane[1];
-    out[2][2] = alpha * clip_plane[2];
-    out[3][2] = alpha * clip_plane[3];
-    out
-}
-
 /// Flip a plane so its normal points toward `point` (the kept side faces the
 /// camera). The reflection matrix is sign-invariant, but the oblique near-plane
 /// clip is not: it keeps the +n side, so the normal must face the viewer or the
@@ -174,7 +119,7 @@ pub fn planar_matrices(
     // right at the waterline survives the near-plane test.
     let clip_world = [plane[0], plane[1], plane[2], plane[3] + clip_bias];
     let clip_view = plane_in_view(clip_world, r_view);
-    let r_proj = oblique_projection(proj, clip_view);
+    let r_proj = camera_oblique_projection(proj, clip_view);
     PlanarMatrices {
         view: r_view,
         view_proj: mat4_mul(r_proj, r_view),
@@ -185,7 +130,7 @@ pub fn planar_matrices(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gfx::projection::perspective_rh;
+    use crate::render::depth::camera_projection;
 
     // Apply a column-major transform to a homogeneous point.
     fn xform(m: Mat4, p: [f32; 4]) -> [f32; 4] {
@@ -233,7 +178,7 @@ mod tests {
 
     #[test]
     fn inverse_round_trips() {
-        let m = perspective_rh(1.1, 1.7, 0.2, 80.0);
+        let m = camera_projection(1.1, 1.7, 0.2, 80.0);
         let id = mat4_mul(m, mat4_inverse(m));
         for (c, col) in id.iter().enumerate() {
             for (r, &val) in col.iter().enumerate() {
@@ -249,12 +194,12 @@ mod tests {
         // z < -5). After oblique clipping the projection, a point ON the plane
         // maps to ndc.z ~= 0, a point in front (far side) to ndc.z in (0, 1), and
         // a point behind the plane to ndc.z < 0 (clipped).
-        let proj = perspective_rh(1.2, 1.0, 0.1, 100.0);
+        let proj = camera_projection(1.2, 1.0, 0.1, 100.0);
         // Plane z = -5: n.p + d = 0 with kept side n.p + d > 0 toward -z (far).
         // Choose C so the far/kept side is positive: C = (0,0,-1,-5) -> for
         // p=(0,0,-50): -(-50)-5 = 45 > 0 (kept); p=(0,0,-2): 2-5 = -3 < 0 (clip).
         let c = [0.0, 0.0, -1.0, -5.0];
-        let pobl = oblique_projection(proj, c);
+        let pobl = camera_oblique_projection(proj, c);
 
         let ndc_z = |z: f32| {
             let clip = xform(pobl, [0.0, 0.0, z, 1.0]);
@@ -269,9 +214,9 @@ mod tests {
     #[test]
     fn oblique_clip_preserves_x_and_y_projection() {
         // Only the depth row changes; x/y of a projected point are untouched.
-        let proj = perspective_rh(1.0, 1.5, 0.1, 50.0);
+        let proj = camera_projection(1.0, 1.5, 0.1, 50.0);
         let c = [0.0, 0.0, -1.0, -8.0];
-        let pobl = oblique_projection(proj, c);
+        let pobl = camera_oblique_projection(proj, c);
         let p = [2.0, 1.5, -20.0, 1.0];
         let a = xform(proj, p);
         let b = xform(pobl, p);
@@ -295,7 +240,7 @@ mod tests {
             [0.0, 0.0, 1.0, 0.0],
             [0.0, -3.0, -6.0, 1.0],
         ];
-        let proj = perspective_rh(1.2, 1.6, 0.1, 100.0);
+        let proj = camera_projection(1.2, 1.6, 0.1, 100.0);
         let m = planar_matrices(view, proj, [0.0, 3.0, 6.0], plane, 0.0);
 
         let ndc_z = |p: [f32; 3]| {
@@ -356,7 +301,7 @@ mod tests {
             [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let proj = perspective_rh(1.2, 1.6, 0.1, 100.0);
+        let proj = camera_projection(1.2, 1.6, 0.1, 100.0);
         let cam_pos = [0.0, 0.0, 0.0];
         let m = planar_matrices(view, proj, cam_pos, plane, 0.0);
 
@@ -365,7 +310,7 @@ mod tests {
         let bb_max = [0.5, 0.5, 3.5];
 
         // The main camera rejects it (behind the near plane).
-        let main_frustum = crate::gfx::frustum::Frustum::from_view_projection(proj);
+        let main_frustum = crate::gfx::frustum::Frustum::from_camera(proj);
         assert!(
             !main_frustum.intersects_aabb(bb_min, bb_max),
             "object behind the camera must be outside the main frustum"
@@ -373,7 +318,7 @@ mod tests {
 
         // The reflected frustum captures it. This is the frustum the GPU mirror
         // cull tests each record against.
-        let reflected_frustum = crate::gfx::frustum::Frustum::from_view_projection(m.view_proj);
+        let reflected_frustum = crate::gfx::frustum::Frustum::from_camera(m.view_proj);
         assert!(
             reflected_frustum.intersects_aabb(bb_min, bb_max),
             "object behind the camera must be visible in the reflection"

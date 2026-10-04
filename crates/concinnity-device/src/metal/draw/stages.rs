@@ -3,10 +3,10 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::jitter;
-use concinnity_core::gfx::projection::perspective_rh;
 use concinnity_core::gfx::render_types::{self, LineVertex};
 use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
 use concinnity_core::profile;
+use concinnity_core::render::depth::camera_projection;
 use concinnity_core::render::error;
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::render_graph::{self, FrameGraphInputs};
@@ -294,7 +294,7 @@ impl MtlContext {
         // The projection / jitter / VP are resolved here, ahead of the main
         // render encoder, because the cull compute pass needs the frustum
         // before the render pass begins.
-        let proj = perspective_rh(fov_y_radians, aspect, near, far);
+        let proj = camera_projection(fov_y_radians, aspect, near, far);
         // This frame's un-jittered VP, captured before the graph runs so the
         // two-pass phase-2 cull (`encode_cull_phase2`, dispatched inside
         // `execute_graph`) can project AABBs through it against the pyramid the
@@ -332,7 +332,7 @@ impl MtlContext {
         // world-space position from depth (fog, decals, raymarch, transparent),
         // instead of each pass re-inverting `vp` independently.
         let inv_vp = mat4_inverse(vp);
-        let frustum = Frustum::from_view_projection(vp);
+        let frustum = Frustum::from_camera(vp);
         FrameProjection {
             proj,
             vp,

@@ -38,6 +38,7 @@
 // record is a word longer and starts with that id.
 
 {OBJECT_COMMON}
+{DEPTH_CONVENTION}
 
 // `cull_status` values. STATUS_HIZ_CANDIDATE is the only outcome phase 2
 // re-tests against the rebuilt pyramid; the others are settled by phase 1.
@@ -276,7 +277,7 @@ float aabb_distance_sq(float3 bb_min, float3 bb_max)
 #ifndef SHADOW_CULL
 
 // Project the eight AABB corners through the reprojection matrix and reduce to
-// a screen-space rect (NDC.xy in [-1, 1]) plus the AABB's closest NDC depth.
+// a screen-space rect (NDC.xy in [-1, 1]) plus the AABB's nearest NDC depth.
 // Returns false if any corner ended up behind the camera (w <= 0), in which
 // case the caller conservatively keeps the object.
 bool project_aabb(
@@ -288,7 +289,7 @@ bool project_aabb(
 {
     ndc_min = float2( 1.0,  1.0);
     ndc_max = float2(-1.0, -1.0);
-    min_depth = 1.0;
+    min_depth = DEPTH_FAR;
     [unroll] for (uint i = 0u; i < 8u; ++i)
     {
         float3 corner = float3(
@@ -303,15 +304,14 @@ bool project_aabb(
         float3 ndc = clip.xyz / clip.w;
         ndc_min = min(ndc_min, ndc.xy);
         ndc_max = max(ndc_max, ndc.xy);
-        min_depth = min(min_depth, ndc.z);
+        min_depth = depth_closer(min_depth, ndc.z);
     }
     return true;
 }
 
 // True when the AABB is fully occluded by the Hi-Z pyramid. Conservative: any
 // uncertain case returns false (keep the object). The NDC y-flip matches the
-// main pass's viewport, and depth is the [0, 1] range both APIs use, so
-// MAX-reduced texels store the farthest occluder.
+// main pass's viewport, and the pyramid's texels store the farthest occluder.
 bool hiz_occluded(float3 bb_min, float3 bb_max)
 {
     float2 ndc_min, ndc_max;
@@ -328,8 +328,8 @@ bool hiz_occluded(float3 bb_min, float3 bb_max)
     {
         return false;
     }
-    // Standard depth: nearest point of the AABB at NDC.z near 0. Behind-near or
-    // behind-far means we conservatively keep the AABB.
+    // An AABB whose nearest point falls outside the [0, 1] depth range crosses
+    // the near or far plane, so it is conservatively kept.
     if (aabb_min_depth < 0.0 || aabb_min_depth > 1.0)
     {
         return false;
@@ -354,10 +354,10 @@ bool hiz_occluded(float3 bb_min, float3 bb_max)
     float d1 = hiz_tex.Load(int3(hi.x, lo.y, mip));
     float d2 = hiz_tex.Load(int3(lo.x, hi.y, mip));
     float d3 = hiz_tex.Load(int3(hi.x, hi.y, mip));
-    float occluder_depth = max(max(d0, d1), max(d2, d3));
-    // If the AABB's closest projected depth is strictly behind the farthest
+    float occluder_depth = depth_farther(depth_farther(d0, d1), depth_farther(d2, d3));
+    // If the AABB's nearest projected depth is strictly behind the farthest
     // previously-rasterized surface in this region, the whole AABB is hidden.
-    return aabb_min_depth > occluder_depth;
+    return depth_behind(aabb_min_depth, occluder_depth);
 }
 
 #ifndef CN_BACKEND_METAL

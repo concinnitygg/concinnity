@@ -14,9 +14,10 @@
 
 use crate::components::SpotLight;
 use crate::gfx::frustum::Frustum;
-use crate::gfx::projection::{look_at, perspective_rh, up_for};
+use crate::gfx::projection::{look_at, up_for};
 use crate::gfx::render_types::{MAX_SHADOWED_SPOTS, SpotShadowData};
 use crate::math::vec3::{add, scale};
+use crate::render::depth::shadow_perspective;
 use crate::transform::mat4_mul;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -94,7 +95,7 @@ fn spot_shadow_data(light: &SpotLight) -> SpotShadowData {
         up_for(dir),
     );
     let fov = (2.0 * light.outer_angle).to_radians();
-    let proj = perspective_rh(fov, 1.0, SHADOW_NEAR, far);
+    let proj = shadow_perspective(fov, 1.0, SHADOW_NEAR, far);
     SpotShadowData {
         light_vp: mat4_mul(proj, view),
         depth_bias: DEPTH_BIAS,
@@ -157,7 +158,7 @@ pub fn refreshed_slices(mask: u32, count: u32) -> impl Iterator<Item = u32> {
 /// The world-space frustum a slice renders, which is also the volume its GPU
 /// cull keeps casters from.
 pub fn slice_frustum(data: &SpotShadowData) -> Frustum {
-    Frustum::from_view_projection(data.light_vp)
+    Frustum::from_shadow(data.light_vp)
 }
 
 #[cfg(test)]

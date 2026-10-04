@@ -945,7 +945,7 @@ impl MtlContext {
         } else {
             self.shadow.render_mask
         };
-        let mut cascades = [(0, Frustum::from_view_projection(IDENTITY)); NUM_SHADOW_CASCADES];
+        let mut cascades = [(0, Frustum::from_shadow(IDENTITY)); NUM_SHADOW_CASCADES];
         let mut kept = 0;
         for (c, light_vp) in self.shadow.uniforms.light_vps.iter().enumerate() {
             if mask & (1u32 << c) == 0 {
@@ -953,7 +953,7 @@ impl MtlContext {
             }
             // The caster-extent near push baked into light_vps survives, so
             // off-screen / tall casters are kept.
-            cascades[kept] = (c, Frustum::from_view_projection(*light_vp));
+            cascades[kept] = (c, Frustum::from_shadow(*light_vp));
             kept += 1;
         }
         self.encode_view_culls(
@@ -967,7 +967,7 @@ impl MtlContext {
             },
         );
 
-        let mut spots = [(0, Frustum::from_view_projection(IDENTITY)); MAX_SHADOWED_SPOTS];
+        let mut spots = [(0, Frustum::from_shadow(IDENTITY)); MAX_SHADOWED_SPOTS];
         let mut kept = 0;
         let mut spot_mask = 0u32;
         for slice in self.spot_shadow.refreshed_slices() {

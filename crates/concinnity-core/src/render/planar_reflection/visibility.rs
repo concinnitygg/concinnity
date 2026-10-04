@@ -295,7 +295,7 @@ impl PlanarCrops {
 mod tests {
     use super::*;
     use crate::gfx::frustum::Frustum;
-    use crate::gfx::projection::perspective_rh;
+    use crate::render::depth::camera_projection;
     use crate::transform::mat4_mul;
     use alloc::vec::Vec;
 
@@ -307,7 +307,7 @@ mod tests {
             [0.0, 0.0, 1.0, 0.0],
             [-eye[0], -eye[1], -eye[2], 1.0],
         ];
-        mat4_mul(perspective_rh(1.2, 1.0, 0.1, 100.0), view)
+        mat4_mul(camera_projection(1.2, 1.0, 0.1, 100.0), view)
     }
 
     // A 2x2 pane facing +z at depth `z`, centered on x = `x`.
@@ -457,7 +457,7 @@ mod tests {
             width: 50,
             height: 100,
         };
-        let frustum = Frustum::from_view_projection(rect.crop_view_projection(vp, 100, 100));
+        let frustum = Frustum::from_camera(rect.crop_view_projection(vp, 100, 100));
         let left = ([-3.0, -0.5, -10.5], [-2.0, 0.5, -9.5]);
         let right = ([2.0, -0.5, -10.5], [3.0, 0.5, -9.5]);
         assert!(frustum.intersects_aabb(left.0, left.1));

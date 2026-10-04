@@ -12,6 +12,7 @@ mod context;
 mod cull;
 mod cull_readback;
 mod decal;
+mod depth;
 mod descriptor_slot;
 mod draw;
 mod error;

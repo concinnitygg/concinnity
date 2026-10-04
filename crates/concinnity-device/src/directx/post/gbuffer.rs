@@ -13,6 +13,7 @@
 //! un-jittered current / previous VPs in-shader so projection jitter never
 //! contaminates motion. Mirrors src/metal/post/gbuffer.rs.
 
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::uniforms::ModelHistoryParams;
 use concinnity_core::transform::IDENTITY;
@@ -77,7 +78,7 @@ fn create_gbuffer_pso(
         .target(GBUFFER_NORMAL_DEPTH_FORMAT, Blend::Opaque)
         .target(GBUFFER_ROUGHNESS_FORMAT, Blend::Opaque)
         .target(GBUFFER_VELOCITY_FORMAT, Blend::Opaque)
-        .depth(DXGI_FORMAT_D32_FLOAT, Depth::LESS_WRITE)
+        .depth(DXGI_FORMAT_D32_FLOAT, Depth::camera_write())
         .build(device, "gbuffer prepass")
 }
 
@@ -540,7 +541,13 @@ impl DxContext {
             cmd.ClearRenderTargetView(gb.normal_depth_rtv, &[0.0_f32; 4], None);
             cmd.ClearRenderTargetView(gb.roughness_rtv, &GBUFFER_ROUGHNESS_CLEAR, None);
             cmd.ClearRenderTargetView(gb.velocity_rtv, &[0.0_f32; 4], None);
-            cmd.ClearDepthStencilView(gb.depth_dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0, 0, None);
+            cmd.ClearDepthStencilView(
+                gb.depth_dsv,
+                D3D12_CLEAR_FLAG_DEPTH,
+                DepthConvention::Camera.clear(),
+                0,
+                None,
+            );
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
                 TopLeftY: 0.0,

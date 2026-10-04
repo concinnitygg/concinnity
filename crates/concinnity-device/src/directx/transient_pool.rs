@@ -389,6 +389,7 @@ fn resting_state(m: &TransientTexture) -> D3D12_RESOURCE_STATES {
 mod tests {
     use super::super::post::gbuffer::GBUFFER_ROUGHNESS_CLEAR;
     use super::*;
+    use concinnity_core::render::depth::DepthConvention;
     use concinnity_core::render::post::device::PostExtent;
     use concinnity_core::render::post::{bloom, ssao};
     use concinnity_core::render::render_graph::{self, PoolGates, plan_pool_slots};
@@ -538,7 +539,7 @@ mod tests {
             array_layers: 1,
             mip_levels: 1,
             usage: TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
-            clear: ClearValue::Depth(1.0),
+            clear: ClearValue::depth(DepthConvention::Camera),
         };
         let desc = rt_desc(&depth);
         assert_eq!(desc.Format, DXGI_FORMAT_D32_FLOAT);

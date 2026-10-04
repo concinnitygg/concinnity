@@ -358,7 +358,7 @@ mod tests {
     fn general_inverse_round_trips_a_projection_and_a_view() {
         // The screen-space passes invert a view-projection, whose bottom row is
         // not [0, 0, 0, 1], so mat4_affine_inverse cannot serve them.
-        let proj = crate::gfx::projection::perspective_rh(75.0f32.to_radians(), 1.6, 0.1, 500.0);
+        let proj = crate::render::depth::camera_projection(75.0f32.to_radians(), 1.6, 0.1, 500.0);
         let view: Mat4 = [
             [0.92388, 0.0, -0.38268, 0.0],
             [0.0, 1.0, 0.0, 0.0],

@@ -1,11 +1,13 @@
-//! The engine's view and projection matrices, in the convention every backend
-//! already agreed on: right-handed, looking down `-z`, with depth mapped to
-//! `[0, 1]` after the perspective divide. Metal, Vulkan, and DirectX all sample
-//! depth that way, so the same matrices are valid for all three; Vulkan and D3D12
-//! compensate for their Y-down NDC with a negative-height viewport rather than
-//! by flipping the projection.
+//! The engine's view and projection matrices: right-handed, looking down `-z`.
+//! Metal, Vulkan, and DirectX share them; Vulkan and D3D12 compensate for their
+//! Y-down NDC with a negative-height viewport rather than by flipping the
+//! projection.
 //!
-//! Both projections and both ways of building a view matrix sit together because
+//! The projections here map near to device depth 0 and far to 1. They are the
+//! builders behind [`crate::render::depth`]'s entry points, which pick one per
+//! depth convention, so a caller never names a depth mapping directly.
+//!
+//! The projections and both ways of building a view matrix sit together because
 //! they have to agree: a shadow cascade's ortho and a probe face's perspective
 //! are sampled by the same shaders as the main camera's.
 
@@ -19,7 +21,7 @@ const MIN_HALF_FOV_TAN: f32 = 1.0e-6;
 
 /// Right-handed perspective projection with depth in `[0, 1]`. `fov_y_radians`
 /// is the full vertical field of view; `aspect` is width over height.
-pub fn perspective_rh(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
+pub(crate) fn perspective_rh(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
     let ys = 1.0 / tan(fov_y_radians * 0.5).max(MIN_HALF_FOV_TAN);
     let xs = ys / aspect;
     let zs = far / (near - far);
@@ -32,7 +34,7 @@ pub fn perspective_rh(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> M
 }
 
 /// Right-handed orthographic projection with depth in `[0, 1]`.
-pub fn ortho_rh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Mat4 {
+pub(crate) fn ortho_rh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Mat4 {
     let rml = right - left;
     let tmb = top - bottom;
     let fmn = far - near;
@@ -47,6 +49,59 @@ pub fn ortho_rh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f3
             1.0,
         ],
     ]
+}
+
+/// Oblique near-plane clipping (Lengyel) for a [`perspective_rh`] matrix.
+/// Replaces the projection's z (depth) row so the near clip plane coincides
+/// with `clip_plane` (given in the projection's view space), clipping
+/// everything on the negative side of that plane. The far plane is preserved by
+/// scaling against the frustum corner the plane faces.
+///
+/// The near plane is `z_row . p = 0`, so the new z-row is `alpha * C` for the
+/// clip plane C (any alpha keeps the near plane at C). Picking the far frustum
+/// corner q = inv(P) . (sgn(Cx), sgn(Cy), 1, 1) and requiring it to land on the
+/// far plane (ndc.z = 1, i.e. z_row.q = w_row.q = -q.z) gives
+/// alpha = -q.z / (C . q). For this projection q has the closed form below
+/// (q.z = -1), so alpha = 1 / (C . q).
+pub(crate) fn oblique_rh(proj: Mat4, clip_plane: [f32; 4]) -> Mat4 {
+    let xs = proj[0][0];
+    let ys = proj[1][1];
+    let zs = proj[2][2]; // z-row's z component
+    let zs_near = proj[3][2]; // z-row's w component (= zs * near)
+    if xs.abs() < 1e-12 || ys.abs() < 1e-12 || zs_near.abs() < 1e-12 {
+        return proj;
+    }
+
+    let sgn = |v: f32| {
+        if v > 0.0 {
+            1.0
+        } else if v < 0.0 {
+            -1.0
+        } else {
+            0.0
+        }
+    };
+    // Back-projected far frustum corner toward the clip plane.
+    let q = [
+        sgn(clip_plane[0]) / xs,
+        sgn(clip_plane[1]) / ys,
+        -1.0,
+        (1.0 + zs) / zs_near,
+    ];
+    let denom =
+        clip_plane[0] * q[0] + clip_plane[1] * q[1] + clip_plane[2] * q[2] + clip_plane[3] * q[3];
+    if denom.abs() < 1e-12 {
+        return proj;
+    }
+    let alpha = 1.0 / denom;
+
+    let mut out = proj;
+    // Replace the z (depth) row: row index 2 across all four columns.
+    out[0][2] = alpha * clip_plane[0];
+    out[1][2] = alpha * clip_plane[1];
+    out[2][2] = alpha * clip_plane[2];
+    out[3][2] = alpha * clip_plane[3];
+    out
 }
 
 /// World-to-view for an orthonormal camera basis at `eye`, looking down

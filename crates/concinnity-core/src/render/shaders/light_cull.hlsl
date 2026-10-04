@@ -20,6 +20,7 @@
 {PROBE_TYPES}
 
 {LIGHT_TYPES}
+{DEPTH_CONVENTION}
 
 #ifdef CN_BACKEND_DIRECTX
 #define LIGHTS_REGISTER t0
@@ -39,12 +40,12 @@
 [[vk::binding(3, 0)]] StructuredBuffer<ProbeUniforms> probe_records : register(PROBE_RECORDS_REGISTER);
 
 // Direction of the camera ray through a screen-NDC point. Unprojects the far
-// plane (z = 1) to world space, then normalizes from the camera: for a
+// plane to world space, then normalizes from the camera: for a
 // perspective projection every ray through a screen point passes through the
 // eye, so the far-plane unprojection gives the direction.
 float3 cluster_corner_ray(float2 ndc)
 {
-    float4 clip = float4(ndc, 1.0, 1.0);
+    float4 clip = float4(ndc, DEPTH_FAR, 1.0);
     float4 world = mul(cluster.inv_view_proj, clip);
     world /= world.w;
     return normalize(world.xyz - cluster.cam_pos_znear.xyz);

@@ -56,6 +56,8 @@
 #define USE_MSAA 0
 #endif
 
+{DEPTH_CONVENTION}
+
 // Waves summed per surface. Mirrors `MAX_WATER_WAVES` in concinnity-asset and
 // `WATER_MAX_WAVES` in `core::render`'s uniforms; the array length is part of
 // the `WaterParams` layout, so it is a constant here rather than a define.
@@ -241,7 +243,7 @@ int2 water_clamp_pixel(float2 pixel_xy)
 // against the distance to the surface itself.
 float water_scene_distance(float2 ndc_xy, float depth01)
 {
-    float4 world = mul(view.inv_vp, float4(ndc_xy, depth01, 1.0));
+    float4 world = depth_unproject(view.inv_vp, ndc_xy, depth01);
     return distance(world.xyz / world.w, view.camera_pos.xyz);
 }
 
@@ -372,7 +374,7 @@ float4 water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflection)
 // fragment position lines up with the stored texel.
 bool water_occluded(WaterVertexOut i)
 {
-    return water_scene_depth(water_clamp_pixel(i.position.xy)) < i.position.z;
+    return depth_in_front(water_scene_depth(water_clamp_pixel(i.position.xy)), i.position.z);
 }
 
 #ifdef WATER_RT

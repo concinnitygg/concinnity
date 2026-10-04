@@ -4,6 +4,7 @@
 //! samples enabled, no stencil), and creates it through the pipeline library.
 //! [`compute_pso`] is the compute counterpart.
 
+use concinnity_core::render::depth::{DepthCompare, DepthConvention};
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostBlend;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -68,14 +69,27 @@ impl Blend {
 pub(in crate::directx) enum CompareOp {
     Less,
     LessEqual,
+    Greater,
+    GreaterEqual,
     Always,
 }
 
 impl CompareOp {
+    const fn depth(compare: DepthCompare) -> Self {
+        match compare {
+            DepthCompare::Less => CompareOp::Less,
+            DepthCompare::LessEqual => CompareOp::LessEqual,
+            DepthCompare::Greater => CompareOp::Greater,
+            DepthCompare::GreaterEqual => CompareOp::GreaterEqual,
+        }
+    }
+
     fn raw(self) -> D3D12_COMPARISON_FUNC {
         match self {
             CompareOp::Less => D3D12_COMPARISON_FUNC_LESS,
             CompareOp::LessEqual => D3D12_COMPARISON_FUNC_LESS_EQUAL,
+            CompareOp::Greater => D3D12_COMPARISON_FUNC_GREATER,
+            CompareOp::GreaterEqual => D3D12_COMPARISON_FUNC_GREATER_EQUAL,
             CompareOp::Always => D3D12_COMPARISON_FUNC_ALWAYS,
         }
     }
@@ -88,13 +102,41 @@ pub(in crate::directx) enum Depth {
 }
 
 impl Depth {
-    // The opaque-geometry test: nearer fragments pass and write.
-    pub(in crate::directx) const LESS_WRITE: Depth = Depth::Test {
-        compare: CompareOp::Less,
-        write: true,
-    };
+    // The opaque-geometry test against the camera's depth: nearer fragments
+    // pass and write.
+    pub(in crate::directx) const fn camera_write() -> Depth {
+        Depth::Test {
+            compare: CompareOp::depth(DepthConvention::Camera.write_compare()),
+            write: true,
+        }
+    }
 
-    fn raw(self) -> D3D12_DEPTH_STENCIL_DESC {
+    // A camera-depth pass whose shader writes a depth no farther than the
+    // rasterized one: equal depth passes too.
+    pub(in crate::directx) const fn camera_write_inclusive() -> Depth {
+        Depth::Test {
+            compare: CompareOp::depth(DepthConvention::Camera.inclusive_compare()),
+            write: true,
+        }
+    }
+
+    // Tested against the camera's depth without writing it.
+    pub(in crate::directx) const fn camera_read_only() -> Depth {
+        Depth::Test {
+            compare: CompareOp::depth(DepthConvention::Camera.inclusive_compare()),
+            write: false,
+        }
+    }
+
+    // A shadow caster: nearer the light passes and writes.
+    pub(in crate::directx) const fn shadow_write() -> Depth {
+        Depth::Test {
+            compare: CompareOp::depth(DepthConvention::Shadow.write_compare()),
+            write: true,
+        }
+    }
+
+    pub(in crate::directx) fn raw(self) -> D3D12_DEPTH_STENCIL_DESC {
         let (enable, compare, write) = match self {
             Depth::Off => (false, CompareOp::Always, false),
             Depth::Test { compare, write } => (true, compare, write),
@@ -437,18 +479,36 @@ mod tests {
         let off = Depth::Off.raw();
         assert!(!off.DepthEnable.as_bool());
         assert_eq!(off.DepthWriteMask, D3D12_DEPTH_WRITE_MASK_ZERO);
-        let less = Depth::LESS_WRITE.raw();
+        let less = Depth::camera_write().raw();
         assert!(less.DepthEnable.as_bool());
         assert_eq!(less.DepthWriteMask, D3D12_DEPTH_WRITE_MASK_ALL);
         assert_eq!(less.DepthFunc, D3D12_COMPARISON_FUNC_LESS);
-        let read = Depth::Test {
-            compare: CompareOp::LessEqual,
-            write: false,
-        }
-        .raw();
+        let shadow = Depth::shadow_write().raw();
+        assert_eq!(shadow.DepthWriteMask, D3D12_DEPTH_WRITE_MASK_ALL);
+        assert_eq!(shadow.DepthFunc, D3D12_COMPARISON_FUNC_LESS);
+        let inclusive = Depth::camera_write_inclusive().raw();
+        assert_eq!(inclusive.DepthWriteMask, D3D12_DEPTH_WRITE_MASK_ALL);
+        assert_eq!(inclusive.DepthFunc, D3D12_COMPARISON_FUNC_LESS_EQUAL);
+        let read = Depth::camera_read_only().raw();
+        assert!(read.DepthEnable.as_bool());
         assert_eq!(read.DepthWriteMask, D3D12_DEPTH_WRITE_MASK_ZERO);
         assert_eq!(read.DepthFunc, D3D12_COMPARISON_FUNC_LESS_EQUAL);
         assert!(!read.StencilEnable.as_bool());
+    }
+
+    #[test]
+    fn every_depth_compare_maps_to_its_comparison_func() {
+        for (compare, func) in [
+            (DepthCompare::Less, D3D12_COMPARISON_FUNC_LESS),
+            (DepthCompare::LessEqual, D3D12_COMPARISON_FUNC_LESS_EQUAL),
+            (DepthCompare::Greater, D3D12_COMPARISON_FUNC_GREATER),
+            (
+                DepthCompare::GreaterEqual,
+                D3D12_COMPARISON_FUNC_GREATER_EQUAL,
+            ),
+        ] {
+            assert_eq!(CompareOp::depth(compare).raw(), func);
+        }
     }
 
     #[test]

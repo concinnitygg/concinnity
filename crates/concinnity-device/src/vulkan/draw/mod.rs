@@ -14,9 +14,9 @@ use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::jitter;
 use concinnity_core::gfx::lod;
-use concinnity_core::gfx::projection::perspective_rh;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
+use concinnity_core::render::depth::camera_projection;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use concinnity_core::render::model_history::HistoryMode;
@@ -445,7 +445,7 @@ impl VkContext {
         // immediately.
         self.upload_probe_set(frame_idx)?;
 
-        let frustum = Frustum::from_view_projection(vp_mat);
+        let frustum = Frustum::from_camera(vp_mat);
 
         // Compute-cull host-side prep: rebuild this frame's
         // `GpuObjectData` + `GpuDrawArgs` storage buffers with the
@@ -776,7 +776,7 @@ impl VkContext {
         } else {
             extent.width as f32 / extent.height as f32
         };
-        let proj = perspective_rh(fov_y_radians, aspect, near, far);
+        let proj = camera_projection(fov_y_radians, aspect, near, far);
         // When TAA is on, offset the projection by a sub-pixel Halton jitter so
         // the accumulation has fresh sample positions each frame. The jitter is
         // a pure NDC x/y shift (depth is unaffected): `proj[2][0/1]` are the

@@ -14,6 +14,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowPassPush, ShadowUniforms};
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shadow_bias;
 use objc2::rc::Retained;
@@ -26,6 +27,7 @@ use objc2_metal::{
 
 use crate::metal::context::MtlContext;
 use crate::metal::cull::ShadowViewIcb;
+use crate::metal::depth::clear_depth;
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
 
@@ -93,7 +95,7 @@ impl MtlContext {
             depth_attach.setSlice(cascade_idx);
             depth_attach.setLoadAction(MTLLoadAction::Clear);
             depth_attach.setStoreAction(MTLStoreAction::Store);
-            depth_attach.setClearDepth(1.0);
+            depth_attach.setClearDepth(clear_depth(DepthConvention::Shadow));
 
             // Per-pass GPU timing spans the first to the last cascade actually
             // rendered this frame (the set varies with the update policy):
@@ -180,7 +182,7 @@ impl MtlContext {
             "shadow view indirect",
         ));
         enc.set_pipeline(pipeline);
-        enc.set_depth_stencil(&self.targets.depth_state);
+        enc.set_depth_stencil(&self.targets.shadow_depth_state);
         enc.setDepthBias_slopeScale_clamp(
             shadow_bias::RASTER_CONSTANT,
             shadow_bias::RASTER_SLOPE,

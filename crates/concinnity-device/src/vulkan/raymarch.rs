@@ -538,10 +538,10 @@ fn cube_proxy<'a>(
     }
 }
 
-// Build a per-volume raymarch graphics pipeline: depth-tested LESS_OR_EQUAL
-// with depth write (the fragment overrides `gl_FragDepth`, so downstream passes
-// see the raymarched surface), opaque. Negative-height viewport is applied
-// dynamically at encode time.
+// Build a per-volume raymarch graphics pipeline: depth-tested inclusively
+// against the camera depth with depth write (the fragment overrides
+// `gl_FragDepth`, so downstream passes see the raymarched surface), opaque.
+// Negative-height viewport is applied dynamically at encode time.
 fn create_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,
@@ -551,10 +551,7 @@ fn create_pipeline(
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
     GraphicsPipelineDesc {
-        depth: Depth::Test {
-            compare: vk::CompareOp::LESS_OR_EQUAL,
-            write: true,
-        },
+        depth: Depth::camera_write_inclusive(),
         samples: msaa_samples,
         ..cube_proxy(vert_spv, frag_spv, layout, render_pass, &[Blend::Opaque])
     }
@@ -564,7 +561,7 @@ fn create_pipeline(
 // Build the volumetric variant of the per-volume pipeline. Same cube proxy +
 // front cull as the opaque pass, but the color output alpha-blends over the
 // existing scene (SRC_ALPHA / ONE_MINUS_SRC_ALPHA) and the depth state keeps the
-// LESS_OR_EQUAL early-z test without writing: the medium is translucent and
+// inclusive early-z test without writing: the medium is translucent and
 // never updates the depth buffer downstream passes read. Mirrors the DirectX
 // `create_raymarch_volumetric_pso`.
 fn create_volumetric_pipeline(
@@ -596,10 +593,7 @@ fn create_volumetric_pipeline(
         vk::PipelineMultisampleStateCreateInfo::default().rasterization_samples(msaa_samples);
     // Early-z against the existing scene depth, but no depth write: the medium
     // doesn't occlude itself or update SSR / decal depth.
-    let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-        .depth_test_enable(true)
-        .depth_write_enable(false)
-        .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
+    let depth_stencil = Depth::camera_read_only().raw();
     // Alpha-blend the in-scattered luminance over the rasterized scene.
     let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
         .blend_enable(true)
@@ -636,7 +630,7 @@ fn create_volumetric_pipeline(
 
 // Build a per-volume depth-only shadow-caster pipeline. Same cube proxy + front
 // cull as the main pass, but no color attachment (single-sample shadow map),
-// depth-test LESS (matching the rasterized CSM casters) with depth write, and
+// the shadow casters' depth test (matching the rasterized CSM casters) with depth write, and
 // the fragment writes hit depth via `gl_FragDepth`. Targets `shadow_render_pass`.
 fn create_shadow_pipeline(
     device: &VkDevice,
@@ -646,7 +640,7 @@ fn create_shadow_pipeline(
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
     GraphicsPipelineDesc {
-        depth: Depth::LESS_WRITE,
+        depth: Depth::shadow_write(),
         ..cube_proxy(vert_spv, frag_spv, layout, shadow_render_pass, &[])
     }
     .build(device, "raymarch shadow")

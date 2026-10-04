@@ -323,7 +323,7 @@ impl MtlContext {
 
         let vp = reflection_probe::face_view_projection(eye, face);
         let view = reflection_probe::face_view_matrix(eye, face);
-        let frustum = Frustum::from_view_projection(vp);
+        let frustum = Frustum::from_camera(vp);
 
         let RenderingBake { done, gpu, .. } = bake;
 

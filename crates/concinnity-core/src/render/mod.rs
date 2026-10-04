@@ -29,6 +29,7 @@ pub mod chunk_window;
 pub mod csm;
 pub mod cursor;
 pub mod decal;
+pub mod depth;
 pub mod draw_slot;
 pub mod error;
 pub mod feedback;

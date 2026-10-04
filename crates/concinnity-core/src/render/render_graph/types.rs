@@ -5,6 +5,7 @@
 //! backend-owned).
 
 use crate::math::floor;
+use crate::render::depth::DepthConvention;
 use core::num::NonZeroU32;
 
 // The set operations every flag newtype in this module shares. `$noun` names
@@ -395,6 +396,13 @@ pub enum ClearValue {
     Depth(f32),
 }
 
+impl ClearValue {
+    /// The clear of a depth target drawn under `convention`.
+    pub const fn depth(convention: DepthConvention) -> Self {
+        Self::Depth(convention.clear())
+    }
+}
+
 // Buffer-shape description. Size is optional because some
 // imported buffers grow dynamically per-frame (the GPU object data
 // buffer, the per-emitter spawn ring, ...): the graph then just
@@ -512,10 +520,11 @@ impl TextureDesc {
             array_layers: 1,
             mip_levels: 1,
             usage,
-            // Zero / far, which is what every target the graph models clears to
-            // unless it says otherwise via `with_clear_color`.
+            // Zero / the camera's far plane, which is what every target the
+            // graph models clears to unless it says otherwise via
+            // `with_clear_color` or `with_depth_convention`.
             clear: if format.is_depth() {
-                ClearValue::Depth(1.0)
+                ClearValue::depth(DepthConvention::Camera)
             } else {
                 ClearValue::Color([0.0; 4])
             },
@@ -563,6 +572,15 @@ impl TextureDesc {
     pub(crate) const fn with_clear_color(self, color: [f32; 4]) -> Self {
         Self {
             clear: ClearValue::Color(color),
+            ..self
+        }
+    }
+
+    /// Clear a depth target to the far plane of `convention` rather than the
+    /// camera's.
+    pub(crate) const fn with_depth_convention(self, convention: DepthConvention) -> Self {
+        Self {
+            clear: ClearValue::depth(convention),
             ..self
         }
     }
@@ -682,6 +700,33 @@ mod tests {
         assert!(PixelFormat::Depth32Float.is_depth());
         assert!(!PixelFormat::Rgba8Unorm.is_depth());
         assert!(!PixelFormat::R8Unorm.is_depth());
+    }
+
+    // A depth target clears to its convention's far plane; color stays zero.
+    #[test]
+    fn depth_targets_clear_to_their_convention() {
+        let size = TextureSize::Absolute(4);
+        let depth = TextureDesc::texture_2d(
+            size,
+            size,
+            PixelFormat::Depth32Float,
+            TextureUsage::DEPTH_STENCIL,
+        );
+        assert_eq!(
+            depth.clear,
+            ClearValue::Depth(DepthConvention::Camera.clear())
+        );
+        assert_eq!(
+            depth.with_depth_convention(DepthConvention::Shadow).clear,
+            ClearValue::Depth(DepthConvention::Shadow.clear())
+        );
+        let color = TextureDesc::texture_2d(
+            size,
+            size,
+            PixelFormat::Rgba16Float,
+            TextureUsage::RENDER_TARGET,
+        );
+        assert_eq!(color.clear, ClearValue::Color([0.0; 4]));
     }
 
     #[test]

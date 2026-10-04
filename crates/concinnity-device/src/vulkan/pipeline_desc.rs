@@ -6,9 +6,11 @@
 //! counterpart.
 
 use ash::vk;
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostBlend;
 
+use crate::vulkan::depth::compare_op;
 use crate::vulkan::error::map_vk_result;
 use crate::vulkan::owned::{OwnedPipeline, VkDevice};
 use crate::vulkan::pipeline::{SHADER_ENTRY, spv_module};
@@ -68,13 +70,41 @@ pub(in crate::vulkan) enum Depth {
 }
 
 impl Depth {
-    // The opaque-geometry test: nearer fragments pass and write.
-    pub(in crate::vulkan) const LESS_WRITE: Depth = Depth::Test {
-        compare: vk::CompareOp::LESS,
-        write: true,
-    };
+    // The opaque-geometry test against the camera's depth: nearer fragments
+    // pass and write.
+    pub(in crate::vulkan) const fn camera_write() -> Depth {
+        Depth::Test {
+            compare: compare_op(DepthConvention::Camera.write_compare()),
+            write: true,
+        }
+    }
 
-    fn raw(self) -> vk::PipelineDepthStencilStateCreateInfo<'static> {
+    // A camera-depth pass whose shader writes a depth no farther than the
+    // rasterized one: equal depth passes too.
+    pub(in crate::vulkan) const fn camera_write_inclusive() -> Depth {
+        Depth::Test {
+            compare: compare_op(DepthConvention::Camera.inclusive_compare()),
+            write: true,
+        }
+    }
+
+    // Tested against the camera's depth without writing it.
+    pub(in crate::vulkan) const fn camera_read_only() -> Depth {
+        Depth::Test {
+            compare: compare_op(DepthConvention::Camera.inclusive_compare()),
+            write: false,
+        }
+    }
+
+    // A shadow caster: nearer the light passes and writes.
+    pub(in crate::vulkan) const fn shadow_write() -> Depth {
+        Depth::Test {
+            compare: compare_op(DepthConvention::Shadow.write_compare()),
+            write: true,
+        }
+    }
+
+    pub(in crate::vulkan) fn raw(self) -> vk::PipelineDepthStencilStateCreateInfo<'static> {
         let (test, compare, write) = match self {
             Depth::Off => (false, vk::CompareOp::ALWAYS, false),
             Depth::Test { compare, write } => (true, compare, write),
@@ -315,12 +345,24 @@ mod tests {
             (off.depth_test_enable, off.depth_write_enable),
             (vk::FALSE, vk::FALSE)
         );
-        let less = Depth::LESS_WRITE.raw();
+        let less = Depth::camera_write().raw();
         assert_eq!(
             (less.depth_test_enable, less.depth_write_enable),
             (vk::TRUE, vk::TRUE)
         );
         assert_eq!(less.depth_compare_op, vk::CompareOp::LESS);
+        let shadow = Depth::shadow_write().raw();
+        assert_eq!(shadow.depth_write_enable, vk::TRUE);
+        assert_eq!(shadow.depth_compare_op, vk::CompareOp::LESS);
+        let inclusive = Depth::camera_write_inclusive().raw();
+        assert_eq!(inclusive.depth_write_enable, vk::TRUE);
+        assert_eq!(inclusive.depth_compare_op, vk::CompareOp::LESS_OR_EQUAL);
+        let read_only = Depth::camera_read_only().raw();
+        assert_eq!(
+            (read_only.depth_test_enable, read_only.depth_write_enable),
+            (vk::TRUE, vk::FALSE)
+        );
+        assert_eq!(read_only.depth_compare_op, vk::CompareOp::LESS_OR_EQUAL);
         let read = Depth::Test {
             compare: vk::CompareOp::GREATER_OR_EQUAL,
             write: false,
