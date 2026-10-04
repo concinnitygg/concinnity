@@ -44,9 +44,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     Ok(CullState {
         bindless: bindless.active,
         main_pipeline: bindless.main_pipeline,
-        world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines::new(
-            bindless.world_pipelines,
-        ),
+        world_pipelines: bindless.world_pipelines,
         pipeline: compute.pipeline,
         encode_pipeline: compute.encode_pipeline,
         bucket_count: bindless.bucket_count,

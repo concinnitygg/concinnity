@@ -614,7 +614,7 @@ impl VkContext {
 impl ProbeBakeDevice for VkContext {
     type Capture = RenderingBake;
     type Prefilter = PrefilteringBake;
-    type Frame = ();
+    type Frame<'f> = ();
 
     fn book(&mut self) -> &mut ProbeBook {
         &mut self.probe.book

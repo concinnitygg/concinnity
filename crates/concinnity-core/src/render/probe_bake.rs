@@ -39,8 +39,9 @@ pub trait ProbeBakeDevice {
     type Capture;
     /// The resources of a convolution in flight.
     type Prefilter;
-    /// What the frame hands a capture that starts or renders a face in it.
-    type Frame;
+    /// What the frame hands a capture that starts or renders a face in it,
+    /// borrowed for the frame's advance.
+    type Frame<'f>;
 
     /// The probe bookkeeping the bake advances.
     fn book(&mut self) -> &mut ProbeBook;
@@ -59,7 +60,7 @@ pub trait ProbeBakeDevice {
     /// Build the capture of the probe at `index`, submitting no face yet.
     fn start_capture(
         &mut self,
-        frame: &Self::Frame,
+        frame: &Self::Frame<'_>,
         index: usize,
         placement: ProbePlacement,
     ) -> RenderResult<Self::Capture>;
@@ -67,7 +68,7 @@ pub trait ProbeBakeDevice {
     /// Record and submit cube face `face` of `capture`.
     fn render_face(
         &mut self,
-        frame: &Self::Frame,
+        frame: &Self::Frame<'_>,
         capture: &mut Self::Capture,
         face: usize,
     ) -> RenderResult<()>;
@@ -181,7 +182,7 @@ impl<C, P> ProbeBake<C, P> {
 
     /// Advance both slots one frame: the convolution first, so a cube that
     /// installs frees its slot for the capture that follows it.
-    pub fn advance<D>(&mut self, device: &mut D, frame: &D::Frame) -> BakeReport
+    pub fn advance<D>(&mut self, device: &mut D, frame: &D::Frame<'_>) -> BakeReport
     where
         D: ProbeBakeDevice<Capture = C, Prefilter = P>,
     {
@@ -224,7 +225,7 @@ impl<C, P> ProbeBake<C, P> {
     /// Advance the capture slot one frame: render the next face, hand a
     /// retired capture to a free convolution slot, or start the next queued
     /// probe.
-    pub fn advance_capture<D>(&mut self, device: &mut D, frame: &D::Frame) -> BakeReport
+    pub fn advance_capture<D>(&mut self, device: &mut D, frame: &D::Frame<'_>) -> BakeReport
     where
         D: ProbeBakeDevice<Capture = C, Prefilter = P>,
     {
@@ -324,7 +325,7 @@ impl<C, P> ProbeBake<C, P> {
         }
     }
 
-    fn render_next_face<D>(&mut self, device: &mut D, frame: &D::Frame) -> BakeReport
+    fn render_next_face<D>(&mut self, device: &mut D, frame: &D::Frame<'_>) -> BakeReport
     where
         D: ProbeBakeDevice<Capture = C, Prefilter = P>,
     {
@@ -362,7 +363,7 @@ impl<C, P> ProbeBake<C, P> {
         }
     }
 
-    fn start_next<D>(&mut self, device: &mut D, frame: &D::Frame) -> BakeReport
+    fn start_next<D>(&mut self, device: &mut D, frame: &D::Frame<'_>) -> BakeReport
     where
         D: ProbeBakeDevice<Capture = C, Prefilter = P>,
     {

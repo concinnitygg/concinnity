@@ -10,6 +10,7 @@ use concinnity_core::components::ShaderPrograms;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::world_pipelines::WorldPipelines;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -202,11 +203,6 @@ pub(crate) fn build_bindless_sampler_args(
     Ok(buf)
 }
 
-// The main-pass pipelines of the material-referenced world shaders, indexed by
-// `shader_bucket - 1`. `None` marks a bucket whose Shader is not resident.
-pub(crate) type WorldPipelineTable =
-    Vec<Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>>;
-
 // Pipelines for the material-referenced world shaders past the default
 // (ShaderHandle 1..), in bucket order. Extra world shaders render only through
 // the GPU-driven bindless path (the cull kernel routes their draws into
@@ -215,13 +211,13 @@ pub(crate) type WorldPipelineTable =
 // A bucket flagged `deferred` (its Shader is owned by a scene that has not
 // pinned) stays `None` until
 // [`super::super::MtlContext::install_world_shader`] builds it.
-pub(crate) fn build_world_pipeline_table(
+pub(crate) fn build_world_pipelines(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
     extra_shaders: &[backend_init::WorldShader<'_>],
     hot_reload: bool,
     sample_count: u32,
-) -> RenderResult<WorldPipelineTable> {
+) -> RenderResult<WorldPipelines<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>> {
     let mut table = Vec::with_capacity(extra_shaders.len());
     for (i, shader) in extra_shaders.iter().enumerate() {
         // A bucket whose Shader a non-start scene owns has no payload yet; the
@@ -239,7 +235,7 @@ pub(crate) fn build_world_pipeline_table(
             sample_count,
         )?));
     }
-    Ok(table)
+    Ok(WorldPipelines::new(table))
 }
 
 // One material-referenced shader bucket's bindless main-pass pipeline.

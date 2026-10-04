@@ -706,7 +706,7 @@ impl MtlContext {
             // streaming has since replaced.
             self.advance_probe_capture(&crate::metal::probe::ProbeFrame {
                 elapsed,
-                tex_args: bindless_tex_args.clone(),
+                tex_args: bindless_tex_args.as_ref(),
             });
             // Keep the RT acceleration structure current with this frame's
             // transforms before any pass reads `rt_accel`. The default `Auto` mode

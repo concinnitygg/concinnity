@@ -117,9 +117,9 @@ pub(in crate::metal) type MtlProbeBake = ProbeBake<RenderingBake, PrefilteringBa
 // What the frame hands the bake: the time a capture starting this frame
 // animates its faces with, and the frame's bindless texture arguments every face
 // samples through.
-pub(crate) struct ProbeFrame {
+pub(crate) struct ProbeFrame<'f> {
     pub(in crate::metal) elapsed: f32,
-    pub(in crate::metal) tex_args: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    pub(in crate::metal) tex_args: Option<&'f Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
 }
 
 // Probe resources parked behind the frames-in-flight fence: a bake's when a
@@ -205,7 +205,7 @@ impl MtlContext {
     // placement. Called once the frame has built its bindless texture arguments,
     // which every face samples through: they name the textures live this frame,
     // and the fence keeps their ring slot intact until the face retires.
-    pub(in crate::metal) fn advance_probe_capture(&mut self, frame: &ProbeFrame) {
+    pub(in crate::metal) fn advance_probe_capture(&mut self, frame: &ProbeFrame<'_>) {
         let report = self.with_probe_bake(|bake, ctx| bake.advance_capture(ctx, frame));
         crate::probe_report::report_probe_bake(report);
     }
@@ -226,7 +226,7 @@ impl MtlContext {
     // full-scene captures.
     fn start_probe_capture(
         &mut self,
-        frame: &ProbeFrame,
+        frame: &ProbeFrame<'_>,
         placement: ProbePlacement,
     ) -> RenderResult<RenderingBake> {
         let ProbeFrame { elapsed, .. } = *frame;
@@ -429,7 +429,7 @@ impl MtlContext {
 impl ProbeBakeDevice for MtlContext {
     type Capture = RenderingBake;
     type Prefilter = PrefilteringBake;
-    type Frame = ProbeFrame;
+    type Frame<'f> = ProbeFrame<'f>;
 
     fn book(&mut self) -> &mut ProbeBook {
         &mut self.probe.book
@@ -454,7 +454,7 @@ impl ProbeBakeDevice for MtlContext {
 
     fn start_capture(
         &mut self,
-        frame: &ProbeFrame,
+        frame: &ProbeFrame<'_>,
         _index: usize,
         placement: ProbePlacement,
     ) -> RenderResult<RenderingBake> {
@@ -463,13 +463,12 @@ impl ProbeBakeDevice for MtlContext {
 
     fn render_face(
         &mut self,
-        frame: &ProbeFrame,
+        frame: &ProbeFrame<'_>,
         capture: &mut RenderingBake,
         face: usize,
     ) -> RenderResult<()> {
         let tex_args = frame
             .tex_args
-            .as_ref()
             .ok_or_else(|| RenderError::Other("probe: no bindless texture args".into()))?;
         self.record_probe_face(capture, face, tex_args)
     }

@@ -3,18 +3,20 @@
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::world_pipelines::WorldPipelines;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLRenderPipelineState;
 
 use super::CullInputs;
 use crate::metal::init::InitGpu;
-use crate::metal::init::pipelines::{self, WorldPipelineTable};
+use crate::metal::init::pipelines;
 
 pub(super) struct BindlessPass {
     pub(super) active: bool,
     pub(super) main_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub(super) world_pipelines: WorldPipelineTable,
+    pub(super) world_pipelines:
+        WorldPipelines<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub(super) bucket_count: usize,
 }
 
@@ -60,7 +62,7 @@ pub(super) fn build_bindless_pass(
                     .into(),
             ));
         }
-        pipelines::build_world_pipeline_table(
+        pipelines::build_world_pipelines(
             device,
             inputs.vert_desc,
             &world_shaders[1..],
@@ -68,9 +70,9 @@ pub(super) fn build_bindless_pass(
             hdr_samples,
         )?
     } else {
-        Vec::new()
+        WorldPipelines::default()
     };
-    let bucket_count = 1 + world_pipelines.len();
+    let bucket_count = world_pipelines.bucket_count();
 
     Ok(BindlessPass {
         active,

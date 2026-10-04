@@ -69,7 +69,7 @@ impl Mock {
 impl ProbeBakeDevice for Mock {
     type Capture = usize;
     type Prefilter = usize;
-    type Frame = ();
+    type Frame<'f> = ();
 
     fn book(&mut self) -> &mut ProbeBook {
         &mut self.book
