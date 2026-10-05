@@ -80,10 +80,10 @@ pub fn compile_world_shader(
     })
 }
 
-// A hook the file never defined is a call to an undefined function; every
-// other failure (a syntax error, no compiler) carries its own remedy.
+// A call to a hook no file defined gets the hooks' signatures; every other
+// failure (a syntax error, no compiler) carries its own remedy.
 fn hook_hint(diagnostic: &str) -> &'static str {
-    if diagnostic.contains("found undefined function") {
+    if program::calls_undefined(diagnostic, &["shade", "transform"]) {
         "\nA Shader's `fragment` file must define `float4 shade(VertexOut v, \
              GpuObjectData od)` and its `vertex` file, when declared, `VertexOut \
              transform(float4x4 model, float3 pos, float3 normal, float3 tangent, \
@@ -322,20 +322,48 @@ mod tests {
     }
 
     // A fragment file without `shade` fails naming the Shader and the hook,
-    // at build time rather than at a renderer's init.
+    // at build time rather than at a renderer's init, for every target.
     #[test]
     fn a_fragment_without_the_hook_fails_naming_it() {
         concinnity_shader::require_dxc!();
-        let err = compile_world_shader(
-            "empty",
-            &fragment_only("// nothing here\n"),
-            Platform::Vulkan,
-        )
-        .unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.starts_with("Shader 'empty': compiling"), "got: {msg}");
-        assert!(msg.contains("shade"), "names the hook: {msg}");
-        assert!(msg.contains("must define"), "carries the hook hint: {msg}");
+        for platform in Platform::ALL {
+            let err = compile_world_shader("empty", &fragment_only("// nothing here\n"), platform)
+                .unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.starts_with("Shader 'empty': compiling"),
+                "{platform:?}: {msg}"
+            );
+            assert!(
+                msg.contains("must define `float4 shade("),
+                "{platform:?} carries the hook hint: {msg}"
+            );
+        }
+    }
+
+    // The SPIR-V leg (Vulkan, Metal) and DXIL word a call to an undefined
+    // function differently; the hint follows the hook through either.
+    #[test]
+    fn the_hook_hint_answers_every_targets_wording() {
+        let spirv = "main_bindless.hlsl:340:12: error: found undefined function\n    \
+                     return shade(v, od);\n           ^\n";
+        let dxil = "error: External function used in non-library profile: \
+                    \\01?transform@@YA?AUVertexOut@@V?$matrix@M$03$03@@V?$vector@M$02@@@Z\n";
+        for output in [spirv, dxil] {
+            assert!(hook_hint(output).contains("must define"), "{output}");
+        }
+    }
+
+    // An undefined helper of the author's own is located by its diagnostic
+    // and is not a missing hook.
+    #[test]
+    fn the_hook_hint_ignores_other_failures() {
+        let helper = "shaders/magenta.hlsl:2:12: error: found undefined function\n    \
+                      return tint(v);\n           ^\n";
+        let syntax = "shaders/magenta.hlsl:2:16: error: expected ';' at end of declaration\n";
+        for output in [helper, syntax] {
+            assert_eq!(hook_hint(output), "", "{output}");
+        }
     }
 
     // A hook with the wrong signature is not an overload of the engine's

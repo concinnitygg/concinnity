@@ -64,6 +64,14 @@ pub(crate) fn require_compiler(owner: &str, have_compiler: bool) -> std::io::Res
     ))
 }
 
+/// Whether `output` reports a call to any of `hooks` that no file defined,
+/// however the backend's compiler words it.
+pub(crate) fn calls_undefined(output: &str, hooks: &[&str]) -> bool {
+    diagnostics::undefined_functions(output)
+        .iter()
+        .any(|name| hooks.contains(&name.as_str()))
+}
+
 /// What [`compile_all`] produced: the programs in job order, and every
 /// warning the compiler printed on the way, each once.
 #[derive(Debug)]

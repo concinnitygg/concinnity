@@ -84,10 +84,10 @@ pub fn compile_sdf_field(
     })
 }
 
-// A function the field never defined is a call to an undefined function; every
-// other failure (a syntax error, no compiler) carries its own remedy.
+// A call to a function the field never defined gets the field's signatures;
+// every other failure (a syntax error, no compiler) carries its own remedy.
 fn field_hint(diagnostic: &str) -> &'static str {
-    if diagnostic.contains("found undefined function") {
+    if program::calls_undefined(diagnostic, &["map", "shade", "sampleVolume"]) {
         "\nAn SdfVolume's field must define `float map(float3 p, SdfParams params, \
              float time)` and `SdfSurface shade(float3 p, float3 normal, SdfParams \
              params, float time, float2 frag_uv)`, or `VolumeSample sampleVolume(float3 \

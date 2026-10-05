@@ -191,18 +191,43 @@ fn a_template_error_notes_the_authors_line() {
 }
 
 // A surface field that never defines `shade` is a call to an undefined
-// function, and the message says what the field must define.
+// function, and the message says what the field must define, for every target.
 #[test]
 fn a_missing_function_fails_naming_what_the_field_must_define() {
     concinnity_shader::require_dxc!();
-    let err = compile_sdf_field("blob", field(MAP), Platform::Vulkan, false, false).unwrap_err();
-    let message = err.to_string();
-    assert!(
-        message.starts_with("SdfVolume 'blob': compiling"),
-        "{message}"
-    );
-    assert!(message.contains("found undefined function"), "{message}");
-    assert!(message.contains("must define"), "{message}");
+    for platform in Platform::ALL {
+        let err = compile_sdf_field("blob", field(MAP), platform, false, false).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.starts_with("SdfVolume 'blob': compiling"),
+            "{platform:?}: {message}"
+        );
+        assert!(
+            message.contains("must define `float map("),
+            "{platform:?}: {message}"
+        );
+    }
+}
+
+// The SPIR-V leg (Vulkan, Metal) and DXIL word a call to an undefined function
+// differently; the hint follows the field's functions through either.
+#[test]
+fn the_field_hint_answers_every_targets_wording() {
+    let spirv = "raymarch_common.hlsl:110:19: error: found undefined function\n        \
+                 float d = map(p, VOL.params, time);\n                  ^\n";
+    let dxil = "error: External function used in non-library profile: \
+                \\01?sampleVolume@@YA?AUVolumeSample@@V?$vector@M$02@@USdfParams@@M@Z\n";
+    for output in [spirv, dxil] {
+        assert!(field_hint(output).contains("must define"), "{output}");
+    }
+}
+
+// An undefined helper of the author's own is not one of the field's functions.
+#[test]
+fn the_field_hint_ignores_other_undefined_calls() {
+    let helper = "error: External function used in non-library profile: \
+                  \\01?noise@@YAMV?$vector@M$02@@@Z\n";
+    assert_eq!(field_hint(helper), "");
 }
 
 // A warning fails nothing and comes back located in the author's field, once.

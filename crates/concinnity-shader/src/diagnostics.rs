@@ -7,6 +7,10 @@
 
 use std::fmt;
 
+mod undefined;
+
+pub use undefined::undefined_functions;
+
 /// How serious a diagnostic is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Severity {
