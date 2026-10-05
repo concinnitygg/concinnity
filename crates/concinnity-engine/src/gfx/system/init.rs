@@ -1418,7 +1418,6 @@ impl GraphicsSystem {
         let draw_list::MeshGeometry {
             meshes: mesh_geometry,
             sources: mesh_sources,
-            always_resident: always_resident_meshes,
             component_handles: component_mesh_handles,
             deferred_seeds: deferred_mesh_seeds,
         } = draw_list::load_mesh_geometry(ctx, &deferred_mesh_sources, blob_disk_backed)?;
@@ -1483,6 +1482,16 @@ impl GraphicsSystem {
         // text/sprite atlas pool.
         let (env_map_bytes, environment_map_source) =
             self.decode_environment_map(ctx, capture_sources)?;
+        let env_map_background = match ctx.resource::<EnvironmentMapTable>().map(|t| t.record(0)) {
+            None => true,
+            Some(Ok(record)) => record.background,
+            Some(Err(e)) => {
+                tracing::error!(
+                    "GraphicsSystem: EnvironmentMap handle 0 runtime record failed to decode: {e}"
+                );
+                return None;
+            }
+        };
         let (color_lut_bytes, color_lut_source) = self.decode_color_lut(ctx, capture_sources)?;
         let TextAtlases {
             atlases: text_atlas_data,
@@ -1519,7 +1528,6 @@ impl GraphicsSystem {
                 room_geometry: &room_geometry,
                 texture_count,
                 material_map: &material_map,
-                always_resident_meshes: &always_resident_meshes,
             },
         )?;
 
@@ -1622,6 +1630,7 @@ impl GraphicsSystem {
                 textures: &texture_data,
                 text_atlases: text_atlas_data,
                 env_map_bytes: env_map_bytes.as_deref(),
+                env_map_background,
                 color_lut_bytes: color_lut_bytes.as_deref(),
             },
             light_uniforms,

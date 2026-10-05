@@ -485,7 +485,7 @@ mod tests {
         let world = concat!(
             r#"["GraphicsConfig",{"$id":"gfx"}]"#,
             "\n",
-            r#"["EngineDefaults",{"$id":"defaults","sky":false}]"#,
+            r#"["EngineDefaults",{"$id":"defaults","loading_overlay":false}]"#,
             "\n",
         );
         let result = build_pipeline_from_str(world, None, Platform::Metal).expect("build pipeline");
@@ -497,7 +497,7 @@ mod tests {
             .expect("the directive compiled into the blob");
         let baked: concinnity_core::components::EngineDefaults =
             postcard::from_bytes(&result.defs[index].args_bytes).unwrap();
-        assert!(!baked.sky);
+        assert!(!baked.loading_overlay);
         assert!(baked.debug_hud, "the flags it does not name stay on");
     }
 

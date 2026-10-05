@@ -2251,7 +2251,7 @@ mod tests {
             draw_args_flags(true, true, true),
             DrawArgsFlags::ENABLED | DrawArgsFlags::CULLABLE
         );
-        // Non-cullable (e.g. skybox): enabled but never frustum-tested.
+        // Non-cullable (e.g. a room): enabled but never frustum-tested.
         assert_eq!(draw_args_flags(true, true, false), DrawArgsFlags::ENABLED);
         // Hidden or not-yet-streamed objects clear ENABLED so the kernel
         // resets their indirect command.

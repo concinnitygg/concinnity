@@ -533,7 +533,7 @@ mod tests {
     fn a_declared_directive_is_amended_rather_than_duplicated() {
         let mut world = World::new();
         world.add_component(EngineDefaults {
-            sky: false,
+            loading_overlay: false,
             ..Default::default()
         });
         editor_hud(&mut world);
@@ -541,7 +541,7 @@ mod tests {
         assert_eq!(world.query::<EngineDefaults>().count(), 1);
         let defaults = world.query::<EngineDefaults>().next().unwrap();
         assert!(!defaults.debug_hud);
-        assert!(!defaults.sky, "the world's own opt-out stands");
+        assert!(!defaults.loading_overlay, "the world's own opt-out stands");
     }
 
     // The templates-spec-driven constructors materialize the same components the

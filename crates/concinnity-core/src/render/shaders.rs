@@ -52,6 +52,8 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("rt_types.hlsl", RT_TYPES),
     ("shadow.hlsl", SHADOW),
     ("shadow_bias.hlsl", SHADOW_BIAS),
+    ("sky.hlsl", SKY),
+    ("sky_ray.hlsl", SKY_RAY),
     ("ssao.hlsl", SSAO),
     ("ssgi.hlsl", SSGI),
     ("ssr.hlsl", SSR),
@@ -64,6 +66,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("transparent_rt.hlsl", TRANSPARENT_RT),
     ("transparent_scene.hlsl", TRANSPARENT_SCENE),
     ("transparent_types.hlsl", TRANSPARENT_TYPES),
+    ("view_uniforms.hlsl", VIEW_UNIFORMS),
     ("water.hlsl", WATER),
 ];
 
@@ -152,6 +155,10 @@ pub const RT_TYPES: &str = include_str!("shaders/rt_types.hlsl");
 pub const SHADOW: &str = include_str!("shaders/shadow.hlsl");
 /// `shadow_bias.hlsl`.
 pub const SHADOW_BIAS: &str = include_str!("shaders/shadow_bias.hlsl");
+/// `sky.hlsl`.
+pub const SKY: &str = include_str!("shaders/sky.hlsl");
+/// `sky_ray.hlsl`.
+pub const SKY_RAY: &str = include_str!("shaders/sky_ray.hlsl");
 /// `ssao.hlsl`.
 pub const SSAO: &str = include_str!("shaders/ssao.hlsl");
 /// `ssgi.hlsl`.
@@ -176,41 +183,7 @@ pub const TRANSPARENT_RT: &str = include_str!("shaders/transparent_rt.hlsl");
 pub const TRANSPARENT_SCENE: &str = include_str!("shaders/transparent_scene.hlsl");
 /// `transparent_types.hlsl`.
 pub const TRANSPARENT_TYPES: &str = include_str!("shaders/transparent_types.hlsl");
+/// `view_uniforms.hlsl`.
+pub const VIEW_UNIFORMS: &str = include_str!("shaders/view_uniforms.hlsl");
 /// `water.hlsl`.
 pub const WATER: &str = include_str!("shaders/water.hlsl");
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // The sky shell's half-extent tracks the camera far plane, so its corners
-    // always fall outside it: every vertex path must pin sky verts to the far
-    // plane or those corners clip and the clear color shows through. One
-    // `project_vertex` serves every main-pass entry, so one check covers them.
-    #[test]
-    fn the_vertex_path_pins_sky_to_the_far_plane() {
-        assert!(MAIN_SHADING.contains("color.b > 1.5"));
-        assert!(MAIN_SHADING.contains("o.position.z = depth_pin_far(o.position.w)"));
-    }
-
-    // The pre-pass rasterizes the same visible set the main pass does, sky
-    // shell included, so an unpinned sky vert clips and the G-buffer loses
-    // coverage the main pass has. The pin also zeroes the sky's depth, so the
-    // screen-space passes see no surface there rather than the shell's inward
-    // faces. The bindless vertex entry is the only one that carries skybox
-    // geometry, so the two matches are the pin's definition and its one call.
-    #[test]
-    fn the_prepass_pins_sky_to_the_far_plane() {
-        assert!(GBUFFER_PREPASS.contains("color.b > 1.5"));
-        assert!(GBUFFER_PREPASS.contains("o.position.z = depth_pin_far(o.position.w)"));
-        assert!(GBUFFER_PREPASS.contains("o.view_depth = 0.0"));
-        assert_eq!(GBUFFER_PREPASS.matches("gb_sky_pin(").count(), 2);
-    }
-
-    // The sky shell has no finite bounds, so the shadow cull draws it into
-    // every view; a shell that reaches a cascade would shadow the whole scene.
-    #[test]
-    fn the_shadow_pass_drops_the_sky() {
-        assert!(SHADOW.contains("color.b > 1.5"));
-    }
-}

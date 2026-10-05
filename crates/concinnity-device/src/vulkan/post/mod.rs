@@ -18,6 +18,7 @@
 
 pub(in crate::vulkan) mod bloom;
 pub(in crate::vulkan) mod gbuffer;
+mod gbuffer_sky;
 pub(in crate::vulkan) mod reflection_composite;
 pub(in crate::vulkan) mod rt_reflections;
 pub(in crate::vulkan) mod ssao;

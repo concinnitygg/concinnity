@@ -67,6 +67,7 @@ mod tests {
         let mut world = World::new();
         let entry = |roughness| ResourceEntry {
             payload: None,
+            baked: Vec::new(),
             data_bytes: postcard::to_allocvec(&Material {
                 roughness,
                 ..Default::default()

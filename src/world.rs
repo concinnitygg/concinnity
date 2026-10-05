@@ -226,7 +226,9 @@ impl World {
 
     /// Add a baked image-based-lighting payload, from
     /// [`bake::environment_map`](crate::bake::environment_map). The renderer
-    /// lights with the map at handle 0.
+    /// lights with the map at handle 0 and, unless the map set
+    /// [`background`](crate::components::EnvironmentMap::background) to
+    /// `false`, draws it behind all geometry.
     ///
     /// Only an environment-map payload fits; a mesh's does not:
     ///
@@ -240,7 +242,8 @@ impl World {
     /// # }
     /// ```
     pub fn add_environment_map(&mut self, payload: EnvironmentMapPayload) -> EnvironmentMapHandle {
-        self.inner.add_environment_map(payload.into_bytes())
+        let (bytes, record) = payload.into_parts();
+        self.inner.add_environment_map(bytes, record)
     }
 
     /// Add a baked glyph atlas, from [`bake::font`](crate::bake::font),

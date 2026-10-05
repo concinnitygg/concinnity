@@ -3,15 +3,16 @@
 //! DISTINCT from `env_map`: the specular reflection term box-projects against the
 //! probe's influence box and samples its cube, so glossy surfaces and windows
 //! reflect the actual surrounding geometry instead of the imported (often foreign)
-//! HDR sky, while the skybox + diffuse irradiance keep sampling `env_map` so the
-//! visible sky is never replaced by a capture.
+//! HDR sky, while the background + diffuse irradiance keep sampling `env_map` so
+//! the visible sky is never replaced by a capture.
 //!
 //! Each cube mirrors the main pass exactly -- it reuses the GPU-driven bindless
 //! cull + the three main-pass geometry sub-paths (`encode_main_into_face`) so the
-//! folded static + instanced + skinned geometry, and the skybox (a non-cullable
-//! draw object), all render into each face. The six faces are rendered through
-//! the cube view-projections in `gfx::reflection_probe` (orientation unit-tested
-//! there) into the six slices of a capture cube, then convolved into the probe's
+//! folded static + instanced + skinned geometry render into each face, with the
+//! environment drawn behind them as the main pass draws it. The six faces are
+//! rendered through the cube view-projections in `gfx::reflection_probe`
+//! (orientation unit-tested there) into the six slices of a capture cube, then
+//! convolved into the probe's
 //! prefiltered radiance cube by the compute kernels in `probe_prefilter.hlsl`.
 //! Nothing is read back: the whole bake stays on the GPU timeline. The build-time
 //! CPU convolution in `bake::environment_map` still serves imported HDR environment

@@ -1292,7 +1292,7 @@ pub(super) fn aliasing_barrier(after: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER
 // IBL textures produced by a single `EnvironmentMap` asset. Mirrors the Metal
 // `EnvironmentMapTextures` shape so the fragment-shader code stays portable.
 // `prefilter_mip_count == 0` means no EnvironmentMap is declared; the fragment
-// shader then draws the gradient sky and the flat albedo ambient term instead of IBL.
+// shader then uses the flat albedo ambient term instead of IBL.
 // The `irradiance` / `prefilter` fields hold the COM resources alive while
 // their SRVs are referenced via the shader-visible descriptor heap; the SRV
 // GPU handles are read by `draw.rs`, not the GpuResource itself.

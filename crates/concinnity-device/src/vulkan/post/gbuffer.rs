@@ -25,7 +25,7 @@ use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
 use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::{GBufferView, ModelHistoryParams};
-use concinnity_core::transform::IDENTITY;
+use concinnity_core::render::view_history::ViewHistory;
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::VkContext;
@@ -34,6 +34,7 @@ use super::super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc, compute_pi
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::set_writes::SetWrites;
 use super::super::texture::*;
+use super::gbuffer_sky::GbufferSky;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::depth;
 use crate::vulkan::owned::{
@@ -155,15 +156,15 @@ fn create_prepass_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass
 // The pre-pass's three MRT targets: normal+depth, roughness, velocity. All three
 // must be byte-identical without `independentBlend` enabled at device creation;
 // the R8 roughness target stores only R under the uniform RGBA write mask.
-const PREPASS_TARGETS: [Blend; 3] = [Blend::Opaque; 3];
+pub(super) const PREPASS_TARGETS: [Blend; 3] = [Blend::Opaque; 3];
 
 // Vertex input for the GPU-driven (bindless) G-buffer pre-pass: the current
-// attributes the VS reads (position 0, normal 1, skybox-sentinel color 3) on
-// binding 0, plus the previous-frame position (location 5) on binding 1. Both
+// attributes the VS reads (position 0, normal 1) on binding 0, plus the
+// previous-frame position (location 5) on binding 1. Both
 // bindings carry the 56-byte `Vertex`; the static prefix binds the static VB to
 // both (prev_pos == cur_pos), the skinned tail binds the current deformed buffer
-// to binding 0 and the previous-frame deformed buffer to binding 1. Tangent + UV
-// are unused (the pre-pass samples no textures).
+// to binding 0 and the previous-frame deformed buffer to binding 1. Tangent,
+// color and UV are unused (the pre-pass samples no textures).
 const VERTEX_56_DUAL_BINDINGS: [vk::VertexInputBindingDescription; 2] = [
     vk::VertexInputBindingDescription {
         binding: 0,
@@ -176,10 +177,9 @@ const VERTEX_56_DUAL_BINDINGS: [vk::VertexInputBindingDescription; 2] = [
         input_rate: vk::VertexInputRate::VERTEX,
     },
 ];
-const VERTEX_56_DUAL_ATTRIBUTES: [vk::VertexInputAttributeDescription; 4] = [
+const VERTEX_56_DUAL_ATTRIBUTES: [vk::VertexInputAttributeDescription; 3] = [
     position_attribute(0, 0, 0),
     position_attribute(0, 1, 12),
-    position_attribute(0, 3, 36),
     position_attribute(1, 5, 0),
 ];
 
@@ -291,9 +291,6 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
         draw_args_buffers,
     } = records;
 
-    let vs = super::super::builtin_shaders::GBUFFER_PREPASS_VERT_BINDLESS.compile(hot_reload)?;
-    let fs = super::super::builtin_shaders::GBUFFER_PREPASS_FRAG_BINDLESS.compile(hot_reload)?;
-
     // Set 0: GbView UBO (binding 0), the previous frame's model-history slot
     // (binding 1) and this frame's draw args (binding 2), all VERTEX.
     let set_layout =
@@ -303,20 +300,12 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
         .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts))
         .map_err(|e| crate::vulkan::error::map_vk_result(e, "gbuffer bindless pipeline layout"))?;
 
-    // Same no-cull / LESS depth as the main pass, over a private depth buffer.
-    let pipeline = GraphicsPipelineDesc {
-        depth: Depth::camera_write(),
-        vertex_bindings: &VERTEX_56_DUAL_BINDINGS,
-        vertex_attributes: &VERTEX_56_DUAL_ATTRIBUTES,
-        ..GraphicsPipelineDesc::fullscreen(
-            &vs,
-            &fs,
-            pipeline_layout.handle(),
-            gb.prepass_render_pass.handle(),
-            &PREPASS_TARGETS,
-        )
-    }
-    .build(device, "gbuffer prepass")?;
+    let pipeline = build_prepass_pipeline(
+        device,
+        pipeline_layout.handle(),
+        gb.prepass_render_pass.handle(),
+        hot_reload,
+    )?;
 
     // Per-frame model-history SSBOs, sized for `n_cull` column-major `float4x4`
     // records, parallel to the object buffer. Device-local: only the snapshot
@@ -368,6 +357,25 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
         prev_model_buffers,
         history,
     })
+}
+
+// The bindless pre-pass pipeline: the same no-cull / LESS depth as the main
+// pass, over a private depth buffer.
+pub(in crate::vulkan) fn build_prepass_pipeline(
+    device: &VkDevice,
+    layout: vk::PipelineLayout,
+    render_pass: vk::RenderPass,
+    hot_reload: bool,
+) -> RenderResult<OwnedPipeline> {
+    let vs = super::super::builtin_shaders::GBUFFER_PREPASS_VERT_BINDLESS.compile(hot_reload)?;
+    let fs = super::super::builtin_shaders::GBUFFER_PREPASS_FRAG_BINDLESS.compile(hot_reload)?;
+    GraphicsPipelineDesc {
+        depth: Depth::camera_write(),
+        vertex_bindings: &VERTEX_56_DUAL_BINDINGS,
+        vertex_attributes: &VERTEX_56_DUAL_ATTRIBUTES,
+        ..GraphicsPipelineDesc::fullscreen(&vs, &fs, layout, render_pass, &PREPASS_TARGETS)
+    }
+    .build(device, "gbuffer prepass")
 }
 
 // A UBO at binding 0 and two storage buffers at 1 and 2, read by `stages`: the
@@ -480,7 +488,8 @@ pub(in crate::vulkan) struct GbufferResources {
     pub(in crate::vulkan) prepass_render_pass: OwnedRenderPass,
 
     // Per-frame view UBO (jittered_vp + cur_vp + prev_vp + view_mat),
-    // host-mapped. The pre-pass pipeline's own set 0 points at it.
+    // host-mapped. The pre-pass pipeline's set 0 and the sky's per-frame sets
+    // point at it.
     pub(in crate::vulkan) view_ubo_buffers: Vec<PooledBuffer>,
 
     // Per-frame MRT targets + private depth + framebuffers (rebuilt on resize).
@@ -499,7 +508,10 @@ pub(in crate::vulkan) struct GbufferResources {
     // Last frame's un-jittered VP, owned here so the velocity channel works for
     // any consumer (TAA or FSR) independent of whether engine-TAA is on. The
     // per-object half of the same history is the GPU-filled model-history ring.
-    pub(in crate::vulkan) prev_view_proj: [[f32; 4]; 4],
+    pub(in crate::vulkan) view_history: ViewHistory,
+
+    // The sky's motion behind the geometry.
+    pub(in crate::vulkan) sky: GbufferSky,
 }
 
 // Command pool + queue the target builders use to lay out the private depth
@@ -527,6 +539,7 @@ impl GbufferResources {
         queue: GbufferQueueCtx,
         extent: GbufferExtent,
         pooled: &GbufferPooled,
+        hot_reload: bool,
     ) -> RenderResult<Self> {
         let GbufferDeviceCtx { alloc, device } = ctx;
         // Only the frame count is needed here (for the view-UBO ring); the
@@ -545,6 +558,12 @@ impl GbufferResources {
             )?;
             view_ubo_buffers.push(buf);
         }
+        let sky = GbufferSky::build(
+            device,
+            prepass_render_pass.handle(),
+            &view_ubo_buffers,
+            hot_reload,
+        )?;
 
         let mut me = Self {
             prepass_render_pass,
@@ -554,7 +573,8 @@ impl GbufferResources {
             velocity_images: Vec::new(),
             depth_images: Vec::new(),
             framebuffers: Vec::new(),
-            prev_view_proj: IDENTITY,
+            view_history: ViewHistory::default(),
+            sky,
         };
         me.build_targets(ctx, queue, extent, pooled)?;
         Ok(me)
@@ -753,7 +773,7 @@ impl VkContext {
         // Upload this frame's view UBO. When velocity is inactive the previous
         // VP equals the current one, so instanced + sky motion is zero.
         let prev_vp = if velocity_active {
-            gb.prev_view_proj
+            gb.view_history.prev_or(cur_vp)
         } else {
             cur_vp
         };
@@ -818,6 +838,12 @@ impl VkContext {
         // ride the cull records' runtime reserve. With nothing to draw the pass
         // is the clears above, which is what "no geometry" means to every reader.
         self.encode_gbuffer_prepass_gpu_driven(cmd, frame_idx, velocity_active);
+        // The sky keeps the "no geometry" depth and roughness and adds the
+        // camera's motion where nothing was drawn.
+        if self.draws_sky(self.state.view.mode) {
+            gb.sky.encode(device, cmd, frame_idx);
+            self.inc_draw_calls(1);
+        }
 
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.

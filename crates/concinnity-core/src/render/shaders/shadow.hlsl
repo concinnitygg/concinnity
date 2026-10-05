@@ -100,12 +100,6 @@ float4 shadow_vertex_bindless(
 {
     uint oid = object_instance_index(instance_id);
 #endif
-    // Skybox vertices carry a blue channel of 2.0. The sky shell encloses the
-    // camera, so it must never occlude the light: collapse it to a point.
-    if (v.color.b > 1.5)
-    {
-        return float4(0.0, 0.0, 0.0, 1.0);
-    }
     float4x4 model = objects[oid].model;
     return mul(shadow_cb.light_vps[SHADOW_CASCADE], mul(model, float4(v.pos, 1.0)));
 }

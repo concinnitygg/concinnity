@@ -52,6 +52,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // and a fragment spliced after its own marker has been passed would land
     // unreplaced.
     ("{MAIN_TYPES}", "main_types.hlsl"),
+    ("{VIEW_UNIFORMS}", "view_uniforms.hlsl"),
     ("{OBJECT_COMMON}", "object_common.hlsl"),
     ("{PROBE_TYPES}", "probe_types.hlsl"),
     // TRANSPARENT_PROBES leads PROBE_COMMON because it carries that marker:
@@ -83,6 +84,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // DEPTH_CONVENTION trails every fragment that carries it (MAIN_SHADING,
     // RAYMARCH_COMMON), for the same reason.
     ("{DEPTH_CONVENTION}", "depth_convention.hlsl"),
+    ("{SKY_RAY}", "sky_ray.hlsl"),
     // The two hooks a world Shader defines, with the engine's own shading as
     // the default. A world compile passes its files as caller splices for the
     // same markers, which take precedence over these rows.

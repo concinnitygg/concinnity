@@ -1,7 +1,7 @@
 // The static draw list: every prop and instanced prop baked into draw objects,
 // with each prop entity given its draw slots and init world matrix.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use concinnity_core::components::{
     GlobalTransform, InstancedProp, PropInstance, RenderHandle, SubMeshRef,
@@ -23,7 +23,6 @@ pub(super) struct PropDrawInputs<'a> {
     pub(super) room_geometry: &'a [RoomGeometry],
     pub(super) texture_count: usize,
     pub(super) material_map: &'a HashMap<MaterialHandle, MaterialEntry>,
-    pub(super) always_resident_meshes: &'a HashSet<usize>,
 }
 
 impl GraphicsSystem {
@@ -59,18 +58,6 @@ impl GraphicsSystem {
             );
         }
 
-        // The props that draw the sky, so the frame step can keep them centered
-        // on the camera.
-        self.sky_props = prop_entities
-            .iter()
-            .zip(&items)
-            .filter(|(_, item)| {
-                item.mesh
-                    .is_some_and(|mesh| inputs.always_resident_meshes.contains(&mesh.index()))
-            })
-            .map(|(&entity, _)| entity)
-            .collect();
-
         let data = draw_list::build_draw_list(draw_list::DrawListInputs {
             items: &items,
             instanced_props: &instanced_props,
@@ -80,7 +67,6 @@ impl GraphicsSystem {
             room_geometry: inputs.room_geometry,
             texture_count: inputs.texture_count,
             material_map: inputs.material_map,
-            always_resident_meshes: inputs.always_resident_meshes,
         })?;
 
         // A PickIndex resource is the editor's opt-in (a shipped runtime never

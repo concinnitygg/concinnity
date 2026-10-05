@@ -168,6 +168,26 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         program: &shared::GBUFFER_PREPASS_FRAG_BINDLESS,
         registers: &[],
     },
+    // The sky's motion, drawn under the pre-pass root signature it reads the
+    // view block of.
+    DxilAbi {
+        program: &shared::GBUFFER_SKY_VERT,
+        registers: &[("gb_view", "b1")],
+    },
+    // The sky, from `directx/sky.rs`: the pass's view block as a root CBV, the
+    // prefilter cube in a one-entry table, and a static sampler.
+    DxilAbi {
+        program: &shared::SKY_VERT,
+        registers: &[("view_cb", "b0")],
+    },
+    DxilAbi {
+        program: &shared::SKY_FRAG,
+        registers: &[
+            ("view_cb", "b0"),
+            ("prefilter_cube", "t0"),
+            ("cube_sampler", "s0"),
+        ],
+    },
     DxilAbi {
         program: &shared::SHADOW_VERT_BINDLESS,
         registers: &[
@@ -763,6 +783,29 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("objects", "buffer(9)"),
             ("prev_models", "buffer(10)"),
             ("draw_args", "buffer(11)"),
+        ]],
+        argument_ids: &[],
+    },
+    // The sky's motion, at the tail of the same pre-pass encoder: the view
+    // block is the one `metal/post/gbuffer.rs` binds at buffer(0).
+    MetalAbi {
+        program: &shared::GBUFFER_SKY_VERT,
+        slots: &[&[("gb_view", "buffer(0)")]],
+        argument_ids: &[],
+    },
+    // The sky, from `metal/sky.rs`: the pass's view block, the prefilter cube
+    // and the cube sampler, each at slot 0.
+    MetalAbi {
+        program: &shared::SKY_VERT,
+        slots: &[&[("view_cb", "buffer(0)")]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::SKY_FRAG,
+        slots: &[&[
+            ("view_cb", "buffer(0)"),
+            ("prefilter_cube", "texture(0)"),
+            ("cube_sampler", "sampler(0)"),
         ]],
         argument_ids: &[],
     },

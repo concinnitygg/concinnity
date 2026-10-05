@@ -578,9 +578,8 @@ fn generate_grass(resolution: u32) -> (u32, u32, Vec<u8>) {
 // The texture is 4 pixels wide and `resolution` pixels tall. Metal maps
 // V = 0 to the first row stored in memory and V = 1 to the last row, with
 // V = 0 at the top of the image. Row 0 is therefore the zenith color (deep
-// azure) and the last row is the horizon color (pale blue-white). The skybox
-// mesh sets V = 0 on wall top edges (zenith) and V = 1 on wall bottom edges
-// (horizon), so the gradient renders correctly from ground level to overhead.
+// azure) and the last row is the horizon color (pale blue-white), so a surface
+// mapping V = 0 to its top edge shows the gradient upright.
 //
 // Width 4 is sufficient because the gradient varies only in V; any
 // horizontal filtering artifacts are invisible on a featureless sky.

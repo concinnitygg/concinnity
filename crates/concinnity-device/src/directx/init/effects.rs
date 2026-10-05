@@ -291,6 +291,8 @@ pub(super) fn build_gbuffer(
         Some(GbufferResources::new(
             crate::directx::post::gbuffer::GbufferDeviceCtx {
                 alloc: &gpu.hw.alloc,
+                info_queue: gpu.hw.info_queue.as_ref(),
+                hot_reload: gpu.hot_reload,
             },
             crate::directx::post::gbuffer::GbufferExtent {
                 width: targets.extent.render_width,

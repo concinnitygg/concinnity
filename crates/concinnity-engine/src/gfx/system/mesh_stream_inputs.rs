@@ -47,7 +47,7 @@ pub(super) fn texture_stream_centers(
 }
 
 // Per-streamed-mesh data captured before `draw_objects` moves into the backend.
-// Only static, frustum-cullable draws stream; skybox, rooms, and dynamic props
+// Only static, frustum-cullable draws stream; rooms and dynamic props
 // (sentinel AABB) stay resident so structural geometry never pops in. Each
 // payload copies the draw's region of the shared vertex/index buffers, scored by
 // its AABB center; indices are stored mesh-relative and narrowed to u16 (each
@@ -134,7 +134,7 @@ mod tests {
 
     // A draw over `[vertex_offset (bytes), +vertex_count]` / `[index_offset,
     // +index_count]` sampling `texture_slot` (+ `normal_map_slot`). A non-cullable
-    // draw carries the NaN sentinel AABB, matching the skybox / dynamic path.
+    // draw carries the NaN sentinel AABB, matching the room / dynamic path.
     fn draw(
         vertex_offset: usize,
         vertex_count: usize,
@@ -237,7 +237,7 @@ mod tests {
         let verts: Vec<Vertex> = (0..2).map(|i| vert(i as f32)).collect();
         let indices: Vec<u32> = vec![0, 1];
         let objs = vec![
-            // Non-cullable (NaN AABB): skybox / dynamic, stays resident.
+            // Non-cullable (NaN AABB): room / dynamic, stays resident.
             draw(0, 2, 0, 2, 0, NO_NORMAL_MAP_SLOT, false),
             // Cullable but vertex_count overruns the 2-vertex buffer: skipped.
             draw(0, 5, 0, 2, 0, NO_NORMAL_MAP_SLOT, true),

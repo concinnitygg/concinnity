@@ -85,7 +85,7 @@ float3 downsample_13(float2 uv, float2 texel, bool karis)
 
 #if defined(BLOOM_PREFILTER)
 
-// Upper bound on a single bloom source sample. IBL skyboxes can be many orders
+// Upper bound on a single bloom source sample. An IBL background can be many orders
 // of magnitude brighter than surface shading (e.g. an EV24 HDR); without a
 // clamp one ultra-bright texel blurs out and washes the whole frame white.
 static const float BLOOM_CLAMP = 16.0;

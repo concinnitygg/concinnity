@@ -155,6 +155,7 @@ pub(super) fn build_screen_space(
         hw,
         command_pool,
         frames,
+        hot_reload,
         ..
     } = *gpu;
     let (device, alloc) = (&hw.device, &hw.alloc);
@@ -220,6 +221,7 @@ pub(super) fn build_screen_space(
                 frames,
             },
             &targets.transient_pool.gbuffer_pooled(frames),
+            hot_reload,
         )?)
     } else {
         None

@@ -255,13 +255,20 @@ impl MtlContext {
 
         // Main camera: bind the per-cluster light lists once for the pass.
         self.bind_clusters(&encoder, true);
-        Ok(self.encode_main_geometry_into(
+        let draw_calls = self.encode_main_geometry_into(
             &encoder,
             &view_uniforms,
             gpu,
             // Main pass: the main cull ICB (no override).
             None,
-        ))
+        );
+        // The sky lands behind phase 1's geometry. Under two-pass occlusion
+        // `Main2` then draws the disoccluded rest over it, which wins the depth
+        // test because the sky writes none.
+        if self.draws_sky(self.state.view.mode) {
+            self.encode_sky(&encoder, &view_uniforms);
+        }
+        Ok(draw_calls)
     }
 
     // Render the main pass into one reflection-probe cube face instead of the
@@ -367,7 +374,13 @@ impl MtlContext {
         // Planar / probe re-render: the main camera's cluster grid does not match
         // this viewpoint, so iterate every local light instead of the clusters.
         self.bind_clusters(&encoder, false);
-        Ok(self.encode_main_geometry_into(&encoder, &view_uniforms, gpu, pass.icb_override))
+        let draw_calls =
+            self.encode_main_geometry_into(&encoder, &view_uniforms, gpu, pass.icb_override);
+        // A face is always rendered lit, whatever the viewport shows.
+        if self.draws_sky(concinnity_core::gfx::view_modes::ViewMode::Lit) {
+            self.encode_sky(&encoder, &view_uniforms);
+        }
+        Ok(draw_calls)
     }
 
     // Phase-2 main pass for two-pass occlusion (`Main2`). Loads (does not

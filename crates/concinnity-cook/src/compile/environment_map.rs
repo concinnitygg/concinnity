@@ -80,6 +80,47 @@ pub(crate) fn validate_environment_map_args(args: &serde_json::Value) -> Result<
     resolve_args(args).map(|_| ())
 }
 
+// Everything the convolution reads, and nothing it does not: the payload is
+// compiled from these alone and its cache key hashes them, so a display field
+// such as `background` never re-runs the bake.
+#[derive(serde::Serialize)]
+struct BakeInputs<'a> {
+    source: &'a str,
+    generator: &'a str,
+    prefilter_face_size: u32,
+    irradiance_face_size: u32,
+    prefilter_samples: u32,
+    prefilter_clamp: f32,
+}
+
+impl<'a> BakeInputs<'a> {
+    fn of(map: &'a EnvironmentMap) -> Self {
+        Self {
+            source: &map.source,
+            generator: &map.generator,
+            prefilter_face_size: map.prefilter_face_size,
+            irradiance_face_size: map.irradiance_face_size,
+            prefilter_samples: map.prefilter_samples,
+            prefilter_clamp: map.prefilter_clamp,
+        }
+    }
+}
+
+// The args the payload cache key hashes: the bake inputs, with every default
+// filled in, so a field spelled out at its default keys like one left out.
+pub(crate) fn environment_map_payload_key_args(
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let map = resolve_args(args)?;
+    serde_json::to_value(BakeInputs::of(&map)).map_err(|e| e.to_string())
+}
+
+// The runtime fields the record carries beside the payload.
+pub(crate) fn compile_environment_map_data(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+    resolve_args(args)
+        .map(|map| concinnity_core::resource::EnvironmentMapRecord::from(&map).to_bytes())
+}
+
 // Source containers an equirectangular panorama can arrive in.
 fn is_supported_source(source: &str) -> bool {
     let lower = source.to_ascii_lowercase();
@@ -103,10 +144,8 @@ pub(crate) fn compile_environment_map_payload(
     args: &serde_json::Value,
     assets_dir: Option<&Path>,
 ) -> Result<Vec<u8>, String> {
-    let params = resolve_args(args)?;
-    let prefilter_face = params.prefilter_face_size;
-    let irradiance_face = params.irradiance_face_size;
-    let prefilter_samples = params.prefilter_samples;
+    let map = resolve_args(args)?;
+    let params = BakeInputs::of(&map);
 
     let hdr = if !params.source.is_empty() {
         // A bare filename (no directory component) is resolved via the same
@@ -114,10 +153,10 @@ pub(crate) fn compile_environment_map_payload(
         // asset root recursively, falling back to the raw path so an absolute
         // or relative path also works.
         let resolved =
-            concinnity_host::store::source::resolve_source_path(&params.source, assets_dir);
+            concinnity_host::store::source::resolve_source_path(params.source, assets_dir);
         load_equirect_source(&resolved)?
     } else {
-        match params.generator.as_str() {
+        match params.generator {
             "sky" => generate_sky_equirect(),
             "stars" => generate_stars_equirect(),
             other => return Err(format!("unknown EnvironmentMap generator '{}'", other)),
@@ -128,9 +167,9 @@ pub(crate) fn compile_environment_map_payload(
     let pool = jobs::JobPool::new(jobs::default_threads());
     Ok(bake_payload(
         &hdr,
-        prefilter_face,
-        irradiance_face,
-        prefilter_samples,
+        params.prefilter_face_size,
+        params.irradiance_face_size,
+        params.prefilter_samples,
         params.prefilter_clamp,
         &jobs::PoolRows(&pool),
     ))
@@ -246,6 +285,59 @@ mod tests {
         let args = serde_json::json!({ "source": path.to_str().unwrap() });
         let err = compile_environment_map_payload(&args, None).unwrap_err();
         assert!(err.contains("exactly one mesh"), "got: {err}");
+    }
+
+    // The record's runtime fields carry the authored background flag, so the
+    // renderer reads it without the payload changing.
+    #[test]
+    fn the_record_data_carries_the_background_flag() {
+        use concinnity_core::resource::{EnvironmentMapTable, ResourceEntry};
+        let table = |args| {
+            EnvironmentMapTable(vec![ResourceEntry {
+                data_bytes: compile_environment_map_data(&args).unwrap(),
+                ..Default::default()
+            }])
+        };
+        let background = |args| table(args).record(0).map(|r| r.background);
+        assert_eq!(
+            background(serde_json::json!({"generator": "sky"})),
+            Ok(true)
+        );
+        assert_eq!(
+            background(serde_json::json!({"generator": "sky", "background": false})),
+            Ok(false)
+        );
+    }
+
+    // The payload's cache key, as the resource pack derives it.
+    fn payload_key(args: serde_json::Value) -> String {
+        let rt = crate::authoring::registry::RegisteredType::EnvironmentMap;
+        let ctx = crate::asset::BuildCtx {
+            name: "env",
+            platform: concinnity_core::platform::Platform::Metal,
+            assets_dir: None,
+            all_assets: &[],
+        };
+        crate::cache::payload_key(
+            1,
+            &rt.payload_key_args(&args),
+            &ctx,
+            &crate::asset::CacheInputs::extra(Vec::new()),
+        )
+    }
+
+    // `background` is read by the renderer, never by the convolution, so
+    // flipping it reuses the baked cubemaps.
+    #[test]
+    fn a_display_field_shares_the_payload_key() {
+        let shown = serde_json::json!({"generator": "sky"});
+        let hidden = serde_json::json!({"generator": "sky", "background": false});
+        assert_eq!(payload_key(shown.clone()), payload_key(hidden));
+        // A bake input still re-keys it, and a default spelled out does not.
+        let sharper = serde_json::json!({"generator": "sky", "prefilter_face_size": 256});
+        assert_ne!(payload_key(shown.clone()), payload_key(sharper));
+        let spelled = serde_json::json!({"generator": "sky", "prefilter_face_size": 512});
+        assert_eq!(payload_key(shown), payload_key(spelled));
     }
 
     #[test]

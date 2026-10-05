@@ -16,6 +16,9 @@
 use crate::profile::{MAX_PASS_TIMINGS, PassTiming};
 use crate::render::render_graph::{PASS_COUNT, PASS_NAMES, PassId};
 
+// Every pass has a slot in the per-pass timing table.
+const _: () = assert!(PASS_COUNT <= MAX_PASS_TIMINGS);
+
 /// Per-frame block: `[whole_frame_start, whole_frame_end, pass0_start,
 /// pass0_end, ..., pass(PASS_COUNT-1)_end]`.
 pub const SLOTS_PER_FRAME: usize = 2 * (PASS_COUNT + 1);
@@ -55,7 +58,7 @@ pub fn decode_frame_block(
 ) -> (u32, [PassTiming; MAX_PASS_TIMINGS]) {
     let frame_us = pair_micros(0, 1);
     let mut passes = [("", 0u32); MAX_PASS_TIMINGS];
-    for (i, name) in PASS_NAMES.iter().take(MAX_PASS_TIMINGS).enumerate() {
+    for (i, name) in PASS_NAMES.iter().enumerate() {
         passes[i] = (*name, pair_micros(2 + 2 * i, 3 + 2 * i));
     }
     (frame_us, passes)

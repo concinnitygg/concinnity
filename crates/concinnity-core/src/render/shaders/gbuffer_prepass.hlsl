@@ -10,18 +10,23 @@
 // never leaks into it. Alpha 0 in target(0) marks "no geometry", the sky
 // included.
 //
-// Every host rasterizes this pre-pass off the cull records, so there are two
-// entries, one per stage, each selected by a define:
+// Every host rasterizes this pre-pass off the cull records, then draws the sky
+// over whatever they left uncovered, so there are three entries, each selected
+// by a define:
 //
 //   GB_BINDLESS          - object id via first-instance, model and roughness
 //                          from the per-frame GpuObjectData buffer
-//   GB_FRAGMENT_BINDLESS - the fragment (roughness from a varying)
+//   GB_SKY               - the sky's vertex stage: a fullscreen triangle at the
+//                          far plane, depth-tested without writing, whose
+//                          motion is the camera's rotation alone
+//   GB_FRAGMENT_BINDLESS - the fragment both draw with (roughness from a
+//                          varying)
 //
 // CN_BACKEND_DIRECTX pins every register to the root signatures in
-// directx/post/gbuffer.rs, which are the host's slots rather than the Metal
-// buffer indices the shared declarations otherwise carry: b0 goes to the
-// indirect command's object id, the view CBV follows at b1, and every
-// structured buffer starts from t0.
+// directx/post/gbuffer.rs and directx/post/gbuffer_sky.rs, which are the host's
+// slots rather than the Metal buffer indices the shared declarations otherwise
+// carry: b0 goes to the indirect command's object id, the view CBV follows at
+// b1, and every structured buffer starts from t0.
 //
 // CN_BACKEND_DIRECTX also selects how DirectX delivers the object id, matching
 // what main_bindless.hlsl already does there: it rides that b0 root constant rather
@@ -31,6 +36,7 @@
 
 {OBJECT_COMMON}
 {DEPTH_CONVENTION}
+{SKY_RAY}
 
 // Layout matches `GBufferView` / `GbViewUniforms` (4 x float4x4, 256 B).
 struct GbView
@@ -41,7 +47,7 @@ struct GbView
     float4x4 view_mat;
 };
 
-#ifdef GB_BINDLESS
+#if defined(GB_BINDLESS) || defined(GB_SKY)
 #ifdef CN_BACKEND_DIRECTX
 // b0 belongs to the indirect command's object-id root constant, so the view
 // CBV follows it at b1.
@@ -93,7 +99,6 @@ struct GbBindlessVertexIn
 {
     [[vk::location(0)]] float3 pos      : POSITION;
     [[vk::location(1)]] float3 normal   : NORMAL;
-    [[vk::location(3)]] float3 color    : COLOR0;
     [[vk::location(5)]] float3 prev_pos : PREVPOSITION;
 };
 
@@ -120,8 +125,8 @@ struct GbFragmentOut
 
 #ifdef GB_BINDLESS
 
-// Everything but roughness and the sky pin, from a world-space position pair
-// and the model matrix whose normal transform the surface normal rides.
+// Everything but roughness, from a world-space position pair and the model
+// matrix whose normal transform the surface normal rides.
 GbVertexOut gb_project(float4x4 model, float4 cur_world, float4 prev_world, float3 model_normal)
 {
     GbVertexOut o;
@@ -137,31 +142,26 @@ GbVertexOut gb_project(float4x4 model, float4 cur_world, float4 prev_world, floa
     return o;
 }
 
-// Skybox vertices carry a blue channel of 2.0: pin them to the far plane so the
-// sky never occludes scene geometry, and zero their depth so the sky reads as
-// "no geometry" to every screen-space pass while still writing its motion. The
-// pin must match the forward pass's, since the upscalers read this depth.
-GbVertexOut gb_sky_pin(GbVertexOut o, float3 color)
-{
-    if (color.b > 1.5)
-    {
-        o.position.z = depth_pin_far(o.position.w);
-        o.view_depth = 0.0;
-    }
-    return o;
-}
-
 #endif
 
+// Any component past 1 lands every pixel off the image, which every reader
+// treats as missing history.
+static const float GB_MOTION_LIMIT = 2.0;
+static const float GB_MIN_PREV_W = 1e-6;
+
 // Stored so the TAA pass can do `prev_uv = uv + motion`. Image-space UV with
-// 0 = top, matching the upright resolve the readers sample.
+// 0 = top, matching the upright resolve the readers sample. A point at or
+// behind the previous camera has no previous pixel, and the clamp keeps a far
+// off-screen one finite in the RG16F target.
 float2 gb_motion(float4 cur_clip, float4 prev_clip)
 {
+    if (!(prev_clip.w > GB_MIN_PREV_W))
+        return (float2)(GB_MOTION_LIMIT);
     float2 cur_ndc  = cur_clip.xy  / cur_clip.w;
     float2 prev_ndc = prev_clip.xy / prev_clip.w;
     float2 cur_uv  = float2(cur_ndc.x  * 0.5 + 0.5, 0.5 - cur_ndc.y  * 0.5);
     float2 prev_uv = float2(prev_ndc.x * 0.5 + 0.5, 0.5 - prev_ndc.y * 0.5);
-    return prev_uv - cur_uv;
+    return clamp(prev_uv - cur_uv, -GB_MOTION_LIMIT, GB_MOTION_LIMIT);
 }
 
 // ---- Entry points ----
@@ -184,8 +184,32 @@ GbVertexOut gbuffer_prepass_vertex_bindless(
     GpuObjectData obj = objects[oid];
     float4 cur_world  = mul(obj.model, float4(v.pos, 1.0));
     float4 prev_world = mul(gb_prev_model(oid, obj.model), float4(v.prev_pos, 1.0));
-    GbVertexOut o = gb_sky_pin(gb_project(obj.model, cur_world, prev_world, v.normal), v.color);
+    GbVertexOut o = gb_project(obj.model, cur_world, prev_world, v.normal);
     o.roughness = obj.tint_roughness.w;
+    return o;
+}
+
+#endif
+
+#ifdef GB_SKY
+
+// The sky reads as "no geometry" to every screen-space pass (view depth 0, the
+// background's roughness) while still writing its motion: the view ray through
+// the jittered projection, reprojected through this frame's and the previous
+// frame's unjittered matrices. A direction has no position, so the camera's
+// translation drops out and the motion is its rotation alone.
+[shader("vertex")]
+GbVertexOut gbuffer_sky_vertex(uint vid : SV_VertexID)
+{
+    float2 ndc = sky_corner(vid);
+    float3 ray = sky_ray(gb_view.jittered_vp, ndc);
+    GbVertexOut o;
+    o.position    = float4(ndc, DEPTH_FAR, 1.0);
+    o.view_normal = (float3)(0.0);
+    o.view_depth  = 0.0;
+    o.cur_clip    = mul(gb_view.cur_vp, float4(ray, 0.0));
+    o.prev_clip   = mul(gb_view.prev_vp, float4(ray, 0.0));
+    o.roughness   = 1.0;
     return o;
 }
 

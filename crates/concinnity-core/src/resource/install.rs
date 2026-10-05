@@ -11,7 +11,8 @@ use crate::ecs::asset_id::AssetId;
 use crate::ecs::{EnvironmentMapHandle, FontHandle, MaterialHandle, MeshHandle, PipelineContext};
 
 use super::{
-    EnvironmentMapTable, FontTable, MaterialTable, MeshTable, ResourceEntry, RuntimeMeshPayloads,
+    EnvironmentMapRecord, EnvironmentMapTable, FontTable, MaterialTable, MeshTable, ResourceEntry,
+    RuntimeMeshPayloads,
 };
 
 /// Record `payload` as `id`'s geometry and return the handle it lands on.
@@ -42,21 +43,29 @@ pub fn append_material(ctx: &mut PipelineContext, material: Material) -> Materia
         .resource_mut::<MaterialTable>()
         .expect("the table was just ensured");
     MaterialHandle::new(table.append(ResourceEntry {
-        payload: None,
         data_bytes: bytes,
+        ..Default::default()
     }))
 }
 
-/// Install a baked IBL `payload` into the world's environment-map table and
-/// return its handle. The renderer lights with the map at handle 0.
-pub fn append_environment_map(ctx: &mut PipelineContext, payload: Vec<u8>) -> EnvironmentMapHandle {
+/// Install a baked IBL `payload` into the world's environment-map table with
+/// its runtime fields `record` and return its handle. The renderer lights with
+/// the map at handle 0.
+pub fn append_environment_map(
+    ctx: &mut PipelineContext,
+    payload: Vec<u8>,
+    record: EnvironmentMapRecord,
+) -> EnvironmentMapHandle {
     if ctx.resource::<EnvironmentMapTable>().is_none() {
         ctx.insert_resource(EnvironmentMapTable::default());
     }
     let table = ctx
         .resource_mut::<EnvironmentMapTable>()
         .expect("the table was just ensured");
-    EnvironmentMapHandle::new(table.append(ResourceEntry::baked(payload)))
+    EnvironmentMapHandle::new(table.append(ResourceEntry {
+        data_bytes: record.to_bytes(),
+        ..ResourceEntry::baked(payload)
+    }))
 }
 
 /// Install a baked glyph-atlas `payload` into the world's font table and
@@ -108,12 +117,28 @@ mod tests {
         let second = append_material(&mut ctx, Material::default());
         assert_eq!((first.0, second.0), (0, 1));
 
-        let map = append_environment_map(&mut ctx, vec![1, 2, 3]);
+        let map = append_environment_map(&mut ctx, vec![1, 2, 3], Default::default());
         assert_eq!(map.0, 0);
         let table = ctx
             .resource::<EnvironmentMapTable>()
             .expect("the table exists");
         assert_eq!(table.0[0].baked_bytes(), Some(&[1u8, 2, 3][..]));
+    }
+
+    // The background flag rides the runtime fields beside the payload.
+    #[test]
+    fn an_installed_map_keeps_its_background_flag() {
+        let mut world = World::default();
+        let mut ctx = world.context();
+        let hidden = EnvironmentMapRecord { background: false };
+        append_environment_map(&mut ctx, vec![1], hidden);
+        append_environment_map(&mut ctx, vec![2], EnvironmentMapRecord::default());
+        let table = ctx
+            .resource::<EnvironmentMapTable>()
+            .expect("the table exists");
+        assert_eq!(table.record(0), Ok(hidden));
+        assert!(table.record(1).is_ok_and(|r| r.background));
+        assert_eq!(table.0[0].baked_bytes(), Some(&[1u8][..]));
     }
 
     #[test]

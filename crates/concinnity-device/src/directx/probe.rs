@@ -2,8 +2,9 @@
 //! (or an auto-seeded grid when a world declares none) is baked into its own cube,
 //! DISTINCT from `env_map`: the specular reflection term box-projects against the
 //! probe's influence box and samples its cube, so glossy surfaces reflect the
-//! actual surrounding geometry instead of the imported HDR sky, while the skybox +
-//! diffuse irradiance keep sampling `env_map` so the visible sky is never replaced.
+//! actual surrounding geometry instead of the imported HDR sky, while the
+//! background + diffuse irradiance keep sampling `env_map` so the visible sky is
+//! never replaced.
 //!
 //! The cube math + the staggered-bake state machine are backend-agnostic
 //! (`concinnity_core::render::reflection_probe`); this module drives the GPU capture, mirroring
@@ -800,6 +801,10 @@ impl DxContext {
             );
         }
         self.inc_draw_calls(1);
+        // A face is always rendered lit, whatever the viewport shows.
+        if self.draws_sky(concinnity_core::gfx::view_modes::ViewMode::Lit) {
+            self.encode_sky(cmd, view_gva);
+        }
     }
 }
 

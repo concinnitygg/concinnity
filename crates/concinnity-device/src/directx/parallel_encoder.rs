@@ -38,7 +38,7 @@
 //!   5. `Cell`s workers read but never write (`cull.prev_view_proj`,
 //!      `cull.hiz_valid`, `upscale.jitter`) - set by the frame stages before
 //!      `execute_graph` or after its join; concurrent reads alone do not race.
-//!   6. `gbuffer.prev_view_proj` (`RefCell`) - `borrow`ed by the G-buffer pass
+//!   6. `gbuffer.view_history` (`RefCell`) - `borrow`ed by the G-buffer pass
 //!      alone during the fan-out (the borrow flag is a write, so a second pass
 //!      must never borrow it there); `borrow_mut`ed after the join.
 //!   7. The upscaler's `reset_pending` / `output_is_psr` (`Cell`) - read and

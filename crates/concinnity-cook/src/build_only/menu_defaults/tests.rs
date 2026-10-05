@@ -71,7 +71,7 @@ fn the_hud_toggle_opts_out() {
 fn the_directive_survives_the_build() {
     let mut assets = vec![
         gfx(),
-        serde_json::json!({"type":"EngineDefaults","args":{"$id":"d","sky": false}}),
+        serde_json::json!({"type":"EngineDefaults","args":{"$id":"d","loading_overlay": false}}),
     ];
     inject(&mut assets).unwrap();
     assert_eq!(

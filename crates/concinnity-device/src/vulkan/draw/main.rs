@@ -294,6 +294,13 @@ impl VkContext {
             self.inc_draw_calls(1);
         }
 
+        // The sky lands behind phase 1's geometry. Under two-pass occlusion
+        // `Main2` then draws the disoccluded rest over it, which wins the depth
+        // test because the sky writes none.
+        if self.draws_sky(self.state.view.mode) {
+            self.encode_main_sky(cmd, frame_idx);
+        }
+
         // End the main scene pass. The render pass leaves the HDR resolve
         // image in SHADER_READ_ONLY_OPTIMAL for the composite pass to sample.
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice

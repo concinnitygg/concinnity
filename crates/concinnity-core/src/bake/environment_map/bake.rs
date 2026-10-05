@@ -133,7 +133,7 @@ fn importance_sample_ggx(
 // disables the cap. This suppresses the lone-hot-texel "bright squares" a
 // clear-sky HDR otherwise smears across reflective floors. The rough mips always
 // pass through here; mip 0 only does for a reflection probe (`clamp_mip0`), never
-// for an imported environment map, so the on-screen skybox keeps its true HDR.
+// for an imported environment map, so the on-screen background keeps its true HDR.
 fn clamp_radiance(rgb: [f32; 3], clamp: f32) -> [f32; 3] {
     if clamp <= 0.0 {
         return rgb;
@@ -411,8 +411,8 @@ impl<'a> CubeBake<'a> {
 ///
 /// `clamp_mip0` decides whether the firefly cap the rough mips always apply
 /// also caps this mirror mip. An imported environment map leaves it OFF -- mip 0
-/// is drawn directly as the on-screen skybox, which must keep its true HDR
-/// sun/sky. A reflection probe turns it ON -- the probe is never a skybox (it is
+/// is drawn directly as the on-screen background, which must keep its true HDR
+/// sun/sky. A reflection probe turns it ON -- the probe is never a background (it is
 /// sampled only by the specular term, as a low-res fallback when SSR/RT miss on
 /// a near-mirror surface), so a lone blown highlight in the capture would
 /// otherwise alias into a bright square there; capping it (at the same `clamp`)
@@ -824,7 +824,7 @@ mod tests {
         // Mip 0 is the mirror (roughness 0) reflection a near-mirror surface
         // samples on an SSR/RT miss.
         let face = 16usize;
-        // clamp_mip0 = false (an imported env map / skybox): the blazing texel survives
+        // clamp_mip0 = false (an imported env map / background): the blazing texel survives
         // mip 0 untouched, so the on-screen sky would keep its true HDR sun.
         let unclamped_mip0 = compute_prefilter(&firefly_cube(face), face as u32, 2, 16, 8.0, false);
         assert!(

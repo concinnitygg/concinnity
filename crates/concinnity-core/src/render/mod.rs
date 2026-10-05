@@ -70,6 +70,7 @@ pub mod shadow_bias;
 pub mod shadow_schedule;
 pub mod skinned_pool;
 pub mod skinned_slots;
+pub mod sky;
 pub mod slot_rewrites;
 pub mod snapshot;
 pub mod spot_shadow;
@@ -82,5 +83,6 @@ pub mod transparent;
 /// every backend except where only one backend binds a block.
 pub mod uniforms;
 
+pub mod view_history;
 pub mod volumetric_fog;
 pub mod world_pipelines;

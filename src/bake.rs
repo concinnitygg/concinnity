@@ -67,6 +67,7 @@ pub use concinnity_core::components::cook::{
 pub use concinnity_core::bake::payload::MeshPayload;
 
 use concinnity_core::components::{self, ProceduralMesh};
+use concinnity_core::resource::EnvironmentMapRecord;
 
 // A payload only a bake in this module constructs, so what a data-entry method
 // takes is known to be the kind it installs.
@@ -97,10 +98,38 @@ macro_rules! payload {
     };
 }
 
-payload! {
-    /// Baked image-based lighting, for
-    /// [`World::add_environment_map`](crate::World::add_environment_map).
-    EnvironmentMapPayload
+/// Baked image-based lighting and the map's runtime fields, for
+/// [`World::add_environment_map`](crate::World::add_environment_map).
+#[derive(Clone, PartialEq, Eq)]
+pub struct EnvironmentMapPayload {
+    bytes: Vec<u8>,
+    record: EnvironmentMapRecord,
+}
+
+impl EnvironmentMapPayload {
+    fn new(bytes: Vec<u8>, map: &EnvironmentMap) -> Self {
+        Self {
+            bytes,
+            record: EnvironmentMapRecord::from(map),
+        }
+    }
+
+    /// The baked bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<u8>, EnvironmentMapRecord) {
+        (self.bytes, self.record)
+    }
+}
+
+impl core::fmt::Debug for EnvironmentMapPayload {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EnvironmentMapPayload")
+            .field("len", &self.bytes.len())
+            .finish()
+    }
 }
 
 payload! {
@@ -132,7 +161,7 @@ pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, crate::Error> {
 pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, crate::Error> {
     use concinnity_host::thread::jobs;
     concinnity_core::bake::payload::environment_map(map, &jobs::PoolRows(jobs::pool()))
-        .map(EnvironmentMapPayload)
+        .map(|bytes| EnvironmentMapPayload::new(bytes, map))
         .map_err(crate::Error::Bake)
 }
 
@@ -145,7 +174,7 @@ pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, cr
         map,
         &concinnity_core::bake::environment_map::Serial,
     )
-    .map(EnvironmentMapPayload)
+    .map(|bytes| EnvironmentMapPayload::new(bytes, map))
     .map_err(crate::Error::Bake)
 }
 
@@ -336,5 +365,28 @@ mod tests {
         let mut world = crate::World::new();
         let handle = world.add_environment_map(payload);
         assert_eq!(handle.index(), 0);
+    }
+
+    // A map baked to light the world without being shown reaches the table the
+    // renderer reads its background from with the flag off.
+    #[test]
+    fn a_hidden_background_survives_the_bake_into_the_world() {
+        use concinnity_core::resource::EnvironmentMapTable;
+        let payload = environment_map(&EnvironmentMap {
+            generator: "sky".into(),
+            prefilter_face_size: 16,
+            irradiance_face_size: 8,
+            prefilter_samples: 4,
+            background: false,
+            ..Default::default()
+        })
+        .expect("the sky bakes");
+        let mut world = crate::World::new();
+        world.add_environment_map(payload);
+        let table = world
+            .inner()
+            .resource::<EnvironmentMapTable>()
+            .expect("the map's table");
+        assert_eq!(table.record(0).map(|r| r.background), Ok(false));
     }
 }

@@ -132,6 +132,7 @@ impl VkContext {
                     frames: self.frames_in_flight,
                 },
                 &pooled,
+                self.hot_reload.enabled,
             )?;
             self.gbuffer = Some(gb);
         }

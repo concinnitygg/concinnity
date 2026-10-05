@@ -34,20 +34,25 @@ use alloc::string::String;
 /// wants the largest of them, 1024; below that each point is magnified into a
 /// blob.
 ///
-/// The sky mesh that displays the map (a skybox
-/// [ProceduralMesh](#proceduralmesh) plus its [Material](#material) and
-/// [Prop](#prop)) is injected at world start when the world declares no skybox
-/// mesh of its own. Declare an [EngineDefaults](#enginedefaults) with
-/// `"sky": false` to use the map for image-based lighting only, with the
-/// background left to `clear_color` or your own geometry.
-///
-/// A skybox mesh, injected or declared, is kept centered on the camera, so it
-/// covers the horizon anywhere in a world however far the camera travels.
+/// The map is also the world's background: every pixel no surface covers
+/// shows it along that pixel's view direction, at infinite distance, so it
+/// never clips against the camera's far plane and never moves as the camera
+/// travels. Set `background` to `false` to use the map for image-based
+/// lighting only; the background is then
+/// [GraphicsConfig](#graphicsconfig)'s `clear_color`, as it is in a world
+/// with no `EnvironmentMap`. A world uses one map; extra declarations are
+/// ignored.
 ///
 /// ```rust
 /// # use concinnity_core::components::EnvironmentMap;
 /// EnvironmentMap {
 ///     source: "assets/hdri/studio.hdr".into(),
+///     ..Default::default()
+/// };
+/// // Light with the map but keep the clear color behind the scene.
+/// EnvironmentMap {
+///     generator: "sky".into(),
+///     background: false,
 ///     ..Default::default()
 /// };
 /// ```
@@ -89,6 +94,10 @@ pub struct EnvironmentMap {
     /// sky. Set to `0` to disable (no cap); lower values clamp harder.
     #[asset(default = 12.0)]
     pub prefilter_clamp: f32,
+    /// Draw the map as the background behind all geometry. `false` lights
+    /// the world with the map but leaves the background to `clear_color`.
+    #[asset(default = true)]
+    pub background: bool,
     /// Injected at load time from the compiled blob payload.
     #[serde(skip)]
     pub locator: Option<PayloadLocator>,

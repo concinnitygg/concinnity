@@ -215,6 +215,7 @@ mod tests {
         };
         let entry = |m: &Material| ResourceEntry {
             payload: None,
+            baked: Vec::new(),
             data_bytes: postcard::to_allocvec(m).expect("serializes"),
         };
         (vec![entry(&steel), entry(&glass)], vec![10, 20])
@@ -467,6 +468,7 @@ mod tests {
         };
         f.world.insert_resource(MaterialTable(vec![ResourceEntry {
             payload: None,
+            baked: Vec::new(),
             data_bytes: postcard::to_allocvec(&broken).expect("serializes"),
         }]));
         f.world.insert_resource(MaterialNames(vec![10]));
@@ -484,6 +486,7 @@ mod tests {
         };
         f.world.insert_resource(MaterialTable(vec![ResourceEntry {
             payload: None,
+            baked: Vec::new(),
             data_bytes: postcard::to_allocvec(&shaded).expect("serializes"),
         }]));
         f.world.insert_resource(MaterialNames(vec![10]));

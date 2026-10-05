@@ -330,6 +330,14 @@ impl VkContext {
             &globals,
         )?;
         let (commands, frame_sync) = commands::build_frame_commands(&gpu, &swapchain)?;
+        let sky = crate::vulkan::sky::VkSky::build(
+            &hw.device,
+            descriptors.global_set_layout.handle(),
+            targets.main_render_pass.handle(),
+            targets.msaa_samples,
+            media.env_map_background,
+            hot_reload,
+        )?;
 
         let mut me = Self {
             swapchain,
@@ -359,6 +367,7 @@ impl VkContext {
             lines: crate::vulkan::line::LineState::empty(),
             fog: world_fx.fog,
             raymarch: world_fx.raymarch,
+            sky,
             transparent: world_fx.transparent,
             planar_reflection: world_fx.planar_reflection,
             particle: Default::default(),

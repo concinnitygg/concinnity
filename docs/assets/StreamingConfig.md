@@ -13,7 +13,7 @@ dropped to make room.
 
 Texture streaming covers the color and normal-map textures (each capped
 independently via `texture_budget` / `texture_cap`). Mesh streaming covers
-static geometry; the skybox, rooms, and moving props always stay loaded.
+static geometry; rooms and moving props always stay loaded.
 
 ## Parameters
 

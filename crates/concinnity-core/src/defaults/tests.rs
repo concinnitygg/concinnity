@@ -1,15 +1,13 @@
 use crate::ecs::Ref;
-use alloc::string::ToString;
-use alloc::vec;
 use alloc::vec::Vec;
 
 use super::*;
 use crate::components::{
-    Camera3D, DebugHud, EngineDefaults, LoadingOverlay, PhysicsConfig, ProceduralMesh, Prop,
-    PropBody, Scene, Screen, Sprite, StatHud, StreamingConfig, TextLabel,
+    DebugHud, EngineDefaults, LoadingOverlay, PhysicsConfig, PropBody, Scene, Screen, Sprite,
+    StatHud, StreamingConfig, TextLabel,
 };
 use crate::ecs::World;
-use crate::resource::{EnvironmentMapTable, FontTable, MaterialTable, MeshTable, ResourceEntry};
+use crate::resource::FontTable;
 
 // Run the pass over a world, as `World::start` does.
 fn complete(world: &mut World) -> Result<(), WorldError> {
@@ -137,121 +135,6 @@ fn two_engine_defaults_are_an_error() {
         complete(&mut world),
         Err(WorldError::RepeatedEngineDefaults { count: 2 })
     ));
-}
-
-// A world lit by an environment map gets the geometry that displays it: a
-// skybox mesh baked at start, its material, and the prop that places it.
-#[test]
-fn an_environment_map_gets_the_sky() {
-    let mut world = rendering();
-    world.insert_resource(EnvironmentMapTable(vec![ResourceEntry::default()]));
-    complete(&mut world).unwrap();
-
-    let mesh = world
-        .query::<ProceduralMesh>()
-        .next()
-        .expect("the skybox mesh");
-    assert_eq!(mesh.generator, "skybox");
-    assert!(mesh.locator.is_none(), "baked at start, not compiled");
-    let payloads = world
-        .resource::<crate::resource::RuntimeMeshPayloads>()
-        .expect("a baked payload");
-    assert!(payloads.get(ids::<ProceduralMesh>(&world)[0]).is_some());
-
-    let prop = world.query::<Prop>().next().expect("the sky prop");
-    assert_eq!(prop.mesh, Some(crate::ecs::MeshHandle::new(0)));
-    assert_eq!(prop.material, Some(crate::ecs::MaterialHandle::new(0)));
-    assert_eq!(
-        world.resource::<MaterialTable>().expect("materials").len(),
-        1
-    );
-}
-
-// The baked mesh takes the first handle past everything the build assigned, so
-// a handle already baked into a Prop still reaches its own geometry.
-#[test]
-fn the_baked_sky_mesh_trails_every_build_assigned_handle() {
-    let mut world = rendering();
-    world.insert_resource(EnvironmentMapTable(vec![ResourceEntry::default()]));
-    // Two compiled Mesh resources and one compiled ProceduralMesh: handles 0..3.
-    world.insert_resource(MeshTable(vec![
-        ResourceEntry::default(),
-        ResourceEntry::default(),
-    ]));
-    world.push_identified(
-        AssetId(1),
-        ProceduralMesh {
-            generator: "box".to_string(),
-            locator: Some(crate::ecs::PayloadLocator {
-                blob_index: 0,
-                offset: 0,
-                len: 1,
-            }),
-            ..Default::default()
-        },
-    );
-    complete(&mut world).unwrap();
-
-    let prop = world.query::<Prop>().next().expect("the sky prop");
-    assert_eq!(prop.mesh, Some(crate::ecs::MeshHandle::new(3)));
-}
-
-#[test]
-fn the_sky_mesh_tracks_the_camera_far_plane_and_caps() {
-    let size_for = |far: f32| {
-        let mut world = rendering();
-        world.insert_resource(EnvironmentMapTable(vec![ResourceEntry::default()]));
-        world.add_component(Camera3D::bake(crate::components::cook::Camera3D {
-            far,
-            ..Default::default()
-        }));
-        complete(&mut world).unwrap();
-        world.query::<ProceduralMesh>().next().unwrap().size
-    };
-    assert_eq!(size_for(100.0), Some(90.0));
-    assert_eq!(size_for(900.0), Some(400.0));
-}
-
-#[test]
-fn a_world_with_its_own_skybox_geometry_gets_no_sky() {
-    let mut world = rendering();
-    world.insert_resource(EnvironmentMapTable(vec![ResourceEntry::default()]));
-    world.push_identified(
-        AssetId(1),
-        ProceduralMesh {
-            generator: "skybox".to_string(),
-            ..Default::default()
-        },
-    );
-    complete(&mut world).unwrap();
-    assert!(world.query::<Prop>().next().is_none());
-    assert_eq!(world.query::<ProceduralMesh>().count(), 1);
-}
-
-#[test]
-fn no_environment_map_means_no_sky() {
-    let mut world = rendering();
-    complete(&mut world).unwrap();
-    assert!(world.query::<Prop>().next().is_none());
-    assert!(world.query::<ProceduralMesh>().next().is_none());
-}
-
-// The cube example turns the sky off so its spin behavior, scoped to `Prop`,
-// still resolves to the one prop the world declares.
-#[test]
-fn opting_out_of_the_sky_leaves_the_world_its_own_props() {
-    let mut world = rendering();
-    world.insert_resource(EnvironmentMapTable(vec![ResourceEntry::default()]));
-    world.add_component(Prop::default());
-    world.add_component(EngineDefaults {
-        sky: false,
-        ..Default::default()
-    });
-    complete(&mut world).unwrap();
-
-    assert_eq!(world.query::<Prop>().count(), 1);
-    assert!(world.query::<ProceduralMesh>().next().is_none());
-    assert!(world.resource::<MaterialTable>().is_none());
 }
 
 #[test]
@@ -397,15 +280,12 @@ fn the_loading_overlay_toggle_opts_out() {
 #[test]
 fn minted_names_are_unique_and_out_of_the_declared_range() {
     let mut world = streamed();
-    world.insert_resource(EnvironmentMapTable(vec![ResourceEntry::default()]));
     world.add_component(StatHud::default());
     complete(&mut world).unwrap();
 
     let mut all: Vec<AssetId> = ids::<TextLabel>(&world);
     all.extend(ids::<Sprite>(&world));
     all.extend(ids::<Screen>(&world));
-    all.extend(ids::<Prop>(&world));
-    all.extend(ids::<ProceduralMesh>(&world));
     assert!(all.iter().all(|id| id.is_minted()), "{all:?}");
     let mut sorted = all.clone();
     sorted.sort_unstable();
@@ -417,7 +297,6 @@ fn minted_names_are_unique_and_out_of_the_declared_range() {
 #[test]
 fn completing_an_already_completed_world_adds_nothing() {
     let mut world = streamed();
-    world.insert_resource(EnvironmentMapTable(vec![ResourceEntry::default()]));
     world.add_component(PropBody::default());
     complete(&mut world).unwrap();
     let census = world.component_census();

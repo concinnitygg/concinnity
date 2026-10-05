@@ -25,16 +25,13 @@ pub(crate) type RoomGeometry = (Room, Vec<Vertex>, Vec<u16>, Vec<(f32, Vec<u16>)
 // Mesh-geometry lookup tables from `load_mesh_geometry`: the loaded geometry
 // (dense, indexed by the unified mesh-source handle -- a `.mesh` reference's
 // `MeshHandle` indexes it directly), file-backed Mesh source metadata keyed by
-// handle (dev-only), the always-resident handle set, and the asset id ->
-// handle map for the geometry producers that are still components
-// (ProceduralMesh / VoxelChunk / File).
+// handle (dev-only), and the asset id -> handle map for the geometry producers
+// that are still components (ProceduralMesh / VoxelChunk / File).
 pub(crate) struct MeshGeometry {
     /// Decoded geometry, indexed by the unified mesh-source handle.
     pub meshes: Vec<LoadedMesh>,
     /// File-backed `Mesh` source metadata keyed by handle (dev-only).
     pub sources: std::collections::HashMap<usize, MeshSourceMeta>,
-    /// Handles whose props must stay resident regardless of streaming.
-    pub always_resident: std::collections::HashSet<usize>,
     /// Asset id to handle, for the geometry producers that are still
     /// components (`ProceduralMesh` / `VoxelChunk` / `File`).
     pub component_handles: std::collections::HashMap<AssetId, usize>,
@@ -108,9 +105,9 @@ type AppendedMesh = (
     [f32; 3],
 );
 
-// Sentinel AABB used when a draw object opts out of culling (e.g. unbounded
-// skybox geometry). Both metal and vulkan/directx backends should treat any
-// non-finite component as "always draw".
+// Sentinel AABB used when a draw object opts out of culling (a dynamic prop,
+// whose bounds move, or a room that encloses the camera). Every backend treats
+// a non-finite component as "always draw".
 const UNCULLED_BB: ([f32; 3], [f32; 3]) = (
     [f32::NAN, f32::NAN, f32::NAN],
     [f32::NAN, f32::NAN, f32::NAN],
@@ -244,9 +241,8 @@ pub(crate) struct MeshSourceMeta {
 // assigned handles, so `geometry[h]` is the source cook gave handle `h`.
 // Returns None if any payload is missing or malformed. Also returns a
 // handle-keyed source-meta map for file-backed Mesh declarations under
-// `cn debug` (from the dev `MeshSources` catalog), the set of handles whose
-// props must always stay resident (skybox-class geometry that encloses the
-// camera), and the asset id -> handle map for the still-component producers.
+// `cn debug` (from the dev `MeshSources` catalog) and the asset id -> handle
+// map for the still-component producers.
 pub(crate) fn load_mesh_geometry(
     ctx: &mut PipelineContext,
     deferred: &DeferredMeshSources,
@@ -370,20 +366,9 @@ pub(crate) fn load_mesh_geometry(
         ..
     } = sink;
 
-    // Skybox-generated meshes enclose the camera, so any prop using one must
-    // opt out of frustum culling AND streaming residency (per the
-    // StreamingConfig docstring's "skybox always stays resident" promise).
-    let always_resident_meshes: std::collections::HashSet<usize> = proc_meshes
-        .iter()
-        .chain(&baked_meshes)
-        .filter(|(_, pm)| pm.generator == "skybox")
-        .filter_map(|(id, _)| component_handles.get(&(*id)?).copied())
-        .collect();
-
     Some(MeshGeometry {
         meshes: geometry,
         sources: mesh_sources,
-        always_resident: always_resident_meshes,
         component_handles,
         deferred_seeds: deferred_payloads,
     })
@@ -571,7 +556,6 @@ pub(crate) struct DrawListInputs<'a> {
     // to slot 0.
     pub texture_count: usize,
     pub material_map: &'a std::collections::HashMap<MaterialHandle, MaterialEntry>,
-    pub always_resident_meshes: &'a std::collections::HashSet<usize>,
 }
 
 pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
@@ -584,7 +568,6 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
         room_geometry,
         texture_count,
         material_map,
-        always_resident_meshes,
     } = inputs;
     let mut all_vertices: Vec<Vertex> = Vec::new();
     let mut all_indices: Vec<u32> = Vec::new();
@@ -726,12 +709,11 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                         return None;
                     }
                 };
-                let (bb_min, bb_max) =
-                    if item.is_dynamic || always_resident_meshes.contains(&sub_mesh) {
-                        UNCULLED_BB
-                    } else {
-                        frustum::transform_aabb(local_min, local_max, model_mat)
-                    };
+                let (bb_min, bb_max) = if item.is_dynamic {
+                    UNCULLED_BB
+                } else {
+                    frustum::transform_aabb(local_min, local_max, model_mat)
+                };
                 union_local(local_min, local_max);
                 let slot = DrawIndex::from_usize(draw_objects.len());
                 prop_idxs.push(slot);
@@ -800,12 +782,11 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     return None;
                 }
             };
-            let (bb_min, bb_max) =
-                if item.is_dynamic || always_resident_meshes.contains(&mesh_handle) {
-                    UNCULLED_BB
-                } else {
-                    frustum::transform_aabb(local_min, local_max, model_mat)
-                };
+            let (bb_min, bb_max) = if item.is_dynamic {
+                UNCULLED_BB
+            } else {
+                frustum::transform_aabb(local_min, local_max, model_mat)
+            };
             union_local(local_min, local_max);
             let slot = DrawIndex::from_usize(draw_objects.len());
             prop_idxs.push(slot);
@@ -1124,7 +1105,6 @@ mod tests {
             room_geometry: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &std::collections::HashSet::new(),
         })
         .expect("build_draw_list");
         let DrawListData {
@@ -1185,7 +1165,6 @@ mod tests {
             room_geometry: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &std::collections::HashSet::new(),
         })
         .expect("build_draw_list");
         let DrawListData {
@@ -1196,51 +1175,6 @@ mod tests {
 
         assert!(draw_objects.is_empty());
         assert!(clusters.is_empty());
-    }
-
-    #[test]
-    fn always_resident_mesh_forces_uncullable_bb_on_static_prop() {
-        // A static prop with no dynamic flags would normally get a finite AABB
-        // and be picked up by the streamer's `obj.cullable()` selection. When
-        // its mesh is in the always_resident_meshes set (e.g. the auto-generated
-        // skybox), the bb is forced to NaN so the prop opts out of frustum
-        // culling and of mesh streaming. This is what the StreamingConfig
-        // docstring promises for the skybox.
-        let mesh_geometry = vec![unit_quad_mesh()];
-
-        // A single static mesh-backed item referencing the always-resident mesh.
-        let items = vec![RenderableItem {
-            asset_id: None,
-            model: None,
-            mesh: Some(MeshHandle::new(0)),
-            material: None,
-            cull_distance: 0.0,
-            is_dynamic: false,
-        }];
-        let world_mats = vec![IDENTITY4];
-
-        let mut always_resident = std::collections::HashSet::new();
-        always_resident.insert(0usize);
-
-        let data = build_draw_list(DrawListInputs {
-            items: &items,
-            instanced_props: &[],
-            world_mats: &world_mats,
-            model_map: &std::collections::HashMap::new(),
-            mesh_geometry: &mesh_geometry,
-            room_geometry: &[],
-            texture_count: 0,
-            material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &always_resident,
-        })
-        .expect("build_draw_list");
-        let DrawListData { draw_objects, .. } = data;
-
-        assert_eq!(draw_objects.len(), 1);
-        // UNCULLED_BB is all-NaN; `cullable()` returns false in that case.
-        assert!(draw_objects[0].bb_min[0].is_nan());
-        assert!(draw_objects[0].bb_max[0].is_nan());
-        assert!(!draw_objects[0].cullable());
     }
 
     // The item built from a mesh entity's components reads the renderer fields
@@ -1352,7 +1286,6 @@ mod tests {
             room_geometry: &[],
             texture_count: 0,
             material_map: &material_map,
-            always_resident_meshes: &std::collections::HashSet::new(),
         })
         .expect("build_draw_list");
         let DrawListData {
@@ -1397,7 +1330,6 @@ mod tests {
             room_geometry: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &std::collections::HashSet::new(),
         })
         .expect("build_draw_list");
         let DrawListData {
@@ -1448,7 +1380,6 @@ mod tests {
             room_geometry: &room_geometry,
             texture_count: 7,
             material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &std::collections::HashSet::new(),
         })
         .expect("build_draw_list");
         let DrawListData {
@@ -1495,7 +1426,6 @@ mod tests {
             room_geometry: &[],
             texture_count: 3,
             material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &std::collections::HashSet::new(),
         })
         .expect("build_draw_list");
         let DrawListData { draw_objects, .. } = data;
@@ -1522,7 +1452,6 @@ mod tests {
             room_geometry: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &std::collections::HashSet::new(),
         }));
 
         // Model sub-mesh with no mesh field.
@@ -1543,7 +1472,6 @@ mod tests {
             room_geometry: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &std::collections::HashSet::new(),
         }));
 
         // Model sub-mesh whose mesh id has no geometry.
@@ -1564,7 +1492,6 @@ mod tests {
             room_geometry: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &std::collections::HashSet::new(),
         }));
 
         // Model sub-mesh referencing a material absent from the material_map.
@@ -1585,7 +1512,6 @@ mod tests {
             room_geometry: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &std::collections::HashSet::new(),
         }));
 
         // Single-mesh item whose mesh id has no geometry.
@@ -1598,7 +1524,6 @@ mod tests {
             room_geometry: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &std::collections::HashSet::new(),
         }));
 
         // Single-mesh item referencing a material absent from the material_map.
@@ -1613,7 +1538,6 @@ mod tests {
             room_geometry: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &std::collections::HashSet::new(),
         }));
 
         // Item carrying neither a model nor a mesh.
@@ -1633,7 +1557,6 @@ mod tests {
             room_geometry: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &std::collections::HashSet::new(),
         }));
 
         // InstancedProp mesh id has no geometry.
@@ -1652,7 +1575,6 @@ mod tests {
             room_geometry: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &std::collections::HashSet::new(),
         }));
 
         // InstancedProp material absent from the material_map.
@@ -1671,7 +1593,6 @@ mod tests {
             room_geometry: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
-            always_resident_meshes: &std::collections::HashSet::new(),
         }));
     }
 
@@ -1733,7 +1654,7 @@ mod tests {
             .into_iter()
             .map(|payload| ResourceEntry {
                 payload,
-                data_bytes: Vec::new(),
+                ..Default::default()
             })
             .collect();
         world.insert_resource(MeshTable(entries));
@@ -1766,7 +1687,6 @@ mod tests {
         let MeshGeometry {
             meshes: geometry,
             sources,
-            always_resident: resident,
             component_handles,
             ..
         } = load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("decoded");
@@ -1780,10 +1700,6 @@ mod tests {
         // The source-capture map only fills under the dev-flag global, which the
         // tests never set, so it stays empty here.
         assert!(sources.is_empty());
-        assert!(
-            resident.is_empty(),
-            "no skybox mesh -> nothing always-resident"
-        );
     }
 
     // A deferred Mesh skips its decode: empty geometry with the baked bounds,
@@ -1839,35 +1755,6 @@ mod tests {
         assert!(seeds.is_empty());
     }
 
-    // A skybox ProceduralMesh decodes and is marked always-resident so its props
-    // opt out of culling and streaming.
-    #[test]
-    fn load_mesh_geometry_marks_skybox_always_resident() {
-        let mut b = BlobWorld::new();
-        let loc = b.payload(&tri_payload());
-        b.push_identified(
-            AssetId(2),
-            ProceduralMesh {
-                generator: "skybox".to_string(),
-                locator: Some(loc),
-                ..Default::default()
-            },
-        );
-        let mut world = b.seal();
-        let mut ctx = world.context();
-
-        let MeshGeometry {
-            meshes: geometry,
-            always_resident: resident,
-            component_handles,
-            ..
-        } = load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("decoded");
-        // The lone component-backed producer got the first handle.
-        assert_eq!(component_handles.get(&AssetId(2)), Some(&0));
-        assert_eq!(geometry.len(), 1);
-        assert!(resident.contains(&0), "skybox generator stays resident");
-    }
-
     // Geometry the world baked for itself at start loads from the payload map
     // rather than a locator, and lands past every handle the build assigned.
     #[test]
@@ -1887,7 +1774,7 @@ mod tests {
         b.push_identified(
             AssetId(3),
             ProceduralMesh {
-                generator: "skybox".to_string(),
+                generator: "sphere".to_string(),
                 ..Default::default()
             },
         );
@@ -1899,7 +1786,6 @@ mod tests {
 
         let MeshGeometry {
             meshes: geometry,
-            always_resident: resident,
             component_handles,
             ..
         } = load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("decoded");
@@ -1911,7 +1797,6 @@ mod tests {
             "the baked mesh trails the compiled blocks"
         );
         assert_eq!(geometry[2].vertices.len(), 3, "the baked payload decoded");
-        assert!(resident.contains(&2), "a baked skybox stays resident too");
     }
 
     // A mesh baked at start whose payload never reached the map aborts the
@@ -1922,7 +1807,7 @@ mod tests {
         b.push_identified(
             AssetId(3),
             ProceduralMesh {
-                generator: "skybox".to_string(),
+                generator: "sphere".to_string(),
                 ..Default::default()
             },
         );
@@ -1958,11 +1843,10 @@ mod tests {
         let MeshGeometry {
             meshes: geometry,
             sources,
-            always_resident: resident,
             component_handles,
             ..
         } = load_mesh_geometry(&mut ctx, &DeferredMeshSources::default(), false).expect("ok");
-        assert!(geometry.is_empty() && sources.is_empty() && resident.is_empty());
+        assert!(geometry.is_empty() && sources.is_empty());
         assert!(component_handles.is_empty());
     }
 

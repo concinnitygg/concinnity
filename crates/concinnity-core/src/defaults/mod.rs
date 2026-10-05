@@ -4,20 +4,18 @@
 //! [`run`] is the [`SystemTable`](crate::ecs::SystemTable) completion pass, so
 //! it happens before the gates read the world and a HUD or overlay it injects
 //! brings its own system into the schedule. Nothing it adds is compiled: the
-//! chip font and the sky mesh are baked here out of [`crate::bake`], and the
-//! names they cross-reference each other by come from the range
+//! chip font is baked here out of [`crate::bake`], and the names the injected
+//! components cross-reference each other by come from the range
 //! [`AssetId::MINTED_BASE`] reserves.
 //!
-//! A world that renders -- one declaring a
-//! [`GraphicsConfig`] -- receives the HUD,
-//! sky, and loading defaults. The physics default is gated on physics content
+//! A world that renders -- one declaring a [`GraphicsConfig`] -- receives the
+//! HUD and loading defaults. The physics default is gated on physics content
 //! instead, so the headless tier, which has no renderer and needs no HUD, gets
 //! the [`PhysicsConfig`](crate::components::PhysicsConfig) its simulation
 //! already runs on and nothing else.
 //!
 //! Each default yields to what the world declares: an authored HUD keeps every
-//! label it names and receives chips only for the slots it leaves unset, and a
-//! world with its own skybox geometry gets no sky mesh. An
+//! label it names and receives chips only for the slots it leaves unset. An
 //! [`EngineDefaults`] turns individual
 //! defaults off entirely; the world holds at most one, and its column is
 //! drained here.
@@ -26,7 +24,6 @@ mod font;
 mod hud;
 mod loading;
 mod physics;
-mod sky;
 
 use crate::components::{EngineDefaults, GraphicsConfig};
 use crate::ecs::asset_id::AssetIdsExhausted;
@@ -60,9 +57,6 @@ fn inject_defaults(
     // renderer to draw it.
     if ctx.query::<GraphicsConfig>().next().is_none() {
         return Ok(());
-    }
-    if toggles.sky {
-        sky::inject(ctx, minter)?;
     }
     if toggles.hud {
         hud::complete_stat_hud(ctx, minter)?;

@@ -428,6 +428,13 @@ impl DxContext {
             self.inc_draw_calls(1);
         }
 
+        // The sky lands behind phase 1's geometry. Under two-pass occlusion
+        // `Main2` then draws the disoccluded rest over it, which wins the depth
+        // test because the sky writes none.
+        if self.draws_sky(self.state.view.mode) {
+            self.encode_main_sky(cmd, frame_idx, view_gva);
+        }
+
         // Resolve the HDR scene target so the post stack can sample it. Under
         // two-pass occlusion the resolve is deferred to `Main2` (which re-runs
         // the disoccluded geometry on top of this pass's color + depth), so the

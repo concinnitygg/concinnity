@@ -1180,6 +1180,15 @@ impl DxContext {
                     pass_id.name()
                 )));
             }
+            PassId::Sky => {
+                // Drawn inline at the tail of Main and of every probe face and
+                // mirror render; it only names a timing slot.
+                return Err(RenderError::Other(format!(
+                    "graph executor (directx): pass {} is drawn inline by the opaque \
+                     scene passes and should not appear as a graph node",
+                    pass_id.name()
+                )));
+            }
             PassId::ReflectionComposite => {
                 // Metal-only inline pass; never scheduled on DirectX. Handled
                 // here only to keep the dispatch match exhaustive.

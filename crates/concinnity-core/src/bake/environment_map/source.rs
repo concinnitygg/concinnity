@@ -128,7 +128,7 @@ pub fn bake_payload<S: RowScheduler>(
         DEFAULT_IRRADIANCE_THETA_SAMPLES,
     )
     .bake(rows);
-    // The source-resolution mip 0 IS the on-screen skybox, keep it unclamped.
+    // The source-resolution mip 0 IS the on-screen background, keep it unclamped.
     let mut prefilter = Vec::with_capacity(prefilter_mips as usize);
     prefilter.push(prefilter_mip0(
         &source_cube,

@@ -18,6 +18,7 @@ use concinnity_core::render::scene_flow;
 use concinnity_core::render::scene_state::SceneState;
 use concinnity_core::render::shadow_schedule;
 use concinnity_core::render::spot_shadow;
+use concinnity_core::render::view_history::ViewHistory;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -86,8 +87,8 @@ pub(super) struct InstancedState {
 }
 
 // Scene-captured reflection probes: each surface's specular reflection samples
-// the nearest probe whose box contains it, while the skybox + diffuse keep the
-// sky. See metal/probe.rs and metal/probe_set.rs.
+// the nearest probe whose box contains it, while the background + diffuse keep
+// the sky. See metal/probe.rs and metal/probe_set.rs.
 pub(super) struct ProbeState {
     // The placements (declared `ReflectionProbe` assets or `auto_seed_probes`),
     // the record of every installed probe (the live count the shaders read) and
@@ -528,8 +529,7 @@ pub(super) struct MtlSceneAssets {
     // gray fallback for both cubes when no EnvironmentMap was supplied, so
     // the fragment shader's texture(3) / texture(4) bindings are always
     // valid. `prefilter_mip_count == 0` means no EnvironmentMap is declared,
-    // and the fragment shader draws the gradient sky and the flat albedo
-    // ambient term instead of IBL.
+    // and the fragment shader uses the flat albedo ambient term instead of IBL.
     pub env_map: EnvironmentMapTextures,
     // 3D color-grading LUT sampled in the composite pass. Holds the declared
     // `ColorLut` payload, or a 2x2x2 identity LUT when the world declares
@@ -620,7 +620,7 @@ pub(crate) struct MtlContext {
     pub(super) spot_shadow: SpotShadowState,
     // Local reflection probes: the scene captured into one cube per placement
     // (metal/probe.rs). Distinct from `scene.env_map` (which stays the sky -- it
-    // drives the skybox + diffuse irradiance) so the bake never corrupts the
+    // drives the background + diffuse irradiance) so the bake never corrupts the
     // visible sky. See [`ProbeState`].
     pub(super) probe: ProbeState,
     pub(super) text: TextState,
@@ -640,10 +640,10 @@ pub(crate) struct MtlContext {
     // ping-pong history buffers, and per-frame bookkeeping. See [`TaaState`].
     pub(super) taa: TaaState,
     // Previous frame's un-jittered view-projection, fed to the velocity
-    // pre-pass to reproject motion. Identity until the first frame completes.
-    // (Shared by both TAA and the upscaler when either drives the velocity
-    // pre-pass, so it is kept flat rather than under `taa`.)
-    pub(super) prev_view_proj: [[f32; 4]; 4],
+    // pre-pass to reproject motion. (Shared by both TAA and the upscaler when
+    // either drives the velocity pre-pass, so it is kept flat rather than
+    // under `taa`.)
+    pub(super) view_history: ViewHistory,
     // MetalFX-temporal-upscaling feature state: the scaler, the input/output
     // scale ratio, the per-frame projection jitter, and the history-reset
     // flag. When the scaler is `Some`, the 3D scene renders at
@@ -737,6 +737,8 @@ pub(crate) struct MtlContext {
     pub(super) planar_reflection: Option<super::planar::PlanarReflectionSet>,
     pub(super) glass: GlassState,
     pub(super) raymarch: RaymarchState,
+    // The environment drawn behind the opaque scene. See `metal/sky.rs`.
+    pub(super) sky: super::sky::SkyState,
     // Device, queues, allocator and window. Declared last so every resource
     // above releases before the device layer and the window it presents to.
     pub(super) hw: MtlHardware,

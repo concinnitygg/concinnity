@@ -19,8 +19,8 @@ use crate::bake::environment_map::stars::generate_stars_equirect;
 use crate::bake::mesh::{finish_mesh_payload, vertices_from_data};
 use crate::components::{EnvironmentMap, Font, Material, Mesh, ProceduralMesh, validate};
 use crate::geometry::{
-    Vert, build_box, build_cylinder, build_extrude, build_plane, build_room_geometry, build_skybox,
-    build_sphere, build_terrain, water_grid,
+    Vert, build_box, build_cylinder, build_extrude, build_plane, build_room_geometry, build_sphere,
+    build_terrain, water_grid,
 };
 
 // Fallbacks for the generator arguments a `ProceduralMesh` leaves unset. Each
@@ -34,7 +34,6 @@ const SPHERE_RINGS: u32 = 12;
 const SPHERE_SEGMENTS: u32 = 16;
 const TERRAIN_SUBDIVISIONS: u32 = 64;
 const TERRAIN_AMPLITUDE: f32 = 4.0;
-const SKYBOX_SIZE: f32 = 490.0;
 const EXTRUDE_HEIGHT: f32 = 1.0;
 const EXTRUDE_CORNER_RADIUS: f32 = 0.0;
 const EXTRUDE_CORNER_SEGMENTS: u32 = 8;
@@ -92,7 +91,6 @@ pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, String> {
             mesh.subdivisions.unwrap_or(TERRAIN_SUBDIVISIONS),
             mesh.amplitude.unwrap_or(TERRAIN_AMPLITUDE),
         )?,
-        "skybox" => build_skybox(mesh.size.unwrap_or(SKYBOX_SIZE)),
         "extrude" => {
             let profile = mesh
                 .profile
@@ -234,7 +232,6 @@ mod tests {
             mesh("plane"),
             mesh("sphere"),
             mesh("terrain"),
-            mesh("skybox"),
             mesh("water_grid"),
             extrude,
         ] {

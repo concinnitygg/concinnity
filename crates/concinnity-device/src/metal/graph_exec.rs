@@ -726,6 +726,15 @@ impl MtlContext {
                     pass_id.name()
                 )));
             }
+            PassId::Sky => {
+                // Drawn inline at the tail of Main and of every probe face and
+                // mirror render; it only names a timing slot.
+                return Err(RenderError::Other(format!(
+                    "graph executor: pass {} is drawn inline by the opaque scene \
+                         passes; it should not appear as its own graph node",
+                    pass_id.name()
+                )));
+            }
             PassId::ReflectionComposite => {
                 // Encoded inline at the tail of SsrResolve / RtReflections (it
                 // blurs + composites the reflection target they wrote). Keeps a

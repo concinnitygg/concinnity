@@ -243,10 +243,6 @@ float3 irradiance_sample(float3 n)
 {
     return irradiance_cube.Sample(cube_sampler, SKY_DIR(n)).rgb;
 }
-float3 prefilter_sample_level0(float3 dir)
-{
-    return prefilter_cube.SampleLevel(cube_sampler, SKY_DIR(dir), 0.0).rgb;
-}
 float3 prefilter_sample_bias(float3 dir, float lod)
 {
     return prefilter_cube.SampleBias(cube_sampler, SKY_DIR(dir), lod).rgb;

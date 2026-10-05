@@ -6,12 +6,10 @@
 /// declare itself: the [DebugHud](#debughud) with its chip
 /// [TextLabel](#textlabel)s and font, the chips and font of a
 /// [StatHud](#stathud), the [PhysicsConfig](#physicsconfig) a world with
-/// physics content simulates on, the [LoadingOverlay](#loadingoverlay) a
-/// streamed world waits behind, and, when an
-/// [EnvironmentMap](#environmentmap) is present, the sky mesh that displays
-/// it. Declaring a piece yourself keeps the injection from filling that slot;
-/// declaring `EngineDefaults` with a flag set to `false` removes the whole
-/// default.
+/// physics content simulates on, and the [LoadingOverlay](#loadingoverlay) a
+/// streamed world waits behind. Declaring a piece yourself keeps the
+/// injection from filling that slot; declaring `EngineDefaults` with a flag set
+/// to `false` removes the whole default.
 ///
 /// Two defaults are stated in terms of a [MainMenu](#mainmenu), which the
 /// build expands away, so they are injected by the build instead: the
@@ -21,7 +19,7 @@
 /// # use concinnity_core::components::EngineDefaults;
 /// EngineDefaults {
 ///     debug_hud: false,
-///     sky: false,
+///     loading_overlay: false,
 ///     ..Default::default()
 /// };
 /// ```
@@ -46,13 +44,6 @@ pub struct EngineDefaults {
     /// declares no `DebugHud`.
     #[asset(default = true)]
     pub debug_hud: bool,
-    /// Inject the sky mesh (a skybox mesh, [Material](#material), and
-    /// [Prop](#prop)) when the world has an
-    /// [EnvironmentMap](#environmentmap) but no skybox mesh. Disable to use an
-    /// `EnvironmentMap` for image-based lighting only, with the background
-    /// left to `clear_color` or your own geometry.
-    #[asset(default = true)]
-    pub sky: bool,
     /// Inject an Escape-toggled pause [MainMenu](#mainmenu) when the world
     /// plays a [Story](#story) but declares no `MainMenu`: Resume, Save, Load,
     /// a trimmed Settings screen, and Quit to the story's title. Disable to

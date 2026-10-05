@@ -1,5 +1,6 @@
 // Samples in, report out. Pure: no clock, no world, no I/O.
 
+use concinnity_core::render::render_graph::PassId;
 use serde::Serialize;
 
 use crate::frame_report::sample::{FrameRun, FrameSample};
@@ -74,6 +75,11 @@ pub struct PassShare {
     /// number moved with every other pass has not changed, and its share says
     /// so.
     pub share: f32,
+    /// The listed pass whose time already includes this one's, for a pass the
+    /// backend timed inside another. It is listed right below that pass and
+    /// left out of the remainder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub within: Option<String>,
 }
 
 /// One system's CPU contribution to a segment's frame, or the render side's
@@ -120,7 +126,8 @@ pub struct SlowFrame {
     /// The largest CPU costs, systems and the render submission together,
     /// largest first. Zero rows are left out.
     pub cpu: Vec<FrameCost>,
-    /// The largest passes of the GPU frame it reported, largest first.
+    /// The largest passes of the GPU frame it reported, largest first, leaving
+    /// out a pass timed inside another.
     pub passes: Vec<FrameCost>,
 }
 
@@ -233,9 +240,18 @@ fn slowest_frames(measured: &[&FrameSample], run: &FrameRun) -> Vec<SlowFrame> {
                     .map(|(slot, name)| (name, sample.system_us[slot]))
                     .chain(core::iter::once((RENDER_SUBMIT, sample.render_cpu_us))),
             ),
-            passes: largest(
-                named_slots(&run.pass_names).map(|(slot, name)| (name, sample.pass_us[slot])),
-            ),
+            passes: {
+                let us = |name: &str| {
+                    named_slots(&run.pass_names)
+                        .find(|(_, n)| *n == name)
+                        .map_or(0, |(slot, _)| sample.pass_us[slot])
+                };
+                largest(
+                    named_slots(&run.pass_names)
+                        .filter(|(_, name)| counted_in(name, |outer| us(outer) > 0).is_none())
+                        .map(|(slot, name)| (name, sample.pass_us[slot])),
+                )
+            },
         })
         .collect()
 }
@@ -252,6 +268,16 @@ fn largest<'a>(costs: impl Iterator<Item = (&'a str, u32)>) -> Vec<FrameCost> {
     rows.sort_by_key(|row| core::cmp::Reverse(row.us));
     rows.truncate(SLOW_FRAME_ROWS);
     rows
+}
+
+// The pass the named one's time is already counted in: the pass whose timing
+// span contains it, when that pass ran. A nested pass whose enclosing pass did
+// not run has nothing to be counted twice in, so it stands on its own.
+fn counted_in(name: &str, ran: impl Fn(&str) -> bool) -> Option<&'static str> {
+    PassId::from_name(name)
+        .and_then(PassId::enclosing)
+        .map(PassId::name)
+        .filter(|outer| ran(outer))
 }
 
 // The occupied slots of a name table, with their index.
@@ -364,7 +390,8 @@ fn span_seconds(frames: &[&FrameSample]) -> f32 {
 }
 
 // The passes that owned the GPU frame, largest first, with each one's share of
-// it. Passes that never ran are left out rather than listed as zero.
+// it, and a pass timed inside another listed right below it. Passes that never
+// ran are left out rather than listed as zero.
 fn pass_shares(
     frames: &[&FrameSample],
     run: &FrameRun,
@@ -392,26 +419,51 @@ fn pass_shares(
                 } else {
                     median_us as f32 / gpu_median_us as f32
                 },
+                within: None,
             })
         })
         .collect();
     shares.sort_unstable_by_key(|p| core::cmp::Reverse(p.median_us));
-    shares.truncate(PASSES_REPORTED);
+    let mut shares = nest(shares);
 
     // Passes on separate queues overlap, so their times can sum past the frame
     // they ran in; there is nothing left over to report when they do. A backend
     // that timed nothing gets no row either: the remainder corrects a partial
     // list rather than standing in for one.
-    let listed: u32 = shares.iter().map(|p| p.median_us).sum();
+    let listed: u32 = shares
+        .iter()
+        .filter(|p| p.within.is_none())
+        .map(|p| p.median_us)
+        .sum();
     let rest = gpu_median_us.saturating_sub(listed);
     if rest > 0 && !shares.is_empty() {
         shares.push(PassShare {
             name: UNATTRIBUTED.to_string(),
             median_us: rest,
             share: rest as f32 / gpu_median_us as f32,
+            within: None,
         });
     }
     shares
+}
+
+// Cut a cost-ordered pass list to the passes a segment reports, each followed
+// by the passes timed inside it (see `counted_in`).
+fn nest(shares: Vec<PassShare>) -> Vec<PassShare> {
+    let ran: Vec<String> = shares.iter().map(|p| p.name.clone()).collect();
+    let within = |name: &str| counted_in(name, |outer| ran.iter().any(|n| n == outer));
+    let (mut inner, top): (Vec<PassShare>, Vec<PassShare>) =
+        shares.into_iter().partition(|p| within(&p.name).is_some());
+    let mut out = Vec::with_capacity(top.len() + inner.len());
+    for pass in top.into_iter().take(PASSES_REPORTED) {
+        let outer = pass.name.clone();
+        out.push(pass);
+        for mut p in inner.extract_if(.., |p| within(&p.name) == Some(outer.as_str())) {
+            p.within = Some(outer.clone());
+            out.push(p);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -595,6 +647,110 @@ mod tests {
             .map(|p| p.name.as_str())
             .collect();
         assert_eq!(names, ["main", "async"]);
+    }
+
+    // Vulkan and DirectX time the sky inside the main pass. Its row sits
+    // under main and stays out of the remainder, so the top-level rows add up
+    // to the frame the way they do on Metal, which reports no sky time.
+    #[test]
+    fn a_pass_timed_inside_another_is_listed_under_it_and_counted_once() {
+        let mut nested = sample(0.0, Some(0), 20_000);
+        // gpu_frame is 10_000us: main 6_000 (sky's 1_000 included), shadow 3_000.
+        nested.pass_us[0] = 3_000;
+        nested.pass_us[1] = 6_000;
+        nested.pass_us[2] = 1_000;
+        let mut run = run_of(vec![nested]);
+        run.pass_names = vec!["shadow".to_string(), "main".to_string(), "sky".to_string()];
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let rows: Vec<(&str, Option<&str>, u32)> = report
+            .overall
+            .passes
+            .iter()
+            .map(|p| (p.name.as_str(), p.within.as_deref(), p.median_us))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("main", None, 6_000),
+                ("sky", Some("main"), 1_000),
+                ("shadow", None, 3_000),
+                (UNATTRIBUTED, None, 1_000),
+            ]
+        );
+        let top: f32 = report
+            .overall
+            .passes
+            .iter()
+            .filter(|p| p.within.is_none())
+            .map(|p| p.share)
+            .sum();
+        assert!((top - 1.0).abs() < 1e-4);
+
+        // The same frame with the sky folded into main and no sky reading.
+        let mut folded = sample(0.0, Some(0), 20_000);
+        folded.pass_us[0] = 3_000;
+        folded.pass_us[1] = 6_000;
+        let mut run = run_of(vec![folded]);
+        run.pass_names = vec!["shadow".to_string(), "main".to_string(), "sky".to_string()];
+        let metal = Report::of(&run, no_warmup()).expect("measured frames");
+        let unattributed = |r: &Report| r.overall.passes.last().map(|p| p.median_us);
+        assert_eq!(unattributed(&metal), unattributed(&report));
+    }
+
+    // With no enclosing pass on the list there is nothing to count it twice in.
+    #[test]
+    fn a_nested_pass_without_its_enclosing_pass_stands_on_its_own() {
+        let mut only = sample(0.0, Some(0), 20_000);
+        only.pass_us[1] = 4_000;
+        let mut run = run_of(vec![only]);
+        run.pass_names = vec!["main".to_string(), "sky".to_string()];
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let passes = &report.overall.passes;
+        assert_eq!(passes[0].name, "sky");
+        assert_eq!(passes[0].within, None);
+        assert_eq!(passes[1].median_us, 6_000);
+    }
+
+    // The slow-frame list follows the segment list's rule: a nested pass whose
+    // enclosing pass did not run that frame is listed on its own.
+    #[test]
+    fn a_slow_frame_lists_a_nested_pass_whose_enclosing_pass_did_not_run() {
+        let mut slow = sample(0.0, Some(0), 20_000);
+        slow.pass_us[1] = 1_000;
+        slow.pass_us[2] = 3_000;
+        let mut run = run_of(vec![slow]);
+        run.pass_names = vec!["main".to_string(), "sky".to_string(), "shadow".to_string()];
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let names: Vec<&str> = report.slowest[0]
+            .passes
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(names, ["shadow", "sky"]);
+        let segment: Vec<&str> = report
+            .overall
+            .passes
+            .iter()
+            .filter(|p| p.within.is_none())
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(segment, ["shadow", "sky", UNATTRIBUTED]);
+    }
+
+    #[test]
+    fn a_slow_frame_lists_only_the_passes_that_split_its_frame() {
+        let mut slow = sample(0.0, Some(0), 20_000);
+        slow.pass_us[0] = 6_000;
+        slow.pass_us[1] = 1_000;
+        let mut run = run_of(vec![slow]);
+        run.pass_names = vec!["main".to_string(), "sky".to_string()];
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let names: Vec<&str> = report.slowest[0]
+            .passes
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(names, ["main"]);
     }
 
     #[test]

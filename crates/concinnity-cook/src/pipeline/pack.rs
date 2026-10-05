@@ -522,7 +522,7 @@ fn compile_resource(
             crate::asset::CacheInputs::extra(rt.source_files(&asset.args, shared.assets_dir));
         let key = crate::cache::payload_key(
             RESOURCE_CACHE_DISC_BASE + job_resource_kind(*rt) as u8,
-            &asset.args,
+            &rt.payload_key_args(&asset.args),
             &ctx,
             &inputs,
         );

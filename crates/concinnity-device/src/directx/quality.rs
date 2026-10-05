@@ -121,6 +121,8 @@ impl DxContext {
             let gbuffer = super::post::gbuffer::GbufferResources::new(
                 super::post::gbuffer::GbufferDeviceCtx {
                     alloc: &self.hw.alloc,
+                    info_queue: self.hw.info_queue.as_ref(),
+                    hot_reload: self.hot_reload.enabled,
                 },
                 super::post::gbuffer::GbufferExtent {
                     width: render_w,

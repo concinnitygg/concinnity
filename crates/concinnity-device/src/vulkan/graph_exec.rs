@@ -502,7 +502,7 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     pub vp_mat: [[f32; 4]; 4],
     // Un-jittered current-frame view-projection matrix. The G-buffer
     // pre-pass uses it (alongside `vp_mat` for the jittered VP and the
-    // prior frame's `prev_view_proj` stored on `GbufferResources`) so the
+    // prior frame's `view_history` stored on `GbufferResources`) so the
     // stored motion vector is free of sub-pixel jitter. `Default::default()`
     // for frames where the velocity channel isn't dispatched.
     pub cur_vp: [[f32; 4]; 4],
@@ -1030,6 +1030,15 @@ impl VkContext {
                     "graph executor (vulkan): pass {} is bundled inside SsaoBlur \
                      (encode_ssao encodes the SSAO kernel + blur sub-passes); it \
                      should not appear as its own graph node",
+                    pass_id.name()
+                )));
+            }
+            PassId::Sky => {
+                // Drawn inline at the tail of Main and of every probe face and
+                // mirror render; it only names a timing slot.
+                return Err(RenderError::Other(format!(
+                    "graph executor (vulkan): pass {} is drawn inline by the opaque \
+                     scene passes and should not appear as a graph node",
                     pass_id.name()
                 )));
             }

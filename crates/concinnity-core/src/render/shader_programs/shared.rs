@@ -123,12 +123,40 @@ pub static GBUFFER_PREPASS_FRAG_BINDLESS: ShaderProgram = ShaderProgram {
     gates: &["GB_FRAGMENT_BINDLESS"],
     msaa: false,
 };
+/// `gbuffer_sky_vertex` from `gbuffer_prepass.hlsl`: the sky's motion, drawn
+/// with the bindless fragment.
+pub static GBUFFER_SKY_VERT: ShaderProgram = ShaderProgram {
+    file: "gbuffer_prepass.hlsl",
+    entry: "gbuffer_sky_vertex",
+    label: "gbuffer_sky_vert.hlsl",
+    gates: &["GB_SKY"],
+    msaa: false,
+};
 /// `shadow_vertex_bindless` from `shadow.hlsl`.
 pub static SHADOW_VERT_BINDLESS: ShaderProgram = ShaderProgram {
     file: "shadow.hlsl",
     entry: "shadow_vertex_bindless",
     label: "shadow_vert_bindless.hlsl",
     gates: &["SHADOW_BINDLESS"],
+    msaa: false,
+};
+
+// The environment drawn as the background, at the tail of each opaque scene
+// pass.
+/// `sky_vertex` from `sky.hlsl`.
+pub static SKY_VERT: ShaderProgram = ShaderProgram {
+    file: "sky.hlsl",
+    entry: "sky_vertex",
+    label: "sky_vert.hlsl",
+    gates: &[],
+    msaa: false,
+};
+/// `sky_fragment` from `sky.hlsl`.
+pub static SKY_FRAG: ShaderProgram = ShaderProgram {
+    file: "sky.hlsl",
+    entry: "sky_fragment",
+    label: "sky_frag.hlsl",
+    gates: &[],
     msaa: false,
 };
 
@@ -537,7 +565,10 @@ pub static ALL: &[&ShaderProgram] = &[
     &PROBE_GGX,
     &GBUFFER_PREPASS_VERT_BINDLESS,
     &GBUFFER_PREPASS_FRAG_BINDLESS,
+    &GBUFFER_SKY_VERT,
     &SHADOW_VERT_BINDLESS,
+    &SKY_VERT,
+    &SKY_FRAG,
     &FULLSCREEN_VERT,
     &TAA_FRAG,
     &BLOOM_PREFILTER,

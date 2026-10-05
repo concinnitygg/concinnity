@@ -33,15 +33,14 @@ sky is drawn at the resolution `prefilter_face_size` sets, so a starfield
 wants the largest of them, 1024; below that each point is magnified into a
 blob.
 
-The sky mesh that displays the map (a skybox
-[ProceduralMesh](ProceduralMesh.md) plus its [Material](Material.md) and
-[Prop](Prop.md)) is injected at world start when the world declares no skybox
-mesh of its own. Declare an [EngineDefaults](EngineDefaults.md) with
-`"sky": false` to use the map for image-based lighting only, with the
-background left to `clear_color` or your own geometry.
-
-A skybox mesh, injected or declared, is kept centered on the camera, so it
-covers the horizon anywhere in a world however far the camera travels.
+The map is also the world's background: every pixel no surface covers
+shows it along that pixel's view direction, at infinite distance, so it
+never clips against the camera's far plane and never moves as the camera
+travels. Set `background` to `false` to use the map for image-based
+lighting only; the background is then
+[GraphicsConfig](GraphicsConfig.md)'s `clear_color`, as it is in a world
+with no `EnvironmentMap`. A world uses one map; extra declarations are
+ignored.
 
 ## Parameters
 
@@ -51,3 +50,4 @@ covers the horizon anywhere in a world however far the camera travels.
 - `irradiance_face_size`: An integer. Face size of the diffuse ambient cubemap, in pixels. Defaults to `8`.
 - `prefilter_samples`: An integer. Number of samples used to filter each reflection texel. Higher reduces noise at the cost of build time. Defaults to `1024`.
 - `prefilter_clamp`: A float. Upper bound on how bright a single source texel may count while building the glossy reflection mips. A clear-sky HDR holds a few sun or sky texels thousands of times brighter than their surroundings; left unbounded they survive into the small (coarse) reflection mips as lone hot texels and smear across glossy floors as hard bright squares. This caps each sampled texel so that energy spreads smoothly across the reflection instead. It affects reflections only, never the on-screen sky. Set to `0` to disable (no cap); lower values clamp harder. Defaults to `12.0`.
+- `background`: A boolean. Draw the map as the background behind all geometry. `false` lights the world with the map but leaves the background to `clear_color`. Defaults to `true`.

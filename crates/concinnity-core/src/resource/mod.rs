@@ -8,10 +8,12 @@
 //! client re-exports them under `crate::resource::*`, alongside the engine-side
 //! `install_resource_tables` that inserts them as World resources.
 
+mod environment_map;
 mod handles;
 mod install;
 mod runtime;
 
+pub use environment_map::EnvironmentMapRecord;
 pub use handles::{MeshBlock, ResourceHandles};
 pub use install::{append_environment_map, append_font, append_material, append_mesh};
 pub use runtime::RuntimeMeshPayloads;
@@ -22,14 +24,18 @@ use alloc::vec::Vec;
 
 use crate::ecs::{PayloadLocator, ResourceKind, ResourceRecord, World};
 
-/// One loaded resource's runtime form. A payload resource (audio clip, and later
-/// meshes / textures) carries a `PayloadLocator` into the blob payload section; a
-/// data resource (a baked Material) carries its runtime bytes in `data_bytes`.
+/// One loaded resource's runtime form. A payload resource (audio clip, mesh,
+/// texture) carries a `PayloadLocator` into the blob payload section, or the
+/// payload itself when the running world baked it; a data resource (a baked
+/// Material) carries its runtime bytes in `data_bytes`, and so does a hybrid
+/// (a SkinnedMesh, an EnvironmentMap) beside its payload.
 #[derive(Debug, Clone, Default)]
 pub struct ResourceEntry {
     /// Where the compiled payload lives, for a payload resource.
     pub payload: Option<PayloadLocator>,
-    /// The runtime bytes, for a data resource.
+    /// The payload bytes themselves, for one the world baked for itself.
+    pub baked: Vec<u8>,
+    /// The runtime bytes, for a data or hybrid resource.
     pub data_bytes: Vec<u8>,
 }
 
@@ -39,7 +45,8 @@ impl ResourceEntry {
     pub fn baked(payload_bytes: Vec<u8>) -> Self {
         Self {
             payload: None,
-            data_bytes: payload_bytes,
+            baked: payload_bytes,
+            data_bytes: Vec::new(),
         }
     }
 
@@ -47,7 +54,7 @@ impl ResourceEntry {
     /// `None` for a build-compiled resource, whose bytes are read through its
     /// [`PayloadLocator`] instead.
     pub fn baked_bytes(&self) -> Option<&[u8]> {
-        (self.payload.is_none() && !self.data_bytes.is_empty()).then_some(&self.data_bytes[..])
+        (self.payload.is_none() && !self.baked.is_empty()).then_some(&self.baked[..])
     }
 }
 
@@ -73,6 +80,7 @@ pub(crate) fn resource_table(
     for record in records.iter_mut().filter(|r| r.resource_kind == kind) {
         table[record.handle as usize] = ResourceEntry {
             payload: record.payload.clone(),
+            baked: Vec::new(),
             data_bytes: core::mem::take(&mut record.data_bytes),
         };
     }

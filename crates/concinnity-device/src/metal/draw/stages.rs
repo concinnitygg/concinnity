@@ -539,7 +539,7 @@ impl MtlContext {
         // state it depends on: the pyramid is now valid for next frame's cull, and
         // the un-jittered VP captured at the top of the frame becomes the
         // projection that cull tests through (distinct from the velocity
-        // pre-pass's `prev_view_proj`, which only advances when velocity runs).
+        // pre-pass's `view_history`, which only advances when velocity runs).
         if self.cull.hiz.is_some() {
             self.cull.hiz_valid = true;
             self.cull.prev_view_proj = self.cull.cur_view_proj;
@@ -549,14 +549,18 @@ impl MtlContext {
         // pre-pass runs: TAA, the MetalFX upscaler or SSGI. The
         // un-jittered VP becomes `prev_vp` so the velocity shader can
         // diff against it; the per-object transforms were snapshotted on the
-        // GPU by the pre-pass's own history dispatch. TAA-specific bookkeeping
-        // (history-target ping-pong) only runs when TAA itself is on.
+        // GPU by the pre-pass's own history dispatch. A frame without it drops
+        // the camera history, so motion restarts from its own view. TAA-specific
+        // bookkeeping (history-target ping-pong) only runs when TAA itself is on.
         if velocity_active {
-            self.prev_view_proj = mat4_mul(proj, self.state.view.matrix);
+            self.view_history
+                .advance(mat4_mul(proj, self.state.view.matrix));
             self.taa.frame = self.taa.frame.wrapping_add(1);
             if let Some(taa) = self.taa.pass.as_mut() {
                 taa.advance();
             }
+        } else {
+            self.view_history.reset();
         }
         // What the SSGI accumulation wrote this frame is next frame's history.
         if let Some(ssgi) = self.ssgi.pass.as_mut() {

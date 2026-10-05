@@ -34,7 +34,7 @@ use alloc::vec::Vec;
 #[serde(default)]
 pub struct ProceduralMesh {
     /// Built-in generator name (required), e.g. `room`, `box`, `cylinder`,
-    /// `sphere`, `terrain`, `heightfield`, `skybox`, or `extrude`.
+    /// `sphere`, `terrain`, `heightfield`, or `extrude`.
     pub generator: String,
 
     // Room / box / plane dimensions
@@ -78,11 +78,6 @@ pub struct ProceduralMesh {
     pub elevation_min: Option<f32>,
     /// Height mapped to white pixels in the `heightfield` source, in world units.
     pub elevation_max: Option<f32>,
-
-    // Skybox
-    /// Half-extent on all axes for the `skybox` generator, in world units.
-    /// Keep it below the camera's `far` plane so the sky is not clipped.
-    pub size: Option<f32>,
 
     // Extrude
     /// 2D outline `[[x, z], ...]` extruded by the `extrude` generator.

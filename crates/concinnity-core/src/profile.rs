@@ -6,11 +6,11 @@
 
 use alloc::vec::Vec;
 
-/// Maximum number of per-pass GPU timings tracked by [`RenderStats`]. Must be
-/// at least the client render graph's `PassId` count (`PASS_COUNT`), which the
-/// per-pass timing loop iterates; sized with headroom so unused slots carry the
-/// `""` sentinel name and a zero microsecond reading.
-pub const MAX_PASS_TIMINGS: usize = 32;
+/// Maximum number of per-pass GPU timings tracked by [`RenderStats`]: one per
+/// render-graph `PassId`, which a compile-time assertion in
+/// `render::pass_timing` holds it to, with headroom for new passes. Unused
+/// slots carry the `""` sentinel name and a zero microsecond reading.
+pub const MAX_PASS_TIMINGS: usize = 48;
 
 /// One per-pass GPU timing measurement: a stable pass name and the GPU
 /// microseconds spent in that pass during the most recently completed frame.

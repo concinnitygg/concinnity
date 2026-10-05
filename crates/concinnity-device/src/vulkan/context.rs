@@ -897,8 +897,8 @@ pub(super) struct VkSceneAssets {
     // Owned IBL cube textures.
     pub(super) env_map: EnvironmentMapTextures,
     // Number of mip levels in the bound IBL prefilter cubemap. 0 = no
-    // EnvironmentMap declared; the fragment shader then draws the gradient sky
-    // and the flat albedo ambient term instead of IBL.
+    // EnvironmentMap declared; the fragment shader then uses the flat albedo
+    // ambient term instead of IBL.
     pub(super) prefilter_mip_count: u32,
     // 3D color-grading LUT sampled in the composite pass. Holds the declared
     // `ColorLut` payload, or a 2x2x2 identity LUT when the world declares none.
@@ -1183,6 +1183,9 @@ pub(crate) struct VkContext {
     // `Decals`. While present, the main pass switches to a STORE-color render
     // pass (MSAA) so this pass can load + re-resolve the multisampled color.
     pub(super) raymarch: Option<crate::vulkan::raymarch::RaymarchResources>,
+
+    // The environment drawn behind the opaque scene. See `vulkan/sky.rs`.
+    pub(super) sky: crate::vulkan::sky::VkSky,
 
     // The shared `PassId::Transparent` slot and its two producers, translucent
     // glass panes and water surfaces. `Some` only when the world declared a

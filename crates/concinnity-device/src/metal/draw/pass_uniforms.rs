@@ -206,10 +206,11 @@ impl MtlContext {
         // accumulation.
         let velocity_active = self.reads_motion();
         let vel_uniforms = if velocity_active {
+            let cur_vp = mat4_mul(proj, self.state.view.matrix);
             Some(VelocityUniforms {
                 jittered_vp: vp,
-                cur_vp: mat4_mul(proj, self.state.view.matrix),
-                prev_vp: self.prev_view_proj,
+                cur_vp,
+                prev_vp: self.view_history.prev_or(cur_vp),
             })
         } else {
             None

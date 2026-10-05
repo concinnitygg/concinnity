@@ -196,6 +196,8 @@ impl MtlContext {
             build_decal_pipeline(device, hr)
         );
         let fog = rebuild_if_live!(self.fog.pipeline.is_some(), build_fog_pipeline(device, hr));
+        let sky = super::sky::build_sky_pipeline(device, self.targets.hdr.sample_count, hr)?;
+        let sky_velocity = super::sky::build_sky_velocity_pipeline(device, hr)?;
 
         // The shadow pipeline needs the static vertex layout.
         let static_vdesc = static_vertex_descriptor();
@@ -298,6 +300,8 @@ impl MtlContext {
         if let Some(p) = fog {
             self.fog.pipeline = Some(p);
         }
+        self.sky.pipeline = sky;
+        self.sky.velocity_pipeline = sky_velocity;
         if let (Some(p), Some(pass)) = (ssao, self.ssao.pass.as_mut()) {
             pass.swap_pipelines(p);
         }

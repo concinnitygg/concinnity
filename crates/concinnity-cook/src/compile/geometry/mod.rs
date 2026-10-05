@@ -1,6 +1,6 @@
 // The JSON front half of mesh compilation: per-generator arg parsing and the
 // `compile_*_payload` functions that pack generator output into the binary
-// blob. The generators themselves (room, extrude, primitives, terrain, skybox,
+// blob. The generators themselves (room, extrude, primitives, terrain,
 // heightfield) and the payload tail (tangents, LOD alternates, serialization)
 // live in `concinnity_core::geometry` / `concinnity_core::bake::mesh`; this
 // module parses world.jsonl args and calls down into them.
@@ -14,7 +14,6 @@ mod extrude;
 mod heightfield;
 mod primitives;
 mod room;
-mod skybox;
 mod terrain;
 
 use concinnity_core::bake::mesh::{bounding_sphere_radius, vertices_from_data};
@@ -83,7 +82,6 @@ pub(crate) fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
                 subdivisions,
             )?
         }
-        "skybox" => skybox::build_skybox(args)?,
         "extrude" => extrude::build_extrude(args)?,
         // empty generator string = inline vertex data supplied directly in the blob
         "" => build_inline(args)?,
@@ -593,9 +591,7 @@ mod tests {
 
     #[test]
     fn compile_mesh_payload_known_generators_ok() {
-        for name in &[
-            "room", "box", "cylinder", "plane", "sphere", "terrain", "skybox",
-        ] {
+        for name in &["room", "box", "cylinder", "plane", "sphere", "terrain"] {
             let args = serde_json::json!({"generator": name});
             assert!(
                 compile_mesh_payload(&args).is_ok(),

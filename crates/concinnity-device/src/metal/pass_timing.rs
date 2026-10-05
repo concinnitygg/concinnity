@@ -81,6 +81,9 @@ pub(super) const FRAMES_IN_FLIGHT: usize = 3;
 // "don't sample at this stage".
 const NO_SAMPLE: usize = usize::MAX;
 
+// Every pass has a bit in the `attached` mask.
+const _: () = assert!(PASS_COUNT <= u64::BITS as usize);
+
 // Sample slots per frame: one (start, end) pair per pass, in `PassId` order.
 const SAMPLE_COUNT: usize = PASS_COUNT * 2;
 
@@ -196,7 +199,7 @@ impl PassTimingResources {
     }
 
     // Record that `pass` was attached this frame (its slot holds fresh
-    // timestamps). `pass as usize < PASS_COUNT <= 64`, so the shift is in range.
+    // timestamps).
     fn mark_attached(&self, pass: PassId) {
         self.attached.fetch_or(
             1u64 << (pass as usize),

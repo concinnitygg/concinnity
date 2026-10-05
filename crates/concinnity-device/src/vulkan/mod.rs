@@ -50,6 +50,7 @@ mod render_pass;
 mod resources;
 mod screenshot;
 mod set_writes;
+mod sky;
 mod swapchain;
 #[cfg(test)]
 mod test_gpu;

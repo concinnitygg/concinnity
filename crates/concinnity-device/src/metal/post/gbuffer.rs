@@ -94,6 +94,14 @@ pub(crate) fn create_gbuffer_targets(
 
 // Pipeline
 
+// The color target formats, in attachment order: view normal + linear depth,
+// perceptual roughness, screen-space motion.
+pub(in crate::metal) const GBUFFER_FORMATS: [MTLPixelFormat; 3] = [
+    MTLPixelFormat::RGBA16Float,
+    MTLPixelFormat::R8Unorm,
+    MTLPixelFormat::RG16Float,
+];
+
 // Two-stream vertex descriptor for the GPU-driven bindless G-buffer pipeline.
 // Stream 0 (buffer 1) is the standard 56-byte `Vertex` (pos / normal / tangent /
 // color / uv) the cull-baked indirect commands draw; stream 1 (buffer 2) is the
@@ -103,8 +111,8 @@ pub(crate) fn create_gbuffer_targets(
 // Stream 1 reads only position at offset 0; its stride is the full 56-byte
 // `Vertex` so the cull-baked `base_vertex` indexes it identically to stream 0.
 pub(crate) fn gbuffer_bindless_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
-    // Stream 0 (buffer 1): the attributes the bindless VS reads (pos, normal,
-    // color for the skybox sentinel). Tangent/uv are unused by the G-buffer.
+    // Stream 0 (buffer 1): the attributes the bindless VS reads (pos, normal).
+    // Tangent, color and uv are unused by the G-buffer.
     // Stream 1 (buffer 2): previous vertex position only.
     vertex_descriptor(
         &[
@@ -120,12 +128,6 @@ pub(crate) fn gbuffer_bindless_vertex_descriptor() -> Retained<MTLVertexDescript
                 offset: 12,
                 buffer_index: 1,
             }, // normal
-            VertexAttr {
-                index: 3,
-                format: MTLVertexFormat::Float3,
-                offset: 36,
-                buffer_index: 1,
-            }, // color
             VertexAttr {
                 index: 5,
                 format: MTLVertexFormat::Float3,
@@ -179,15 +181,12 @@ pub(crate) fn build_gbuffer_bindless_pipeline(
     // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
     // declares.
     unsafe {
-        let ca0 = desc.colorAttachments().objectAtIndexedSubscript(0);
-        ca0.setPixelFormat(MTLPixelFormat::RGBA16Float);
-        ca0.setBlendingEnabled(false);
-        let ca1 = desc.colorAttachments().objectAtIndexedSubscript(1);
-        ca1.setPixelFormat(MTLPixelFormat::R8Unorm);
-        ca1.setBlendingEnabled(false);
-        let ca2 = desc.colorAttachments().objectAtIndexedSubscript(2);
-        ca2.setPixelFormat(MTLPixelFormat::RG16Float);
-        ca2.setBlendingEnabled(false);
+        let targets = desc.colorAttachments();
+        for (i, format) in GBUFFER_FORMATS.iter().enumerate() {
+            let target = targets.objectAtIndexedSubscript(i);
+            target.setPixelFormat(*format);
+            target.setBlendingEnabled(false);
+        }
     }
     desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
     desc.setSupportIndirectCommandBuffers(true);
@@ -336,7 +335,13 @@ impl MtlContext {
             // The encoder above cleared all four attachments, so a world with
             // nothing in the cull records still leaves the consumers a clean
             // "no geometry" G-buffer to read.
-            self.encode_gbuffer_prepass_gpu_driven(&enc, view, gpu, velocity_active)
+            let draws = self.encode_gbuffer_prepass_gpu_driven(&enc, view, gpu, velocity_active);
+            // The sky keeps the "no geometry" depth and roughness and adds the
+            // camera's motion where nothing was drawn.
+            if self.draws_sky(self.state.view.mode) {
+                self.encode_sky_velocity(&enc, view);
+            }
+            draws
         };
         if let Some(objects) = snapshot.as_ref() {
             self.encode_model_history(cmd_buf, objects, history_targets, self.cull_count())?;

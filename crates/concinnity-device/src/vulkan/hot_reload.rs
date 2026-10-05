@@ -63,8 +63,9 @@ impl VkContext {
     // `vulkan/shaders/`: composite, text, bloom (prefilter / downsample /
     // upsample), bindless main (when live), GPU-cull compute, auto-exposure
     // (build + average), projected-decal, volumetric-fog, SSAO (kernel,
-    // blur), SSR (resolve), the reflection composite (blur, composite), and
-    // TAA (resolve). The world-loaded main / shadow / instanced / skinned
+    // blur), SSR (resolve), the reflection composite (blur, composite), TAA
+    // (resolve), the sky, and the G-buffer pre-pass with the sky's motion
+    // behind it. The world-loaded main / shadow / instanced / skinned
     // pipelines remain out of scope; same split as DirectX. The caller
     // has already `device_wait_idle`'d so swapping pipelines out from
     // under in-flight command buffers is safe.
@@ -122,6 +123,38 @@ impl VkContext {
                 Ok::<_, RenderError>((pipeline, engine_pair))
             }
         );
+        let sky_pipeline = crate::vulkan::sky::build_sky_pipeline(
+            &self.hw.device,
+            self.sky.layout(),
+            self.targets.main_render_pass.handle(),
+            self.targets.msaa_samples,
+            hr,
+        )?;
+        // The G-buffer pre-pass (when the cull records drive it) and the sky's
+        // motion behind it.
+        let gbuffer_pipelines = self
+            .gbuffer
+            .as_ref()
+            .map(|gb| {
+                let render_pass = gb.prepass_render_pass.handle();
+                let prepass = self
+                    .cull
+                    .gbuffer_bindless_pipeline_layout
+                    .as_ref()
+                    .filter(|_| self.cull.gbuffer_bindless_pipeline.is_some())
+                    .map(|layout| {
+                        crate::vulkan::post::gbuffer::build_prepass_pipeline(
+                            device,
+                            layout.handle(),
+                            render_pass,
+                            hr,
+                        )
+                    })
+                    .transpose()?;
+                let sky = gb.sky.rebuild_pipeline(device, render_pass)?;
+                Ok::<_, RenderError>((prepass, sky))
+            })
+            .transpose()?;
         // The cull kernel, and its phase-2 twin (two-pass occlusion) when built:
         // the same source with the `CULL_PHASE2` define, over the shared layout.
         let cull_pipelines = self
@@ -260,6 +293,13 @@ impl VkContext {
         if let Some((new_pipeline, engine_pair)) = bindless_main_pipeline {
             self.cull.bindless_pipeline = Some(new_pipeline);
             self.cull.bindless_main_spv = engine_pair;
+        }
+        self.sky.swap_pipeline(sky_pipeline);
+        if let (Some((prepass, sky)), Some(gb)) = (gbuffer_pipelines, self.gbuffer.as_mut()) {
+            if prepass.is_some() {
+                self.cull.gbuffer_bindless_pipeline = prepass;
+            }
+            gb.sky.swap_pipeline(sky);
         }
         // The wireframe twins were built from the pre-reload shaders; drop them
         // so the next wireframe frame rebuilds against these.

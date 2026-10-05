@@ -20,7 +20,6 @@ use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
 use concinnity_core::transform::propagation;
 
-use super::sky_follow;
 use super::*;
 use crate::settings;
 use crate::settings::system::rows::{DISABLED_ROW_COLOR, expand_dim_set};
@@ -321,11 +320,6 @@ impl GraphicsSystem {
         // Lifetime/Spawner ticks and the spawn / despawn / reparent drains run
         // in SpawnSystem, scheduled earlier this tick, so the churn is already
         // applied when transforms are gathered below.
-
-        // The sky rides with the camera: its mesh is sized to sit inside the
-        // far plane, so it only covers the horizon while the camera is within
-        // it. Done before the propagation below picks the move up.
-        sky_follow::center_on_camera(ctx, &self.sky_props, final_cam_pos);
 
         // Gather updated model matrices for any entity whose transform changed
         // since last frame (physics, camera interact, reparent): resolve each

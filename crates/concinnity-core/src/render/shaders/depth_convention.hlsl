@@ -33,10 +33,6 @@
 // Camera depth `d` moved `offset` toward the far plane.
 #define depth_offset_far(d, offset) ((d) + (offset))
 
-// The clip-space z that pins a vertex just inside the far plane, for a clip w
-// of `w`. The sky shell uses it so the camera far plane never clips it.
-#define depth_pin_far(w) ((w) * (1.0 - 1e-6))
-
 // The homogeneous world position (divide by w) of the surface stored at camera
 // depth `d` under NDC `ndc_xy`, through the inverse view-projection `inv_vp`.
 // Where `d` is cleared it is the far-plane point on the pixel's ray; a caller

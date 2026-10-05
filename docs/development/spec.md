@@ -385,7 +385,7 @@ matters because later passes must see what earlier passes produced:
 | 7     | Room textures        | Per-surface texture assignment.                                               |
 | 8     | Companions (round 1) | The window and shader stack implied by everything above.                     |
 | 9     | AppConfig            | World name and window title for distribution.                                 |
-| 10    | Engine defaults      | Main menu, HUDs, chips, font, sky mesh, for a rendering world.                |
+| 10    | Engine defaults      | Main menu, HUDs, chips, font, for a rendering world.                          |
 | 11    | Menus                | Screens, sprites, labels, hit regions, key bindings.                          |
 | 12    | Option selects       | Settings rows to their primitives.                                            |
 | 13    | Sliders              | Continuous settings rows to their primitives.                                 |
@@ -599,16 +599,18 @@ at runtime from world content, and are never serialized.
 struct ResourceRecord {
     resource_kind: u8,                    // ResourceKind discriminant
     handle:        u32,                   // dense index within that kind
-    payload:       Option<PayloadLocator>,// payload resources
-    data_bytes:    Vec<u8>,               // data resources
+    payload:       Option<PayloadLocator>,// payload and hybrid resources
+    data_bytes:    Vec<u8>,               // data and hybrid resources
 }
 ```
 
 `resource_kind` selects the per-kind table; `handle` is the dense index within
-that kind, equal to the record's position within its kind. Both the locator and
-the inline-bytes branch are present so either shape round-trips; a given kind
-uses one. Meshes, textures, and audio clips carry payloads; a baked material
-carries its runtime bytes inline.
+that kind, equal to the record's position within its kind. Each kind has one
+shape. Meshes, textures, and audio clips carry payloads; a baked material carries
+its runtime bytes inline. A hybrid kind carries both: a skinned mesh's geometry
+payload beside its baked placement, materials, and capsule, and an environment
+map's baked lighting beside the runtime fields the renderer reads (whether it is
+drawn as the background), so editing those fields never re-bakes the payload.
 
 Resource kind discriminants are pinned by test, because a reorder would silently
 re-key every table:
@@ -1663,8 +1665,8 @@ the nearest draw that samples it; albedo and normal maps share one pool, so a
 draw contributes its position to both the slot it samples as albedo and the slot
 it samples as a normal map. A mesh is scored by its AABB center.
 
-Only static, frustum-cullable draws stream. Skybox, rooms, and dynamic props
-stay resident so structural geometry never pops in.
+Only static, frustum-cullable draws stream. Rooms and dynamic props stay
+resident so structural geometry never pops in.
 
 ### 11.3 Payload sources
 

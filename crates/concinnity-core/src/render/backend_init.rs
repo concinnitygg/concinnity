@@ -84,6 +84,10 @@ pub struct MediaPayloads<'a> {
     /// Serialized EnvironmentMap payload (irradiance + prefilter cubemaps).
     /// None disables IBL; the runtime binds 1x1 gray fallback cubes.
     pub env_map_bytes: Option<&'a [u8]>,
+    /// Draw the environment map as the background behind all geometry (see
+    /// [`crate::render::sky`]). Without a map the background is the clear
+    /// color either way.
+    pub env_map_background: bool,
     /// Serialized ColorLut payload (3D grading LUT). None = identity LUT.
     pub color_lut_bytes: Option<&'a [u8]>,
 }
@@ -314,9 +318,10 @@ pub struct SwapchainConfig {
 #[derive(Copy, Clone, Debug)]
 pub struct RenderRequirements {
     /// True when any 3D scene content exists (meshes, instances, skinned
-    /// meshes, streamed chunks, water, glass, SDF volumes, particles, or
-    /// decals). False = the world renders UI / text only: the backend skips
-    /// the scene pipelines and the frame collapses to a clear + composite.
+    /// meshes, streamed chunks, water, glass, SDF volumes, particles, decals,
+    /// or an environment map drawn as the background). False = the world
+    /// renders UI / text only: the backend skips the scene pipelines and the
+    /// frame collapses to a clear + composite.
     pub scene: bool,
 }
 
@@ -327,9 +332,11 @@ impl Default for RenderRequirements {
 }
 
 impl RenderRequirements {
-    /// Derive the requirements a scene plus its effect content imposes.
-    pub fn derive(scene: &SceneData, fx: &WorldFx) -> Self {
-        let scene_present = !scene.vertices.is_empty()
+    /// Derive the requirements a scene plus its effect content imposes, where
+    /// `sky` says the world draws its environment map as the background.
+    pub fn derive(scene: &SceneData, fx: &WorldFx, sky: bool) -> Self {
+        let scene_present = sky
+            || !scene.vertices.is_empty()
             || !scene.draw_objects.is_empty()
             || !scene.instanced_clusters.is_empty()
             || scene.n_skinned > 0
@@ -381,6 +388,7 @@ impl<'a> BackendInit<'a> {
                 textures: &[],
                 text_atlases,
                 env_map_bytes: None,
+                env_map_background: true,
                 color_lut_bytes: None,
             },
             light_uniforms: LightUniforms::DEFAULT,
@@ -451,7 +459,8 @@ impl<'a> BackendInit<'a> {
     /// assets already declared in the world, so the derivation here is
     /// complete: a world with no scene content at init can never grow one.
     pub fn resolve_requirements(&mut self) {
-        let req = RenderRequirements::derive(&self.scene, &self.fx);
+        let sky = self.media.env_map_bytes.is_some() && self.media.env_map_background;
+        let req = RenderRequirements::derive(&self.scene, &self.fx, sky);
         if !req.scene {
             trim_scene_features(
                 &mut self.shadows,
@@ -540,8 +549,31 @@ mod tests {
 
     #[test]
     fn text_only_world_derives_no_scene() {
-        let req = RenderRequirements::derive(&empty_scene(), &empty_fx());
+        let req = RenderRequirements::derive(&empty_scene(), &empty_fx(), false);
         assert!(!req.scene);
+    }
+
+    // A world that draws only its environment, behind a camera and nothing
+    // else, still renders a 3D view of it.
+    #[test]
+    fn a_shown_environment_is_scene_content() {
+        assert!(RenderRequirements::derive(&empty_scene(), &empty_fx(), true).scene);
+    }
+
+    // A map that lights the world but is not shown draws nothing on its own, so
+    // with no props there is no scene; shown, it is the scene.
+    #[test]
+    fn only_a_shown_environment_resolves_to_a_scene() {
+        let window = Window::default();
+        let ibl = [0u8; 4];
+        let mut init = BackendInit::minimal(&window, Vec::new());
+        init.media.env_map_bytes = Some(&ibl);
+        init.media.env_map_background = false;
+        init.resolve_requirements();
+        assert!(!init.requirements.scene);
+        init.media.env_map_background = true;
+        init.resolve_requirements();
+        assert!(init.requirements.scene);
     }
 
     #[test]
@@ -578,18 +610,18 @@ mod tests {
     fn any_scene_content_derives_scene() {
         let mut scene = empty_scene();
         scene.n_skinned = 1;
-        assert!(RenderRequirements::derive(&scene, &empty_fx()).scene);
+        assert!(RenderRequirements::derive(&scene, &empty_fx(), false).scene);
 
         let mut scene = empty_scene();
         scene.n_chunk_max = 8;
-        assert!(RenderRequirements::derive(&scene, &empty_fx()).scene);
+        assert!(RenderRequirements::derive(&scene, &empty_fx(), false).scene);
 
         // FX content alone is scene content too (a water-only world still
         // renders into the HDR scene chain).
         let scene = empty_scene();
         let mut fx = empty_fx();
         fx.water_surfaces.push(WaterSurface::default());
-        assert!(RenderRequirements::derive(&scene, &fx).scene);
+        assert!(RenderRequirements::derive(&scene, &fx, false).scene);
     }
 
     #[test]
@@ -625,7 +657,7 @@ mod tests {
         let mut scene = empty_scene();
         scene.n_skinned = 2;
         let fx = empty_fx();
-        let req = RenderRequirements::derive(&scene, &fx);
+        let req = RenderRequirements::derive(&scene, &fx, false);
         assert!(req.scene);
     }
 }

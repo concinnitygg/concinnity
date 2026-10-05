@@ -639,7 +639,7 @@ impl DxContext {
         // G-buffer (decoupled from TAA, so FSR-without-engine-TAA also gets
         // correct motion).
         if let Some(gb) = &self.gbuffer {
-            *gb.prev_view_proj.borrow_mut() = cur_vp;
+            gb.view_history.borrow_mut().advance(cur_vp);
         }
     }
 }

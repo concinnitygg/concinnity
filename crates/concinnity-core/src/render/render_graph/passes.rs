@@ -208,6 +208,16 @@ pass_ids! {
     /// nothing on a frame with no reflector in view. Gated on
     /// `FrameGraphInputs::planar_reflection_enabled`.
     PlanarReflection => "planar_reflection",
+    /// The environment drawn as the background. Not a standalone graph node: a
+    /// fullscreen draw at the tail of each pass that renders the opaque scene
+    /// from one viewpoint (`Main`, the reflection-probe faces, the planar
+    /// mirrors), in that pass's own color and depth, so it costs no extra
+    /// load or store of either. It carries its own timing slot so its cost is
+    /// visible inside `Main`'s (see [`PassId::enclosing`]): Vulkan and DirectX
+    /// time it with timestamps around the draw, while Metal samples only at
+    /// encoder boundaries and counts it in `Main` alone. No backend's graph
+    /// executor dispatches this id.
+    Sky => "sky",
 }
 
 impl PassId {
@@ -215,6 +225,21 @@ impl PassId {
     /// the table is `const`.
     pub fn name(self) -> &'static str {
         PASS_NAMES[self as usize]
+    }
+
+    /// The pass with this stable name.
+    pub fn from_name(name: &str) -> Option<PassId> {
+        PassId::ALL.into_iter().find(|p| p.name() == name)
+    }
+
+    /// The pass whose timing span contains this one's, for a pass timed inside
+    /// another: its time is already part of the enclosing pass's, so a
+    /// breakdown of the frame lists it under that pass rather than beside it.
+    pub const fn enclosing(self) -> Option<PassId> {
+        match self {
+            PassId::Sky => Some(PassId::Main),
+            _ => None,
+        }
     }
 }
 
@@ -233,6 +258,27 @@ mod tests {
             assert!(!pass.name().is_empty(), "{pass:?} has an empty name");
         }
         assert_eq!(PASS_NAMES.len(), PASS_COUNT);
+    }
+
+    #[test]
+    fn every_pass_is_found_by_its_name() {
+        for pass in PassId::ALL {
+            assert_eq!(PassId::from_name(pass.name()), Some(pass));
+        }
+        assert_eq!(PassId::from_name("not a pass"), None);
+    }
+
+    // A nested pass is enclosed by a top-level one, never by another nested
+    // pass or itself, so one level of nesting is all a breakdown needs.
+    #[test]
+    fn an_enclosing_pass_is_itself_top_level() {
+        for pass in PassId::ALL {
+            if let Some(outer) = pass.enclosing() {
+                assert_ne!(outer, pass);
+                assert_eq!(outer.enclosing(), None, "{pass:?} nests two deep");
+            }
+        }
+        assert_eq!(PassId::Sky.enclosing(), Some(PassId::Main));
     }
 
     #[test]

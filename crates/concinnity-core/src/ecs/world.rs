@@ -197,9 +197,15 @@ impl World {
 
     /// Add a baked image-based-lighting `payload` (see
     /// [`bake::payload::environment_map`](crate::bake::payload::environment_map))
-    /// and return its handle. The renderer lights with the map at handle 0.
-    pub fn add_environment_map(&mut self, payload: Vec<u8>) -> EnvironmentMapHandle {
-        crate::resource::append_environment_map(&mut self.context(), payload)
+    /// with the map's runtime fields `record` (whether it is drawn as the
+    /// background) and return its handle. The renderer lights with the map at
+    /// handle 0.
+    pub fn add_environment_map(
+        &mut self,
+        payload: Vec<u8>,
+        record: crate::resource::EnvironmentMapRecord,
+    ) -> EnvironmentMapHandle {
+        crate::resource::append_environment_map(&mut self.context(), payload, record)
     }
 
     /// Add a baked glyph-atlas `payload` (see

@@ -374,8 +374,8 @@ pub(super) struct ProbeState {
     // probe falls back to the sky until its turn.
     pub book: ProbeBook,
     // The cube array the bake writes a cube of per placement, and the per-frame
-    // record buffers. Distinct from `env_map` so the skybox + diffuse irradiance
-    // keep the sky.
+    // record buffers. Distinct from `env_map` so the background + diffuse
+    // irradiance keep the sky.
     pub gpu: super::probe_set::ProbeSetGpu,
     // At most one probe whose six cube faces are rendering on the GPU (one face
     // per frame, into the reserved-ring-slot capture resources) and one prior
@@ -549,8 +549,8 @@ pub(super) struct DxTargets {
 pub(super) struct DxSceneAssets {
     // IBL resources. The fragment shader always samples these; when no
     // EnvironmentMap was supplied, both are 1x1 gray fallback cubes and
-    // ViewUniforms::prefilter_mip_count is 0, so the shader draws the gradient
-    // sky and the flat albedo ambient term instead of IBL.
+    // ViewUniforms::prefilter_mip_count is 0, so the shader uses the flat albedo
+    // ambient term instead of IBL.
     pub env_map: EnvironmentMapTextures,
     // 3D color-grading LUT sampled in the composite pass. Holds the declared
     // `ColorLut` payload baked into a Texture3D, or a 2x2x2 identity LUT when
@@ -809,6 +809,9 @@ pub(crate) struct DxContext {
     // `Self::raymarch_enabled()` so worlds with no visible SDF skip the slot
     // entirely.
     pub(super) raymarch: Option<super::raymarch::RaymarchResources>,
+
+    // The environment drawn behind the opaque scene. See `directx/sky.rs`.
+    pub(super) sky: super::sky::DxSky,
 
     // The shared `PassId::Transparent` slot and its two producers, translucent
     // glass panes and water surfaces. `Some` only when the world declared a

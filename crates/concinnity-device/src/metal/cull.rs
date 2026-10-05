@@ -114,7 +114,7 @@ pub(crate) struct CullState {
     pub hiz: Option<super::hiz::HiZResources>,
     // Previous frame's un-jittered view-projection, captured every Hi-Z build.
     // The next frame's cull kernel projects AABBs through it. Distinct from the
-    // TAA `prev_view_proj`.
+    // velocity pre-pass's `view_history`.
     pub prev_view_proj: [[f32; 4]; 4],
     // This frame's un-jittered view-projection, captured before `execute_graph`
     // so the phase-2 cull can project AABBs against the freshly built pyramid.

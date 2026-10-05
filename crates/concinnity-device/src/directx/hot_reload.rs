@@ -78,7 +78,7 @@ impl DxContext {
     // Covers every runtime-bundled PSO: composite, text, bloom (prefilter
     // / downsample / upsample), GPU-cull compute, auto-exposure (build +
     // average), projected-decal, transparent (glass + water), volumetric-fog, the
-    // unified G-buffer pre-pass (static / instanced / skinned), SSAO (kernel,
+    // sky, the G-buffer pre-pass with the sky's motion behind it, SSAO (kernel,
     // blur), SSR (resolve), the reflection composite (blur, composite), TAA
     // (resolve), and bucket 0 of the GPU-driven main
     // pass when it is live (rebuilt from the world default Shader's pair where
@@ -219,6 +219,29 @@ impl DxContext {
 
         // Decal (always built when DecalResources exists, which is unconditional).
         let msaa_samples = self.targets.hdr.msaa_samples;
+        let sky_pso = super::context::dump_on_err(
+            info_queue,
+            super::sky::build_sky_pso(device, self.sky.root_sig(), msaa_samples, hr),
+        )?;
+        // The G-buffer pre-pass (when the cull records drive it) and the sky's
+        // motion behind it.
+        let gbuffer_psos = self
+            .gbuffer
+            .as_ref()
+            .map(|gb| {
+                let prepass = self
+                    .cull
+                    .gbuffer_bindless_root_sig
+                    .as_ref()
+                    .filter(|_| self.cull.gbuffer_bindless_pso.is_some())
+                    .map(|root_sig| {
+                        super::post::gbuffer::build_prepass_pso(device, root_sig, info_queue, hr)
+                    })
+                    .transpose()?;
+                let sky = gb.sky.rebuild_pso(device, info_queue)?;
+                Ok::<_, RenderError>((prepass, sky))
+            })
+            .transpose()?;
         let decal_pso = self
             .decal
             .state
@@ -339,6 +362,13 @@ impl DxContext {
         if let Some((p, engine_pair)) = bindless_main_pso {
             self.cull.main_bindless_pso = Some(p);
             self.cull.bindless_main_shaders = engine_pair;
+        }
+        self.sky.swap_pso(sky_pso);
+        if let (Some((prepass, sky)), Some(gb)) = (gbuffer_psos, self.gbuffer.as_mut()) {
+            if prepass.is_some() {
+                self.cull.gbuffer_bindless_pso = prepass;
+            }
+            gb.sky.swap_pso(sky);
         }
         // The wireframe twins were built from the pre-reload shaders; drop them
         // so the next wireframe frame rebuilds against these.

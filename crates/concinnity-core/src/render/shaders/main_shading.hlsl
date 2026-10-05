@@ -16,7 +16,6 @@
 //   spot_shadow_cmp / spot_shadow_map_size    the spot depth array
 //   ssao_sample / ssao_size                   the blurred occlusion buffer
 //   irradiance_sample /
-//   prefilter_sample_level0 /
 //   prefilter_sample_bias                     the environment cubes
 //   environment_specular                      the reflection tap: the
 //                                             fragment's probes where the set
@@ -44,9 +43,6 @@ static const float REFLECTION_ROUGHNESS_CUT = 0.6;
 static const float LTC_LUT_SIZE  = 64.0;
 static const float LTC_LUT_SCALE = (LTC_LUT_SIZE - 1.0) / LTC_LUT_SIZE;
 static const float LTC_LUT_BIAS  = 0.5 / LTC_LUT_SIZE;
-
-static const float3 SKY_ZENITH  = float3(0.110, 0.322, 0.726);
-static const float3 SKY_HORIZON = float3(0.765, 0.863, 0.941);
 
 // ---- Stage interface ----
 
@@ -96,15 +92,6 @@ VertexOut project_vertex(float4x4 model, float3 pos, float3 normal, float3 tange
 
     o.view_depth = -mul(VIEW.view_mat, world).z;
     o.position   = mul(VIEW.vp, world);
-
-    // Skybox sentinel (blue channel 2.0): pin to the far plane so the sky is
-    // never clipped by the camera far plane and always renders behind scene
-    // geometry. Every forward vertex path needs it, and the G-buffer pre-pass
-    // pins it identically (`gb_sky_pin`).
-    if (color.b > 1.5)
-    {
-        o.position.z = depth_pin_far(o.position.w);
-    }
     return o;
 }
 
@@ -395,23 +382,6 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
 
     float3 cam_pos = float3(VIEW.cam_x, VIEW.cam_y, VIEW.cam_z);
     bool ibl_enabled = VIEW.prefilter_mip_count > 0.5;
-
-    // Skybox sentinel (blue channel 2.0): sky color from the view direction.
-    if (v.color.b > 1.5)
-    {
-        float3 view_dir = normalize(v.world_pos - cam_pos);
-        float3 sky;
-        if (ibl_enabled)
-        {
-            sky = prefilter_sample_level0(view_dir);
-        }
-        else
-        {
-            float t = max(0.0, view_dir.y);
-            sky = lerp(SKY_HORIZON, SKY_ZENITH, t);
-        }
-        return float4(sky, 1.0);
-    }
 
     // The record is per-object, so a fragment wave that straddles two objects
     // of one indirect draw carries two pool indices. That makes every pool

@@ -340,6 +340,12 @@ impl DxContext {
             &scene,
             &fx.sdf_volumes,
         )?;
+        let sky = super::sky::DxSky::build(
+            &gpu.hw.device,
+            features.msaa_samples,
+            media.env_map_background,
+            hot_reload,
+        )?;
         let planar_reflection = effects::build_planar_reflection(
             &gpu,
             &descriptors,
@@ -418,6 +424,7 @@ impl DxContext {
             decal,
             lines: super::line::LineState::empty(),
             raymarch,
+            sky,
             transparent,
             planar_reflection,
             fog,

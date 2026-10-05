@@ -407,7 +407,7 @@ impl VkContext {
         // the motion vector works for any consumer (TAA or FSR), exactly
         // mirroring the TAA advance above.
         if let Some(gb) = &mut self.gbuffer {
-            gb.prev_view_proj = cur_vp;
+            gb.view_history.advance(cur_vp);
         }
 
         // Advance Hi-Z temporal state: this frame's un-jittered VP becomes next

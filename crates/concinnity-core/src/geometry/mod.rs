@@ -2,7 +2,7 @@
 //! streaming (`build_chunk_mesh` / `build_chunk_impostor_mesh` regenerate a
 //! chunk's mesh as it streams in), the glass/water quad generators the GPU
 //! backends call, the procedural mesh generators (room, box, cylinder, plane,
-//! sphere, terrain, skybox, extrude, heightfield-from-pixels), and the shared
+//! sphere, terrain, extrude, heightfield-from-pixels), and the shared
 //! low-level mesh math (per-vertex tangents, face normals, the vertex tuple
 //! type).
 //!
@@ -19,7 +19,6 @@ mod grid;
 mod heightfield;
 mod primitives;
 mod room;
-mod skybox;
 mod terrain;
 mod voxel;
 pub mod water_grid;
@@ -28,7 +27,6 @@ pub use extrude::build_extrude;
 pub use heightfield::{HeightfieldField, build_heightfield_from_pixels};
 pub use primitives::{build_box, build_cylinder, build_plane, build_sphere};
 pub use room::build_room_geometry;
-pub use skybox::build_skybox;
 pub use terrain::build_terrain;
 pub(crate) use terrain::{terrain_height, terrain_subdivisions};
 

@@ -541,9 +541,8 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
 
         // Radiance HDR: an EnvironmentMap, whose build convolves the
         // equirectangular source into the irradiance + prefiltered radiance
-        // cubemaps that light the scene. Its presence also injects the skybox
-        // mesh that displays it (see cook's `inject_sky`). Stem only, like
-        // fonts and audio.
+        // cubemaps that light the scene and the background behind it. Stem
+        // only, like fonts and audio.
         "hdr" => Ok(vec![environment_map_entry(&stem, path_str)?]),
 
         // KTX2: a GPU-ready compressed texture. Becomes a Texture asset whose

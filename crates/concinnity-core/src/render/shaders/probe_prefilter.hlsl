@@ -108,7 +108,7 @@ RWTexture2DArray<float4> dst_mip : register(u1);
 
 // Mip 0 of the probe cube: the capture copied through, firefly-clamped.
 //
-// A probe cube is sampled only by the specular term (never drawn as a skybox),
+// A probe cube is sampled only by the specular term (never drawn as a background),
 // so the mirror mip is capped too: it suppresses a lone blown highlight aliasing
 // into a bright square on a near-mirror surface that falls back to the probe.
 // The CPU counterpart is `prefilter_mip0` with `clamp_mip0` set.

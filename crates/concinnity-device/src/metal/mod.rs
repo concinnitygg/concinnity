@@ -54,6 +54,7 @@ mod resources;
 mod rt_ring;
 mod scoped_encoder;
 mod screenshot;
+mod sky;
 mod text_upload;
 mod texture;
 mod transient_pool;

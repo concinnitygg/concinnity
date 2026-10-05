@@ -61,10 +61,14 @@ pub fn to_text(report: &Report) -> String {
                 segment.gpu.p50_us as f32 / MICROS_PER_MILLI,
             ),
             "of the GPU frame",
-            segment
-                .passes
-                .iter()
-                .map(|p| (p.name.as_str(), p.median_us, p.share)),
+            segment.passes.iter().map(|p| {
+                // A pass timed inside the one above it is indented under it.
+                let name = match p.within {
+                    Some(_) => format!("  {}", p.name),
+                    None => p.name.clone(),
+                };
+                (name, p.median_us, p.share)
+            }),
         );
         write_block(
             &mut out,
@@ -77,7 +81,7 @@ pub fn to_text(report: &Report) -> String {
             segment
                 .systems
                 .iter()
-                .map(|s| (s.name.as_str(), s.mean_us, s.share)),
+                .map(|s| (s.name.clone(), s.mean_us, s.share)),
         );
     }
     out
@@ -86,11 +90,11 @@ pub fn to_text(report: &Report) -> String {
 // A named cost breakdown, or nothing at all when there is none to show. An
 // empty CPU block is the report saying the CPU was not what limited the
 // stretch, which is worth more than a ranking of noise.
-fn write_block<'a>(
+fn write_block(
     out: &mut String,
     heading: &str,
     of_what: &str,
-    rows: impl Iterator<Item = (&'a str, u32, f32)>,
+    rows: impl Iterator<Item = (String, u32, f32)>,
 ) {
     let mut started = false;
     for (name, mean_us, share) in rows {
@@ -248,6 +252,24 @@ mod tests {
         // The share is of the mean, which the table above reports the median
         // of, so the heading names the total it was taken against.
         assert!(text.contains("GPU passes, median 5.00 ms"), "{text}");
+    }
+
+    #[test]
+    fn a_pass_timed_inside_another_is_indented_under_it() {
+        let mut first = sample(0.0, Some(0), 10_000);
+        first.pass_us[0] = 3_000;
+        first.pass_us[1] = 500;
+        let run = FrameRun {
+            samples: vec![first],
+            segments: vec!["approach".to_string()],
+            pass_names: vec!["main".to_string(), "sky".to_string()],
+            system_names: Vec::new(),
+            completed: true,
+        };
+        let text = to_text(&report_of(run));
+        let main = text.find("\n  main ").expect("main row");
+        let sky = text.find("\n    sky ").expect("indented sky row");
+        assert!(main < sky, "{text}");
     }
 
     #[test]

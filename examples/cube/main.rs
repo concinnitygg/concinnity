@@ -16,8 +16,8 @@
 //! lighting it reflects -- is baked in place with the [`bake`] functions and
 //! handed over raw. Everything that happens after [`App::run`] is the engine
 //! reacting to that data: the water grid is tessellated, the spin behavior is
-//! compiled, and the world gains the defaults it declares nothing of its own
-//! for, the sky mesh that displays the starfield among them.
+//! compiled, the world gains the defaults it declares nothing of its own for,
+//! and the starfield is drawn behind everything as the background.
 //!
 //! The camera has no controller, so the viewpoint stays on the cube.
 //!
@@ -63,7 +63,7 @@ const SKY_DEGREES_PER_SECOND: f32 = 3.0;
 // still while its light moves.
 const SKY_PIVOT: AssetId = AssetId(1);
 // The cube's three layers, named so the spin below can reach them and nothing
-// else -- the sky mesh is a prop too, and turning it would turn the stars.
+// else -- the sun is a prop too, and turning it would pull it off its orbit.
 const CUBE_LAYERS: [AssetId; 3] = [AssetId(2), AssetId(3), AssetId(4)];
 // Half the pool's width, reaching exactly as far as the point the sun sets
 // at. A body that sets beyond the far edge loses its reflection off that edge
@@ -129,8 +129,8 @@ fn cube_world() -> Result<World, concinnity::Error> {
     });
 
     // A generated starfield, convolved here into the two cubemaps the shaders
-    // light with. The world gains a sky mesh at start that displays it, so the
-    // same bake is both the background and the scene's cold fill. The face
+    // light with. The map is also drawn as the background, so the same bake is
+    // both the stars on screen and the scene's cold fill. The face
     // size is what the stars are drawn at on screen, so it is four times the
     // one this used to bake at; the sample count, which only affects the
     // blurred reflection mips, comes down to pay for it.
@@ -312,7 +312,7 @@ fn place_on_cube(world: &mut World, id: AssetId, mesh: MeshHandle, material: Mat
 
 // The spin, written to each of the cube's three layers by name. It runs once a
 // tick, world-scoped: a behavior scoped to `Prop` would reach every prop in the
-// world, and the sky mesh and the sun are props too.
+// world, and the sun is a prop too.
 fn spin_behavior() -> Behavior {
     Behavior {
         on: BehaviorSource::Tick,
@@ -368,9 +368,8 @@ mod tests {
     }
 
     // The spin reaches the cube and nothing else. A behavior scoped to `Prop`
-    // would also turn the sky mesh the world gains at start, and the skybox
-    // samples the map by the direction out of the camera, so the stars would
-    // spin with the cube instead of with the sky.
+    // would also turn the sun, which hangs under the sky pivot, so it would
+    // spin with the cube instead of orbiting with the sky.
     #[test]
     fn the_spin_turns_the_cube_alone() {
         let spin = spin_behavior();

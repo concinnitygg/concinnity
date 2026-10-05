@@ -16,12 +16,13 @@
 use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::uniforms::ModelHistoryParams;
-use concinnity_core::transform::IDENTITY;
+use concinnity_core::render::view_history::ViewHistory;
 use std::cell::RefCell;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
+use super::gbuffer_sky::GbufferSky;
 use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
@@ -73,22 +74,26 @@ fn create_gbuffer_pso(
     ps: &[u8],
     layout: &[D3D12_INPUT_ELEMENT_DESC],
 ) -> RenderResult<ID3D12PipelineState> {
-    GraphicsPso::new(root_sig, vs, ps)
-        .input_layout(layout)
-        .target(GBUFFER_NORMAL_DEPTH_FORMAT, Blend::Opaque)
-        .target(GBUFFER_ROUGHNESS_FORMAT, Blend::Opaque)
-        .target(GBUFFER_VELOCITY_FORMAT, Blend::Opaque)
+    gbuffer_targets(GraphicsPso::new(root_sig, vs, ps).input_layout(layout))
         .depth(DXGI_FORMAT_D32_FLOAT, Depth::camera_write())
         .build(device, "gbuffer prepass")
 }
 
+// The pre-pass's three color targets, in attachment order.
+pub(super) fn gbuffer_targets(pso: GraphicsPso<'_>) -> GraphicsPso<'_> {
+    pso.target(GBUFFER_NORMAL_DEPTH_FORMAT, Blend::Opaque)
+        .target(GBUFFER_ROUGHNESS_FORMAT, Blend::Opaque)
+        .target(GBUFFER_VELOCITY_FORMAT, Blend::Opaque)
+}
+
 // Vertex input layout for the GPU-driven (bindless) G-buffer pre-pass: the
-// current-frame attributes the VS reads (position / normal / color for the
-// skybox sentinel) on slot 0, plus the previous-frame position on slot 1. Both
+// current-frame attributes the VS reads (position / normal) on slot 0, plus the
+// previous-frame position on slot 1. Both
 // slots carry the 56-byte `Vertex`; the static prefix binds the static VB to
 // both slots (prev_pos == cur_pos), the skinned tail binds the current deformed
-// buffer to slot 0 and the previous-frame deformed buffer to slot 1. Tangent +
-// UV are unused (the pre-pass samples no textures), so they are omitted.
+// buffer to slot 0 and the previous-frame deformed buffer to slot 1. Tangent,
+// color and UV are unused (the pre-pass samples no textures), so they are
+// omitted.
 fn gbuffer_bindless_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
     vec![
         D3D12_INPUT_ELEMENT_DESC {
@@ -106,15 +111,6 @@ fn gbuffer_bindless_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
             Format: DXGI_FORMAT_R32G32B32_FLOAT,
             InputSlot: 0,
             AlignedByteOffset: 12,
-            InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-            InstanceDataStepRate: 0,
-        },
-        D3D12_INPUT_ELEMENT_DESC {
-            SemanticName: windows::core::s!("COLOR"),
-            SemanticIndex: 0,
-            Format: DXGI_FORMAT_R32G32B32_FLOAT,
-            InputSlot: 0,
-            AlignedByteOffset: 36,
             InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
             InstanceDataStepRate: 0,
         },
@@ -223,19 +219,29 @@ pub(in crate::directx) fn build_gbuffer_bindless(
     info_queue: Option<&ID3D12InfoQueue>,
     hot_reload: bool,
 ) -> RenderResult<GbufferBindlessPipeline> {
-    let vs = builtin_shaders::GBUFFER_PREPASS_VERT_BINDLESS.compile(hot_reload)?;
-    let ps = builtin_shaders::GBUFFER_PREPASS_FRAG_BINDLESS.compile(hot_reload)?;
     let root_sig = dump_on_err(info_queue, create_gbuffer_bindless_root_signature(device))?;
-    let layout = gbuffer_bindless_input_layout();
-    let pso = dump_on_err(
-        info_queue,
-        create_gbuffer_pso(device, &root_sig, &vs, &ps, &layout),
-    )?;
+    let pso = build_prepass_pso(device, &root_sig, info_queue, hot_reload)?;
     let cmd_sig = dump_on_err(
         info_queue,
         crate::directx::cull::create_cull_command_signature(device, &root_sig),
     )?;
     Ok((root_sig, pso, cmd_sig))
+}
+
+// The bindless pre-pass pipeline state over `root_sig`.
+pub(in crate::directx) fn build_prepass_pso(
+    device: &ID3D12Device,
+    root_sig: &ID3D12RootSignature,
+    info_queue: Option<&ID3D12InfoQueue>,
+    hot_reload: bool,
+) -> RenderResult<ID3D12PipelineState> {
+    let vs = builtin_shaders::GBUFFER_PREPASS_VERT_BINDLESS.compile(hot_reload)?;
+    let ps = builtin_shaders::GBUFFER_PREPASS_FRAG_BINDLESS.compile(hot_reload)?;
+    let layout = gbuffer_bindless_input_layout();
+    dump_on_err(
+        info_queue,
+        create_gbuffer_pso(device, root_sig, &vs, &ps, &layout),
+    )
 }
 
 // Descriptor-slot handles for the three G-buffer SRVs, minted by the caller
@@ -276,13 +282,18 @@ pub(in crate::directx) struct GbufferResources {
     // Last frame's un-jittered VP, owned here so the velocity channel works for
     // any consumer (TAA or FSR) independent of whether engine-TAA is on. The
     // per-object half of the same history is the GPU-filled model-history ring.
-    pub(in crate::directx) prev_view_proj: RefCell<[[f32; 4]; 4]>,
+    pub(in crate::directx) view_history: RefCell<ViewHistory>,
+
+    // The sky's motion behind the geometry.
+    pub(in crate::directx) sky: GbufferSky,
 }
 
 // The device the G-buffer builder allocates against.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct GbufferDeviceCtx<'a> {
     pub alloc: &'a DeviceAllocator,
+    pub info_queue: Option<&'a ID3D12InfoQueue>,
+    pub hot_reload: bool,
 }
 
 // The three color targets the transient pool owns, handed to the G-buffer at
@@ -347,7 +358,11 @@ impl GbufferResources {
         slots: GbufferSlots,
         pooled: &GbufferPooled,
     ) -> RenderResult<Self> {
-        let GbufferDeviceCtx { alloc } = ctx;
+        let GbufferDeviceCtx {
+            alloc,
+            info_queue,
+            hot_reload,
+        } = ctx;
         let device = alloc.device();
         let GbufferExtent { width, height } = extent;
         // The three color targets come from the transient pool; this only
@@ -383,6 +398,8 @@ impl GbufferResources {
             view_ubo_resources.push(buf);
         }
 
+        let sky = GbufferSky::build(device, info_queue, hot_reload)?;
+
         Ok(Self {
             normal_depth,
             normal_depth_rtv: slots.normal_depth_rtv,
@@ -397,7 +414,8 @@ impl GbufferResources {
             depth_dsv: slots.depth_dsv,
             view_ubo_resources,
             view_ubo_ptrs,
-            prev_view_proj: RefCell::new(IDENTITY),
+            view_history: RefCell::new(ViewHistory::default()),
+            sky,
         })
     }
 
@@ -502,7 +520,7 @@ impl DxContext {
         // Upload this frame's view UBO. When velocity is inactive the previous
         // VP equals the current one, so instanced + sky motion is zero.
         let prev_vp = if velocity_active {
-            *gb.prev_view_proj.borrow()
+            gb.view_history.borrow().prev_or(cur_vp)
         } else {
             cur_vp
         };
@@ -575,6 +593,12 @@ impl DxContext {
         // tail over the deformed VB). With nothing to draw the pass is the
         // clears above, which is what "no geometry" means to every reader.
         self.encode_gbuffer_prepass_gpu_driven(cmd, frame_idx, view_gva, velocity_active);
+        // The sky keeps the "no geometry" depth and roughness and adds the
+        // camera's motion where nothing was drawn.
+        if self.draws_sky(self.state.view.mode) {
+            gb.sky.encode(cmd, view_gva);
+            self.inc_draw_calls(1);
+        }
 
         // Snapshot this frame's models into this frame's history slot, AFTER the
         // pass above read the previous one -- which is what keeps a single frame

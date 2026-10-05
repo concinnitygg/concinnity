@@ -65,6 +65,24 @@ impl RegisteredType {
         }
     }
 
+    /// The args this resource's payload cache key hashes: the whole authored
+    /// args, except for a resource whose record carries fields its payload
+    /// never reads, which keys on its bake inputs alone so editing one of those
+    /// fields reuses the payload. Args that do not resolve key as authored; the
+    /// compile refuses them with the real error.
+    pub(crate) fn payload_key_args<'a>(
+        self,
+        args: &'a serde_json::Value,
+    ) -> std::borrow::Cow<'a, serde_json::Value> {
+        match self {
+            Self::EnvironmentMap => {
+                crate::compile::environment_map::environment_map_payload_key_args(args)
+                    .map_or(std::borrow::Cow::Borrowed(args), std::borrow::Cow::Owned)
+            }
+            _ => std::borrow::Cow::Borrowed(args),
+        }
+    }
+
     /// The source files this resource reads, folded into its payload cache key
     /// so an unchanged source is a cache hit.
     pub(crate) fn source_files(
@@ -124,10 +142,12 @@ impl RegisteredType {
     }
 
     /// The baked runtime data that rides the resource record's `data_bytes`
-    /// ALONGSIDE a compiled payload, or `None`. SkinnedMesh is the only such
-    /// hybrid today: its geometry compiles into a blob payload while its
-    /// authored placement/material/capsule fields bake here. (Material, a pure
-    /// data resource, routes its bytes through `compile_payload` + `is_data`
+    /// ALONGSIDE a compiled payload, or `None`. Two kinds are such hybrids: a
+    /// SkinnedMesh's geometry compiles into a blob payload while its authored
+    /// placement/material/capsule fields bake here, and an EnvironmentMap's
+    /// cubemaps compile while its display fields (`background`) bake here, so
+    /// changing one never re-runs the convolution. (Material, a pure data
+    /// resource, routes its bytes through `compile_payload` + `is_data`
     /// instead.) `name` is the asset's declared name, interned into the baked
     /// form where the runtime needs the identity.
     pub(crate) fn compile_data(
@@ -139,6 +159,11 @@ impl RegisteredType {
             Self::SkinnedMesh => compile_skinned_mesh_data(name, args)
                 .map(Some)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            Self::EnvironmentMap => {
+                crate::compile::environment_map::compile_environment_map_data(args)
+                    .map(Some)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            }
             _ => Ok(None),
         }
     }

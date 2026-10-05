@@ -330,7 +330,7 @@ float4 fog_fragment(
         view_z = froxel.z_far;
     }
 
-    // Normalized volume W. Clamped so the skybox and anything past the volume's
+    // Normalized volume W. Clamped so the background and anything past the volume's
     // far edge sample the fully-integrated last slice.
     float z01 = saturate((view_z - froxel.z_near) / max(froxel.z_far - froxel.z_near, 1e-4));
 

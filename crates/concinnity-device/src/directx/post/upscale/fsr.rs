@@ -498,8 +498,8 @@ impl FsrUpscaler {
             },
             // HDR linear input, depth in [0, 1] with reverse-Z not in use
             // (the engine writes 0 at near, 1 at far; Direct3D default).
-            // The depth-infinite flag would force FFX's heuristic for
-            // skybox masking; we have a real far plane so leave it off.
+            // The depth-infinite flag tells FFX the far plane is at
+            // infinity; ours is finite, so leave it off.
             // Auto-exposure: FFX computes its own mid-gray heuristic
             // from the color buffer when this is on, useful because
             // the engine's `PostProcessConfig.auto_exposure` runs after

@@ -225,12 +225,11 @@ const MAIN_VERTEX_ATTRS: [vk::VertexInputAttributeDescription; 5] = [
     attr(4, vk::Format::R32G32_SFLOAT, 48),
 ];
 
-// The shadow pass reads only position and the sky-marking color, so the
-// optimizer strips the other attributes from its interface. Binding just those
-// keeps the validation layer from warning about unconsumed attributes; the
-// binding keeps the full 56-byte `Vertex` stride.
-const SHADOW_VERTEX_ATTRS: [vk::VertexInputAttributeDescription; 2] =
-    [MAIN_VERTEX_ATTRS[0], MAIN_VERTEX_ATTRS[3]];
+// The shadow pass reads only position, so the optimizer strips the other
+// attributes from its interface. Binding just that one keeps the validation
+// layer from warning about unconsumed attributes; the binding keeps the full
+// 56-byte `Vertex` stride.
+const SHADOW_VERTEX_ATTRS: [vk::VertexInputAttributeDescription; 1] = [MAIN_VERTEX_ATTRS[0]];
 
 // TextVertex (32 bytes): pos(vec2) + uv(vec2) + color(vec3) + mode(float).
 const TEXT_VERTEX_BINDING: [vk::VertexInputBindingDescription; 1] = vertex_binding(32);
