@@ -547,13 +547,20 @@ mod tests {
         assert_eq!(desc.Flags, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
         assert_eq!(resting_state(&depth), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         // A depth target's optimized clear must be the depth arm: handing
-        // D3D12 a color for a D32 resource is a creation failure.
-        assert_eq!(
-            // SAFETY: the union arm is the one `clear_value` just wrote for a `ClearValue::Depth`,
-            // which the assertion above pins.
-            unsafe { clear_value(&depth).Anonymous.DepthStencil.Depth },
-            1.0
-        );
+        // D3D12 a color for a D32 resource is a creation failure. Both
+        // conventions' clears land in it.
+        for convention in [DepthConvention::Camera, DepthConvention::Shadow] {
+            let target = TransientTexture {
+                clear: ClearValue::depth(convention),
+                ..depth.clone()
+            };
+            assert_eq!(
+                // SAFETY: the union arm is the one `clear_value` just wrote for a
+                // `ClearValue::Depth`, which the assertion above pins.
+                unsafe { clear_value(&target).Anonymous.DepthStencil.Depth },
+                convention.clear()
+            );
+        }
 
         let volume = TransientTexture {
             label: "probe_volume",

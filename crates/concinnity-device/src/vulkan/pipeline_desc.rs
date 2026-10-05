@@ -345,24 +345,24 @@ mod tests {
             (off.depth_test_enable, off.depth_write_enable),
             (vk::FALSE, vk::FALSE)
         );
-        let less = Depth::camera_write().raw();
+        let camera = Depth::camera_write().raw();
         assert_eq!(
-            (less.depth_test_enable, less.depth_write_enable),
+            (camera.depth_test_enable, camera.depth_write_enable),
             (vk::TRUE, vk::TRUE)
         );
-        assert_eq!(less.depth_compare_op, vk::CompareOp::LESS);
+        assert_eq!(camera.depth_compare_op, vk::CompareOp::GREATER);
         let shadow = Depth::shadow_write().raw();
         assert_eq!(shadow.depth_write_enable, vk::TRUE);
         assert_eq!(shadow.depth_compare_op, vk::CompareOp::LESS);
         let inclusive = Depth::camera_write_inclusive().raw();
         assert_eq!(inclusive.depth_write_enable, vk::TRUE);
-        assert_eq!(inclusive.depth_compare_op, vk::CompareOp::LESS_OR_EQUAL);
+        assert_eq!(inclusive.depth_compare_op, vk::CompareOp::GREATER_OR_EQUAL);
         let read_only = Depth::camera_read_only().raw();
         assert_eq!(
             (read_only.depth_test_enable, read_only.depth_write_enable),
             (vk::TRUE, vk::FALSE)
         );
-        assert_eq!(read_only.depth_compare_op, vk::CompareOp::LESS_OR_EQUAL);
+        assert_eq!(read_only.depth_compare_op, vk::CompareOp::GREATER_OR_EQUAL);
         let read = Depth::Test {
             compare: vk::CompareOp::GREATER_OR_EQUAL,
             write: false,

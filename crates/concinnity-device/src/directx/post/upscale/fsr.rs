@@ -27,6 +27,7 @@
 )]
 
 use crate::directx::descriptor_slot::SrvSlot;
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::ffi::{CStr, c_void};
 use std::ptr;
@@ -74,6 +75,28 @@ const FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE: u32 = 1 << 0;
 const FFX_UPSCALE_ENABLE_DEPTH_INVERTED: u32 = 1 << 3;
 const FFX_UPSCALE_ENABLE_DEPTH_INFINITE: u32 = 1 << 4;
 const FFX_UPSCALE_ENABLE_AUTO_EXPOSURE: u32 = 1 << 5;
+
+// The create flags for a camera drawn under `depth`: HDR linear input, FFX's own
+// auto-exposure, and inverted depth when the near plane is device depth 1. The
+// far plane is finite, so the infinite-depth flag stays off.
+const fn ffx_create_flags(depth: DepthConvention) -> u32 {
+    let flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+    if depth.is_reversed() {
+        flags | FFX_UPSCALE_ENABLE_DEPTH_INVERTED
+    } else {
+        flags
+    }
+}
+
+// The `(camera_near, camera_far)` pair the dispatch hands FFX. With inverted
+// depth FFX takes the two planes swapped.
+const fn ffx_camera_planes(depth: DepthConvention, near: f32, far: f32) -> (f32, f32) {
+    if depth.is_reversed() {
+        (far, near)
+    } else {
+        (near, far)
+    }
+}
 
 // FfxApiResourceType
 const FFX_API_RESOURCE_TYPE_TEXTURE2D: u32 = 2;
@@ -496,15 +519,11 @@ impl FsrUpscaler {
                 ty: FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE,
                 p_next: &mut backend.header as *mut ffxApiHeader,
             },
-            // HDR linear input, depth in [0, 1] with reverse-Z not in use
-            // (the engine writes 0 at near, 1 at far; Direct3D default).
-            // The depth-infinite flag tells FFX the far plane is at
-            // infinity; ours is finite, so leave it off.
             // Auto-exposure: FFX computes its own mid-gray heuristic
             // from the color buffer when this is on, useful because
             // the engine's `PostProcessConfig.auto_exposure` runs after
             // upscaling, so the input scene is *un*-exposed.
-            flags: FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE,
+            flags: ffx_create_flags(DepthConvention::Camera),
             max_render_size: FfxApiDimensions2D {
                 width: render_width,
                 height: render_height,
@@ -564,7 +583,6 @@ impl FsrUpscaler {
             output_height,
             scale
         );
-        let _ = FFX_UPSCALE_ENABLE_DEPTH_INVERTED;
         let _ = FFX_UPSCALE_ENABLE_DEPTH_INFINITE;
         let _ = FFX_API_RESOURCE_USAGE_DEPTHTARGET;
         let _ = FFX_API_RESOURCE_USAGE_READ_ONLY;
@@ -718,6 +736,8 @@ impl super::UpscaleBackend for FsrUpscaler {
             camera_far,
             camera_fov_y_radians,
         } = camera;
+        let (camera_near, camera_far) =
+            ffx_camera_planes(DepthConvention::Camera, camera_near, camera_far);
         let render_size = FfxApiDimensions2D {
             width: self.render_width,
             height: self.render_height,
@@ -1033,5 +1053,22 @@ mod tests {
         // FfxApiResource: void* + description + state + pad
         //   = 8 + 32 + 4 + 4 = 48 (last u32 + 4-byte tail padding to 8-byte alignment)
         assert_eq!(size_of::<FfxApiResource>(), 48);
+    }
+
+    #[test]
+    fn the_depth_contract_follows_the_camera_convention() {
+        let camera = DepthConvention::Camera;
+        let inverted = (ffx_create_flags(camera) & FFX_UPSCALE_ENABLE_DEPTH_INVERTED) != 0;
+        assert_eq!(inverted, camera.is_reversed());
+        let expected = if inverted { (500.0, 0.1) } else { (0.1, 500.0) };
+        assert_eq!(ffx_camera_planes(camera, 0.1, 500.0), expected);
+        assert_eq!(
+            ffx_create_flags(DepthConvention::Shadow) & FFX_UPSCALE_ENABLE_DEPTH_INVERTED,
+            0
+        );
+        assert_eq!(
+            ffx_camera_planes(DepthConvention::Shadow, 0.1, 500.0),
+            (0.1, 500.0)
+        );
     }
 }

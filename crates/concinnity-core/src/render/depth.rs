@@ -8,9 +8,13 @@
 //! counterpart is `shaders/depth_convention.hlsl`.
 //!
 //! The camera and the shadow maps are separate conventions: no pass tests one
-//! against the other's depth.
+//! against the other's depth. Camera depth is reversed (near 1, far 0), which on
+//! a 32-bit float buffer spreads precision evenly over distance; shadow depth
+//! is standard (near 0, far 1).
 
-use crate::gfx::projection::{oblique_rh, ortho_rh, perspective_rh};
+use crate::gfx::projection::{
+    ortho_rh, perspective_rh, reversed_oblique_rh, reversed_perspective_rh,
+};
 use crate::transform::Mat4;
 
 /// A depth test: how an incoming fragment's depth compares against the stored
@@ -43,14 +47,25 @@ impl DepthConvention {
     /// Device depth at the near plane.
     pub const fn near(self) -> f32 {
         match self {
-            Self::Camera | Self::Shadow => 0.0,
+            Self::Camera => 1.0,
+            Self::Shadow => 0.0,
         }
     }
 
     /// Device depth at the far plane.
     pub const fn far(self) -> f32 {
         match self {
-            Self::Camera | Self::Shadow => 1.0,
+            Self::Camera => 0.0,
+            Self::Shadow => 1.0,
+        }
+    }
+
+    /// Whether the near plane sits at device depth 1 and the far plane at 0:
+    /// what an upscaler's inverted-depth flag asks.
+    pub const fn is_reversed(self) -> bool {
+        match self {
+            Self::Camera => true,
+            Self::Shadow => false,
         }
     }
 
@@ -64,7 +79,8 @@ impl DepthConvention {
     /// fragment passes, so the first of two coplanar draws keeps the pixel.
     pub const fn write_compare(self) -> DepthCompare {
         match self {
-            Self::Camera | Self::Shadow => DepthCompare::Less,
+            Self::Camera => DepthCompare::Greater,
+            Self::Shadow => DepthCompare::Less,
         }
     }
 
@@ -73,15 +89,14 @@ impl DepthConvention {
     /// fragment depth with a value no farther than the rasterized one.
     pub const fn inclusive_compare(self) -> DepthCompare {
         match self {
-            Self::Camera | Self::Shadow => DepthCompare::LessEqual,
+            Self::Camera => DepthCompare::GreaterEqual,
+            Self::Shadow => DepthCompare::LessEqual,
         }
     }
 
     /// Whether device depth `a` is strictly nearer than `b`.
     pub fn is_closer(self, a: f32, b: f32) -> bool {
-        match self {
-            Self::Camera | Self::Shadow => a < b,
-        }
+        if self.is_reversed() { a > b } else { a < b }
     }
 
     /// The nearer of two device depths.
@@ -92,9 +107,9 @@ impl DepthConvention {
 
 /// The camera's perspective projection: the main camera and the reflection
 /// probe faces. `fov_y_radians` is the full vertical field of view; `aspect` is
-/// width over height.
+/// width over height. Depth is reversed: `near` maps to 1 and `far` to 0.
 pub fn camera_projection(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
-    perspective_rh(fov_y_radians, aspect, near, far)
+    reversed_perspective_rh(fov_y_radians, aspect, near, far)
 }
 
 /// A camera projection whose near clip plane is replaced by `clip_plane`, given
@@ -102,7 +117,7 @@ pub fn camera_projection(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -
 /// The far plane is kept. A planar reflection uses it to clip the geometry
 /// behind its mirror.
 pub(crate) fn camera_oblique_projection(proj: Mat4, clip_plane: [f32; 4]) -> Mat4 {
-    oblique_rh(proj, clip_plane)
+    reversed_oblique_rh(proj, clip_plane)
 }
 
 /// A spot light's perspective shadow projection.
@@ -140,14 +155,24 @@ mod tests {
     }
 
     #[test]
-    fn both_conventions_are_standard_depth() {
-        for c in BOTH {
-            assert_eq!(c.near(), 0.0);
-            assert_eq!(c.far(), 1.0);
-            assert_eq!(c.clear(), 1.0);
-            assert_eq!(c.write_compare(), DepthCompare::Less);
-            assert_eq!(c.inclusive_compare(), DepthCompare::LessEqual);
-        }
+    fn the_camera_is_reversed_and_shadows_are_standard() {
+        let camera = DepthConvention::Camera;
+        assert!(camera.is_reversed());
+        assert_eq!(
+            (camera.near(), camera.far(), camera.clear()),
+            (1.0, 0.0, 0.0)
+        );
+        assert_eq!(camera.write_compare(), DepthCompare::Greater);
+        assert_eq!(camera.inclusive_compare(), DepthCompare::GreaterEqual);
+
+        let shadow = DepthConvention::Shadow;
+        assert!(!shadow.is_reversed());
+        assert_eq!(
+            (shadow.near(), shadow.far(), shadow.clear()),
+            (0.0, 1.0, 1.0)
+        );
+        assert_eq!(shadow.write_compare(), DepthCompare::Less);
+        assert_eq!(shadow.inclusive_compare(), DepthCompare::LessEqual);
     }
 
     // A cleared pixel must lose to every surface a write test can produce.
@@ -165,7 +190,8 @@ mod tests {
         for c in BOTH {
             assert_eq!(c.closer(c.near(), c.far()), c.near());
             assert_eq!(c.closer(c.far(), c.near()), c.near());
-            assert_eq!(c.closer(0.25, 0.75), 0.25);
+            let toward_near = if c.is_reversed() { 0.75 } else { 0.25 };
+            assert_eq!(c.closer(0.25, 0.75), toward_near);
             assert_eq!(c.closer(0.5, 0.5), 0.5);
             assert!(!c.is_closer(0.5, 0.5));
             assert!(!c.is_closer(c.far(), c.near()));
@@ -191,14 +217,45 @@ mod tests {
         assert!((device_depth(cascade, -8.0) - DepthConvention::Shadow.far()).abs() < 1e-5);
     }
 
-    // The shader half of the camera convention has to name the same planes and
-    // the conservative-depth direction its write test implies.
+    // A camera matrix keeps nearer surfaces passing its write test at every
+    // distance, oblique clip included.
+    #[test]
+    fn the_camera_write_test_keeps_the_nearer_surface() {
+        let proj = camera_projection(1.1, 1.7, 0.2, 80.0);
+        let oblique = camera_oblique_projection(proj, [0.0, 0.1, -1.0, -0.25]);
+        for m in [proj, oblique] {
+            let mut prev = device_depth(m, -0.3);
+            for z in [-0.5, -1.0, -10.0, -40.0, -79.0] {
+                let d = device_depth(m, z);
+                assert!(
+                    DepthConvention::Camera.is_closer(prev, d),
+                    "{prev} vs {d} at {z}"
+                );
+                prev = d;
+            }
+        }
+    }
+
+    // The shader half of the camera convention has to name the same planes, the
+    // same reductions and the conservative-depth direction its write test
+    // implies.
     #[test]
     fn the_shader_convention_matches() {
         let src = crate::render::shaders::DEPTH_CONVENTION;
         let camera = DepthConvention::Camera;
         assert!(src.contains(&alloc::format!("#define DEPTH_NEAR {:?}\n", camera.near())));
         assert!(src.contains(&alloc::format!("#define DEPTH_FAR {:?}\n", camera.far())));
+        let (closer, farther) = if camera.is_reversed() {
+            ("max", "min")
+        } else {
+            ("min", "max")
+        };
+        assert!(src.contains(&alloc::format!(
+            "#define depth_closer(a, b) {closer}((a), (b))\n"
+        )));
+        assert!(src.contains(&alloc::format!(
+            "#define depth_farther(a, b) {farther}((a), (b))\n"
+        )));
         let conservative = |compare| match compare {
             DepthCompare::Less | DepthCompare::LessEqual => "SV_DepthLessEqual",
             DepthCompare::Greater | DepthCompare::GreaterEqual => "SV_DepthGreaterEqual",
@@ -213,15 +270,11 @@ mod tests {
         )));
     }
 
-    // The entry points carry the same matrices as the generic builders they
-    // wrap, bit for bit.
+    // The shadow entry points still carry the standard-depth builders'
+    // matrices, bit for bit.
     #[test]
-    fn the_entry_points_match_the_generic_builders() {
+    fn the_shadow_entry_points_stay_standard() {
         for (fov, aspect, near, far) in [(1.2, 1.6, 0.1, 500.0), (0.4, 0.5, 0.01, 10.0)] {
-            assert_eq!(
-                bits(camera_projection(fov, aspect, near, far)),
-                bits(perspective_rh(fov, aspect, near, far))
-            );
             assert_eq!(
                 bits(shadow_perspective(fov, aspect, near, far)),
                 bits(perspective_rh(fov, aspect, near, far))
@@ -230,12 +283,6 @@ mod tests {
         assert_eq!(
             bits(shadow_ortho(-3.0, 5.0, -2.0, 6.0, -1.0, 9.0)),
             bits(ortho_rh(-3.0, 5.0, -2.0, 6.0, -1.0, 9.0))
-        );
-        let proj = perspective_rh(1.1, 1.7, 0.2, 80.0);
-        let plane = [0.1, 0.9, -0.3, 2.0];
-        assert_eq!(
-            bits(camera_oblique_projection(proj, plane)),
-            bits(oblique_rh(proj, plane))
         );
     }
 }

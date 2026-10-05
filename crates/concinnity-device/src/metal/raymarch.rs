@@ -215,7 +215,7 @@ pub(in crate::metal) fn build_raymarch_pipeline(
         // raymarching is the case that needs blend.
         ca.setBlendingEnabled(false);
     }
-    // The fragment writes `[[depth(less)]]` into the bound
+    // The fragment writes conservative depth into the bound
     // `depth_resolve` attachment so downstream passes that sample it
     // see raymarched-surface depth. Pipeline must declare the same
     // depth format the attachment uses.
@@ -879,8 +879,8 @@ mod tests {
     #[test]
     fn volume_in_frustum_culls_offscreen_boxes() {
         use concinnity_core::gfx::frustum::Frustum;
-        // Identity view-projection -> the visible region is the [-1, 1]^3 clip
-        // cube. A unit box at the origin overlaps it; a box far to the right is
+        // Identity view-projection -> the visible region is the clip box,
+        // x and y in [-1, 1] and depth in [0, 1]. A unit box at the origin overlaps it; a box far to the right is
         // entirely past the right clip plane and is culled.
         let identity = [
             [1.0, 0.0, 0.0, 0.0],

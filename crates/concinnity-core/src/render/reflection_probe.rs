@@ -1079,7 +1079,7 @@ mod tests {
         }
     }
 
-    // Depth in [0, 1] of the point `distance` along face `face`'s axis.
+    // Device depth of the point `distance` along face `face`'s axis.
     fn face_depth(face: usize, distance: f32) -> f32 {
         let eye = [4.0, 1.0, -2.0];
         let d = face_dir(face, 0.0, 0.0);
@@ -1107,8 +1107,10 @@ mod tests {
                 let z = face_depth(face, distance);
                 assert!((0.0..=1.0).contains(&z), "face {face} at {distance}: z {z}");
             }
-            assert!(face_depth(face, CAPTURE_FAR * 1.05) > 1.0, "face {face}");
-            assert!(face_depth(face, CAPTURE_NEAR * 0.5) < 0.0, "face {face}");
+            // Reversed depth: past the far plane falls below 0, nearer than the
+            // near plane above 1.
+            assert!(face_depth(face, CAPTURE_FAR * 1.05) < 0.0, "face {face}");
+            assert!(face_depth(face, CAPTURE_NEAR * 0.5) > 1.0, "face {face}");
         }
     }
 

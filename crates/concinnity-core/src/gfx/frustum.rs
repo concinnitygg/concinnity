@@ -2,9 +2,9 @@
 //!
 //! Given a column-major view-projection matrix the six clip-space planes are
 //! extracted using the Gribb-Hartmann method (left/right/bottom/top/near/far).
-//! [`Frustum::from_camera`] and [`Frustum::from_shadow`] take a camera or a
-//! shadow view-projection and share one extraction for a matrix that maps near
-//! to device depth 0 and far to 1.
+//! [`Frustum::from_camera`] takes a camera view-projection (reversed depth:
+//! near at device depth 1, far at 0) and [`Frustum::from_shadow`] a shadow one
+//! (near at 0, far at 1); only their near and far planes differ.
 //! `Frustum::intersects_aabb` returns false only when an axis-aligned bounding
 //! box is fully outside at least one plane.  False positives are acceptable for
 //! culling (a few extra draws), false negatives are not, so the test treats
@@ -33,18 +33,24 @@ impl Frustum {
     /// probe face or a planar reflection. `vp[col][row]`, column-major, the
     /// layout the renderer's ViewUniforms use.
     pub fn from_camera(vp: [[f32; 4]; 4]) -> Self {
-        Self::from_standard_depth(vp)
+        // Reversed depth keeps 0 <= z <= w: near is w - z >= 0, far is z >= 0.
+        Self::extract(vp, |z, w| (combine(w, z, -1.0), z))
     }
 
     /// The frustum of a shadow view-projection: a directional cascade or a spot
     /// slice. Same layout as [`Frustum::from_camera`].
     pub fn from_shadow(vp: [[f32; 4]; 4]) -> Self {
-        Self::from_standard_depth(vp)
+        // Far is w - z >= 0. Near is the -1..1 plane w + z >= 0, which sits
+        // behind the 0..1 one and only keeps more.
+        Self::extract(vp, |z, w| (combine(w, z, 1.0), combine(w, z, -1.0)))
     }
 
-    // Gribb-Hartmann extraction for a projection that maps near to device depth
-    // 0 and far to 1.
-    fn from_standard_depth(vp: [[f32; 4]; 4]) -> Self {
+    // Gribb-Hartmann extraction. `depth_planes` turns the z and w rows into the
+    // near and far planes the projection's depth range implies.
+    fn extract(
+        vp: [[f32; 4]; 4],
+        depth_planes: impl Fn([f32; 4], [f32; 4]) -> ([f32; 4], [f32; 4]),
+    ) -> Self {
         // Row r of vp = [vp[0][r], vp[1][r], vp[2][r], vp[3][r]].
         let row = |r: usize| -> [f32; 4] { [vp[0][r], vp[1][r], vp[2][r], vp[3][r]] };
         let r0 = row(0);
@@ -52,24 +58,16 @@ impl Frustum {
         let r2 = row(2);
         let r3 = row(3);
 
-        let make = |a: [f32; 4], b: [f32; 4], sign: f32| -> Plane {
-            let p = [
-                a[0] * sign + b[0],
-                a[1] * sign + b[1],
-                a[2] * sign + b[2],
-                a[3] * sign + b[3],
-            ];
-            normalize_plane(p)
-        };
+        let (near, far) = depth_planes(r2, r3);
 
         Self {
             planes: [
-                make(r0, r3, 1.0),  // left:   row3 + row0
-                make(r0, r3, -1.0), // right:  row3 - row0
-                make(r1, r3, 1.0),  // bottom: row3 + row1
-                make(r1, r3, -1.0), // top:    row3 - row1
-                make(r2, r3, 1.0),  // near:   row3 + row2   (works for 0..1 z and -1..1 z)
-                make(r2, r3, -1.0), // far:    row3 - row2
+                normalize_plane(combine(r3, r0, 1.0)),  // left:   row3 + row0
+                normalize_plane(combine(r3, r0, -1.0)), // right:  row3 - row0
+                normalize_plane(combine(r3, r1, 1.0)),  // bottom: row3 + row1
+                normalize_plane(combine(r3, r1, -1.0)), // top:    row3 - row1
+                normalize_plane(near),
+                normalize_plane(far),
             ],
         }
     }
@@ -94,6 +92,16 @@ impl Frustum {
         }
         true
     }
+}
+
+// `a + sign * b`, componentwise.
+fn combine(a: [f32; 4], b: [f32; 4], sign: f32) -> [f32; 4] {
+    [
+        b[0] * sign + a[0],
+        b[1] * sign + a[1],
+        b[2] * sign + a[2],
+        b[3] * sign + a[3],
+    ]
 }
 
 fn normalize_plane(p: [f32; 4]) -> Plane {
@@ -172,7 +180,8 @@ mod tests {
 
     #[test]
     fn identity_vp_contains_origin_aabb() {
-        // Identity VP defines the [-1,1]^3 clip cube as the visible region.
+        // Identity VP defines the clip box (x, y in [-1, 1], depth in [0, 1])
+        // as the visible region.
         let f = Frustum::from_camera(identity4());
         assert!(f.intersects_aabb([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]));
     }
@@ -184,24 +193,38 @@ mod tests {
         assert!(!f.intersects_aabb([5.0, -0.5, -0.5], [6.0, 0.5, 0.5]));
     }
 
-    fn plane_bits(f: &Frustum) -> [[u32; 4]; 6] {
-        f.planes
-            .map(|p| [p.normal[0], p.normal[1], p.normal[2], p.d].map(f32::to_bits))
+    fn point_inside(f: &Frustum, p: [f32; 3]) -> bool {
+        f.intersects_aabb(p, p)
     }
 
-    // Each convention's entry point extracts exactly the planes the standard
-    // extraction does, for a perspective and an orthographic matrix alike.
+    // The camera frustum's near and far planes are exactly the projection's:
+    // a point just inside either is kept, just outside is culled.
     #[test]
-    fn the_entry_points_match_the_standard_extraction() {
-        let vps = [
-            crate::gfx::projection::perspective_rh(1.2, 1.6, 0.1, 500.0),
-            crate::gfx::projection::ortho_rh(-4.0, 6.0, -3.0, 5.0, -2.0, 9.0),
-        ];
-        for vp in vps {
-            let standard = plane_bits(&Frustum::from_standard_depth(vp));
-            assert_eq!(plane_bits(&Frustum::from_camera(vp)), standard);
-            assert_eq!(plane_bits(&Frustum::from_shadow(vp)), standard);
-        }
+    fn the_camera_frustum_spans_exactly_near_to_far() {
+        let vp = crate::render::depth::camera_projection(1.2, 1.6, 0.1, 500.0);
+        let f = Frustum::from_camera(vp);
+        assert!(point_inside(&f, [0.0, 0.0, -0.1001]));
+        assert!(!point_inside(&f, [0.0, 0.0, -0.0999]));
+        assert!(point_inside(&f, [0.0, 0.0, -499.9]));
+        assert!(!point_inside(&f, [0.0, 0.0, -500.1]));
+        assert!(point_inside(&f, [10.0, -5.0, -100.0]));
+        assert!(!point_inside(&f, [10.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn the_shadow_frustum_keeps_its_near_to_far_box() {
+        let spot = crate::render::depth::shadow_perspective(1.0, 1.0, 0.05, 40.0);
+        let f = Frustum::from_shadow(spot);
+        assert!(point_inside(&f, [0.0, 0.0, -0.06]));
+        assert!(point_inside(&f, [0.0, 0.0, -39.9]));
+        assert!(!point_inside(&f, [0.0, 0.0, -40.1]));
+
+        let cascade = crate::render::depth::shadow_ortho(-4.0, 4.0, -4.0, 4.0, -2.0, 8.0);
+        let f = Frustum::from_shadow(cascade);
+        assert!(point_inside(&f, [3.9, -3.9, 1.9]));
+        assert!(point_inside(&f, [0.0, 0.0, -7.9]));
+        assert!(!point_inside(&f, [0.0, 0.0, -8.1]));
+        assert!(!point_inside(&f, [4.1, 0.0, 0.0]));
     }
 
     #[test]

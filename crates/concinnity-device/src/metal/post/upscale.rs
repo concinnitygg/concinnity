@@ -11,6 +11,7 @@
 //! its sub-pixel offset.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -271,9 +272,10 @@ impl MtlContext {
             upscaler.scaler.setJitterOffsetX(jx);
             upscaler.scaler.setJitterOffsetY(jy);
 
-            // Reverse-Z is not in use (the depth state writes 0=near,
-            // 1=far), so leave depth-reversed off.
-            upscaler.scaler.setDepthReversed(false);
+            // `depthReversed` means near is device depth 1.
+            upscaler
+                .scaler
+                .setDepthReversed(DepthConvention::Camera.is_reversed());
 
             // First-frame-after-rebuild discards history. The flag is
             // owned by an atomic on the context; `draw_frame` raises it

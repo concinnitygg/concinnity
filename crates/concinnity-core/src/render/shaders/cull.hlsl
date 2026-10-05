@@ -285,11 +285,11 @@ bool project_aabb(
     float3 bb_max,
     out float2 ndc_min,
     out float2 ndc_max,
-    out float min_depth)
+    out float nearest_depth)
 {
     ndc_min = float2( 1.0,  1.0);
     ndc_max = float2(-1.0, -1.0);
-    min_depth = DEPTH_FAR;
+    nearest_depth = DEPTH_FAR;
     [unroll] for (uint i = 0u; i < 8u; ++i)
     {
         float3 corner = float3(
@@ -304,7 +304,7 @@ bool project_aabb(
         float3 ndc = clip.xyz / clip.w;
         ndc_min = min(ndc_min, ndc.xy);
         ndc_max = max(ndc_max, ndc.xy);
-        min_depth = depth_closer(min_depth, ndc.z);
+        nearest_depth = depth_closer(nearest_depth, ndc.z);
     }
     return true;
 }
@@ -315,8 +315,8 @@ bool project_aabb(
 bool hiz_occluded(float3 bb_min, float3 bb_max)
 {
     float2 ndc_min, ndc_max;
-    float aabb_min_depth;
-    if (!project_aabb(bb_min, bb_max, ndc_min, ndc_max, aabb_min_depth))
+    float aabb_nearest_depth;
+    if (!project_aabb(bb_min, bb_max, ndc_min, ndc_max, aabb_nearest_depth))
     {
         return false;
     }
@@ -330,7 +330,7 @@ bool hiz_occluded(float3 bb_min, float3 bb_max)
     }
     // An AABB whose nearest point falls outside the [0, 1] depth range crosses
     // the near or far plane, so it is conservatively kept.
-    if (aabb_min_depth < 0.0 || aabb_min_depth > 1.0)
+    if (aabb_nearest_depth < 0.0 || aabb_nearest_depth > 1.0)
     {
         return false;
     }
@@ -357,7 +357,7 @@ bool hiz_occluded(float3 bb_min, float3 bb_max)
     float occluder_depth = depth_farther(depth_farther(d0, d1), depth_farther(d2, d3));
     // If the AABB's nearest projected depth is strictly behind the farthest
     // previously-rasterized surface in this region, the whole AABB is hidden.
-    return depth_behind(aabb_min_depth, occluder_depth);
+    return depth_behind(aabb_nearest_depth, occluder_depth);
 }
 
 #ifndef CN_BACKEND_METAL

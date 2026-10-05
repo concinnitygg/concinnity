@@ -15,6 +15,7 @@
 use crate::directx::descriptor_slot::SrvSlot;
 use concinnity_core::components::UpscaleQuality;
 use concinnity_core::gfx::jitter;
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::ffi::c_void;
 use std::ptr;
@@ -38,11 +39,21 @@ const PERF_MAX_QUALITY: i32 = 2;
 const PERF_ULTRA_PERFORMANCE: i32 = 3;
 const PERF_DLAA: i32 = 5;
 
-// NVSDK_NGX_DLSS_Feature_Flags. Engine depth is 0 = near (NOT inverted), HDR
-// linear input, low-res UV motion vectors. So: IsHDR + AutoExposure (the scene
-// is un-exposed pre-upscale, matching the FSR path); DepthInverted stays off.
+// NVSDK_NGX_DLSS_Feature_Flags. HDR linear input, low-res UV motion vectors:
+// IsHDR + AutoExposure (the scene is un-exposed pre-upscale, matching the FSR
+// path), and DepthInverted when the camera's near plane is device depth 1.
 const DLSS_FLAG_IS_HDR: i32 = 1 << 0;
+const DLSS_FLAG_DEPTH_INVERTED: i32 = 1 << 3;
 const DLSS_FLAG_AUTO_EXPOSURE: i32 = 1 << 6;
+
+const fn dlss_create_flags(depth: DepthConvention) -> i32 {
+    let flags = DLSS_FLAG_IS_HDR | DLSS_FLAG_AUTO_EXPOSURE;
+    if depth.is_reversed() {
+        flags | DLSS_FLAG_DEPTH_INVERTED
+    } else {
+        flags
+    }
+}
 
 // NVSDK_NGX_Parameter name strings (NUL-terminated; from nvsdk_ngx_defs.h).
 const P_WIDTH: &[u8] = b"Width\0";
@@ -283,7 +294,7 @@ impl DlssUpscaler {
             NVSDK_NGX_Parameter_SetI(
                 params,
                 P_CREATE_FLAGS.as_ptr(),
-                DLSS_FLAG_IS_HDR | DLSS_FLAG_AUTO_EXPOSURE,
+                dlss_create_flags(DepthConvention::Camera),
             );
             NVSDK_NGX_Parameter_SetI(params, P_ENABLE_OUTPUT_SUBRECTS.as_ptr(), 0);
             NVSDK_NGX_Parameter_SetUI(params, P_CREATION_NODE_MASK.as_ptr(), 1);
@@ -490,5 +501,17 @@ mod tests {
         assert_eq!(PERF_DLAA, 5);
         assert_eq!(DLSS_FLAG_IS_HDR, 1);
         assert_eq!(DLSS_FLAG_AUTO_EXPOSURE, 64);
+    }
+
+    #[test]
+    fn the_depth_flag_follows_the_camera_convention() {
+        assert_eq!(DLSS_FLAG_DEPTH_INVERTED, 8);
+        let camera = DepthConvention::Camera;
+        let inverted = (dlss_create_flags(camera) & DLSS_FLAG_DEPTH_INVERTED) != 0;
+        assert_eq!(inverted, camera.is_reversed());
+        assert_eq!(
+            dlss_create_flags(DepthConvention::Shadow) & DLSS_FLAG_DEPTH_INVERTED,
+            0
+        );
     }
 }

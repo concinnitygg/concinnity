@@ -14,6 +14,7 @@
 use crate::directx::descriptor_slot::SrvSlot;
 use concinnity_core::components::UpscaleQuality;
 use concinnity_core::gfx::jitter;
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::ffi::{CStr, c_void};
 use std::ptr;
@@ -37,11 +38,20 @@ const XESS_QUALITY_SETTING_BALANCED: i32 = 102;
 const XESS_QUALITY_SETTING_QUALITY: i32 = 103;
 const XESS_QUALITY_SETTING_AA: i32 = 106;
 
-// xess_init_flags_t (bitmask). The engine feeds HDR linear color, low-res
+// xess_init_flags_t (bitmask). The engine feeds HDR linear color and low-res
 // (render-resolution) UV motion vectors scaled to pixels via SetVelocityScale,
-// and depth in [0,1] with 0 = near (NOT inverted). So the only flag we set is
-// auto-exposure (the scene is un-exposed pre-upscale, matching the FSR path).
+// so the flags are auto-exposure (the scene is un-exposed pre-upscale, matching
+// the FSR path) and inverted depth when the camera's near plane is device depth 1.
+const XESS_INIT_FLAG_INVERTED_DEPTH: u32 = 1 << 1;
 const XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE: u32 = 1 << 8;
+
+const fn xess_init_flags(depth: DepthConvention) -> u32 {
+    if depth.is_reversed() {
+        XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE | XESS_INIT_FLAG_INVERTED_DEPTH
+    } else {
+        XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE
+    }
+}
 
 type xess_context_handle_t = *mut c_void;
 
@@ -264,7 +274,7 @@ impl XessUpscaler {
             return Ok(None);
         }
 
-        let init_flags = XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE;
+        let init_flags = xess_init_flags(DepthConvention::Camera);
         // SAFETY: `ctx` is the non-null context just created, and a null pipeline-library pointer
         // is the header's "use the default" value.
         let rc = unsafe { (xess.build_pipelines)(ctx, ptr::null_mut(), true, init_flags) };
@@ -477,6 +487,18 @@ mod tests {
         assert_eq!(
             offset_of!(xess_d3d12_execute_params_t, descriptor_heap_offset),
             128
+        );
+    }
+
+    #[test]
+    fn the_depth_flag_follows_the_camera_convention() {
+        assert_eq!(XESS_INIT_FLAG_INVERTED_DEPTH, 2);
+        let camera = DepthConvention::Camera;
+        let inverted = (xess_init_flags(camera) & XESS_INIT_FLAG_INVERTED_DEPTH) != 0;
+        assert_eq!(inverted, camera.is_reversed());
+        assert_eq!(
+            xess_init_flags(DepthConvention::Shadow) & XESS_INIT_FLAG_INVERTED_DEPTH,
+            0
         );
     }
 }

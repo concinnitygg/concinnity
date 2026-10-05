@@ -21,6 +21,7 @@
 use ash::vk;
 use concinnity_core::components::UpscaleQuality;
 use concinnity_core::gfx::jitter;
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
@@ -50,12 +51,21 @@ const PERF_MAX_QUALITY: i32 = 2;
 const PERF_ULTRA_PERFORMANCE: i32 = 3;
 const PERF_DLAA: i32 = 5;
 
-// NVSDK_NGX_DLSS_Feature_Flags. Engine depth is 0 = near (NOT inverted), HDR
-// linear input, low-res UV motion vectors. So: IsHDR; DepthInverted stays off.
-// Auto-exposure is deliberately left off: the dispatch supplies an explicit 1.0
-// exposure texture instead (NVIDIA's recommended path over auto-exposure), which
-// NGX uses only while this flag is clear.
+// NVSDK_NGX_DLSS_Feature_Flags. HDR linear input, low-res UV motion vectors,
+// and DepthInverted when the camera's near plane is device depth 1. Auto-exposure
+// is deliberately left off: the dispatch supplies an explicit 1.0 exposure
+// texture instead (NVIDIA's recommended path over auto-exposure), which NGX uses
+// only while this flag is clear.
 const DLSS_FLAG_IS_HDR: i32 = 1 << 0;
+const DLSS_FLAG_DEPTH_INVERTED: i32 = 1 << 3;
+
+const fn dlss_create_flags(depth: DepthConvention) -> i32 {
+    if depth.is_reversed() {
+        DLSS_FLAG_IS_HDR | DLSS_FLAG_DEPTH_INVERTED
+    } else {
+        DLSS_FLAG_IS_HDR
+    }
+}
 
 // NVSDK_NGX_Parameter name strings (NUL-terminated; from nvsdk_ngx_params.h).
 const P_WIDTH: &[u8] = b"Width\0";
@@ -468,7 +478,11 @@ impl DlssUpscaler {
                 P_PERF_QUALITY.as_ptr(),
                 dlss_perf_quality(UpscaleQuality::nearest(scale)),
             );
-            NVSDK_NGX_Parameter_SetI(params, P_CREATE_FLAGS.as_ptr(), DLSS_FLAG_IS_HDR);
+            NVSDK_NGX_Parameter_SetI(
+                params,
+                P_CREATE_FLAGS.as_ptr(),
+                dlss_create_flags(DepthConvention::Camera),
+            );
             NVSDK_NGX_Parameter_SetI(params, P_ENABLE_OUTPUT_SUBRECTS.as_ptr(), 0);
             NVSDK_NGX_Parameter_SetUI(params, P_CREATION_NODE_MASK.as_ptr(), 1);
             NVSDK_NGX_Parameter_SetUI(params, P_VISIBILITY_NODE_MASK.as_ptr(), 1);
@@ -792,5 +806,17 @@ mod tests {
         assert_eq!(PERF_ULTRA_PERFORMANCE, 3);
         assert_eq!(PERF_DLAA, 5);
         assert_eq!(DLSS_FLAG_IS_HDR, 1);
+    }
+
+    #[test]
+    fn the_depth_flag_follows_the_camera_convention() {
+        assert_eq!(DLSS_FLAG_DEPTH_INVERTED, 8);
+        let camera = DepthConvention::Camera;
+        let inverted = (dlss_create_flags(camera) & DLSS_FLAG_DEPTH_INVERTED) != 0;
+        assert_eq!(inverted, camera.is_reversed());
+        assert_eq!(
+            dlss_create_flags(DepthConvention::Shadow) & DLSS_FLAG_DEPTH_INVERTED,
+            0
+        );
     }
 }

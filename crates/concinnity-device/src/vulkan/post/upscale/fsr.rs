@@ -29,6 +29,7 @@
 
 use ash::vk;
 use ash::vk::Handle;
+use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -77,7 +78,30 @@ struct ffxConfigureDescGlobalDebug1 {
 
 // Bitmask values from `enum FfxApiCreateContextUpscaleFlags`.
 const FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE: u32 = 1 << 0;
+const FFX_UPSCALE_ENABLE_DEPTH_INVERTED: u32 = 1 << 3;
 const FFX_UPSCALE_ENABLE_AUTO_EXPOSURE: u32 = 1 << 5;
+
+// The create flags for a camera drawn under `depth`: HDR linear input, FFX's own
+// auto-exposure, and inverted depth when the near plane is device depth 1. The
+// far plane is finite, so the infinite-depth flag stays off.
+const fn ffx_create_flags(depth: DepthConvention) -> u32 {
+    let flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+    if depth.is_reversed() {
+        flags | FFX_UPSCALE_ENABLE_DEPTH_INVERTED
+    } else {
+        flags
+    }
+}
+
+// The `(camera_near, camera_far)` pair the dispatch hands FFX. With inverted
+// depth FFX takes the two planes swapped.
+const fn ffx_camera_planes(depth: DepthConvention, near: f32, far: f32) -> (f32, f32) {
+    if depth.is_reversed() {
+        (far, near)
+    } else {
+        (near, far)
+    }
+}
 
 // FfxApiResourceType
 const FFX_API_RESOURCE_TYPE_TEXTURE2D: u32 = 2;
@@ -425,10 +449,7 @@ impl FsrUpscaler {
                 ty: FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE,
                 p_next: &mut backend.header as *mut ffxApiHeader,
             },
-            // HDR linear input; FFX runs its own auto-exposure heuristic from
-            // the color buffer. Depth is the standard Vulkan [0, 1] range (not
-            // reverse-Z), so no depth-inverted / depth-infinite flags.
-            flags: FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE,
+            flags: ffx_create_flags(DepthConvention::Camera),
             // `maxRenderSize` is the upper bound on the per-frame render size;
             // the FSR sample sets it to the display size, so mirror that. The
             // actual reduced render size is passed per-frame in the dispatch.
@@ -630,10 +651,11 @@ impl VkUpscaleBackend for FsrUpscaler {
         let UpscaleCamera {
             jitter_offset,
             elapsed,
-            near: camera_near,
-            far: camera_far,
+            near,
+            far,
             fov_y_radians: camera_fov_y_radians,
         } = camera;
+        let (camera_near, camera_far) = ffx_camera_planes(DepthConvention::Camera, near, far);
         let mk = |image: vk::Image, format: u32, usage: u32, state: u32, w: u32, h: u32| {
             FfxApiResource {
                 resource: image.as_raw() as usize as *mut c_void,
@@ -780,5 +802,22 @@ mod tests {
         assert_eq!(size_of::<FfxApiResource>(), 48);
         // header (16) + 3 pointer-sized handles = 16 + 24 = 40.
         assert_eq!(size_of::<ffxCreateBackendVKDesc>(), 40);
+    }
+
+    #[test]
+    fn the_depth_contract_follows_the_camera_convention() {
+        let camera = DepthConvention::Camera;
+        let inverted = (ffx_create_flags(camera) & FFX_UPSCALE_ENABLE_DEPTH_INVERTED) != 0;
+        assert_eq!(inverted, camera.is_reversed());
+        let expected = if inverted { (500.0, 0.1) } else { (0.1, 500.0) };
+        assert_eq!(ffx_camera_planes(camera, 0.1, 500.0), expected);
+        assert_eq!(
+            ffx_create_flags(DepthConvention::Shadow) & FFX_UPSCALE_ENABLE_DEPTH_INVERTED,
+            0
+        );
+        assert_eq!(
+            ffx_camera_planes(DepthConvention::Shadow, 0.1, 500.0),
+            (0.1, 500.0)
+        );
     }
 }

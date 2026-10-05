@@ -191,9 +191,10 @@ mod tests {
     #[test]
     fn oblique_clip_puts_the_plane_at_the_near_depth() {
         // A view-space plane at z = -5 facing the camera (kept side is farther,
-        // z < -5). After oblique clipping the projection, a point ON the plane
-        // maps to ndc.z ~= 0, a point in front (far side) to ndc.z in (0, 1), and
-        // a point behind the plane to ndc.z < 0 (clipped).
+        // z < -5). After oblique clipping the reversed-depth projection, a point
+        // ON the plane maps to ndc.z ~= 1 (the near plane), a point in front (far
+        // side) to ndc.z in (0, 1), and a point behind the plane past 1
+        // (clipped).
         let proj = camera_projection(1.2, 1.0, 0.1, 100.0);
         // Plane z = -5: n.p + d = 0 with kept side n.p + d > 0 toward -z (far).
         // Choose C so the far/kept side is positive: C = (0,0,-1,-5) -> for
@@ -205,10 +206,10 @@ mod tests {
             let clip = xform(pobl, [0.0, 0.0, z, 1.0]);
             clip[2] / clip[3]
         };
-        assert!(approx(ndc_z(-5.0), 0.0, 1e-3), "on-plane ndc.z");
+        assert!(approx(ndc_z(-5.0), 1.0, 1e-3), "on-plane ndc.z");
         let front = ndc_z(-50.0);
         assert!(front > 0.0 && front < 1.0, "far side in [0,1]: {front}");
-        assert!(ndc_z(-2.0) < 0.0, "near side clipped");
+        assert!(ndc_z(-2.0) > 1.0, "near side clipped");
     }
 
     #[test]
@@ -228,8 +229,9 @@ mod tests {
     fn planar_matrices_clip_below_the_water_plane() {
         // A camera above a horizontal water plane (y = 0, normal up). The mirror
         // pass must clip world geometry BELOW the plane (it would otherwise leak
-        // into the reflection). Verify a below-water point lands at ndc.z < 0 and
-        // an above-water point stays in [0, 1].
+        // into the reflection). Verify a below-water point lands past the near
+        // plane (ndc.z > 1 under reversed depth) and an above-water point stays
+        // in [0, 1].
         let plane = [0.0, 1.0, 0.0, 0.0]; // y = 0, normal +y (kept side: above)
         // Simple camera at (0, 3, 6) looking toward -z and slightly down. Build a
         // view that just translates (identity rotation is enough for the depth
@@ -250,9 +252,9 @@ mod tests {
         // Above water, in front of the camera: visible (0..1).
         let above = ndc_z([0.0, 2.0, -4.0]);
         assert!(above > 0.0 && above < 1.0, "above-water visible: {above}");
-        // Below water, in front of the camera: clipped (ndc.z < 0).
+        // Below water, in front of the camera: clipped (ndc.z > 1).
         let below = ndc_z([0.0, -2.0, -4.0]);
-        assert!(below < 0.0, "below-water clipped: {below}");
+        assert!(below > 1.0, "below-water clipped: {below}");
         // The reflected eye sits below the plane (mirror of y = 3).
         assert!(approx(m.eye[1], -3.0, 1e-5), "reflected eye height");
     }

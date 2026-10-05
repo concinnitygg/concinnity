@@ -359,8 +359,8 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     })
 }
 
-// The bindless pre-pass pipeline: the same no-cull / LESS depth as the main
-// pass, over a private depth buffer.
+// The bindless pre-pass pipeline: the same no-cull / camera depth test as the
+// main pass, over a private depth buffer.
 pub(in crate::vulkan) fn build_prepass_pipeline(
     device: &VkDevice,
     layout: vk::PipelineLayout,

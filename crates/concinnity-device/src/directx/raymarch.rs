@@ -21,7 +21,7 @@
 //!   * Per-frame `RaymarchView` cbuffer ring (triple-buffered).
 //!   * Color attachment = `hdr_resolve` (LOAD, opaque write). Depth
 //!     attachment = the main depth buffer in `DEPTH_WRITE`: the fragment
-//!     writes hit depth via `SV_DepthLessEqual` so downstream passes
+//!     writes hit depth as conservative depth so downstream passes
 //!     (decals, fog, SSR, TAA, ...) see the raymarched surface.
 //!
 //! Every `SdfVolume` builds here from its one distance-field payload, the same
@@ -208,9 +208,9 @@ fn create_raymarch_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12R
 // Build the per-volume PSO. Front-face culled so back faces of the
 // proxy cube rasterize (which works regardless of whether the camera
 // is inside or outside the bbox). Depth attachment is the main scene
-// depth (D32_FLOAT); the shader writes hit depth via
-// `SV_DepthLessEqual` so downstream passes see raymarched-surface
-// depth.
+// depth (D32_FLOAT); the shader writes hit depth as conservative
+// depth (`CAMERA_DEPTH_CONSERVATIVE`) so downstream passes see
+// raymarched-surface depth.
 fn create_raymarch_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
@@ -220,7 +220,7 @@ fn create_raymarch_pso(
 ) -> RenderResult<ID3D12PipelineState> {
     let input_layout = main_input_layout();
     // Hardware z-test against the existing MSAA main depth, and write
-    // hit depth back via `SV_DepthLessEqual` so downstream
+    // hit depth back as conservative depth so downstream
     // depth-sampling passes (decals, fog, SSR) see the raymarched
     // surface. Renders into the MSAA `hdr_color` target so the depth
     // sample-count matches; the encoder re-resolves `hdr_color →
@@ -1059,7 +1059,7 @@ impl DxContext {
         // single-sample post-stack passes (Decals, Fog, SsrResolve,
         // TaaResolve, Bloom, Composite) pick up the raymarched
         // color AND the raymarched-surface depth (which flowed into
-        // `depth.resource` via SV_DepthLessEqual). The MSAA-off path
+        // `depth.resource` as conservative depth). The MSAA-off path
         // skips the resolve and renders into hdr_color directly.
         let msaa = self.targets.hdr.resolve.is_some();
 
@@ -1105,8 +1105,8 @@ impl DxContext {
 
         // hdr_color is already in RENDER_TARGET: with MSAA on the graph rests it
         // there, and with MSAA off it is the spine this pass declares a write
-        // on. Depth stays in DEPTH_WRITE; the DSV is writable + the LESS_EQUAL
-        // test composites against existing rasterized depth.
+        // on. Depth stays in DEPTH_WRITE; the DSV is writable + the inclusive
+        // camera test composites against existing rasterized depth.
 
         let w = self.targets.extent.render_width;
         let h = self.targets.extent.render_height;

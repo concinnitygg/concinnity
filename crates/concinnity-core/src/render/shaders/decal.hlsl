@@ -108,8 +108,8 @@ float4 decal_fragment(DecalVertexOut i) : SV_Target
     {
         discard;
     }
-    // A cleared pixel means the main pass left it empty (the sky writes
-    // near-far-plane depth instead). Nothing to project onto.
+    // A cleared pixel means the main pass left it empty (the sky draws at the
+    // cleared depth without writing). Nothing to project onto.
     float depth = decal_scene_depth(pixel);
     if (depth_is_cleared(depth))
     {

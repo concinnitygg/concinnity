@@ -3,9 +3,10 @@
 //! Y-down NDC with a negative-height viewport rather than by flipping the
 //! projection.
 //!
-//! The projections here map near to device depth 0 and far to 1. They are the
-//! builders behind [`crate::render::depth`]'s entry points, which pick one per
-//! depth convention, so a caller never names a depth mapping directly.
+//! The projections here map near to device depth 0 and far to 1, or, for the
+//! `reversed_` ones, near to 1 and far to 0. They are the builders behind
+//! [`crate::render::depth`]'s entry points, which pick one per depth
+//! convention, so a caller never names a depth mapping directly.
 //!
 //! The projections and both ways of building a view matrix sit together because
 //! they have to agree: a shadow cascade's ortho and a probe face's perspective
@@ -51,24 +52,43 @@ pub(crate) fn ortho_rh(left: f32, right: f32, bottom: f32, top: f32, near: f32, 
     ]
 }
 
-/// Oblique near-plane clipping (Lengyel) for a [`perspective_rh`] matrix.
-/// Replaces the projection's z (depth) row so the near clip plane coincides
-/// with `clip_plane` (given in the projection's view space), clipping
+/// Right-handed perspective projection with reversed depth: near maps to device
+/// depth 1 and far to 0. Its x, y and w rows are [`perspective_rh`]'s.
+pub(crate) fn reversed_perspective_rh(
+    fov_y_radians: f32,
+    aspect: f32,
+    near: f32,
+    far: f32,
+) -> Mat4 {
+    let ys = 1.0 / tan(fov_y_radians * 0.5).max(MIN_HALF_FOV_TAN);
+    let xs = ys / aspect;
+    let zs = near / (far - near);
+    [
+        [xs, 0.0, 0.0, 0.0],
+        [0.0, ys, 0.0, 0.0],
+        [0.0, 0.0, zs, -1.0],
+        [0.0, 0.0, zs * far, 0.0],
+    ]
+}
+
+/// Oblique near-plane clipping (Lengyel) for a [`reversed_perspective_rh`]
+/// matrix. Replaces the projection's z (depth) row so the near clip plane
+/// coincides with `clip_plane` (given in the projection's view space), clipping
 /// everything on the negative side of that plane. The far plane is preserved by
 /// scaling against the frustum corner the plane faces.
 ///
-/// The near plane is `z_row . p = 0`, so the new z-row is `alpha * C` for the
-/// clip plane C (any alpha keeps the near plane at C). Picking the far frustum
-/// corner q = inv(P) . (sgn(Cx), sgn(Cy), 1, 1) and requiring it to land on the
-/// far plane (ndc.z = 1, i.e. z_row.q = w_row.q = -q.z) gives
-/// alpha = -q.z / (C . q). For this projection q has the closed form below
-/// (q.z = -1), so alpha = 1 / (C . q).
-pub(crate) fn oblique_rh(proj: Mat4, clip_plane: [f32; 4]) -> Mat4 {
+/// The near plane is where depth equals w, so the new z-row is
+/// `w_row - alpha * C` for the clip plane C (any alpha keeps the near plane at
+/// C). Picking the far frustum corner q = inv(P) . (sgn(Cx), sgn(Cy), 0, 1)
+/// and requiring it to stay on the far plane (ndc.z = 0) gives
+/// alpha = (w_row . q) / (C . q). For this projection q has the closed form
+/// below (q.z = -1, so w_row . q = 1).
+pub(crate) fn reversed_oblique_rh(proj: Mat4, clip_plane: [f32; 4]) -> Mat4 {
     let xs = proj[0][0];
     let ys = proj[1][1];
     let zs = proj[2][2]; // z-row's z component
-    let zs_near = proj[3][2]; // z-row's w component (= zs * near)
-    if xs.abs() < 1e-12 || ys.abs() < 1e-12 || zs_near.abs() < 1e-12 {
+    let zs_far = proj[3][2]; // z-row's w component (= zs * far)
+    if xs.abs() < 1e-12 || ys.abs() < 1e-12 || zs_far.abs() < 1e-12 {
         return proj;
     }
 
@@ -86,7 +106,7 @@ pub(crate) fn oblique_rh(proj: Mat4, clip_plane: [f32; 4]) -> Mat4 {
         sgn(clip_plane[0]) / xs,
         sgn(clip_plane[1]) / ys,
         -1.0,
-        (1.0 + zs) / zs_near,
+        zs / zs_far,
     ];
     let denom =
         clip_plane[0] * q[0] + clip_plane[1] * q[1] + clip_plane[2] * q[2] + clip_plane[3] * q[3];
@@ -97,10 +117,10 @@ pub(crate) fn oblique_rh(proj: Mat4, clip_plane: [f32; 4]) -> Mat4 {
 
     let mut out = proj;
     // Replace the z (depth) row: row index 2 across all four columns.
-    out[0][2] = alpha * clip_plane[0];
-    out[1][2] = alpha * clip_plane[1];
-    out[2][2] = alpha * clip_plane[2];
-    out[3][2] = alpha * clip_plane[3];
+    out[0][2] = -alpha * clip_plane[0];
+    out[1][2] = -alpha * clip_plane[1];
+    out[2][2] = -1.0 - alpha * clip_plane[2];
+    out[3][2] = -alpha * clip_plane[3];
     out
 }
 
@@ -226,6 +246,118 @@ mod tests {
         assert!(near[2].abs() < 1e-5, "near depth {}", near[2]);
         assert!((far[2] - 1.0).abs() < 1e-5, "far depth {}", far[2]);
         assert!((far[0] - 1.0).abs() < 1e-5 && (far[1] - 1.0).abs() < 1e-5);
+    }
+
+    fn depth(m: Mat4, p: [f32; 3]) -> f32 {
+        let c = transform(m, p);
+        c[2] / c[3]
+    }
+
+    fn sgn(v: f32) -> f32 {
+        if v == 0.0 { 0.0 } else { v.signum() }
+    }
+
+    // Lengyel's derivation for a [`perspective_rh`] matrix: near at ndc 0, the
+    // far corner held at ndc 1.
+    fn standard_oblique_rh(proj: Mat4, c: [f32; 4]) -> Mat4 {
+        let q = [
+            sgn(c[0]) / proj[0][0],
+            sgn(c[1]) / proj[1][1],
+            -1.0,
+            (1.0 + proj[2][2]) / proj[3][2],
+        ];
+        let alpha = 1.0 / (c[0] * q[0] + c[1] * q[1] + c[2] * q[2] + c[3] * q[3]);
+        let mut out = proj;
+        for (col, cv) in c.iter().enumerate() {
+            out[col][2] = alpha * cv;
+        }
+        out
+    }
+
+    const CAMERAS: [(f32, f32, f32, f32); 4] = [
+        (1.2, 1.6, 0.1, 500.0),
+        (0.4, 0.5, 0.01, 10.0),
+        (1.5, 2.35, 0.5, 20_000.0),
+        (0.9, 1.0, 1.0, 80.0),
+    ];
+
+    // Reversed depth is exactly 1 - standard depth: the near plane at 1, the far
+    // plane at 0, and every distance between mirrored, under the same x/y/w.
+    #[test]
+    fn the_reversed_perspective_mirrors_standard_depth() {
+        for (fov, aspect, near, far) in CAMERAS {
+            let standard = perspective_rh(fov, aspect, near, far);
+            let reversed = reversed_perspective_rh(fov, aspect, near, far);
+            for row in [0, 1, 3] {
+                for col in 0..4 {
+                    assert_eq!(reversed[col][row], standard[col][row]);
+                }
+            }
+            assert!((depth(reversed, [0.0, 0.0, -near]) - 1.0).abs() < 1e-6);
+            assert!(depth(reversed, [0.0, 0.0, -far]).abs() < 1e-6);
+            for t in [0.0f32, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.99, 1.0] {
+                let z = -(near + (far - near) * t);
+                let p = [0.3 * z, -0.2 * z, z];
+                let (s, r) = (depth(standard, p), depth(reversed, p));
+                assert!((r - (1.0 - s)).abs() < 1e-5, "t={t}: {r} vs 1 - {s}");
+            }
+        }
+    }
+
+    // The reversed oblique matrix clips at the same plane as the standard-Z
+    // derivation and keeps the same side, with every depth mirrored: points on
+    // the clip plane land on the near plane (1), the far corner the plane faces
+    // stays on the far plane (0).
+    #[test]
+    fn the_reversed_oblique_mirrors_the_standard_derivation() {
+        // Mirror-like planes ahead of the eye, which sits on the clipped side.
+        let planes = [
+            [0.0, 0.0, -1.0, -3.0],
+            [0.2, 0.1, -1.0, -3.0],
+            [-0.3, 0.25, -1.0, -4.0],
+            [0.1, -0.3, -1.0, -2.0],
+        ];
+        for (fov, aspect, near, far) in CAMERAS {
+            let standard = perspective_rh(fov, aspect, near, far);
+            let reversed = reversed_perspective_rh(fov, aspect, near, far);
+            for c in planes {
+                let s = standard_oblique_rh(standard, c);
+                let r = reversed_oblique_rh(reversed, c);
+                for row in [0, 1, 3] {
+                    for col in 0..4 {
+                        assert_eq!(r[col][row], s[col][row]);
+                    }
+                }
+                let side = |p: [f32; 3]| c[0] * p[0] + c[1] * p[1] + c[2] * p[2] + c[3];
+                for z in [-near, -0.5 * (near + far), -0.9 * far] {
+                    for (fx, fy) in [(0.3, -0.2), (-0.4, 0.4), (0.0, 0.0)] {
+                        let p = [fx * z, fy * z, z];
+                        let (ds, dr) = (depth(s, p), depth(r, p));
+                        let tolerance = 1e-4 * ds.abs().max(1.0);
+                        assert!((dr - (1.0 - ds)).abs() < tolerance, "{dr} vs 1 - {ds}");
+                        // Same culled side: behind the plane falls past the
+                        // near plane under both.
+                        if side(p) < 0.0 {
+                            assert!(ds < 0.0 && dr > 1.0, "{p:?}: {ds} / {dr}");
+                        }
+                    }
+                }
+                // Points on the clip plane sit on the reversed near plane.
+                for (a, b) in [(0.1, 0.2), (-0.3, 0.05), (0.25, -0.4)] {
+                    let s = -c[3] / (c[0] * a + c[1] * b - c[2]);
+                    let on_plane = [s * a, s * b, -s];
+                    assert!(side(on_plane).abs() < 1e-4);
+                    assert!((depth(r, on_plane) - 1.0).abs() < 1e-4);
+                }
+                // The far corner the plane faces is held at the far plane.
+                let corner = [
+                    sgn(c[0]) * far / standard[0][0],
+                    sgn(c[1]) * far / standard[1][1],
+                    -far,
+                ];
+                assert!(depth(r, corner).abs() < 1e-4, "{}", depth(r, corner));
+            }
+        }
     }
 
     #[test]

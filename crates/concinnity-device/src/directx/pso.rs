@@ -479,20 +479,20 @@ mod tests {
         let off = Depth::Off.raw();
         assert!(!off.DepthEnable.as_bool());
         assert_eq!(off.DepthWriteMask, D3D12_DEPTH_WRITE_MASK_ZERO);
-        let less = Depth::camera_write().raw();
-        assert!(less.DepthEnable.as_bool());
-        assert_eq!(less.DepthWriteMask, D3D12_DEPTH_WRITE_MASK_ALL);
-        assert_eq!(less.DepthFunc, D3D12_COMPARISON_FUNC_LESS);
+        let camera = Depth::camera_write().raw();
+        assert!(camera.DepthEnable.as_bool());
+        assert_eq!(camera.DepthWriteMask, D3D12_DEPTH_WRITE_MASK_ALL);
+        assert_eq!(camera.DepthFunc, D3D12_COMPARISON_FUNC_GREATER);
         let shadow = Depth::shadow_write().raw();
         assert_eq!(shadow.DepthWriteMask, D3D12_DEPTH_WRITE_MASK_ALL);
         assert_eq!(shadow.DepthFunc, D3D12_COMPARISON_FUNC_LESS);
         let inclusive = Depth::camera_write_inclusive().raw();
         assert_eq!(inclusive.DepthWriteMask, D3D12_DEPTH_WRITE_MASK_ALL);
-        assert_eq!(inclusive.DepthFunc, D3D12_COMPARISON_FUNC_LESS_EQUAL);
+        assert_eq!(inclusive.DepthFunc, D3D12_COMPARISON_FUNC_GREATER_EQUAL);
         let read = Depth::camera_read_only().raw();
         assert!(read.DepthEnable.as_bool());
         assert_eq!(read.DepthWriteMask, D3D12_DEPTH_WRITE_MASK_ZERO);
-        assert_eq!(read.DepthFunc, D3D12_COMPARISON_FUNC_LESS_EQUAL);
+        assert_eq!(read.DepthFunc, D3D12_COMPARISON_FUNC_GREATER_EQUAL);
         assert!(!read.StencilEnable.as_bool());
     }
 
