@@ -38,11 +38,13 @@ pub(super) fn build_shadow(
     // shadows). The casters draw through the GPU-driven shadow pipeline the
     // cull builds.
     let effective_shadow_size = shadows.map_size;
+    let extent =
+        render_types::shadow_array_extent(effective_shadow_size, NUM_SHADOW_CASCADES as u32);
     let (shadow_resource_opt, shadow_dsvs, shadow_srv_gpu) = if effective_shadow_size > 0 {
         let (sm, dsvs) = create_shadow_map_array(
             &hw.device,
-            effective_shadow_size,
-            NUM_SHADOW_CASCADES as u32,
+            extent.size,
+            extent.layers,
             heaps::cpu_handle(
                 &targets.depth.heap,
                 dsv_descriptor_size,
@@ -66,6 +68,7 @@ pub(super) fn build_shadow(
         resource: shadow_resource_opt,
         dsvs: shadow_dsvs,
         map_size: effective_shadow_size,
+        layers: extent.layers,
         srv_gpu: shadow_srv_gpu,
         // The first directional light's direction, for per-frame CSM updates.
         light_dir: lights::sun_direction(light_uniforms),

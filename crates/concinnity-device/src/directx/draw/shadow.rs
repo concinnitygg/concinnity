@@ -35,6 +35,8 @@ pub(in crate::directx) struct ShadowState {
     pub resource: Option<GpuResource<ID3D12Resource>>,
     pub dsvs: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
     pub map_size: u32,
+    // Slices the bound resource holds: the cascades, or the fallback's one.
+    pub layers: u32,
     pub srv_gpu: SrvSlot,
     pub light_dir: [f32; 3],
     pub cadence: ShadowCadence,

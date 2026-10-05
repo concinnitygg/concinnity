@@ -3,6 +3,7 @@
 // a device-local image via a one-shot command buffer.
 
 use ash::vk;
+use concinnity_core::gfx::render_types;
 use concinnity_core::render::error;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::mipmap;
@@ -1011,7 +1012,7 @@ pub(super) fn create_fallback_color_lut(ctx: &GpuUploadContext) -> RenderResult<
 // view per cascade for use as a per-slice depth attachment in the shadow
 // pass.
 //
-// When `size > 0`, creates a full shadow map; otherwise a 1×1 single-layer
+// An empty array (`size` or `layers` 0) is a 1×1 single-layer
 // fallback (depth=1.0 = fully lit). The fallback intentionally uses a single
 // array layer because the shader's cascade selection falls back to cascade 0
 // when `cascade_splits == +inf`, so layer 0 is the only one ever sampled.
@@ -1026,11 +1027,8 @@ pub(super) fn create_shadow_map_array(
         command_pool,
         queue,
     } = ctx;
-    let (w, h, layer_count) = if size > 0 {
-        (size, size, layers.max(1))
-    } else {
-        (1, 1, 1)
-    };
+    let extent = render_types::shadow_array_extent(size, layers);
+    let (w, h, layer_count) = (extent.size, extent.size, extent.layers);
     let img_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .extent(vk::Extent3D {

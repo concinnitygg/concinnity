@@ -5,7 +5,7 @@
 
 use concinnity_core::components::{GlassPanel, WaterSurface};
 use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::render_types::{DrawObject, LightUniforms, NUM_SHADOW_CASCADES};
+use concinnity_core::gfx::render_types::{DrawObject, LightUniforms};
 use concinnity_core::render::backend_init::{PlanarBudget, PostSettings, SdfVolumeSource, WorldFx};
 use concinnity_core::render::decal::{self, DecalRecord};
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -527,7 +527,7 @@ pub(super) fn build_raymarch(
         },
         crate::directx::raymarch::RaymarchSharedBindings {
             shadow_resource: shadow.resource.as_ref().map(|r| &r.resource),
-            shadow_layers: NUM_SHADOW_CASCADES as u32,
+            shadow_layers: shadow.layers,
             irradiance_resource: &scene.env_map.irradiance.resource,
             prefilter_resource: &scene.env_map.prefilter.resource,
         },

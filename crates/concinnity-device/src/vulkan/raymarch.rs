@@ -39,7 +39,7 @@ use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline::GraphicsStages;
 use super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc, Raster};
 use super::record::cmd_push_constants;
-use super::render_pass::create_main_render_pass_two_pass;
+use super::render_pass::{create_main_render_pass_two_pass, main_framebuffer_dependency};
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
 use super::texture::{
@@ -323,22 +323,7 @@ fn create_raymarch_render_pass_single(
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
         .color_attachments(std::slice::from_ref(&color_ref))
         .depth_stencil_attachment(&depth_ref);
-    let dependency = vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-        )
-        .src_access_mask(vk::AccessFlags::empty())
-        .dst_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-        )
-        .dst_access_mask(
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-        );
+    let dependency = main_framebuffer_dependency();
     let info = vk::RenderPassCreateInfo::default()
         .attachments(&attachments)
         .subpasses(std::slice::from_ref(&subpass))

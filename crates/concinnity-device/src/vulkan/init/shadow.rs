@@ -101,18 +101,9 @@ pub(super) fn build_spot_shadow(
     let hw = gpu.hw;
     // Spot shadow map array: one layer per shadow-casting spot, at a quarter
     // the cascade resolution (a spot slice covers a single cone, not a
-    // view-frustum slab). Passing size 0 yields the 1x1 fallback, which is
-    // what a world with no shadowed spot binds.
+    // view-frustum slab). No shadowed spot yields the 1x1 fallback.
     let slice_size = render_types::spot_shadow_slice_size(shadow.map_size);
-    let map = create_shadow_map_array(
-        &gpu.upload(),
-        if spot_shadows.is_empty() {
-            0
-        } else {
-            slice_size
-        },
-        spot_shadows.len().max(1) as u32,
-    )?;
+    let map = create_shadow_map_array(&gpu.upload(), slice_size, spot_shadows.len() as u32)?;
     crate::vulkan::draw::spot_shadow::build_spot_shadow(
         crate::vulkan::draw::spot_shadow::SpotShadowBuild {
             alloc: &hw.alloc,

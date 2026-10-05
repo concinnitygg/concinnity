@@ -6,6 +6,31 @@ use concinnity_core::render::error::RenderResult;
 
 use crate::vulkan::owned::{OwnedRenderPass, VkDevice};
 
+// The external dependency of every render pass that begins on the main
+// framebuffers. Render-pass compatibility counts dependencies, so the main
+// pass, both two-pass phases and the raymarch pass must share this one. It
+// orders the LOAD reads too, since a pass may load after a layout transition.
+pub(super) fn main_framebuffer_dependency() -> vk::SubpassDependency {
+    vk::SubpassDependency::default()
+        .src_subpass(vk::SUBPASS_EXTERNAL)
+        .dst_subpass(0)
+        .src_stage_mask(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+        )
+        .src_access_mask(vk::AccessFlags::empty())
+        .dst_stage_mask(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+        )
+        .dst_access_mask(
+            vk::AccessFlags::COLOR_ATTACHMENT_READ
+                | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        )
+}
+
 pub(super) fn create_main_render_pass(
     device: &VkDevice,
     format: vk::Format,
@@ -86,22 +111,7 @@ pub(super) fn create_main_render_pass(
         subpass = subpass.resolve_attachments(std::slice::from_ref(&resolve_ref));
     }
 
-    let dependency = vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-        )
-        .src_access_mask(vk::AccessFlags::empty())
-        .dst_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-        )
-        .dst_access_mask(
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-        );
+    let dependency = main_framebuffer_dependency();
 
     let rp_info = vk::RenderPassCreateInfo::default()
         .attachments(&attachments)
@@ -227,30 +237,9 @@ pub(super) fn create_main_render_pass_two_pass(
         subpass = subpass.resolve_attachments(std::slice::from_ref(&resolve_ref));
     }
 
-    // Use the EXACT same subpass dependency as `create_main_render_pass`. Both
-    // two-pass variants share the main framebuffers + the bindless pipeline,
-    // which were created against `main_render_pass`; render-pass compatibility
-    // (validated on `vkCmdBeginRenderPass` / `vkCmdDraw`) treats differing
-    // dependencies as incompatible, so the dependency must match. Phase 2's
-    // LOAD of the phase-1 color + depth is instead ordered by an explicit
-    // `vkCmdPipelineBarrier` in `encode_main_pass_phase2` (this backend owns
-    // its cross-pass sync inline anyway).
-    let dependency = vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-        )
-        .src_access_mask(vk::AccessFlags::empty())
-        .dst_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-        )
-        .dst_access_mask(
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-        );
+    // Phase 2's LOAD of the phase-1 color + depth is ordered by an explicit
+    // `vkCmdPipelineBarrier` in `encode_main_pass_phase2`.
+    let dependency = main_framebuffer_dependency();
 
     let rp_info = vk::RenderPassCreateInfo::default()
         .attachments(&attachments)

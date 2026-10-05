@@ -76,6 +76,26 @@ pub fn spot_shadow_slice_size(shadow_map_size: u32) -> u32 {
     (shadow_map_size / 4).clamp(256, 1024)
 }
 
+/// The allocated shape of a shadow map array: texel edge and slice count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShadowArrayExtent {
+    /// Texel edge of every slice.
+    pub size: u32,
+    /// Number of slices.
+    pub layers: u32,
+}
+
+/// The array allocated for `layers` slices of `size` texels. An empty array
+/// (size or layer count 0, i.e. shadows off) becomes a single 1x1 slice, so
+/// every view over it names layers that exist.
+pub fn shadow_array_extent(size: u32, layers: u32) -> ShadowArrayExtent {
+    if size == 0 || layers == 0 {
+        ShadowArrayExtent { size: 1, layers: 1 }
+    } else {
+        ShadowArrayExtent { size, layers }
+    }
+}
+
 /// Maximum number of joints in a single skinned-mesh skeleton. Enforced
 /// CPU-side as a clamp on each `SkinnedDrawObject.joint_count` and on the
 /// matching `skinned_joint_matrices` Vec length. The skinned shaders read
@@ -2299,6 +2319,23 @@ mod tests {
         // Clamped at both ends rather than scaling without limit.
         assert_eq!(spot_shadow_slice_size(64), 256, "floored");
         assert_eq!(spot_shadow_slice_size(u32::MAX), 1024, "ceilinged");
+    }
+
+    // Shadows off still allocates one slice, and views must not claim the
+    // cascade count the disabled array never got.
+    #[test]
+    fn an_empty_shadow_array_is_one_texel_and_one_slice() {
+        let cascades = NUM_SHADOW_CASCADES as u32;
+        let one = ShadowArrayExtent { size: 1, layers: 1 };
+        assert_eq!(shadow_array_extent(0, cascades), one, "shadows off");
+        assert_eq!(shadow_array_extent(512, 0), one, "no slices");
+        assert_eq!(
+            shadow_array_extent(2048, cascades),
+            ShadowArrayExtent {
+                size: 2048,
+                layers: cascades
+            }
+        );
     }
 
     // A degenerate cluster AABB disables culling rather than culling
