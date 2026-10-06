@@ -347,14 +347,14 @@ const AUDITS: &[BackendAudit] = &[
             ("planar.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
             // The last `Inline` row on this backend. One of its two barriers is
             // really intra-pass (the G-buffer depth, which the graph does not
-            // model, borrowed for FSR's read); the other transitions the
+            // model, borrowed for the upscaler's read); the other transitions the
             // upscaler's output, which *is* the graph's `scene_color` under
             // temporal upscaling. Driving it needs a resting state the graph
             // cannot express: the output alternates UNORDERED_ACCESS and
             // PIXEL_SHADER_RESOURCE depending on whether a previous frame
             // dispatched.
             (
-                "post/upscale/fsr.rs",
+                "post/upscale/mod.rs",
                 ".ResourceBarrier(",
                 2,
                 Reason::Inline,

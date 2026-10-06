@@ -1,263 +1,66 @@
-//! NVIDIA DLSS temporal upscaling for the Vulkan backend, via the raw NGX API
-//! (`NVSDK_NGX_VULKAN_*`). One of the three `VkUpscaleBackend` implementations;
-//! RTX-only. Compiled only when `build.rs` finds the NGX SDK and emits
-//! `cfg(ngx_sdk_bundled)` (which also links `nvsdk_ngx_d.lib` and bundles
-//! `nvngx_dlss.dll` next to the .exe). When the SDK is absent the whole module
-//! is cfg'd out and `build_upscaler` never resolves to DLSS.
+//! NVIDIA DLSS temporal upscaling for the Vulkan backend, through the raw NGX
+//! API's `NVSDK_NGX_VULKAN_*` entry points (see `crate::upscale_sdk::dlss`);
+//! RTX only. Compiled only when `build.rs` finds the NGX SDK, links its static
+//! library and bundles `nvngx_dlss.dll` beside the executable
+//! (`cfg(ngx_sdk_bundled)`).
 //!
-//! Mirrors `directx/post/upscale/dlss.rs`: same NGX parameter-bag flow
-//! (CreateFeature / EvaluateFeature record onto a command buffer), same engine
-//! identity, same perf-quality mapping. The Vulkan deltas are the
-//! `NVSDK_NGX_VULKAN_*` entry points (vs `NVSDK_NGX_D3D12_*`), the device /
-//! instance extensions DLSS needs at creation time (queried via
-//! `required_extensions`, enabled by `UpscaleSdk`), and resources passed as
-//! `NVSDK_NGX_Resource_VK` through `SetVoidPointer` (vs `SetD3d12Resource`). It
-//! also differs in exposure handling: it supplies an explicit 1.0 exposure
-//! texture (NVIDIA's recommended path over auto-exposure) instead of the
-//! auto-exposure flag the D3D12 path uses. The scene is un-exposed pre-upscale
-//! (exposure + tonemap run after the upscale), so 1.0 is the identity value.
-//! Validated against NGX SDK 1.5.0 by the constant + layout asserts in the tests.
+//! The Vulkan specifics are the instance and device extensions DLSS needs at
+//! creation time (queried by `required_extensions`, enabled through
+//! `UpscaleSdk`) and resources bound as `NVSDK_NGX_Resource_VK` through
+//! `SetVoidPointer`. Exposure comes from an engine-supplied 1x1 texture of 1.0
+//! rather than DLSS's auto-exposure: the scene is un-exposed until after the
+//! upscale, so 1.0 is the identity.
 
-use ash::vk;
-use concinnity_core::components::UpscaleQuality;
-use concinnity_core::gfx::jitter;
-use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
-use concinnity_core::render::error::{RenderError, RenderResult};
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
-use super::{OutputWrites, UpscaleCamera, UpscaleInputs, VkUpscaleBackend};
-use crate::vulkan::context::HDR_FORMAT;
-use crate::vulkan::owned::VkDevice;
-use crate::vulkan::texture::{GpuImage, create_image, create_image_view, one_shot_submit};
+use ash::vk;
+use concinnity_core::gfx::jitter;
+use concinnity_core::render::error::{RenderError, RenderResult};
 
-// NGX result: 0x1 is success; failure codes share the 0xBAD00000 high bits.
-const NVSDK_NGX_RESULT_FAIL: u32 = 0xBAD0_0000;
-fn ngx_succeeded(v: u32) -> bool {
-    (v & 0xFFF0_0000) != NVSDK_NGX_RESULT_FAIL
-}
+use super::{
+    BarrierSync, ImageViewInfo, LayoutTransition, OutputWrites, UpscaleImage, UpscaleInputs,
+    UpscaleOutput, UpscalerGpu, VkUpscaleBackend, copy_ext_names, image_barrier,
+};
+use crate::upscale_sdk::dlss::{
+    ENGINE_VERSION, NVSDK_NGX_ENGINE_TYPE_CUSTOM, NVSDK_NGX_FEATURE_SUPERSAMPLING,
+    NVSDK_NGX_RESULT_FAIL, NVSDK_NGX_VERSION_API, P_COLOR, P_DEPTH, P_EXPOSURE_TEXTURE,
+    P_MOTION_VECTORS, P_OUTPUT, PROJECT_ID, app_data_path, ngx_succeeded, set_create_parameters,
+    set_evaluate_parameters, supersampling_available,
+};
+use crate::upscale_sdk::{UpscaleCamera, UpscaleExtent};
+use crate::vulkan::texture::{
+    GpuImage, ImageSpec, create_image, create_image_view, one_shot_submit,
+};
 
-const NVSDK_NGX_VERSION_API: i32 = 0x0000_0015; // 1.5.0
-const NVSDK_NGX_ENGINE_TYPE_CUSTOM: i32 = 0;
-const NVSDK_NGX_FEATURE_SUPERSAMPLING: i32 = 1;
-// NVSDK_NGX_Resource_VK_Type (sequential from 0).
+// NVSDK_NGX_Resource_VK_Type.
 const NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW: i32 = 0;
 
-// NVSDK_NGX_PerfQuality_Value (sequential from 0).
-const PERF_MAX_PERF: i32 = 0;
-const PERF_BALANCED: i32 = 1;
-const PERF_MAX_QUALITY: i32 = 2;
-const PERF_ULTRA_PERFORMANCE: i32 = 3;
-const PERF_DLAA: i32 = 5;
+const EXPOSURE_FORMAT: vk::Format = vk::Format::R32_SFLOAT;
 
-// NVSDK_NGX_DLSS_Feature_Flags. HDR linear input, low-res UV motion vectors,
-// and DepthInverted when the camera's near plane is device depth 1. Auto-exposure
-// is deliberately left off: the dispatch supplies an explicit 1.0 exposure
-// texture instead (NVIDIA's recommended path over auto-exposure), which NGX uses
-// only while this flag is clear.
-const DLSS_FLAG_IS_HDR: i32 = 1 << 0;
-const DLSS_FLAG_DEPTH_INVERTED: i32 = 1 << 3;
-
-const fn dlss_create_flags(depth: DepthMapping) -> i32 {
-    if depth.reversed {
-        DLSS_FLAG_IS_HDR | DLSS_FLAG_DEPTH_INVERTED
-    } else {
-        DLSS_FLAG_IS_HDR
-    }
-}
-
-// NVSDK_NGX_Parameter name strings (NUL-terminated; from nvsdk_ngx_params.h).
-const P_WIDTH: &[u8] = b"Width\0";
-const P_HEIGHT: &[u8] = b"Height\0";
-const P_OUT_WIDTH: &[u8] = b"OutWidth\0";
-const P_OUT_HEIGHT: &[u8] = b"OutHeight\0";
-const P_PERF_QUALITY: &[u8] = b"PerfQualityValue\0";
-const P_CREATE_FLAGS: &[u8] = b"DLSS.Feature.Create.Flags\0";
-const P_ENABLE_OUTPUT_SUBRECTS: &[u8] = b"DLSS.Enable.Output.Subrects\0";
-const P_CREATION_NODE_MASK: &[u8] = b"CreationNodeMask\0";
-const P_VISIBILITY_NODE_MASK: &[u8] = b"VisibilityNodeMask\0";
-const P_SUPERSAMPLING_AVAILABLE: &[u8] = b"SuperSampling.Available\0";
-const P_COLOR: &[u8] = b"Color\0";
-const P_OUTPUT: &[u8] = b"Output\0";
-const P_DEPTH: &[u8] = b"Depth\0";
-const P_MOTION_VECTORS: &[u8] = b"MotionVectors\0";
-const P_EXPOSURE_TEXTURE: &[u8] = b"ExposureTexture\0";
-const P_JITTER_X: &[u8] = b"Jitter.Offset.X\0";
-const P_JITTER_Y: &[u8] = b"Jitter.Offset.Y\0";
-const P_MV_SCALE_X: &[u8] = b"MV.Scale.X\0";
-const P_MV_SCALE_Y: &[u8] = b"MV.Scale.Y\0";
-const P_RESET: &[u8] = b"Reset\0";
-const P_SUBRECT_WIDTH: &[u8] = b"DLSS.Render.Subrect.Dimensions.Width\0";
-const P_SUBRECT_HEIGHT: &[u8] = b"DLSS.Render.Subrect.Dimensions.Height\0";
-const P_SHARPNESS: &[u8] = b"Sharpness\0";
-
-// Engine identity for NGX. Any GUID-like project id avoids needing an
-// NVIDIA-assigned application id.
-const PROJECT_ID: &[u8] = b"5f2e1a64-9c3b-4d7e-8a1f-2b6c0d9e7f30\0";
-const ENGINE_VERSION: &[u8] = b"1.0.0\0";
-
-// NVSDK_NGX_ImageViewInfo_VK (nvsdk_ngx_vk.h). 48 bytes; same shape as XeSS's
-// image-view-info: handles(16) + VkImageSubresourceRange(20) + format(4) +
-// width(4) + height(4).
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct NVSDK_NGX_ImageViewInfo_VK {
-    image_view: vk::ImageView,
-    image: vk::Image,
-    subresource_range: vk::ImageSubresourceRange,
-    format: vk::Format,
-    width: u32,
-    height: u32,
-}
-
-// NVSDK_NGX_Resource_VK (nvsdk_ngx_vk.h). The C struct's first member is a union
-// of an `ImageViewInfo_VK` and a `BufferInfo_VK`; the image-view arm is the
-// larger (48 vs 16) and the only one DLSS uses here, so it sizes the union and
-// is embedded directly. 56 bytes: union(48) + Type(4) + ReadWrite(1) + pad.
+// `NVSDK_NGX_Resource_VK` (`nvsdk_ngx_defs_vk.h`). The C struct opens with a
+// union of an image-view and a buffer description; the image view is the
+// larger arm and the only one bound here, so it stands in for the union.
 #[repr(C)]
 struct NVSDK_NGX_Resource_VK {
-    image_view_info: NVSDK_NGX_ImageViewInfo_VK,
+    image_view_info: ImageViewInfo,
     ty: i32,
     read_write: bool,
 }
 
-fn make_resource(
-    img_view: vk::ImageView,
-    image: vk::Image,
-    aspect: vk::ImageAspectFlags,
-    format: vk::Format,
-    width: u32,
-    height: u32,
-    read_write: bool,
-) -> NVSDK_NGX_Resource_VK {
-    NVSDK_NGX_Resource_VK {
-        image_view_info: NVSDK_NGX_ImageViewInfo_VK {
-            image_view: img_view,
-            image,
-            subresource_range: vk::ImageSubresourceRange {
-                aspect_mask: aspect,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
-            format,
-            width,
-            height,
-        },
-        ty: NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW,
-        read_write,
+impl NVSDK_NGX_Resource_VK {
+    fn image(img: &UpscaleImage, read_write: bool) -> Self {
+        Self {
+            image_view_info: ImageViewInfo::of(img),
+            ty: NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW,
+            read_write,
+        }
     }
 }
 
-// The image dimensions, format, and clear value for `create_cleared_input`.
-#[derive(Clone, Copy)]
-struct ClearedInputSpec {
-    width: u32,
-    height: u32,
-    format: vk::Format,
-    clear: vk::ClearColorValue,
-}
-
-// Create a small device-local input image, clear it to `clear`, and leave it in
-// GENERAL (the layout NGX reads all resources in). Used for the supplied
-// exposure texture, written once here and never touched again, so the one-time
-// clear barrier covers all later NGX reads. SAMPLED | STORAGE usage matches
-// however NGX binds it (descriptor type unknown to us).
-fn create_cleared_input(
-    gpu: super::UpscalerGpu<'_>,
-    spec: ClearedInputSpec,
-) -> RenderResult<GpuImage> {
-    let super::UpscalerGpu {
-        alloc,
-        device,
-        command_pool,
-        queue,
-        ..
-    } = gpu;
-    let ClearedInputSpec {
-        width,
-        height,
-        format,
-        clear,
-    } = spec;
-    let pooled = create_image(
-        alloc,
-        &crate::vulkan::texture::ImageSpec {
-            width: width.max(1),
-            height: height.max(1),
-            format,
-            tiling: vk::ImageTiling::OPTIMAL,
-            usage: vk::ImageUsageFlags::SAMPLED
-                | vk::ImageUsageFlags::STORAGE
-                | vk::ImageUsageFlags::TRANSFER_DST,
-            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            samples: vk::SampleCountFlags::TYPE_1,
-        },
-    )?;
-    let image = pooled.image();
-    let view = create_image_view(device, image, format, vk::ImageAspectFlags::COLOR)?;
-    let range = vk::ImageSubresourceRange {
-        aspect_mask: vk::ImageAspectFlags::COLOR,
-        base_mip_level: 0,
-        level_count: 1,
-        base_array_layer: 0,
-        layer_count: 1,
-    };
-    one_shot_submit(device, command_pool, queue, |cmd| {
-        super::image_barrier(
-            device,
-            cmd,
-            image,
-            vk::ImageAspectFlags::COLOR,
-            super::LayoutTransition {
-                from: vk::ImageLayout::UNDEFINED,
-                to: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            },
-            super::BarrierSync {
-                src_stage: vk::PipelineStageFlags::TOP_OF_PIPE,
-                src_access: vk::AccessFlags::empty(),
-                dst_stage: vk::PipelineStageFlags::TRANSFER,
-                dst_access: vk::AccessFlags::TRANSFER_WRITE,
-            },
-        );
-        // SAFETY: `cmd` is a command buffer in the recording state, `image` was just transitioned
-        // to TRANSFER_DST_OPTIMAL by the barrier above, and `range` names its only mip and layer.
-        unsafe {
-            device.cmd_clear_color_image(
-                cmd,
-                image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &clear,
-                std::slice::from_ref(&range),
-            );
-        }
-        super::image_barrier(
-            device,
-            cmd,
-            image,
-            vk::ImageAspectFlags::COLOR,
-            super::LayoutTransition {
-                from: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                to: vk::ImageLayout::GENERAL,
-            },
-            super::BarrierSync {
-                src_stage: vk::PipelineStageFlags::TRANSFER,
-                src_access: vk::AccessFlags::TRANSFER_WRITE,
-                dst_stage: vk::PipelineStageFlags::COMPUTE_SHADER,
-                dst_access: vk::AccessFlags::SHADER_READ,
-            },
-        );
-    })?;
-    Ok(GpuImage::from_pooled(pooled, view))
-}
-
-// NGX entry points, exported (unmangled, C linkage) from nvsdk_ngx_d.lib. The
-// `NVSDK_NGX_Parameter` / `NVSDK_NGX_Handle` bags are opaque pointers; the VK
-// handles ride as ash's repr(transparent) wrappers. Init/CreateFeature/Evaluate
-// are the Vulkan variants; the `NVSDK_NGX_Parameter_*` setters are API-agnostic
-// core exports (shared with the D3D12 path).
+// NGX's Vulkan entry points and the resource setter they take, exported
+// unmangled from the static library.
 unsafe extern "C" {
     fn NVSDK_NGX_VULKAN_Init_with_ProjectID(
         project_id: *const u8,
@@ -275,11 +78,9 @@ unsafe extern "C" {
     fn NVSDK_NGX_VULKAN_Shutdown1(device: vk::Device) -> u32;
     fn NVSDK_NGX_VULKAN_GetCapabilityParameters(out_params: *mut *mut c_void) -> u32;
     fn NVSDK_NGX_VULKAN_DestroyParameters(params: *mut c_void) -> u32;
-    // CreateFeature1 takes the VkDevice (vs CreateFeature), letting NGX set up
-    // its internal resources against the device during the init command buffer
-    // instead of lazily on first evaluate. The NGX helper header prefers it
-    // whenever a device is available, and it avoids first-frame UNDEFINED ->
-    // GENERAL validation errors on NGX's internal textures.
+    // CreateFeature1 takes the device, so NGX sets its internal resources up
+    // during the init command buffer rather than lazily on the first evaluate;
+    // the NGX helpers prefer it whenever a device is at hand.
     fn NVSDK_NGX_VULKAN_CreateFeature1(
         device: vk::Device,
         cmd: vk::CommandBuffer,
@@ -300,16 +101,12 @@ unsafe extern "C" {
         out_dev_count: *mut u32,
         out_dev_exts: *mut *const *const c_char,
     ) -> u32;
-    fn NVSDK_NGX_Parameter_SetUI(params: *mut c_void, name: *const u8, value: u32);
-    fn NVSDK_NGX_Parameter_SetI(params: *mut c_void, name: *const u8, value: i32);
-    fn NVSDK_NGX_Parameter_SetF(params: *mut c_void, name: *const u8, value: f32);
     fn NVSDK_NGX_Parameter_SetVoidPointer(params: *mut c_void, name: *const u8, value: *mut c_void);
-    fn NVSDK_NGX_Parameter_GetUI(params: *mut c_void, name: *const u8, out: *mut u32) -> u32;
 }
 
 // Instance + device extensions NGX requires, queried before instance / device
 // creation. Returns `(instance_exts, device_exts)` as owned `CString`s, or
-// `None` if the query fails. Static-linked, so no DLL load is needed.
+// `None` if the query fails. Static-linked, so no library load is needed.
 pub(super) fn required_extensions() -> Option<(Vec<CString>, Vec<CString>)> {
     let mut inst_count: u32 = 0;
     let mut inst_exts: *const *const c_char = ptr::null();
@@ -331,45 +128,58 @@ pub(super) fn required_extensions() -> Option<(Vec<CString>, Vec<CString>)> {
     }
     // SAFETY: `inst_count`/`inst_exts` are the pair NGX just wrote on the success path above, and
     // the SDK owns that array.
-    let inst = unsafe { super::copy_ext_names(inst_count, inst_exts) };
+    let inst = unsafe { copy_ext_names(inst_count, inst_exts) };
     // SAFETY: as above, for the device extension pair.
-    let dev = unsafe { super::copy_ext_names(dev_count, dev_exts) };
+    let dev = unsafe { copy_ext_names(dev_count, dev_exts) };
     Some((inst, dev))
 }
 
-// The DLSS performance/quality preset for the nearest engine preset: DLAA at
-// native resolution.
-fn dlss_perf_quality(q: Option<UpscaleQuality>) -> i32 {
-    match q {
-        None => PERF_DLAA,
-        Some(UpscaleQuality::Quality) => PERF_MAX_QUALITY,
-        Some(UpscaleQuality::Balanced) => PERF_BALANCED,
-        Some(UpscaleQuality::Performance) => PERF_MAX_PERF,
-        Some(UpscaleQuality::UltraPerformance) => PERF_ULTRA_PERFORMANCE,
+// NGX initialized on `device`, with the parameter bag and super-sampling
+// feature once they exist. `release` frees whatever it holds and shuts NGX
+// down, at most once; dropping the session releases it too.
+struct NgxSession {
+    device: vk::Device,
+    params: *mut c_void,
+    feature: *mut c_void,
+}
+
+impl NgxSession {
+    fn release(&mut self) {
+        if self.device == vk::Device::null() {
+            return;
+        }
+        // SAFETY: the feature and the bag are each released at most once (only when non-null), and
+        // the shutdown names the live device NGX was initialized on, cleared straight after so it
+        // runs once.
+        unsafe {
+            if !self.feature.is_null() {
+                NVSDK_NGX_VULKAN_ReleaseFeature(self.feature);
+            }
+            if !self.params.is_null() {
+                NVSDK_NGX_VULKAN_DestroyParameters(self.params);
+            }
+            NVSDK_NGX_VULKAN_Shutdown1(self.device);
+        }
+        self.feature = ptr::null_mut();
+        self.params = ptr::null_mut();
+        self.device = vk::Device::null();
     }
 }
 
-// Owns the NGX feature handle + parameter bag, the output texture the bloom +
-// composite stack consumes, and the device handle (held for `Shutdown1`).
-pub(in crate::vulkan) struct DlssUpscaler {
-    device: vk::Device,
-    params: *mut c_void,
-    handle: *mut c_void,
+impl Drop for NgxSession {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
 
-    output: GpuImage,
-    output_layout: Cell<vk::ImageLayout>,
-
-    // Engine-supplied exposure texture (1x1 R32F = 1.0), created once in GENERAL
-    // and bound every dispatch. With auto-exposure off NGX uses this identity
-    // exposure (the scene is un-exposed pre-upscale).
+// The DLSS feature, the output image it writes and the exposure texture it
+// reads.
+pub(super) struct DlssUpscaler {
+    ngx: NgxSession,
+    extent: UpscaleExtent,
+    output: UpscaleOutput,
+    // 1x1 R32F holding 1.0, created once in GENERAL and bound every evaluate.
     exposure: GpuImage,
-
-    render_width: u32,
-    render_height: u32,
-    output_width: u32,
-    output_height: u32,
-    upscale_scale: f32,
-
     jitter: Cell<[f32; 2]>,
     reset_pending: Cell<bool>,
 }
@@ -381,30 +191,15 @@ pub(in crate::vulkan) struct DlssUpscaler {
 unsafe impl Send for DlssUpscaler {}
 
 impl DlssUpscaler {
-    // Try to construct a DLSS upscaler. Returns `Ok(None)` when DLSS is
-    // unavailable (NGX init failure, GPU lacks DLSS, feature-create failure);
-    // `build_upscaler` falls through. NGX `CreateFeature` records onto a command
-    // buffer, so this submits a one-shot init buffer to `queue`. Assumes the NGX
-    // instance / device extensions were enabled at creation (via `UpscaleSdk`).
+    // `Ok(None)` when DLSS is unavailable: NGX failed to initialize, the GPU
+    // lacks DLSS, or the feature could not be created. Feature creation records
+    // onto a command buffer, so this submits a one-shot buffer to the queue.
+    // Assumes the NGX extensions were enabled at device creation.
     pub(super) fn try_new(
-        gpu: super::UpscalerGpu<'_>,
-        output_width: u32,
-        output_height: u32,
-        upscale_scale: f32,
+        gpu: UpscalerGpu<'_>,
+        extent: UpscaleExtent,
     ) -> RenderResult<Option<Self>> {
-        let super::UpscalerGpu {
-            alloc,
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-        } = gpu;
-        let (render_width, render_height, scale) =
-            super::resolve_render_dims(output_width, output_height, upscale_scale);
-
-        // NGX writes logs / data into the app-data path; use the working dir.
-        let app_path: Vec<u16> = ".".encode_utf16().chain(std::iter::once(0)).collect();
+        let app_path = app_data_path();
         // SAFETY: the NGX entry point is statically linked and matches the SDK's declared
         // signature; every pointer it is handed points at a live local that outlives the call.
         let rc = unsafe {
@@ -413,9 +208,9 @@ impl DlssUpscaler {
                 NVSDK_NGX_ENGINE_TYPE_CUSTOM,
                 ENGINE_VERSION.as_ptr(),
                 app_path.as_ptr(),
-                instance.handle(),
-                physical_device,
-                device.handle(),
+                gpu.instance.handle(),
+                gpu.physical_device,
+                gpu.device.handle(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -429,209 +224,168 @@ impl DlssUpscaler {
             );
             return Ok(None);
         }
-
-        let mut params: *mut c_void = ptr::null_mut();
-        // SAFETY: NGX was initialized above and writes the out-param; `params` is a live local.
-        let rc = unsafe { NVSDK_NGX_VULKAN_GetCapabilityParameters(&mut params) };
-        if !ngx_succeeded(rc) || params.is_null() {
-            tracing::warn!(
-                "DLSS (Vulkan): GetCapabilityParameters returned {rc:#x}; trying next backend"
-            );
-            // SAFETY: each handle was created by the NGX calls above and is released exactly once
-            // here, innermost first, before the device it was created against goes away.
-            unsafe { NVSDK_NGX_VULKAN_Shutdown1(device.handle()) };
-            return Ok(None);
-        }
-
-        // Authoritative DLSS-support gate for this GPU + driver.
-        let mut available: u32 = 0;
-        // SAFETY: `params` is the live NGX parameter block returned by GetCapabilityParameters, and
-        // each name is a static NUL-terminated key; the values are read/written by the SDK before
-        // the call returns.
-        let rc = unsafe {
-            NVSDK_NGX_Parameter_GetUI(params, P_SUPERSAMPLING_AVAILABLE.as_ptr(), &mut available)
+        let mut ngx = NgxSession {
+            device: gpu.device.handle(),
+            params: ptr::null_mut(),
+            feature: ptr::null_mut(),
         };
-        if !ngx_succeeded(rc) || available == 0 {
+
+        // SAFETY: NGX is initialized, and `ngx.params` is a live field that receives the bag.
+        let rc = unsafe { NVSDK_NGX_VULKAN_GetCapabilityParameters(&mut ngx.params) };
+        if !ngx_succeeded(rc) || ngx.params.is_null() {
             tracing::warn!(
-                "DLSS (Vulkan): SuperSampling not available on this GPU; trying next backend"
+                "DLSS (Vulkan): GetCapabilityParameters returned {rc:#x}; trying the next backend"
             );
-            // SAFETY: each handle was created by the NGX calls above and is released exactly once
-            // here, innermost first, before the device it was created against goes away.
-            unsafe {
-                NVSDK_NGX_VULKAN_DestroyParameters(params);
-                NVSDK_NGX_VULKAN_Shutdown1(device.handle());
-            }
             return Ok(None);
         }
-
-        // Feature-create parameters.
-        // SAFETY: `params` is the live NGX parameter block returned by GetCapabilityParameters, and
-        // each name is a static NUL-terminated key; the values are read/written by the SDK before
-        // the call returns.
-        unsafe {
-            NVSDK_NGX_Parameter_SetUI(params, P_WIDTH.as_ptr(), render_width);
-            NVSDK_NGX_Parameter_SetUI(params, P_HEIGHT.as_ptr(), render_height);
-            NVSDK_NGX_Parameter_SetUI(params, P_OUT_WIDTH.as_ptr(), output_width);
-            NVSDK_NGX_Parameter_SetUI(params, P_OUT_HEIGHT.as_ptr(), output_height);
-            NVSDK_NGX_Parameter_SetI(
-                params,
-                P_PERF_QUALITY.as_ptr(),
-                dlss_perf_quality(UpscaleQuality::nearest(scale)),
+        // SAFETY: `ngx.params` is the non-null bag NGX just returned.
+        if !unsafe { supersampling_available(ngx.params) } {
+            tracing::warn!(
+                "DLSS (Vulkan): SuperSampling not available on this GPU; trying the next backend"
             );
-            NVSDK_NGX_Parameter_SetI(
-                params,
-                P_CREATE_FLAGS.as_ptr(),
-                dlss_create_flags(CAMERA_DEPTH),
-            );
-            NVSDK_NGX_Parameter_SetI(params, P_ENABLE_OUTPUT_SUBRECTS.as_ptr(), 0);
-            NVSDK_NGX_Parameter_SetUI(params, P_CREATION_NODE_MASK.as_ptr(), 1);
-            NVSDK_NGX_Parameter_SetUI(params, P_VISIBILITY_NODE_MASK.as_ptr(), 1);
+            return Ok(None);
         }
+        // SAFETY: `ngx.params` is the live bag.
+        unsafe { set_create_parameters(ngx.params, extent, true) };
 
-        // CreateFeature1 records onto a command buffer; submit a one-shot init
-        // (the submit is fence-waited, so the feature + its internal resources
-        // are ready before the first frame's evaluate).
-        let mut handle: *mut c_void = ptr::null_mut();
-        let mut create_rc: u32 = NVSDK_NGX_RESULT_FAIL;
-        one_shot_submit(device, command_pool, queue, |cmd| {
-            // SAFETY: `cmd` is in the recording state, `params` is the live parameter block filled
-            // above, and `handle` is a live local NGX writes the new feature into.
+        // The submit is fence-waited, so the feature and its internal resources
+        // are ready before the first frame's evaluate.
+        let mut create_rc = NVSDK_NGX_RESULT_FAIL;
+        one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |cmd| {
+            // SAFETY: `cmd` is in the recording state, `ngx.params` is the live bag filled above,
+            // and `ngx.feature` is a live field NGX writes the new feature into.
             create_rc = unsafe {
                 NVSDK_NGX_VULKAN_CreateFeature1(
-                    device.handle(),
+                    gpu.device.handle(),
                     cmd,
                     NVSDK_NGX_FEATURE_SUPERSAMPLING,
-                    params,
-                    &mut handle,
+                    ngx.params,
+                    &mut ngx.feature,
                 )
             };
         })?;
-        if !ngx_succeeded(create_rc) || handle.is_null() {
+        if !ngx_succeeded(create_rc) || ngx.feature.is_null() {
             tracing::warn!(
-                "DLSS (Vulkan): CreateFeature returned {create_rc:#x}; trying next backend"
+                "DLSS (Vulkan): CreateFeature returned {create_rc:#x}; trying the next backend"
             );
-            // SAFETY: each handle was created by the NGX calls above and is released exactly once
-            // here, innermost first, before the device it was created against goes away.
-            unsafe {
-                NVSDK_NGX_VULKAN_DestroyParameters(params);
-                NVSDK_NGX_VULKAN_Shutdown1(device.handle());
-            }
             return Ok(None);
         }
 
-        let output = match super::create_output_image(
-            alloc,
-            device,
-            command_pool,
-            queue,
-            (output_width, output_height),
-            OutputWrites::storage_and_clear(),
-        ) {
-            Ok(img) => img,
-            Err(e) => {
-                // SAFETY: each handle was created by the NGX calls above and is released exactly
-                // once here, innermost first, before the device it was created against goes away.
-                unsafe {
-                    NVSDK_NGX_VULKAN_ReleaseFeature(handle);
-                    NVSDK_NGX_VULKAN_DestroyParameters(params);
-                    NVSDK_NGX_VULKAN_Shutdown1(device.handle());
-                }
-                return Err(e);
-            }
-        };
-
-        // Supplied 1.0 exposure texture (see the struct field). Created in GENERAL
-        // so the first evaluate finds it ready; on failure tear down everything
-        // built so far.
-        let exposure = match create_cleared_input(
-            super::UpscalerGpu {
-                alloc,
-                instance,
-                device,
-                physical_device,
-                command_pool,
-                queue,
-            },
-            ClearedInputSpec {
-                width: 1,
-                height: 1,
-                format: vk::Format::R32_SFLOAT,
-                clear: vk::ClearColorValue {
-                    float32: [1.0, 0.0, 0.0, 0.0],
-                },
-            },
-        ) {
-            Ok(img) => img,
-            Err(e) => {
-                // SAFETY: each handle was created by the NGX calls above and is released exactly
-                // once here, innermost first, before the device it was created against goes away.
-                unsafe {
-                    NVSDK_NGX_VULKAN_ReleaseFeature(handle);
-                    NVSDK_NGX_VULKAN_DestroyParameters(params);
-                    NVSDK_NGX_VULKAN_Shutdown1(device.handle());
-                }
-                drop(output);
-                return Err(e);
-            }
-        };
-
-        tracing::info!(
-            "DLSS (Vulkan): feature created: render {render_width}x{render_height} -> upscale \
-             {output_width}x{output_height} (scale {scale:.3})"
-        );
-
-        Ok(Some(DlssUpscaler {
-            device: device.handle(),
-            params,
-            handle,
+        let output = UpscaleOutput::create(gpu, extent.output, OutputWrites::storage_and_clear())?;
+        let exposure = create_identity_exposure(gpu)?;
+        tracing::info!("DLSS (Vulkan): feature created: {extent}");
+        Ok(Some(Self {
+            ngx,
+            extent,
             output,
-            output_layout: Cell::new(vk::ImageLayout::GENERAL),
             exposure,
-            render_width,
-            render_height,
-            output_width,
-            output_height,
-            upscale_scale: scale,
             jitter: Cell::new([0.0, 0.0]),
             reset_pending: Cell::new(true),
         }))
     }
 }
 
+// Create the 1x1 exposure texture, cleared to 1.0 and left in GENERAL (the
+// layout NGX reads every resource in). Written once here and never again, so
+// the one clear barrier covers every later read. SAMPLED | STORAGE usage covers
+// however NGX binds it.
+fn create_identity_exposure(gpu: UpscalerGpu<'_>) -> RenderResult<GpuImage> {
+    let pooled = create_image(
+        gpu.alloc,
+        &ImageSpec {
+            width: 1,
+            height: 1,
+            format: EXPOSURE_FORMAT,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::STORAGE
+                | vk::ImageUsageFlags::TRANSFER_DST,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples: vk::SampleCountFlags::TYPE_1,
+        },
+    )?;
+    let image = pooled.image();
+    let view = create_image_view(
+        gpu.device,
+        image,
+        EXPOSURE_FORMAT,
+        vk::ImageAspectFlags::COLOR,
+    )?;
+    let range = vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
+    let one = vk::ClearColorValue {
+        float32: [1.0, 0.0, 0.0, 0.0],
+    };
+    one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |cmd| {
+        image_barrier(
+            gpu.device,
+            cmd,
+            image,
+            vk::ImageAspectFlags::COLOR,
+            LayoutTransition {
+                from: vk::ImageLayout::UNDEFINED,
+                to: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            },
+            BarrierSync {
+                src_stage: vk::PipelineStageFlags::TOP_OF_PIPE,
+                src_access: vk::AccessFlags::empty(),
+                dst_stage: vk::PipelineStageFlags::TRANSFER,
+                dst_access: vk::AccessFlags::TRANSFER_WRITE,
+            },
+        );
+        // SAFETY: `cmd` is a command buffer in the recording state, `image` was just transitioned
+        // to TRANSFER_DST_OPTIMAL by the barrier above, and `range` names its only mip and layer.
+        unsafe {
+            gpu.device.cmd_clear_color_image(
+                cmd,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &one,
+                std::slice::from_ref(&range),
+            );
+        }
+        image_barrier(
+            gpu.device,
+            cmd,
+            image,
+            vk::ImageAspectFlags::COLOR,
+            LayoutTransition {
+                from: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                to: vk::ImageLayout::GENERAL,
+            },
+            BarrierSync {
+                src_stage: vk::PipelineStageFlags::TRANSFER,
+                src_access: vk::AccessFlags::TRANSFER_WRITE,
+                dst_stage: vk::PipelineStageFlags::COMPUTE_SHADER,
+                dst_access: vk::AccessFlags::SHADER_READ,
+            },
+        );
+    })?;
+    Ok(GpuImage::from_pooled(pooled, view))
+}
+
 impl VkUpscaleBackend for DlssUpscaler {
-    fn render_dims(&self) -> (u32, u32) {
-        (self.render_width, self.render_height)
-    }
-    fn output_dims(&self) -> (u32, u32) {
-        (self.output_width, self.output_height)
-    }
-    fn scale(&self) -> f32 {
-        self.upscale_scale
-    }
-    fn output_image(&self) -> &GpuImage {
-        &self.output
-    }
-    fn output_layout(&self) -> vk::ImageLayout {
-        self.output_layout.get()
-    }
-    fn set_output_layout(&self, layout: vk::ImageLayout) {
-        self.output_layout.set(layout);
-    }
-    // NGX clears the output inside `EvaluateFeature` before writing it.
-    fn output_writes(&self) -> OutputWrites {
-        OutputWrites::storage_and_clear()
-    }
-    fn set_jitter(&self, offset: [f32; 2]) {
-        self.jitter.set(offset);
-    }
-    fn jitter(&self) -> [f32; 2] {
-        self.jitter.get()
+    fn extent(&self) -> UpscaleExtent {
+        self.extent
     }
 
-    // DLSS prescribes no jitter sequence; the engine's Halton-2/3 (shared with
-    // the camera projection) drives both.
+    fn output(&self) -> &UpscaleOutput {
+        &self.output
+    }
+
+    // DLSS prescribes no jitter sequence; the engine's Halton (2, 3) drives
+    // both the projection and the evaluate.
     fn jitter_offset(&self, frame_index: u32) -> [f32; 2] {
         jitter::offset(frame_index)
+    }
+
+    fn jitter(&self) -> &Cell<[f32; 2]> {
+        &self.jitter
     }
 
     fn dispatch(
@@ -640,105 +394,51 @@ impl VkUpscaleBackend for DlssUpscaler {
         inputs: UpscaleInputs<'_>,
         camera: UpscaleCamera,
     ) -> RenderResult<()> {
-        let UpscaleInputs {
-            color,
-            depth,
-            motion,
-        } = inputs;
-        let jitter_offset = camera.jitter_offset;
-        let reset = self.reset_pending.replace(false);
-        // These must outlive the EvaluateFeature call (NGX reads them during the
-        // record); they are bound by pointer through SetVoidPointer.
-        let mut color_res = make_resource(
-            color.view,
-            color.image,
-            color.aspect,
-            color.format,
-            color.width,
-            color.height,
-            false,
-        );
-        let mut depth_res = make_resource(
-            depth.view,
-            depth.image,
-            depth.aspect,
-            depth.format,
-            depth.width,
-            depth.height,
-            false,
-        );
-        let mut motion_res = make_resource(
-            motion.view,
-            motion.image,
-            motion.aspect,
-            motion.format,
-            motion.width,
-            motion.height,
-            false,
-        );
-        let mut output_res = make_resource(
-            self.output.view,
-            self.output.image,
-            vk::ImageAspectFlags::COLOR,
-            HDR_FORMAT,
-            self.output_width,
-            self.output_height,
-            true,
-        );
-        let mut exposure_res = make_resource(
-            self.exposure.view,
-            self.exposure.image,
-            vk::ImageAspectFlags::COLOR,
-            vk::Format::R32_SFLOAT,
-            1,
-            1,
-            false,
-        );
-        // SAFETY: `self.params` is the live parameter block, each name is a static NUL-terminated
-        // key, and every resource descriptor pointer points at a local that outlives the evaluate
-        // below.
+        let exposure = UpscaleImage {
+            image: self.exposure.image,
+            view: self.exposure.view,
+            format: EXPOSURE_FORMAT,
+            width: 1,
+            height: 1,
+            aspect: vk::ImageAspectFlags::COLOR,
+        };
+        // NGX reads these through the pointers bound below while recording the
+        // evaluate, so they live until it returns.
+        let mut resources = [
+            (P_COLOR, NVSDK_NGX_Resource_VK::image(inputs.color, false)),
+            (
+                P_OUTPUT,
+                NVSDK_NGX_Resource_VK::image(&self.output.as_upscale_image(), true),
+            ),
+            (P_DEPTH, NVSDK_NGX_Resource_VK::image(inputs.depth, false)),
+            (
+                P_MOTION_VECTORS,
+                NVSDK_NGX_Resource_VK::image(inputs.motion, false),
+            ),
+            (
+                P_EXPOSURE_TEXTURE,
+                NVSDK_NGX_Resource_VK::image(&exposure, false),
+            ),
+        ];
+        let params = self.ngx.params;
+        // SAFETY: `params` is the live bag, every name is a NUL-terminated constant, and every
+        // resource description points at an element of `resources`, which outlives the evaluate.
         unsafe {
-            let p = self.params;
-            NVSDK_NGX_Parameter_SetVoidPointer(
-                p,
-                P_COLOR.as_ptr(),
-                &mut color_res as *mut _ as *mut c_void,
+            for (name, resource) in &mut resources {
+                let resource: *mut NVSDK_NGX_Resource_VK = resource;
+                NVSDK_NGX_Parameter_SetVoidPointer(params, name.as_ptr(), resource.cast());
+            }
+            set_evaluate_parameters(
+                params,
+                camera.jitter_offset,
+                self.reset_pending.replace(false),
+                self.extent,
             );
-            NVSDK_NGX_Parameter_SetVoidPointer(
-                p,
-                P_OUTPUT.as_ptr(),
-                &mut output_res as *mut _ as *mut c_void,
-            );
-            NVSDK_NGX_Parameter_SetVoidPointer(
-                p,
-                P_DEPTH.as_ptr(),
-                &mut depth_res as *mut _ as *mut c_void,
-            );
-            NVSDK_NGX_Parameter_SetVoidPointer(
-                p,
-                P_MOTION_VECTORS.as_ptr(),
-                &mut motion_res as *mut _ as *mut c_void,
-            );
-            NVSDK_NGX_Parameter_SetVoidPointer(
-                p,
-                P_EXPOSURE_TEXTURE.as_ptr(),
-                &mut exposure_res as *mut _ as *mut c_void,
-            );
-            NVSDK_NGX_Parameter_SetF(p, P_JITTER_X.as_ptr(), jitter_offset[0]);
-            NVSDK_NGX_Parameter_SetF(p, P_JITTER_Y.as_ptr(), jitter_offset[1]);
-            // RG16F motion vectors are `prev_uv - cur_uv` in UV space; DLSS
-            // wants pixel-space, so scale by the render extent (same as FSR).
-            NVSDK_NGX_Parameter_SetF(p, P_MV_SCALE_X.as_ptr(), self.render_width as f32);
-            NVSDK_NGX_Parameter_SetF(p, P_MV_SCALE_Y.as_ptr(), self.render_height as f32);
-            NVSDK_NGX_Parameter_SetI(p, P_RESET.as_ptr(), if reset { 1 } else { 0 });
-            NVSDK_NGX_Parameter_SetUI(p, P_SUBRECT_WIDTH.as_ptr(), self.render_width);
-            NVSDK_NGX_Parameter_SetUI(p, P_SUBRECT_HEIGHT.as_ptr(), self.render_height);
-            NVSDK_NGX_Parameter_SetF(p, P_SHARPNESS.as_ptr(), 0.0);
         }
-        // SAFETY: `cmd` is in the recording state and `self.handle` / `self.params` are the live
-        // feature and parameter block created in `new`.
+        // SAFETY: `cmd` is recording, and the feature and bag are the live ones created in
+        // `try_new`.
         let rc = unsafe {
-            NVSDK_NGX_VULKAN_EvaluateFeature_C(cmd, self.handle, self.params, ptr::null())
+            NVSDK_NGX_VULKAN_EvaluateFeature_C(cmd, self.ngx.feature, params, ptr::null())
         };
         if !ngx_succeeded(rc) {
             return Err(RenderError::Other(format!(
@@ -748,21 +448,9 @@ impl VkUpscaleBackend for DlssUpscaler {
         Ok(())
     }
 
-    fn destroy(&mut self, _device: &VkDevice) {
-        // SAFETY: each handle is released exactly once (guarded by its null check) and nulled
-        // afterwards, innermost first, so a second `destroy` is a no-op.
-        unsafe {
-            if !self.handle.is_null() {
-                NVSDK_NGX_VULKAN_ReleaseFeature(self.handle);
-                self.handle = ptr::null_mut();
-            }
-            if !self.params.is_null() {
-                NVSDK_NGX_VULKAN_DestroyParameters(self.params);
-                self.params = ptr::null_mut();
-            }
-            NVSDK_NGX_VULKAN_Shutdown1(self.device);
-        }
-        self.output = GpuImage::null();
+    fn destroy(&mut self) {
+        self.ngx.release();
+        self.output.release();
         self.exposure = GpuImage::null();
     }
 }
@@ -772,56 +460,13 @@ mod tests {
     use super::*;
     use std::mem::{offset_of, size_of};
 
+    // The image-view arm pins its own fields in `upscale::tests`.
     #[test]
     fn ngx_vk_resource_layout_matches_sdk() {
-        // ImageViewInfo: handles(16) + VkImageSubresourceRange(20) + format(4)
-        // + width(4) + height(4) = 48.
-        assert_eq!(size_of::<NVSDK_NGX_ImageViewInfo_VK>(), 48);
-        assert_eq!(offset_of!(NVSDK_NGX_ImageViewInfo_VK, image_view), 0);
-        assert_eq!(offset_of!(NVSDK_NGX_ImageViewInfo_VK, image), 8);
-        assert_eq!(
-            offset_of!(NVSDK_NGX_ImageViewInfo_VK, subresource_range),
-            16
-        );
-        assert_eq!(offset_of!(NVSDK_NGX_ImageViewInfo_VK, format), 36);
-        assert_eq!(offset_of!(NVSDK_NGX_ImageViewInfo_VK, width), 40);
-        assert_eq!(offset_of!(NVSDK_NGX_ImageViewInfo_VK, height), 44);
-
-        // Resource_VK: union(48, sized by ImageViewInfo) + Type(4) + ReadWrite(1)
-        // + tail pad = 56.
         assert_eq!(size_of::<NVSDK_NGX_Resource_VK>(), 56);
+        assert_eq!(offset_of!(NVSDK_NGX_Resource_VK, image_view_info), 0);
         assert_eq!(offset_of!(NVSDK_NGX_Resource_VK, ty), 48);
         assert_eq!(offset_of!(NVSDK_NGX_Resource_VK, read_write), 52);
-    }
-
-    #[test]
-    fn ngx_constants_match_sdk() {
-        assert!(ngx_succeeded(0x1)); // NVSDK_NGX_Result_Success
-        assert!(!ngx_succeeded(0xBAD0_0005)); // a FAIL code
-        assert_eq!(NVSDK_NGX_VERSION_API, 0x0000_0015);
-        assert_eq!(NVSDK_NGX_FEATURE_SUPERSAMPLING, 1);
         assert_eq!(NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW, 0);
-        assert_eq!(PERF_MAX_PERF, 0);
-        assert_eq!(PERF_MAX_QUALITY, 2);
-        assert_eq!(PERF_ULTRA_PERFORMANCE, 3);
-        assert_eq!(PERF_DLAA, 5);
-        assert_eq!(DLSS_FLAG_IS_HDR, 1);
-    }
-
-    // NGX's DepthInverted bit is set exactly when the depth is reversed, and
-    // the camera's depth is.
-    #[test]
-    fn the_depth_flag_follows_the_depth_mapping() {
-        assert_eq!(DLSS_FLAG_DEPTH_INVERTED, 8);
-        for reversed in [false, true] {
-            for infinite in [false, true] {
-                let flags = dlss_create_flags(DepthMapping { reversed, infinite });
-                assert_eq!((flags & DLSS_FLAG_DEPTH_INVERTED) != 0, reversed);
-            }
-        }
-        assert_ne!(
-            dlss_create_flags(CAMERA_DEPTH) & DLSS_FLAG_DEPTH_INVERTED,
-            0
-        );
     }
 }

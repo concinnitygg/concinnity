@@ -1,191 +1,36 @@
-//! AMD FidelityFX FSR temporal upscaling for the Vulkan backend. Mirrors
-//! `directx/post/upscale/fsr.rs` (the FFX `ffx_api` is shared between the DX12
-//! and Vulkan backends; only the backend-create descriptor and the resource
-//! handle types differ). One of the three `VkUpscaleBackend` implementations;
-//! the cross-vendor default that every other backend falls back to.
+//! AMD FidelityFX FSR temporal upscaling for the Vulkan backend, through the
+//! FidelityFX SDK's `ffx_api` (see `crate::upscale_sdk::fsr`). The runtime is
+//! `amd_fidelityfx_vk.dll` (Windows) / `libamd_fidelityfx_vk.so` (Linux),
+//! loaded on demand; a missing library falls through to the next backend.
 //!
-//! **FFX SDK integration.** Wraps the AMD FidelityFX SDK v1.1.x unified
-//! `ffx_api` at runtime. The runtime library is `amd_fidelityfx_vk.dll`
-//! (Windows) / `libamd_fidelityfx_vk.so` (Linux); it is loaded on demand via
-//! `libloading` and the five C entry points (`ffxCreateContext` /
-//! `ffxDestroyContext` / `ffxConfigure` / `ffxQuery` / `ffxDispatch`) are
-//! resolved by symbol. Failure to find the library or any entry point logs a
-//! warning and `try_new` returns `None`; `build_upscaler` then falls back to the
-//! next backend / native-resolution rendering. The FFI bindings live inline
-//! because the surface is small (five entry points, ~10 structs); the only delta
-//! from the DX module is `ffxCreateBackendVKDesc` and the handles being
-//! `VkDevice` / `VkPhysicalDevice` / `VkImage` / `VkCommandBuffer`.
-//!
-//! The scaler does temporal accumulation itself, so the TAA resolve is bypassed
-//! while upscaling is on (the frame graph drops `TaaResolve` and runs `Upscale`
-//! in its slot). The velocity pre-pass still runs; FSR consumes its
-//! render-resolution motion + depth targets. Projection jitter is still applied,
-//! but per FSR's `ffxQueryDescUpscaleGetJitterOffset`, not the engine's stock
-//! Halton sequence (FSR's jitter is tuned to its temporal kernel).
-#![expect(
-    non_camel_case_types,
-    reason = "inline FFX bindings keep the SDK's own C type names"
-)]
+//! The scaler accumulates temporally itself, so the frame graph drops the TAA
+//! resolve and runs `Upscale` in its slot; the projection is jittered by FFX's
+//! own sequence rather than the engine's Halton one.
+
+use std::cell::Cell;
+use std::ffi::c_void;
 
 use ash::vk;
 use ash::vk::Handle;
-use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use std::cell::Cell;
-use std::ffi::c_void;
-use std::ptr;
+use concinnity_core::render::error::RenderResult;
 
-use super::{OutputWrites, UpscaleCamera, UpscaleInputs, UpscalerGpu, VkUpscaleBackend};
-use crate::vulkan::owned::VkDevice;
-use crate::vulkan::texture::GpuImage;
+use super::{
+    OutputWrites, UpscaleInputs, UpscaleOutput, UpscalerGpu, VkUpscaleBackend, open_library,
+};
+use crate::upscale_sdk::fsr::{FfxContext, FfxDispatchHandles, ffxApiHeader};
+use crate::upscale_sdk::{UpscaleCamera, UpscaleExtent};
 
-// FFX API bindings (subset)
-//
-// Layouts match `C:\FidelityFX-SDK-v1.1.4\ffx-api\include\ffx_api\*.h` and
-// `.../vk/ffx_api_vk.h`. Verified against v1.1.4; bump the FFX SDK and
-// re-check (the `ffx_struct_sizes_match_sdk_v114` test guards drift).
+const LIBRARY: &str = if cfg!(windows) {
+    "amd_fidelityfx_vk.dll"
+} else {
+    "libamd_fidelityfx_vk.so"
+};
+const LABEL: &str = "FidelityFX FSR (Vulkan)";
 
-type ffxContext = *mut c_void;
-type ffxReturnCode_t = u32;
+const FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK: u64 = 0x000_0003;
 
-const FFX_API_RETURN_OK: u32 = 0;
-
-#[repr(C)]
-struct ffxApiHeader {
-    // Discriminator (one of `FFX_API_*_DESC_TYPE_*` u64 constants).
-    ty: u64,
-    // Pointer to next struct in chain (null if none).
-    p_next: *mut ffxApiHeader,
-}
-
-// Vulkan backend (the one delta from the DX module, where this is
-// `FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12 = 0x2`).
-const FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK: u64 = 0x0000003;
-const FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE: u64 = 0x00010000;
-const FFX_API_DISPATCH_DESC_TYPE_UPSCALE: u64 = 0x00010001;
-const FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTERPHASECOUNT: u64 = 0x00010004;
-const FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTEROFFSET: u64 = 0x00010005;
-
-const FFX_API_CONFIGURE_DESC_TYPE_GLOBALDEBUG1: u64 = 0x0000001;
-const FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_VERBOSE: u32 = 0xfffffff;
-
-#[repr(C)]
-struct ffxConfigureDescGlobalDebug1 {
-    header: ffxApiHeader,
-    fp_message: FfxApiMessage,
-    debug_level: u32,
-}
-
-// Bitmask values from `enum FfxApiCreateContextUpscaleFlags`.
-const FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE: u32 = 1 << 0;
-const FFX_UPSCALE_ENABLE_DEPTH_INVERTED: u32 = 1 << 3;
-const FFX_UPSCALE_ENABLE_DEPTH_INFINITE: u32 = 1 << 4;
-const FFX_UPSCALE_ENABLE_AUTO_EXPOSURE: u32 = 1 << 5;
-
-// The create flags for a camera whose depth maps as `depth`: HDR linear input, FFX's own
-// auto-exposure, inverted depth when the near plane is device depth 1, and
-// infinite depth when the projection has no far plane.
-const fn ffx_create_flags(depth: DepthMapping) -> u32 {
-    let mut flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
-    if depth.reversed {
-        flags |= FFX_UPSCALE_ENABLE_DEPTH_INVERTED;
-    }
-    if depth.infinite {
-        flags |= FFX_UPSCALE_ENABLE_DEPTH_INFINITE;
-    }
-    flags
-}
-
-// The `(camera_near, camera_far)` pair the dispatch hands FFX for the camera,
-// whose near plane is `near` and whose projection has no far plane: FFX takes
-// that far plane as FLT_MAX, and with inverted depth the two planes swapped.
-const fn ffx_camera_planes(depth: DepthMapping, near: f32) -> (f32, f32) {
-    let far = f32::MAX;
-    if depth.reversed {
-        (far, near)
-    } else {
-        (near, far)
-    }
-}
-
-// FfxApiResourceType
-const FFX_API_RESOURCE_TYPE_TEXTURE2D: u32 = 2;
-
-// FfxApiResourceUsage
-const FFX_API_RESOURCE_USAGE_READ_ONLY: u32 = 0;
-const FFX_API_RESOURCE_USAGE_UAV: u32 = 1 << 1;
-const FFX_API_RESOURCE_USAGE_DEPTHTARGET: u32 = 1 << 2;
-
-// FfxApiResourceState
-const FFX_API_RESOURCE_STATE_UNORDERED_ACCESS: u32 = 1 << 1;
-const FFX_API_RESOURCE_STATE_COMPUTE_READ: u32 = 1 << 2;
-
-// FfxApiSurfaceFormat
-const FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT: u32 = 4;
-const FFX_API_SURFACE_FORMAT_R32_FLOAT: u32 = 28;
-const FFX_API_SURFACE_FORMAT_R16G16_FLOAT: u32 = 18;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct FfxApiDimensions2D {
-    width: u32,
-    height: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct FfxApiFloatCoords2D {
-    x: f32,
-    y: f32,
-}
-
-#[repr(C)]
-struct FfxApiResourceDescription {
-    ty: u32,     // FfxApiResourceType
-    format: u32, // FfxApiSurfaceFormat
-    width_or_size: u32,
-    height_or_stride: u32,
-    depth_or_alignment: u32,
-    mip_count: u32,
-    flags: u32,
-    usage: u32,
-}
-
-#[repr(C)]
-struct FfxApiResource {
-    resource: *mut c_void, // VkImage handle (as a raw pointer-sized value)
-    description: FfxApiResourceDescription,
-    state: u32, // FfxApiResourceState
-}
-
-impl FfxApiResource {
-    fn empty() -> Self {
-        Self {
-            resource: ptr::null_mut(),
-            description: FfxApiResourceDescription {
-                ty: 0,
-                format: 0,
-                width_or_size: 0,
-                height_or_stride: 0,
-                depth_or_alignment: 0,
-                mip_count: 0,
-                flags: 0,
-                usage: 0,
-            },
-            state: 0,
-        }
-    }
-}
-
-// Vulkan backend-create descriptor. `ffx_api_vk.h`:
-//   struct ffxCreateBackendVKDesc {
-//       ffxCreateContextDescHeader header;
-//       VkDevice                   vkDevice;
-//       VkPhysicalDevice           vkPhysicalDevice;
-//       PFN_vkGetDeviceProcAddr    vkDeviceProcAddr;
-//   };
-// The three handles are passed as raw pointer-sized values; the FFX VK
-// backend loads its own VK entry points through `vkDeviceProcAddr`.
+// `ffxCreateBackendVKDesc` (`ffx_api/vk/ffx_api_vk.h`). FFX loads its own
+// Vulkan entry points through `vkDeviceProcAddr`.
 #[repr(C)]
 struct ffxCreateBackendVKDesc {
     header: ffxApiHeader,
@@ -194,642 +39,121 @@ struct ffxCreateBackendVKDesc {
     vk_device_proc_addr: *mut c_void,
 }
 
-type FfxApiMessage = Option<extern "C" fn(ty: u32, message: *const u16)>;
-
-// Tracing-backed message sink for FFX errors / warnings (Windows only: FFX
-// passes `wchar_t*`, which is 2 bytes on Windows but 4 on Linux, so the
-// u16 decode is only correct there; on other platforms we pass `None` and
-// rely on FFX return codes).
-#[cfg(windows)]
-extern "C" fn ffx_message_sink(ty: u32, message: *const u16) {
-    if message.is_null() {
-        return;
-    }
-    let mut len = 0usize;
-    let mut p = message;
-    // SAFETY: FFX guarantees null-termination.
-    unsafe {
-        while *p != 0 {
-            len += 1;
-            p = p.add(1);
-        }
-    }
-    // SAFETY: the loop above walked `message` to its NUL terminator, so `len` u16s starting at
-    // `message` are all initialized and in bounds.
-    let slice = unsafe { std::slice::from_raw_parts(message, len) };
-    let text = String::from_utf16_lossy(slice);
-    match ty {
-        0 => tracing::error!("FFX: {text}"),
-        1 => tracing::warn!("FFX: {text}"),
-        other => tracing::info!("FFX[{other}]: {text}"),
-    }
+// A Vulkan handle as the pointer-sized value `ffx_api` takes.
+fn raw(handle: impl Handle) -> *mut c_void {
+    handle.as_raw() as usize as *mut c_void
 }
 
-// The per-context / global message callback, present only on Windows.
-fn message_callback() -> FfxApiMessage {
-    #[cfg(windows)]
-    {
-        Some(ffx_message_sink)
-    }
-    #[cfg(not(windows))]
-    {
-        None
-    }
-}
-
-#[repr(C)]
-struct ffxCreateContextDescUpscale {
-    header: ffxApiHeader,
-    flags: u32,
-    max_render_size: FfxApiDimensions2D,
-    max_upscale_size: FfxApiDimensions2D,
-    fp_message: FfxApiMessage,
-}
-
-#[repr(C)]
-struct ffxDispatchDescUpscale {
-    header: ffxApiHeader,
-    command_list: *mut c_void, // VkCommandBuffer handle
-    color: FfxApiResource,
-    depth: FfxApiResource,
-    motion_vectors: FfxApiResource,
-    exposure: FfxApiResource,
-    reactive: FfxApiResource,
-    transparency_and_composition: FfxApiResource,
-    output: FfxApiResource,
-    jitter_offset: FfxApiFloatCoords2D,
-    motion_vector_scale: FfxApiFloatCoords2D,
-    render_size: FfxApiDimensions2D,
-    upscale_size: FfxApiDimensions2D,
-    enable_sharpening: bool,
-    sharpness: f32,
-    frame_time_delta: f32,
-    pre_exposure: f32,
-    reset: bool,
-    camera_near: f32,
-    camera_far: f32,
-    camera_fov_angle_vertical: f32,
-    view_space_to_meters_factor: f32,
-    flags: u32,
-}
-
-#[repr(C)]
-struct ffxQueryDescUpscaleGetJitterPhaseCount {
-    header: ffxApiHeader,
-    render_width: u32,
-    display_width: u32,
-    out_phase_count: *mut i32,
-}
-
-#[repr(C)]
-struct ffxQueryDescUpscaleGetJitterOffset {
-    header: ffxApiHeader,
-    index: i32,
-    phase_count: i32,
-    out_x: *mut f32,
-    out_y: *mut f32,
-}
-
-#[repr(C)]
-struct ffxAllocationCallbacks {
-    user_data: *mut c_void,
-    alloc: *mut c_void,
-    dealloc: *mut c_void,
-}
-
-type PfnFfxCreateContext = unsafe extern "C" fn(
-    context: *mut ffxContext,
-    desc: *mut ffxApiHeader,
-    mem_cb: *const ffxAllocationCallbacks,
-) -> ffxReturnCode_t;
-type PfnFfxDestroyContext = unsafe extern "C" fn(
-    context: *mut ffxContext,
-    mem_cb: *const ffxAllocationCallbacks,
-) -> ffxReturnCode_t;
-type PfnFfxQuery =
-    unsafe extern "C" fn(context: *mut ffxContext, desc: *mut ffxApiHeader) -> ffxReturnCode_t;
-type PfnFfxDispatch =
-    unsafe extern "C" fn(context: *mut ffxContext, desc: *const ffxApiHeader) -> ffxReturnCode_t;
-type PfnFfxConfigure =
-    unsafe extern "C" fn(context: *mut ffxContext, desc: *const ffxApiHeader) -> ffxReturnCode_t;
-
-struct FfxApi {
-    // Held to keep the library mapped for the context's lifetime. The function
-    // pointers below are copied out of it and stay valid as long as this stays
-    // alive.
-    _lib: libloading::Library,
-    create_context: PfnFfxCreateContext,
-    destroy_context: PfnFfxDestroyContext,
-    configure: PfnFfxConfigure,
-    query: PfnFfxQuery,
-    dispatch: PfnFfxDispatch,
-}
-
-impl FfxApi {
-    // Load the FFX Vulkan runtime and resolve the five entry points. Returns
-    // `None` on any failure; the caller logs and falls back.
-    fn load() -> Option<Self> {
-        let lib_name = if cfg!(windows) {
-            "amd_fidelityfx_vk.dll"
-        } else {
-            "libamd_fidelityfx_vk.so"
-        };
-        // SAFETY: loading a system library + reading well-known C symbols.
-        // The symbols' prototypes match the FFX header; GetProcAddress-style
-        // misses surface as `None` via `?`.
-        unsafe {
-            let lib = libloading::Library::new(lib_name).ok()?;
-            let create_context = *lib.get::<PfnFfxCreateContext>(b"ffxCreateContext\0").ok()?;
-            let destroy_context = *lib
-                .get::<PfnFfxDestroyContext>(b"ffxDestroyContext\0")
-                .ok()?;
-            let configure = *lib.get::<PfnFfxConfigure>(b"ffxConfigure\0").ok()?;
-            let query = *lib.get::<PfnFfxQuery>(b"ffxQuery\0").ok()?;
-            let dispatch = *lib.get::<PfnFfxDispatch>(b"ffxDispatch\0").ok()?;
-            Some(FfxApi {
-                _lib: lib,
-                create_context,
-                destroy_context,
-                configure,
-                query,
-                dispatch,
-            })
-        }
-    }
-}
-
-// Owns the FFX upscale context, the display-resolution output texture the bloom
-// + composite stack samples, and the FFX function-pointer table. The FFX
-// context internally owns its own Vulkan pipelines + history resources; we feed
-// it per-frame inputs through `ffxDispatch` from `encode_upscale`.
-pub(in crate::vulkan) struct FsrUpscaler {
-    ffx: FfxApi,
-    ctx: ffxContext,
-
-    // Output texture FFX writes (display-res RGBA16F, STORAGE | SAMPLED). Lives
-    // in `GENERAL` while FFX writes it and `SHADER_READ_ONLY_OPTIMAL` while
-    // bloom + composite sample it; `output_layout` tracks which.
-    output: GpuImage,
-    output_layout: Cell<vk::ImageLayout>,
-
-    // Render-resolution dims passed to FFX every frame (its `renderSize`).
-    render_width: u32,
-    render_height: u32,
-    // Output- (display-) resolution dims (FFX's `upscaleSize`).
-    output_width: u32,
-    output_height: u32,
-    // Per-axis render-to-output ratio actually used (clamped).
-    upscale_scale: f32,
-
-    // Number of FFX-prescribed jitter phases for this (render, output) pair.
-    jitter_phase_count: i32,
-    // This frame's FSR-prescribed jitter offset (render-pixel units), set by
-    // `draw.rs` before the parallel fan-out and read by `encode_upscale`.
+// The FFX upscale context and the output image it writes.
+pub(super) struct FsrUpscaler {
+    ffx: FfxContext<libloading::Library>,
+    output: UpscaleOutput,
     jitter: Cell<[f32; 2]>,
-    // Previous frame's elapsed-seconds stamp, for the FFX frame delta.
-    prev_elapsed: Cell<f32>,
-    // `true` on the first frame / after a resize: forces FFX's `reset` so the
-    // temporal history starts fresh.
-    reset_pending: Cell<bool>,
 }
 
-// SAFETY: The FFX context handle + loaded function pointers are raw C pointers used only
-// on the render thread (the upscale pass is recorded by exactly one
-// parallel-encoder worker per frame); the `Send` bound is satisfied unsafely,
-// same as the rest of `VkContext`.
+// SAFETY: `FsrUpscaler` owns its FFX context and the library its entry points come from, neither
+// shared: the upscale pass is recorded by exactly one parallel-encoder worker per frame, under the
+// same main-thread guard as the rest of `VkContext`. Moving the whole upscaler hands over exclusive
+// ownership, so it is `Send` without being `Sync`.
 unsafe impl Send for FsrUpscaler {}
 
 impl FsrUpscaler {
-    // Try to construct an FSR upscaler at the given output resolution + quality.
-    // Returns `Ok(None)` when FFX is unavailable (library miss, any entry point
-    // missing, context init failed); `build_upscaler` then falls through.
+    // `Ok(None)` when FFX is unavailable: the library or one of its entry
+    // points is missing, or the context could not be created.
     pub(super) fn try_new(
         gpu: UpscalerGpu<'_>,
-        output_width: u32,
-        output_height: u32,
-        upscale_scale: f32,
+        extent: UpscaleExtent,
     ) -> RenderResult<Option<Self>> {
-        let UpscalerGpu {
-            alloc,
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-        } = gpu;
-        let ffx = match FfxApi::load() {
-            Some(api) => api,
-            None => {
-                if cfg!(ffx_sdk_bundled) {
-                    tracing::warn!(
-                        "FidelityFX FSR (Vulkan): amd_fidelityfx_vk.dll was bundled at build \
-                         time but failed to load at runtime; trying the next backend"
-                    );
-                } else {
-                    tracing::warn!(
-                        "FidelityFX FSR (Vulkan): amd_fidelityfx_vk.dll not found (build.rs did \
-                         not bundle it; set CN_FIDELITYFX_SDK or put the DLL on PATH). \
-                         Trying the next backend."
-                    );
-                }
-                return Ok(None);
+        let Some(library) = open_library(LIBRARY) else {
+            if cfg!(ffx_sdk_bundled) {
+                tracing::warn!(
+                    "{LABEL}: {LIBRARY} was bundled at build time but failed to load at runtime; \
+                     trying the next backend"
+                );
+            } else {
+                tracing::warn!(
+                    "{LABEL}: {LIBRARY} not found (build.rs did not bundle it; set \
+                     CN_FIDELITYFX_SDK or put the library on the search path). Trying the next \
+                     backend."
+                );
             }
-        };
-
-        let (render_width, render_height, scale) =
-            super::resolve_render_dims(output_width, output_height, upscale_scale);
-
-        // Build the create-context descriptor chain: backend VK -> upscale spec.
-        let mut backend = ffxCreateBackendVKDesc {
-            header: ffxApiHeader {
-                ty: FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK,
-                p_next: ptr::null_mut(),
-            },
-            vk_device: device.handle().as_raw() as usize as *mut c_void,
-            vk_physical_device: physical_device.as_raw() as usize as *mut c_void,
-            vk_device_proc_addr: instance.fp_v1_0().get_device_proc_addr as usize as *mut c_void,
-        };
-        let mut upscale = ffxCreateContextDescUpscale {
-            header: ffxApiHeader {
-                ty: FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE,
-                p_next: &mut backend.header as *mut ffxApiHeader,
-            },
-            flags: ffx_create_flags(CAMERA_DEPTH),
-            // `maxRenderSize` is the upper bound on the per-frame render size;
-            // the FSR sample sets it to the display size, so mirror that. The
-            // actual reduced render size is passed per-frame in the dispatch.
-            max_render_size: FfxApiDimensions2D {
-                width: output_width,
-                height: output_height,
-            },
-            max_upscale_size: FfxApiDimensions2D {
-                width: output_width,
-                height: output_height,
-            },
-            fp_message: message_callback(),
-        };
-
-        let mut ctx: ffxContext = ptr::null_mut();
-        // SAFETY: the entry point was resolved from the loaded FidelityFX library at init and
-        // matches the SDK's declared signature; the context and every descriptor / out-param it is
-        // handed are live for the call.
-        let rc = unsafe {
-            (ffx.create_context)(
-                &mut ctx,
-                &mut upscale.header as *mut ffxApiHeader,
-                ptr::null(),
-            )
-        };
-        if rc != FFX_API_RETURN_OK || ctx.is_null() {
-            tracing::warn!(
-                "FidelityFX FSR (Vulkan): ffxCreateContext returned {rc}; trying the next backend"
-            );
             return Ok(None);
-        }
-
-        // Raise FFX's diagnostic verbosity on the new context. `ffxConfigure`
-        // dereferences the context's provider, so it must run after
-        // `ffxCreateContext`.
-        let mut global_debug = ffxConfigureDescGlobalDebug1 {
-            header: ffxApiHeader {
-                ty: FFX_API_CONFIGURE_DESC_TYPE_GLOBALDEBUG1,
-                p_next: ptr::null_mut(),
-            },
-            fp_message: message_callback(),
-            debug_level: FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_VERBOSE,
         };
-        let rc_dbg =
-            // SAFETY: the entry point was resolved from the loaded FidelityFX library at init and
-            // matches the SDK's declared signature; the context and every descriptor / out-param it
-            // is handed are live for the call.
-            unsafe { (ffx.configure)(&mut ctx, &global_debug.header as *const ffxApiHeader) };
-        let _ = &mut global_debug;
-        if rc_dbg != FFX_API_RETURN_OK {
-            tracing::warn!(
-                "FidelityFX FSR (Vulkan): global debug configure returned {rc_dbg} (non-fatal)"
-            );
-        }
-        tracing::info!(
-            "FidelityFX FSR (Vulkan): context created: render {}x{} -> upscale {}x{} (scale {:.3})",
-            render_width,
-            render_height,
-            output_width,
-            output_height,
-            scale
-        );
-
-        // Query the jitter phase count once; it depends on the (fixed) ratio.
-        let mut phase_count: i32 = 0;
-        let mut jpc_desc = ffxQueryDescUpscaleGetJitterPhaseCount {
-            header: ffxApiHeader {
-                ty: FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTERPHASECOUNT,
-                p_next: ptr::null_mut(),
-            },
-            render_width,
-            display_width: output_width,
-            out_phase_count: &mut phase_count,
+        let mut backend = ffxCreateBackendVKDesc {
+            header: ffxApiHeader::new(FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK),
+            vk_device: raw(gpu.device.handle()),
+            vk_physical_device: raw(gpu.physical_device),
+            vk_device_proc_addr: gpu.instance.fp_v1_0().get_device_proc_addr as usize
+                as *mut c_void,
         };
-        // SAFETY: the entry point was resolved from the loaded FidelityFX library at init and
-        // matches the SDK's declared signature; the context and every descriptor / out-param it is
-        // handed are live for the call.
-        let rc = unsafe { (ffx.query)(&mut ctx, &mut jpc_desc.header as *mut ffxApiHeader) };
-        if rc != FFX_API_RETURN_OK || phase_count <= 0 {
-            tracing::warn!(
-                "FidelityFX FSR (Vulkan): jitter-phase-count query returned {rc} (phase_count={phase_count})"
-            );
-            phase_count = 8;
-        }
-
-        // Output texture FFX writes into.
-        let output = match super::create_output_image(
-            alloc,
-            device,
-            command_pool,
-            queue,
-            (output_width, output_height),
-            OutputWrites::storage(),
-        ) {
-            Ok(img) => img,
-            Err(e) => {
-                // SAFETY: the entry point was resolved from the loaded FidelityFX library at init
-                // and matches the SDK's declared signature; the context and every descriptor /
-                // out-param it is handed are live for the call.
-                unsafe {
-                    let _ = (ffx.destroy_context)(&mut ctx, ptr::null());
-                }
-                return Err(e);
-            }
+        // SAFETY: the description names the live device and physical device, which `VkContext`
+        // keeps until after it destroys the upscaler.
+        let ffx = unsafe { FfxContext::create(library, &mut backend.header, extent, LABEL) };
+        let Some(ffx) = ffx else {
+            return Ok(None);
         };
-
-        Ok(Some(FsrUpscaler {
+        let output = UpscaleOutput::create(gpu, extent.output, OutputWrites::storage())?;
+        Ok(Some(Self {
             ffx,
-            ctx,
             output,
-            output_layout: Cell::new(vk::ImageLayout::GENERAL),
-            render_width,
-            render_height,
-            output_width,
-            output_height,
-            upscale_scale: scale,
-            jitter_phase_count: phase_count,
             jitter: Cell::new([0.0, 0.0]),
-            prev_elapsed: Cell::new(0.0),
-            reset_pending: Cell::new(true),
         }))
     }
 }
 
 impl VkUpscaleBackend for FsrUpscaler {
-    fn render_dims(&self) -> (u32, u32) {
-        (self.render_width, self.render_height)
+    fn extent(&self) -> UpscaleExtent {
+        self.ffx.extent()
     }
-    fn output_dims(&self) -> (u32, u32) {
-        (self.output_width, self.output_height)
-    }
-    fn scale(&self) -> f32 {
-        self.upscale_scale
-    }
-    fn output_image(&self) -> &GpuImage {
+
+    fn output(&self) -> &UpscaleOutput {
         &self.output
     }
-    fn output_layout(&self) -> vk::ImageLayout {
-        self.output_layout.get()
-    }
-    fn set_output_layout(&self, layout: vk::ImageLayout) {
-        self.output_layout.set(layout);
-    }
-    fn output_writes(&self) -> OutputWrites {
-        OutputWrites::storage()
-    }
-    fn set_jitter(&self, offset: [f32; 2]) {
-        self.jitter.set(offset);
-    }
-    fn jitter(&self) -> [f32; 2] {
-        self.jitter.get()
-    }
 
-    // Query FFX for the sub-pixel jitter offset matching this frame's index.
     fn jitter_offset(&self, frame_index: u32) -> [f32; 2] {
-        let mut jx = 0.0_f32;
-        let mut jy = 0.0_f32;
-        let index = (frame_index as i32).rem_euclid(self.jitter_phase_count.max(1));
-        let mut desc = ffxQueryDescUpscaleGetJitterOffset {
-            header: ffxApiHeader {
-                ty: FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTEROFFSET,
-                p_next: ptr::null_mut(),
-            },
-            index,
-            phase_count: self.jitter_phase_count,
-            out_x: &mut jx,
-            out_y: &mut jy,
-        };
-        // SAFETY: the entry point was resolved from the loaded FidelityFX library at init and
-        // matches the SDK's declared signature; the context and every descriptor / out-param it is
-        // handed are live for the call.
-        let rc = unsafe {
-            (self.ffx.query)(
-                &self.ctx as *const ffxContext as *mut ffxContext,
-                &mut desc.header as *mut ffxApiHeader,
-            )
-        };
-        if rc != FFX_API_RETURN_OK {
-            return [0.0, 0.0];
-        }
-        [jx, jy]
+        self.ffx.jitter_offset(frame_index)
     }
 
-    // Record the FFX upscale dispatch onto `cmd`. The inputs must already be in
-    // the layouts/states `encode_upscale` arranged; FFX records its own internal
-    // barriers from the declared states. FSR consumes only the raw image handles
-    // (FFX is told each input's format + render dims).
+    fn jitter(&self) -> &Cell<[f32; 2]> {
+        &self.jitter
+    }
+
     fn dispatch(
         &self,
         cmd: vk::CommandBuffer,
         inputs: UpscaleInputs<'_>,
         camera: UpscaleCamera,
     ) -> RenderResult<()> {
-        let UpscaleInputs {
-            color,
-            depth,
-            motion,
-        } = inputs;
-        let UpscaleCamera {
-            jitter_offset,
-            elapsed,
-            near,
-            fov_y_radians: camera_fov_y_radians,
-        } = camera;
-        let (camera_near, camera_far) = ffx_camera_planes(CAMERA_DEPTH, near);
-        let mk = |image: vk::Image, format: u32, usage: u32, state: u32, w: u32, h: u32| {
-            FfxApiResource {
-                resource: image.as_raw() as usize as *mut c_void,
-                description: FfxApiResourceDescription {
-                    ty: FFX_API_RESOURCE_TYPE_TEXTURE2D,
-                    format,
-                    width_or_size: w,
-                    height_or_stride: h,
-                    depth_or_alignment: 1,
-                    mip_count: 1,
-                    flags: 0,
-                    usage,
-                },
-                state,
-            }
+        let handles = FfxDispatchHandles {
+            command_list: raw(cmd),
+            color: raw(inputs.color.image),
+            depth: raw(inputs.depth.image),
+            motion_vectors: raw(inputs.motion.image),
+            output: raw(self.output.image().image),
         };
-
-        let color_res = mk(
-            color.image,
-            FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT,
-            FFX_API_RESOURCE_USAGE_READ_ONLY,
-            FFX_API_RESOURCE_STATE_COMPUTE_READ,
-            self.render_width,
-            self.render_height,
-        );
-        let depth_res = mk(
-            depth.image,
-            FFX_API_SURFACE_FORMAT_R32_FLOAT,
-            FFX_API_RESOURCE_USAGE_DEPTHTARGET,
-            FFX_API_RESOURCE_STATE_COMPUTE_READ,
-            self.render_width,
-            self.render_height,
-        );
-        let mv_res = mk(
-            motion.image,
-            FFX_API_SURFACE_FORMAT_R16G16_FLOAT,
-            FFX_API_RESOURCE_USAGE_READ_ONLY,
-            FFX_API_RESOURCE_STATE_COMPUTE_READ,
-            self.render_width,
-            self.render_height,
-        );
-        let output_res = mk(
-            self.output.image,
-            FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT,
-            FFX_API_RESOURCE_USAGE_UAV,
-            FFX_API_RESOURCE_STATE_UNORDERED_ACCESS,
-            self.output_width,
-            self.output_height,
-        );
-
-        let reset = self.reset_pending.replace(false);
-        let dt_ms = super::frame_delta_ms(&self.prev_elapsed, elapsed);
-
-        let mut desc = ffxDispatchDescUpscale {
-            header: ffxApiHeader {
-                ty: FFX_API_DISPATCH_DESC_TYPE_UPSCALE,
-                p_next: ptr::null_mut(),
-            },
-            command_list: cmd.as_raw() as usize as *mut c_void,
-            color: color_res,
-            depth: depth_res,
-            motion_vectors: mv_res,
-            exposure: FfxApiResource::empty(),
-            reactive: FfxApiResource::empty(),
-            transparency_and_composition: FfxApiResource::empty(),
-            output: output_res,
-            jitter_offset: FfxApiFloatCoords2D {
-                x: jitter_offset[0],
-                y: jitter_offset[1],
-            },
-            // Velocity is stored as `prev_uv - cur_uv` in UV space (RG16F); FSR
-            // expects motion in input-pixel coords, so per-axis scale = the
-            // render-resolution extent.
-            motion_vector_scale: FfxApiFloatCoords2D {
-                x: self.render_width as f32,
-                y: self.render_height as f32,
-            },
-            render_size: FfxApiDimensions2D {
-                width: self.render_width,
-                height: self.render_height,
-            },
-            upscale_size: FfxApiDimensions2D {
-                width: self.output_width,
-                height: self.output_height,
-            },
-            enable_sharpening: false,
-            sharpness: 0.0,
-            frame_time_delta: dt_ms,
-            pre_exposure: 1.0,
-            reset,
-            camera_near,
-            camera_far,
-            camera_fov_angle_vertical: camera_fov_y_radians,
-            view_space_to_meters_factor: 1.0,
-            flags: 0,
-        };
-
-        // SAFETY: the entry point was resolved from the loaded FidelityFX library at init and
-        // matches the SDK's declared signature; the context and every descriptor / out-param it is
-        // handed are live for the call.
-        let rc = unsafe {
-            (self.ffx.dispatch)(
-                &self.ctx as *const ffxContext as *mut ffxContext,
-                &desc.header as *const ffxApiHeader,
-            )
-        };
-        let _ = &mut desc.header;
-        if rc != FFX_API_RETURN_OK {
-            return Err(RenderError::Other(format!(
-                "ffxDispatch (upscale, vulkan) returned {rc}"
-            )));
-        }
-        Ok(())
+        // SAFETY: `cmd` is recording; `encode_upscale` put the inputs in SHADER_READ_ONLY_OPTIMAL
+        // (FFX's compute read) and the output in GENERAL, all at this context's extent, and the
+        // frame keeps every one alive until the buffer executes.
+        unsafe { self.ffx.dispatch(handles, camera) }
     }
 
-    fn destroy(&mut self, _device: &VkDevice) {
-        if !self.ctx.is_null() {
-            // SAFETY: the entry point was resolved from the loaded FidelityFX library at init and
-            // matches the SDK's declared signature; the context and every descriptor / out-param it
-            // is handed are live for the call.
-            unsafe {
-                let _ = (self.ffx.destroy_context)(&mut self.ctx, ptr::null());
-            }
-            self.ctx = ptr::null_mut();
-        }
-        self.output = GpuImage::null();
+    fn destroy(&mut self) {
+        self.ffx.destroy();
+        self.output.release();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::size_of;
+    use std::mem::{offset_of, size_of};
 
-    // Validates the FFX struct layouts match the C definitions byte-for-byte.
-    // If the FFX SDK is bumped and these sizes change, the FFI is wrong.
     #[test]
-    fn ffx_struct_sizes_match_sdk_v114() {
-        assert_eq!(size_of::<ffxApiHeader>(), 16);
-        assert_eq!(size_of::<FfxApiDimensions2D>(), 8);
-        assert_eq!(size_of::<FfxApiFloatCoords2D>(), 8);
-        assert_eq!(size_of::<FfxApiResourceDescription>(), 32);
-        // void* + description + state + tail pad = 8 + 32 + 4 + 4 = 48.
-        assert_eq!(size_of::<FfxApiResource>(), 48);
-        // header (16) + 3 pointer-sized handles = 16 + 24 = 40.
+    fn ffx_vk_backend_layout_matches_sdk_v114() {
         assert_eq!(size_of::<ffxCreateBackendVKDesc>(), 40);
-    }
-
-    // Each depth flag follows its own field of the mapping, the planes swap
-    // under inverted depth, and the camera's depth sets both flags.
-    #[test]
-    fn the_depth_contract_follows_the_depth_mapping() {
-        for reversed in [false, true] {
-            for infinite in [false, true] {
-                let depth = DepthMapping { reversed, infinite };
-                let flags = ffx_create_flags(depth);
-                assert_eq!((flags & FFX_UPSCALE_ENABLE_DEPTH_INVERTED) != 0, reversed);
-                assert_eq!((flags & FFX_UPSCALE_ENABLE_DEPTH_INFINITE) != 0, infinite);
-                let expected = if reversed {
-                    (f32::MAX, 0.1)
-                } else {
-                    (0.1, f32::MAX)
-                };
-                assert_eq!(ffx_camera_planes(depth, 0.1), expected);
-            }
-        }
-        // The planes pass the far plane as FLT_MAX, which FFX reads as no far
-        // plane only under the infinite-depth flag.
-        let camera = ffx_create_flags(CAMERA_DEPTH);
-        assert_ne!(camera & FFX_UPSCALE_ENABLE_DEPTH_INVERTED, 0);
-        assert_ne!(camera & FFX_UPSCALE_ENABLE_DEPTH_INFINITE, 0);
+        assert_eq!(offset_of!(ffxCreateBackendVKDesc, header), 0);
+        assert_eq!(offset_of!(ffxCreateBackendVKDesc, vk_device), 16);
+        assert_eq!(offset_of!(ffxCreateBackendVKDesc, vk_physical_device), 24);
+        assert_eq!(offset_of!(ffxCreateBackendVKDesc, vk_device_proc_addr), 32);
     }
 }

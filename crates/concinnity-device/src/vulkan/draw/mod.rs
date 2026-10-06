@@ -797,11 +797,11 @@ impl VkContext {
             // The active backend prescribes the jitter sequence (render-pixel
             // units): FSR queries its FFX-tuned offsets, DLSS / XeSS use the
             // shared Halton-2/3. The same offset feeds the dispatch via
-            // `set_jitter`. Phase index = the TAA frame counter, which advances
+            // its `jitter` cell. Phase index = the TAA frame counter, which advances
             // every frame here (TAA resources are forced built under upscaling).
             let phase = self.taa.as_ref().map(|t| t.taa_frame).unwrap_or(0);
             let [jx_px, jy_px] = up.jitter_offset(phase);
-            up.set_jitter([jx_px, jy_px]);
+            up.jitter().set([jx_px, jy_px]);
             let mut p = proj;
             p[2][0] -= jx_px * 2.0 / extent.width.max(1) as f32;
             p[2][1] -= jy_px * 2.0 / extent.height.max(1) as f32;

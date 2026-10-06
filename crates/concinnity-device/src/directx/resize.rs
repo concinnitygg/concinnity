@@ -96,28 +96,24 @@ impl DxContext {
         //    A failed rebuild degrades to native-resolution rendering (render
         //    == output). Everything downstream sizes off `render_w`/`render_h`.
         let (render_w, render_h) = if let Some(old) = self.upscale.backend.as_ref() {
-            let scale = old.upscale_scale();
-            let (uav, srv_cpu, srv_gpu) = old.output_descriptors();
+            let scale = old.extent().scale;
+            let descriptors = old.output().descriptors();
             let backend = self.upscale.requested;
             // Drop the old context before building the replacement (its
             // max_render / max_upscale sizes are baked at creation).
             self.upscale.backend = None;
             let rebuilt = crate::directx::post::upscale::build_upscaler(
-                &self.hw.device,
-                &self.hw.command_queue,
-                new_w,
-                new_h,
-                scale,
-                crate::directx::post::upscale::UpscalerDescriptors {
-                    uav_cpu: uav,
-                    srv_cpu,
-                    srv_gpu,
+                crate::directx::post::upscale::UpscaleDevice {
+                    device: &self.hw.device,
+                    command_queue: &self.hw.command_queue,
                 },
+                (new_w, new_h),
+                scale,
+                descriptors,
                 backend,
-            )?
-            .0;
+            )?;
             let dims = match &rebuilt {
-                Some(u) => u.render_dims(),
+                Some(u) => u.extent().render,
                 None => (new_w, new_h),
             };
             self.upscale.backend = rebuilt;

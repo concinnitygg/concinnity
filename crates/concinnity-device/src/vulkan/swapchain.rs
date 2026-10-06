@@ -145,9 +145,9 @@ impl VkContext {
         // function guarantees the old context is idle before destroy. The new
         // render dims then drive `render_ext`; off-screen scene passes rebuild
         // to it while bloom / composite / swapchain stay at `ext`.
-        if let Some(scale) = self.upscale.as_ref().map(|u| u.scale()) {
+        if let Some(scale) = self.upscale.as_ref().map(|u| u.extent().scale) {
             if let Some(mut old) = self.upscale.take() {
-                old.destroy(&self.hw.device);
+                old.destroy();
             }
             // Rebuild the backend the world requested (not a hardcoded FSR). The
             // DLSS / XeSS device extensions are fixed at device creation, and
@@ -162,8 +162,7 @@ impl VkContext {
                     command_pool: self.commands.command_pool,
                     queue: self.hw.graphics_queue,
                 },
-                ext.width,
-                ext.height,
+                (ext.width, ext.height),
                 scale,
                 self.upscale_requested,
             )?;
@@ -181,7 +180,7 @@ impl VkContext {
         }
         let render_ext = match &self.upscale {
             Some(u) => {
-                let (w, h) = u.render_dims();
+                let (w, h) = u.extent().render;
                 vk::Extent2D {
                     width: w,
                     height: h,

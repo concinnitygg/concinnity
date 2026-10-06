@@ -63,10 +63,11 @@ pub(super) fn build_upscale(
     let (width, height) = output;
     let upscaler = if post.temporal_upscaling {
         crate::directx::post::upscale::build_upscaler(
-            &hw.device,
-            &hw.command_queue,
-            width,
-            height,
+            crate::directx::post::upscale::UpscaleDevice {
+                device: &hw.device,
+                command_queue: &hw.command_queue,
+            },
+            (width, height),
             post.upscale_scale,
             crate::directx::post::upscale::UpscalerDescriptors {
                 uav_cpu: descriptors.slot_cpu(layout.upscale_uav_slot),
@@ -75,12 +76,11 @@ pub(super) fn build_upscale(
             },
             post.upscale_backend,
         )?
-        .0
     } else {
         None
     };
     if let Some(u) = &upscaler {
-        let (render_w, render_h) = u.render_dims();
+        let (render_w, render_h) = u.extent().render;
         tracing::info!(
             "DirectX: temporal upscaling active: scene render {}x{}, drawable {}x{}",
             render_w,
@@ -93,7 +93,6 @@ pub(super) fn build_upscale(
         backend: upscaler,
         requested: post.upscale_backend,
         jitter: std::cell::Cell::new([0.0, 0.0]),
-        prev_elapsed: std::cell::Cell::new(0.0),
     })
 }
 

@@ -72,7 +72,7 @@ impl VkContext {
     // scene.
     pub(in crate::vulkan) fn scene_color_view(&self, frame: usize) -> vk::ImageView {
         if let Some(up) = &self.upscale {
-            up.output_image().view
+            up.output().image().view
         } else if let Some(taa) = &self.taa {
             taa.output_view(frame)
         } else {

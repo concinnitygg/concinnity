@@ -1,92 +1,28 @@
-//! NVIDIA DLSS temporal upscaling for the D3D12 backend, via the raw NGX API
-//! (`NVSDK_NGX_D3D12_*`). One of the three `UpscaleBackend` implementations;
-//! RTX-only. Compiled only when `build.rs` finds the NGX SDK and emits
-//! `cfg(ngx_sdk_bundled)` (which also links `nvsdk_ngx_d.lib` and bundles
-//! `nvngx_dlss.dll` next to the .exe). When the SDK is absent the whole module
-//! is cfg'd out and `build_upscaler` never resolves to DLSS.
-//!
-//! NGX is a parameter-bag API: a feature is created + evaluated by setting
-//! named parameters on an `NVSDK_NGX_Parameter` and calling CreateFeature /
-//! EvaluateFeature, both of which record onto a command list (mirroring the FFX
-//! "evaluate on a command list" model). The bindings are inline `extern "C"`
-//! (linked from the static lib), validated against NGX SDK 1.5.0 by the
-//! constant asserts in the tests.
+//! NVIDIA DLSS temporal upscaling for the D3D12 backend, through the raw NGX
+//! API's `NVSDK_NGX_D3D12_*` entry points (see `crate::upscale_sdk::dlss`);
+//! RTX only. Compiled only when `build.rs` finds the NGX SDK, links its static
+//! library and bundles `nvngx_dlss.dll` beside the executable
+//! (`cfg(ngx_sdk_bundled)`). DLSS computes its own exposure here.
 
-use crate::directx::descriptor_slot::SrvSlot;
-use concinnity_core::components::UpscaleQuality;
-use concinnity_core::gfx::jitter;
-use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr;
+
+use concinnity_core::gfx::jitter;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
 
-// NGX result: 0x1 is success; failure codes share the 0xBAD00000 high bits.
-const NVSDK_NGX_RESULT_FAIL: u32 = 0xBAD0_0000;
-fn ngx_succeeded(v: u32) -> bool {
-    (v & 0xFFF0_0000) != NVSDK_NGX_RESULT_FAIL
-}
+use super::{UpscaleBackend, UpscaleInputs, UpscaleOutput, UpscalerTarget};
+use crate::upscale_sdk::dlss::{
+    ENGINE_VERSION, NVSDK_NGX_ENGINE_TYPE_CUSTOM, NVSDK_NGX_FEATURE_SUPERSAMPLING,
+    NVSDK_NGX_RESULT_FAIL, NVSDK_NGX_VERSION_API, P_COLOR, P_DEPTH, P_MOTION_VECTORS, P_OUTPUT,
+    PROJECT_ID, app_data_path, ngx_succeeded, set_create_parameters, set_evaluate_parameters,
+    supersampling_available,
+};
+use crate::upscale_sdk::{UpscaleCamera, UpscaleExtent};
 
-const NVSDK_NGX_VERSION_API: i32 = 0x0000_0015; // 1.5.0
-const NVSDK_NGX_ENGINE_TYPE_CUSTOM: i32 = 0;
-const NVSDK_NGX_FEATURE_SUPERSAMPLING: i32 = 1;
-
-// NVSDK_NGX_PerfQuality_Value (sequential from 0).
-const PERF_MAX_PERF: i32 = 0;
-const PERF_BALANCED: i32 = 1;
-const PERF_MAX_QUALITY: i32 = 2;
-const PERF_ULTRA_PERFORMANCE: i32 = 3;
-const PERF_DLAA: i32 = 5;
-
-// NVSDK_NGX_DLSS_Feature_Flags. HDR linear input, low-res UV motion vectors:
-// IsHDR + AutoExposure (the scene is un-exposed pre-upscale, matching the FSR
-// path), and DepthInverted when the camera's near plane is device depth 1.
-const DLSS_FLAG_IS_HDR: i32 = 1 << 0;
-const DLSS_FLAG_DEPTH_INVERTED: i32 = 1 << 3;
-const DLSS_FLAG_AUTO_EXPOSURE: i32 = 1 << 6;
-
-const fn dlss_create_flags(depth: DepthMapping) -> i32 {
-    let flags = DLSS_FLAG_IS_HDR | DLSS_FLAG_AUTO_EXPOSURE;
-    if depth.reversed {
-        flags | DLSS_FLAG_DEPTH_INVERTED
-    } else {
-        flags
-    }
-}
-
-// NVSDK_NGX_Parameter name strings (NUL-terminated; from nvsdk_ngx_defs.h).
-const P_WIDTH: &[u8] = b"Width\0";
-const P_HEIGHT: &[u8] = b"Height\0";
-const P_OUT_WIDTH: &[u8] = b"OutWidth\0";
-const P_OUT_HEIGHT: &[u8] = b"OutHeight\0";
-const P_PERF_QUALITY: &[u8] = b"PerfQualityValue\0";
-const P_CREATE_FLAGS: &[u8] = b"DLSS.Feature.Create.Flags\0";
-const P_ENABLE_OUTPUT_SUBRECTS: &[u8] = b"DLSS.Enable.Output.Subrects\0";
-const P_CREATION_NODE_MASK: &[u8] = b"CreationNodeMask\0";
-const P_VISIBILITY_NODE_MASK: &[u8] = b"VisibilityNodeMask\0";
-const P_SUPERSAMPLING_AVAILABLE: &[u8] = b"SuperSampling.Available\0";
-const P_COLOR: &[u8] = b"Color\0";
-const P_OUTPUT: &[u8] = b"Output\0";
-const P_DEPTH: &[u8] = b"Depth\0";
-const P_MOTION_VECTORS: &[u8] = b"MotionVectors\0";
-const P_JITTER_X: &[u8] = b"Jitter.Offset.X\0";
-const P_JITTER_Y: &[u8] = b"Jitter.Offset.Y\0";
-const P_MV_SCALE_X: &[u8] = b"MV.Scale.X\0";
-const P_MV_SCALE_Y: &[u8] = b"MV.Scale.Y\0";
-const P_RESET: &[u8] = b"Reset\0";
-const P_SUBRECT_WIDTH: &[u8] = b"DLSS.Render.Subrect.Dimensions.Width\0";
-const P_SUBRECT_HEIGHT: &[u8] = b"DLSS.Render.Subrect.Dimensions.Height\0";
-const P_SHARPNESS: &[u8] = b"Sharpness\0";
-
-// Engine identity for NGX. Any GUID-like project id avoids needing an
-// NVIDIA-assigned application id.
-const PROJECT_ID: &[u8] = b"5f2e1a64-9c3b-4d7e-8a1f-2b6c0d9e7f30\0";
-const ENGINE_VERSION: &[u8] = b"1.0.0\0";
-
-// NGX entry points, exported (unmangled, __cdecl) from nvsdk_ngx_d.lib.
-// `NVSDK_NGX_Parameter` / `NVSDK_NGX_Handle` / `ID3D12*` are opaque pointers
-// from Rust's side.
+// NGX's D3D12 entry points, exported unmangled from the static library.
 unsafe extern "C" {
     fn NVSDK_NGX_D3D12_Init_with_ProjectID(
         project_id: *const u8,
@@ -113,126 +49,68 @@ unsafe extern "C" {
         params: *const c_void,
         callback: *const c_void,
     ) -> u32;
-    fn NVSDK_NGX_Parameter_SetUI(params: *mut c_void, name: *const u8, value: u32);
-    fn NVSDK_NGX_Parameter_SetI(params: *mut c_void, name: *const u8, value: i32);
-    fn NVSDK_NGX_Parameter_SetF(params: *mut c_void, name: *const u8, value: f32);
     fn NVSDK_NGX_Parameter_SetD3d12Resource(params: *mut c_void, name: *const u8, res: *mut c_void);
-    fn NVSDK_NGX_Parameter_GetUI(params: *mut c_void, name: *const u8, out: *mut u32) -> u32;
 }
 
-fn device_raw(device: &ID3D12Device) -> *mut c_void {
-    device.as_raw()
-}
-fn cmd_list_raw(cmd: &ID3D12GraphicsCommandList) -> *mut c_void {
-    cmd.as_raw()
-}
-fn resource_raw(res: &ID3D12Resource) -> *mut c_void {
-    res.as_raw()
+// NGX initialized on `device`, with the parameter bag and super-sampling
+// feature once they exist. Releases whatever it holds, then shuts NGX down, on
+// drop.
+struct NgxSession {
+    device: ID3D12Device,
+    params: *mut c_void,
+    feature: *mut c_void,
 }
 
-// The DLSS performance/quality preset for the nearest engine preset: DLAA at
-// native resolution.
-fn dlss_perf_quality(q: Option<UpscaleQuality>) -> i32 {
-    match q {
-        None => PERF_DLAA,
-        Some(UpscaleQuality::Quality) => PERF_MAX_QUALITY,
-        Some(UpscaleQuality::Balanced) => PERF_BALANCED,
-        Some(UpscaleQuality::Performance) => PERF_MAX_PERF,
-        Some(UpscaleQuality::UltraPerformance) => PERF_ULTRA_PERFORMANCE,
+impl Drop for NgxSession {
+    fn drop(&mut self) {
+        // SAFETY: the feature and the bag are each released at most once (only when non-null), and
+        // the shutdown names the device NGX was initialized on, which this session still holds.
+        unsafe {
+            if !self.feature.is_null() {
+                NVSDK_NGX_D3D12_ReleaseFeature(self.feature);
+            }
+            if !self.params.is_null() {
+                NVSDK_NGX_D3D12_DestroyParameters(self.params);
+            }
+            NVSDK_NGX_D3D12_Shutdown1(self.device.as_raw());
+        }
     }
 }
 
-// Owns the NGX feature handle + parameter bag, the output texture the bloom +
-// composite stack consumes, and the device (held for `Shutdown1` on drop).
-// Mirrors `FsrUpscaler`.
-pub(in crate::directx) struct DlssUpscaler {
-    device: ID3D12Device,
-    params: *mut c_void,
-    handle: *mut c_void,
-    output: ID3D12Resource,
-    output_srv_gpu: SrvSlot,
-    output_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    upscale_scale: f32,
-    render_width: u32,
-    render_height: u32,
-    output_width: u32,
-    output_height: u32,
-    reset_pending: std::cell::Cell<bool>,
-    output_is_psr: std::cell::Cell<bool>,
+// The DLSS feature and the output texture it writes.
+pub(super) struct DlssUpscaler {
+    ngx: NgxSession,
+    extent: UpscaleExtent,
+    output: UpscaleOutput,
+    reset_pending: Cell<bool>,
 }
 
-// The NGX handle / parameter bag / device are render-thread-only; the trait's
-// `Send` bound is satisfied unsafely, same as the rest of `DxContext`.
-// SAFETY: `DlssUpscaler` owns an NGX feature handle, its parameter bag and a COM device reference,
-// none of which are shared: every entry point runs on the render thread that built them, under the
-// same main-thread guard as the rest of `DxContext`. Moving the whole upscaler hands over exclusive
+// SAFETY: `DlssUpscaler` owns an NGX feature, its parameter bag and a COM device reference, none of
+// which are shared: every entry point runs on the render thread that built them, under the same
+// main-thread guard as the rest of `DxContext`. Moving the whole upscaler hands over exclusive
 // ownership, so it is `Send` without being `Sync`.
 unsafe impl Send for DlssUpscaler {}
 
-// GPU device + queue plus output resolution and upscale ratio for NGX feature
-// creation.
-#[derive(Clone, Copy)]
-pub(in crate::directx) struct DlssCreateParams<'a> {
-    // The GPU device (held for Shutdown1 on drop).
-    pub device: &'a ID3D12Device,
-    // Command queue for NGX CreateFeature's one-shot init submission.
-    pub command_queue: &'a ID3D12CommandQueue,
-    pub output_width: u32,
-    pub output_height: u32,
-    // Per-axis render-to-output scale ratio, clamped to [1/3, 1.0].
-    pub upscale_scale: f32,
-}
-
-// GPU descriptor heap handles for the upscaler output texture.
-#[derive(Clone, Copy)]
-pub(in crate::directx) struct DlssOutputDescriptors {
-    pub output_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub output_srv_gpu: SrvSlot,
-}
-
 impl DlssUpscaler {
-    // Try to construct a DLSS upscaler. Returns `Ok(None)` when DLSS is
-    // unavailable (NGX init failure, GPU lacks DLSS, feature-create failure);
-    // the caller falls through. NGX `CreateFeature` records onto a command
-    // list, so this submits a one-shot init list to `command_queue`.
-    pub(in crate::directx) fn try_new(
-        params: DlssCreateParams<'_>,
-        descriptors: DlssOutputDescriptors,
-    ) -> RenderResult<Option<Self>> {
-        let DlssCreateParams {
-            device,
-            command_queue,
-            output_width,
-            output_height,
-            upscale_scale,
-        } = params;
-        let DlssOutputDescriptors {
-            output_uav_cpu,
-            output_srv_cpu,
-            output_srv_gpu,
-        } = descriptors;
-        let scale = if upscale_scale > 0.0 {
-            upscale_scale.clamp(1.0 / 3.0, 1.0)
-        } else {
-            1.0
-        };
-        let render_width = (((output_width as f32) * scale).round() as u32).max(1);
-        let render_height = (((output_height as f32) * scale).round() as u32).max(1);
-
-        // NGX writes logs / data into the app-data path; use the working dir.
-        let app_path: Vec<u16> = ".".encode_utf16().chain(std::iter::once(0)).collect();
+    // `Ok(None)` when DLSS is unavailable: NGX failed to initialize, the GPU
+    // lacks DLSS, or the feature could not be created. Feature creation records
+    // onto a command list, so this submits a one-shot list to the queue.
+    pub(super) fn try_new(target: UpscalerTarget<'_>) -> RenderResult<Option<Self>> {
+        let UpscalerTarget {
+            gpu,
+            extent,
+            descriptors,
+        } = target;
+        let app_path = app_data_path();
         // SAFETY: an NGX entry point from the linked SDK. `PROJECT_ID`, `ENGINE_VERSION` and
-        // `app_path` are NUL-terminated buffers live for the call, and `device_raw` borrows the
-        // live D3D12 device.
+        // `app_path` are NUL-terminated buffers live for the call, and the device is live.
         let rc = unsafe {
             NVSDK_NGX_D3D12_Init_with_ProjectID(
                 PROJECT_ID.as_ptr(),
                 NVSDK_NGX_ENGINE_TYPE_CUSTOM,
                 ENGINE_VERSION.as_ptr(),
                 app_path.as_ptr(),
-                device_raw(device),
+                gpu.device.as_raw(),
                 ptr::null(),
                 NVSDK_NGX_VERSION_API,
             )
@@ -240,159 +118,74 @@ impl DlssUpscaler {
         if !ngx_succeeded(rc) {
             tracing::warn!(
                 "DLSS: NVSDK_NGX_D3D12_Init returned {rc:#x} (NGX unavailable / not RTX). \
-                 Trying the next upscaler."
+                 Trying the next backend."
             );
             return Ok(None);
         }
-
-        let mut params: *mut c_void = ptr::null_mut();
-        // SAFETY: NGX was initialized above, and `params` is a live local that receives the
-        // parameter-bag pointer.
-        let rc = unsafe { NVSDK_NGX_D3D12_GetCapabilityParameters(&mut params) };
-        if !ngx_succeeded(rc) || params.is_null() {
-            tracing::warn!(
-                "DLSS: GetCapabilityParameters returned {rc:#x}; trying the next upscaler"
-            );
-            // SAFETY: NGX was initialized above and is shut down exactly once on this path; the
-            // device it names is still live.
-            unsafe { NVSDK_NGX_D3D12_Shutdown1(device_raw(device)) };
-            return Ok(None);
-        }
-
-        // Authoritative DLSS-support gate for this GPU + driver.
-        let mut available: u32 = 0;
-        // SAFETY: `params` is the non-null bag NGX just handed back, the name is a NUL-terminated
-        // constant, and `available` is a live local.
-        let rc = unsafe {
-            NVSDK_NGX_Parameter_GetUI(params, P_SUPERSAMPLING_AVAILABLE.as_ptr(), &mut available)
+        let mut ngx = NgxSession {
+            device: gpu.device.clone(),
+            params: ptr::null_mut(),
+            feature: ptr::null_mut(),
         };
-        if !ngx_succeeded(rc) || available == 0 {
+
+        // SAFETY: NGX is initialized, and `ngx.params` is a live field that receives the bag.
+        let rc = unsafe { NVSDK_NGX_D3D12_GetCapabilityParameters(&mut ngx.params) };
+        if !ngx_succeeded(rc) || ngx.params.is_null() {
             tracing::warn!(
-                "DLSS: SuperSampling not available on this GPU; trying the next upscaler"
+                "DLSS: GetCapabilityParameters returned {rc:#x}; trying the next backend"
             );
-            // SAFETY: `params` is the bag NGX handed back and is destroyed exactly once on this
-            // path, and the device the shutdown names is still live.
-            unsafe {
-                NVSDK_NGX_D3D12_DestroyParameters(params);
-                NVSDK_NGX_D3D12_Shutdown1(device_raw(device));
-            }
             return Ok(None);
         }
-
-        // Feature-create parameters.
-        // SAFETY: `params` is the live parameter bag and every name is a NUL-terminated constant.
-        unsafe {
-            NVSDK_NGX_Parameter_SetUI(params, P_WIDTH.as_ptr(), render_width);
-            NVSDK_NGX_Parameter_SetUI(params, P_HEIGHT.as_ptr(), render_height);
-            NVSDK_NGX_Parameter_SetUI(params, P_OUT_WIDTH.as_ptr(), output_width);
-            NVSDK_NGX_Parameter_SetUI(params, P_OUT_HEIGHT.as_ptr(), output_height);
-            NVSDK_NGX_Parameter_SetI(
-                params,
-                P_PERF_QUALITY.as_ptr(),
-                dlss_perf_quality(UpscaleQuality::nearest(scale)),
+        // SAFETY: `ngx.params` is the non-null bag NGX just returned.
+        if !unsafe { supersampling_available(ngx.params) } {
+            tracing::warn!(
+                "DLSS: SuperSampling not available on this GPU; trying the next backend"
             );
-            NVSDK_NGX_Parameter_SetI(
-                params,
-                P_CREATE_FLAGS.as_ptr(),
-                dlss_create_flags(CAMERA_DEPTH),
-            );
-            NVSDK_NGX_Parameter_SetI(params, P_ENABLE_OUTPUT_SUBRECTS.as_ptr(), 0);
-            NVSDK_NGX_Parameter_SetUI(params, P_CREATION_NODE_MASK.as_ptr(), 1);
-            NVSDK_NGX_Parameter_SetUI(params, P_VISIBILITY_NODE_MASK.as_ptr(), 1);
+            return Ok(None);
         }
+        // SAFETY: `ngx.params` is the live bag.
+        unsafe { set_create_parameters(ngx.params, extent, false) };
 
-        // CreateFeature records onto a command list; submit a one-shot init list.
-        let mut handle: *mut c_void = ptr::null_mut();
-        let mut create_rc: u32 = NVSDK_NGX_RESULT_FAIL;
-        crate::directx::texture::one_shot_submit(device, command_queue, |cmd| {
-            // SAFETY: `cmd` is the one-shot init list in the recording state, `params` is the live
-            // parameter bag, and `handle` is a live local the SDK fills.
+        let mut create_rc = NVSDK_NGX_RESULT_FAIL;
+        crate::directx::texture::one_shot_submit(gpu.device, gpu.command_queue, |cmd| {
+            // SAFETY: `cmd` is the one-shot list in the recording state, `ngx.params` the live
+            // bag, and `ngx.feature` a live field the SDK fills.
             create_rc = unsafe {
                 NVSDK_NGX_D3D12_CreateFeature(
-                    cmd_list_raw(cmd),
+                    cmd.as_raw(),
                     NVSDK_NGX_FEATURE_SUPERSAMPLING,
-                    params,
-                    &mut handle,
+                    ngx.params,
+                    &mut ngx.feature,
                 )
             };
         })?;
-        if !ngx_succeeded(create_rc) || handle.is_null() {
-            tracing::warn!("DLSS: CreateFeature returned {create_rc:#x}; trying the next upscaler");
-            // SAFETY: `params` is the bag NGX handed back and is destroyed exactly once on this
-            // path, and the device the shutdown names is still live.
-            unsafe {
-                NVSDK_NGX_D3D12_DestroyParameters(params);
-                NVSDK_NGX_D3D12_Shutdown1(device_raw(device));
-            }
+        if !ngx_succeeded(create_rc) || ngx.feature.is_null() {
+            tracing::warn!("DLSS: CreateFeature returned {create_rc:#x}; trying the next backend");
             return Ok(None);
         }
 
-        let output = super::create_output_texture(device, output_width, output_height)?;
-        super::write_output_uav(device, &output, output_uav_cpu);
-        super::write_output_srv(device, &output, output_srv_cpu);
-
-        tracing::info!(
-            "DLSS: feature created: render {render_width}x{render_height} -> upscale \
-             {output_width}x{output_height} (scale {scale:.3})"
-        );
-
-        Ok(Some(DlssUpscaler {
-            device: device.clone(),
-            params,
-            handle,
+        let output = UpscaleOutput::create(gpu.device, extent.output, descriptors)?;
+        tracing::info!("DLSS: feature created: {extent}");
+        Ok(Some(Self {
+            ngx,
+            extent,
             output,
-            output_srv_gpu,
-            output_uav_cpu,
-            output_srv_cpu,
-            upscale_scale: scale,
-            render_width,
-            render_height,
-            output_width,
-            output_height,
-            reset_pending: std::cell::Cell::new(true),
-            output_is_psr: std::cell::Cell::new(false),
+            reset_pending: Cell::new(true),
         }))
     }
 }
 
-impl super::UpscaleBackend for DlssUpscaler {
-    fn render_dims(&self) -> (u32, u32) {
-        (self.render_width, self.render_height)
-    }
-    fn output_dims(&self) -> (u32, u32) {
-        (self.output_width, self.output_height)
-    }
-    fn upscale_scale(&self) -> f32 {
-        self.upscale_scale
-    }
-    fn output_srv_gpu(&self) -> SrvSlot {
-        self.output_srv_gpu
-    }
-    fn output_descriptors(
-        &self,
-    ) -> (
-        D3D12_CPU_DESCRIPTOR_HANDLE,
-        D3D12_CPU_DESCRIPTOR_HANDLE,
-        SrvSlot,
-    ) {
-        (
-            self.output_uav_cpu,
-            self.output_srv_cpu,
-            self.output_srv_gpu,
-        )
-    }
-    fn output_resource(&self) -> &ID3D12Resource {
-        &self.output
-    }
-    fn output_is_psr(&self) -> bool {
-        self.output_is_psr.get()
-    }
-    fn set_output_is_psr(&self, v: bool) {
-        self.output_is_psr.set(v);
+impl UpscaleBackend for DlssUpscaler {
+    fn extent(&self) -> UpscaleExtent {
+        self.extent
     }
 
-    // DLSS prescribes no jitter sequence; the engine's Halton-2/3 (shared with
-    // the camera projection) drives both.
+    fn output(&self) -> &UpscaleOutput {
+        &self.output
+    }
+
+    // DLSS prescribes no jitter sequence; the engine's Halton (2, 3) drives
+    // both the projection and the evaluate.
     fn jitter_offset(&self, frame_index: u32) -> [f32; 2] {
         jitter::offset(frame_index)
     }
@@ -400,63 +193,33 @@ impl super::UpscaleBackend for DlssUpscaler {
     fn dispatch(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        inputs: super::UpscaleInputs<'_>,
-        camera: super::UpscaleCamera,
+        inputs: UpscaleInputs<'_>,
+        camera: UpscaleCamera,
     ) -> RenderResult<()> {
-        let super::UpscaleInputs {
-            color,
-            depth,
-            motion_vectors,
-        } = inputs;
-        let super::UpscaleCamera { jitter_offset, .. } = camera;
-        let reset = self.reset_pending.replace(false);
-        // SAFETY: `self.params` is the live parameter bag, every name is a NUL-terminated constant,
-        // and each resource pointer borrows a COM object the caller keeps alive for the frame.
+        let params = self.ngx.params;
+        let resources = [
+            (P_COLOR, inputs.color),
+            (P_OUTPUT, self.output.resource()),
+            (P_DEPTH, inputs.depth),
+            (P_MOTION_VECTORS, inputs.motion_vectors),
+        ];
+        // SAFETY: `params` is the live bag, every name is a NUL-terminated constant, and each
+        // resource is a COM object the frame keeps alive until the list executes.
         unsafe {
-            NVSDK_NGX_Parameter_SetD3d12Resource(
-                self.params,
-                P_COLOR.as_ptr(),
-                resource_raw(color),
+            for (name, resource) in resources {
+                NVSDK_NGX_Parameter_SetD3d12Resource(params, name.as_ptr(), resource.as_raw());
+            }
+            set_evaluate_parameters(
+                params,
+                camera.jitter_offset,
+                self.reset_pending.replace(false),
+                self.extent,
             );
-            NVSDK_NGX_Parameter_SetD3d12Resource(
-                self.params,
-                P_OUTPUT.as_ptr(),
-                resource_raw(&self.output),
-            );
-            NVSDK_NGX_Parameter_SetD3d12Resource(
-                self.params,
-                P_DEPTH.as_ptr(),
-                resource_raw(depth),
-            );
-            NVSDK_NGX_Parameter_SetD3d12Resource(
-                self.params,
-                P_MOTION_VECTORS.as_ptr(),
-                resource_raw(motion_vectors),
-            );
-            NVSDK_NGX_Parameter_SetF(self.params, P_JITTER_X.as_ptr(), jitter_offset[0]);
-            NVSDK_NGX_Parameter_SetF(self.params, P_JITTER_Y.as_ptr(), jitter_offset[1]);
-            // RG16F motion vectors are `prev_uv - cur_uv` in UV space; DLSS
-            // wants pixel-space, so scale by the render extent (same as FSR).
-            NVSDK_NGX_Parameter_SetF(self.params, P_MV_SCALE_X.as_ptr(), self.render_width as f32);
-            NVSDK_NGX_Parameter_SetF(
-                self.params,
-                P_MV_SCALE_Y.as_ptr(),
-                self.render_height as f32,
-            );
-            NVSDK_NGX_Parameter_SetI(self.params, P_RESET.as_ptr(), if reset { 1 } else { 0 });
-            NVSDK_NGX_Parameter_SetUI(self.params, P_SUBRECT_WIDTH.as_ptr(), self.render_width);
-            NVSDK_NGX_Parameter_SetUI(self.params, P_SUBRECT_HEIGHT.as_ptr(), self.render_height);
-            NVSDK_NGX_Parameter_SetF(self.params, P_SHARPNESS.as_ptr(), 0.0);
         }
-        // SAFETY: `cmd` is the frame's command list in the recording state, and the feature handle
-        // and parameter bag are the live ones created in `new`.
+        // SAFETY: `cmd` is recording, and the feature and bag are the live ones created in
+        // `try_new`.
         let rc = unsafe {
-            NVSDK_NGX_D3D12_EvaluateFeature_C(
-                cmd_list_raw(cmd),
-                self.handle,
-                self.params,
-                ptr::null(),
-            )
+            NVSDK_NGX_D3D12_EvaluateFeature_C(cmd.as_raw(), self.ngx.feature, params, ptr::null())
         };
         if !ngx_succeeded(rc) {
             return Err(RenderError::Other(format!(
@@ -464,59 +227,5 @@ impl super::UpscaleBackend for DlssUpscaler {
             )));
         }
         Ok(())
-    }
-}
-
-impl Drop for DlssUpscaler {
-    fn drop(&mut self) {
-        // SAFETY: the feature handle and the parameter bag are each released exactly once (both
-        // nulled straight after), and the device the shutdown names is still owned by this struct.
-        unsafe {
-            if !self.handle.is_null() {
-                NVSDK_NGX_D3D12_ReleaseFeature(self.handle);
-                self.handle = ptr::null_mut();
-            }
-            if !self.params.is_null() {
-                NVSDK_NGX_D3D12_DestroyParameters(self.params);
-                self.params = ptr::null_mut();
-            }
-            NVSDK_NGX_D3D12_Shutdown1(device_raw(&self.device));
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ngx_constants_match_sdk() {
-        assert!(ngx_succeeded(0x1)); // NVSDK_NGX_Result_Success
-        assert!(!ngx_succeeded(0xBAD0_0005)); // a FAIL code
-        assert_eq!(NVSDK_NGX_VERSION_API, 0x0000_0015);
-        assert_eq!(NVSDK_NGX_FEATURE_SUPERSAMPLING, 1);
-        assert_eq!(PERF_MAX_PERF, 0);
-        assert_eq!(PERF_MAX_QUALITY, 2);
-        assert_eq!(PERF_ULTRA_PERFORMANCE, 3);
-        assert_eq!(PERF_DLAA, 5);
-        assert_eq!(DLSS_FLAG_IS_HDR, 1);
-        assert_eq!(DLSS_FLAG_AUTO_EXPOSURE, 64);
-    }
-
-    // NGX's DepthInverted bit is set exactly when the depth is reversed, and
-    // the camera's depth is.
-    #[test]
-    fn the_depth_flag_follows_the_depth_mapping() {
-        assert_eq!(DLSS_FLAG_DEPTH_INVERTED, 8);
-        for reversed in [false, true] {
-            for infinite in [false, true] {
-                let flags = dlss_create_flags(DepthMapping { reversed, infinite });
-                assert_eq!((flags & DLSS_FLAG_DEPTH_INVERTED) != 0, reversed);
-            }
-        }
-        assert_ne!(
-            dlss_create_flags(CAMERA_DEPTH) & DLSS_FLAG_DEPTH_INVERTED,
-            0
-        );
     }
 }

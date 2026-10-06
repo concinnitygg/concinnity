@@ -62,11 +62,8 @@ pub(super) fn build_upscale(
                 command_pool,
                 queue: hw.graphics_queue,
             },
-            swapchain_extent.width,
-            swapchain_extent.height,
+            (swapchain_extent.width, swapchain_extent.height),
             post.upscale_scale,
-            // Only FSR is available on Vulkan (DLSS / XeSS are DirectX-only); a
-            // DX-only request logs a note and uses FSR.
             post.upscale_backend,
         )?;
         // Arm the messenger's benign-error budget for DLSS (see
@@ -85,7 +82,7 @@ pub(super) fn build_upscale(
     };
     let render_extent = match &upscale {
         Some(u) => {
-            let (w, h) = u.render_dims();
+            let (w, h) = u.extent().render;
             vk::Extent2D {
                 width: w,
                 height: h,
@@ -303,7 +300,7 @@ pub(super) fn build_taa_and_wire_scene_inputs(
     // override is the final word; the TAA *resolve* is dropped from the
     // graph and never runs.
     if let Some(up) = upscale {
-        let up_output_view = up.output_image().view;
+        let up_output_view = up.output().image().view;
         for (i, &set) in composite.sets.iter().enumerate() {
             write_composite_set(
                 device,

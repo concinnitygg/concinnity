@@ -1,74 +1,31 @@
-//! Intel XeSS temporal upscaling for the D3D12 backend. One of the three
-//! `UpscaleBackend` implementations; runs cross-vendor (Arc XMX + the DP4a
-//! fallback on other GPUs). The runtime DLL is `libxess.dll`, loaded on demand
-//! via `LoadLibraryA` (bundled next to the .exe by `build.rs` when the XeSS SDK
-//! is found, else searched on PATH). Failure to load logs a warning and the
-//! caller falls through to the next backend / native rendering. The FFI
-//! bindings are inline (small, concentrated API), validated against XeSS SDK
-//! 3.0.1 by the size/offset asserts in the tests.
-#![expect(
-    non_camel_case_types,
-    reason = "inline XeSS bindings keep the SDK's own C type names"
-)]
+//! Intel XeSS temporal upscaling for the D3D12 backend (see
+//! `crate::upscale_sdk::xess`); runs cross-vendor (Arc XMX + the DP4a fallback
+//! elsewhere). The runtime is `libxess.dll`, bundled beside the executable by
+//! `build.rs` when the SDK is found or else taken from PATH; a missing DLL falls
+//! through to the next backend.
 
-use crate::directx::descriptor_slot::SrvSlot;
-use concinnity_core::components::UpscaleQuality;
-use concinnity_core::gfx::jitter;
-use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
-use concinnity_core::render::error::{RenderError, RenderResult};
 use std::ffi::{CStr, c_void};
 use std::ptr;
-use windows::Win32::Foundation::HMODULE;
+
+use concinnity_core::gfx::jitter;
+use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
-use windows::core::{Interface, PCSTR};
+use windows::core::Interface;
 
-// XeSS API bindings (subset). Layouts match
-// `C:\XeSS_SDK_3.0.1\inc\xess\{xess.h,xess_d3d12.h}` (v3.0.1). `XESS_PACK_B()`
-// is `pack(8)`, a no-op on x86_64 where every field is already <= 8-aligned, so
-// `#[repr(C)]` matches byte-for-byte (asserted in tests).
+use super::{Dll, UpscaleBackend, UpscaleInputs, UpscaleOutput, UpscalerTarget};
+use crate::upscale_sdk::xess::{
+    XESS_RESULT_SUCCESS, XessCommonApi, XessContext, XessExecuteFrame, XessInitHead,
+    xess_context_handle_t,
+};
+use crate::upscale_sdk::{SdkLibrary, UpscaleCamera, UpscaleExtent, entry_point};
 
-// xess_result_t: 0 == success, negative == error, positive == warning.
-const XESS_RESULT_SUCCESS: i32 = 0;
+const LIBRARY: &CStr = c"libxess.dll";
+const LABEL: &str = "XeSS";
 
-// xess_quality_settings_t (a C enum, ABI int).
-const XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: i32 = 100;
-const XESS_QUALITY_SETTING_PERFORMANCE: i32 = 101;
-const XESS_QUALITY_SETTING_BALANCED: i32 = 102;
-const XESS_QUALITY_SETTING_QUALITY: i32 = 103;
-const XESS_QUALITY_SETTING_AA: i32 = 106;
-
-// xess_init_flags_t (bitmask). The engine feeds HDR linear color and low-res
-// (render-resolution) UV motion vectors scaled to pixels via SetVelocityScale,
-// so the flags are auto-exposure (the scene is un-exposed pre-upscale, matching
-// the FSR path) and inverted depth when the camera's near plane is device depth 1.
-const XESS_INIT_FLAG_INVERTED_DEPTH: u32 = 1 << 1;
-const XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE: u32 = 1 << 8;
-
-const fn xess_init_flags(depth: DepthMapping) -> u32 {
-    if depth.reversed {
-        XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE | XESS_INIT_FLAG_INVERTED_DEPTH
-    } else {
-        XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE
-    }
-}
-
-type xess_context_handle_t = *mut c_void;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct xess_2d_t {
-    x: u32,
-    y: u32,
-}
-
+// `xess_d3d12_init_params_t` (`xess_d3d12.h`).
 #[repr(C)]
 struct xess_d3d12_init_params_t {
-    output_resolution: xess_2d_t,
-    quality_setting: i32,
-    init_flags: u32,
-    creation_node_mask: u32,
-    visible_node_mask: u32,
+    head: XessInitHead,
     p_temp_buffer_heap: *mut c_void,
     buffer_heap_offset: u64,
     p_temp_texture_heap: *mut c_void,
@@ -76,6 +33,7 @@ struct xess_d3d12_init_params_t {
     p_pipeline_library: *mut c_void,
 }
 
+// `xess_d3d12_execute_params_t` (`xess_d3d12.h`).
 #[repr(C)]
 struct xess_d3d12_execute_params_t {
     p_color_texture: *mut c_void,
@@ -84,18 +42,7 @@ struct xess_d3d12_execute_params_t {
     p_exposure_scale_texture: *mut c_void,
     p_responsive_pixel_mask_texture: *mut c_void,
     p_output_texture: *mut c_void,
-    jitter_offset_x: f32,
-    jitter_offset_y: f32,
-    exposure_scale: f32,
-    reset_history: u32,
-    input_width: u32,
-    input_height: u32,
-    input_color_base: xess_2d_t,
-    input_motion_vector_base: xess_2d_t,
-    input_depth_base: xess_2d_t,
-    input_responsive_mask_base: xess_2d_t,
-    reserved0: xess_2d_t,
-    output_color_base: xess_2d_t,
+    frame: XessExecuteFrame,
     p_descriptor_heap: *mut c_void,
     descriptor_heap_offset: u32,
 }
@@ -117,276 +64,122 @@ type PfnXessD3D12Execute = unsafe extern "C" fn(
     cmd: *mut c_void,
     params: *const xess_d3d12_execute_params_t,
 ) -> i32;
-type PfnXessDestroyContext = unsafe extern "C" fn(ctx: xess_context_handle_t) -> i32;
-type PfnXessSetVelocityScale =
-    unsafe extern "C" fn(ctx: xess_context_handle_t, x: f32, y: f32) -> i32;
 
-struct XessApi {
-    #[expect(
-        dead_code,
-        reason = "held to keep the DLL loaded for the context's lifetime"
-    )]
-    module: HMODULE,
+struct XessD3D12Api {
     create_context: PfnXessD3D12CreateContext,
     build_pipelines: PfnXessD3D12BuildPipelines,
     init: PfnXessD3D12Init,
     execute: PfnXessD3D12Execute,
-    destroy_context: PfnXessDestroyContext,
-    set_velocity_scale: PfnXessSetVelocityScale,
+    common: XessCommonApi,
 }
 
-impl XessApi {
-    // Load `libxess.dll` and resolve the entry points. Returns `None` on any
-    // failure; the caller logs and falls through. The DLL handle is held so the
-    // function pointers stay valid for the context's lifetime.
-    fn load() -> Option<Self> {
-        // SAFETY: the name is a NUL-terminated literal, and a failed load is reported rather than
-        // dereferenced.
-        let module = unsafe { LoadLibraryA(PCSTR(c"libxess.dll".as_ptr() as *const u8)) }.ok()?;
-        let resolve = |name: &CStr| -> Option<*const c_void> {
-            // SAFETY: `module` is the handle `LoadLibraryA` just returned, and `name` is a NUL-
-            // terminated `CStr` live for the call. The result is only a pointer here; the
-            // transmutes that give it a prototype are documented below.
-            unsafe {
-                GetProcAddress(module, PCSTR(name.as_ptr() as *const u8))
-                    .map(|p| p as *const c_void)
-            }
-        };
-        // SAFETY: each prototype matches the XeSS header for SDK 3.0.1.
+impl XessD3D12Api {
+    fn resolve(library: &impl SdkLibrary) -> Option<Self> {
+        // SAFETY: each type is the prototype `xess_d3d12.h` declares for that export.
         unsafe {
-            Some(XessApi {
-                module,
-                create_context: std::mem::transmute::<*const c_void, PfnXessD3D12CreateContext>(
-                    resolve(c"xessD3D12CreateContext")?,
-                ),
-                build_pipelines: std::mem::transmute::<*const c_void, PfnXessD3D12BuildPipelines>(
-                    resolve(c"xessD3D12BuildPipelines")?,
-                ),
-                init: std::mem::transmute::<*const c_void, PfnXessD3D12Init>(resolve(
-                    c"xessD3D12Init",
-                )?),
-                execute: std::mem::transmute::<*const c_void, PfnXessD3D12Execute>(resolve(
-                    c"xessD3D12Execute",
-                )?),
-                destroy_context: std::mem::transmute::<*const c_void, PfnXessDestroyContext>(
-                    resolve(c"xessDestroyContext")?,
-                ),
-                set_velocity_scale: std::mem::transmute::<*const c_void, PfnXessSetVelocityScale>(
-                    resolve(c"xessSetVelocityScale")?,
-                ),
+            Some(Self {
+                create_context: entry_point(library, c"xessD3D12CreateContext")?,
+                build_pipelines: entry_point(library, c"xessD3D12BuildPipelines")?,
+                init: entry_point(library, c"xessD3D12Init")?,
+                execute: entry_point(library, c"xessD3D12Execute")?,
+                common: XessCommonApi::resolve(library)?,
             })
         }
     }
 }
 
-fn device_raw(device: &ID3D12Device) -> *mut c_void {
-    device.as_raw()
-}
-fn cmd_list_raw(cmd: &ID3D12GraphicsCommandList) -> *mut c_void {
-    cmd.as_raw()
-}
-fn resource_raw(res: &ID3D12Resource) -> *mut c_void {
-    res.as_raw()
+// The XeSS context, its execute entry point, and the output texture it writes.
+pub(super) struct XessUpscaler {
+    ctx: XessContext<Dll>,
+    execute: PfnXessD3D12Execute,
+    output: UpscaleOutput,
 }
 
-// The XeSS quality preset for the nearest engine preset: native anti-aliasing
-// at native resolution. The preset is a hint for XeSS's internal model
-// selection; the actual render dims are `output * scale` (passed via
-// `inputWidth/Height`).
-fn xess_quality(q: Option<UpscaleQuality>) -> i32 {
-    match q {
-        None => XESS_QUALITY_SETTING_AA,
-        Some(UpscaleQuality::Quality) => XESS_QUALITY_SETTING_QUALITY,
-        Some(UpscaleQuality::Balanced) => XESS_QUALITY_SETTING_BALANCED,
-        Some(UpscaleQuality::Performance) => XESS_QUALITY_SETTING_PERFORMANCE,
-        Some(UpscaleQuality::UltraPerformance) => XESS_QUALITY_SETTING_ULTRA_PERFORMANCE,
-    }
-}
-
-// Owns the XeSS context, the output texture the bloom + composite stack
-// consumes (at output resolution), and the loaded function table. Mirrors
-// `FsrUpscaler`.
-pub(in crate::directx) struct XessUpscaler {
-    xess: XessApi,
-    ctx: xess_context_handle_t,
-    output: ID3D12Resource,
-    output_srv_gpu: SrvSlot,
-    output_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-    upscale_scale: f32,
-    render_width: u32,
-    render_height: u32,
-    output_width: u32,
-    output_height: u32,
-    reset_pending: std::cell::Cell<bool>,
-    output_is_psr: std::cell::Cell<bool>,
-}
-
-// The XeSS context handle + loaded function pointers are raw C pointers used
-// only on the render thread; the trait's `Send` bound is satisfied unsafely,
-// same as the rest of `DxContext`.
-// SAFETY: `XessUpscaler` owns its XeSS context handle and the function pointers resolved from a DLL
-// held open for the context's lifetime. Neither is shared: every entry point runs on the render
-// thread that built them, under the same main-thread guard as the rest of `DxContext`. Moving the
-// whole upscaler hands over exclusive ownership, so it is `Send` without being `Sync`.
+// SAFETY: `XessUpscaler` owns its XeSS context and the DLL its entry points come from, neither
+// shared: every entry point runs on the render thread that built them, under the same main-thread
+// guard as the rest of `DxContext`. Moving the whole upscaler hands over exclusive ownership, so it
+// is `Send` without being `Sync`.
 unsafe impl Send for XessUpscaler {}
 
 impl XessUpscaler {
-    // Try to construct an XeSS upscaler. Returns `Ok(None)` when XeSS is
-    // unavailable (DLL miss / context init failure); the caller falls through.
-    pub(in crate::directx) fn try_new(
-        device: &ID3D12Device,
-        output_width: u32,
-        output_height: u32,
-        upscale_scale: f32,
-        output_uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-        output_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
-        output_srv_gpu: SrvSlot,
-    ) -> RenderResult<Option<Self>> {
-        let xess = match XessApi::load() {
-            Some(api) => api,
-            None => {
-                tracing::warn!(
-                    "XeSS: libxess.dll not found (build.rs did not bundle it; set \
-                     CN_XESS_SDK or put the DLL on PATH). Trying the next upscaler."
-                );
-                return Ok(None);
-            }
+    // `Ok(None)` when XeSS is unavailable: the DLL or one of its entry points
+    // is missing, or the context could not be created or initialized.
+    pub(super) fn try_new(target: UpscalerTarget<'_>) -> RenderResult<Option<Self>> {
+        let Some(library) = Dll::open(LIBRARY) else {
+            tracing::warn!(
+                "{LABEL}: libxess.dll not found (build.rs did not bundle it; set CN_XESS_SDK or \
+                 put the DLL on PATH). Trying the next backend."
+            );
+            return Ok(None);
         };
-
-        // Same render/output split as FSR: render at `output * scale`, clamp
-        // into [1/3, 1] (XeSS supports up to ~3x per-axis).
-        let scale = if upscale_scale > 0.0 {
-            upscale_scale.clamp(1.0 / 3.0, 1.0)
-        } else {
-            1.0
+        let Some(api) = XessD3D12Api::resolve(&library) else {
+            tracing::warn!(
+                "{LABEL}: libxess.dll lacks a D3D12 entry point; trying the next backend"
+            );
+            return Ok(None);
         };
-        let render_width = (((output_width as f32) * scale).round() as u32).max(1);
-        let render_height = (((output_height as f32) * scale).round() as u32).max(1);
+        let extent = target.extent;
 
-        let mut ctx: xess_context_handle_t = ptr::null_mut();
-        // SAFETY: `xess.create_context` was resolved from the loaded DLL with the header's
-        // prototype, `device_raw` borrows the live D3D12 device, and `ctx` is a live local the call
-        // fills.
-        let rc = unsafe { (xess.create_context)(device_raw(device), &mut ctx) };
-        if rc != XESS_RESULT_SUCCESS || ctx.is_null() {
-            tracing::warn!("XeSS: xessD3D12CreateContext returned {rc}; trying the next upscaler");
+        let mut handle: xess_context_handle_t = ptr::null_mut();
+        // SAFETY: the entry point came from the loaded DLL with the header's prototype, the device
+        // is live, and `handle` is a live local the call fills.
+        let rc = unsafe { (api.create_context)(target.gpu.device.as_raw(), &mut handle) };
+        if rc != XESS_RESULT_SUCCESS || handle.is_null() {
+            tracing::warn!(
+                "{LABEL}: xessD3D12CreateContext returned {rc}; trying the next backend"
+            );
             return Ok(None);
         }
+        let ctx = XessContext::adopt(library, api.common, handle, extent);
 
-        let init_flags = xess_init_flags(CAMERA_DEPTH);
-        // SAFETY: `ctx` is the non-null context just created, and a null pipeline-library pointer
-        // is the header's "use the default" value.
-        let rc = unsafe { (xess.build_pipelines)(ctx, ptr::null_mut(), true, init_flags) };
+        let head = XessInitHead::new(extent);
+        // SAFETY: `ctx` holds the live context, and a null pipeline library is the header's "none".
+        let rc = unsafe {
+            (api.build_pipelines)(ctx.handle(), ptr::null_mut(), true, head.init_flags())
+        };
         if rc != XESS_RESULT_SUCCESS {
-            tracing::warn!("XeSS: xessD3D12BuildPipelines returned {rc}; trying the next upscaler");
-            // SAFETY: `ctx` is the non-null context created above and is destroyed exactly once on
-            // this path.
-            unsafe { (xess.destroy_context)(ctx) };
+            tracing::warn!(
+                "{LABEL}: xessD3D12BuildPipelines returned {rc}; trying the next backend"
+            );
             return Ok(None);
         }
-
         let init_params = xess_d3d12_init_params_t {
-            output_resolution: xess_2d_t {
-                x: output_width,
-                y: output_height,
-            },
-            quality_setting: xess_quality(UpscaleQuality::nearest(scale)),
-            init_flags,
-            creation_node_mask: 0,
-            visible_node_mask: 0,
+            head,
             p_temp_buffer_heap: ptr::null_mut(),
             buffer_heap_offset: 0,
             p_temp_texture_heap: ptr::null_mut(),
             texture_heap_offset: 0,
             p_pipeline_library: ptr::null_mut(),
         };
-        // SAFETY: `ctx` is the non-null context created above, and `init_params` is a live local
-        // the call only reads.
-        let rc = unsafe { (xess.init)(ctx, &init_params) };
+        // SAFETY: `ctx` holds the live context, and `init_params` is a live local the call reads.
+        let rc = unsafe { (api.init)(ctx.handle(), &init_params) };
         if rc != XESS_RESULT_SUCCESS {
-            tracing::warn!("XeSS: xessD3D12Init returned {rc}; trying the next upscaler");
-            // SAFETY: `ctx` is the non-null context created above and is destroyed exactly once on
-            // this path.
-            unsafe { (xess.destroy_context)(ctx) };
+            tracing::warn!("{LABEL}: xessD3D12Init returned {rc}; trying the next backend");
             return Ok(None);
         }
+        ctx.set_velocity_scale(LABEL);
 
-        // Motion vectors are RG16F `prev_uv - cur_uv` in UV space; XeSS expects
-        // pixel-space velocity (default low-res), so scale by the render extent.
-        let rc =
-            // SAFETY: `ctx` is the non-null context created above; the call takes only scalars
-            // besides it.
-            unsafe { (xess.set_velocity_scale)(ctx, render_width as f32, render_height as f32) };
-        if rc != XESS_RESULT_SUCCESS {
-            tracing::warn!("XeSS: xessSetVelocityScale returned {rc} (non-fatal)");
-        }
-
-        let output = super::create_output_texture(device, output_width, output_height)?;
-        super::write_output_uav(device, &output, output_uav_cpu);
-        super::write_output_srv(device, &output, output_srv_cpu);
-
-        tracing::info!(
-            "XeSS: context created: render {render_width}x{render_height} -> upscale \
-             {output_width}x{output_height} (scale {scale:.3})"
-        );
-
-        Ok(Some(XessUpscaler {
-            xess,
+        let output = UpscaleOutput::create(target.gpu.device, extent.output, target.descriptors)?;
+        tracing::info!("{LABEL}: context created: {extent}");
+        Ok(Some(Self {
             ctx,
+            execute: api.execute,
             output,
-            output_srv_gpu,
-            output_uav_cpu,
-            output_srv_cpu,
-            upscale_scale: scale,
-            render_width,
-            render_height,
-            output_width,
-            output_height,
-            reset_pending: std::cell::Cell::new(true),
-            output_is_psr: std::cell::Cell::new(false),
         }))
     }
 }
 
-impl super::UpscaleBackend for XessUpscaler {
-    fn render_dims(&self) -> (u32, u32) {
-        (self.render_width, self.render_height)
-    }
-    fn output_dims(&self) -> (u32, u32) {
-        (self.output_width, self.output_height)
-    }
-    fn upscale_scale(&self) -> f32 {
-        self.upscale_scale
-    }
-    fn output_srv_gpu(&self) -> SrvSlot {
-        self.output_srv_gpu
-    }
-    fn output_descriptors(
-        &self,
-    ) -> (
-        D3D12_CPU_DESCRIPTOR_HANDLE,
-        D3D12_CPU_DESCRIPTOR_HANDLE,
-        SrvSlot,
-    ) {
-        (
-            self.output_uav_cpu,
-            self.output_srv_cpu,
-            self.output_srv_gpu,
-        )
-    }
-    fn output_resource(&self) -> &ID3D12Resource {
-        &self.output
-    }
-    fn output_is_psr(&self) -> bool {
-        self.output_is_psr.get()
-    }
-    fn set_output_is_psr(&self, v: bool) {
-        self.output_is_psr.set(v);
+impl UpscaleBackend for XessUpscaler {
+    fn extent(&self) -> UpscaleExtent {
+        self.ctx.extent()
     }
 
-    // XeSS prescribes no jitter sequence; the engine's Halton-2/3 (shared with
-    // the camera projection) drives both. XeSS wants the offset in [-0.5, 0.5].
+    fn output(&self) -> &UpscaleOutput {
+        &self.output
+    }
+
+    // XeSS prescribes no jitter sequence; the engine's Halton (2, 3) drives
+    // both the projection and the execute.
     fn jitter_offset(&self, frame_index: u32) -> [f32; 2] {
         jitter::offset(frame_index)
     }
@@ -394,43 +187,23 @@ impl super::UpscaleBackend for XessUpscaler {
     fn dispatch(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        inputs: super::UpscaleInputs<'_>,
-        camera: super::UpscaleCamera,
+        inputs: UpscaleInputs<'_>,
+        camera: UpscaleCamera,
     ) -> RenderResult<()> {
-        let super::UpscaleInputs {
-            color,
-            depth,
-            motion_vectors,
-        } = inputs;
-        let super::UpscaleCamera { jitter_offset, .. } = camera;
-        let reset = self.reset_pending.replace(false);
-        let zero = xess_2d_t { x: 0, y: 0 };
         let params = xess_d3d12_execute_params_t {
-            p_color_texture: resource_raw(color),
-            p_velocity_texture: resource_raw(motion_vectors),
-            p_depth_texture: resource_raw(depth),
+            p_color_texture: inputs.color.as_raw(),
+            p_velocity_texture: inputs.motion_vectors.as_raw(),
+            p_depth_texture: inputs.depth.as_raw(),
             p_exposure_scale_texture: ptr::null_mut(),
             p_responsive_pixel_mask_texture: ptr::null_mut(),
-            p_output_texture: resource_raw(&self.output),
-            jitter_offset_x: jitter_offset[0],
-            jitter_offset_y: jitter_offset[1],
-            exposure_scale: 1.0,
-            reset_history: if reset { 1 } else { 0 },
-            input_width: self.render_width,
-            input_height: self.render_height,
-            input_color_base: zero,
-            input_motion_vector_base: zero,
-            input_depth_base: zero,
-            input_responsive_mask_base: zero,
-            reserved0: zero,
-            output_color_base: zero,
+            p_output_texture: self.output.resource().as_raw(),
+            frame: self.ctx.frame(camera.jitter_offset),
             p_descriptor_heap: ptr::null_mut(),
             descriptor_heap_offset: 0,
         };
-        // SAFETY: `self.ctx` is the context created in `try_new`, `cmd` is the frame's command list
-        // in the recording state, and `params` is a live local naming resources the caller keeps
-        // alive for the frame.
-        let rc = unsafe { (self.xess.execute)(self.ctx, cmd_list_raw(cmd), &params) };
+        // SAFETY: `ctx` holds the live context, `cmd` is recording, and `params` is a live local
+        // naming resources the frame keeps alive until the list executes.
+        let rc = unsafe { (self.execute)(self.ctx.handle(), cmd.as_raw(), &params) };
         if rc != XESS_RESULT_SUCCESS {
             return Err(RenderError::Other(format!(
                 "xessD3D12Execute returned {rc}"
@@ -440,70 +213,33 @@ impl super::UpscaleBackend for XessUpscaler {
     }
 }
 
-impl Drop for XessUpscaler {
-    fn drop(&mut self) {
-        if !self.ctx.is_null() {
-            // SAFETY: `self.ctx` is non-null here and is destroyed exactly once (nulled straight
-            // after), and the DLL the function pointer came from is still open.
-            unsafe {
-                let _ = (self.xess.destroy_context)(self.ctx);
-            }
-            self.ctx = ptr::null_mut();
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::mem::{offset_of, size_of};
 
+    // The shared head and frame runs pin their own fields.
     #[test]
-    fn xess_struct_sizes_match_sdk_v301() {
-        assert_eq!(size_of::<xess_2d_t>(), 8);
-        assert_eq!(size_of::<xess_d3d12_init_params_t>(), 64);
-        assert_eq!(size_of::<xess_d3d12_execute_params_t>(), 136);
+    fn xess_d3d12_layouts_match_sdk_v301() {
+        type I = xess_d3d12_init_params_t;
+        assert_eq!(size_of::<I>(), 64);
+        assert_eq!(offset_of!(I, head), 0);
+        assert_eq!(offset_of!(I, p_temp_buffer_heap), 24);
+        assert_eq!(offset_of!(I, buffer_heap_offset), 32);
+        assert_eq!(offset_of!(I, p_temp_texture_heap), 40);
+        assert_eq!(offset_of!(I, texture_heap_offset), 48);
+        assert_eq!(offset_of!(I, p_pipeline_library), 56);
 
-        assert_eq!(offset_of!(xess_d3d12_init_params_t, quality_setting), 8);
-        assert_eq!(offset_of!(xess_d3d12_init_params_t, init_flags), 12);
-        assert_eq!(offset_of!(xess_d3d12_init_params_t, p_temp_buffer_heap), 24);
-        assert_eq!(offset_of!(xess_d3d12_init_params_t, p_pipeline_library), 56);
-
-        assert_eq!(
-            offset_of!(xess_d3d12_execute_params_t, p_output_texture),
-            40
-        );
-        assert_eq!(offset_of!(xess_d3d12_execute_params_t, jitter_offset_x), 48);
-        assert_eq!(offset_of!(xess_d3d12_execute_params_t, reset_history), 60);
-        assert_eq!(offset_of!(xess_d3d12_execute_params_t, input_width), 64);
-        assert_eq!(
-            offset_of!(xess_d3d12_execute_params_t, input_color_base),
-            72
-        );
-        assert_eq!(
-            offset_of!(xess_d3d12_execute_params_t, p_descriptor_heap),
-            120
-        );
-        assert_eq!(
-            offset_of!(xess_d3d12_execute_params_t, descriptor_heap_offset),
-            128
-        );
-    }
-
-    // The inverted-depth bit is set exactly when the depth is reversed, and
-    // the camera's depth is.
-    #[test]
-    fn the_depth_flag_follows_the_depth_mapping() {
-        assert_eq!(XESS_INIT_FLAG_INVERTED_DEPTH, 2);
-        for reversed in [false, true] {
-            for infinite in [false, true] {
-                let flags = xess_init_flags(DepthMapping { reversed, infinite });
-                assert_eq!((flags & XESS_INIT_FLAG_INVERTED_DEPTH) != 0, reversed);
-            }
-        }
-        assert_ne!(
-            xess_init_flags(CAMERA_DEPTH) & XESS_INIT_FLAG_INVERTED_DEPTH,
-            0
-        );
+        type E = xess_d3d12_execute_params_t;
+        assert_eq!(size_of::<E>(), 136);
+        assert_eq!(offset_of!(E, p_color_texture), 0);
+        assert_eq!(offset_of!(E, p_velocity_texture), 8);
+        assert_eq!(offset_of!(E, p_depth_texture), 16);
+        assert_eq!(offset_of!(E, p_exposure_scale_texture), 24);
+        assert_eq!(offset_of!(E, p_responsive_pixel_mask_texture), 32);
+        assert_eq!(offset_of!(E, p_output_texture), 40);
+        assert_eq!(offset_of!(E, frame), 48);
+        assert_eq!(offset_of!(E, p_descriptor_heap), 120);
+        assert_eq!(offset_of!(E, descriptor_heap_offset), 128);
     }
 }

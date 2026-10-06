@@ -1,135 +1,43 @@
-//! Intel XeSS temporal upscaling for the Vulkan backend. One of the three
-//! `VkUpscaleBackend` implementations; runs cross-vendor (Arc XMX + the DP4a
-//! fallback on other GPUs). The runtime DLL is `libxess.dll` (it carries the
-//! `xessVK*` entry points alongside the D3D12 ones), loaded on demand via
-//! `libloading` (cross-platform, mirroring the FSR module's choice over the DX
-//! path's `LoadLibraryA`). Failure to load logs a warning and `try_new` returns
-//! `None`; `build_upscaler` then falls through.
+//! Intel XeSS temporal upscaling for the Vulkan backend (see
+//! `crate::upscale_sdk::xess`); runs cross-vendor (Arc XMX + the DP4a fallback
+//! elsewhere). The runtime is `libxess.dll` / `libxess.so`, which carries the
+//! `xessVK*` entry points beside the D3D12 ones, loaded on demand; a missing
+//! library falls through to the next backend.
 //!
-//! Unlike FSR, XeSS needs Vulkan instance + device extensions (and a device
-//! feature chain) enabled at instance / device creation. Those are queried up
-//! front through `XessExtQuery` (held by `UpscaleSdk`, see `mod.rs`); this module
-//! only creates the upscale context after the device exists.
-//!
-//! The FFI bindings are inline (small, concentrated API), validated against XeSS
-//! SDK 3.0.1 (`inc/xess/{xess.h,xess_vk.h}`) by the size/offset asserts in the
-//! tests. `XESS_PACK_B()` is `pack(8)`, a no-op on x86_64 where every field is
-//! already <= 8-aligned, so `#[repr(C)]` matches byte-for-byte.
-#![expect(
-    non_camel_case_types,
-    reason = "inline XeSS bindings keep the SDK's own C type names"
-)]
+//! Unlike FSR, XeSS needs instance and device extensions and a device feature
+//! chain enabled when the device is created. Those are queried up front through
+//! `XessExtQuery` (held by `UpscaleSdk`); this module creates the upscale
+//! context once the device exists.
 
-use ash::vk;
-use concinnity_core::components::UpscaleQuality;
-use concinnity_core::gfx::jitter;
-use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
-use concinnity_core::render::error::{RenderError, RenderResult};
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
+use ash::vk;
+use concinnity_core::gfx::jitter;
+use concinnity_core::render::error::{RenderError, RenderResult};
+
 use super::{
-    OutputWrites, UpscaleCamera, UpscaleImage, UpscaleInputs, VkUpscaleBackend, copy_ext_names,
+    ImageViewInfo, OutputWrites, UpscaleInputs, UpscaleOutput, UpscalerGpu, VkUpscaleBackend,
+    copy_ext_names, open_library,
 };
-use crate::vulkan::context::HDR_FORMAT;
-use crate::vulkan::owned::VkDevice;
-use crate::vulkan::texture::GpuImage;
+use crate::upscale_sdk::xess::{
+    XESS_RESULT_SUCCESS, XessCommonApi, XessContext, XessExecuteFrame, XessInitHead,
+    xess_context_handle_t,
+};
+use crate::upscale_sdk::{SdkLibrary, UpscaleCamera, UpscaleExtent, entry_point};
 
-// xess_result_t: 0 == success, negative == error, positive == warning.
-const XESS_RESULT_SUCCESS: i32 = 0;
+const LIBRARY: &str = if cfg!(windows) {
+    "libxess.dll"
+} else {
+    "libxess.so"
+};
+const LABEL: &str = "XeSS (Vulkan)";
 
-// xess_quality_settings_t (a C enum, ABI int).
-const XESS_QUALITY_SETTING_ULTRA_PERFORMANCE: i32 = 100;
-const XESS_QUALITY_SETTING_PERFORMANCE: i32 = 101;
-const XESS_QUALITY_SETTING_BALANCED: i32 = 102;
-const XESS_QUALITY_SETTING_QUALITY: i32 = 103;
-const XESS_QUALITY_SETTING_AA: i32 = 106;
-
-// xess_init_flags_t (bitmask). The engine feeds HDR linear color and low-res
-// (render-resolution) UV motion vectors scaled to pixels via SetVelocityScale,
-// so the flags are auto-exposure (the scene is un-exposed pre-upscale, matching
-// the FSR path) and inverted depth when the camera's near plane is device depth 1.
-const XESS_INIT_FLAG_INVERTED_DEPTH: u32 = 1 << 1;
-const XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE: u32 = 1 << 8;
-
-const fn xess_init_flags(depth: DepthMapping) -> u32 {
-    if depth.reversed {
-        XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE | XESS_INIT_FLAG_INVERTED_DEPTH
-    } else {
-        XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE
-    }
-}
-
-type xess_context_handle_t = *mut c_void;
-
-// xess_coord_t is a typedef of xess_2d_t (xess.h:87): { uint32_t x, y }.
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct xess_2d_t {
-    x: u32,
-    y: u32,
-}
-
-// xess_vk_image_view_info (xess_vk.h). VkImageView / VkImage are
-// non-dispatchable 64-bit handles; VkImageSubresourceRange is 5 u32s (20 B);
-// VkFormat is an ABI int. 48 bytes under pack(8).
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct xess_vk_image_view_info {
-    image_view: vk::ImageView,
-    image: vk::Image,
-    subresource_range: vk::ImageSubresourceRange,
-    format: vk::Format,
-    width: u32,
-    height: u32,
-}
-
-impl xess_vk_image_view_info {
-    // An absent optional input (exposure scale / responsive mask): null
-    // handles, no flags set so XeSS ignores it.
-    fn empty() -> Self {
-        Self {
-            image_view: vk::ImageView::null(),
-            image: vk::Image::null(),
-            subresource_range: vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::empty(),
-                base_mip_level: 0,
-                level_count: 0,
-                base_array_layer: 0,
-                layer_count: 0,
-            },
-            format: vk::Format::UNDEFINED,
-            width: 0,
-            height: 0,
-        }
-    }
-
-    fn from_input(img: &UpscaleImage) -> Self {
-        Self {
-            image_view: img.view,
-            image: img.image,
-            subresource_range: vk::ImageSubresourceRange {
-                aspect_mask: img.aspect,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
-            format: img.format,
-            width: img.width,
-            height: img.height,
-        }
-    }
-}
-
+// `xess_vk_init_params_t` (`xess_vk.h`).
 #[repr(C)]
 struct xess_vk_init_params_t {
-    output_resolution: xess_2d_t,
-    quality_setting: i32,
-    init_flags: u32,
-    creation_node_mask: u32,
-    visible_node_mask: u32,
+    head: XessInitHead,
     temp_buffer_heap: vk::DeviceMemory,
     buffer_heap_offset: u64,
     temp_texture_heap: vk::DeviceMemory,
@@ -137,30 +45,20 @@ struct xess_vk_init_params_t {
     pipeline_cache: vk::PipelineCache,
 }
 
+// `xess_vk_execute_params_t` (`xess_vk.h`).
 #[repr(C)]
 struct xess_vk_execute_params_t {
-    color_texture: xess_vk_image_view_info,
-    velocity_texture: xess_vk_image_view_info,
-    depth_texture: xess_vk_image_view_info,
-    exposure_scale_texture: xess_vk_image_view_info,
-    responsive_pixel_mask_texture: xess_vk_image_view_info,
-    output_texture: xess_vk_image_view_info,
-    jitter_offset_x: f32,
-    jitter_offset_y: f32,
-    exposure_scale: f32,
-    reset_history: u32,
-    input_width: u32,
-    input_height: u32,
-    input_color_base: xess_2d_t,
-    input_motion_vector_base: xess_2d_t,
-    input_depth_base: xess_2d_t,
-    input_responsive_mask_base: xess_2d_t,
-    reserved0: xess_2d_t,
-    output_color_base: xess_2d_t,
+    color_texture: ImageViewInfo,
+    velocity_texture: ImageViewInfo,
+    depth_texture: ImageViewInfo,
+    exposure_scale_texture: ImageViewInfo,
+    responsive_pixel_mask_texture: ImageViewInfo,
+    output_texture: ImageViewInfo,
+    frame: XessExecuteFrame,
 }
 
-// Extension / context entry points. XESS_API is a bare dllimport (no explicit
-// __cdecl/__stdcall), so on x86_64 Windows `extern "C"` is the only convention.
+// XESS_API is a bare dllimport (no explicit calling convention), so on x86_64
+// `extern "C"` is the only one.
 type PfnXessVKGetRequiredInstanceExtensions =
     unsafe extern "C" fn(*mut u32, *mut *const *const c_char, *mut u32) -> i32;
 type PfnXessVKGetRequiredDeviceExtensions = unsafe extern "C" fn(
@@ -186,67 +84,45 @@ type PfnXessVKExecute = unsafe extern "C" fn(
     vk::CommandBuffer,
     *const xess_vk_execute_params_t,
 ) -> i32;
-type PfnXessDestroyContext = unsafe extern "C" fn(xess_context_handle_t) -> i32;
-type PfnXessSetVelocityScale = unsafe extern "C" fn(xess_context_handle_t, f32, f32) -> i32;
 
-fn lib_name() -> &'static str {
-    if cfg!(windows) {
-        "libxess.dll"
-    } else {
-        "libxess.so"
-    }
-}
-
-// Pre-device extension / feature queries (XeSS-specific). Held by `UpscaleSdk`
-// across instance + device creation so the SDK-owned device-feature chain
-// (`device_features`) stays mapped through `vkCreateDevice`.
+// Pre-device extension / feature queries. Held by `UpscaleSdk` across instance
+// and device creation so the SDK-owned device-feature chain stays mapped
+// through `vkCreateDevice`.
 pub(super) struct XessExtQuery {
-    _lib: libloading::Library,
     get_instance_exts: PfnXessVKGetRequiredInstanceExtensions,
     get_device_exts: PfnXessVKGetRequiredDeviceExtensions,
     get_device_features: PfnXessVKGetRequiredDeviceFeatures,
+    _library: libloading::Library,
 }
 
 impl XessExtQuery {
     pub(super) fn load() -> Option<Self> {
-        // SAFETY: loading a system library + reading well-known C symbols whose
-        // prototypes match the XeSS SDK 3.0.1 headers; misses surface as `None`.
+        let library = open_library(LIBRARY)?;
+        // SAFETY: each type is the prototype `xess_vk.h` declares for that export, and the library
+        // they come from is held alongside them.
         unsafe {
-            let lib = libloading::Library::new(lib_name()).ok()?;
-            let get_instance_exts = *lib
-                .get::<PfnXessVKGetRequiredInstanceExtensions>(
-                    b"xessVKGetRequiredInstanceExtensions\0",
-                )
-                .ok()?;
-            let get_device_exts = *lib
-                .get::<PfnXessVKGetRequiredDeviceExtensions>(b"xessVKGetRequiredDeviceExtensions\0")
-                .ok()?;
-            let get_device_features = *lib
-                .get::<PfnXessVKGetRequiredDeviceFeatures>(b"xessVKGetRequiredDeviceFeatures\0")
-                .ok()?;
-            Some(XessExtQuery {
-                _lib: lib,
-                get_instance_exts,
-                get_device_exts,
-                get_device_features,
+            Some(Self {
+                get_instance_exts: entry_point(&library, c"xessVKGetRequiredInstanceExtensions")?,
+                get_device_exts: entry_point(&library, c"xessVKGetRequiredDeviceExtensions")?,
+                get_device_features: entry_point(&library, c"xessVKGetRequiredDeviceFeatures")?,
+                _library: library,
             })
         }
     }
 
-    // Returns XeSS's required instance extensions and the minimum Vulkan API
-    // version it needs (XeSS 3.x shaders use SPV_KHR_integer_dot_product, which
-    // requires a Vulkan 1.3 environment). The caller raises the instance
-    // `apiVersion` to at least this (clamped to loader support).
+    // XeSS's required instance extensions and the minimum Vulkan API version
+    // it needs (XeSS 3.x shaders use SPV_KHR_integer_dot_product, which needs a
+    // Vulkan 1.3 environment). The caller raises the instance `apiVersion` to
+    // at least this, clamped to loader support.
     pub(super) fn instance_extensions(&self) -> (Vec<CString>, u32) {
         let mut count: u32 = 0;
         let mut exts: *const *const c_char = ptr::null();
         let mut min_api: u32 = 0;
-        // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches the
-        // SDK's declared signature; the context and every parameter / out-param it is handed are
-        // live for the call.
+        // SAFETY: the entry point came from the loaded library with the header's prototype, and
+        // every out-param is a live local.
         let rc = unsafe { (self.get_instance_exts)(&mut count, &mut exts, &mut min_api) };
         if rc != XESS_RESULT_SUCCESS {
-            tracing::warn!("XeSS: xessVKGetRequiredInstanceExtensions returned {rc}");
+            tracing::warn!("{LABEL}: xessVKGetRequiredInstanceExtensions returned {rc}");
             return (Vec::new(), 0);
         }
         // SAFETY: `count`/`exts` are the pair the SDK just wrote on the success path above, and the
@@ -261,14 +137,13 @@ impl XessExtQuery {
     ) -> Vec<CString> {
         let mut count: u32 = 0;
         let mut exts: *const *const c_char = ptr::null();
-        // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches the
-        // SDK's declared signature; the context and every parameter / out-param it is handed are
-        // live for the call.
+        // SAFETY: the entry point came from the loaded library with the header's prototype, the
+        // instance and physical device are live, and every out-param is a live local.
         let rc = unsafe {
             (self.get_device_exts)(instance.handle(), physical_device, &mut count, &mut exts)
         };
         if rc != XESS_RESULT_SUCCESS {
-            tracing::warn!("XeSS: xessVKGetRequiredDeviceExtensions returned {rc}");
+            tracing::warn!("{LABEL}: xessVKGetRequiredDeviceExtensions returned {rc}");
             return Vec::new();
         }
         // SAFETY: as in `instance_extensions` -- `count`/`exts` are the pair the SDK just wrote.
@@ -277,9 +152,9 @@ impl XessExtQuery {
 
     // Patch the device-feature `pNext` chain with XeSS's required features and
     // return the (possibly new) chain head, to be set as `VkDeviceCreateInfo.pNext`.
-    // `head` is the caller's existing chain; the returned memory the SDK adds is
-    // owned by libxess.dll and valid while `self` lives. On failure the caller's
-    // `head` is returned unchanged.
+    // `head` is the caller's existing chain; the memory the SDK adds is owned by
+    // the library and valid while `self` lives. On failure the caller's `head`
+    // is returned unchanged.
     pub(super) fn device_features(
         &self,
         instance: &ash::Instance,
@@ -287,14 +162,13 @@ impl XessExtQuery {
         head: *mut c_void,
     ) -> *mut c_void {
         let mut chain = head;
+        // SAFETY: the entry point came from the loaded library with the header's prototype, the
+        // instance and physical device are live, and `chain` is a live local the SDK may rewrite.
         let rc =
-            // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches
-            // the SDK's declared signature; the context and every parameter / out-param it is
-            // handed are live for the call.
             unsafe { (self.get_device_features)(instance.handle(), physical_device, &mut chain) };
         if rc != XESS_RESULT_SUCCESS {
             tracing::warn!(
-                "XeSS: xessVKGetRequiredDeviceFeatures returned {rc}; using base features"
+                "{LABEL}: xessVKGetRequiredDeviceFeatures returned {rc}; using base features"
             );
             return head;
         }
@@ -302,274 +176,135 @@ impl XessExtQuery {
     }
 }
 
-// The full XeSS context API, loaded once at context creation.
-struct XessApi {
-    _lib: libloading::Library,
+struct XessVkApi {
     create_context: PfnXessVKCreateContext,
     build_pipelines: PfnXessVKBuildPipelines,
     init: PfnXessVKInit,
     execute: PfnXessVKExecute,
-    destroy_context: PfnXessDestroyContext,
-    set_velocity_scale: PfnXessSetVelocityScale,
+    common: XessCommonApi,
 }
 
-impl XessApi {
-    fn load() -> Option<Self> {
-        // SAFETY: see `XessExtQuery::load`.
+impl XessVkApi {
+    fn resolve(library: &impl SdkLibrary) -> Option<Self> {
+        // SAFETY: each type is the prototype `xess_vk.h` declares for that export.
         unsafe {
-            let lib = libloading::Library::new(lib_name()).ok()?;
-            let create_context = *lib
-                .get::<PfnXessVKCreateContext>(b"xessVKCreateContext\0")
-                .ok()?;
-            let build_pipelines = *lib
-                .get::<PfnXessVKBuildPipelines>(b"xessVKBuildPipelines\0")
-                .ok()?;
-            let init = *lib.get::<PfnXessVKInit>(b"xessVKInit\0").ok()?;
-            let execute = *lib.get::<PfnXessVKExecute>(b"xessVKExecute\0").ok()?;
-            let destroy_context = *lib
-                .get::<PfnXessDestroyContext>(b"xessDestroyContext\0")
-                .ok()?;
-            let set_velocity_scale = *lib
-                .get::<PfnXessSetVelocityScale>(b"xessSetVelocityScale\0")
-                .ok()?;
-            Some(XessApi {
-                _lib: lib,
-                create_context,
-                build_pipelines,
-                init,
-                execute,
-                destroy_context,
-                set_velocity_scale,
+            Some(Self {
+                create_context: entry_point(library, c"xessVKCreateContext")?,
+                build_pipelines: entry_point(library, c"xessVKBuildPipelines")?,
+                init: entry_point(library, c"xessVKInit")?,
+                execute: entry_point(library, c"xessVKExecute")?,
+                common: XessCommonApi::resolve(library)?,
             })
         }
     }
 }
 
-// The XeSS quality preset for the nearest engine preset: native anti-aliasing
-// at native resolution. The preset is a hint for XeSS's internal model
-// selection; the actual render dims are `output * scale` (passed via
-// `inputWidth/Height`).
-fn xess_quality(q: Option<UpscaleQuality>) -> i32 {
-    match q {
-        None => XESS_QUALITY_SETTING_AA,
-        Some(UpscaleQuality::Quality) => XESS_QUALITY_SETTING_QUALITY,
-        Some(UpscaleQuality::Balanced) => XESS_QUALITY_SETTING_BALANCED,
-        Some(UpscaleQuality::Performance) => XESS_QUALITY_SETTING_PERFORMANCE,
-        Some(UpscaleQuality::UltraPerformance) => XESS_QUALITY_SETTING_ULTRA_PERFORMANCE,
-    }
-}
-
-// Owns the XeSS context, the output texture the bloom + composite stack samples
-// (at output resolution), and the loaded function table.
-pub(in crate::vulkan) struct XessUpscaler {
-    xess: XessApi,
-    ctx: xess_context_handle_t,
-
-    output: GpuImage,
-    output_layout: Cell<vk::ImageLayout>,
-
-    render_width: u32,
-    render_height: u32,
-    output_width: u32,
-    output_height: u32,
-    upscale_scale: f32,
-
+// The XeSS context, its execute entry point, and the output image it writes.
+pub(super) struct XessUpscaler {
+    ctx: XessContext<libloading::Library>,
+    execute: PfnXessVKExecute,
+    output: UpscaleOutput,
     jitter: Cell<[f32; 2]>,
-    reset_pending: Cell<bool>,
 }
 
-// SAFETY: The XeSS context handle + loaded function pointers are raw C pointers used
-// only on the render thread; the trait's `Send` bound is satisfied unsafely,
-// same as the rest of `VkContext`.
+// SAFETY: `XessUpscaler` owns its XeSS context and the library its entry points come from, neither
+// shared: the upscale pass is recorded by exactly one parallel-encoder worker per frame, under the
+// same main-thread guard as the rest of `VkContext`. Moving the whole upscaler hands over exclusive
+// ownership, so it is `Send` without being `Sync`.
 unsafe impl Send for XessUpscaler {}
 
 impl XessUpscaler {
-    // Try to construct an XeSS upscaler. Returns `Ok(None)` when XeSS is
-    // unavailable (DLL miss / context init failure); `build_upscaler` falls
-    // through. Assumes the XeSS instance / device extensions + features were
-    // enabled at creation time (via `UpscaleSdk`); if they were not, the
-    // context create / init below fails and we fall back.
+    // `Ok(None)` when XeSS is unavailable: the library or one of its entry
+    // points is missing, or the context could not be created or initialized
+    // (as when its extensions were not enabled at device creation).
     pub(super) fn try_new(
-        gpu: super::UpscalerGpu<'_>,
-        output_width: u32,
-        output_height: u32,
-        upscale_scale: f32,
+        gpu: UpscalerGpu<'_>,
+        extent: UpscaleExtent,
     ) -> RenderResult<Option<Self>> {
-        let super::UpscalerGpu {
-            alloc,
-            instance,
-            device,
-            physical_device,
-            command_pool,
-            queue,
-        } = gpu;
-        let xess = match XessApi::load() {
-            Some(api) => api,
-            None => {
-                tracing::warn!(
-                    "XeSS (Vulkan): libxess.dll not found (build.rs did not bundle it; set \
-                     CN_XESS_SDK or put the DLL on PATH). Trying the next backend."
-                );
-                return Ok(None);
-            }
-        };
-
-        let (render_width, render_height, scale) =
-            super::resolve_render_dims(output_width, output_height, upscale_scale);
-
-        let mut ctx: xess_context_handle_t = ptr::null_mut();
-        // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches the
-        // SDK's declared signature; the context and every parameter / out-param it is handed are
-        // live for the call.
-        let rc = unsafe {
-            (xess.create_context)(
-                instance.handle(),
-                physical_device,
-                device.handle(),
-                &mut ctx,
-            )
-        };
-        if rc != XESS_RESULT_SUCCESS || ctx.is_null() {
+        let Some(library) = open_library(LIBRARY) else {
             tracing::warn!(
-                "XeSS (Vulkan): xessVKCreateContext returned {rc}; trying the next backend"
+                "{LABEL}: {LIBRARY} not found (build.rs did not bundle it; set CN_XESS_SDK or put \
+                 the library on the search path). Trying the next backend."
             );
             return Ok(None);
-        }
+        };
+        let Some(api) = XessVkApi::resolve(&library) else {
+            tracing::warn!(
+                "{LABEL}: {LIBRARY} lacks a Vulkan entry point; trying the next backend"
+            );
+            return Ok(None);
+        };
 
-        let init_flags = xess_init_flags(CAMERA_DEPTH);
-        // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches the
-        // SDK's declared signature; the context and every parameter / out-param it is handed are
-        // live for the call.
+        let mut handle: xess_context_handle_t = ptr::null_mut();
+        // SAFETY: the entry point came from the loaded library with the header's prototype, the
+        // instance, physical device and device are live, and `handle` is a live local it fills.
         let rc = unsafe {
-            (xess.build_pipelines)(
-                ctx,
-                crate::vulkan::pipeline_cache::handle(),
-                true,
-                init_flags,
+            (api.create_context)(
+                gpu.instance.handle(),
+                gpu.physical_device,
+                gpu.device.handle(),
+                &mut handle,
             )
         };
+        if rc != XESS_RESULT_SUCCESS || handle.is_null() {
+            tracing::warn!("{LABEL}: xessVKCreateContext returned {rc}; trying the next backend");
+            return Ok(None);
+        }
+        let ctx = XessContext::adopt(library, api.common, handle, extent);
+
+        let head = XessInitHead::new(extent);
+        let pipeline_cache = crate::vulkan::pipeline_cache::handle();
+        // SAFETY: `ctx` holds the live context, and the pipeline cache is the engine's own.
+        let rc =
+            unsafe { (api.build_pipelines)(ctx.handle(), pipeline_cache, true, head.init_flags()) };
         if rc != XESS_RESULT_SUCCESS {
-            tracing::warn!(
-                "XeSS (Vulkan): xessVKBuildPipelines returned {rc}; trying the next backend"
-            );
-            // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches
-            // the SDK's declared signature; the context and every parameter / out-param it is
-            // handed are live for the call.
-            unsafe { (xess.destroy_context)(ctx) };
+            tracing::warn!("{LABEL}: xessVKBuildPipelines returned {rc}; trying the next backend");
             return Ok(None);
         }
-
         let init_params = xess_vk_init_params_t {
-            output_resolution: xess_2d_t {
-                x: output_width,
-                y: output_height,
-            },
-            quality_setting: xess_quality(UpscaleQuality::nearest(scale)),
-            init_flags,
-            creation_node_mask: 0,
-            visible_node_mask: 0,
+            head,
             temp_buffer_heap: vk::DeviceMemory::null(),
             buffer_heap_offset: 0,
             temp_texture_heap: vk::DeviceMemory::null(),
             texture_heap_offset: 0,
-            pipeline_cache: crate::vulkan::pipeline_cache::handle(),
+            pipeline_cache,
         };
-        // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches the
-        // SDK's declared signature; the context and every parameter / out-param it is handed are
-        // live for the call.
-        let rc = unsafe { (xess.init)(ctx, &init_params) };
+        // SAFETY: `ctx` holds the live context, and `init_params` is a live local the call reads.
+        let rc = unsafe { (api.init)(ctx.handle(), &init_params) };
         if rc != XESS_RESULT_SUCCESS {
-            tracing::warn!("XeSS (Vulkan): xessVKInit returned {rc}; trying the next backend");
-            // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches
-            // the SDK's declared signature; the context and every parameter / out-param it is
-            // handed are live for the call.
-            unsafe { (xess.destroy_context)(ctx) };
+            tracing::warn!("{LABEL}: xessVKInit returned {rc}; trying the next backend");
             return Ok(None);
         }
+        ctx.set_velocity_scale(LABEL);
 
-        // Motion vectors are RG16F `prev_uv - cur_uv` in UV space; XeSS expects
-        // pixel-space velocity (default low-res), so scale by the render extent.
-        let rc =
-            // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches
-            // the SDK's declared signature; the context and every parameter / out-param it is
-            // handed are live for the call.
-            unsafe { (xess.set_velocity_scale)(ctx, render_width as f32, render_height as f32) };
-        if rc != XESS_RESULT_SUCCESS {
-            tracing::warn!("XeSS (Vulkan): xessSetVelocityScale returned {rc} (non-fatal)");
-        }
-
-        let output = match super::create_output_image(
-            alloc,
-            device,
-            command_pool,
-            queue,
-            (output_width, output_height),
-            OutputWrites::storage(),
-        ) {
-            Ok(img) => img,
-            Err(e) => {
-                // SAFETY: the entry point was resolved from the loaded XeSS library at init and
-                // matches the SDK's declared signature; the context and every parameter / out-param
-                // it is handed are live for the call.
-                unsafe { (xess.destroy_context)(ctx) };
-                return Err(e);
-            }
-        };
-
-        tracing::info!(
-            "XeSS (Vulkan): context created: render {render_width}x{render_height} -> upscale \
-             {output_width}x{output_height} (scale {scale:.3})"
-        );
-
-        Ok(Some(XessUpscaler {
-            xess,
+        let output = UpscaleOutput::create(gpu, extent.output, OutputWrites::storage())?;
+        tracing::info!("{LABEL}: context created: {extent}");
+        Ok(Some(Self {
             ctx,
+            execute: api.execute,
             output,
-            output_layout: Cell::new(vk::ImageLayout::GENERAL),
-            render_width,
-            render_height,
-            output_width,
-            output_height,
-            upscale_scale: scale,
             jitter: Cell::new([0.0, 0.0]),
-            reset_pending: Cell::new(true),
         }))
     }
 }
 
 impl VkUpscaleBackend for XessUpscaler {
-    fn render_dims(&self) -> (u32, u32) {
-        (self.render_width, self.render_height)
-    }
-    fn output_dims(&self) -> (u32, u32) {
-        (self.output_width, self.output_height)
-    }
-    fn scale(&self) -> f32 {
-        self.upscale_scale
-    }
-    fn output_image(&self) -> &GpuImage {
-        &self.output
-    }
-    fn output_layout(&self) -> vk::ImageLayout {
-        self.output_layout.get()
-    }
-    fn set_output_layout(&self, layout: vk::ImageLayout) {
-        self.output_layout.set(layout);
-    }
-    fn output_writes(&self) -> OutputWrites {
-        OutputWrites::storage()
-    }
-    fn set_jitter(&self, offset: [f32; 2]) {
-        self.jitter.set(offset);
-    }
-    fn jitter(&self) -> [f32; 2] {
-        self.jitter.get()
+    fn extent(&self) -> UpscaleExtent {
+        self.ctx.extent()
     }
 
-    // XeSS prescribes no jitter sequence; the engine's Halton-2/3 (shared with
-    // the camera projection) drives both. XeSS wants the offset in [-0.5, 0.5].
+    fn output(&self) -> &UpscaleOutput {
+        &self.output
+    }
+
+    // XeSS prescribes no jitter sequence; the engine's Halton (2, 3) drives
+    // both the projection and the execute.
     fn jitter_offset(&self, frame_index: u32) -> [f32; 2] {
         jitter::offset(frame_index)
+    }
+
+    fn jitter(&self) -> &Cell<[f32; 2]> {
+        &self.jitter
     }
 
     fn dispatch(
@@ -578,71 +313,27 @@ impl VkUpscaleBackend for XessUpscaler {
         inputs: UpscaleInputs<'_>,
         camera: UpscaleCamera,
     ) -> RenderResult<()> {
-        let UpscaleInputs {
-            color,
-            depth,
-            motion,
-        } = inputs;
-        // XeSS ignores the camera's temporal / projection fields (auto-exposure
-        // + its own frame heuristics); only the shared jitter feeds the dispatch.
-        let jitter_offset = camera.jitter_offset;
-        let reset = self.reset_pending.replace(false);
-        let zero = xess_2d_t { x: 0, y: 0 };
-        let output_view = xess_vk_image_view_info {
-            image_view: self.output.view,
-            image: self.output.image,
-            subresource_range: vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
-            format: HDR_FORMAT,
-            width: self.output_width,
-            height: self.output_height,
-        };
         let params = xess_vk_execute_params_t {
-            color_texture: xess_vk_image_view_info::from_input(color),
-            velocity_texture: xess_vk_image_view_info::from_input(motion),
-            depth_texture: xess_vk_image_view_info::from_input(depth),
-            exposure_scale_texture: xess_vk_image_view_info::empty(),
-            responsive_pixel_mask_texture: xess_vk_image_view_info::empty(),
-            output_texture: output_view,
-            jitter_offset_x: jitter_offset[0],
-            jitter_offset_y: jitter_offset[1],
-            exposure_scale: 1.0,
-            reset_history: if reset { 1 } else { 0 },
-            input_width: self.render_width,
-            input_height: self.render_height,
-            input_color_base: zero,
-            input_motion_vector_base: zero,
-            input_depth_base: zero,
-            input_responsive_mask_base: zero,
-            reserved0: zero,
-            output_color_base: zero,
+            color_texture: ImageViewInfo::of(inputs.color),
+            velocity_texture: ImageViewInfo::of(inputs.motion),
+            depth_texture: ImageViewInfo::of(inputs.depth),
+            exposure_scale_texture: ImageViewInfo::empty(),
+            responsive_pixel_mask_texture: ImageViewInfo::empty(),
+            output_texture: ImageViewInfo::of(&self.output.as_upscale_image()),
+            frame: self.ctx.frame(camera.jitter_offset),
         };
-        // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches the
-        // SDK's declared signature; the context and every parameter / out-param it is handed are
-        // live for the call.
-        let rc = unsafe { (self.xess.execute)(self.ctx, cmd, &params) };
+        // SAFETY: `ctx` holds the live context, `cmd` is recording, and `params` is a live local
+        // naming images the frame keeps alive until the buffer executes.
+        let rc = unsafe { (self.execute)(self.ctx.handle(), cmd, &params) };
         if rc != XESS_RESULT_SUCCESS {
             return Err(RenderError::Other(format!("xessVKExecute returned {rc}")));
         }
         Ok(())
     }
 
-    fn destroy(&mut self, _device: &VkDevice) {
-        if !self.ctx.is_null() {
-            // SAFETY: the entry point was resolved from the loaded XeSS library at init and matches
-            // the SDK's declared signature; the context and every parameter / out-param it is
-            // handed are live for the call.
-            unsafe {
-                let _ = (self.xess.destroy_context)(self.ctx);
-            }
-            self.ctx = ptr::null_mut();
-        }
-        self.output = GpuImage::null();
+    fn destroy(&mut self) {
+        self.ctx.destroy();
+        self.output.release();
     }
 }
 
@@ -651,57 +342,26 @@ mod tests {
     use super::*;
     use std::mem::{offset_of, size_of};
 
-    // Pin the XeSS VK struct layouts against the SDK 3.0.1 headers. These differ
-    // from the D3D12 structs (image-view-info vs raw resource pointers), so they
-    // are the most likely silent ABI mismatch.
+    // The shared head, frame and image-view-info layouts pin their own fields.
     #[test]
-    fn xess_vk_struct_sizes_match_sdk_v301() {
-        // VkImageView(8) + VkImage(8) + VkImageSubresourceRange(20) +
-        // VkFormat(4) + width(4) + height(4) = 48.
-        assert_eq!(size_of::<xess_vk_image_view_info>(), 48);
-        assert_eq!(offset_of!(xess_vk_image_view_info, image_view), 0);
-        assert_eq!(offset_of!(xess_vk_image_view_info, image), 8);
-        assert_eq!(offset_of!(xess_vk_image_view_info, subresource_range), 16);
-        assert_eq!(offset_of!(xess_vk_image_view_info, format), 36);
-        assert_eq!(offset_of!(xess_vk_image_view_info, width), 40);
-        assert_eq!(offset_of!(xess_vk_image_view_info, height), 44);
+    fn xess_vk_layouts_match_sdk_v301() {
+        type I = xess_vk_init_params_t;
+        assert_eq!(size_of::<I>(), 64);
+        assert_eq!(offset_of!(I, head), 0);
+        assert_eq!(offset_of!(I, temp_buffer_heap), 24);
+        assert_eq!(offset_of!(I, buffer_heap_offset), 32);
+        assert_eq!(offset_of!(I, temp_texture_heap), 40);
+        assert_eq!(offset_of!(I, texture_heap_offset), 48);
+        assert_eq!(offset_of!(I, pipeline_cache), 56);
 
-        // xess_2d_t = 2 u32.
-        assert_eq!(size_of::<xess_2d_t>(), 8);
-
-        // init params: outputResolution(8) + quality(4) + flags(4) + 2 masks(8)
-        // + 3 handles(24) + 2 offsets(16) = 64.
-        assert_eq!(size_of::<xess_vk_init_params_t>(), 64);
-        assert_eq!(offset_of!(xess_vk_init_params_t, quality_setting), 8);
-        assert_eq!(offset_of!(xess_vk_init_params_t, init_flags), 12);
-        assert_eq!(offset_of!(xess_vk_init_params_t, temp_buffer_heap), 24);
-        assert_eq!(offset_of!(xess_vk_init_params_t, pipeline_cache), 56);
-
-        // execute params: 6 image-view-infos (288) + 3 floats + reset + 2 dims
-        // (24) + 6 coords (48) = 360.
-        assert_eq!(size_of::<xess_vk_execute_params_t>(), 360);
-        assert_eq!(offset_of!(xess_vk_execute_params_t, output_texture), 240);
-        assert_eq!(offset_of!(xess_vk_execute_params_t, jitter_offset_x), 288);
-        assert_eq!(offset_of!(xess_vk_execute_params_t, reset_history), 300);
-        assert_eq!(offset_of!(xess_vk_execute_params_t, input_width), 304);
-        assert_eq!(offset_of!(xess_vk_execute_params_t, input_color_base), 312);
-        assert_eq!(offset_of!(xess_vk_execute_params_t, output_color_base), 352);
-    }
-
-    // The inverted-depth bit is set exactly when the depth is reversed, and
-    // the camera's depth is.
-    #[test]
-    fn the_depth_flag_follows_the_depth_mapping() {
-        assert_eq!(XESS_INIT_FLAG_INVERTED_DEPTH, 2);
-        for reversed in [false, true] {
-            for infinite in [false, true] {
-                let flags = xess_init_flags(DepthMapping { reversed, infinite });
-                assert_eq!((flags & XESS_INIT_FLAG_INVERTED_DEPTH) != 0, reversed);
-            }
-        }
-        assert_ne!(
-            xess_init_flags(CAMERA_DEPTH) & XESS_INIT_FLAG_INVERTED_DEPTH,
-            0
-        );
+        type E = xess_vk_execute_params_t;
+        assert_eq!(size_of::<E>(), 360);
+        assert_eq!(offset_of!(E, color_texture), 0);
+        assert_eq!(offset_of!(E, velocity_texture), 48);
+        assert_eq!(offset_of!(E, depth_texture), 96);
+        assert_eq!(offset_of!(E, exposure_scale_texture), 144);
+        assert_eq!(offset_of!(E, responsive_pixel_mask_texture), 192);
+        assert_eq!(offset_of!(E, output_texture), 240);
+        assert_eq!(offset_of!(E, frame), 288);
     }
 }

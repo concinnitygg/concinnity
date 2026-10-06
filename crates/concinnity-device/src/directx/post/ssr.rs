@@ -128,7 +128,7 @@ impl DxContext {
     // otherwise the raw `hdr_resolve` SRV.
     pub(in crate::directx) fn scene_srv_for_post(&self) -> SrvSlot {
         if let Some(up) = &self.upscale.backend {
-            return up.output_srv_gpu();
+            return up.output().srv_gpu();
         }
         // Both SSR and RT feed the same composite (RT takes precedence at the
         // graph level, so at most one resolve runs). A SSGI-only world runs no

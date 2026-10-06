@@ -1971,7 +1971,7 @@ impl VkContext {
         // Temporal upscaling (FSR / DLSS / XeSS): the vendor context + the
         // output texture, via the backend trait.
         if let Some(mut up) = self.upscale.take() {
-            up.destroy(device);
+            up.destroy();
         }
 
         // Decal resources (pipeline + per-frame uniforms + per-decal sets).

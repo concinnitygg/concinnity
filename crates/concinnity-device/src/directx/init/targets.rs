@@ -48,7 +48,7 @@ pub(super) fn build_targets(
     // resolved render dims (clamped to the backend's supported ratio
     // range); a missing / failed upscaler leaves the scene at full output.
     let (render_w, render_h) = match &upscale.backend {
-        Some(u) => u.render_dims(),
+        Some(u) => u.extent().render,
         None => (width, height),
     };
 
