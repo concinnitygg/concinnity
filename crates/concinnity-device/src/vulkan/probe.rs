@@ -277,8 +277,7 @@ impl VkContext {
                 );
             }
         }
-        let vp = reflection_probe::face_view_projection(eye, face);
-        let frustum = Frustum::from_camera(vp, None);
+        let frustum = reflection_probe::face_frustum(eye, face, capture.capture_distance);
         self.encode_probe_cull(cmd, cull_set, hiz_set, &frustum, eye);
         self.encode_main_into_face(
             cmd,
@@ -692,6 +691,7 @@ impl ProbeBakeDevice for VkContext {
 
         let rendering = RenderingBake {
             eye,
+            capture_distance: placement.capture_distance,
             bake,
             prefilter,
             face_cmds: Vec::with_capacity(CAPTURE_FACES),
@@ -818,6 +818,7 @@ impl FaceArea {
 // last face's fence retiring guarantees the GPU is done with all of them.
 pub(crate) struct RenderingBake {
     eye: [f32; 3],
+    capture_distance: Option<f32>,
     bake: BakeResources,
     // The capture cube each face copies into, and the probe cube the convolution
     // will write. Allocated with the capture because face 0 copies into it, and

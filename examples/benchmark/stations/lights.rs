@@ -177,6 +177,7 @@ pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
         ReflectionProbe {
             position: [center[0], WALL_HEIGHT * 0.35, center[2]],
             half_extents: [FLOOR_HALF_EXTENT, WALL_HEIGHT * 0.5, FLOOR_HALF_EXTENT],
+            capture_distance: None,
         },
     );
 }

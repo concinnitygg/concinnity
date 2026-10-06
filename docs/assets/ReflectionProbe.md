@@ -21,7 +21,13 @@ distinct space (a room) parallax-corrects better than one large box. Boxes may
 overlap freely: a surface inside several boxes blends all of them, so reflections
 cross-fade smoothly as the camera moves between probes.
 
+By default a probe captures everything it can see, however far away.
+Setting `capture_distance` limits that, which suits a probe inside a room:
+it skips the geometry beyond the walls, which it could not reflect anyway,
+and its capture costs less.
+
 ## Parameters
 
 - `position`: An array of 3 floats. World-space capture point the cubemap is rendered from. Put it at roughly eye height in open space (not inside geometry) for the area it serves. Defaults to `[0.0, 1.7, 0.0]`.
 - `half_extents`: An array of 3 floats. Half-size of the influence box around `position`, per axis. A surface inside `position` plus or minus `half_extents` may select this probe, and the box is the parallax-correction volume. Make it span the local space the probe represents (e.g. a room's walls). Defaults to `[10.0, 5.0, 10.0]`.
+- `capture_distance`: A float. How far the capture reaches, in world units: an object lying wholly farther than this from `position` along the axis a cube face looks down is left out of that face, so the capture covers a cube of this half-size around `position`. An object that straddles the distance is captured whole, never cut, and the sky shows wherever an object was left out. `null` (the default) captures without limit.

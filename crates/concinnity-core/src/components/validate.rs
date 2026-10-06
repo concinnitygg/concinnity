@@ -186,6 +186,7 @@ pub fn reflection_probe(mut args: ReflectionProbe) -> ReflectionProbe {
     for e in &mut args.half_extents {
         *e = e.max(0.0);
     }
+    args.capture_distance = args.capture_distance.map(|d| d.max(0.0));
     args
 }
 

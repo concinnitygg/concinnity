@@ -3552,22 +3552,27 @@ fn disabled_volumetric_fog_skips_the_fog_pass() {
 #[test]
 fn declared_reflection_probes_replace_the_auto_seed() {
     use concinnity_core::components::ReflectionProbe;
+    use concinnity_core::render::reflection_probe::ProbePlacement;
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
-    for x in [0.0, 10.0] {
-        b.push(ReflectionProbe {
-            position: [x, 1.0, 0.0],
-            half_extents: [4.0; 3],
-        });
+    let probes = [(0.0, None), (10.0, Some(6.0))].map(|(x, capture_distance)| ReflectionProbe {
+        position: [x, 1.0, 0.0],
+        half_extents: [4.0; 3],
+        capture_distance,
+    });
+    for probe in &probes {
+        b.push(probe.clone());
     }
     let mut world = b.build();
     let gs = init_graphics(&mut world, hooks);
 
     assert!(!gs.failed);
     assert!(
-        lock(&state).saw(&Call::SetReflectionProbes(2)),
-        "both declared placements reach the backend"
+        lock(&state).saw(&Call::SetReflectionProbes(
+            probes.iter().map(ProbePlacement::from).collect()
+        )),
+        "both declared placements reach the backend, capture distance and all"
     );
     // Read, not drained: draining the only component on a probe entity would
     // despawn it, and the editor's billboard drive can only address a live one.

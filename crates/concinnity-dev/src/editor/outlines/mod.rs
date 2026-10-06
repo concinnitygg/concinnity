@@ -93,7 +93,7 @@ pub(crate) fn stroke(ty: &str, selected: bool) -> Stroke {
 }
 
 // A secondary stroke for a shape's inner detail (the spot cone's inner-angle
-// circle): the same color at half strength.
+// circle, a probe's capture cube): the same color at half strength.
 pub(crate) fn inner_stroke(s: Stroke) -> Stroke {
     Stroke {
         color: [s.color[0], s.color[1], s.color[2], s.color[3] * 0.5],

@@ -92,7 +92,7 @@ pub(super) fn gather_auto_seed_triangles(
 // can address the authored probes by name.
 pub(super) fn declared_probe_placements(ctx: &PipelineContext) -> Vec<ProbePlacement> {
     ctx.query::<ReflectionProbe>()
-        .map(|p| ProbePlacement::from_center_extents(p.position, p.half_extents))
+        .map(ProbePlacement::from)
         .collect()
 }
 

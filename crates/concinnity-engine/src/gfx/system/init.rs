@@ -1668,7 +1668,7 @@ impl GraphicsSystem {
 
         self.finalize_display_modes(ctx, &mut settings);
 
-        // Metal bakes a cube per placement; DirectX and Vulkan no-op.
+        // The backend bakes a cube per placement.
         if let Some(backend) = self.backend.as_deref_mut() {
             backend.set_reflection_probes(&probe_placements);
         }

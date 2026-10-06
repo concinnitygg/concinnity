@@ -9,7 +9,9 @@
 //! the orientation test pins exactly.
 
 use crate::bake::environment_map as em;
+use crate::components::ReflectionProbe;
 use crate::gfx::cubemap::FACE_BASIS;
+use crate::gfx::frustum::Frustum;
 use crate::gfx::projection::view_from_basis;
 use crate::math::vec3::dot;
 use crate::math::{ceil, floor, powi, round, sqrt};
@@ -39,6 +41,13 @@ pub fn face_view_projection(eye: [f32; 3], face: usize) -> [[f32; 4]; 4] {
     mat4_mul(perspective_90(CAPTURE_NEAR), view)
 }
 
+/// The culling frustum of cube face `face` captured from `eye`. With a
+/// `capture_distance` it keeps only objects reaching nearer than that along the
+/// face's view axis; `None` reaches without limit.
+pub fn face_frustum(eye: [f32; 3], face: usize, capture_distance: Option<f32>) -> Frustum {
+    Frustum::from_camera(face_view_projection(eye, face), capture_distance)
+}
+
 /// The world->view matrix alone for cube face `face`, captured from `eye`. The
 /// main pass needs both the combined view-projection (vertex clip transform) and
 /// the bare view matrix (some shaders reconstruct view-space data), so the probe
@@ -60,11 +69,23 @@ pub struct ProbePlacement {
     pub box_min: [f32; 3],
     /// Upper corner of the probe's parallax box.
     pub box_max: [f32; 3],
+    /// How far each cube face's capture reaches along its view axis. `None`
+    /// captures without limit.
+    pub capture_distance: Option<f32>,
+}
+
+impl From<&ReflectionProbe> for ProbePlacement {
+    fn from(probe: &ReflectionProbe) -> ProbePlacement {
+        ProbePlacement {
+            capture_distance: probe.capture_distance,
+            ..ProbePlacement::from_center_extents(probe.position, probe.half_extents)
+        }
+    }
 }
 
 impl ProbePlacement {
-    /// Build a placement from an authored `ReflectionProbe` (capture point +
-    /// half-extents): the box is `position` plus or minus `half_extents`.
+    /// A placement captured from `position` without limit, whose box is
+    /// `position` plus or minus `half_extents`.
     pub fn from_center_extents(position: [f32; 3], half_extents: [f32; 3]) -> ProbePlacement {
         ProbePlacement {
             position,
@@ -78,6 +99,7 @@ impl ProbePlacement {
                 position[1] + half_extents[1],
                 position[2] + half_extents[2],
             ],
+            capture_distance: None,
         }
     }
 
@@ -795,6 +817,7 @@ fn interior_probes_from_solid(
                 position,
                 box_min,
                 box_max,
+                capture_distance: None,
             }
         })
         .collect()
@@ -956,6 +979,7 @@ fn seed_grid_probes(
                 position: open_capture_point(center, x0, x1, z0, z1, occupancy),
                 box_min: [x0, aabb_min[1], z0],
                 box_max: [x1, aabb_max[1], z1],
+                capture_distance: None,
             });
         }
     }
@@ -1168,6 +1192,66 @@ mod tests {
         assert_eq!(p.position, [1.0, 2.0, 3.0]);
     }
 
+    #[test]
+    fn a_declared_probe_carries_its_capture_distance() {
+        let probe = ReflectionProbe {
+            position: [1.0, 2.0, 3.0],
+            half_extents: [4.0, 5.0, 6.0],
+            capture_distance: Some(7.5),
+        };
+        let p = ProbePlacement::from(&probe);
+        assert_eq!(p.capture_distance, Some(7.5));
+        assert_eq!(p.box_min, [-3.0, -3.0, -3.0]);
+        assert_eq!(p.box_max, [5.0, 7.0, 9.0]);
+        assert_eq!(p.position, [1.0, 2.0, 3.0]);
+        let unlimited = ProbePlacement::from(&ReflectionProbe::default());
+        assert_eq!(unlimited.capture_distance, None);
+    }
+
+    // A box of half-size `half` centered `along` the face axis and `across` it
+    // (toward the face's +u edge) from `eye`.
+    fn box_on_face(eye: [f32; 3], face: usize, along: f32, across: f32, half: f32) -> bool {
+        let axis = face_dir(face, 0.0, 0.0);
+        let side = FACE_BASIS[face][0];
+        let c: [f32; 3] = core::array::from_fn(|i| eye[i] + axis[i] * along + side[i] * across);
+        face_frustum(eye, face, Some(10.0))
+            .intersects_aabb(c.map(|x| x - half), c.map(|x| x + half))
+    }
+
+    // The distance is measured along each face's own axis, so across the six
+    // faces it bounds a cube: an object off to the side but nearer than the
+    // distance along the axis stays even when its straight-line distance
+    // exceeds it, and an object straddling the distance is kept whole.
+    #[test]
+    fn a_capture_distance_bounds_every_face_along_its_axis() {
+        let eye = [3.0, -1.5, 2.0];
+        for face in 0..6 {
+            assert!(
+                box_on_face(eye, face, 9.0, 0.0, 0.25),
+                "face {face}: nearer"
+            );
+            assert!(
+                !box_on_face(eye, face, 11.0, 0.0, 0.25),
+                "face {face}: farther"
+            );
+            assert!(
+                box_on_face(eye, face, 10.0, 0.0, 1.0),
+                "face {face}: straddling"
+            );
+            assert!(
+                box_on_face(eye, face, 9.0, 8.0, 0.25),
+                "face {face}: a cube corner"
+            );
+            let far = face_dir(face, 0.0, 0.0).map(|a| a * 1.0e4);
+            let far: [f32; 3] = core::array::from_fn(|i| eye[i] + far[i]);
+            let unlimited = face_frustum(eye, face, None);
+            assert!(
+                unlimited.intersects_aabb(far, far.map(|x| x + 1.0)),
+                "face {face}"
+            );
+        }
+    }
+
     // Union of every probe's influence box.
     fn probe_union(probes: &[ProbePlacement]) -> ([f32; 3], [f32; 3]) {
         let mn = probes.iter().fold([f32::MAX; 3], |a, p| {
@@ -1193,9 +1277,12 @@ mod tests {
     fn resolve_placements_seeds_from_the_finite_boxes() {
         let wall = ([-10.0, 0.0, -10.0], [10.0, 6.0, 10.0]);
         let degenerate = ([f32::NAN, 0.0, 0.0], [f32::INFINITY, 1.0, 1.0]);
-        assert_eq!(
-            resolve_placements(&[], [wall, degenerate]),
-            auto_seed_probes(wall.0, wall.1, &[wall])
+        let seeded = resolve_placements(&[], [wall, degenerate]);
+        assert_eq!(seeded, auto_seed_probes(wall.0, wall.1, &[wall]));
+        assert!(!seeded.is_empty());
+        assert!(
+            seeded.iter().all(|p| p.capture_distance.is_none()),
+            "a seeded probe captures without limit"
         );
     }
 

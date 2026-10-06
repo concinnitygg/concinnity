@@ -210,6 +210,9 @@ fn push_probe(ctx: &ShapeCtx, out: &mut Vec<Line>) {
     }
     .model_matrix();
     shapes::push_box(out, &model, probe.half_extents, ctx.stroke);
+    if let Some(d) = probe.capture_distance {
+        shapes::push_box(out, &model, [d; 3], outlines::inner_stroke(ctx.stroke));
+    }
 }
 
 // The live Camera3D is the editor's own viewpoint (fly moves it), so the
@@ -538,6 +541,35 @@ mod tests {
                 "{label} has no outlineable type"
             );
         }
+    }
+
+    #[test]
+    fn a_probe_with_a_capture_distance_outlines_its_capture_cube() {
+        let world = world_with(
+            "probe",
+            ReflectionProbe {
+                position: [1.0, 2.0, 3.0],
+                half_extents: [2.0; 3],
+                capture_distance: Some(6.0),
+            },
+        );
+        let mut h = hook(vec![entry("probe", "ReflectionProbe")]);
+        h.select_named("probe");
+        let lines = lines_of(&h, &world);
+        assert_eq!(
+            lines.len(),
+            2 * shapes::BOX_EDGES,
+            "influence box + capture cube"
+        );
+        let (influence, capture) = lines.split_at(shapes::BOX_EDGES);
+        assert!(capture[0].start_color[3] < influence[0].start_color[3]);
+        let reach = capture
+            .iter()
+            .flat_map(|l| [l.start, l.end])
+            .fold([0.0f32; 3], |acc, p| {
+                core::array::from_fn(|i| acc[i].max((p[i] - [1.0, 2.0, 3.0][i]).abs()))
+            });
+        assert_eq!(reach, [6.0; 3]);
     }
 
     #[test]

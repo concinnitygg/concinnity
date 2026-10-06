@@ -27,6 +27,21 @@
 ///     ..Default::default()
 /// };
 /// ```
+///
+/// By default a probe captures everything it can see, however far away.
+/// Setting `capture_distance` limits that, which suits a probe inside a room:
+/// it skips the geometry beyond the walls, which it could not reflect anyway,
+/// and its capture costs less.
+///
+/// ```rust
+/// # use concinnity_core::components::ReflectionProbe;
+/// // A 6 m room whose probe captures nothing past 10 m on any axis.
+/// ReflectionProbe {
+///     position: [0.0, 1.5, 0.0],
+///     half_extents: [3.0, 1.5, 3.0],
+///     capture_distance: Some(10.0),
+/// };
+/// ```
 #[derive(
     Debug,
     Clone,
@@ -47,4 +62,38 @@ pub struct ReflectionProbe {
     /// the probe represents (e.g. a room's walls).
     #[asset(default = [10.0, 5.0, 10.0])]
     pub half_extents: [f32; 3],
+    /// How far the capture reaches, in world units: an object lying wholly
+    /// farther than this from `position` along the axis a cube face looks down
+    /// is left out of that face, so the capture covers a cube of this half-size
+    /// around `position`. An object that straddles the distance is captured
+    /// whole, never cut, and the sky shows wherever an object was left out.
+    /// `null` (the default) captures without limit.
+    pub capture_distance: Option<f32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_capture_distance_is_unlimited_unless_set() {
+        let bare: ReflectionProbe = crate::test_support::from_json("{}");
+        assert_eq!(bare.capture_distance, None);
+        let set: ReflectionProbe = crate::test_support::from_json(r#"{"capture_distance":12.5}"#);
+        assert_eq!(set.capture_distance, Some(12.5));
+        assert_eq!(
+            crate::components::validate::reflection_probe(set).capture_distance,
+            Some(12.5)
+        );
+    }
+
+    #[test]
+    fn a_negative_capture_distance_captures_nothing() {
+        let probe = ReflectionProbe {
+            capture_distance: Some(-4.0),
+            ..Default::default()
+        };
+        let probe = crate::components::validate::reflection_probe(probe);
+        assert_eq!(probe.capture_distance, Some(0.0));
+    }
 }

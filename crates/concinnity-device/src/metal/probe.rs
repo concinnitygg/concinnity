@@ -56,7 +56,6 @@
 //!     direct + ambient lighting without contact shadows.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::probe_bake::{
     CAPTURE_FACES, ProbeBake, ProbeBakeDevice, capture_ring_slot,
@@ -97,6 +96,7 @@ pub(crate) struct RenderingBake {
     done: Arc<AtomicBool>,
     // Capture vantage, snapshotted at start so the six faces are temporally consistent.
     eye: [f32; 3],
+    capture_distance: Option<f32>,
     elapsed: f32,
     // Loop-invariant buffers + targets shared across the six faces (reserved ring slot).
     gpu: BakeGpu,
@@ -286,6 +286,7 @@ impl MtlContext {
         Ok(RenderingBake {
             done: Arc::new(AtomicBool::new(false)),
             eye,
+            capture_distance: placement.capture_distance,
             elapsed,
             gpu: BakeGpu {
                 msaa_color,
@@ -324,7 +325,7 @@ impl MtlContext {
 
         let vp = reflection_probe::face_view_projection(eye, face);
         let view = reflection_probe::face_view_matrix(eye, face);
-        let frustum = Frustum::from_camera(vp, None);
+        let frustum = reflection_probe::face_frustum(eye, face, bake.capture_distance);
 
         let RenderingBake { done, gpu, .. } = bake;
 

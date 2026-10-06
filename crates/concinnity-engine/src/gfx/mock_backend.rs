@@ -128,7 +128,7 @@ pub(crate) enum Call {
     SetUiCursorHidden(bool),
     SetMenuMode(bool),
     SetCameraCapture(bool),
-    SetReflectionProbes(usize),
+    SetReflectionProbes(Vec<reflection_probe::ProbePlacement>),
     SetVsync(bool),
     SetWindowMode(WindowMode),
     SetWindowSize(u32, u32),
@@ -663,7 +663,7 @@ impl WindowControl for MockBackend {
 
 impl RenderTuning for MockBackend {
     fn set_reflection_probes(&mut self, probes: &[reflection_probe::ProbePlacement]) {
-        self.record(Call::SetReflectionProbes(probes.len()));
+        self.record(Call::SetReflectionProbes(probes.to_vec()));
     }
 
     fn set_ambient_intensity(&mut self, value: f32) {

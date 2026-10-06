@@ -38,7 +38,6 @@
 //!   * Single bounce + cold-first-frame lighting (the shadow map may be unpopulated when
 //!     a probe bakes on an early frame), exactly like Metal.
 
-use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -78,6 +77,7 @@ const PROBE_FACE_SIZE: u32 = PLAN.face_size();
 // guarantees their GPU work has retired before they drop).
 pub(crate) struct RenderingBake {
     eye: [f32; 3],
+    capture_distance: Option<f32>,
     sample_count: u32,
     // Reused across the six faces.
     color: ID3D12Resource,
@@ -356,6 +356,7 @@ impl DxContext {
 
         Ok(RenderingBake {
             eye,
+            capture_distance: placement.capture_distance,
             sample_count,
             color,
             _depth: depth,
@@ -391,8 +392,7 @@ impl DxContext {
             bake.shadow_gva,
         );
 
-        let vp = reflection_probe::face_view_projection(eye, face);
-        let frustum = Frustum::from_camera(vp, None);
+        let frustum = reflection_probe::face_frustum(eye, face, bake.capture_distance);
 
         // A fresh allocator + list per face, held until the fence proves the face
         // retired, so no in-flight allocator is ever reset.
