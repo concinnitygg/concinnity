@@ -22,12 +22,12 @@ impl Forward {
 }
 
 impl Executor for Forward {
-    fn call(&self, name: &str, arguments: &Map<String, Value>) -> Value {
+    fn call(&self, name: &str, arguments: Map<String, Value>) -> Value {
         let message = json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": { "name": name, "arguments": Value::Object(arguments.clone()) },
+            "params": { "name": name, "arguments": Value::Object(arguments) },
         });
         match remote::post(self.port, &message) {
             Ok(response) => unwrap_result(&response),

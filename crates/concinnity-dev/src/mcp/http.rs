@@ -222,7 +222,7 @@ mod tests {
     struct Always;
 
     impl Executor for Always {
-        fn call(&self, _name: &str, _arguments: &Map<String, Value>) -> Value {
+        fn call(&self, _name: &str, _arguments: Map<String, Value>) -> Value {
             super::super::tools::text_result(r#"{"ok":true}"#, false)
         }
     }

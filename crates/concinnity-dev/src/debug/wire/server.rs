@@ -1,11 +1,8 @@
 //! The localhost debug listener: `DebugServer` (the `FrameHook` the run loop
 //! ticks), the accept / per-connection threads, and the per-frame drive of the
-//! runtime commands plus the owned hot-reload driver. Each connection is handed
+//! queued verb jobs plus the owned hot-reload driver. Each connection is handed
 //! to `crate::mcp::AppServer`, which parses the HTTP request and answers the
-//! MCP message it carried. The shared snapshot lives in `super::super::state`;
-//! the query-command dispatcher `AppServer` runs each call against is
-//! `super::super::dispatch::handle_request`; spawn / crossfade command handlers
-//! live in `super::super::commands`.
+//! MCP message it carried from the verb table in `super::super::catalog`.
 
 use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::World;
@@ -16,10 +13,13 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::debug::anim_command;
 use crate::debug::hot_reload;
-use crate::debug::runtime_spawn::{self, RuntimeQueue};
-use crate::debug::state::{AssetEntry, CameraSnapshot, DebugState};
+use crate::debug::queue::RuntimeQueue;
+use crate::debug::state::{
+    AssetEntry, BudgetMemory, BudgetSnapshot, BudgetThreads, CameraSnapshot, DebugState,
+    PressureSnapshot,
+};
+use crate::debug::verbs::camera::{self, CameraMotion};
 use crate::frame_hook::FrameHook;
 use crate::mcp::AppServer;
 
@@ -35,18 +35,18 @@ const SNAPSHOT_INTERVAL: u64 = 30;
 // `Box<dyn FrameHook>` and ticks it each frame.
 pub(crate) struct DebugServer {
     shared: Arc<Mutex<DebugState>>,
-    // The snapshot's runtime command queue, drained every tick.
-    commands: RuntimeQueue,
+    // The snapshot's job queue, run every tick.
+    queue: RuntimeQueue,
     frame: u64,
     // The asset / shader / world.jsonl reload drive. The server owns the
     // session's one driver so the `reload-assets` command can reach its
     // pending flag; the drive itself is shared with the plain `cn editor`
     // path (see `crate::debug::hot_reload::HotReloadDriver`).
     reload: hot_reload::HotReloadDriver,
-    // Active camera-move motion installed by a `camera-move` command, advanced
-    // once per frame by `drive_runtime_commands` until exhausted or cleared by
-    // a `camera-stop`. `None` when no motion is in progress. Main-thread only.
-    camera_motion: Option<runtime_spawn::CameraMotion>,
+    // Active camera-move motion installed by a `camera-move` call, advanced
+    // once per frame by `drive_jobs` until exhausted or cleared by a
+    // `camera-stop`. `None` when no motion is in progress. Main-thread only.
+    camera_motion: Option<CameraMotion>,
 }
 
 impl DebugServer {
@@ -55,7 +55,7 @@ impl DebugServer {
     pub(crate) fn start(port: u16) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let state = DebugState::default();
-        let commands = state.commands.clone();
+        let queue = state.queue.clone();
         let shared = Arc::new(Mutex::new(state));
 
         let shared_for_thread = Arc::clone(&shared);
@@ -66,7 +66,7 @@ impl DebugServer {
         tracing::info!("debug server listening on http://127.0.0.1:{port}/mcp");
         Ok(Self {
             shared,
-            commands,
+            queue,
             frame: 0,
             reload: hot_reload::HotReloadDriver::new(),
             camera_motion: None,
@@ -94,51 +94,36 @@ impl DebugServer {
 }
 
 impl DebugServer {
-    // Apply the debug runtime commands once per frame: backend commands
-    // against the parked backend, animation commands against the
-    // `AnimationSystem`, then the deferred ECS-side commands and the per-frame
-    // camera-move advance. The asset / shader / world.jsonl reload passes live
-    // on `self.reload`, driven separately by `tick`.
-    fn drive_runtime_commands(&mut self, world: &mut World) {
-        // Anim and world commands need the world itself, so they are applied
-        // once the backend borrow ends. Backend commands wait on the queue
-        // until a backend is parked.
-        let drained = self.commands.drain_by_target();
+    // Run the jobs the verbs queued once per frame: backend jobs against the
+    // parked backend, then world jobs, then the per-frame camera-move advance.
+    // The asset / shader / world.jsonl reload passes live on `self.reload`,
+    // driven separately by `tick`.
+    fn drive_jobs(&mut self, world: &mut World) {
+        let jobs = self.queue.take();
+        // Backend jobs wait in the queue until a backend is parked; world jobs
+        // never wait on one.
         let handoff = concinnity_engine::live_edit::render_handoff(world);
         match handoff.backend {
             Some(backend) => {
-                for cmd in drained.backend {
-                    runtime_spawn::dispatch_runtime_spawn(cmd, handoff.texture_slots, backend);
+                for job in jobs.backend {
+                    job(&mut *backend, handoff.texture_slots);
                 }
             }
-            None => {
-                for cmd in drained.backend {
-                    self.commands.enqueue(cmd);
-                }
-            }
-        }
-        for cmd in drained.anim {
-            anim_command::dispatch_anim_command(
-                cmd,
-                concinnity_engine::ecs::animation_system_mut(world),
-            );
+            None => self.queue.requeue_backend(jobs.backend),
         }
 
         // tick() runs before the world step, so the Camera3DSystem step this
         // frame sees a new pose, and a freshly installed camera-move also steps
         // this same frame just below.
-        for cmd in drained.world {
-            runtime_spawn::dispatch_world_command(cmd, world, &mut self.camera_motion);
+        for job in jobs.world {
+            job(world, &mut self.camera_motion);
         }
 
-        // Advance an in-progress camera-move one step. Runs every frame (before
-        // the world step) so the renderer sees sustained motion across temporal
-        // passes. A finite motion counts itself down to None; a vanished camera
-        // (world swap) drops the motion rather than spinning.
-        if let Some(motion) = self.camera_motion.take()
-            && runtime_spawn::apply_camera_move_step(&motion, world)
-        {
-            self.camera_motion = motion.advanced();
+        // Advance an in-progress camera-move one step, every frame before the
+        // world step, so the renderer sees sustained motion across temporal
+        // passes.
+        if let Some(motion) = self.camera_motion.take() {
+            self.camera_motion = camera::advance_camera_motion(motion, world);
         }
     }
 }
@@ -147,10 +132,10 @@ impl FrameHook for DebugServer {
     fn tick(&mut self, world: &mut World) {
         self.frame += 1;
 
-        // The runtime commands, then the asset / shader / world.jsonl
-        // reload passes. Both run only from this hook, so a `cn run` (no
-        // debug hook) never touches them.
-        self.drive_runtime_commands(world);
+        // The queued verb jobs, then the asset / shader / world.jsonl reload
+        // passes. Both run only from this hook, so a `cn run` (no debug hook)
+        // never touches them.
+        self.drive_jobs(world);
         self.reload.drive(world);
 
         let mut state = match self.shared.lock() {
@@ -166,13 +151,12 @@ impl FrameHook for DebugServer {
         state.streaming = concinnity_engine::ecs::streaming_stats(world).unwrap_or_default();
         state.scratch = world.scratch_stats();
         // Live RAM back-off pressure, refreshed alongside the streaming counts.
-        state.streaming_pressure = concinnity_engine::ecs::streaming_pressure(world).map(|p| {
-            crate::debug::state::PressureSnapshot {
+        state.streaming_pressure =
+            concinnity_engine::ecs::streaming_pressure(world).map(|p| PressureSnapshot {
                 rss_bytes: p.rss_bytes,
                 budget_bytes: p.budget_bytes,
                 under_pressure: p.under_pressure,
-            }
-        });
+            });
 
         // Process thread + memory budgets (fixed at start) plus the live RSS
         // (one cheap syscall per tick, dev-only), for the `budget` query.
@@ -180,19 +164,23 @@ impl FrameHook for DebugServer {
             concinnity_engine::ecs::thread_budget(world),
             concinnity_engine::ecs::memory_budget(world),
         ) {
-            state.budget = Some(crate::debug::state::BudgetSnapshot {
-                total_cores: threads.total_cores,
-                job_threads: concinnity_host::thread::jobs::pool().thread_count(),
-                total_ram_mib: memory.total_ram_bytes.map(|b| b / (1024 * 1024)),
-                budget_mib: memory.budget_mib(),
-                overridden: memory.overridden,
-                rss_mib: concinnity_engine::app::sysmem::process_resident_bytes()
-                    .map(|b| b / (1024 * 1024)),
+            state.budget = Some(BudgetSnapshot {
+                threads: BudgetThreads {
+                    total_cores: threads.total_cores,
+                    job_threads: concinnity_host::thread::jobs::pool().thread_count(),
+                },
+                memory: BudgetMemory {
+                    total_ram_mib: memory.total_ram_bytes.map(|b| b / (1024 * 1024)),
+                    budget_mib: memory.budget_mib(),
+                    overridden: memory.overridden,
+                    rss_mib: concinnity_engine::app::sysmem::process_resident_bytes()
+                        .map(|b| b / (1024 * 1024)),
+                },
             });
         }
         // Opportunistically pick up the shader-reload flag the backend exposes
         // (Some only under `cn debug` on hot-reload backends); once captured,
-        // the `reload-shaders` command can fire the flag. The backend sits in
+        // the `reload-shaders` verb can fire the flag. The backend sits in
         // the world's parked slot between ticks.
         if state.shader_reload.is_none()
             && let Some(flag) = concinnity_engine::live_edit::shader_reload_flag(world)
@@ -200,7 +188,7 @@ impl FrameHook for DebugServer {
             state.shader_reload = Some(flag);
         }
         // The reload driver keeps one set of signals across re-arms, so the
-        // `reload-assets` command captures them once the driver is armed.
+        // `reload-assets` verb captures them once the driver is armed.
         if state.reload.is_none() {
             state.reload = self.reload.signals();
         }

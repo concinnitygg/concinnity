@@ -63,6 +63,32 @@ pub struct ParticleEmitterRecord {
 }
 
 impl ParticleEmitterRecord {
+    /// The record for `emitter` sampling albedo pool slot `texture_slot`, with
+    /// every tunable clamped into the range the kernels accept: a unit
+    /// direction (world-up for a degenerate one), positive lifetimes, ordered
+    /// speed and lifetime bounds, a non-empty pool, and finite colors.
+    pub fn new(emitter: &ParticleEmitter, texture_slot: usize) -> Self {
+        let lifetime_min = emitter.lifetime_min.max(MIN_LIFETIME);
+        let speed_min = emitter.speed_min.max(0.0);
+        Self {
+            texture_slot,
+            position: emitter.position,
+            direction: normalize_or(emitter.direction, 1e-6, [0.0, 1.0, 0.0]),
+            spread_cos: cos(emitter.spread_deg.clamp(0.0, 180.0).to_radians()),
+            speed_min,
+            speed_max: emitter.speed_max.max(speed_min),
+            lifetime_min,
+            lifetime_max: emitter.lifetime_max.max(lifetime_min),
+            gravity: emitter.gravity,
+            spawn_rate: emitter.spawn_rate.max(0.0),
+            max_particles: emitter.max_particles.clamp(1, MAX_PARTICLES_PER_EMITTER),
+            size_start: emitter.size_start.max(0.0),
+            size_end: emitter.size_end.max(0.0),
+            color_start: sanitized_color(emitter.color_start),
+            color_end: sanitized_color(emitter.color_end),
+        }
+    }
+
     /// Conservative world-space AABB enclosing every particle this emitter
     /// could spawn over its full lifetime. Used by the per-frame frustum-cull
     /// skip so an off-screen emitter pays no _render_ cost; the compute
@@ -138,42 +164,12 @@ pub fn build_particle_records(
         if !e.visible {
             continue;
         }
-        let max_particles = e.max_particles.clamp(1, MAX_PARTICLES_PER_EMITTER);
         let slot = match e.texture {
             None => 0,
-            Some(handle) => {
-                let slot = handle.index();
-                if slot >= texture_count {
-                    continue;
-                }
-                slot
-            }
+            Some(handle) if handle.index() < texture_count => handle.index(),
+            Some(_) => continue,
         };
-        // A zero / non-finite direction falls back to world-up so the cone
-        // still has a well-defined axis.
-        let direction = normalize_or(e.direction, 1e-6, [0.0, 1.0, 0.0]);
-        let spread_cos = cos(e.spread_deg.clamp(0.0, 180.0).to_radians());
-        let lifetime_min = e.lifetime_min.max(MIN_LIFETIME);
-        let lifetime_max = e.lifetime_max.max(lifetime_min);
-        let speed_min = e.speed_min.max(0.0);
-        let speed_max = e.speed_max.max(speed_min);
-        out.push(ParticleEmitterRecord {
-            texture_slot: slot,
-            position: e.position,
-            direction,
-            spread_cos,
-            speed_min,
-            speed_max,
-            lifetime_min,
-            lifetime_max,
-            gravity: e.gravity,
-            spawn_rate: e.spawn_rate.max(0.0),
-            max_particles,
-            size_start: e.size_start.max(0.0),
-            size_end: e.size_end.max(0.0),
-            color_start: sanitized_color(e.color_start),
-            color_end: sanitized_color(e.color_end),
-        });
+        out.push(ParticleEmitterRecord::new(e, slot));
     }
     out
 }
@@ -312,6 +308,37 @@ mod tests {
         };
         let recs = build_particle_records(&[&e], 0);
         assert!(recs[0].lifetime_max >= recs[0].lifetime_min);
+    }
+
+    #[test]
+    fn new_clamps_every_out_of_range_tunable() {
+        let e = ParticleEmitter {
+            direction: [0.0, 0.0, 0.0],
+            spread_deg: 500.0,
+            speed_min: -5.0,
+            speed_max: -10.0,
+            lifetime_min: -1.0,
+            lifetime_max: -2.0,
+            spawn_rate: -1.0,
+            max_particles: 0,
+            size_start: -1.0,
+            size_end: -1.0,
+            color_start: [f32::NAN, 1.0, 1.0, 1.0],
+            ..Default::default()
+        };
+        let r = ParticleEmitterRecord::new(&e, 4);
+        assert_eq!(r.texture_slot, 4);
+        assert_eq!(r.direction, [0.0, 1.0, 0.0]);
+        assert!((r.spread_cos + 1.0).abs() < 1e-6);
+        assert_eq!((r.speed_min, r.speed_max), (0.0, 0.0));
+        assert_eq!(
+            (r.lifetime_min, r.lifetime_max),
+            (MIN_LIFETIME, MIN_LIFETIME)
+        );
+        assert_eq!(r.spawn_rate, 0.0);
+        assert_eq!(r.max_particles, 1);
+        assert_eq!((r.size_start, r.size_end), (0.0, 0.0));
+        assert_eq!(r.color_start, [0.0, 1.0, 1.0, 1.0]);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! The shared world-snapshot data model the debug server exposes. `wire::server`
-//! rebuilds it once per frame from the live `World`; `dispatch::handle_request`
-//! reads it to answer client queries. Kept as plain data (no sockets, no engine
-//! driving) so the dispatcher stays unit-testable against a hand-built snapshot.
+//! rebuilds it once per frame from the live `World`; the verbs in `super::verbs`
+//! read it to answer client queries. Kept as plain data (no sockets, no engine
+//! driving) so the verbs stay unit-testable against a hand-built snapshot.
 
 use concinnity_core::profile;
 use concinnity_engine::gfx::streaming::system::StreamingStats;
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use super::hot_reload::ReloadSignals;
-use super::runtime_spawn::RuntimeQueue;
+use super::queue::RuntimeQueue;
 
 // The world snapshot rebuilt by `tick`. The asset/system lists are not cheap
 // to rebuild, so they refresh on an interval while `frame` advances every tick.
@@ -70,9 +70,8 @@ pub(crate) struct DebugState {
     // `streaming` query. `None` until StreamingSystem publishes its first sample
     // (or when the valve is inert: no `MemoryBudget` / RSS available).
     pub(super) streaming_pressure: Option<PressureSnapshot>,
-    // Runtime commands the tool-call handlers push and the per-frame debug
-    // drive applies. Handlers clone it out before dropping the snapshot lock.
-    pub(super) commands: RuntimeQueue,
+    // Jobs the verb handlers queue and the per-frame debug drive runs.
+    pub(super) queue: RuntimeQueue,
 }
 
 // A read-only snapshot of the process thread + memory budgets (see
@@ -80,8 +79,18 @@ pub(crate) struct DebugState {
 // the live resident set size sampled each tick; the rest are fixed at start.
 #[derive(Clone, Default, serde::Serialize)]
 pub(crate) struct BudgetSnapshot {
+    pub(super) threads: BudgetThreads,
+    pub(super) memory: BudgetMemory,
+}
+
+#[derive(Clone, Default, serde::Serialize)]
+pub(crate) struct BudgetThreads {
     pub(super) total_cores: usize,
     pub(super) job_threads: usize,
+}
+
+#[derive(Clone, Default, serde::Serialize)]
+pub(crate) struct BudgetMemory {
     pub(super) total_ram_mib: Option<u64>,
     pub(super) budget_mib: u64,
     pub(super) overridden: bool,
@@ -98,9 +107,7 @@ pub(crate) struct PressureSnapshot {
     pub(super) under_pressure: bool,
 }
 
-// A read-only snapshot of the active `Camera3D`, served by `camera-get`. The
-// matching `camera-set` mutation lives in `super::commands` /
-// `super::runtime_spawn`.
+// A read-only snapshot of the active `Camera3D`, served by `camera-get`.
 #[derive(Clone, serde::Serialize)]
 pub(crate) struct CameraSnapshot {
     pub(super) position: [f32; 3],

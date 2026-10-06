@@ -477,7 +477,7 @@ impl DxContext {
 // Runtime mutation (RenderBackend::add_decal / remove_decal)
 
 // Runtime-mutation surface driven only by the cn-debug command server
-// ([debug/runtime_spawn.rs]). This module tree is compiled into both the FFI
+// ([debug/verbs/render.rs]). This module tree is compiled into both the FFI
 // library crate (`concinnity_dev`) and the `concinnity` binary; the cn-debug
 // chain is reachable from the binary's `main` but not from the library crate's
 // (FFI) roots, so dead-code flags these in the lib build. Not backend-specific.

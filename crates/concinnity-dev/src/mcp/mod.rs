@@ -13,11 +13,11 @@
 //! declares no commands of its own. The split below is what keeps the protocol
 //! testable without a socket:
 //!   jsonrpc  message parsing and response building, transport-agnostic
-//!   tools    the catalog rendered as MCP tools, and the body one call carries
+//!   tools    the verb table rendered as MCP tools
 //!   server   the methods answered, over an injected call executor
 //!   http     the app's transport: one request, one response, one connection
 //!   stdio    newline-delimited framing over any byte streams
-//!   app      the executor that runs a call against the live world snapshot
+//!   app      the executor that runs a call through the verb table
 //!   bridge   the executor that forwards a call to a running app
 //!   remote   the client that posts one JSON-RPC message to an app
 

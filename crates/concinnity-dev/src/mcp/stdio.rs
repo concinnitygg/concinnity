@@ -42,7 +42,7 @@ mod tests {
     struct Never;
 
     impl Executor for Never {
-        fn call(&self, _name: &str, _arguments: &Map<String, Value>) -> Value {
+        fn call(&self, _name: &str, _arguments: Map<String, Value>) -> Value {
             unreachable!("these messages never reach a tools/call")
         }
     }

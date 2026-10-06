@@ -32,7 +32,6 @@ pub(super) fn report(
         .collect();
 
     serde_json::json!({
-        "ok": true,
         "frame": frame,
         // Null when no binary installed the tracking allocator, which is not
         // the same as a heap holding nothing.
@@ -77,7 +76,6 @@ mod tests {
     #[test]
     fn the_reply_lists_every_reported_tag_with_its_budget() {
         let value = report(7, None, &ledger().snapshot(), None, ScratchStats::default());
-        assert_eq!(value["ok"], true);
         assert_eq!(value["frame"], 7);
 
         let tags = value["tags"].as_array().expect("tags is an array");

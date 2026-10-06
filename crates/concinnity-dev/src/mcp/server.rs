@@ -28,9 +28,9 @@ type Failure = (i64, String);
 /// How one `tools/call` is carried out, once the server has checked that the
 /// verb exists and its arguments are an object.
 pub(super) trait Executor {
-    /// The `tools/call` result for a catalogd verb, failures included: a
-    /// rejected command is an error result, never a protocol error.
-    fn call(&self, name: &str, arguments: &Map<String, Value>) -> Value;
+    /// The `tools/call` result for a cataloged verb, failures included: a
+    /// rejected call is an error result, never a protocol error.
+    fn call(&self, name: &str, arguments: Map<String, Value>) -> Value;
 }
 
 /// The protocol state machine.
@@ -74,8 +74,8 @@ impl<E: Executor> Server<E> {
             return Err((INVALID_PARAMS, format!("unknown tool: {name}")));
         }
         let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
-        let arguments = tools::arguments(&arguments).map_err(|e| (INVALID_PARAMS, e))?;
-        Ok(self.execute.call(name, &arguments))
+        let arguments = tools::arguments(arguments).map_err(|e| (INVALID_PARAMS, e))?;
+        Ok(self.execute.call(name, arguments))
     }
 }
 
@@ -114,10 +114,10 @@ mod tests {
     }
 
     impl Executor for &Fake {
-        fn call(&self, name: &str, arguments: &Map<String, Value>) -> Value {
+        fn call(&self, name: &str, arguments: Map<String, Value>) -> Value {
             self.seen.borrow_mut().push(json!({
                 "name": name,
-                "arguments": Value::Object(arguments.clone()),
+                "arguments": Value::Object(arguments),
             }));
             self.result.clone()
         }
@@ -127,7 +127,7 @@ mod tests {
     struct Always;
 
     impl Executor for Always {
-        fn call(&self, _name: &str, _arguments: &Map<String, Value>) -> Value {
+        fn call(&self, _name: &str, _arguments: Map<String, Value>) -> Value {
             tools::text_result(r#"{"ok":true}"#, false)
         }
     }
@@ -197,11 +197,11 @@ mod tests {
         let tools = reply["result"]["tools"]
             .as_array()
             .expect("tools is an array");
-        assert_eq!(tools.len(), catalog::all().len());
-        for (tool, command) in tools.iter().zip(catalog::all()) {
-            assert_eq!(tool["name"], command.name);
-            assert_eq!(tool["description"], command.description);
-            assert_eq!(tool["inputSchema"], command.schema());
+        assert_eq!(tools.len(), catalog::all().count());
+        for (tool, verb) in tools.iter().zip(catalog::all()) {
+            assert_eq!(tool["name"], verb.name);
+            assert_eq!(tool["description"], verb.description);
+            assert_eq!(tool["inputSchema"], verb.schema());
         }
     }
 

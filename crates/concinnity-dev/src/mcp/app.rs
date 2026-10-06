@@ -1,16 +1,15 @@
 //! The MCP server a running app serves on its debug port.
 //!
-//! Each call runs against the live world snapshot through the same socket-free
-//! dispatcher the verb catalog describes, so `{"cmd": ...}` is an internal seam
-//! between the tool surface and the dispatcher rather than a wire format.
+//! Each call runs against the live world snapshot through the debug server's
+//! verb table, and its reply becomes the one text block of the tool result.
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 
 use super::server::{Executor, Server};
 use super::{http, tools};
-use crate::debug::dispatch::handle_request;
+use crate::debug::catalog;
 use crate::debug::state::DebugState;
 
 /// The MCP server behind one app's debug port. Shared across connections: each
@@ -38,19 +37,25 @@ struct Dispatcher {
 }
 
 impl Executor for Dispatcher {
-    fn call(&self, name: &str, arguments: &Map<String, Value>) -> Value {
-        let reply = handle_request(&tools::payload(name, arguments), &self.shared);
-        tools::text_result(&reply, !accepted(&reply))
+    fn call(&self, name: &str, arguments: Map<String, Value>) -> Value {
+        match catalog::run(name, arguments, &self.shared) {
+            Ok(fields) => tools::text_result(&accepted(fields).to_string(), false),
+            Err(error) => {
+                let reply = json!({ "ok": false, "error": error });
+                tools::text_result(&reply.to_string(), true)
+            }
+        }
     }
 }
 
-// A reply the engine accepted carries `"ok": true`; anything else, an
-// unparseable reply included, is reported to the client as a failed call.
-fn accepted(reply: &str) -> bool {
-    serde_json::from_str::<Value>(reply)
-        .ok()
-        .and_then(|v| v.get("ok").and_then(Value::as_bool))
-        .unwrap_or(false)
+// A verb's reply fields, after the flag that says the engine accepted the call.
+fn accepted(fields: Value) -> Value {
+    let mut reply = Map::new();
+    reply.insert("ok".to_string(), Value::Bool(true));
+    if let Value::Object(fields) = fields {
+        reply.extend(fields);
+    }
+    Value::Object(reply)
 }
 
 #[cfg(test)]
@@ -67,31 +72,42 @@ mod tests {
 
     fn call(name: &str, arguments: Value) -> Value {
         let dispatcher = Dispatcher { shared: snapshot() };
-        let arguments = tools::arguments(&arguments).expect("valid arguments");
-        dispatcher.call(name, &arguments)
+        let arguments = tools::arguments(arguments).expect("valid arguments");
+        dispatcher.call(name, arguments)
+    }
+
+    fn reply(result: &Value) -> Value {
+        serde_json::from_str(result["content"][0]["text"].as_str().expect("text")).unwrap()
     }
 
     #[test]
     fn a_read_only_verb_answers_from_the_snapshot() {
         let result = call("state", Value::Null);
         assert_eq!(result["isError"], json!(false));
-        let reply: Value =
-            serde_json::from_str(result["content"][0]["text"].as_str().expect("text")).unwrap();
+        let reply = reply(&result);
         assert_eq!(reply["ok"], json!(true));
         assert_eq!(reply["frame"], json!(0));
+        // The flag leads, ahead of the verb's own fields.
+        assert_eq!(
+            reply.as_object().unwrap().keys().next().map(String::as_str),
+            Some("ok")
+        );
     }
 
     #[test]
     fn a_verb_the_world_cannot_serve_is_a_failed_call() {
-        // A default snapshot holds no camera, so the dispatcher rejects it.
+        // A default snapshot holds no camera, so the verb refuses.
         let result = call("camera-get", Value::Null);
         assert_eq!(result["isError"], json!(true));
+        let reply = reply(&result);
+        assert_eq!(reply["ok"], json!(false));
+        assert!(reply["error"].as_str().unwrap().contains("no Camera3D"));
     }
 
     #[test]
-    fn arguments_reach_the_dispatcher_as_the_request_body() {
-        // The rejected `op` is only visible if the body, not just the verb,
-        // reached the dispatcher.
+    fn arguments_reach_the_verb() {
+        // The rejected `op` is only visible if the arguments, not just the
+        // verb, reached the table.
         let result = call(
             "quality-set",
             json!({ "setting": "ssao", "op": "sideways" }),
@@ -128,12 +144,5 @@ mod tests {
                 .expect("text")
                 .contains(r#""pong":true"#)
         );
-    }
-
-    #[test]
-    fn an_unparseable_reply_is_a_failed_call() {
-        assert!(!accepted("not json"));
-        assert!(!accepted(r#"{"ok":false}"#));
-        assert!(accepted(r#"{"ok":true}"#));
     }
 }
