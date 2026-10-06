@@ -1,6 +1,7 @@
 //! The viewport's world-origin axes: one line per world axis, running from the
 //! origin out along its positive direction and fading to nothing at the camera's
-//! far plane, so the axis reads as unbounded without ending in a hard edge.
+//! view distance (or a fixed length for a camera that sees without limit), so
+//! the axis reads as unbounded without ending in a hard edge.
 //! Unlike the rest of the editor's viewport furniture these are world geometry,
 //! not overlay sprites: they go through the renderer's line pass, so
 //! scene geometry in front of an axis occludes it.
@@ -10,16 +11,17 @@
 
 use concinnity_core::gfx::lines::Line;
 
-// Fraction of the camera's far plane the line holds full alpha for, before it
-// starts fading. The remainder ramps to zero, so the run dissolves into the
+// Fraction of the run the line holds full alpha for, before it starts fading. The remainder ramps to zero, so the run dissolves into the
 // distance instead of stopping.
 const SOLID_FRACTION: f32 = 0.25;
 // Screen thickness. Thin enough to read as a reference line rather than
 // geometry, wide enough to survive the pass's edge antialiasing.
 const WIDTH_PX: f32 = 2.0;
-// Shortest run drawn when the camera's far plane is very close: a tiny far
-// plane would otherwise leave the axes as stubs at the origin.
+// Shortest run drawn when the camera's view distance is very short, which would
+// otherwise leave the axes as stubs at the origin.
 const MIN_EXTENT: f32 = 50.0;
+// The run for a camera that sees without limit.
+const UNLIMITED_EXTENT: f32 = 200.0;
 
 // X red, Y green, Z blue: the gizmo handles' hues, carried at a higher
 // saturation. Values are linear RGB written into the HDR scene target, so they
@@ -29,11 +31,11 @@ const AXIS_COLORS: [[f32; 3]; 3] = [[0.90, 0.10, 0.12], [0.16, 0.75, 0.22], [0.1
 
 const AXES: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
-// Append the origin axes for a camera whose far plane is `far`: per axis, a
-// solid run out from the origin followed by a run that fades to nothing at the
-// far plane. Appends into the frame's shared line buffer.
-pub(crate) fn push_lines(out: &mut Vec<Line>, far: f32) {
-    let extent = far.max(MIN_EXTENT);
+// Append the origin axes for a camera whose view distance is `view_distance`:
+// per axis, a solid run out from the origin followed by a run that fades to
+// nothing at the view distance. Appends into the frame's shared line buffer.
+pub(crate) fn push_lines(out: &mut Vec<Line>, view_distance: Option<f32>) {
+    let extent = view_distance.unwrap_or(UNLIMITED_EXTENT).max(MIN_EXTENT);
     let solid = extent * SOLID_FRACTION;
     for (axis, rgb) in AXES.iter().zip(AXIS_COLORS) {
         let at = |d: f32| [axis[0] * d, axis[1] * d, axis[2] * d];
@@ -59,9 +61,9 @@ pub(crate) fn push_lines(out: &mut Vec<Line>, far: f32) {
 mod tests {
     use super::*;
 
-    fn lines(far: f32) -> Vec<Line> {
+    fn lines(view_distance: f32) -> Vec<Line> {
         let mut out = Vec::new();
-        push_lines(&mut out, far);
+        push_lines(&mut out, Some(view_distance));
         out
     }
 
@@ -96,10 +98,14 @@ mod tests {
     }
 
     #[test]
-    fn the_run_reaches_the_far_plane() {
+    fn the_run_reaches_the_view_distance() {
         assert_eq!(lines(500.0)[1].end[0], 500.0);
         // A near-sighted camera still gets a usable run rather than a stub.
         assert_eq!(lines(1.0)[1].end[0], MIN_EXTENT);
+        // An unlimited one gets a fixed run.
+        let mut unlimited = Vec::new();
+        push_lines(&mut unlimited, None);
+        assert_eq!(unlimited[1].end[0], UNLIMITED_EXTENT);
     }
 
     #[test]

@@ -279,7 +279,7 @@ impl VkContext {
             }
         }
         let vp = reflection_probe::face_view_projection(eye, face);
-        let frustum = Frustum::from_camera(vp);
+        let frustum = Frustum::from_camera(vp, None);
         self.encode_probe_cull(cmd, cull_set, hiz_set, &frustum, eye);
         self.encode_main_into_face(
             cmd,
@@ -1271,7 +1271,7 @@ mod tests {
     // material carries a world shader -- so it is pinned rather than eyeballed.
     #[test]
     fn a_capture_cull_routes_every_record_into_one_region() {
-        let p = capture_cull_params(&Frustum::from_camera(IDENTITY), [0.0; 3], 12);
+        let p = capture_cull_params(&Frustum::from_camera(IDENTITY, None), [0.0; 3], 12);
         assert_eq!(p.bucket_count, 1, "one region, whatever the world declares");
         assert_eq!(p.object_count, 12);
         assert_eq!(p.bucket_stride, 12, "stride names the region capacity");
@@ -1284,7 +1284,7 @@ mod tests {
     // That is how the mirror render lost its draws.
     #[test]
     fn the_capture_push_covers_the_whole_shader_block() {
-        let p = capture_cull_params(&Frustum::from_camera(IDENTITY), [1.0, 2.0, 3.0], 4);
+        let p = capture_cull_params(&Frustum::from_camera(IDENTITY, None), [1.0, 2.0, 3.0], 4);
         let bytes = bytemuck::bytes_of(&p);
         assert_eq!(bytes.len(), 120, "cull.hlsl's push_constant block is 120 B");
         // The two routing fields live in the last 8 bytes: the exact span a

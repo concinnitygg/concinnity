@@ -82,8 +82,9 @@ pub struct FrameParams<'a> {
     pub fov_y_radians: f32,
     /// Near clip distance in world units.
     pub near: f32,
-    /// Far clip distance in world units.
-    pub far: f32,
+    /// How far the camera sees in world units, or `None` for no limit: culls
+    /// whole objects beyond it and caps the shadow distance.
+    pub view_distance: Option<f32>,
     /// World-space camera position.
     pub cam_pos: [f32; 3],
     /// Overlay draw calls for this frame.

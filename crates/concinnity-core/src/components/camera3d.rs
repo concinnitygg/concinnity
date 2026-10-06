@@ -129,7 +129,7 @@ fn default_controller() -> Option<CameraController> {
 /// Camera3DArgs {
 ///     fov_y_degrees: 80.0,
 ///     near: 0.05,
-///     far: 500.0,
+///     view_distance: Some(500.0),
 ///     position: [0.0, 4.0, 0.0],
 ///     ..Default::default()
 /// };
@@ -150,9 +150,11 @@ pub struct Camera3DArgs {
     /// Near clip plane distance.
     #[asset(default = 0.05)]
     pub near: f32,
-    /// Far clip plane distance.
-    #[asset(default = 200.0)]
-    pub far: f32,
+    /// How far the camera sees, in world units. Objects lying wholly beyond
+    /// this distance along the view direction are not drawn, and shadows reach
+    /// no farther; an object that straddles it is drawn whole, never cut.
+    /// `null` (the default) sees without limit: there is no far clip plane.
+    pub view_distance: Option<f32>,
     /// Initial eye position in world space [x, y, z].
     #[asset(default = [0.0, 1.7, 0.0])]
     pub position: [f32; 3],
@@ -170,6 +172,15 @@ pub struct Camera3DArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_view_distance_is_unlimited_unless_set() {
+        let bare: Camera3DArgs = crate::test_support::from_json("{}");
+        assert_eq!(bare.view_distance, None);
+        let set: Camera3DArgs = crate::test_support::from_json(r#"{"view_distance":750.0}"#);
+        assert_eq!(set.view_distance, Some(750.0));
+        assert_eq!(Camera3D::bake(set).view_distance, Some(750.0));
+    }
 
     #[test]
     fn an_explicit_null_controller_leaves_the_camera_undriven() {
@@ -232,8 +243,8 @@ pub struct Camera3D {
     pub fov_y_degrees: f32,
     /// Near clip distance in world units.
     pub near: f32,
-    /// Far clip distance in world units.
-    pub far: f32,
+    /// How far the camera sees in world units, or `None` for no limit.
+    pub view_distance: Option<f32>,
     /// Current view matrix, written each step by the active camera system.
     /// Column-major, matching the GLSL mat4 convention.
     pub view_matrix: [[f32; 4]; 4],
@@ -263,7 +274,7 @@ impl Camera3D {
         Self {
             fov_y_degrees: args.fov_y_degrees,
             near: args.near,
-            far: args.far,
+            view_distance: args.view_distance,
             view_matrix: crate::gfx::camera::view_matrix(args.position, args.yaw, args.pitch),
             position: args.position,
             yaw: args.yaw,

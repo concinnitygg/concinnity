@@ -108,23 +108,21 @@ float4 decal_fragment(DecalVertexOut i) : SV_Target
     {
         discard;
     }
-    // A cleared pixel means the main pass left it empty (the sky draws at the
-    // cleared depth without writing). Nothing to project onto.
-    float depth = decal_scene_depth(pixel);
-    if (depth_is_cleared(depth))
-    {
-        discard;
-    }
-
     // Reconstruct world space at this pixel through the inverse VP. Every
     // backend rasterizes this pass with the framebuffer's Y running downwards
     // (Vulkan through the same negative-height viewport as the main pass), so
-    // the NDC flip is shared rather than target-specific.
+    // the NDC flip is shared rather than target-specific. A cleared pixel means
+    // the main pass left it empty (the sky draws at the cleared depth without
+    // writing): nothing to project onto.
+    float depth = decal_scene_depth(pixel);
     float2 ndc_xy = (i.position.xy / view.viewport) * 2.0 - 1.0;
     ndc_xy.y = -ndc_xy.y;
-    float4 clip = float4(ndc_xy, depth, 1.0);
-    float4 world = mul(view.inv_vp, clip);
-    world /= world.w;
+    float3 world_pos;
+    if (!depth_reconstruct(view.inv_vp, ndc_xy, depth, world_pos))
+    {
+        discard;
+    }
+    float4 world = float4(world_pos, 1.0);
 
     // Decal-local clip against the unit box.
     float4 local = mul(params.inv_model, world);

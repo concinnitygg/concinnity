@@ -378,7 +378,10 @@ pub struct ClusterParams {
     pub z_near: f32,
     /// Camera forward axis (world space, unit); projects a ray onto view depth.
     pub view_forward: [f32; 3],
-    /// Far bound of the clustered range in view units (positive distance).
+    /// Far end of the sliced depth range in view units (positive distance):
+    /// the reach of what the grid bins, from
+    /// [`ClusterReach::range`](crate::render::cluster_range::ClusterReach::range).
+    /// The last slice also holds every fragment past it.
     pub z_far: f32,
     /// Cluster tiles across the screen.
     pub grid_x: u32,
@@ -434,7 +437,7 @@ impl ClusterParams {
             cam_pos: camera.position,
             z_near: camera.near.max(1e-3),
             view_forward: [-view[0][2], -view[1][2], -view[2][2]],
-            z_far: camera.far,
+            z_far: camera.range,
             grid_x: CLUSTER_GRID_X,
             grid_y: CLUSTER_GRID_Y,
             grid_z: CLUSTER_GRID_Z,
@@ -461,8 +464,8 @@ pub struct ClusterCamera {
     pub position: [f32; 3],
     /// Near plane in view units; clamped to 1e-3 so the slice math stays finite.
     pub near: f32,
-    /// Far plane in view units.
-    pub far: f32,
+    /// Far end of the sliced depth range in view units.
+    pub range: f32,
     /// Render-target width in pixels.
     pub width: u32,
     /// Render-target height in pixels.
@@ -750,7 +753,7 @@ impl PostProcessParams {
 /// Fragment constants for the composite pass: the authored post-process
 /// tunables plus the scene-transition fade the backend owns. Pushed verbatim to
 /// the composite fragment shader, so the layout must stay in sync with the
-/// `CompositeUniforms` struct there. 48 bytes.
+/// `CompositeParams` struct there. 52 bytes.
 ///
 /// The fade is not a `PostProcessParams` field because that struct is resolved
 /// from the `PostProcessConfig` asset and re-pushed whenever a settings slider
@@ -771,8 +774,27 @@ pub struct CompositeParams {
     /// scene). Non-zero switches the fragment to visualize the matching
     /// prepass channel.
     pub view_mode: u32,
-    /// Camera far plane, for normalizing the depth channel view.
-    pub far: f32,
+    /// Distance the depth channel view shows as black.
+    pub depth_near: f32,
+    /// Distance the depth channel view shows as white; distances between map
+    /// on a log scale.
+    pub depth_far: f32,
+}
+
+/// The farthest distance the depth channel view tells apart for a camera that
+/// sees without limit, in world units.
+pub const DEPTH_VIEW_UNLIMITED_SPAN: f32 = 10_000.0;
+
+impl CompositeParams {
+    /// The `(depth_near, depth_far)` the depth channel view maps for a camera
+    /// with near plane `near`: from the near plane out to the view distance, or
+    /// to [`DEPTH_VIEW_UNLIMITED_SPAN`] when there is none. A log scale gives
+    /// every decade of distance the same share of the gray ramp.
+    pub fn depth_view_range(near: f32, view_distance: Option<f32>) -> (f32, f32) {
+        let near = near.max(1e-3);
+        let far = view_distance.unwrap_or(DEPTH_VIEW_UNLIMITED_SPAN);
+        (near, far.max(2.0 * near))
+    }
 }
 
 /// Per-frame uniform for the SSAO (GTAO) horizon-search kernel. Carries the
@@ -1872,6 +1894,40 @@ mod tests {
         assert_eq!(albedo_pool_index(0, 0), 0);
     }
 
+    // Thirteen scalars: the post tunables, the fade, the view selector and the
+    // depth view's two distances.
+    #[test]
+    fn composite_params_layout_matches_shaders() {
+        assert_eq!(size_of::<CompositeParams>(), 52);
+        assert_eq!(offset_of!(CompositeParams, post), 0);
+        assert_eq!(size_of::<PostProcessParams>(), 36);
+        assert_eq!(offset_of!(CompositeParams, fade), 36);
+        assert_eq!(offset_of!(CompositeParams, view_mode), 40);
+        assert_eq!(offset_of!(CompositeParams, depth_near), 44);
+        assert_eq!(offset_of!(CompositeParams, depth_far), 48);
+    }
+
+    #[test]
+    fn the_depth_view_spans_near_to_the_view_distance() {
+        assert_eq!(
+            CompositeParams::depth_view_range(0.05, Some(400.0)),
+            (0.05, 400.0)
+        );
+        assert_eq!(
+            CompositeParams::depth_view_range(0.05, None),
+            (0.05, DEPTH_VIEW_UNLIMITED_SPAN)
+        );
+        // Degenerate inputs still give the log ramp a span.
+        assert_eq!(
+            CompositeParams::depth_view_range(0.0, Some(0.0)),
+            (1e-3, 2e-3)
+        );
+        assert_eq!(
+            CompositeParams::depth_view_range(1.0, Some(0.5)),
+            (1.0, 2.0)
+        );
+    }
+
     // Every (vec3, scalar) pair shares one 16-byte lane, as the shader's float4
     // spelling does.
     #[test]
@@ -1903,7 +1959,7 @@ mod tests {
             proj: crate::transform::IDENTITY,
             position: [1.0, 2.0, 3.0],
             near: 0.0,
-            far: 500.0,
+            range: 500.0,
             width: 1920,
             height: 1080,
         };

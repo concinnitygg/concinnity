@@ -4,7 +4,7 @@
 //! projection.
 //!
 //! The projections here map near to device depth 0 and far to 1, or, for the
-//! `reversed_` ones, near to 1 and far to 0. They are the builders behind
+//! `reversed_infinite_` ones, near to 1 and infinity to 0. They are the builders behind
 //! [`crate::render::depth`]'s entry points, which pick one per depth
 //! convention, so a caller never names a depth mapping directly.
 //!
@@ -52,43 +52,38 @@ pub(crate) fn ortho_rh(left: f32, right: f32, bottom: f32, top: f32, near: f32, 
     ]
 }
 
-/// Right-handed perspective projection with reversed depth: near maps to device
-/// depth 1 and far to 0. Its x, y and w rows are [`perspective_rh`]'s.
-pub(crate) fn reversed_perspective_rh(
-    fov_y_radians: f32,
-    aspect: f32,
-    near: f32,
-    far: f32,
-) -> Mat4 {
+/// Right-handed perspective projection with reversed depth and no far plane:
+/// near maps to device depth 1 and depth falls toward 0 as distance goes to
+/// infinity, reaching it only there. Its x, y and w rows are
+/// [`perspective_rh`]'s.
+pub(crate) fn reversed_infinite_perspective_rh(fov_y_radians: f32, aspect: f32, near: f32) -> Mat4 {
     let ys = 1.0 / tan(fov_y_radians * 0.5).max(MIN_HALF_FOV_TAN);
     let xs = ys / aspect;
-    let zs = near / (far - near);
     [
         [xs, 0.0, 0.0, 0.0],
         [0.0, ys, 0.0, 0.0],
-        [0.0, 0.0, zs, -1.0],
-        [0.0, 0.0, zs * far, 0.0],
+        [0.0, 0.0, 0.0, -1.0],
+        [0.0, 0.0, near, 0.0],
     ]
 }
 
-/// Oblique near-plane clipping (Lengyel) for a [`reversed_perspective_rh`]
-/// matrix. Replaces the projection's z (depth) row so the near clip plane
-/// coincides with `clip_plane` (given in the projection's view space), clipping
-/// everything on the negative side of that plane. The far plane is preserved by
-/// scaling against the frustum corner the plane faces.
+/// Oblique near-plane clipping (Lengyel) for a
+/// [`reversed_infinite_perspective_rh`] matrix. Replaces the projection's z
+/// (depth) row so the near clip plane coincides with `clip_plane` (given in the
+/// projection's view space), clipping everything on the negative side of that
+/// plane. Depth still reaches 0 only at infinity.
 ///
 /// The near plane is where depth equals w, so the new z-row is
 /// `w_row - alpha * C` for the clip plane C (any alpha keeps the near plane at
-/// C). Picking the far frustum corner q = inv(P) . (sgn(Cx), sgn(Cy), 0, 1)
-/// and requiring it to stay on the far plane (ndc.z = 0) gives
-/// alpha = (w_row . q) / (C . q). For this projection q has the closed form
-/// below (q.z = -1, so w_row . q = 1).
-pub(crate) fn reversed_oblique_rh(proj: Mat4, clip_plane: [f32; 4]) -> Mat4 {
+/// C). Depth must stay non-negative over the whole frustum, and the direction
+/// that bounds it is the far frustum corner the plane faces, taken at infinity:
+/// the point q = (sgn(Cx) / xs, sgn(Cy) / ys, -1, 0). Requiring depth 0 there
+/// gives alpha = (w_row . q) / (C . q) = 1 / (C . q), the limit of the finite
+/// derivation as the far plane recedes.
+pub(crate) fn reversed_infinite_oblique_rh(proj: Mat4, clip_plane: [f32; 4]) -> Mat4 {
     let xs = proj[0][0];
     let ys = proj[1][1];
-    let zs = proj[2][2]; // z-row's z component
-    let zs_far = proj[3][2]; // z-row's w component (= zs * far)
-    if xs.abs() < 1e-12 || ys.abs() < 1e-12 || zs_far.abs() < 1e-12 {
+    if xs.abs() < 1e-12 || ys.abs() < 1e-12 {
         return proj;
     }
 
@@ -101,15 +96,9 @@ pub(crate) fn reversed_oblique_rh(proj: Mat4, clip_plane: [f32; 4]) -> Mat4 {
             0.0
         }
     };
-    // Back-projected far frustum corner toward the clip plane.
-    let q = [
-        sgn(clip_plane[0]) / xs,
-        sgn(clip_plane[1]) / ys,
-        -1.0,
-        zs / zs_far,
-    ];
-    let denom =
-        clip_plane[0] * q[0] + clip_plane[1] * q[1] + clip_plane[2] * q[2] + clip_plane[3] * q[3];
+    // The far frustum corner toward the clip plane, as a point at infinity.
+    let q = [sgn(clip_plane[0]) / xs, sgn(clip_plane[1]) / ys, -1.0];
+    let denom = clip_plane[0] * q[0] + clip_plane[1] * q[1] + clip_plane[2] * q[2];
     if denom.abs() < 1e-12 {
         return proj;
     }
@@ -257,16 +246,20 @@ mod tests {
         if v == 0.0 { 0.0 } else { v.signum() }
     }
 
-    // Lengyel's derivation for a [`perspective_rh`] matrix: near at ndc 0, the
-    // far corner held at ndc 1.
-    fn standard_oblique_rh(proj: Mat4, c: [f32; 4]) -> Mat4 {
-        let q = [
-            sgn(c[0]) / proj[0][0],
-            sgn(c[1]) / proj[1][1],
-            -1.0,
-            (1.0 + proj[2][2]) / proj[3][2],
-        ];
-        let alpha = 1.0 / (c[0] * q[0] + c[1] * q[1] + c[2] * q[2] + c[3] * q[3]);
+    // The standard-depth infinite projection: [`perspective_rh`] as the far
+    // plane recedes, near at ndc 0 and infinity at 1.
+    fn standard_infinite_rh(fov_y_radians: f32, aspect: f32, near: f32) -> Mat4 {
+        let mut p = perspective_rh(fov_y_radians, aspect, near, 1.0e3);
+        p[2][2] = -1.0;
+        p[3][2] = -near;
+        p
+    }
+
+    // Lengyel's infinite derivation for [`standard_infinite_rh`]: near at ndc 0,
+    // the far corner at infinity held at ndc 1.
+    fn standard_infinite_oblique_rh(proj: Mat4, c: [f32; 4]) -> Mat4 {
+        let q = [sgn(c[0]) / proj[0][0], sgn(c[1]) / proj[1][1], -1.0];
+        let alpha = 1.0 / (c[0] * q[0] + c[1] * q[1] + c[2] * q[2]);
         let mut out = proj;
         for (col, cv) in c.iter().enumerate() {
             out[col][2] = alpha * cv;
@@ -274,42 +267,46 @@ mod tests {
         out
     }
 
-    const CAMERAS: [(f32, f32, f32, f32); 4] = [
-        (1.2, 1.6, 0.1, 500.0),
-        (0.4, 0.5, 0.01, 10.0),
-        (1.5, 2.35, 0.5, 20_000.0),
-        (0.9, 1.0, 1.0, 80.0),
+    const CAMERAS: [(f32, f32, f32); 4] = [
+        (1.2, 1.6, 0.1),
+        (0.4, 0.5, 0.01),
+        (1.5, 2.35, 0.5),
+        (0.9, 1.0, 1.0),
     ];
 
-    // Reversed depth is exactly 1 - standard depth: the near plane at 1, the far
-    // plane at 0, and every distance between mirrored, under the same x/y/w.
+    const DISTANCES: [f32; 7] = [1.0, 3.0, 40.0, 900.0, 2.0e4, 1.0e6, 1.0e9];
+
+    // Reversed infinite depth is exactly 1 - standard infinite depth: the near
+    // plane at 1, infinity at 0, and every distance between mirrored, under the
+    // same x/y/w as the finite projection.
     #[test]
-    fn the_reversed_perspective_mirrors_standard_depth() {
-        for (fov, aspect, near, far) in CAMERAS {
-            let standard = perspective_rh(fov, aspect, near, far);
-            let reversed = reversed_perspective_rh(fov, aspect, near, far);
+    fn the_reversed_infinite_perspective_mirrors_standard_depth() {
+        for (fov, aspect, near) in CAMERAS {
+            let finite = perspective_rh(fov, aspect, near, 100.0);
+            let standard = standard_infinite_rh(fov, aspect, near);
+            let reversed = reversed_infinite_perspective_rh(fov, aspect, near);
             for row in [0, 1, 3] {
                 for col in 0..4 {
-                    assert_eq!(reversed[col][row], standard[col][row]);
+                    assert_eq!(reversed[col][row], finite[col][row]);
                 }
             }
-            assert!((depth(reversed, [0.0, 0.0, -near]) - 1.0).abs() < 1e-6);
-            assert!(depth(reversed, [0.0, 0.0, -far]).abs() < 1e-6);
-            for t in [0.0f32, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.99, 1.0] {
-                let z = -(near + (far - near) * t);
+            assert_eq!(depth(reversed, [0.0, 0.0, -near]), 1.0);
+            for d in DISTANCES {
+                let z = -(near + d);
                 let p = [0.3 * z, -0.2 * z, z];
                 let (s, r) = (depth(standard, p), depth(reversed, p));
-                assert!((r - (1.0 - s)).abs() < 1e-5, "t={t}: {r} vs 1 - {s}");
+                assert!((r - (1.0 - s)).abs() < 1e-5, "{d}: {r} vs 1 - {s}");
             }
         }
     }
 
-    // The reversed oblique matrix clips at the same plane as the standard-Z
-    // derivation and keeps the same side, with every depth mirrored: points on
-    // the clip plane land on the near plane (1), the far corner the plane faces
-    // stays on the far plane (0).
+    // The reversed infinite oblique matrix clips at the same plane as Lengyel's
+    // standard-Z infinite derivation and keeps the same side, with every depth
+    // mirrored: points on the clip plane land on the near plane (1), and the far
+    // corner the plane faces reaches the far plane (0) only at infinity. Every
+    // other direction inside the frustum stays in front of it.
     #[test]
-    fn the_reversed_oblique_mirrors_the_standard_derivation() {
+    fn the_reversed_infinite_oblique_mirrors_the_standard_derivation() {
         // Mirror-like planes ahead of the eye, which sits on the clipped side.
         let planes = [
             [0.0, 0.0, -1.0, -3.0],
@@ -317,21 +314,21 @@ mod tests {
             [-0.3, 0.25, -1.0, -4.0],
             [0.1, -0.3, -1.0, -2.0],
         ];
-        for (fov, aspect, near, far) in CAMERAS {
-            let standard = perspective_rh(fov, aspect, near, far);
-            let reversed = reversed_perspective_rh(fov, aspect, near, far);
+        for (fov, aspect, near) in CAMERAS {
+            let standard = standard_infinite_rh(fov, aspect, near);
+            let reversed = reversed_infinite_perspective_rh(fov, aspect, near);
             for c in planes {
-                let s = standard_oblique_rh(standard, c);
-                let r = reversed_oblique_rh(reversed, c);
+                let s = standard_infinite_oblique_rh(standard, c);
+                let r = reversed_infinite_oblique_rh(reversed, c);
                 for row in [0, 1, 3] {
                     for col in 0..4 {
                         assert_eq!(r[col][row], s[col][row]);
                     }
                 }
                 let side = |p: [f32; 3]| c[0] * p[0] + c[1] * p[1] + c[2] * p[2] + c[3];
-                for z in [-near, -0.5 * (near + far), -0.9 * far] {
+                for d in [near, 2.5, 7.0, 300.0, 1.0e5] {
                     for (fx, fy) in [(0.3, -0.2), (-0.4, 0.4), (0.0, 0.0)] {
-                        let p = [fx * z, fy * z, z];
+                        let p = [-fx * d, -fy * d, -d];
                         let (ds, dr) = (depth(s, p), depth(r, p));
                         let tolerance = 1e-4 * ds.abs().max(1.0);
                         assert!((dr - (1.0 - ds)).abs() < tolerance, "{dr} vs 1 - {ds}");
@@ -349,13 +346,23 @@ mod tests {
                     assert!(side(on_plane).abs() < 1e-4);
                     assert!((depth(r, on_plane) - 1.0).abs() < 1e-4);
                 }
-                // The far corner the plane faces is held at the far plane.
-                let corner = [
-                    sgn(c[0]) * far / standard[0][0],
-                    sgn(c[1]) * far / standard[1][1],
-                    -far,
-                ];
-                assert!(depth(r, corner).abs() < 1e-4, "{}", depth(r, corner));
+                // The far corner the plane faces, as a point at infinity: clip
+                // z is 0 there while w stays positive.
+                let q = [sgn(c[0]) / standard[0][0], sgn(c[1]) / standard[1][1], -1.0];
+                let z = r[0][2] * q[0] + r[1][2] * q[1] + r[2][2] * q[2];
+                let w = r[0][3] * q[0] + r[1][3] * q[1] + r[2][3] * q[2];
+                assert!(z.abs() < 1e-5 && w > 0.0, "{z} / {w}");
+                // Toward that corner and the other three, depth only approaches
+                // the far plane.
+                for (sx, sy) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+                    let mut prev = 1.0;
+                    for d in [1.0e3, 1.0e4, 1.0e5, 1.0e6] {
+                        let corner = [sx * d / r[0][0], sy * d / r[1][1], -d];
+                        let dr = depth(r, corner);
+                        assert!(dr > 0.0 && dr < prev, "{c:?} {sx},{sy} at {d}: {dr}");
+                        prev = dr;
+                    }
+                }
             }
         }
     }

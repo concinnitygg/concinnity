@@ -240,11 +240,16 @@ int2 water_clamp_pixel(float2 pixel_xy)
 
 // Linear camera distance to the scene point a screen NDC position and its stored
 // non-linear depth describe. Gives the water column thickness when differenced
-// against the distance to the surface itself.
+// against the distance to the surface itself. With no surface behind the water
+// the column is bottomless.
 float water_scene_distance(float2 ndc_xy, float depth01)
 {
-    float4 world = depth_unproject(view.inv_vp, ndc_xy, depth01);
-    return distance(world.xyz / world.w, view.camera_pos.xyz);
+    float3 world;
+    if (!depth_reconstruct(view.inv_vp, ndc_xy, depth01, world))
+    {
+        return 1e30;
+    }
+    return distance(world, view.camera_pos.xyz);
 }
 
 // The surface at this fragment: the wave normal, the fragment's screen UV, and

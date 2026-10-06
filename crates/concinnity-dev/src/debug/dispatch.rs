@@ -195,7 +195,7 @@ pub(crate) fn handle_request(text: &str, shared: &Arc<Mutex<DebugState>>) -> Str
                 "pitch": c.pitch,
                 "fov_y_degrees": c.fov_y_degrees,
                 "near": c.near,
-                "far": c.far,
+                "view_distance": c.view_distance,
             }),
             // No camera snapshot yet: either the world has no Camera3D or
             // `tick` has not run since startup.
@@ -512,7 +512,7 @@ mod tests {
                 pitch: -0.2,
                 fov_y_degrees: 60.0,
                 near: 0.1,
-                far: 100.0,
+                view_distance: Some(100.0),
             }),
             ..Default::default()
         };
@@ -520,6 +520,7 @@ mod tests {
         assert_eq!(r["ok"], true);
         assert_eq!(r["position"][0], 1.0);
         assert_eq!(r["fov_y_degrees"], 60.0);
+        assert_eq!(r["view_distance"], 100.0);
     }
 
     #[test]

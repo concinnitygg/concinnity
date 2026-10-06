@@ -19,7 +19,7 @@ From library preset (standalone, replaces Camera3D):
 - `preset`: A string. Name of a built-in or file-backed preset (e.g. "shot_eye_level"). Preset values are used as defaults; any inline fields override them.
 - `fov_y_degrees`: A float. Vertical field of view in degrees. Defaults to `75.0`.
 - `near`: A float. Near clip plane distance in world units. Defaults to `0.05`.
-- `far`: A float. Far clip plane distance in world units. Defaults to `200.0`.
+- `view_distance`: A float. How far the camera sees in world units; `null` for no limit. Optional.
 - `position`: An array of 3 floats. World-space camera position. Defaults to `[0.0, 0.0, 0.0]`.
 - `yaw`: A float. Yaw rotation in radians (Y-axis, applied first). Defaults to `0.0`.
 - `pitch`: A float. Pitch rotation in radians (X-axis, applied second). Defaults to `0.0`.

@@ -8,12 +8,13 @@
 //! counterpart is `shaders/depth_convention.hlsl`.
 //!
 //! The camera and the shadow maps are separate conventions: no pass tests one
-//! against the other's depth. Camera depth is reversed (near 1, far 0), which on
-//! a 32-bit float buffer spreads precision evenly over distance; shadow depth
-//! is standard (near 0, far 1).
+//! against the other's depth. Camera depth is reversed and infinite (near 1,
+//! infinity 0), which on a 32-bit float buffer spreads precision evenly over
+//! distance and leaves the camera no far clip; shadow depth is standard (near 0,
+//! far 1) over a finite range.
 
 use crate::gfx::projection::{
-    ortho_rh, perspective_rh, reversed_oblique_rh, reversed_perspective_rh,
+    ortho_rh, perspective_rh, reversed_infinite_oblique_rh, reversed_infinite_perspective_rh,
 };
 use crate::transform::Mat4;
 
@@ -52,7 +53,8 @@ impl DepthConvention {
         }
     }
 
-    /// Device depth at the far plane.
+    /// Device depth at the far plane, which for an infinite convention is
+    /// infinity.
     pub const fn far(self) -> f32 {
         match self {
             Self::Camera => 0.0,
@@ -63,6 +65,15 @@ impl DepthConvention {
     /// Whether the near plane sits at device depth 1 and the far plane at 0:
     /// what an upscaler's inverted-depth flag asks.
     pub const fn is_reversed(self) -> bool {
+        match self {
+            Self::Camera => true,
+            Self::Shadow => false,
+        }
+    }
+
+    /// Whether the projection has no far plane: depth reaches [`Self::far`]
+    /// only at infinity, which is what an upscaler's infinite-depth flag asks.
+    pub const fn is_infinite(self) -> bool {
         match self {
             Self::Camera => true,
             Self::Shadow => false,
@@ -107,17 +118,18 @@ impl DepthConvention {
 
 /// The camera's perspective projection: the main camera and the reflection
 /// probe faces. `fov_y_radians` is the full vertical field of view; `aspect` is
-/// width over height. Depth is reversed: `near` maps to 1 and `far` to 0.
-pub fn camera_projection(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
-    reversed_perspective_rh(fov_y_radians, aspect, near, far)
+/// width over height. Depth is reversed and infinite: `near` maps to 1, and
+/// depth falls toward 0 with distance, reaching it only at infinity.
+pub fn camera_projection(fov_y_radians: f32, aspect: f32, near: f32) -> Mat4 {
+    reversed_infinite_perspective_rh(fov_y_radians, aspect, near)
 }
 
 /// A camera projection whose near clip plane is replaced by `clip_plane`, given
 /// in the projection's view space, so everything on its negative side clips.
-/// The far plane is kept. A planar reflection uses it to clip the geometry
-/// behind its mirror.
+/// Depth still reaches the far plane only at infinity. A planar reflection uses
+/// it to clip the geometry behind its mirror.
 pub(crate) fn camera_oblique_projection(proj: Mat4, clip_plane: [f32; 4]) -> Mat4 {
-    reversed_oblique_rh(proj, clip_plane)
+    reversed_infinite_oblique_rh(proj, clip_plane)
 }
 
 /// A spot light's perspective shadow projection.
@@ -158,6 +170,7 @@ mod tests {
     fn the_camera_is_reversed_and_shadows_are_standard() {
         let camera = DepthConvention::Camera;
         assert!(camera.is_reversed());
+        assert!(camera.is_infinite());
         assert_eq!(
             (camera.near(), camera.far(), camera.clear()),
             (1.0, 0.0, 0.0)
@@ -167,6 +180,7 @@ mod tests {
 
         let shadow = DepthConvention::Shadow;
         assert!(!shadow.is_reversed());
+        assert!(!shadow.is_infinite());
         assert_eq!(
             (shadow.near(), shadow.far(), shadow.clear()),
             (0.0, 1.0, 1.0)
@@ -202,11 +216,8 @@ mod tests {
     // their convention names.
     #[test]
     fn projections_land_on_the_convention_planes() {
-        let camera = camera_projection(1.2, 1.6, 0.1, 500.0);
-        let near = device_depth(camera, -0.1);
-        let far = device_depth(camera, -500.0);
-        assert!((near - DepthConvention::Camera.near()).abs() < 1e-4);
-        assert!((far - DepthConvention::Camera.far()).abs() < 1e-4);
+        let camera = camera_projection(1.2, 1.6, 0.1);
+        assert_eq!(device_depth(camera, -0.1), DepthConvention::Camera.near());
 
         let spot = shadow_perspective(1.0, 1.0, 0.05, 40.0);
         assert!((device_depth(spot, -0.05) - DepthConvention::Shadow.near()).abs() < 1e-4);
@@ -217,15 +228,42 @@ mod tests {
         assert!((device_depth(cascade, -8.0) - DepthConvention::Shadow.far()).abs() < 1e-5);
     }
 
+    // The camera has no far plane: depth keeps falling with distance and stays
+    // in front of the far plane however far a surface is.
+    #[test]
+    fn camera_depth_approaches_the_far_plane_only_at_infinity() {
+        for (fov, aspect, near) in [(1.2, 1.6, 0.1), (0.5, 2.35, 0.01), (1.6, 1.0, 2.0)] {
+            let camera = camera_projection(fov, aspect, near);
+            let mut prev = device_depth(camera, -near);
+            assert_eq!(prev, 1.0);
+            for distance in [0.5, 1.0, 10.0, 1.0e3, 1.0e5, 1.0e6, 1.0e7, 1.0e9, 1.0e12] {
+                if distance <= near {
+                    continue;
+                }
+                let d = device_depth(camera, -distance);
+                assert!(
+                    DepthConvention::Camera.is_closer(prev, d),
+                    "{prev} vs {d} at {distance}"
+                );
+                assert!(
+                    DepthConvention::Camera.is_closer(d, DepthConvention::Camera.far()),
+                    "{d} at {distance}"
+                );
+                prev = d;
+            }
+            assert!(device_depth(camera, -1.0e9) < 1.0e-8);
+        }
+    }
+
     // A camera matrix keeps nearer surfaces passing its write test at every
     // distance, oblique clip included.
     #[test]
     fn the_camera_write_test_keeps_the_nearer_surface() {
-        let proj = camera_projection(1.1, 1.7, 0.2, 80.0);
+        let proj = camera_projection(1.1, 1.7, 0.2);
         let oblique = camera_oblique_projection(proj, [0.0, 0.1, -1.0, -0.25]);
         for m in [proj, oblique] {
             let mut prev = device_depth(m, -0.3);
-            for z in [-0.5, -1.0, -10.0, -40.0, -79.0] {
+            for z in [-0.5, -1.0, -10.0, -40.0, -79.0, -5.0e3, -1.0e6] {
                 let d = device_depth(m, z);
                 assert!(
                     DepthConvention::Camera.is_closer(prev, d),

@@ -689,8 +689,10 @@ impl VkContext {
             // narrowed to the crop, and the oblique clip rides the view-proj, so it
             // also rejects geometry that cannot reach the crop or sits behind the
             // reflector.
-            let frustum =
-                Frustum::from_camera(crop.crop_view_projection(m.view_proj, set.width, set.height));
+            let frustum = Frustum::from_camera(
+                crop.crop_view_projection(m.view_proj, set.width, set.height),
+                self.state.view.view_distance,
+            );
             self.encode_probe_cull(cmd, set.cull_sets[ring], set.hiz_set, &frustum, m.eye);
             // Order the previous mirror render's attachment writes before this one's
             // layout transition. `main_render_pass` declares both attachments

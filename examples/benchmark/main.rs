@@ -70,9 +70,9 @@ use concinnity::{App, World};
 
 // How far the camera sees. Long enough to reach across the widest station from
 // the far side of its own circle, short enough that the stations past the next
-// one are behind the far plane rather than rendered into every segment before
+// one lie beyond it, culled rather than rendered into every segment before
 // them.
-const CAMERA_FAR: f32 = 80.0;
+const VIEW_DISTANCE: f32 = 80.0;
 const CAMERA_FOV_Y_DEGREES: f32 = 65.0;
 
 // Frames earlier than this are thrown away. Shorter than the opening hold, so
@@ -121,7 +121,7 @@ fn benchmark_world() -> Result<World, String> {
         Camera3D {
             fov_y_degrees: CAMERA_FOV_Y_DEGREES,
             near: 0.05,
-            far: CAMERA_FAR,
+            view_distance: Some(VIEW_DISTANCE),
             position: [0.0, track::HEIGHT, stations::START_Z],
             yaw: 0.0,
             pitch: (-4.0_f32).to_radians(),
@@ -174,14 +174,14 @@ mod tests {
     }
 
     // The camera has to see across a station from the far side of its own
-    // circle, or the station is clipped in the middle of its own segment.
+    // circle, or the station is culled in the middle of its own segment.
     #[test]
     fn the_camera_sees_across_the_station_it_is_circling() {
         let widest = stations::STATIONS
             .iter()
             .map(|s| s.radius)
             .fold(0.0_f32, f32::max);
-        assert!(CAMERA_FAR > widest * 2.0, "the far side is clipped");
+        assert!(VIEW_DISTANCE > widest * 2.0, "the far side is culled");
     }
 
     // The report and the track are what make this world a benchmark rather than

@@ -209,6 +209,8 @@ pub(super) struct DxUniforms {
     // pass. Static: filled once at init from `BackendInit.local_lights` and
     // never rewritten (not persistently mapped, so it stays out of `unmap`).
     pub local_light_buffer: PooledBuffer,
+    // The local lights' reach, which places the far end of the cluster grid.
+    pub cluster_reach: concinnity_core::render::cluster_range::ClusterReach,
     // The values the light ring carries. A live Ambient-slider or
     // directional-light change mutates this and re-arms `light_dirty`;
     // `record_frame` writes the frame's own slot, so no in-flight read is raced.
@@ -933,7 +935,7 @@ impl DxContext {
             elapsed,
             fov_y_radians,
             near,
-            far,
+            view_distance,
             cam_pos,
             text_calls,
             lines,
@@ -947,7 +949,8 @@ impl DxContext {
         // + depth normalization) and for the graph-input mask in record_frame.
         self.state.view.mode = view_mode;
         self.state.view.show = show;
-        self.state.view.far = far;
+        self.state.view.near = near;
+        self.state.view.view_distance = view_distance;
         self.state.view.sky_rot = sky_rot;
         self.apply_pending_rebuilds()?;
 
@@ -982,7 +985,7 @@ impl DxContext {
         // frame and a world that never draws a line never compiles them.
         self.ensure_line_pipeline(!lines.is_empty());
 
-        self.update_shadow_schedule(cam_pos, fov_y_radians, near, far);
+        self.update_shadow_schedule(cam_pos, fov_y_radians, near, view_distance);
         // Reflection-probe count + records into this frame's ring CBV and records
         // buffer, which every probe-reading pass binds. A ring (one of each per
         // frame) so this write never races a prior frame's in-flight GPU read.
@@ -1032,7 +1035,7 @@ impl DxContext {
                 elapsed,
                 fov_y_radians,
                 near,
-                far,
+                view_distance,
                 cam_pos,
                 text_calls,
                 lines,

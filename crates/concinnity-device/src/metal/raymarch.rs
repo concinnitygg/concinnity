@@ -888,7 +888,7 @@ mod tests {
             [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let f = Frustum::from_camera(identity);
+        let f = Frustum::from_camera(identity, None);
         assert!(volume_in_frustum([0.0, 0.0, 0.0], [0.5, 0.5, 0.5], &f));
         assert!(!volume_in_frustum([10.0, 0.0, 0.0], [0.5, 0.5, 0.5], &f));
         // A box the camera sits inside (origin within its extent) still

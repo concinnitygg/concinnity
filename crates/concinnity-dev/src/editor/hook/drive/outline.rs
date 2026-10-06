@@ -247,7 +247,7 @@ fn push_camera(ctx: &ShapeCtx, out: &mut Vec<Line>) {
             fov_y_rad: num("fov_y_degrees", 75.0).to_radians(),
             aspect,
             near: num("near", 0.05),
-            far: num("far", 200.0),
+            far: num("view_distance", shapes::UNLIMITED_FRUSTUM_LENGTH),
         },
         ctx.stroke,
     );
@@ -563,7 +563,7 @@ mod tests {
                 view_matrix: concinnity_core::gfx::camera::view_matrix([0.0; 3], 0.0, 0.0),
                 fov_y_degrees: 75.0,
                 near: 0.05,
-                far: 200.0,
+                view_distance: None,
                 yaw: 0.0,
                 pitch: 0.0,
                 desired_move: [0.0; 3],
@@ -577,10 +577,11 @@ mod tests {
         assert_eq!(lines_of(&h, &world).len(), shapes::BOX_EDGES);
 
         // A hand-authored projection key that is not a number falls back to
-        // the shipping default rather than collapsing the frustum away.
+        // the shipping default rather than collapsing the frustum away, and an
+        // unlimited view distance draws the fixed-length outline.
         let mut h = hook(vec![serde_json::json!({
             "type": "Camera3D",
-            "args": {"$id": "shot", "near": "0.05", "far": null}
+            "args": {"$id": "shot", "near": "0.05", "view_distance": null}
         })]);
         h.select_named("shot");
         assert_eq!(lines_of(&h, &world).len(), shapes::BOX_EDGES);

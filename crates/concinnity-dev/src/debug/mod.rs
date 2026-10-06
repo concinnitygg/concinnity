@@ -49,7 +49,7 @@
 //!
 //! `camera-get` is a read-only snapshot (like `state` / `profile`): it reports
 //! the active `Camera3D`'s `position`, `yaw`, `pitch`, `fov_y_degrees`, `near`,
-//! and `far` from the per-tick snapshot. `camera-set` is a runtime mutation
+//! and `view_distance` (`null` when unlimited) from the per-tick snapshot. `camera-set` is a runtime mutation
 //! (like `decal-add` / `screenshot`): it queues a new pose on the runtime
 //! queue, blocks on a one-shot reply, and the per-frame debug
 //! drive writes `position` / `yaw` / `pitch` (and `fov_y_degrees` when present)

@@ -265,6 +265,10 @@ pub(crate) struct Frustum {
     pub far: f32,
 }
 
+// How far a camera's frustum outline reaches when the camera sees without
+// limit.
+pub(crate) const UNLIMITED_FRUSTUM_LENGTH: f32 = 200.0;
+
 // A camera frustum wireframe: near rect, far rect, and the four connecting
 // edges. Appends nothing for a degenerate projection (`far <= near` or a
 // non-positive fov / aspect).

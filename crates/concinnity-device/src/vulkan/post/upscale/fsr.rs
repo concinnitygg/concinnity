@@ -79,23 +79,28 @@ struct ffxConfigureDescGlobalDebug1 {
 // Bitmask values from `enum FfxApiCreateContextUpscaleFlags`.
 const FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE: u32 = 1 << 0;
 const FFX_UPSCALE_ENABLE_DEPTH_INVERTED: u32 = 1 << 3;
+const FFX_UPSCALE_ENABLE_DEPTH_INFINITE: u32 = 1 << 4;
 const FFX_UPSCALE_ENABLE_AUTO_EXPOSURE: u32 = 1 << 5;
 
 // The create flags for a camera drawn under `depth`: HDR linear input, FFX's own
-// auto-exposure, and inverted depth when the near plane is device depth 1. The
-// far plane is finite, so the infinite-depth flag stays off.
+// auto-exposure, inverted depth when the near plane is device depth 1, and
+// infinite depth when the projection has no far plane.
 const fn ffx_create_flags(depth: DepthConvention) -> u32 {
-    let flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+    let mut flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
     if depth.is_reversed() {
-        flags | FFX_UPSCALE_ENABLE_DEPTH_INVERTED
-    } else {
-        flags
+        flags |= FFX_UPSCALE_ENABLE_DEPTH_INVERTED;
     }
+    if depth.is_infinite() {
+        flags |= FFX_UPSCALE_ENABLE_DEPTH_INFINITE;
+    }
+    flags
 }
 
-// The `(camera_near, camera_far)` pair the dispatch hands FFX. With inverted
-// depth FFX takes the two planes swapped.
-const fn ffx_camera_planes(depth: DepthConvention, near: f32, far: f32) -> (f32, f32) {
+// The `(camera_near, camera_far)` pair the dispatch hands FFX for the camera,
+// whose near plane is `near` and whose projection has no far plane: FFX takes
+// that far plane as FLT_MAX, and with inverted depth the two planes swapped.
+const fn ffx_camera_planes(depth: DepthConvention, near: f32) -> (f32, f32) {
+    let far = f32::MAX;
     if depth.is_reversed() {
         (far, near)
     } else {
@@ -652,10 +657,9 @@ impl VkUpscaleBackend for FsrUpscaler {
             jitter_offset,
             elapsed,
             near,
-            far,
             fov_y_radians: camera_fov_y_radians,
         } = camera;
-        let (camera_near, camera_far) = ffx_camera_planes(DepthConvention::Camera, near, far);
+        let (camera_near, camera_far) = ffx_camera_planes(DepthConvention::Camera, near);
         let mk = |image: vk::Image, format: u32, usage: u32, state: u32, w: u32, h: u32| {
             FfxApiResource {
                 resource: image.as_raw() as usize as *mut c_void,
@@ -807,17 +811,22 @@ mod tests {
     #[test]
     fn the_depth_contract_follows_the_camera_convention() {
         let camera = DepthConvention::Camera;
-        let inverted = (ffx_create_flags(camera) & FFX_UPSCALE_ENABLE_DEPTH_INVERTED) != 0;
+        let flags = ffx_create_flags(camera);
+        let inverted = (flags & FFX_UPSCALE_ENABLE_DEPTH_INVERTED) != 0;
         assert_eq!(inverted, camera.is_reversed());
-        let expected = if inverted { (500.0, 0.1) } else { (0.1, 500.0) };
-        assert_eq!(ffx_camera_planes(camera, 0.1, 500.0), expected);
-        assert_eq!(
-            ffx_create_flags(DepthConvention::Shadow) & FFX_UPSCALE_ENABLE_DEPTH_INVERTED,
-            0
-        );
-        assert_eq!(
-            ffx_camera_planes(DepthConvention::Shadow, 0.1, 500.0),
-            (0.1, 500.0)
-        );
+        // The planes pass the far plane as FLT_MAX, which is what FFX reads it
+        // as only under the infinite-depth flag.
+        assert!(camera.is_infinite());
+        assert_ne!(flags & FFX_UPSCALE_ENABLE_DEPTH_INFINITE, 0);
+        let expected = if inverted {
+            (f32::MAX, 0.1)
+        } else {
+            (0.1, f32::MAX)
+        };
+        assert_eq!(ffx_camera_planes(camera, 0.1), expected);
+
+        let shadow = ffx_create_flags(DepthConvention::Shadow);
+        assert_eq!(shadow & FFX_UPSCALE_ENABLE_DEPTH_INVERTED, 0);
+        assert_eq!(shadow & FFX_UPSCALE_ENABLE_DEPTH_INFINITE, 0);
     }
 }

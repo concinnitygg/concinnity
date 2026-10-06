@@ -8,6 +8,7 @@ use concinnity_core::gfx::render_types::{
 use concinnity_core::profile;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend_init;
+use concinnity_core::render::cluster_range::ClusterReach;
 use concinnity_core::render::decal;
 use concinnity_core::render::error;
 use concinnity_core::render::hdr_output;
@@ -516,6 +517,8 @@ pub(super) struct MtlSceneAssets {
     // neutral placeholder when the scene declares no local lights) so the
     // binding is valid; `light_uniforms.num_local_lights` bounds iteration.
     pub local_light_buffer: PooledBuffer,
+    // The local lights' reach, which places the far end of the cluster grid.
+    pub cluster_reach: ClusterReach,
     // Per-scene rect area-light extents, indexed by `GpuLight.data_index`.
     // Uploaded once; a one-element placeholder when the world declares none.
     pub area_light_buffer: PooledBuffer,

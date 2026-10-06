@@ -47,7 +47,8 @@ pub(in crate::shader_layout) fn composite() -> Vec<Case> {
         [post.fxaa] => ["fxaa"],
         fade,
         view_mode,
-        [far] => ["far_plane"],
+        depth_near,
+        depth_far,
     }))]
 }
 

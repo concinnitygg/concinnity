@@ -64,7 +64,7 @@ impl MtlContext {
             elapsed,
             fov_y_radians,
             near,
-            far,
+            view_distance,
             cam_pos,
             text_calls,
             lines,
@@ -79,7 +79,8 @@ impl MtlContext {
         // Snapped for the pass encoders (wireframe fill mode, unlit shading,
         // the composite's channel visualization + depth normalization).
         self.state.view.mode = view_mode;
-        self.state.view.far = far;
+        self.state.view.near = near;
+        self.state.view.view_distance = view_distance;
         self.state.view.sky_rot = sky_rot;
         self.apply_pending_rebuilds()?;
 
@@ -113,7 +114,7 @@ impl MtlContext {
         // Per-object morph weights for the skinned fold, from the same ring slot.
         let skinned_morph_weight_bufs = self.build_morph_weight_buffers(ring_slot)?;
 
-        let aspect = self.update_shadow_schedule(cam_pos, fov_y_radians, near, far);
+        let aspect = self.update_shadow_schedule(cam_pos, fov_y_radians, near, view_distance);
 
         let (render_w, render_h) = self.resize_frame_targets()?;
 
@@ -122,7 +123,14 @@ impl MtlContext {
             vp,
             inv_vp,
             frustum,
-        } = self.frame_projection(fov_y_radians, aspect, near, far, render_w, render_h);
+        } = self.frame_projection(
+            fov_y_radians,
+            aspect,
+            near,
+            view_distance,
+            render_w,
+            render_h,
+        );
 
         let texture_signature = self.refresh_probe_records_and_residency(ring_slot)?;
 
@@ -160,7 +168,7 @@ impl MtlContext {
             fov_y_radians,
             aspect,
             near,
-            far,
+            view_distance,
             cam_pos,
             sky_rot,
             proj,

@@ -132,8 +132,10 @@ pub struct SceneView {
     pub mode: ViewMode,
     /// The feature passes the frame runs.
     pub show: ShowFlags,
-    /// The camera far plane, for the composite's depth-channel normalization.
-    pub far: f32,
+    /// The camera near plane, where the composite's depth-channel view starts.
+    pub near: f32,
+    /// The camera view distance, where the depth-channel view ends when set.
+    pub view_distance: Option<f32>,
     /// The camera's view matrix, column-major.
     pub matrix: [[f32; 4]; 4],
     /// Rows of the sky's inverse rotation, uploaded into every uniform block
@@ -149,7 +151,8 @@ impl SceneView {
             scene_fade: 0.0,
             mode: ViewMode::default(),
             show: ShowFlags::default(),
-            far: 1.0,
+            near: 0.05,
+            view_distance: None,
             matrix: IDENTITY,
             sky_rot: SkyOrientation::IDENTITY_ROWS,
         }

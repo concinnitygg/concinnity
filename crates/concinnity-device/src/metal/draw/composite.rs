@@ -93,11 +93,16 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
         );
         // Post-process tunables (bloom intensity) plus the scene-transition
         // fade at buffer(0).
+        let (depth_near, depth_far) = render_types::CompositeParams::depth_view_range(
+            self.ctx.state.view.near,
+            self.ctx.state.view.view_distance,
+        );
         let composite = render_types::CompositeParams {
             post: self.ctx.post_process,
             fade: self.ctx.state.view.scene_fade,
             view_mode: self.channel_view,
-            far: self.ctx.state.view.far,
+            depth_near,
+            depth_far,
         };
         enc.set_fragment_value(&composite, 0);
         // Fullscreen triangle: 3 vertices, no vertex buffer (the shared

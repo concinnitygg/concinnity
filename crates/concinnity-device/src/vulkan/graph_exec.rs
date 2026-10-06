@@ -519,12 +519,10 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // integration step.
     pub elapsed: f32,
     // Camera near-plane in view units. The FogFroxel kernel needs it to map
-    // each Z slab onto the linear-Z `[near, max_distance]` volume range.
+    // each Z slab onto the linear-Z `[near, max_distance]` volume range, and
+    // the temporal-upscale dispatch (FSR; DLSS / XeSS ignore it) needs it with
+    // the FOV to linearize depth for its reprojection.
     pub near: f32,
-    // Camera far-plane in view units. The temporal-upscale dispatch (FSR;
-    // DLSS / XeSS ignore it) needs the near + far + FOV to linearize depth for
-    // its reprojection.
-    pub far: f32,
     // Which planar mirrors this frame renders, and the screen rectangle each
     // covers; computed once from `vp_mat` so the mirror pass and the transparent
     // pass that samples it agree.

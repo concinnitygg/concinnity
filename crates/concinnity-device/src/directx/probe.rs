@@ -392,7 +392,7 @@ impl DxContext {
         );
 
         let vp = reflection_probe::face_view_projection(eye, face);
-        let frustum = Frustum::from_camera(vp);
+        let frustum = Frustum::from_camera(vp, None);
 
         // A fresh allocator + list per face, held until the fence proves the face
         // retired, so no in-flight allocator is ever reset.

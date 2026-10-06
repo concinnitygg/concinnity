@@ -234,7 +234,7 @@ impl DxContext {
         cam_pos: [f32; 3],
         fov_y_radians: f32,
         near: f32,
-        far: f32,
+        view_distance: Option<f32>,
     ) {
         // Cascaded-shadow update policy. Advance the round-robin schedule, then
         // refresh only this frame's cascades' light VPs (splits always refresh).
@@ -251,7 +251,7 @@ impl DxContext {
                 aspect: self.targets.extent.render_width.max(1) as f32
                     / self.targets.extent.render_height.max(1) as f32,
                 near,
-                far,
+                view_distance,
             };
             let shadow = &mut self.shadow;
             let light = CascadeLight {
@@ -548,12 +548,11 @@ impl DxContext {
         fov_y_radians: f32,
         aspect: f32,
         near: f32,
-        far: f32,
         width: u32,
         height: u32,
     ) -> FrameProjection {
         // Compute the camera VPs the main + velocity passes consume.
-        let proj = camera_projection(fov_y_radians, aspect, near, far);
+        let proj = camera_projection(fov_y_radians, aspect, near);
         // Un-jittered camera VP, fed to the velocity pre-pass so the stored
         // motion vector is free of the sub-pixel projection jitter.
         let cur_vp = mat4_mul(proj, self.state.view.matrix);

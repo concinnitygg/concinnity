@@ -98,7 +98,7 @@ mod tests {
 
     // A camera at `EYE` looking `yaw` radians left of -z.
     fn yawed(yaw: f32) -> Mat4 {
-        let proj = camera_projection(1.2, 16.0 / 9.0, 0.1, 200.0);
+        let proj = camera_projection(1.2, 16.0 / 9.0, 0.1);
         let dir = [-sin(yaw), 0.0, -cos(yaw)];
         mat4_mul(
             proj,
@@ -136,7 +136,7 @@ mod tests {
     ];
 
     fn camera(eye: [f32; 3], target: [f32; 3]) -> Mat4 {
-        let proj = camera_projection(1.2, 16.0 / 9.0, 0.1, 200.0);
+        let proj = camera_projection(1.2, 16.0 / 9.0, 0.1);
         mat4_mul(proj, look_at(eye, target, UP))
     }
 
@@ -200,7 +200,7 @@ mod tests {
     // sees the same sky its unclipped camera would.
     #[test]
     fn the_depth_row_never_moves_the_ray() {
-        let proj = camera_projection(1.2, 16.0 / 9.0, 0.1, 200.0);
+        let proj = camera_projection(1.2, 16.0 / 9.0, 0.1);
         let view = look_at(EYE, TARGET, UP);
         let oblique = camera_oblique_projection(proj, [0.2, 0.9, -0.1, -3.0]);
         let mut reversed = proj;
@@ -219,7 +219,7 @@ mod tests {
     // through a mirror's reflected (handedness-flipping) view.
     #[test]
     fn the_ray_points_forward_through_a_mirror() {
-        let proj = camera_projection(1.2, 16.0 / 9.0, 0.1, 200.0);
+        let proj = camera_projection(1.2, 16.0 / 9.0, 0.1);
         let mirrored = view_from_basis(EYE, [-1.0, 0.0, 0.0], UP, [0.0, 0.0, -1.0]);
         let vp = mat4_mul(proj, mirrored);
         for ndc in SAMPLES {
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn jitter_never_leaks_into_the_motion() {
-        let proj = camera_projection(1.2, 16.0 / 9.0, 0.1, 200.0);
+        let proj = camera_projection(1.2, 16.0 / 9.0, 0.1);
         let view = look_at(EYE, TARGET, UP);
         let cur = mat4_mul(proj, view);
         let shaky = mat4_mul(jittered(proj, 0.0013, -0.0007), view);
@@ -271,7 +271,7 @@ mod tests {
     // where the previous camera saw that same direction.
     #[test]
     fn a_turning_camera_moves_the_sky_by_its_rotation() {
-        let proj = camera_projection(1.2, 16.0 / 9.0, 0.1, 200.0);
+        let proj = camera_projection(1.2, 16.0 / 9.0, 0.1);
         let yaw = 0.05f32;
         let turned = [-sin(yaw), 0.0, -cos(yaw)];
         let prev = mat4_mul(proj, look_at(EYE, [EYE[0], EYE[1], EYE[2] - 1.0], UP));

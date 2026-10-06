@@ -20,26 +20,23 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::f32::consts::FRAC_PI_2;
 
-// One cube face: a 90-degree vertical field of view at a square aspect.
-fn perspective_90(near: f32, far: f32) -> [[f32; 4]; 4] {
-    camera_projection(FRAC_PI_2, 1.0, near, far)
+// One cube face: a 90-degree vertical field of view at a square aspect, with
+// the camera's infinite depth.
+fn perspective_90(near: f32) -> [[f32; 4]; 4] {
+    camera_projection(FRAC_PI_2, 1.0, near)
 }
 
 /// Near plane of every probe face. The capture is independent of the live
-/// camera's clip range, so a probe sees the same scene whatever the camera's
-/// near and far planes are.
+/// camera's near plane and view distance, so a probe sees the same scene
+/// whatever the camera's are.
 pub const CAPTURE_NEAR: f32 = 0.05;
 
-/// Far plane of every probe face. The cube is sampled by direction, so the far
-/// plane only bounds what the capture sees and sets its depth precision.
-pub const CAPTURE_FAR: f32 = 2000.0;
-
-/// The view-projection for cube face `face` (0..6) captured from `eye`, over
-/// [`CAPTURE_NEAR`]..[`CAPTURE_FAR`].
+/// The view-projection for cube face `face` (0..6) captured from `eye`, from
+/// [`CAPTURE_NEAR`] out to infinity.
 pub fn face_view_projection(eye: [f32; 3], face: usize) -> [[f32; 4]; 4] {
     let b = FACE_BASIS[face];
     let view = view_from_basis(eye, b[0], b[1], b[2]);
-    mat4_mul(perspective_90(CAPTURE_NEAR, CAPTURE_FAR), view)
+    mat4_mul(perspective_90(CAPTURE_NEAR), view)
 }
 
 /// The world->view matrix alone for cube face `face`, captured from `eye`. The
@@ -1098,18 +1095,18 @@ mod tests {
         z / w
     }
 
-    // The capture keeps geometry from just past the near plane out to well
-    // beyond any camera's far plane, and clips only past its own range.
+    // The capture keeps geometry from just past the near plane out to any
+    // distance, and clips only nearer than its near plane.
     #[test]
-    fn every_face_captures_the_fixed_range() {
+    fn every_face_captures_from_its_near_plane_out() {
         for face in 0..6 {
-            for distance in [CAPTURE_NEAR * 1.5, 1.0, 250.0, CAPTURE_FAR * 0.95] {
+            let mut prev = 1.0;
+            for distance in [CAPTURE_NEAR * 1.5, 1.0, 250.0, 2.0e3, 1.0e5, 1.0e8] {
                 let z = face_depth(face, distance);
-                assert!((0.0..=1.0).contains(&z), "face {face} at {distance}: z {z}");
+                assert!(z > 0.0 && z < prev, "face {face} at {distance}: z {z}");
+                prev = z;
             }
-            // Reversed depth: past the far plane falls below 0, nearer than the
-            // near plane above 1.
-            assert!(face_depth(face, CAPTURE_FAR * 1.05) < 0.0, "face {face}");
+            // Reversed depth: nearer than the near plane rises above 1.
             assert!(face_depth(face, CAPTURE_NEAR * 0.5) > 1.0, "face {face}");
         }
     }
@@ -1143,10 +1140,7 @@ mod tests {
         let eye = [1.0, 2.0, -3.0];
         for face in 0..6 {
             let vp = face_view_projection(eye, face);
-            let comp = mat4_mul(
-                perspective_90(CAPTURE_NEAR, CAPTURE_FAR),
-                face_view_matrix(eye, face),
-            );
+            let comp = mat4_mul(perspective_90(CAPTURE_NEAR), face_view_matrix(eye, face));
             for c in 0..4 {
                 for r in 0..4 {
                     assert!(

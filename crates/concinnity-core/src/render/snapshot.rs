@@ -21,8 +21,8 @@ pub struct FrameScalars {
     pub fov_y_radians: f32,
     /// Near clip distance in world units.
     pub near: f32,
-    /// Far clip distance in world units.
-    pub far: f32,
+    /// How far the camera sees in world units, or `None` for no limit.
+    pub view_distance: Option<f32>,
     /// View matrix the frame draws with (rebased when a chunk world streams).
     pub view: Mat4,
     /// Camera position in the space the frame renders in.
@@ -50,7 +50,7 @@ impl Default for FrameScalars {
             elapsed: 0.0,
             fov_y_radians: core::f32::consts::FRAC_PI_4,
             near: 0.05,
-            far: 200.0,
+            view_distance: None,
             view: crate::transform::IDENTITY,
             cam_pos: [0.0; 3],
             view_mode: ViewMode::default(),

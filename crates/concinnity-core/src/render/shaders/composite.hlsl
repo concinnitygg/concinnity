@@ -10,9 +10,9 @@
 // alike. Textures 3-5 are declared but sampled only while a
 // channel view is active, which is also the only time the host binds them.
 
-// Layout matches `CompositeParams` in render_types.rs (48 B): the
+// Layout matches `CompositeParams` in render_types.rs (52 B): the
 // `PostProcessParams` fields followed by the fade, the channel-view selector,
-// and the camera far plane.
+// and the depth view's distance range.
 struct CompositeParams
 {
     float bloom_intensity;
@@ -36,8 +36,10 @@ struct CompositeParams
     // G-buffer channel view selector (ViewMode discriminant): 0 composites the
     // scene; 3 = normals, 4 = roughness, 5 = occlusion, 6 = depth.
     uint view_mode;
-    // Camera far plane, normalizing the depth channel view.
-    float far_plane;
+    // Distances the depth channel view shows as black and white, on a log
+    // scale between.
+    float depth_near;
+    float depth_far;
 };
 
 [[vk::binding(0, 0)]] Texture2D<float4> hdr_tex : register(t0);
@@ -180,9 +182,11 @@ float3 channel_view(float2 uv)
     }
     if (post.view_mode == 6u)
     {
-        // Linear view depth over far; empty pixels read as the far plane.
-        return (nd.a > 0.0) ? (float3)(saturate(nd.a / max(post.far_plane, 1e-3)))
-                            : (float3)(1.0);
+        // Log distance from depth_near (black) to depth_far (white); empty
+        // pixels read as white.
+        float t = log(max(nd.a, post.depth_near) / post.depth_near)
+                / log(post.depth_far / post.depth_near);
+        return (nd.a > 0.0) ? (float3)(saturate(t)) : (float3)(1.0);
     }
     return (float3)(0.0);
 }

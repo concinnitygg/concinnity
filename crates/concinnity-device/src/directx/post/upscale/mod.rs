@@ -104,7 +104,6 @@ pub(in crate::directx) struct UpscaleCamera {
     // Frame time delta in milliseconds.
     pub frame_time_delta_ms: f32,
     pub camera_near: f32,
-    pub camera_far: f32,
     pub camera_fov_y_radians: f32,
 }
 

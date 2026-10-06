@@ -61,11 +61,12 @@ mod tests {
 
     #[test]
     fn nested_objects_merge_recursively() {
-        let template = json!({"controller": {"move_speed": 4.0, "free_fly": false}, "far": 100});
+        let template =
+            json!({"controller": {"move_speed": 4.0, "free_fly": false}, "view_distance": 100});
         let patch = json!({"controller": {"move_speed": 9.0}});
         assert_eq!(
             merge_args(&template, &patch),
-            json!({"controller": {"move_speed": 9.0, "free_fly": false}, "far": 100})
+            json!({"controller": {"move_speed": 9.0, "free_fly": false}, "view_distance": 100})
         );
     }
 

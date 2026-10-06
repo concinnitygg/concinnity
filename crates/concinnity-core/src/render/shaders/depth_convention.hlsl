@@ -3,18 +3,19 @@
 // is `render::depth`; the two must agree.
 //
 // Camera depth is the main camera's buffer and every target tested against it:
-// reversed, near is 1 and far is 0. Shadow depth is the shadow maps: near is 0
-// and far is 1.
+// reversed and infinite, near is 1 and depth reaches 0 only at infinity. Shadow
+// depth is the shadow maps: near is 0 and far is 1.
 //
-// The helpers are macros, so each expands to the exact expression it names and
-// compiles to the same code as writing that expression in place. Guarded,
-// because a shader and a fragment it splices may both carry the marker.
+// The comparison helpers are macros, so each expands to the exact expression it
+// names and compiles to the same code as writing that expression in place.
+// Guarded, because a shader and a fragment it splices may both carry the
+// marker.
 
 #ifndef CN_DEPTH_CONVENTION
 #define CN_DEPTH_CONVENTION
 
-// Camera device depth at the near and far planes. `DEPTH_FAR` is also the
-// cleared value: a pixel no surface reached.
+// Camera device depth at the near plane and at infinity. `DEPTH_FAR` is also
+// the cleared value: a pixel no surface reached.
 #define DEPTH_NEAR 1.0
 #define DEPTH_FAR 0.0
 
@@ -36,12 +37,33 @@
 // distance, so a relative step in depth is a relative step in distance.
 #define depth_offset_far_relative(d, fraction) ((d) * (1.0 - (fraction)))
 
-// The homogeneous world position (divide by w) of the surface stored at camera
-// depth `d` under NDC `ndc_xy`, through the inverse view-projection `inv_vp`.
-// Where `d` is cleared it is the far-plane point on the pixel's ray; a caller
-// that needs a no-hit result tests `depth_is_cleared` / `depth_is_written`
-// first.
-#define depth_unproject(inv_vp, ndc_xy, d) mul((inv_vp), float4((ndc_xy), (d), 1.0))
+// Smallest homogeneous w a reconstructed camera-depth point may have. Under the
+// infinite projection w is the reciprocal of the view-axis distance, so a
+// surface past 1e7 m reconstructs as no hit rather than a point at infinity.
+#define DEPTH_RECONSTRUCT_MIN_W 1e-7
+
+// The world position of the surface stored at camera depth `d` under NDC
+// `ndc_xy`, through the inverse view-projection `inv_vp`, into `world`. False
+// where there is no surface to place: a cleared pixel, or a depth so close to
+// the far plane that its point lies at infinity. `world` is finite either way.
+bool depth_reconstruct(float4x4 inv_vp, float2 ndc_xy, float d, out float3 world)
+{
+    float4 h = mul(inv_vp, float4(ndc_xy, d, 1.0));
+    world = h.xyz / max(h.w, DEPTH_RECONSTRUCT_MIN_W);
+    return depth_is_written(d) && h.w > DEPTH_RECONSTRUCT_MIN_W;
+}
+
+// World-space unit direction of the camera ray through NDC `ndc_xy`, for the
+// camera at `cam_pos` whose inverse view-projection is `inv_vp`. It reads the
+// ray's point at infinity, which the infinite projection puts at `DEPTH_FAR`
+// with w = 0: nothing is divided by w, and the camera's position never cancels
+// against a nearby point, which would cost the direction its precision far from
+// the world origin.
+float3 camera_view_ray(float4x4 inv_vp, float2 ndc_xy, float3 cam_pos)
+{
+    float4 h = mul(inv_vp, float4(ndc_xy, DEPTH_FAR, 1.0));
+    return normalize(h.xyz - h.w * cam_pos);
+}
 
 // Conservative depth output for a pass writing camera depth no farther than
 // the rasterized fragment's, which keeps early depth testing.

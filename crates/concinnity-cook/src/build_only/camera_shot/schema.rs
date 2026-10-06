@@ -31,8 +31,8 @@ pub struct CameraShot {
     pub fov_y_degrees: f32,
     /// Near clip plane distance in world units.
     pub near: f32,
-    /// Far clip plane distance in world units.
-    pub far: f32,
+    /// How far the camera sees in world units; `null` for no limit.
+    pub view_distance: Option<f32>,
     /// World-space camera position.
     pub position: [f32; 3],
     /// Yaw rotation in radians (Y-axis, applied first).
@@ -47,7 +47,7 @@ impl Default for CameraShot {
             preset: String::new(),
             fov_y_degrees: 75.0,
             near: 0.05,
-            far: 200.0,
+            view_distance: None,
             position: [0.0, 0.0, 0.0],
             yaw: 0.0,
             pitch: 0.0,
@@ -66,7 +66,7 @@ mod tests {
         let s = CameraShot::default();
         assert!(s.preset.is_empty());
         assert_eq!(s.fov_y_degrees, 75.0);
-        assert_eq!((s.near, s.far), (0.05, 200.0));
+        assert_eq!((s.near, s.view_distance), (0.05, None));
         assert_eq!(s.position, [0.0, 0.0, 0.0]);
         assert_eq!((s.yaw, s.pitch), (0.0, 0.0));
     }
@@ -85,6 +85,6 @@ mod tests {
         let bytes = postcard::to_allocvec(&s).unwrap();
         let back: CameraShot = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back.preset, "establishing");
-        assert_eq!(back.far, 200.0);
+        assert_eq!(back.view_distance, None);
     }
 }

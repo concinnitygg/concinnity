@@ -229,7 +229,7 @@ impl FrameHook for DebugServer {
             pitch: c.pitch,
             fov_y_degrees: c.fov_y_degrees,
             near: c.near,
-            far: c.far,
+            view_distance: c.view_distance,
         });
 
         if self.frame % SNAPSHOT_INTERVAL == 1 {

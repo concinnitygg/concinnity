@@ -36,7 +36,7 @@ fn camera_world(pos: [f32; 3]) -> (World, AssetId) {
         view_matrix: concinnity_core::gfx::camera::view_matrix(pos, 0.0, 0.0),
         fov_y_degrees: 90.0,
         near: 0.05,
-        far: 200.0,
+        view_distance: None,
         yaw: 0.0,
         pitch: 0.0,
         desired_move: [0.0; 3],

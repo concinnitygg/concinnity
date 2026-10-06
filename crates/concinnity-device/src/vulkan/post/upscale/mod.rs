@@ -70,7 +70,6 @@ pub(in crate::vulkan) struct UpscaleCamera {
     // clock + reset state.
     pub(in crate::vulkan) elapsed: f32,
     pub(in crate::vulkan) near: f32,
-    pub(in crate::vulkan) far: f32,
     pub(in crate::vulkan) fov_y_radians: f32,
 }
 
@@ -796,7 +795,6 @@ impl VkContext {
         };
 
         let near = params.near.max(1e-3);
-        let far = params.far.max(near + 1.0);
         upscaler.dispatch(
             cmd,
             UpscaleInputs {
@@ -808,7 +806,6 @@ impl VkContext {
                 jitter_offset: upscaler.jitter(),
                 elapsed: params.elapsed,
                 near,
-                far,
                 fov_y_radians: params.fov_y_radians,
             },
         )?;

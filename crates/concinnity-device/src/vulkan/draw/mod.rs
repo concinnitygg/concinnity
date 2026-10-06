@@ -48,7 +48,7 @@ pub(super) struct RecordFrameView<'a> {
     pub elapsed: f32,
     pub fov_y_radians: f32,
     pub near: f32,
-    pub far: f32,
+    pub view_distance: Option<f32>,
     pub cam_pos: [f32; 3],
     pub text_calls: &'a [TextDrawCall],
     // This frame's expanded line ribbons. Empty whenever nothing published
@@ -331,7 +331,7 @@ impl VkContext {
             elapsed,
             fov_y_radians,
             near,
-            far,
+            view_distance,
             cam_pos,
             text_calls,
             lines,
@@ -345,7 +345,14 @@ impl VkContext {
 
         let start_cmd = self.record_frame_start(frame_idx)?;
 
-        self.update_shadow_schedule(extent, cam_pos, fov_y_radians, near, far, frame_idx);
+        self.update_shadow_schedule(
+            extent,
+            cam_pos,
+            fov_y_radians,
+            near,
+            view_distance,
+            frame_idx,
+        );
 
         // Push this frame's skinning matrices into the per-frame joint buffers
         // before the skin fold reads them. No-op when no SkinnedMesh is
@@ -376,7 +383,7 @@ impl VkContext {
         //  Camera projection + per-frame view state. Computed before the main
         //  render pass begins so the GPU-cull compute dispatch (which Vulkan
         //  forbids inside a render pass) can read this frame's frustum.
-        let (aspect, proj, render_proj) = self.frame_projection(extent, fov_y_radians, near, far);
+        let (aspect, proj, render_proj) = self.frame_projection(extent, fov_y_radians, near);
         // Un-jittered camera VP, fed to the velocity pre-pass so the stored
         // motion vector is free of the sub-pixel projection jitter.
         let cur_vp = mat4_mul(proj, self.state.view.matrix);
@@ -397,7 +404,12 @@ impl VkContext {
                 proj,
                 position: cam_pos,
                 near,
-                far,
+                range: self.uniforms.cluster_reach.range(
+                    cam_pos,
+                    near,
+                    self.probe.book.records(),
+                    view_distance,
+                ),
                 width: extent.width,
                 height: extent.height,
             },
@@ -445,7 +457,7 @@ impl VkContext {
         // immediately.
         self.upload_probe_set(frame_idx)?;
 
-        let frustum = Frustum::from_camera(vp_mat);
+        let frustum = Frustum::from_camera(vp_mat, view_distance);
 
         // Compute-cull host-side prep: rebuild this frame's
         // `GpuObjectData` + `GpuDrawArgs` storage buffers with the
@@ -516,7 +528,6 @@ impl VkContext {
             aspect,
             elapsed,
             near,
-            far,
             planar: self
                 .planar_reflection
                 .as_ref()
@@ -769,14 +780,13 @@ impl VkContext {
         extent: vk::Extent2D,
         fov_y_radians: f32,
         near: f32,
-        far: f32,
     ) -> (f32, [[f32; 4]; 4], [[f32; 4]; 4]) {
         let aspect = if extent.height == 0 {
             1.0
         } else {
             extent.width as f32 / extent.height as f32
         };
-        let proj = camera_projection(fov_y_radians, aspect, near, far);
+        let proj = camera_projection(fov_y_radians, aspect, near);
         // When TAA is on, offset the projection by a sub-pixel Halton jitter so
         // the accumulation has fresh sample positions each frame. The jitter is
         // a pure NDC x/y shift (depth is unaffected): `proj[2][0/1]` are the

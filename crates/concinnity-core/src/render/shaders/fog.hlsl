@@ -195,13 +195,10 @@ float3 froxel_to_world(uint x, uint y, float z_slice)
     float view_z = lerp(froxel.z_near, froxel.z_far,
                         (z_slice + 0.5) / float(froxel.froxel_dims.z));
 
-    // Un-project a far-plane direction, then walk that ray to the requested
+    // Take the camera ray through the froxel, then walk it to the requested
     // view-space z. Cheaper than inverting a per-froxel matrix and correct for
     // any perspective projection.
-    float4 clip_far = float4(ndc_xy, DEPTH_FAR, 1.0);
-    float4 world_far = mul(fog.inv_vp, clip_far);
-    world_far /= world_far.w;
-    float3 ray = normalize(world_far.xyz - fog.cam_pos.xyz);
+    float3 ray = camera_view_ray(fog.inv_vp, ndc_xy, fog.cam_pos.xyz);
 
     // Projection of `ray` onto the view-forward axis. `view` is world->view and
     // positive view depth is -z, so view-forward in world space is the negated
@@ -319,11 +316,10 @@ float4 fog_fragment(
     // maps to the far edge of the volume, so it takes fog integrated across the
     // whole volume.
     float view_z;
-    if (depth_is_written(depth))
+    float3 world;
+    if (depth_reconstruct(fog.inv_vp, ndc_xy, depth, world))
     {
-        float4 world = depth_unproject(fog.inv_vp, ndc_xy, depth);
-        world /= world.w;
-        view_z = -mul(froxel.view, float4(world.xyz, 1.0)).z;
+        view_z = -mul(froxel.view, float4(world, 1.0)).z;
     }
     else
     {

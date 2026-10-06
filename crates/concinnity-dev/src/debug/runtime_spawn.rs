@@ -873,7 +873,7 @@ mod tests {
         world.add_component(Camera3D {
             fov_y_degrees: 75.0,
             near: 0.05,
-            far: 200.0,
+            view_distance: None,
             view_matrix: [[0.0; 4]; 4],
             position: [0.0; 3],
             yaw: 0.0,
@@ -912,7 +912,7 @@ mod tests {
         world.add_component(Camera3D {
             fov_y_degrees: 75.0,
             near: 0.05,
-            far: 200.0,
+            view_distance: None,
             view_matrix: [[0.0; 4]; 4],
             position: [0.0; 3],
             yaw: 0.0,
@@ -1086,7 +1086,7 @@ mod tests {
         world.add_component(Camera3D {
             fov_y_degrees: 75.0,
             near: 0.05,
-            far: 200.0,
+            view_distance: None,
             view_matrix: [[0.0; 4]; 4],
             position: [0.0; 3],
             yaw: 0.0,
@@ -1295,7 +1295,7 @@ mod tests {
         Camera3D {
             fov_y_degrees: 75.0,
             near: 0.05,
-            far: 200.0,
+            view_distance: None,
             view_matrix: [[0.0; 4]; 4],
             position: [0.0; 3],
             yaw: 0.0,

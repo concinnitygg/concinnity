@@ -627,6 +627,8 @@ pub(super) struct VkUniforms {
     // Single per-scene local-light storage buffer (SSBO), uploaded once at init
     // and bound at global set 0 binding 9. Static (never rewritten per-frame).
     pub(super) local_light_buffer: PooledBuffer,
+    // The local lights' reach, which places the far end of the cluster grid.
+    pub(super) cluster_reach: concinnity_core::render::cluster_range::ClusterReach,
     // The values the ring carries. A live Ambient-slider or directional-light
     // change mutates this and re-arms `light_dirty`; `record_frame` writes the
     // frame's own slot, so no in-flight read is ever raced.
@@ -1357,7 +1359,7 @@ impl VkContext {
             elapsed,
             fov_y_radians,
             near,
-            far,
+            view_distance,
             cam_pos,
             text_calls,
             lines,
@@ -1371,7 +1373,8 @@ impl VkContext {
         // + depth normalization) and for the graph-input mask in record_frame.
         self.state.view.mode = view_mode;
         self.state.view.show = show;
-        self.state.view.far = far;
+        self.state.view.near = near;
+        self.state.view.view_distance = view_distance;
         self.state.view.sky_rot = sky_rot;
         self.apply_pending_rebuilds()?;
 
@@ -1434,7 +1437,7 @@ impl VkContext {
                 elapsed,
                 fov_y_radians,
                 near,
-                far,
+                view_distance,
                 cam_pos,
                 text_calls,
                 lines,

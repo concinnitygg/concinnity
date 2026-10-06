@@ -528,11 +528,10 @@ impl DxContext {
             if let Some(cull) = culls.get_mut(kept) {
                 *cull = RegionCull {
                     region: slot,
-                    frustum: Frustum::from_camera(crop.crop_view_projection(
-                        m.view_proj,
-                        set.width,
-                        set.height,
-                    )),
+                    frustum: Frustum::from_camera(
+                        crop.crop_view_projection(m.view_proj, set.width, set.height),
+                        self.state.view.view_distance,
+                    ),
                     eye: m.eye,
                 };
                 kept += 1;

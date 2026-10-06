@@ -58,9 +58,12 @@ float rasterized_distance(float2 px, float3 cam, float4 sv_pos)
     // Metal clip space is y-down after the projection flip the engine applies,
     // so re-mirror Y to match the inv_vp the CPU built from the unflipped one.
     ndc_xy.y = -ndc_xy.y;
-    float4 world = depth_unproject(view_cb.inv_vp, ndc_xy, depth_ndc);
-    world /= max(world.w, 1e-6);
-    return length(world.xyz - cam);
+    float3 world;
+    if (!depth_reconstruct(view_cb.inv_vp, ndc_xy, depth_ndc, world))
+    {
+        return 1e30;
+    }
+    return length(world - cam);
 }
 
 #else

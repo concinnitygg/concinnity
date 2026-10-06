@@ -88,6 +88,10 @@ impl fullscreen::CompositeEncoder for VkContext {
             // Non-zero only for the G-buffer channel views, which take the
             // fragment's visualization branch; Lit / Unlit / Wireframe all
             // composite the scene.
+            let (depth_near, depth_far) = CompositeParams::depth_view_range(
+                self.state.view.near,
+                self.state.view.view_distance,
+            );
             let composite = CompositeParams {
                 post: self.post_process,
                 fade: self.state.view.scene_fade,
@@ -96,7 +100,8 @@ impl fullscreen::CompositeEncoder for VkContext {
                 } else {
                     0
                 },
-                far: self.state.view.far,
+                depth_near,
+                depth_far,
             };
             cmd_push_constants(
                 device,

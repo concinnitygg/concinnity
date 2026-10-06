@@ -224,7 +224,7 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "camera-get",
-        description: "Report the active camera's position, yaw, pitch, vertical field of view, and clip planes.",
+        description: "Report the active camera's position, yaw, pitch, vertical field of view, near plane, and view distance (null when unlimited).",
         access: Access::ReadOnly,
         params: &[],
     },

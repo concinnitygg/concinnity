@@ -44,7 +44,7 @@ fn camera(controller: Option<CameraController>) -> Camera3D {
     Camera3D {
         fov_y_degrees: 60.0,
         near: 0.05,
-        far: 200.0,
+        view_distance: None,
         view_matrix: concinnity_core::gfx::camera::view_matrix(
             AUTHORED.position,
             AUTHORED.yaw,

@@ -1,5 +1,5 @@
 //! EditorHook: the world-origin axes drive. Builds this frame's axis lines
-//! (`editor/viewport/axes.rs`) sized to the live camera's far plane and hands them to the
+//! (`editor/viewport/axes.rs`) sized to the live camera's view distance and hands them to the
 //! renderer's line pass. Unlike the overlay furniture the axes are world
 //! geometry, so there is nothing to place or hide here: an empty list is the
 //! off state, and the renderer drops the pass with it.
@@ -23,7 +23,7 @@ impl EditorHook {
         let Some(cam) = world.query::<Camera3D>().next() else {
             return;
         };
-        axes::push_lines(out, cam.far);
+        axes::push_lines(out, cam.view_distance);
     }
 }
 
@@ -38,7 +38,7 @@ mod tests {
             view_matrix: concinnity_core::gfx::camera::view_matrix([0.0; 3], 0.0, 0.0),
             fov_y_degrees: 90.0,
             near: 0.05,
-            far: 300.0,
+            view_distance: Some(300.0),
             yaw: 0.0,
             pitch: 0.0,
             desired_move: [0.0; 3],
@@ -64,7 +64,7 @@ mod tests {
         let world = world_with_camera();
         let lines = axis_lines(&hook(), &world);
         assert_eq!(lines.len(), 6, "a solid + fading run per axis");
-        // Sized to the camera's far plane, so the runs reach the horizon.
+        // Sized to the camera's view distance, so the runs reach the horizon.
         assert!(lines.iter().any(|l| l.end[0] == 300.0));
     }
 

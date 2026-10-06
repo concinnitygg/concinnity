@@ -25,7 +25,7 @@ pub(crate) fn expand_camera_shots(
                 "$id": shot_name,
                 "fov_y_degrees": shot.fov_y_degrees,
                 "near": shot.near,
-                "far": shot.far,
+                "view_distance": shot.view_distance,
                 "position": shot.position,
                 "yaw": shot.yaw,
                 "pitch": shot.pitch
@@ -68,16 +68,16 @@ fn resolve_shot(
 fn camera_shot_preset(preset: &str) -> serde_json::Value {
     match preset {
         "shot_eye_level" => {
-            serde_json::json!({"fov_y_degrees":75.0,"position":[0.0,1.75,0.0],"yaw":std::f64::consts::PI,"near":0.05,"far":200.0})
+            serde_json::json!({"fov_y_degrees":75.0,"position":[0.0,1.75,0.0],"yaw":std::f64::consts::PI,"near":0.05})
         }
         "shot_overhead" => {
-            serde_json::json!({"fov_y_degrees":60.0,"position":[0.0,8.0,0.0],"pitch":-1.3963,"near":0.05,"far":200.0})
+            serde_json::json!({"fov_y_degrees":60.0,"position":[0.0,8.0,0.0],"pitch":-1.3963,"near":0.05})
         }
         "shot_dramatic_low" => {
-            serde_json::json!({"fov_y_degrees":85.0,"position":[0.0,0.4,0.0],"pitch":0.2618,"near":0.05,"far":200.0})
+            serde_json::json!({"fov_y_degrees":85.0,"position":[0.0,0.4,0.0],"pitch":0.2618,"near":0.05})
         }
         "shot_outdoor_wide" => {
-            serde_json::json!({"fov_y_degrees":80.0,"position":[0.0,1.75,0.0],"near":0.05,"far":500.0})
+            serde_json::json!({"fov_y_degrees":80.0,"position":[0.0,1.75,0.0],"near":0.05})
         }
         _ => serde_json::Value::Null,
     }
@@ -167,10 +167,10 @@ mod tests {
     }
 
     #[test]
-    fn preset_outdoor_wide_pushes_the_far_plane_out() {
+    fn preset_outdoor_wide_sees_without_limit() {
         let args = expand_args(serde_json::json!({"preset": "shot_outdoor_wide"}));
         assert_eq!(args["fov_y_degrees"], serde_json::json!(80.0f32));
-        assert_eq!(args["far"], serde_json::json!(500.0f32));
+        assert_eq!(args["view_distance"], serde_json::Value::Null);
         assert_eq!(args["near"], serde_json::json!(0.05f32));
     }
 
@@ -181,7 +181,7 @@ mod tests {
         let args = expand_args(serde_json::json!({"preset": "cn_test_no_such_shot"}));
         assert_eq!(args["fov_y_degrees"], serde_json::json!(75.0f32));
         assert_eq!(args["near"], serde_json::json!(0.05f32));
-        assert_eq!(args["far"], serde_json::json!(200.0f32));
+        assert_eq!(args["view_distance"], serde_json::Value::Null);
         assert_eq!(
             args["position"],
             serde_json::json!([0.0f32, 0.0f32, 0.0f32])
@@ -228,12 +228,12 @@ mod tests {
     #[test]
     fn inline_fields_reach_the_camera_over_the_preset() {
         let args = expand_args(serde_json::json!({
-            "preset": "shot_overhead", "near": 0.5, "far": 50.0,
+            "preset": "shot_overhead", "near": 0.5, "view_distance": 50.0,
             "position": [1.0, 2.0, 3.0], "yaw": 1.5
         }));
         assert_eq!(args["fov_y_degrees"], serde_json::json!(60.0f32));
         assert_eq!(
-            (args["near"].as_f64(), args["far"].as_f64()),
+            (args["near"].as_f64(), args["view_distance"].as_f64()),
             (Some(0.5), Some(50.0))
         );
         assert_eq!(

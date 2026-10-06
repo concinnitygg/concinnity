@@ -240,10 +240,10 @@ impl MtlContext {
         cam_pos: [f32; 3],
         fov_y_radians: f32,
         near: f32,
-        far: f32,
+        view_distance: Option<f32>,
     ) -> f32 {
         // Compute per-frame cascade VPs + splits from current camera + light.
-        // The aspect/near/far are taken from the same params used by the main
+        // The aspect/near are taken from the same params used by the main
         // perspective below so cascades match the visible camera frustum.
         let cascade_aspect = {
             let s = self.window().view.drawableSize();
@@ -260,7 +260,7 @@ impl MtlContext {
                 fov_y_rad: fov_y_radians,
                 aspect: cascade_aspect,
                 near,
-                far,
+                view_distance,
             };
             let shadow = &mut self.shadow;
             let light = CascadeLight {
@@ -286,7 +286,7 @@ impl MtlContext {
         fov_y_radians: f32,
         aspect: f32,
         near: f32,
-        far: f32,
+        view_distance: Option<f32>,
         render_w: u32,
         render_h: u32,
     ) -> FrameProjection {
@@ -294,7 +294,7 @@ impl MtlContext {
         // The projection / jitter / VP are resolved here, ahead of the main
         // render encoder, because the cull compute pass needs the frustum
         // before the render pass begins.
-        let proj = camera_projection(fov_y_radians, aspect, near, far);
+        let proj = camera_projection(fov_y_radians, aspect, near);
         // This frame's un-jittered VP, captured before the graph runs so the
         // two-pass phase-2 cull (`encode_cull_phase2`, dispatched inside
         // `execute_graph`) can project AABBs through it against the pyramid the
@@ -332,7 +332,7 @@ impl MtlContext {
         // world-space position from depth (fog, decals, raymarch, transparent),
         // instead of each pass re-inverting `vp` independently.
         let inv_vp = mat4_inverse(vp);
-        let frustum = Frustum::from_camera(vp);
+        let frustum = Frustum::from_camera(vp, view_distance);
         FrameProjection {
             proj,
             vp,

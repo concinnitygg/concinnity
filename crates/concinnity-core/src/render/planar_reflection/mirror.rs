@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn inverse_round_trips() {
-        let m = camera_projection(1.1, 1.7, 0.2, 80.0);
+        let m = camera_projection(1.1, 1.7, 0.2);
         let id = mat4_mul(m, mat4_inverse(m));
         for (c, col) in id.iter().enumerate() {
             for (r, &val) in col.iter().enumerate() {
@@ -195,7 +195,7 @@ mod tests {
         // ON the plane maps to ndc.z ~= 1 (the near plane), a point in front (far
         // side) to ndc.z in (0, 1), and a point behind the plane past 1
         // (clipped).
-        let proj = camera_projection(1.2, 1.0, 0.1, 100.0);
+        let proj = camera_projection(1.2, 1.0, 0.1);
         // Plane z = -5: n.p + d = 0 with kept side n.p + d > 0 toward -z (far).
         // Choose C so the far/kept side is positive: C = (0,0,-1,-5) -> for
         // p=(0,0,-50): -(-50)-5 = 45 > 0 (kept); p=(0,0,-2): 2-5 = -3 < 0 (clip).
@@ -215,7 +215,7 @@ mod tests {
     #[test]
     fn oblique_clip_preserves_x_and_y_projection() {
         // Only the depth row changes; x/y of a projected point are untouched.
-        let proj = camera_projection(1.0, 1.5, 0.1, 50.0);
+        let proj = camera_projection(1.0, 1.5, 0.1);
         let c = [0.0, 0.0, -1.0, -8.0];
         let pobl = camera_oblique_projection(proj, c);
         let p = [2.0, 1.5, -20.0, 1.0];
@@ -242,7 +242,7 @@ mod tests {
             [0.0, 0.0, 1.0, 0.0],
             [0.0, -3.0, -6.0, 1.0],
         ];
-        let proj = camera_projection(1.2, 1.6, 0.1, 100.0);
+        let proj = camera_projection(1.2, 1.6, 0.1);
         let m = planar_matrices(view, proj, [0.0, 3.0, 6.0], plane, 0.0);
 
         let ndc_z = |p: [f32; 3]| {
@@ -303,7 +303,7 @@ mod tests {
             [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let proj = camera_projection(1.2, 1.6, 0.1, 100.0);
+        let proj = camera_projection(1.2, 1.6, 0.1);
         let cam_pos = [0.0, 0.0, 0.0];
         let m = planar_matrices(view, proj, cam_pos, plane, 0.0);
 
@@ -312,7 +312,7 @@ mod tests {
         let bb_max = [0.5, 0.5, 3.5];
 
         // The main camera rejects it (behind the near plane).
-        let main_frustum = crate::gfx::frustum::Frustum::from_camera(proj);
+        let main_frustum = crate::gfx::frustum::Frustum::from_camera(proj, None);
         assert!(
             !main_frustum.intersects_aabb(bb_min, bb_max),
             "object behind the camera must be outside the main frustum"
@@ -320,7 +320,7 @@ mod tests {
 
         // The reflected frustum captures it. This is the frustum the GPU mirror
         // cull tests each record against.
-        let reflected_frustum = crate::gfx::frustum::Frustum::from_camera(m.view_proj);
+        let reflected_frustum = crate::gfx::frustum::Frustum::from_camera(m.view_proj, None);
         assert!(
             reflected_frustum.intersects_aabb(bb_min, bb_max),
             "object behind the camera must be visible in the reflection"

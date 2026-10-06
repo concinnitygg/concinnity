@@ -109,7 +109,7 @@ pub(crate) fn submit(
         elapsed: snap.frame.elapsed,
         fov_y_radians: snap.frame.fov_y_radians,
         near: snap.frame.near,
-        far: snap.frame.far,
+        view_distance: snap.frame.view_distance,
         cam_pos: snap.frame.cam_pos,
         text_calls: &snap.text_calls,
         lines: &snap.lines,

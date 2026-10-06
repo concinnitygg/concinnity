@@ -54,7 +54,7 @@ pub(super) struct RecordFrameView<'a> {
     pub elapsed: f32,
     pub fov_y_radians: f32,
     pub near: f32,
-    pub far: f32,
+    pub view_distance: Option<f32>,
     pub cam_pos: [f32; 3],
     pub text_calls: &'a [TextDrawCall],
     // This frame's expanded line ribbons. Empty whenever nothing published
@@ -176,7 +176,7 @@ impl DxContext {
             elapsed,
             fov_y_radians,
             near,
-            far,
+            view_distance,
             cam_pos,
             text_calls,
             lines,
@@ -265,7 +265,7 @@ impl DxContext {
             proj,
             cur_vp,
             vp_mat,
-        } = self.frame_projection(fov_y_radians, aspect, near, far, width, height);
+        } = self.frame_projection(fov_y_radians, aspect, near, width, height);
 
         // Clustered light-binning params (main camera). The compute pass reads
         // these to build each cluster's world-space AABB (un-jittered inverse VP
@@ -282,7 +282,12 @@ impl DxContext {
                 proj,
                 position: cam_pos,
                 near,
-                far,
+                range: self.uniforms.cluster_reach.range(
+                    cam_pos,
+                    near,
+                    self.probe.book.records(),
+                    view_distance,
+                ),
                 width,
                 height,
             },
@@ -324,7 +329,7 @@ impl DxContext {
             );
         }
 
-        let frustum = Frustum::from_camera(vp_mat);
+        let frustum = Frustum::from_camera(vp_mat, view_distance);
 
         let (view_gva, light_gva, local_lights_gva) = (
             com::gpu_va(&self.uniforms.view_ubo_resources[frame_idx]),
@@ -406,7 +411,6 @@ impl DxContext {
             aspect,
             elapsed,
             near,
-            far,
             prime_model_history,
             planar: self
                 .planar_reflection

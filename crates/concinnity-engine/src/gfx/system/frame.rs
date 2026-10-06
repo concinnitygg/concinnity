@@ -253,25 +253,19 @@ impl GraphicsSystem {
         // world is streaming, or both rebased onto the chunk render origin when
         // one is). Fall back to the absolute Camera3D values if the resource is
         // absent (a unit test driving this system without StreamingSystem).
-        let (fov_y_radians, near, far, view_matrix, cam_pos) = ctx
+        let (fov_y_radians, near, view_distance, view_matrix, cam_pos) = ctx
             .query::<Camera3D>()
             .next()
             .map(|c| {
                 (
                     c.fov_y_degrees.to_radians(),
                     c.near,
-                    c.far,
+                    c.view_distance,
                     c.view_matrix,
                     c.position,
                 )
             })
-            .unwrap_or((
-                std::f32::consts::FRAC_PI_4,
-                0.05,
-                200.0,
-                IDENTITY4,
-                [0.0; 3],
-            ));
+            .unwrap_or((std::f32::consts::FRAC_PI_4, 0.05, None, IDENTITY4, [0.0; 3]));
         let (final_view, final_cam_pos) = ctx
             .resource::<crate::gfx::streaming::system::CameraRelativeView>()
             .map(|c| (c.view, c.cam_pos))
@@ -523,7 +517,7 @@ impl GraphicsSystem {
             elapsed,
             fov_y_radians,
             near,
-            far,
+            view_distance,
             view: final_view,
             cam_pos: final_cam_pos,
             view_mode: view.mode,
@@ -793,7 +787,7 @@ mod tests {
                 Camera3D {
                     fov_y_degrees: 90.0,
                     near: 0.1,
-                    far: 500.0,
+                    view_distance: Some(500.0),
                     view_matrix: translated(1.0),
                     position: [1.0, 2.0, 3.0],
                     yaw: 0.0,
@@ -815,7 +809,7 @@ mod tests {
         assert_eq!(snap.frame.cam_pos, [7.0, 0.0, 0.0]);
         assert!((snap.frame.fov_y_radians - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
         assert_eq!(snap.frame.near, 0.1);
-        assert_eq!(snap.frame.far, 500.0);
+        assert_eq!(snap.frame.view_distance, Some(500.0));
     }
 
     // An in-flight fade records its effects as scene ops instead of touching a

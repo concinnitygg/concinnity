@@ -105,11 +105,16 @@ impl fullscreen::CompositeEncoder for DxContext {
             // the scene-transition fade, matching the root-sig declaration).
             // Pushed verbatim so the HLSL cbuffer reads the same byte order as
             // the Rust struct.
+            let (depth_near, depth_far) = CompositeParams::depth_view_range(
+                self.state.view.near,
+                self.state.view.view_distance,
+            );
             let composite = CompositeParams {
                 post: self.post_process,
                 fade: self.state.view.scene_fade,
                 view_mode: args.channel_view,
-                far: self.state.view.far,
+                depth_near,
+                depth_far,
             };
             cmd.set_graphics_root_constants(2, &composite);
             // Root param [3]: 3D color-grading LUT SRV (t2).

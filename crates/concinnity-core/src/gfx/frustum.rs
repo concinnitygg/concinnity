@@ -2,9 +2,9 @@
 //!
 //! Given a column-major view-projection matrix the six clip-space planes are
 //! extracted using the Gribb-Hartmann method (left/right/bottom/top/near/far).
-//! [`Frustum::from_camera`] takes a camera view-projection (reversed depth:
-//! near at device depth 1, far at 0) and [`Frustum::from_shadow`] a shadow one
-//! (near at 0, far at 1); only their near and far planes differ.
+//! [`Frustum::from_camera`] takes a camera view-projection (reversed, infinite
+//! depth: near at device depth 1, no far plane) and [`Frustum::from_shadow`] a
+//! shadow one (near at 0, far at 1); only their near and far planes differ.
 //! `Frustum::intersects_aabb` returns false only when an axis-aligned bounding
 //! box is fully outside at least one plane.  False positives are acceptable for
 //! culling (a few extra draws), false negatives are not, so the test treats
@@ -24,17 +24,27 @@ pub struct Plane {
 /// The six clip-space planes of a view frustum.
 #[derive(Copy, Clone, Debug)]
 pub struct Frustum {
-    /// Left, right, bottom, top, near, far.
+    /// Left, right, bottom, top, near, far. A camera frustum with no view
+    /// distance has no far plane, so its far slot repeats the near plane.
     pub planes: [Plane; 6],
 }
 
 impl Frustum {
     /// The frustum of a camera view-projection: the main camera, a reflection
     /// probe face or a planar reflection. `vp[col][row]`, column-major, the
-    /// layout the renderer's ViewUniforms use.
-    pub fn from_camera(vp: [[f32; 4]; 4]) -> Self {
-        // Reversed depth keeps 0 <= z <= w: near is w - z >= 0, far is z >= 0.
-        Self::extract(vp, |z, w| (combine(w, z, -1.0), z))
+    /// layout the renderer's ViewUniforms use. The projection has no far plane,
+    /// so the frustum is open-ended unless `view_distance` closes it at that
+    /// distance along the view axis.
+    pub fn from_camera(vp: [[f32; 4]; 4], view_distance: Option<f32>) -> Self {
+        // Reversed depth keeps z <= w: near is w - z >= 0. The infinite
+        // projection's z row is constant, so it bounds nothing on the far side.
+        Self::extract(vp, |z, w| {
+            let near = combine(w, z, -1.0);
+            let far = view_distance
+                .and_then(|distance| view_distance_plane(w, distance))
+                .unwrap_or(near);
+            (near, far)
+        })
     }
 
     /// The frustum of a shadow view-projection: a directional cascade or a spot
@@ -92,6 +102,13 @@ impl Frustum {
         }
         true
     }
+}
+
+// The plane `distance - w >= 0`: clip w is the view-axis depth of a camera
+// projection, so this keeps everything nearer than `distance` along the view
+// axis. `None` when the w row carries no view axis to measure along.
+fn view_distance_plane(w: [f32; 4], distance: f32) -> Option<[f32; 4]> {
+    (length([w[0], w[1], w[2]]) > 1e-6).then_some([-w[0], -w[1], -w[2], distance - w[3]])
 }
 
 // `a + sign * b`, componentwise.
@@ -180,15 +197,18 @@ mod tests {
 
     #[test]
     fn identity_vp_contains_origin_aabb() {
-        // Identity VP defines the clip box (x, y in [-1, 1], depth in [0, 1])
-        // as the visible region.
-        let f = Frustum::from_camera(identity4());
+        // Identity VP defines the clip box (x, y in [-1, 1], depth up to 1) as
+        // the visible region.
+        let f = Frustum::from_camera(identity4(), None);
         assert!(f.intersects_aabb([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]));
+        // Its w row has no view axis, so a view distance adds no plane.
+        let bounded = Frustum::from_camera(identity4(), Some(0.5));
+        assert!(bounded.intersects_aabb([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]));
     }
 
     #[test]
     fn identity_vp_rejects_far_aabb() {
-        let f = Frustum::from_camera(identity4());
+        let f = Frustum::from_camera(identity4(), None);
         // entirely past the right clip plane
         assert!(!f.intersects_aabb([5.0, -0.5, -0.5], [6.0, 0.5, 0.5]));
     }
@@ -197,18 +217,54 @@ mod tests {
         f.intersects_aabb(p, p)
     }
 
-    // The camera frustum's near and far planes are exactly the projection's:
-    // a point just inside either is kept, just outside is culled.
+    // The camera frustum's near plane is exactly the projection's, and with no
+    // view distance nothing ahead of it is ever culled for being far.
     #[test]
-    fn the_camera_frustum_spans_exactly_near_to_far() {
-        let vp = crate::render::depth::camera_projection(1.2, 1.6, 0.1, 500.0);
-        let f = Frustum::from_camera(vp);
+    fn the_camera_frustum_starts_at_near_and_never_ends() {
+        let vp = crate::render::depth::camera_projection(1.2, 1.6, 0.1);
+        let f = Frustum::from_camera(vp, None);
         assert!(point_inside(&f, [0.0, 0.0, -0.1001]));
         assert!(!point_inside(&f, [0.0, 0.0, -0.0999]));
-        assert!(point_inside(&f, [0.0, 0.0, -499.9]));
-        assert!(!point_inside(&f, [0.0, 0.0, -500.1]));
+        for distance in [500.0, 1.0e4, 1.0e6, 1.0e9] {
+            assert!(point_inside(&f, [0.0, 0.0, -distance]), "{distance}");
+            assert!(point_inside(
+                &f,
+                [0.3 * distance, -0.2 * distance, -distance]
+            ));
+        }
         assert!(point_inside(&f, [10.0, -5.0, -100.0]));
         assert!(!point_inside(&f, [10.0, 0.0, 1.0]));
+        assert!(
+            !point_inside(&f, [1.0e7, 0.0, -1.0e6]),
+            "still bounded at the sides"
+        );
+        for plane in &f.planes {
+            assert!((length(plane.normal) - 1.0).abs() < 1e-5, "{plane:?}");
+        }
+    }
+
+    // A view distance closes the frustum at that distance along the view axis,
+    // wherever the camera sits and whichever way it looks.
+    #[test]
+    fn a_view_distance_closes_the_camera_frustum() {
+        let proj = crate::render::depth::camera_projection(1.2, 1.6, 0.1);
+        let f = Frustum::from_camera(proj, Some(500.0));
+        assert!(point_inside(&f, [0.0, 0.0, -499.9]));
+        assert!(!point_inside(&f, [0.0, 0.0, -500.1]));
+        assert!(point_inside(&f, [0.0, 0.0, -0.1001]));
+
+        let eye = [1.0e3, 20.0, -4.0e3];
+        let view = crate::gfx::projection::look_at(
+            eye,
+            [1.0e3 + 3.0, 20.0, -4.0e3 - 4.0],
+            [0.0, 1.0, 0.0],
+        );
+        let f = Frustum::from_camera(crate::transform::mat4_mul(proj, view), Some(100.0));
+        let ahead = |d: f32| [eye[0] + 0.6 * d, eye[1], eye[2] - 0.8 * d];
+        assert!(point_inside(&f, ahead(99.5)));
+        assert!(!point_inside(&f, ahead(100.5)));
+        let far_plane = f.planes[5];
+        assert!((length(far_plane.normal) - 1.0).abs() < 1e-5);
     }
 
     #[test]

@@ -769,9 +769,8 @@ fn framed_camera_entry(
     // Camera looks down -Z (yaw=0); place it on the +Z side of the center.
     let pos = [center[0], center[1] + height_above, center[2] + distance];
     let pitch = -(height_above / distance).atan();
-    // Near/far framed around the orbit distance so we don't clip the scene.
+    // Near plane framed around the orbit distance so we don't clip the scene.
     let near = (radius * 0.05).max(0.01);
-    let far = (distance + radius) * 4.0;
 
     Some(serde_json::json!({
         "type": "Camera3D",
@@ -779,7 +778,6 @@ fn framed_camera_entry(
             "$id": format!("{prefix}_cam"),
             "fov_y_degrees": fov_y_degrees,
             "near": near,
-            "far": far,
             "yaw": 0.0,
             "pitch": pitch,
             "position": [pos[0], pos[1], pos[2]],
@@ -859,9 +857,9 @@ mod tests {
         assert!(args["pitch"].as_f64().unwrap() < 0.0);
 
         let near = args["near"].as_f64().unwrap();
-        let far = args["far"].as_f64().unwrap();
         assert!(near > 0.0);
-        assert!(far > near);
+        // The framing camera sees the whole scene however far it reaches.
+        assert!(args.get("view_distance").is_none());
     }
 
     #[test]

@@ -584,9 +584,6 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // front edge of the froxel volume onto view-space depth, and by
     // `Upscale` (FSR3 dispatch's `cameraNear`).
     pub near: f32,
-    // Camera far-plane in view units. Consumed by `Upscale` (FSR3
-    // dispatch's `cameraFar`).
-    pub far: f32,
     // Whether this frame's model-history snapshot fills every ring slot rather
     // than only its own: the rebuild's prime request, taken from the tracker
     // before the fan-out. Consumed by GBufferPrepass.

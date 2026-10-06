@@ -180,6 +180,7 @@ pub(super) fn build_uniforms(
         light_ubo_resources,
         light_ubo_ptrs,
         local_light_buffer,
+        cluster_reach: concinnity_core::render::cluster_range::ClusterReach::new(local_lights),
         light_uniforms,
         light_dirty: std::cell::Cell::new(concinnity_core::render::frame_dirty::FrameDirty::new(
             FRAMES,

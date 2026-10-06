@@ -108,7 +108,7 @@ pub(crate) struct CameraSnapshot {
     pub(super) pitch: f32,
     pub(super) fov_y_degrees: f32,
     pub(super) near: f32,
-    pub(super) far: f32,
+    pub(super) view_distance: Option<f32>,
 }
 
 // A structural census entry: one component type and how many of it the world

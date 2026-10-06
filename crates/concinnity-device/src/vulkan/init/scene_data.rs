@@ -182,6 +182,7 @@ pub(super) fn build_scene_resources(
             light_ubo_buffers,
             light_dirty: FrameDirty::new(frames),
             local_light_buffer,
+            cluster_reach: concinnity_core::render::cluster_range::ClusterReach::new(local_lights),
             light_uniforms,
         },
         light_cull,

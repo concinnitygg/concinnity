@@ -74,11 +74,9 @@ const CUBE_LAYERS: [AssetId; 3] = [AssetId(2), AssetId(3), AssetId(4)];
 // degree of eye level: the stars meet their reflections on that line too.
 const WATER_HALF_EXTENT: f32 = 459.0;
 // The fixed viewpoint: on the cube, tipped down just far enough that the
-// horizon sits a little above the frame's center, with sky over it. The far
-// plane reaches past the pool's far edge everywhere the frame shows it.
+// horizon sits a little above the frame's center, with sky over it.
 const CAMERA_POSITION: [f32; 3] = [0.0, 2.0, 9.0];
 const CAMERA_PITCH: f32 = -0.09;
-const CAMERA_FAR: f32 = 600.0;
 const CAMERA_FOV_Y_DEGREES: f32 = 40.0;
 
 fn main() {
@@ -106,7 +104,7 @@ fn cube_world() -> Result<World, concinnity::Error> {
     world.add_component(bake::camera(bake::Camera3D {
         fov_y_degrees: CAMERA_FOV_Y_DEGREES,
         near: 0.05,
-        far: CAMERA_FAR,
+        view_distance: None,
         position: CAMERA_POSITION,
         yaw: 0.0,
         pitch: CAMERA_PITCH,

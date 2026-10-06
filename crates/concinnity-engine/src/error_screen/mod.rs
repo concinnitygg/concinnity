@@ -93,7 +93,7 @@ fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
             elapsed: started.elapsed().as_secs_f32(),
             fov_y_radians: 1.0,
             near: 0.1,
-            far: 100.0,
+            view_distance: None,
             cam_pos: [0.0, 0.0, 0.0],
             text_calls: &text_calls,
             lines: &[],

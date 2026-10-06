@@ -26,6 +26,7 @@ pub mod backend_init;
 pub mod buffer_growth;
 pub mod call_buffer;
 pub mod chunk_window;
+pub mod cluster_range;
 pub mod csm;
 pub mod cursor;
 pub mod decal;

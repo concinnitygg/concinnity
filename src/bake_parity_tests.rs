@@ -40,7 +40,7 @@ fn camera_args() -> bake::Camera3D {
     bake::Camera3D {
         fov_y_degrees: 40.0,
         near: 0.05,
-        far: 100.0,
+        view_distance: Some(100.0),
         position: [0.0, 2.0, 8.0],
         yaw: 0.0,
         pitch: -0.245,

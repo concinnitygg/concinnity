@@ -39,16 +39,10 @@
 [[vk::binding(2, 0)]] RWStructuredBuffer<uint> cluster_list : register(CLUSTER_LIST_REGISTER);
 [[vk::binding(3, 0)]] StructuredBuffer<ProbeUniforms> probe_records : register(PROBE_RECORDS_REGISTER);
 
-// Direction of the camera ray through a screen-NDC point. Unprojects the far
-// plane to world space, then normalizes from the camera: for a
-// perspective projection every ray through a screen point passes through the
-// eye, so the far-plane unprojection gives the direction.
+// Direction of the camera ray through a screen-NDC point.
 float3 cluster_corner_ray(float2 ndc)
 {
-    float4 clip = float4(ndc, DEPTH_FAR, 1.0);
-    float4 world = mul(cluster.inv_view_proj, clip);
-    world /= world.w;
-    return normalize(world.xyz - cluster.cam_pos_znear.xyz);
+    return camera_view_ray(cluster.inv_view_proj, ndc, cluster.cam_pos_znear.xyz);
 }
 
 [shader("compute")]
@@ -125,7 +119,10 @@ void light_cull_kernel(uint3 tid : SV_DispatchThreadID)
     // Probe influence boxes, grown by the blend margin `probe_weight` fades
     // them over. The nearest-capture candidates are every probe whose closest
     // approach to the AABB is no farther than the least farthest approach of
-    // any probe: no other capture can be nearest to a point inside it.
+    // any probe: no other capture can be nearest to a point inside it. The last
+    // slice also holds every fragment past the sliced range, however far, so
+    // there any probe can be the nearest.
+    bool open_ended = cz + 1u == cluster.grid_z;
     uint probes = min(cluster.num_probes, MAX_CLUSTERED_PROBES);
     float nearest_bound = 1e30;
     for (uint pi = 0u; pi < probes; ++pi)
@@ -156,6 +153,11 @@ void light_cull_kernel(uint3 tid : SV_DispatchThreadID)
             {
                 nearest |= 1u << (pj - first);
             }
+        }
+        if (open_ended)
+        {
+            uint word_probes = last > first ? last - first : 0u;
+            nearest = word_probes >= 32u ? 0xFFFFFFFFu : (1u << word_probes) - 1u;
         }
         cluster_list[pbase + w] = influence;
         cluster_list[pbase + CLUSTER_PROBE_MASK_WORDS + w] = nearest;

@@ -331,7 +331,7 @@ impl VkContext {
         cam_pos: [f32; 3],
         fov_y_radians: f32,
         near: f32,
-        far: f32,
+        view_distance: Option<f32>,
         frame_idx: usize,
     ) {
         // Recompute cascade VPs + splits from the current camera + light, and
@@ -348,7 +348,7 @@ impl VkContext {
                 fov_y_rad: fov_y_radians,
                 aspect: cascade_aspect,
                 near,
-                far,
+                view_distance,
             };
             let shadow = &mut self.shadow;
             let light = CascadeLight {

@@ -158,7 +158,7 @@ pub(super) fn create_composite_root_signature(
         .srv_table(0, 1, Visibility::Pixel)
         .srv_table(1, 1, Visibility::Pixel)
         // [2] CompositeParams (the 9 PostProcessParams tunables, the
-        // scene-transition fade, and the view-mode + far pair) at b0. The count
+        // scene-transition fade, the view mode and the depth view's range) at b0. The count
         // must cover the whole struct: constants past `Num32BitValues` read as
         // zero in the shader, which silently disabled the `fxaa` flag while this
         // was 8.
