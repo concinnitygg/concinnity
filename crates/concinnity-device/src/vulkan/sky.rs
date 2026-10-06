@@ -77,7 +77,7 @@ pub(in crate::vulkan) fn build_sky_pipeline(
     let vs = super::builtin_shaders::SKY_VERT.compile(hot_reload)?;
     let fs = super::builtin_shaders::SKY_FRAG.compile(hot_reload)?;
     GraphicsPipelineDesc {
-        depth: Depth::camera_read_only(),
+        depth: Depth::read_only(),
         samples,
         ..GraphicsPipelineDesc::fullscreen(&vs, &fs, layout, main_render_pass, &[Blend::Opaque])
     }

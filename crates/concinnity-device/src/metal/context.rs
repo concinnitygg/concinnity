@@ -121,8 +121,9 @@ pub(super) struct ProbeState {
 
 // Cascaded shadow map resources + the cascade schedule. `enabled` is false when
 // `shadow_map_size == 0`, in which case the shadow pass is skipped; `map` and
-// `sampler` are always present (1x1 fallback reading 1.0 = fully lit when
-// disabled) so fragment shaders can always sample texture(2) / sampler(1).
+// `sampler` are always present (a 1x1 fallback every compare reads as fully
+// lit when disabled) so fragment shaders can always sample texture(2) /
+// sampler(1).
 // Mirrors `DxContext::shadow`.
 pub(super) struct ShadowState {
     pub enabled: bool,
@@ -473,21 +474,20 @@ pub(super) struct MtlTargets {
     // them on one aliased `MTLHeap` slot. Rebuilt on resize. See
     // [`TransientTexturePool`].
     pub transient_pool: TransientTexturePool,
-    // The camera's opaque-geometry test: nearer fragments pass and write.
+    // The opaque-geometry test: nearer fragments pass and write. The shadow
+    // casters draw with it too: the cascades, the spot slices and the
+    // raymarched casters drawn into them.
     pub depth_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
-    // The camera test that also passes at equal depth, with write. Opaque
+    // The test that also passes at equal depth, with write. Opaque
     // raymarched surfaces bind it: their shader writes a depth no farther than
     // the proxy's rasterized one.
     pub depth_state_inclusive: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
-    // Read-only depth state: the inclusive camera test, no write. Used by translucent
+    // Read-only depth state: the inclusive test, no write. Used by translucent
     // draws that must be occluded by nearer opaque geometry but must not
     // update the depth buffer (volumetric raymarch volumes). Metal forbids
     // `setDepthStencilState(nil)` under the validation layer, so translucent
     // passes bind this instead of clearing the state.
     pub depth_state_read_only: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
-    // The shadow casters' test, for the cascades, the spot slices and the
-    // raymarched casters drawn into them.
-    pub shadow_depth_state: Retained<ProtocolObject<dyn MTLDepthStencilState>>,
     // True when the world has no 3D geometry (e.g. a text-only world). The
     // off-screen HDR / bloom / effect targets are then allocated at 1x1 since
     // nothing is rendered into them; the composite pass still runs at the full

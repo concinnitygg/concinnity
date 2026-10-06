@@ -58,6 +58,7 @@ pub(in crate::directx) use concinnity_core::render::uniforms::{
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::depth::shadow_sample_compare;
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
 use crate::directx::error::{map_hresult, map_pso_hresult};
@@ -209,7 +210,7 @@ fn create_raymarch_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12R
 // proxy cube rasterize (which works regardless of whether the camera
 // is inside or outside the bbox). Depth attachment is the main scene
 // depth (D32_FLOAT); the shader writes hit depth as conservative
-// depth (`CAMERA_DEPTH_CONSERVATIVE`) so downstream passes see
+// depth (`DEPTH_CONSERVATIVE`) so downstream passes see
 // raymarched-surface depth.
 fn create_raymarch_pso(
     device: &ID3D12Device,
@@ -228,7 +229,7 @@ fn create_raymarch_pso(
     GraphicsPso::new(root_sig, vs, ps)
         .input_layout(&input_layout)
         .target(HDR_FORMAT, Blend::Opaque)
-        .depth(DXGI_FORMAT_D32_FLOAT, Depth::camera_write_inclusive())
+        .depth(DXGI_FORMAT_D32_FLOAT, Depth::write_inclusive())
         .samples(msaa_samples.max(1))
         .raster(proxy_raster(msaa_samples > 1))
         .build(device, "raymarch")
@@ -313,7 +314,7 @@ fn create_raymarch_volumetric_pso(
 
     // Early-z against the bbox far face, but no depth write: the
     // medium doesn't occlude itself or update SSR/decal depth.
-    let depth_stencil = Depth::camera_read_only().raw();
+    let depth_stencil = Depth::read_only().raw();
 
     let mut rtv_formats = [DXGI_FORMAT_UNKNOWN; 8];
     rtv_formats[0] = HDR_FORMAT;
@@ -400,8 +401,8 @@ fn create_raymarch_shadow_root_signature(
 
 // Build the depth-only shadow PSO for one volume. No RTV, no MSAA
 // (shadow map is single-sample), front-face cull so back-face
-// fragments produce rays through the bbox. Writes hit depth via
-// `SV_DepthLessEqual`; the writable shadow DSV at draw time supplies
+// fragments produce rays through the bbox. Writes hit depth through the
+// conservative-depth semantic; the writable shadow DSV at draw time supplies
 // the comparison. Format matches the existing `create_shadow_pso`:
 // D32_FLOAT, sample count 1.
 fn create_raymarch_shadow_pso(
@@ -413,7 +414,7 @@ fn create_raymarch_shadow_pso(
     let input_layout = main_input_layout();
     GraphicsPso::new(root_sig, vs, ps)
         .input_layout(&input_layout)
-        .depth(DXGI_FORMAT_D32_FLOAT, Depth::shadow_write())
+        .depth(DXGI_FORMAT_D32_FLOAT, Depth::write())
         .raster(proxy_raster(false))
         .build(device, "raymarch shadow")
 }
@@ -699,7 +700,7 @@ fn write_scene_color_srv(
 
 // Write the 3-sampler descriptor table for the raymarch pass into the
 // sampler heap, starting at `base_slot`. The slots are:
-//   [+0] shadow_samp (LESS_EQUAL comparison sampler)
+//   [+0] shadow_samp (shadow comparison sampler)
 //   [+1] cube_samp   (linear-clamp + mip linear, for IBL cubes)
 //   [+2] scene_samp  (linear-clamp, for the scene_color tap)
 fn write_raymarch_samplers(
@@ -715,7 +716,7 @@ fn write_raymarch_samplers(
         AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
         AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
         AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_LESS_EQUAL,
+        ComparisonFunc: shadow_sample_compare(),
         MinLOD: 0.0,
         MaxLOD: f32::MAX,
         ..Default::default()
@@ -1235,9 +1236,9 @@ impl DxContext {
     // caster per cascade; the proxy unit cube rasterizes through the
     // cascade's light VP (front-face cull means back faces produce one
     // fragment per texel inside the box), the depth-only fragment
-    // marches the SDF, and writes the hit's NDC.z via
-    // `SV_DepthLessEqual` so the cascade DSV's existing LESS depth test
-    // keeps only the nearest caster between rasterized and raymarched.
+    // marches the SDF, and writes the hit's NDC.z through the
+    // conservative-depth semantic, so the cascade DSV's write test keeps
+    // only the caster nearest the light between rasterized and raymarched.
     //
     // Uploads `view` into the same per-frame cbuffer ring
     // `encode_raymarch` uses. Bytes for the same frame_idx are written

@@ -769,8 +769,8 @@ impl MtlContext {
     // `shadow.map` slice with `Load` / `Store` (keeping the rasterized depth
     // already written into the slice), then draws each caster's proxy cube
     // with front faces culled. The depth-only fragment cone-marches the SDF
-    // from the light side and writes the hit's NDC.z via `[[depth(less)]]`;
-    // the slice's LESS depth test keeps the nearest caster (rasterized or
+    // from the light side and writes the hit's NDC.z through the conservative-depth
+    // semantic; the slice's depth write test keeps the nearest caster (rasterized or
     // raymarched) per texel. A no-op (returns 0) when no volume casts.
     pub(in crate::metal) fn encode_sdf_shadow_casters(
         &self,
@@ -826,7 +826,7 @@ impl MtlContext {
             // light-space projection. Same depth state as the rasterized
             // casters so the two layers composite.
             enc.setCullMode(MTLCullMode::Front);
-            enc.set_depth_stencil(self.targets.shadow_depth_state.as_ref());
+            enc.set_depth_stencil(self.targets.depth_state.as_ref());
 
             let cascade = RaymarchShadowCascade {
                 cascade_idx: cascade_idx as u32,

@@ -1,8 +1,8 @@
-// The core depth conventions in Vulkan terms: compare ops for pipeline depth
-// state and clear values for render-pass begin.
+// The core depth convention in Vulkan terms: compare ops for pipeline depth
+// state and the shadow sampler, and the clear value for render-pass begin.
 
 use ash::vk;
-use concinnity_core::render::depth::{DepthCompare, DepthConvention};
+use concinnity_core::render::depth::{DEPTH_CLEAR, DEPTH_INCLUSIVE_COMPARE, DepthCompare};
 
 pub(in crate::vulkan) const fn compare_op(compare: DepthCompare) -> vk::CompareOp {
     match compare {
@@ -13,15 +13,18 @@ pub(in crate::vulkan) const fn compare_op(compare: DepthCompare) -> vk::CompareO
     }
 }
 
-// The depth attachment's clear for a target drawn under `convention`.
-pub(in crate::vulkan) const fn clear_value(convention: DepthConvention) -> vk::ClearValue {
-    vk::ClearValue {
-        depth_stencil: vk::ClearDepthStencilValue {
-            depth: convention.clear(),
-            stencil: 0,
-        },
-    }
-}
+// Every depth attachment's clear.
+pub(in crate::vulkan) const CLEAR_VALUE: vk::ClearValue = vk::ClearValue {
+    depth_stencil: vk::ClearDepthStencilValue {
+        depth: DEPTH_CLEAR,
+        stencil: 0,
+    },
+};
+
+// The shadow compare sampler's test: lit where the reference depth is no
+// farther from the light than the stored caster.
+pub(in crate::vulkan) const SHADOW_SAMPLE_COMPARE: vk::CompareOp =
+    compare_op(DEPTH_INCLUSIVE_COMPARE);
 
 #[cfg(test)]
 mod tests {
@@ -39,5 +42,12 @@ mod tests {
             compare_op(DepthCompare::GreaterEqual),
             vk::CompareOp::GREATER_OR_EQUAL
         );
+    }
+
+    // Reversed depth: a sample is lit where its reference is at or nearer the
+    // light than the stored caster.
+    #[test]
+    fn the_shadow_sampler_passes_at_or_nearer_the_light() {
+        assert_eq!(SHADOW_SAMPLE_COMPARE, vk::CompareOp::GREATER_OR_EQUAL);
     }
 }

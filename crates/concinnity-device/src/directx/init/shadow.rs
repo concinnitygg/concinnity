@@ -31,9 +31,10 @@ pub(super) fn build_shadow(
     let dsv_descriptor_size = heaps::descriptor_size(&hw.device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
     // Shadow map array
     // Real path: NUM_SHADOW_CASCADES-slice Texture2DArray with per-slice DSVs.
-    // Fallback: 1x1 single-slice R32_FLOAT array with value 0.0 (LESS_EQUAL
-    // always passes, so fully lit), declared as Texture2DArray so the shader's
-    // binding type stays identical between disabled and enabled cases.
+    // Fallback: 1x1 single-slice R32_FLOAT array holding the depth clear value
+    // (every shadow compare passes, so fully lit), declared as Texture2DArray
+    // so the shader's binding type stays identical between disabled and
+    // enabled cases.
     // CSM is gated on `shadow_map_size` (from GraphicsConfig; 0 disables
     // shadows). The casters draw through the GPU-driven shadow pipeline the
     // cull builds.

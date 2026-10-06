@@ -16,10 +16,9 @@ pub(super) fn build_targets(gpu: &InitGpu<'_>, features: &Features) -> RenderRes
     let device = &*gpu.hw.device;
     let (render_w, render_h) = features.render;
 
-    let depth_state = Depth::camera_write().state(device)?;
-    let depth_state_inclusive = Depth::camera_write_inclusive().state(device)?;
-    let depth_state_read_only = Depth::camera_read_only().state(device)?;
-    let shadow_depth_state = Depth::shadow_write().state(device)?;
+    let depth_state = Depth::write().state(device)?;
+    let depth_state_inclusive = Depth::write_inclusive().state(device)?;
+    let depth_state_read_only = Depth::read_only().state(device)?;
     let hdr = create_hdr_targets(device, render_w, render_h, features.hdr_samples)?;
     let transient_pool = build_transient_pool(
         device,
@@ -36,7 +35,6 @@ pub(super) fn build_targets(gpu: &InitGpu<'_>, features: &Features) -> RenderRes
         depth_state,
         depth_state_inclusive,
         depth_state_read_only,
-        shadow_depth_state,
         geometry_less: !features.scene,
     })
 }

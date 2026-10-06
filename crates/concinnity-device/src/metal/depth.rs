@@ -1,7 +1,10 @@
-// The core depth conventions in Metal terms: the depth-stencil states the passes
-// bind and the clear depth their attachments load with.
+// The core depth convention in Metal terms: the depth-stencil states the passes
+// bind, the clear depth their attachments load with, and the compare the
+// shadow sampler takes.
 
-use concinnity_core::render::depth::{DepthCompare, DepthConvention};
+use concinnity_core::render::depth::{
+    DEPTH_CLEAR, DEPTH_INCLUSIVE_COMPARE, DEPTH_WRITE_COMPARE, DepthCompare,
+};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -16,37 +19,29 @@ pub(in crate::metal) struct Depth {
 }
 
 impl Depth {
-    // The opaque-geometry test against the camera's depth: nearer fragments
-    // pass and write.
-    pub(in crate::metal) const fn camera_write() -> Self {
+    // The opaque-geometry test: nearer fragments pass and write. The camera's
+    // opaque passes and every shadow caster draw with it.
+    pub(in crate::metal) const fn write() -> Self {
         Self {
-            compare: DepthConvention::Camera.write_compare(),
+            compare: DEPTH_WRITE_COMPARE,
             write: true,
         }
     }
 
-    // A camera-depth pass whose shader writes a depth no farther than the
-    // rasterized one: equal depth passes too.
-    pub(in crate::metal) const fn camera_write_inclusive() -> Self {
+    // A pass whose shader writes a depth no farther than the rasterized one:
+    // equal depth passes too.
+    pub(in crate::metal) const fn write_inclusive() -> Self {
         Self {
-            compare: DepthConvention::Camera.inclusive_compare(),
+            compare: DEPTH_INCLUSIVE_COMPARE,
             write: true,
         }
     }
 
-    // Tested against the camera's depth without writing it.
-    pub(in crate::metal) const fn camera_read_only() -> Self {
+    // Tested against depth another pass wrote, without writing it.
+    pub(in crate::metal) const fn read_only() -> Self {
         Self {
-            compare: DepthConvention::Camera.inclusive_compare(),
+            compare: DEPTH_INCLUSIVE_COMPARE,
             write: false,
-        }
-    }
-
-    // A shadow caster: nearer the light passes and writes.
-    pub(in crate::metal) const fn shadow_write() -> Self {
-        Self {
-            compare: DepthConvention::Shadow.write_compare(),
-            write: true,
         }
     }
 
@@ -72,10 +67,13 @@ const fn compare_function(compare: DepthCompare) -> MTLCompareFunction {
     }
 }
 
-// The depth an attachment clears to for a target drawn under `convention`.
-pub(in crate::metal) fn clear_depth(convention: DepthConvention) -> f64 {
-    f64::from(convention.clear())
-}
+// The depth every depth attachment clears to.
+pub(in crate::metal) const CLEAR_DEPTH: f64 = DEPTH_CLEAR as f64;
+
+// The shadow compare sampler's test: lit where the reference depth is no
+// farther from the light than the stored caster.
+pub(in crate::metal) const SHADOW_SAMPLE_COMPARE: MTLCompareFunction =
+    compare_function(DEPTH_INCLUSIVE_COMPARE);
 
 #[cfg(test)]
 mod tests {
@@ -99,5 +97,13 @@ mod tests {
             compare_function(DepthCompare::GreaterEqual),
             MTLCompareFunction::GreaterEqual
         );
+    }
+
+    // Reversed depth: a sample is lit where its reference is at or nearer the
+    // light than the stored caster, i.e. greater or equal.
+    #[test]
+    fn the_shadow_sampler_passes_at_or_nearer_the_light() {
+        assert_eq!(SHADOW_SAMPLE_COMPARE, MTLCompareFunction::GreaterEqual);
+        assert_eq!(CLEAR_DEPTH, 0.0);
     }
 }

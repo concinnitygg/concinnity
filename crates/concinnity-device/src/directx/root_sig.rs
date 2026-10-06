@@ -8,6 +8,7 @@ use bytemuck::NoUninit;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
+use crate::directx::depth::shadow_sample_compare;
 use crate::directx::error::map_hresult;
 use crate::directx::root_constants::root_dwords;
 
@@ -116,8 +117,8 @@ pub(in crate::directx) enum SamplerState {
     LinearWrap,
     // As `LinearClamp`, with a transparent black border.
     LinearClampTransparentBorder,
-    // Bilinear `<=` depth compare, clamp to edge.
-    CompareLessEqual,
+    // Bilinear shadow-map depth compare, clamp to edge.
+    ShadowCompare,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,10 +149,10 @@ impl StaticSampler {
                 D3D12_COMPARISON_FUNC_ALWAYS,
                 D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
             ),
-            SamplerState::CompareLessEqual => (
+            SamplerState::ShadowCompare => (
                 D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT,
                 D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-                D3D12_COMPARISON_FUNC_LESS_EQUAL,
+                shadow_sample_compare(),
                 D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
             ),
         };
@@ -569,7 +570,7 @@ mod tests {
         let sig = RootSig::new()
             .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
             .static_sampler(SamplerState::LinearWrap, 1, Visibility::Pixel)
-            .static_sampler(SamplerState::CompareLessEqual, 2, Visibility::All)
+            .static_sampler(SamplerState::ShadowCompare, 2, Visibility::All)
             .static_sampler(
                 SamplerState::LinearClampTransparentBorder,
                 3,
@@ -582,7 +583,7 @@ mod tests {
         assert_eq!(s[0].MaxLOD, f32::MAX);
         assert_eq!(s[1].AddressW, D3D12_TEXTURE_ADDRESS_MODE_WRAP);
         assert_eq!(s[1].ShaderRegister, 1);
-        assert_eq!(s[2].ComparisonFunc, D3D12_COMPARISON_FUNC_LESS_EQUAL);
+        assert_eq!(s[2].ComparisonFunc, D3D12_COMPARISON_FUNC_GREATER_EQUAL);
         assert_eq!(
             s[2].Filter,
             D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT

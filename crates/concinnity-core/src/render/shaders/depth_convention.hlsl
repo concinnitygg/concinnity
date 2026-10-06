@@ -2,9 +2,9 @@
 // that reads, reduces, compares or writes a hardware depth value. The CPU half
 // is `render::depth`; the two must agree.
 //
-// Camera depth is the main camera's buffer and every target tested against it:
-// reversed and infinite, near is 1 and depth reaches 0 only at infinity. Shadow
-// depth is the shadow maps: near is 0 and far is 1.
+// Every depth target is reversed: near is 1 and far is 0. The camera's buffer,
+// and every target tested against it, has no far plane, so its depth reaches 0
+// only at infinity; a shadow map's far plane is the end of its light's range.
 //
 // The comparison helpers are macros, so each expands to the exact expression it
 // names and compiles to the same code as writing that expression in place.
@@ -14,17 +14,17 @@
 #ifndef CN_DEPTH_CONVENTION
 #define CN_DEPTH_CONVENTION
 
-// Camera device depth at the near plane and at infinity. `DEPTH_FAR` is also
-// the cleared value: a pixel no surface reached.
+// Device depth at the near plane and at the far plane (infinity for the
+// camera). `DEPTH_FAR` is also the cleared value: a texel no surface reached.
 #define DEPTH_NEAR 1.0
 #define DEPTH_FAR 0.0
 
-// The nearer / farther of two camera depths. The identity of a `depth_closer`
+// The nearer / farther of two depths. The identity of a `depth_closer`
 // reduction is `DEPTH_FAR`, of a `depth_farther` one `DEPTH_NEAR`.
 #define depth_closer(a, b) max((a), (b))
 #define depth_farther(a, b) min((a), (b))
 
-// Whether camera depth `a` is strictly in front of / behind `b`.
+// Whether depth `a` is strictly in front of / behind `b`.
 #define depth_in_front(a, b) ((a) > (b))
 #define depth_behind(a, b) ((a) < (b))
 
@@ -65,16 +65,14 @@ float3 camera_view_ray(float4x4 inv_vp, float2 ndc_xy, float3 cam_pos)
     return normalize(h.xyz - h.w * cam_pos);
 }
 
-// Conservative depth output for a pass writing camera depth no farther than
-// the rasterized fragment's, which keeps early depth testing.
-#define CAMERA_DEPTH_CONSERVATIVE SV_DepthGreaterEqual
+// Conservative depth output for a pass writing a depth no farther than the
+// rasterized fragment's, which keeps early depth testing: a raymarched surface
+// against the camera, or a raymarched caster against the light.
+#define DEPTH_CONSERVATIVE SV_DepthGreaterEqual
 
-// Shadow depth `d` moved `offset` toward the light: the side a sample's compare
-// reference is biased to, so a surface does not shadow itself.
-#define shadow_depth_offset_near(d, offset) ((d) - (offset))
-
-// Conservative depth output for a shadow caster writing a depth no farther from
-// the light than the rasterized fragment's.
-#define SHADOW_DEPTH_CONSERVATIVE SV_DepthLessEqual
+// Depth `d` moved `offset` toward the near plane. A shadow sample's compare
+// reference is biased this way, toward the light, so a surface does not shadow
+// itself.
+#define depth_offset_near(d, offset) ((d) + (offset))
 
 #endif

@@ -3,10 +3,10 @@
 //! Y-down NDC with a negative-height viewport rather than by flipping the
 //! projection.
 //!
-//! The projections here map near to device depth 0 and far to 1, or, for the
-//! `reversed_infinite_` ones, near to 1 and infinity to 0. They are the builders behind
-//! [`crate::render::depth`]'s entry points, which pick one per depth
-//! convention, so a caller never names a depth mapping directly.
+//! The projections here map depth reversed: near to device depth 1 and far to
+//! 0, or, for the `reversed_infinite_` ones, infinity to 0. They are the
+//! builders behind [`crate::render::depth`]'s entry points, which pick one per
+//! kind of view, so a caller never names a depth mapping directly.
 //!
 //! The projections and both ways of building a view matrix sit together because
 //! they have to agree: a shadow cascade's ortho and a probe face's perspective
@@ -20,8 +20,10 @@ use crate::transform::Mat4;
 // otherwise divide by zero and fill the matrix with infinities.
 const MIN_HALF_FOV_TAN: f32 = 1.0e-6;
 
-/// Right-handed perspective projection with depth in `[0, 1]`. `fov_y_radians`
-/// is the full vertical field of view; `aspect` is width over height.
+/// Right-handed perspective projection with standard depth: near maps to 0 and
+/// far to 1. `fov_y_radians` is the full vertical field of view; `aspect` is
+/// width over height. The reference the reversed builders are tested against.
+#[cfg(test)]
 pub(crate) fn perspective_rh(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
     let ys = 1.0 / tan(fov_y_radians * 0.5).max(MIN_HALF_FOV_TAN);
     let xs = ys / aspect;
@@ -34,7 +36,9 @@ pub(crate) fn perspective_rh(fov_y_radians: f32, aspect: f32, near: f32, far: f3
     ]
 }
 
-/// Right-handed orthographic projection with depth in `[0, 1]`.
+/// Right-handed orthographic projection with standard depth: near maps to 0
+/// and far to 1. The reference the reversed builders are tested against.
+#[cfg(test)]
 pub(crate) fn ortho_rh(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Mat4 {
     let rml = right - left;
     let tmb = top - bottom;
@@ -49,6 +53,47 @@ pub(crate) fn ortho_rh(left: f32, right: f32, bottom: f32, top: f32, near: f32, 
             -near / fmn,
             1.0,
         ],
+    ]
+}
+
+/// Right-handed perspective projection with reversed depth over a finite range:
+/// near maps to device depth 1 and far to 0. `fov_y_radians` is the full
+/// vertical field of view; `aspect` is width over height.
+pub(crate) fn reversed_perspective_rh(
+    fov_y_radians: f32,
+    aspect: f32,
+    near: f32,
+    far: f32,
+) -> Mat4 {
+    let ys = 1.0 / tan(fov_y_radians * 0.5).max(MIN_HALF_FOV_TAN);
+    let xs = ys / aspect;
+    let zs = near / (far - near);
+    [
+        [xs, 0.0, 0.0, 0.0],
+        [0.0, ys, 0.0, 0.0],
+        [0.0, 0.0, zs, -1.0],
+        [0.0, 0.0, far * zs, 0.0],
+    ]
+}
+
+/// Right-handed orthographic projection with reversed depth: the box's near
+/// face maps to device depth 1 and its far face to 0.
+pub(crate) fn reversed_ortho_rh(
+    left: f32,
+    right: f32,
+    bottom: f32,
+    top: f32,
+    near: f32,
+    far: f32,
+) -> Mat4 {
+    let rml = right - left;
+    let tmb = top - bottom;
+    let fmn = far - near;
+    [
+        [2.0 / rml, 0.0, 0.0, 0.0],
+        [0.0, 2.0 / tmb, 0.0, 0.0],
+        [0.0, 0.0, 1.0 / fmn, 0.0],
+        [-(right + left) / rml, -(top + bottom) / tmb, far / fmn, 1.0],
     ]
 }
 
@@ -240,6 +285,64 @@ mod tests {
     fn depth(m: Mat4, p: [f32; 3]) -> f32 {
         let c = transform(m, p);
         c[2] / c[3]
+    }
+
+    // Reversed finite depth is exactly 1 - standard depth: the near plane at 1,
+    // the far plane at 0 and every distance between mirrored, under the same
+    // x, y and w rows.
+    #[test]
+    fn the_reversed_perspective_mirrors_standard_depth() {
+        for (fov, aspect, near, far) in [
+            (1.2, 1.6, 0.1, 500.0),
+            (0.4, 0.5, 0.01, 10.0),
+            (1.6, 1.0, 0.05, 40.0),
+            (0.9, 2.35, 2.0, 1.0e4),
+        ] {
+            let standard = perspective_rh(fov, aspect, near, far);
+            let reversed = reversed_perspective_rh(fov, aspect, near, far);
+            for row in [0, 1, 3] {
+                for col in 0..4 {
+                    assert_eq!(reversed[col][row], standard[col][row]);
+                }
+            }
+            assert!((depth(reversed, [0.0, 0.0, -near]) - 1.0).abs() < 1e-6);
+            assert!(depth(reversed, [0.0, 0.0, -far]).abs() < 1e-6);
+            for t in [0.0, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0] {
+                let z = -(near + t * (far - near));
+                let p = [0.2 * z, -0.3 * z, z];
+                let (s, r) = (depth(standard, p), depth(reversed, p));
+                assert!((r - (1.0 - s)).abs() < 1e-5, "{t}: {r} vs 1 - {s}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_reversed_ortho_mirrors_standard_depth() {
+        for (l, r, b, t, near, far) in [
+            (-2.0, 2.0, -1.0, 1.0, 1.0, 11.0),
+            (-16.7, 16.7, -16.7, 16.7, -80.0, 33.4),
+            (-3.0, 5.0, -2.0, 6.0, -1.0, 9.0),
+        ] {
+            let standard = ortho_rh(l, r, b, t, near, far);
+            let reversed = reversed_ortho_rh(l, r, b, t, near, far);
+            for row in [0, 1, 3] {
+                for col in 0..4 {
+                    assert_eq!(reversed[col][row], standard[col][row]);
+                }
+            }
+            assert!((depth(reversed, [l, b, -near]) - 1.0).abs() < 1e-6);
+            assert!(depth(reversed, [r, t, -far]).abs() < 1e-6);
+            for f in [0.0, 0.01, 0.3, 0.5, 0.8, 1.0] {
+                let p = [0.5 * l, 0.25 * t, -(near + f * (far - near))];
+                let (s, rv) = (depth(standard, p), depth(reversed, p));
+                assert!((rv - (1.0 - s)).abs() < 1e-6, "{f}: {rv} vs 1 - {s}");
+            }
+            // The z row is the standard one negated: the same depth scale per
+            // meter, pointing the other way.
+            for col in 0..3 {
+                assert_eq!(reversed[col][2], -standard[col][2]);
+            }
+        }
     }
 
     fn sgn(v: f32) -> f32 {

@@ -27,7 +27,6 @@
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::probe_bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
 use concinnity_core::render::probe_book::ProbeBook;
@@ -549,7 +548,7 @@ impl VkContext {
                 float32: [r, g, b, a],
             },
         };
-        let clear_depth = depth::clear_value(DepthConvention::Camera);
+        let clear_depth = depth::CLEAR_VALUE;
         let clears: &[vk::ClearValue] = if self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1
         {
             &[clear_color, clear_depth, vk::ClearValue::default()]

@@ -195,7 +195,7 @@ float sampleSunShadow(float3 world_pos, float view_depth, float2 screen_xy)
         return 1.0;
     }
 
-    float ref = shadow_depth_offset_near(ndc.z, cascade_depth_bias(cascade));
+    float ref = depth_offset_near(ndc.z, cascade_depth_bias(cascade));
 
     // A per-pixel rotation breaks the 5x5 kernel's banding.
     float angle = raymarchHashRotation(screen_xy);

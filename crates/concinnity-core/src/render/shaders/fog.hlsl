@@ -180,7 +180,7 @@ float fog_shadow_factor(float3 world_pos, float view_depth)
     // Explicit LOD, not an implicit one. A compute kernel has no fragment quad
     // to derive a mip from -- neighboring threads are unrelated froxel columns
     // -- and the cascade array has one mip, so level zero is the same tap.
-    return shadow_map.SampleCmpLevelZero(shadow_samp, uv_layer, shadow_depth_offset_near(ndc.z, bias));
+    return shadow_map.SampleCmpLevelZero(shadow_samp, uv_layer, depth_offset_near(ndc.z, bias));
 }
 
 // World-space position at a froxel center. `z_slice` is a floating-point slab

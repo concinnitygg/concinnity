@@ -14,7 +14,7 @@
 use crate::directx::descriptor_slot::SrvSlot;
 use concinnity_core::components::UpscaleQuality;
 use concinnity_core::gfx::jitter;
-use concinnity_core::render::depth::DepthConvention;
+use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::ffi::{CStr, c_void};
 use std::ptr;
@@ -45,8 +45,8 @@ const XESS_QUALITY_SETTING_AA: i32 = 106;
 const XESS_INIT_FLAG_INVERTED_DEPTH: u32 = 1 << 1;
 const XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE: u32 = 1 << 8;
 
-const fn xess_init_flags(depth: DepthConvention) -> u32 {
-    if depth.is_reversed() {
+const fn xess_init_flags(depth: DepthMapping) -> u32 {
+    if depth.reversed {
         XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE | XESS_INIT_FLAG_INVERTED_DEPTH
     } else {
         XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE
@@ -274,7 +274,7 @@ impl XessUpscaler {
             return Ok(None);
         }
 
-        let init_flags = xess_init_flags(DepthConvention::Camera);
+        let init_flags = xess_init_flags(CAMERA_DEPTH);
         // SAFETY: `ctx` is the non-null context just created, and a null pipeline-library pointer
         // is the header's "use the default" value.
         let rc = unsafe { (xess.build_pipelines)(ctx, ptr::null_mut(), true, init_flags) };
@@ -490,14 +490,19 @@ mod tests {
         );
     }
 
+    // The inverted-depth bit is set exactly when the depth is reversed, and
+    // the camera's depth is.
     #[test]
-    fn the_depth_flag_follows_the_camera_convention() {
+    fn the_depth_flag_follows_the_depth_mapping() {
         assert_eq!(XESS_INIT_FLAG_INVERTED_DEPTH, 2);
-        let camera = DepthConvention::Camera;
-        let inverted = (xess_init_flags(camera) & XESS_INIT_FLAG_INVERTED_DEPTH) != 0;
-        assert_eq!(inverted, camera.is_reversed());
-        assert_eq!(
-            xess_init_flags(DepthConvention::Shadow) & XESS_INIT_FLAG_INVERTED_DEPTH,
+        for reversed in [false, true] {
+            for infinite in [false, true] {
+                let flags = xess_init_flags(DepthMapping { reversed, infinite });
+                assert_eq!((flags & XESS_INIT_FLAG_INVERTED_DEPTH) != 0, reversed);
+            }
+        }
+        assert_ne!(
+            xess_init_flags(CAMERA_DEPTH) & XESS_INIT_FLAG_INVERTED_DEPTH,
             0
         );
     }

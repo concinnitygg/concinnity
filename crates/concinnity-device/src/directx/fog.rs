@@ -133,7 +133,7 @@ fn create_fog_froxel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D1
         .cbv(2, Visibility::All)
         .srv_table(0, 1, Visibility::All)
         .uav_table(0, 1, Visibility::All)
-        .static_sampler(SamplerState::CompareLessEqual, 0, Visibility::All)
+        .static_sampler(SamplerState::ShadowCompare, 0, Visibility::All)
         .build(device, "fog froxel root sig")
 }
 

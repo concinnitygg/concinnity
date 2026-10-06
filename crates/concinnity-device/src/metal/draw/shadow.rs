@@ -14,7 +14,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowPassPush, ShadowUniforms};
-use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shadow_bias;
 use objc2::rc::Retained;
@@ -27,7 +26,7 @@ use objc2_metal::{
 
 use crate::metal::context::MtlContext;
 use crate::metal::cull::ShadowViewIcb;
-use crate::metal::depth::clear_depth;
+use crate::metal::depth::CLEAR_DEPTH;
 use crate::metal::encode::RenderEncode;
 use crate::metal::scoped_encoder::ScopedEncoder;
 
@@ -95,7 +94,7 @@ impl MtlContext {
             depth_attach.setSlice(cascade_idx);
             depth_attach.setLoadAction(MTLLoadAction::Clear);
             depth_attach.setStoreAction(MTLStoreAction::Store);
-            depth_attach.setClearDepth(clear_depth(DepthConvention::Shadow));
+            depth_attach.setClearDepth(CLEAR_DEPTH);
 
             // Per-pass GPU timing spans the first to the last cascade actually
             // rendered this frame (the set varies with the update policy):
@@ -145,8 +144,8 @@ impl MtlContext {
 
         // Raymarched SDF shadow casters: depth-only draws into the same
         // per-cascade slices, run after the rasterized + skinned casters so
-        // both layers compete via the slice's LESS depth test (nearest caster
-        // wins per texel). No-op when no volume opts into `cast_shadows` or the
+        // both layers compete via the slice's depth write test (the caster nearest
+        // the light wins per texel). No-op when no volume opts into `cast_shadows` or the
         // executor passed no view.
         if let Some(view) = raymarch_view {
             total_draws += self.encode_sdf_shadow_casters(cmd_buf, view)?;
@@ -182,7 +181,7 @@ impl MtlContext {
             "shadow view indirect",
         ));
         enc.set_pipeline(pipeline);
-        enc.set_depth_stencil(&self.targets.shadow_depth_state);
+        enc.set_depth_stencil(&self.targets.depth_state);
         enc.setDepthBias_slopeScale_clamp(
             shadow_bias::RASTER_CONSTANT,
             shadow_bias::RASTER_SLOPE,

@@ -4,11 +4,13 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types;
+use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::mipmap;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
+use super::depth::SHADOW_SAMPLE_COMPARE;
 use super::error::map_vk_result;
 use crate::vulkan::owned::{OwnedSampler, VkDevice};
 
@@ -1006,6 +1008,53 @@ pub(super) fn create_fallback_color_lut(ctx: &GpuUploadContext) -> RenderResult<
     upload_color_lut(ctx, 2, &data)
 }
 
+// Clear the 1x1 fallback array to the depth clear value and rest it sampled. No
+// pass ever renders the fallback, so this is the only write it gets.
+fn clear_shadow_fallback(
+    device: &VkDevice,
+    cmd: vk::CommandBuffer,
+    image: vk::Image,
+    layer_count: u32,
+) {
+    transition_image_layout_array(
+        device,
+        cmd,
+        image,
+        vk::ImageLayout::UNDEFINED,
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        vk::ImageAspectFlags::DEPTH,
+        layer_count,
+    );
+    let range = vk::ImageSubresourceRange::default()
+        .aspect_mask(vk::ImageAspectFlags::DEPTH)
+        .level_count(1)
+        .layer_count(layer_count);
+    // SAFETY: `cmd` is a command buffer in the recording state, and `image` is live, was moved
+    // to TRANSFER_DST_OPTIMAL just above, and was created with TRANSFER_DST usage by
+    // `create_shadow_map_array`, the only caller.
+    unsafe {
+        device.cmd_clear_depth_stencil_image(
+            cmd,
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &vk::ClearDepthStencilValue {
+                depth: DEPTH_CLEAR,
+                stencil: 0,
+            },
+            &[range],
+        );
+    }
+    transition_image_layout_array(
+        device,
+        cmd,
+        image,
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        vk::ImageAspectFlags::DEPTH,
+        layer_count,
+    );
+}
+
 // Create a `layers`-slice D32_SFLOAT array shadow map. The returned `view` is
 // a single sampled 2D-array view covering every layer (bound at descriptor
 // set=0 binding=3 in the main pass); `aux_views` holds one single-layer 2D
@@ -1013,7 +1062,8 @@ pub(super) fn create_fallback_color_lut(ctx: &GpuUploadContext) -> RenderResult<
 // pass.
 //
 // An empty array (`size` or `layers` 0) is a 1×1 single-layer
-// fallback (depth=1.0 = fully lit). The fallback intentionally uses a single
+// fallback cleared to the depth clear value, the far plane, so every shadow
+// compare against it is fully lit. The fallback intentionally uses a single
 // array layer because the shader's cascade selection falls back to cascade 0
 // when `cascade_splits == +inf`, so layer 0 is the only one ever sampled.
 pub(super) fn create_shadow_map_array(
@@ -1029,6 +1079,12 @@ pub(super) fn create_shadow_map_array(
     } = ctx;
     let extent = render_types::shadow_array_extent(size, layers);
     let (w, h, layer_count) = (extent.size, extent.size, extent.layers);
+    let fallback = size == 0 || layers == 0;
+    let clear_usage = if fallback {
+        vk::ImageUsageFlags::TRANSFER_DST
+    } else {
+        vk::ImageUsageFlags::empty()
+    };
     let img_info = vk::ImageCreateInfo::default()
         .image_type(vk::ImageType::TYPE_2D)
         .extent(vk::Extent3D {
@@ -1041,7 +1097,11 @@ pub(super) fn create_shadow_map_array(
         .format(vk::Format::D32_SFLOAT)
         .tiling(vk::ImageTiling::OPTIMAL)
         .initial_layout(vk::ImageLayout::UNDEFINED)
-        .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
+        .usage(
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                | vk::ImageUsageFlags::SAMPLED
+                | clear_usage,
+        )
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .samples(vk::SampleCountFlags::TYPE_1);
     let pooled = alloc
@@ -1056,15 +1116,19 @@ pub(super) fn create_shadow_map_array(
     // producer barrier (SHADER_READ_ONLY -> DEPTH_STENCIL_ATTACHMENT) start from
     // the image's real layout.
     one_shot_submit(device, command_pool, queue, |cmd| {
-        transition_image_layout_array(
-            device,
-            cmd,
-            image,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            vk::ImageAspectFlags::DEPTH,
-            layer_count,
-        );
+        if fallback {
+            clear_shadow_fallback(device, cmd, image, layer_count);
+        } else {
+            transition_image_layout_array(
+                device,
+                cmd,
+                image,
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::ImageAspectFlags::DEPTH,
+                layer_count,
+            );
+        }
     })?;
 
     // Sampled view: 2D array over every layer.
@@ -1270,7 +1334,8 @@ pub(super) fn create_sampler_linear_repeat(
         .map_err(|e| super::error::map_vk_result(e, "linear repeat sampler"))
 }
 
-// Compare sampler for PCF shadow sampling (LessEqual compare op).
+// Compare sampler for PCF shadow sampling, lit where the reference depth is no
+// farther from the light than the stored caster.
 pub(super) fn create_sampler_shadow(device: &VkDevice) -> RenderResult<OwnedSampler> {
     let info = vk::SamplerCreateInfo::default()
         .mag_filter(vk::Filter::LINEAR)
@@ -1282,7 +1347,7 @@ pub(super) fn create_sampler_shadow(device: &VkDevice) -> RenderResult<OwnedSamp
         .border_color(vk::BorderColor::FLOAT_OPAQUE_WHITE)
         .unnormalized_coordinates(false)
         .compare_enable(true)
-        .compare_op(vk::CompareOp::LESS_OR_EQUAL)
+        .compare_op(SHADOW_SAMPLE_COMPARE)
         .mipmap_mode(vk::SamplerMipmapMode::LINEAR);
     device
         .create_sampler(&info)

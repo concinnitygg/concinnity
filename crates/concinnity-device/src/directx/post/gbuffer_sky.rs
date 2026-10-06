@@ -53,7 +53,7 @@ impl GbufferSky {
         dump_on_err(
             info_queue,
             gbuffer_targets(GraphicsPso::new(root_sig, &vs, &ps))
-                .depth(DXGI_FORMAT_D32_FLOAT, Depth::camera_read_only())
+                .depth(DXGI_FORMAT_D32_FLOAT, Depth::read_only())
                 .build(device, "gbuffer sky"),
         )
     }

@@ -194,7 +194,7 @@ float sample_spot_shadow(int shadow_index, float3 world_pos, float3 normal, floa
         return 1.0;
     }
 
-    float ref = shadow_depth_offset_near(ndc.z, sd.depth_bias);
+    float ref = depth_offset_near(ndc.z, sd.depth_bias);
     float angle = hash_rotation(screen_xy);
     float ca = cos(angle);
     float sa = sin(angle);
@@ -311,7 +311,7 @@ float sample_cascade_pcf(int cascade, float3 world_pos, float2 screen_xy)
         return 1.0;
     }
 
-    float ref = shadow_depth_offset_near(ndc.z, cascade_depth_bias(cascade));
+    float ref = depth_offset_near(ndc.z, cascade_depth_bias(cascade));
 
     float angle = hash_rotation(screen_xy);
     float ca = cos(angle);

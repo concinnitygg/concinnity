@@ -22,7 +22,6 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::depth::DepthConvention;
 
 use super::super::context::VkContext;
 use crate::vulkan::depth;
@@ -118,7 +117,7 @@ impl VkContext {
 
             // Raymarched SDF shadow casters into this cascade's DSV, after the
             // rasterized casters and within the same render pass (no re-clear);
-            // the LESS depth test keeps the nearer occluder.
+            // the depth write test keeps the nearer occluder.
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
@@ -153,7 +152,7 @@ impl VkContext {
             width: size,
             height: size,
         };
-        let clear_depth = depth::clear_value(DepthConvention::Shadow);
+        let clear_depth = depth::CLEAR_VALUE;
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(self.shadow.render_pass.handle())
             .framebuffer(framebuffer)

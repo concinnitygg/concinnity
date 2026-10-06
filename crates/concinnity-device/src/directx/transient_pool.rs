@@ -389,7 +389,7 @@ fn resting_state(m: &TransientTexture) -> D3D12_RESOURCE_STATES {
 mod tests {
     use super::super::post::gbuffer::GBUFFER_ROUGHNESS_CLEAR;
     use super::*;
-    use concinnity_core::render::depth::DepthConvention;
+    use concinnity_core::render::depth::DEPTH_CLEAR;
     use concinnity_core::render::post::device::PostExtent;
     use concinnity_core::render::post::{bloom, ssao};
     use concinnity_core::render::render_graph::{self, PoolGates, plan_pool_slots};
@@ -539,7 +539,7 @@ mod tests {
             array_layers: 1,
             mip_levels: 1,
             usage: TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
-            clear: ClearValue::depth(DepthConvention::Camera),
+            clear: ClearValue::DEPTH,
         };
         let desc = rt_desc(&depth);
         assert_eq!(desc.Format, DXGI_FORMAT_D32_FLOAT);
@@ -547,20 +547,13 @@ mod tests {
         assert_eq!(desc.Flags, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
         assert_eq!(resting_state(&depth), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         // A depth target's optimized clear must be the depth arm: handing
-        // D3D12 a color for a D32 resource is a creation failure. Both
-        // conventions' clears land in it.
-        for convention in [DepthConvention::Camera, DepthConvention::Shadow] {
-            let target = TransientTexture {
-                clear: ClearValue::depth(convention),
-                ..depth.clone()
-            };
-            assert_eq!(
-                // SAFETY: the union arm is the one `clear_value` just wrote for a
-                // `ClearValue::Depth`, which the assertion above pins.
-                unsafe { clear_value(&target).Anonymous.DepthStencil.Depth },
-                convention.clear()
-            );
-        }
+        // D3D12 a color for a D32 resource is a creation failure.
+        assert_eq!(
+            // SAFETY: the union arm is the one `clear_value` just wrote for a
+            // `ClearValue::Depth`, which the assertion above pins.
+            unsafe { clear_value(&depth).Anonymous.DepthStencil.Depth },
+            DEPTH_CLEAR
+        );
 
         let volume = TransientTexture {
             label: "probe_volume",

@@ -192,7 +192,7 @@ fn create_main_pso_filled(
     GraphicsPso::new(root_sig, vs, ps)
         .input_layout(&layout)
         .target(rtv_format, Blend::Opaque)
-        .depth(DXGI_FORMAT_D32_FLOAT, Depth::camera_write())
+        .depth(DXGI_FORMAT_D32_FLOAT, Depth::write())
         .samples(sample_count)
         // No culling, matching Metal's default, so meshes with mixed winding
         // (e.g. procedural floor/ceiling planes) render from both sides.
@@ -211,7 +211,7 @@ pub(in crate::directx) fn create_shadow_pso(
     let layout = main_input_layout();
     GraphicsPso::new(root_sig, vs, &[])
         .input_layout(&layout)
-        .depth(DXGI_FORMAT_D32_FLOAT, Depth::shadow_write())
+        .depth(DXGI_FORMAT_D32_FLOAT, Depth::write())
         // No culling, matching Metal, so double-sided procedural meshes cast
         // shadows correctly.
         .raster(Raster {

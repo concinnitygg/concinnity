@@ -9,6 +9,7 @@ use super::InitGpu;
 use super::bootstrap::DxgiSwapchain;
 use super::heap_layout::{DSV_SLOTS, RtvHeapLayout};
 use crate::directx::context::{FRAMES, SwapchainState};
+use crate::directx::depth::shadow_sample_compare;
 use crate::directx::error::map_hresult;
 
 // Sampler heap slots: [0] shadow comparison, [1] linear repeat, [2] cube
@@ -154,13 +155,13 @@ fn create_samplers(
     // D3D12 1..16 range below.
     anisotropy: u32,
 ) {
-    // [0] Shadow comparison sampler (LESS_EQUAL).
+    // [0] Shadow comparison sampler.
     let shadow_samp = D3D12_SAMPLER_DESC {
         Filter: D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT,
         AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
         AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
         AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-        ComparisonFunc: D3D12_COMPARISON_FUNC_LESS_EQUAL,
+        ComparisonFunc: shadow_sample_compare(),
         MinLOD: 0.0,
         MaxLOD: f32::MAX,
         ..Default::default()

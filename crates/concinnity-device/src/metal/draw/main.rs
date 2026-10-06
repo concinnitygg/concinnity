@@ -19,7 +19,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PixelRect;
 use concinnity_core::render::post::reflection_path::ReflectionPath;
@@ -33,7 +32,7 @@ use objc2_metal::{
 };
 
 use crate::metal::context::{BINDLESS_TEXTURE_ARG_BUFFER_INDEX, MtlContext};
-use crate::metal::depth::clear_depth;
+use crate::metal::depth::CLEAR_DEPTH;
 use crate::metal::encode::RenderEncode;
 use crate::metal::pass_timing::PassTimer;
 use crate::metal::scoped_encoder::ScopedEncoder;
@@ -200,7 +199,7 @@ impl MtlContext {
             let da = main_pass_desc.depthAttachment();
             da.setTexture(Some(self.targets.hdr.depth_attachment()));
             da.setLoadAction(MTLLoadAction::Clear);
-            da.setClearDepth(clear_depth(DepthConvention::Camera));
+            da.setClearDepth(CLEAR_DEPTH);
             // `depth_resolve` is the canonical post-rasterize scene depth the
             // post chain consumes: raymarch writes hit depth into it, and
             // water / decal / fog sample it. Multisampled, the Main pass
@@ -331,7 +330,7 @@ impl MtlContext {
             let da = desc.depthAttachment();
             da.setTexture(Some(face_depth));
             da.setLoadAction(MTLLoadAction::Clear);
-            da.setClearDepth(clear_depth(DepthConvention::Camera));
+            da.setClearDepth(CLEAR_DEPTH);
             da.setStoreAction(MTLStoreAction::DontCare);
         }
         if let Some(t) = &self.diagnostics.pass_timing {

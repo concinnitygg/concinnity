@@ -187,7 +187,7 @@ struct RaymarchFragOut
     // Writing a nearer depth keeps early-Z while letting the hit composite
     // against rasterized geometry, and feeds the raymarched surface's depth to
     // the passes downstream that sample it.
-    float depth : CAMERA_DEPTH_CONSERVATIVE;
+    float depth : DEPTH_CONSERVATIVE;
 };
 
 [shader("pixel")]
@@ -318,7 +318,7 @@ RaymarchVertexOut raymarch_shadow_vertex(RaymarchVertexIn v)
 }
 
 [shader("pixel")]
-float raymarch_shadow_fragment(RaymarchVertexOut input) : SHADOW_DEPTH_CONSERVATIVE
+float raymarch_shadow_fragment(RaymarchVertexOut input) : DEPTH_CONSERVATIVE
 {
     // `dir_i.xyz` is L, surface to light, which is what `shadePbrSun` reads from
     // the same field; incoming light travels along -L, so the shadow ray does.

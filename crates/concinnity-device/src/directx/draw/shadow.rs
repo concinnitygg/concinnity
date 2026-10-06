@@ -15,7 +15,7 @@
 
 use concinnity_core::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
 use concinnity_core::render::backend_init::ShadowCadence;
-use concinnity_core::render::depth::DepthConvention;
+use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::shadow_schedule;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -141,8 +141,8 @@ impl DxContext {
 
         // Raymarched SDF shadow casters: depth-only draws into the same
         // per-cascade DSVs. Run after the rasterized + skinned draws so
-        // both layers compete via the cascade's LESS depth test: the
-        // nearer caster wins per texel. No-op when no volume opts into
+        // both layers compete via the cascade's depth write test: the
+        // caster nearer the light wins per texel. No-op when no volume opts into
         // `cast_shadows` or when no `raymarch_view` was supplied by the
         // executor.
         if let Some(view) = raymarch_view
@@ -195,13 +195,7 @@ impl DxContext {
         // SAFETY: the command list is in the recording state, and the DSV names a live slice.
         unsafe {
             cmd.OMSetRenderTargets(0, None, false, Some(&dsv));
-            cmd.ClearDepthStencilView(
-                dsv,
-                D3D12_CLEAR_FLAG_DEPTH,
-                DepthConvention::Shadow.clear(),
-                0,
-                None,
-            );
+            cmd.ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
         }
     }
 
@@ -275,7 +269,7 @@ impl DxContext {
         self.inc_draw_calls(1);
 
         // Skinned tail over the deformed VB + skinned IB. No depth clear -- it
-        // appends to the static depth via the LESS test.
+        // appends to the static depth via the write test.
         if self.state.draw.n_skinned > 0
             && let Some(deformed_vbv) = self.skinned.deformed_vbvs.get(frame_idx)
         {

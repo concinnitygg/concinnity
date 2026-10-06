@@ -10,12 +10,13 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
 use concinnity_core::render::spot_shadow;
 use objc2_metal::{
-    MTLCompareFunction, MTLDevice as _, MTLResourceOptions, MTLSamplerAddressMode,
-    MTLSamplerDescriptor, MTLSamplerMinMagFilter,
+    MTLDevice as _, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor,
+    MTLSamplerMinMagFilter,
 };
 
 use super::InitGpu;
 use crate::metal::context::{ShadowState, SpotShadowState, bytes_of_slice};
+use crate::metal::depth::SHADOW_SAMPLE_COMPARE;
 use crate::metal::texture::{create_shadow_map_array, create_shadow_map_fallback};
 
 pub(super) fn build_shadow(
@@ -35,20 +36,22 @@ pub(super) fn build_shadow(
             create_shadow_map_array(device, shadows.map_size, NUM_SHADOW_CASCADES as u32)?;
         (shadow_tex, shadows.map_size)
     } else {
-        // 1x1 fallback depth array (value 1.0 = fully lit).
+        // 1x1 fallback depth array holding the clear value, which every
+        // reference passes against: fully lit.
         (create_shadow_map_fallback(device)?, 1)
     };
     let uniforms = csm::empty_shadow_uniforms();
 
     // compare sampler for PCF: always created so texture(2) / sampler(1) are
-    // always bound; LessEqual returns 1.0 (lit) when reference <= stored depth.
+    // always bound; returns 1.0 (lit) where the reference is no farther from
+    // the light than the stored depth.
     let sampler = {
         let desc = MTLSamplerDescriptor::new();
         desc.setMinFilter(MTLSamplerMinMagFilter::Linear);
         desc.setMagFilter(MTLSamplerMinMagFilter::Linear);
         desc.setSAddressMode(MTLSamplerAddressMode::ClampToEdge);
         desc.setTAddressMode(MTLSamplerAddressMode::ClampToEdge);
-        desc.setCompareFunction(MTLCompareFunction::LessEqual);
+        desc.setCompareFunction(SHADOW_SAMPLE_COMPARE);
         // Rides the engine sampler block alongside the pool sampler.
         desc.setSupportArgumentBuffers(true);
         device

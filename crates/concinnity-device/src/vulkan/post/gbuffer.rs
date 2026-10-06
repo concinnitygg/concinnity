@@ -22,7 +22,6 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
-use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::{GBufferView, ModelHistoryParams};
 use concinnity_core::render::view_history::ViewHistory;
@@ -370,7 +369,7 @@ pub(in crate::vulkan) fn build_prepass_pipeline(
     let vs = super::super::builtin_shaders::GBUFFER_PREPASS_VERT_BINDLESS.compile(hot_reload)?;
     let fs = super::super::builtin_shaders::GBUFFER_PREPASS_FRAG_BINDLESS.compile(hot_reload)?;
     GraphicsPipelineDesc {
-        depth: Depth::camera_write(),
+        depth: Depth::write(),
         vertex_bindings: &VERTEX_56_DUAL_BINDINGS,
         vertex_attributes: &VERTEX_56_DUAL_ATTRIBUTES,
         ..GraphicsPipelineDesc::fullscreen(&vs, &fs, layout, render_pass, &PREPASS_TARGETS)
@@ -801,7 +800,7 @@ impl VkContext {
             vk::ClearValue {
                 color: vk::ClearColorValue { float32: [0.0; 4] },
             },
-            depth::clear_value(DepthConvention::Camera),
+            depth::CLEAR_VALUE,
         ];
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(gb.prepass_render_pass.handle())

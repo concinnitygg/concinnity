@@ -13,7 +13,7 @@
 //! un-jittered current / previous VPs in-shader so projection jitter never
 //! contaminates motion. Mirrors src/metal/post/gbuffer.rs.
 
-use concinnity_core::render::depth::DepthConvention;
+use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::uniforms::ModelHistoryParams;
 use concinnity_core::render::view_history::ViewHistory;
@@ -65,8 +65,8 @@ pub(in crate::directx) use concinnity_core::render::uniforms::GBufferView;
 // Root signatures
 
 // PSO for the G-buffer pre-pass. Writes the three MRT targets over a private
-// single-sample depth buffer. Mirrors the main pass's no-cull rasterizer + LESS
-// depth test so the G-buffer matches the main pass's visible surfaces.
+// single-sample depth buffer. Mirrors the main pass's no-cull rasterizer + depth
+// write test so the G-buffer matches the main pass's visible surfaces.
 fn create_gbuffer_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
@@ -75,7 +75,7 @@ fn create_gbuffer_pso(
     layout: &[D3D12_INPUT_ELEMENT_DESC],
 ) -> RenderResult<ID3D12PipelineState> {
     gbuffer_targets(GraphicsPso::new(root_sig, vs, ps).input_layout(layout))
-        .depth(DXGI_FORMAT_D32_FLOAT, Depth::camera_write())
+        .depth(DXGI_FORMAT_D32_FLOAT, Depth::write())
         .build(device, "gbuffer prepass")
 }
 
@@ -204,8 +204,8 @@ pub(in crate::directx) fn build_model_history(
 // signature, and the shared cull command signature rebuilt against that root sig
 // (object id at root param 0). Returns the trio the cull state stores; the
 // per-frame `prev_model` buffers it reads are allocated alongside the other cull
-// buffers. Reuses `create_gbuffer_pso` (3 MRT, private D32, single-sample, LESS
-// depth) with the two-stream bindless input layout.
+// buffers. Reuses `create_gbuffer_pso` (3 MRT, private D32, single-sample, depth
+// write test) with the two-stream bindless input layout.
 // The bindless g-buffer root signature, pipeline state, and command signature
 // the cull state stores.
 type GbufferBindlessPipeline = (
@@ -559,13 +559,7 @@ impl DxContext {
             cmd.ClearRenderTargetView(gb.normal_depth_rtv, &[0.0_f32; 4], None);
             cmd.ClearRenderTargetView(gb.roughness_rtv, &GBUFFER_ROUGHNESS_CLEAR, None);
             cmd.ClearRenderTargetView(gb.velocity_rtv, &[0.0_f32; 4], None);
-            cmd.ClearDepthStencilView(
-                gb.depth_dsv,
-                D3D12_CLEAR_FLAG_DEPTH,
-                DepthConvention::Camera.clear(),
-                0,
-                None,
-            );
+            cmd.ClearDepthStencilView(gb.depth_dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,
                 TopLeftY: 0.0,

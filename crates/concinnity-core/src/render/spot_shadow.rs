@@ -9,8 +9,9 @@
 //!
 //! A spot's projection is a perspective frustum whose vertical FOV is the full
 //! cone angle (2x the outer half-angle), so the cone inscribes the shadow slice's
-//! square footprint. Right-handed with [0, 1] depth, matching `csm.rs`, so the
-//! same matrices are valid on all three backends.
+//! square footprint. Right-handed with the engine's reversed [0, 1] depth
+//! (near 1, the spot's range 0), matching `csm.rs`, so the same matrices are
+//! valid on all three backends.
 
 use crate::components::SpotLight;
 use crate::gfx::frustum::Frustum;
@@ -217,10 +218,18 @@ mod tests {
         let data = build_spot_shadow_data(&lights, &slices);
         // Only the casting light produced an entry, and it sits at slice 0.
         assert_eq!(data.len(), 1);
-        // Its far plane is b's range: a point just inside it stays within depth 1.
+        // Its far plane is b's range: a point just inside it stays in front of
+        // depth 0, one just past it falls behind.
         let clip = transform(data[0].light_vp, [0.0, 4.0 - 32.0, 0.0]);
         assert!(clip[3] > 0.0);
-        assert!((clip[2] / clip[3]) < 1.0);
+        assert!((clip[2] / clip[3]) > 0.0);
+        let past = transform(data[0].light_vp, [0.0, 4.0 - 34.0, 0.0]);
+        assert!((past[2] / past[3]) < 0.0);
+        // The bulb's near plane holds depth 1, and nearer the bulb is nearer.
+        let near = transform(data[0].light_vp, [0.0, 4.0 - SHADOW_NEAR, 0.0]);
+        assert!(((near[2] / near[3]) - 1.0).abs() < 1e-5);
+        let mid = transform(data[0].light_vp, [0.0, 4.0 - 10.0, 0.0]);
+        assert!(mid[2] / mid[3] > clip[2] / clip[3]);
     }
 
     // The cone axis maps to the center of the slice, and the outer cone edge
@@ -316,6 +325,18 @@ mod tests {
         assert!(!f.intersects_aabb(lo, hi), "past the range");
         let (lo, hi) = unit([12.0, 0.0, 0.0]);
         assert!(!f.intersects_aabb(lo, hi), "outside the cone");
+        // The depth planes are exact: the range ends 20 m below the bulb and
+        // the near plane sits SHADOW_NEAR below it.
+        let (lo, hi) = unit([0.0, -9.45, 0.0]);
+        assert!(f.intersects_aabb(lo, hi), "just inside the range");
+        let (lo, hi) = unit([0.0, -10.55, 0.0]);
+        assert!(!f.intersects_aabb(lo, hi), "just past the range");
+        let gap = 0.5 * SHADOW_NEAR;
+        assert!(!f.intersects_aabb([-0.01, 10.0 - gap, -0.01], [0.01, 9.999, 0.01]));
+        assert!(f.intersects_aabb(
+            [-0.01, 10.0 - 2.0 * SHADOW_NEAR, -0.01],
+            [0.01, 9.999, 0.01]
+        ));
     }
 
     #[test]

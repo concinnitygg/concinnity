@@ -28,7 +28,6 @@
 //! (the bindless face render omits the skinned tail), exactly like the probe capture.
 
 use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::{self, PlanarReflectors};
 use concinnity_core::transform::mat4_inverse;
@@ -693,7 +692,7 @@ fn create_planar_depth(
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
     };
-    let clear_value = optimized_clear(DepthConvention::Camera);
+    let clear_value = optimized_clear();
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: width as u64,

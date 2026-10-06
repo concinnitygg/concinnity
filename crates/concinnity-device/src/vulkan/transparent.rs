@@ -27,7 +27,6 @@ use ash::vk;
 use concinnity_core::components::{GlassPanel, WaterSurface};
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
-use concinnity_core::render::depth::DepthConvention;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen::align_up;
 use concinnity_core::render::post::rt_reflections::RtParamsInputs;
@@ -1058,7 +1057,7 @@ pub(in crate::vulkan) fn create_transparent_pipeline(
 }
 
 // Build one glass reflection pre-pass pipeline: the transparent pipeline's
-// stages, overwriting a reflection layer and depth-tested (LESS, writing) against
+// stages, overwriting a reflection layer and depth-tested (write test, writing) against
 // the layer's depth attachment, so each layer keeps the nearest surface it
 // accepts. `render_pass` is the pre-pass's own.
 pub(in crate::vulkan) fn create_glass_reflection_pipeline(
@@ -1133,7 +1132,7 @@ fn transparent_pipeline(
     // target is single-sample regardless of the main pass's MSAA.
     let (blend, depth) = match output {
         TransparentOutput::Scene => (Blend::AlphaOver, Depth::Off),
-        TransparentOutput::ReflectionLayer => (Blend::Opaque, Depth::camera_write()),
+        TransparentOutput::ReflectionLayer => (Blend::Opaque, Depth::write()),
     };
     GraphicsPipelineDesc {
         depth,
@@ -2292,7 +2291,7 @@ impl VkContext {
             vk::ClearValue {
                 color: vk::ClearColorValue { float32: [0.0; 4] },
             },
-            depth::clear_value(DepthConvention::Camera),
+            depth::CLEAR_VALUE,
         ];
         for layer in 0..2 {
             let rp_begin = vk::RenderPassBeginInfo::default()

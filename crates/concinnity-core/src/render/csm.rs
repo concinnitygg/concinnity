@@ -19,8 +19,9 @@
 //!      and an ortho projection that exactly encloses the sphere.
 //!
 //! The math is shared across all three backends: Metal, Vulkan, and DirectX
-//! all use RH view matrices with [0, 1] depth in their orthographic
-//! projections, so the same VPs are valid for every backend's shadow sampling.
+//! all use RH view matrices and the engine's reversed [0, 1] depth in their
+//! orthographic projections, so the same VPs are valid for every backend's
+//! shadow sampling.
 
 use crate::gfx::projection::look_at;
 use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
@@ -467,7 +468,8 @@ mod tests {
         // cascade, and the clip boundary slides across the world as the camera
         // moves. The ortho near plane is extended toward the light for exactly
         // this. A caster 30m up sits well beyond the few-meter cascade-0 sphere
-        // radius, so without the extension it projects to ndc.z < 0 (clipped).
+        // radius, so without the extension it projects past the near plane,
+        // to ndc.z > 1 (clipped).
         let cam = [0.0_f32, 0.0, 0.0];
         let light = [0.0_f32, 0.85, 0.3]; // mostly overhead
         let ndc = cascade0_ndc(cam, [0.0, 30.0, -3.0], light);
@@ -486,5 +488,41 @@ mod tests {
             "tall caster clipped from shadow map: ndc.z = {}",
             ndc[2]
         );
+        // Nearer the light is nearer in the map, so the caster wins the depth
+        // test against the ground below it.
+        let ground = cascade0_ndc(cam, [0.0, 0.0, -3.0], light);
+        assert!(ndc[2] > ground[2], "{} vs {}", ndc[2], ground[2]);
+    }
+
+    // Every cascade's depth rises toward the light at exactly its z row's
+    // length per meter: the scale the sample bias converts meters with.
+    #[test]
+    fn each_cascade_maps_its_sphere_into_reversed_depth() {
+        let light = normalize_clamped([-0.4, 0.78, 0.5], 1e-6);
+        let u = compute_shadow_uniforms(ShadowUniformInputs {
+            view: ident_view(),
+            cam_pos: [0.0, 0.0, 0.0],
+            fov_y_rad: core::f32::consts::FRAC_PI_4,
+            aspect: 16.0 / 9.0,
+            near: 0.1,
+            shadow_distance: 80.0,
+            light_dir_to_source: light,
+            shadow_map_size: 2048,
+            active_cascades: 4,
+        });
+        for vp in u.light_vps {
+            let depth = |p: [f32; 3]| {
+                let z = vp[0][2] * p[0] + vp[1][2] * p[1] + vp[2][2] * p[2] + vp[3][2];
+                let w = vp[0][3] * p[0] + vp[1][3] * p[1] + vp[2][3] * p[2] + vp[3][3];
+                z / w
+            };
+            // The z row's length is the depth scale per meter along the light.
+            let row2 = [vp[0][2], vp[1][2], vp[2][2]];
+            let per_meter = sqrt(length_sq(row2));
+            let probe = [0.0, 0.0, -5.0];
+            let toward_light = depth(add(probe, scale(light, 1.0))) - depth(probe);
+            assert!(toward_light > 0.0, "{toward_light}");
+            assert!((toward_light - per_meter).abs() < 1e-3 * per_meter.max(1e-6) + 1e-6);
+        }
     }
 }

@@ -536,7 +536,7 @@ fn create_pipeline(
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
     GraphicsPipelineDesc {
-        depth: Depth::camera_write_inclusive(),
+        depth: Depth::write_inclusive(),
         samples: msaa_samples,
         ..cube_proxy(vert_spv, frag_spv, layout, render_pass, &[Blend::Opaque])
     }
@@ -578,7 +578,7 @@ fn create_volumetric_pipeline(
         vk::PipelineMultisampleStateCreateInfo::default().rasterization_samples(msaa_samples);
     // Early-z against the existing scene depth, but no depth write: the medium
     // doesn't occlude itself or update SSR / decal depth.
-    let depth_stencil = Depth::camera_read_only().raw();
+    let depth_stencil = Depth::read_only().raw();
     // Alpha-blend the in-scattered luminance over the rasterized scene.
     let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
         .blend_enable(true)
@@ -625,7 +625,7 @@ fn create_shadow_pipeline(
     frag_spv: &[u8],
 ) -> RenderResult<OwnedPipeline> {
     GraphicsPipelineDesc {
-        depth: Depth::shadow_write(),
+        depth: Depth::write(),
         ..cube_proxy(vert_spv, frag_spv, layout, shadow_render_pass, &[])
     }
     .build(device, "raymarch shadow")
@@ -1183,7 +1183,7 @@ impl VkContext {
 
     // Draw the visible SDF shadow casters into one CSM cascade. Called from the
     // Shadow pass inside each cascade's depth-only render pass, after the
-    // rasterized casters: the cascade's LESS depth test keeps the nearer of the
+    // rasterized casters: the cascade's depth write test keeps the nearer of the
     // rasterized vs raymarched occluder per texel. The viewport / scissor set by
     // the shadow pass persist (dynamic state), so this only rebinds the cube
     // geometry, the shadow pipeline, the shadow view + per-volume sets, and the

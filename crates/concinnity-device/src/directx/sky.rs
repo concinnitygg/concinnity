@@ -76,7 +76,7 @@ pub(in crate::directx) fn build_sky_pso(
     let vs = builtin_shaders::SKY_VERT.compile(hot_reload)?;
     let ps = builtin_shaders::SKY_FRAG.compile(hot_reload)?;
     GraphicsPso::fullscreen(root_sig, &vs, &ps, HDR_FORMAT, Blend::Opaque)
-        .depth(DXGI_FORMAT_D32_FLOAT, Depth::camera_read_only())
+        .depth(DXGI_FORMAT_D32_FLOAT, Depth::read_only())
         .samples(msaa_samples.max(1))
         .raster(Raster {
             multisample: msaa_samples > 1,

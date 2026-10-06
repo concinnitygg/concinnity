@@ -40,7 +40,7 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::depth::DepthConvention;
+use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PixelRect;
 use concinnity_core::render::probe_bake::{
@@ -727,7 +727,7 @@ impl DxContext {
             cmd.ClearDepthStencilView(
                 dsv,
                 D3D12_CLEAR_FLAG_DEPTH,
-                DepthConvention::Camera.clear(),
+                DEPTH_CLEAR,
                 0,
                 Some(&[scissor]),
             );
@@ -967,7 +967,7 @@ fn create_bake_depth(
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
     };
-    let clear_value = optimized_clear(DepthConvention::Camera);
+    let clear_value = optimized_clear();
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: size as u64,

@@ -2,7 +2,7 @@
 // All texture uploads use an upload heap (CPU-visible) that is copied to a
 // default heap (GPU-local) via CopyTextureRegion on a one-shot command list.
 
-use concinnity_core::render::depth::DepthConvention;
+use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::mipmap;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -587,8 +587,9 @@ pub(super) fn create_fallback_flat_normal_resource(
 }
 
 // Create a 1×1×1 R32_FLOAT Texture2DArray fallback for when no shadow pass is
-// configured. Value 0.0 ensures SampleCmpLevelZero (LESS_EQUAL) always passes,
-// returning 1.0 (fully lit). R32_FLOAT is required for comparison sampling.
+// configured. It holds the depth clear value, the far plane, so every shadow
+// compare against it passes, returning 1.0 (fully lit). R32_FLOAT is required
+// for comparison sampling.
 // The SRV is declared as Texture2DArray (ArraySize=1) so the fragment shader's
 // binding type stays identical between the disabled and CSM-enabled cases.
 pub(super) fn create_fallback_shadow_array(
@@ -652,7 +653,7 @@ pub(super) fn create_fallback_shadow_array(
     // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping past this
     // call.
     unsafe {
-        *(map_ptr as *mut f32) = 0.0f32;
+        *(map_ptr as *mut f32) = DEPTH_CLEAR;
         upload.Unmap(0, None);
     }
 
@@ -728,7 +729,7 @@ pub(super) fn create_main_depth_texture(
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
     };
-    let clear_value = optimized_clear(DepthConvention::Camera);
+    let clear_value = optimized_clear();
     let mut flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
     if !shader_readable {
         flags |= D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
@@ -803,7 +804,7 @@ pub(super) fn create_shadow_map_array(
         Type: D3D12_HEAP_TYPE_DEFAULT,
         ..Default::default()
     };
-    let clear_value = optimized_clear(DepthConvention::Shadow);
+    let clear_value = optimized_clear();
     let desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Width: size as u64,

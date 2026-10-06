@@ -6,7 +6,7 @@
 //! counterpart.
 
 use ash::vk;
-use concinnity_core::render::depth::DepthConvention;
+use concinnity_core::render::depth::{DEPTH_INCLUSIVE_COMPARE, DEPTH_WRITE_COMPARE};
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostBlend;
 
@@ -70,37 +70,29 @@ pub(in crate::vulkan) enum Depth {
 }
 
 impl Depth {
-    // The opaque-geometry test against the camera's depth: nearer fragments
-    // pass and write.
-    pub(in crate::vulkan) const fn camera_write() -> Depth {
+    // The opaque-geometry test: nearer fragments pass and write. The camera's
+    // opaque passes and every shadow caster draw with it.
+    pub(in crate::vulkan) const fn write() -> Depth {
         Depth::Test {
-            compare: compare_op(DepthConvention::Camera.write_compare()),
+            compare: compare_op(DEPTH_WRITE_COMPARE),
             write: true,
         }
     }
 
-    // A camera-depth pass whose shader writes a depth no farther than the
-    // rasterized one: equal depth passes too.
-    pub(in crate::vulkan) const fn camera_write_inclusive() -> Depth {
+    // A pass whose shader writes a depth no farther than the rasterized one:
+    // equal depth passes too.
+    pub(in crate::vulkan) const fn write_inclusive() -> Depth {
         Depth::Test {
-            compare: compare_op(DepthConvention::Camera.inclusive_compare()),
+            compare: compare_op(DEPTH_INCLUSIVE_COMPARE),
             write: true,
         }
     }
 
-    // Tested against the camera's depth without writing it.
-    pub(in crate::vulkan) const fn camera_read_only() -> Depth {
+    // Tested against depth another pass wrote, without writing it.
+    pub(in crate::vulkan) const fn read_only() -> Depth {
         Depth::Test {
-            compare: compare_op(DepthConvention::Camera.inclusive_compare()),
+            compare: compare_op(DEPTH_INCLUSIVE_COMPARE),
             write: false,
-        }
-    }
-
-    // A shadow caster: nearer the light passes and writes.
-    pub(in crate::vulkan) const fn shadow_write() -> Depth {
-        Depth::Test {
-            compare: compare_op(DepthConvention::Shadow.write_compare()),
-            write: true,
         }
     }
 
@@ -345,19 +337,17 @@ mod tests {
             (off.depth_test_enable, off.depth_write_enable),
             (vk::FALSE, vk::FALSE)
         );
-        let camera = Depth::camera_write().raw();
+        // The camera's opaque passes and the shadow casters share it.
+        let write = Depth::write().raw();
         assert_eq!(
-            (camera.depth_test_enable, camera.depth_write_enable),
+            (write.depth_test_enable, write.depth_write_enable),
             (vk::TRUE, vk::TRUE)
         );
-        assert_eq!(camera.depth_compare_op, vk::CompareOp::GREATER);
-        let shadow = Depth::shadow_write().raw();
-        assert_eq!(shadow.depth_write_enable, vk::TRUE);
-        assert_eq!(shadow.depth_compare_op, vk::CompareOp::LESS);
-        let inclusive = Depth::camera_write_inclusive().raw();
+        assert_eq!(write.depth_compare_op, vk::CompareOp::GREATER);
+        let inclusive = Depth::write_inclusive().raw();
         assert_eq!(inclusive.depth_write_enable, vk::TRUE);
         assert_eq!(inclusive.depth_compare_op, vk::CompareOp::GREATER_OR_EQUAL);
-        let read_only = Depth::camera_read_only().raw();
+        let read_only = Depth::read_only().raw();
         assert_eq!(
             (read_only.depth_test_enable, read_only.depth_write_enable),
             (vk::TRUE, vk::FALSE)

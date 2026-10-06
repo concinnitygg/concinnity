@@ -253,7 +253,7 @@ impl GlassReflectionTargets {
             depth: reduced_target(device, MTLPixelFormat::Depth32Float, width, height)
                 .ok_or_else(|| allocation_failed("the glass reflection depth"))?,
             empty: upload_texture(alloc, 1, 1, &[0u8; 4])?,
-            depth_state: Depth::camera_write().state(device)?,
+            depth_state: Depth::write().state(device)?,
         })
     }
 

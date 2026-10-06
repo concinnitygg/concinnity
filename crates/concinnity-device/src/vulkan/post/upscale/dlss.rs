@@ -21,7 +21,7 @@
 use ash::vk;
 use concinnity_core::components::UpscaleQuality;
 use concinnity_core::gfx::jitter;
-use concinnity_core::render::depth::DepthConvention;
+use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
@@ -59,8 +59,8 @@ const PERF_DLAA: i32 = 5;
 const DLSS_FLAG_IS_HDR: i32 = 1 << 0;
 const DLSS_FLAG_DEPTH_INVERTED: i32 = 1 << 3;
 
-const fn dlss_create_flags(depth: DepthConvention) -> i32 {
-    if depth.is_reversed() {
+const fn dlss_create_flags(depth: DepthMapping) -> i32 {
+    if depth.reversed {
         DLSS_FLAG_IS_HDR | DLSS_FLAG_DEPTH_INVERTED
     } else {
         DLSS_FLAG_IS_HDR
@@ -481,7 +481,7 @@ impl DlssUpscaler {
             NVSDK_NGX_Parameter_SetI(
                 params,
                 P_CREATE_FLAGS.as_ptr(),
-                dlss_create_flags(DepthConvention::Camera),
+                dlss_create_flags(CAMERA_DEPTH),
             );
             NVSDK_NGX_Parameter_SetI(params, P_ENABLE_OUTPUT_SUBRECTS.as_ptr(), 0);
             NVSDK_NGX_Parameter_SetUI(params, P_CREATION_NODE_MASK.as_ptr(), 1);
@@ -808,14 +808,19 @@ mod tests {
         assert_eq!(DLSS_FLAG_IS_HDR, 1);
     }
 
+    // NGX's DepthInverted bit is set exactly when the depth is reversed, and
+    // the camera's depth is.
     #[test]
-    fn the_depth_flag_follows_the_camera_convention() {
+    fn the_depth_flag_follows_the_depth_mapping() {
         assert_eq!(DLSS_FLAG_DEPTH_INVERTED, 8);
-        let camera = DepthConvention::Camera;
-        let inverted = (dlss_create_flags(camera) & DLSS_FLAG_DEPTH_INVERTED) != 0;
-        assert_eq!(inverted, camera.is_reversed());
-        assert_eq!(
-            dlss_create_flags(DepthConvention::Shadow) & DLSS_FLAG_DEPTH_INVERTED,
+        for reversed in [false, true] {
+            for infinite in [false, true] {
+                let flags = dlss_create_flags(DepthMapping { reversed, infinite });
+                assert_eq!((flags & DLSS_FLAG_DEPTH_INVERTED) != 0, reversed);
+            }
+        }
+        assert_ne!(
+            dlss_create_flags(CAMERA_DEPTH) & DLSS_FLAG_DEPTH_INVERTED,
             0
         );
     }

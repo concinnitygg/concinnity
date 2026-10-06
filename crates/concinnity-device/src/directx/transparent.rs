@@ -37,7 +37,7 @@
 use concinnity_core::components::{GlassPanel, WaterSurface};
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
-use concinnity_core::render::depth::DepthConvention;
+use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::rt_reflections::RtParamsInputs;
 use windows::Win32::Foundation::RECT;
@@ -462,7 +462,7 @@ pub(in crate::directx) fn create_transparent_pso(
 }
 
 // The glass reflection pre-pass PSO: the transparent PSO's stages, overwriting
-// a reflection layer and depth-tested (LESS, writing) against its `D32_FLOAT`
+// a reflection layer and depth-tested (write test, writing) against its `D32_FLOAT`
 // depth, so each layer keeps the nearest surface it accepts.
 pub(in crate::directx) fn create_glass_reflection_pso(
     device: &ID3D12Device,
@@ -496,7 +496,7 @@ fn transparent_pso(
     let (blend, depth_format, depth) = match output {
         TransparentOutput::Scene => (Blend::AlphaOver, DXGI_FORMAT_UNKNOWN, Depth::Off),
         TransparentOutput::ReflectionLayer => {
-            (Blend::Opaque, DXGI_FORMAT_D32_FLOAT, Depth::camera_write())
+            (Blend::Opaque, DXGI_FORMAT_D32_FLOAT, Depth::write())
         }
     };
     let layout = main_input_layout();
@@ -1464,13 +1464,7 @@ impl DxContext {
                 )]);
                 cmd.OMSetRenderTargets(1, Some(&slots.rtv[layer]), false, Some(&slots.dsv));
                 cmd.ClearRenderTargetView(slots.rtv[layer], &[0.0; 4], None);
-                cmd.ClearDepthStencilView(
-                    slots.dsv,
-                    D3D12_CLEAR_FLAG_DEPTH,
-                    DepthConvention::Camera.clear(),
-                    0,
-                    None,
-                );
+                cmd.ClearDepthStencilView(slots.dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
                 set_viewport(cmd, layers.extent);
                 cmd.set_graphics_srv_table(GLASS_REFLECTION_ROOT_RT, slots.windows[layer]);
             }

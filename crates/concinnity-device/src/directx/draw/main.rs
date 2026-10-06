@@ -5,7 +5,7 @@
 //! `hdr_color` to `PIXEL_SHADER_RESOURCE` so post-process passes can sample
 //! it.
 
-use concinnity_core::render::depth::DepthConvention;
+use concinnity_core::render::depth::DEPTH_CLEAR;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -176,13 +176,7 @@ impl DxContext {
                 &self.state.view.clear_color,
                 None,
             );
-            cmd.ClearDepthStencilView(
-                depth_dsv,
-                D3D12_CLEAR_FLAG_DEPTH,
-                DepthConvention::Camera.clear(),
-                0,
-                None,
-            );
+            cmd.ClearDepthStencilView(depth_dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);
 
             let vp = D3D12_VIEWPORT {
                 TopLeftX: 0.0,

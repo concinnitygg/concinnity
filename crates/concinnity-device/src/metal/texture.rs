@@ -1,6 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use super::error::allocation_failed;
+use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::mipmap;
 use objc2::rc::Retained;
@@ -157,9 +158,9 @@ pub(super) fn create_fallback_texture(alloc: &DeviceAllocator) -> RenderResult<P
     upload_texture(alloc, 1, 1, &[255u8, 255, 255, 255])
 }
 
-// Create a 1x1 Depth32Float texture-array (one layer) with value 1.0, used
-// when no ShadowStage is declared. A depth of 1.0 means "maximum depth" so
-// sample_compare with LessEqual always returns 1.0 (fully lit).
+// Create a 1x1 Depth32Float texture-array (one layer) holding the depth clear
+// value, used when shadows are off. That is the far plane, so a shadow compare
+// against it always returns 1.0 (fully lit).
 //
 // The fragment shader binds the shadow map as depth2d_array; using a
 // 1-layer 2D-array fallback keeps the binding type identical between the
@@ -177,7 +178,7 @@ pub(super) fn create_shadow_map_fallback(
     let texture = device
         .newTextureWithDescriptor(&desc)
         .ok_or_else(|| allocation_failed("shadow map fallback texture"))?;
-    let depth: f32 = 1.0;
+    let depth: f32 = DEPTH_CLEAR;
     // SAFETY: `region` is the texture's single 1x1 texel and `depth` is one f32, matching the
     // Depth32Float format's 4-byte row stride.
     unsafe {

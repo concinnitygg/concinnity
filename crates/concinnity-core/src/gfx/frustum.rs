@@ -2,9 +2,9 @@
 //!
 //! Given a column-major view-projection matrix the six clip-space planes are
 //! extracted using the Gribb-Hartmann method (left/right/bottom/top/near/far).
-//! [`Frustum::from_camera`] takes a camera view-projection (reversed, infinite
-//! depth: near at device depth 1, no far plane) and [`Frustum::from_shadow`] a
-//! shadow one (near at 0, far at 1); only their near and far planes differ.
+//! Both take reversed depth (near at device depth 1): [`Frustum::from_camera`] a
+//! camera view-projection, which has no far plane, and [`Frustum::from_shadow`]
+//! a shadow one, whose far plane is at 0. Only their far planes differ.
 //! `Frustum::intersects_aabb` returns false only when an axis-aligned bounding
 //! box is fully outside at least one plane.  False positives are acceptable for
 //! culling (a few extra draws), false negatives are not, so the test treats
@@ -50,9 +50,8 @@ impl Frustum {
     /// The frustum of a shadow view-projection: a directional cascade or a spot
     /// slice. Same layout as [`Frustum::from_camera`].
     pub fn from_shadow(vp: [[f32; 4]; 4]) -> Self {
-        // Far is w - z >= 0. Near is the -1..1 plane w + z >= 0, which sits
-        // behind the 0..1 one and only keeps more.
-        Self::extract(vp, |z, w| (combine(w, z, 1.0), combine(w, z, -1.0)))
+        // Reversed depth spans 0 <= z <= w: near is w - z >= 0, far is z >= 0.
+        Self::extract(vp, |z, w| (combine(w, z, -1.0), z))
     }
 
     // Gribb-Hartmann extraction. `depth_planes` turns the z and w rows into the
@@ -267,20 +266,62 @@ mod tests {
         assert!((length(far_plane.normal) - 1.0).abs() < 1e-5);
     }
 
+    // A shadow frustum is exactly its projection's near-to-far box: nothing
+    // in front of the near plane or past the far plane is kept.
     #[test]
-    fn the_shadow_frustum_keeps_its_near_to_far_box() {
+    fn the_shadow_frustum_keeps_exactly_its_near_to_far_box() {
         let spot = crate::render::depth::shadow_perspective(1.0, 1.0, 0.05, 40.0);
         let f = Frustum::from_shadow(spot);
-        assert!(point_inside(&f, [0.0, 0.0, -0.06]));
+        assert!(point_inside(&f, [0.0, 0.0, -0.0501]));
+        assert!(!point_inside(&f, [0.0, 0.0, -0.0499]));
+        assert!(!point_inside(&f, [0.0, 0.0, 0.5]));
         assert!(point_inside(&f, [0.0, 0.0, -39.9]));
+        assert!(point_inside(&f, [19.9, -19.9, -39.9]));
         assert!(!point_inside(&f, [0.0, 0.0, -40.1]));
+        assert!(!point_inside(&f, [20.1, 0.0, -20.0]));
 
         let cascade = crate::render::depth::shadow_ortho(-4.0, 4.0, -4.0, 4.0, -2.0, 8.0);
         let f = Frustum::from_shadow(cascade);
-        assert!(point_inside(&f, [3.9, -3.9, 1.9]));
-        assert!(point_inside(&f, [0.0, 0.0, -7.9]));
-        assert!(!point_inside(&f, [0.0, 0.0, -8.1]));
+        assert!(point_inside(&f, [3.9, -3.9, 1.99]));
+        assert!(!point_inside(&f, [0.0, 0.0, 2.01]));
+        assert!(point_inside(&f, [0.0, 0.0, -7.99]));
+        assert!(!point_inside(&f, [0.0, 0.0, -8.01]));
         assert!(!point_inside(&f, [4.1, 0.0, 0.0]));
+
+        // A box straddling either depth plane is kept; one wholly past it is not.
+        assert!(f.intersects_aabb([-1.0, -1.0, 1.0], [1.0, 1.0, 3.0]));
+        assert!(!f.intersects_aabb([-1.0, -1.0, 2.1], [1.0, 1.0, 3.0]));
+        assert!(f.intersects_aabb([-1.0, -1.0, -9.0], [1.0, 1.0, -7.0]));
+        assert!(!f.intersects_aabb([-1.0, -1.0, -9.0], [1.0, 1.0, -8.1]));
+        for plane in &f.planes {
+            assert!((length(plane.normal) - 1.0).abs() < 1e-5, "{plane:?}");
+        }
+    }
+
+    // The planes hold through a light view as well: a cascade built the way
+    // the CSM builds one keeps its box in world space.
+    #[test]
+    fn a_cascade_frustum_keeps_its_box_in_world_space() {
+        let center = [10.0, 0.0, -20.0];
+        let radius = 5.0;
+        let to_light = crate::math::vec3::normalize_clamped([0.3, 1.0, 0.2], 1e-6);
+        let eye = crate::math::vec3::add(center, crate::math::vec3::scale(to_light, radius));
+        let view = crate::gfx::projection::look_at(eye, center, [0.0, 0.0, 1.0]);
+        let proj = crate::render::depth::shadow_ortho(
+            -radius,
+            radius,
+            -radius,
+            radius,
+            -30.0,
+            2.0 * radius,
+        );
+        let f = Frustum::from_shadow(crate::transform::mat4_mul(proj, view));
+        let along = |d: f32| crate::math::vec3::add(eye, crate::math::vec3::scale(to_light, d));
+        // Near is 30 m toward the light from the eye, far is 2 radii past it.
+        assert!(point_inside(&f, along(29.9)));
+        assert!(!point_inside(&f, along(30.1)));
+        assert!(point_inside(&f, along(-9.9)));
+        assert!(!point_inside(&f, along(-10.1)));
     }
 
     #[test]
