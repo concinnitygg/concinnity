@@ -604,6 +604,26 @@ impl DxContext {
         }
     }
 
+    // Drop every accumulated temporal history for a frame that does not
+    // continue the last: the TAA and SSGI rings, the camera half of the motion
+    // history, the Hi-Z pyramid the occlusion test would reproject the old view
+    // through, and the upscaler's history on its next dispatch.
+    pub(in crate::directx) fn reset_temporal_history(&mut self) {
+        self.cull.hiz_valid.set(false);
+        if let Some(taa) = self.taa.as_mut() {
+            taa.pass.reset_history();
+        }
+        if let Some(ssgi) = self.ssgi.as_mut() {
+            ssgi.reset_history();
+        }
+        if let Some(gb) = &self.gbuffer {
+            gb.view_history.borrow_mut().reset();
+        }
+        if let Some(upscaler) = &self.upscale.backend {
+            upscaler.request_history_reset();
+        }
+    }
+
     // History the next frame reads: Hi-Z validity, cull VP, TAA jitter, G-buffer VP.
     pub(super) fn advance_temporal_state(&self, cur_vp: [[f32; 4]; 4]) {
         // The Hi-Z reduction that feeds next frame's cull is the graph's

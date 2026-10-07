@@ -88,6 +88,7 @@ pub fn options(key: SettingKey) -> Option<&'static [&'static str]> {
         K::WindowMode => Some(&WINDOW_MODE_OPTIONS),
         K::RenderScale => Some(&RENDER_SCALE_OPTIONS),
         K::UpscaleBackend => Some(&UPSCALE_BACKEND_OPTIONS),
+        K::DlssPreset => Some(&crate::render::dlss::DlssPreset::LABELS),
         K::FpsCap => Some(&FPS_CAP_OPTIONS),
         K::MasterVolume | K::MusicVolume | K::SfxVolume | K::VoiceVolume => Some(&VOLUME_OPTIONS),
         K::AaMode => Some(&AA_MODE_OPTIONS),

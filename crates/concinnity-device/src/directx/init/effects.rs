@@ -61,6 +61,7 @@ pub(super) fn build_upscale(
     let hw = gpu.hw;
     let layout = &descriptors.layout;
     let (width, height) = output;
+    let mut requested = crate::upscale_sdk::UpscaleRequest::from_post(post);
     let upscaler = if post.temporal_upscaling {
         crate::directx::post::upscale::build_upscaler(
             crate::directx::post::upscale::UpscaleDevice {
@@ -74,7 +75,7 @@ pub(super) fn build_upscale(
                 srv_cpu: descriptors.slot_cpu(layout.upscale_srv_slot),
                 srv_gpu: descriptors.slot_gpu(layout.upscale_srv_slot),
             },
-            post.upscale_backend,
+            &mut requested,
         )?
     } else {
         None
@@ -91,7 +92,7 @@ pub(super) fn build_upscale(
     }
     Ok(UpscaleState {
         backend: upscaler,
-        requested: post.upscale_backend,
+        requested,
         jitter: std::cell::Cell::new([0.0, 0.0]),
     })
 }

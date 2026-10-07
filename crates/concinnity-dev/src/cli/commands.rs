@@ -3,7 +3,7 @@
 // `dispatch`.
 use concinnity_engine::app::run::LaunchRequest;
 
-use super::value_enums::{BundleFormatArg, QualityPresetArg, RtDynamicArg};
+use super::value_enums::{BundleFormatArg, DlssPresetArg, QualityPresetArg, RtDynamicArg};
 
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum Commands {
@@ -128,6 +128,12 @@ pub(crate) struct RenderArgs {
     // instanced geometry only, which isolates the skinned trace path.
     #[arg(long)]
     pub(crate) rt_skinned_geometry: Option<bool>,
+
+    /// Force the DLSS render preset for this launch, unpersisted
+    // Outranks the settings-menu choice, so a probe can run a preset without
+    // writing settings. Ignored unless DLSS is the upscaler.
+    #[arg(long, value_enum)]
+    pub(crate) dlss_preset: Option<DlssPresetArg>,
 }
 
 impl RenderArgs {
@@ -141,6 +147,7 @@ impl RenderArgs {
             quality_preset: self.quality_preset.map(Into::into),
             rt_dynamic: self.rt_dynamic.map(Into::into),
             rt_skinned_geometry: self.rt_skinned_geometry,
+            dlss_preset: self.dlss_preset.map(Into::into),
         }
     }
 }
@@ -361,6 +368,7 @@ mod tests {
     use super::*;
     use crate::cli::Cli;
     use clap::Parser;
+    use concinnity_core::render::dlss::DlssPreset;
     use concinnity_core::render::rt_geom::RtDynamicMode;
     use concinnity_engine::gfx::quality_preset::QualityPreset;
 
@@ -383,6 +391,7 @@ mod tests {
             assert!(render.quality_preset.is_none(), "{argv:?}");
             assert!(render.rt_dynamic.is_none(), "{argv:?}");
             assert!(render.rt_skinned_geometry.is_none(), "{argv:?}");
+            assert!(render.dlss_preset.is_none(), "{argv:?}");
         }
     }
 
@@ -397,6 +406,8 @@ mod tests {
             "rebuild",
             "--rt-skinned-geometry",
             "false",
+            "--dlss-preset",
+            "m",
         ])
         .unwrap();
         let Commands::Run(args) = cli.resolved_command() else {
@@ -411,6 +422,7 @@ mod tests {
                 quality_preset: Some(QualityPreset::Ultra),
                 rt_dynamic: Some(RtDynamicMode::Rebuild),
                 rt_skinned_geometry: Some(false),
+                dlss_preset: Some(DlssPreset::M),
             }
         );
     }
@@ -427,6 +439,8 @@ mod tests {
                 "rebuild",
                 "--rt-skinned-geometry",
                 "false",
+                "--dlss-preset",
+                "l",
             ])
             .unwrap();
             let render = match cli.resolved_command() {
@@ -444,6 +458,10 @@ mod tests {
                 "{command}"
             );
             assert_eq!(render.rt_skinned_geometry, Some(false), "{command}");
+            assert!(
+                matches!(render.dlss_preset, Some(DlssPresetArg::L)),
+                "{command}"
+            );
         }
     }
 

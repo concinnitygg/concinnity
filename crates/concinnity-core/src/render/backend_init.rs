@@ -16,6 +16,7 @@ use crate::gfx::render_types::{
     PostProcessTunables, SpotShadowData,
 };
 use crate::render::decal::DecalRecord;
+use crate::render::dlss::DlssPreset;
 use crate::render::particles::ParticleEmitterRecord;
 use crate::render::post::rt_reflections::RtReflectionSettings;
 use crate::render::post::ssao::settings::SsaoSettings;
@@ -167,6 +168,8 @@ pub struct PostSettings {
     /// Upscaler selector for DirectX / Vulkan (FSR3 / DLSS / XeSS); Metal
     /// always uses MetalFX and ignores it.
     pub upscale_backend: UpscalerBackend,
+    /// The render preset DLSS runs when it is the upscaler.
+    pub dlss_preset: DlssPreset,
     /// Two-pass Hi-Z occlusion request; gated on the bindless cull path.
     pub occlusion_two_pass: bool,
 }
@@ -423,6 +426,7 @@ impl<'a> BackendInit<'a> {
                 temporal_upscaling: false,
                 upscale_scale: 1.0,
                 upscale_backend: UpscalerBackend::Auto,
+                dlss_preset: DlssPreset::Default,
                 occlusion_two_pass: false,
             },
             fx: WorldFx {
@@ -543,6 +547,7 @@ mod tests {
             temporal_upscaling: true,
             upscale_scale: 0.5,
             upscale_backend: UpscalerBackend::Auto,
+            dlss_preset: DlssPreset::Default,
             occlusion_two_pass: true,
         }
     }

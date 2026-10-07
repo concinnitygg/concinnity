@@ -75,6 +75,7 @@ pub(crate) struct InitSnapshot {
     pub(crate) rt_reflections_on: bool,
     pub(crate) rt_dynamic: concinnity_core::render::rt_geom::RtDynamicMode,
     pub(crate) rt_skinned_geometry: bool,
+    pub(crate) dlss_preset: concinnity_core::render::dlss::DlssPreset,
     // Per shader bucket, how many compiled programs the payload carries. A
     // bucket with none is a world that declared no Shader for it, which every
     // backend reads as "use the engine's own main-pass program".
@@ -317,6 +318,7 @@ fn record_init(state: &Arc<Mutex<MockState>>, init: BackendInit<'_>) {
         rt_reflections_on: init.post.rt_reflections.is_some(),
         rt_dynamic: init.post.rt_dynamic,
         rt_skinned_geometry: init.post.rt_skinned_geometry,
+        dlss_preset: init.post.dlss_preset,
     });
 }
 

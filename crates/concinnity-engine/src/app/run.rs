@@ -15,6 +15,7 @@
 use concinnity_core::components::GraphicsConfig;
 use concinnity_core::ecs::ScheduleMode;
 use concinnity_core::error::WorldError;
+use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_host::store::paths::StateTree;
 use std::path::Path;
@@ -109,6 +110,8 @@ pub struct LaunchRequest {
     /// Whether skinned meshes join the ray-tracing acceleration structure.
     /// `None` leaves them in.
     pub rt_skinned_geometry: Option<bool>,
+    /// Force the DLSS render preset over the persisted choice, unpersisted.
+    pub dlss_preset: Option<DlssPreset>,
 }
 
 impl LaunchRequest {
@@ -129,6 +132,11 @@ impl LaunchRequest {
     /// How the acceleration structure tracks moving props: the request, else `Auto`.
     pub fn resolve_rt_dynamic(&self) -> RtDynamicMode {
         self.rt_dynamic.unwrap_or_default()
+    }
+
+    /// The DLSS render preset: the request, else `persisted`.
+    pub fn resolve_dlss_preset(&self, persisted: DlssPreset) -> DlssPreset {
+        self.dlss_preset.unwrap_or(persisted)
     }
 
     /// Whether skinned meshes join the acceleration structure: the request, else in.
@@ -403,6 +411,19 @@ mod tests {
             };
             assert_eq!(request.resolve_rt_dynamic(), mode);
         }
+    }
+
+    #[test]
+    fn a_requested_dlss_preset_outranks_the_persisted_one() {
+        assert_eq!(
+            LaunchRequest::default().resolve_dlss_preset(DlssPreset::K),
+            DlssPreset::K
+        );
+        let forced = LaunchRequest {
+            dlss_preset: Some(DlssPreset::M),
+            ..Default::default()
+        };
+        assert_eq!(forced.resolve_dlss_preset(DlssPreset::K), DlssPreset::M);
     }
 
     #[test]

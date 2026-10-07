@@ -55,13 +55,16 @@ const VIDEO_MINIMAL_ROWS: [(SettingKey, &str); 4] = [
 // Rows tucked under the Video "Advanced" collapsible group (collapsed by
 // default), so the top of the Video tab stays uncrowded. More live
 // post-process sliders join these later. Cycle rows then slider rows.
-const VIDEO_ADVANCED_ROWS: [(SettingKey, &str); 8] = [
+const VIDEO_ADVANCED_ROWS: [(SettingKey, &str); 9] = [
     (SettingKey::RenderScale, "Render Scale"),
     // Upscaler backend (Auto/FSR3/DLSS/XeSS). Restart-required, independent of the
     // quality preset; DirectX / Vulkan only (Metal uses MetalFX, so the row is
     // inert there). Sits next to render scale since it only matters with temporal
     // upscaling on.
     (SettingKey::UpscaleBackend, "Upscaler"),
+    // The DLSS render preset. Restart-required; grayed out where the upscaler
+    // row could not pick DLSS.
+    (SettingKey::DlssPreset, "DLSS Preset"),
     // Display-output / upscaling preferences (Off/On + render-scale cycle).
     // Restart-required and independent of the quality preset.
     (SettingKey::TemporalUpscaling, "Temporal Upscaling"),

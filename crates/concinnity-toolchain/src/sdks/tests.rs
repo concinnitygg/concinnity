@@ -89,14 +89,22 @@ fn install_xess(dir: &Path) {
     touch(&dir.join("xess").join("bin").join("libxess.dll"));
 }
 
+// The import lib, beside the header that declares the API version it matches.
 fn install_ngx_lib(dir: &Path) {
+    install_ngx_lib_at_api(dir, "0x0000015");
+}
+
+fn install_ngx_lib_at_api(dir: &Path, api: &str) {
+    let ngx = dir.join("streamline").join("external").join("ngx-sdk");
     touch(
-        &dir.join("streamline")
-            .join("external")
-            .join("ngx-sdk")
-            .join("lib")
+        &ngx.join("lib")
             .join("Windows_x86_64")
             .join("nvsdk_ngx_d.lib"),
+    );
+    let defs = format!("#define NVSDK_NGX_VERSION_API_MACRO {api}  // NGX_VERSION_DOT\n");
+    touch_with(
+        &ngx.join("include").join("nvsdk_ngx_defs.h"),
+        defs.as_bytes(),
     );
 }
 
@@ -453,6 +461,125 @@ fn dlss_missing_import_lib_emits_nothing_linkable() {
     assert!(has(&out, "NGX import lib not found at"));
     assert!(!has(&out, "cargo::rustc-link-arg="));
     assert!(!has(&out, "ngx_sdk_bundled"));
+}
+
+#[test]
+fn dlss_on_another_ngx_api_version_links_nothing() {
+    let tmp = TempDir::new().unwrap();
+    install_ngx_lib_at_api(tmp.path(), "0x0000016");
+    install_ngx_dll(tmp.path());
+    let env = env_in(tmp.path());
+
+    let mut out = Vec::new();
+    dlss_directives(&env, BinaryTargets::Bins, &mut out);
+    assert!(has(
+        &out,
+        "NGX SDK API version 0x16 does not match the 0x15"
+    ));
+    assert!(!has(&out, "cargo::rustc-link-arg="));
+    assert!(!has(&out, "ngx_sdk_bundled"));
+    assert!(!profile(tmp.path()).join("nvngx_dlss.dll").exists());
+}
+
+#[test]
+fn ngx_header_api_version_reads_the_version_macro() {
+    let defs = "#define NVSDK_CONV __cdecl\n\
+                #define NVSDK_NGX_VERSION_API_MACRO 0x0000015  // NGX_VERSION_DOT 1.5.0\n";
+    assert_eq!(ngx_header_api_version(defs), Some(0x15));
+}
+
+#[test]
+fn ngx_header_api_version_reads_any_spacing_and_radix() {
+    for line in [
+        "#define\tNVSDK_NGX_VERSION_API_MACRO\t0x0000015",
+        "#  define NVSDK_NGX_VERSION_API_MACRO 0x15",
+        "  # define NVSDK_NGX_VERSION_API_MACRO 0X15 /* 1.5.0 */",
+        "#define NVSDK_NGX_VERSION_API_MACRO 21",
+    ] {
+        assert_eq!(ngx_header_api_version(line), Some(0x15), "{line:?}");
+    }
+}
+
+#[test]
+fn ngx_header_api_version_rejects_other_lines() {
+    for defs in [
+        "#define NVSDK_CONV __cdecl",
+        "#define NVSDK_NGX_VERSION_API_MACRO nope",
+        "#define NVSDK_NGX_VERSION_API_MACRO",
+        "#define NVSDK_NGX_VERSION_API_MACRO_OTHER 0x15",
+        "// #define NVSDK_NGX_VERSION_API_MACRO 0x15",
+        "#undef NVSDK_NGX_VERSION_API_MACRO 0x15",
+        "",
+    ] {
+        assert_eq!(ngx_header_api_version(defs), None, "{defs:?}");
+    }
+}
+
+// A missing header is watched through the nearest directory that exists, never
+// as the missing path itself, which Cargo would treat as always stale.
+#[test]
+fn dlss_watches_a_missing_header_through_its_nearest_directory() {
+    let tmp = TempDir::new().unwrap();
+    let env = env_in(tmp.path());
+    let ngx = tmp
+        .path()
+        .join("streamline")
+        .join("external")
+        .join("ngx-sdk");
+    touch(
+        &ngx.join("lib")
+            .join("Windows_x86_64")
+            .join("nvsdk_ngx_d.lib"),
+    );
+    let header = ngx.join("include").join("nvsdk_ngx_defs.h");
+
+    let mut out = Vec::new();
+    dlss_directives(&env, BinaryTargets::Bins, &mut out);
+    assert!(out.contains(&rerun_path(&ngx)), "{out:?}");
+    assert!(!out.contains(&rerun_path(&header)));
+    assert!(has(&out, "NGX SDK API version none does not match"));
+    assert!(!has(&out, "ngx_sdk_bundled"));
+
+    fs::create_dir_all(ngx.join("include")).unwrap();
+    let mut out = Vec::new();
+    dlss_directives(&env, BinaryTargets::Bins, &mut out);
+    assert!(out.contains(&rerun_path(&ngx.join("include"))), "{out:?}");
+}
+
+#[test]
+fn dlss_watches_a_present_header_itself() {
+    let tmp = TempDir::new().unwrap();
+    install_ngx_lib(tmp.path());
+    let header = tmp
+        .path()
+        .join("streamline")
+        .join("external")
+        .join("ngx-sdk")
+        .join("include")
+        .join("nvsdk_ngx_defs.h");
+    let mut out = Vec::new();
+    dlss_directives(&env_in(tmp.path()), BinaryTargets::None, &mut out);
+    assert!(out.contains(&rerun_path(&header)));
+}
+
+#[test]
+fn a_header_that_is_not_utf8_still_reads() {
+    let tmp = TempDir::new().unwrap();
+    install_ngx_lib(tmp.path());
+    let header = tmp
+        .path()
+        .join("streamline")
+        .join("external")
+        .join("ngx-sdk")
+        .join("include")
+        .join("nvsdk_ngx_defs.h");
+    touch_with(
+        &header,
+        b"// \xa9 NVIDIA\n#define NVSDK_NGX_VERSION_API_MACRO 0x0000015\n",
+    );
+    let mut out = Vec::new();
+    dlss_directives(&env_in(tmp.path()), BinaryTargets::None, &mut out);
+    assert!(out.contains(&"cargo::rustc-cfg=ngx_sdk_bundled".to_string()));
 }
 
 #[test]

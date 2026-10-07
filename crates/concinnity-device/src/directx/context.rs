@@ -943,6 +943,7 @@ impl DxContext {
             view_mode,
             show,
             sky_rot,
+            history_reset,
         } = params;
         // Snapped for the passes recorded below (the wireframe pipeline
         // variant, the unlit shade flag, the composite's channel visualization
@@ -953,6 +954,9 @@ impl DxContext {
         self.state.view.view_distance = view_distance;
         self.state.view.sky_rot = sky_rot;
         self.apply_pending_rebuilds()?;
+        if history_reset {
+            self.reset_temporal_history();
+        }
 
         let frame = self.current_frame;
 

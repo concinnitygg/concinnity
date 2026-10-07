@@ -9,6 +9,7 @@ use concinnity_core::components::{
 use concinnity_core::ecs::FrameRateCap;
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::render::backend_init::ShadowCadence;
+use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::window::display_mode;
 
@@ -76,13 +77,14 @@ pub(super) static BOOL_ROWS: [BoolRow; 8] = [
 ];
 
 // The display rows: the frame-rate cap and window mode apply live, the render
-// scale and upscaler at restart.
+// scale, the upscaler and the DLSS preset at restart.
 #[derive(Clone, Copy)]
 pub(super) enum DisplayRow {
     FpsCap,
     WindowMode,
     RenderScale,
     UpscaleBackend,
+    DlssPreset,
 }
 
 // The shadow rows and the anisotropy row, all governed by the quality preset.
@@ -122,6 +124,7 @@ impl SettingsState {
         // I/O.
         let mut cfg = self.settings_cache.take();
         let mut cfg_dirty = false;
+        let mut reset_history = false;
         let tree = ctx
             .resource::<concinnity_host::store::paths::StateTree>()
             .cloned();
@@ -130,7 +133,12 @@ impl SettingsState {
             if !self.slider_step_fraction(ctx, &mut cmd) {
                 continue;
             }
-            cfg_dirty |= self.apply_setting_command(ctx, ops, cfg, &cmd);
+            let changed = self.apply_setting_command(ctx, ops, cfg, &cmd);
+            cfg_dirty |= changed;
+            reset_history |= changed && settings::resets_temporal_history(cmd.setting);
+        }
+        if reset_history {
+            ctx.insert_resource(PendingHistoryReset(HistoryResetCauses::SETTINGS_CHANGE));
         }
         // Hand the batch's snapshot to the background writer (spawned on the
         // first persisted change) and keep it as the cache the next change
@@ -260,6 +268,9 @@ impl SettingsState {
             }
             K::UpscaleBackend => {
                 Some(self.apply_display_row(ctx, ops, cfg, DisplayRow::UpscaleBackend, opts, op))
+            }
+            K::DlssPreset => {
+                Some(self.apply_display_row(ctx, ops, cfg, DisplayRow::DlssPreset, opts, op))
             }
             key @ (K::Ssao
             | K::Ssr
@@ -530,6 +541,13 @@ impl SettingsState {
                 }
                 self.graphics.upscale_backend = settings::upscale_backend_at(next);
                 cfg.graphics.upscale_backend = Some(self.graphics.upscale_backend);
+                next
+            }
+            DisplayRow::DlssPreset => {
+                let cur = settings::dlss_preset_index(self.graphics.dlss_preset);
+                let next = settings::cycle(cur, opts.len(), op);
+                self.graphics.dlss_preset = settings::dlss_preset_at(next);
+                cfg.graphics.dlss_preset = Some(self.graphics.dlss_preset);
                 next
             }
         };

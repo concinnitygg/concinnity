@@ -75,6 +75,7 @@ const DEFAULT_COMMAND: Commands = Commands::Editor(EditorArgs {
         quality_preset: None,
         rt_dynamic: None,
         rt_skinned_geometry: None,
+        dlss_preset: None,
     },
 });
 
@@ -113,6 +114,7 @@ mod tests {
         assert!(a.render.quality_preset.is_none());
         assert!(a.render.rt_dynamic.is_none());
         assert!(a.render.rt_skinned_geometry.is_none());
+        assert!(a.render.dlss_preset.is_none());
     }
 
     // The default is `editor` itself, not a look-alike: an unknown subcommand

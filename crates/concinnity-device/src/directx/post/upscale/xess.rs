@@ -211,6 +211,10 @@ impl UpscaleBackend for XessUpscaler {
         }
         Ok(())
     }
+
+    fn request_history_reset(&self) {
+        self.ctx.request_history_reset();
+    }
 }
 
 #[cfg(test)]

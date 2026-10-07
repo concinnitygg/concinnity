@@ -2365,6 +2365,97 @@ fn the_ray_tracing_flags_reach_the_backend() {
     }
 }
 
+// `--dlss-preset` outranks the persisted preset for the launch: the backend is
+// built with it and the menu row shows it, while the settings store keeps the
+// saved choice until the row itself is cycled.
+#[test]
+fn a_forced_dlss_preset_reaches_the_backend_and_the_menu_unpersisted() {
+    use concinnity_core::components::{SettingCommand, SettingOp};
+    use concinnity_core::render::dlss::DlssPreset;
+
+    const ROW_LABEL: AssetId = AssetId(700);
+    let mut saved_settings = crate::config::Settings::default();
+    saved_settings.graphics.dlss_preset = Some(DlssPreset::K);
+    let launch = |forced: Option<DlssPreset>| {
+        let (state, hooks) = recording_hooks_with(saved_settings.clone(), GpuProfile::UNKNOWN);
+        let mut b = post_config_scene(Default::default());
+        push_settings_row(&mut b, "dlss_preset", "next", ROW_LABEL);
+        let mut world = b.build();
+        world.insert_resource(LaunchRequest {
+            dlss_preset: forced,
+            ..Default::default()
+        });
+        let gs = init_graphics(&mut world, hooks);
+        assert!(!gs.failed);
+        let built = lock(&state).init.as_ref().unwrap().dlss_preset;
+        (world, built)
+    };
+    let menu = |world: &mut World| {
+        let live = settings_state(world);
+        let shown = (
+            live.graphics.dlss_preset,
+            live.persisted_graphics.dlss_preset,
+        );
+        (shown, label_text(world, ROW_LABEL))
+    };
+
+    let (mut world, built) = launch(None);
+    assert_eq!(built, DlssPreset::K);
+    assert_eq!(
+        menu(&mut world),
+        ((DlssPreset::K, Some(DlssPreset::K)), "K".to_string())
+    );
+
+    let (mut world, built) = launch(Some(DlssPreset::M));
+    assert_eq!(built, DlssPreset::M);
+    assert_eq!(
+        menu(&mut world),
+        ((DlssPreset::M, Some(DlssPreset::K)), "M".to_string())
+    );
+
+    // Cycling the row steps from the forced value and saves the preset alone.
+    let saved: Arc<Mutex<Vec<crate::config::Settings>>> = Arc::default();
+    {
+        let log = Arc::clone(&saved);
+        let slot = world
+            .resource_mut::<crate::settings::system::SettingsSlot>()
+            .expect("SettingsSlot parked at init");
+        let state = slot.0.as_mut().expect("SettingsState in its slot");
+        state.settings_cache = Some(saved_settings.clone());
+        state.settings_writer = Some(crate::settings::system::writer::SettingsWriter::with_sink(
+            move |cfg| {
+                log.lock().unwrap().push(cfg.clone());
+                Ok(())
+            },
+        ));
+    }
+    world.events_mut::<SettingCommand>().send(SettingCommand {
+        setting: SettingKey::DlssPreset,
+        op: SettingOp::Next,
+        value_label: Some(ROW_LABEL),
+        persist: true,
+    });
+    {
+        use concinnity_core::ecs::System;
+        crate::settings::system::SettingsSystem::new().step(&mut world.context());
+    }
+    assert_eq!(
+        settings_state(&world).graphics.dlss_preset,
+        DlssPreset::Default
+    );
+    assert_eq!(label_text(&mut world, ROW_LABEL), "Default");
+    world
+        .resource_mut::<crate::settings::system::SettingsSlot>()
+        .unwrap()
+        .0
+        .as_mut()
+        .unwrap()
+        .settings_writer = None;
+    let mut expected = saved_settings;
+    expected.graphics.dlss_preset = Some(DlssPreset::Default);
+    assert_eq!(saved.lock().unwrap().as_slice(), [expected]);
+}
+
 // A world launched without a screenshot request keeps the presented frame
 // unreadable, so production pays nothing for capture.
 #[test]
@@ -3081,6 +3172,40 @@ fn a_capability_gated_row_grays_out_its_whole_scroll_row() {
         .map(|r| r.disabled)
         .collect();
     assert_eq!(disabled, vec![true]);
+}
+
+// The DLSS preset row is live wherever the upscaler row could pick DLSS (an
+// NVIDIA GPU on a selectable-upscaler backend), whichever upscaler built, and
+// grayed everywhere else.
+#[test]
+fn the_dlss_preset_row_follows_whether_dlss_is_selectable() {
+    let preset_row_disabled = |vendor| {
+        let mut profile = GpuProfile::UNKNOWN;
+        profile.vendor = vendor;
+        let (_, hooks) = recording_hooks_with(crate::config::Settings::default(), profile);
+        let mut b = post_config_scene(Default::default());
+        push_settings_row(&mut b, "dlss_preset", "next", AssetId(600));
+        let mut world = b.build();
+        let gs = init_graphics(&mut world, hooks);
+        assert!(!gs.failed);
+        let disabled: Vec<bool> = world
+            .context()
+            .query::<HitRegion>()
+            .filter(|r| {
+                matches!(
+                    r.action,
+                    Some(UiAction::Setting {
+                        key: SettingKey::DlssPreset,
+                        ..
+                    })
+                )
+            })
+            .map(|r| r.disabled)
+            .collect();
+        disabled
+    };
+    assert_eq!(preset_row_disabled(GpuVendor::Nvidia), vec![false]);
+    assert_eq!(preset_row_disabled(GpuVendor::Amd), vec![true]);
 }
 
 // The muted gray a disabled settings row is recolored to.

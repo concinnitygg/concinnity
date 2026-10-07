@@ -7,9 +7,7 @@
 //! The Vulkan specifics are the instance and device extensions DLSS needs at
 //! creation time (queried by `required_extensions`, enabled through
 //! `UpscaleSdk`) and resources bound as `NVSDK_NGX_Resource_VK` through
-//! `SetVoidPointer`. Exposure comes from an engine-supplied 1x1 texture of 1.0
-//! rather than DLSS's auto-exposure: the scene is un-exposed until after the
-//! upscale, so 1.0 is the identity.
+//! `SetVoidPointer`.
 
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
@@ -17,27 +15,25 @@ use std::ptr;
 
 use ash::vk;
 use concinnity_core::gfx::jitter;
+use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::history_reset::UpscalerResetLatch;
 
 use super::{
-    BarrierSync, ImageViewInfo, LayoutTransition, OutputWrites, UpscaleImage, UpscaleInputs,
-    UpscaleOutput, UpscalerGpu, VkUpscaleBackend, copy_ext_names, image_barrier,
+    ImageViewInfo, OutputWrites, UpscaleImage, UpscaleInputs, UpscaleOutput, UpscalerGpu,
+    VkUpscaleBackend, copy_ext_names,
 };
 use crate::upscale_sdk::dlss::{
     ENGINE_VERSION, NVSDK_NGX_ENGINE_TYPE_CUSTOM, NVSDK_NGX_FEATURE_SUPERSAMPLING,
-    NVSDK_NGX_RESULT_FAIL, NVSDK_NGX_VERSION_API, P_COLOR, P_DEPTH, P_EXPOSURE_TEXTURE,
-    P_MOTION_VECTORS, P_OUTPUT, PROJECT_ID, app_data_path, ngx_succeeded, set_create_parameters,
-    set_evaluate_parameters, supersampling_available,
+    NVSDK_NGX_RESULT_FAIL, NVSDK_NGX_VERSION_API, P_COLOR, P_DEPTH, P_MOTION_VECTORS, P_OUTPUT,
+    PROJECT_ID, app_data_path, create_with_preset_fallback, loaded_feature, ngx_succeeded,
+    set_create_parameters, set_evaluate_parameters, supersampling_unavailable,
 };
 use crate::upscale_sdk::{UpscaleCamera, UpscaleExtent};
-use crate::vulkan::texture::{
-    GpuImage, ImageSpec, create_image, create_image_view, one_shot_submit,
-};
+use crate::vulkan::texture::one_shot_submit;
 
 // NVSDK_NGX_Resource_VK_Type.
 const NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW: i32 = 0;
-
-const EXPOSURE_FORMAT: vk::Format = vk::Format::R32_SFLOAT;
 
 // `NVSDK_NGX_Resource_VK` (`nvsdk_ngx_defs_vk.h`). The C struct opens with a
 // union of an image-view and a buffer description; the image view is the
@@ -166,22 +162,67 @@ impl NgxSession {
     }
 }
 
+impl NgxSession {
+    // Create the super-sampling feature for `extent` running `preset`,
+    // replacing any feature this session holds. `false` (logged) when NGX
+    // refuses it. The submit is fence-waited, so the feature and its internal
+    // resources are ready before the first frame's evaluate.
+    fn create_feature(
+        &mut self,
+        gpu: UpscalerGpu<'_>,
+        extent: UpscaleExtent,
+        preset: DlssPreset,
+    ) -> RenderResult<bool> {
+        if !self.feature.is_null() {
+            // SAFETY: the feature is the live one this session created, idle since its creating
+            // submit was fence-waited, and released exactly once here.
+            unsafe { NVSDK_NGX_VULKAN_ReleaseFeature(self.feature) };
+            self.feature = ptr::null_mut();
+        }
+        // SAFETY: `self.params` is the live bag NGX returned.
+        unsafe { set_create_parameters(self.params, extent, preset) };
+        let mut create_rc = NVSDK_NGX_RESULT_FAIL;
+        one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |cmd| {
+            // SAFETY: `cmd` is in the recording state, `self.params` is the live bag filled
+            // above, and `self.feature` is a live field NGX writes the new feature into.
+            create_rc = unsafe {
+                NVSDK_NGX_VULKAN_CreateFeature1(
+                    gpu.device.handle(),
+                    cmd,
+                    NVSDK_NGX_FEATURE_SUPERSAMPLING,
+                    self.params,
+                    &mut self.feature,
+                )
+            };
+        })?;
+        if !ngx_succeeded(create_rc) || self.feature.is_null() {
+            // A refused create leaves no feature to release.
+            self.feature = ptr::null_mut();
+            tracing::warn!(
+                "DLSS (Vulkan): CreateFeature (render preset {}) returned {create_rc:#x}",
+                preset.label()
+            );
+            return Ok(false);
+        }
+        Ok(true)
+    }
+}
+
 impl Drop for NgxSession {
     fn drop(&mut self) {
         self.release();
     }
 }
 
-// The DLSS feature, the output image it writes and the exposure texture it
-// reads.
+// The DLSS feature and the output image it writes.
 pub(super) struct DlssUpscaler {
     ngx: NgxSession,
     extent: UpscaleExtent,
     output: UpscaleOutput,
-    // 1x1 R32F holding 1.0, created once in GENERAL and bound every evaluate.
-    exposure: GpuImage,
     jitter: Cell<[f32; 2]>,
-    reset_pending: Cell<bool>,
+    reset: UpscalerResetLatch,
+    // The render preset the feature runs, after any fallback.
+    preset: DlssPreset,
 }
 
 // SAFETY: the NGX feature handle and parameter bag this owns are not shared:
@@ -192,12 +233,13 @@ unsafe impl Send for DlssUpscaler {}
 
 impl DlssUpscaler {
     // `Ok(None)` when DLSS is unavailable: NGX failed to initialize, the GPU
-    // lacks DLSS, or the feature could not be created. Feature creation records
-    // onto a command buffer, so this submits a one-shot buffer to the queue.
+    // or driver lacks DLSS, or the feature could not be created. A feature
+    // library older than the requested render preset runs the default one.
     // Assumes the NGX extensions were enabled at device creation.
     pub(super) fn try_new(
         gpu: UpscalerGpu<'_>,
         extent: UpscaleExtent,
+        dlss_preset: DlssPreset,
     ) -> RenderResult<Option<Self>> {
         let app_path = app_data_path();
         // SAFETY: the NGX entry point is statically linked and matches the SDK's declared
@@ -239,134 +281,35 @@ impl DlssUpscaler {
             return Ok(None);
         }
         // SAFETY: `ngx.params` is the non-null bag NGX just returned.
-        if !unsafe { supersampling_available(ngx.params) } {
-            tracing::warn!(
-                "DLSS (Vulkan): SuperSampling not available on this GPU; trying the next backend"
-            );
+        if let Some(reason) = unsafe { supersampling_unavailable(ngx.params) } {
+            tracing::warn!("DLSS (Vulkan): {reason}; trying the next backend");
             return Ok(None);
         }
-        // SAFETY: `ngx.params` is the live bag.
-        unsafe { set_create_parameters(ngx.params, extent, true) };
-
-        // The submit is fence-waited, so the feature and its internal resources
-        // are ready before the first frame's evaluate.
-        let mut create_rc = NVSDK_NGX_RESULT_FAIL;
-        one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |cmd| {
-            // SAFETY: `cmd` is in the recording state, `ngx.params` is the live bag filled above,
-            // and `ngx.feature` is a live field NGX writes the new feature into.
-            create_rc = unsafe {
-                NVSDK_NGX_VULKAN_CreateFeature1(
-                    gpu.device.handle(),
-                    cmd,
-                    NVSDK_NGX_FEATURE_SUPERSAMPLING,
-                    ngx.params,
-                    &mut ngx.feature,
-                )
-            };
-        })?;
-        if !ngx_succeeded(create_rc) || ngx.feature.is_null() {
-            tracing::warn!(
-                "DLSS (Vulkan): CreateFeature returned {create_rc:#x}; trying the next backend"
-            );
+        let Some(created) = create_with_preset_fallback(
+            "DLSS (Vulkan)",
+            dlss_preset,
+            |preset| ngx.create_feature(gpu, extent, preset),
+            loaded_feature,
+        )?
+        else {
             return Ok(None);
-        }
+        };
 
         let output = UpscaleOutput::create(gpu, extent.output, OutputWrites::storage_and_clear())?;
-        let exposure = create_identity_exposure(gpu)?;
-        tracing::info!("DLSS (Vulkan): feature created: {extent}");
+        tracing::info!(
+            "DLSS (Vulkan): feature created: {extent}, {}, render preset {}",
+            created.library,
+            created.preset.label()
+        );
         Ok(Some(Self {
             ngx,
             extent,
             output,
-            exposure,
             jitter: Cell::new([0.0, 0.0]),
-            reset_pending: Cell::new(true),
+            reset: UpscalerResetLatch::default(),
+            preset: created.preset,
         }))
     }
-}
-
-// Create the 1x1 exposure texture, cleared to 1.0 and left in GENERAL (the
-// layout NGX reads every resource in). Written once here and never again, so
-// the one clear barrier covers every later read. SAMPLED | STORAGE usage covers
-// however NGX binds it.
-fn create_identity_exposure(gpu: UpscalerGpu<'_>) -> RenderResult<GpuImage> {
-    let pooled = create_image(
-        gpu.alloc,
-        &ImageSpec {
-            width: 1,
-            height: 1,
-            format: EXPOSURE_FORMAT,
-            tiling: vk::ImageTiling::OPTIMAL,
-            usage: vk::ImageUsageFlags::SAMPLED
-                | vk::ImageUsageFlags::STORAGE
-                | vk::ImageUsageFlags::TRANSFER_DST,
-            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            samples: vk::SampleCountFlags::TYPE_1,
-        },
-    )?;
-    let image = pooled.image();
-    let view = create_image_view(
-        gpu.device,
-        image,
-        EXPOSURE_FORMAT,
-        vk::ImageAspectFlags::COLOR,
-    )?;
-    let range = vk::ImageSubresourceRange {
-        aspect_mask: vk::ImageAspectFlags::COLOR,
-        base_mip_level: 0,
-        level_count: 1,
-        base_array_layer: 0,
-        layer_count: 1,
-    };
-    let one = vk::ClearColorValue {
-        float32: [1.0, 0.0, 0.0, 0.0],
-    };
-    one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |cmd| {
-        image_barrier(
-            gpu.device,
-            cmd,
-            image,
-            vk::ImageAspectFlags::COLOR,
-            LayoutTransition {
-                from: vk::ImageLayout::UNDEFINED,
-                to: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            },
-            BarrierSync {
-                src_stage: vk::PipelineStageFlags::TOP_OF_PIPE,
-                src_access: vk::AccessFlags::empty(),
-                dst_stage: vk::PipelineStageFlags::TRANSFER,
-                dst_access: vk::AccessFlags::TRANSFER_WRITE,
-            },
-        );
-        // SAFETY: `cmd` is a command buffer in the recording state, `image` was just transitioned
-        // to TRANSFER_DST_OPTIMAL by the barrier above, and `range` names its only mip and layer.
-        unsafe {
-            gpu.device.cmd_clear_color_image(
-                cmd,
-                image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &one,
-                std::slice::from_ref(&range),
-            );
-        }
-        image_barrier(
-            gpu.device,
-            cmd,
-            image,
-            vk::ImageAspectFlags::COLOR,
-            LayoutTransition {
-                from: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                to: vk::ImageLayout::GENERAL,
-            },
-            BarrierSync {
-                src_stage: vk::PipelineStageFlags::TRANSFER,
-                src_access: vk::AccessFlags::TRANSFER_WRITE,
-                dst_stage: vk::PipelineStageFlags::COMPUTE_SHADER,
-                dst_access: vk::AccessFlags::SHADER_READ,
-            },
-        );
-    })?;
-    Ok(GpuImage::from_pooled(pooled, view))
 }
 
 impl VkUpscaleBackend for DlssUpscaler {
@@ -394,14 +337,6 @@ impl VkUpscaleBackend for DlssUpscaler {
         inputs: UpscaleInputs<'_>,
         camera: UpscaleCamera,
     ) -> RenderResult<()> {
-        let exposure = UpscaleImage {
-            image: self.exposure.image,
-            view: self.exposure.view,
-            format: EXPOSURE_FORMAT,
-            width: 1,
-            height: 1,
-            aspect: vk::ImageAspectFlags::COLOR,
-        };
         // NGX reads these through the pointers bound below while recording the
         // evaluate, so they live until it returns.
         let mut resources = [
@@ -415,10 +350,6 @@ impl VkUpscaleBackend for DlssUpscaler {
                 P_MOTION_VECTORS,
                 NVSDK_NGX_Resource_VK::image(inputs.motion, false),
             ),
-            (
-                P_EXPOSURE_TEXTURE,
-                NVSDK_NGX_Resource_VK::image(&exposure, false),
-            ),
         ];
         let params = self.ngx.params;
         // SAFETY: `params` is the live bag, every name is a NUL-terminated constant, and every
@@ -431,7 +362,7 @@ impl VkUpscaleBackend for DlssUpscaler {
             set_evaluate_parameters(
                 params,
                 camera.jitter_offset,
-                self.reset_pending.replace(false),
+                crate::upscale_reset::consume(&self.reset),
                 self.extent,
             );
         }
@@ -448,10 +379,17 @@ impl VkUpscaleBackend for DlssUpscaler {
         Ok(())
     }
 
+    fn request_history_reset(&self) {
+        self.reset.request();
+    }
+
+    fn dlss_preset(&self) -> Option<DlssPreset> {
+        Some(self.preset)
+    }
+
     fn destroy(&mut self) {
         self.ngx.release();
         self.output.release();
-        self.exposure = GpuImage::null();
     }
 }
 

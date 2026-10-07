@@ -200,6 +200,12 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
         self.frame = self.frame.wrapping_add(1);
     }
 
+    /// Forget the accumulation, so the next trace starts over from the current
+    /// frame instead of reprojecting a view it no longer matches.
+    pub fn reset_history(&mut self) {
+        self.ring.invalidate();
+    }
+
     /// Recreate every target for a new render resolution and forget the
     /// accumulation, which was rendered at a resolution this one cannot
     /// reproject from. The caller has already idled the device.
@@ -624,6 +630,20 @@ mod tests {
         )
         .expect("resize");
         assert!(!pass.frame().history_valid);
+    }
+
+    #[test]
+    fn a_history_reset_forgets_the_accumulation_until_the_next_trace() {
+        let device = MockDevice::new();
+        let mut pass = SsgiPass::new(&device, 2, EXTENT).expect("pass");
+        encode_frame(&device, &pass);
+        pass.advance();
+        assert!(pass.frame().history_valid);
+        pass.reset_history();
+        assert!(!pass.frame().history_valid);
+        encode_frame(&device, &pass);
+        pass.advance();
+        assert!(pass.frame().history_valid);
     }
 
     #[test]

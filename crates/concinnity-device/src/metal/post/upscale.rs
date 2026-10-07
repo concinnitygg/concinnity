@@ -13,6 +13,7 @@
 
 use concinnity_core::render::depth::CAMERA_DEPTH;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::history_reset::UpscalerResetLatch;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureUsage};
@@ -40,10 +41,10 @@ pub(crate) struct UpscaleState {
     // the main thread before fan-out, read by `encode_upscale` on a worker;
     // packed atomically so the worker snapshots it without a mutex.
     pub jitter: UpscaleJitter,
-    // Whether the scaler should discard its temporal history on the next
-    // encode. Raised after a scaler rebuild (resize / startup); cleared by
-    // `encode_upscale` after honoring it.
-    pub reset_pending: std::sync::atomic::AtomicBool,
+    // Whether the scaler discards its temporal history on the next encode:
+    // pending after a scaler rebuild (resize / startup) and on a frame that
+    // resets the temporal history; consumed by `encode_upscale`.
+    pub reset: UpscalerResetLatch,
 }
 
 // MetalFX temporal upscaler. Owns the descriptor-bound scaler instance plus
@@ -219,8 +220,8 @@ impl MtlContext {
     // which is rasterized from the same geometry the main pass shaded.
     //
     // Reset is requested whenever the scaler was just rebuilt (resize or
-    // first frame); after the encode the flag is cleared via the atomic
-    // stash that `draw_frame` mutates on the main thread between frames.
+    // first frame) or the frame resets the temporal history; the encode
+    // consumes the latch `draw_frame` raises on the main thread between frames.
     pub(in crate::metal) fn encode_upscale(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -275,15 +276,11 @@ impl MtlContext {
             // `depthReversed` means near is device depth 1.
             upscaler.scaler.setDepthReversed(CAMERA_DEPTH.reversed);
 
-            // First-frame-after-rebuild discards history. The flag is
-            // owned by an atomic on the context; `draw_frame` raises it
-            // on the main thread between frames whenever the scaler was
-            // rebuilt.
-            let reset = self
-                .upscale
-                .reset_pending
-                .swap(false, std::sync::atomic::Ordering::AcqRel);
-            upscaler.scaler.setReset(reset);
+            // The first frame after a rebuild or a history reset discards
+            // history. The latch is raised on the main thread between frames.
+            upscaler
+                .scaler
+                .setReset(crate::upscale_reset::consume(&self.upscale.reset));
         }
 
         // MetalFX's encode is a single dispatch that doesn't go through a render

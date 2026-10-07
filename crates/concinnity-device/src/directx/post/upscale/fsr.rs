@@ -108,6 +108,10 @@ impl UpscaleBackend for FsrUpscaler {
         // and the frame keeps every one alive until the list executes.
         unsafe { self.ffx.dispatch(handles, camera) }
     }
+
+    fn request_history_reset(&self) {
+        self.ffx.request_history_reset();
+    }
 }
 
 #[cfg(test)]

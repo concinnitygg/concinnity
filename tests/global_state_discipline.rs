@@ -218,7 +218,7 @@ fn a_test_that_writes_a_global_holds_the_exclusive_guard() {
 
 // The scan is only worth as much as its ability to see the shapes it forbids.
 #[test]
-fn the_scan_recognises_two_guards_held_at_once() {
+fn the_scan_recognizes_two_guards_held_at_once() {
     let offending = "\n#[test]\nfn deadlocks() {\n    let _guard = crate::test_support::lock();\n    let _cwd = concinnity_testing::GlobalState::acquire().with_cwd();\n}\n";
     let bodies = source::test_bodies(offending);
     assert_eq!(bodies.len(), 1);
@@ -251,7 +251,7 @@ fn a_scoped_guard_is_not_counted_as_held() {
     );
 }
 
-// A `{` inside a fixture string must not run the body into its neighbours, or
+// A `{` inside a fixture string must not run the body into its neighbors, or
 // the scan reports whatever the next test does.
 #[test]
 fn a_malformed_json_fixture_does_not_extend_the_body() {

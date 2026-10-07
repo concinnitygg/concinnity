@@ -125,7 +125,7 @@ pub(in crate::editor::hook) enum FormTarget {
     // An asset the build generates, which has no world.jsonl line of its own.
     // The form is seeded from the entry the expansion produced, and confirming
     // appends that line -- which then overrides the expansion, since the cook
-    // drops a generated asset in favour of an authored one of the same name and
+    // drops a generated asset in favor of an authored one of the same name and
     // type. Renaming it in the form instead leaves the generated asset in place
     // and adds a separate one, which is the honest reading of a rename.
     Promote(serde_json::Value),

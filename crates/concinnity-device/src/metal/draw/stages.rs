@@ -533,6 +533,22 @@ impl MtlContext {
         drop(submission_token);
     }
 
+    // Drop every accumulated temporal history for a frame that does not
+    // continue the last: the TAA and SSGI rings, the camera half of the motion
+    // history, the Hi-Z pyramid the occlusion test would reproject the old view
+    // through, and MetalFX's history on its next encode.
+    pub(super) fn reset_temporal_history(&mut self) {
+        self.cull.hiz_valid = false;
+        if let Some(taa) = self.taa.pass.as_mut() {
+            taa.reset_history();
+        }
+        if let Some(ssgi) = self.ssgi.pass.as_mut() {
+            ssgi.reset_history();
+        }
+        self.view_history.reset();
+        self.upscale.reset.request();
+    }
+
     pub(super) fn advance_temporal_state(&mut self, velocity_active: bool, proj: [[f32; 4]; 4]) {
         // The Hi-Z reduction that feeds next frame's cull is the graph's terminal
         // `HizFinal` pass, so it has already been encoded. Advance the temporal

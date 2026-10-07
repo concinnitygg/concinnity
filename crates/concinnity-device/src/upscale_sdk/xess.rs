@@ -12,12 +12,12 @@
     reason = "the XeSS bindings keep the SDK's own C type names"
 )]
 
-use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr;
 
 use concinnity_core::components::UpscaleQuality;
 use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
+use concinnity_core::render::history_reset::UpscalerResetLatch;
 
 use super::{SdkLibrary, UpscaleExtent, entry_point};
 
@@ -174,7 +174,7 @@ pub(crate) struct XessContext<L> {
     handle: xess_context_handle_t,
     api: XessCommonApi,
     extent: UpscaleExtent,
-    reset_pending: Cell<bool>,
+    reset: UpscalerResetLatch,
     _library: L,
 }
 
@@ -190,7 +190,7 @@ impl<L> XessContext<L> {
             handle,
             api,
             extent,
-            reset_pending: Cell::new(true),
+            reset: UpscalerResetLatch::default(),
             _library: library,
         }
     }
@@ -204,9 +204,19 @@ impl<L> XessContext<L> {
     }
 
     /// The shared execute fields of this frame at `jitter`. The first frame
-    /// after creation resets XeSS's history.
+    /// after creation, and the first after [`Self::request_history_reset`],
+    /// resets XeSS's history.
     pub(crate) fn frame(&self, jitter: [f32; 2]) -> XessExecuteFrame {
-        XessExecuteFrame::new(jitter, self.reset_pending.replace(false), self.extent)
+        XessExecuteFrame::new(
+            jitter,
+            crate::upscale_reset::consume(&self.reset),
+            self.extent,
+        )
+    }
+
+    /// Discard XeSS's history on the next frame.
+    pub(crate) fn request_history_reset(&self) {
+        self.reset.request();
     }
 
     /// Scale the engine's UV-space motion vectors into the render pixels XeSS

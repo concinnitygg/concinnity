@@ -11,12 +11,12 @@
     reason = "the FFX bindings keep the SDK's own C type names"
 )]
 
-use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr;
 
 use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::history_reset::UpscalerResetLatch;
 
 use super::camera::FrameClock;
 use super::{SdkLibrary, UpscaleCamera, UpscaleExtent, entry_point};
@@ -347,7 +347,7 @@ pub(crate) struct FfxContext<L> {
     handle: ffxContext,
     extent: UpscaleExtent,
     jitter_phase_count: i32,
-    reset_pending: Cell<bool>,
+    reset: UpscalerResetLatch,
     clock: FrameClock,
     _library: L,
 }
@@ -397,7 +397,7 @@ impl<L: SdkLibrary> FfxContext<L> {
             handle,
             extent,
             jitter_phase_count: FALLBACK_JITTER_PHASE_COUNT,
-            reset_pending: Cell::new(true),
+            reset: UpscalerResetLatch::default(),
             clock: FrameClock::default(),
             _library: library,
         };
@@ -470,10 +470,15 @@ impl<L: SdkLibrary> FfxContext<L> {
         [x, y]
     }
 
+    /// Discard FFX's history on the next dispatch.
+    pub(crate) fn request_history_reset(&self) {
+        self.reset.request();
+    }
+
     /// Record the upscale of this frame onto `handles.command_list`, reading
     /// the inputs in the compute-read state and writing the output in the
-    /// unordered-access state. The first dispatch after creation resets FFX's
-    /// history.
+    /// unordered-access state. The first dispatch after creation, and the
+    /// first after [`Self::request_history_reset`], resets FFX's history.
     ///
     /// # Safety
     ///
@@ -540,7 +545,7 @@ impl<L: SdkLibrary> FfxContext<L> {
             sharpness: 0.0,
             frame_time_delta: self.clock.delta_ms(camera.elapsed),
             pre_exposure: 1.0,
-            reset: self.reset_pending.replace(false),
+            reset: crate::upscale_reset::consume(&self.reset),
             camera_near,
             camera_far,
             camera_fov_angle_vertical: camera.fov_y_radians,

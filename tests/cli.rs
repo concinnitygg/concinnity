@@ -6,7 +6,7 @@
 //! in-crate unit tests cannot, since those never run the binary), plus the
 //! world-discovery fallbacks each command reaches for when no `-f` is given,
 //! which read process-global path anchors that a unit test in the shared test
-//! binary could not redirect without racing its neighbours. Under
+//! binary could not redirect without racing its neighbors. Under
 //! `cargo llvm-cov` the profile data the spawned binary writes on exit is
 //! merged, so this coverage counts.
 //!

@@ -207,9 +207,12 @@ class Xess(WindowsSdk):
 
 class Streamline(WindowsSdk):
     name = "streamline"
-    release = "2.11.1"
+    release = "2.14.1"
     summary = "NVIDIA Streamline, for DLSS"
     payload_parts = ("bin", "x64", "nvngx_dlss.dll")
+    sha256 = {
+        "windows-x86_64": "92c4d954631a1710da86ca3fa8d5034f2b9503838c95fc4ae977ae149319781b",
+    }
 
     @classmethod
     def url(cls, _slug):
@@ -662,6 +665,7 @@ def selftest():
         (Dxc, "macos-aarch64", "build"),
         (Agility, "windows-x86_64", "fetch"),
         (FidelityFxVulkan, "windows-x86_64", "build"),
+        (Streamline, "windows-x86_64", "fetch"),
     ]
     for component, slug, want in kinds:
         got = "fetch" if fetched_on(component, slug) else "build" if built_on(component, slug) else None

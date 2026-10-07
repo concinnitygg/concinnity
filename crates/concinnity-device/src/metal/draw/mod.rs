@@ -72,6 +72,7 @@ impl MtlContext {
             view_mode,
             show,
             sky_rot,
+            history_reset,
         } = params;
         let mtm = objc2::MainThreadMarker::new().ok_or_else(|| {
             error::RenderError::Other("draw_frame must be called from the main thread".into())
@@ -83,6 +84,9 @@ impl MtlContext {
         self.state.view.view_distance = view_distance;
         self.state.view.sky_rot = sky_rot;
         self.apply_pending_rebuilds()?;
+        if history_reset {
+            self.reset_temporal_history();
+        }
 
         let pass_timing_slot = self.begin_frame_stats();
         if !self.pump_window_events(mtm) {
@@ -647,9 +651,7 @@ impl MtlContext {
                 want_h,
                 self.upscale.scale,
             )?);
-            self.upscale
-                .reset_pending
-                .store(true, std::sync::atomic::Ordering::Release);
+            self.upscale.reset.rebuilt();
         }
 
         // Output (drawable) dimensions are the `want_w/h` arg; the render

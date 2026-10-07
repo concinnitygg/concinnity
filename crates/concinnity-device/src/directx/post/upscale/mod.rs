@@ -14,7 +14,7 @@
 use std::cell::Cell;
 use std::ffi::{CStr, c_void};
 
-use concinnity_core::components::UpscalerBackend;
+use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -27,7 +27,7 @@ use crate::directx::error::map_hresult;
 use crate::directx::graph_exec::GraphFrameParams;
 use crate::directx::texture::transition_barrier;
 use crate::upscale_sdk::{
-    Availability, ResolvedBackend, SdkLibrary, UpscaleCamera, UpscaleExtent, build_first_available,
+    Availability, ResolvedBackend, SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest,
 };
 
 #[cfg(ngx_sdk_bundled)]
@@ -37,12 +37,12 @@ mod xess;
 
 // Temporal upscaling state. `backend` is `Some` only when the world's
 // `PostProcessConfig.temporal_upscaling` is on and a vendor context was created.
-// `requested` is the backend the world asked for, kept so a resize rebuilds the
-// same one. `jitter` is the current frame's sub-pixel projection offset in
-// render pixels, set by the frame stages before the parallel fan-out.
+// `requested` is the upscaler and model the world asked for, kept so a resize
+// rebuilds the same one. `jitter` is the current frame's sub-pixel projection
+// offset in render pixels, set by the frame stages before the parallel fan-out.
 pub(in crate::directx) struct UpscaleState {
     pub backend: Option<Box<dyn UpscaleBackend>>,
-    pub requested: UpscalerBackend,
+    pub requested: UpscaleRequest,
     pub jitter: Cell<[f32; 2]>,
 }
 
@@ -65,6 +65,12 @@ pub(in crate::directx) trait UpscaleBackend: Send {
         inputs: UpscaleInputs<'_>,
         camera: UpscaleCamera,
     ) -> RenderResult<()>;
+    // Discard the accumulated history on the next dispatch.
+    fn request_history_reset(&self);
+    // The DLSS render preset the upscaler runs, or `None` for another upscaler.
+    fn dlss_preset(&self) -> Option<DlssPreset> {
+        None
+    }
 }
 
 // Render-resolution inputs the upscale consumes for one frame.
@@ -102,6 +108,11 @@ struct UpscalerTarget<'a> {
     gpu: UpscaleDevice<'a>,
     extent: UpscaleExtent,
     descriptors: UpscalerDescriptors,
+    #[cfg_attr(
+        not(ngx_sdk_bundled),
+        expect(dead_code, reason = "only DLSS has render presets")
+    )]
+    dlss_preset: DlssPreset,
 }
 
 const UPSCALE_OUTPUT_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -245,22 +256,26 @@ pub(in crate::directx) fn build_upscaler(
     output: (u32, u32),
     upscale_scale: f32,
     descriptors: UpscalerDescriptors,
-    requested: UpscalerBackend,
+    requested: &mut UpscaleRequest,
 ) -> RenderResult<Option<Box<dyn UpscaleBackend>>> {
-    let target = UpscalerTarget {
+    let target = |dlss_preset| UpscalerTarget {
         gpu,
         extent: UpscaleExtent::resolve(output, upscale_scale),
         descriptors,
+        dlss_preset,
     };
-    let (built, _) = build_first_available(requested, availability(), output, |candidate| {
-        Ok(match candidate {
-            ResolvedBackend::Fsr => fsr::FsrUpscaler::try_new(target)?.map(boxed),
-            ResolvedBackend::Xess => xess::XessUpscaler::try_new(target)?.map(boxed),
-            #[cfg(ngx_sdk_bundled)]
-            ResolvedBackend::Dlss => dlss::DlssUpscaler::try_new(target)?.map(boxed),
-            _ => None,
-        })
-    })?;
+    let (built, _) =
+        requested.build_first_available(availability(), output, |candidate, preset| {
+            let target = target(preset);
+            Ok(match candidate {
+                ResolvedBackend::Fsr => fsr::FsrUpscaler::try_new(target)?.map(boxed),
+                ResolvedBackend::Xess => xess::XessUpscaler::try_new(target)?.map(boxed),
+                #[cfg(ngx_sdk_bundled)]
+                ResolvedBackend::Dlss => dlss::DlssUpscaler::try_new(target)?.map(boxed),
+                _ => None,
+            })
+        })?;
+    requested.adopt_running_preset(built.as_deref().and_then(|u| u.dlss_preset()));
     Ok(built)
 }
 

@@ -108,6 +108,10 @@ pub struct FrameParams<'a> {
     /// samples the sky, so the sky, the IBL and the reflections turn together.
     /// Identity in a world with no `SkyRotation`.
     pub sky_rot: [[f32; 4]; 3],
+    /// The temporal history the previous frames accumulated no longer matches
+    /// this one (see [`crate::render::history_reset`]): every temporal pass and
+    /// upscaler starts over instead of reprojecting it.
+    pub history_reset: bool,
 }
 
 /// The per-frame drive: what every graphics backend must implement for a world

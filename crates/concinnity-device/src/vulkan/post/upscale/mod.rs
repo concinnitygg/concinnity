@@ -22,10 +22,11 @@ use std::ffi::{CStr, CString, c_char, c_void};
 
 use ash::vk;
 use concinnity_core::components::UpscalerBackend;
+use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::error::{RenderError, RenderResult};
 
 use crate::upscale_sdk::{
-    Availability, SdkLibrary, UpscaleCamera, UpscaleExtent, build_first_available, preferred,
+    Availability, SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest, preferred,
 };
 use crate::vulkan::allocator::DeviceAllocator;
 use crate::vulkan::context::{HDR_FORMAT, VkContext};
@@ -83,6 +84,12 @@ pub(in crate::vulkan) trait VkUpscaleBackend: Send {
         inputs: UpscaleInputs<'_>,
         camera: UpscaleCamera,
     ) -> RenderResult<()>;
+    // Discard the accumulated history on the next dispatch.
+    fn request_history_reset(&self);
+    // The DLSS render preset the upscaler runs, or `None` for another upscaler.
+    fn dlss_preset(&self) -> Option<DlssPreset> {
+        None
+    }
     // Tear down the SDK context and the owned images. Called after
     // `device_wait_idle`, before the device is destroyed.
     fn destroy(&mut self);
@@ -375,18 +382,31 @@ pub(in crate::vulkan) fn build_upscaler(
     gpu: UpscalerGpu<'_>,
     output: (u32, u32),
     upscale_scale: f32,
-    requested: UpscalerBackend,
+    requested: &mut UpscaleRequest,
 ) -> RenderResult<(Option<Box<dyn VkUpscaleBackend>>, ResolvedBackend)> {
     let extent = UpscaleExtent::resolve(output, upscale_scale);
-    build_first_available(requested, availability(), output, |candidate| {
-        Ok(match candidate {
-            ResolvedBackend::Fsr => fsr::FsrUpscaler::try_new(gpu, extent)?.map(boxed),
-            ResolvedBackend::Xess => xess::XessUpscaler::try_new(gpu, extent)?.map(boxed),
-            #[cfg(ngx_sdk_bundled)]
-            ResolvedBackend::Dlss => dlss::DlssUpscaler::try_new(gpu, extent)?.map(boxed),
-            _ => None,
-        })
-    })
+    let (built, resolved) = requested.build_first_available(
+        availability(),
+        output,
+        |candidate,
+         #[cfg_attr(
+            not(ngx_sdk_bundled),
+            expect(unused_variables, reason = "only DLSS has render presets")
+        )]
+         preset| {
+            Ok(match candidate {
+                ResolvedBackend::Fsr => fsr::FsrUpscaler::try_new(gpu, extent)?.map(boxed),
+                ResolvedBackend::Xess => xess::XessUpscaler::try_new(gpu, extent)?.map(boxed),
+                #[cfg(ngx_sdk_bundled)]
+                ResolvedBackend::Dlss => {
+                    dlss::DlssUpscaler::try_new(gpu, extent, preset)?.map(boxed)
+                }
+                _ => None,
+            })
+        },
+    )?;
+    requested.adopt_running_preset(built.as_deref().and_then(|u| u.dlss_preset()));
+    Ok((built, resolved))
 }
 
 fn boxed(backend: impl VkUpscaleBackend + 'static) -> Box<dyn VkUpscaleBackend> {

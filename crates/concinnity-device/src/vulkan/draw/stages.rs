@@ -374,6 +374,26 @@ impl VkContext {
         ));
     }
 
+    // Drop every accumulated temporal history for a frame that does not
+    // continue the last: the TAA and SSGI rings, the camera half of the motion
+    // history, the Hi-Z pyramid the occlusion test would reproject the old view
+    // through, and the upscaler's history on its next dispatch.
+    pub(in crate::vulkan) fn reset_temporal_history(&mut self) {
+        self.cull.hiz_valid = false;
+        if let Some(taa) = &mut self.taa {
+            taa.pass.reset_history();
+        }
+        if let Some(ssgi) = &mut self.ssgi {
+            ssgi.reset_history();
+        }
+        if let Some(gb) = &mut self.gbuffer {
+            gb.view_history.reset();
+        }
+        if let Some(upscaler) = &self.upscale {
+            upscaler.request_history_reset();
+        }
+    }
+
     // History the next frame reads: TAA jitter and ring, G-buffer VP, Hi-Z VP and validity.
     pub(super) fn advance_temporal_state(&mut self, cur_vp: [[f32; 4]; 4]) {
         // The Hi-Z reduction that feeds next frame's cull is the graph's terminal

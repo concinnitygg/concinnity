@@ -139,7 +139,7 @@ pub(super) fn build_upscale(
         scaler: upscaler,
         scale,
         jitter: Default::default(),
-        reset_pending: std::sync::atomic::AtomicBool::new(true),
+        reset: Default::default(),
     }
 }
 

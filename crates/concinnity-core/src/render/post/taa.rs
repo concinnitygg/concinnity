@@ -155,6 +155,12 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
         self.ring.advance();
     }
 
+    /// Forget the accumulated history, so the next resolve seeds it from the
+    /// current frame instead of blending against a view it no longer matches.
+    pub fn reset_history(&mut self) {
+        self.ring.invalidate();
+    }
+
     // Which target `write` samples as history.
     fn history_slot(&self, write: usize) -> usize {
         let slots = self.targets.len();
@@ -272,6 +278,28 @@ mod tests {
             height: 900,
         };
         assert_eq!(resolve_extent(&d, e), e);
+    }
+
+    #[test]
+    fn a_history_reset_drops_the_history_until_the_next_advance() {
+        use crate::render::post::mock::MockDevice;
+        let device = MockDevice::new();
+        let extent = PostExtent {
+            width: 64,
+            height: 64,
+        };
+        let mut pass = TaaPass::new(&device, TaaRing::ping_pong(), extent).expect("pass");
+        pass.advance();
+        assert!(pass.ring().valid());
+        pass.reset_history();
+        assert!(!pass.ring().valid());
+        assert_eq!(
+            pass.ring().write(),
+            0,
+            "accumulation restarts at the first slot"
+        );
+        pass.advance();
+        assert!(pass.ring().valid());
     }
 
     #[test]

@@ -98,7 +98,6 @@ impl DxContext {
         let (render_w, render_h) = if let Some(old) = self.upscale.backend.as_ref() {
             let scale = old.extent().scale;
             let descriptors = old.output().descriptors();
-            let backend = self.upscale.requested;
             // Drop the old context before building the replacement (its
             // max_render / max_upscale sizes are baked at creation).
             self.upscale.backend = None;
@@ -110,7 +109,7 @@ impl DxContext {
                 (new_w, new_h),
                 scale,
                 descriptors,
-                backend,
+                &mut self.upscale.requested,
             )?;
             let dims = match &rebuilt {
                 Some(u) => u.extent().render,

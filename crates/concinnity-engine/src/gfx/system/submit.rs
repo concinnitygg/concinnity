@@ -117,6 +117,7 @@ pub(crate) fn submit(
         view_mode: snap.frame.view_mode,
         show: snap.frame.show,
         sky_rot: snap.frame.sky_rot,
+        history_reset: snap.frame.history_reset,
     }) {
         Ok(()) => policy.frame_succeeded(),
         Err(e) => {

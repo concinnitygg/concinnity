@@ -59,6 +59,11 @@ impl SsgiResources {
     pub(in crate::directx) fn advance(&mut self) {
         self.pass.advance();
     }
+
+    // Forget the accumulation for a frame that does not continue the last.
+    pub(in crate::directx) fn reset_history(&mut self) {
+        self.pass.reset_history();
+    }
 }
 
 impl DxContext {

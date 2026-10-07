@@ -15,6 +15,7 @@ use concinnity_core::ecs::{
 use concinnity_core::gfx::frustum;
 use concinnity_core::input::snapshot::InputPacket;
 use concinnity_core::profile;
+use concinnity_core::render::history_reset::{HistoryView, PendingHistoryReset};
 use concinnity_core::render::overlay_maps;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
@@ -513,6 +514,26 @@ impl GraphicsSystem {
             ));
         }
 
+        // Whether the history the temporal passes accumulated still matches
+        // this frame. Compared in absolute world space, so a chunk rebase is
+        // not a cut.
+        if let Some(PendingHistoryReset(causes)) = ctx.resources.take::<PendingHistoryReset>() {
+            self.history_reset.request(causes);
+        }
+        let scene = ctx
+            .resource::<crate::ecs::ActiveSceneFlow>()
+            .and_then(|f| f.flow.as_ref())
+            .map(|f| f.current);
+        let history_reset = self.history_reset.observe(HistoryView {
+            position: cam_pos,
+            view: view_matrix,
+            fov_y_radians,
+            scene,
+        });
+        if history_reset.any() {
+            tracing::debug!("temporal history reset: {history_reset:?}");
+        }
+
         snap.frame = FrameScalars {
             elapsed,
             fov_y_radians,
@@ -528,6 +549,7 @@ impl GraphicsSystem {
                 .map(|s| s.sample_rows())
                 .unwrap_or(concinnity_core::sky::SkyOrientation::IDENTITY_ROWS),
             directional,
+            history_reset: history_reset.any(),
         };
         // Adopt the overlay draw list wholesale and hand the spent one back to
         // OverlaySystem, which recycles its buffers into the next build.
@@ -563,6 +585,9 @@ impl GraphicsSystem {
     // to a muted gray so it reads as unavailable.
     pub(super) fn apply_capability_gating(&mut self, ctx: &mut PipelineContext) {
         let caps = self.caps;
+        let vendor = ctx
+            .resource::<backend::GpuProfile>()
+            .map_or(backend::GpuVendor::Other, |g| g.vendor);
         // Mark each unavailable setting's region(s) disabled and collect their
         // value-label ids (both stepper regions of a row reference its value
         // label, so this is the row's anchor into the scroll element list).
@@ -572,7 +597,7 @@ impl GraphicsSystem {
             let Some(UiAction::Setting { key, .. }) = r.action else {
                 continue;
             };
-            if settings::setting_available(key, &caps) {
+            if settings::setting_available(key, &caps, vendor) {
                 continue;
             }
             r.disabled = true;
@@ -810,6 +835,58 @@ mod tests {
         assert!((snap.frame.fov_y_radians - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
         assert_eq!(snap.frame.near, 0.1);
         assert_eq!(snap.frame.view_distance, Some(500.0));
+    }
+
+    fn camera_at(x: f32) -> Camera3D {
+        Camera3D {
+            fov_y_degrees: 70.0,
+            near: 0.1,
+            view_distance: None,
+            view_matrix: translated(-x),
+            position: [x, 0.0, 0.0],
+            yaw: 0.0,
+            pitch: 0.0,
+            desired_move: [0.0; 3],
+            jump_requested: false,
+            interact_requested: false,
+            controller: None,
+        }
+    }
+
+    // A teleport and a settings change each reset the temporal history for
+    // one frame; a rebase of the render origin, which moves the camera-relative
+    // view but not the camera, does not.
+    #[test]
+    fn extraction_flags_a_history_reset_on_a_cut_or_a_settings_change() {
+        use concinnity_core::render::history_reset::HistoryResetCauses;
+
+        let mut world = World::new();
+        let cam = {
+            let mut ctx = world.context();
+            let e = ctx.components.spawn();
+            ctx.insert(e, camera_at(0.0));
+            e
+        };
+        let mut gs = GraphicsSystem::new(None);
+        assert!(!extract_once(&mut gs, &mut world).frame.history_reset);
+
+        world
+            .context()
+            .insert_resource(crate::gfx::streaming::system::CameraRelativeView {
+                view: translated(-0.5),
+                cam_pos: [0.5, 0.0, 0.0],
+            });
+        assert!(!extract_once(&mut gs, &mut world).frame.history_reset);
+
+        *world.context().get_mut::<Camera3D>(cam).unwrap() = camera_at(500.0);
+        assert!(extract_once(&mut gs, &mut world).frame.history_reset);
+        assert!(!extract_once(&mut gs, &mut world).frame.history_reset);
+
+        world
+            .context()
+            .insert_resource(PendingHistoryReset(HistoryResetCauses::SETTINGS_CHANGE));
+        assert!(extract_once(&mut gs, &mut world).frame.history_reset);
+        assert!(!extract_once(&mut gs, &mut world).frame.history_reset);
     }
 
     // An in-flight fade records its effects as scene ops instead of touching a

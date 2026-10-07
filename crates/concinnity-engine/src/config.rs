@@ -13,6 +13,7 @@
 //! Unknown fields are ignored on load so future additions are forwards-compatible.
 
 use concinnity_core::components::AaMode;
+use concinnity_core::components::GamepadAction;
 use concinnity_core::components::GamepadMap;
 use concinnity_core::components::PassResolution;
 use concinnity_core::components::ShadowUpdate;
@@ -20,6 +21,7 @@ use concinnity_core::components::UpscaleQuality;
 use concinnity_core::components::UpscalerBackend;
 use concinnity_core::components::WindowMode;
 use concinnity_core::input::keymap;
+use concinnity_core::render::dlss::DlssPreset;
 use concinnity_host::store::paths::StateTree;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -47,7 +49,7 @@ pub(crate) struct GraphicsSettings {
     // world's authored look) and saves once. `Auto` re-resolves from the
     // detected tier each launch; a named tier is a fixed ceiling; `Custom`
     // imposes no ceiling (only the per-field overrides below apply).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub(crate) quality_preset: Option<crate::gfx::quality_preset::QualityPreset>,
     // Display sync (vsync). `None` uses the world's `GraphicsConfig.vsync`.
     #[serde(default)]
@@ -70,7 +72,7 @@ pub(crate) struct GraphicsSettings {
     pub(crate) show_vram: Option<bool>,
     // Window mode (windowed / borderless / fullscreen). `None` uses the world's
     // `Window.mode`. Applied live.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub(crate) window_mode: Option<WindowMode>,
     // Chosen fullscreen display mode [width, height, refresh_hz] in pixels
     // (refresh_hz 0 = unknown / keep the display's rate). `None` means never
@@ -82,14 +84,18 @@ pub(crate) struct GraphicsSettings {
     // Render-scale preset (upscaling quality). `None` uses the world's
     // `PostProcessConfig.upscale_quality`. Applied at next launch (the upscaler
     // and render targets are sized once at init).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub(crate) render_scale: Option<UpscaleQuality>,
     // Upscaler backend (`PostProcessConfig.upscale_backend`: Auto / FSR3 / DLSS /
     // XeSS). `None` uses the world's value. Applied at next launch (the upscaler
     // is selected + built once at init); DirectX / Vulkan only (Metal uses
     // MetalFX). A user/hardware preference, independent of the quality preset.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub(crate) upscale_backend: Option<UpscalerBackend>,
+    // The DLSS render preset. `None` leaves DLSS's own default. Applied at next
+    // launch, like the backend.
+    #[serde(default, deserialize_with = "lenient")]
+    pub(crate) dlss_preset: Option<DlssPreset>,
     // Exposure offset in photographic stops. `None` uses the world's
     // `PostProcessConfig.exposure_ev`. Applied live (a pure post-process
     // uniform), and re-applied at init for a persisted choice.
@@ -130,7 +136,7 @@ pub(crate) struct GraphicsSettings {
     // uses the world's value. Applied live on Metal (the TAA pass rebuilds and
     // the composite FXAA flag updates in place) and governed by the quality
     // preset ceiling like the toggles below.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub aa_mode: Option<AaMode>,
     // Quality-feature toggles. Each `None` uses the world's
     // `PostProcessConfig` value. They gate render passes whose GPU resources
@@ -161,7 +167,7 @@ pub(crate) struct GraphicsSettings {
     // backend rebuilds the SSGI pass in place); persisted + applied at the next
     // launch on backends without a live path. Governed by the quality preset
     // ceiling like the toggles above.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub(crate) ssgi_resolution: Option<PassResolution>,
     #[serde(default)]
     pub(crate) ssgi_rays: Option<u32>,
@@ -169,12 +175,12 @@ pub(crate) struct GraphicsSettings {
     // (`PostProcessConfig.reflection_blur_resolution`). `None` uses the world's
     // value. Applied live on Metal; governed by the quality preset ceiling like
     // the SSGI sub-quality above (only bites when a reflection feature is on).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub(crate) reflection_blur_resolution: Option<PassResolution>,
     // Ray-traced reflection trace resolution
     // (`PostProcessConfig.rt_reflection_resolution`). `None` uses the world's
     // value; governed by the quality preset ceiling.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub(crate) rt_reflection_resolution: Option<PassResolution>,
     // Per-feature sub-quality tunables (SSAO radius / intensity, SSR intensity /
     // distance, SSGI intensity / distance, auto-exposure EV bounds + speed). Each
@@ -206,7 +212,7 @@ pub(crate) struct GraphicsSettings {
     // Both are governed by the quality preset ceiling like the toggles above.
     #[serde(default)]
     pub shadow_map_size: Option<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub(crate) shadow_update: Option<ShadowUpdate>,
     // Shadow distance in world units (`GraphicsConfig.shadow_distance`). `None`
     // uses the world's value. Applied live on Metal (the cascade-split math reads
@@ -281,7 +287,7 @@ pub(crate) struct ControlsSettings {
     // Gameplay movement key bindings (forward/back/strafe/sprint/jump/interact).
     // `None` uses the engine defaults (W/S/A/D/Shift/Space/E). Applied live: the
     // active backend decodes physical keys through this map.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_bindings")]
     pub(crate) keymap: Option<keymap::KeyMap>,
     // Gamepad look sensitivity in radians per second at full stick deflection.
     // `None` uses the engine default. Applied when the camera controller
@@ -294,8 +300,93 @@ pub(crate) struct ControlsSettings {
     pub(crate) gamepad_deadzone: Option<f32>,
     // Gamepad action button bindings (sprint/jump/interact). `None` uses the
     // engine defaults (L3/South/West). Applied by the input sampling.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_bindings")]
     pub(crate) gamepad_map: Option<GamepadMap>,
+}
+
+// Read an `Option<enum>` override, taking a value this build does not know (a
+// variant since removed, or one a newer build wrote) as unset. One stale field
+// then falls back to the world's value instead of failing the whole store,
+// which would drop every other saved choice with it.
+fn lenient<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = ciborium::Value::deserialize(d)?;
+    Ok(value.deserialized::<Option<T>>().ok().flatten())
+}
+
+// A persisted binding map that must keep each input bound to one action.
+trait BindingMap: serde::de::DeserializeOwned {
+    const NAME: &'static str;
+    fn binds_each_input_once(&self) -> bool;
+}
+
+impl BindingMap for keymap::KeyMap {
+    const NAME: &'static str = "key";
+    fn binds_each_input_once(&self) -> bool {
+        let keys = keymap::Bindable::ALL.map(|action| self.get(action));
+        keys.iter()
+            .enumerate()
+            .all(|(i, key)| !keys[..i].contains(key))
+    }
+}
+
+impl BindingMap for GamepadMap {
+    const NAME: &'static str = "gamepad";
+    fn binds_each_input_once(&self) -> bool {
+        let buttons = GamepadAction::ALL.map(|action| self.get(action));
+        buttons
+            .iter()
+            .enumerate()
+            .all(|(i, button)| !buttons[..i].contains(button))
+    }
+}
+
+// Read a binding map whose every field has a default, dropping only the
+// bindings this build cannot read (a renamed key or button): each entry is kept
+// when it reads on its own, and the dropped ones fall back to their defaults.
+// A repair that would bind one input to two actions drops the whole map.
+fn lenient_bindings<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: BindingMap,
+{
+    let value = ciborium::Value::deserialize(d)?;
+    if let Ok(map) = value.deserialized::<Option<T>>() {
+        return Ok(map);
+    }
+    let ciborium::Value::Map(entries) = value else {
+        tracing::warn!("{} bindings unreadable, using the defaults", T::NAME);
+        return Ok(None);
+    };
+    let (readable, dropped): (Vec<_>, Vec<_>) = entries.into_iter().partition(|entry| {
+        ciborium::Value::Map(vec![entry.clone()])
+            .deserialized::<T>()
+            .is_ok()
+    });
+    let names: Vec<_> = dropped
+        .iter()
+        .map(|(key, _)| key.as_text().unwrap_or("?"))
+        .collect();
+    let repaired = ciborium::Value::Map(readable)
+        .deserialized::<T>()
+        .ok()
+        .filter(T::binds_each_input_once);
+    match repaired {
+        Some(_) => tracing::warn!(
+            "{} bindings unreadable, using their defaults: {}",
+            T::NAME,
+            names.join(", ")
+        ),
+        None => tracing::warn!(
+            "{} bindings unreadable ({}) and their defaults collide, using the default map",
+            T::NAME,
+            names.join(", ")
+        ),
+    }
+    Ok(repaired)
 }
 
 impl Settings {
@@ -337,6 +428,120 @@ mod tests {
     use concinnity_core::components::GamepadButton;
     use concinnity_core::components::InputKey;
 
+    // A value this build does not know unsets that one override and leaves the
+    // rest of the store, including the other overrides beside it, intact.
+    #[test]
+    fn an_unknown_enum_value_unsets_only_its_own_override() {
+        use ciborium::Value;
+        let text = |v: &str| Value::Text(v.to_string());
+        let graphics = Value::Map(vec![
+            (text("vsync"), Value::Bool(true)),
+            (text("dlss_preset"), text("preset_z")),
+            (text("aa_mode"), text("taa")),
+            (text("upscale_backend"), Value::Integer(7.into())),
+            (text("shadow_update"), Value::Null),
+            (text("ssgi_resolution"), text("quarter")),
+        ]);
+        let store = Value::Map(vec![(text("graphics"), graphics)]);
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&store, &mut bytes).unwrap();
+
+        let settings: Settings = ciborium::from_reader(&bytes[..]).unwrap();
+        let g = &settings.graphics;
+        assert_eq!(g.vsync, Some(true));
+        assert_eq!(g.dlss_preset, None);
+        assert_eq!(g.aa_mode, Some(AaMode::Taa));
+        assert_eq!(g.upscale_backend, None);
+        assert_eq!(g.shadow_update, None);
+        assert_eq!(g.ssgi_resolution, Some(PassResolution::Quarter));
+        assert_eq!(g.render_scale, None, "an absent override stays unset");
+    }
+
+    // A binding this build cannot read falls back to its default; the other
+    // bindings in the same map, and the rest of the store, survive.
+    #[test]
+    fn an_unknown_binding_drops_only_that_binding() {
+        use ciborium::Value;
+        let text = |v: &str| Value::Text(v.to_string());
+        let keymap = keymap::KeyMap {
+            jump: InputKey::J,
+            ..Default::default()
+        };
+        let mut keymap_value = Value::serialized(&keymap).unwrap();
+        let Value::Map(entries) = &mut keymap_value else {
+            panic!("a key map serializes as a map");
+        };
+        for (key, value) in entries.iter_mut() {
+            if *key == text("forward") {
+                *value = text("NoSuchKey");
+            }
+        }
+        let gamepad = Value::Map(vec![
+            (text("sprint"), text("NoSuchButton")),
+            (text("jump"), text("North")),
+        ]);
+        let controls = Value::Map(vec![
+            (text("keymap"), keymap_value),
+            (text("gamepad_map"), gamepad),
+            (text("gamepad_deadzone"), Value::Float(0.2)),
+        ]);
+        let graphics = Value::Map(vec![(text("vsync"), Value::Bool(true))]);
+        let store = Value::Map(vec![
+            (text("controls"), controls),
+            (text("graphics"), graphics),
+        ]);
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&store, &mut bytes).unwrap();
+
+        let settings: Settings = ciborium::from_reader(&bytes[..]).unwrap();
+        let read = settings
+            .controls
+            .keymap
+            .expect("the readable bindings survive");
+        assert_eq!(read.forward, keymap::KeyMap::default().forward);
+        assert_eq!(read.jump, InputKey::J);
+        let pad = settings
+            .controls
+            .gamepad_map
+            .expect("the readable bindings survive");
+        assert_eq!(pad.sprint, GamepadMap::default().sprint);
+        assert_eq!(pad.jump, GamepadButton::North);
+        assert_eq!(settings.controls.gamepad_deadzone, Some(0.2));
+        assert_eq!(settings.graphics.vsync, Some(true));
+    }
+
+    // A dropped binding whose default another action already holds would bind
+    // one input to two actions, so the whole map falls back to the defaults.
+    #[test]
+    fn a_repair_that_collides_drops_the_whole_map() {
+        use ciborium::Value;
+        let text = |v: &str| Value::Text(v.to_string());
+        let keymap = Value::Map(vec![
+            (text("forward"), text("NoSuchKey")),
+            (text("jump"), Value::serialized(&InputKey::W).unwrap()),
+        ]);
+        let gamepad = Value::Map(vec![
+            (text("sprint"), text("NoSuchButton")),
+            (
+                text("jump"),
+                Value::serialized(&GamepadButton::LeftStick).unwrap(),
+            ),
+        ]);
+        let controls = Value::Map(vec![
+            (text("keymap"), keymap),
+            (text("gamepad_map"), gamepad),
+            (text("gamepad_deadzone"), Value::Float(0.2)),
+        ]);
+        let store = Value::Map(vec![(text("controls"), controls)]);
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&store, &mut bytes).unwrap();
+
+        let settings: Settings = ciborium::from_reader(&bytes[..]).unwrap();
+        assert_eq!(settings.controls.keymap, None);
+        assert_eq!(settings.controls.gamepad_map, None);
+        assert_eq!(settings.controls.gamepad_deadzone, Some(0.2));
+    }
+
     #[test]
     fn settings_cbor_roundtrip() {
         let s = Settings {
@@ -346,6 +551,7 @@ mod tests {
                 fps_cap: Some(144),
                 resolution: Some([1920, 1080, 120]),
                 upscale_backend: Some(UpscalerBackend::Xess),
+                dlss_preset: Some(DlssPreset::M),
                 exposure_ev: Some(-1.5),
                 bloom_intensity: Some(0.8),
                 bloom_threshold: Some(1.2),

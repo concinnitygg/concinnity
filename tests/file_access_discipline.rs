@@ -96,14 +96,14 @@ fn only_the_two_root_owners_name_the_system_temp_dir() {
 
 // The scan is only worth as much as its ability to see the shape it forbids.
 #[test]
-fn the_scan_recognises_a_hand_built_temp_path() {
+fn the_scan_recognizes_a_hand_built_temp_path() {
     let offending = "let dir = std::env::temp_dir().join(\"cn-thing\");";
 
     assert!(offending.contains(RAW_TEMP));
     assert!(!"let dir = concinnity_host::scratch::path(\"thing\");".contains(RAW_TEMP));
 }
 
-// The owners are recognised by where they are, so a file that merely sounds
+// The owners are recognized by where they are, so a file that merely sounds
 // like one is still scanned.
 #[test]
 fn the_scan_spares_the_owners_and_nothing_else() {
@@ -159,7 +159,7 @@ fn no_test_reads_outside_its_own_package() {
 }
 
 #[test]
-fn the_scan_recognises_a_walk_out_of_the_package() {
+fn the_scan_recognizes_a_walk_out_of_the_package() {
     let escaping = "fn repo_root() -> PathBuf {\n    Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\")\n}\n";
     let bodies = source::fn_bodies(escaping);
     assert_eq!(bodies.len(), 1);

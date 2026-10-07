@@ -19,6 +19,8 @@ use concinnity_core::gfx::render_types;
 use concinnity_core::input::keymap::{Bindable, KeyMap};
 use concinnity_core::render::backend::{GpuProfile, GpuVendor};
 use concinnity_core::render::backend_init::ShadowCadence;
+use concinnity_core::render::dlss::DlssPreset;
+use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
 use concinnity_core::render::ops;
 use concinnity_core::window::display_mode::DisplayMode;
 use std::sync::{Arc, Mutex};
@@ -113,6 +115,7 @@ impl Fixture {
             hdr_pq: false,
             temporal_upscaling: false,
             upscale_backend: settings::upscale_backend_at(0),
+            dlss_preset: settings::dlss_preset_at(0),
             occlusion_two_pass: false,
             texture_cap: settings::texture_quality_at(0).0,
             texture_budget: settings::texture_quality_at(0).1,
@@ -1026,6 +1029,7 @@ fn restart_required_rows_persist_without_a_backend_call() {
         SettingKey::OcclusionTwoPass,
         SettingKey::TextureQuality,
         SettingKey::UpscaleBackend,
+        SettingKey::DlssPreset,
     ] {
         f.next(key);
     }
@@ -1046,6 +1050,7 @@ fn restart_required_rows_persist_without_a_backend_call() {
     assert!(cfg.graphics.texture_cap.is_some());
     assert!(cfg.graphics.texture_budget.is_some());
     assert!(cfg.graphics.upscale_backend.is_some());
+    assert_eq!(cfg.graphics.dlss_preset, Some(DlssPreset::K));
 }
 
 // The ceiling-governed restart rows still opt the master preset out to Custom.
@@ -1090,6 +1095,44 @@ fn upscale_backend_cycle_reaches_dlss_on_nvidia() {
         seen |= f.state.graphics.upscale_backend == UpscalerBackend::Dlss;
     }
     assert!(seen, "DLSS is reachable on an NVIDIA device");
+}
+
+// The DLSS preset row steps through every preset, persists the choice for
+// the next launch, and changes nothing live, so it leaves the temporal history
+// alone.
+#[test]
+fn dlss_preset_cycles_and_persists_without_resetting_history() {
+    let mut f = Fixture::new();
+    for want in [
+        DlssPreset::K,
+        DlssPreset::L,
+        DlssPreset::M,
+        DlssPreset::Default,
+    ] {
+        f.next(SettingKey::DlssPreset);
+        assert_eq!(f.state.graphics.dlss_preset, want);
+    }
+    assert_eq!(
+        f.persisted().graphics.dlss_preset,
+        Some(DlssPreset::Default)
+    );
+    assert!(
+        f.world
+            .context()
+            .resource::<PendingHistoryReset>()
+            .is_none()
+    );
+}
+
+// A live quality change reports a history reset for the next frame.
+#[test]
+fn a_live_quality_change_requests_a_history_reset() {
+    let mut f = Fixture::new();
+    f.next(SettingKey::AaMode);
+    assert_eq!(
+        f.world.context().resource::<PendingHistoryReset>().copied(),
+        Some(PendingHistoryReset(HistoryResetCauses::SETTINGS_CHANGE))
+    );
 }
 
 // The master preset is a ceiling over the world's authored look: picking a tier

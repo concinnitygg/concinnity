@@ -236,7 +236,7 @@ mod tests {
     }
 
     // A row's mark follows its own panel, in both directions and without
-    // disturbing its neighbours.
+    // disturbing its neighbors.
     #[test]
     fn a_row_is_marked_from_its_own_panel() {
         let count = registry::view_toggle_count();

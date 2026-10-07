@@ -191,7 +191,9 @@ impl VkContext {
             hot_reload,
         };
 
-        let (upscale, render_extent) = effects::build_upscale(&gpu, swapchain.extent, &post)?;
+        let mut upscale_requested = crate::upscale_sdk::UpscaleRequest::from_post(&post);
+        let (upscale, render_extent) =
+            effects::build_upscale(&gpu, swapchain.extent, &post, &mut upscale_requested)?;
         commands::reset_timestamp_queries(&gpu)?;
         let area_light = scene_data::build_area_lights(&gpu, &area_lights)?;
         let scene = scene_assets::build_scene_assets(&gpu, &media, anisotropy)?;
@@ -355,7 +357,7 @@ impl VkContext {
             taa,
             post: screen.post,
             upscale,
-            upscale_requested: post.upscale_backend,
+            upscale_requested,
             ssao: screen.ssao,
             ssr: screen.ssr,
             reflection_composite: rt.composite,

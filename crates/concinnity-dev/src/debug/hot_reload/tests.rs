@@ -1952,7 +1952,7 @@ fn reload_stories_ignores_worlds_without_stories() {
 // AssetHotReloadState
 
 #[test]
-fn state_debug_format_summarises_the_catalog() {
+fn state_debug_format_summarizes_the_catalog() {
     let mut map = TextureSourceMap::new();
     map.push_texture("standalone.png".to_string(), 0, 0);
     let state = AssetHotReloadState::from_sources(

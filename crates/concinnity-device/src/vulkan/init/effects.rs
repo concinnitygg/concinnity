@@ -47,6 +47,7 @@ pub(super) fn build_upscale(
     gpu: &InitGpu<'_>,
     swapchain_extent: vk::Extent2D,
     post: &PostSettings,
+    requested: &mut crate::upscale_sdk::UpscaleRequest,
 ) -> RenderResult<(Option<Box<dyn VkUpscaleBackend>>, vk::Extent2D)> {
     let InitGpu {
         hw, command_pool, ..
@@ -64,7 +65,7 @@ pub(super) fn build_upscale(
             },
             (swapchain_extent.width, swapchain_extent.height),
             post.upscale_scale,
-            post.upscale_backend,
+            requested,
         )?;
         // Arm the messenger's benign-error budget for DLSS (see
         // `DLSS_FIRST_FRAME_LAYOUT_SUPPRESS`); a no-op for other backends.

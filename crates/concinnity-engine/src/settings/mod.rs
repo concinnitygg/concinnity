@@ -21,6 +21,7 @@ use concinnity_core::components::{
 use concinnity_core::gfx::render_types::PostProcessTunables;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::GpuVendor;
+use concinnity_core::render::dlss::DlssPreset;
 
 use crate::config::{GraphicsSettings, Settings};
 // This module presents one settings vocabulary. The option-label registry half
@@ -29,13 +30,17 @@ use crate::config::{GraphicsSettings, Settings};
 // client-only half below.
 pub(crate) use concinnity_core::settings::{SettingKey, options};
 
-// Whether setting `key` can be changed on a device with the given capabilities.
-// A capability-gated setting (e.g. `ray_traced_reflections`, which needs
-// hardware ray tracing) is unavailable when the device lacks that capability;
+// Whether setting `key` can be changed on a device with the given capabilities
+// and GPU vendor. A gated setting (e.g. `ray_traced_reflections`, which needs
+// hardware ray tracing) is unavailable when the device lacks what it needs;
 // every other setting is always available. The settings menu grays out and
 // disables an unavailable row. This is the one place to gate a future
-// capability-dependent toggle.
-pub(crate) fn setting_available(key: SettingKey, caps: &backend::DeviceCapabilities) -> bool {
+// capability- or vendor-dependent toggle.
+pub(crate) fn setting_available(
+    key: SettingKey,
+    caps: &backend::DeviceCapabilities,
+    vendor: GpuVendor,
+) -> bool {
     match key {
         SettingKey::RayTracedReflections
         | SettingKey::RtReflectionResolution
@@ -43,6 +48,11 @@ pub(crate) fn setting_available(key: SettingKey, caps: &backend::DeviceCapabilit
         // The upscaler selector (FSR3 / DLSS / XeSS) grays out on a device whose
         // upscaler is fixed, rather than offering a dead selection.
         SettingKey::UpscaleBackend => caps.selectable_upscaler,
+        // Live wherever the upscaler row can pick DLSS, even while another
+        // upscaler runs.
+        SettingKey::DlssPreset => {
+            caps.selectable_upscaler && upscale_backend_available(UpscalerBackend::Dlss, vendor)
+        }
         _ => true,
     }
 }
@@ -140,6 +150,25 @@ pub(crate) fn upscale_backend_index(backend: UpscalerBackend) -> usize {
         UpscalerBackend::Dlss => 2,
         UpscalerBackend::Xess => 3,
     }
+}
+
+// DlssPreset for an option index, and the index for a preset. Order matches
+// `DlssPreset::ALL`, which the row's labels are built from.
+pub(crate) fn dlss_preset_at(index: usize) -> DlssPreset {
+    DlssPreset::ALL.get(index).copied().unwrap_or_default()
+}
+pub(crate) fn dlss_preset_index(preset: DlssPreset) -> usize {
+    DlssPreset::ALL
+        .iter()
+        .position(|&p| p == preset)
+        .unwrap_or_default()
+}
+
+// Whether a settings change alters which render passes run or how, so the
+// temporal history accumulated under the old settings no longer matches the
+// frame. Restart-required rows change nothing until the next launch.
+pub(crate) fn resets_temporal_history(key: SettingKey) -> bool {
+    key == SettingKey::GraphicsQuality || key.is_quality_toggle() || key.is_quality_cycle()
 }
 
 // Whether an upscaler backend is offered on the given GPU vendor. Auto and FSR3
@@ -777,7 +806,7 @@ mod tests {
                 ray_tracing: false,
                 ..backend::DeviceCapabilities::ALL
             };
-            assert!(setting_available(key, &caps), "{key:?}");
+            assert!(setting_available(key, &caps, GpuVendor::Nvidia), "{key:?}");
         }
     }
 
@@ -840,8 +869,8 @@ mod tests {
             SettingKey::RtReflectionResolution,
             SettingKey::RtReflectionShadows,
         ] {
-            assert!(setting_available(key, &capable));
-            assert!(!setting_available(key, &incapable));
+            assert!(setting_available(key, &capable, GpuVendor::Nvidia));
+            assert!(!setting_available(key, &incapable, GpuVendor::Nvidia));
         }
         // Every other setting is always available, regardless of capability.
         for key in [
@@ -853,14 +882,15 @@ mod tests {
             SettingKey::AutoExposure,
         ] {
             assert!(
-                setting_available(key, &incapable),
+                setting_available(key, &incapable, GpuVendor::Nvidia),
                 "{key:?} should be available"
             );
         }
         // The default reports every capability present.
         assert!(setting_available(
             SettingKey::RayTracedReflections,
-            &DeviceCapabilities::default()
+            &DeviceCapabilities::default(),
+            GpuVendor::Nvidia
         ));
     }
 
@@ -1246,15 +1276,66 @@ mod tests {
         // upscaler keeps it, one with a fixed upscaler grays it out.
         assert!(setting_available(
             SettingKey::UpscaleBackend,
-            &backend::DeviceCapabilities::ALL
+            &backend::DeviceCapabilities::ALL,
+            GpuVendor::Nvidia
         ));
         assert!(!setting_available(
             SettingKey::UpscaleBackend,
             &backend::DeviceCapabilities {
                 selectable_upscaler: false,
                 ..backend::DeviceCapabilities::ALL
-            }
+            },
+            GpuVendor::Nvidia
         ));
+    }
+
+    #[test]
+    fn dlss_preset_round_trips_and_is_live_wherever_dlss_is_selectable() {
+        assert_eq!(
+            options(SettingKey::DlssPreset).unwrap(),
+            DlssPreset::LABELS.as_slice()
+        );
+        for preset in DlssPreset::ALL {
+            assert_eq!(dlss_preset_at(dlss_preset_index(preset)), preset);
+        }
+        assert_eq!(dlss_preset_at(99), DlssPreset::Default);
+        assert!(slider(SettingKey::DlssPreset).is_none());
+        let caps = backend::DeviceCapabilities::ALL;
+        assert!(setting_available(
+            SettingKey::DlssPreset,
+            &caps,
+            GpuVendor::Nvidia
+        ));
+        // Not on another vendor, nor where the upscaler is fixed.
+        assert!(!setting_available(
+            SettingKey::DlssPreset,
+            &caps,
+            GpuVendor::Amd
+        ));
+        assert!(!setting_available(
+            SettingKey::DlssPreset,
+            &backend::DeviceCapabilities {
+                selectable_upscaler: false,
+                ..caps
+            },
+            GpuVendor::Nvidia
+        ));
+    }
+
+    #[test]
+    fn live_quality_changes_reset_the_temporal_history_and_restart_rows_do_not() {
+        assert!(resets_temporal_history(SettingKey::GraphicsQuality));
+        assert!(resets_temporal_history(SettingKey::AaMode));
+        assert!(resets_temporal_history(SettingKey::Ssr));
+        for key in [
+            SettingKey::DlssPreset,
+            SettingKey::UpscaleBackend,
+            SettingKey::RenderScale,
+            SettingKey::Vsync,
+            SettingKey::Exposure,
+        ] {
+            assert!(!resets_temporal_history(key), "{key:?}");
+        }
     }
 
     #[test]

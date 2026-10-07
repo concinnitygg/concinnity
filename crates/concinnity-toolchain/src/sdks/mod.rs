@@ -9,6 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
+use concinnity_core::render::dlss::NGX_API_VERSION;
+
 use crate::{Backend, BinaryTargets};
 
 #[cfg(test)]
@@ -371,6 +373,38 @@ fn dlss_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) 
         return;
     };
 
+    // The engine's NGX declarations are transcribed from one API version of the
+    // SDK headers; a vendored SDK on another version would link against
+    // signatures the code does not match, so it is not linked at all.
+    const NGX_DEFS: &[&str] = &["external", "ngx-sdk", "include", "nvsdk_ngx_defs.h"];
+    let defs_path = env.streamline_root.as_ref().map(|root| {
+        let mut path = root.clone();
+        path.extend(NGX_DEFS);
+        path
+    });
+    // A missing header is watched through the nearest directory that exists
+    // (Cargo treats a missing watched path as always stale), so vendoring it
+    // later still re-runs the check.
+    if let Some(watched) = defs_path
+        .as_deref()
+        .and_then(|path| path.ancestors().find(|p| p.exists()))
+    {
+        out.push(rerun_path(watched));
+    }
+    let header_api = defs_path
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|defs| ngx_header_api_version(&String::from_utf8_lossy(&defs)));
+    if header_api != Some(NGX_API_VERSION) {
+        if targets.bundles() {
+            let found = header_api.map_or_else(|| "none".to_string(), |v| format!("{v:#x}"));
+            out.push(warning(&format!(
+                "NGX SDK API version {found} does not match the {NGX_API_VERSION:#x} the DLSS \
+                 declarations are written against. The DLSS upscaler backend will be unavailable."
+            )));
+        }
+        return;
+    }
+
     // Pass the NGX static import lib straight to the linker for the final
     // artifact (a build-script `rustc-link-lib` does not reliably propagate, and
     // `rustc-link-arg` is scoped to the calling package's own targets, so each
@@ -398,6 +432,25 @@ fn dlss_directives(env: &SdkEnv, targets: BinaryTargets, out: &mut Vec<String>) 
         };
         copy_next_to_exe(env, targets, &dll_src, "nvngx_dlss.dll", out);
     }
+}
+
+// The `NVSDK_NGX_VERSION_API_MACRO` an `nvsdk_ngx_defs.h` defines, read by
+// tokens so the directive's spacing does not matter.
+fn ngx_header_api_version(defs: &str) -> Option<u32> {
+    defs.lines().find_map(|line| {
+        let mut tokens = line.trim_start().strip_prefix('#')?.split_whitespace();
+        if tokens.next()? != "define" || tokens.next()? != "NVSDK_NGX_VERSION_API_MACRO" {
+            return None;
+        }
+        let value = tokens.next()?;
+        match value
+            .strip_prefix("0x")
+            .or_else(|| value.strip_prefix("0X"))
+        {
+            Some(hex) => u32::from_str_radix(hex, 16).ok(),
+            None => value.parse().ok(),
+        }
+    })
 }
 
 // Copy `src` into the directory holding the package's binaries so

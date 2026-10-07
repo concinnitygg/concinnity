@@ -1,5 +1,6 @@
 // The argv mirrors of engine types. The value-enum derives live here so no
 // layer below the command line carries a clap dependency.
+use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_engine::gfx::quality_preset::QualityPreset;
 
@@ -65,6 +66,26 @@ impl From<RtDynamicArg> for RtDynamicMode {
     }
 }
 
+// The argv face of the render layer's `DlssPreset`.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub(crate) enum DlssPresetArg {
+    Default,
+    K,
+    L,
+    M,
+}
+
+impl From<DlssPresetArg> for DlssPreset {
+    fn from(p: DlssPresetArg) -> Self {
+        match p {
+            DlssPresetArg::Default => DlssPreset::Default,
+            DlssPresetArg::K => DlssPreset::K,
+            DlssPresetArg::L => DlssPreset::L,
+            DlssPresetArg::M => DlssPreset::M,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +115,11 @@ mod tests {
                 RtDynamicMode::Tlas,
             ]
         );
+
+        let presets: Vec<DlssPreset> = DlssPresetArg::value_variants()
+            .iter()
+            .map(|&a| a.into())
+            .collect();
+        assert_eq!(presets, DlssPreset::ALL.to_vec());
     }
 }

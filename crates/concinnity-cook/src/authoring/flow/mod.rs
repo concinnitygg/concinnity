@@ -98,7 +98,7 @@ mod tests {
         }
     }
 
-    // The world the map exists to draw: a menu on the left, an arrow labelled
+    // The world the map exists to draw: a menu on the left, an arrow labeled
     // by the button, the scene it starts on the right.
     fn menu_world() -> Vec<WorldJsonlAsset> {
         vec![

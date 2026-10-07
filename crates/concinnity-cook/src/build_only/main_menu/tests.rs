@@ -219,6 +219,7 @@ fn video_tab_emits_a_row_per_setting() {
         ("resolution", "Resolution"),
         ("render_scale", "Render Scale"),
         ("upscale_backend", "Upscaler"),
+        ("dlss_preset", "DLSS Preset"),
     ] {
         let opt = by_name(&assets, &format!("m_settings_video_opt_{setting}"));
         assert_eq!(opt["type"], "OptionSelect");
@@ -688,6 +689,7 @@ fn video_advanced_group_collapses_render_scale_and_exposure() {
     // rows also live in Advanced.
     for key in [
         "opt_upscale_backend",
+        "opt_dlss_preset",
         "opt_temporal_upscaling",
         "opt_hdr_display",
         "opt_hdr_pq",

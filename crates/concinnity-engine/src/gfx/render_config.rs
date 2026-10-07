@@ -11,6 +11,7 @@ use concinnity_core::components::{
 };
 use concinnity_core::gfx::render_types::PostProcessTunables;
 use concinnity_core::render::backend_init::ShadowCadence;
+use concinnity_core::render::dlss::DlssPreset;
 
 use crate::config::GraphicsSettings;
 use crate::gfx::quality_preset::{QualityCeiling, clamp_shadow_update, more_aggressive_upscale};
@@ -112,6 +113,7 @@ pub(crate) struct ResolvedGraphics {
     pub(crate) hdr_pq: bool,
     pub(crate) temporal_upscaling: bool,
     pub(crate) upscale_backend: UpscalerBackend,
+    pub(crate) dlss_preset: DlssPreset,
     pub(crate) occlusion_two_pass: bool,
     pub(crate) texture_cap: u32,
     pub(crate) texture_budget: u32,
@@ -171,6 +173,7 @@ pub(crate) fn resolve_graphics(
         hdr_pq: user.hdr_pq.unwrap_or(post.hdr_pq),
         temporal_upscaling: user.temporal_upscaling.unwrap_or(post.temporal_upscaling),
         upscale_backend: user.upscale_backend.unwrap_or(post.upscale_backend),
+        dlss_preset: user.dlss_preset.unwrap_or_default(),
         occlusion_two_pass: user
             .occlusion_two_pass
             .unwrap_or(world.declared_post().is_some_and(|c| c.occlusion_two_pass)),
@@ -462,6 +465,7 @@ mod tests {
             fps_cap: Some(30),
             hdr_display: Some(false),
             upscale_backend: Some(UpscalerBackend::Auto),
+            dlss_preset: Some(DlssPreset::L),
             perf_stats: Some(false),
             ..GraphicsSettings::default()
         };
@@ -470,6 +474,7 @@ mod tests {
         assert_eq!(r.fps_cap, 30);
         assert!(!r.hdr_display);
         assert_eq!(r.upscale_backend, UpscalerBackend::Auto);
+        assert_eq!(r.dlss_preset, DlssPreset::L);
         assert!(!r.perf_stats);
         assert!(r.show_fps, "an untouched stats toggle defaults on");
 
@@ -478,6 +483,7 @@ mod tests {
         assert_eq!(r.fps_cap, 60);
         assert!(r.hdr_display);
         assert_eq!(r.upscale_backend, UpscalerBackend::Fsr3);
+        assert_eq!(r.dlss_preset, DlssPreset::Default);
     }
 
     #[test]

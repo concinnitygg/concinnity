@@ -81,9 +81,8 @@ struct DxilAbi {
 // `transparent.rs` and the other modules the rows below name. They are pinned
 // because the shader files are shared with Metal and Vulkan, whose hosts bind
 // the same declarations at entirely different slots, so an edit made on either
-// of those platforms cannot see a DirectX root signature at all.
-// `dx_crosscheck.sh` runs this script's DirectX branch, which is where such an
-// edit gets caught.
+// of those platforms cannot see a DirectX root signature at all. A DirectX
+// build runs this check, which is where such an edit gets caught.
 const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     // The bindless main pair, whose layout is a contract with world Shaders as
     // well: each builds its own PSO against the same root signature (see
@@ -567,9 +566,8 @@ fn precompile_spirv() {
 // what lets `directx::builtin_shaders` serve these bytes without re-deriving the
 // cache key.
 //
-// The DirectX branch runs on any host but Windows only under
-// `dx_crosscheck.sh`, which type-checks the backend and never runs the binary,
-// so that host embeds nothing and the lookup answers `None` for everything.
+// A DirectX build on any host but Windows is a cross-compile that never runs
+// the binary, so it embeds nothing and the lookup answers `None` for everything.
 fn precompile_dxil() {
     if !cfg!(windows) {
         concinnity_toolchain::precompile_shader_artifacts(&[], "engine_dxil.rs", "embedded_dxil");

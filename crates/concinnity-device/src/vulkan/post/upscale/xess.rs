@@ -331,6 +331,10 @@ impl VkUpscaleBackend for XessUpscaler {
         Ok(())
     }
 
+    fn request_history_reset(&self) {
+        self.ctx.request_history_reset();
+    }
+
     fn destroy(&mut self) {
         self.ctx.destroy();
         self.output.release();

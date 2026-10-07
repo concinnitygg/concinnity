@@ -41,8 +41,8 @@
 //!   6. `gbuffer.view_history` (`RefCell`) - `borrow`ed by the G-buffer pass
 //!      alone during the fan-out (the borrow flag is a write, so a second pass
 //!      must never borrow it there); `borrow_mut`ed after the join.
-//!   7. The upscaler's `reset_pending` / `output_is_psr` (`Cell`) - read and
-//!      written by the Upscale pass alone.
+//!   7. The upscaler's `output_is_psr` (`Cell`) - read and written by the
+//!      Upscale pass alone. Its history-reset latch is atomic.
 //!   8. The upload rings (`lines.vertices`, `text.upload`; `RefCell<Slot>` per
 //!      frame) and the device allocator (`DeviceAllocator`'s
 //!      `Rc<RefCell<Inner>>`, mutated by allocating, cloning, or dropping a

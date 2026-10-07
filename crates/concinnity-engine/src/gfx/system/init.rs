@@ -271,6 +271,7 @@ pub(super) fn post_settings(
             1.0
         },
         upscale_backend: graphics.upscale_backend,
+        dlss_preset: graphics.dlss_preset,
         occlusion_two_pass: graphics.occlusion_two_pass,
     }
 }
@@ -303,6 +304,7 @@ fn sync_menu_labels(
         SettingKey::UpscaleBackend => {
             Some(crate::settings::upscale_backend_index(g.upscale_backend))
         }
+        SettingKey::DlssPreset => Some(crate::settings::dlss_preset_index(g.dlss_preset)),
         SettingKey::MasterVolume => Some(crate::settings::volume_index(master_volume)),
         SettingKey::MusicVolume => Some(crate::settings::volume_index(music_volume)),
         SettingKey::SfxVolume => Some(crate::settings::volume_index(sfx_volume)),
@@ -429,6 +431,9 @@ impl GraphicsSystem {
             streaming_config.as_ref(),
         );
         settings.graphics = resolve_graphics(&settings.authored, user_graphics, &quality.ceiling);
+        // `--dlss-preset` wins for this launch, shown on the row and never
+        // persisted unless the row itself changes.
+        settings.graphics.dlss_preset = launch.resolve_dlss_preset(settings.graphics.dlss_preset);
         if let Some(sc) = streaming_config.as_mut() {
             sc.texture_cap = settings.graphics.texture_cap;
             sc.texture_budget = settings.graphics.texture_budget;

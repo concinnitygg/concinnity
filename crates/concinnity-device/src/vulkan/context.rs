@@ -1116,11 +1116,11 @@ pub(crate) struct VkContext {
     // resolution; bloom + composite sample its output.
     pub(super) upscale: Option<Box<dyn VkUpscaleBackend>>,
 
-    // The upscaler backend the world requested (`PostProcessConfig.upscale_backend`).
-    // Kept so a swapchain resize rebuilds the same backend via `build_upscaler`
-    // (the DLSS / XeSS device extensions are fixed at device creation, so the
-    // resize must re-resolve to the same first choice; it does, deterministically).
-    pub(super) upscale_requested: components::UpscalerBackend,
+    // The upscaler and model the world requested. Kept so a swapchain resize
+    // rebuilds the same backend via `build_upscaler` (the DLSS / XeSS device
+    // extensions are fixed at device creation, so the resize must re-resolve to
+    // the same first choice; it does, deterministically).
+    pub(super) upscale_requested: crate::upscale_sdk::UpscaleRequest,
 
     // Screen-space ambient occlusion (GTAO) resources. `Some` only when the
     // world's `PostProcessConfig` set `ssao: true`; `None` binds the
@@ -1367,6 +1367,7 @@ impl VkContext {
             view_mode,
             show,
             sky_rot,
+            history_reset,
         } = params;
         // Snapped for the passes recorded below (the wireframe pipeline
         // variant, the unlit shade flag, the composite's channel visualization
@@ -1377,6 +1378,9 @@ impl VkContext {
         self.state.view.view_distance = view_distance;
         self.state.view.sky_rot = sky_rot;
         self.apply_pending_rebuilds()?;
+        if history_reset {
+            self.reset_temporal_history();
+        }
 
         // Minimized window: the client area is 0x0. Vulkan rejects every
         // zero-extent operation (swapchain, render area, viewport, image copy),

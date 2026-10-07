@@ -83,7 +83,7 @@ fn no_test_starts_a_graphics_world_on_the_windowed_loop() {
 
 // The scan is only worth as much as its ability to see the shape it forbids.
 #[test]
-fn the_scan_recognises_the_shape_it_forbids() {
+fn the_scan_recognizes_the_shape_it_forbids() {
     let offending = r#"
 #[test]
 fn opens_a_window() {

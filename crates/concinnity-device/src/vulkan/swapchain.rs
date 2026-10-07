@@ -164,7 +164,7 @@ impl VkContext {
                 },
                 (ext.width, ext.height),
                 scale,
-                self.upscale_requested,
+                &mut self.upscale_requested,
             )?;
             // The rebuilt feature re-emits the benign DLSS first-frame layout
             // errors; re-arm the messenger budget so they stay suppressed.

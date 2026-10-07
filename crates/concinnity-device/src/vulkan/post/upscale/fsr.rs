@@ -137,6 +137,10 @@ impl VkUpscaleBackend for FsrUpscaler {
         unsafe { self.ffx.dispatch(handles, camera) }
     }
 
+    fn request_history_reset(&self) {
+        self.ffx.request_history_reset();
+    }
+
     fn destroy(&mut self) {
         self.ffx.destroy();
         self.output.release();
