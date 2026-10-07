@@ -109,7 +109,7 @@ so numbers are comparable across runs on one machine.
 Call `Bench::run(name, items, body)` from a module's `benches` function. Name
 benchmarks `module/what/size`. Keep bodies self-contained: tear down what you
 build, or the heap column will show the drift. A new area is a module under
-`suite/`, declared in `suite.rs` and called from its `main`.
+`suite/`, declared in `suite/main.rs` and called from its `main`.
 
 Whole-frame, whole-world measurements (system schedules, streaming, physics
 under load) are a different instrument: they run a real client against a

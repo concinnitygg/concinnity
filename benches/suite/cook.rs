@@ -17,32 +17,45 @@ use concinnity_core::blob::{BlobMeta, WorldManifest, encode_cnb, parse_cnb};
 use crate::support::Bench;
 
 const SIZES: [(usize, &str); 2] = [(1_000, "1k"), (10_000, "10k")];
+const BLOB_BENCHES: [&str; 2] = ["blob_encode", "blob_parse"];
+const BENCHES: [&str; 4] = ["prepare_world", "build", BLOB_BENCHES[0], BLOB_BENCHES[1]];
 
 fn world_jsonl(props: usize) -> String {
     let mut out = String::with_capacity(props * 128 + 512);
     out.push_str(concat!(
-        "{\"type\":\"Camera3D\",\"args\":{\"$id\":\"cam\",\"position\":[0,2,12]}}\n",
-        "{\"type\":\"GraphicsConfig\",\"args\":",
-        "{\"$id\":\"gfx\",\"vsync\":false,\"shadow_map_size\":0}}\n",
-        "{\"type\":\"ProceduralMesh\",\"args\":",
-        "{\"$id\":\"bench_mesh\",\"generator\":\"box\",\"half_extents\":[0.4,0.4,0.4]}}\n",
-        "{\"type\":\"Texture\",\"args\":",
-        "{\"$id\":\"bench_tex\",\"generator\":\"checker\",\"resolution\":64}}\n",
-        "{\"type\":\"Material\",\"args\":",
-        "{\"$id\":\"bench_mat\",\"albedo\":\"bench_tex\",\"roughness\":0.6}}\n",
+        "[\"Camera3D\",{\"$id\":\"cam\",\"position\":[0,2,12]}]\n",
+        "[\"GraphicsConfig\",{\"$id\":\"gfx\",\"vsync\":false,\"shadow_map_size\":0}]\n",
+        "[\"ProceduralMesh\",",
+        "{\"$id\":\"bench_mesh\",\"generator\":\"box\",\"half_extents\":[0.4,0.4,0.4]}]\n",
+        "[\"Texture\",{\"$id\":\"bench_tex\",\"generator\":\"checker\",\"resolution\":64}]\n",
+        "[\"Material\",{\"$id\":\"bench_mat\",\"albedo\":\"bench_tex\",\"roughness\":0.6}]\n",
     ));
     for i in 0..props {
         let x = (i % 100) as f32 * 1.2;
         let z = (i / 100) as f32 * 1.2;
         out.push_str(&format!(
-            "{{\"type\":\"Prop\",\"args\":{{\"mesh\":\"bench_mesh\",\
-             \"material\":\"bench_mat\",\"position\":[{x},0.45,{z}]}}}}\n"
+            "[\"Prop\",{{\"mesh\":\"bench_mesh\",\"material\":\"bench_mat\",\
+             \"position\":[{x},0.45,{z}]}}]\n"
         ));
     }
     out
 }
 
+fn bench_name(what: &str, label: &str) -> String {
+    format!("cook/{what}/{label}")
+}
+
 pub(crate) fn benches(bench: &mut Bench) {
+    // World setup costs a full cook per size, so skip it for sizes the filter
+    // selects nothing from.
+    let sizes: Vec<_> = SIZES
+        .into_iter()
+        .filter(|(_, label)| bench.selects_any(BENCHES.map(|what| bench_name(what, label))))
+        .collect();
+    if sizes.is_empty() {
+        return;
+    }
+
     // A state tree inside the workspace target/ dir, so bench runs never read
     // or write a real project's build state. Absolute, because cargo runs bench
     // binaries from the package dir.
@@ -57,15 +70,15 @@ pub(crate) fn benches(bench: &mut Bench) {
     // cache lives in.
     let assets_dir = tree.assets_dir();
 
-    for (n, label) in SIZES {
+    for (n, label) in sizes {
         let content = world_jsonl(n);
 
-        bench.run(&format!("cook/prepare_world/{label}"), n as u64, || {
+        bench.run(&bench_name("prepare_world", label), n as u64, || {
             let loaded = prepare_world(&content, Some(&assets_dir)).expect("bench world validates");
             loaded.assets.len()
         });
 
-        bench.run(&format!("cook/build/{label}"), n as u64, || {
+        bench.run(&bench_name("build", label), n as u64, || {
             let result = build_pipeline_from_str(
                 &content,
                 Some(&assets_dir),
@@ -74,6 +87,10 @@ pub(crate) fn benches(bench: &mut Bench) {
             .expect("bench world compiles");
             result.defs.len()
         });
+
+        if !bench.selects_any(BLOB_BENCHES.map(|what| bench_name(what, label))) {
+            continue;
+        }
 
         // The blob image the compile above would ship: full metadata plus the
         // primary payload section, assembled the way the cook's writer does.
@@ -95,13 +112,13 @@ pub(crate) fn benches(bench: &mut Bench) {
         let image =
             encode_cnb(concinnity_core::SCHEMA_VERSION, &meta, payload).expect("blob encodes");
 
-        bench.run(&format!("cook/blob_encode/{label}"), n as u64, || {
+        bench.run(&bench_name("blob_encode", label), n as u64, || {
             encode_cnb(concinnity_core::SCHEMA_VERSION, &meta, payload)
                 .expect("blob encodes")
                 .len()
         });
 
-        bench.run(&format!("cook/blob_parse/{label}"), n as u64, || {
+        bench.run(&bench_name("blob_parse", label), n as u64, || {
             let (meta, payload_start) =
                 parse_cnb::<BlobMeta>(concinnity_core::SCHEMA_VERSION, &image)
                     .expect("blob parses");

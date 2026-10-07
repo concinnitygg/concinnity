@@ -109,6 +109,15 @@ fn args_split_filters_from_flags() {
 }
 
 #[test]
+fn selects_any_holds_when_one_name_matches() {
+    let bench = Bench::from_args(["engine/"].into_iter().map(String::from));
+    assert!(bench.selects_any(["cook/build/1k", "engine/populate/10k"]));
+    assert!(!bench.selects_any(["cook/build/1k", "cook/build/10k"]));
+    assert!(!bench.selects_any(std::iter::empty::<&str>()));
+    assert!(Bench::from_args(std::iter::empty()).selects_any(["cook/build/1k"]));
+}
+
+#[test]
 fn from_env_reads_the_process_arguments() {
     // The test binary's own arguments; the splitting rules are covered by
     // `args_split_filters_from_flags`.

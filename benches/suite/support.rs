@@ -129,6 +129,12 @@ impl Bench {
         self.filters.is_empty() || self.filters.iter().any(|f| name.contains(f.as_str()))
     }
 
+    /// Whether the filter selects any of `names`, so a module can skip setup
+    /// that only its unselected benchmarks need.
+    pub(crate) fn selects_any<S: AsRef<str>>(&self, names: impl IntoIterator<Item = S>) -> bool {
+        names.into_iter().any(|name| self.matches(name.as_ref()))
+    }
+
     /// Measure `body`, attributing each iteration's cost across `items` units
     /// of work. `items` only scales the report; the body always runs whole.
     pub(crate) fn run<R>(&mut self, name: &str, items: u64, mut body: impl FnMut() -> R) {
