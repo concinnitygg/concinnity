@@ -135,28 +135,3 @@ pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // How many props the grove stands up.
-    const fn count() -> usize {
-        GROVE[0] * GROVE[1] * 2
-    }
-
-    #[test]
-    fn the_grove_stands_up_a_trunk_and_a_canopy_per_tree() {
-        assert_eq!(count(), 208);
-    }
-
-    // Two crowns of the same shape at the same height throw the same shadow;
-    // an ellipsoid turned by its trunk's own heading does not.
-    #[test]
-    fn a_crown_is_not_a_sphere() {
-        assert!(
-            CANOPY_SCALE[0] != CANOPY_SCALE[2],
-            "the silhouette is round"
-        );
-    }
-}

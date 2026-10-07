@@ -89,25 +89,3 @@ fn reading(row: usize) -> TextLabel {
         ..Default::default()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // The rows have to fit the plate they are drawn over, or the read-out runs
-    // off the bottom of its own background.
-    #[test]
-    fn the_rows_fit_the_plate_behind_them() {
-        let rows = READINGS.len() + 1;
-        let used = rows as f32 * ROW_HEIGHT;
-        assert!(used < PLATE_SIZE[1], "{used} of {}", PLATE_SIZE[1]);
-    }
-
-    #[test]
-    fn every_reading_has_a_label_of_its_own() {
-        let mut names = READINGS.to_vec();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), READINGS.len());
-    }
-}

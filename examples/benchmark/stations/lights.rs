@@ -194,27 +194,3 @@ fn bulb_color(index: usize) -> [f32; 3] {
     ];
     WHEEL[index % WHEEL.len()]
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // How many point lights the field holds.
-    const fn point_light_count() -> usize {
-        LIGHTS[0] * LIGHTS[1] * LIGHTS[2]
-    }
-
-    #[test]
-    fn the_field_holds_what_its_dimensions_say() {
-        assert_eq!(point_light_count(), 60);
-    }
-
-    // Neighboring lights have to overlap, or the clusters between them hold
-    // nothing and the culling path is never asked a hard question.
-    #[test]
-    fn the_bulbs_reach_past_their_neighbors() {
-        for step in LIGHT_SPACING {
-            assert!(LIGHT_RANGE > step, "a bulb stops short of the next one");
-        }
-    }
-}

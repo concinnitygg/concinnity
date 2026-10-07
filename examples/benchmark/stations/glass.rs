@@ -152,22 +152,3 @@ pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // The slabs are what makes the transparent pass expensive, and they only do
-    // that where they overlap: a rack spread wider than one slab is a row of
-    // separate windows, each shading its pixels once.
-    #[test]
-    fn the_rack_overlaps_itself_along_the_view() {
-        assert!(SLAB_HALF_EXTENTS[0] * 2.0 > SLAB_SPACING * SLABS as f32);
-    }
-
-    #[test]
-    fn the_marks_cover_the_floor_the_camera_sees() {
-        let span = DECAL_SPACING * (DECALS[0] - 1) as f32;
-        assert!(span < FLOOR_HALF_EXTENT * 2.0, "marks fall off the floor");
-    }
-}

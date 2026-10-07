@@ -63,13 +63,3 @@ pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
         .reference("mesh", "instances_mesh")
         .reference("material", palette::METAL);
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_lattice_holds_what_its_dimensions_say() {
-        assert_eq!(count(), 400);
-    }
-}

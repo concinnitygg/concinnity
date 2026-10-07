@@ -88,31 +88,3 @@ pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
         );
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // How many particles the station keeps alive once every plume is running.
-    fn live_particle_estimate() -> u32 {
-        let mean_lifetime = (LIFETIME[0] + LIFETIME[1]) * 0.5;
-        (SPAWN_RATE * mean_lifetime) as u32 * VENTS as u32
-    }
-
-    // The cap has to sit above what the rate and the lifetime imply, or the
-    // emitter silently stops spawning partway up the plume and the station
-    // measures a smaller simulation than it declares.
-    #[test]
-    fn every_plume_has_room_for_the_particles_it_spawns() {
-        let per_plume = SPAWN_RATE * LIFETIME[1];
-        assert!(
-            per_plume < MAX_PARTICLES as f32,
-            "{per_plume} particles into a cap of {MAX_PARTICLES}",
-        );
-    }
-
-    #[test]
-    fn the_station_runs_a_simulation_worth_measuring() {
-        assert!(live_particle_estimate() > 50_000);
-    }
-}

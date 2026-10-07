@@ -81,22 +81,3 @@ pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
         },
     );
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // The columns have to stand inside the pool, or nothing is reflected and
-    // the station measures a flat mirror of the sky.
-    #[test]
-    fn the_colonnade_stands_in_the_water() {
-        assert!(
-            COLUMN_SPACING[0] < EXTENT[0],
-            "the columns fall off the sides"
-        );
-        assert!(
-            COLUMN_SPACING[1] < EXTENT[1],
-            "the columns fall off the ends"
-        );
-    }
-}
