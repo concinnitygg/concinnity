@@ -168,8 +168,8 @@ pub(super) fn build_screen_space(
     let post_support = crate::vulkan::post::PostSupport::new(device, frames)?;
     let init_post_device = shared_post_device(gpu, &post_support, scene, descriptors);
 
-    // SSAO (GTAO): the shared kernel + blur. Its blurred output is the transient
-    // pool's per-frame `ao_output`, read per frame.
+    // SSAO (GTAO): the shared depth copy, kernel + blur. Its blurred output is
+    // the transient pool's per-frame `ao_output`, read per frame.
     let ssao = match post.ssao {
         Some(settings) => Some(SsaoResources::new(
             &init_post_device,

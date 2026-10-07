@@ -130,8 +130,8 @@ pub struct FrameGraphInputs {
     /// `true` when SSAO should run; matches
     /// `self.ssao_settings.is_some()`. The graph adds an `SsaoBlur`
     /// render pass that dispatches the bundled `encode_ssao` (which
-    /// internally encodes SsaoPrepass + SsaoKernel + SsaoBlur). SsaoBlur
-    /// writes `ao_output`; Main reads it. SsaoPrepass + SsaoKernel
+    /// internally encodes SsaoDepth + SsaoKernel + SsaoBlur). SsaoBlur
+    /// writes `ao_output`; Main reads it. SsaoDepth + SsaoKernel
     /// stay as timing-only PassIds.
     pub ssao_enabled: bool,
     /// `true` when temporal upscaling is on (e.g. MetalFX on Metal). The
@@ -515,7 +515,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     let ssr_gbuffer_v1 = gbuffer_v1.map(|g| g.normal_depth);
 
     // SSAO bundle writes ao_output. PassId::SsaoBlur is the single
-    // graph node for the entire encode_ssao bundle; SsaoPrepass +
+    // graph node for the entire encode_ssao bundle; SsaoDepth +
     // SsaoKernel keep their per-pass timing slots via inline
     // `pass_timing.attach_render` calls inside encode_ssao but they're
     // not graph nodes (the executor rejects them if mis-added).

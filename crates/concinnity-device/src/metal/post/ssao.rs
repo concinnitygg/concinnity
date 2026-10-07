@@ -1,9 +1,10 @@
 //! Metal's share of SSAO (GTAO): the settings, the white fallback the forward
 //! pass binds while it is off, and where the kernel's inputs come from this
-//! frame. The kernel and blur -- their pipelines, the raw occlusion between them
-//! and both draws -- are written once in `concinnity_core::render::post::ssao`
-//! and reach Metal through `MtlPostDevice`. The depth + normal they read come
-//! from the unified G-buffer pre-pass.
+//! frame. The depth copy, kernel and blur -- their pipelines, the depth copy and
+//! raw occlusion they own and every draw -- are written once in
+//! `concinnity_core::render::post::ssao` and reach Metal through
+//! `MtlPostDevice`. The depth + normal they read come from the unified G-buffer
+//! pre-pass.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types;
@@ -15,7 +16,8 @@ use objc2::runtime::ProtocolObject;
 use crate::metal::context::MtlContext;
 use crate::metal::post::post_device::{MtlPostPipeline, MtlPostTarget};
 
-// The shared kernel and blur, holding Metal's own pipeline and target handles.
+// The shared depth copy, kernel and blur, holding Metal's own pipeline and
+// target handles.
 pub(crate) type MtlSsaoPass = SsaoPass<MtlPostPipeline, MtlPostTarget>;
 
 // All SSAO (GTAO) state grouped into one feature unit: the resolved settings,

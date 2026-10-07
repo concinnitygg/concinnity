@@ -46,8 +46,8 @@ pass_ids! {
     Cull => "cull",
     /// Directional shadow cascades and spot shadow slices.
     Shadow => "shadow",
-    /// Depth / normal prepass feeding ambient occlusion.
-    SsaoPrepass => "ssao_prepass",
+    /// The single-channel depth copy ambient occlusion samples.
+    SsaoDepth => "ssao_depth",
     /// The ambient-occlusion gather.
     SsaoKernel => "ssao_kernel",
     /// Bilateral blur over the occlusion buffer.

@@ -20,8 +20,8 @@
 use crate::render::shader_programs::ShaderProgram;
 use crate::render::shader_programs::shared::{
     BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, REFLECTION_BLUR, REFLECTION_COMPOSITE,
-    SSAO_BLUR, SSAO_KERNEL, SSGI_COMPOSITE, SSGI_DEPTH, SSGI_REDUCE, SSGI_TRACE, SSR_RESOLVE,
-    TAA_FRAG,
+    SSAO_BLUR, SSAO_DEPTH, SSAO_KERNEL, SSGI_COMPOSITE, SSGI_DEPTH, SSGI_REDUCE, SSGI_TRACE,
+    SSR_RESOLVE, TAA_FRAG,
 };
 
 /// A fullscreen post-pass fragment program. The vertex stage is always
@@ -61,6 +61,9 @@ pub enum PostProgram {
     /// `reflection_composite_fragment` from `reflection.hlsl`: the reflection
     /// blended over the scene by roughness.
     ReflectionComposite,
+    /// `ssao_depth_fragment` from `ssao.hlsl`: the G-buffer's linear depth
+    /// copied into the single channel the ambient-occlusion passes sample.
+    SsaoDepth,
     /// `ssao_kernel_fragment` from `ssao.hlsl`: the ambient-occlusion horizon
     /// search.
     SsaoKernel,
@@ -89,7 +92,7 @@ pub struct PostProgramBindings {
 
 impl PostProgram {
     /// Every post program, in declaration order.
-    pub const ALL: [PostProgram; 13] = [
+    pub const ALL: [PostProgram; 14] = [
         PostProgram::TaaResolve,
         PostProgram::SsrResolve,
         PostProgram::SsgiDepth,
@@ -101,6 +104,7 @@ impl PostProgram {
         PostProgram::BloomUpsample,
         PostProgram::ReflectionBlur,
         PostProgram::ReflectionComposite,
+        PostProgram::SsaoDepth,
         PostProgram::SsaoKernel,
         PostProgram::SsaoBlur,
     ];
@@ -120,6 +124,7 @@ impl PostProgram {
             PostProgram::BloomUpsample => "bloom upsample",
             PostProgram::ReflectionBlur => "reflection blur",
             PostProgram::ReflectionComposite => "reflection composite",
+            PostProgram::SsaoDepth => "ssao depth",
             PostProgram::SsaoKernel => "ssao kernel",
             PostProgram::SsaoBlur => "ssao blur",
         }
@@ -139,6 +144,7 @@ impl PostProgram {
             PostProgram::BloomUpsample => &BLOOM_UPSAMPLE,
             PostProgram::ReflectionBlur => &REFLECTION_BLUR,
             PostProgram::ReflectionComposite => &REFLECTION_COMPOSITE,
+            PostProgram::SsaoDepth => &SSAO_DEPTH,
             PostProgram::SsaoKernel => &SSAO_KERNEL,
             PostProgram::SsaoBlur => &SSAO_BLUR,
         }
@@ -180,12 +186,14 @@ impl PostProgram {
             PostProgram::ReflectionBlur => sources(2, 0),
             // reflection, scene, normal+depth, roughness, blur.
             PostProgram::ReflectionComposite => sources(5, 0),
-            // The G-buffer; `SsaoParams`.
+            // The G-buffer; no constants.
+            PostProgram::SsaoDepth => sources(1, 0),
+            // G-buffer, depth copy; `SsaoParams`.
             PostProgram::SsaoKernel => sources(
-                1,
+                2,
                 core::mem::size_of::<crate::gfx::render_types::SsaoParams>(),
             ),
-            // raw occlusion, G-buffer; no constants.
+            // raw occlusion, depth copy; no constants.
             PostProgram::SsaoBlur => sources(2, 0),
         }
     }
@@ -472,6 +480,7 @@ mod tests {
             (PostProgram::BloomUpsample, 0),
             (PostProgram::ReflectionBlur, 0),
             (PostProgram::ReflectionComposite, 0),
+            (PostProgram::SsaoDepth, 0),
             (PostProgram::SsaoKernel, size_of::<SsaoParams>()),
             (PostProgram::SsaoBlur, 0),
         ];

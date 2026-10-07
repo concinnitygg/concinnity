@@ -78,10 +78,10 @@ impl DxContext {
     // Covers every runtime-bundled PSO: composite, text, bloom (prefilter
     // / downsample / upsample), GPU-cull compute, auto-exposure (build +
     // average), projected-decal, transparent (glass + water), volumetric-fog, the
-    // sky, the G-buffer pre-pass with the sky's motion behind it, SSAO (kernel,
-    // blur), SSR (resolve), the reflection composite (blur, composite), TAA
-    // (resolve), and bucket 0 of the GPU-driven main
-    // pass when it is live (rebuilt from the world default Shader's pair where
+    // sky, the G-buffer pre-pass with the sky's motion behind it, SSAO (depth
+    // copy, kernel, blur), SSR (resolve), the reflection composite (blur,
+    // composite), TAA (resolve), and bucket 0 of the GPU-driven main pass when
+    // it is live (rebuilt from the world default Shader's pair where
     // the world declares one). The shadow PSO is out of scope here.
     pub(super) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {

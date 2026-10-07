@@ -2,19 +2,11 @@
 //! steps, so no system pays the sleep inside its own step time and the cap
 //! applies whichever systems the world built. The cap value comes from the
 //! `FrameRateCap` resource (published by GraphicsSystem from GraphicsConfig +
-//! the live settings row); the menu clamp reads the previous frame's
-//! `MenuActive` resource, which is exactly the one-frame-lagged view the
-//! in-step pacer used to read from its own field.
+//! the live settings row), and is the only limit the pacer applies.
 
 use concinnity_core::ecs::FrameRateCap;
-use concinnity_core::ecs::MenuActive;
 use concinnity_core::ecs::World;
 use std::time::{Duration, Instant};
-
-// Frame-rate ceiling while a menu view is open. A paused menu does not benefit
-// from a high refresh rate, and the world render is skipped behind an opaque
-// menu anyway, so the pacer holds the loop at this rate (clamping down only).
-const MENU_FPS_CAP: u32 = 60;
 
 // Frame-pacing math for the FPS cap, split from the sleep so the drift / no-burst
 // logic is unit-testable. Given the current time, the previously scheduled
@@ -29,26 +21,13 @@ fn pace_deadline(now: Instant, prev: Option<Instant>, target: Duration) -> (Inst
     (wait_until, wait_until + target)
 }
 
-// The cap to pace this frame at: the user cap, clamped down to `MENU_FPS_CAP`
-// while a menu view is open (never up -- a user cap already below it stands).
-// `0` = unlimited.
-fn effective_cap(user_cap: u32, menu_active: bool) -> u32 {
-    if !menu_active {
-        return user_cap;
-    }
-    match user_cap {
-        0 => MENU_FPS_CAP,
-        cap => cap.min(MENU_FPS_CAP),
-    }
-}
-
 // Holds each frame's start to the target interval so the loop runs at most
 // `FrameRateCap` frames a second. One per `Runtime`, driven once per world step.
 #[derive(Debug, Default)]
 pub(crate) struct FramePacer {
     // The pacer's running target for the next frame's start.
     deadline: Option<Instant>,
-    // The user cap the deadline was accumulated under. A cap change re-bases
+    // The cap the deadline was accumulated under. A cap change re-bases
     // the pacer (clears the deadline) so switching caps never leaves one stale
     // long wait, mirroring the old in-step rebase on the settings change.
     last_cap: u32,
@@ -58,15 +37,11 @@ impl FramePacer {
     // Pace the upcoming world step from the world's published pacing state.
     // No-op (and deadline cleared) while no cap is published or the cap is 0.
     pub(crate) fn pace(&mut self, world: &World) {
-        let user_cap = world.resource::<FrameRateCap>().map(|c| c.0).unwrap_or(0);
-        if user_cap != self.last_cap {
+        let cap = world.resource::<FrameRateCap>().map(|c| c.0).unwrap_or(0);
+        if cap != self.last_cap {
             self.deadline = None;
-            self.last_cap = user_cap;
+            self.last_cap = cap;
         }
-        // The menu state published on the previous step; a menu opening this
-        // step is clamped one frame later, which is imperceptible.
-        let menu_active = world.resource::<MenuActive>().map(|m| m.0).unwrap_or(false);
-        let cap = effective_cap(user_cap, menu_active);
         if cap == 0 {
             self.deadline = None;
             return;
@@ -125,15 +100,19 @@ mod tests {
         assert_eq!(next, now + target);
     }
 
-    // An open menu clamps the cap down to MENU_FPS_CAP; a user cap already
-    // below the clamp stands, and 0 (unlimited) becomes the clamp itself.
+    // An open menu runs at the published cap like any other frame: with no
+    // cap it stays unpaced.
     #[test]
-    fn menu_clamps_the_cap_down_only() {
-        assert_eq!(effective_cap(0, false), 0);
-        assert_eq!(effective_cap(144, false), 144);
-        assert_eq!(effective_cap(0, true), MENU_FPS_CAP);
-        assert_eq!(effective_cap(144, true), MENU_FPS_CAP);
-        assert_eq!(effective_cap(30, true), 30);
+    fn an_open_menu_follows_the_published_cap() {
+        let mut world = World::new();
+        world.insert_resource(concinnity_core::ecs::MenuActive(true));
+        world.insert_resource(FrameRateCap(0));
+        let mut pacer = FramePacer::default();
+        pacer.pace(&world);
+        assert!(pacer.deadline.is_none(), "an uncapped menu is not paced");
+        world.insert_resource(FrameRateCap(1000));
+        pacer.pace(&world);
+        assert_eq!(pacer.last_cap, 1000, "the menu paces at the cap itself");
     }
 
     // A cap change re-bases the pacer: the accumulated deadline is dropped so

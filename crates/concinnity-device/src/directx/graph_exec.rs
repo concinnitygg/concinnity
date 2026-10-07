@@ -33,9 +33,9 @@
 //!
 //! Bundled passes:
 //!   * `PassId::SsaoBlur` dispatches the bundled `encode_ssao` (which
-//!     internally encodes the GTAO kernel + depth-aware blur).
-//!     `PassId::SsaoPrepass` / `PassId::SsaoKernel` stay timing-only and the
-//!     executor rejects them as graph nodes.
+//!     internally encodes the GTAO depth copy, kernel and depth-aware
+//!     blur). `PassId::SsaoDepth` / `PassId::SsaoKernel` stay timing-only and
+//!     the executor rejects them as graph nodes.
 //!
 //! `PassId::ParticlesSim` and `PassId::ParticlesDraw` are two nodes with their
 //! own command lists: the sim integrates every live emitter's pool and the draw
@@ -1172,10 +1172,10 @@ impl DxContext {
             PassId::SsaoBlur => {
                 self.encode_ssao(cmd, params.frame_idx, params.fov_y_radians, params.aspect)?;
             }
-            PassId::SsaoPrepass | PassId::SsaoKernel => {
+            PassId::SsaoDepth | PassId::SsaoKernel => {
                 return Err(RenderError::Other(format!(
                     "graph executor (directx): pass {} is bundled inside SsaoBlur \
-                     (encode_ssao encodes the SSAO kernel and blur); it \
+                     (encode_ssao encodes the SSAO depth copy, kernel and blur); it \
                      should not appear as its own graph node",
                     pass_id.name()
                 )));

@@ -1325,9 +1325,8 @@ catch-up burst of unpaced frames.
 A cap change clears the deadline so switching caps never leaves one stale long
 wait.
 
-While a menu view is open the pacer clamps to 60 FPS — never up, so a user cap
-already below it stands. A paused menu does not benefit from a high refresh rate,
-and the world render is skipped behind an opaque menu anyway.
+The cap is the only limit the pacer applies: a menu view runs at it like any
+other frame.
 
 ---
 
@@ -2141,7 +2140,7 @@ so the list is append-only.
 | 0   | `cull`                 | compute | GPU-driven frustum and Hi-Z cull; writes the indirect draw args the main pass consumes. Under two-pass occlusion also writes a per-object status buffer. |
 | 1   | `shadow`               | render  | Cascaded shadow map render.                                                                                                                              |
 | 2   | `ssr_prepass`          | render  | Screen-space reflection G-buffer (depth, normal, roughness). Skipped when the unified pre-pass runs.                                                     |
-| 3   | `ssao_prepass`         | render  | Ambient-occlusion input. Timing slot only; encoded inside the SSAO bundle.                                                                               |
+| 3   | `ssao_depth`           | render  | Single-channel linear-depth copy the occlusion kernel and blur sample. Timing slot only; encoded inside the SSAO bundle.                                 |
 | 4   | `ssao_kernel`          | render  | Occlusion sampling. Timing slot only.                                                                                                                    |
 | 5   | `ssao_blur`            | render  | Occlusion blur. The single graph node for the whole SSAO bundle.                                                                                         |
 | 6   | `main`                 | render  | Forward geometry pass; writes HDR color, depth, and resolve.                                                                                            |

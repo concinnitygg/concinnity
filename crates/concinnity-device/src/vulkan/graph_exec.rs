@@ -27,7 +27,7 @@
 //! Bundled passes:
 //!   * `PassId::SsaoBlur` dispatches the bundled `encode_ssao` (GTAO
 //!     kernel + depth-aware blur over the unified pre-pass normal+depth).
-//!     `PassId::SsaoPrepass` / `PassId::SsaoKernel` stay timing-only and
+//!     `PassId::SsaoDepth` / `PassId::SsaoKernel` stay timing-only and
 //!     the executor rejects them as graph nodes.
 
 use ash::Device;
@@ -542,7 +542,7 @@ impl VkContext {
     // `[start, ...returned, end]` in one `vkQueueSubmit`, so submission order =
     // GPU order and every encoder's inline barrier still synchronizes against
     // the prior pass across the command-buffer boundary. A timing-only `PassId`
-    // (SsaoPrepass, SsaoKernel, ReflectionComposite) returns an error.
+    // (SsaoDepth, SsaoKernel, ReflectionComposite) returns an error.
     pub(in crate::vulkan) fn execute_graph(
         &mut self,
         graph: &CompiledGraph,
@@ -1020,17 +1020,17 @@ impl VkContext {
             }
             PassId::SsaoBlur => {
                 // The single graph node for the bundled `encode_ssao`
-                // dispatch: encodes the GTAO kernel + depth-aware blur over the
-                // unified pre-pass's normal+depth. The SsaoPrepass / SsaoKernel
-                // PassIds stay timing-only (rejected as graph nodes below) like
-                // Metal's same pattern.
+                // dispatch: encodes the GTAO depth copy, kernel + depth-aware
+                // blur over the unified pre-pass's normal+depth. The SsaoDepth /
+                // SsaoKernel PassIds stay timing-only (rejected as graph nodes
+                // below) like Metal's same pattern.
                 self.encode_ssao(cmd, params.frame_idx, params.fov_y_radians, params.aspect)?;
             }
-            PassId::SsaoPrepass | PassId::SsaoKernel => {
+            PassId::SsaoDepth | PassId::SsaoKernel => {
                 return Err(RenderError::Other(format!(
                     "graph executor (vulkan): pass {} is bundled inside SsaoBlur \
-                     (encode_ssao encodes the SSAO kernel + blur sub-passes); it \
-                     should not appear as its own graph node",
+                     (encode_ssao encodes the SSAO depth copy, kernel + blur \
+                     sub-passes); it should not appear as its own graph node",
                     pass_id.name()
                 )));
             }

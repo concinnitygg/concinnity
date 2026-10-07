@@ -18,12 +18,12 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 // Descriptor sets the shared passes may hold at once: one per target, plus one
 // per level of a target with several, plus one per pooled transient a pass
-// writes. With every pass on they hold 28: the indirect-light trace's rings and
-// depth pyramids 14, the bloom chain and its pooled top 7, the temporal
-// resolve's ring 2, the reflection composite 2, SSAO's raw and pooled
-// occlusion 2, and the reflection target 1. A pass recreating its targets
-// creates the new ones before it drops the old, so this leaves room for the
-// widest of those to overlap.
+// writes. With every pass on they hold 29: the indirect-light trace's rings and
+// depth pyramids 14, the bloom chain and its pooled top 7, SSAO's depth copy
+// and its raw and pooled occlusion 3, the temporal resolve's ring 2, the
+// reflection composite 2, and the reflection target 1. A pass recreating its
+// targets creates the new ones before it drops the old, so this leaves room for
+// the widest of those to overlap.
 pub(in crate::directx) const POST_TARGET_SLOTS: usize = 48;
 
 // The occupancy mask is one bit per slot.

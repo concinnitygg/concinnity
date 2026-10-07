@@ -806,9 +806,9 @@ impl CompositeParams {
 
 /// Per-frame uniform for the SSAO (GTAO) horizon-search kernel. Carries the
 /// clamped authored tunables plus the view-ray scale the kernel needs to
-/// rebuild a view-space position from the linear depth the SSAO pre-pass
-/// writes. Pushed verbatim to the SSAO kernel fragment shader, so the layout
-/// must stay in sync with the `SsaoParams` struct there. 16 bytes.
+/// rebuild a view-space position from linear depth. Pushed verbatim to the
+/// SSAO kernel fragment shader, so the layout must stay in sync with the
+/// `SsaoParams` struct there. 16 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct SsaoParams {
@@ -2063,6 +2063,15 @@ mod tests {
         assert_eq!(offset_of!(SsrParams, inv_view), 32);
         assert_eq!(offset_of!(SsrParams, sky_rot), 96);
         assert_eq!(size_of::<SsrParams>() % 16, 0);
+    }
+
+    #[test]
+    fn ssao_params_layout_matches_shaders() {
+        assert_eq!(size_of::<SsaoParams>(), 16);
+        assert_eq!(offset_of!(SsaoParams, radius), 0);
+        assert_eq!(offset_of!(SsaoParams, intensity), 4);
+        assert_eq!(offset_of!(SsaoParams, tan_half_fov_y), 8);
+        assert_eq!(offset_of!(SsaoParams, aspect), 12);
     }
 
     #[test]

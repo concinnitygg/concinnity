@@ -351,6 +351,7 @@ pub(in crate::directx) fn dxgi_format(format: PixelFormat) -> DXGI_FORMAT {
         PixelFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
         PixelFormat::Rg16Float => DXGI_FORMAT_R16G16_FLOAT,
         PixelFormat::R8Unorm => DXGI_FORMAT_R8_UNORM,
+        PixelFormat::R16Float => DXGI_FORMAT_R16_FLOAT,
         PixelFormat::R32Float => DXGI_FORMAT_R32_FLOAT,
         PixelFormat::Rg32Float => DXGI_FORMAT_R32G32_FLOAT,
         PixelFormat::Depth32Float => DXGI_FORMAT_D32_FLOAT,

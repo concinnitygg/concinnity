@@ -4,7 +4,7 @@
 //! now in the graph. Composite plus Shadow, Main, Cull, AutoExposure,
 //! Bloom, Velocity, TaaResolve, SsrResolve, ParticlesSim, ParticlesDraw,
 //! Fog, Decals, GBufferPrepass, and SsaoBlur are the dispatchable PassIds.
-//! PassIds `SsaoPrepass` and `SsaoKernel` are timing-only: their per-pass
+//! PassIds `SsaoDepth` and `SsaoKernel` are timing-only: their per-pass
 //! timing slots fire from `diagnostics.pass_timing.attach_*` calls inside
 //! the bundled `encode_ssao` Rust function, but they must never appear as
 //! graph nodes (the executor rejects them with a clear error if mis-added).
@@ -706,14 +706,14 @@ impl MtlContext {
             }
             PassId::SsaoBlur => {
                 // PassId::SsaoBlur dispatches the bundled `encode_ssao` (GTAO
-                // kernel + depth-aware blur). It reads the unified G-buffer
-                // pre-pass output, so SSAO runs no geometry redraw of its own;
-                // per-pass timing for the sub-passes is wired inline inside
-                // `encode_ssao`.
+                // depth copy, kernel + depth-aware blur). It reads the unified
+                // G-buffer pre-pass output, so SSAO runs no geometry redraw of
+                // its own; per-pass timing for the sub-passes is wired inline
+                // inside `encode_ssao`.
                 let ssao_params = pass_input(params.ssao_params, PassId::SsaoBlur, "ssao_params")?;
                 self.encode_ssao(cmd_buf, ssao_params)?
             }
-            PassId::SsaoPrepass | PassId::SsaoKernel => {
+            PassId::SsaoDepth | PassId::SsaoKernel => {
                 // Bundled inside `encode_ssao` (dispatched via
                 // PassId::SsaoBlur). These PassIds keep their
                 // per-pass timing slots via inline

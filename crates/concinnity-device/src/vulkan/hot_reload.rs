@@ -62,9 +62,9 @@ impl VkContext {
     // Covers every runtime-bundled pipeline whose source lives in
     // `vulkan/shaders/`: composite, text, bloom (prefilter / downsample /
     // upsample), bindless main (when live), GPU-cull compute, auto-exposure
-    // (build + average), projected-decal, volumetric-fog, SSAO (kernel,
-    // blur), SSR (resolve), the reflection composite (blur, composite), TAA
-    // (resolve), the sky, and the G-buffer pre-pass with the sky's motion
+    // (build + average), projected-decal, volumetric-fog, SSAO (depth copy,
+    // kernel, blur), SSR (resolve), the reflection composite (blur, composite),
+    // TAA (resolve), the sky, and the G-buffer pre-pass with the sky's motion
     // behind it. The world-loaded main / shadow / instanced / skinned
     // pipelines remain out of scope; same split as DirectX. The caller
     // has already `device_wait_idle`'d so swapping pipelines out from
@@ -223,8 +223,8 @@ impl VkContext {
             })
             .transpose()?;
 
-        // SSAO (only when PostProcessConfig opted in). Rebuilds the kernel +
-        // blur.
+        // SSAO (only when PostProcessConfig opted in). Rebuilds the depth
+        // copy, kernel + blur.
         let ssao_rebuilt = rebuild_if_live!(
             self.ssao.is_some(),
             concinnity_core::render::post::ssao::build_pipelines(&self.post_device(0))

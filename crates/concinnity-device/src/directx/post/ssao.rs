@@ -1,7 +1,7 @@
 //! DirectX's share of SSAO (GTAO): the settings, the white fallback the forward
 //! pass binds while it is off, and the view of the pool's `ao_output` the blur
-//! writes. The kernel and blur -- their pipelines, the raw occlusion between
-//! them and both draws -- are written once in
+//! writes. The depth copy, kernel and blur -- their pipelines, the depth copy
+//! and raw occlusion they own and every draw -- are written once in
 //! `concinnity_core::render::post::ssao` and reach D3D12 through
 //! `DxPostDevice`. The view normal + linear depth they read come from the
 //! unified G-buffer pre-pass.

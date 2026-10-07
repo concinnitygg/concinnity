@@ -185,8 +185,8 @@ pub(super) fn build_taa(
 }
 
 // SSAO: 1x1 white fallback always populated so the main pass binds a
-// pass-through occlusion when SSAO is off. The shared kernel and blur take
-// their targets' descriptors from the post block.
+// pass-through occlusion when SSAO is off. The shared depth copy, kernel and
+// blur take their targets' descriptors from the post block.
 pub(super) fn build_ssao(
     gpu: &InitGpu<'_>,
     post_device: &DxPostDevice<'_>,

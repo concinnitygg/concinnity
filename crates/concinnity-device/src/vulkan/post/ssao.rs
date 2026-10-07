@@ -1,8 +1,8 @@
 //! Vulkan's share of SSAO (GTAO), which is the settings and where the kernel's
-//! inputs and the blur's output come from this frame. The kernel and blur --
-//! their pipelines, the raw occlusion between them and both draws -- are written
-//! once in `concinnity_core::render::post::ssao` and reach Vulkan through
-//! `VkPostDevice`. The depth + normal they read come from the unified G-buffer
+//! inputs and the blur's output come from this frame. The depth copy, kernel
+//! and blur -- their pipelines, the depth copy and raw occlusion they own and
+//! every draw -- are written once in `concinnity_core::render::post::ssao` and
+//! reach Vulkan through `VkPostDevice`. The depth + normal they read come from the unified G-buffer
 //! pre-pass.
 //!
 //! The main pass samples the blurred occlusion, the pool's `ao_output`, at set 0

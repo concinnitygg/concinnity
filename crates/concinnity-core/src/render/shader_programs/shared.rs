@@ -210,6 +210,14 @@ pub static COMPOSITE_FRAG: ShaderProgram = ShaderProgram {
     gates: &[],
     msaa: false,
 };
+/// `ssao_depth_fragment` from `ssao.hlsl`.
+pub static SSAO_DEPTH: ShaderProgram = ShaderProgram {
+    file: "ssao.hlsl",
+    entry: "ssao_depth_fragment",
+    label: "ssao_depth.hlsl",
+    gates: &["SSAO_DEPTH"],
+    msaa: false,
+};
 /// `ssao_kernel_fragment` from `ssao.hlsl`.
 pub static SSAO_KERNEL: ShaderProgram = ShaderProgram {
     file: "ssao.hlsl",
@@ -575,6 +583,7 @@ pub static ALL: &[&ShaderProgram] = &[
     &BLOOM_DOWNSAMPLE,
     &BLOOM_UPSAMPLE,
     &COMPOSITE_FRAG,
+    &SSAO_DEPTH,
     &SSAO_KERNEL,
     &SSAO_BLUR,
     &SSR_RESOLVE,

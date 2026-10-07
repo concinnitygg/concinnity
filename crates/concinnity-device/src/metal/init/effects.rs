@@ -182,7 +182,7 @@ pub(in crate::metal) fn build_taa(
     })
 }
 
-// SSAO (GTAO): the shared kernel + blur and their raw-occlusion target, built
+// SSAO (GTAO): the shared depth copy, kernel + blur and their targets, built
 // only when SSAO is on. The depth + normal the kernel reads come from the
 // unified G-buffer pre-pass, so SSAO builds no pre-pass of its own; the white
 // fallback is always present.

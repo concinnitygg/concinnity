@@ -99,7 +99,7 @@ pub(super) fn build_timestamp_resources(
     // encode, and the resolve at the end of the command list copies the whole block
     // into the persistently-mapped readback buffer. The CPU reads the previous
     // frame's block at the top of `draw_frame`, after the matching fence wait gates
-    // the GPU writes. SsaoPrepass and SsaoKernel are bundled inside their parent
+    // the GPU writes. SsaoDepth and SsaoKernel are bundled inside their parent
     // encoder, and the FogFroxel / Upscale / Transparent / Raymarch arms are no-ops
     // here, so those slots stay zero and drop out of the on-screen chip.
     let heap_desc = D3D12_QUERY_HEAP_DESC {

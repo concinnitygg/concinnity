@@ -1043,12 +1043,21 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[],
     },
+    // The depth copy reads the G-buffer by point load, so its sampler is
+    // compiled out.
+    MetalAbi {
+        program: &shared::SSAO_DEPTH,
+        slots: &[&[("gbuffer", "texture(0)")]],
+        argument_ids: &[],
+    },
     MetalAbi {
         program: &shared::SSAO_KERNEL,
         slots: &[&[
             ("params", "buffer(0)"),
             ("gbuffer", "texture(0)"),
             ("gbuffer_samp", "sampler(0)"),
+            ("depth", "texture(1)"),
+            ("depth_samp", "sampler(1)"),
         ]],
         argument_ids: &[],
     },
@@ -1059,8 +1068,8 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         slots: &[&[
             ("ao_raw", "texture(0)"),
             ("ao_raw_samp", "sampler(0)"),
-            ("gbuffer", "texture(1)"),
-            ("gbuffer_samp", "sampler(1)"),
+            ("depth", "texture(1)"),
+            ("depth_samp", "sampler(1)"),
         ]],
         argument_ids: &[],
     },

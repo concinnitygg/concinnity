@@ -441,6 +441,8 @@ pub enum PixelFormat {
     Rg16Float,
     /// 8-bit unorm single channel.
     R8Unorm,
+    /// 16-bit float single channel.
+    R16Float,
     /// 32-bit float single channel.
     R32Float,
     /// 32-bit float RG.
@@ -463,6 +465,7 @@ impl PixelFormat {
             | PixelFormat::R32Float
             | PixelFormat::Depth32Float
             | PixelFormat::BgraSwapchain => 4,
+            PixelFormat::R16Float => 2,
             PixelFormat::R8Unorm => 1,
         }
     }
@@ -684,6 +687,7 @@ mod tests {
         assert_eq!(PixelFormat::Rg32Float.bytes_per_texel(), 8);
         assert_eq!(PixelFormat::Depth32Float.bytes_per_texel(), 4);
         assert_eq!(PixelFormat::BgraSwapchain.bytes_per_texel(), 4);
+        assert_eq!(PixelFormat::R16Float.bytes_per_texel(), 2);
         assert_eq!(PixelFormat::R8Unorm.bytes_per_texel(), 1);
         assert!(PixelFormat::Depth32Float.is_depth());
         assert!(!PixelFormat::Rgba8Unorm.is_depth());
