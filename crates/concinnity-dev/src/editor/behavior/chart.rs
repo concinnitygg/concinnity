@@ -14,7 +14,6 @@ use concinnity_core::ecs::asset_id::AssetId;
 use super::graph::{Card, CardKind, Chart};
 use super::panel::CHAR_W;
 use super::pulse;
-use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 
@@ -25,76 +24,91 @@ pub(crate) const CARD_POOL: usize = 32;
 const SEG_POOL: usize = 96;
 const WIRE_LABEL_POOL: usize = 32;
 
-// The id family a chart draws into. Two panels draw charts, and both writing
-// one family would leave them fighting over every element whenever both are
-// open, so the family comes from the panel doing the drawing.
+// The chart's elements, numbered from 0: the wire segments under the cards,
+// each card's breakpoint dot over it, and the width indicator on top.
+mod slots {
+    use super::{CARD_POOL, SEG_POOL, WIRE_LABEL_POOL};
+
+    crate::editor::hud_ids::hud_ids! {
+        base: 0;
+        sprites: [
+            pub(super) segment[SEG_POOL],
+            pub(super) card_bg[CARD_POOL],
+            pub(super) card_break[CARD_POOL],
+            pub(super) TRACK,
+            pub(super) THUMB,
+        ];
+        labels: [
+            pub(super) HINT,
+            pub(super) wire_label[WIRE_LABEL_POOL],
+            pub(super) card_title[CARD_POOL],
+            pub(super) card_detail[CARD_POOL],
+        ];
+    }
+}
+
+// The ids a chart draws into: its slots, shifted into a block the drawing panel
+// reserves. Two panels draw charts, and both writing one family would leave
+// them fighting over every element whenever both are open.
 #[derive(Clone, Copy)]
 pub(crate) struct ChartIds {
     base: u32,
 }
 
 impl ChartIds {
-    pub(crate) const fn of(key: PanelKey) -> Self {
-        Self {
-            base: registry::base(key),
-        }
+    pub(crate) const SPAN: usize = slots::IDS_SPAN;
+
+    pub(crate) const fn new(base: u32) -> Self {
+        Self { base }
     }
 
-    const fn at(self, offset: u32) -> AssetId {
-        AssetId(self.base + offset)
+    const fn at(self, slot: AssetId) -> AssetId {
+        AssetId(self.base + slot.0)
     }
 
     pub(crate) const fn hint(self) -> AssetId {
-        self.at(0x1F0)
+        self.at(slots::HINT)
     }
 
     // The width indicator along the foot of the canvas.
     const fn track(self) -> AssetId {
-        self.at(0x1F1)
+        self.at(slots::TRACK)
     }
 
     const fn thumb(self) -> AssetId {
-        self.at(0x1F2)
+        self.at(slots::THUMB)
     }
 
     pub(crate) const fn card_bg(self, i: usize) -> AssetId {
-        self.at(0x200 + i as u32)
+        self.at(slots::card_bg(i))
     }
 
     pub(crate) const fn card_title(self, i: usize) -> AssetId {
-        self.at(0x240 + i as u32)
+        self.at(slots::card_title(i))
     }
 
     pub(crate) const fn card_detail(self, i: usize) -> AssetId {
-        self.at(0x280 + i as u32)
+        self.at(slots::card_detail(i))
     }
 
     pub(crate) const fn wire_label(self, i: usize) -> AssetId {
-        self.at(0x2C0 + i as u32)
+        self.at(slots::wire_label(i))
     }
 
     pub(crate) const fn segment(self, i: usize) -> AssetId {
-        self.at(0x300 + i as u32)
+        self.at(slots::segment(i))
     }
 
     pub(crate) const fn card_break(self, i: usize) -> AssetId {
-        self.at(0x360 + i as u32)
+        self.at(slots::card_break(i))
     }
 
-    pub(crate) fn all_sprite_ids(self) -> Vec<AssetId> {
-        let mut ids: Vec<AssetId> = (0..SEG_POOL).map(|i| self.segment(i)).collect();
-        ids.extend((0..CARD_POOL).map(|i| self.card_bg(i)));
-        ids.extend((0..CARD_POOL).map(|i| self.card_break(i)));
-        ids.extend([self.track(), self.thumb()]);
-        ids
+    pub(crate) fn sprite_ids(self) -> Vec<AssetId> {
+        slots::ids().sprites.iter().map(|&id| self.at(id)).collect()
     }
 
-    pub(crate) fn all_label_ids(self) -> Vec<AssetId> {
-        let mut ids = vec![self.hint()];
-        ids.extend((0..WIRE_LABEL_POOL).map(|i| self.wire_label(i)));
-        ids.extend((0..CARD_POOL).map(|i| self.card_title(i)));
-        ids.extend((0..CARD_POOL).map(|i| self.card_detail(i)));
-        ids
+    pub(crate) fn label_ids(self) -> Vec<AssetId> {
+        slots::ids().labels.iter().map(|&id| self.at(id)).collect()
     }
 }
 
@@ -527,7 +541,7 @@ fn layout_indicator(world: &mut World, view: &ChartView, band: [f32; 4]) {
 }
 
 pub(crate) fn hide_all(world: &mut World, ids: ChartIds) {
-    widget::hide_all(world, &ids.all_sprite_ids(), &ids.all_label_ids(), &[]);
+    widget::hide_all(world, &ids.sprite_ids(), &ids.label_ids(), &[]);
 }
 
 #[cfg(test)]
@@ -537,12 +551,12 @@ mod tests {
     use concinnity_core::components::{Sprite, TextLabel};
     use serde_json::json;
 
-    // Any panel's family will do here: what the tests check is what is drawn,
-    // not which ids it lands in (`id_families_are_disjoint` holds that).
-    const IDS: ChartIds = ChartIds::of(PanelKey::Behavior);
+    // Any base will do here: what the tests check is what is drawn, not which
+    // ids it lands in (`id_families_are_disjoint` holds that).
+    const IDS: ChartIds = ChartIds::new(0);
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&IDS.all_sprite_ids(), &IDS.all_label_ids(), &[])
+        crate::test_support::injected_world(&IDS.sprite_ids(), &IDS.label_ids(), &[])
     }
 
     fn branching() -> Chart {

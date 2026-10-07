@@ -12,42 +12,49 @@
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
 use super::asset_list::{self, ROW_H};
-use super::registry::{self, PanelKey};
+use super::registry::PanelKey;
 use super::shader_diagnostics::Tone;
 use super::shader_list::{MenuItem, Row, RowKind};
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
-use crate::editor::widget_menu::{self, MenuIds};
+use crate::editor::widget_menu::{self, MAX_ITEMS, MenuIds};
 
-const BASE: u32 = registry::base(PanelKey::Shaders);
-pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-const TITLE_LABEL: AssetId = AssetId(BASE + 1);
-const CLOSE_BG: AssetId = AssetId(BASE + 2);
-const CLOSE_LABEL: AssetId = AssetId(BASE + 3);
-const LIST_TRACK: AssetId = AssetId(BASE + 4);
-const LIST_THUMB: AssetId = AssetId(BASE + 5);
-const MENU: MenuIds = MenuIds {
-    dot_bg: AssetId(BASE + 6),
-    dots: [AssetId(BASE + 7), AssetId(BASE + 8), AssetId(BASE + 9)],
-    bg: AssetId(BASE + 10),
-    item_bgs: [AssetId(BASE + 11), AssetId(BASE + 12), AssetId(BASE + 15)],
-    item_labels: [AssetId(BASE + 13), AssetId(BASE + 14), AssetId(BASE + 16)],
-};
-
-// The row pools sit above the chrome ids, one sub-range per element.
 const POOL_MAX: usize = 32;
-fn row_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x40 + i as u32)
+
+// The panel, the row highlights, the scrollbar over them, then a row's dots and
+// its menu over everything.
+hud_ids! {
+    base: panel_base(PanelKey::Shaders);
+    sprites: [
+        pub(crate) PANEL_BG,
+        CLOSE_BG,
+        row_bg[POOL_MAX],
+        LIST_TRACK,
+        LIST_THUMB,
+        MENU_DOT_BG,
+        menu_dot[3],
+        MENU_BG,
+        menu_item_bg[MAX_ITEMS],
+    ];
+    labels: [
+        TITLE_LABEL,
+        CLOSE_LABEL,
+        row_label[POOL_MAX],
+        badge_label[POOL_MAX],
+        menu_item_label[MAX_ITEMS],
+    ];
 }
-fn row_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x80 + i as u32)
-}
-fn badge_label(i: usize) -> AssetId {
-    AssetId(BASE + 0xC0 + i as u32)
-}
+
+const MENU: MenuIds = MenuIds {
+    dot_bg: MENU_DOT_BG,
+    dots: [menu_dot(0), menu_dot(1), menu_dot(2)],
+    bg: MENU_BG,
+    item_bgs: [menu_item_bg(0), menu_item_bg(1), menu_item_bg(2)],
+    item_labels: [menu_item_label(0), menu_item_label(1), menu_item_label(2)],
+};
 
 // The default (and minimum) width; the user can widen the panel past this.
 const SHADERS_W: f32 = 400.0;
@@ -206,7 +213,7 @@ pub(crate) fn hit_test(
 
 // Position + show the panel at origin `o`, effective size `s`, or hide it all.
 pub(crate) fn place(world: &mut World, view: Option<&ShadersView>, o: [f32; 2], s: [f32; 2]) {
-    hide_all(world);
+    ids().hide(world);
     let Some(view) = view else {
         return;
     };
@@ -344,36 +351,15 @@ fn place_row(world: &mut World, slot: usize, row: &Row, rect: [f32; 4], mouse: [
     }
 }
 
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
-}
-
-// Every sprite id in draw order: the panel, the row highlights, the scrollbar
-// over them, then a row's dots and its menu over everything.
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, CLOSE_BG];
-    ids.extend((0..POOL_MAX).map(row_bg));
-    ids.extend([LIST_TRACK, LIST_THUMB]);
-    ids.extend(MENU.sprites());
-    ids
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![TITLE_LABEL, CLOSE_LABEL];
-    ids.extend((0..POOL_MAX).map(row_label));
-    ids.extend((0..POOL_MAX).map(badge_label));
-    ids.extend(MENU.labels());
-    ids
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::editor::panels::shader_source::SourceKey;
-    use concinnity_core::components::{ShaderStage, Sprite, TextLabel};
+    use concinnity_core::components::{ShaderStage, TextLabel};
+    use concinnity_core::ecs::asset_id::AssetId;
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])
+        ids().test_world()
     }
 
     fn row(kind: RowKind, text: &str, badge: Option<&str>) -> Row {
@@ -548,21 +534,5 @@ mod tests {
         assert_eq!(size(DEFAULT_ROWS + 5), size(DEFAULT_ROWS));
         assert_eq!(rows_for_height(max_size(POOL_MAX + 10)[1]), POOL_MAX);
         assert_eq!(rows_for_height(size(4)[1]), 4);
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let rows = rows();
-        let mut world = injected_world();
-        let view = ShadersView {
-            rows: &rows,
-            scroll: 0,
-            mouse: [0.0, 0.0],
-            menu: None,
-        };
-        place(&mut world, Some(&view), [20.0, 20.0], size(rows.len()));
-        place(&mut world, None, [0.0, 0.0], size(1));
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
     }
 }

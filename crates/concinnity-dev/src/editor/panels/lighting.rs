@@ -71,8 +71,14 @@ pub(crate) const SECTIONS: &[Section] = &[
 
 // The total binding count across every section: the size of the panel's control
 // pools, and the global index space (`binding(i)`).
-pub(crate) fn binding_count() -> usize {
-    SECTIONS.iter().map(|s| s.fields.len()).sum()
+pub(crate) const fn binding_count() -> usize {
+    let mut count = 0;
+    let mut s = 0;
+    while s < SECTIONS.len() {
+        count += SECTIONS[s].fields.len();
+        s += 1;
+    }
+    count
 }
 
 // Binding `i` as `(section index, arg path, row caption)`.

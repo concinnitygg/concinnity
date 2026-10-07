@@ -49,9 +49,9 @@ fn open_every_panel(h: &mut EditorHook, world: &mut World) {
         }
     }
     h.form.selected_type = Some("Sprite".to_string());
-    h.view_open = true;
-    h.open_template = Some(0);
-    h.palette.open = true;
+    h.open[PanelKey::View] = true;
+    h.templates.detail = Some(0);
+    h.open[PanelKey::Palette] = true;
     h.shaders.source = Some(SourceState::new(
         SourceKey::shader("lit", ShaderStage::Fragment),
         "/cn-none/lit.hlsl".to_string(),
@@ -62,19 +62,20 @@ fn open_every_panel(h: &mut EditorHook, world: &mut World) {
 // Every declared element of `p`, forced visible so a `hide` that misses one is
 // visible as a leftover rather than passing on an already-blank world.
 fn show_every_element(p: &dyn Panel, world: &mut World) {
-    for id in p.sprite_ids() {
+    let ids = p.ids();
+    for &id in &ids.sprites {
         widget::set_sprite_visible(world, id, true);
     }
-    for id in p.label_ids() {
+    for &id in ids.labels.iter().chain(&ids.code_labels) {
         widget::set_label_visible(world, id, true);
     }
-    for (id, _) in p.field_ids() {
+    for id in ids.field_ids() {
         widget::show_field(world, id, [0.0, 0.0, 10.0, 10.0], false);
     }
 }
 
 fn visible_sprites(p: &dyn Panel, world: &World) -> Vec<AssetId> {
-    let ids = p.sprite_ids();
+    let ids = &p.ids().sprites;
     world
         .join2::<Sprite, concinnity_core::components::Identity>()
         .filter(|(_, s, identity)| s.visible && ids.contains(&identity.id()))
@@ -93,19 +94,20 @@ fn hide_blanks_every_declared_element() {
         show_every_element(p, &mut world);
         p.hide(&mut world);
 
-        for id in p.sprite_ids() {
+        let ids = p.ids();
+        for &id in &ids.sprites {
             let s = world
                 .get_by_id::<Sprite>(id)
                 .unwrap_or_else(|| panic!("{key:?} declares sprite {id:?} but injection has none"));
             assert!(!s.visible, "{key:?} left sprite {id:?} visible after hide");
         }
-        for id in p.label_ids() {
+        for &id in ids.labels.iter().chain(&ids.code_labels) {
             let l = world
                 .get_by_id::<TextLabel>(id)
                 .unwrap_or_else(|| panic!("{key:?} declares label {id:?} but injection has none"));
             assert!(!l.visible, "{key:?} left label {id:?} visible after hide");
         }
-        for (id, _) in p.field_ids() {
+        for id in ids.field_ids() {
             let t = world
                 .get_by_id::<TextInput>(id)
                 .unwrap_or_else(|| panic!("{key:?} declares field {id:?} but injection has none"));
@@ -144,14 +146,14 @@ fn effective_size_clamps_a_stored_override() {
         let d = h.default_size(key);
         let max = registry::panel(key).max_size(&h);
 
-        h.sizes[key.index()] = Some([1.0, 1.0]);
+        h.sizes[key] = Some([1.0, 1.0]);
         assert_eq!(
             h.effective_size(key),
             d,
             "{key:?} let an override shrink it below its default"
         );
 
-        h.sizes[key.index()] = Some([1.0e6, 1.0e6]);
+        h.sizes[key] = Some([1.0e6, 1.0e6]);
         let grown = h.effective_size(key);
         assert!(
             grown[0] >= d[0] && grown[1] >= d[1],
@@ -322,11 +324,9 @@ fn overlay_ids_are_declared_elements() {
     h.form.field_dropdown = None;
     for key in PanelKey::ALL {
         let p = registry::panel(key);
-        let declared = p.sprite_ids();
-        let labels = p.label_ids();
         for id in p.overlay_ids(&h) {
             assert!(
-                declared.contains(&id) || labels.contains(&id),
+                p.ids().all().any(|declared| declared == id),
                 "{key:?} overlay id {id:?} is not among its injected elements"
             );
         }
@@ -340,21 +340,27 @@ fn view_button_and_view_rows_toggle_the_panels() {
     let mut h = hook(Vec::new());
     let mut world = World::new();
     h.apply_top(HudAction::ToggleView, &mut world);
-    assert!(h.view_open, "the View button shows the View panel");
+    assert!(
+        h.open[PanelKey::View],
+        "the View button shows the View panel"
+    );
     h.apply_top(HudAction::ToggleView, &mut world);
-    assert!(!h.view_open, "a second click hides it");
+    assert!(!h.open[PanelKey::View], "a second click hides it");
     // Row 0 -> Assets, row 1 -> Preview, row 2 -> Templates.
     h.toggle_view_row(0, &mut world);
-    assert!(h.panel_open, "row 0 shows the Assets panel");
+    assert!(h.open[PanelKey::Assets], "row 0 shows the Assets panel");
     h.toggle_view_row(1, &mut world);
     assert!(
-        !h.preview_open,
+        !h.open[PanelKey::Preview],
         "row 1 hides the (default-shown) Preview panel"
     );
     h.toggle_view_row(2, &mut world);
-    assert!(h.templates_open, "row 2 shows the Templates panel");
     assert!(
-        h.panel_open,
+        h.open[PanelKey::Templates],
+        "row 2 shows the Templates panel"
+    );
+    assert!(
+        h.open[PanelKey::Assets],
         "Assets stayed shown -- panels are independent"
     );
 }
@@ -365,7 +371,11 @@ fn view_button_and_view_rows_toggle_the_panels() {
 fn template_pick_opens_detail_then_apply_adds_idempotently() {
     let mut h = hook(Vec::new());
     h.open_template_detail(0);
-    assert_eq!(h.open_template, Some(0), "the detail panel opens on pick");
+    assert_eq!(
+        h.templates.detail,
+        Some(0),
+        "the detail panel opens on pick"
+    );
     assert!(h.entries.is_empty(), "picking adds nothing on its own");
 
     h.apply_template_detail(TemplateAction::Apply);
@@ -373,7 +383,7 @@ fn template_pick_opens_detail_then_apply_adds_idempotently() {
         .assets()
         .len();
     assert_eq!(h.entries.len(), first, "Apply adds all template entries");
-    assert_eq!(h.open_template, None, "Apply closes the detail panel");
+    assert_eq!(h.templates.detail, None, "Apply closes the detail panel");
 
     // Re-open and Apply again: no duplicate entries.
     h.open_template_detail(0);
@@ -402,7 +412,7 @@ fn template_detail_rows_and_close() {
         "grouped under type headers"
     );
     h.apply_template_detail(TemplateAction::Close);
-    assert_eq!(h.open_template, None);
+    assert_eq!(h.templates.detail, None);
     assert!(h.entries.is_empty(), "closing adds nothing");
 }
 
@@ -491,7 +501,7 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
     );
     h.tick(&mut world);
     assert!(
-        h.view_open && vis(&world, view::PANEL_BG),
+        h.open[PanelKey::View] && vis(&world, view::PANEL_BG),
         "View panel opened"
     );
     // Its "Templates" row (index 2) is laid out; grab its rect to click it.
@@ -510,7 +520,10 @@ fn tick_view_button_opens_view_then_a_row_opens_templates() {
         },
     );
     h.tick(&mut world);
-    assert!(h.templates_open, "the Templates row toggled the panel on");
+    assert!(
+        h.open[PanelKey::Templates],
+        "the Templates row toggled the panel on"
+    );
     assert!(vis(&world, template::PANEL_BG), "Templates panel shown");
 }
 
@@ -533,7 +546,7 @@ fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
     let vp = [1280.0, 720.0];
     let mut h = hook(Vec::new());
     // Start with the Templates list already open.
-    h.templates_open = true;
+    h.open[PanelKey::Templates] = true;
     world.add_component(FrameInput {
         viewport: vp,
         ..Default::default()
@@ -558,7 +571,11 @@ fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
         },
     );
     h.tick(&mut world);
-    assert_eq!(h.open_template, Some(0), "the detail panel opened on pick");
+    assert_eq!(
+        h.templates.detail,
+        Some(0),
+        "the detail panel opened on pick"
+    );
     assert!(vis(&world, template_panel::PANEL_BG), "detail panel shown");
     let title = world
         .get_by_id::<TextLabel>(template_panel::TITLE_LABEL)
@@ -588,7 +605,7 @@ fn tick_picking_a_template_spawns_the_detail_panel_then_apply_adds() {
         },
     );
     h.tick(&mut world);
-    assert_eq!(h.open_template, None, "Apply closed the detail panel");
+    assert_eq!(h.templates.detail, None, "Apply closed the detail panel");
     assert!(
         !vis(&world, template_panel::PANEL_BG),
         "detail panel hidden"

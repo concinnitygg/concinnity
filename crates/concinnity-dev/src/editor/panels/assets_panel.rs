@@ -34,8 +34,9 @@ use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use super::asset_tree::{Badge, TreeRow};
-use super::registry::{self, PanelKey};
+use super::registry::PanelKey;
 use crate::editor::hud;
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::selection::SelectedNames;
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, place_sprite, point_in};
@@ -137,73 +138,6 @@ impl PickerOption {
     }
 }
 
-// Reserved asset-id family for the panel. The asset-id VALUE does not affect
-// draw order (the overlay draws in component-insertion order, not by id);
-// z-order is set by the sequence in `all_sprite_ids` / `all_label_ids`, which
-// `inject.rs` inserts in that order. The id values only need to be distinct.
-const PANEL: u32 = registry::base(PanelKey::Assets);
-pub(crate) const PANEL_BG: AssetId = AssetId(PANEL);
-pub(crate) const PLUS_BG: AssetId = AssetId(PANEL + 1);
-pub(crate) const PLUS_LABEL: AssetId = AssetId(PANEL + 2);
-pub(crate) const SEARCH_INPUT: AssetId = AssetId(PANEL + 3);
-pub(crate) const STATUS_LABEL: AssetId = AssetId(PANEL + 4);
-pub(crate) const EMPTY_LABEL: AssetId = AssetId(PANEL + 5);
-pub(crate) const LIST_TRACK: AssetId = AssetId(PANEL + 6);
-pub(crate) const LIST_THUMB: AssetId = AssetId(PANEL + 7);
-pub(crate) const PICKER_BG: AssetId = AssetId(PANEL + 8);
-// The draggable title bar's heading (the bar is the panel surface itself).
-pub(crate) const TITLE_LABEL: AssetId = AssetId(PANEL + 9);
-// The "X" close button in the title bar's top-right corner.
-pub(crate) const CLOSE_BG: AssetId = AssetId(PANEL + 10);
-pub(crate) const CLOSE_LABEL: AssetId = AssetId(PANEL + 11);
-pub(crate) const DOT_BG: AssetId = AssetId(PANEL + 12);
-pub(crate) const DOT1: AssetId = AssetId(PANEL + 13);
-pub(crate) const DOT2: AssetId = AssetId(PANEL + 14);
-pub(crate) const DOT3: AssetId = AssetId(PANEL + 15);
-pub(crate) const MENU_BG: AssetId = AssetId(PANEL + 16);
-pub(crate) const MENU_DELETE_BG: AssetId = AssetId(PANEL + 17);
-pub(crate) const MENU_DELETE_LABEL: AssetId = AssetId(PANEL + 18);
-pub(crate) const MENU_EXPORT_BG: AssetId = AssetId(PANEL + 19);
-pub(crate) const MENU_EXPORT_LABEL: AssetId = AssetId(PANEL + 20);
-
-pub(crate) fn row_bg(slot: usize) -> AssetId {
-    AssetId(PANEL + 0x20 + slot as u32)
-}
-pub(crate) fn name_label(slot: usize) -> AssetId {
-    AssetId(PANEL + 0x40 + slot as u32)
-}
-pub(crate) fn type_label(slot: usize) -> AssetId {
-    AssetId(PANEL + 0x60 + slot as u32)
-}
-// The visibility eye at a row's head is drawn from two sprites: an outline that
-// reshapes from an open lens to a closed lid, and a pupil shown only while open.
-// The per-row sub-families are spaced 0x20 apart so each holds up to
-// `ROW_POOL_MAX` slots (a resized panel reveals more rows) without overlapping
-// the next; the whole set stays within the Assets id window (below the Edit
-// family), guarded by `id_families_are_disjoint`.
-fn eye_ring(slot: usize) -> AssetId {
-    AssetId(PANEL + 0x80 + slot as u32)
-}
-fn eye_pupil(slot: usize) -> AssetId {
-    AssetId(PANEL + 0xA0 + slot as u32)
-}
-// The pick lock beside the eye is a padlock: a shackle arch behind a solid body.
-fn lock_shackle(slot: usize) -> AssetId {
-    AssetId(PANEL + 0xC0 + slot as u32)
-}
-fn lock_body(slot: usize) -> AssetId {
-    AssetId(PANEL + 0xE0 + slot as u32)
-}
-pub(crate) fn picker_row_bg(slot: usize) -> AssetId {
-    AssetId(PANEL + 0x100 + slot as u32)
-}
-pub(crate) fn picker_row_label(slot: usize) -> AssetId {
-    AssetId(PANEL + 0x120 + slot as u32)
-}
-pub(crate) fn picker_row_summary(slot: usize) -> AssetId {
-    AssetId(PANEL + 0x140 + slot as u32)
-}
-
 // Geometry, in window pixels. Every rect derives from the panel's origin `o`
 // (its title bar's top-left corner), so dragging the title bar moves the whole
 // panel; the hook owns the origin.
@@ -230,6 +164,54 @@ const ICON_STROKE: f32 = 1.5;
 // injected pool `ROW_POOL_MAX`.
 pub(crate) const ROW_POOL: usize = 14;
 pub(crate) const ROW_POOL_MAX: usize = 28;
+
+// Bottom-to-top: panel background, header chrome, the row families, the picker
+// backing (under its option rows), then the floating overlays (scrollbar,
+// triple-dot, row menu), which must sit ABOVE the row backgrounds so a hovered
+// row's fill cannot cover them. Each row's visibility eye is an outline that
+// reshapes from an open lens to a closed lid plus a pupil shown only while
+// open; the pick lock beside it is a shackle arch behind a solid body, drawn
+// after it. Among labels the row-menu captions come last, so they draw above
+// the row labels the menu floats over.
+hud_ids! {
+    base: panel_base(PanelKey::Assets);
+    sprites: [
+        pub(crate) PANEL_BG,
+        pub(crate) CLOSE_BG,
+        pub(crate) PLUS_BG,
+        pub(crate) row_bg[ROW_POOL_MAX],
+        eye_ring[ROW_POOL_MAX],
+        eye_pupil[ROW_POOL_MAX],
+        lock_shackle[ROW_POOL_MAX],
+        lock_body[ROW_POOL_MAX],
+        pub(crate) PICKER_BG,
+        pub(crate) picker_row_bg[ROW_POOL_MAX],
+        pub(crate) LIST_TRACK,
+        pub(crate) LIST_THUMB,
+        pub(crate) DOT_BG,
+        pub(crate) DOT1,
+        pub(crate) DOT2,
+        pub(crate) DOT3,
+        pub(crate) MENU_BG,
+        pub(crate) MENU_DELETE_BG,
+        pub(crate) MENU_EXPORT_BG,
+    ];
+    labels: [
+        pub(crate) TITLE_LABEL,
+        pub(crate) CLOSE_LABEL,
+        pub(crate) PLUS_LABEL,
+        pub(crate) STATUS_LABEL,
+        pub(crate) EMPTY_LABEL,
+        pub(crate) name_label[ROW_POOL_MAX],
+        pub(crate) type_label[ROW_POOL_MAX],
+        pub(crate) picker_row_label[ROW_POOL_MAX],
+        pub(crate) picker_row_summary[ROW_POOL_MAX],
+        pub(crate) MENU_DELETE_LABEL,
+        pub(crate) MENU_EXPORT_LABEL,
+    ];
+    fields: [pub(crate) SEARCH_INPUT = "search"];
+}
+
 // The asset name, and the type that reads right-aligned beside it, inside what
 // the triple-dot's reserved slot leaves. The lock icon widened the row's head,
 // so the name clips a step shorter to keep clear of its type caption. This is
@@ -628,16 +610,10 @@ pub(crate) fn hit_test(
     Some(PanelAction::Consume)
 }
 
-// Position + show the panel's elements for this frame at origin `o`, or hide
-// them all when the panel is closed (`view` is `None`).
-pub(crate) fn place(world: &mut World, view: Option<&PanelView>, o: [f32; 2], s: [f32; 2]) {
-    let Some(view) = view else {
-        hide_all(world);
-        return;
-    };
-
+// Position + show the panel's elements for this frame at origin `o`.
+pub(crate) fn place(world: &mut World, view: &PanelView, o: [f32; 2], s: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
-    hide_all(world);
+    ids().hide(world);
 
     let w = s[0];
     widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
@@ -1165,72 +1141,6 @@ fn layout_scrollbar(
     );
 }
 
-// Every panel sprite id, so the closed / hidden pass can blank the whole panel
-// (and `inject.rs` can create exactly this set). THE ORDER OF THIS VEC IS THE DRAW
-// ORDER: `inject.rs` adds the panel's Sprites in this sequence, and the overlay
-// draws components in insertion (component-column) order -- NOT by asset id -- so
-// later entries paint on top. Bottom-to-top: panel background, header chrome, the
-// row families, the picker backing (under its option rows), then the floating
-// overlays (scrollbar, triple-dot, row menu), which must sit ABOVE the row
-// backgrounds so a hovered row's fill cannot cover them.
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, CLOSE_BG, PLUS_BG];
-    ids.extend((0..ROW_POOL_MAX).map(row_bg));
-    // The eye then the lock, each family drawn before the next so a lock body
-    // paints over its own shackle arch.
-    ids.extend((0..ROW_POOL_MAX).map(eye_ring));
-    ids.extend((0..ROW_POOL_MAX).map(eye_pupil));
-    ids.extend((0..ROW_POOL_MAX).map(lock_shackle));
-    ids.extend((0..ROW_POOL_MAX).map(lock_body));
-    ids.push(PICKER_BG);
-    ids.extend((0..ROW_POOL_MAX).map(picker_row_bg));
-    ids.extend([
-        LIST_TRACK,
-        LIST_THUMB,
-        DOT_BG,
-        DOT1,
-        DOT2,
-        DOT3,
-        MENU_BG,
-        MENU_DELETE_BG,
-        MENU_EXPORT_BG,
-    ]);
-    ids
-}
-
-// Same draw-order contract as `all_sprite_ids` (all TextLabels draw after all
-// Sprites, so any label sits above the sprite chrome; among labels this Vec's
-// order decides who wins). The row-menu caption comes last so it draws above the
-// row labels the menu floats over.
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![
-        TITLE_LABEL,
-        CLOSE_LABEL,
-        PLUS_LABEL,
-        STATUS_LABEL,
-        EMPTY_LABEL,
-    ];
-    ids.extend((0..ROW_POOL_MAX).map(name_label));
-    ids.extend((0..ROW_POOL_MAX).map(type_label));
-    ids.extend((0..ROW_POOL_MAX).map(picker_row_label));
-    ids.extend((0..ROW_POOL_MAX).map(picker_row_summary));
-    ids.push(MENU_DELETE_LABEL);
-    ids.push(MENU_EXPORT_LABEL);
-    ids
-}
-
-// Every typed field the panel injects: just the search field (the form's inputs
-// belong to `form_panel.rs`).
-pub(crate) fn all_field_ids() -> Vec<AssetId> {
-    vec![SEARCH_INPUT]
-}
-
-// Hide every panel element, including the typed field (and blur it so a hidden
-// field cannot keep keyboard focus).
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &all_field_ids());
-}
-
 // Whether the cursor is over the scrollable body area (for wheel scrolling).
 pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
     let p = widget::outer_rect(o, s);
@@ -1345,7 +1255,7 @@ mod tests {
 
     // A world with every panel element injected (hidden), for driving `place`.
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &all_field_ids())
+        ids().test_world()
     }
 
     fn sprite(world: &World, id: AssetId) -> Sprite {
@@ -1452,7 +1362,7 @@ mod tests {
         f.picker_options = vec![PickerOption::new("PointLight")];
         let mut world = injected_world();
         let o = test_origin();
-        place(&mut world, Some(&f.view()), o, size());
+        place(&mut world, &f.view(), o, size());
         let l = label(&world, PLUS_LABEL);
         assert_eq!(l.content, "+");
         assert_eq!(sprite(&world, PLUS_BG).tint, PLUS_TINT);
@@ -1460,7 +1370,7 @@ mod tests {
             l.scale > 1.0,
             "the glyph draws larger than the body text (the box is unchanged)"
         );
-        place(&mut world, Some(&f.picker_view()), o, size());
+        place(&mut world, &f.picker_view(), o, size());
         assert_eq!(label(&world, PLUS_LABEL).content, "X");
         assert_eq!(
             sprite(&world, PLUS_BG).tint,
@@ -1477,7 +1387,7 @@ mod tests {
         let f = Fixture::new();
         let mut world = injected_world();
         let o = test_origin();
-        place(&mut world, Some(&f.view()), o, size());
+        place(&mut world, &f.view(), o, size());
         let title = label(&world, TITLE_LABEL);
         assert!(title.visible);
         assert_eq!(title.content, "Assets");
@@ -1568,7 +1478,7 @@ mod tests {
             Some(PanelAction::CloseOverlays)
         );
         let mut world = injected_world();
-        place(&mut world, Some(&v), o, size());
+        place(&mut world, &v, o, size());
         assert!(!sprite(&world, MENU_BG).visible);
         assert!(!label(&world, MENU_DELETE_LABEL).visible);
     }
@@ -1597,7 +1507,7 @@ mod tests {
         f.hidden.insert("lamp".to_string());
         f.locked.insert("cam".to_string());
         let o = test_origin();
-        place(&mut world, Some(&f.view()), o, size());
+        place(&mut world, &f.view(), o, size());
 
         assert_eq!(label(&world, STATUS_LABEL).content, "Assets (3)");
         assert_eq!(label(&world, name_label(0)).content, "- World (2)");
@@ -1640,11 +1550,11 @@ mod tests {
         f.picker_options = vec![PickerOption::new("PointLight")];
         let o = test_origin();
         let field = |w: &World| w.get_by_id::<TextInput>(SEARCH_INPUT).cloned().unwrap();
-        place(&mut world, Some(&f.view()), o, size());
+        place(&mut world, &f.view(), o, size());
         let t = field(&world);
         assert!(t.visible && !t.focused, "shown, unfocused until clicked");
 
-        place(&mut world, Some(&f.picker_view()), o, size());
+        place(&mut world, &f.picker_view(), o, size());
         assert!(field(&world).focused, "the picker types into the field");
     }
 
@@ -1658,7 +1568,7 @@ mod tests {
         let r1 = row_rect(o, PANEL_W, 1);
 
         // Unhovered: the type reads, and the dot slot is already reserved.
-        place(&mut world, Some(&f.view()), o, size());
+        place(&mut world, &f.view(), o, size());
         let resting = label(&world, type_label(1));
         assert!(resting.visible && !sprite(&world, DOT1).visible);
 
@@ -1666,7 +1576,7 @@ mod tests {
             mouse: [r1[0] + 5.0, r1[1] + 5.0],
             ..f.view()
         };
-        place(&mut world, Some(&v), o, size());
+        place(&mut world, &v, o, size());
         assert!(sprite(&world, DOT1).visible, "hover reveals the dots");
         let hovered = label(&world, type_label(1));
         assert!(hovered.visible, "the hovered row's type keeps reading");
@@ -1681,7 +1591,7 @@ mod tests {
             mouse: [d[0] + 2.0, d[1] + 2.0],
             ..f.view()
         };
-        place(&mut world, Some(&over), o, size());
+        place(&mut world, &over, o, size());
         assert!(sprite(&world, DOT_BG).visible);
     }
 
@@ -1706,7 +1616,7 @@ mod tests {
         );
 
         let mut world = injected_world();
-        place(&mut world, Some(&v), o, size());
+        place(&mut world, &v, o, size());
         assert!(sprite(&world, MENU_BG).visible);
         assert_eq!(label(&world, MENU_DELETE_LABEL).content, "Delete");
     }
@@ -1740,7 +1650,7 @@ mod tests {
             Some(PanelAction::RowExport)
         );
         let mut world = injected_world();
-        place(&mut world, Some(&v), o, size());
+        place(&mut world, &v, o, size());
         assert!(sprite(&world, MENU_EXPORT_BG).visible);
         assert_eq!(label(&world, MENU_EXPORT_LABEL).content, "Export .glb");
 
@@ -1756,7 +1666,7 @@ mod tests {
             Some(PanelAction::CloseOverlays)
         );
         let mut world = injected_world();
-        place(&mut world, Some(&v), o, size());
+        place(&mut world, &v, o, size());
         assert!(!sprite(&world, MENU_EXPORT_BG).visible);
         assert!(!label(&world, MENU_EXPORT_LABEL).visible);
     }
@@ -1776,7 +1686,7 @@ mod tests {
             row_menu: Some("cam"),
             ..f.view()
         };
-        place(&mut world, Some(&v), o, size());
+        place(&mut world, &v, o, size());
         // The menu opens under slot 1 (cam) and is one row tall (Delete), so it
         // covers slot 2 (lamp). Slot 3 is the fox header, slot 4 the past_a row.
         assert!(
@@ -1859,7 +1769,7 @@ mod tests {
         f.picker_options = vec![PickerOption::new("PointLight")];
         let mut world = injected_world();
         let o = test_origin();
-        place(&mut world, Some(&f.picker_view()), o, size());
+        place(&mut world, &f.picker_view(), o, size());
 
         let name = label(&world, picker_row_label(0));
         let summary = label(&world, picker_row_summary(0));
@@ -1888,7 +1798,7 @@ mod tests {
             summary: "x".repeat(400),
         }];
         let mut world = injected_world();
-        place(&mut world, Some(&f.picker_view()), test_origin(), size());
+        place(&mut world, &f.picker_view(), test_origin(), size());
 
         let summary = label(&world, picker_row_summary(0));
         let budget = picker_summary_budget(size()[0]);
@@ -1913,7 +1823,7 @@ mod tests {
     fn picker_shows_an_empty_state_with_no_matching_options() {
         let f = Fixture::new();
         let mut world = injected_world();
-        place(&mut world, Some(&f.picker_view()), test_origin(), size());
+        place(&mut world, &f.picker_view(), test_origin(), size());
         let empty = label(&world, EMPTY_LABEL);
         assert!(empty.visible);
         assert_eq!(empty.content, "No matching types");
@@ -1928,7 +1838,7 @@ mod tests {
             status: Some("the world does not build"),
             ..f.view()
         };
-        place(&mut world, Some(&v), test_origin(), size());
+        place(&mut world, &v, test_origin(), size());
         let status = label(&world, STATUS_LABEL);
         assert_eq!(status.content, "the world does not build");
         assert_eq!(status.color, ERROR_LABEL);
@@ -1948,7 +1858,7 @@ mod tests {
             rows: &[],
             ..f.view()
         };
-        place(&mut world, Some(&v), test_origin(), size());
+        place(&mut world, &v, test_origin(), size());
         assert_eq!(label(&world, EMPTY_LABEL).content, "No matching assets");
     }
 
@@ -1963,30 +1873,19 @@ mod tests {
             scroll: 3,
             ..f.view()
         };
-        place(&mut world, Some(&v), test_origin(), size());
+        place(&mut world, &v, test_origin(), size());
         assert!(sprite(&world, LIST_THUMB).visible);
         // A short tree hides it again.
         let short = Fixture::new();
-        place(&mut world, Some(&short.view()), test_origin(), size());
+        place(&mut world, &short.view(), test_origin(), size());
         assert!(!sprite(&world, LIST_THUMB).visible);
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let mut world = injected_world();
-        let f = Fixture::new();
-        place(&mut world, Some(&f.view()), test_origin(), size());
-        place(&mut world, None, [0.0, 0.0], size());
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
-        assert!(world.query::<TextInput>().all(|t| !t.visible));
     }
 
     // The floating overlays are injected after the row families, so a hovered
     // row's fill can never paint over the scrollbar, dots, or row menu.
     #[test]
     fn floating_overlays_are_injected_after_the_row_families() {
-        let ids = all_sprite_ids();
+        let ids = &ids().sprites;
         let pos = |id: AssetId| ids.iter().position(|&x| x == id).expect("id listed");
         let last_row = (0..ROW_POOL).map(row_bg).map(pos).max().unwrap();
         for overlay in [LIST_TRACK, LIST_THUMB, DOT_BG, DOT1, MENU_BG] {

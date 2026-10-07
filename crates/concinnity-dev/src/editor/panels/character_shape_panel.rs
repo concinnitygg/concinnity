@@ -11,39 +11,47 @@ use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
 use super::character_shape::{Row, SliderRow};
-use super::registry::{self, PanelKey};
+use super::registry::PanelKey;
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 use crate::editor::widget_slider::{self, SliderIds};
-
-const BASE: u32 = registry::base(PanelKey::CharacterShape);
-pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-pub(crate) const TITLE_LABEL: AssetId = AssetId(BASE + 2);
-pub(crate) const CLOSE_BG: AssetId = AssetId(BASE + 3);
-pub(crate) const CLOSE_LABEL: AssetId = AssetId(BASE + 4);
-pub(crate) const RESET_BG: AssetId = AssetId(BASE + 5);
-pub(crate) const RESET_LABEL: AssetId = AssetId(BASE + 6);
-pub(crate) const RANDOM_BG: AssetId = AssetId(BASE + 7);
-pub(crate) const RANDOM_LABEL: AssetId = AssetId(BASE + 8);
-pub(crate) const STATUS_LABEL: AssetId = AssetId(BASE + 9);
 
 // The visible-row pool: the most rows the window can show at once. A mesh
 // with more rows than fit scrolls.
 pub(crate) const MAX_ROWS: usize = 40;
 
-// Per-visible-row chrome and slider controls (pool index).
-pub(crate) fn row_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x20 + i as u32)
+// Chrome, row backgrounds, then the slider parts above them, each pool indexed
+// by visible row.
+hud_ids! {
+    base: panel_base(PanelKey::CharacterShape);
+    sprites: [
+        pub(crate) PANEL_BG,
+        pub(crate) CLOSE_BG,
+        pub(crate) RESET_BG,
+        pub(crate) RANDOM_BG,
+        pub(crate) row_bg[MAX_ROWS],
+        slider_track[MAX_ROWS],
+        slider_fill[MAX_ROWS],
+        slider_handle[MAX_ROWS],
+    ];
+    labels: [
+        pub(crate) TITLE_LABEL,
+        pub(crate) CLOSE_LABEL,
+        pub(crate) RESET_LABEL,
+        pub(crate) RANDOM_LABEL,
+        pub(crate) STATUS_LABEL,
+        pub(crate) row_label[MAX_ROWS],
+        slider_value[MAX_ROWS],
+    ];
 }
-pub(crate) fn row_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x60 + i as u32)
-}
+
 pub(crate) fn slider_ids(i: usize) -> SliderIds {
     SliderIds {
-        track: AssetId(BASE + 0xA0 + i as u32),
-        fill: AssetId(BASE + 0xE0 + i as u32),
-        handle: AssetId(BASE + 0x120 + i as u32),
-        value: AssetId(BASE + 0x160 + i as u32),
+        track: slider_track(i),
+        fill: slider_fill(i),
+        handle: slider_handle(i),
+        value: slider_value(i),
     }
 }
 
@@ -227,13 +235,8 @@ fn place_button(
     }
 }
 
-// Position + show the panel (`Some(view)`) at effective size `s`, or blank
-// every element (`None`).
-pub(crate) fn place(world: &mut World, view: Option<&ShapeView>, o: [f32; 2], s: [f32; 2]) {
-    let Some(view) = view else {
-        hide_all(world);
-        return;
-    };
+// Position + show the panel at effective size `s`.
+pub(crate) fn place(world: &mut World, view: &ShapeView, o: [f32; 2], s: [f32; 2]) {
     let w = s[0];
     widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
     let title = widget::title_rect(o, w);
@@ -349,34 +352,6 @@ pub(crate) fn place(world: &mut World, view: Option<&ShapeView>, o: [f32; 2], s:
     }
 }
 
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
-}
-
-// Every panel sprite id, in draw (insertion) order: chrome, row backgrounds,
-// then the slider parts above them.
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, CLOSE_BG, RESET_BG, RANDOM_BG];
-    ids.extend((0..MAX_ROWS).map(row_bg));
-    ids.extend((0..MAX_ROWS).map(|i| slider_ids(i).track));
-    ids.extend((0..MAX_ROWS).map(|i| slider_ids(i).fill));
-    ids.extend((0..MAX_ROWS).map(|i| slider_ids(i).handle));
-    ids
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![
-        TITLE_LABEL,
-        CLOSE_LABEL,
-        RESET_LABEL,
-        RANDOM_LABEL,
-        STATUS_LABEL,
-    ];
-    ids.extend((0..MAX_ROWS).map(row_label));
-    ids.extend((0..MAX_ROWS).map(|i| slider_ids(i).value));
-    ids
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::character_shape::{self, Rows};
@@ -385,7 +360,7 @@ mod tests {
     use concinnity_core::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])
+        ids().test_world()
     }
 
     fn names(list: &[&str]) -> Vec<String> {
@@ -508,7 +483,7 @@ mod tests {
         let mut world = injected_world();
         let (derived, rows, values) = fixture();
         let v = view(&rows, &derived, &values, Some("body_shape"));
-        place(&mut world, Some(&v), [20.0, 20.0], size(rows.len()));
+        place(&mut world, &v, [20.0, 20.0], size(rows.len()));
         let label = |world: &World, id: AssetId| world.get_by_id::<TextLabel>(id).unwrap().clone();
         let sprite_visible =
             |world: &World, id: AssetId| world.get_by_id::<Sprite>(id).unwrap().visible;
@@ -530,7 +505,7 @@ mod tests {
         let no_rows = character_shape::rows(&none, 0, false);
         let mut nv = view(&no_rows, &none, &[], None);
         nv.status = Some("Select a SkinnedMesh");
-        place(&mut world, Some(&nv), [20.0, 20.0], size(1));
+        place(&mut world, &nv, [20.0, 20.0], size(1));
         assert!(!sprite_visible(&world, RESET_BG));
         assert!(label(&world, STATUS_LABEL).visible);
         assert!(
@@ -559,21 +534,10 @@ mod tests {
             hit_test(&v, r2[0] + 5.0, r2[1] + 5.0, o, s),
             Some(ShapeAction::Preset(1))
         );
-        place(&mut world, Some(&v), o, s);
+        place(&mut world, &v, o, s);
         let label = |id: AssetId| world.get_by_id::<TextLabel>(id).unwrap().content.clone();
         assert_eq!(label(row_label(0)), "Presets");
         assert_eq!(label(row_label(2)), "apply heavy");
         assert_eq!(label(row_label(3)), "Face");
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let mut world = injected_world();
-        let (derived, rows, values) = fixture();
-        let v = view(&rows, &derived, &values, Some("body_shape"));
-        place(&mut world, Some(&v), [20.0, 20.0], size(rows.len()));
-        place(&mut world, None, [0.0, 0.0], size(0));
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
     }
 }

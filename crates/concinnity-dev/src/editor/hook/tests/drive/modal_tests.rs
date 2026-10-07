@@ -91,15 +91,18 @@ fn an_open_dialog_swallows_presses_to_the_bar_and_panels() {
     let view = [bar.view[0] + 2.0, bar.view[1] + 2.0];
     let mut world = world_with_input(click_at(view[0], view[1]));
     h.tick(&mut world);
-    assert!(!h.view_open, "the View chip never saw the press");
+    assert!(!h.open[PanelKey::View], "the View chip never saw the press");
 
-    assert!(h.preview_open, "Preview starts shown");
+    assert!(h.open[PanelKey::Preview], "Preview starts shown");
     let o = h.origin(PanelKey::Preview, VP);
     let title = widget::title_rect(o, registry::panel(PanelKey::Preview).size(&h)[0]);
     let close = widget::close_rect(title);
     let mut world = world_with_input(click_at(close[0] + 2.0, close[1] + 2.0));
     h.tick(&mut world);
-    assert!(h.preview_open, "the close button never saw the press");
+    assert!(
+        h.open[PanelKey::Preview],
+        "the close button never saw the press"
+    );
     assert!(
         h.modal.is_some(),
         "a press off the buttons keeps the dialog up"
@@ -109,7 +112,7 @@ fn an_open_dialog_swallows_presses_to_the_bar_and_panels() {
     h.modal = None;
     let mut world = world_with_input(click_at(view[0], view[1]));
     h.tick(&mut world);
-    assert!(h.view_open);
+    assert!(h.open[PanelKey::View]);
 }
 
 // While the dialog is up the wheel is swallowed too: a scrollable panel under
@@ -117,10 +120,10 @@ fn an_open_dialog_swallows_presses_to_the_bar_and_panels() {
 #[test]
 fn an_open_dialog_swallows_the_wheel() {
     let mut h = hook();
-    h.panel_open = true;
-    h.preview_open = false;
+    h.open[PanelKey::Assets] = true;
+    h.open[PanelKey::Preview] = false;
     // Enough tree rows that the Assets panel can scroll.
-    h.tree_groups = vec![TreeGroup {
+    h.assets.groups = vec![TreeGroup {
         label: asset_tree::WORLD_GROUP.to_string(),
         assets: (0..40)
             .map(|i| asset_tree::TreeAsset {
@@ -131,8 +134,8 @@ fn an_open_dialog_swallows_the_wheel() {
             })
             .collect(),
     }];
-    h.tree_unfolded = vec![0];
-    h.tree_stale = false;
+    h.assets.unfolded = vec![0];
+    h.assets.stale = false;
     let o = h.origin(PanelKey::Assets, VP);
     let s = h.effective_size(PanelKey::Assets);
     let input = FrameInput {
@@ -146,13 +149,13 @@ fn an_open_dialog_swallows_the_wheel() {
     let mut world = world_with_input(input.clone());
     h.tick(&mut world);
     assert_eq!(
-        h.tree_scroll, 0,
+        h.assets.scroll, 0,
         "the wheel is swallowed while the dialog is up"
     );
     h.modal = None;
     let mut world = world_with_input(input);
     h.tick(&mut world);
-    assert_eq!(h.tree_scroll, 1, "the same wheel scrolls once it closes");
+    assert_eq!(h.assets.scroll, 1, "the same wheel scrolls once it closes");
 }
 
 // The dialog's elements draw above every panel, the top bar, and the toast
@@ -163,17 +166,14 @@ fn dialog_layers_sit_above_all_other_chrome() {
     h.notifier.push(notify::Level::Info, "toast");
     h.open_modal("m", confirm_buttons());
     let layers = h.compute_layers();
-    let dialog = layers[&modal::all_sprite_ids()[0]];
+    let dialog = layers[&modal::ids().sprites[0]];
     assert!(dialog > TOP_BAR_LAYER);
-    assert!(dialog > layers[&toast_overlay::all_sprite_ids()[0]]);
-    for id in modal::all_sprite_ids()
-        .into_iter()
-        .chain(modal::all_label_ids())
-    {
+    assert!(dialog > layers[&toast_overlay::ids().sprites[0]]);
+    for id in modal::ids().all() {
         assert_eq!(layers[&id], dialog);
     }
     h.modal = None;
-    assert!(!h.compute_layers().contains_key(&modal::all_sprite_ids()[0]));
+    assert!(!h.compute_layers().contains_key(&modal::ids().sprites[0]));
 }
 
 // The draw pass shows the dialog only while it is open and the HUD is shown;
@@ -182,10 +182,10 @@ fn dialog_layers_sit_above_all_other_chrome() {
 fn draw_shows_while_open_and_hides_otherwise() {
     let mut h = hook();
     let mut world = World::new();
-    for id in modal::all_sprite_ids() {
+    for &id in &modal::ids().sprites {
         world.push_identified(id, Sprite::default());
     }
-    for id in modal::all_label_ids() {
+    for &id in &modal::ids().labels {
         world.push_identified(id, TextLabel::default());
     }
     h.drive_modal_draw(&mut world, VP, true, [0.0, 0.0]);

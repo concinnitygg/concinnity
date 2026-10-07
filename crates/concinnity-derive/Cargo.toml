@@ -6,7 +6,6 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "Derive macros for the Concinnity engine's authored asset schemas"
 readme = "README.md"
 keywords = ["gamedev", "derive", "concinnity"]

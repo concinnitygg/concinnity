@@ -29,9 +29,12 @@ fn starts_in_edit_mode_with_hud_shown() {
     );
     assert!(h.hud_visible, "HUD shown at launch");
     // Assets / View / Templates start closed; Preview starts shown.
-    assert!(!h.panel_open && !h.view_open && !h.templates_open);
-    assert!(h.preview_open, "the Preview panel is shown at launch");
-    assert!(!h.picker_open);
+    assert!(!h.open[PanelKey::Assets] && !h.open[PanelKey::View] && !h.open[PanelKey::Templates]);
+    assert!(
+        h.open[PanelKey::Preview],
+        "the Preview panel is shown at launch"
+    );
+    assert!(!h.assets.picker_open);
 }
 
 #[test]
@@ -72,7 +75,7 @@ fn tick_f1_toggles_hud_visibility() {
 #[test]
 fn dragging_does_not_trigger_controls_it_crosses() {
     let mut h = hook(Vec::new());
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     let vp = [1280.0, 720.0];
     let start = h.origin(PanelKey::Assets, vp);
     let mut world = world_with_input(FrameInput {
@@ -132,10 +135,13 @@ fn apply_panel_toggles_the_picker_and_consumes() {
     let mut world = world_with_fields();
     let mut h = hook(Vec::new());
     h.apply_panel(PanelAction::TogglePicker, &mut world);
-    assert!(h.picker_open);
-    assert!(h.search_focus, "the picker types into the search field");
+    assert!(h.assets.picker_open);
+    assert!(
+        h.assets.search_focus,
+        "the picker types into the search field"
+    );
     h.apply_panel(PanelAction::TogglePicker, &mut world);
-    assert!(!h.picker_open, "a second toggle closes the picker");
+    assert!(!h.assets.picker_open, "a second toggle closes the picker");
     h.apply_panel(PanelAction::Consume, &mut world);
 }
 
@@ -144,10 +150,10 @@ fn apply_panel_pick_option_opens_the_add_form() {
     let mut world = world_with_fields();
     let mut h = hook(vec![entry("log", "Logger")]);
 
-    h.picker_open = true;
+    h.assets.picker_open = true;
     h.apply_panel(PanelAction::PickOption(0), &mut world);
     assert!(h.form_open(), "a picker pick opens the add form");
-    assert!(!h.picker_open, "and closes the picker behind it");
+    assert!(!h.assets.picker_open, "and closes the picker behind it");
 
     // A pick with the picker already closed is a no-op: there is no option
     // list to index into.

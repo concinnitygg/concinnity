@@ -18,12 +18,11 @@ use crate::editor::text_area::TextArea;
 use crate::editor::text_area::highlight::{HLSL, SDF_HLSL};
 use crate::editor::text_area::markers::GutterMarker;
 
-// The list's shown state and scroll, the board the hot-reload driver publishes
+// The list's scroll, the board the hot-reload driver publishes
 // each Shader's and volume's latest outcome to, and the file open in the
 // source panel.
 #[derive(Debug)]
 pub(in crate::editor::hook) struct ShadersState {
-    pub(in crate::editor::hook) open: bool,
     pub(in crate::editor::hook) scroll: usize,
     // The row whose "..." menu is open, by what it stands for, so a rebuild of
     // the rows keeps it on the same row.
@@ -60,7 +59,6 @@ pub(in crate::editor::hook) struct RowsKey {
 impl Default for ShadersState {
     fn default() -> Self {
         Self {
-            open: false,
             scroll: 0,
             menu: None,
             reports: ReloadReports::default(),

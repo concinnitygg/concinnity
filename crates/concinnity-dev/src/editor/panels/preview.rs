@@ -8,25 +8,15 @@
 //! the editor HUD it is plain `Sprite` / `TextLabel` components at reserved ids
 //! (injected by `inject.rs`), driven each frame by the editor hook. The title
 //! bar, close button, and row draw come from the shared `list_panel`; this
-//! module only names the ids, width, and its row actions.
+//! module only declares the ids, width, and its row actions.
 
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
-use super::list_panel::{self, Row};
-use super::registry::{self, PanelKey};
+use super::list_panel::{self, ListIds, Row};
+use super::registry::PanelKey;
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::viewport::snap::SnapSettings;
-use crate::editor::widget::{self, point_in};
-
-const BASE: u32 = registry::base(PanelKey::Preview);
-// Named ids the cross-module tests reference (injection ordering / visibility);
-// the shipping paths derive every id from `BASE` through `list_panel`.
-#[cfg(test)]
-pub(crate) const PANEL_BG: AssetId = list_panel::panel_bg(BASE);
-#[cfg(test)]
-pub(crate) const ROW_BG: AssetId = list_panel::row_bg(BASE, 0);
-#[cfg(test)]
-pub(crate) const CHECK_BOX: AssetId = list_panel::check_box(BASE, 0);
+use crate::editor::widget::point_in;
 
 const PREVIEW_W: f32 = 232.0;
 // The capture row, the fly row, the world-axes row, the two snap rows, the
@@ -37,6 +27,29 @@ const SNAP_MOVE_ROW: usize = 3;
 const SNAP_ROTATE_ROW: usize = 4;
 const ALIGN_ROW: usize = 5;
 const DROP_FLOOR_ROW: usize = 6;
+
+hud_ids! {
+    base: panel_base(PanelKey::Preview);
+    sprites: [pub(crate) PANEL_BG, CLOSE_BG, row_bg[ROWS], check_box[ROWS]];
+    labels: [TITLE_LABEL, CLOSE_LABEL, row_label[ROWS], value_label[ROWS]];
+}
+
+const LIST: ListIds = ListIds {
+    panel_bg: PANEL_BG,
+    title: TITLE_LABEL,
+    close_bg: CLOSE_BG,
+    close_label: CLOSE_LABEL,
+    row_bg,
+    row_label,
+    check_box: Some(check_box),
+    value_label: Some(value_label),
+};
+
+// Named ids the cross-module tests reference (injection ordering / visibility).
+#[cfg(test)]
+pub(crate) const ROW_BG: concinnity_core::ecs::asset_id::AssetId = row_bg(0);
+#[cfg(test)]
+pub(crate) const CHECK_BOX: concinnity_core::ecs::asset_id::AssetId = check_box(0);
 
 // Where the panel sits until the user drags it: the window's top-left, below
 // the top bar (clear of its buttons and the Assets panel's default anchor).
@@ -130,31 +143,17 @@ pub(crate) fn place(world: &mut World, o: [f32; 2], state: PreviewState, mouse: 
         Row::checkbox("Align drop to surface", state.align),
         Row::label("Drop to floor (Ctrl+Down)"),
     ];
-    list_panel::place(world, BASE, o, size(), "Preview", &rows, mouse);
-}
-
-// Hide every panel element (the F1-hidden pass).
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
-}
-
-// Every panel sprite / label id, for injection and the hidden pass.
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    list_panel::all_sprite_ids(BASE, ROWS, true)
-}
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    list_panel::all_label_ids(BASE, ROWS, true)
+    list_panel::place(world, &LIST, o, size(), "Preview", &rows, mouse);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::list_panel::title_label;
     use super::*;
     use crate::editor::widget;
     use concinnity_core::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])
+        ids().test_world()
     }
 
     #[test]
@@ -228,7 +227,7 @@ mod tests {
         );
         let value = |i| {
             world
-                .get_by_id::<TextLabel>(list_panel::value_label(BASE, i))
+                .get_by_id::<TextLabel>(value_label(i))
                 .cloned()
                 .unwrap()
         };
@@ -252,7 +251,7 @@ mod tests {
             align: false,
         };
         place(&mut world, o, off_state, [0.0, 0.0]);
-        let title = world.get_by_id::<TextLabel>(title_label(BASE)).unwrap();
+        let title = world.get_by_id::<TextLabel>(TITLE_LABEL).unwrap();
         assert!(title.visible && title.content == "Preview");
         let off = world.get_by_id::<Sprite>(CHECK_BOX).cloned().unwrap();
         place(
@@ -266,25 +265,5 @@ mod tests {
         );
         let on = world.get_by_id::<Sprite>(CHECK_BOX).unwrap();
         assert_ne!(off.tint, on.tint, "the checkbox greens while playing");
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let mut world = injected_world();
-        place(
-            &mut world,
-            default_origin(),
-            PreviewState {
-                playing: true,
-                fly: true,
-                axes: true,
-                snap: SnapSettings::default(),
-                align: false,
-            },
-            [0.0, 0.0],
-        );
-        hide_all(&mut world);
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
     }
 }

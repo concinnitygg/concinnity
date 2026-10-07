@@ -14,32 +14,12 @@
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
 use super::asset_list::{self, ListRow, MAX_ROWS, ROW_H};
-use super::registry::{self, PanelKey};
+use super::registry::PanelKey;
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
-
-// The row pools sit at `+0x20` / `+0x40`; the chrome ids below stay under
-// `+0x20`, so the sub-ranges never overlap.
-const TPL: u32 = registry::base(PanelKey::TemplateDetail);
-pub(crate) const PANEL_BG: AssetId = AssetId(TPL);
-pub(crate) const TITLE_LABEL: AssetId = AssetId(TPL + 2);
-pub(crate) const CLOSE_BG: AssetId = AssetId(TPL + 3);
-pub(crate) const CLOSE_LABEL: AssetId = AssetId(TPL + 4);
-pub(crate) const APPLY_BG: AssetId = AssetId(TPL + 5);
-pub(crate) const APPLY_LABEL: AssetId = AssetId(TPL + 6);
-pub(crate) const DESC_LABEL: AssetId = AssetId(TPL + 7);
-pub(crate) const LIST_TRACK: AssetId = AssetId(TPL + 8);
-pub(crate) const LIST_THUMB: AssetId = AssetId(TPL + 9);
-
-pub(crate) fn row_bg(i: usize) -> AssetId {
-    AssetId(TPL + 0x20 + i as u32)
-}
-pub(crate) fn row_label(i: usize) -> AssetId {
-    AssetId(TPL + 0x40 + i as u32)
-}
 
 // Geometry, in window pixels. Every rect derives from the panel origin `o` (the
 // title bar's top-left), so dragging the title bar moves the whole panel.
@@ -48,6 +28,27 @@ pub(crate) const TPL_W: f32 = 420.0;
 // The injected row pool: the default shows up to `MAX_ROWS`, resizing taller
 // reveals more up to this.
 const POOL_MAX: usize = 28;
+
+// Background + chrome, the row backgrounds, then the scrollbar above them.
+hud_ids! {
+    base: panel_base(PanelKey::TemplateDetail);
+    sprites: [
+        pub(crate) PANEL_BG,
+        pub(crate) CLOSE_BG,
+        pub(crate) APPLY_BG,
+        pub(crate) row_bg[POOL_MAX],
+        pub(crate) LIST_TRACK,
+        pub(crate) LIST_THUMB,
+    ];
+    labels: [
+        pub(crate) TITLE_LABEL,
+        pub(crate) CLOSE_LABEL,
+        pub(crate) APPLY_LABEL,
+        pub(crate) DESC_LABEL,
+        pub(crate) row_label[POOL_MAX],
+    ];
+}
+
 const PAD: f32 = 10.0;
 const GAP: f32 = 8.0;
 // The header row: the description and the Apply button.
@@ -181,15 +182,10 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<Tem
 }
 
 // Position + show the panel's elements for this frame at origin `o`, effective
-// size `s`, or hide them all when the panel is closed (`view` is `None`).
-pub(crate) fn place(world: &mut World, view: Option<&TemplateView>, o: [f32; 2], s: [f32; 2]) {
-    let Some(view) = view else {
-        hide_all(world);
-        return;
-    };
-
+// size `s`.
+pub(crate) fn place(world: &mut World, view: &TemplateView, o: [f32; 2], s: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
-    hide_all(world);
+    ids().hide(world);
 
     let w = s[0];
     let window = rows_for_height(s[1]);
@@ -267,30 +263,11 @@ pub(crate) fn place(world: &mut World, view: Option<&TemplateView>, o: [f32; 2],
     );
 }
 
-// Hide every panel element (the closed / F1-hidden pass).
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
-}
-
-// Every panel sprite id, for injection and the hidden pass. THE ORDER IS THE DRAW
-// ORDER (inject.rs inserts in this sequence, the overlay draws in insertion
-// order): background + chrome, the row backgrounds, then the scrollbar above them.
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, CLOSE_BG, APPLY_BG];
-    ids.extend((0..POOL_MAX).map(row_bg));
-    ids.extend([LIST_TRACK, LIST_THUMB]);
-    ids
-}
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![TITLE_LABEL, CLOSE_LABEL, APPLY_LABEL, DESC_LABEL];
-    ids.extend((0..POOL_MAX).map(row_label));
-    ids
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_core::ecs::asset_id::AssetId;
 
     fn test_origin() -> [f32; 2] {
         default_origin(1280.0)
@@ -332,7 +309,7 @@ mod tests {
     }
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])
+        ids().test_world()
     }
 
     fn sprite(world: &World, id: AssetId) -> Sprite {
@@ -437,7 +414,7 @@ mod tests {
         let rs = rows();
         let mut world = injected_world();
         let o = test_origin();
-        place(&mut world, Some(&view(&rs)), o, size(rs.len()));
+        place(&mut world, &view(&rs), o, size(rs.len()));
         assert_eq!(
             label(&world, TITLE_LABEL).content,
             "Template Minimal 3D World"
@@ -462,12 +439,7 @@ mod tests {
     fn scrollbar_only_when_the_list_overflows() {
         let short = rows();
         let mut world = injected_world();
-        place(
-            &mut world,
-            Some(&view(&short)),
-            test_origin(),
-            size(short.len()),
-        );
+        place(&mut world, &view(&short), test_origin(), size(short.len()));
         assert!(!sprite(&world, LIST_THUMB).visible, "short list, no bar");
 
         let long: Vec<ListRow> = (0..MAX_ROWS + 6)
@@ -477,12 +449,7 @@ mod tests {
                 entry: Some(i),
             })
             .collect();
-        place(
-            &mut world,
-            Some(&view(&long)),
-            test_origin(),
-            size(long.len()),
-        );
+        place(&mut world, &view(&long), test_origin(), size(long.len()));
         assert!(sprite(&world, LIST_THUMB).visible, "overflow shows the bar");
     }
 
@@ -504,15 +471,5 @@ mod tests {
         assert_eq!(rows_for_height(10_000.0), POOL_MAX, "capped at the pool");
         // A short template cannot grow taller (no more rows to show).
         assert_eq!(max_size(3)[1], size(3)[1]);
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let rs = rows();
-        let mut world = injected_world();
-        place(&mut world, Some(&view(&rs)), test_origin(), size(rs.len()));
-        hide_all(&mut world);
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
     }
 }

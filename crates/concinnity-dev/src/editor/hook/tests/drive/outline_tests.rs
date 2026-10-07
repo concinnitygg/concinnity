@@ -48,7 +48,7 @@ fn selected_trigger_volume_publishes_its_line_outline() {
         6 + outlines::shapes::BOX_EDGES,
         "axes plus the volume's box edges"
     );
-    let ids: std::collections::HashSet<_> = billboards::all_sprite_ids().into_iter().collect();
+    let ids: std::collections::HashSet<_> = billboards::ids().sprites.iter().copied().collect();
     let icons = billboards::MAX_BILLBOARDS;
     assert!(
         world

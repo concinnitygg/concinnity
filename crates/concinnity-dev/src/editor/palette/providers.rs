@@ -13,12 +13,13 @@ use crate::editor::view_menu;
 
 // One row per view-toggleable panel (the ones that open on demand).
 pub(crate) fn panel_items() -> Vec<PaletteItem> {
-    registry::view_toggles()
-        .map(|p| PaletteItem {
-            label: p.view_row().unwrap_or("").to_string(),
+    registry::VIEW_ROWS
+        .iter()
+        .map(|&(key, caption)| PaletteItem {
+            label: caption.to_string(),
             hint: "open panel".to_string(),
             category: Category::Panel,
-            action: PaletteAction::OpenPanel(p.key()),
+            action: PaletteAction::OpenPanel(key),
         })
         .collect()
 }
@@ -133,7 +134,7 @@ mod tests {
     #[test]
     fn panel_items_cover_every_view_toggle() {
         let items = panel_items();
-        assert_eq!(items.len(), registry::view_toggle_count());
+        assert_eq!(items.len(), registry::VIEW_ROWS.len());
         for it in &items {
             assert_eq!(it.category, Category::Panel);
             assert!(matches!(it.action, PaletteAction::OpenPanel(_)));

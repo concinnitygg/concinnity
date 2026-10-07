@@ -16,7 +16,6 @@ use crate::editor::behavior::pulse::NodePulse;
 // that carries it out.
 #[derive(Debug, Default)]
 pub(in crate::editor::hook) struct BehaviorState {
-    pub(in crate::editor::hook) open: bool,
     pub(in crate::editor::hook) index: usize,
     pub(in crate::editor::hook) row: Option<usize>,
     pub(in crate::editor::hook) scroll: usize,
@@ -101,7 +100,6 @@ mod tests {
 
     fn dirty() -> BehaviorState {
         BehaviorState {
-            open: true,
             index: 3,
             row: Some(2),
             scroll: 4,
@@ -131,7 +129,6 @@ mod tests {
         let mut s = dirty();
         s.blur_inputs();
         assert!(!s.focus && !s.name_focus && !s.remove_armed && !s.picking);
-        assert!(s.open);
         assert_eq!((s.index, s.row, s.scroll), (3, Some(2), 4));
         assert_eq!((s.pick, s.pick_scroll, s.filter.as_str()), (6, 5, "wait"));
         assert!(s.status.is_some());
@@ -146,7 +143,7 @@ mod tests {
         assert_eq!((s.index, s.row, s.scroll, s.status), (0, None, 0, None));
         assert!(s.clip.is_some());
         assert_eq!(s.breakpoints.len(), 1);
-        assert!(s.open && s.focus && s.name_focus && s.remove_armed && s.picking);
+        assert!(s.focus && s.name_focus && s.remove_armed && s.picking);
         assert_eq!((s.pick, s.pick_scroll, s.filter.as_str()), (6, 5, "wait"));
         assert_eq!((s.mode, s.overview_card), (ViewMode::Chart, Some(1)));
         assert_eq!((s.pan, s.pan_drag), ([1.0, 2.0], Some([3.0, 4.0])));

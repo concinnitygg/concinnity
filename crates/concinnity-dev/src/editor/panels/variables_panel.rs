@@ -12,44 +12,41 @@
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
-use super::registry::{self, PanelKey};
+use super::registry::PanelKey;
 use super::variables::Row;
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 
-const BASE: u32 = registry::base(PanelKey::Variables);
-pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-pub(crate) const TITLE_LABEL: AssetId = AssetId(BASE + 1);
-pub(crate) const CLOSE_BG: AssetId = AssetId(BASE + 2);
-pub(crate) const CLOSE_LABEL: AssetId = AssetId(BASE + 3);
-pub(crate) const NEW_BG: AssetId = AssetId(BASE + 4);
-pub(crate) const NEW_LABEL: AssetId = AssetId(BASE + 5);
-pub(crate) const MODE_LABEL: AssetId = AssetId(BASE + 6);
-pub(crate) const TYPE_BG: AssetId = AssetId(BASE + 7);
-pub(crate) const TYPE_LABEL: AssetId = AssetId(BASE + 8);
-pub(crate) const DEL_BG: AssetId = AssetId(BASE + 9);
-pub(crate) const DEL_LABEL: AssetId = AssetId(BASE + 10);
-pub(crate) const HEAD_NAME: AssetId = AssetId(BASE + 11);
-pub(crate) const HEAD_TYPE: AssetId = AssetId(BASE + 18);
-pub(crate) const HEAD_VALUE: AssetId = AssetId(BASE + 19);
-pub(crate) const STATUS_BG: AssetId = AssetId(BASE + 12);
-pub(crate) const STATUS_LABEL: AssetId = AssetId(BASE + 13);
-pub(crate) const LIST_TRACK: AssetId = AssetId(BASE + 14);
-pub(crate) const LIST_THUMB: AssetId = AssetId(BASE + 15);
-pub(crate) const NAME_INPUT: AssetId = AssetId(BASE + 16);
-pub(crate) const VALUE_INPUT: AssetId = AssetId(BASE + 17);
-
-pub(crate) fn row_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x40 + i as u32)
-}
-pub(crate) fn row_name(i: usize) -> AssetId {
-    AssetId(BASE + 0x80 + i as u32)
-}
-pub(crate) fn row_type(i: usize) -> AssetId {
-    AssetId(BASE + 0xC0 + i as u32)
-}
-pub(crate) fn row_value(i: usize) -> AssetId {
-    AssetId(BASE + 0x100 + i as u32)
+hud_ids! {
+    base: panel_base(PanelKey::Variables);
+    sprites: [
+        pub(crate) PANEL_BG,
+        pub(crate) CLOSE_BG,
+        pub(crate) NEW_BG,
+        pub(crate) TYPE_BG,
+        pub(crate) DEL_BG,
+        pub(crate) STATUS_BG,
+        pub(crate) LIST_TRACK,
+        pub(crate) LIST_THUMB,
+        pub(crate) row_bg[ROW_POOL_MAX],
+    ];
+    labels: [
+        pub(crate) TITLE_LABEL,
+        pub(crate) CLOSE_LABEL,
+        pub(crate) NEW_LABEL,
+        pub(crate) MODE_LABEL,
+        pub(crate) TYPE_LABEL,
+        pub(crate) DEL_LABEL,
+        pub(crate) HEAD_NAME,
+        pub(crate) HEAD_TYPE,
+        pub(crate) HEAD_VALUE,
+        pub(crate) STATUS_LABEL,
+        pub(crate) row_name[ROW_POOL_MAX],
+        pub(crate) row_type[ROW_POOL_MAX],
+        pub(crate) row_value[ROW_POOL_MAX],
+    ];
+    fields: [pub(crate) NAME_INPUT = "name", pub(crate) VALUE_INPUT = "value"];
 }
 
 // Geometry, in window pixels, all derived from the panel origin `o`.
@@ -278,7 +275,7 @@ pub(crate) fn hit_test(
 // element (`None`).
 pub(crate) fn place(world: &mut World, view: Option<&VariablesView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
-        hide_all(world);
+        ids().hide(world);
         return;
     };
     let w = s[0];
@@ -556,41 +553,6 @@ fn label_at(rect: [f32; 4], caption: &str) -> [f32; 2] {
     ]
 }
 
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &all_field_ids());
-}
-
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![
-        PANEL_BG, CLOSE_BG, NEW_BG, TYPE_BG, DEL_BG, STATUS_BG, LIST_TRACK, LIST_THUMB,
-    ];
-    ids.extend((0..ROW_POOL_MAX).map(row_bg));
-    ids
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![
-        TITLE_LABEL,
-        CLOSE_LABEL,
-        NEW_LABEL,
-        MODE_LABEL,
-        TYPE_LABEL,
-        DEL_LABEL,
-        HEAD_NAME,
-        HEAD_TYPE,
-        HEAD_VALUE,
-        STATUS_LABEL,
-    ];
-    ids.extend((0..ROW_POOL_MAX).map(row_name));
-    ids.extend((0..ROW_POOL_MAX).map(row_type));
-    ids.extend((0..ROW_POOL_MAX).map(row_value));
-    ids
-}
-
-pub(crate) fn all_field_ids() -> Vec<AssetId> {
-    vec![NAME_INPUT, VALUE_INPUT]
-}
-
 pub(crate) fn status_ids() -> Vec<AssetId> {
     vec![STATUS_BG, STATUS_LABEL]
 }
@@ -601,7 +563,7 @@ mod tests {
     use concinnity_core::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &all_field_ids())
+        ids().test_world()
     }
 
     fn label(world: &World, id: AssetId) -> TextLabel {
@@ -864,22 +826,5 @@ mod tests {
         assert!(b[1] + b[3] <= o[1] + s[1], "it stays inside the panel");
         let from_top = b[1] - row_rect(o, s, 0)[1];
         assert_eq!(from_top % ROW_H, 0.0, "its edge lands between rows");
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let mut world = injected_world();
-        let rows = vec![declared("visits", "int", "3")];
-        let v = VariablesView {
-            selected: Some(0),
-            name_focus: true,
-            status: Some("something"),
-            ..view(&rows)
-        };
-        place(&mut world, Some(&v), [20.0, 20.0], size());
-        place(&mut world, None, [0.0, 0.0], size());
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
-        assert!(world.query::<TextInput>().all(|t| !t.visible && !t.focused));
     }
 }

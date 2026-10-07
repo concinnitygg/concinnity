@@ -99,7 +99,7 @@ impl EditorHook {
         if !drag_has_effect(asset_type) {
             return;
         }
-        self.content_drag = Some(ContentDrag {
+        self.content.drag = Some(ContentDrag {
             name,
             asset_type,
             anchor: at,
@@ -115,13 +115,13 @@ impl EditorHook {
         world: &mut World,
     ) {
         if input.escape {
-            self.content_drag = None;
+            self.content.drag = None;
             return;
         }
         let mouse = [input.mouse_x, input.mouse_y];
         if input.left_button_down {
             let over_panel = self.cursor_over_content_panel(mouse, vp);
-            let moved = match &mut self.content_drag {
+            let moved = match &mut self.content.drag {
                 Some(drag) => {
                     let (dx, dy) = (mouse[0] - drag.anchor[0], mouse[1] - drag.anchor[1]);
                     drag.moved |= (dx * dx + dy * dy).sqrt() >= DRAG_START_PX;
@@ -132,12 +132,12 @@ impl EditorHook {
             let pose = (moved && !over_panel)
                 .then(|| self.drop_pose(world, vp, mouse, input.ctrl))
                 .flatten();
-            if let Some(drag) = &mut self.content_drag {
+            if let Some(drag) = &mut self.content.drag {
                 drag.pose = pose;
             }
             return;
         }
-        let Some(drag) = self.content_drag.take() else {
+        let Some(drag) = self.content.drag.take() else {
             return;
         };
         let Some(pose) = drag.pose else {
@@ -296,7 +296,7 @@ impl EditorHook {
     // Whether a ghost is showing this frame (the drag left the panel and has
     // a landing pose); the trigger outline stands down while it does.
     pub(in crate::editor::hook) fn content_ghost_pose(&self) -> Option<DropPose> {
-        self.content_drag.as_ref().and_then(|d| d.pose)
+        self.content.drag.as_ref().and_then(|d| d.pose)
     }
 
     // Draw the ghost through the shared outline pool.

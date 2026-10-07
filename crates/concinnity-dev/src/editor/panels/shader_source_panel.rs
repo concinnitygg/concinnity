@@ -8,31 +8,47 @@
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
-use super::registry::{self, PanelKey};
+use super::registry::PanelKey;
 use super::shader_diagnostics::{Status, Tone};
 use super::shader_list_panel::tone_color;
 use super::shader_reference_panel::{self as reference, COLUMN_W, RefView};
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::text_area::TextArea;
 use crate::editor::text_area::layout::{self, Geometry, Metrics, TextAreaIds, TextAreaView};
 use crate::editor::text_area::markers::{GutterMarker, Severity};
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 
-const BASE: u32 = registry::base(PanelKey::ShaderSource);
-pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-const TITLE_LABEL: AssetId = AssetId(BASE + 2);
-const CLOSE_BG: AssetId = AssetId(BASE + 3);
-const CLOSE_LABEL: AssetId = AssetId(BASE + 4);
-const SAVE_BG: AssetId = AssetId(BASE + 5);
-const SAVE_LABEL: AssetId = AssetId(BASE + 6);
-const PATH_LABEL: AssetId = AssetId(BASE + 7);
-const STATUS_LABEL: AssetId = AssetId(BASE + 8);
-const DIRTY_LABEL: AssetId = AssetId(BASE + 9);
-const REF_BG: AssetId = AssetId(BASE + 10);
-const REF_LABEL: AssetId = AssetId(BASE + 11);
-pub(crate) const AREA: TextAreaIds = TextAreaIds::new(BASE + 0x100);
+// The chrome, then the text area and the reference column over it.
+hud_ids! {
+    base: panel_base(PanelKey::ShaderSource);
+    sprites: [
+        pub(crate) PANEL_BG,
+        CLOSE_BG,
+        SAVE_BG,
+        REF_BG,
+        ..AREA.sprite_ids(),
+        ..reference::ids().sprites.iter().copied(),
+    ];
+    labels: [
+        TITLE_LABEL,
+        CLOSE_LABEL,
+        SAVE_LABEL,
+        PATH_LABEL,
+        STATUS_LABEL,
+        DIRTY_LABEL,
+        REF_LABEL,
+        ..reference::ids().labels.iter().copied(),
+    ];
+    code_labels: [
+        ..AREA.code_label_ids(),
+        ..reference::ids().code_labels.iter().copied(),
+    ];
+    blocks: [AREA_BASE: TextAreaIds::SPAN, pub(super) REFERENCE_BASE: reference::IDS_SPAN];
+}
+
+pub(crate) const AREA: TextAreaIds = TextAreaIds::new(AREA_BASE);
 
 // The default (and minimum) width; the user can widen the panel past this.
 const SOURCE_W: f32 = 660.0;
@@ -240,7 +256,7 @@ pub(crate) fn place(
     m: Metrics,
 ) {
     let Some(view) = view else {
-        hide_all(world);
+        ids().hide(world);
         return;
     };
     let w = s[0];
@@ -344,49 +360,12 @@ fn place_header(world: &mut World, view: &SourceView, o: [f32; 2], w: f32, dirty
     );
 }
 
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
-    layout::hide(world, AREA);
-    reference::hide_all(world);
-}
-
-// Every sprite id in draw order: the chrome, then the text area and the
-// reference column over it.
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, CLOSE_BG, SAVE_BG, REF_BG];
-    ids.extend(AREA.sprite_ids());
-    ids.extend(reference::sprite_ids());
-    ids
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    vec![
-        TITLE_LABEL,
-        CLOSE_LABEL,
-        SAVE_LABEL,
-        PATH_LABEL,
-        STATUS_LABEL,
-        DIRTY_LABEL,
-        REF_LABEL,
-    ]
-    .into_iter()
-    .chain(reference::label_ids())
-    .collect()
-}
-
-// The labels drawn in the code face: the text area's lines and line numbers,
-// and the reference column's names.
-pub(crate) fn code_label_ids() -> Vec<AssetId> {
-    let mut ids = AREA.code_label_ids();
-    ids.extend(reference::code_label_ids());
-    ids
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::editor::panels::shader_reference::{RefRow, Reference};
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_core::components::TextLabel;
+    use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_core::render::shader_programs::vocabulary::ENTRIES;
 
     const M: Metrics = Metrics {
@@ -397,9 +376,7 @@ mod tests {
     };
 
     fn injected_world() -> World {
-        let mut labels = all_label_ids();
-        labels.extend(code_label_ids());
-        crate::test_support::injected_world(&all_sprite_ids(), &labels, &[])
+        ids().test_world()
     }
 
     fn view<'a>(
@@ -502,22 +479,6 @@ mod tests {
         let l = label(&world, STATUS_LABEL);
         assert_eq!(l.content, "line 2: unused");
         assert_eq!(l.color, theme::LOG_WARN);
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let mut world = injected_world();
-        let area = TextArea::from_text("a");
-        place(
-            &mut world,
-            Some(&view(&area, None, &[])),
-            [20.0, 20.0],
-            size(false),
-            M,
-        );
-        place(&mut world, None, [0.0, 0.0], size(false), M);
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
     }
 
     fn reference_rows() -> Vec<RefRow<'static>> {

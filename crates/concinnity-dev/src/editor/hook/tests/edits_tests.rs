@@ -23,6 +23,7 @@ use crate::editor::panels::form_panel::{self, FormAction};
 use crate::editor::panels::template_panel::TemplateAction;
 
 use crate::editor::hook::tests::fixtures::entry_target;
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::sim;
 use crate::test_support::isolate_state_dir;
 
@@ -170,10 +171,10 @@ fn a_broken_world_reports_its_error_in_the_status_line() {
     let mut h = hook(vec![serde_json::json!({
         "type": "NotARealAssetType", "args": {"$id": "oops"}
     })]);
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     h.refresh_tree_if_needed();
-    assert!(h.tree_groups.is_empty());
-    let status = h.tree_status.as_deref().expect("the failure surfaces");
+    assert!(h.assets.groups.is_empty());
+    let status = h.assets.status.as_deref().expect("the failure surfaces");
     assert!(status.contains("NotARealAssetType"), "{status}");
 }
 
@@ -240,7 +241,7 @@ fn undo_drops_entry_indexed_ui_state() {
     h.form.selected_type = Some("Sprite".to_string());
     let target = entry_target(&h, 1);
     h.form.target = target;
-    h.row_menu = Some(h.handle_for("b"));
+    h.assets.row_menu = Some(h.handle_for("b"));
 
     h.undo(&mut world);
     assert_eq!(
@@ -249,7 +250,7 @@ fn undo_drops_entry_indexed_ui_state() {
         "the form no longer targets a live row"
     );
     assert_eq!(h.form.selected_type, None);
-    assert_eq!(h.row_menu, None);
+    assert_eq!(h.assets.row_menu, None);
 }
 
 // Ctrl+Z / Ctrl+Y drive the history from the tick, but stand down while a text

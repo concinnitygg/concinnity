@@ -26,24 +26,28 @@ impl EditorHook {
     // command palette). Called from the frame drive rather than from each
     // edit, so a burst of edits costs one expansion, not one each.
     pub(in crate::editor::hook) fn refresh_tree_if_needed(&mut self) {
-        if !(self.panel_open || self.content_open || self.palette.open) || !self.tree_stale {
+        if !(self.open[PanelKey::Assets]
+            || self.open[PanelKey::Content]
+            || self.open[PanelKey::Palette])
+            || !self.assets.stale
+        {
             return;
         }
-        self.tree_stale = false;
+        self.assets.stale = false;
         match self.cook_working_entries() {
             Ok(loaded) => {
-                self.tree_groups = asset_tree::groups_from(&loaded);
-                self.tree_status = None;
+                self.assets.groups = asset_tree::groups_from(&loaded);
+                self.assets.status = None;
                 // A group that no longer exists must not stay unfolded.
-                let n = self.tree_groups.len();
-                self.tree_unfolded.retain(|&g| g < n);
+                let n = self.assets.groups.len();
+                self.assets.unfolded.retain(|&g| g < n);
             }
             Err(e) => {
                 // A world mid-edit may not cook; the panel says so rather than
                 // showing a stale tree.
-                self.tree_groups.clear();
-                self.tree_unfolded.clear();
-                self.tree_status = Some(short_status(&e));
+                self.assets.groups.clear();
+                self.assets.unfolded.clear();
+                self.assets.status = Some(short_status(&e));
             }
         }
     }
@@ -78,12 +82,12 @@ impl EditorHook {
     // engine-edited field). Blank while the picker is open, since the field is
     // narrowing the picker's options rather than the tree.
     pub(in crate::editor::hook) fn tree_rows(&self, world: &World) -> Vec<TreeRow> {
-        let filter = if self.picker_open {
+        let filter = if self.assets.picker_open {
             String::new()
         } else {
             widget::field_text(world, assets_panel::SEARCH_INPUT)
         };
-        asset_tree::rows(&self.tree_groups, &self.tree_unfolded, &filter)
+        asset_tree::rows(&self.assets.groups, &self.assets.unfolded, &filter)
     }
 
     // The "+" picker's option list, narrowed by the search field and sorted
@@ -92,7 +96,7 @@ impl EditorHook {
         &self,
         world: &World,
     ) -> Option<Vec<assets_panel::PickerOption>> {
-        if !self.picker_open {
+        if !self.assets.picker_open {
             return None;
         }
         let filter = widget::field_text(world, assets_panel::SEARCH_INPUT).to_lowercase();
@@ -106,7 +110,7 @@ impl EditorHook {
 
     // The asset behind a resolved row click, if the tree still lists it.
     fn tree_asset(&self, group: usize, index: usize) -> Option<&asset_tree::TreeAsset> {
-        self.tree_groups.get(group)?.assets.get(index)
+        self.assets.groups.get(group)?.assets.get(index)
     }
 
     // The handle of the asset behind a resolved row click.
@@ -122,18 +126,19 @@ impl EditorHook {
     ) -> PanelView<'a> {
         PanelView {
             rows: &d.rows,
-            scroll: self.tree_scroll,
+            scroll: self.assets.scroll,
             // Focus is asserted only while frontmost, matching the other panels'
             // guard against fighting for typed keys.
-            search_focus: self.search_focus && self.panel_order.last() == Some(&PanelKey::Assets),
+            search_focus: self.assets.search_focus
+                && self.panel_order.last() == Some(&PanelKey::Assets),
             picker_options: d.picker_options.as_deref(),
-            picker_scroll: self.picker_scroll,
+            picker_scroll: self.assets.picker_scroll,
             selected,
             hidden: &d.hidden,
             locked: &d.locked,
             row_menu: d.row_menu.as_deref(),
-            total: self.tree_groups.iter().map(|g| g.assets.len()).sum(),
-            status: self.tree_status.as_deref(),
+            total: self.assets.groups.iter().map(|g| g.assets.len()).sum(),
+            status: self.assets.status.as_deref(),
             mouse,
         }
     }
@@ -145,20 +150,20 @@ impl EditorHook {
     }
 
     pub(in crate::editor::hook) fn scroll_tree(&mut self, delta: f32, world: &World) {
-        if self.picker_open {
+        if self.assets.picker_open {
             let total = self
                 .picker_options(world)
                 .map_or(0, |o| o.len())
                 .saturating_sub(self.tree_rows_shown());
-            self.picker_scroll = scroll_step(self.picker_scroll, delta, total);
+            self.assets.picker_scroll = scroll_step(self.assets.picker_scroll, delta, total);
             return;
         }
         let max = self
             .tree_rows(world)
             .len()
             .saturating_sub(self.tree_rows_shown());
-        self.tree_scroll = scroll_step(self.tree_scroll, delta, max);
-        self.row_menu = None;
+        self.assets.scroll = scroll_step(self.assets.scroll, delta, max);
+        self.assets.row_menu = None;
     }
 
     fn clamp_tree_scroll(&mut self, world: &World) {
@@ -166,26 +171,26 @@ impl EditorHook {
             .tree_rows(world)
             .len()
             .saturating_sub(self.tree_rows_shown());
-        self.tree_scroll = self.tree_scroll.min(max);
+        self.assets.scroll = self.assets.scroll.min(max);
     }
 
     // Route a resolved Assets-panel click.
     pub(in crate::editor::hook) fn apply_panel(&mut self, action: PanelAction, world: &mut World) {
         match action {
             PanelAction::FocusSearch => {
-                self.search_focus = true;
-                self.row_menu = None;
+                self.assets.search_focus = true;
+                self.assets.row_menu = None;
             }
             PanelAction::TogglePicker => {
-                if self.picker_open {
-                    self.picker_open = false;
+                if self.assets.picker_open {
+                    self.assets.picker_open = false;
                 } else {
                     // The field keeps whatever was typed: the picker simply
                     // narrows by the same text the tree was filtered by.
-                    self.picker_open = true;
-                    self.picker_scroll = 0;
-                    self.row_menu = None;
-                    self.search_focus = true;
+                    self.assets.picker_open = true;
+                    self.assets.picker_scroll = 0;
+                    self.assets.row_menu = None;
+                    self.assets.search_focus = true;
                 }
             }
             PanelAction::PickOption(i) => {
@@ -209,18 +214,18 @@ impl EditorHook {
                         Some(key) => FormTarget::Entry(key),
                         None => FormTarget::New,
                     };
-                    self.picker_open = false;
+                    self.assets.picker_open = false;
                     self.open_form(world, ty, target);
                 }
             }
             PanelAction::ToggleGroup(group) => {
-                match self.tree_unfolded.iter().position(|&g| g == group) {
+                match self.assets.unfolded.iter().position(|&g| g == group) {
                     Some(i) => {
-                        self.tree_unfolded.remove(i);
+                        self.assets.unfolded.remove(i);
                     }
-                    None => self.tree_unfolded.push(group),
+                    None => self.assets.unfolded.push(group),
                 }
-                self.row_menu = None;
+                self.assets.row_menu = None;
                 self.clamp_tree_scroll(world);
             }
             // A row click mirrors a viewport pick: plain replaces the selection
@@ -230,7 +235,7 @@ impl EditorHook {
                 let Some(name) = self.tree_asset(group, index).map(|a| a.name.clone()) else {
                     return;
                 };
-                self.row_menu = None;
+                self.assets.row_menu = None;
                 if self.shift_held {
                     if self.toggle_named(&name) {
                         self.open_asset_form(&name, world);
@@ -260,26 +265,35 @@ impl EditorHook {
                 }
             }
             PanelAction::OpenRowMenu(group, index) => {
-                self.row_menu = self.tree_handle(group, index);
+                self.assets.row_menu = self.tree_handle(group, index);
             }
             // Generated assets have no line to delete: they are removed by
             // editing whatever produced them.
             PanelAction::RowDelete => {
-                if let Some(idx) = self.row_menu.take().and_then(|h| self.handle_index(&h)) {
+                if let Some(idx) = self
+                    .assets
+                    .row_menu
+                    .take()
+                    .and_then(|h| self.handle_index(&h))
+                {
                     self.remove_entry_at(idx);
                 }
                 self.clamp_tree_scroll(world);
             }
             PanelAction::RowExport => {
-                let name = self.row_menu.take().and_then(|h| self.handle_name(&h));
+                let name = self
+                    .assets
+                    .row_menu
+                    .take()
+                    .and_then(|h| self.handle_name(&h));
                 if let Some(name) = name {
                     self.console_export(Some(name.as_str()), false);
                 }
             }
             PanelAction::CloseOverlays => {
-                self.picker_open = false;
-                self.row_menu = None;
-                self.search_focus = false;
+                self.assets.picker_open = false;
+                self.assets.row_menu = None;
+                self.assets.search_focus = false;
             }
             PanelAction::Consume => {}
         }
@@ -321,8 +335,8 @@ impl EditorHook {
 
     // Enter blurs the search field (the filter applies live while typing).
     pub(in crate::editor::hook) fn tree_keys(&mut self, _world: &mut World, input: &FrameInput) {
-        if self.search_focus && input.pressed_fresh(InputKey::Enter) {
-            self.search_focus = false;
+        if self.assets.search_focus && input.pressed_fresh(InputKey::Enter) {
+            self.assets.search_focus = false;
         }
     }
 
@@ -330,16 +344,17 @@ impl EditorHook {
     // viewport pick is always visible in the tree. A name the tree does not list
     // (a filtered-out match, a mid-edit cook failure) leaves it as-is.
     pub(in crate::editor::hook) fn reveal_in_tree(&mut self, name: &str, world: &World) {
-        if !self.panel_open {
+        if !self.open[PanelKey::Assets] {
             return;
         }
         if let Some(group) = self
-            .tree_groups
+            .assets
+            .groups
             .iter()
             .position(|g| g.assets.iter().any(|a| a.name == name))
-            && !self.tree_unfolded.contains(&group)
+            && !self.assets.unfolded.contains(&group)
         {
-            self.tree_unfolded.push(group);
+            self.assets.unfolded.push(group);
         }
         let rows = self.tree_rows(world);
         let Some(row) = rows
@@ -350,9 +365,9 @@ impl EditorHook {
         };
         // Scroll only when the row is outside the visible window, keeping its
         // group header in view when it sits directly above.
-        if row < self.tree_scroll || row >= self.tree_scroll + self.tree_rows_shown() {
+        if row < self.assets.scroll || row >= self.assets.scroll + self.tree_rows_shown() {
             let max = rows.len().saturating_sub(self.tree_rows_shown());
-            self.tree_scroll = row.saturating_sub(1).min(max);
+            self.assets.scroll = row.saturating_sub(1).min(max);
         }
     }
 }

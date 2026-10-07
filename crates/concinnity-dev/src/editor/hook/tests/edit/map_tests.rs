@@ -26,8 +26,7 @@ fn map_session(entries: Vec<serde_json::Value>) -> (EditorHook, World) {
 }
 
 fn injected_world() -> World {
-    let p = registry::panel(PanelKey::Map);
-    crate::test_support::injected_world(&p.sprite_ids(), &p.label_ids(), &[])
+    registry::panel(PanelKey::Map).ids().test_world()
 }
 
 fn card<'a>(chart: &'a Chart, title: &str) -> &'a Card {
@@ -188,13 +187,12 @@ fn the_map_and_the_behavior_chart_draw_at_once() {
     let mut h = hook(world_entries);
     let behavior = registry::panel(PanelKey::Behavior);
     let map = registry::panel(PanelKey::Map);
-    let mut world = crate::test_support::injected_world(
-        &[behavior.sprite_ids(), map.sprite_ids()].concat(),
-        &[behavior.label_ids(), map.label_ids()].concat(),
-        &[],
-    );
-    for id in behavior.field_ids() {
-        world.push_identified(id.0, concinnity_core::components::TextInput::default());
+    let mut world = behavior.ids().test_world();
+    for &id in &map.ids().sprites {
+        world.push_identified(id, concinnity_core::components::Sprite::default());
+    }
+    for &id in &map.ids().labels {
+        world.push_identified(id, TextLabel::default());
     }
     behavior.toggle(&mut h, &mut world);
     map.toggle(&mut h, &mut world);
@@ -217,11 +215,11 @@ fn the_map_and_the_behavior_chart_draw_at_once() {
             .collect()
     };
     assert!(
-        drawn(ChartIds::of(PanelKey::Map)).contains(&"main".to_string()),
+        drawn(map::panel::CHART_IDS).contains(&"main".to_string()),
         "the map lost its cards to the behavior chart",
     );
     assert!(
-        !drawn(ChartIds::of(PanelKey::Behavior)).is_empty(),
+        !drawn(crate::editor::behavior::panel::CHART_IDS).is_empty(),
         "the behavior chart drew nothing, so the map proves nothing",
     );
 }
@@ -313,7 +311,7 @@ fn a_ctrl_click_on_a_place_reaches_the_behaviors_that_send_the_world_to_it() {
         ["opener"],
         "the one that sends the world here"
     );
-    assert!(h.behavior.open, "the panel showing one opened");
+    assert!(h.open[PanelKey::Behavior], "the panel showing one opened");
     assert_eq!(h.behavior_data().name, "opener");
 }
 
@@ -327,7 +325,7 @@ fn a_ctrl_click_on_a_place_no_behavior_reaches_leaves_the_selection_alone() {
     assert!(click_card(&mut h, &mut world, "bistro"));
 
     assert_eq!(selected(&h), ["main"]);
-    assert!(!h.behavior.open, "nothing to open");
+    assert!(!h.open[PanelKey::Behavior], "nothing to open");
 }
 
 // The other direction: what the Assets panel or the viewport selected is what
@@ -452,7 +450,10 @@ fn a_map_that_shrank_under_the_canvas_brings_it_back_to_the_last_place() {
 #[test]
 fn a_closed_panel_drives_nothing() {
     let mut h = hook(scenes(20));
-    assert!(!h.map.open, "the Map panel is closed until it is opened");
+    assert!(
+        !h.open[PanelKey::Map],
+        "the Map panel is closed until it is opened"
+    );
     select(&mut h, &["scene_19"]);
     h.drive_map();
     assert_eq!(h.map.pan, [0.0, 0.0]);

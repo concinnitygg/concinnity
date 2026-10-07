@@ -32,21 +32,6 @@ pub(crate) struct MenuIds {
     pub item_labels: [AssetId; MAX_ITEMS],
 }
 
-impl MenuIds {
-    // Every sprite id in draw order: the dots, then the menu over them.
-    pub(crate) fn sprites(&self) -> Vec<AssetId> {
-        let mut ids = vec![self.dot_bg];
-        ids.extend(self.dots);
-        ids.push(self.bg);
-        ids.extend(self.item_bgs);
-        ids
-    }
-
-    pub(crate) fn labels(&self) -> Vec<AssetId> {
-        self.item_labels.to_vec()
-    }
-}
-
 // One action the menu offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Item {
@@ -189,7 +174,11 @@ mod tests {
     const ROW: [f32; 4] = [0.0, 100.0, 400.0, 28.0];
 
     fn world() -> World {
-        crate::test_support::injected_world(&IDS.sprites(), &IDS.labels(), &[])
+        crate::test_support::injected_world(
+            &[1, 2, 3, 4, 5, 6, 7, 10].map(AssetId),
+            &[8, 9, 11].map(AssetId),
+            &[],
+        )
     }
 
     #[test]

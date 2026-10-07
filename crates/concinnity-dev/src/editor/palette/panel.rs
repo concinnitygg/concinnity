@@ -4,31 +4,11 @@
 //! `editor/palette/`; the drive in `hook/edit/palette.rs`.
 
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
-use crate::editor::panels::registry::{self, PanelKey};
+use crate::editor::hud_ids::{hud_ids, panel_base};
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::theme;
 use crate::editor::widget::{self, point_in};
-
-const BASE: u32 = registry::base(PanelKey::Palette);
-pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-pub(crate) const TITLE_LABEL: AssetId = AssetId(BASE + 2);
-pub(crate) const CLOSE_BG: AssetId = AssetId(BASE + 3);
-pub(crate) const CLOSE_LABEL: AssetId = AssetId(BASE + 4);
-pub(crate) const INPUT: AssetId = AssetId(BASE + 5);
-
-fn row_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x10 + i as u32)
-}
-fn row_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x40 + i as u32)
-}
-fn row_hint(i: usize) -> AssetId {
-    AssetId(BASE + 0x70 + i as u32)
-}
-fn row_tag(i: usize) -> AssetId {
-    AssetId(BASE + 0xA0 + i as u32)
-}
 
 // Geometry, in window pixels. Every rect derives from the panel origin `o`, so
 // dragging the title bar moves the whole panel.
@@ -38,6 +18,18 @@ const INPUT_H: f32 = 28.0;
 const ROW_H: f32 = 24.0;
 // Visible result rows; a longer match list scrolls.
 pub(crate) const ROW_POOL: usize = 10;
+
+hud_ids! {
+    base: panel_base(PanelKey::Palette);
+    sprites: [pub(crate) PANEL_BG, pub(crate) CLOSE_BG, row_bg[ROW_POOL]];
+    labels: [
+        pub(crate) TITLE_LABEL,
+        pub(crate) CLOSE_LABEL,
+        [ROW_POOL] { row_label, row_hint, row_tag },
+    ];
+    fields: [pub(crate) INPUT = "search"];
+}
+
 // Character budgets for the three row columns at the fixed width.
 const CAPTION_CHARS: usize = 26;
 const HINT_CHARS: usize = 24;
@@ -136,7 +128,7 @@ pub(crate) fn hit_test(view: &PaletteView, mx: f32, my: f32, o: [f32; 2]) -> Opt
 // Position + show the panel (`Some(view)`), or blank every element (`None`).
 pub(crate) fn place(world: &mut World, view: Option<&PaletteView>, o: [f32; 2]) {
     let Some(view) = view else {
-        hide_all(world);
+        ids().hide(world);
         return;
     };
     widget::place_panel(world, PANEL_BG, widget::outer_rect(o, size()));
@@ -216,39 +208,13 @@ fn empty_row(world: &mut World, o: [f32; 2]) {
     );
 }
 
-// Hide every panel element, blurring the input so a hidden field cannot keep
-// keyboard focus.
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &all_field_ids());
-}
-
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, CLOSE_BG];
-    ids.extend((0..ROW_POOL).map(row_bg));
-    ids
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![TITLE_LABEL, CLOSE_LABEL];
-    for i in 0..ROW_POOL {
-        ids.push(row_label(i));
-        ids.push(row_hint(i));
-        ids.push(row_tag(i));
-    }
-    ids
-}
-
-pub(crate) fn all_field_ids() -> Vec<AssetId> {
-    vec![INPUT]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use concinnity_core::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &all_field_ids())
+        ids().test_world()
     }
 
     fn rows(n: usize) -> Vec<(String, String)> {
@@ -346,17 +312,5 @@ mod tests {
         place(&mut world, Some(&view(&backing, 0)), [20.0, 20.0]);
         let first = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
         assert!(first.visible && first.content == "no match");
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let mut world = injected_world();
-        let backing = rows(ROW_POOL);
-        place(&mut world, Some(&view(&backing, 0)), [20.0, 20.0]);
-        place(&mut world, None, [0.0, 0.0]);
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
-        let input = world.query::<TextInput>().next().unwrap();
-        assert!(!input.visible && !input.focused);
     }
 }

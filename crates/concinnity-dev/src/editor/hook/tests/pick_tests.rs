@@ -21,6 +21,7 @@ use crate::editor::panels::assets_panel;
 
 use crate::editor::hook::tests::fixtures::entry_target;
 use crate::editor::hook::tests::fixtures::{active, selected};
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::sim;
 use crate::editor::viewport::highlight;
 use crate::test_support::isolate_state_dir;
@@ -48,7 +49,7 @@ fn viewport_click_picks_the_nearest_prop_without_opening_a_form() {
 
     click_at(&mut world, &mut h, [640.0, 360.0]);
     assert_eq!(active(&h).as_deref(), Some("box_near"), "nearest hit wins");
-    assert!(!h.panel_open, "a viewport click opens no panel");
+    assert!(!h.open[PanelKey::Assets], "a viewport click opens no panel");
     assert!(!h.form_open(), "a viewport click opens no form");
 
     // An already-open form follows the pick instead.
@@ -140,7 +141,10 @@ fn viewport_click_on_an_unknown_asset_selects_without_a_form() {
 
     click_at(&mut world, &mut h, [640.0, 360.0]);
     assert_eq!(active(&h).as_deref(), Some("some_generated_asset"));
-    assert!(!h.panel_open, "no panel opens on a viewport click");
+    assert!(
+        !h.open[PanelKey::Assets],
+        "no panel opens on a viewport click"
+    );
     assert_eq!(h.form.target, FormTarget::New);
     assert!(!h.form_open());
 }
@@ -202,7 +206,7 @@ fn selection_ring_tracks_the_picked_asset() {
 
     let ring = |world: &World| {
         world
-            .get_by_id::<Sprite>(highlight::all_sprite_ids()[0])
+            .get_by_id::<Sprite>(highlight::ids().sprites[0])
             .cloned()
             .expect("outline sprite injected")
     };
@@ -331,9 +335,9 @@ fn ray_hits_leaves_out_a_box_the_ray_misses() {
 fn viewport_pick_reveals_the_tree_row() {
     let world = World::new();
     let mut h = hook(Vec::new());
-    h.panel_open = true;
-    h.tree_stale = false;
-    h.tree_groups = vec![TreeGroup {
+    h.open[PanelKey::Assets] = true;
+    h.assets.stale = false;
+    h.assets.groups = vec![TreeGroup {
         label: asset_tree::WORLD_GROUP.to_string(),
         assets: (0..30)
             .map(|i| asset_tree::TreeAsset {
@@ -346,11 +350,11 @@ fn viewport_pick_reveals_the_tree_row() {
     }];
 
     h.reveal_in_tree("a25", &world);
-    assert_eq!(h.tree_unfolded, vec![0], "the group unfolds");
+    assert_eq!(h.assets.unfolded, vec![0], "the group unfolds");
     // Rows: header at 0, a25 at 26; the scroll clamps to the last window.
-    assert_eq!(h.tree_scroll, 31 - assets_panel::ROW_POOL);
+    assert_eq!(h.assets.scroll, 31 - assets_panel::ROW_POOL);
 
     // A revealed row already inside the window leaves the scroll alone.
     h.reveal_in_tree("a20", &world);
-    assert_eq!(h.tree_scroll, 31 - assets_panel::ROW_POOL);
+    assert_eq!(h.assets.scroll, 31 - assets_panel::ROW_POOL);
 }

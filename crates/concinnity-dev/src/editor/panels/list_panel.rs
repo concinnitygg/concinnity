@@ -2,11 +2,10 @@
 //! View, Templates). Each is one rounded surface: a draggable title area with a
 //! close button over a vertical stack of fixed-height rows, and each row is a
 //! hover / selection highlight plus a label with an optional checkbox. The three
-//! panels differ only in their reserved-id base, their width, and how a row
-//! index maps to their own action; the row geometry, the id-family layout, the
-//! per-row draw, and the hit-test / hide bookkeeping are identical, so they live
-//! here once. (The Assets and Template detail panels use the richer grouped list
-//! in `asset_list.rs` instead.)
+//! panels differ only in their ids, their width, and how a row index maps to
+//! their own action; the row geometry, the per-row draw, and the hit test are
+//! identical, so they live here once. (The Assets and Template detail panels
+//! use the richer grouped list in `asset_list.rs` instead.)
 
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
@@ -31,33 +30,18 @@ const BOTTOM_PAD: f32 = 6.0;
 // on / off state separately.
 const ROW_TINT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 
-// The reserved-id layout every row-list panel follows, offset from its `base`:
-// the panel surface + title label + close button, then three contiguous per-row
-// sub-ranges (row highlight, checkbox, row label). `const fn` so a panel can
-// name a fixed id (`const PANEL_BG = list_panel::panel_bg(BASE)`).
-pub(crate) const fn panel_bg(base: u32) -> AssetId {
-    AssetId(base)
-}
-pub(crate) const fn title_label(base: u32) -> AssetId {
-    AssetId(base + 1)
-}
-pub(crate) const fn close_bg(base: u32) -> AssetId {
-    AssetId(base + 2)
-}
-pub(crate) const fn close_label(base: u32) -> AssetId {
-    AssetId(base + 3)
-}
-pub(crate) const fn row_bg(base: u32, i: usize) -> AssetId {
-    AssetId(base + 0x10 + i as u32)
-}
-pub(crate) const fn check_box(base: u32, i: usize) -> AssetId {
-    AssetId(base + 0x20 + i as u32)
-}
-pub(crate) const fn row_label(base: u32, i: usize) -> AssetId {
-    AssetId(base + 0x30 + i as u32)
-}
-pub(crate) const fn value_label(base: u32, i: usize) -> AssetId {
-    AssetId(base + 0x40 + i as u32)
+// The ids a row-list panel draws into, declared by the panel itself. A panel
+// whose rows never carry a checkbox or a value has no ids for them.
+#[derive(Clone, Copy)]
+pub(crate) struct ListIds {
+    pub panel_bg: AssetId,
+    pub title: AssetId,
+    pub close_bg: AssetId,
+    pub close_label: AssetId,
+    pub row_bg: fn(usize) -> AssetId,
+    pub row_label: fn(usize) -> AssetId,
+    pub check_box: Option<fn(usize) -> AssetId>,
+    pub value_label: Option<fn(usize) -> AssetId>,
 }
 
 // The "X" close button at the title bar's right end.
@@ -139,7 +123,7 @@ impl Row {
 // highlight and the close-button tint.
 pub(crate) fn place(
     world: &mut World,
-    base: u32,
+    ids: &ListIds,
     o: [f32; 2],
     s: [f32; 2],
     heading: &str,
@@ -147,11 +131,11 @@ pub(crate) fn place(
     mouse: [f32; 2],
 ) {
     let w = s[0];
-    widget::place_panel(world, panel_bg(base), widget::outer_rect(o, s));
+    widget::place_panel(world, ids.panel_bg, widget::outer_rect(o, s));
     let title = widget::title_rect(o, w);
-    widget::place_heading(world, title_label(base), title, heading);
+    widget::place_heading(world, ids.title, title, heading);
     let close_hover = point_in(mouse[0], mouse[1], close_rect(o, w));
-    widget::place_close(world, close_bg(base), close_label(base), title, close_hover);
+    widget::place_close(world, ids.close_bg, ids.close_label, title, close_hover);
     for (i, row) in rows.iter().enumerate() {
         let r = row_rect(o, w, i);
         let hovered = point_in(mouse[0], mouse[1], r);
@@ -164,7 +148,7 @@ pub(crate) fn place(
         };
         place_rounded(
             world,
-            row_bg(base, i),
+            (ids.row_bg)(i),
             theme::highlight_rect(r),
             tint,
             theme::CONTROL_RADIUS,
@@ -177,19 +161,21 @@ pub(crate) fn place(
                 } else {
                     theme::CHECK_OFF_TINT
                 };
-                place_rounded(
-                    world,
-                    check_box(base, i),
-                    [
-                        r[0] + PAD,
-                        r[1] + (ROW_H - BOX_SIZE) * 0.5,
-                        BOX_SIZE,
-                        BOX_SIZE,
-                    ],
-                    box_tint,
-                    4.0,
-                    true,
-                );
+                if let Some(check_box) = ids.check_box {
+                    place_rounded(
+                        world,
+                        check_box(i),
+                        [
+                            r[0] + PAD,
+                            r[1] + (ROW_H - BOX_SIZE) * 0.5,
+                            BOX_SIZE,
+                            BOX_SIZE,
+                        ],
+                        box_tint,
+                        4.0,
+                        true,
+                    );
+                }
                 r[0] + CHECK_LABEL_INSET
             }
             None => r[0] + PAD,
@@ -200,7 +186,7 @@ pub(crate) fn place(
         };
         widget::place_message(
             world,
-            row_label(base, i),
+            (ids.row_label)(i),
             [
                 label_x,
                 r[1] + LABEL_TOP,
@@ -211,19 +197,22 @@ pub(crate) fn place(
             theme::LABEL,
             true,
         );
+        let Some(value_label) = ids.value_label else {
+            continue;
+        };
         match &row.value {
             Some(v) => {
                 let vr = value_rect(o, w, i);
                 widget::place_message(
                     world,
-                    value_label(base, i),
+                    value_label(i),
                     [vr[0], vr[1] + LABEL_TOP, vr[2] - PAD, widget::LINE_H],
                     v,
                     theme::LABEL_DIM,
                     true,
                 );
             }
-            None => widget::set_label_visible(world, value_label(base, i), false),
+            None => widget::set_label_visible(world, value_label(i), false),
         }
     }
 }
@@ -235,46 +224,33 @@ pub(crate) fn hit_row(mx: f32, my: f32, o: [f32; 2], w: f32, rows: usize) -> Opt
     (0..rows).find(|&i| point_in(mx, my, row_rect(o, w, i)))
 }
 
-// The sprite ids a row-list panel injects: the panel surface, the close-button
-// background, every row highlight, and (when the rows carry checkboxes) every
-// checkbox.
-pub(crate) fn all_sprite_ids(base: u32, rows: usize, checkboxes: bool) -> Vec<AssetId> {
-    let mut ids = vec![panel_bg(base), close_bg(base)];
-    ids.extend((0..rows).map(|i| row_bg(base, i)));
-    if checkboxes {
-        ids.extend((0..rows).map(|i| check_box(base, i)));
-    }
-    ids
-}
-
-// The label ids a row-list panel injects: the title / close labels, every row
-// label, and (when the rows carry values) every value label.
-pub(crate) fn all_label_ids(base: u32, rows: usize, values: bool) -> Vec<AssetId> {
-    let mut ids = vec![title_label(base), close_label(base)];
-    ids.extend((0..rows).map(|i| row_label(base, i)));
-    if values {
-        ids.extend((0..rows).map(|i| value_label(base, i)));
-    }
-    ids
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor::hud_ids::hud_ids;
     use concinnity_core::components::{Sprite, TextLabel};
 
-    // A scratch family well clear of every real allocation in `registry.rs`.
-    const BASE: u32 = 0x3000_0000 + 0x1F00;
+    const ROWS: usize = 2;
 
-    fn injected_world(rows: usize) -> World {
-        let mut world = World::new();
-        for id in all_sprite_ids(BASE, rows, true) {
-            world.push_identified(id, Sprite::default());
-        }
-        for id in all_label_ids(BASE, rows, true) {
-            world.push_identified(id, TextLabel::default());
-        }
-        world
+    hud_ids! {
+        base: 0;
+        sprites: [PANEL_BG, CLOSE_BG, row_bg[ROWS], check_box[ROWS]];
+        labels: [TITLE_LABEL, CLOSE_LABEL, row_label[ROWS], value_label[ROWS]];
+    }
+
+    const IDS: ListIds = ListIds {
+        panel_bg: PANEL_BG,
+        title: TITLE_LABEL,
+        close_bg: CLOSE_BG,
+        close_label: CLOSE_LABEL,
+        row_bg,
+        row_label,
+        check_box: Some(check_box),
+        value_label: Some(value_label),
+    };
+
+    fn injected_world() -> World {
+        ids().test_world()
     }
 
     fn sprite(world: &World, id: AssetId) -> Sprite {
@@ -295,29 +271,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn id_family_is_disjoint_across_sub_ranges() {
-        assert_eq!(panel_bg(BASE), AssetId(BASE));
-        assert_eq!(close_bg(BASE), AssetId(BASE + 2));
-        assert_eq!(row_bg(BASE, 0), AssetId(BASE + 0x10));
-        assert_eq!(check_box(BASE, 0), AssetId(BASE + 0x20));
-        assert_eq!(row_label(BASE, 0), AssetId(BASE + 0x30));
-    }
-
     // The whole panel is one rounded chrome surface; rows highlight over it.
     #[test]
     fn place_draws_the_rounded_panel_surface() {
-        let mut world = injected_world(1);
+        let mut world = injected_world();
         place(
             &mut world,
-            BASE,
+            &IDS,
             [20.0, 30.0],
             size(200.0, 1),
             "Panel",
             &[Row::label("a")],
             [0.0, 0.0],
         );
-        let bg = sprite(&world, panel_bg(BASE));
+        let bg = sprite(&world, PANEL_BG);
         assert!(bg.visible);
         assert_eq!((bg.x, bg.y), (20.0, 30.0));
         assert_eq!((bg.width, bg.height), (200.0, size(200.0, 1)[1]));
@@ -328,19 +295,19 @@ mod tests {
     // rows stay anchored below the title bar and the extra space is padding.
     #[test]
     fn place_grows_the_surface_to_the_effective_size() {
-        let mut world = injected_world(1);
+        let mut world = injected_world();
         let o = [20.0, 30.0];
         let tall_wide = [size(200.0, 1)[0] + 80.0, size(200.0, 1)[1] + 120.0];
         place(
             &mut world,
-            BASE,
+            &IDS,
             o,
             tall_wide,
             "Panel",
             &[Row::label("a")],
             [0.0, 0.0],
         );
-        let bg = sprite(&world, panel_bg(BASE));
+        let bg = sprite(&world, PANEL_BG);
         assert_eq!((bg.width, bg.height), (tall_wide[0], tall_wide[1]));
         // The lone row still sits directly under the title bar.
         assert_eq!(row_rect(o, tall_wide[0], 0)[1], o[1] + widget::TITLE_H);
@@ -359,69 +326,66 @@ mod tests {
 
     #[test]
     fn place_draws_title_close_and_a_checkbox_row() {
-        let mut world = injected_world(1);
+        let mut world = injected_world();
         let o = [20.0, 20.0];
         let w = 200.0;
         place(
             &mut world,
-            BASE,
+            &IDS,
             o,
             size(w, 1),
             "Panel",
             &[Row::checkbox("Toggle", true)],
             [0.0, 0.0],
         );
-        let title = world.get_by_id::<TextLabel>(title_label(BASE)).unwrap();
+        let title = world.get_by_id::<TextLabel>(TITLE_LABEL).unwrap();
         assert!(title.visible && title.content == "Panel");
         // The close button always shows its "X".
-        let close = world.get_by_id::<TextLabel>(close_label(BASE)).unwrap();
+        let close = world.get_by_id::<TextLabel>(CLOSE_LABEL).unwrap();
         assert!(close.visible && close.content == "X");
         // The checkbox is green while on and the label is inset past the box.
-        assert_eq!(
-            sprite(&world, check_box(BASE, 0)).tint,
-            theme::CHECK_ON_TINT
-        );
-        let label = world.get_by_id::<TextLabel>(row_label(BASE, 0)).unwrap();
+        assert_eq!(sprite(&world, check_box(0)).tint, theme::CHECK_ON_TINT);
+        let label = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
         assert_eq!(label.content, "Toggle");
         assert_eq!(label.x, o[0] + CHECK_LABEL_INSET);
         // Off flips the checkbox tint.
         place(
             &mut world,
-            BASE,
+            &IDS,
             o,
             size(w, 1),
             "Panel",
             &[Row::checkbox("Toggle", false)],
             [0.0, 0.0],
         );
-        assert_eq!(
-            sprite(&world, check_box(BASE, 0)).tint,
-            theme::CHECK_OFF_TINT
-        );
+        assert_eq!(sprite(&world, check_box(0)).tint, theme::CHECK_OFF_TINT);
     }
 
     #[test]
     fn label_only_row_insets_by_pad_not_a_box() {
-        // A label-only panel injects no checkbox ids (`all_sprite_ids(.., false)`),
-        // so its rows have nothing to inset past: the label sits at PAD.
-        let mut world = World::new();
-        for id in all_sprite_ids(BASE, 1, false) {
-            world.push_identified(id, Sprite::default());
-        }
-        for id in all_label_ids(BASE, 1, false) {
-            world.push_identified(id, TextLabel::default());
-        }
+        // A label-only panel declares no checkbox ids, so its rows have nothing
+        // to inset past: the label sits at PAD.
+        let mut world = crate::test_support::injected_world(
+            &[PANEL_BG, CLOSE_BG, row_bg(0)],
+            &[TITLE_LABEL, CLOSE_LABEL, row_label(0)],
+            &[],
+        );
+        let labels_only = ListIds {
+            check_box: None,
+            value_label: None,
+            ..IDS
+        };
         let o = [20.0, 20.0];
         place(
             &mut world,
-            BASE,
+            &labels_only,
             o,
             size(200.0, 1),
             "Panel",
             &[Row::label("Just text")],
             [0.0, 0.0],
         );
-        let label = world.get_by_id::<TextLabel>(row_label(BASE, 0)).unwrap();
+        let label = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
         assert_eq!(
             label.x,
             o[0] + PAD,
@@ -431,62 +395,40 @@ mod tests {
 
     #[test]
     fn hovered_and_selected_rows_are_tinted() {
-        let mut world = injected_world(2);
+        let mut world = injected_world();
         let o = [20.0, 20.0];
         let w = 200.0;
         let r0 = row_rect(o, w, 0);
         place(
             &mut world,
-            BASE,
+            &IDS,
             o,
             size(w, 2),
             "Panel",
             &[Row::label("a"), Row::label("b").select(true)],
             [r0[0] + 5.0, r0[1] + 5.0],
         );
-        let hovered = sprite(&world, row_bg(BASE, 0));
+        let hovered = sprite(&world, row_bg(0));
         assert_eq!(hovered.tint, theme::HOVER_TINT);
         assert!(
             hovered.height < ROW_H && hovered.corner_radius > 0.0,
             "the highlight is an inset rounded pill, not a full-width band"
         );
         assert_eq!(
-            sprite(&world, row_bg(BASE, 1)).tint,
+            sprite(&world, row_bg(1)).tint,
             theme::SELECTED_TINT,
             "the selected row is highlighted without a hover"
         );
         // An idle, unselected row draws no highlight at all.
         place(
             &mut world,
-            BASE,
+            &IDS,
             o,
             size(w, 2),
             "Panel",
             &[Row::label("a"), Row::label("b")],
             [0.0, 0.0],
         );
-        assert_eq!(sprite(&world, row_bg(BASE, 0)).tint[3], 0.0);
-    }
-
-    #[test]
-    fn hide_all_blanks_every_listed_element() {
-        let mut world = injected_world(2);
-        place(
-            &mut world,
-            BASE,
-            [20.0, 20.0],
-            size(200.0, 2),
-            "Panel",
-            &[Row::checkbox("a", true), Row::checkbox("b", false)],
-            [0.0, 0.0],
-        );
-        widget::hide_all(
-            &mut world,
-            &all_sprite_ids(BASE, 2, true),
-            &all_label_ids(BASE, 2, true),
-            &[],
-        );
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
+        assert_eq!(sprite(&world, row_bg(0)).tint[3], 0.0);
     }
 }

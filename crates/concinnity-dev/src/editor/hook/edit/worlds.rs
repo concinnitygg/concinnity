@@ -16,6 +16,7 @@ use crate::editor::history::History;
 use crate::editor::hook::worlds_start::Adopt;
 use crate::editor::hook::{EditorHook, scroll_step};
 use crate::editor::modal;
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::session_store;
 use crate::editor::worlds;
 use crate::editor::worlds::{WorldRow, WorldTarget, WorldsAction, WorldsConfirm, WorldsView};
@@ -43,7 +44,8 @@ impl EditorHook {
 
     // Show the panel, with a fresh listing.
     pub(in crate::editor::hook) fn open_worlds_panel(&mut self) {
-        self.worlds.open();
+        self.open[PanelKey::Worlds] = true;
+        self.worlds.reset_view();
         self.refresh_worlds();
     }
 
@@ -330,41 +332,42 @@ impl EditorHook {
 
         // Everything below indexes, names, or was read out of the world that
         // is being left behind.
-        self.tree_groups.clear();
-        self.tree_unfolded.clear();
-        self.tree_scroll = 0;
-        self.tree_status = None;
-        self.tree_stale = true;
+        self.assets.groups.clear();
+        self.assets.unfolded.clear();
+        self.assets.scroll = 0;
+        self.assets.status = None;
+        self.assets.stale = true;
         self.template_index = None;
         self.form.close();
-        self.row_menu = None;
-        self.picker_open = false;
+        self.assets.row_menu = None;
+        self.assets.picker_open = false;
         self.selection.clear();
         self.pick_last = None;
         self.marquee = None;
         self.gizmo_drag = None;
-        self.shape_drag = None;
-        self.shape_status = None;
-        self.content_drag = None;
+        self.shape.drag = None;
+        self.shape.status = None;
+        self.content.drag = None;
         self.create_menu = None;
         self.hidden_assets.clear();
         self.locked_assets.clear();
         self.isolate = None;
         self.behavior.reset_for_world();
         self.map.reset_for_world();
-        self.variables_row = None;
-        self.variables_scroll = 0;
-        self.lighting_focus = None;
-        self.lighting_status = None;
+        self.variables.row = None;
+        self.variables.scroll = 0;
+        self.lighting.focus = None;
+        self.lighting.status = None;
         self.story.reset_for_world();
         self.shaders.reset_for_world();
-        self.lighting_touched = false;
+        self.lighting.touched = false;
 
         // The panel has done its job; it stays a registered panel, so the View
         // row reopens it as a switcher. The session owns a world now, so the
         // start screen is over for good and the rest of the editor comes back.
         self.leave_start_screen();
-        self.worlds.close();
+        self.open[PanelKey::Worlds] = false;
+        self.worlds.reset_view();
         self.untitled = false;
         self.refresh_worlds();
     }

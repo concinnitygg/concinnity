@@ -442,7 +442,7 @@ fn behavior_value_field_is_carried_across_a_preview_rebuild() {
     widget::seed_field(&mut world, behavior::panel::VALUE_INPUT, "half typed");
     let snapshot = EditorHook::field_snapshot(&world);
     let mut fresh = World::new();
-    for id in behavior::panel::all_field_ids() {
+    for id in behavior::panel::ids().field_ids() {
         fresh.push_identified(id, TextInput::default());
     }
     EditorHook::restore_fields(&mut fresh, &snapshot);

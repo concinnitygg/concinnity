@@ -14,21 +14,27 @@
 //! `palette`, `select`, `shaders` (with its `shader_edits`, `shader_form` and
 //! `shader_source`), `story`, `variables` and `worlds`.
 //!
-//! A panel whose state outgrew a few hook fields keeps it in a `*_state` sibling
-//! (`behavior_state`, `console_state`, `map_state`, `palette_state`,
-//! `shaders_state`, `story_state` and `worlds_state`), a plain struct with the resets that touch
-//! nothing else.
+//! Each panel keeps its session state in a `*_state` sibling (`assets_state`,
+//! `behavior_state`, `console_state`, `content_state`, `import_state`,
+//! `lighting_state`, `map_state`, `palette_state`, `shape_state`,
+//! `shaders_state`, `story_state`, `templates_state`, `variables_state` and
+//! `worlds_state`), a plain struct with the resets that touch nothing else.
+//! Whether a panel is open is the hook's (`EditorHook::open`), not its state's.
 
 pub(super) mod asset_tree;
+pub(super) mod assets_state;
 pub(super) mod behavior;
 pub(super) mod behavior_state;
 pub(super) mod character_shape;
 pub(super) mod console;
 pub(super) mod console_state;
 pub(super) mod content;
+pub(super) mod content_state;
 pub(super) mod export;
 pub(super) mod import;
+pub(super) mod import_state;
 pub(super) mod lighting;
+pub(super) mod lighting_state;
 pub(super) mod map;
 pub(super) mod map_state;
 pub(super) mod overrides;
@@ -43,8 +49,11 @@ pub(super) mod shader_form;
 pub(super) mod shader_source;
 pub(super) mod shaders;
 pub(super) mod shaders_state;
+pub(super) mod shape_state;
 pub(super) mod story;
 pub(super) mod story_state;
+pub(super) mod templates_state;
 pub(super) mod variables;
+pub(super) mod variables_state;
 pub(super) mod worlds;
 pub(super) mod worlds_state;

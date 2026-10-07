@@ -11,6 +11,7 @@ use crate::editor::hook::tests::fixtures::{entry, hook};
 
 use crate::editor::hook::tests::fixtures::active;
 use crate::editor::panels::content_panel;
+use crate::editor::panels::registry::PanelKey;
 
 // The Content grid over a world with visual assets: cells list them with
 // icon fallbacks (no thumbnails baked in tests), the type chip narrows, the
@@ -28,8 +29,8 @@ fn content_grid_lists_filters_and_selects_visual_assets() {
         }),
         entry("note", "TextLabel"),
     ]);
-    h.content_open = true;
-    h.tree_stale = true;
+    h.open[PanelKey::Content] = true;
+    h.assets.stale = true;
     h.refresh_tree_if_needed();
 
     let (cells, total) = h.content_cells(&world);
@@ -52,7 +53,7 @@ fn content_grid_lists_filters_and_selects_visual_assets() {
     let (cells, total) = h.content_cells(&world);
     assert_eq!((cells.len(), total), (1, 1));
     assert_eq!(cells[0].asset_type, RegisteredType::Material);
-    h.content_type = 0;
+    h.content.type_chip = 0;
 
     // The search field ranks name matches.
     world.push_identified(

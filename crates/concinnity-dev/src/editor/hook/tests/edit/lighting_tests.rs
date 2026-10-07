@@ -58,7 +58,7 @@ fn lighting_opens_via_the_view_panel_and_seeds() {
         ..Default::default()
     });
     let mut h = hook(vec![sun_entry()]);
-    h.view_open = true;
+    h.open[PanelKey::View] = true;
     let vp = [1280.0, 720.0];
     let vo = h.origin(PanelKey::View, vp);
     let row = list_panel::row_rect(vo, 200.0, 3);
@@ -70,7 +70,10 @@ fn lighting_opens_via_the_view_panel_and_seeds() {
         vp,
         &mut world
     ));
-    assert!(h.lighting_open, "the Lighting row opens the panel");
+    assert!(
+        h.open[PanelKey::Lighting],
+        "the Lighting row opens the panel"
+    );
     assert_eq!(
         widget::field_text(&world, lighting_panel::input(SUN_INTENSITY)),
         "2.2",
@@ -88,11 +91,11 @@ fn lighting_apply_commits_sun_intensity() {
     let mut world = World::new();
     inject::editor_hud(&mut world);
     let mut h = hook(vec![sun_entry()]);
-    h.lighting_open = true;
+    h.open[PanelKey::Lighting] = true;
     h.seed_lighting(&mut world);
     widget::seed_field(&mut world, lighting_panel::input(SUN_INTENSITY), "5.5");
     h.apply_lighting(&mut world);
-    assert_eq!(h.lighting_status, None);
+    assert_eq!(h.lighting.status, None);
     assert!(
         h.dirty && h.rebuild_preview,
         "commit marks the world changed"
@@ -113,11 +116,11 @@ fn lighting_apply_with_unparseable_text_keeps_the_authored_value() {
     let mut world = World::new();
     inject::editor_hud(&mut world);
     let mut h = hook(vec![sun_entry()]);
-    h.lighting_open = true;
+    h.open[PanelKey::Lighting] = true;
     h.seed_lighting(&mut world);
     widget::seed_field(&mut world, lighting_panel::input(SUN_INTENSITY), "garbage");
     h.apply_lighting(&mut world);
-    assert_eq!(h.lighting_status, None);
+    assert_eq!(h.lighting.status, None);
     let args = h.entries[0]["args"].as_object().unwrap();
     assert_eq!(args["intensity"].as_f64().unwrap() as f32, 2.2);
 }
@@ -129,7 +132,7 @@ fn lighting_bool_toggle_commits_immediately_and_keeps_typed_text() {
     let mut world = World::new();
     inject::editor_hud(&mut world);
     let mut h = hook(vec![fog_entry(false)]);
-    h.lighting_open = true;
+    h.open[PanelKey::Lighting] = true;
     h.seed_lighting(&mut world);
     // An in-progress density edit, not yet applied.
     widget::seed_field(
@@ -160,7 +163,7 @@ fn lighting_add_row_appends_the_missing_singleton() {
     let mut world = World::new();
     inject::editor_hud(&mut world);
     let mut h = hook(vec![sun_entry()]);
-    h.lighting_open = true;
+    h.open[PanelKey::Lighting] = true;
     assert_eq!(h.lighting_present(), vec![true, false, false, false]);
     h.add_lighting_section(1, &mut world);
     assert_eq!(h.entries.len(), 2);
@@ -177,8 +180,8 @@ fn lighting_add_row_appends_the_missing_singleton() {
 #[test]
 fn lighting_focus_yields_when_not_frontmost() {
     let mut h = hook(vec![sun_entry()]);
-    h.lighting_open = true;
-    h.lighting_focus = Some(SUN_INTENSITY);
+    h.open[PanelKey::Lighting] = true;
+    h.lighting.focus = Some(SUN_INTENSITY);
     h.focus_panel(PanelKey::Lighting);
     let d = h.lighting_data();
     assert_eq!(

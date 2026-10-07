@@ -9,7 +9,6 @@
 // scrolls up).
 #[derive(Debug)]
 pub(in crate::editor::hook) struct ConsoleState {
-    pub(in crate::editor::hook) open: bool,
     pub(in crate::editor::hook) focus: bool,
     pub(in crate::editor::hook) blur: bool,
     pub(in crate::editor::hook) scroll: usize,
@@ -19,7 +18,6 @@ pub(in crate::editor::hook) struct ConsoleState {
 impl Default for ConsoleState {
     fn default() -> Self {
         Self {
-            open: false,
             focus: false,
             blur: false,
             scroll: 0,

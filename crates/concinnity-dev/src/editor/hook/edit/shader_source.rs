@@ -278,7 +278,7 @@ impl EditorHook {
         mouse: [f32; 2],
     ) {
         let Some(src) = &self.shaders.source else {
-            shader_source_panel::hide_all(world);
+            shader_source_panel::ids().hide(world);
             return;
         };
         let s = self.effective_size(PanelKey::ShaderSource);

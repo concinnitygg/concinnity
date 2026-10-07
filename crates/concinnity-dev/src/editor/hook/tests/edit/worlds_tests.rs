@@ -57,7 +57,7 @@ fn opening_a_world_retargets_the_whole_session() {
     );
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
-    h.worlds.open = true;
+    h.open[PanelKey::Worlds] = true;
     // A session with history, a selection, and per-world hide state behind it.
     h.entries.push(prop_entry("crate_b"));
     h.mark_changed();
@@ -90,10 +90,10 @@ fn opening_a_world_retargets_the_whole_session() {
         "the compiled world is swapped on the next frame"
     );
     assert!(h.world_shadows.is_none());
-    assert!(h.tree_stale && h.tree_groups.is_empty());
+    assert!(h.assets.stale && h.assets.groups.is_empty());
     assert_eq!(selected(&h).len(), 0);
     assert!(h.hidden_assets.is_empty());
-    assert!(!h.worlds.open, "the panel has done its job");
+    assert!(!h.open[PanelKey::Worlds], "the panel has done its job");
     assert!(h.worlds.rows[world_row_index(&h, "lobby")].open);
 
     crate::test_support::isolate_state_dir();
@@ -135,13 +135,16 @@ fn plus_opens_an_untitled_world_that_the_first_save_names() {
     let arena = write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
-    h.worlds.open = true;
+    h.open[PanelKey::Worlds] = true;
     let mut world = world_with_name_field();
     h.apply_worlds_action(WorldsAction::New, &mut world);
 
     assert!(h.untitled, "the session is on a world with no home yet");
     assert!(h.entries.is_empty() && !h.dirty);
-    assert!(!h.worlds.open, "the panel steps aside for the empty world");
+    assert!(
+        !h.open[PanelKey::Worlds],
+        "the panel steps aside for the empty world"
+    );
     assert!(h.modal.is_none(), "nothing is asked until a save");
     assert_eq!(world_names(&h), ["arena"], "and nothing is on disk");
 
@@ -378,7 +381,7 @@ fn the_row_menu_opens_on_the_dot_and_closes_on_anything_else() {
     write_world(&worlds_dir, "lobby", &[], 3_000);
 
     let mut h = hook_at(&arena, Vec::new());
-    h.worlds.open = true;
+    h.open[PanelKey::Worlds] = true;
     let mut world = world_with_name_field();
     let i = world_row_index(&h, "arena");
     h.apply_worlds_action(WorldsAction::OpenMenu(i), &mut world);
@@ -432,7 +435,7 @@ fn a_dirty_plus_asks_before_leaving_the_world() {
 #[test]
 fn panel_presses_are_rect_guarded() {
     let mut h = EditorHook::new("unused.jsonl".to_string(), Vec::new());
-    h.worlds.open = true;
+    h.open[PanelKey::Worlds] = true;
     h.worlds.rows = vec![WorldRow {
         name: "arena".to_string(),
         path: "/p/worlds/arena.jsonl".to_string(),
@@ -463,7 +466,7 @@ fn panel_presses_are_rect_guarded() {
     ));
 
     // A hidden panel claims nothing.
-    h.worlds.open = false;
+    h.open[PanelKey::Worlds] = false;
     let r = worlds::Layout::new(worlds::Mode::Session, VP, 0.0).row_rect(o, 0);
     assert!(!h.try_panel_press(PanelKey::Worlds, r[0] + 4.0, r[1] + 4.0, VP, &mut world));
 }

@@ -1,12 +1,11 @@
 [workspace.package]
-version = "0.19.114"
+version = "0.19.115"
 description = "Asset-driven world engine"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
 license = "MIT"
 rust-version = "1.97"
 repository = "https://github.com/concinnitygg/concinnity"
-homepage = "https://concinnity.gg"
 readme = "README.md"
 keywords = ["gamedev", "graphics", "engine", "rendering", "3d"]
 categories = ["game-engines", "graphics", "rendering::engine"]
@@ -63,7 +62,6 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-homepage.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true

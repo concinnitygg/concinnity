@@ -6,7 +6,6 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "Host services for Concinnity: the on-disk state tree and the thread-scoped services"
 readme = "README.md"
 keywords = ["gamedev", "filesystem", "threadpool", "concinnity"]

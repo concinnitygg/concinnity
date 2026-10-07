@@ -12,6 +12,7 @@ use crate::frame_hook::FrameHook;
 
 use crate::editor::hook::tests::fixtures::select;
 use crate::editor::panels::assets_panel::PanelAction;
+use crate::editor::panels::registry::PanelKey;
 
 // The row eye and lock are editor-session state: they flip the hook's sets (the
 // hidden set publishing as ids each tick) and never touch the entries.
@@ -21,7 +22,7 @@ fn hide_and_lock_are_session_state_not_edits() {
     let id = asset_id::intern("box");
     let mut world = world_with_input(FrameInput::default());
     let mut h = hook(vec![entry("box", "Sprite")]);
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     seed_tree(&mut h, Vec::new());
     let (g, i) = row_of(&h, "box");
 

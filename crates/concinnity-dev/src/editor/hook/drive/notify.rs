@@ -74,8 +74,8 @@ impl EditorHook {
         match action {
             notify::Action::OpenConsole => self.open_console_panel(world),
             notify::Action::GoToBehaviorFault => {
-                if !self.behavior.open {
-                    self.behavior.open = true;
+                if !self.open[PanelKey::Behavior] {
+                    self.open[PanelKey::Behavior] = true;
                     self.open_behavior(world);
                 }
                 self.focus_panel(PanelKey::Behavior);
@@ -85,7 +85,7 @@ impl EditorHook {
     }
 
     fn open_console_panel(&mut self, world: &mut World) {
-        if self.console.open {
+        if self.open[PanelKey::Console] {
             self.focus_panel(PanelKey::Console);
         } else {
             self.toggle_console(world);

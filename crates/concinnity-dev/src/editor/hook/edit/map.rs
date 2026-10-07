@@ -124,7 +124,7 @@ impl EditorHook {
     // world starts when it has not been rooted in this one, then whatever is
     // selected. An in-flight pan owns the canvas until the button comes up.
     pub(in crate::editor::hook) fn drive_map(&mut self) {
-        if !self.map.open || self.map.pan_drag.is_some() {
+        if !self.open[PanelKey::Map] || self.map.pan_drag.is_some() {
             return;
         }
         let chart = self.map_chart();

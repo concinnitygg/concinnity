@@ -63,7 +63,7 @@ fn ctrl_d_duplicates_unless_the_behavior_panel_owns_it() {
         viewport: [1280.0, 720.0],
         ..Default::default()
     });
-    for id in behavior::panel::all_field_ids() {
+    for id in behavior::panel::ids().field_ids() {
         world.push_identified(id, TextInput::default());
     }
     let mut h = hook(vec![entry("box", "Sprite")]);

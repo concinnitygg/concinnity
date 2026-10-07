@@ -17,49 +17,48 @@ pub(crate) mod files;
 mod geometry;
 pub(crate) mod loading;
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 pub(crate) use draw::place;
 pub(crate) use geometry::{Layout, Mode, hit_test};
 
-use super::panels::registry::{self, PanelKey};
-use super::widget;
-
-const BASE: u32 = registry::base(PanelKey::Worlds);
-pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-pub(crate) const TITLE_LABEL: AssetId = AssetId(BASE + 1);
-pub(crate) const CLOSE_BG: AssetId = AssetId(BASE + 2);
-pub(crate) const CLOSE_LABEL: AssetId = AssetId(BASE + 3);
-// The `+` that starts an untitled world.
-pub(crate) const NEW_BG: AssetId = AssetId(BASE + 4);
-pub(crate) const NEW_LABEL: AssetId = AssetId(BASE + 5);
-pub(crate) const STATUS_LABEL: AssetId = AssetId(BASE + 6);
-pub(crate) const LIST_HEADER: AssetId = AssetId(BASE + 7);
-pub(crate) const LIST_TRACK: AssetId = AssetId(BASE + 8);
-pub(crate) const LIST_THUMB: AssetId = AssetId(BASE + 9);
-// The triple-dot button. One set of elements, positioned on whichever row is
-// offering it this frame, as in the Assets panel.
-pub(crate) const DOT_BG: AssetId = AssetId(BASE + 0xA);
-pub(crate) const DOT1: AssetId = AssetId(BASE + 0xB);
-pub(crate) const DOT2: AssetId = AssetId(BASE + 0xC);
-pub(crate) const DOT3: AssetId = AssetId(BASE + 0xD);
-// The floating row menu the triple-dot opens.
-pub(crate) const MENU_BG: AssetId = AssetId(BASE + 0xE);
-pub(crate) const MENU_OPEN_BG: AssetId = AssetId(BASE + 0xF);
-pub(crate) const MENU_OPEN_LABEL: AssetId = AssetId(BASE + 0x10);
-pub(crate) const MENU_DELETE_BG: AssetId = AssetId(BASE + 0x11);
-pub(crate) const MENU_DELETE_LABEL: AssetId = AssetId(BASE + 0x12);
-
-pub(crate) fn row_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x20 + i as u32)
-}
-pub(crate) fn row_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x40 + i as u32)
-}
+use super::hud_ids::{hud_ids, panel_base};
+use super::panels::registry::PanelKey;
 
 // Row slots the panel has elements for. The docked sidebar fills a tall window
 // with them; the switcher shows fewer. A longer listing scrolls.
 pub(crate) const POOL: usize = 24;
+
+// Chrome, then the rows, then the overlays that float over them: the scrollbar,
+// the triple-dot button (one set, positioned on whichever row offers it this
+// frame) and the row menu it opens. `NEW_BG` is the `+` that starts an
+// untitled world.
+hud_ids! {
+    base: panel_base(PanelKey::Worlds);
+    sprites: [
+        pub(crate) PANEL_BG,
+        pub(crate) CLOSE_BG,
+        pub(crate) NEW_BG,
+        pub(crate) row_bg[POOL],
+        pub(crate) LIST_TRACK,
+        pub(crate) LIST_THUMB,
+        pub(crate) DOT_BG,
+        pub(crate) DOT1,
+        pub(crate) DOT2,
+        pub(crate) DOT3,
+        pub(crate) MENU_BG,
+        pub(crate) MENU_OPEN_BG,
+        pub(crate) MENU_DELETE_BG,
+    ];
+    labels: [
+        pub(crate) TITLE_LABEL,
+        pub(crate) CLOSE_LABEL,
+        pub(crate) NEW_LABEL,
+        pub(crate) STATUS_LABEL,
+        pub(crate) LIST_HEADER,
+        pub(crate) row_label[POOL],
+        pub(crate) MENU_OPEN_LABEL,
+        pub(crate) MENU_DELETE_LABEL,
+    ];
+}
 
 // One listed world, as the panel draws it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,58 +140,4 @@ pub(crate) enum WorldsAction {
     CloseMenu,
     // A click elsewhere on the panel: swallowed so it cannot reach the world.
     Consume,
-}
-
-// Hide every panel element.
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
-}
-
-// Every panel sprite id, in draw (insertion) order: chrome, then the rows, then
-// the overlays that float over them (scrollbar, triple-dot, row menu).
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, CLOSE_BG, NEW_BG];
-    ids.extend((0..POOL).map(row_bg));
-    ids.extend([
-        LIST_TRACK,
-        LIST_THUMB,
-        DOT_BG,
-        DOT1,
-        DOT2,
-        DOT3,
-        MENU_BG,
-        MENU_OPEN_BG,
-        MENU_DELETE_BG,
-    ]);
-    ids
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![
-        TITLE_LABEL,
-        CLOSE_LABEL,
-        NEW_LABEL,
-        STATUS_LABEL,
-        LIST_HEADER,
-    ];
-    ids.extend((0..POOL).map(row_label));
-    ids.extend([MENU_OPEN_LABEL, MENU_DELETE_LABEL]);
-    ids
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn id_lists_cover_every_slot_without_repeats() {
-        let mut all: Vec<AssetId> = all_sprite_ids()
-            .into_iter()
-            .chain(all_label_ids())
-            .collect();
-        let n = all.len();
-        all.sort_by_key(|id| id.0);
-        all.dedup();
-        assert_eq!(all.len(), n, "no duplicate reserved ids");
-    }
 }

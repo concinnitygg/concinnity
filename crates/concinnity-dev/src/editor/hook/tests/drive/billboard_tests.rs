@@ -12,6 +12,7 @@ use concinnity_host::thread::asset_id;
 use crate::editor::hook::tests::fixtures::{click_at, entry, hook, pick_world};
 
 use crate::editor::hook::tests::fixtures::active;
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::viewport::billboards;
 
 // Billboard test rig: the pick rig plus a PointLight entity indexed by name
@@ -50,7 +51,10 @@ fn billboard_click_selects_the_light_and_seeds_its_transform() {
         Some("lamp"),
         "the icon press selects"
     );
-    assert!(!h.panel_open && !h.form_open(), "an icon press opens no UI");
+    assert!(
+        !h.open[PanelKey::Assets] && !h.form_open(),
+        "an icon press opens no UI"
+    );
 
     // The seeded Transform mirrors the authored position, so the gizmo's
     // member resolve works on the light.

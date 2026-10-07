@@ -8,12 +8,10 @@ use concinnity_core::components::Sprite;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
-use crate::editor::panels::registry::ID_BASE;
+use crate::editor::hud_ids::{Family, family_base};
 use crate::editor::widget;
 
-// Reserved id: the free slot between the marquee rect (0xE00) and the
-// billboards (0x1000).
-pub(crate) const CURSOR: AssetId = AssetId(ID_BASE + 0xF00);
+pub(crate) const CURSOR: AssetId = AssetId(family_base(Family::Cursor));
 
 // Cursor height in reference pixels; the overlay scales it for the viewport.
 const CURSOR_PX: f32 = 20.0;

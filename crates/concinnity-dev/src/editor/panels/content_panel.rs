@@ -8,41 +8,32 @@
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
-use super::registry::{self, PanelKey};
+use super::registry::PanelKey;
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::theme;
 use crate::editor::thumbs::{self, Thumb};
 use crate::editor::viewport::billboards;
 use crate::editor::widget::{self, point_in};
 
-const BASE: u32 = registry::base(PanelKey::Content);
-
-pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-const TITLE_LABEL: AssetId = AssetId(BASE + 1);
-const CLOSE_BG: AssetId = AssetId(BASE + 2);
-const CLOSE_LABEL: AssetId = AssetId(BASE + 3);
-const TYPE_BG: AssetId = AssetId(BASE + 4);
-const TYPE_LABEL: AssetId = AssetId(BASE + 5);
-const STATUS_LABEL: AssetId = AssetId(BASE + 6);
-pub(crate) const SEARCH_INPUT: AssetId = AssetId(BASE + 7);
-
-const fn cell_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x20 + i as u32)
-}
-const fn cell_thumb(i: usize) -> AssetId {
-    AssetId(BASE + 0x40 + i as u32)
-}
-const fn cell_glyph(i: usize) -> AssetId {
-    AssetId(BASE + 0x60 + i as u32)
-}
-const fn cell_name(i: usize) -> AssetId {
-    AssetId(BASE + 0x80 + i as u32)
-}
-
 pub(crate) const COLS: usize = 4;
 pub(crate) const GRID_ROWS: usize = 4;
 pub(crate) const CELLS: usize = COLS * GRID_ROWS;
+
+hud_ids! {
+    base: panel_base(PanelKey::Content);
+    sprites: [pub(crate) PANEL_BG, CLOSE_BG, TYPE_BG, cell_bg[CELLS], cell_thumb[CELLS]];
+    labels: [
+        TITLE_LABEL,
+        CLOSE_LABEL,
+        TYPE_LABEL,
+        STATUS_LABEL,
+        cell_glyph[CELLS],
+        cell_name[CELLS],
+    ];
+    fields: [pub(crate) SEARCH_INPUT = "search"];
+}
+
 const CELL_W: f32 = 92.0;
 const CELL_H: f32 = 112.0;
 const THUMB_H: f32 = 84.0;
@@ -276,28 +267,6 @@ fn hide_cell(world: &mut World, slot: usize) {
     widget::set_sprite_visible(world, cell_thumb(slot), false);
     widget::set_label_visible(world, cell_glyph(slot), false);
     widget::set_label_visible(world, cell_name(slot), false);
-}
-
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, CLOSE_BG, TYPE_BG];
-    ids.extend((0..CELLS).map(cell_bg));
-    ids.extend((0..CELLS).map(cell_thumb));
-    ids
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![TITLE_LABEL, CLOSE_LABEL, TYPE_LABEL, STATUS_LABEL];
-    ids.extend((0..CELLS).map(cell_glyph));
-    ids.extend((0..CELLS).map(cell_name));
-    ids
-}
-
-pub(crate) fn all_field_ids() -> Vec<(AssetId, &'static str)> {
-    vec![(SEARCH_INPUT, "search")]
-}
-
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[SEARCH_INPUT]);
 }
 
 // Whether the wheel over `(mx, my)` belongs to the grid body.

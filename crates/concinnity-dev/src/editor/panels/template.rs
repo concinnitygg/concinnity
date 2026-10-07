@@ -9,30 +9,38 @@
 //! crate.
 
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
-use super::list_panel::{self, Row};
-use super::registry::{self, PanelKey};
+use super::list_panel::{self, ListIds, Row};
+use super::registry::PanelKey;
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::widget::{self, point_in};
-
-const BASE: u32 = registry::base(PanelKey::Templates);
-// Named ids the cross-module tests reference; the shipping paths derive every id
-// from `BASE` through `list_panel`.
-#[cfg(test)]
-pub(crate) const PANEL_BG: AssetId = list_panel::panel_bg(BASE);
-#[cfg(test)]
-pub(crate) fn row_bg(i: usize) -> AssetId {
-    list_panel::row_bg(BASE, i)
-}
 
 // The number of template rows (one per built-in template) and the title of row
 // `i`, read from the shared templates crate.
-pub(crate) fn count() -> usize {
+pub(crate) const fn count() -> usize {
     concinnity_cook::authoring::template::TEMPLATES.len()
 }
 fn title(i: usize) -> &'static str {
     concinnity_cook::authoring::template::TEMPLATES[i].title
 }
+
+// Label-only rows: no checkbox, no value.
+hud_ids! {
+    base: panel_base(PanelKey::Templates);
+    sprites: [pub(crate) PANEL_BG, CLOSE_BG, pub(crate) row_bg[count()]];
+    labels: [TITLE_LABEL, CLOSE_LABEL, row_label[count()]];
+}
+
+const LIST: ListIds = ListIds {
+    panel_bg: PANEL_BG,
+    title: TITLE_LABEL,
+    close_bg: CLOSE_BG,
+    close_label: CLOSE_LABEL,
+    row_bg,
+    row_label,
+    check_box: None,
+    value_label: None,
+};
 
 // The default (and minimum) panel width; the user can widen it past this.
 const TEMPLATES_W: f32 = 220.0;
@@ -80,31 +88,16 @@ pub(crate) fn place(
     let rows: Vec<Row> = (0..count())
         .map(|i| Row::label(title(i)).select(selected == Some(i)))
         .collect();
-    list_panel::place(world, BASE, o, s, "Templates", &rows, mouse);
-}
-
-// Hide every panel element (the F1-hidden pass, or when the panel is toggled off).
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
-}
-
-// Every panel sprite / label id, for injection and the hidden pass (label-only
-// rows carry no checkbox).
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    list_panel::all_sprite_ids(BASE, count(), false)
-}
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    list_panel::all_label_ids(BASE, count(), false)
+    list_panel::place(world, &LIST, o, s, "Templates", &rows, mouse);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::list_panel::{row_label, title_label};
     use super::*;
     use concinnity_core::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])
+        ids().test_world()
     }
 
     #[test]
@@ -128,10 +121,10 @@ mod tests {
     fn place_labels_rows_from_the_templates_crate() {
         let mut world = injected_world();
         place(&mut world, default_origin(1280.0), size(), None, [0.0, 0.0]);
-        let title = world.get_by_id::<TextLabel>(title_label(BASE)).unwrap();
+        let title = world.get_by_id::<TextLabel>(TITLE_LABEL).unwrap();
         assert!(title.visible && title.content == "Templates");
         for i in 0..count() {
-            let l = world.get_by_id::<TextLabel>(row_label(BASE, i)).unwrap();
+            let l = world.get_by_id::<TextLabel>(row_label(i)).unwrap();
             assert_eq!(
                 l.content,
                 concinnity_cook::authoring::template::TEMPLATES[i].title
@@ -150,14 +143,5 @@ mod tests {
         place(&mut world, o, size(), Some(0), [0.0, 0.0]);
         let selected = world.get_by_id::<Sprite>(row_bg(0)).unwrap().tint;
         assert_ne!(idle, selected);
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let mut world = injected_world();
-        place(&mut world, default_origin(1280.0), size(), None, [0.0, 0.0]);
-        hide_all(&mut world);
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
     }
 }

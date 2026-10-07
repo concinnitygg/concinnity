@@ -98,9 +98,9 @@ pub(in crate::editor::hook) fn world_with_input(input: FrameInput) -> World {
 // combo filter, the form's name heading, and its arg-input pool).
 pub(in crate::editor::hook) fn world_with_fields() -> World {
     let mut world = World::new();
-    for id in assets_panel::all_field_ids()
-        .into_iter()
-        .chain(form_panel::all_field_ids())
+    for id in assets_panel::ids()
+        .field_ids()
+        .chain(form_panel::ids().field_ids())
     {
         world.push_identified(id, TextInput::default());
     }
@@ -128,7 +128,7 @@ pub(in crate::editor::hook) fn entry_with_args(
 // Seed the cooked tree the panel rows come from, without paying for a real
 // world expansion: the working entries under `World`, plus any generated groups
 // the test needs. Mirrors what `refresh_tree_if_needed` builds, and clears
-// `tree_stale` so the frame drive does not overwrite it.
+// `assets.stale` so the frame drive does not overwrite it.
 pub(in crate::editor::hook) fn seed_tree(h: &mut EditorHook, extra: Vec<TreeGroup>) {
     let world_group = TreeGroup {
         label: asset_tree::WORLD_GROUP.to_string(),
@@ -145,9 +145,9 @@ pub(in crate::editor::hook) fn seed_tree(h: &mut EditorHook, extra: Vec<TreeGrou
             })
             .collect(),
     };
-    h.tree_groups = std::iter::once(world_group).chain(extra).collect();
-    h.tree_unfolded = (0..h.tree_groups.len()).collect();
-    h.tree_stale = false;
+    h.assets.groups = std::iter::once(world_group).chain(extra).collect();
+    h.assets.unfolded = (0..h.assets.groups.len()).collect();
+    h.assets.stale = false;
 }
 
 // One generated group, as a scene import's or injection pass's output would
@@ -174,7 +174,8 @@ pub(in crate::editor::hook) fn generated_group(
 
 // The (group, index) a row click on `name` resolves to.
 pub(in crate::editor::hook) fn row_of(h: &EditorHook, name: &str) -> (usize, usize) {
-    h.tree_groups
+    h.assets
+        .groups
         .iter()
         .enumerate()
         .find_map(|(gi, g)| {
@@ -313,7 +314,7 @@ pub(in crate::editor::hook) fn behavior_session(
     entries: Vec<serde_json::Value>,
 ) -> (EditorHook, World) {
     let mut world = World::new();
-    for id in behavior::panel::all_field_ids() {
+    for id in behavior::panel::ids().field_ids() {
         world.push_identified(id, TextInput::default());
     }
     let mut h = hook(entries);
@@ -345,7 +346,7 @@ pub(in crate::editor::hook) fn type_name(world: &mut World, text: &str) {
 // Put the Story panel's text area in charge of the keyboard: open, focused,
 // and frontmost.
 pub(in crate::editor::hook) fn focus_story(h: &mut EditorHook) {
-    h.story.open = true;
+    h.open[PanelKey::Story] = true;
     h.story.focus = true;
     h.focus_panel(crate::editor::panels::registry::PanelKey::Story);
 }
@@ -428,14 +429,15 @@ pub(in crate::editor::hook) fn expandable_hook() -> EditorHook {
     let mut h = hook(vec![serde_json::json!({
         "type": "GraphicsConfig", "args": {"$id": "gfx"}
     })]);
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     h
 }
 
 // The first asset the build generates that an authored line could override,
 // as (group, index, name).
 pub(in crate::editor::hook) fn a_promotable_asset(h: &EditorHook) -> (usize, usize, String) {
-    h.tree_groups
+    h.assets
+        .groups
         .iter()
         .enumerate()
         .find_map(|(gi, g)| {
@@ -515,7 +517,7 @@ pub(in crate::editor::hook) fn hook_at(
 // The naming prompt's field, which is the only place a world is named now.
 pub(in crate::editor::hook) fn world_with_name_field() -> World {
     let mut world = World::new();
-    for id in modal::all_field_ids() {
+    for id in modal::ids().field_ids() {
         world.push_identified(id, TextInput::default());
     }
     world

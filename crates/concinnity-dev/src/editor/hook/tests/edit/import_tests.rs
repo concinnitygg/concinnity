@@ -26,8 +26,8 @@ fn import_session() -> (EditorHook, World, concinnity_testing::TempTree) {
     let mut world = World::new();
     inject::editor_hud(&mut world);
     let mut h = hook(Vec::new());
-    h.import_open = true;
-    h.import_focus = true;
+    h.open[PanelKey::Import] = true;
+    h.import.focus = true;
     h.focus_panel(PanelKey::Import);
     (h, world, concinnity_testing::TempTree::new())
 }
@@ -45,7 +45,7 @@ fn import_add_resolves_a_scene_file() {
     std::fs::write(&glb, b"glb bytes").unwrap();
     type_path(&mut world, &glb.to_string_lossy());
     h.add_import(&mut world);
-    assert_eq!(h.import_status, None);
+    assert_eq!(h.import.status, None);
     assert_eq!(h.entries.len(), 1);
     assert_eq!(h.entries[0]["type"], "SceneImport");
     assert_eq!(h.entries[0]["args"]["$id"], "crate_stack");
@@ -71,7 +71,7 @@ fn import_add_uniquifies_a_colliding_name() {
     h.entries.push(entry("tale", "PointLight"));
     type_path(&mut world, &md.to_string_lossy());
     h.add_import(&mut world);
-    assert_eq!(h.import_status, None);
+    assert_eq!(h.import.status, None);
     assert_eq!(h.entries.len(), 2);
     assert_eq!(h.entries[1]["type"], "StoryImport");
     assert_eq!(
@@ -88,7 +88,8 @@ fn import_add_rejects_missing_files_and_unknown_extensions() {
     type_path(&mut world, "/no/such/thing.glb");
     h.add_import(&mut world);
     assert!(
-        h.import_status
+        h.import
+            .status
             .as_ref()
             .unwrap()
             .text()
@@ -100,7 +101,7 @@ fn import_add_rejects_missing_files_and_unknown_extensions() {
     std::fs::write(&odd, b"?").unwrap();
     type_path(&mut world, &odd.to_string_lossy());
     h.add_import(&mut world);
-    assert!(h.import_status.is_some(), "unknown extension rejected");
+    assert!(h.import.status.is_some(), "unknown extension rejected");
     assert!(h.entries.is_empty() && !h.dirty);
 }
 
@@ -112,7 +113,7 @@ fn import_add_resolves_an_hdr_to_an_environment_map() {
     std::fs::write(&hdr, b"radiance").unwrap();
     type_path(&mut world, &hdr.to_string_lossy());
     h.add_import(&mut world);
-    assert_eq!(h.import_status, None);
+    assert_eq!(h.import.status, None);
     assert_eq!(h.entries.len(), 1);
     assert_eq!(h.entries[0]["type"], "EnvironmentMap");
     assert_eq!(h.entries[0]["args"]["$id"], "studio");
@@ -148,7 +149,7 @@ fn import_add_retargets_an_existing_environment_map() {
     assert!(h.dirty && h.rebuild_preview);
     // Reported as a notice, not an error: the Add succeeded.
     assert!(matches!(
-        h.import_status,
+        h.import.status,
         Some(import_panel::ImportStatus::Notice(_))
     ));
     assert_eq!(
@@ -188,7 +189,10 @@ fn import_rows_list_and_open_in_the_edit_form() {
     assert_eq!(rows[2].caption, "env  (EnvironmentMap)  sky.hdr");
 
     h.apply_import_action(ImportAction::Open(0), &mut world);
-    assert!(h.panel_open, "the Assets UI comes up with the form");
+    assert!(
+        h.open[PanelKey::Assets],
+        "the Assets UI comes up with the form"
+    );
     assert!(h.form_open());
     assert_eq!(
         h.form.target,
@@ -211,7 +215,7 @@ fn import_browse_result_fills_the_path_field_relatively() {
     let assets = dir.dir("assets");
     let picked = assets.join("hero.glb");
     std::fs::write(&picked, b"glb").unwrap();
-    h.import_status = Some(import_panel::ImportStatus::Error("stale error".to_string()));
+    h.import.status = Some(import_panel::ImportStatus::Error("stale error".to_string()));
     h.accept_browsed_path(&mut world, &picked);
 
     assert_eq!(
@@ -219,13 +223,13 @@ fn import_browse_result_fills_the_path_field_relatively() {
         "assets/hero.glb",
         "a file inside the project stores relatively"
     );
-    assert!(h.import_focus, "the field takes focus, ready to Add");
-    assert_eq!(h.import_status, None, "a stale error is cleared");
+    assert!(h.import.focus, "the field takes focus, ready to Add");
+    assert_eq!(h.import.status, None, "a stale error is cleared");
     assert!(h.entries.is_empty(), "Browse does not commit on its own");
 
     // Confirming with Add resolves the browsed path like any typed one.
     h.add_import(&mut world);
-    assert_eq!(h.import_status, None);
+    assert_eq!(h.import.status, None);
     assert_eq!(h.entries.len(), 1);
     assert_eq!(h.entries[0]["type"], "SceneImport");
     assert_eq!(h.entries[0]["args"]["source"], "assets/hero.glb");

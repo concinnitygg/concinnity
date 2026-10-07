@@ -24,7 +24,7 @@ use std::sync::atomic::Ordering;
 
 fn console_world() -> World {
     let mut world = World::new();
-    for id in console_panel::all_field_ids() {
+    for id in console_panel::ids().field_ids() {
         world.push_identified(id, TextInput::default());
     }
     world
@@ -462,7 +462,7 @@ fn backtick_toggles_the_console_with_a_one_frame_blur() {
     };
 
     h.drive_console_toggle(&input, &mut world);
-    assert!(h.console.open && h.console.focus && h.console.blur);
+    assert!(h.open[PanelKey::Console] && h.console.focus && h.console.blur);
     assert_eq!(h.panel_order.last(), Some(&PanelKey::Console));
     let (lines, total, first) = h.console_window();
     assert!(
@@ -479,12 +479,15 @@ fn backtick_toggles_the_console_with_a_one_frame_blur() {
     );
 
     h.drive_console_toggle(&input, &mut world);
-    assert!(!h.console.open && !h.console.focus, "second press closes");
+    assert!(
+        !h.open[PanelKey::Console] && !h.console.focus,
+        "second press closes"
+    );
 
     // While another text field is focused, backtick is just a character.
     crate::editor::hook::tests::fixtures::focus_story(&mut h);
     h.drive_console_toggle(&input, &mut world);
-    assert!(!h.console.open);
+    assert!(!h.open[PanelKey::Console]);
 }
 
 // A held backtick opens the console once; its auto-repeat does not close it.
@@ -500,9 +503,9 @@ fn a_held_backtick_toggles_once() {
         ..Default::default()
     };
     h.drive_console_toggle(&press(false), &mut world);
-    assert!(h.console.open);
+    assert!(h.open[PanelKey::Console]);
     h.drive_console_toggle(&press(true), &mut world);
-    assert!(h.console.open, "the repeat leaves it open");
+    assert!(h.open[PanelKey::Console], "the repeat leaves it open");
 }
 
 // The /del ghost completes against authored names, and Tab accepts it into
@@ -548,13 +551,13 @@ fn tick_opens_the_console_blurred_then_focuses() {
         ..Default::default()
     });
     world.push_identified(console_panel::INPUT, TextInput::default());
-    for id in console_panel::all_label_ids() {
+    for &id in &console_panel::ids().labels {
         world.push_identified(id, TextLabel::default());
     }
     let mut h = hook(Vec::new());
 
     h.tick(&mut world);
-    assert!(h.console.open);
+    assert!(h.open[PanelKey::Console]);
     let input = world.get_by_id::<TextInput>(console_panel::INPUT).unwrap();
     assert!(
         input.visible && !input.focused,

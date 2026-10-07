@@ -7,25 +7,12 @@
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
 use super::console::{ConsoleLine, Severity};
-use super::registry::{self, PanelKey};
+use super::registry::PanelKey;
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
-
-const BASE: u32 = registry::base(PanelKey::Console);
-pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-pub(crate) const TITLE_LABEL: AssetId = AssetId(BASE + 2);
-pub(crate) const CLOSE_BG: AssetId = AssetId(BASE + 3);
-pub(crate) const CLOSE_LABEL: AssetId = AssetId(BASE + 4);
-pub(crate) const LOG_TRACK: AssetId = AssetId(BASE + 5);
-pub(crate) const LOG_THUMB: AssetId = AssetId(BASE + 6);
-pub(crate) const INPUT: AssetId = AssetId(BASE + 7);
-
-pub(crate) fn row_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x40 + i as u32)
-}
 
 // Geometry, in window pixels. Every rect derives from the panel origin `o`
 // (the title bar's top-left), so dragging the title bar moves the whole panel.
@@ -39,6 +26,23 @@ const SCROLLBAR_W: f32 = 5.0;
 // panel taller reveals more, up to the injected pool `LINE_POOL_MAX`.
 pub(crate) const LINE_POOL: usize = 14;
 pub(crate) const LINE_POOL_MAX: usize = 28;
+
+hud_ids! {
+    base: panel_base(PanelKey::Console);
+    sprites: [
+        pub(crate) PANEL_BG,
+        pub(crate) CLOSE_BG,
+        pub(crate) LOG_TRACK,
+        pub(crate) LOG_THUMB,
+    ];
+    labels: [
+        pub(crate) TITLE_LABEL,
+        pub(crate) CLOSE_LABEL,
+        pub(crate) row_label[LINE_POOL_MAX],
+    ];
+    fields: [pub(crate) INPUT = "/help"];
+}
+
 // A log line's character budget at the default width; widening the panel grows it.
 const MAX_LINE_CHARS: usize = 64;
 // Approximate body-font advance, for growing the line budget with the width.
@@ -234,24 +238,10 @@ fn layout_scrollbar(world: &mut World, view: &ConsoleView, o: [f32; 2], w: f32, 
 // Hide every panel element, blurring the command line so a hidden field cannot
 // keep keyboard focus.
 pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &all_field_ids());
+    ids().hide(world);
     if let Some(t) = widget::input_mut(world, INPUT) {
         t.ghost.clear();
     }
-}
-
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    vec![PANEL_BG, CLOSE_BG, LOG_TRACK, LOG_THUMB]
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![TITLE_LABEL, CLOSE_LABEL];
-    ids.extend((0..LINE_POOL_MAX).map(row_label));
-    ids
-}
-
-pub(crate) fn all_field_ids() -> Vec<AssetId> {
-    vec![INPUT]
 }
 
 #[cfg(test)]
@@ -260,7 +250,7 @@ mod tests {
     use concinnity_core::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &all_field_ids())
+        ids().test_world()
     }
 
     fn lines(n: usize) -> Vec<ConsoleLine> {

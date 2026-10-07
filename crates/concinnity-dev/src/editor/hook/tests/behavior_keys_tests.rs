@@ -18,6 +18,7 @@ use crate::editor::behavior;
 use crate::editor::behavior::panel::{BehaviorAction, ViewMode};
 use crate::editor::hook::EditorHook;
 
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::widget;
 
 // The title of the card the chart's selection belongs to.
@@ -142,7 +143,10 @@ fn behavior_arrows_step_the_overview_and_enter_opens_a_behavior() {
     // opens the table declaring it and leaves the map showing.
     press_behavior_key(&mut h, &mut world, InputKey::Enter);
     assert_eq!(h.behavior.mode, ViewMode::Overview);
-    assert!(h.variables_open, "the table the variable is declared in");
+    assert!(
+        h.open[PanelKey::Variables],
+        "the table the variable is declared in"
+    );
 
     press_behavior_key(&mut h, &mut world, InputKey::Right);
     assert_eq!(selected_overview_title(&h).as_deref(), Some("react"));

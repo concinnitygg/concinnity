@@ -6,7 +6,6 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "Authored world model, validation, and the asset cook pipeline that bakes a Concinnity world into a blob"
 readme = "README.md"
 keywords = ["gamedev", "assets", "concinnity"]

@@ -6,7 +6,6 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "The Concinnity dev tooling library: world authoring, the in-engine editor, the debug server, docs and packaging"
 readme = "README.md"
 keywords = ["gamedev", "editor", "cli", "concinnity"]

@@ -10,6 +10,7 @@ use crate::editor::hook::tests::fixtures::hook;
 
 use crate::editor::notify;
 
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::toast_overlay;
 
 // The toast stack claims only presses on its live cards; everywhere else the
@@ -27,14 +28,17 @@ fn toast_presses_claim_cards_and_fall_through_elsewhere() {
     h.drive_toasts(&mut world, vp, true, [0.0, 0.0]);
     assert!(!h.toasts_hidden, "a live toast draws");
     // While live, the stack's ids join the layer map above the modal band.
-    let card_id = toast_overlay::all_sprite_ids()[0];
+    let card_id = toast_overlay::ids().sprites[0];
     assert!(h.compute_layers().contains_key(&card_id));
     // A press off the stack still falls through.
     assert!(!h.try_toast_press(10.0, 10.0, vp, &mut world));
     // A press on the newest card claims it, runs its action, and dismisses.
     let r = toast_overlay::card_rect(vp, 0, 0);
     assert!(h.try_toast_press(r[0] + 5.0, r[1] + 5.0, vp, &mut world));
-    assert!(h.console.open, "the error's action opened the Console");
+    assert!(
+        h.open[PanelKey::Console],
+        "the error's action opened the Console"
+    );
     assert!(h.notifier.is_empty(), "the card dismissed");
 }
 
@@ -51,7 +55,7 @@ fn toast_drive_settles_hidden_when_the_queue_empties() {
     h.notifier.click_card(0);
     h.drive_toasts(&mut world, vp, true, [0.0, 0.0]);
     assert!(h.toasts_hidden, "one hide pass after the stack empties");
-    let card_id = toast_overlay::all_sprite_ids()[0];
+    let card_id = toast_overlay::ids().sprites[0];
     assert!(!h.compute_layers().contains_key(&card_id));
 }
 

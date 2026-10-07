@@ -6,11 +6,10 @@ use concinnity_core::components::Sprite;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
-use crate::editor::panels::registry::ID_BASE;
+use crate::editor::hud_ids::{Family, family_base};
 use crate::editor::theme;
 
-// Reserved id: the next free block after the gizmo's 0xD00.
-pub(crate) const RECT: AssetId = AssetId(ID_BASE + 0xE00);
+pub(crate) const RECT: AssetId = AssetId(family_base(Family::Marquee));
 
 // A press must travel this far (either axis) before it becomes a marquee; a
 // stiller release is an empty-space click.

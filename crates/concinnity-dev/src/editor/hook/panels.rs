@@ -1,8 +1,8 @@
 //! The `Panel` registry implementations: one stateless unit per floating panel,
 //! binding its module (geometry + draw) to the hook state that backs it. The
 //! shared machinery -- dragging, focus, close buttons, injection, draw layers,
-//! the hidden pass -- lives on the registry consumers; each impl supplies only
-//! what is panel-specific.
+//! open state, the hidden pass -- lives on the registry and its consumers; each
+//! impl supplies only what is panel-specific.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
@@ -11,13 +11,13 @@ use concinnity_core::ecs::asset_id::AssetId;
 use super::EditorHook;
 use crate::editor::behavior;
 use crate::editor::behavior::panel::ViewMode;
+use crate::editor::hud_ids::HudIds;
 use crate::editor::map;
 use crate::editor::palette;
 use crate::editor::panels::assets_panel;
 use crate::editor::panels::character_shape_panel;
 use crate::editor::panels::console_panel;
 use crate::editor::panels::content_panel;
-use crate::editor::panels::form;
 use crate::editor::panels::form_panel::{self, FormAction};
 use crate::editor::panels::health_panel;
 use crate::editor::panels::import_panel;
@@ -37,11 +37,20 @@ use crate::editor::viewport::snap;
 use crate::editor::widget;
 use crate::editor::worlds;
 
+// Apply a body press the panel resolved, if it resolved one: whether the press
+// was taken.
+fn handled<A>(action: Option<A>, apply: impl FnOnce(A)) -> bool {
+    action.map(apply).is_some()
+}
+
 pub(crate) struct AssetsPanel;
 
 impl Panel for AssetsPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Assets
+    }
+    fn ids(&self) -> &'static HudIds {
+        assets_panel::ids()
     }
     fn resizable(&self) -> bool {
         true
@@ -49,44 +58,34 @@ impl Panel for AssetsPanel {
     fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
         assets_panel::max_size()
     }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Assets")
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.panel_open
+    // Toggling either way drops the transient overlays, like closing.
+    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
+        let open = !hook.open[PanelKey::Assets];
+        hook.open[PanelKey::Assets] = open;
+        self.on_close(hook, world);
+        if open {
+            self.on_open(hook, world);
+        }
     }
     // Opening re-cooks the tree and focuses a cleared search field, ready to
     // type.
-    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
-        hook.toggle_assets();
-        if hook.panel_open {
-            hook.tree_stale = true;
-            hook.tree_scroll = 0;
-            hook.search_focus = true;
-            widget::seed_field(world, assets_panel::SEARCH_INPUT, "");
-        }
+    fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.assets.stale = true;
+        hook.assets.scroll = 0;
+        hook.assets.search_focus = true;
+        widget::seed_field(world, assets_panel::SEARCH_INPUT, "");
     }
     // Closing keeps the tree state (like a View-checkbox untick); only the
     // transient picker / row-menu overlays are dropped.
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.panel_open = false;
-        hook.picker_open = false;
-        hook.row_menu = None;
+    fn on_close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.assets.picker_open = false;
+        hook.assets.row_menu = None;
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         assets_panel::size()
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         assets_panel::default_origin(vp[0])
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        assets_panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        assets_panel::all_label_ids()
-    }
-    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        vec![(assets_panel::SEARCH_INPUT, "search")]
     }
     fn press(
         &self,
@@ -103,13 +102,7 @@ impl Panel for AssetsPanel {
             let view = hook.make_view(&data, &selected, [mx, my]);
             assets_panel::hit_test(&view, mx, my, o, s)
         };
-        match action {
-            Some(a) => {
-                hook.apply_panel(a, world);
-                true
-            }
-            None => false,
-        }
+        handled(action, |a| hook.apply_panel(a, world))
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::Assets);
@@ -126,10 +119,7 @@ impl Panel for AssetsPanel {
         let data = hook.panel_data(world);
         let selected = hook.selected_names();
         let view = hook.make_view(&data, &selected, mouse);
-        assets_panel::place(world, Some(&view), o, s);
-    }
-    fn hide(&self, world: &mut World) {
-        assets_panel::place(world, None, [0.0, 0.0], assets_panel::size());
+        assets_panel::place(world, &view, o, s);
     }
 }
 
@@ -139,11 +129,14 @@ impl Panel for EditPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Edit
     }
+    fn ids(&self) -> &'static HudIds {
+        form_panel::ids()
+    }
     fn resizable(&self) -> bool {
         true
     }
-    // The form is part of the assets UI: shown / interactive only while the
-    // browse panel is on.
+    // The form is part of the UI of the panel it opened from: shown /
+    // interactive only while that panel is.
     fn is_open(&self, hook: &EditorHook) -> bool {
         hook.form_open() && registry::panel(hook.form.host).is_open(hook)
     }
@@ -160,17 +153,6 @@ impl Panel for EditPanel {
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         form_panel::default_origin(vp[0])
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        form_panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        form_panel::all_label_ids()
-    }
-    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        let mut ids = vec![(form_panel::NAME_INPUT, "name")];
-        ids.extend((0..form::FIELD_POOL_MAX).map(|j| (form_panel::form_input(j), "")));
-        ids
     }
     fn overlay_ids(&self, hook: &EditorHook) -> Vec<AssetId> {
         if hook.form.field_dropdown.is_some() {
@@ -195,13 +177,7 @@ impl Panel for EditPanel {
             let view = hook.make_form_view(&data, [mx, my]);
             form_panel::hit_test(&view, mx, my, o, s)
         };
-        match action {
-            Some(a) => {
-                hook.apply_form(a, world);
-                true
-            }
-            None => false,
-        }
+        handled(action, |a| hook.apply_form(a, world))
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::Edit);
@@ -214,10 +190,7 @@ impl Panel for EditPanel {
         let s = hook.effective_size(PanelKey::Edit);
         let data = hook.panel_data(world);
         let view = hook.make_form_view(&data, mouse);
-        form_panel::place(world, Some(&view), o, s);
-    }
-    fn hide(&self, world: &mut World) {
-        form_panel::place(world, None, [0.0, 0.0], form_panel::size(0));
+        form_panel::place(world, &view, o, s);
     }
 }
 
@@ -227,17 +200,8 @@ impl Panel for HealthPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Health
     }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Health")
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.health_open
-    }
-    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.health_open = !hook.health_open;
-    }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.health_open = false;
+    fn ids(&self) -> &'static HudIds {
+        health_panel::ids()
     }
     // Grows with the breakdown: the panel is as tall as the tags something is
     // reporting into.
@@ -246,12 +210,6 @@ impl Panel for HealthPanel {
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         health_panel::default_origin(vp)
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        health_panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        health_panel::all_label_ids()
     }
     // Read-only: a body press is swallowed so it cannot reach the world.
     fn press(
@@ -269,9 +227,6 @@ impl Panel for HealthPanel {
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         health_panel::place(world, hook.health.snapshot(), o, mouse);
     }
-    fn hide(&self, world: &mut World) {
-        health_panel::hide_all(world);
-    }
 }
 
 pub(crate) struct PreviewPanel;
@@ -280,29 +235,14 @@ impl Panel for PreviewPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Preview
     }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Preview")
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.preview_open
-    }
-    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.preview_open = !hook.preview_open;
-    }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.preview_open = false;
+    fn ids(&self) -> &'static HudIds {
+        preview::ids()
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         preview::size()
     }
     fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
         preview::default_origin()
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        preview::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        preview::all_label_ids()
     }
     fn press(
         &self,
@@ -312,46 +252,28 @@ impl Panel for PreviewPanel {
         my: f32,
         o: [f32; 2],
     ) -> bool {
-        match preview::hit_test(mx, my, o) {
-            Some(PreviewAction::TogglePlay) => {
-                hook.sim_toggle_play();
-                true
-            }
-            Some(PreviewAction::ToggleFly) => {
-                hook.toggle_fly();
-                true
-            }
-            Some(PreviewAction::ToggleAxes) => {
-                hook.axes_visible = !hook.axes_visible;
-                true
-            }
-            Some(PreviewAction::ToggleSnapMove) => {
+        handled(preview::hit_test(mx, my, o), |a| match a {
+            PreviewAction::TogglePlay => hook.sim_toggle_play(),
+            PreviewAction::ToggleFly => hook.toggle_fly(),
+            PreviewAction::ToggleAxes => hook.axes_visible = !hook.axes_visible,
+            PreviewAction::ToggleSnapMove => {
                 hook.snap.translate.enabled = !hook.snap.translate.enabled;
-                true
             }
-            Some(PreviewAction::CycleSnapMoveStep) => {
+            PreviewAction::CycleSnapMoveStep => {
                 hook.snap.translate.cycle(&snap::TRANSLATE_STEPS);
-                true
             }
-            Some(PreviewAction::ToggleSnapRotate) => {
+            PreviewAction::ToggleSnapRotate => {
                 hook.snap.rotate.enabled = !hook.snap.rotate.enabled;
-                true
             }
-            Some(PreviewAction::CycleSnapRotateStep) => {
+            PreviewAction::CycleSnapRotateStep => {
                 hook.snap.rotate.cycle(&snap::ROTATE_STEPS);
-                true
             }
-            Some(PreviewAction::ToggleAlign) => {
-                hook.align_to_surface = !hook.align_to_surface;
-                true
-            }
-            Some(PreviewAction::DropToFloor) => {
+            PreviewAction::ToggleAlign => hook.align_to_surface = !hook.align_to_surface,
+            PreviewAction::DropToFloor => {
                 hook.drop_selection_to_floor(world);
-                true
             }
-            Some(PreviewAction::Consume) => true,
-            None => false,
-        }
+            PreviewAction::Consume => {}
+        })
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         preview::place(
@@ -367,9 +289,6 @@ impl Panel for PreviewPanel {
             mouse,
         );
     }
-    fn hide(&self, world: &mut World) {
-        preview::hide_all(world);
-    }
 }
 
 pub(crate) struct ContentPanel;
@@ -378,36 +297,20 @@ impl Panel for ContentPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Content
     }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Content")
+    fn ids(&self) -> &'static HudIds {
+        content_panel::ids()
     }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.content_open
+    fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.assets.stale = true;
     }
-    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.content_open = !hook.content_open;
-        if hook.content_open {
-            hook.tree_stale = true;
-        }
-    }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.content_open = false;
-        hook.content_search_focus = false;
+    fn on_close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.content.search_focus = false;
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         content_panel::size()
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         content_panel::default_origin(vp)
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        content_panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        content_panel::all_label_ids()
-    }
-    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        content_panel::all_field_ids()
     }
     fn press(
         &self,
@@ -418,13 +321,8 @@ impl Panel for ContentPanel {
         o: [f32; 2],
     ) -> bool {
         let shown = hook.content_cells(world).0.len();
-        match content_panel::hit_test(mx, my, o, shown) {
-            Some(action) => {
-                hook.apply_content_action(action, world, [mx, my]);
-                true
-            }
-            None => false,
-        }
+        let action = content_panel::hit_test(mx, my, o, shown);
+        handled(action, |a| hook.apply_content_action(a, world, [mx, my]))
     }
     fn wheel_over(
         &self,
@@ -447,43 +345,32 @@ impl Panel for ContentPanel {
                 cells: &cells,
                 total,
                 type_caption: hook.content_type_caption(),
-                search_focus: hook.content_search_focus,
+                search_focus: hook.content.search_focus,
                 mouse,
             },
             o,
         );
     }
-    fn hide(&self, world: &mut World) {
-        content_panel::hide_all(world);
-    }
 }
 
+// Opened from the top bar's View button rather than from a row of its own.
 pub(crate) struct ViewPanel;
 
 impl Panel for ViewPanel {
     fn key(&self) -> PanelKey {
         PanelKey::View
     }
+    fn ids(&self) -> &'static HudIds {
+        view::ids()
+    }
     fn resizable(&self) -> bool {
         true
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.view_open
-    }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.view_open = false;
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         view::size()
     }
     fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
         view::default_origin()
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        view::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        view::all_label_ids()
     }
     fn press(
         &self,
@@ -494,21 +381,14 @@ impl Panel for ViewPanel {
         o: [f32; 2],
     ) -> bool {
         let s = hook.effective_size(PanelKey::View);
-        match view::hit_test(mx, my, o, s) {
-            Some(ViewAction::Toggle(i)) => {
-                hook.toggle_view_row(i, world);
-                true
-            }
-            Some(ViewAction::Consume) => true,
-            None => false,
-        }
+        handled(view::hit_test(mx, my, o, s), |a| match a {
+            ViewAction::Toggle(i) => hook.toggle_view_row(i, world),
+            ViewAction::Consume => {}
+        })
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let s = hook.effective_size(PanelKey::View);
         view::place(world, o, s, &hook.view_rows(), mouse);
-    }
-    fn hide(&self, world: &mut World) {
-        view::hide_all(world);
     }
 }
 
@@ -518,32 +398,17 @@ impl Panel for TemplatesPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Templates
     }
+    fn ids(&self) -> &'static HudIds {
+        template::ids()
+    }
     fn resizable(&self) -> bool {
         true
-    }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Templates")
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.templates_open
-    }
-    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.templates_open = !hook.templates_open;
-    }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.templates_open = false;
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         template::size()
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         template::default_origin(vp[0])
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        template::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        template::all_label_ids()
     }
     fn press(
         &self,
@@ -554,21 +419,14 @@ impl Panel for TemplatesPanel {
         o: [f32; 2],
     ) -> bool {
         let s = hook.effective_size(PanelKey::Templates);
-        match template::hit_test(mx, my, o, s) {
-            Some(TemplatesAction::Pick(i)) => {
-                hook.open_template_detail(i);
-                true
-            }
-            Some(TemplatesAction::Consume) => true,
-            None => false,
-        }
+        handled(template::hit_test(mx, my, o, s), |a| match a {
+            TemplatesAction::Pick(i) => hook.open_template_detail(i),
+            TemplatesAction::Consume => {}
+        })
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let s = hook.effective_size(PanelKey::Templates);
-        template::place(world, o, s, hook.open_template, mouse);
-    }
-    fn hide(&self, world: &mut World) {
-        template::hide_all(world);
+        template::place(world, o, s, hook.templates.detail, mouse);
     }
 }
 
@@ -578,7 +436,8 @@ impl TemplateDetailPanel {
     // The open template's grouped-row count (1 when none is open, matching the
     // panel's minimum footprint).
     fn row_count(&self, hook: &EditorHook) -> usize {
-        hook.open_template
+        hook.templates
+            .detail
             .map_or(1, |i| hook.template_rows(i).len())
     }
 }
@@ -587,13 +446,16 @@ impl Panel for TemplateDetailPanel {
     fn key(&self) -> PanelKey {
         PanelKey::TemplateDetail
     }
+    fn ids(&self) -> &'static HudIds {
+        template_panel::ids()
+    }
     fn resizable(&self) -> bool {
         true
     }
     // Part of the Templates UI: shown only while the Templates list is open and
     // a template is picked.
     fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.templates_open && hook.open_template.is_some()
+        hook.open[PanelKey::Templates] && hook.templates.detail.is_some()
     }
     fn close(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.close_template_detail();
@@ -609,12 +471,6 @@ impl Panel for TemplateDetailPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         template_panel::default_origin(vp[0])
     }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        template_panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        template_panel::all_label_ids()
-    }
     fn press(
         &self,
         hook: &mut EditorHook,
@@ -623,20 +479,15 @@ impl Panel for TemplateDetailPanel {
         my: f32,
         o: [f32; 2],
     ) -> bool {
-        if hook.open_template.is_none() {
+        if hook.templates.detail.is_none() {
             return false;
         }
         let s = hook.effective_size(PanelKey::TemplateDetail);
-        match template_panel::hit_test(mx, my, o, s) {
-            Some(a) => {
-                hook.apply_template_detail(a);
-                true
-            }
-            None => false,
-        }
+        let action = template_panel::hit_test(mx, my, o, s);
+        handled(action, |a| hook.apply_template_detail(a))
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
-        if hook.open_template.is_none() {
+        if hook.templates.detail.is_none() {
             return false;
         }
         let s = hook.effective_size(PanelKey::TemplateDetail);
@@ -646,16 +497,13 @@ impl Panel for TemplateDetailPanel {
         hook.scroll_template_list(delta);
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
-        let Some(i) = hook.open_template else {
+        let Some(i) = hook.templates.detail else {
             return;
         };
         let s = hook.effective_size(PanelKey::TemplateDetail);
         let data = hook.template_detail_data(i);
         let view = hook.make_template_view(&data, mouse);
-        template_panel::place(world, Some(&view), o, s);
-    }
-    fn hide(&self, world: &mut World) {
-        template_panel::place(world, None, [0.0, 0.0], template_panel::size(0));
+        template_panel::place(world, &view, o, s);
     }
 }
 
@@ -665,45 +513,24 @@ impl Panel for LightingPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Lighting
     }
+    fn ids(&self) -> &'static HudIds {
+        lighting_panel::ids()
+    }
     fn resizable(&self) -> bool {
         true
     }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Lighting")
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.lighting_open
-    }
     // Opening (re)seeds the text controls from the current entries and drops
     // any stale focus / status from the last session.
-    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
-        hook.lighting_open = !hook.lighting_open;
-        if hook.lighting_open {
-            hook.lighting_focus = None;
-            hook.lighting_status = None;
-            hook.seed_lighting(world);
-        }
-    }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.lighting_open = false;
+    fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.lighting.focus = None;
+        hook.lighting.status = None;
+        hook.seed_lighting(world);
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
         lighting_panel::size(lighting::rows(&hook.lighting_present()).len())
     }
     fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
         lighting_panel::default_origin()
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        lighting_panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        lighting_panel::all_label_ids()
-    }
-    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        lighting_panel::all_field_ids()
-            .into_iter()
-            .map(|id| (id, ""))
-            .collect()
     }
     fn press(
         &self,
@@ -719,22 +546,13 @@ impl Panel for LightingPanel {
             let view = hook.make_lighting_view(&data, [mx, my]);
             lighting_panel::hit_test(&view, mx, my, o, s)
         };
-        match action {
-            Some(a) => {
-                hook.apply_lighting_action(a, world);
-                true
-            }
-            None => false,
-        }
+        handled(action, |a| hook.apply_lighting_action(a, world))
     }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let s = hook.effective_size(PanelKey::Lighting);
         let data = hook.lighting_data();
         let view = hook.make_lighting_view(&data, mouse);
-        lighting_panel::place(world, Some(&view), o, s);
-    }
-    fn hide(&self, world: &mut World) {
-        lighting_panel::place(world, None, [0.0, 0.0], lighting_panel::size(0));
+        lighting_panel::place(world, &view, o, s);
     }
 }
 
@@ -744,45 +562,31 @@ impl Panel for CharacterShapePanel {
     fn key(&self) -> PanelKey {
         PanelKey::CharacterShape
     }
+    fn ids(&self) -> &'static HudIds {
+        character_shape_panel::ids()
+    }
     fn resizable(&self) -> bool {
         true
     }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Character Shape")
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.shape_open
-    }
-    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.shape_open = !hook.shape_open;
-        if hook.shape_open {
-            hook.shape_status = None;
-            hook.shape_scroll = 0;
-        }
-    }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.shape_open = false;
+    fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.shape.status = None;
+        hook.shape.scroll = 0;
     }
     // The panel shows up to `DEFAULT_ROWS` rows by default and can be dragged
     // taller to show every row; never taller than its content.
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
         character_shape_panel::size(
-            hook.shape_rows
+            hook.shape
+                .rows
                 .clamp(1, character_shape_panel::DEFAULT_ROWS),
         )
     }
     fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
-        let rows = hook.shape_rows.clamp(1, character_shape_panel::MAX_ROWS);
+        let rows = hook.shape.rows.clamp(1, character_shape_panel::MAX_ROWS);
         [f32::INFINITY, character_shape_panel::size(rows)[1]]
     }
     fn default_origin(&self, _vp: [f32; 2]) -> [f32; 2] {
         character_shape_panel::default_origin()
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        character_shape_panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        character_shape_panel::all_label_ids()
     }
     fn press(
         &self,
@@ -798,13 +602,9 @@ impl Panel for CharacterShapePanel {
             let view = hook.make_shape_view(&data, [mx, my]);
             character_shape_panel::hit_test(&view, mx, my, o, s)
         };
-        match action {
-            Some(a) => {
-                hook.apply_shape_action(a, &data, [mx, my], world);
-                true
-            }
-            None => false,
-        }
+        handled(action, |a| {
+            hook.apply_shape_action(a, &data, [mx, my], world)
+        })
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::CharacterShape);
@@ -817,10 +617,7 @@ impl Panel for CharacterShapePanel {
         let s = hook.effective_size(PanelKey::CharacterShape);
         let data = hook.shape_data(world);
         let view = hook.make_shape_view(&data, mouse);
-        character_shape_panel::place(world, Some(&view), o, s);
-    }
-    fn hide(&self, world: &mut World) {
-        character_shape_panel::place(world, None, [0.0, 0.0], character_shape_panel::size(0));
+        character_shape_panel::place(world, &view, o, s);
     }
 }
 
@@ -830,43 +627,25 @@ impl Panel for StoryPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Story
     }
+    fn ids(&self) -> &'static HudIds {
+        story_panel::ids()
+    }
     fn resizable(&self) -> bool {
         true
     }
     fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
         story_panel::max_size()
     }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Story")
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.story.open
-    }
     // Opening (re)loads the source file, so the panel always starts from the
     // on-disk truth.
-    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.story.open = !hook.story.open;
-        if hook.story.open {
-            hook.load_story();
-        }
-    }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.story.open = false;
+    fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.load_story();
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         story_panel::size()
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         story_panel::default_origin(vp[0])
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        story_panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        story_panel::all_label_ids()
-    }
-    fn code_label_ids(&self) -> Vec<AssetId> {
-        story_panel::code_label_ids()
     }
     fn press(
         &self,
@@ -881,13 +660,7 @@ impl Panel for StoryPanel {
             let view = hook.make_story_view([mx, my]);
             story_panel::hit_test(&view, mx, my, o, s)
         };
-        match action {
-            Some(a) => {
-                hook.apply_story_action(a, mx, my);
-                true
-            }
-            None => false,
-        }
+        handled(action, |a| hook.apply_story_action(a, mx, my))
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::Story);
@@ -903,9 +676,6 @@ impl Panel for StoryPanel {
         let s = hook.effective_size(PanelKey::Story);
         let view = hook.make_story_view(mouse);
         story_panel::place(world, Some(&view), o, s, Metrics::code());
-    }
-    fn hide(&self, world: &mut World) {
-        story_panel::hide_all(world);
     }
 }
 
@@ -923,39 +693,24 @@ impl Panel for ShadersPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Shaders
     }
+    fn ids(&self) -> &'static HudIds {
+        shader_list_panel::ids()
+    }
     fn resizable(&self) -> bool {
         true
     }
     fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
         shader_list_panel::max_size(self.row_count(hook))
     }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Shaders")
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.shaders.open
-    }
     // Opening builds the rows before the panel's first draw.
-    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.shaders.open = !hook.shaders.open;
-        if hook.shaders.open {
-            hook.shader_rows();
-        }
-    }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.shaders.open = false;
+    fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.shader_rows();
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
         shader_list_panel::size(self.row_count(hook))
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         shader_list_panel::default_origin(vp[0])
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        shader_list_panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        shader_list_panel::all_label_ids()
     }
     fn press(
         &self,
@@ -971,17 +726,11 @@ impl Panel for ShadersPanel {
             let view = hook.make_shaders_view(&rows, [mx, my]);
             shader_list_panel::hit_test(&view, mx, my, o, s)
         };
-        match action {
-            Some(a) => {
-                hook.apply_shaders_action(a, &rows, world);
-                true
-            }
-            // A press anywhere else closes the row menu without being taken.
-            None => {
-                hook.shaders.menu = None;
-                false
-            }
+        // A press anywhere else closes the row menu without being taken.
+        if action.is_none() {
+            hook.shaders.menu = None;
         }
+        handled(action, |a| hook.apply_shaders_action(a, &rows, world))
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::Shaders);
@@ -995,9 +744,6 @@ impl Panel for ShadersPanel {
         let view = hook.make_shaders_view(&hook.shaders.rows, mouse);
         shader_list_panel::place(world, Some(&view), o, s);
     }
-    fn hide(&self, world: &mut World) {
-        shader_list_panel::hide_all(world);
-    }
 }
 
 pub(crate) struct ShaderSourcePanel;
@@ -1005,6 +751,9 @@ pub(crate) struct ShaderSourcePanel;
 impl Panel for ShaderSourcePanel {
     fn key(&self) -> PanelKey {
         PanelKey::ShaderSource
+    }
+    fn ids(&self) -> &'static HudIds {
+        shader_source_panel::ids()
     }
     fn resizable(&self) -> bool {
         true
@@ -1025,15 +774,6 @@ impl Panel for ShaderSourcePanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         shader_source_panel::default_origin(vp[0])
     }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        shader_source_panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        shader_source_panel::all_label_ids()
-    }
-    fn code_label_ids(&self) -> Vec<AssetId> {
-        shader_source_panel::code_label_ids()
-    }
     fn press(
         &self,
         hook: &mut EditorHook,
@@ -1043,13 +783,8 @@ impl Panel for ShaderSourcePanel {
         o: [f32; 2],
     ) -> bool {
         let s = hook.effective_size(PanelKey::ShaderSource);
-        match shader_source_panel::hit_test(mx, my, o, s, hook.shaders.reference.open) {
-            Some(a) => {
-                hook.apply_source_action(a, mx, my);
-                true
-            }
-            None => false,
-        }
+        let action = shader_source_panel::hit_test(mx, my, o, s, hook.shaders.reference.open);
+        handled(action, |a| hook.apply_source_action(a, mx, my))
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::ShaderSource);
@@ -1066,9 +801,6 @@ impl Panel for ShaderSourcePanel {
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         hook.draw_shader_source(world, o, mouse);
     }
-    fn hide(&self, world: &mut World) {
-        shader_source_panel::hide_all(world);
-    }
 }
 
 pub(crate) struct ConsolePanel;
@@ -1077,25 +809,21 @@ impl Panel for ConsolePanel {
     fn key(&self) -> PanelKey {
         PanelKey::Console
     }
+    fn ids(&self) -> &'static HudIds {
+        console_panel::ids()
+    }
     fn resizable(&self) -> bool {
         true
     }
     fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
         console_panel::max_size()
     }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Console")
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.console.open
-    }
     // Opening focuses a cleared command line (backtick does the same through
     // the hook's key drive).
     fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
         hook.toggle_console(world);
     }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.console.open = false;
+    fn on_close(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.console.focus = false;
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
@@ -1103,18 +831,6 @@ impl Panel for ConsolePanel {
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         console_panel::default_origin(vp)
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        console_panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        console_panel::all_label_ids()
-    }
-    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        console_panel::all_field_ids()
-            .into_iter()
-            .map(|id| (id, "/help"))
-            .collect()
     }
     fn press(
         &self,
@@ -1125,13 +841,8 @@ impl Panel for ConsolePanel {
         o: [f32; 2],
     ) -> bool {
         let s = hook.effective_size(PanelKey::Console);
-        match console_panel::hit_test(mx, my, o, s) {
-            Some(a) => {
-                hook.apply_console_action(a, world);
-                true
-            }
-            None => false,
-        }
+        let action = console_panel::hit_test(mx, my, o, s);
+        handled(action, |a| hook.apply_console_action(a, world))
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::Console);
@@ -1150,8 +861,9 @@ impl Panel for ConsolePanel {
         let view = hook.make_console_view(&lines, total, first, &ghost, mouse);
         console_panel::place(world, Some(&view), o, s);
     }
+    // The command line's autocomplete ghost goes with it.
     fn hide(&self, world: &mut World) {
-        console_panel::place(world, None, [0.0, 0.0], console_panel::size());
+        console_panel::hide_all(world);
     }
 }
 
@@ -1160,6 +872,9 @@ pub(crate) struct BehaviorPanel;
 impl Panel for BehaviorPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Behavior
+    }
+    fn ids(&self) -> &'static HudIds {
+        behavior::panel::ids()
     }
     fn resizable(&self) -> bool {
         true
@@ -1172,22 +887,12 @@ impl Panel for BehaviorPanel {
             _ => [f32::INFINITY, f32::INFINITY],
         }
     }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Behavior")
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.behavior.open
-    }
     // Opening re-reads the world's behaviors, so the panel always starts from
     // the current entry list rather than a stale selection.
-    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
-        hook.behavior.open = !hook.behavior.open;
-        if hook.behavior.open {
-            hook.open_behavior(world);
-        }
+    fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.open_behavior(world);
     }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.behavior.open = false;
+    fn on_close(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.behavior.blur_inputs();
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
@@ -1199,19 +904,6 @@ impl Panel for BehaviorPanel {
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         behavior::panel::default_origin(vp[0])
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        behavior::panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        behavior::panel::all_label_ids()
-    }
-    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        vec![
-            (behavior::panel::VALUE_INPUT, "value"),
-            (behavior::panel::NAME_INPUT, "name"),
-            (behavior::panel::FILTER_INPUT, "filter"),
-        ]
     }
     fn overlay_ids(&self, hook: &EditorHook) -> Vec<AssetId> {
         let mut ids = behavior::panel::status_ids();
@@ -1234,13 +926,7 @@ impl Panel for BehaviorPanel {
             let view = hook.make_behavior_view(&data, [mx, my]);
             behavior::panel::hit_test(&view, mx, my, o, s)
         };
-        match action {
-            Some(a) => {
-                hook.apply_behavior_action(a, world, [mx, my]);
-                true
-            }
-            None => false,
-        }
+        handled(action, |a| hook.apply_behavior_action(a, world, [mx, my]))
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::Behavior);
@@ -1258,9 +944,6 @@ impl Panel for BehaviorPanel {
         let view = hook.make_behavior_view(&data, mouse);
         behavior::panel::place(world, Some(&view), o, s);
     }
-    fn hide(&self, world: &mut World) {
-        behavior::panel::place(world, None, [0.0, 0.0], behavior::panel::size());
-    }
 }
 
 pub(crate) struct MapPanel;
@@ -1269,25 +952,18 @@ impl Panel for MapPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Map
     }
+    fn ids(&self) -> &'static HudIds {
+        map::panel::ids()
+    }
     fn resizable(&self) -> bool {
         true
     }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Map")
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.map.open
-    }
     // Opening is a fresh look at the map, so the canvas is put back on where
     // the world starts rather than on wherever it was last left.
-    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.map.open = !hook.map.open;
-        if hook.map.open {
-            hook.map.reroot();
-        }
+    fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.map.reroot();
     }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.map.open = false;
+    fn on_close(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.map.pan_drag = None;
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
@@ -1295,12 +971,6 @@ impl Panel for MapPanel {
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         map::panel::default_origin(vp[0])
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        map::panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        map::panel::all_label_ids()
     }
     fn press(
         &self,
@@ -1316,13 +986,7 @@ impl Panel for MapPanel {
             let view = hook.make_map_view(&chart, [mx, my]);
             map::panel::hit_test(&view, mx, my, o, s)
         };
-        match action {
-            Some(action) => {
-                hook.apply_map_action(action, [mx, my], world);
-                true
-            }
-            None => false,
-        }
+        handled(action, |a| hook.apply_map_action(a, [mx, my], world))
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::Map);
@@ -1336,9 +1000,6 @@ impl Panel for MapPanel {
         let view = hook.make_map_view(&chart, mouse);
         map::panel::place(world, Some(&view), o, hook.effective_size(PanelKey::Map));
     }
-    fn hide(&self, world: &mut World) {
-        map::panel::place(world, None, [0.0, 0.0], map::panel::size());
-    }
 }
 
 pub(crate) struct VariablesPanel;
@@ -1347,48 +1008,29 @@ impl Panel for VariablesPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Variables
     }
+    fn ids(&self) -> &'static HudIds {
+        variables_panel::ids()
+    }
     fn resizable(&self) -> bool {
         true
     }
     fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
         variables_panel::max_size()
     }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Variables")
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.variables_open
-    }
     // Opening re-reads the world, so the panel always starts from the current
     // table and the names its behaviors use.
-    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
-        hook.variables_open = !hook.variables_open;
-        if hook.variables_open {
-            hook.open_variables(world);
-        }
+    fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.open_variables(world);
     }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.variables_open = false;
-        hook.variables_name_focus = false;
-        hook.variables_value_focus = false;
+    fn on_close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.variables.name_focus = false;
+        hook.variables.value_focus = false;
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         variables_panel::size()
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         variables_panel::default_origin(vp[0])
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        variables_panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        variables_panel::all_label_ids()
-    }
-    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        vec![
-            (variables_panel::NAME_INPUT, "name"),
-            (variables_panel::VALUE_INPUT, "value"),
-        ]
     }
     fn overlay_ids(&self, _hook: &EditorHook) -> Vec<AssetId> {
         variables_panel::status_ids()
@@ -1407,13 +1049,7 @@ impl Panel for VariablesPanel {
             let view = hook.make_variables_view(&data, [mx, my]);
             variables_panel::hit_test(&view, mx, my, o, s)
         };
-        match action {
-            Some(a) => {
-                hook.apply_variables_action(a, world);
-                true
-            }
-            None => false,
-        }
+        handled(action, |a| hook.apply_variables_action(a, world))
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::Variables);
@@ -1431,9 +1067,6 @@ impl Panel for VariablesPanel {
         let view = hook.make_variables_view(&data, mouse);
         variables_panel::place(world, Some(&view), o, s);
     }
-    fn hide(&self, world: &mut World) {
-        variables_panel::place(world, None, [0.0, 0.0], variables_panel::size());
-    }
 }
 
 pub(crate) struct PalettePanel;
@@ -1442,33 +1075,18 @@ impl Panel for PalettePanel {
     fn key(&self) -> PanelKey {
         PanelKey::Palette
     }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.palette.open
+    fn ids(&self) -> &'static HudIds {
+        palette::panel::ids()
     }
     // Opening rebuilds the item list and clears the query, ready to type.
     fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
         hook.toggle_palette(world);
-    }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.close_palette();
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         palette::panel::size()
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         palette::panel::default_origin(vp)
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        palette::panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        palette::panel::all_label_ids()
-    }
-    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        palette::panel::all_field_ids()
-            .into_iter()
-            .map(|id| (id, "search"))
-            .collect()
     }
     fn press(
         &self,
@@ -1482,13 +1100,7 @@ impl Panel for PalettePanel {
             let view = hook.make_palette_view([mx, my]);
             palette::panel::hit_test(&view, mx, my, o)
         };
-        match action {
-            Some(hit) => {
-                hook.apply_palette_hit(hit, world);
-                true
-            }
-            None => false,
-        }
+        handled(action, |hit| hook.apply_palette_hit(hit, world))
     }
     fn wheel_over(
         &self,
@@ -1510,9 +1122,6 @@ impl Panel for PalettePanel {
         let view = hook.make_palette_view(mouse);
         palette::panel::place(world, Some(&view), o);
     }
-    fn hide(&self, world: &mut World) {
-        palette::panel::place(world, None, [0.0, 0.0]);
-    }
 }
 
 pub(crate) struct ImportPanel;
@@ -1521,48 +1130,27 @@ impl Panel for ImportPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Import
     }
+    fn ids(&self) -> &'static HudIds {
+        import_panel::ids()
+    }
     fn resizable(&self) -> bool {
         true
     }
     fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
         import_panel::max_size()
     }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Import")
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.import_open
-    }
     // Opening clears stale state and focuses the path field, ready to type.
-    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
-        hook.import_open = !hook.import_open;
-        if hook.import_open {
-            hook.import_status = None;
-            hook.import_scroll = 0;
-            hook.import_focus = true;
-            widget::seed_field(world, import_panel::PATH_INPUT, "");
-        }
-    }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.import_open = false;
+    fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.import.status = None;
+        hook.import.scroll = 0;
+        hook.import.focus = true;
+        widget::seed_field(world, import_panel::PATH_INPUT, "");
     }
     fn size(&self, _hook: &EditorHook) -> [f32; 2] {
         import_panel::size()
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         import_panel::default_origin(vp[0])
-    }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        import_panel::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        import_panel::all_label_ids()
-    }
-    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        import_panel::all_field_ids()
-            .into_iter()
-            .map(|id| (id, "path/to/file.glb"))
-            .collect()
     }
     fn press(
         &self,
@@ -1578,13 +1166,7 @@ impl Panel for ImportPanel {
             let view = hook.make_import_view(&rows, [mx, my]);
             import_panel::hit_test(&view, mx, my, o, s)
         };
-        match action {
-            Some(a) => {
-                hook.apply_import_action(a, world);
-                true
-            }
-            None => false,
-        }
+        handled(action, |a| hook.apply_import_action(a, world))
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::Import);
@@ -1602,9 +1184,6 @@ impl Panel for ImportPanel {
         let view = hook.make_import_view(&rows, mouse);
         import_panel::place(world, Some(&view), o, s);
     }
-    fn hide(&self, world: &mut World) {
-        import_panel::place(world, None, [0.0, 0.0], import_panel::size());
-    }
 }
 
 pub(crate) struct WorldsPanel;
@@ -1613,21 +1192,14 @@ impl Panel for WorldsPanel {
     fn key(&self) -> PanelKey {
         PanelKey::Worlds
     }
-    fn view_row(&self) -> Option<&'static str> {
-        Some("Worlds")
-    }
-    fn is_open(&self, hook: &EditorHook) -> bool {
-        hook.worlds.open
+    fn ids(&self) -> &'static HudIds {
+        worlds::ids()
     }
     // Opening re-reads the project's worlds.
-    fn toggle(&self, hook: &mut EditorHook, _world: &mut World) {
-        match hook.worlds.open {
-            true => hook.worlds.open = false,
-            false => hook.open_worlds_panel(),
-        }
+    fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.open_worlds_panel();
     }
-    fn close(&self, hook: &mut EditorHook, _world: &mut World) {
-        hook.worlds.open = false;
+    fn on_close(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.worlds.menu = None;
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
@@ -1639,12 +1211,6 @@ impl Panel for WorldsPanel {
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         worlds::Layout::new(worlds::Mode::Session, vp, 0.0).default_origin()
     }
-    fn sprite_ids(&self) -> Vec<AssetId> {
-        worlds::all_sprite_ids()
-    }
-    fn label_ids(&self) -> Vec<AssetId> {
-        worlds::all_label_ids()
-    }
     fn press(
         &self,
         hook: &mut EditorHook,
@@ -1654,13 +1220,7 @@ impl Panel for WorldsPanel {
         o: [f32; 2],
     ) -> bool {
         let action = worlds::hit_test(&hook.make_worlds_view([mx, my]), mx, my, o);
-        match action {
-            Some(a) => {
-                hook.apply_worlds_action(a, world);
-                true
-            }
-            None => false,
-        }
+        handled(action, |a| hook.apply_worlds_action(a, world))
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         hook.worlds_layout().cursor_over_list(mx, my, o)
@@ -1671,8 +1231,5 @@ impl Panel for WorldsPanel {
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let view = hook.make_worlds_view(mouse);
         worlds::place(world, Some(&view), o);
-    }
-    fn hide(&self, world: &mut World) {
-        worlds::place(world, None, [0.0, 0.0]);
     }
 }

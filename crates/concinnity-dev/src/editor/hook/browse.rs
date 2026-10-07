@@ -57,7 +57,11 @@ impl EditorHook {
             rows: self.tree_rows(world),
             hidden: names(&self.hidden_assets),
             locked: names(&self.locked_assets),
-            row_menu: self.row_menu.as_ref().and_then(|h| self.handle_name(h)),
+            row_menu: self
+                .assets
+                .row_menu
+                .as_ref()
+                .and_then(|h| self.handle_name(h)),
             picker_options: self.picker_options(world),
             form_title,
             form_overrides: self.form_overrides_data(),
@@ -132,7 +136,7 @@ impl EditorHook {
             HudAction::Save => self.save(),
             HudAction::Undo => self.undo(world),
             HudAction::Redo => self.redo(world),
-            HudAction::ToggleView => self.view_open = !self.view_open,
+            HudAction::ToggleView => self.open[PanelKey::View] = !self.open[PanelKey::View],
             HudAction::ToggleDisplay => self.toggle_display_menu(),
             HudAction::PlayPause => self.sim_toggle_play(),
             HudAction::Step => self.sim.step(),
@@ -143,16 +147,6 @@ impl EditorHook {
         }
     }
 
-    // Toggle the whole assets UI (the tree panel plus any open edit form).
-    // Hiding it KEEPS all that state -- panel positions, the open form, the
-    // scroll offset, the fold state, the selection -- so toggling back restores
-    // the same view. Only the transient picker / row-menu overlays are dropped.
-    pub(super) fn toggle_assets(&mut self) {
-        self.panel_open = !self.panel_open;
-        self.picker_open = false;
-        self.row_menu = None;
-    }
-
     // Open (or re-target) the Template detail panel on template `i` (a preview of
     // the assets it would add, with an Apply button), bringing it to the front of
     // the focus stack. The Templates list stays open so another can be picked.
@@ -160,16 +154,16 @@ impl EditorHook {
         if i >= concinnity_cook::authoring::template::TEMPLATES.len() {
             return;
         }
-        self.open_template = Some(i);
-        self.template_list_scroll = 0;
+        self.templates.detail = Some(i);
+        self.templates.detail_scroll = 0;
         self.focus_panel(PanelKey::TemplateDetail);
     }
 
     // Close the Template detail panel (its state is transient; the Templates list
     // stays as it was).
     pub(super) fn close_template_detail(&mut self) {
-        self.open_template = None;
-        self.template_list_scroll = 0;
+        self.templates.detail = None;
+        self.templates.detail_scroll = 0;
     }
 
     // Route a resolved Template-detail click: Apply layers the template's assets
@@ -177,7 +171,7 @@ impl EditorHook {
     pub(super) fn apply_template_detail(&mut self, action: TemplateAction) {
         match action {
             TemplateAction::Apply => {
-                if let Some(i) = self.open_template {
+                if let Some(i) = self.templates.detail {
                     self.apply_template(i);
                 }
                 self.close_template_detail();
@@ -210,7 +204,7 @@ impl EditorHook {
             title: &d.title,
             description: &d.description,
             rows: &d.rows,
-            scroll: self.template_list_scroll,
+            scroll: self.templates.detail_scroll,
             mouse,
         }
     }

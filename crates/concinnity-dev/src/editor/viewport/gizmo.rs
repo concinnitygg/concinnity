@@ -10,16 +10,20 @@ use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::math::pick::PickRay;
 
-use crate::editor::panels::registry::ID_BASE;
-
-// Reserved id family: the next free block after the highlight's 0xC00.
-const GIZMO_BASE: u32 = ID_BASE + 0xD00;
-// Per-axis element block: segments at +0..SEGMENTS, the tip handle after them.
-const AXIS_STRIDE: u32 = 0x10;
-// The mode caption beside the origin ("move" / "rotate" / "scale").
-pub(crate) const MODE_LABEL: AssetId = AssetId(GIZMO_BASE + 0x30);
+use crate::editor::hud_ids::{Family, family_base, hud_ids};
 
 pub(crate) const SEGMENTS: usize = 6;
+// Per-axis element run: the segments, then the tip handle.
+const AXIS_PARTS: usize = SEGMENTS + 1;
+
+// The axis runs back to back, and the mode caption beside the origin ("move" /
+// "rotate" / "scale").
+hud_ids! {
+    base: family_base(Family::Gizmo);
+    sprites: [axis_part[3 * AXIS_PARTS]];
+    labels: [pub(crate) MODE_LABEL];
+}
+
 const SEGMENT_PX: f32 = 3.0;
 const TIP_PX: f32 = 10.0;
 // Extra slop around the tip handle for the press hit test.
@@ -82,22 +86,11 @@ pub(crate) fn wrap_deg(d: f32) -> f32 {
 }
 
 fn segment_id(axis: usize, seg: usize) -> AssetId {
-    AssetId(GIZMO_BASE + axis as u32 * AXIS_STRIDE + seg as u32)
+    axis_part(axis * AXIS_PARTS + seg)
 }
 
 fn tip_id(axis: usize) -> AssetId {
-    AssetId(GIZMO_BASE + axis as u32 * AXIS_STRIDE + SEGMENTS as u32)
-}
-
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut out = Vec::with_capacity(3 * (SEGMENTS + 1));
-    for axis in 0..3 {
-        for seg in 0..SEGMENTS {
-            out.push(segment_id(axis, seg));
-        }
-        out.push(tip_id(axis));
-    }
-    out
+    axis_part(axis * AXIS_PARTS + SEGMENTS)
 }
 
 // The gizmo's screen geometry for one frame: the projected origin and the
@@ -256,12 +249,7 @@ pub(crate) fn place(world: &mut World, layout: &Layout, mode: GizmoMode) {
 }
 
 pub(crate) fn hide(world: &mut World) {
-    for id in all_sprite_ids() {
-        if let Some(s) = world.get_mut_by_id::<Sprite>(id) {
-            s.visible = false;
-        }
-    }
-    crate::editor::widget::set_label_visible(world, MODE_LABEL, false);
+    ids().hide(world);
 }
 
 fn place_square(world: &mut World, id: AssetId, center: [f32; 2], size: f32, radius: f32) {
@@ -381,11 +369,16 @@ mod tests {
         assert!((wrap_deg(720.0)).abs() < 1e-3);
     }
 
+    // Each axis draws its segments, then its tip, axis after axis.
     #[test]
-    fn id_family_is_contiguous_and_disjoint_per_axis() {
-        let ids = all_sprite_ids();
-        assert_eq!(ids.len(), 3 * (SEGMENTS + 1));
-        let unique: std::collections::HashSet<_> = ids.iter().collect();
-        assert_eq!(unique.len(), ids.len());
+    fn axis_parts_run_in_draw_order() {
+        let parts: Vec<AssetId> = (0..3)
+            .flat_map(|axis| {
+                (0..SEGMENTS)
+                    .map(move |seg| segment_id(axis, seg))
+                    .chain([tip_id(axis)])
+            })
+            .collect();
+        assert_eq!(parts, ids().sprites);
     }
 }

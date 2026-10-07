@@ -35,7 +35,7 @@ fn shape_slider_drag_commits_one_undo_step() {
         },
     );
     let mut h = hook(shape_world_entries());
-    h.shape_open = true;
+    h.open[PanelKey::CharacterShape] = true;
     h.focus_panel(PanelKey::CharacterShape);
     select(&mut h, &["body"]);
     h.tick(&mut world);
@@ -58,7 +58,7 @@ fn shape_slider_drag_commits_one_undo_step() {
         "a plain SkinnedMesh gets the bundled humanoid schema"
     );
     assert_eq!(
-        h.shape_rows,
+        h.shape.rows,
         presets + 1 + 6,
         "the preset rows, three headers + three sliders"
     );
@@ -71,7 +71,7 @@ fn shape_slider_drag_commits_one_undo_step() {
     let y = rect[1] + rect[3] * 0.5;
     let x_half = widget_slider::handle_x(rect, 0.5, bipolar);
     click_at(&mut world, &mut h, [x_half, y]);
-    assert!(h.shape_drag.is_some(), "the press starts a drag");
+    assert!(h.shape.drag.is_some(), "the press starts a drag");
     assert!(
         !h.dirty && !h.rebuild_preview,
         "no entry change until release"
@@ -88,7 +88,7 @@ fn shape_slider_drag_commits_one_undo_step() {
     assert!(!h.can_undo(), "nothing recorded mid-drag");
 
     release_at(&mut world, &mut h, [x_neg, y]);
-    assert!(h.shape_drag.is_none(), "release ends the drag");
+    assert!(h.shape.drag.is_none(), "release ends the drag");
     assert!(
         h.dirty && h.rebuild_preview,
         "the release is one committed edit"

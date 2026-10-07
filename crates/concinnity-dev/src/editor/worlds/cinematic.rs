@@ -13,12 +13,11 @@
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
-use crate::editor::panels::registry::ID_BASE;
+use crate::editor::hud_ids::{Family, family_base};
 use crate::editor::viewport::framing::{CameraPose, bounding_sphere, fit_distance};
 use crate::editor::widget;
 
-// Reserved id family: the next free block after the Worlds panel's (0xC000).
-pub(crate) const FADE: AssetId = AssetId(ID_BASE + 0xD000);
+pub(crate) const FADE: AssetId = AssetId(family_base(Family::ShotFade));
 
 // How long a moving shot holds, and how long every shot's fade in and out
 // take. A shot spends most of its time clear: the fades are the punctuation,

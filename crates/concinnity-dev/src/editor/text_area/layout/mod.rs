@@ -44,79 +44,93 @@ fn marker_tint(s: Severity) -> [f32; 4] {
     [r, g, b, 1.0]
 }
 
-// A text area's reserved element ids: one family starting at `base`, taking
-// `0xD0 + ROW_POOL` ids of its owner's block.
+// The area's elements, numbered from 0. Sprites in draw order: the well and
+// gutter, then the line highlights and markers, the caret over them, the
+// scrollbars on top. Labels: the line numbers and the lines, all in the code
+// face.
+mod slots {
+    use super::ROW_POOL;
+
+    crate::editor::hud_ids::hud_ids! {
+        base: 0;
+        sprites: [
+            pub(super) WELL,
+            pub(super) GUTTER,
+            pub(super) CURRENT_LINE,
+            pub(super) selection[ROW_POOL],
+            pub(super) marker[ROW_POOL],
+            pub(super) CARET,
+            pub(super) V_TRACK,
+            pub(super) V_THUMB,
+            pub(super) H_TRACK,
+            pub(super) H_THUMB,
+        ];
+        code_labels: [pub(super) number[ROW_POOL], pub(super) text[ROW_POOL]];
+    }
+}
+
+// A text area's ids: its slots, shifted into a block its owner reserves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TextAreaIds {
     base: u32,
 }
 
 impl TextAreaIds {
+    pub(crate) const SPAN: usize = slots::IDS_SPAN;
+
     pub(crate) const fn new(base: u32) -> Self {
         Self { base }
     }
 
-    const fn at(self, offset: u32) -> AssetId {
-        AssetId(self.base + offset)
+    const fn at(self, slot: AssetId) -> AssetId {
+        AssetId(self.base + slot.0)
     }
     fn well(self) -> AssetId {
-        self.at(0)
+        self.at(slots::WELL)
     }
     fn gutter(self) -> AssetId {
-        self.at(1)
+        self.at(slots::GUTTER)
     }
     fn current_line(self) -> AssetId {
-        self.at(2)
+        self.at(slots::CURRENT_LINE)
     }
     fn caret(self) -> AssetId {
-        self.at(3)
+        self.at(slots::CARET)
     }
     fn v_track(self) -> AssetId {
-        self.at(4)
+        self.at(slots::V_TRACK)
     }
     fn v_thumb(self) -> AssetId {
-        self.at(5)
+        self.at(slots::V_THUMB)
     }
     fn h_track(self) -> AssetId {
-        self.at(6)
+        self.at(slots::H_TRACK)
     }
     fn h_thumb(self) -> AssetId {
-        self.at(7)
+        self.at(slots::H_THUMB)
     }
     fn selection(self, row: usize) -> AssetId {
-        self.at(0x10 + row as u32)
+        self.at(slots::selection(row))
     }
     fn marker(self, row: usize) -> AssetId {
-        self.at(0x50 + row as u32)
+        self.at(slots::marker(row))
     }
     fn number(self, row: usize) -> AssetId {
-        self.at(0x90 + row as u32)
+        self.at(slots::number(row))
     }
     fn text(self, row: usize) -> AssetId {
-        self.at(0xD0 + row as u32)
+        self.at(slots::text(row))
     }
 
-    // Every sprite, in draw order: the well and gutter, then the line
-    // highlights and markers, the caret over them, the scrollbars on top.
     pub(crate) fn sprite_ids(self) -> Vec<AssetId> {
-        let mut ids = vec![self.well(), self.gutter(), self.current_line()];
-        ids.extend((0..ROW_POOL).map(|r| self.selection(r)));
-        ids.extend((0..ROW_POOL).map(|r| self.marker(r)));
-        ids.extend([
-            self.caret(),
-            self.v_track(),
-            self.v_thumb(),
-            self.h_track(),
-            self.h_thumb(),
-        ]);
-        ids
+        slots::ids().sprites.iter().map(|&id| self.at(id)).collect()
     }
 
-    // Every label: the line numbers and the lines, all in the code face.
     pub(crate) fn code_label_ids(self) -> Vec<AssetId> {
-        (0..ROW_POOL)
-            .map(|r| self.number(r))
-            .chain((0..ROW_POOL).map(|r| self.text(r)))
+        slots::ids()
+            .code_labels
+            .iter()
+            .map(|&id| self.at(id))
             .collect()
     }
 }

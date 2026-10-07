@@ -22,7 +22,8 @@ use concinnity_core::ecs::asset_id::AssetId;
 
 use super::form::{self, FieldKind, FormField};
 use super::form_extras::{self, ExtraRow};
-use super::registry::{self, PanelKey};
+use super::registry::PanelKey;
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::overrides::FieldOrigin;
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
@@ -43,73 +44,54 @@ pub(crate) const MAX_OVR_ROWS: usize = 4;
 const OVR_ROW_H: f32 = 26.0;
 const OVR_MENU_W: f32 = 340.0;
 
-const EDIT: u32 = registry::base(PanelKey::Edit);
-pub(crate) const EDIT_BG: AssetId = AssetId(EDIT);
-pub(crate) const TITLE_LABEL: AssetId = AssetId(EDIT + 2);
-pub(crate) const APPLY_BG: AssetId = AssetId(EDIT + 3);
-pub(crate) const APPLY_LABEL: AssetId = AssetId(EDIT + 4);
-// The "X" close button in the title bar's top-right corner.
-pub(crate) const CLOSE_BG: AssetId = AssetId(EDIT + 5);
-pub(crate) const CLOSE_LABEL: AssetId = AssetId(EDIT + 6);
-// The asset-name heading: a real editable TextInput drawn a step larger.
-pub(crate) const NAME_INPUT: AssetId = AssetId(EDIT + 7);
-pub(crate) const FORM_STATUS: AssetId = AssetId(EDIT + 8);
-pub(crate) const FORM_TRACK: AssetId = AssetId(EDIT + 9);
-pub(crate) const FORM_THUMB: AssetId = AssetId(EDIT + 10);
-pub(crate) const DROP_BG: AssetId = AssetId(EDIT + 11);
-pub(crate) const DROP_TRACK: AssetId = AssetId(EDIT + 12);
-pub(crate) const DROP_THUMB: AssetId = AssetId(EDIT + 13);
-
-// The per-slot control pool (`form::FIELD_POOL` of each). `form_row_label(r)` is
-// the caption of visible slot `r`; `form_input(r)` its text control;
-// `form_toggle_bg(r)` its checkbox / cycle-button / array-add background;
-// `form_swatch(r)` its color swatch / array-remove button;
-// `form_enum_label(r)` its enum-value / array-count caption.
-pub(crate) fn form_row_label(r: usize) -> AssetId {
-    AssetId(EDIT + 0x20 + r as u32)
-}
-pub(crate) fn form_input(r: usize) -> AssetId {
-    AssetId(EDIT + 0x40 + r as u32)
-}
-pub(crate) fn form_toggle_bg(r: usize) -> AssetId {
-    AssetId(EDIT + 0x60 + r as u32)
-}
-pub(crate) fn form_swatch(r: usize) -> AssetId {
-    AssetId(EDIT + 0x80 + r as u32)
-}
-pub(crate) fn form_enum_label(r: usize) -> AssetId {
-    AssetId(EDIT + 0xA0 + r as u32)
-}
-// The value dropdown's own option rows (the Assets panel's combo pool can be in
-// use at the same time now that the two are separate panels).
-pub(crate) fn drop_row_bg(r: usize) -> AssetId {
-    AssetId(EDIT + 0xC0 + r as u32)
-}
-pub(crate) fn drop_row_label(r: usize) -> AssetId {
-    AssetId(EDIT + 0xE0 + r as u32)
-}
-// Override chrome for a template-derived asset: a per-slot accent bar +
-// action button on overridden rows, a header summary chip + entity-menu
-// button, and a floating Revert / Apply menu.
-pub(crate) fn ovr_bar(r: usize) -> AssetId {
-    AssetId(EDIT + 0x100 + r as u32)
-}
-pub(crate) fn ovr_btn_bg(r: usize) -> AssetId {
-    AssetId(EDIT + 0x120 + r as u32)
-}
-pub(crate) fn ovr_btn_label(r: usize) -> AssetId {
-    AssetId(EDIT + 0x140 + r as u32)
-}
-pub(crate) const OVR_CHIP_BG: AssetId = AssetId(EDIT + 0x160);
-pub(crate) const OVR_CHIP_LABEL: AssetId = AssetId(EDIT + 0x161);
-pub(crate) const ENT_BTN_BG: AssetId = AssetId(EDIT + 0x162);
-pub(crate) const ENT_BTN_LABEL: AssetId = AssetId(EDIT + 0x163);
-pub(crate) const OVR_MENU_BG: AssetId = AssetId(EDIT + 0x164);
-pub(crate) fn ovr_menu_row_bg(r: usize) -> AssetId {
-    AssetId(EDIT + 0x170 + r as u32)
-}
-pub(crate) fn ovr_menu_row_label(r: usize) -> AssetId {
-    AssetId(EDIT + 0x180 + r as u32)
+// Background, title, buttons, per-slot chrome, then the floating overlays
+// (scrollbar, value dropdown, override menu) which must sit above the slot
+// chrome; among labels the dropdown's option captions come last so they draw
+// above the slot captions the dropdown floats over.
+//
+// Per slot (`form::FIELD_POOL_MAX` of each): `form_row_label(r)` is the caption
+// of visible slot `r`; `form_input(r)` its text control; `form_toggle_bg(r)` its
+// checkbox / cycle-button / array-add background; `form_swatch(r)` its color
+// swatch / array-remove button; `form_enum_label(r)` its enum-value /
+// array-count caption. A template-derived asset adds override chrome: a per-slot
+// accent bar + action button on overridden rows, a header summary chip +
+// entity-menu button, and a floating Revert / Apply menu. The name heading is a
+// real editable TextInput drawn a step larger.
+hud_ids! {
+    base: panel_base(PanelKey::Edit);
+    sprites: [
+        pub(crate) EDIT_BG,
+        pub(crate) CLOSE_BG,
+        pub(crate) APPLY_BG,
+        pub(crate) OVR_CHIP_BG,
+        pub(crate) ENT_BTN_BG,
+        pub(crate) form_toggle_bg[form::FIELD_POOL_MAX],
+        pub(crate) form_swatch[form::FIELD_POOL_MAX],
+        pub(crate) ovr_bar[form::FIELD_POOL_MAX],
+        pub(crate) ovr_btn_bg[form::FIELD_POOL_MAX],
+        pub(crate) FORM_TRACK,
+        pub(crate) FORM_THUMB,
+        pub(crate) DROP_BG,
+        pub(crate) drop_row_bg[MAX_DROP_ROWS],
+        pub(crate) DROP_TRACK,
+        pub(crate) DROP_THUMB,
+        pub(crate) OVR_MENU_BG,
+        pub(crate) ovr_menu_row_bg[MAX_OVR_ROWS],
+    ];
+    labels: [
+        pub(crate) TITLE_LABEL,
+        pub(crate) CLOSE_LABEL,
+        pub(crate) APPLY_LABEL,
+        pub(crate) FORM_STATUS,
+        pub(crate) OVR_CHIP_LABEL,
+        pub(crate) ENT_BTN_LABEL,
+        pub(crate) form_row_label[form::FIELD_POOL_MAX],
+        pub(crate) form_enum_label[form::FIELD_POOL_MAX],
+        pub(crate) ovr_btn_label[form::FIELD_POOL_MAX],
+        pub(crate) drop_row_label[MAX_DROP_ROWS],
+        pub(crate) ovr_menu_row_label[MAX_OVR_ROWS],
+    ];
+    fields: [pub(crate) NAME_INPUT = "name", pub(crate) form_input[form::FIELD_POOL_MAX] = ""];
 }
 
 // Which of the form's inputs holds keyboard focus (re-asserted each frame so the
@@ -689,15 +671,10 @@ pub(crate) fn hit_test(
 }
 
 // Position + show the panel's elements for this frame at origin `o`, effective
-// size `s`, or hide them all when the form is closed (`view` is `None`).
-pub(crate) fn place(world: &mut World, view: Option<&FormView>, o: [f32; 2], s: [f32; 2]) {
-    let Some(view) = view else {
-        hide_all(world);
-        return;
-    };
-
+// size `s`.
+pub(crate) fn place(world: &mut World, view: &FormView, o: [f32; 2], s: [f32; 2]) {
     // Blank everything, then re-show what this frame needs.
-    hide_all(world);
+    ids().hide(world);
 
     let w = s[0];
     let window = rows_for_height(s[1]);
@@ -1190,16 +1167,6 @@ fn place_center_label(
     }
 }
 
-// Hide every panel element, including the typed fields (and blur them so a
-// hidden field cannot keep keyboard focus).
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &all_field_ids());
-}
-
-// Every panel sprite id. THE ORDER OF THIS VEC IS THE DRAW ORDER (inject.rs
-// inserts in this sequence; the overlay draws in insertion order): background,
-// title, buttons, per-slot chrome, then the floating overlays (scrollbar, value
-// dropdown) which must sit above the slot chrome.
 // The value dropdown's own elements, which draw above the rest of the panel
 // while it is open so its backing occludes the field rows it covers.
 pub(crate) fn dropdown_ids() -> Vec<AssetId> {
@@ -1215,43 +1182,6 @@ pub(crate) fn override_menu_ids() -> Vec<AssetId> {
     let mut ids = vec![OVR_MENU_BG];
     ids.extend((0..MAX_OVR_ROWS).map(ovr_menu_row_bg));
     ids.extend((0..MAX_OVR_ROWS).map(ovr_menu_row_label));
-    ids
-}
-
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![EDIT_BG, CLOSE_BG, APPLY_BG, OVR_CHIP_BG, ENT_BTN_BG];
-    ids.extend((0..form::FIELD_POOL_MAX).map(form_toggle_bg));
-    ids.extend((0..form::FIELD_POOL_MAX).map(form_swatch));
-    ids.extend((0..form::FIELD_POOL_MAX).map(ovr_bar));
-    ids.extend((0..form::FIELD_POOL_MAX).map(ovr_btn_bg));
-    ids.extend([FORM_TRACK, FORM_THUMB, DROP_BG]);
-    ids.extend((0..MAX_DROP_ROWS).map(drop_row_bg));
-    ids.extend([DROP_TRACK, DROP_THUMB, OVR_MENU_BG]);
-    ids.extend((0..MAX_OVR_ROWS).map(ovr_menu_row_bg));
-    ids
-}
-// Same draw-order contract; the dropdown's option captions come last so they
-// draw above the slot captions the dropdown floats over.
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![
-        TITLE_LABEL,
-        CLOSE_LABEL,
-        APPLY_LABEL,
-        FORM_STATUS,
-        OVR_CHIP_LABEL,
-        ENT_BTN_LABEL,
-    ];
-    ids.extend((0..form::FIELD_POOL_MAX).map(form_row_label));
-    ids.extend((0..form::FIELD_POOL_MAX).map(form_enum_label));
-    ids.extend((0..form::FIELD_POOL_MAX).map(ovr_btn_label));
-    ids.extend((0..MAX_DROP_ROWS).map(drop_row_label));
-    ids.extend((0..MAX_OVR_ROWS).map(ovr_menu_row_label));
-    ids
-}
-// Every typed field: the name heading and the arg-field text inputs.
-pub(crate) fn all_field_ids() -> Vec<AssetId> {
-    let mut ids = vec![NAME_INPUT];
-    ids.extend((0..form::FIELD_POOL_MAX).map(form_input));
     ids
 }
 
@@ -1318,7 +1248,7 @@ mod tests {
     }
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &all_field_ids())
+        ids().test_world()
     }
 
     fn sprite(world: &World, id: AssetId) -> Sprite {
@@ -1437,7 +1367,7 @@ mod tests {
         let mut world = injected_world();
         let fields = float_fields(form::FIELD_POOL_MAX);
         let tall = [EDIT_W, max_size(fields.len())[1]];
-        place(&mut world, Some(&view(&fields)), [20.0, 20.0], tall);
+        place(&mut world, &view(&fields), [20.0, 20.0], tall);
         assert!(
             input(&world, form_input(form::FIELD_POOL)).visible,
             "a row past the default window shows only because we grew"
@@ -1485,7 +1415,7 @@ mod tests {
         let fields = float_fields(1);
         let mut world = injected_world();
         let o = test_origin();
-        place(&mut world, Some(&view(&fields)), o, size(fields.len()));
+        place(&mut world, &view(&fields), o, size(fields.len()));
         assert_eq!(label(&world, TITLE_LABEL).content, "New PointLight");
         assert_eq!(label(&world, APPLY_LABEL).content, "Add");
         assert_eq!(
@@ -1499,12 +1429,7 @@ mod tests {
         let mut editing = view(&fields);
         editing.editing = true;
         editing.title = "Edit Camera3D";
-        place(
-            &mut world,
-            Some(&editing),
-            o,
-            size(editing.form_fields.len()),
-        );
+        place(&mut world, &editing, o, size(editing.form_fields.len()));
         assert_eq!(label(&world, TITLE_LABEL).content, "Edit Camera3D");
         assert_eq!(label(&world, APPLY_LABEL).content, "Apply");
     }
@@ -1517,7 +1442,7 @@ mod tests {
         let fields = float_fields(form::FIELD_POOL + 4);
         let mut world = injected_world();
         let v = view(&fields);
-        place(&mut world, Some(&v), o, size(v.form_fields.len()));
+        place(&mut world, &v, o, size(v.form_fields.len()));
         assert!(
             sprite_visible(&world, FORM_THUMB),
             "the form scrollbar shows"
@@ -1561,7 +1486,7 @@ mod tests {
         let mut world = injected_world();
         place(
             &mut world,
-            Some(&view(&fields)),
+            &view(&fields),
             test_origin(),
             size(fields.len()),
         );
@@ -1592,7 +1517,7 @@ mod tests {
         }];
         place(
             &mut world,
-            Some(&view(&fields)),
+            &view(&fields),
             test_origin(),
             size(fields.len()),
         );
@@ -1626,7 +1551,7 @@ mod tests {
             choices: Vec::new(),
         }];
         let v = view(&fields);
-        place(&mut world, Some(&v), o, size(v.form_fields.len()));
+        place(&mut world, &v, o, size(v.form_fields.len()));
         assert!(!sprite_visible(&world, form_swatch(0)), "no color swatch");
         assert!(
             !input(&world, form_input(0)).visible,
@@ -1690,7 +1615,7 @@ mod tests {
             elem("2"),
         ];
         let v = view(&fields);
-        place(&mut world, Some(&v), o, size(v.form_fields.len()));
+        place(&mut world, &v, o, size(v.form_fields.len()));
         // The header caret is now `v` (its element leaves follow it).
         assert_eq!(label(&world, form_enum_label(0)).content, "[3] v");
         // Slots 1..=3 are the axis-labeled element fields.
@@ -1730,7 +1655,7 @@ mod tests {
             choices: Vec::new(),
         }];
         let v = view(&small);
-        place(&mut world, Some(&v), o, size(v.form_fields.len()));
+        place(&mut world, &v, o, size(v.form_fields.len()));
         assert!(
             sprite_visible(&world, form_toggle_bg(0)),
             "cycle button shows"
@@ -1794,12 +1719,7 @@ mod tests {
         ];
         let mut v = view(&fields);
         v.field_dropdown = Some(0);
-        place(
-            &mut world,
-            Some(&v),
-            test_origin(),
-            size(v.form_fields.len()),
-        );
+        place(&mut world, &v, test_origin(), size(v.form_fields.len()));
         assert!(sprite_visible(&world, DROP_BG), "dropdown backing shows");
         assert!(sprite_visible(&world, drop_row_bg(0)), "option row shows");
         let opt0 = label(&world, drop_row_label(0));
@@ -1857,7 +1777,7 @@ mod tests {
             choices: Vec::new(),
         }];
         let v = view(&fields);
-        place(&mut world, Some(&v), o, size(v.form_fields.len()));
+        place(&mut world, &v, o, size(v.form_fields.len()));
         assert!(
             sprite_visible(&world, form_toggle_bg(0)),
             "add button shows"
@@ -1881,33 +1801,23 @@ mod tests {
         );
     }
 
-    // A validation error shows on the reserved status line; hiding the panel
-    // blanks everything including the typed fields.
+    // A validation error shows on the reserved status line.
     #[test]
-    fn error_line_shows_and_hide_all_blanks() {
+    fn error_line_shows_on_the_status_line() {
         let fields = float_fields(1);
         let mut world = injected_world();
         let mut v = view(&fields);
         v.form_error = Some("Invalid argument");
-        place(
-            &mut world,
-            Some(&v),
-            test_origin(),
-            size(v.form_fields.len()),
-        );
+        place(&mut world, &v, test_origin(), size(v.form_fields.len()));
         let status = label(&world, FORM_STATUS);
         assert!(status.visible);
         assert_eq!(status.content, "Invalid argument");
-        place(&mut world, None, [0.0, 0.0], size(0));
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
-        assert!(world.query::<TextInput>().all(|t| !t.visible));
     }
 
     // The floating value dropdown draws above the slot chrome (insertion order).
     #[test]
     fn dropdown_is_injected_after_the_slot_chrome() {
-        let sprites = all_sprite_ids();
+        let sprites = &ids().sprites;
         let spos = |id: AssetId| sprites.iter().position(|&x| x == id).unwrap();
         let last_slot = (0..form::FIELD_POOL_MAX)
             .map(form_toggle_bg)
@@ -1921,7 +1831,7 @@ mod tests {
         );
         let first_drop_row = (0..MAX_DROP_ROWS).map(drop_row_bg).map(spos).min().unwrap();
         assert!(spos(DROP_BG) < first_drop_row, "backing under its rows");
-        let labels = all_label_ids();
+        let labels = &ids().labels;
         let lpos = |id: AssetId| labels.iter().position(|&x| x == id).unwrap();
         let last_slot_label = (0..form::FIELD_POOL_MAX)
             .map(form_row_label)
@@ -1969,7 +1879,7 @@ mod tests {
         let o = test_origin();
         place(
             &mut world,
-            Some(&view_with_dropdown(&fields, 0, [0.0, 0.0])),
+            &view_with_dropdown(&fields, 0, [0.0, 0.0]),
             o,
             size(fields.len()),
         );
@@ -2101,7 +2011,7 @@ mod tests {
             "a label row presses nothing"
         );
         let mut world = injected_world();
-        place(&mut world, Some(&v), o, s);
+        place(&mut world, &v, o, s);
         assert_eq!(label(&world, form_row_label(1)).content, "Stages");
         assert_eq!(label(&world, form_row_label(2)).content, "vertex");
         assert!(sprite_visible(&world, form_toggle_bg(2)));
@@ -2118,14 +2028,14 @@ mod tests {
         };
         let o = test_origin();
         let mut world = injected_world();
-        place(&mut world, Some(&v), o, size(1));
+        place(&mut world, &v, o, size(1));
         assert_eq!(label(&world, FORM_STATUS).content, "name taken");
         assert_eq!(sprite(&world, APPLY_BG).tint, BTN_TINT_DISABLED);
         let v = FormView {
             form_error: Some("bad"),
             ..v
         };
-        place(&mut world, Some(&v), o, size(1));
+        place(&mut world, &v, o, size(1));
         assert_eq!(label(&world, FORM_STATUS).content, "bad");
     }
 

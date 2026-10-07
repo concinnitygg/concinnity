@@ -12,6 +12,7 @@ use crate::editor::behavior::panel::BehaviorAction;
 use crate::editor::behavior::path;
 use crate::editor::hook::tests::fixtures::{behavior, hook, playing_hook};
 
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::sim;
 
 // A world carrying one published trace tick for behavior `b`'s first node.
@@ -46,7 +47,7 @@ fn trace_events_become_pulses_and_live_values() {
             "on": "start", "do": [{"save": {}}],
         }),
     )]);
-    h.behavior.open = true;
+    h.open[PanelKey::Behavior] = true;
     let mut world = traced_world(id, false);
     h.drive_trace(&mut world);
 
@@ -93,7 +94,7 @@ fn pulses_decay_by_frame_time() {
             "on": "start", "do": [{"save": {}}],
         }),
     )]);
-    h.behavior.open = true;
+    h.open[PanelKey::Behavior] = true;
     let mut world = traced_world(id, false);
     h.drive_trace(&mut world);
     assert_eq!(h.behavior.pulses[0].age, 0.0, "a fresh firing");
@@ -120,7 +121,7 @@ fn a_breakpoint_hit_pauses_and_lands_on_the_node() {
             "on": "start", "do": [{"save": {}}],
         }),
     )]);
-    h.behavior.open = true;
+    h.open[PanelKey::Behavior] = true;
     let mut world = traced_world(id, true);
     h.drive_trace(&mut world);
     assert_eq!(h.sim.state, sim::SimState::Paused, "the hit froze the run");
@@ -141,7 +142,7 @@ fn stopping_clears_the_live_state() {
             "on": "start", "do": [{"save": {}}],
         }),
     )]);
-    h.behavior.open = true;
+    h.open[PanelKey::Behavior] = true;
     let mut world = traced_world(id, false);
     h.drive_trace(&mut world);
     assert!(!h.behavior.pulses.is_empty() && !h.live_vars.is_empty());
@@ -162,7 +163,7 @@ fn ctrl_click_toggles_a_card_breakpoint() {
         }),
     )]);
     let mut world = World::new();
-    h.behavior.open = true;
+    h.open[PanelKey::Behavior] = true;
     let data = h.behavior_data();
     let card = data
         .chart

@@ -22,70 +22,72 @@ use super::fields;
 use super::graph::{Card, CardKind, Chart};
 use super::outline::{Kind, Row};
 use super::path::{Path, Step};
-use crate::editor::panels::registry::{self, PanelKey};
+use crate::editor::hud_ids::{hud_ids, panel_base};
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 
-const BASE: u32 = registry::base(PanelKey::Behavior);
-// The family the chart views draw into, which is this panel's own.
-const CHART_IDS: chart::ChartIds = chart::ChartIds::of(PanelKey::Behavior);
-pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-pub(crate) const TITLE_LABEL: AssetId = AssetId(BASE + 1);
-pub(crate) const CLOSE_BG: AssetId = AssetId(BASE + 2);
-pub(crate) const CLOSE_LABEL: AssetId = AssetId(BASE + 3);
-pub(crate) const PREV_BG: AssetId = AssetId(BASE + 4);
-pub(crate) const PREV_LABEL: AssetId = AssetId(BASE + 5);
-pub(crate) const NEXT_BG: AssetId = AssetId(BASE + 6);
-pub(crate) const NEXT_LABEL: AssetId = AssetId(BASE + 7);
-pub(crate) const NAME_LABEL: AssetId = AssetId(BASE + 8);
-pub(crate) const NEW_BG: AssetId = AssetId(BASE + 9);
-pub(crate) const NEW_LABEL: AssetId = AssetId(BASE + 10);
-pub(crate) const PICK_BG: AssetId = AssetId(BASE + 11);
-pub(crate) const PICK_LABEL: AssetId = AssetId(BASE + 12);
-pub(crate) const DEL_BG: AssetId = AssetId(BASE + 13);
-pub(crate) const DEL_LABEL: AssetId = AssetId(BASE + 14);
-pub(crate) const UP_BG: AssetId = AssetId(BASE + 15);
-pub(crate) const UP_LABEL: AssetId = AssetId(BASE + 16);
-pub(crate) const DOWN_BG: AssetId = AssetId(BASE + 17);
-pub(crate) const DOWN_LABEL: AssetId = AssetId(BASE + 18);
-pub(crate) const STATUS_LABEL: AssetId = AssetId(BASE + 19);
-pub(crate) const LIST_TRACK: AssetId = AssetId(BASE + 20);
-pub(crate) const LIST_THUMB: AssetId = AssetId(BASE + 21);
-pub(crate) const DROP_BG: AssetId = AssetId(BASE + 22);
-pub(crate) const DROP_TRACK: AssetId = AssetId(BASE + 23);
-pub(crate) const DROP_THUMB: AssetId = AssetId(BASE + 24);
-pub(crate) const VALUE_INPUT: AssetId = AssetId(BASE + 25);
-pub(crate) const VIEW_BG: AssetId = AssetId(BASE + 26);
-pub(crate) const VIEW_LABEL: AssetId = AssetId(BASE + 27);
-pub(crate) const STATUS_BG: AssetId = AssetId(BASE + 28);
-pub(crate) const INSPECT_BG: AssetId = AssetId(BASE + 29);
-pub(crate) const INSPECT_LABEL: AssetId = AssetId(BASE + 30);
-pub(crate) const REMOVE_BG: AssetId = AssetId(BASE + 31);
-pub(crate) const REMOVE_LABEL: AssetId = AssetId(BASE + 32);
-pub(crate) const NAME_INPUT: AssetId = AssetId(BASE + 33);
-pub(crate) const FILTER_INPUT: AssetId = AssetId(BASE + 34);
-pub(crate) const DROP_FILTER_BG: AssetId = AssetId(BASE + 35);
-pub(crate) const DUP_BG: AssetId = AssetId(BASE + 36);
-pub(crate) const DUP_LABEL: AssetId = AssetId(BASE + 37);
+// Chrome, then the outline rows, then the scrollbar and the palette floating
+// above them.
+hud_ids! {
+    base: panel_base(PanelKey::Behavior);
+    sprites: [
+        pub(crate) PANEL_BG,
+        CLOSE_BG,
+        PREV_BG,
+        NEXT_BG,
+        VIEW_BG,
+        REMOVE_BG,
+        NEW_BG,
+        PICK_BG,
+        DEL_BG,
+        UP_BG,
+        DOWN_BG,
+        DUP_BG,
+        INSPECT_BG,
+        row_bg[ROW_POOL_MAX],
+        ..CHART_IDS.sprite_ids(),
+        STATUS_BG,
+        LIST_TRACK,
+        LIST_THUMB,
+        pub(crate) DROP_BG,
+        DROP_FILTER_BG,
+        pick_bg[PICK_POOL],
+        DROP_TRACK,
+        DROP_THUMB,
+    ];
+    labels: [
+        TITLE_LABEL,
+        CLOSE_LABEL,
+        PREV_LABEL,
+        NEXT_LABEL,
+        NAME_LABEL,
+        VIEW_LABEL,
+        REMOVE_LABEL,
+        NEW_LABEL,
+        PICK_LABEL,
+        DEL_LABEL,
+        UP_LABEL,
+        DOWN_LABEL,
+        DUP_LABEL,
+        STATUS_LABEL,
+        INSPECT_LABEL,
+        pub(crate) row_label[ROW_POOL_MAX],
+        row_value[ROW_POOL_MAX],
+        ..CHART_IDS.label_ids(),
+        pick_label[PICK_POOL],
+        pick_hint[PICK_POOL],
+    ];
+    fields: [
+        pub(crate) VALUE_INPUT = "value",
+        pub(crate) NAME_INPUT = "name",
+        pub(crate) FILTER_INPUT = "filter",
+    ];
+    blocks: [CHART_BASE: chart::ChartIds::SPAN];
+}
 
-pub(crate) fn row_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x40 + i as u32)
-}
-pub(crate) fn row_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x80 + i as u32)
-}
-pub(crate) fn row_value(i: usize) -> AssetId {
-    AssetId(BASE + 0xC0 + i as u32)
-}
-pub(crate) fn pick_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x100 + i as u32)
-}
-pub(crate) fn pick_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x120 + i as u32)
-}
-pub(crate) fn pick_hint(i: usize) -> AssetId {
-    AssetId(BASE + 0x140 + i as u32)
-}
+// The family the chart views draw into, which is this panel's own.
+pub(crate) const CHART_IDS: chart::ChartIds = chart::ChartIds::new(CHART_BASE);
 
 // Geometry, in window pixels. Every rect derives from the panel origin `o` (the
 // title bar's top-left), so dragging the title bar moves the whole panel. The
@@ -732,7 +734,7 @@ pub(crate) fn overview_action(card: &Card, i: usize) -> BehaviorAction {
 // element (`None`).
 pub(crate) fn place(world: &mut World, view: Option<&BehaviorView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
-        hide_all(world);
+        ids().hide(world);
         return;
     };
     let w = s[0];
@@ -1357,54 +1359,6 @@ fn place_chip(world: &mut World, chip: &Chip, mouse: [f32; 2]) {
     }
 }
 
-// Hide every panel element, blurring the value field so a hidden field cannot
-// keep keyboard focus.
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &all_field_ids());
-}
-
-// Every panel sprite id, in draw (insertion) order: chrome, then the outline
-// rows, then the scrollbar and the palette floating above them.
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![
-        PANEL_BG, CLOSE_BG, PREV_BG, NEXT_BG, VIEW_BG, REMOVE_BG, NEW_BG, PICK_BG, DEL_BG, UP_BG,
-        DOWN_BG, DUP_BG,
-    ];
-    ids.push(INSPECT_BG);
-    ids.extend((0..ROW_POOL_MAX).map(row_bg));
-    ids.extend(CHART_IDS.all_sprite_ids());
-    ids.extend([STATUS_BG, LIST_TRACK, LIST_THUMB, DROP_BG, DROP_FILTER_BG]);
-    ids.extend((0..PICK_POOL).map(pick_bg));
-    ids.extend([DROP_TRACK, DROP_THUMB]);
-    ids
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![
-        TITLE_LABEL,
-        CLOSE_LABEL,
-        PREV_LABEL,
-        NEXT_LABEL,
-        NAME_LABEL,
-        VIEW_LABEL,
-        REMOVE_LABEL,
-        NEW_LABEL,
-        PICK_LABEL,
-        DEL_LABEL,
-        UP_LABEL,
-        DOWN_LABEL,
-        DUP_LABEL,
-        STATUS_LABEL,
-        INSPECT_LABEL,
-    ];
-    ids.extend((0..ROW_POOL_MAX).map(row_label));
-    ids.extend((0..ROW_POOL_MAX).map(row_value));
-    ids.extend(CHART_IDS.all_label_ids());
-    ids.extend((0..PICK_POOL).map(pick_label));
-    ids.extend((0..PICK_POOL).map(pick_hint));
-    ids
-}
-
 // The error banner's elements. They float over the body, so they draw above it
 // and its backing occludes the rows or cards beneath.
 pub(crate) fn status_ids() -> Vec<AssetId> {
@@ -1429,10 +1383,6 @@ pub(crate) fn palette_ids() -> Vec<AssetId> {
     ids
 }
 
-pub(crate) fn all_field_ids() -> Vec<AssetId> {
-    vec![VALUE_INPUT, NAME_INPUT, FILTER_INPUT]
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::outline;
@@ -1442,7 +1392,7 @@ mod tests {
     use concinnity_core::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &all_field_ids())
+        ids().test_world()
     }
 
     fn sample_chart() -> &'static Chart {
@@ -2384,26 +2334,5 @@ mod tests {
             hit_test(&v, r0[0] + 3.0, r0[1] + 3.0, o, size()),
             Some(BehaviorAction::Select(10))
         );
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let mut world = injected_world();
-        let rows = sample_rows();
-        let picks = edit::picks(&Kind::Node, &[]);
-        let kept = all(&picks);
-        let v = BehaviorView {
-            picking: true,
-            matches: &kept,
-            editable: true,
-            focus: true,
-            selected: Some(0),
-            ..view(&rows, &picks)
-        };
-        place(&mut world, Some(&v), [20.0, 20.0], size());
-        place(&mut world, None, [0.0, 0.0], size());
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
-        assert!(world.query::<TextInput>().all(|t| !t.visible && !t.focused));
     }
 }

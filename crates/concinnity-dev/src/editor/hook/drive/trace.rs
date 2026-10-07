@@ -18,11 +18,12 @@ use crate::editor::behavior::trace;
 use concinnity_cook::authoring::world::entry_handle;
 
 use crate::editor::hook::EditorHook;
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::sim;
 
 impl EditorHook {
     pub(in crate::editor::hook) fn drive_trace(&mut self, world: &mut World) {
-        if !self.behavior.open && !self.variables_open {
+        if !self.open[PanelKey::Behavior] && !self.open[PanelKey::Variables] {
             world.remove_resource::<TraceRequest>();
             self.clear_trace();
             return;

@@ -8,33 +8,35 @@
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
-use super::registry::{self, PanelKey};
+use super::registry::PanelKey;
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 
-const BASE: u32 = registry::base(PanelKey::Import);
-pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-pub(crate) const TITLE_LABEL: AssetId = AssetId(BASE + 2);
-pub(crate) const CLOSE_BG: AssetId = AssetId(BASE + 3);
-pub(crate) const CLOSE_LABEL: AssetId = AssetId(BASE + 4);
-pub(crate) const ADD_BG: AssetId = AssetId(BASE + 5);
-pub(crate) const ADD_LABEL: AssetId = AssetId(BASE + 6);
-pub(crate) const HINT_LABEL: AssetId = AssetId(BASE + 7);
-pub(crate) const STATUS_LABEL: AssetId = AssetId(BASE + 8);
-pub(crate) const LIST_HEADER: AssetId = AssetId(BASE + 9);
-pub(crate) const LIST_TRACK: AssetId = AssetId(BASE + 10);
-pub(crate) const LIST_THUMB: AssetId = AssetId(BASE + 11);
-pub(crate) const PATH_INPUT: AssetId = AssetId(BASE + 12);
-pub(crate) const BROWSE_BG: AssetId = AssetId(BASE + 13);
-pub(crate) const BROWSE_LABEL: AssetId = AssetId(BASE + 14);
-
-pub(crate) fn row_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x20 + i as u32)
-}
-pub(crate) fn row_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x40 + i as u32)
+// Chrome, then the list rows, then the scrollbar floating above them.
+hud_ids! {
+    base: panel_base(PanelKey::Import);
+    sprites: [
+        pub(crate) PANEL_BG,
+        pub(crate) CLOSE_BG,
+        pub(crate) BROWSE_BG,
+        pub(crate) ADD_BG,
+        pub(crate) row_bg[IMPORT_POOL_MAX],
+        pub(crate) LIST_TRACK,
+        pub(crate) LIST_THUMB,
+    ];
+    labels: [
+        pub(crate) TITLE_LABEL,
+        pub(crate) CLOSE_LABEL,
+        pub(crate) BROWSE_LABEL,
+        pub(crate) ADD_LABEL,
+        pub(crate) HINT_LABEL,
+        pub(crate) STATUS_LABEL,
+        pub(crate) LIST_HEADER,
+        pub(crate) row_label[IMPORT_POOL_MAX],
+    ];
+    fields: [pub(crate) PATH_INPUT = "path/to/file.glb"];
 }
 
 // The file-backed asset types `entry_from_path` produces, in the order their
@@ -290,7 +292,7 @@ pub(crate) fn hit_test(
 // element (`None`).
 pub(crate) fn place(world: &mut World, view: Option<&ImportView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
-        hide_all(world);
+        ids().hide(world);
         return;
     };
     let w = s[0];
@@ -431,46 +433,13 @@ fn layout_scrollbar(world: &mut World, view: &ImportView, o: [f32; 2], w: f32, r
     );
 }
 
-// Hide every panel element, blurring the path field so a hidden field cannot
-// keep keyboard focus.
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &all_field_ids());
-}
-
-// Every panel sprite id, in draw (insertion) order: chrome, then the list
-// rows, then the scrollbar floating above them.
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, CLOSE_BG, BROWSE_BG, ADD_BG];
-    ids.extend((0..IMPORT_POOL_MAX).map(row_bg));
-    ids.extend([LIST_TRACK, LIST_THUMB]);
-    ids
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![
-        TITLE_LABEL,
-        CLOSE_LABEL,
-        BROWSE_LABEL,
-        ADD_LABEL,
-        HINT_LABEL,
-        STATUS_LABEL,
-        LIST_HEADER,
-    ];
-    ids.extend((0..IMPORT_POOL_MAX).map(row_label));
-    ids
-}
-
-pub(crate) fn all_field_ids() -> Vec<AssetId> {
-    vec![PATH_INPUT]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use concinnity_core::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &all_field_ids())
+        ids().test_world()
     }
 
     fn rows(n: usize) -> Vec<ImportRow> {
@@ -630,16 +599,5 @@ mod tests {
                 .unwrap()
                 .visible
         );
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let mut world = injected_world();
-        let r = rows(2);
-        place(&mut world, Some(&view(&r, 0)), [20.0, 20.0], size());
-        place(&mut world, None, [0.0, 0.0], size());
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
-        assert!(world.query::<TextInput>().all(|t| !t.visible));
     }
 }

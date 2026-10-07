@@ -42,11 +42,11 @@ impl EditorHook {
 
     // Scroll the Template detail panel's asset list.
     pub(super) fn scroll_template_list(&mut self, delta: f32) {
-        if let Some(i) = self.open_template {
+        if let Some(i) = self.templates.detail {
             let window =
                 template_panel::rows_for_height(self.effective_size(PanelKey::TemplateDetail)[1]);
             let max = self.template_rows(i).len().saturating_sub(window);
-            self.template_list_scroll = scroll_step(self.template_list_scroll, delta, max);
+            self.templates.detail_scroll = scroll_step(self.templates.detail_scroll, delta, max);
         }
     }
 
@@ -79,7 +79,7 @@ impl EditorHook {
         }
         // A shape slider drag likewise: follow + live preview,
         // cancel, or commit once.
-        if self.shape_drag.is_some() {
+        if self.shape.drag.is_some() {
             self.drive_shape_drag(input, world);
         }
         // An in-flight marquee likewise: follow, cancel, or select.
@@ -93,16 +93,16 @@ impl EditorHook {
         }
         // A drag-out placement from the Content panel: ghost follow,
         // cancel, or commit.
-        if self.content_drag.is_some() {
+        if self.content.drag.is_some() {
             self.drive_content_drag(input, vp, world);
         }
         if input.left_click
             && self.drag.is_none()
             && self.resize.is_none()
             && self.gizmo_drag.is_none()
-            && self.shape_drag.is_none()
+            && self.shape.drag.is_none()
             && self.marquee.is_none()
-            && self.content_drag.is_none()
+            && self.content.drag.is_none()
             && self.orbit.is_none()
         {
             // The confirmation dialog swallows every press first.
@@ -127,9 +127,9 @@ impl EditorHook {
             && self.drag.is_none()
             && self.resize.is_none()
             && self.gizmo_drag.is_none()
-            && self.shape_drag.is_none()
+            && self.shape.drag.is_none()
             && self.marquee.is_none()
-            && self.content_drag.is_none()
+            && self.content.drag.is_none()
             && self.orbit.is_none()
         {
             self.open_create_menu(input, vp, world);
@@ -193,7 +193,7 @@ impl EditorHook {
             && !self.sim.playing()
             && !self.text_focus_active()
             && self.gizmo_drag.is_none()
-            && self.shape_drag.is_none()
+            && self.shape.drag.is_none()
         {
             for key in input.pressed_keys() {
                 match key {
@@ -255,7 +255,7 @@ impl EditorHook {
             dirty: self.dirty,
             undo: self.can_undo(),
             redo: self.can_redo(),
-            view_open: self.view_open,
+            view_open: self.open[PanelKey::View],
             display_open: self.display_menu_open,
             sim: self.sim.state,
             // The start screen is the whole window: the bar it would sit under
@@ -277,7 +277,7 @@ impl EditorHook {
         }
         let pos = [input.mouse_x - drag.grab[0], input.mouse_y - drag.grab[1]];
         let size = self.effective_size(drag.key);
-        self.positions[drag.key.index()] = Some(widget::clamp_origin(pos, size, vp, hud::BAR_H));
+        self.positions[drag.key] = Some(widget::clamp_origin(pos, size, vp, hud::BAR_H));
     }
 
     // While an edge / corner resize is active, grow the panel from the press
@@ -294,8 +294,8 @@ impl EditorHook {
         let min = self.default_size(r.key);
         let max = registry::panel(r.key).max_size(self);
         let (o, s) = resize::apply(&r, [input.mouse_x, input.mouse_y], min, max, vp, hud::BAR_H);
-        self.positions[r.key.index()] = Some(o);
-        self.sizes[r.key.index()] = Some(s);
+        self.positions[r.key] = Some(o);
+        self.sizes[r.key] = Some(s);
     }
 
     // Route a press: the top bar first (it draws over the panels), then the panels
@@ -312,8 +312,8 @@ impl EditorHook {
             // SAVE only writes world.jsonl; it neither rebuilds nor re-injects
             // the world, so an open form is left intact (no blank-field risk).
             self.apply_top(a, world);
-            self.picker_open = false;
-            self.row_menu = None;
+            self.assets.picker_open = false;
+            self.assets.row_menu = None;
             return;
         }
         // Front-to-back: the frontmost shown panel to claim the press handles it and

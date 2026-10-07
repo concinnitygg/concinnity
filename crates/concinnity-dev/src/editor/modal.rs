@@ -8,33 +8,26 @@
 //! layer sits above all other chrome.
 
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
-use super::panels::registry::ID_BASE;
+use super::hud_ids::{Family, family_base, hud_ids};
 use super::widget::{self, point_in};
 use super::widget_check::{self, Check, CheckIds};
 use super::{hud, theme};
 
-// Reserved id family: the next free block after the toast stack's (0xA000).
-const BASE: u32 = ID_BASE + 0xB000;
-
-const DIM: AssetId = AssetId(BASE);
-const PANEL_BG: AssetId = AssetId(BASE + 1);
-const MESSAGE: AssetId = AssetId(BASE + 2);
-pub(crate) const NAME_INPUT: AssetId = AssetId(BASE + 3);
-const CHECK: CheckIds = CheckIds {
-    box_bg: AssetId(BASE + 4),
-    caption: AssetId(BASE + 5),
-    note: AssetId(BASE + 6),
-};
-
 pub(crate) const MAX_BUTTONS: usize = 3;
-const fn button_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x10 + i as u32)
+
+hud_ids! {
+    base: family_base(Family::Modal);
+    sprites: [DIM, PANEL_BG, CHECK_BOX, button_bg[MAX_BUTTONS]];
+    labels: [MESSAGE, CHECK_CAPTION, CHECK_NOTE, button_label[MAX_BUTTONS]];
+    fields: [pub(crate) NAME_INPUT = "world name"];
 }
-const fn button_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x20 + i as u32)
-}
+
+const CHECK: CheckIds = CheckIds {
+    box_bg: CHECK_BOX,
+    caption: CHECK_CAPTION,
+    note: CHECK_NOTE,
+};
 
 const PANEL_W: f32 = 380.0;
 const PAD: f32 = 14.0;
@@ -258,34 +251,7 @@ pub(crate) fn place(world: &mut World, vp: [f32; 2], dialog: &Dialog, mouse: [f3
 }
 
 pub(crate) fn hide(world: &mut World) {
-    widget::set_sprite_visible(world, DIM, false);
-    widget::set_sprite_visible(world, PANEL_BG, false);
-    widget::set_label_visible(world, MESSAGE, false);
-    widget::hide_field(world, NAME_INPUT);
-    widget_check::hide(world, CHECK);
-    for slot in 0..MAX_BUTTONS {
-        widget::set_sprite_visible(world, button_bg(slot), false);
-        widget::set_label_visible(world, button_label(slot), false);
-    }
-}
-
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    [DIM, PANEL_BG]
-        .into_iter()
-        .chain(CHECK.sprites())
-        .chain((0..MAX_BUTTONS).map(button_bg))
-        .collect()
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    std::iter::once(MESSAGE)
-        .chain(CHECK.labels())
-        .chain((0..MAX_BUTTONS).map(button_label))
-        .collect()
-}
-
-pub(crate) fn all_field_ids() -> Vec<AssetId> {
-    vec![NAME_INPUT]
+    ids().hide(world);
 }
 
 #[cfg(test)]
@@ -293,6 +259,7 @@ mod tests {
     use super::*;
     use concinnity_core::components::TextInput;
     use concinnity_core::components::{Sprite, TextAlign, TextLabel};
+    use concinnity_core::ecs::asset_id::AssetId;
 
     const VP: [f32; 2] = [1280.0, 720.0];
     const PLAIN: Controls = Controls {
@@ -314,17 +281,7 @@ mod tests {
     }
 
     fn world_with_elements() -> World {
-        let mut world = World::new();
-        for id in all_sprite_ids() {
-            world.push_identified(id, Sprite::default());
-        }
-        for id in all_label_ids() {
-            world.push_identified(id, TextLabel::default());
-        }
-        for id in all_field_ids() {
-            world.push_identified(id, TextInput::default());
-        }
-        world
+        ids().test_world()
     }
 
     fn plain(label: &str) -> Button {
@@ -539,19 +496,6 @@ mod tests {
             [0.0, 0.0],
         );
         assert!(world.query::<TextInput>().all(|t| !t.visible && !t.focused));
-    }
-
-    #[test]
-    fn id_lists_cover_every_slot_without_repeats() {
-        let sprites = all_sprite_ids();
-        let labels = all_label_ids();
-        let mut all: Vec<AssetId> = sprites.iter().chain(labels.iter()).copied().collect();
-        let n = all.len();
-        all.sort_by_key(|id| id.0);
-        all.dedup();
-        assert_eq!(all.len(), n, "no duplicate reserved ids");
-        assert_eq!(sprites.len(), 3 + MAX_BUTTONS);
-        assert_eq!(labels.len(), 3 + MAX_BUTTONS);
     }
 
     // A checkbox sits between the message and the buttons, grows the dialog,

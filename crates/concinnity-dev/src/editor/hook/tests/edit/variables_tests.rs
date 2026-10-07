@@ -21,7 +21,7 @@ use crate::editor::widget;
 
 fn variables_session(entries: Vec<serde_json::Value>) -> (EditorHook, World) {
     let mut world = World::new();
-    for id in variables_panel::all_field_ids() {
+    for id in variables_panel::ids().field_ids() {
         world.push_identified(id, TextInput::default());
     }
     let mut h = hook(entries);
@@ -223,7 +223,7 @@ fn renaming_a_variable_commits_on_enter_and_refuses_a_blank() {
         serde_json::json!("points")
     );
     assert_eq!(
-        h.variables_row,
+        h.variables.row,
         Some(0),
         "the selection followed the rename"
     );
@@ -260,7 +260,7 @@ fn removing_a_declaration_leaves_the_name_the_behaviors_still_use() {
     select_var(&mut h, &mut world, "score");
     h.apply_variables_action(VariablesAction::Remove, &mut world);
 
-    assert_eq!(h.variables_row, None, "the selection was dropped");
+    assert_eq!(h.variables.row, None, "the selection was dropped");
     assert_eq!(table_args(&h)["vars"], serde_json::json!([]));
     assert_eq!(
         var_rows(&h),
@@ -351,8 +351,8 @@ fn an_overview_variable_card_opens_the_table_on_it() {
         .expect("the variable is on the map");
 
     h.apply_behavior_action(BehaviorAction::OpenVariable(card), &mut world, [0.0, 0.0]);
-    assert!(h.variables_open, "the table opened");
+    assert!(h.open[PanelKey::Variables], "the table opened");
     assert_eq!(h.panel_order.last(), Some(&PanelKey::Variables));
-    let row = h.variables_row.expect("selected on the card's variable");
+    let row = h.variables.row.expect("selected on the card's variable");
     assert_eq!(h.variables_data().rows[row].name, "score");
 }

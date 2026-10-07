@@ -52,13 +52,12 @@ use super::notify;
 use super::outlines;
 use super::overrides;
 use super::panels::asset_list::ListRow;
-use super::panels::asset_tree::{TreeGroup, TreeRow};
+use super::panels::asset_tree::TreeRow;
 use super::panels::console::ConsoleSink;
 use super::panels::form::FormField;
 use super::panels::health::HealthState;
-use super::panels::import_panel::ImportStatus;
 use super::panels::lighting;
-use super::panels::registry::{self, PANEL_COUNT, PanelKey};
+use super::panels::registry::{self, PanelKey, PerPanel};
 use super::selection::Selection;
 use super::session_store;
 use super::sim;
@@ -73,12 +72,19 @@ use super::worlds;
 use crate::debug::hot_reload::WorldPathHandle;
 use crate::editor::text_area::clipboard::InternalClipboard;
 use crate::frame_hook::FrameHook;
+use edit::assets_state::AssetsState;
 use edit::behavior_state::BehaviorState;
 use edit::console_state::ConsoleState;
+use edit::content_state::ContentState;
+use edit::import_state::ImportState;
+use edit::lighting_state::LightingState;
 use edit::map_state::MapState;
 use edit::palette_state::PaletteState;
 use edit::shaders_state::ShadersState;
+use edit::shape_state::ShapeState;
 use edit::story_state::StoryState;
+use edit::templates_state::TemplatesState;
+use edit::variables_state::VariablesState;
 use edit::worlds_state::WorldsState;
 use form_state::{FormState, FormTarget, FormTemplate};
 
@@ -136,30 +142,9 @@ pub(crate) struct EditorHook {
     // applied live until they are.
     world_entries: EntryList,
     world_shadows: Option<live::ShadowBaselines>,
-    // Whether the Templates panel is shown (toggled from the View panel).
-    templates_open: bool,
-    // The template whose detail panel is open (index into the templates
-    // registry); `None` means the detail panel is closed.
-    open_template: Option<usize>,
-    // First visible row of the Template detail panel's asset list.
-    template_list_scroll: usize,
-    // Whether the Lighting panel is shown (toggled from the View panel), which
-    // text binding holds keyboard focus, and the message from the last rejected
-    // Apply.
-    lighting_open: bool,
-    lighting_focus: Option<usize>,
-    lighting_status: Option<String>,
-    // The CharacterShape panel: shown state, the row window's scroll, the row
-    // count sampled once a frame (the rows come from the live world, which
-    // the panel sizing cannot reach), the last rejected commit, the seed
-    // counter behind Randomize, and a slider drag in flight
-    // (`hook/drag/shape.rs`).
-    shape_open: bool,
-    shape_scroll: usize,
-    shape_rows: usize,
-    shape_status: Option<String>,
-    shape_seed: u64,
-    shape_drag: Option<drag::shape::ShapeDrag>,
+    templates: TemplatesState,
+    lighting: LightingState,
+    shape: ShapeState,
     story: StoryState,
     // The Shaders list and the Shader source panel it opens.
     shaders: ShadersState,
@@ -167,12 +152,7 @@ pub(crate) struct EditorHook {
     text_clipboard: InternalClipboard,
     // The session's monotonic clock, for timing presses into double-clicks.
     clock: std::time::Instant,
-    // The Import panel: shown state, whether the path field holds keyboard
-    // focus, the list window scroll, and the last Add's outcome.
-    import_open: bool,
-    import_focus: bool,
-    import_scroll: usize,
-    import_status: Option<ImportStatus>,
+    import: ImportState,
     console: ConsoleState,
     // The shared log sink, and whether a worker is mid-build (the /cook guard).
     console_sink: ConsoleSink,
@@ -186,15 +166,9 @@ pub(crate) struct EditorHook {
     behavior: BehaviorState,
     // The Map panel: the world's places and the moves between them
     // (`editor/map/`). It reads the entry list and writes nothing, so its
-    // state is what is shown and where the canvas is looked at.
+    // state is where the canvas is looked at.
     map: MapState,
-    // The Variables panel: shown state, the selected row of the table, the row
-    // window's scroll, and which of its two fields holds the keyboard.
-    variables_open: bool,
-    variables_row: Option<usize>,
-    variables_scroll: usize,
-    variables_name_focus: bool,
-    variables_value_focus: bool,
+    variables: VariablesState,
     // Live-debug values fed by the runtime's execution trace (`hook/drive/trace.rs`).
     trace_seen: u64,
     live_vars: Vec<(String, String, String)>,
@@ -223,35 +197,8 @@ pub(crate) struct EditorHook {
     // input. The start screen's docked sidebar starts its content below it so
     // the OS window buttons never land on a control.
     top_inset: f32,
-    // Whether the Assets panel is shown (toggled from the View panel).
-    panel_open: bool,
-    // The Assets panel's body: every asset of the expanded world as one tree
-    // grouped by origin. `tree_groups` is the cooked model (it costs a world
-    // expansion, so it is recomputed only when `tree_stale` and the panel is
-    // up), `tree_unfolded` holds the groups the user unfolded, `row_menu` the
-    // asset whose Delete menu is open, and `tree_status` carries a cook failure
-    // to the status line.
-    tree_groups: Vec<TreeGroup>,
-    tree_unfolded: Vec<usize>,
-    tree_scroll: usize,
-    tree_stale: bool,
-    tree_status: Option<String>,
-    search_focus: bool,
-    row_menu: Option<AssetHandle>,
-    // The header "+" type picker: whether its option list is open and how far it
-    // is scrolled. While open the search field narrows those options instead of
-    // the tree.
-    picker_open: bool,
-    picker_scroll: usize,
-    // The Content panel (the visual-asset thumbnail grid): shown state, the
-    // grid's first visible row, the type-chip cycle position (0 = All, i =
-    // VISUAL_TYPES[i-1]), whether its search field holds keyboard focus, and
-    // an in-flight drag-out placement (`hook/drag/content.rs`), if any.
-    content_open: bool,
-    content_scroll: usize,
-    content_type: usize,
-    content_search_focus: bool,
-    content_drag: Option<drag::content::ContentDrag>,
+    assets: AssetsState,
+    content: ContentState,
     // The right-click "Create here" menu (`hook/drive/create_menu.rs`), if open.
     create_menu: Option<drive::create_menu::CreateMenu>,
     // The confirmation dialog (`hook/drive/modal.rs`), if open. Screen-modal:
@@ -283,17 +230,9 @@ pub(crate) struct EditorHook {
     cinematic_ticking: bool,
     cinematic_restore: Option<framing::CameraPose>,
     palette: PaletteState,
-    // Whether the Preview panel is shown (starts shown; toggled from the View
-    // panel).
-    preview_open: bool,
-    // Whether the Health panel is shown (starts hidden; toggled from the View
-    // panel).
-    health_open: bool,
     // The Health panel's sampler. Ticked every frame whether or not the panel is
     // shown, so its rates cover a continuous window.
     health: HealthState,
-    // Whether the View panel itself is shown (the top-bar View button toggles it).
-    view_open: bool,
     // The Display menu (`hook/drive/view_menu.rs`): open state, the viewport
     // view mode, the show flags, and the editor-side billboard-icons toggle.
     display_menu_open: bool,
@@ -339,14 +278,17 @@ pub(crate) struct EditorHook {
     // Saved camera poses (`hook/bookmarks.rs`), loaded from the per-project
     // session store and persisted on save.
     bookmarks: [Option<framing::CameraPose>; session_store::BOOKMARK_SLOTS],
-    // The floating panels' dragged origins, indexed by `PanelKey`; `None` means
-    // the panel still sits at its default anchor. Always clamped fully on screen
-    // before use.
-    positions: [Option<[f32; 2]>; PANEL_COUNT],
-    // The user's per-panel size overrides, indexed by `PanelKey`; `None` means the
-    // panel is at its content-derived default. Only ever grows a panel past that
-    // default (see `effective_size`), and only the resizable panels are set.
-    sizes: [Option<[f32; 2]>; PANEL_COUNT],
+    // Whether each floating panel is open. A panel whose showing follows from
+    // other state (the edit form, the Template detail, the Shader source)
+    // answers `Panel::is_open` from that state instead and never reads its flag.
+    open: PerPanel<bool>,
+    // The floating panels' dragged origins; `None` means the panel still sits at
+    // its default anchor. Always clamped fully on screen before use.
+    positions: PerPanel<Option<[f32; 2]>>,
+    // The user's per-panel size overrides; `None` means the panel is at its
+    // content-derived default. Only ever grows a panel past that default (see
+    // `effective_size`), and only the resizable panels are set.
+    sizes: PerPanel<Option<[f32; 2]>>,
     // The title-bar drag in progress, if any.
     drag: Option<Drag>,
     // The edge / corner resize in progress, if any.
@@ -356,12 +298,6 @@ pub(crate) struct EditorHook {
     // end. Its position drives the per-frame `HudLayers` publish so overlapping
     // panels occlude cleanly instead of merging.
     panel_order: Vec<PanelKey>,
-    // Unapplied-edit markers: typed-or-clicked control state a panel holds
-    // that has not been committed by its Apply / Add. Event-driven (set on
-    // edit input, cleared on open / apply), so no per-frame comparisons. The
-    // panels suffix their heading with "*" while set. Behavior / Variables
-    // commit per change and never hold unapplied state, so they carry none.
-    lighting_touched: bool,
     // The preview rebuild blocks the frame loop, so when the last one measured
     // slow its card goes up ahead of the stall: `rebuild_op` holds the card,
     // `rebuild_countdown` the frames left before the rebuild runs (the card
@@ -410,6 +346,13 @@ struct TemplateDetailData {
 struct LightingData {
     rows: Vec<lighting::Row>,
     fields: Vec<Option<FormField>>,
+}
+
+// The panels open at launch: the Preview panel alone.
+fn initial_open() -> PerPanel<bool> {
+    let mut open = PerPanel::splat(false);
+    open[PanelKey::Preview] = true;
+    open
 }
 
 // Move a scroll offset one row toward the wheel direction, clamped to `max`.
@@ -524,26 +467,14 @@ impl EditorHook {
             rebuild_preview: false,
             rebuild_required: false,
             world_shadows: None,
-            templates_open: false,
-            open_template: None,
-            template_list_scroll: 0,
-            lighting_open: false,
-            lighting_focus: None,
-            lighting_status: None,
-            shape_open: false,
-            shape_scroll: 0,
-            shape_rows: 0,
-            shape_status: None,
-            shape_seed: 0,
-            shape_drag: None,
+            templates: TemplatesState::default(),
+            lighting: LightingState::default(),
+            shape: ShapeState::default(),
             story: StoryState::default(),
             shaders: ShadersState::default(),
             text_clipboard: InternalClipboard::default(),
             clock: std::time::Instant::now(),
-            import_open: false,
-            import_focus: false,
-            import_scroll: 0,
-            import_status: None,
+            import: ImportState::default(),
             console: ConsoleState::default(),
             console_sink: ConsoleSink::default(),
             console_build_running: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -551,11 +482,7 @@ impl EditorHook {
             toasts_hidden: true,
             behavior: BehaviorState::default(),
             map: MapState::default(),
-            variables_open: false,
-            variables_row: None,
-            variables_scroll: 0,
-            variables_name_focus: false,
-            variables_value_focus: false,
+            variables: VariablesState::default(),
             trace_seen: 0,
             live_vars: Vec::new(),
             live_locals: Vec::new(),
@@ -566,21 +493,8 @@ impl EditorHook {
             shift_held: false,
             viewport: [0.0, 0.0],
             top_inset: 0.0,
-            panel_open: false,
-            tree_groups: Vec::new(),
-            tree_unfolded: Vec::new(),
-            tree_scroll: 0,
-            tree_stale: true,
-            tree_status: None,
-            search_focus: false,
-            row_menu: None,
-            picker_open: false,
-            picker_scroll: 0,
-            content_open: false,
-            content_scroll: 0,
-            content_type: 0,
-            content_search_focus: false,
-            content_drag: None,
+            assets: AssetsState::default(),
+            content: ContentState::default(),
             create_menu: None,
             modal: None,
             worlds: WorldsState::default(),
@@ -592,10 +506,7 @@ impl EditorHook {
             cinematic_ticking: false,
             cinematic_restore: None,
             palette: PaletteState::default(),
-            preview_open: true,
-            health_open: false,
             health: HealthState::new(),
-            view_open: false,
             display_menu_open: false,
             view_mode: view_menu::ViewMode::default(),
             show_flags: view_menu::ShowFlags::default(),
@@ -615,15 +526,15 @@ impl EditorHook {
             fly: false,
             glide: None,
             bookmarks,
-            positions: [None; PANEL_COUNT],
-            sizes: [None; PANEL_COUNT],
+            open: initial_open(),
+            positions: PerPanel::splat(None),
+            sizes: PerPanel::splat(None),
             drag: None,
             resize: None,
             // Back-to-front, matching the injected draw order (registry order:
             // the Template detail panel frontmost, over the Templates list it
             // spawns from).
             panel_order: PanelKey::ALL.to_vec(),
-            lighting_touched: false,
             rebuild_op: None,
             rebuild_countdown: 0,
             last_rebuild_secs: 0.0,
@@ -648,7 +559,7 @@ impl EditorHook {
     // seconds to compile does not hold the window closed for them.
     pub(crate) fn with_start_screen(mut self, picked: Option<String>) -> Self {
         self.start_mode = true;
-        self.worlds.open = true;
+        self.open[PanelKey::Worlds] = true;
         self.worlds.selected = picked.clone();
         self.start_preview = picked;
         self.refresh_worlds();
@@ -706,21 +617,21 @@ impl EditorHook {
     // must keep working while the console is being typed into, but stand down
     // while any other field is (a backtick there is just a character).
     fn non_console_text_focus(&self) -> bool {
-        self.search_focus
-            || self.content_search_focus
-            || self.picker_open
+        self.assets.search_focus
+            || self.content.search_focus
+            || self.assets.picker_open
             || self.form.selected_type.is_some()
-            || self.lighting_focus.is_some()
+            || self.lighting.focus.is_some()
             || self.story_typing()
             || self.shader_typing()
-            || self.import_focus
+            || self.import.focus
             || self.behavior.focus
             || self.behavior.name_focus
             || self.behavior.picking
-            || self.variables_name_focus
-            || self.variables_value_focus
+            || self.variables.name_focus
+            || self.variables.value_focus
             || self.prompting()
-            || self.palette.open
+            || self.open[PanelKey::Palette]
     }
 }
 
@@ -742,7 +653,7 @@ impl FrameHook for EditorHook {
         self.drive_shader_source();
         self.shaders
             .retry_missing(self.clock.elapsed().as_secs_f64());
-        if self.shaders.open {
+        if self.open[PanelKey::Shaders] {
             self.shader_rows();
         }
         // Accumulate the Health panel's per-frame counters and, on its throttled
@@ -773,8 +684,8 @@ impl FrameHook for EditorHook {
             if input.typed_any() {
                 match self.frontmost_open_panel() {
                     Some(PanelKey::Edit) => self.form.touched = true,
-                    Some(PanelKey::Lighting) if self.lighting_focus.is_some() => {
-                        self.lighting_touched = true;
+                    Some(PanelKey::Lighting) if self.lighting.focus.is_some() => {
+                        self.lighting.touched = true;
                     }
                     _ => {}
                 }

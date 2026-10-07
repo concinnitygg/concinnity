@@ -1,6 +1,6 @@
 //! The editor "View" panel: the hub that toggles the visibility of the other
-//! floating editor panels. Its rows come from the panel registry (every panel
-//! with a `view_row` caption, in registry order), so a new panel gets its toggle
+//! floating editor panels. Its rows come from the panel registry
+//! (`registry::VIEW_ROWS`, in registry order), so a new panel gets its toggle
 //! here without touching this module. Like the rest of the editor HUD it is
 //! plain `Sprite` / `TextLabel` components at reserved ids (injected by
 //! `inject.rs`), driven each frame by the editor hook -- nothing here reaches
@@ -9,29 +9,37 @@
 //! The title bar, close button, and row draw come from the shared `list_panel`.
 
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
-use super::list_panel::{self, Row};
+use super::list_panel::{self, ListIds, Row};
 use super::registry::{self, PanelKey};
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::widget::{self, point_in};
 
-const BASE: u32 = registry::base(PanelKey::View);
-// Named ids the cross-module tests reference; the shipping paths derive every id
-// from `BASE` through `list_panel`.
-#[cfg(test)]
-pub(crate) const PANEL_BG: AssetId = list_panel::panel_bg(BASE);
-#[cfg(test)]
-pub(crate) fn row_bg(i: usize) -> AssetId {
-    list_panel::row_bg(BASE, i)
-}
-#[cfg(test)]
-pub(crate) fn check_box(i: usize) -> AssetId {
-    list_panel::check_box(BASE, i)
+hud_ids! {
+    base: panel_base(PanelKey::View);
+    sprites: [
+        pub(crate) PANEL_BG,
+        CLOSE_BG,
+        pub(crate) row_bg[count()],
+        pub(crate) check_box[count()],
+    ];
+    labels: [TITLE_LABEL, CLOSE_LABEL, row_label[count()]];
 }
 
+const LIST: ListIds = ListIds {
+    panel_bg: PANEL_BG,
+    title: TITLE_LABEL,
+    close_bg: CLOSE_BG,
+    close_label: CLOSE_LABEL,
+    row_bg,
+    row_label,
+    check_box: Some(check_box),
+    value_label: None,
+};
+
 // The number of toggle rows: one per registered panel that opts into a View row.
-pub(crate) fn count() -> usize {
-    registry::view_toggle_count()
+pub(crate) const fn count() -> usize {
+    registry::VIEW_ROWS.len()
 }
 
 // The default (and minimum) panel width; the user can widen it past this.
@@ -74,30 +82,16 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<Vie
 // Position + show the panel at origin `o`, effective size `s`, with the given
 // toggle rows (built by the hook from the registry).
 pub(crate) fn place(world: &mut World, o: [f32; 2], s: [f32; 2], rows: &[Row], mouse: [f32; 2]) {
-    list_panel::place(world, BASE, o, s, "View", rows, mouse);
-}
-
-// Hide every panel element (the F1-hidden pass, or when the panel is toggled off).
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
-}
-
-// Every panel sprite / label id, for injection and the hidden pass.
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    list_panel::all_sprite_ids(BASE, count(), true)
-}
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    list_panel::all_label_ids(BASE, count(), false)
+    list_panel::place(world, &LIST, o, s, "View", rows, mouse);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::list_panel::{row_label, title_label};
     use super::*;
     use concinnity_core::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])
+        ids().test_world()
     }
 
     fn rows(states: &[(&str, bool)]) -> Vec<Row> {
@@ -143,10 +137,12 @@ mod tests {
         );
     }
 
+    // One row of elements per View row, and none spare.
     #[test]
-    fn count_tracks_the_registry() {
-        assert_eq!(count(), registry::view_toggle_count());
-        assert!(count() >= 3, "Assets / Preview / Templates are registered");
+    fn injects_one_row_per_view_row() {
+        assert_eq!(count(), registry::view_toggles().count());
+        assert_eq!(ids().sprites.len(), 2 + 2 * count());
+        assert_eq!(ids().labels.len(), 2 + count());
     }
 
     #[test]
@@ -159,9 +155,9 @@ mod tests {
             &rows(&[("Assets", false), ("Preview", true), ("Templates", false)]),
             [0.0, 0.0],
         );
-        let title = world.get_by_id::<TextLabel>(title_label(BASE)).unwrap();
+        let title = world.get_by_id::<TextLabel>(TITLE_LABEL).unwrap();
         assert!(title.visible && title.content == "View");
-        let first = world.get_by_id::<TextLabel>(row_label(BASE, 0)).unwrap();
+        let first = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
         assert_eq!(first.content, "Assets");
     }
 
@@ -190,20 +186,5 @@ mod tests {
         );
         let on = world.get_by_id::<Sprite>(check_box(0)).unwrap().tint;
         assert_ne!(off, on, "the checkbox tint flips with the panel state");
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let mut world = injected_world();
-        place(
-            &mut world,
-            default_origin(),
-            size(),
-            &rows(&[("Assets", true), ("Preview", true), ("Templates", true)]),
-            [0.0, 0.0],
-        );
-        hide_all(&mut world);
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
     }
 }

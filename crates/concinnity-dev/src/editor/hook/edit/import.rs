@@ -55,11 +55,11 @@ impl EditorHook {
     ) -> ImportView<'a> {
         ImportView {
             rows,
-            scroll: self.import_scroll,
+            scroll: self.import.scroll,
             // Focus is asserted only while frontmost, matching the other
             // panels' guard against fighting for typed keys.
-            focus: self.import_focus && self.panel_order.last() == Some(&PanelKey::Import),
-            status: self.import_status.as_ref(),
+            focus: self.import.focus && self.panel_order.last() == Some(&PanelKey::Import),
+            status: self.import.status.as_ref(),
             mouse,
         }
     }
@@ -67,7 +67,7 @@ impl EditorHook {
     pub(in crate::editor::hook) fn scroll_imports(&mut self, delta: f32) {
         let rows_shown = import_panel::visible_rows(self.effective_size(PanelKey::Import)[1]);
         let max = self.import_rows().len().saturating_sub(rows_shown);
-        self.import_scroll = scroll_step(self.import_scroll, delta, max);
+        self.import.scroll = scroll_step(self.import.scroll, delta, max);
     }
 
     // Route a resolved Import-panel click.
@@ -77,7 +77,7 @@ impl EditorHook {
         world: &mut World,
     ) {
         match action {
-            ImportAction::FocusPath => self.import_focus = true,
+            ImportAction::FocusPath => self.import.focus = true,
             ImportAction::Browse => self.browse_import(world),
             ImportAction::Add => self.add_import(world),
             ImportAction::Open(i) => {
@@ -86,7 +86,7 @@ impl EditorHook {
                 }
             }
             // A click on panel chrome blurs the path field.
-            ImportAction::Consume => self.import_focus = false,
+            ImportAction::Consume => self.import.focus = false,
         }
     }
 
@@ -111,15 +111,15 @@ impl EditorHook {
     ) {
         let text = file_dialog::project_path(picked, &project_root());
         widget::seed_field(world, import_panel::PATH_INPUT, &text);
-        self.import_focus = true;
-        self.import_status = None;
+        self.import.focus = true;
+        self.import.status = None;
     }
 
     // Resolve the typed path and append its entries (renamed to stay unique),
     // exactly as `cn add <path>` would. Success clears the field; failure
     // shows on the status line and commits nothing.
     pub(in crate::editor::hook) fn add_import(&mut self, world: &mut World) {
-        self.import_status = None;
+        self.import.status = None;
         let path = widget::field_text(world, import_panel::PATH_INPUT)
             .trim()
             .to_string();
@@ -131,7 +131,7 @@ impl EditorHook {
         if !std::path::Path::new(&path).is_file() {
             let msg = format!("{path}: no such file");
             self.console_sink.error(&format!("import: {msg}"));
-            self.import_status = Some(ImportStatus::Error(short_status(&msg)));
+            self.import.status = Some(ImportStatus::Error(short_status(&msg)));
             self.notifier.error_with(
                 &format!("Import failed: {msg}"),
                 notify::Action::OpenConsole,
@@ -143,7 +143,7 @@ impl EditorHook {
             Err(e) => {
                 // The console keeps the full error; the status line clips it.
                 self.console_sink.error(&format!("import: {e}"));
-                self.import_status = Some(ImportStatus::Error(short_status(&e.to_string())));
+                self.import.status = Some(ImportStatus::Error(short_status(&e.to_string())));
                 self.notifier
                     .error_with(&format!("Import failed: {e}"), notify::Action::OpenConsole);
                 return;
@@ -156,7 +156,7 @@ impl EditorHook {
             crate::authoring::try_retarget_environment_map(&mut self.entries, &new_entries)
         {
             let notice = format!("{name} now uses {source}");
-            self.import_status = Some(ImportStatus::Notice(short_status(&notice)));
+            self.import.status = Some(ImportStatus::Notice(short_status(&notice)));
             self.notifier.info(&notice);
             self.mark_changed();
             widget::seed_field(world, import_panel::PATH_INPUT, "");
@@ -191,13 +191,13 @@ impl EditorHook {
         let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from) else {
             return;
         };
-        self.panel_open = true;
+        self.open[PanelKey::Assets] = true;
         self.open_form(world, ty, FormTarget::Entry(key));
     }
 
     // Enter in the focused path field adds, like clicking the Add button.
     pub(in crate::editor::hook) fn import_keys(&mut self, world: &mut World, input: &FrameInput) {
-        if self.import_focus && input.pressed_fresh(InputKey::Enter) {
+        if self.import.focus && input.pressed_fresh(InputKey::Enter) {
             self.add_import(world);
         }
     }

@@ -596,7 +596,7 @@ impl EditorHook {
             return;
         };
         self.behavior.index = ordinal;
-        self.behavior.open = true;
+        self.open[PanelKey::Behavior] = true;
         self.open_behavior(world);
         self.focus_panel(PanelKey::Behavior);
         if self.behavior.mode == ViewMode::Overview {

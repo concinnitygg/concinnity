@@ -29,6 +29,7 @@ use crate::editor::hook::tests::fixtures::{
 use crate::editor::hook::{EditorHook, declared_id};
 use crate::editor::overrides;
 use crate::editor::panels::form_panel::{self, FormAction};
+use crate::editor::panels::registry::PanelKey;
 use crate::test_support::isolate_state_dir;
 
 fn prefab_hook(patch: serde_json::Value) -> EditorHook {
@@ -40,7 +41,7 @@ fn prefab_hook(patch: serde_json::Value) -> EditorHook {
         serde_json::json!({"type":"Prop","args":{"$id":"i1","prefab":"pair","position":[10.0,0.0,0.0]}}),
         serde_json::json!({"type":"Prop","args": concinnity_cook::authoring::world::args_with_id(patch, "i1_a")}),
     ]);
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     h
 }
 
@@ -222,7 +223,7 @@ fn materializing_a_preset_prefab_authors_it_as_a_world_line() {
         serde_json::json!({"type":"Prop","args":{"$id":"i1","prefab":"cn_test_prefab","position":[10.0,0.0,0.0]}}),
         serde_json::json!({"type":"Prop","args":{"$id":"i1_a","position":[5.0,0.0,0.0]}}),
     ]);
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     let mut world = world_with_fields();
     h.open_asset_form("i1_a", &mut world);
 
@@ -383,7 +384,7 @@ fn editing_a_generated_asset_writes_a_minimal_patch_on_confirm() {
         vec![&root],
         "only the diverged field is authored"
     );
-    assert!(h.dirty && h.tree_stale);
+    assert!(h.dirty && h.assets.stale);
 }
 
 // After a divergence is committed, the asset relists once -- still under its
@@ -396,14 +397,15 @@ fn a_patched_asset_relists_under_its_origin_as_overridden() {
     let mut world = world_with_fields();
     h.refresh_tree_if_needed();
     let (gi, ai, name) = a_promotable_asset(&h);
-    let origin = h.tree_groups[gi].label.clone();
+    let origin = h.assets.groups[gi].label.clone();
     h.apply_panel(PanelAction::SelectRow(gi, ai), &mut world);
     diverge_a_form_field(&mut h, &mut world);
     h.apply_form(FormAction::Confirm, &mut world);
     h.refresh_tree_if_needed();
 
     let listings: Vec<&str> = h
-        .tree_groups
+        .assets
+        .groups
         .iter()
         .filter(|g| g.assets.iter().any(|a| a.name == name))
         .map(|g| g.label.as_str())
@@ -414,7 +416,8 @@ fn a_patched_asset_relists_under_its_origin_as_overridden() {
         "listed once, under its origin group"
     );
     let patched = h
-        .tree_groups
+        .assets
+        .groups
         .iter()
         .flat_map(|g| &g.assets)
         .find(|a| a.name == name)
@@ -443,7 +446,7 @@ fn two_instance_prefab_hook() -> EditorHook {
         serde_json::json!({"type":"Prop","args":{"$id":"i2","prefab":"pair"}}),
         serde_json::json!({"type":"Prop","args":{"$id":"i1_a","position":[5.0,0.0,0.0]}}),
     ]);
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     h
 }
 
@@ -613,7 +616,7 @@ fn the_entity_menu_reverts_all_overrides() {
 fn an_unconditional_expansion_selects_but_does_not_edit() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     seed_tree(
         &mut h,
         vec![TreeGroup {
@@ -661,9 +664,9 @@ fn unapplied_markers_follow_edit_and_apply() {
     h.form.close();
     assert!(!h.form.touched, "closing discards the marker");
     // Lighting: re-seeding (open / apply / undo) clears the marker.
-    h.lighting_touched = true;
+    h.lighting.touched = true;
     h.seed_lighting(&mut world);
-    assert!(!h.lighting_touched);
+    assert!(!h.lighting.touched);
     // Story: an edit marks the heading; undoing back to the loaded text clears.
     h.story.area = crate::editor::text_area::TextArea::from_text("hello");
     h.story.area.type_char('!');

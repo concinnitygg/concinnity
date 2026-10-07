@@ -19,27 +19,34 @@ use concinnity_core::components::{FrameInput, TextAlign};
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
-use super::panels::registry::ID_BASE;
+use super::hud_ids::{Family, family_base, hud_ids};
 use super::sim::SimState;
 use super::theme;
 use super::widget::{self, place_rounded, place_sprite, point_in};
-pub(crate) const SAVE_BUTTON: AssetId = AssetId(ID_BASE);
-pub(crate) const SAVE_LABEL: AssetId = AssetId(ID_BASE + 1);
-pub(crate) const VIEW_BUTTON: AssetId = AssetId(ID_BASE + 2);
-pub(crate) const VIEW_LABEL: AssetId = AssetId(ID_BASE + 3);
-pub(crate) const BAR_BG: AssetId = AssetId(ID_BASE + 4);
-pub(crate) const UNDO_BUTTON: AssetId = AssetId(ID_BASE + 5);
-pub(crate) const UNDO_LABEL: AssetId = AssetId(ID_BASE + 6);
-pub(crate) const REDO_BUTTON: AssetId = AssetId(ID_BASE + 7);
-pub(crate) const REDO_LABEL: AssetId = AssetId(ID_BASE + 8);
-pub(crate) const PLAY_BUTTON: AssetId = AssetId(ID_BASE + 9);
-pub(crate) const PLAY_LABEL: AssetId = AssetId(ID_BASE + 10);
-pub(crate) const STEP_BUTTON: AssetId = AssetId(ID_BASE + 11);
-pub(crate) const STEP_LABEL: AssetId = AssetId(ID_BASE + 12);
-pub(crate) const STOP_BUTTON: AssetId = AssetId(ID_BASE + 13);
-pub(crate) const STOP_LABEL: AssetId = AssetId(ID_BASE + 14);
-pub(crate) const DISPLAY_BUTTON: AssetId = AssetId(ID_BASE + 15);
-pub(crate) const DISPLAY_LABEL: AssetId = AssetId(ID_BASE + 16);
+hud_ids! {
+    base: family_base(Family::TopBar);
+    sprites: [
+        pub(crate) BAR_BG,
+        pub(crate) SAVE_BUTTON,
+        pub(crate) VIEW_BUTTON,
+        pub(crate) DISPLAY_BUTTON,
+        pub(crate) UNDO_BUTTON,
+        pub(crate) REDO_BUTTON,
+        pub(crate) PLAY_BUTTON,
+        pub(crate) STEP_BUTTON,
+        pub(crate) STOP_BUTTON,
+    ];
+    labels: [
+        pub(crate) SAVE_LABEL,
+        pub(crate) VIEW_LABEL,
+        pub(crate) DISPLAY_LABEL,
+        pub(crate) UNDO_LABEL,
+        pub(crate) REDO_LABEL,
+        pub(crate) PLAY_LABEL,
+        pub(crate) STEP_LABEL,
+        pub(crate) STOP_LABEL,
+    ];
+}
 
 // Bar + button geometry, in window pixels. The bar spans the window top edge;
 // the chips sit vertically centered at its right end. On macOS the window's
@@ -195,7 +202,7 @@ pub(crate) fn hit_test(
 // window.
 pub(crate) fn apply_layout(world: &mut World, state: HudState) {
     if !state.visible {
-        hide_all(world);
+        ids().hide(world);
         return;
     }
     let Some(input) = world.query::<FrameInput>().last().cloned() else {
@@ -378,46 +385,6 @@ pub(crate) fn apply_layout(world: &mut World, state: HudState) {
     );
 }
 
-// Every injected top-bar sprite / label id, so the F1-hidden pass can blank it.
-fn all_sprite_ids() -> Vec<AssetId> {
-    vec![
-        BAR_BG,
-        SAVE_BUTTON,
-        VIEW_BUTTON,
-        DISPLAY_BUTTON,
-        UNDO_BUTTON,
-        REDO_BUTTON,
-        PLAY_BUTTON,
-        STEP_BUTTON,
-        STOP_BUTTON,
-    ]
-}
-fn all_label_ids() -> Vec<AssetId> {
-    vec![
-        SAVE_LABEL,
-        VIEW_LABEL,
-        DISPLAY_LABEL,
-        UNDO_LABEL,
-        REDO_LABEL,
-        PLAY_LABEL,
-        STEP_LABEL,
-        STOP_LABEL,
-    ]
-}
-
-// Every top-bar element id (sprites + labels), so the hook can pin the whole bar
-// to the top draw layer above the floating panels.
-pub(crate) fn all_ids() -> Vec<AssetId> {
-    all_sprite_ids()
-        .into_iter()
-        .chain(all_label_ids())
-        .collect()
-}
-
-fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
-}
-
 fn centered(rect: [f32; 4]) -> [f32; 2] {
     [rect[0] + rect[2] * 0.5, rect[1] + LABEL_TOP]
 }
@@ -474,10 +441,10 @@ mod tests {
 
     fn hud_world(vw: f32, mouse: (f32, f32)) -> World {
         let mut world = World::new();
-        for id in all_sprite_ids() {
+        for &id in &ids().sprites {
             world.push_identified(id, Sprite::default());
         }
-        for id in all_label_ids() {
+        for &id in &ids().labels {
             world.push_identified(id, TextLabel::default());
         }
         world.add_component(FrameInput {
@@ -715,7 +682,7 @@ mod tests {
         let mut world = hud_world(1280.0, (0.0, 0.0));
         apply_layout(&mut world, state(true, true, true));
         apply_layout(&mut world, state(true, true, false));
-        for id in all_sprite_ids() {
+        for &id in &ids().sprites {
             assert!(!sprite(&world, id).visible, "sprite {id:?} hidden");
         }
     }

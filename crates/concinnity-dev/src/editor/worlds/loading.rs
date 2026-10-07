@@ -11,16 +11,16 @@
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
-use crate::editor::panels::registry::ID_BASE;
+use crate::editor::hud_ids::{Family, family_base, hud_ids};
 use crate::editor::theme;
 use crate::editor::widget;
 
-// Reserved id family: the next free block after the shot fade's (0xD000).
-const BASE: u32 = ID_BASE + 0xE000;
-pub(crate) const COVER: AssetId = AssetId(BASE);
-pub(crate) const CAPTION: AssetId = AssetId(BASE + 1);
+hud_ids! {
+    base: family_base(Family::Loading);
+    sprites: [pub(crate) COVER];
+    labels: [pub(crate) CAPTION];
+}
 
 // The same black the shots hand over through, so the cover gives way to the
 // opening fade without a step in between.
@@ -50,16 +50,7 @@ pub(crate) fn place(world: &mut World, area: [f32; 4], name: Option<&str>) {
 }
 
 pub(crate) fn hide(world: &mut World) {
-    widget::set_sprite_visible(world, COVER, false);
-    widget::set_label_visible(world, CAPTION, false);
-}
-
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    vec![COVER]
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    vec![CAPTION]
+    ids().hide(world);
 }
 
 #[cfg(test)]

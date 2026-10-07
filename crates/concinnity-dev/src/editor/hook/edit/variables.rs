@@ -131,16 +131,17 @@ impl EditorHook {
     ) -> VariablesView<'a> {
         let frontmost = self.panel_order.last() == Some(&PanelKey::Variables);
         let on_declared = self
-            .variables_row
+            .variables
+            .row
             .and_then(|i| data.rows.get(i))
             .is_some_and(Row::declared);
         VariablesView {
             rows: &data.rows,
-            scroll: self.variables_scroll,
-            selected: self.variables_row,
+            scroll: self.variables.scroll,
+            selected: self.variables.row,
             authoritative: data.authoritative,
-            name_focus: self.variables_name_focus && on_declared && frontmost,
-            value_focus: self.variables_value_focus && on_declared && frontmost,
+            name_focus: self.variables.name_focus && on_declared && frontmost,
+            value_focus: self.variables.value_focus && on_declared && frontmost,
             status: data.status.as_deref(),
             live: data.live,
             mouse,
@@ -150,17 +151,17 @@ impl EditorHook {
     // (Re)open the panel: drop any stale selection and focus, and seed the fields
     // from whatever the table now holds.
     pub(in crate::editor::hook) fn open_variables(&mut self, world: &mut World) {
-        self.variables_row = None;
-        self.variables_scroll = 0;
-        self.variables_name_focus = false;
-        self.variables_value_focus = false;
+        self.variables.row = None;
+        self.variables.scroll = 0;
+        self.variables.name_focus = false;
+        self.variables.value_focus = false;
         self.seed_variables_fields(world);
     }
 
     // Open the panel with `name` selected, for the callers that arrive from
     // somewhere else in the editor already knowing which variable they mean.
     pub(super) fn open_variable_named(&mut self, name: &str, world: &mut World) {
-        if !self.variables_open {
+        if !self.open[PanelKey::Variables] {
             registry::panel(PanelKey::Variables).toggle(self, world);
         }
         self.focus_panel(PanelKey::Variables);
@@ -169,9 +170,9 @@ impl EditorHook {
             .rows
             .iter()
             .position(|r| r.name == name);
-        self.variables_row = at;
-        self.variables_name_focus = false;
-        self.variables_value_focus = false;
+        self.variables.row = at;
+        self.variables.name_focus = false;
+        self.variables.value_focus = false;
         self.ensure_variables_row_visible();
         self.seed_variables_fields(world);
     }
@@ -192,17 +193,17 @@ impl EditorHook {
             VariablesAction::Declare => self.declare_variable(world),
             VariablesAction::Retype => self.retype_variable(world),
             VariablesAction::Remove => self.remove_variable(world),
-            VariablesAction::FocusName => self.variables_name_focus = true,
-            VariablesAction::FocusValue => self.variables_value_focus = true,
+            VariablesAction::FocusName => self.variables.name_focus = true,
+            VariablesAction::FocusValue => self.variables.value_focus = true,
             VariablesAction::Consume => {
-                self.variables_value_focus = false;
+                self.variables.value_focus = false;
             }
         }
     }
 
     fn select_variable(&mut self, i: usize, world: &mut World) {
-        self.variables_row = Some(i);
-        self.variables_value_focus = false;
+        self.variables.row = Some(i);
+        self.variables.value_focus = false;
         self.seed_variables_fields(world);
     }
 
@@ -217,7 +218,8 @@ impl EditorHook {
     // the behaviors resolve against it.
     fn declare_variable(&mut self, world: &mut World) {
         let Some(row) = self
-            .variables_row
+            .variables
+            .row
             .and_then(|i| self.variables_data().rows.get(i).cloned())
         else {
             return;
@@ -262,7 +264,7 @@ impl EditorHook {
                 self.after_variables_change();
             }
         }
-        self.variables_row = self
+        self.variables.row = self
             .variables_data()
             .rows
             .iter()
@@ -312,8 +314,8 @@ impl EditorHook {
         self.write_variables(idx, args);
         // The removed row is gone; whatever slid into its place is not what was
         // selected, so the selection is dropped rather than retargeted.
-        self.variables_row = None;
-        self.variables_value_focus = false;
+        self.variables.row = None;
+        self.variables.value_focus = false;
         self.seed_variables_fields(world);
     }
 
@@ -326,13 +328,13 @@ impl EditorHook {
     ) {
         if input.escape {
             self.blur_variables_name(world);
-            self.variables_value_focus = false;
+            self.variables.value_focus = false;
             return;
         }
         if !input.pressed_fresh(InputKey::Enter) {
             return;
         }
-        if self.variables_name_focus {
+        if self.variables.name_focus {
             self.rename_variable(world);
             return;
         }
@@ -359,7 +361,7 @@ impl EditorHook {
         };
         map.insert("name".to_string(), Value::String(typed.clone()));
         self.write_variables(idx, args);
-        self.variables_row = self
+        self.variables.row = self
             .variables_data()
             .rows
             .iter()
@@ -368,7 +370,7 @@ impl EditorHook {
     }
 
     fn commit_variable_value(&mut self, world: &mut World) {
-        if !self.variables_value_focus {
+        if !self.variables.value_focus {
             return;
         }
         let Some((idx, at)) = self.selected_declaration() else {
@@ -397,7 +399,8 @@ impl EditorHook {
     // The entry holding the table and the selected declaration's place in it.
     fn selected_declaration(&self) -> Option<(usize, usize)> {
         let at = self
-            .variables_row
+            .variables
+            .row
             .and_then(|i| self.variables_data().rows.get(i).cloned())
             .and_then(|r| r.at)?;
         Some((self.variables_entry()?, at))
@@ -419,7 +422,8 @@ impl EditorHook {
 
     fn seed_variables_fields(&mut self, world: &mut World) {
         let row = self
-            .variables_row
+            .variables
+            .row
             .and_then(|i| self.variables_data().rows.get(i).cloned());
         let (name, value) = match row.filter(Row::declared) {
             Some(r) => (r.name, r.value),
@@ -432,10 +436,10 @@ impl EditorHook {
     // Give the name field up, putting back what the table holds so an abandoned
     // rename does not leave the field disagreeing with the world.
     fn blur_variables_name(&mut self, world: &mut World) {
-        if !self.variables_name_focus {
+        if !self.variables.name_focus {
             return;
         }
-        self.variables_name_focus = false;
+        self.variables.name_focus = false;
         self.seed_variables_fields(world);
     }
 
@@ -444,12 +448,12 @@ impl EditorHook {
     }
 
     fn ensure_variables_row_visible(&mut self) {
-        let Some(row) = self.variables_row else {
+        let Some(row) = self.variables.row else {
             return;
         };
         let shown = self.variables_rows_shown();
-        self.variables_scroll =
-            crate::editor::behavior::navigate::scroll_to(row, self.variables_scroll, shown);
+        self.variables.scroll =
+            crate::editor::behavior::navigate::scroll_to(row, self.variables.scroll, shown);
     }
 
     pub(in crate::editor::hook) fn scroll_variables(&mut self, delta: f32) {
@@ -458,7 +462,7 @@ impl EditorHook {
             .rows
             .len()
             .saturating_sub(self.variables_rows_shown());
-        self.variables_scroll = scroll_step(self.variables_scroll, delta, max);
+        self.variables.scroll = scroll_step(self.variables.scroll, delta, max);
     }
 }
 

@@ -7,43 +7,24 @@
 //! above all of that chrome.
 
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
+use super::hud_ids::{Family, family_base, hud_ids};
 use super::notify::{Level, Stack};
-use super::panels::registry::ID_BASE;
 use super::widget::{self, point_in};
 use super::{hud, theme};
-
-// Reserved id family: the block above the palette's (0x8000), leaving 0x9000
-// free for the next panel.
-const BASE: u32 = ID_BASE + 0xA000;
-
-const fn card_bg(slot: usize) -> AssetId {
-    AssetId(BASE + slot as u32)
-}
-const fn card_accent(slot: usize) -> AssetId {
-    AssetId(BASE + 0x10 + slot as u32)
-}
-const fn card_msg(slot: usize) -> AssetId {
-    AssetId(BASE + 0x20 + slot as u32)
-}
-const OVERFLOW_BG: AssetId = AssetId(BASE + 0x30);
-const OVERFLOW_LABEL: AssetId = AssetId(BASE + 0x31);
 
 // Operation cards: label plus a progress bar. Concurrent long operations are
 // rare (the cook guard serializes cooks), so the pool is small.
 pub(crate) const MAX_OPS: usize = 2;
-const fn op_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x40 + i as u32)
-}
-const fn op_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x44 + i as u32)
-}
-const fn op_track(i: usize) -> AssetId {
-    AssetId(BASE + 0x48 + i as u32)
-}
-const fn op_fill(i: usize) -> AssetId {
-    AssetId(BASE + 0x4C + i as u32)
+
+hud_ids! {
+    base: family_base(Family::Toasts);
+    sprites: [
+        [super::notify::MAX_VISIBLE] { card_bg, card_accent },
+        [MAX_OPS] { op_bg, op_track, op_fill },
+        OVERFLOW_BG,
+    ];
+    labels: [card_msg[super::notify::MAX_VISIBLE], op_label[MAX_OPS], OVERFLOW_LABEL];
 }
 
 pub(crate) const CARD_W: f32 = 320.0;
@@ -283,30 +264,7 @@ fn hide_op(world: &mut World, i: usize) {
 }
 
 pub(crate) fn hide(world: &mut World) {
-    for slot in 0..super::notify::MAX_VISIBLE {
-        hide_card(world, slot);
-    }
-    for i in 0..MAX_OPS {
-        hide_op(world, i);
-    }
-    widget::set_sprite_visible(world, OVERFLOW_BG, false);
-    widget::set_label_visible(world, OVERFLOW_LABEL, false);
-}
-
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    (0..super::notify::MAX_VISIBLE)
-        .flat_map(|s| [card_bg(s), card_accent(s)])
-        .chain((0..MAX_OPS).flat_map(|i| [op_bg(i), op_track(i), op_fill(i)]))
-        .chain([OVERFLOW_BG])
-        .collect()
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    (0..super::notify::MAX_VISIBLE)
-        .map(card_msg)
-        .chain((0..MAX_OPS).map(op_label))
-        .chain([OVERFLOW_LABEL])
-        .collect()
+    ids().hide(world);
 }
 
 #[cfg(test)]
@@ -401,25 +359,6 @@ mod tests {
             sweep_offset(0.6, 100.0),
             100.0,
             "half period reaches the far end"
-        );
-    }
-
-    #[test]
-    fn id_lists_cover_every_slot_without_repeats() {
-        let sprites = all_sprite_ids();
-        let labels = all_label_ids();
-        let mut all: Vec<AssetId> = sprites.iter().chain(labels.iter()).copied().collect();
-        let n = all.len();
-        all.sort_by_key(|id| id.0);
-        all.dedup();
-        assert_eq!(all.len(), n, "no duplicate reserved ids");
-        assert_eq!(
-            sprites.len(),
-            super::super::notify::MAX_VISIBLE * 2 + MAX_OPS * 3 + 1
-        );
-        assert_eq!(
-            labels.len(),
-            super::super::notify::MAX_VISIBLE + MAX_OPS + 1
         );
     }
 }

@@ -31,7 +31,7 @@ fn story_session_at(source: &str, text: &str) -> (EditorHook, World) {
     inject::editor_hud(&mut world);
     let mut h = hook(vec![story_import(source)]);
     h.viewport = [1280.0, 720.0];
-    h.story.open = true;
+    h.open[PanelKey::Story] = true;
     h.story.area = TextArea::from_text(text);
     h.story.focus = true;
     h.focus_panel(PanelKey::Story);
@@ -134,7 +134,7 @@ fn story_apply_validates_then_writes() {
     let src = path.to_string_lossy().to_string();
 
     let mut h = hook(vec![story_import(&src)]);
-    h.story.open = true;
+    h.open[PanelKey::Story] = true;
     h.load_story();
     assert_eq!(h.story.status, None);
     assert_eq!(h.story.path, src);
@@ -204,7 +204,7 @@ fn the_save_shortcut_applies() {
 #[test]
 fn story_load_missing_file_shows_status() {
     let mut h = hook(vec![story_import("/no/such/dir/story.md")]);
-    h.story.open = true;
+    h.open[PanelKey::Story] = true;
     h.load_story();
     assert!(h.story.status.is_some());
     assert_eq!(h.story.area.text(), "");
@@ -221,7 +221,7 @@ fn story_create_writes_starter_and_adds_the_import() {
     std::env::set_current_dir(tree.path()).unwrap();
 
     let mut h = hook(Vec::new());
-    h.story.open = true;
+    h.open[PanelKey::Story] = true;
     h.load_story();
     assert!(
         h.make_story_view([0.0, 0.0]).create,

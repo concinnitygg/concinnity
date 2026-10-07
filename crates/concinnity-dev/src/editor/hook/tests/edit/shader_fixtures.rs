@@ -58,7 +58,7 @@ pub(super) fn shader_names(h: &EditorHook) -> Vec<String> {
 // answered while the form is open.
 pub(super) fn form_world() -> World {
     let mut world = world_with_fields();
-    for id in modal::all_field_ids() {
+    for id in modal::ids().field_ids() {
         world.push_identified(id, concinnity_core::components::TextInput::default());
     }
     world

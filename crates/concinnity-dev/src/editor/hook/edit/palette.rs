@@ -38,7 +38,7 @@ impl EditorHook {
             return;
         }
         self.toggle_palette(world);
-        if self.palette.open {
+        if self.open[PanelKey::Palette] {
             // The same keypress may queue a typed character too; one unfocused
             // frame keeps it out of the fresh query.
             self.palette.blur = true;
@@ -49,14 +49,14 @@ impl EditorHook {
     // rebuilds the item list from the current world, clears the query, and
     // fronts the panel.
     pub(in crate::editor::hook) fn toggle_palette(&mut self, world: &mut World) {
-        if self.palette.open {
+        if self.open[PanelKey::Palette] {
             self.close_palette();
             return;
         }
-        self.palette.open = true;
+        self.open[PanelKey::Palette] = true;
         // The asset provider reads the cooked tree; bring it up to date first.
         self.refresh_tree_if_needed();
-        self.palette.items = providers::all_items(&self.tree_groups);
+        self.palette.items = providers::all_items(&self.assets.groups);
         self.palette.query = String::new();
         widget::seed_field(world, palette::panel::INPUT, "");
         self.palette.rerank();
@@ -64,13 +64,13 @@ impl EditorHook {
     }
 
     pub(in crate::editor::hook) fn close_palette(&mut self) {
-        self.palette.open = false;
+        self.open[PanelKey::Palette] = false;
     }
 
     // Read the query off its field. Mirrored onto the hook because the data a
     // press and a draw resolve against is built without world access.
     pub(in crate::editor::hook) fn sample_palette_query(&mut self, world: &World) {
-        if !self.palette.open {
+        if !self.open[PanelKey::Palette] {
             return;
         }
         let typed = widget::field_text(world, palette::panel::INPUT);
@@ -87,7 +87,7 @@ impl EditorHook {
         input: &FrameInput,
         vp: [f32; 2],
     ) -> bool {
-        if !self.palette.open {
+        if !self.open[PanelKey::Palette] {
             return false;
         }
         let o = self.origin(PanelKey::Palette, vp);
@@ -126,7 +126,7 @@ impl EditorHook {
             total: self.palette.matches.len(),
             // Focus is asserted only while frontmost (matching the other
             // panels' guard) and not in the one-frame blur after the open.
-            focus: self.palette.open
+            focus: self.open[PanelKey::Palette]
                 && !self.palette.blur
                 && self.panel_order.last() == Some(&PanelKey::Palette),
             mouse,
@@ -242,7 +242,7 @@ impl EditorHook {
     // Dispatch through the console so the palette needs no command logic of
     // its own; the console opens first so the reply is visible.
     fn dispatch_palette_command(&mut self, world: &mut World, line: &str) {
-        if !self.console.open {
+        if !self.open[PanelKey::Console] {
             self.toggle_console(world);
         }
         self.run_console_line(world, line);

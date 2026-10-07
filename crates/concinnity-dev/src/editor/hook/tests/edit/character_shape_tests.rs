@@ -13,6 +13,7 @@ use crate::editor::inject;
 use crate::editor::hook::tests::fixtures::select;
 use crate::editor::panels::character_shape;
 use crate::editor::panels::character_shape_panel;
+use crate::editor::panels::registry::PanelKey;
 
 // A drag released where it started changes nothing and records no step; the
 // header buttons commit through the same path.
@@ -21,7 +22,7 @@ fn shape_reset_and_randomize_commit_once_each() {
     let mut world = World::new();
     inject::editor_hud(&mut world);
     let mut h = hook(shape_world_entries());
-    h.shape_open = true;
+    h.open[PanelKey::CharacterShape] = true;
     select(&mut h, &["body"]);
     let data = h.shape_data(&world);
     h.apply_shape_action(
@@ -76,7 +77,7 @@ fn shape_add_row_creates_a_shape_for_the_selected_mesh() {
     let mut entries = shape_world_entries();
     entries.pop();
     let mut h = hook(entries);
-    h.shape_open = true;
+    h.open[PanelKey::CharacterShape] = true;
     select(&mut h, &["body"]);
     let data = h.shape_data(&world);
     assert_eq!(data.rows, [character_shape::Row::Add]);
@@ -129,7 +130,7 @@ fn shape_panel_reads_a_character_models_schema_and_applies_presets() {
         }}),
     ];
     let mut h = hook(entries);
-    h.shape_open = true;
+    h.open[PanelKey::CharacterShape] = true;
     select(&mut h, &["body"]);
     // Nothing is inline on a model entry, so the rows are what the live
     // world exposes; publish a pose-free target through the entry fallback

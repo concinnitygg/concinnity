@@ -1,137 +1,103 @@
 //! The floating-panel registry. Every editor panel is one `Panel` implementation
-//! (in `hook/panels.rs`) plus one entry in `PANELS` below; everything that used
-//! to be hand-wired per panel derives from the registry instead: the reserved-id
-//! allocation, the View panel's toggle rows, HUD injection (`inject.rs`), the
-//! focus-stack draw layers, title-bar dragging, close buttons, click / wheel
-//! routing, and the hidden pass (`hook/routing.rs` / `hook/layout.rs`). Adding a
-//! panel means a `PanelKey` variant, a `Panel` impl, and its `PANELS` entry --
-//! none of the shared machinery is touched.
+//! (in `hook/panels.rs`) plus one entry in the `panels!` list below; everything
+//! that used to be hand-wired per panel derives from the registry instead: the
+//! reserved-id family (`hud_ids.rs`), the View panel's toggle rows, HUD
+//! injection (`inject.rs`), the focus-stack draw layers, title-bar dragging,
+//! close buttons, click / wheel routing, open state, and the hidden pass
+//! (`hook/routing.rs` / `hook/layout.rs`). Adding a panel means a `Panel` impl
+//! and its entry in the list -- none of the shared machinery is touched.
 
 use concinnity_core::components::FrameInput;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
 use crate::editor::hook::{EditorHook, panels};
+use crate::editor::hud_ids::HudIds;
 
-// Base of the editor HUD's reserved asset-id space. Interned world ids are dense
-// from 0 and never approach this range, and these ids are never serialized to a
-// blob. The top bar (`hud.rs`) owns `ID_BASE + 0x0..0x40`; the panels' families
-// are allocated by `base` below.
-pub(crate) const ID_BASE: u32 = 0x3000_0000;
+// Declares `PanelKey` (one variant per entry, its discriminant indexing the
+// panel table and the hook's per-panel state), `PanelKey::ALL`, `PANEL_COUNT`,
+// the table itself, and `VIEW_ROWS`, all from the one list below. An entry with
+// a caption gets a toggle row in the View panel.
+macro_rules! panels {
+    ($($key:ident $(($caption:literal))? => $panel:expr,)+) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub(crate) enum PanelKey {
+            $($key,)+
+        }
 
-// One variant per floating panel, in default back-to-front draw / focus order
-// (later = frontmost at launch). The discriminant indexes `PANELS` and the
-// hook's per-panel state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PanelKey {
-    Assets,
-    Edit,
-    Preview,
-    View,
-    Templates,
-    Lighting,
-    Story,
-    Shaders,
-    Import,
-    Health,
-    Console,
-    Behavior,
-    Map,
-    Variables,
-    Content,
-    CharacterShape,
-    // Last (default frontmost), so the detail floats over the Templates list
-    // it spawns from before any interaction reorders the focus stack.
-    TemplateDetail,
-    // Likewise over the Shaders list it opens from.
-    ShaderSource,
-    // After TemplateDetail: the palette is a transient launcher overlay, so it
-    // starts above everything it can open.
-    Palette,
-    // Last of all: a session started with no world named on the command line
-    // opens on this panel, so it has to be the frontmost thing on screen.
-    Worlds,
+        pub(crate) const PANEL_COUNT: usize = [$(PanelKey::$key),+].len();
+
+        impl PanelKey {
+            pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [$(PanelKey::$key),+];
+        }
+
+        static PANELS: [&dyn Panel; PANEL_COUNT] = [$(&$panel),+];
+
+        // The View panel's toggle rows, in registry order (row `i` toggles the
+        // `i`-th entry), with their captions.
+        pub(crate) const VIEW_ROWS: &[(PanelKey, &str)] = &[$($((PanelKey::$key, $caption),)?)+];
+    };
 }
 
-pub(crate) const PANEL_COUNT: usize = 20;
+// Every floating panel, in default back-to-front draw / focus order (later =
+// frontmost at launch).
+panels! {
+    Assets("Assets") => panels::AssetsPanel,
+    Edit => panels::EditPanel,
+    Preview("Preview") => panels::PreviewPanel,
+    View => panels::ViewPanel,
+    Templates("Templates") => panels::TemplatesPanel,
+    Lighting("Lighting") => panels::LightingPanel,
+    Story("Story") => panels::StoryPanel,
+    Shaders("Shaders") => panels::ShadersPanel,
+    Import("Import") => panels::ImportPanel,
+    Health("Health") => panels::HealthPanel,
+    Console("Console") => panels::ConsolePanel,
+    Behavior("Behavior") => panels::BehaviorPanel,
+    Map("Map") => panels::MapPanel,
+    Variables("Variables") => panels::VariablesPanel,
+    Content("Content") => panels::ContentPanel,
+    CharacterShape("Character Shape") => panels::CharacterShapePanel,
+    // Late (default frontmost), so the detail floats over the Templates list
+    // it spawns from before any interaction reorders the focus stack.
+    TemplateDetail => panels::TemplateDetailPanel,
+    // Likewise over the Shaders list it opens from.
+    ShaderSource => panels::ShaderSourcePanel,
+    // The palette is a transient launcher overlay, so it starts above
+    // everything it can open.
+    Palette => panels::PalettePanel,
+    // Last of all: a session started with no world named on the command line
+    // opens on this panel, so it has to be the frontmost thing on screen.
+    Worlds("Worlds") => panels::WorldsPanel,
+}
 
 impl PanelKey {
-    pub(crate) const ALL: [PanelKey; PANEL_COUNT] = [
-        PanelKey::Assets,
-        PanelKey::Edit,
-        PanelKey::Preview,
-        PanelKey::View,
-        PanelKey::Templates,
-        PanelKey::Lighting,
-        PanelKey::Story,
-        PanelKey::Shaders,
-        PanelKey::Import,
-        PanelKey::Health,
-        PanelKey::Console,
-        PanelKey::Behavior,
-        PanelKey::Map,
-        PanelKey::Variables,
-        PanelKey::Content,
-        PanelKey::CharacterShape,
-        PanelKey::TemplateDetail,
-        PanelKey::ShaderSource,
-        PanelKey::Palette,
-        PanelKey::Worlds,
-    ];
-
     pub(crate) fn index(self) -> usize {
         self as usize
     }
 }
 
-// Reserved-id base of each panel's element family, allocated here so families
-// can never collide (`id_families_are_disjoint` enforces it against every
-// panel's actual id list). A new panel takes the next free block; the Assets and
-// Edit families predate the 0x100 spacing and span wider.
-pub(crate) const fn base(key: PanelKey) -> u32 {
-    ID_BASE
-        + match key {
-            PanelKey::Assets => 0x40,
-            PanelKey::Edit => 0x200,
-            PanelKey::Preview => 0x400,
-            PanelKey::View => 0x500,
-            PanelKey::Templates => 0x600,
-            PanelKey::TemplateDetail => 0x700,
-            PanelKey::Lighting => 0x800,
-            PanelKey::Import => 0xA00,
-            PanelKey::Health => 0xB00,
-            // 0xC00..0xE00 belong to the highlight, gizmo, and marquee
-            // overlays, and 0x1000.. to the billboards (all allocated in
-            // their own modules). Above the billboards' open-ended run, which
-            // ends well short of 0x2000 today (`id_families_are_disjoint`
-            // holds the line).
-            PanelKey::Console => 0x2000,
-            // The outline, its value column, and the palette give this panel
-            // the widest family of any, so it takes a whole block of its own.
-            PanelKey::Behavior => 0x3000,
-            // Clear of the Behavior panel's whole block, whose chart segments
-            // and card pools run well past 0x3300.
-            PanelKey::Variables => 0x4000,
-            PanelKey::Content => 0x5000,
-            // 0x6000 and 0x7000 belong to the create and Display menus
-            // (allocated in their own modules).
-            PanelKey::Palette => 0x8000,
-            PanelKey::CharacterShape => 0x9000,
-            // 0xA000 and 0xB000 belong to the toast stack and the confirmation
-            // dialog (allocated in their own modules).
-            PanelKey::Worlds => 0xC000,
-            // 0xD000 and 0xE000 belong to the start screen's shot fade and its
-            // loading cover (allocated in `worlds/cinematic.rs` and
-            // `worlds/loading.rs`). The map draws a chart of its own, so like
-            // the Behavior panel it takes a whole block: its pools run well
-            // past 0xF300.
-            PanelKey::Map => 0xF000,
-            // The text area's row pools outgrow a 0x100 block, so a panel
-            // holding one takes a whole block.
-            PanelKey::Story => 0x1_0000,
-            PanelKey::ShaderSource => 0x1_1000,
-            PanelKey::Shaders => 0x1_2000,
-        }
+// One value per panel, indexed by `PanelKey`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PerPanel<T>([T; PANEL_COUNT]);
+
+impl<T: Copy> PerPanel<T> {
+    pub(crate) const fn splat(value: T) -> Self {
+        Self([value; PANEL_COUNT])
+    }
+}
+
+impl<T> std::ops::Index<PanelKey> for PerPanel<T> {
+    type Output = T;
+    fn index(&self, key: PanelKey) -> &T {
+        &self.0[key.index()]
+    }
+}
+
+impl<T> std::ops::IndexMut<PanelKey> for PerPanel<T> {
+    fn index_mut(&mut self, key: PanelKey) -> &mut T {
+        &mut self.0[key.index()]
+    }
 }
 
 // A floating editor panel. Implementations are stateless units (all panel state
@@ -140,24 +106,38 @@ pub(crate) const fn base(key: PanelKey) -> u32 {
 pub(crate) trait Panel: Sync {
     // The key this panel is registered under (pinned by `keys_match_registry`).
     fn key(&self) -> PanelKey;
-    // Caption of this panel's toggle row in the View panel; `None` keeps it out
-    // (panels that open from elsewhere, like the edit form).
-    fn view_row(&self) -> Option<&'static str> {
-        None
-    }
+    // The injected element ids, for HUD injection, the draw-layer map and the
+    // hidden pass.
+    fn ids(&self) -> &'static HudIds;
     // Whether the user can resize this panel by dragging its edges / corners.
     // Default `false`: the fixed-size panels (Preview, Health, Console) opt out.
     fn resizable(&self) -> bool {
         false
     }
-    // Whether the panel is shown and interactive this frame, compound gates
-    // included (e.g. the edit form requires the Assets UI to be on).
-    fn is_open(&self, hook: &EditorHook) -> bool;
-    // Flip the panel's shown state (its View-panel toggle row). Opening may
-    // seed the panel's typed controls from the world, hence the world access.
-    fn toggle(&self, _hook: &mut EditorHook, _world: &mut World) {}
+    // Whether the panel is shown and interactive this frame. A panel whose
+    // showing follows from other state (e.g. the edit form requires the Assets
+    // UI to be on) overrides this.
+    fn is_open(&self, hook: &EditorHook) -> bool {
+        hook.open_flag(self.key())
+    }
+    // Flip the panel's shown state (its View-panel toggle row).
+    fn toggle(&self, hook: &mut EditorHook, world: &mut World) {
+        let open = !hook.open_flag(self.key());
+        hook.set_open_flag(self.key(), open);
+        if open {
+            self.on_open(hook, world);
+        }
+    }
+    // Runs when the toggle opens the panel. Opening may seed the panel's typed
+    // controls from the world, hence the world access.
+    fn on_open(&self, _hook: &mut EditorHook, _world: &mut World) {}
     // The title-bar "X".
-    fn close(&self, hook: &mut EditorHook, world: &mut World);
+    fn close(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.set_open_flag(self.key(), false);
+        self.on_close(hook, world);
+    }
+    // Runs when the title-bar "X" closes the panel.
+    fn on_close(&self, _hook: &mut EditorHook, _world: &mut World) {}
     // The panel footprint this frame (it may track dynamic content), for the
     // drag clamp and the shared title-bar geometry. Also the minimum a resizable
     // panel can be dragged to.
@@ -170,17 +150,6 @@ pub(crate) trait Panel: Sync {
     }
     // Where the panel sits until the user drags it.
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2];
-    // The injected element ids: sprites, labels, and typed fields with their
-    // placeholder text. The source for HUD injection and the draw-layer map.
-    fn sprite_ids(&self) -> Vec<AssetId>;
-    fn label_ids(&self) -> Vec<AssetId>;
-    // Labels drawn in the monospace code face rather than the HUD face.
-    fn code_label_ids(&self) -> Vec<AssetId> {
-        Vec::new()
-    }
-    fn field_ids(&self) -> Vec<(AssetId, &'static str)> {
-        Vec::new()
-    }
     // The elements of a floating overlay the panel currently has open (a
     // palette, a dropdown): they draw above the rest of the panel, so an opaque
     // backing occludes what it covers instead of the covered text showing
@@ -223,32 +192,10 @@ pub(crate) trait Panel: Sync {
     // Per-frame layout while shown.
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]);
     // Blank every element (toggled off, or the F1-hidden pass).
-    fn hide(&self, world: &mut World);
+    fn hide(&self, world: &mut World) {
+        self.ids().hide(world);
+    }
 }
-
-// The registered panels, indexed by `PanelKey`.
-static PANELS: [&dyn Panel; PANEL_COUNT] = [
-    &panels::AssetsPanel,
-    &panels::EditPanel,
-    &panels::PreviewPanel,
-    &panels::ViewPanel,
-    &panels::TemplatesPanel,
-    &panels::LightingPanel,
-    &panels::StoryPanel,
-    &panels::ShadersPanel,
-    &panels::ImportPanel,
-    &panels::HealthPanel,
-    &panels::ConsolePanel,
-    &panels::BehaviorPanel,
-    &panels::MapPanel,
-    &panels::VariablesPanel,
-    &panels::ContentPanel,
-    &panels::CharacterShapePanel,
-    &panels::TemplateDetailPanel,
-    &panels::ShaderSourcePanel,
-    &panels::PalettePanel,
-    &panels::WorldsPanel,
-];
 
 pub(crate) fn panel(key: PanelKey) -> &'static dyn Panel {
     PANELS[key.index()]
@@ -259,14 +206,9 @@ pub(crate) fn all() -> impl Iterator<Item = &'static dyn Panel> {
     PANELS.into_iter()
 }
 
-// The panels listed in the View panel, in registry order (row `i` of the View
-// panel toggles the `i`-th entry here).
+// The panels listed in the View panel, in `VIEW_ROWS` order.
 pub(crate) fn view_toggles() -> impl Iterator<Item = &'static dyn Panel> {
-    PANELS.into_iter().filter(|p| p.view_row().is_some())
-}
-
-pub(crate) fn view_toggle_count() -> usize {
-    view_toggles().count()
+    VIEW_ROWS.iter().map(|&(key, _)| panel(key))
 }
 
 #[cfg(test)]
@@ -282,98 +224,60 @@ mod tests {
         }
     }
 
-    // Every reserved id across every panel (plus the top bar) is unique: the
-    // point of allocating the family bases in one place.
+    // Every reserved id across every panel and every other HUD module is
+    // unique, so no two elements ever fight over one.
     #[test]
     fn id_families_are_disjoint() {
+        use crate::editor::{create_menu, hud, modal, toast_overlay, view_menu, viewport, worlds};
         let mut seen: std::collections::HashMap<AssetId, String> = std::collections::HashMap::new();
-        let mut claim = |id: AssetId, who: String| {
-            if let Some(prev) = seen.insert(id, who.clone()) {
-                panic!("{who} and {prev} both claim {id:?}");
+        let mut claim = |who: String, ids: &mut dyn Iterator<Item = AssetId>| {
+            for id in ids {
+                if let Some(prev) = seen.insert(id, who.clone()) {
+                    panic!("{who} and {prev} both claim {id:?}");
+                }
             }
         };
-        for id in crate::editor::hud::all_ids() {
-            claim(id, "top bar".to_string());
+        let singles = [
+            ("marquee", viewport::marquee::RECT),
+            ("editor cursor", viewport::cursor::CURSOR),
+            ("start screen shot fade", worlds::cinematic::FADE),
+        ];
+        for (who, id) in singles {
+            claim(who.to_string(), &mut std::iter::once(id));
         }
-        for id in crate::editor::viewport::highlight::all_sprite_ids() {
-            claim(id, "selection highlight".to_string());
-        }
-        claim(
-            crate::editor::viewport::marquee::RECT,
-            "marquee rect".to_string(),
-        );
-        for id in crate::editor::viewport::gizmo::all_sprite_ids() {
-            claim(id, "gizmo".to_string());
-        }
-        for id in crate::editor::viewport::billboards::all_sprite_ids() {
-            claim(id, "billboards".to_string());
-        }
-        for id in crate::editor::viewport::billboards::all_label_ids() {
-            claim(id, "billboard glyphs".to_string());
-        }
-        claim(
-            crate::editor::viewport::gizmo::MODE_LABEL,
-            "gizmo mode label".to_string(),
-        );
-        claim(
-            crate::editor::viewport::cursor::CURSOR,
-            "editor cursor".to_string(),
-        );
-        for id in crate::editor::create_menu::all_sprite_ids() {
-            claim(id, "create menu sprites".to_string());
-        }
-        for id in crate::editor::create_menu::all_label_ids() {
-            claim(id, "create menu labels".to_string());
-        }
-        for id in crate::editor::view_menu::all_sprite_ids() {
-            claim(id, "display menu sprites".to_string());
-        }
-        for id in crate::editor::view_menu::all_label_ids() {
-            claim(id, "display menu labels".to_string());
-        }
-        for id in crate::editor::toast_overlay::all_sprite_ids() {
-            claim(id, "toast sprites".to_string());
-        }
-        for id in crate::editor::toast_overlay::all_label_ids() {
-            claim(id, "toast labels".to_string());
-        }
-        for id in crate::editor::modal::all_sprite_ids() {
-            claim(id, "confirm dialog sprites".to_string());
-        }
-        for id in crate::editor::modal::all_label_ids() {
-            claim(id, "confirm dialog labels".to_string());
-        }
-        claim(
-            crate::editor::worlds::cinematic::FADE,
-            "start screen shot fade".to_string(),
-        );
-        for id in crate::editor::worlds::loading::all_sprite_ids() {
-            claim(id, "loading cover".to_string());
-        }
-        for id in crate::editor::worlds::loading::all_label_ids() {
-            claim(id, "loading caption".to_string());
+        let others = [
+            ("top bar", hud::ids()),
+            ("selection highlight", viewport::highlight::ids()),
+            ("gizmo", viewport::gizmo::ids()),
+            ("billboards", viewport::billboards::ids()),
+            ("create menu", create_menu::ids()),
+            ("display menu", view_menu::ids()),
+            ("toasts", toast_overlay::ids()),
+            ("confirm dialog", modal::ids()),
+            ("loading cover", worlds::loading::ids()),
+        ];
+        for (who, ids) in others {
+            claim(who.to_string(), &mut ids.all());
         }
         for key in PanelKey::ALL {
-            let p = panel(key);
-            for id in p.sprite_ids() {
-                claim(id, format!("{key:?} sprites"));
-            }
-            for id in p.label_ids() {
-                claim(id, format!("{key:?} labels"));
-            }
-            for id in p.code_label_ids() {
-                claim(id, format!("{key:?} code labels"));
-            }
-            for (id, _) in p.field_ids() {
-                claim(id, format!("{key:?} fields"));
-            }
+            claim(format!("{key:?}"), &mut panel(key).ids().all());
+        }
+    }
+
+    // Each key reads and writes its own slot.
+    #[test]
+    fn per_panel_indexes_by_key() {
+        let mut open = PerPanel::splat(false);
+        open[PanelKey::Map] = true;
+        for key in PanelKey::ALL {
+            assert_eq!(open[key], key == PanelKey::Map, "{key:?}");
         }
     }
 
     // The View panel's toggle rows come from the registry in registry order.
     #[test]
     fn view_toggles_lists_the_toggleable_panels() {
-        let rows: Vec<&'static str> = view_toggles().map(|p| p.view_row().unwrap()).collect();
+        let rows: Vec<&str> = VIEW_ROWS.iter().map(|&(_, caption)| caption).collect();
         assert_eq!(
             rows,
             [

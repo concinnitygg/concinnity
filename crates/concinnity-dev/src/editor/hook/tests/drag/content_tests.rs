@@ -37,15 +37,15 @@ fn drag_out_places_a_prop_where_the_ghost_lands() {
             "args": { "$id": "ground", "mesh": "demo_ball", "position": [0.0, -0.5, 0.0] }
         }),
     ]);
-    h.content_open = true;
-    h.tree_stale = true;
+    h.open[PanelKey::Content] = true;
+    h.assets.stale = true;
     h.refresh_tree_if_needed();
 
     // Press the first grid cell: selects and arms the drag.
     let o = h.origin(PanelKey::Content, [1280.0, 720.0]);
     let cell = crate::editor::panels::content_panel::cell_rect(o, 0);
     click_at(&mut world, &mut h, [cell[0] + 10.0, cell[1] + 10.0]);
-    assert!(h.content_drag.is_some(), "the cell press arms a drag");
+    assert!(h.content.drag.is_some(), "the cell press arms a drag");
     assert_eq!(active(&h).as_deref(), Some("demo_ball"));
     let before = h.entries.len();
 
@@ -63,7 +63,7 @@ fn drag_out_places_a_prop_where_the_ghost_lands() {
     // Release commits one entry through the shared path.
     set_input(&mut world, drag_input([640.0, 500.0], false));
     h.tick(&mut world);
-    assert!(h.content_drag.is_none());
+    assert!(h.content.drag.is_none());
     assert_eq!(h.entries.len(), before + 1);
     let placed = &h.entries[before];
     assert_eq!(entry_type(placed), Some("Prop"));
@@ -129,9 +129,9 @@ fn aligned_drag_out_orients_the_drop_to_the_struck_face() {
             "args": { "$id": "wall", "mesh": "demo_ball", "position": [0.0, 0.0, -5.0] }
         }),
     ]);
-    h.content_open = true;
+    h.open[PanelKey::Content] = true;
     h.align_to_surface = true;
-    h.tree_stale = true;
+    h.assets.stale = true;
     h.refresh_tree_if_needed();
 
     let o = h.origin(PanelKey::Content, [1280.0, 720.0]);
@@ -182,8 +182,8 @@ fn a_still_cell_press_places_nothing() {
     let mut h = hook(vec![serde_json::json!({
         "type": "ProceduralMesh", "args": { "$id": "demo_ball", "generator": "box" }
     })]);
-    h.content_open = true;
-    h.tree_stale = true;
+    h.open[PanelKey::Content] = true;
+    h.assets.stale = true;
     h.refresh_tree_if_needed();
     let o = h.origin(PanelKey::Content, [1280.0, 720.0]);
     let cell = crate::editor::panels::content_panel::cell_rect(o, 0);
@@ -191,7 +191,7 @@ fn a_still_cell_press_places_nothing() {
     click_at(&mut world, &mut h, at);
     set_input(&mut world, drag_input(at, false));
     h.tick(&mut world);
-    assert!(h.content_drag.is_none());
+    assert!(h.content.drag.is_none());
     assert_eq!(h.entries.len(), 1, "no placement from a plain click");
     assert!(!h.dirty);
     assert_eq!(active(&h).as_deref(), Some("demo_ball"), "still selected");
@@ -215,7 +215,7 @@ fn material_drag_assigns_to_the_prop_under_the_cursor() {
             "args": { "$id": "crate_prop", "mesh": "demo", "position": [0.0, 0.0, -5.0] }
         }),
     ]);
-    h.content_open = true;
+    h.open[PanelKey::Content] = true;
     h.arm_content_drag(
         "wood".to_string(),
         RegisteredType::Material,

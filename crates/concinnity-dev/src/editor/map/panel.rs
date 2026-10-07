@@ -9,19 +9,21 @@
 //! blanking the other's cards.
 
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
 use crate::editor::behavior::chart::{self, ChartIds};
 use crate::editor::behavior::graph::{Card, Chart};
-use crate::editor::panels::registry::{self, PanelKey};
+use crate::editor::hud_ids::{hud_ids, panel_base};
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::widget::{self, point_in};
 
-const BASE: u32 = registry::base(PanelKey::Map);
-const PANEL_BG: AssetId = AssetId(BASE);
-const TITLE_LABEL: AssetId = AssetId(BASE + 1);
-const CLOSE_BG: AssetId = AssetId(BASE + 2);
-const CLOSE_LABEL: AssetId = AssetId(BASE + 3);
-const CHART_IDS: ChartIds = ChartIds::of(PanelKey::Map);
+hud_ids! {
+    base: panel_base(PanelKey::Map);
+    sprites: [PANEL_BG, CLOSE_BG, ..CHART_IDS.sprite_ids()];
+    labels: [TITLE_LABEL, CLOSE_LABEL, ..CHART_IDS.label_ids()];
+    blocks: [CHART_BASE: ChartIds::SPAN];
+}
+
+pub(crate) const CHART_IDS: ChartIds = ChartIds::new(CHART_BASE);
 
 // What the canvas opens showing: a place, the arrow out of it, and the place it
 // leads to, over enough rows for the ones sharing a column. A panel cannot size
@@ -135,7 +137,7 @@ pub(crate) fn root_pan(chart: &Chart, canvas: [f32; 2]) -> [f32; 2] {
 // every element (`None`).
 pub(crate) fn place(world: &mut World, view: Option<&MapView>, o: [f32; 2], s: [f32; 2]) {
     let Some(view) = view else {
-        hide_all(world);
+        ids().hide(world);
         return;
     };
     widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
@@ -163,22 +165,6 @@ fn chart_view<'a>(view: &'a MapView<'a>) -> chart::ChartView<'a> {
     }
 }
 
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
-}
-
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, CLOSE_BG];
-    ids.extend(CHART_IDS.all_sprite_ids());
-    ids
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![TITLE_LABEL, CLOSE_LABEL];
-    ids.extend(CHART_IDS.all_label_ids());
-    ids
-}
-
 #[cfg(test)]
 mod tests {
     use concinnity_cook::authoring::registry::RegisteredType;
@@ -190,11 +176,12 @@ mod tests {
     use crate::editor::behavior::chart::CARD_POOL;
     use crate::editor::entry_list::EntryList;
     use crate::editor::map::{self, Entries};
+    use concinnity_core::ecs::asset_id::AssetId;
 
     const O: [f32; 2] = [40.0, 60.0];
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])
+        ids().test_world()
     }
 
     fn asset(ty: RegisteredType, id: &str, args: Value) -> WorldJsonlAsset {
@@ -466,22 +453,5 @@ mod tests {
             slot_of(&world, "bistro").is_some(),
             "the root is not in view"
         );
-    }
-
-    // Toggled off, the panel leaves nothing of the map behind.
-    #[test]
-    fn hiding_the_panel_blanks_the_map_it_drew() {
-        let chart = mapped(imported_scene());
-        let mut world = injected_world();
-        place(&mut world, Some(&view(&chart, [0.0, 0.0])), O, size());
-        assert!(sprite(&world, CHART_IDS.card_bg(0)).visible);
-
-        place(&mut world, None, O, size());
-        for id in all_sprite_ids() {
-            assert!(!sprite(&world, id).visible, "{id:?} survived the hide");
-        }
-        for id in all_label_ids() {
-            assert!(!label(&world, id).visible, "{id:?} survived the hide");
-        }
     }
 }

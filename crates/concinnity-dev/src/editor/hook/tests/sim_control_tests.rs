@@ -23,6 +23,7 @@ use super::fixtures::{behavior, entry, entry_with_args, hook, playing_hook};
 
 use crate::editor::hud::HudAction;
 
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::sim;
 
 #[test]
@@ -288,10 +289,10 @@ fn the_trace_request_follows_the_live_debug_panels() {
         world.resource::<TraceRequest>().is_none(),
         "no panel open, no request"
     );
-    h.behavior.open = true;
+    h.open[PanelKey::Behavior] = true;
     h.drive_trace(&mut world);
     assert!(world.resource::<TraceRequest>().is_some());
-    h.behavior.open = false;
+    h.open[PanelKey::Behavior] = false;
     h.drive_trace(&mut world);
     assert!(
         world.resource::<TraceRequest>().is_none(),

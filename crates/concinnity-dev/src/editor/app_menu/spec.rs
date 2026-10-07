@@ -12,7 +12,7 @@ const APP_NAME: &str = "Concinnity";
 /// own (hide, about) carry no command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuCommand {
-    /// Show or hide the panel behind row `i` of [`registry::view_toggles`],
+    /// Show or hide the panel behind row `i` of [`registry::VIEW_ROWS`],
     /// which is the row the View panel's own checkbox `i` drives.
     PanelToggle(usize),
     /// Leave the session the way closing the window does.
@@ -44,7 +44,7 @@ impl MenuCommand {
     }
 }
 
-/// Which panels are open, one bit per row of [`registry::view_toggles`]. The
+/// Which panels are open, one bit per row of [`registry::VIEW_ROWS`]. The
 /// menu is rebuilt from this only when it changes, so it is worth keeping
 /// small and comparable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -173,11 +173,12 @@ pub(super) fn app_entries() -> Vec<Entry> {
 /// The View menu: one checkbox per panel the View panel lists, in the same
 /// registry order, so the two ways of opening a panel show the same thing.
 pub(super) fn view_entries(marks: PanelMarks) -> Vec<Entry> {
-    registry::view_toggles()
+    registry::VIEW_ROWS
+        .iter()
         .enumerate()
-        .map(|(i, panel)| {
+        .map(|(i, &(_, caption))| {
             command(
-                panel.view_row().unwrap_or_default().to_string(),
+                caption.to_string(),
                 MenuCommand::PanelToggle(i),
                 marks.contains(i),
             )
@@ -200,7 +201,7 @@ mod tests {
     }
 
     fn all_open(open: bool) -> PanelMarks {
-        PanelMarks::from_open(std::iter::repeat_n(open, registry::view_toggle_count()))
+        PanelMarks::from_open(std::iter::repeat_n(open, registry::VIEW_ROWS.len()))
     }
 
     // The View menu offers the View panel's rows, under the same captions and
@@ -214,8 +215,9 @@ mod tests {
             .filter_map(Entry::item)
             .map(|i| i.title.as_str())
             .collect();
-        let expected: Vec<_> = registry::view_toggles()
-            .map(|p| p.view_row().expect("a toggle row"))
+        let expected: Vec<_> = registry::VIEW_ROWS
+            .iter()
+            .map(|&(_, caption)| caption)
             .collect();
         assert_eq!(titles, expected);
         assert_eq!(
@@ -231,7 +233,7 @@ mod tests {
     // checkmarks.
     #[test]
     fn every_toggleable_panel_fits_the_marks() {
-        assert!(registry::view_toggle_count() <= u32::BITS as usize);
+        assert!(registry::VIEW_ROWS.len() <= u32::BITS as usize);
         assert_ne!(all_open(true), all_open(false));
     }
 
@@ -239,17 +241,14 @@ mod tests {
     // disturbing its neighbors.
     #[test]
     fn a_row_is_marked_from_its_own_panel() {
-        let count = registry::view_toggle_count();
+        let count = registry::VIEW_ROWS.len();
         for open in 0..count {
             let marks = PanelMarks::from_open((0..count).map(|i| i == open));
             let marked: Vec<_> = view_entries(marks)
                 .into_iter()
                 .filter_map(|e| e.item().filter(|i| i.checked).map(|i| i.title.clone()))
                 .collect();
-            let expected = registry::view_toggles()
-                .nth(open)
-                .and_then(|p| p.view_row())
-                .expect("a toggle row");
+            let (_, expected) = registry::VIEW_ROWS[open];
             assert_eq!(marked, vec![expected.to_string()]);
         }
     }
@@ -269,7 +268,7 @@ mod tests {
     #[test]
     fn every_command_survives_its_tag() {
         let mut all = vec![MenuCommand::Quit];
-        all.extend((0..registry::view_toggle_count()).map(MenuCommand::PanelToggle));
+        all.extend((0..registry::VIEW_ROWS.len()).map(MenuCommand::PanelToggle));
         for command in all {
             assert_eq!(MenuCommand::from_tag(command.tag()), Some(command));
         }

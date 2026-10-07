@@ -16,6 +16,7 @@ use crate::editor::modal;
 use crate::editor::notify;
 use crate::editor::panels::assets_panel;
 use crate::editor::panels::form_panel;
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::widget;
 
 impl EditorHook {
@@ -183,7 +184,7 @@ impl EditorHook {
         // The expansion follows the entries, so the Assets tree is now out of
         // date. Recomputed by the frame drive while the panel shows, so a burst
         // of edits costs one expansion rather than one per edit.
-        self.tree_stale = true;
+        self.assets.stale = true;
         // Template baselines follow the entries too; rebuilt on demand.
         self.template_index = None;
     }
@@ -259,22 +260,22 @@ impl EditorHook {
         self.baseline = self.entries.clone();
         self.dirty = self.entries != self.saved;
         self.rebuild_preview = true;
-        self.tree_stale = true;
+        self.assets.stale = true;
         self.template_index = None;
         self.form.close();
-        self.row_menu = None;
-        self.picker_open = false;
+        self.assets.row_menu = None;
+        self.assets.picker_open = false;
         self.pick_last = None;
         self.marquee = None;
         self.gizmo_drag = None;
-        self.shape_drag = None;
-        self.content_drag = None;
+        self.shape.drag = None;
+        self.content.drag = None;
         self.create_menu = None;
         self.shaders.menu = None;
         self.follow_shader_source();
         // The Lighting panel's text controls hold committed values; re-seed so
         // they show the restored list, not the undone edit.
-        if self.lighting_open {
+        if self.open[PanelKey::Lighting] {
             self.seed_lighting(world);
         }
     }
@@ -335,13 +336,16 @@ impl EditorHook {
     // heading and arg inputs) by reserved id, so a live rebuild's fresh HUD
     // injection does not blank an open form.
     pub(super) fn field_snapshot(world: &World) -> Vec<(AssetId, String)> {
-        assets_panel::all_field_ids()
-            .into_iter()
-            .chain(form_panel::all_field_ids())
-            .chain(behavior::panel::all_field_ids())
-            .chain(modal::all_field_ids())
-            .map(|id| (id, widget::field_text(world, id)))
-            .collect()
+        [
+            assets_panel::ids(),
+            form_panel::ids(),
+            behavior::panel::ids(),
+            modal::ids(),
+        ]
+        .into_iter()
+        .flat_map(|ids| ids.field_ids())
+        .map(|id| (id, widget::field_text(world, id)))
+        .collect()
     }
 
     // Restore a `field_snapshot` into a freshly injected HUD.

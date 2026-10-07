@@ -6,7 +6,6 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "The HLSL shader toolchain shared by Concinnity build scripts and the renderer"
 readme = "README.md"
 keywords = ["gamedev", "shader", "hlsl", "concinnity"]

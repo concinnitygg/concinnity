@@ -101,7 +101,7 @@ fn selection_rings_cover_every_member() {
     click_at(&mut world, &mut h, [200.0, 600.0]);
     click_at_mod(&mut world, &mut h, [424.0, 598.0], true);
 
-    let ids = highlight::all_sprite_ids();
+    let ids = &highlight::ids().sprites;
     let ring = |world: &World, i: usize| {
         world
             .get_by_id::<Sprite>(ids[i])

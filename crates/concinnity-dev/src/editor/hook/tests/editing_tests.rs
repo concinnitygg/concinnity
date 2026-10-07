@@ -57,7 +57,7 @@ fn field_snapshot_carries_typed_text_across_a_reinjection() {
 fn the_search_field_narrows_the_picker_while_it_is_open() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     h.apply_panel(PanelAction::TogglePicker, &mut world);
     set_field(&mut world, assets_panel::SEARCH_INPUT, "pointlight");
     let opts = h.picker_options(&world).unwrap();
@@ -73,16 +73,16 @@ fn the_search_field_narrows_the_picker_while_it_is_open() {
 fn plus_picker_then_name_form_adds_the_entry() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     // "+" opens the picker, which types into the search field (the draw
     // asserts that focus onto the control each frame).
     h.apply_panel(PanelAction::TogglePicker, &mut world);
-    assert!(h.picker_open && h.search_focus);
+    assert!(h.assets.picker_open && h.assets.search_focus);
     // Pick the first offered type -> AddForm, name field prefilled + focused.
     let ty = h.picker_options(&world).unwrap()[0].name.clone();
     h.apply_panel(PanelAction::PickOption(0), &mut world);
     assert!(h.form_open());
-    assert!(!h.picker_open);
+    assert!(!h.assets.picker_open);
     assert_eq!(h.form.selected_type.as_deref(), Some(ty.as_str()));
     assert!((h.form.target == FormTarget::New));
     let name_field = world
@@ -103,14 +103,14 @@ fn plus_picker_then_name_form_adds_the_entry() {
 fn row_click_opens_the_edit_form_for_a_rename() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     seed_tree(&mut h, Vec::new());
     // Clicking the name row opens the edit form prefilled for a rename.
     click_row(&mut h, "lamp", &mut world);
     assert!(h.form_open());
     assert_eq!(h.form.target, entry_target(&h, 0));
     assert_eq!(h.form.selected_type.as_deref(), Some("PointLight"));
-    assert!(h.row_menu.is_none());
+    assert!(h.assets.row_menu.is_none());
     let name_field = world
         .get_by_id::<TextInput>(form_panel::NAME_INPUT)
         .unwrap();
@@ -130,7 +130,7 @@ fn row_click_opens_the_edit_form_for_a_rename() {
 fn renaming_an_asset_through_the_form_keeps_it_selected() {
     let mut h = hook(vec![entry("floor", "Decal"), entry("lamp", "PointLight")]);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     seed_tree(&mut h, Vec::new());
     click_row(&mut h, "lamp", &mut world);
     assert_eq!(active(&h).as_deref(), Some("lamp"));
@@ -153,7 +153,7 @@ fn renaming_an_asset_through_the_form_keeps_it_selected() {
 fn deleting_an_earlier_entry_leaves_the_selection_on_its_own_member() {
     let mut h = hook(vec![entry("a", "Decal"), entry("b", "Decal")]);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     seed_tree(&mut h, Vec::new());
     select(&mut h, &["b"]);
 
@@ -168,14 +168,14 @@ fn deleting_an_earlier_entry_leaves_the_selection_on_its_own_member() {
 fn row_menu_delete_removes_the_entry() {
     let mut h = hook(vec![entry("a", "Decal"), entry("b", "Decal")]);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     seed_tree(&mut h, Vec::new());
     let (g, i) = row_of(&h, "a");
     h.apply_panel(PanelAction::OpenRowMenu(g, i), &mut world);
     h.apply_panel(PanelAction::RowDelete, &mut world);
     assert_eq!(h.entries.len(), 1);
     assert_eq!(h.entries[0]["args"]["$id"], "b");
-    assert!(h.dirty && h.row_menu.is_none());
+    assert!(h.dirty && h.assets.row_menu.is_none());
 }
 
 #[test]
@@ -282,7 +282,7 @@ fn config_singleton_picker_edits_existing_else_adds() {
         "type": "GraphicsConfig", "args": {"$id": "gfx"}
     })]);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     h.apply_panel(PanelAction::TogglePicker, &mut world);
     let gi = h
         .picker_options(&world)
@@ -310,7 +310,7 @@ fn config_singleton_picker_edits_existing_else_adds() {
     // A world WITHOUT the singleton: picking it opens a fresh add.
     let mut h2 = hook(Vec::new());
     let mut world2 = world_with_fields();
-    h2.panel_open = true;
+    h2.open[PanelKey::Assets] = true;
     h2.apply_panel(PanelAction::TogglePicker, &mut world2);
     let wi = h2
         .picker_options(&world2)
@@ -347,7 +347,7 @@ fn cancel_form_returns_to_the_list_without_adding() {
 fn picker_lists_types_alphabetically() {
     let mut h = hook(Vec::new());
     let world = world_with_fields();
-    h.picker_open = true;
+    h.assets.picker_open = true;
     let opts = h.picker_options(&world).unwrap();
     let names: Vec<&str> = opts.iter().map(|o| o.name.as_str()).collect();
     let mut sorted = names.clone();
@@ -369,11 +369,11 @@ fn picker_lists_types_alphabetically() {
 fn close_overlays_dismisses_the_picker_and_row_menu() {
     let mut h = hook(vec![entry("a", "Decal")]);
     let mut world = world_with_fields();
-    h.picker_open = true;
-    h.row_menu = Some(h.handle_for("a"));
+    h.assets.picker_open = true;
+    h.assets.row_menu = Some(h.handle_for("a"));
     h.apply_panel(PanelAction::CloseOverlays, &mut world);
-    assert!(!h.picker_open);
-    assert!(h.row_menu.is_none());
+    assert!(!h.assets.picker_open);
+    assert!(h.assets.row_menu.is_none());
 }
 
 // Clicking an asset's name row in the browse list (not just its row menu)
@@ -381,7 +381,7 @@ fn close_overlays_dismisses_the_picker_and_row_menu() {
 #[test]
 fn clicking_a_list_row_opens_its_edit_form() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     seed_tree(&mut h, Vec::new());
     let vp = [1280.0, 720.0];
     let po = h.origin(PanelKey::Assets, vp);
@@ -416,7 +416,7 @@ fn clicking_a_list_row_opens_its_edit_form() {
 fn deleting_an_unrelated_entry_leaves_the_open_form_on_its_own() {
     let mut h = hook(vec![entry("a", "Decal"), entry("b", "Decal")]);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     // Edit "b" (index 1), then delete "a" (index 0): "b" slides to 0 and the
     // form is still on it.
     seed_tree(&mut h, Vec::new());
@@ -440,7 +440,7 @@ fn deleting_an_unrelated_entry_leaves_the_open_form_on_its_own() {
     // Deleting the edited entry itself closes the form.
     let mut h2 = hook(vec![entry("a", "Decal")]);
     let mut world2 = world_with_fields();
-    h2.panel_open = true;
+    h2.open[PanelKey::Assets] = true;
     seed_tree(&mut h2, Vec::new());
     let target = entry_target(&h2, 0);
     h2.open_form(&mut world2, "Decal".to_string(), target);
@@ -454,7 +454,7 @@ fn deleting_an_unrelated_entry_leaves_the_open_form_on_its_own() {
 fn add_form_writes_edited_arg_values() {
     let mut h = hook(Vec::new());
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     h.apply_panel(PanelAction::TogglePicker, &mut world);
     // Pick a type with a float arg through the real picker->pick path.
     let ty = "PointLight".to_string();
@@ -624,7 +624,7 @@ fn add_form_ref_field_offers_every_target_type() {
         entry("grass_tex", "Texture"),
     ]);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     h.open_form(&mut world, "Prop".to_string(), FormTarget::New);
     let parent = h
         .form
@@ -642,7 +642,7 @@ fn add_form_ref_field_offers_and_persists_an_existing_asset() {
         entry("stone_tex", "Texture"),
     ]);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     // Add a Decal: its `texture` reference offers the two existing Textures.
     h.open_form(&mut world, "Decal".to_string(), FormTarget::New);
     let idx = h
@@ -691,7 +691,7 @@ fn add_form_ref_field_dropdown_picks_and_persists() {
     }
     let mut h = hook(entries);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     h.open_form(&mut world, "Decal".to_string(), FormTarget::New);
     let idx = h
         .form
@@ -755,7 +755,7 @@ fn scrolling_advances_an_open_field_dropdown() {
     }
     let mut h = hook(entries);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     h.open_form(&mut world, "Decal".to_string(), FormTarget::New);
     let idx = h
         .form
@@ -1050,13 +1050,13 @@ fn invalid_arg_keeps_the_form_open_with_an_error() {
 fn toggling_the_assets_panel_keeps_the_open_form_state() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     let target = entry_target(&h, 0);
     h.open_form(&mut world, "PointLight".to_string(), target);
     assert!(h.form_open() && h.form.target == entry_target(&h, 0));
     // Toggle the assets UI off: the form + selection are kept, not discarded.
     h.toggle_view_row(0, &mut world);
-    assert!(!h.panel_open);
+    assert!(!h.open[PanelKey::Assets]);
     assert!(
         h.form_open(),
         "the form is kept when the panel is toggled off"
@@ -1068,7 +1068,7 @@ fn toggling_the_assets_panel_keeps_the_open_form_state() {
     );
     // Toggle back on: the same form and selection are restored.
     h.toggle_view_row(0, &mut world);
-    assert!(h.panel_open && h.form_open());
+    assert!(h.open[PanelKey::Assets] && h.form_open());
     assert_eq!(h.form.target, entry_target(&h, 0));
 }
 
@@ -1083,7 +1083,7 @@ fn a_hidden_assets_panel_hides_the_form_elements() {
         ..Default::default()
     });
     let mut h = hook(vec![entry("lamp", "PointLight")]);
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     let target = entry_target(&h, 0);
     h.open_form(&mut world, "PointLight".to_string(), target);
     let form_shown = |w: &World| w.get_by_id::<Sprite>(form_panel::EDIT_BG).unwrap().visible;
@@ -1106,7 +1106,7 @@ fn edit_form_seeds_and_updates_existing_args() {
         "type": "PointLight", "args": {"$id": "lamp"}
     })]);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     seed_tree(&mut h, Vec::new());
     click_row(&mut h, "lamp", &mut world);
     assert_eq!(h.form.target, entry_target(&h, 0));

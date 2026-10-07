@@ -24,7 +24,7 @@ fn hook(entries: Vec<serde_json::Value>) -> EditorHook {
 // A world holding the palette's query field.
 fn palette_world() -> World {
     let mut world = World::new();
-    for id in palette::panel::all_field_ids() {
+    for id in palette::panel::ids().field_ids() {
         world.push_identified(id, TextInput::default());
     }
     world
@@ -54,10 +54,13 @@ fn either_platform_modifier_opens_the_palette() {
         let mut h = hook(Vec::new());
         let mut world = palette_world();
         h.drive_palette_toggle(&chord(InputKey::K, ctrl, cmd), &mut world);
-        assert!(h.palette.open, "ctrl={ctrl} cmd={cmd} did not open it");
+        assert!(
+            h.open[PanelKey::Palette],
+            "ctrl={ctrl} cmd={cmd} did not open it"
+        );
         // The same chord closes it again.
         h.drive_palette_toggle(&chord(InputKey::K, ctrl, cmd), &mut world);
-        assert!(!h.palette.open);
+        assert!(!h.open[PanelKey::Palette]);
     }
 }
 
@@ -67,7 +70,7 @@ fn an_unmodified_k_leaves_the_palette_closed() {
     let mut h = hook(Vec::new());
     let mut world = palette_world();
     h.drive_palette_toggle(&chord(InputKey::K, false, false), &mut world);
-    assert!(!h.palette.open);
+    assert!(!h.open[PanelKey::Palette]);
 }
 
 // Opening blurs the field for one frame, so the keypress that opened it cannot
@@ -133,8 +136,8 @@ fn committing_a_panel_row_opens_it() {
     h.palette.pick = at;
 
     h.palette_keys(&mut world, &chord(InputKey::Enter, false, false));
-    assert!(!h.palette.open, "committing closes the palette");
-    assert!(h.variables_open, "the panel opened");
+    assert!(!h.open[PanelKey::Palette], "committing closes the palette");
+    assert!(h.open[PanelKey::Variables], "the panel opened");
     assert_eq!(
         h.panel_order.last().copied(),
         Some(PanelKey::Variables),
@@ -158,7 +161,10 @@ fn committing_an_argument_command_seeds_command_mode() {
     h.palette.pick = at;
 
     h.palette_keys(&mut world, &chord(InputKey::Enter, false, false));
-    assert!(h.palette.open, "the palette stays up for the arguments");
+    assert!(
+        h.open[PanelKey::Palette],
+        "the palette stays up for the arguments"
+    );
     assert_eq!(widget::field_text(&world, palette::panel::INPUT), "/add ");
 }
 
@@ -204,7 +210,7 @@ fn a_press_outside_dismisses_without_reaching_the_world() {
         !h.route_palette_dismiss(&inside, vp),
         "a press on the palette is left to its own hit test"
     );
-    assert!(h.palette.open);
+    assert!(h.open[PanelKey::Palette]);
 
     let outside = FrameInput {
         mouse_x: o[0] - 40.0,
@@ -215,7 +221,7 @@ fn a_press_outside_dismisses_without_reaching_the_world() {
         h.route_palette_dismiss(&outside, vp),
         "the press is claimed"
     );
-    assert!(!h.palette.open);
+    assert!(!h.open[PanelKey::Palette]);
 }
 
 // The world's assets reach the palette: a behavior is offered as an asset row

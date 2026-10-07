@@ -30,7 +30,7 @@ const DELETE_LABEL: [f32; 3] = [0.95, 0.60, 0.58];
 // element (`None`).
 pub(crate) fn place(world: &mut World, view: Option<&WorldsView>, o: [f32; 2]) {
     let Some(view) = view else {
-        hide_all(world);
+        ids().hide(world);
         return;
     };
     let m = *view.layout.metrics();
@@ -330,7 +330,7 @@ mod tests {
     const INSET: f32 = 28.0;
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])
+        ids().test_world()
     }
 
     fn rows(n: usize) -> Vec<WorldRow> {

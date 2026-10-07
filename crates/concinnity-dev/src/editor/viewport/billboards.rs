@@ -18,15 +18,10 @@ use concinnity_core::components::Sprite;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
+use crate::editor::hud_ids::{Family, family_base, hud_ids};
 use crate::editor::outlines::shapes::{BOX_EDGES, EDGES};
-use crate::editor::panels::registry::ID_BASE;
 use crate::editor::theme;
 use crate::editor::widget;
-
-// Reserved id family: the next free block after the panel families below 0x1000.
-// Icons at +0x00, their glyph labels at +0x40, and the drag ghost's dotted box
-// run at +0x100 (0x10 per edge).
-const BILLBOARD_BASE: u32 = ID_BASE + 0x1000;
 
 // Icon pool size, bounding the per-frame sprite cost; entries past the pool
 // simply draw no icon (they stay pickable through the Assets tree).
@@ -53,30 +48,15 @@ const MEMBER_TINT: [f32; 4] = [0.20, 0.30, 0.45, 1.0];
 pub(crate) const EDGE_SEGMENTS: usize = 6;
 const SEGMENT_PX: f32 = 3.0;
 
-fn icon_id(i: usize) -> AssetId {
-    AssetId(BILLBOARD_BASE + i as u32)
-}
-
-fn glyph_id(i: usize) -> AssetId {
-    AssetId(BILLBOARD_BASE + 0x40 + i as u32)
+// The icons, then the dotted box run edge after edge; the icons' glyphs.
+hud_ids! {
+    base: family_base(Family::Billboards);
+    sprites: [icon_id[MAX_BILLBOARDS], box_dot[BOX_EDGES * EDGE_SEGMENTS]];
+    labels: [glyph_id[MAX_BILLBOARDS]];
 }
 
 fn box_segment_id(edge: usize, seg: usize) -> AssetId {
-    AssetId(BILLBOARD_BASE + 0x100 + edge as u32 * 0x10 + seg as u32)
-}
-
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut out: Vec<AssetId> = (0..MAX_BILLBOARDS).map(icon_id).collect();
-    for edge in 0..BOX_EDGES {
-        for seg in 0..EDGE_SEGMENTS {
-            out.push(box_segment_id(edge, seg));
-        }
-    }
-    out
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    (0..MAX_BILLBOARDS).map(glyph_id).collect()
+    box_dot(edge * EDGE_SEGMENTS + seg)
 }
 
 // Billboard-eligible: a registered component type that never renders (the
@@ -372,14 +352,7 @@ pub(crate) fn hide_outline(world: &mut World) {
 }
 
 pub(crate) fn hide(world: &mut World) {
-    for id in all_sprite_ids() {
-        if let Some(s) = sprite_mut(world, id) {
-            s.visible = false;
-        }
-    }
-    for id in all_label_ids() {
-        widget::set_label_visible(world, id, false);
-    }
+    ids().hide(world);
 }
 
 fn sprite_mut(world: &mut World, id: AssetId) -> Option<&mut Sprite> {
@@ -515,13 +488,12 @@ mod tests {
         assert_eq!(box_outline(&view, FOV, VP, &behind, [1.0; 3]), None);
     }
 
+    // The dotted box draws edge after edge, after the icons.
     #[test]
-    fn id_family_is_contiguous_and_unique() {
-        let sprites = all_sprite_ids();
-        let labels = all_label_ids();
-        assert_eq!(sprites.len(), MAX_BILLBOARDS + BOX_EDGES * EDGE_SEGMENTS);
-        assert_eq!(labels.len(), MAX_BILLBOARDS);
-        let unique: std::collections::HashSet<_> = sprites.iter().chain(labels.iter()).collect();
-        assert_eq!(unique.len(), sprites.len() + labels.len());
+    fn box_segments_run_in_draw_order() {
+        let dots: Vec<AssetId> = (0..BOX_EDGES)
+            .flat_map(|edge| (0..EDGE_SEGMENTS).map(move |seg| box_segment_id(edge, seg)))
+            .collect();
+        assert_eq!(dots, ids().sprites[MAX_BILLBOARDS..]);
     }
 }

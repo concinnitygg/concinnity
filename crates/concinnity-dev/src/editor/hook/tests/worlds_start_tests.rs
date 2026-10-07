@@ -99,10 +99,10 @@ fn row_mid(h: &EditorHook, i: usize) -> (f32, f32) {
 fn the_start_screen_suppresses_the_top_bar_and_every_other_panel() {
     let mut h = EditorHook::new("unused.jsonl".to_string(), Vec::new()).with_start_screen(None);
     // Panels a session would have open behind it.
-    h.panel_open = true;
-    h.preview_open = true;
-    h.console.open = true;
-    h.view_open = true;
+    h.open[PanelKey::Assets] = true;
+    h.open[PanelKey::Preview] = true;
+    h.open[PanelKey::Console] = true;
+    h.open[PanelKey::View] = true;
 
     assert!(!h.hud_state().visible, "the top bar is not drawn");
     assert!(h.panel_shown(PanelKey::Worlds));
@@ -137,10 +137,10 @@ fn the_loading_cover_takes_the_render_and_leaves_the_listing() {
     let mut h = booting_hook(dir.path(), Some("lobby"));
     h.viewport = VP;
     let mut world = World::new();
-    for id in worlds::loading::all_sprite_ids() {
+    for &id in &worlds::loading::ids().sprites {
         world.push_identified(id, Sprite::default());
     }
-    for id in worlds::loading::all_label_ids() {
+    for &id in &worlds::loading::ids().labels {
         world.push_identified(id, TextLabel::default());
     }
     h.drive_loading_draw(&mut world, true);
@@ -163,7 +163,7 @@ fn the_loading_cover_takes_the_render_and_leaves_the_listing() {
     let layers = h.compute_layers();
     let cover_layer = layers[&worlds::loading::COVER];
     assert!(cover_layer > layers[&worlds::cinematic::FADE]);
-    for id in EditorHook::panel_ids(PanelKey::Worlds) {
+    for id in registry::panel(PanelKey::Worlds).ids().all() {
         assert!(layers[&id] > cover_layer, "the listing draws over it");
     }
 
@@ -356,7 +356,10 @@ fn selecting_a_row_previews_it_without_retargeting_the_session() {
         "and swapped in on the next frame"
     );
     assert_eq!(h.world_path, placeholder, "the session was not retargeted");
-    assert!(h.start_mode && h.worlds.open, "the screen stays up over it");
+    assert!(
+        h.start_mode && h.open[PanelKey::Worlds],
+        "the screen stays up over it"
+    );
     assert!(!h.dirty && !h.can_undo(), "a preview is not an edit");
     assert_eq!(h.saved, h.entries, "and never reads as unsaved");
     let view = h.make_worlds_view([0.0, 0.0]);
@@ -427,7 +430,7 @@ fn opening_the_previewed_world_commits_it_without_rebuilding() {
         "the adopted world keeps its template baselines"
     );
     assert!(!h.start_mode, "the start screen is over for the session");
-    assert!(!h.worlds.open);
+    assert!(!h.open[PanelKey::Worlds]);
     assert!(h.worlds.selected.is_none() && h.worlds.preview.is_none());
     assert!(h.hud_state().visible && h.panel_shown(PanelKey::Preview));
 
@@ -606,7 +609,7 @@ fn an_in_session_row_click_opens_behind_the_guard_and_never_previews() {
     write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
-    h.worlds.open = true;
+    h.open[PanelKey::Worlds] = true;
     h.entries.push(prop_entry("crate_b"));
     h.mark_changed();
     h.rebuild_preview = false;
@@ -665,8 +668,11 @@ fn start_mode_routing_reaches_the_panel_and_nothing_else() {
 
     // Where the top bar would be: it is not drawn, so its chips resolve nothing.
     click_at(&mut h, &mut world, VP[0] - 20.0, hud::BAR_H * 0.5);
-    assert!(!h.view_open, "no View panel behind a bar that is not there");
-    assert!(h.start_mode && h.worlds.open);
+    assert!(
+        !h.open[PanelKey::View],
+        "no View panel behind a bar that is not there"
+    );
+    assert!(h.start_mode && h.open[PanelKey::Worlds]);
 
     // A row press previews that world.
     let arena = world_row_index(&h, "arena");
@@ -721,7 +727,7 @@ fn the_row_menus_open_commits_that_row() {
     );
 
     assert_eq!(h.world_path, lobby.to_string_lossy());
-    assert!(!h.start_mode && !h.worlds.open);
+    assert!(!h.start_mode && !h.open[PanelKey::Worlds]);
     assert!(
         !h.rebuild_preview,
         "the chip commits what is already showing"

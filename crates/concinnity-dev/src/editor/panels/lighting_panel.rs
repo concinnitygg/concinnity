@@ -8,39 +8,34 @@
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
 use super::form::{FieldKind, FormField};
 use super::lighting::{self, Row};
-use super::registry::{self, PanelKey};
+use super::registry::PanelKey;
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 
-const BASE: u32 = registry::base(PanelKey::Lighting);
-pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-pub(crate) const TITLE_LABEL: AssetId = AssetId(BASE + 2);
-pub(crate) const CLOSE_BG: AssetId = AssetId(BASE + 3);
-pub(crate) const CLOSE_LABEL: AssetId = AssetId(BASE + 4);
-pub(crate) const APPLY_BG: AssetId = AssetId(BASE + 5);
-pub(crate) const APPLY_LABEL: AssetId = AssetId(BASE + 6);
-pub(crate) const STATUS_LABEL: AssetId = AssetId(BASE + 7);
-
-// Per-row chrome (row index) and per-binding controls (global binding index);
-// the sub-ranges stay disjoint for any plausible row / binding count.
-pub(crate) fn row_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x20 + i as u32)
-}
-pub(crate) fn row_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x40 + i as u32)
-}
-pub(crate) fn input(b: usize) -> AssetId {
-    AssetId(BASE + 0x60 + b as u32)
-}
-pub(crate) fn check_bg(b: usize) -> AssetId {
-    AssetId(BASE + 0x80 + b as u32)
-}
-pub(crate) fn swatch(b: usize) -> AssetId {
-    AssetId(BASE + 0xA0 + b as u32)
+// Chrome first, then the row backgrounds (per row), then the floating controls
+// above them (per binding).
+hud_ids! {
+    base: panel_base(PanelKey::Lighting);
+    sprites: [
+        pub(crate) PANEL_BG,
+        pub(crate) CLOSE_BG,
+        pub(crate) APPLY_BG,
+        pub(crate) row_bg[max_rows()],
+        pub(crate) check_bg[lighting::binding_count()],
+        pub(crate) swatch[lighting::binding_count()],
+    ];
+    labels: [
+        pub(crate) TITLE_LABEL,
+        pub(crate) CLOSE_LABEL,
+        pub(crate) APPLY_LABEL,
+        pub(crate) STATUS_LABEL,
+        pub(crate) row_label[max_rows()],
+    ];
+    fields: [pub(crate) input[lighting::binding_count()] = ""];
 }
 
 // Geometry, in window pixels. Every rect derives from the panel origin `o` (the
@@ -205,13 +200,8 @@ pub(crate) fn hit_test(
     point_in(mx, my, widget::outer_rect(o, s)).then_some(LightingAction::Consume)
 }
 
-// Position + show the panel (`Some(view)`) at effective size `s`, or blank every
-// element (`None`).
-pub(crate) fn place(world: &mut World, view: Option<&LightingView>, o: [f32; 2], s: [f32; 2]) {
-    let Some(view) = view else {
-        hide_all(world);
-        return;
-    };
+// Position + show the panel at effective size `s`.
+pub(crate) fn place(world: &mut World, view: &LightingView, o: [f32; 2], s: [f32; 2]) {
     let w = s[0];
     let n = view.rows.len();
     widget::place_panel(world, PANEL_BG, widget::outer_rect(o, s));
@@ -343,34 +333,8 @@ pub(crate) fn place(world: &mut World, view: Option<&LightingView>, o: [f32; 2],
 
 // The largest row count the panel can show: every section header plus every
 // binding (an absent section's add row never exceeds its field rows).
-pub(crate) fn max_rows() -> usize {
+pub(crate) const fn max_rows() -> usize {
     lighting::SECTIONS.len() + lighting::binding_count()
-}
-
-// Hide every panel element, blurring the typed fields so a hidden field cannot
-// keep keyboard focus.
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &all_field_ids());
-}
-
-// Every panel sprite id, in draw (insertion) order: chrome first, then the row
-// backgrounds, then the floating per-binding controls above them.
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, CLOSE_BG, APPLY_BG];
-    ids.extend((0..max_rows()).map(row_bg));
-    ids.extend((0..lighting::binding_count()).map(check_bg));
-    ids.extend((0..lighting::binding_count()).map(swatch));
-    ids
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![TITLE_LABEL, CLOSE_LABEL, APPLY_LABEL, STATUS_LABEL];
-    ids.extend((0..max_rows()).map(row_label));
-    ids
-}
-
-pub(crate) fn all_field_ids() -> Vec<AssetId> {
-    (0..lighting::binding_count()).map(input).collect()
 }
 
 #[cfg(test)]
@@ -379,7 +343,7 @@ mod tests {
     use concinnity_core::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &all_field_ids())
+        ids().test_world()
     }
 
     fn all_present_view<'a>(
@@ -462,7 +426,7 @@ mod tests {
         let fields = derived_fields();
         let view = all_present_view(&rows, &fields);
         let o = [20.0, 20.0];
-        place(&mut world, Some(&view), o, size(rows.len()));
+        place(&mut world, &view, o, size(rows.len()));
         let title = world.get_by_id::<TextLabel>(TITLE_LABEL).unwrap();
         assert!(title.visible && title.content == "Lighting");
         let header = world.get_by_id::<TextLabel>(row_label(0)).unwrap();
@@ -505,7 +469,7 @@ mod tests {
         let fields_all = derived_fields();
         place(
             &mut world,
-            Some(&all_present_view(&rows_all, &fields_all)),
+            &all_present_view(&rows_all, &fields_all),
             [20.0, 20.0],
             size(rows_all.len()),
         );
@@ -518,7 +482,7 @@ mod tests {
         }
         place(
             &mut world,
-            Some(&all_present_view(&rows, &fields)),
+            &all_present_view(&rows, &fields),
             [20.0, 20.0],
             size(rows.len()),
         );
@@ -532,23 +496,6 @@ mod tests {
         let i = rows.iter().position(|r| *r == Row::Add(1)).unwrap();
         let add = world.get_by_id::<TextLabel>(row_label(i)).unwrap();
         assert_eq!(add.content, "+ Add VolumetricFog");
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let mut world = injected_world();
-        let rows = lighting::rows(&[true, true, true, true]);
-        let fields = derived_fields();
-        place(
-            &mut world,
-            Some(&all_present_view(&rows, &fields)),
-            [20.0, 20.0],
-            size(rows.len()),
-        );
-        place(&mut world, None, [0.0, 0.0], size(0));
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
-        assert!(world.query::<TextInput>().all(|t| !t.visible));
     }
 
     #[test]

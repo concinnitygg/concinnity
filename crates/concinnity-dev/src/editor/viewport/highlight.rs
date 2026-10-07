@@ -10,15 +10,18 @@ use concinnity_core::components::Sprite;
 use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
-use crate::editor::panels::registry::ID_BASE;
+use crate::editor::hud_ids::{Family, family_base, hud_ids};
 use crate::editor::theme;
 
-// Reserved id family: the next free block after the Health panel's 0xB00.
-const OUTLINE_BASE: u32 = ID_BASE + 0xC00;
 // Ring pool size, bounding the per-frame sprite cost; a selection larger than
 // this keeps every member (gizmo and commit included) but only rings the
 // first `MAX_RINGS`.
 pub(crate) const MAX_RINGS: usize = 32;
+
+hud_ids! {
+    base: family_base(Family::Highlight);
+    sprites: [ring_id[MAX_RINGS]];
+}
 
 const BORDER_W: f32 = 2.0;
 // Breathing room so the ring does not sit flush on the object's silhouette.
@@ -28,20 +31,13 @@ const PAD_PX: f32 = 3.0;
 // glance.
 const MEMBER_TINT: [f32; 4] = [0.20, 0.30, 0.45, 1.0];
 
-fn ring_id(i: usize) -> AssetId {
-    AssetId(OUTLINE_BASE + i as u32)
-}
-
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    (0..MAX_RINGS).map(ring_id).collect()
-}
-
 // The injected pool: invisible until the tick places them, transparent fill,
 // accent border rings.
 pub(crate) fn outline_sprites() -> Vec<(AssetId, Sprite)> {
-    all_sprite_ids()
-        .into_iter()
-        .map(|id| {
+    ids()
+        .sprites
+        .iter()
+        .map(|&id| {
             let ring = Sprite {
                 tint: [0.0, 0.0, 0.0, 0.0],
                 border_width: BORDER_W,
@@ -131,7 +127,7 @@ pub(crate) fn screen_rect(
 // Show one ring per `(rect, is_active)` entry (rects past the pool are
 // dropped) and hide the rest of the pool.
 pub(crate) fn place_all(world: &mut World, rects: &[([f32; 4], bool)]) {
-    for (i, id) in all_sprite_ids().into_iter().enumerate() {
+    for (i, &id) in ids().sprites.iter().enumerate() {
         let Some(s) = sprite_mut(world, id) else {
             continue;
         };

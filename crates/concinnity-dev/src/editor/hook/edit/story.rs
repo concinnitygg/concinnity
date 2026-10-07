@@ -65,7 +65,9 @@ impl EditorHook {
     // Whether the text area holds the keyboard: focused by a press and the
     // panel frontmost.
     pub(in crate::editor::hook) fn story_typing(&self) -> bool {
-        self.story.open && self.story.focus && self.panel_order.last() == Some(&PanelKey::Story)
+        self.open[PanelKey::Story]
+            && self.story.focus
+            && self.panel_order.last() == Some(&PanelKey::Story)
     }
 
     // The text area laid out in the panel as it stands, with the view it shows

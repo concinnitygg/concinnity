@@ -27,26 +27,27 @@ pub(in crate::editor::hook) const VISUAL_TYPES: [RegisteredType; 7] = [
 impl EditorHook {
     // The type chip's caption for the current cycle position.
     pub(in crate::editor::hook) fn content_type_caption(&self) -> &'static str {
-        match self.content_type {
+        match self.content.type_chip {
             0 => "All",
             i => VISUAL_TYPES[(i - 1).min(VISUAL_TYPES.len() - 1)].as_str(),
         }
     }
 
     pub(in crate::editor::hook) fn cycle_content_type(&mut self) {
-        self.content_type = (self.content_type + 1) % (VISUAL_TYPES.len() + 1);
-        self.content_scroll = 0;
+        self.content.type_chip = (self.content.type_chip + 1) % (VISUAL_TYPES.len() + 1);
+        self.content.scroll = 0;
     }
 
     // Every visual asset under the current type filter and search query, best
     // match first: `(name, type)` pairs over the cooked tree.
     pub(super) fn content_items(&self, world: &World) -> Vec<(String, RegisteredType)> {
         let mut items: Vec<(String, RegisteredType)> = self
-            .tree_groups
+            .assets
+            .groups
             .iter()
             .flat_map(|g| g.assets.iter())
             .filter(|a| VISUAL_TYPES.contains(&a.asset_type))
-            .filter(|a| match self.content_type {
+            .filter(|a| match self.content.type_chip {
                 0 => true,
                 i => a.asset_type == VISUAL_TYPES[i - 1],
             })
@@ -72,7 +73,7 @@ impl EditorHook {
         let items = self.content_items(world);
         let thumbs = thumbs::injected();
         let selected = self.selected_names();
-        let first = self.content_scroll * content_panel::COLS;
+        let first = self.content.scroll * content_panel::COLS;
         let cells = items
             .iter()
             .skip(first)
@@ -91,7 +92,7 @@ impl EditorHook {
         let total = self.content_items(world).len();
         let rows = total.div_ceil(content_panel::COLS);
         let max = rows.saturating_sub(content_panel::GRID_ROWS);
-        self.content_scroll = scroll_step(self.content_scroll, delta, max);
+        self.content.scroll = scroll_step(self.content.scroll, delta, max);
     }
 
     pub(in crate::editor::hook) fn apply_content_action(
@@ -102,18 +103,18 @@ impl EditorHook {
     ) {
         match action {
             ContentAction::FocusSearch => {
-                self.content_search_focus = true;
+                self.content.search_focus = true;
                 let text = widget::field_text(world, content_panel::SEARCH_INPUT);
                 widget::focus_field_with(world, content_panel::SEARCH_INPUT, &text);
             }
             ContentAction::CycleType => {
-                self.content_search_focus = false;
+                self.content.search_focus = false;
                 self.cycle_content_type();
             }
             ContentAction::SelectCell(slot) => {
-                self.content_search_focus = false;
+                self.content.search_focus = false;
                 let items = self.content_items(world);
-                let index = self.content_scroll * content_panel::COLS + slot;
+                let index = self.content.scroll * content_panel::COLS + slot;
                 if let Some((name, ty)) = items.get(index) {
                     if self.shift_held {
                         self.toggle_named(name);
@@ -124,7 +125,7 @@ impl EditorHook {
                     }
                 }
             }
-            ContentAction::Consume => self.content_search_focus = false,
+            ContentAction::Consume => self.content.search_focus = false,
         }
     }
 }

@@ -3,13 +3,12 @@
 
 use crate::editor::palette::{self, PaletteItem};
 
-// Shown state, a one-frame focus blur after the Ctrl+K open, the query mirrored
+// A one-frame focus blur after the Ctrl+K open, the query mirrored
 // off its field once a frame, the item list built on open with the matches the
 // query keeps, the highlighted match with its window scroll, and the labels of
 // recent commits (session state, the empty query's launch list).
 #[derive(Debug, Default)]
 pub(in crate::editor::hook) struct PaletteState {
-    pub(in crate::editor::hook) open: bool,
     pub(in crate::editor::hook) blur: bool,
     pub(in crate::editor::hook) query: String,
     pub(in crate::editor::hook) items: Vec<PaletteItem>,

@@ -28,8 +28,8 @@ impl EditorHook {
     // injected form-field length cap (inline JSON runs long); closing
     // releases focus.
     pub(in crate::editor::hook) fn toggle_console(&mut self, world: &mut World) {
-        self.console.open = !self.console.open;
-        if self.console.open {
+        self.open[PanelKey::Console] = !self.open[PanelKey::Console];
+        if self.open[PanelKey::Console] {
             self.console.focus = true;
             self.console.pinned = true;
             widget::seed_field(world, console_panel::INPUT, "");
@@ -58,7 +58,7 @@ impl EditorHook {
             return;
         }
         self.toggle_console(world);
-        if self.console.open {
+        if self.open[PanelKey::Console] {
             // The same keypress queues a '`' character too; one unfocused
             // frame keeps it out of the fresh command line.
             self.console.blur = true;
@@ -265,7 +265,7 @@ impl EditorHook {
         };
         let ty = entry_type(&self.entries[idx]).unwrap_or("?").to_string();
         self.remove_entry_at(idx);
-        self.row_menu = None;
+        self.assets.row_menu = None;
         self.console_sink.info(&format!("removed '{name}' ({ty})"));
     }
 

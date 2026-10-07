@@ -5,23 +5,17 @@
 //! hook (`hook/drive/view_menu.rs`) owns the open state and routing.
 
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 pub(crate) use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
 
+use super::hud_ids::{Family, family_base, hud_ids};
 use super::outlines::{Category, CategorySet};
-use super::panels::registry::ID_BASE;
 use super::theme;
 use super::widget::{self, point_in};
 
-// Reserved id family: the next free block after the create menu's (0x6000).
-const BASE: u32 = ID_BASE + 0x7000;
-pub(crate) const MENU_BG: AssetId = AssetId(BASE);
-pub(crate) const HEADING: AssetId = AssetId(BASE + 1);
-fn row_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x10 + i as u32)
-}
-fn row_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x40 + i as u32)
+hud_ids! {
+    base: family_base(Family::DisplayMenu);
+    sprites: [pub(crate) MENU_BG, row_bg[row_count()]];
+    labels: [pub(crate) HEADING, row_label[row_count()]];
 }
 
 const MENU_W: f32 = 170.0;
@@ -64,7 +58,7 @@ pub(crate) fn rows() -> Vec<MenuRow> {
 
 // Kept allocation-free: the layout, hit test, and per-frame hide all call it,
 // and `rows_cover_every_mode_and_flag_once` pins it against `rows()`.
-pub(crate) fn row_count() -> usize {
+pub(crate) const fn row_count() -> usize {
     ViewMode::ALL.len() + 1 + ShowFlags::LABELED.len() + 1 + 1 + Category::LABELED.len()
 }
 
@@ -177,25 +171,14 @@ pub(crate) fn hide(world: &mut World) {
     }
 }
 
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    std::iter::once(MENU_BG)
-        .chain((0..row_count()).map(row_bg))
-        .collect()
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    std::iter::once(HEADING)
-        .chain((0..row_count()).map(row_label))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_core::ecs::asset_id::AssetId;
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])
+        ids().test_world()
     }
 
     fn state() -> MenuState {

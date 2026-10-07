@@ -6,7 +6,6 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "C ABI for embedding the Concinnity engine in a host application"
 readme = "README.md"
 keywords = ["gamedev", "engine", "ffi", "concinnity"]

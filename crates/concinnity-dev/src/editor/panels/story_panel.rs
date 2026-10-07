@@ -7,27 +7,38 @@
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
-use super::registry::{self, PanelKey};
+use super::registry::PanelKey;
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::text_area::TextArea;
 use crate::editor::text_area::layout::{self, Geometry, Metrics, TextAreaIds, TextAreaView};
 use crate::editor::text_area::markers::GutterMarker;
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 
-const BASE: u32 = registry::base(PanelKey::Story);
-pub(crate) const PANEL_BG: AssetId = AssetId(BASE);
-pub(crate) const TITLE_LABEL: AssetId = AssetId(BASE + 2);
-pub(crate) const CLOSE_BG: AssetId = AssetId(BASE + 3);
-pub(crate) const CLOSE_LABEL: AssetId = AssetId(BASE + 4);
-pub(crate) const APPLY_BG: AssetId = AssetId(BASE + 5);
-pub(crate) const APPLY_LABEL: AssetId = AssetId(BASE + 6);
-pub(crate) const PATH_LABEL: AssetId = AssetId(BASE + 7);
-pub(crate) const STATUS_LABEL: AssetId = AssetId(BASE + 8);
-pub(crate) const CREATE_BG: AssetId = AssetId(BASE + 9);
-pub(crate) const CREATE_LABEL: AssetId = AssetId(BASE + 10);
-pub(crate) const AREA: TextAreaIds = TextAreaIds::new(BASE + 0x100);
+// Chrome, then the create row, then the text area over the panel.
+hud_ids! {
+    base: panel_base(PanelKey::Story);
+    sprites: [
+        pub(crate) PANEL_BG,
+        pub(crate) CLOSE_BG,
+        pub(crate) APPLY_BG,
+        pub(crate) CREATE_BG,
+        ..AREA.sprite_ids(),
+    ];
+    labels: [
+        pub(crate) TITLE_LABEL,
+        pub(crate) CLOSE_LABEL,
+        pub(crate) APPLY_LABEL,
+        pub(crate) PATH_LABEL,
+        pub(crate) STATUS_LABEL,
+        pub(crate) CREATE_LABEL,
+    ];
+    code_labels: [..AREA.code_label_ids()];
+    blocks: [AREA_BASE: TextAreaIds::SPAN];
+}
+
+pub(crate) const AREA: TextAreaIds = TextAreaIds::new(AREA_BASE);
 
 // Geometry, in window pixels. Every rect derives from the panel origin `o`
 // (the title bar's top-left), so dragging the title bar moves the whole panel.
@@ -172,7 +183,7 @@ pub(crate) fn place(
     m: Metrics,
 ) {
     let Some(view) = view else {
-        hide_all(world);
+        ids().hide(world);
         return;
     };
     let w = s[0];
@@ -262,40 +273,11 @@ fn place_header(world: &mut World, view: &StoryView, o: [f32; 2], w: f32) {
     }
 }
 
-// Hide every panel element.
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
-    layout::hide(world, AREA);
-}
-
-// Every panel sprite id, in draw (insertion) order: chrome, then the create
-// row, then the text area over the panel.
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, CLOSE_BG, APPLY_BG, CREATE_BG];
-    ids.extend(AREA.sprite_ids());
-    ids
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    vec![
-        TITLE_LABEL,
-        CLOSE_LABEL,
-        APPLY_LABEL,
-        PATH_LABEL,
-        STATUS_LABEL,
-        CREATE_LABEL,
-    ]
-}
-
-// The labels drawn in the code face: the text area's lines and line numbers.
-pub(crate) fn code_label_ids() -> Vec<AssetId> {
-    AREA.code_label_ids()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_core::ecs::asset_id::AssetId;
 
     const M: Metrics = Metrics {
         line_h: 20.0,
@@ -305,9 +287,7 @@ mod tests {
     };
 
     fn injected_world() -> World {
-        let mut labels = all_label_ids();
-        labels.extend(code_label_ids());
-        crate::test_support::injected_world(&all_sprite_ids(), &labels, &[])
+        ids().test_world()
     }
 
     fn view(area: &TextArea) -> StoryView<'_> {
@@ -443,15 +423,5 @@ mod tests {
             .view()
             .rows;
         assert_eq!(max, layout::ROW_POOL);
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let mut world = injected_world();
-        let area = text(4);
-        place(&mut world, Some(&view(&area)), [20.0, 20.0], size(), M);
-        place(&mut world, None, [0.0, 0.0], size(), M);
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
     }
 }

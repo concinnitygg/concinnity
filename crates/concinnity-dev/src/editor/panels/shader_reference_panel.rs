@@ -4,25 +4,22 @@
 
 use concinnity_core::components::TextAlign;
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
-use super::registry::{self, PanelKey};
 use super::shader_reference::RefRow;
+use crate::editor::hud_ids::hud_ids;
 use crate::editor::text_area::layout::Metrics;
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 
-const BASE: u32 = registry::base(PanelKey::ShaderSource);
-const COLUMN_BG: AssetId = AssetId(BASE + 0x300);
 const POOL: usize = 48;
-fn row_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x340 + i as u32)
-}
-fn heading_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x380 + i as u32)
-}
-fn name_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x3C0 + i as u32)
+
+// Drawn inside the Shader source panel, in the block it reserves. The names are
+// in the code face.
+hud_ids! {
+    base: super::shader_source_panel::REFERENCE_BASE;
+    sprites: [COLUMN_BG, row_bg[POOL]];
+    labels: [heading_label[POOL]];
+    code_labels: [name_label[POOL]];
 }
 
 pub(crate) const COLUMN_W: f32 = 250.0;
@@ -71,7 +68,7 @@ pub(crate) fn hovered<'v, 'a>(view: &'v RefView<'a>, rect: [f32; 4]) -> Option<&
 // Position and show the column in `rect` (`Some(view)`), or blank it.
 pub(crate) fn place(world: &mut World, view: Option<&RefView>, rect: [f32; 4]) {
     let Some(view) = view else {
-        return hide_all(world);
+        return ids().hide(world);
     };
     place_rounded(
         world,
@@ -123,40 +120,18 @@ pub(crate) fn place(world: &mut World, view: Option<&RefView>, rect: [f32; 4]) {
     }
 }
 
-pub(crate) fn hide_all(world: &mut World) {
-    let mut labels = label_ids();
-    labels.extend(code_label_ids());
-    widget::hide_all(world, &sprite_ids(), &labels, &[]);
-}
-
-pub(crate) fn sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![COLUMN_BG];
-    ids.extend((0..POOL).map(row_bg));
-    ids
-}
-
-pub(crate) fn label_ids() -> Vec<AssetId> {
-    (0..POOL).map(heading_label).collect()
-}
-
-// The names, drawn in the code face.
-pub(crate) fn code_label_ids() -> Vec<AssetId> {
-    (0..POOL).map(name_label).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::editor::panels::shader_reference::Reference;
     use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_core::ecs::asset_id::AssetId;
     use concinnity_core::render::shader_programs::vocabulary::ENTRIES;
 
     const RECT: [f32; 4] = [100.0, 50.0, COLUMN_W, 10.0 * ROW_H + 2.0 * INSET];
 
     fn injected_world() -> World {
-        let mut labels = label_ids();
-        labels.extend(code_label_ids());
-        crate::test_support::injected_world(&sprite_ids(), &labels, &[])
+        ids().test_world()
     }
 
     fn label(world: &World, id: AssetId) -> TextLabel {
@@ -209,20 +184,5 @@ mod tests {
             None,
             "the inset"
         );
-    }
-
-    #[test]
-    fn hide_all_blanks_the_column() {
-        let mut world = injected_world();
-        let rows = Reference::default().rows(ENTRIES);
-        let view = RefView {
-            rows: &rows,
-            scroll: 0,
-            mouse: [0.0, 0.0],
-        };
-        place(&mut world, Some(&view), RECT);
-        place(&mut world, None, RECT);
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
     }
 }

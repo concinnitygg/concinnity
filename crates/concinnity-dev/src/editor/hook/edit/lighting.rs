@@ -81,10 +81,11 @@ impl EditorHook {
             // Assert keyboard focus only while the panel is frontmost, so its
             // inputs never fight another panel's focused field for typed keys.
             focus: self
-                .lighting_focus
+                .lighting
+                .focus
                 .filter(|_| self.panel_order.last() == Some(&PanelKey::Lighting)),
-            status: self.lighting_status.as_deref(),
-            dirty: self.lighting_touched,
+            status: self.lighting.status.as_deref(),
+            dirty: self.lighting.touched,
             mouse,
         }
     }
@@ -95,7 +96,7 @@ impl EditorHook {
     pub(in crate::editor::hook) fn seed_lighting(&mut self, world: &mut World) {
         // Re-seeded controls match the committed values again, so any
         // unapplied-edit marker is stale.
-        self.lighting_touched = false;
+        self.lighting.touched = false;
         for (b, field) in self.lighting_fields().iter().enumerate() {
             if let Some(f) = field
                 && f.kind.has_text_input()
@@ -112,12 +113,12 @@ impl EditorHook {
         world: &mut World,
     ) {
         match action {
-            LightingAction::Focus(b) => self.lighting_focus = Some(b),
+            LightingAction::Focus(b) => self.lighting.focus = Some(b),
             LightingAction::Toggle(b) => self.toggle_lighting_bool(b),
             LightingAction::Add(s) => self.add_lighting_section(s, world),
             LightingAction::Apply => self.apply_lighting(world),
             // A click on panel chrome blurs the focused field.
-            LightingAction::Consume => self.lighting_focus = None,
+            LightingAction::Consume => self.lighting.focus = None,
         }
     }
 
@@ -125,7 +126,7 @@ impl EditorHook {
     // asset, and commit all of them together; the first rejection shows on the
     // status line and commits nothing.
     pub(in crate::editor::hook) fn apply_lighting(&mut self, world: &mut World) {
-        self.lighting_status = None;
+        self.lighting.status = None;
         let mut staged = Vec::new();
         for (si, s) in lighting::SECTIONS.iter().enumerate() {
             let Some(idx) = self.entry_index_of(s.ty) else {
@@ -148,7 +149,7 @@ impl EditorHook {
             let args = form::assemble(s.ty, Some(&existing), &fields, &texts);
             let name = self.entries.get(idx).and_then(declared_id).unwrap_or(s.ty);
             if let Err(e) = form::validate(s.ty, name, &args) {
-                self.lighting_status = Some(short_status(&format!("{}: {e}", s.title)));
+                self.lighting.status = Some(short_status(&format!("{}: {e}", s.title)));
                 return;
             }
             staged.push((idx, args));
@@ -184,7 +185,7 @@ impl EditorHook {
         let args = form::assemble(s.ty, Some(&existing), &fields, &texts);
         let name = self.entries.get(idx).and_then(declared_id).unwrap_or(s.ty);
         if let Err(e) = form::validate(s.ty, name, &args) {
-            self.lighting_status = Some(short_status(&format!("{}: {e}", s.title)));
+            self.lighting.status = Some(short_status(&format!("{}: {e}", s.title)));
             return;
         }
         if let Some(entry) = self.entries.get_mut(idx) {

@@ -18,7 +18,7 @@ use crate::editor::hook::camera_pose;
 use crate::editor::hook::tests::fixtures::{
     VP, open_project, prop_entry, world_with_name_field, write_world,
 };
-use crate::editor::panels::registry::PanelKey;
+use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::viewport::framing::CameraPose;
 use crate::editor::worlds::cinematic;
 use crate::editor::worlds::{self, WorldsAction};
@@ -35,7 +35,7 @@ use crate::editor::entry_list::EntryList;
 fn start_hook() -> EditorHook {
     let mut h = EditorHook::new("unused.jsonl".to_string(), Vec::new());
     h.start_mode = true;
-    h.worlds.open = true;
+    h.open[PanelKey::Worlds] = true;
     h.viewport = VP;
     h
 }
@@ -68,10 +68,10 @@ fn preview_world(controller: Option<CameraController>, bounds: bool) -> World {
     asset_id::reset_interner();
     let mut world = world_with_name_field();
     world.add_component(camera(controller));
-    for id in std::iter::once(cinematic::FADE).chain(worlds::loading::all_sprite_ids()) {
+    for &id in std::iter::once(&cinematic::FADE).chain(&worlds::loading::ids().sprites) {
         world.push_identified(id, Sprite::default());
     }
-    for id in worlds::loading::all_label_ids() {
+    for &id in &worlds::loading::ids().labels {
         world.push_identified(id, TextLabel::default());
     }
     let entries = match bounds {
@@ -417,7 +417,7 @@ fn the_fade_draws_under_the_sidebar() {
 
     let layers = h.compute_layers();
     let fade = layers[&cinematic::FADE];
-    for id in EditorHook::panel_ids(PanelKey::Worlds) {
+    for id in registry::panel(PanelKey::Worlds).ids().all() {
         assert!(
             layers[&id] > fade,
             "the sidebar draws over the fade: {id:?}"

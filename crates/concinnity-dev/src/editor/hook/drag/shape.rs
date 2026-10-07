@@ -54,7 +54,7 @@ impl EditorHook {
         };
         drag.follow(mouse[0]);
         drag.preview(world);
-        self.shape_drag = Some(drag);
+        self.shape.drag = Some(drag);
     }
 
     // Per-frame drive: follow the cursor while the button is held, cancel on
@@ -65,12 +65,12 @@ impl EditorHook {
         world: &mut World,
     ) {
         if input.escape {
-            if let Some(drag) = self.shape_drag.take() {
+            if let Some(drag) = self.shape.drag.take() {
                 drag.restore(world);
             }
             return;
         }
-        let Some(drag) = &mut self.shape_drag else {
+        let Some(drag) = &mut self.shape.drag else {
             return;
         };
         if input.left_button_down {
@@ -79,7 +79,7 @@ impl EditorHook {
             }
             return;
         }
-        let Some(drag) = self.shape_drag.take() else {
+        let Some(drag) = self.shape.drag.take() else {
             return;
         };
         if drag.values != drag.start {

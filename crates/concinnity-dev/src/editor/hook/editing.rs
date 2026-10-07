@@ -82,8 +82,8 @@ impl EditorHook {
         self.form.selected_type = Some(ty);
         self.form.target = target;
         self.form.host = PanelKey::Assets;
-        self.picker_open = false;
-        self.row_menu = None;
+        self.assets.picker_open = false;
+        self.assets.row_menu = None;
         self.form.field_dropdown = None;
         self.form.field_dropdown_scroll = 0;
         self.form.scroll = 0;
@@ -208,7 +208,7 @@ impl EditorHook {
             .iter()
             .filter_map(|t| RegisteredType::parse(t))
             .collect();
-        for asset in self.tree_groups.iter().flat_map(|g| &g.assets) {
+        for asset in self.assets.groups.iter().flat_map(|g| &g.assets) {
             let offered = wanted.is_empty() || wanted.contains(&asset.asset_type);
             if offered && !names.iter().any(|n| n == &asset.name) {
                 names.push(asset.name.clone());

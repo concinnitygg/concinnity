@@ -7,33 +7,22 @@
 //! flow lives in `hook/drive/create_menu.rs`.
 
 use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 
+use super::hud_ids::{Family, family_base, hud_ids};
 use super::panels::assets_panel;
-use super::panels::registry::ID_BASE;
 use super::theme;
 use super::viewport::billboards;
 use super::widget::{self, point_in};
 
-// Reserved id family: the next free block after the Content panel's (0x5000).
-const BASE: u32 = ID_BASE + 0x6000;
-
-pub(crate) const MENU_BG: AssetId = AssetId(BASE);
-const HEADING: AssetId = AssetId(BASE + 1);
-
-const fn row_bg(i: usize) -> AssetId {
-    AssetId(BASE + 0x20 + i as u32)
-}
-const fn row_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x60 + i as u32)
-}
-const fn row_summary(i: usize) -> AssetId {
-    AssetId(BASE + 0xA0 + i as u32)
-}
-
 // Row pool bound; items past it are clipped (a world with that many Prefabs
 // still creates them through the Content panel or the console).
 pub(crate) const MAX_ROWS: usize = 24;
+
+hud_ids! {
+    base: family_base(Family::CreateMenu);
+    sprites: [pub(crate) MENU_BG, row_bg[MAX_ROWS]];
+    labels: [HEADING, row_label[MAX_ROWS], row_summary[MAX_ROWS]];
+}
 
 // Wide enough for the name column plus a useful run of each type's summary,
 // the same two columns the assets panel's picker shows.
@@ -219,19 +208,6 @@ pub(crate) fn hide(world: &mut World) {
     }
 }
 
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    std::iter::once(MENU_BG)
-        .chain((0..MAX_ROWS).map(row_bg))
-        .collect()
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    std::iter::once(HEADING)
-        .chain((0..MAX_ROWS).map(row_label))
-        .chain((0..MAX_ROWS).map(row_summary))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,8 +270,7 @@ mod tests {
 
     #[test]
     fn a_type_row_carries_its_summary_and_a_prefab_row_none() {
-        let mut world =
-            crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[]);
+        let mut world = ids().test_world();
         let rows = vec![
             MenuItem::Type("PointLight"),
             MenuItem::PrefabHeader { open: true },

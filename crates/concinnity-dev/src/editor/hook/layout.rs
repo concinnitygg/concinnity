@@ -33,15 +33,13 @@ impl EditorHook {
         self.panel_order.push(key);
     }
 
-    // Every injected element id of a panel, for the `HudLayers` layer map.
-    pub(super) fn panel_ids(key: PanelKey) -> Vec<AssetId> {
-        let p = registry::panel(key);
-        p.sprite_ids()
-            .into_iter()
-            .chain(p.label_ids())
-            .chain(p.code_label_ids())
-            .chain(p.field_ids().into_iter().map(|(id, _)| id))
-            .collect()
+    // Panel `key`'s own open flag, which `Panel::is_open` reads by default.
+    pub(crate) fn open_flag(&self, key: PanelKey) -> bool {
+        self.open[key]
+    }
+
+    pub(crate) fn set_open_flag(&mut self, key: PanelKey, open: bool) {
+        self.open[key] = open;
     }
 
     // The per-frame HUD draw layers: each panel at its focus-stack rank (higher
@@ -54,7 +52,7 @@ impl EditorHook {
             // elements at the bottom of the band and any open overlay above
             // them, while the panel in front still clears the whole band.
             let layer = (rank as i32 + 1) * PANEL_LAYER_SPAN;
-            for id in Self::panel_ids(key) {
+            for id in registry::panel(key).ids().all() {
                 layers.insert(id, layer);
             }
             for id in registry::panel(key).overlay_ids(self) {
@@ -69,45 +67,30 @@ impl EditorHook {
             layers.insert(worlds::cinematic::FADE, 0);
         }
         if self.loading_preview() {
-            for id in worlds::loading::all_sprite_ids()
-                .into_iter()
-                .chain(worlds::loading::all_label_ids())
-            {
+            for id in worlds::loading::ids().all() {
                 layers.insert(id, 1);
             }
         }
-        for id in hud::all_ids() {
+        for id in hud::ids().all() {
             layers.insert(id, TOP_BAR_LAYER);
         }
         // The create and Display menus are modal while open, so they clear
         // everything -- panels and top bar included (their ids are hidden
         // otherwise).
-        for id in create_menu::all_sprite_ids()
-            .into_iter()
-            .chain(create_menu::all_label_ids())
-            .chain(view_menu::all_sprite_ids())
-            .chain(view_menu::all_label_ids())
-        {
+        for id in create_menu::ids().all().chain(view_menu::ids().all()) {
             layers.insert(id, TOP_BAR_LAYER + PANEL_LAYER_SPAN);
         }
         // The toast stack floats above even the modal menus. Its ids join the
         // map only while a toast is live, so an idle stack adds nothing.
         if !self.notifier.is_empty() {
-            for id in toast_overlay::all_sprite_ids()
-                .into_iter()
-                .chain(toast_overlay::all_label_ids())
-            {
+            for id in toast_overlay::ids().all() {
                 layers.insert(id, TOP_BAR_LAYER + 2 * PANEL_LAYER_SPAN);
             }
         }
         // The confirmation dialog is screen-modal while open: routing swallows
         // every press for it, so it draws above everything -- toasts included.
         if self.modal.is_some() {
-            for id in modal::all_sprite_ids()
-                .into_iter()
-                .chain(modal::all_label_ids())
-                .chain(modal::all_field_ids())
-            {
+            for id in modal::ids().all() {
                 layers.insert(id, TOP_BAR_LAYER + 3 * PANEL_LAYER_SPAN);
             }
         }
@@ -143,8 +126,7 @@ impl EditorHook {
         let (anchor, top) = match (self.start_mode, key) {
             (true, PanelKey::Worlds) => (self.worlds_layout().default_origin(), 0.0),
             _ => (
-                self.positions[key.index()]
-                    .unwrap_or_else(|| registry::panel(key).default_origin(vp)),
+                self.positions[key].unwrap_or_else(|| registry::panel(key).default_origin(vp)),
                 hud::BAR_H,
             ),
         };
@@ -163,7 +145,7 @@ impl EditorHook {
     // overridden, is always its default).
     pub(super) fn effective_size(&self, key: PanelKey) -> [f32; 2] {
         let d = self.default_size(key);
-        match self.sizes[key.index()] {
+        match self.sizes[key] {
             Some(o) => {
                 let max = registry::panel(key).max_size(self);
                 [
@@ -245,11 +227,12 @@ impl EditorHook {
         asset_list::grouped_rows(&self.template_entries(i), None)
     }
 
-    // The View panel's toggle rows: one checkbox per registered panel that opts
-    // in (`Panel::view_row`), reflecting its shown state.
+    // The View panel's toggle rows: one checkbox per `registry::VIEW_ROWS`
+    // entry, reflecting its panel's shown state.
     pub(super) fn view_rows(&self) -> Vec<Row> {
-        registry::view_toggles()
-            .map(|p| Row::checkbox(p.view_row().unwrap_or(""), p.is_open(self)))
+        registry::VIEW_ROWS
+            .iter()
+            .map(|&(key, caption)| Row::checkbox(caption, registry::panel(key).is_open(self)))
             .collect()
     }
 

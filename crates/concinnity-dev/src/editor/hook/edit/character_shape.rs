@@ -172,7 +172,7 @@ impl EditorHook {
             character_shape::derive_rows(&schema, &target.morph_names, &target.joint_names);
         let rows = character_shape::rows(&derived, schema.presets.len(), b.shape_idx.is_some());
         // A drag in flight shows its working values, not the committed ones.
-        let values: Vec<f32> = match (&self.shape_drag, b.shape_idx) {
+        let values: Vec<f32> = match (&self.shape.drag, b.shape_idx) {
             (Some(d), _) => derived.sliders.iter().map(|r| d.values.get(r)).collect(),
             (None, Some(idx)) => {
                 let v = self.shape_values(idx);
@@ -189,7 +189,7 @@ impl EditorHook {
             preset_names,
             rows,
             values,
-            status: self.shape_status.clone(),
+            status: self.shape.status.clone(),
         }
     }
 
@@ -210,8 +210,8 @@ impl EditorHook {
             sliders: &d.derived.sliders,
             presets: &d.preset_names,
             values: &d.values,
-            scroll: self.shape_scroll.min(d.rows.len().saturating_sub(1)),
-            dragging: self.shape_drag.as_ref().map(|d| d.slider),
+            scroll: self.shape.scroll.min(d.rows.len().saturating_sub(1)),
+            dragging: self.shape.drag.as_ref().map(|d| d.slider),
             shape,
             status: d.status.as_deref(),
             mouse,
@@ -221,23 +221,24 @@ impl EditorHook {
     // Keep the row count the panel sizes itself by current with the live
     // world, once a frame ahead of the draw.
     pub(in crate::editor::hook) fn sample_shape_rows(&mut self, world: &World) {
-        if !self.shape_open {
+        if !self.open[PanelKey::CharacterShape] {
             return;
         }
-        self.shape_rows = self.shape_data(world).rows.len();
+        self.shape.rows = self.shape_data(world).rows.len();
         let max = self
-            .shape_rows
+            .shape
+            .rows
             .saturating_sub(character_shape_panel::window(
                 self.effective_size(PanelKey::CharacterShape)[1],
             ));
-        self.shape_scroll = self.shape_scroll.min(max);
+        self.shape.scroll = self.shape.scroll.min(max);
     }
 
     pub(in crate::editor::hook) fn scroll_shape(&mut self, delta: f32) {
         let window =
             character_shape_panel::window(self.effective_size(PanelKey::CharacterShape)[1]);
-        let max = self.shape_rows.saturating_sub(window);
-        self.shape_scroll = scroll_step(self.shape_scroll, delta, max);
+        let max = self.shape.rows.saturating_sub(window);
+        self.shape.scroll = scroll_step(self.shape.scroll, delta, max);
     }
 
     // Route a resolved panel click.
@@ -258,12 +259,12 @@ impl EditorHook {
             }
             ShapeAction::Randomize => {
                 if let Some(idx) = data.binding.as_ref().and_then(|b| b.shape_idx) {
-                    self.shape_seed = self.shape_seed.wrapping_add(1);
+                    self.shape.seed = self.shape.seed.wrapping_add(1);
                     let mut values = self.shape_values(idx);
                     values.randomize(
                         &data.derived.sliders,
                         &data.target.joint_names,
-                        self.shape_seed,
+                        self.shape.seed,
                     );
                     self.commit_shape(idx, &values);
                 }
@@ -294,7 +295,7 @@ impl EditorHook {
 
     // Write `values` into shape entry `idx` as ONE edit.
     pub(in crate::editor::hook) fn commit_shape(&mut self, idx: usize, values: &ShapeValues) {
-        self.shape_status = None;
+        self.shape.status = None;
         let mut existing = self.entry_args(idx);
         let Ok(sliders) = serde_json::to_value(&values.sliders) else {
             return;
@@ -311,7 +312,7 @@ impl EditorHook {
             .and_then(declared_id)
             .unwrap_or("CharacterShape");
         if let Err(e) = form::validate("CharacterShape", name, &args) {
-            self.shape_status = Some(short_status(&e));
+            self.shape.status = Some(short_status(&e));
             return;
         }
         if let Some(entry) = self.entries.get_mut(idx) {

@@ -36,7 +36,7 @@ use crate::editor::widget;
 #[test]
 fn title_bar_drag_moves_and_clamps_the_assets_panel() {
     let mut h = hook(Vec::new());
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     let vp = [1280.0, 720.0];
     let start = h.origin(PanelKey::Assets, vp);
     // Press on the title bar, 10 px in from its corner.
@@ -141,7 +141,7 @@ fn edit_panel_drags_by_its_title_bar() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     let mut world = World::new();
     inject::editor_hud(&mut world);
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     let target = entry_target(&h, 0);
     h.open_form(&mut world, "PointLight".to_string(), target);
     let vp = [1280.0, 720.0];
@@ -224,7 +224,7 @@ fn publish_layers_ranks_panels_below_the_top_bar() {
 fn a_panel_press_brings_it_to_the_front() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     let vp = [1280.0, 720.0];
     let po = h.origin(PanelKey::Assets, vp);
     let t = widget::title_rect(po, assets_panel::PANEL_W);
@@ -247,7 +247,7 @@ fn a_panel_press_brings_it_to_the_front() {
 fn edit_form_title_bar_x_closes_the_form() {
     let mut h = hook(vec![entry("lamp", "PointLight")]);
     let mut world = world_with_fields();
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     let target = entry_target(&h, 0);
     h.open_form(&mut world, "PointLight".to_string(), target);
     assert!(h.form_open());
@@ -271,33 +271,33 @@ fn every_panel_title_bar_x_closes_it() {
     let px = close_rect_of(&h, PanelKey::Preview, vp);
     assert!(h.try_panel_press(PanelKey::Preview, px[0] + 5.0, px[1] + 5.0, vp, &mut world));
     assert!(
-        !h.preview_open && h.drag.is_none(),
+        !h.open[PanelKey::Preview] && h.drag.is_none(),
         "Preview X closed it, no drag"
     );
 
     // Assets.
     let mut h = hook(Vec::new());
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     let ax = close_rect_of(&h, PanelKey::Assets, vp);
     assert!(h.try_panel_press(PanelKey::Assets, ax[0] + 5.0, ax[1] + 5.0, vp, &mut world));
     assert!(
-        !h.panel_open && h.drag.is_none(),
+        !h.open[PanelKey::Assets] && h.drag.is_none(),
         "Assets X closed it, no drag"
     );
 
     // View.
     let mut h = hook(Vec::new());
-    h.view_open = true;
+    h.open[PanelKey::View] = true;
     let vx = close_rect_of(&h, PanelKey::View, vp);
     assert!(h.try_panel_press(PanelKey::View, vx[0] + 5.0, vx[1] + 5.0, vp, &mut world));
     assert!(
-        !h.view_open && h.drag.is_none(),
+        !h.open[PanelKey::View] && h.drag.is_none(),
         "View X closed it, no drag"
     );
 
     // Templates.
     let mut h = hook(Vec::new());
-    h.templates_open = true;
+    h.open[PanelKey::Templates] = true;
     let tx = close_rect_of(&h, PanelKey::Templates, vp);
     assert!(h.try_panel_press(
         PanelKey::Templates,
@@ -307,7 +307,7 @@ fn every_panel_title_bar_x_closes_it() {
         &mut world
     ));
     assert!(
-        !h.templates_open && h.drag.is_none(),
+        !h.open[PanelKey::Templates] && h.drag.is_none(),
         "Templates X closed it, no drag"
     );
 }
@@ -324,12 +324,12 @@ fn a_hidden_panel_is_not_interactive() {
     assert!(h.try_panel_press(PanelKey::Preview, pt[0] + 5.0, pt[1] + 5.0, vp, &mut world));
     // Hidden: the same press falls through.
     h.drag = None;
-    h.preview_open = false;
+    h.open[PanelKey::Preview] = false;
     assert!(!h.try_panel_press(PanelKey::Preview, pt[0] + 5.0, pt[1] + 5.0, vp, &mut world));
     // The View panel starts hidden: its press falls through until it is opened.
     let vt = title_rect_of(&h, PanelKey::View, vp);
     assert!(!h.try_panel_press(PanelKey::View, vt[0] + 5.0, vt[1] + 5.0, vp, &mut world));
-    h.view_open = true;
+    h.open[PanelKey::View] = true;
     assert!(h.try_panel_press(PanelKey::View, vt[0] + 5.0, vt[1] + 5.0, vp, &mut world));
 }
 
@@ -343,7 +343,7 @@ fn the_behavior_panel_leaves_the_other_panels_pressable_in_every_view() {
         serde_json::json!({"on": "tick", "do": [{"hide": {"target": "self"}}]}),
     )]);
     let vp = [1280.0, 720.0];
-    h.view_open = true;
+    h.open[PanelKey::View] = true;
     // Behavior sits in front of the panels the press has to reach.
     h.focus_panel(PanelKey::Behavior);
 
@@ -372,7 +372,7 @@ fn the_behavior_panel_leaves_the_other_panels_pressable_in_every_view() {
 #[test]
 fn templates_panel_press_drags_and_focuses() {
     let mut h = hook(Vec::new());
-    h.templates_open = true;
+    h.open[PanelKey::Templates] = true;
     let vp = [1280.0, 720.0];
     let mut world = world_with_fields();
     let t = title_rect_of(&h, PanelKey::Templates, vp);
@@ -405,7 +405,7 @@ fn tick_lays_out_the_open_panel_in_every_state() {
         ..Default::default()
     });
     let mut h = hook(vec![entry("a", "PointLight"), entry("b", "Decal")]);
-    h.panel_open = true;
+    h.open[PanelKey::Assets] = true;
     seed_tree(&mut h, Vec::new());
 
     // Tree: panel drawn, first row is the World group header.
@@ -422,7 +422,7 @@ fn tick_lays_out_the_open_panel_in_every_state() {
     );
 
     // Type picker: the solid backing and the search field show.
-    h.picker_open = true;
+    h.assets.picker_open = true;
     h.tick(&mut world);
     assert!(
         sprite_visible(&world, assets_panel::PICKER_BG),
@@ -436,8 +436,8 @@ fn tick_lays_out_the_open_panel_in_every_state() {
     );
 
     // Row menu: the Delete popup shows over the "a" row.
-    h.picker_open = false;
-    h.row_menu = Some(h.handle_for("a"));
+    h.assets.picker_open = false;
+    h.assets.row_menu = Some(h.handle_for("a"));
     h.tick(&mut world);
     assert!(
         sprite_visible(&world, assets_panel::MENU_BG),
@@ -450,7 +450,7 @@ fn tick_lays_out_the_open_panel_in_every_state() {
 
     // Form open: the edit panel shows alongside the browse list, with its
     // title bar, name heading, and confirm button.
-    h.row_menu = None;
+    h.assets.row_menu = None;
     h.open_form(&mut world, "PointLight".to_string(), FormTarget::New);
     h.tick(&mut world);
     assert!(
@@ -475,7 +475,7 @@ fn tick_lays_out_the_open_panel_in_every_state() {
     );
 
     // Closing the panel + form blanks both.
-    h.panel_open = false;
+    h.open[PanelKey::Assets] = false;
     h.form.close();
     h.tick(&mut world);
     assert!(
@@ -498,26 +498,29 @@ fn scroll_moves_each_regions_offset() {
             .collect(),
     );
     seed_tree(&mut h, Vec::new());
-    h.row_menu = Some(h.handle_for("log0"));
+    h.assets.row_menu = Some(h.handle_for("log0"));
     h.scroll_tree(1.0, &world);
-    assert!(h.tree_scroll > 0, "a closed picker scrolls the tree");
-    assert!(h.row_menu.is_none(), "scrolling dismisses an open row menu");
+    assert!(h.assets.scroll > 0, "a closed picker scrolls the tree");
+    assert!(
+        h.assets.row_menu.is_none(),
+        "scrolling dismisses an open row menu"
+    );
     h.scroll_tree(-1.0, &world);
-    assert_eq!(h.tree_scroll, 0, "scrolling back up clamps at the top");
+    assert_eq!(h.assets.scroll, 0, "scrolling back up clamps at the top");
 
     // An open picker scrolls its own option list instead of the tree.
-    h.picker_open = true;
-    let before = h.tree_scroll;
+    h.assets.picker_open = true;
+    let before = h.assets.scroll;
     h.scroll_tree(1.0, &world);
     assert_eq!(
-        h.tree_scroll, before,
+        h.assets.scroll, before,
         "the tree stays put while the picker is open"
     );
-    assert!(h.picker_scroll > 0, "the picker's own list scrolled");
-    h.picker_open = false;
+    assert!(h.assets.picker_scroll > 0, "the picker's own list scrolled");
+    h.assets.picker_open = false;
 
     // A picked template detail scrolls its own asset list.
-    h.open_template = Some(0);
+    h.templates.detail = Some(0);
     h.scroll_template_list(1.0);
 }
 
@@ -538,7 +541,7 @@ fn drive_drag_parks_each_secondary_panel() {
     });
     h.drive_drag(&held, vp);
     assert!(
-        h.positions[PanelKey::View.index()].is_some(),
+        h.positions[PanelKey::View].is_some(),
         "the View panel follows the cursor"
     );
 
@@ -549,19 +552,19 @@ fn drive_drag_parks_each_secondary_panel() {
     });
     h.drive_drag(&held, vp);
     assert!(
-        h.positions[PanelKey::Templates.index()].is_some(),
+        h.positions[PanelKey::Templates].is_some(),
         "the Templates panel follows"
     );
 
     let mut h = hook(Vec::new());
-    h.open_template = Some(0);
+    h.templates.detail = Some(0);
     h.drag = Some(Drag {
         key: PanelKey::TemplateDetail,
         grab: [10.0, 10.0],
     });
     h.drive_drag(&held, vp);
     assert!(
-        h.positions[PanelKey::TemplateDetail.index()].is_some(),
+        h.positions[PanelKey::TemplateDetail].is_some(),
         "the Template detail panel follows"
     );
 }

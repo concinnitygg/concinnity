@@ -18,6 +18,7 @@ use concinnity_core::math::pick::{PickRay, ray_aabb, screen_ray};
 use concinnity_host::thread::asset_id;
 
 use super::EditorHook;
+use crate::editor::panels::registry::PanelKey;
 use crate::editor::viewport::highlight;
 
 // A repeat click within this many pixels of the last one cycles the hit list
@@ -111,9 +112,9 @@ impl EditorHook {
     // form seeded from what the expansion produced, so confirming it
     // promotes the asset to an authored line.
     pub(super) fn focus_ui_on(&mut self, name: &str, world: &mut World) {
-        self.panel_open = true;
-        self.picker_open = false;
-        self.row_menu = None;
+        self.open[PanelKey::Assets] = true;
+        self.assets.picker_open = false;
+        self.assets.row_menu = None;
         self.refresh_tree_if_needed();
         self.open_asset_form(name, world);
         self.reveal_in_tree(name, world);

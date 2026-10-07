@@ -9,13 +9,12 @@ pub(in crate::editor::hook) fn story_area(text: &str) -> TextArea {
     TextArea::from_text(text).highlighted(&MARKDOWN)
 }
 
-// Shown state, the loaded source in its text area, whether that area holds the
+// The loaded source in its text area, whether that area holds the
 // keyboard (while the panel is frontmost), the source path shown in the
 // header, the last parse / IO error, and the gutter marker a parse error pins
 // to its line.
 #[derive(Debug, Default)]
 pub(in crate::editor::hook) struct StoryState {
-    pub(in crate::editor::hook) open: bool,
     pub(in crate::editor::hook) area: TextArea,
     pub(in crate::editor::hook) focus: bool,
     pub(in crate::editor::hook) path: String,
@@ -24,8 +23,7 @@ pub(in crate::editor::hook) struct StoryState {
 }
 
 impl StoryState {
-    // Drop the source read out of the world being left. Shown state is not the
-    // world's.
+    // Drop the source read out of the world being left.
     pub(in crate::editor::hook) fn reset_for_world(&mut self) {
         self.area = story_area("");
         self.focus = false;
@@ -42,7 +40,6 @@ mod tests {
     #[test]
     fn reset_for_world_keeps_shown_state() {
         let mut s = StoryState {
-            open: true,
             area: TextArea::from_text("a\nb"),
             focus: true,
             path: "story.md".into(),
@@ -58,6 +55,5 @@ mod tests {
         assert!(!s.focus);
         assert_eq!((s.path.as_str(), s.status.as_deref()), ("", None));
         assert!(s.markers.is_empty());
-        assert!(s.open);
     }
 }

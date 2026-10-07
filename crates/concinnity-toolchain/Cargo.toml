@@ -6,7 +6,6 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "Build-script support for Concinnity: backend cfg resolution and graphics SDK setup"
 readme = "README.md"
 keywords = ["gamedev", "build-dependencies", "concinnity"]

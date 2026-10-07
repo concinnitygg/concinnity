@@ -19,6 +19,7 @@ use concinnity_core::ecs::TransientSaves;
 use concinnity_core::ecs::World;
 
 use super::hud;
+use super::hud_ids::HudIds;
 use super::panels::registry::{self, PanelKey};
 use super::theme;
 
@@ -93,16 +94,17 @@ pub(crate) fn editor_hud(world: &mut World) {
     );
     // The loading cover goes in with it: it stands over the same area while the
     // world behind is compiled, above the fade and below everything else.
-    for id in super::worlds::loading::all_sprite_ids() {
+    let loading = super::worlds::loading::ids();
+    for &id in &loading.sprites {
         world.push_identified(id, button_sprite(hidden, [0.0, 0.0, 0.0, 0.0], false));
     }
-    for id in super::worlds::loading::all_label_ids() {
+    for &id in &loading.labels {
         world.push_identified(id, row_label("", hidden, font, false));
     }
     for (id, s) in super::viewport::billboards::sprites() {
         world.push_identified(id, s);
     }
-    for id in super::viewport::billboards::all_label_ids() {
+    for &id in &super::viewport::billboards::ids().labels {
         let mut l = centered_label("", [0.0; 4], font);
         l.visible = false;
         world.push_identified(id, l);
@@ -124,55 +126,43 @@ pub(crate) fn editor_hud(world: &mut World) {
         row_label("", [0.0, 0.0, 0.0, 0.0], font, false),
     );
     for key in PanelKey::ALL {
-        let p = registry::panel(key);
-        for id in p.sprite_ids() {
-            world.push_identified(id, button_sprite(hidden, [0.1, 0.1, 0.12, 1.0], false));
-        }
-        for id in p.label_ids() {
-            world.push_identified(id, row_label("", hidden, font, false));
-        }
-        for id in p.code_label_ids() {
-            world.push_identified(id, code_label(code_font));
-        }
-        for (id, placeholder) in p.field_ids() {
-            world.push_identified(id, text_field(placeholder, font));
-        }
+        inject_ids(world, registry::panel(key).ids(), font, code_font);
     }
     // The right-click create menu floats over the panels (its per-frame layer
     // also pins it above them while open).
-    for id in super::create_menu::all_sprite_ids() {
-        world.push_identified(id, button_sprite(hidden, [0.1, 0.1, 0.12, 1.0], false));
-    }
-    for id in super::create_menu::all_label_ids() {
-        world.push_identified(id, row_label("", hidden, font, false));
-    }
+    inject_ids(world, super::create_menu::ids(), font, code_font);
     // The Display menu floats over the panels the same way.
-    for id in super::view_menu::all_sprite_ids() {
-        world.push_identified(id, button_sprite(hidden, [0.1, 0.1, 0.12, 1.0], false));
-    }
-    for id in super::view_menu::all_label_ids() {
-        world.push_identified(id, row_label("", hidden, font, false));
-    }
+    inject_ids(world, super::view_menu::ids(), font, code_font);
     inject_top_bar(world, font);
     // The toast stack goes in after the top bar: it draws over everything (its
     // per-frame layer also pins it there while live).
-    for id in super::toast_overlay::all_sprite_ids() {
-        world.push_identified(id, button_sprite(hidden, [0.1, 0.1, 0.12, 1.0], false));
-    }
-    for id in super::toast_overlay::all_label_ids() {
-        world.push_identified(id, row_label("", hidden, font, false));
-    }
+    inject_ids(world, super::toast_overlay::ids(), font, code_font);
     // The confirmation dialog goes in last of all: while open it is
     // screen-modal and draws over everything, toasts included (its per-frame
     // layer also pins it there).
-    for id in super::modal::all_sprite_ids() {
+    inject_ids(world, super::modal::ids(), font, code_font);
+}
+
+// One module's elements, hidden at the placeholder rect, each list in its draw
+// order.
+fn inject_ids(
+    world: &mut World,
+    ids: &HudIds,
+    font: Option<FontHandle>,
+    code_font: Option<FontHandle>,
+) {
+    let hidden = [0.0, 0.0, 0.0, 0.0];
+    for &id in &ids.sprites {
         world.push_identified(id, button_sprite(hidden, [0.1, 0.1, 0.12, 1.0], false));
     }
-    for id in super::modal::all_label_ids() {
+    for &id in &ids.labels {
         world.push_identified(id, row_label("", hidden, font, false));
     }
-    for id in super::modal::all_field_ids() {
-        world.push_identified(id, text_field("world name", font));
+    for &id in &ids.code_labels {
+        world.push_identified(id, code_label(code_font));
+    }
+    for &(id, placeholder) in &ids.fields {
+        world.push_identified(id, text_field(placeholder, font));
     }
 }
 
@@ -506,7 +496,7 @@ mod tests {
         let fonts = world.resource::<FontTable>().expect("the faces were baked");
         assert_eq!(fonts.len(), 2);
         let baked = FontHandle::new(0);
-        let code = super::super::panels::story_panel::code_label_ids()[0];
+        let code = super::super::panels::story_panel::ids().code_labels[0];
         let code = world.get_by_id::<TextLabel>(code).unwrap();
         assert_eq!(code.font, Some(FontHandle::new(1)));
         assert_eq!(code.scale, super::super::code_font::SCALE);

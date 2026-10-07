@@ -55,6 +55,8 @@ mod hook;
 // The top bar: the full-width strip holding SAVE, the panel chips and the
 // transport.
 mod hud;
+// The reserved asset-id families every injected HUD element is declared in.
+mod hud_ids;
 // Runtime injection of the HUD's reserved assets into a compiled world,
 // between the in-memory compile and `Runtime::start`.
 mod inject;

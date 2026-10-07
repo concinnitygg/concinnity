@@ -17,53 +17,29 @@ use concinnity_core::ecs::World;
 use concinnity_core::ecs::asset_id::AssetId;
 
 use super::health::{self, HealthSnapshot, Meter, TagRow};
-use super::registry::{self, PanelKey};
+use super::registry::PanelKey;
+use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::theme;
 use crate::editor::widget::{self, point_in};
-
-const BASE: u32 = registry::base(PanelKey::Health);
 
 // One meter per resource: RAM, VRAM, CPU.
 const ROWS: usize = 3;
 
-const PANEL_BG: AssetId = AssetId(BASE);
-const TITLE_LABEL: AssetId = AssetId(BASE + 1);
-const CLOSE_BG: AssetId = AssetId(BASE + 2);
-const CLOSE_LABEL: AssetId = AssetId(BASE + 3);
-const CHURN_LABEL: AssetId = AssetId(BASE + 4);
-const HOT_CLASS_LABEL: AssetId = AssetId(BASE + 5);
-const DRIFT_LABEL: AssetId = AssetId(BASE + 6);
-
-// Per-row families, one slot per row.
-fn track(i: usize) -> AssetId {
-    AssetId(BASE + 0x10 + i as u32)
-}
-fn used_fill(i: usize) -> AssetId {
-    AssetId(BASE + 0x20 + i as u32)
-}
-fn tracked_fill(i: usize) -> AssetId {
-    AssetId(BASE + 0x30 + i as u32)
-}
-fn caption_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x40 + i as u32)
-}
-fn value_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x50 + i as u32)
-}
-fn parts_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x60 + i as u32)
-}
-
-// Breakdown families. Wider stride than the meters': there is one slot per tag
-// per realm, which is more than a 0x10 family holds.
-fn tag_name_label(i: usize) -> AssetId {
-    AssetId(BASE + 0x80 + i as u32)
-}
-fn tag_realm_label(i: usize) -> AssetId {
-    AssetId(BASE + 0xA0 + i as u32)
-}
-fn tag_value_label(i: usize) -> AssetId {
-    AssetId(BASE + 0xC0 + i as u32)
+// The panel surface, then each row's track, its used fill, and the tracked fill
+// nested on top. Every tag can report in either realm, so every line it could
+// take has a slot injected up front; unused ones stay hidden.
+hud_ids! {
+    base: panel_base(PanelKey::Health);
+    sprites: [PANEL_BG, CLOSE_BG, [ROWS] { track, used_fill, tracked_fill }];
+    labels: [
+        TITLE_LABEL,
+        CLOSE_LABEL,
+        CHURN_LABEL,
+        HOT_CLASS_LABEL,
+        DRIFT_LABEL,
+        [ROWS] { caption_label, value_label, parts_label },
+        [health::MAX_TAG_ROWS] { tag_name_label, tag_realm_label, tag_value_label },
+    ];
 }
 
 const PANEL_W: f32 = 340.0;
@@ -332,45 +308,6 @@ fn place_text(
     }
 }
 
-pub(crate) fn hide_all(world: &mut World) {
-    widget::hide_all(world, &all_sprite_ids(), &all_label_ids(), &[]);
-}
-
-// Draw order: the panel surface, then each row's track, its used fill, and the
-// tracked fill nested on top.
-pub(crate) fn all_sprite_ids() -> Vec<AssetId> {
-    let mut ids = vec![PANEL_BG, CLOSE_BG];
-    for i in 0..ROWS {
-        ids.push(track(i));
-        ids.push(used_fill(i));
-        ids.push(tracked_fill(i));
-    }
-    ids
-}
-
-pub(crate) fn all_label_ids() -> Vec<AssetId> {
-    let mut ids = vec![
-        TITLE_LABEL,
-        CLOSE_LABEL,
-        CHURN_LABEL,
-        HOT_CLASS_LABEL,
-        DRIFT_LABEL,
-    ];
-    for i in 0..ROWS {
-        ids.push(caption_label(i));
-        ids.push(value_label(i));
-        ids.push(parts_label(i));
-    }
-    // Every tag can report in either realm, so every line it could take has a
-    // slot injected up front; unused ones stay hidden.
-    for i in 0..health::MAX_TAG_ROWS {
-        ids.push(tag_name_label(i));
-        ids.push(tag_realm_label(i));
-        ids.push(tag_value_label(i));
-    }
-    ids
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,7 +318,7 @@ mod tests {
     const GB: u64 = 1024 * 1024 * 1024;
 
     fn injected_world() -> World {
-        crate::test_support::injected_world(&all_sprite_ids(), &all_label_ids(), &[])
+        ids().test_world()
     }
 
     fn snapshot() -> HealthSnapshot {
@@ -524,15 +461,6 @@ mod tests {
         snap.heap = None;
         place(&mut world, &snap, [0.0, 0.0], [0.0, 0.0]);
         assert!(!label(&world, CHURN_LABEL).visible);
-    }
-
-    #[test]
-    fn hide_all_blanks_every_element() {
-        let mut world = injected_world();
-        place(&mut world, &snapshot(), [0.0, 0.0], [0.0, 0.0]);
-        hide_all(&mut world);
-        assert!(world.query::<Sprite>().all(|s| !s.visible));
-        assert!(world.query::<TextLabel>().all(|l| !l.visible));
     }
 
     #[test]
