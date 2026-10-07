@@ -39,7 +39,7 @@ const PROBE_RECORDS_BINDING: u32 = 3;
 pub(in crate::vulkan) struct VkLightCull {
     pub pipeline: OwnedPipeline,
     pub pipeline_layout: OwnedPipelineLayout,
-    pub _set_layout: OwnedSetLayout,
+    pub set_layout: OwnedSetLayout,
     pub _descriptor_pool: OwnedDescriptorPool,
     // One compute set per frame in flight (each pointing at that frame's
     // `ClusterParams` UBO and probe records).
@@ -89,7 +89,7 @@ impl VkLightCull {
 // Descriptor set layout for the light-cull kernel: the `ClusterParams` UBO, the
 // per-scene `GpuLight` SSBO, the per-cluster list SSBO and the frame's probe
 // records SSBO.
-fn light_cull_set_bindings() -> [Binding; 4] {
+pub(in crate::vulkan) fn light_cull_set_bindings() -> [Binding; 4] {
     use vk::DescriptorType as T;
     let compute = vk::ShaderStageFlags::COMPUTE;
     [
@@ -100,6 +100,32 @@ fn light_cull_set_bindings() -> [Binding; 4] {
     ]
 }
 
+// What one binning set reads and writes: the grid's `ClusterParams` UBO, the
+// per-scene `GpuLight` SSBO, the per-cluster lists the kernel fills, and the
+// probe records it bins (written separately when they are not known yet).
+pub(in crate::vulkan) struct LightCullInputs {
+    pub params: vk::Buffer,
+    pub lights: vk::Buffer,
+    pub lists: vk::Buffer,
+    pub probe_records: Option<vk::Buffer>,
+}
+
+// Point a binning set (one allocated with `VkLightCull::set_layout`) at `inputs`.
+pub(in crate::vulkan) fn write_light_cull_set(
+    device: &VkDevice,
+    set: vk::DescriptorSet,
+    inputs: &LightCullInputs,
+) {
+    let mut writes = SetWrites::new(set)
+        .uniform_buffer(0, inputs.params, vk::WHOLE_SIZE)
+        .storage_buffer(1, inputs.lights, vk::WHOLE_SIZE)
+        .storage_buffer(2, inputs.lists, cluster_list_size());
+    if let Some(records) = inputs.probe_records {
+        writes = writes.storage_buffer(PROBE_RECORDS_BINDING, records, vk::WHOLE_SIZE);
+    }
+    writes.apply(device);
+}
+
 // Build the whole clustered-lighting state. `local_light_buffer` is the
 // per-scene `GpuLight` SSBO the kernel bins. Every set's probe records are
 // written by `write_probe_records` once the probe set exists.
@@ -108,7 +134,6 @@ pub(in crate::vulkan) fn build_light_cull(
     device: &VkDevice,
     frames: usize,
     local_light_buffer: vk::Buffer,
-    local_light_size: vk::DeviceSize,
     hot_reload: bool,
 ) -> RenderResult<VkLightCull> {
     // Per-cluster light lists: device-local, written by compute, read by the
@@ -169,17 +194,22 @@ pub(in crate::vulkan) fn build_light_cull(
         .map_err(|e| super::error::map_vk_result(e, "light cull descriptor sets"))?;
 
     for (i, &set) in sets.iter().enumerate() {
-        SetWrites::new(set)
-            .uniform_buffer(0, params_buffers[i].buffer(), params_size)
-            .storage_buffer(1, local_light_buffer, local_light_size)
-            .storage_buffer(2, cluster_buffer.buffer(), cluster_list_size())
-            .apply(device);
+        write_light_cull_set(
+            device,
+            set,
+            &LightCullInputs {
+                params: params_buffers[i].buffer(),
+                lights: local_light_buffer,
+                lists: cluster_buffer.buffer(),
+                probe_records: None,
+            },
+        );
     }
 
     Ok(VkLightCull {
         pipeline,
         pipeline_layout,
-        _set_layout: set_layout,
+        set_layout,
         _descriptor_pool: descriptor_pool,
         sets,
         cluster_buffer,
@@ -195,15 +225,19 @@ impl VkContext {
         self.light_cull.params_buffers[frame_idx].write_val(0, params);
     }
 
-    // Dispatch the clustered binning pass. One invocation per cluster; the
-    // kernel builds the cluster's world-space AABB and tests each local light's
-    // sphere and each probe's influence box against it, writing the surviving
-    // indices into `cluster_buffer`. The trailing barrier orders the write
-    // before the forward pass's read.
+    // Dispatch the main camera's clustered binning pass, into `cluster_buffer`.
+    // The graph orders the write before the forward pass's read.
     pub(in crate::vulkan) fn encode_light_cull(&self, rec: &Recorder<'_>, frame_idx: usize) {
-        let Some(&set) = self.light_cull.sets.get(frame_idx) else {
-            return;
-        };
+        if let Some(&set) = self.light_cull.sets.get(frame_idx) {
+            self.bin_clusters(rec, set);
+        }
+    }
+
+    // Dispatch the binning kernel through `set`. One invocation per cluster;
+    // the kernel builds the cluster's world-space AABB and tests each local
+    // light's sphere and each probe's influence box against it, writing the
+    // surviving indices into the set's lists.
+    pub(in crate::vulkan) fn bin_clusters(&self, rec: &Recorder<'_>, set: vk::DescriptorSet) {
         let layout = &self.light_cull.pipeline_layout;
         rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &self.light_cull.pipeline);
         rec.bind_descriptor_sets(vk::PipelineBindPoint::COMPUTE, layout, 0, &[set], &[]);

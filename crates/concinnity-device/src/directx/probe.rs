@@ -55,6 +55,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use super::context::{DxContext, FRAMES};
 use super::error::map_hresult;
+use super::light_cull::ClusterGrid;
 use super::probe_prefilter::PrefilterGpu;
 use super::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_resolve_target, transition_barrier,
@@ -133,12 +134,15 @@ pub(in crate::directx) struct FaceTargets {
     pub dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
 }
 
-// GPU virtual addresses of the per-capture view / light / shadow constant buffers.
+// GPU virtual addresses of the per-capture view / light / shadow constant
+// buffers, and the cluster grid binned for the capture's viewpoint (`None`
+// shades every local light and probe).
 #[derive(Clone, Copy)]
-pub(in crate::directx) struct FaceUniforms {
+pub(in crate::directx) struct FaceUniforms<'a> {
     pub view_gva: u64,
     pub light_gva: u64,
     pub shadow_ubo_gva: u64,
+    pub clusters: Option<ClusterGrid<'a>>,
 }
 
 // The indirect draw for one capture region: the command buffer, its byte offset,
@@ -430,6 +434,7 @@ impl DxContext {
                 view_gva,
                 light_gva,
                 shadow_ubo_gva: shadow_gva,
+                clusters: None,
             },
             IndirectDraw {
                 indirect,
@@ -667,7 +672,7 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         targets: FaceTargets,
-        uniforms: FaceUniforms,
+        uniforms: FaceUniforms<'_>,
         draw: IndirectDraw<'_>,
         extent: FaceExtent,
     ) {
@@ -676,7 +681,15 @@ impl DxContext {
             view_gva,
             light_gva,
             shadow_ubo_gva,
+            clusters,
         } = uniforms;
+        let (cluster_params_gva, cluster_list_gva) = match clusters {
+            Some(grid) => (grid.params_gva, com::gpu_va(grid.lists)),
+            None => (
+                self.cluster_params_gva(self.current_frame, false),
+                self.cluster_list_gva(),
+            ),
+        };
         let IndirectDraw {
             indirect,
             indirect_offset,
@@ -767,14 +780,10 @@ impl DxContext {
             // [12] per-scene GpuLight storage buffer (t1). Probe + planar faces
             // reuse the bindless main PSO, which references it unconditionally.
             cmd.SetGraphicsRootShaderResourceView(12, local_lights_gva);
-            // [13] ClusterParams + [14] the per-cluster light lists. These faces
-            // bind the `use_clusters = 0` copy: their viewpoint differs from the
-            // grid the main camera binned, so they iterate every local light.
-            cmd.SetGraphicsRootConstantBufferView(
-                13,
-                self.cluster_params_gva(self.current_frame, false),
-            );
-            cmd.SetGraphicsRootShaderResourceView(14, self.cluster_list_gva());
+            // [13] ClusterParams + [14] the per-cluster light lists: the face's
+            // own grid, or the `use_clusters = 0` copy that iterates every light.
+            cmd.SetGraphicsRootConstantBufferView(13, cluster_params_gva);
+            cmd.SetGraphicsRootShaderResourceView(14, cluster_list_gva);
             // [15]..[18] the spot shadow projections + depth array and the
             // area-light table + LTC lookups. Bound like any other main-pass
             // face: a shadowed spot occludes a probe capture, and an area light

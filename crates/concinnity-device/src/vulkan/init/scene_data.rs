@@ -166,7 +166,6 @@ pub(super) fn build_scene_resources(
         device,
         frames,
         local_light_buffer.buffer(),
-        local_light_size,
         hot_reload,
     )?;
     Ok((

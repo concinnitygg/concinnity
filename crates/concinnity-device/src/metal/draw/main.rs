@@ -80,23 +80,35 @@ pub(in crate::metal) struct FaceTargets<'a> {
     pub resolve_slice: usize,
 }
 
+// A light-cluster grid: the params a fragment places itself in the grid with
+// and the per-cluster light lists and probe masks binned for them.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct ClusterGrid<'a> {
+    pub params: &'a render_types::ClusterParams,
+    pub lists: &'a ProtocolObject<dyn MTLBuffer>,
+}
+
 // How one off-camera render into a `FaceTargets` is drawn: the bindless ICB to
 // execute instead of the main cull's (the planar mirror passes its slot's mirror
 // ICB, culled against the reflected frustum; the probe capture reuses the main
 // cull ICB), the texel rectangle the render is clipped to (`None` draws the
-// whole target), and where its encoder sits in a pass's timing span.
+// whole target), the cluster grid binned for its viewpoint (`None` shades every
+// local light and probe), and where its encoder sits in a pass's timing span.
 #[derive(Clone, Copy)]
 pub(in crate::metal) struct FacePass<'a> {
     pub icb_override: Option<&'a ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
     pub scissor: Option<PixelRect>,
+    pub clusters: Option<ClusterGrid<'a>>,
     pub timer: PassTimer,
 }
 
 impl FacePass<'_> {
-    // The whole target through the main cull ICB, untimed: the probe capture.
+    // The whole target through the main cull ICB, unclustered and untimed: the
+    // probe capture.
     pub(in crate::metal) const PROBE: FacePass<'static> = FacePass {
         icb_override: None,
         scissor: None,
+        clusters: None,
         timer: PassTimer::None,
     };
 }
@@ -253,7 +265,7 @@ impl MtlContext {
         }
 
         // Main camera: bind the per-cluster light lists once for the pass.
-        self.bind_clusters(&encoder, true);
+        self.bind_clusters(&encoder, Some(self.main_cluster_grid()));
         let draw_calls = self.encode_main_geometry_into(
             &encoder,
             &view_uniforms,
@@ -370,9 +382,7 @@ impl MtlContext {
             sky_rot: self.state.view.sky_rot,
         };
 
-        // Planar / probe re-render: the main camera's cluster grid does not match
-        // this viewpoint, so iterate every local light instead of the clusters.
-        self.bind_clusters(&encoder, false);
+        self.bind_clusters(&encoder, pass.clusters);
         let draw_calls =
             self.encode_main_geometry_into(&encoder, &view_uniforms, gpu, pass.icb_override);
         // A face is always rendered lit, whatever the viewport shows.
@@ -476,7 +486,7 @@ impl MtlContext {
         };
         self.bind_main_pass_shared(&encoder, &view_uniforms);
         // Main2 is the same main camera as phase 1, so it reads the clusters too.
-        self.bind_clusters(&encoder, true);
+        self.bind_clusters(&encoder, Some(self.main_cluster_grid()));
         let draw_calls =
             self.execute_bindless_static_icb(&encoder, obj_buf, tex_args, &self.cull.icbs_2, gpu);
 
@@ -609,28 +619,36 @@ impl MtlContext {
         draw_calls
     }
 
+    // The main camera's cluster grid, binned by the frame's `LightCull` node.
+    pub(in crate::metal) fn main_cluster_grid(&self) -> ClusterGrid<'_> {
+        ClusterGrid {
+            params: &self.cluster_params,
+            lists: &self.light_cull.cluster_buffer,
+        }
+    }
+
     // Bind the clustered-lighting inputs the forward pass reads: the params at
-    // fragment buffer(11) + the per-cluster light lists and probe masks at buffer(12).
-    // Bound once per pass (the value is pass-level, shared by every geometry
-    // sub-path) on the shared encoder. `clustered` = true for the main camera (binds the
-    // live params); false for the planar / probe re-renders, which shade from a
-    // viewpoint the main camera's grid does not match and so fall back to
-    // iterating every local light and probe (use_clusters cleared).
+    // fragment buffer(11) + the per-cluster light lists and probe masks at
+    // buffer(12). Bound once per pass on the shared encoder. Without a grid
+    // (a probe capture) `use_clusters` is cleared, so every local light and
+    // probe is iterated.
     fn bind_clusters(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
-        clustered: bool,
+        grid: Option<ClusterGrid<'_>>,
     ) {
-        let cluster_params = if clustered {
-            self.cluster_params
-        } else {
-            render_types::ClusterParams {
-                use_clusters: 0,
-                ..self.cluster_params
-            }
+        let (params, lists) = match grid {
+            Some(grid) => (*grid.params, grid.lists),
+            None => (
+                render_types::ClusterParams {
+                    use_clusters: 0,
+                    ..self.cluster_params
+                },
+                &*self.light_cull.cluster_buffer,
+            ),
         };
-        enc.set_fragment_value(&cluster_params, 11);
-        enc.set_fragment_buffer(&self.light_cull.cluster_buffer, 0, 12);
+        enc.set_fragment_value(&params, 11);
+        enc.set_fragment_buffer(lists, 0, 12);
     }
 
     // Apply the encoder state every main-pass encode needs: the pipeline and

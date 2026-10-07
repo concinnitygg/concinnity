@@ -28,8 +28,9 @@
 //! (the bindless face render omits the skinned tail), exactly like the probe capture.
 
 use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::render_types::ClusterParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::planar_reflection::{self, PlanarReflectors};
+use concinnity_core::render::planar_reflection::{self, PixelRect, PlanarReflectors};
 use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -42,6 +43,7 @@ use super::cull::{INDIRECT_COMMAND_STRIDE, RegionCull};
 use super::draw::ViewUniforms;
 use super::error::map_hresult;
 use super::graph_exec::GraphFrameParams;
+use super::light_cull::{ClusterGrid, build_cluster_light_buffer};
 use super::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_sampled_target, create_uav_buffer,
     transition_barrier, write_format_rtv, write_hdr_srv,
@@ -65,6 +67,12 @@ const PLANAR_CLIP_BIAS: f32 = 0.02;
 // Texels a mirror's crop is grown by on every side, covering the bilinear
 // footprint of the reflector's lookup.
 const PLANAR_CROP_MARGIN: u32 = 2;
+
+// Byte offset of a mirror ring entry's `ClusterParams` CBV, past its
+// `ViewUniforms` one; root CBVs are 256-byte aligned.
+const MIRROR_CLUSTER_OFFSET: usize = 256;
+// Bytes in one mirror ring entry: the view CBV, then the cluster params CBV.
+const MIRROR_CBV_SIZE: u64 = 512;
 
 // Where a plane's mirror render lands. Multisampled planes share one MSAA color
 // target and resolve out of it a plane at a time, the way the probe shares one
@@ -114,9 +122,10 @@ pub(in crate::directx) struct PlanarReflectionSet {
     resolve_srv_cpu: Vec<D3D12_CPU_DESCRIPTOR_HANDLE>,
     resolve_srv_gpu: Vec<SrvSlot>,
 
-    // Per-(plane, frame) reflected `ViewUniforms` CBV ring, persistently mapped.
-    // Indexed `plane * FRAMES + frame_idx`, so each frame writes its own slot and
-    // never races the GPU reading a prior frame's reflected view.
+    // Per-(plane, frame) ring of the reflected `ViewUniforms` CBV and, past it
+    // at `MIRROR_CLUSTER_OFFSET`, the reflected view's `ClusterParams` CBV,
+    // persistently mapped. Indexed `plane * FRAMES + frame_idx`, so each frame
+    // writes its own slot and never races the GPU reading a prior frame's.
     _view_cbvs: Vec<PooledBuffer>,
     view_ptrs: Vec<*mut u8>,
     view_gvas: Vec<u64>,
@@ -130,15 +139,21 @@ pub(in crate::directx) struct PlanarReflectionSet {
     planar_indirect: Vec<ID3D12Resource>,
     planar_status: Vec<ID3D12Resource>,
     n_cull: usize,
+
+    // Per-plane cluster light lists and probe masks, binned over the plane's
+    // reflected view right before its face render reads them. Rest in
+    // `PIXEL_SHADER_RESOURCE` like the main camera's.
+    cluster_lists: Vec<ID3D12Resource>,
 }
 
 // SAFETY: the raw pointers `PlanarReflectionSet` holds are the mappings of upload buffers the
 // struct also owns, so they stay valid for as long as it does and may move with it.
 unsafe impl Send for PlanarReflectionSet {}
-// SAFETY: the only writes through a shared reference are the mirror views, recorded by the one
-// `PlanarReflection` pass a frame encodes (on whichever worker records it). Each write lands in
-// its own `slot * FRAMES + frame` entry, which no other pass touches and which the GPU last read
-// a frames-in-flight fence ago, so no two writers or a writer and the GPU share an entry.
+// SAFETY: the only writes through a shared reference are the mirror views and their cluster
+// params, recorded by the one `PlanarReflection` pass a frame encodes (on whichever worker
+// records it). Each write lands in its own `slot * FRAMES + frame` entry, which no other pass
+// touches and which the GPU last read a frames-in-flight fence ago, so no two writers or a
+// writer and the GPU share an entry.
 unsafe impl Sync for PlanarReflectionSet {}
 
 // Render-target build config for the planar set: MSAA sample count, the render
@@ -239,7 +254,7 @@ impl PlanarReflectionSet {
         let mut view_gvas = Vec::with_capacity(planes.len() * FRAMES);
         for _ in 0..planes.len() * FRAMES {
             let cbv = alloc.alloc_buffer(
-                256,
+                MIRROR_CBV_SIZE,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
@@ -274,6 +289,11 @@ impl PlanarReflectionSet {
             )?);
         }
 
+        let cluster_lists = planes
+            .iter()
+            .map(|_| build_cluster_light_buffer(device))
+            .collect::<RenderResult<_>>()?;
+
         Ok(Self {
             layout,
             width,
@@ -296,6 +316,7 @@ impl PlanarReflectionSet {
             planar_indirect,
             planar_status,
             n_cull,
+            cluster_lists,
         })
     }
 
@@ -377,6 +398,15 @@ impl PlanarReflectionSet {
         let index = rtv_slot_index(matches!(self.color, PlanarColor::Multisampled(_)), slot);
         D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: self.rtv_base.ptr + index * self.rtv_stride,
+        }
+    }
+
+    // Plane `slot`'s cluster grid for frame `frame`: the params written beside
+    // its reflected view and the lists binned for them.
+    fn cluster_grid(&self, slot: usize, frame: usize) -> ClusterGrid<'_> {
+        ClusterGrid {
+            params_gva: self.view_gvas[slot * FRAMES + frame] + MIRROR_CLUSTER_OFFSET as u64,
+            lists: &self.cluster_lists[slot],
         }
     }
 
@@ -489,6 +519,7 @@ impl DxContext {
         // mirror cull.
         let mut culls = [RegionCull::EMPTY; MAX_PLANAR_PLANES];
         let mut kept = 0;
+        let mut clustered = [false; MAX_PLANAR_PLANES];
         for &(slot, crop) in crops {
             let oriented =
                 planar_reflection::orient_plane_toward(set.layout.planes()[slot], params.cam_pos);
@@ -524,6 +555,30 @@ impl DxContext {
                     std::mem::size_of::<ViewUniforms>(),
                 );
             }
+            // Bin the frame's lights and probes over this plane's reflected
+            // view, as `LightCull` does for the main camera's.
+            let cluster_params = params.cluster_params.with_camera(&m.cluster_camera(
+                params.cluster_params.z_near,
+                self.uniforms.cluster_reach.range(
+                    m.eye,
+                    params.cluster_params.z_near,
+                    self.probe.book.records(),
+                    self.state.view.view_distance,
+                ),
+                set.width,
+                set.height,
+            ));
+            clustered[slot] = cluster_params.use_clusters != 0;
+            // SAFETY: the ring entry is `MIRROR_CBV_SIZE` bytes and `ClusterParams`
+            // (128) fits past `MIRROR_CLUSTER_OFFSET`; the entry is this frame's own,
+            // as for the view above.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    &cluster_params as *const ClusterParams as *const u8,
+                    set.view_ptrs[ring].add(MIRROR_CLUSTER_OFFSET),
+                    std::mem::size_of::<ClusterParams>(),
+                );
+            }
             if let Some(cull) = culls.get_mut(kept) {
                 *cull = RegionCull {
                     region: slot,
@@ -549,6 +604,8 @@ impl DxContext {
             set.n_cull,
         );
 
+        self.encode_mirror_light_culls(cmd, params.frame_idx, set, crops, &clustered);
+
         // Per kept plane: render the culled region from the reflected view into
         // the plane's color attachment + the shared depth (against the frame's
         // object buffer), within the crop, then leave the plane's resolve
@@ -568,6 +625,7 @@ impl DxContext {
                     view_gva: set.view_gvas[ring],
                     light_gva: params.light_gva,
                     shadow_ubo_gva: params.shadow_ubo_gva,
+                    clusters: clustered[slot].then(|| set.cluster_grid(slot, params.frame_idx)),
                 },
                 crate::directx::probe::IndirectDraw {
                     indirect,
@@ -584,6 +642,54 @@ impl DxContext {
             set.end_plane(cmd, slot);
         }
         Ok(())
+    }
+}
+
+impl DxContext {
+    // Bin each kept plane whose grid is live into its own cluster lists, with
+    // one barrier flip to `UNORDERED_ACCESS` and back around all of them.
+    fn encode_mirror_light_culls(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+        set: &PlanarReflectionSet,
+        crops: &[(usize, PixelRect)],
+        clustered: &[bool; MAX_PLANAR_PLANES],
+    ) {
+        let mut slots = [0; MAX_PLANAR_PLANES];
+        let mut count = 0;
+        for &(slot, _) in crops {
+            if clustered[slot] && count < MAX_PLANAR_PLANES {
+                slots[count] = slot;
+                count += 1;
+            }
+        }
+        let slots = &slots[..count];
+        if slots.is_empty() {
+            return;
+        }
+        let flip = |from, to| -> [D3D12_RESOURCE_BARRIER; MAX_PLANAR_PLANES] {
+            std::array::from_fn(|i| match slots.get(i) {
+                Some(&slot) => transition_barrier(&set.cluster_lists[slot], from, to),
+                None => D3D12_RESOURCE_BARRIER::default(),
+            })
+        };
+        let to_write = flip(
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        );
+        // SAFETY: the command list is in the recording state, and every resource these
+        // barriers name is live for the call.
+        unsafe { cmd.ResourceBarrier(&to_write[..count]) };
+        for &slot in slots {
+            self.encode_light_cull(cmd, frame_idx, set.cluster_grid(slot, frame_idx));
+        }
+        let to_read = flip(
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        );
+        // SAFETY: as above.
+        unsafe { cmd.ResourceBarrier(&to_read[..count]) };
     }
 }
 

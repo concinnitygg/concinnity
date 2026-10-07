@@ -33,7 +33,7 @@
 use ash::Device;
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{LineVertex, TextDrawCall};
+use concinnity_core::gfx::render_types::{ClusterParams, LineVertex, TextDrawCall};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
@@ -527,6 +527,9 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // covers; computed once from `vp_mat` so the mirror pass and the transparent
     // pass that samples it agree.
     pub planar: PlanarFramePlan,
+    // The main camera's cluster params, which each mirror render re-aims
+    // through its reflected view.
+    pub cluster_params: ClusterParams,
 }
 
 impl VkContext {

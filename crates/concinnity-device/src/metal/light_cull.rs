@@ -6,7 +6,7 @@
 //! cluster's lights and blend only its cluster's probes.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
+use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -18,6 +18,7 @@ use objc2_metal::{
 
 use super::builtin_shaders::compute_pipeline;
 use super::context::MtlContext;
+use super::draw::main::ClusterGrid;
 use super::encode::ComputeEncode;
 use super::error::allocation_failed;
 use super::scoped_encoder::ScopedEncoder;
@@ -32,19 +33,21 @@ pub(crate) struct LightCullState {
 }
 
 impl MtlContext {
-    // Encode the clustered binning pass. One thread per cluster; the kernel
-    // builds the cluster's world-space AABB and tests each local light's sphere
-    // and each probe's influence box against it, writing the surviving indices
-    // into `cluster_buffer`. Caller dispatches this before Main, which reads the
-    // same buffer.
+    // Encode the clustered binning pass for `grid`. One thread per cluster; the
+    // kernel builds the cluster's world-space AABB and tests each local light's
+    // sphere and each probe's influence box against it, writing the surviving
+    // indices into `grid.lists`. Caller dispatches this before the pass that
+    // reads those lists: Main for the main camera's grid, each mirror render
+    // for its own. `timer` names the pass span the encoder is timed under.
     pub(in crate::metal) fn encode_light_cull(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        cluster_params: &ClusterParams,
+        grid: ClusterGrid<'_>,
+        timer: Option<super::pass_timing::PassId>,
     ) -> RenderResult<u32> {
         let desc = objc2_metal::MTLComputePassDescriptor::new();
-        if let Some(t) = &self.diagnostics.pass_timing {
-            t.attach_compute(&desc, super::pass_timing::PassId::LightCull);
+        if let (Some(t), Some(pass)) = (&self.diagnostics.pass_timing, timer) {
+            t.attach_compute(&desc, pass);
         }
         let enc = ScopedEncoder::new(
             cmd_buf
@@ -56,9 +59,9 @@ impl MtlContext {
         );
         enc.set_pipeline(&self.light_cull.pipeline);
 
-        enc.set_value(cluster_params, 0);
+        enc.set_value(grid.params, 0);
         enc.set_buffer(&self.scene.local_light_buffer, 0, 1);
-        enc.set_buffer(&self.light_cull.cluster_buffer, 0, 2);
+        enc.set_buffer(grid.lists, 0, 2);
         // This frame's probe records, built before any pass encodes.
         if let Some(records) = self.probe.records_buf.as_deref() {
             enc.set_buffer(records, 0, 3);
@@ -90,10 +93,10 @@ pub(super) fn build_light_cull_pipeline(
     compute_pipeline(device, &super::builtin_shaders::LIGHT_CULL, hot_reload)
 }
 
-// Allocate the per-cluster list buffer: CLUSTER_LIST_LEN u32, every cluster's
+// Allocate a per-cluster list buffer: CLUSTER_LIST_LEN u32, every cluster's
 // light list and then every cluster's probe mask (see `cluster_types.hlsl`).
 // Private storage: written only by the compute kernel, read only by shaders.
-pub(super) fn build_cluster_light_buffer(
+pub(in crate::metal) fn build_cluster_light_buffer(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
 ) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>> {
     let len = CLUSTER_LIST_LEN as usize * std::mem::size_of::<u32>();

@@ -18,7 +18,10 @@
 //! narrowed to that rectangle, so geometry visible only in the reflection
 //! (behind or beside the main camera) is captured and geometry that cannot reach
 //! the rectangle is not drawn. The GPU cull kernel re-runs into that plane's own
-//! mirror ICB (`encode_mirror_cull`), which the face render executes.
+//! mirror ICB (`encode_mirror_cull`), which the face render executes. The
+//! frame's local lights and probes are binned again over each rendered plane's
+//! reflected view, into that plane's own cluster lists, so a mirror fragment
+//! shades only its cluster's lights as a main-camera fragment does.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -30,12 +33,15 @@ use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTexture, MTLTextureType, MTLTextureUsage};
+use objc2_metal::{
+    MTLBuffer, MTLDevice, MTLPixelFormat, MTLTexture, MTLTextureType, MTLTextureUsage,
+};
 
 use super::context::MtlContext;
 use super::cull::MirrorCull;
 use super::descriptors::TextureDesc;
-use super::draw::main::{FacePass, FaceTargets, GpuFrameBuffers, MainPassCamera};
+use super::draw::main::{ClusterGrid, FacePass, FaceTargets, GpuFrameBuffers, MainPassCamera};
+use super::light_cull::build_cluster_light_buffer;
 use super::pass_timing::{PassId, PassTimer};
 
 // Clip the reflection a hair toward the kept (camera) side of the plane so
@@ -66,13 +72,14 @@ pub(in crate::metal) struct PlanarReflectionTargets {
     pub(in crate::metal) resolve: Retained<ProtocolObject<dyn MTLTexture>>,
 }
 
-// The world's planar reflection layout and one set of targets per mirror plane.
-// A water surface or glass pane samples the resolve of the slot it was assigned
-// at init. The plane geometry is recomputed (oriented toward the camera) per
-// frame, but the planes, the slots and the reflector bounds are fixed at init.
-// The targets are reallocated on resize.
+// The world's planar reflection layout and one set of targets and cluster lists
+// per mirror plane. A water surface or glass pane samples the resolve of the
+// slot it was assigned at init. The plane geometry is recomputed (oriented
+// toward the camera) per frame, but the planes, the slots and the reflector
+// bounds are fixed at init. The targets are reallocated on resize.
 pub(in crate::metal) struct PlanarReflectionSet {
     pub(in crate::metal) targets: Vec<PlanarReflectionTargets>,
+    clusters: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub(in crate::metal) layout: PlanarReflectors,
     width: u32,
     height: u32,
@@ -158,8 +165,12 @@ impl PlanarReflectionSet {
     ) -> RenderResult<Self> {
         let (width, height) = layout.target_size(render_w, render_h);
         let targets = create_targets(device, layout.planes().len(), (width, height), sample_count)?;
+        let clusters = (0..layout.planes().len())
+            .map(|_| build_cluster_light_buffer(device))
+            .collect::<RenderResult<_>>()?;
         Ok(Self {
             targets,
+            clusters,
             layout,
             width,
             height,
@@ -280,6 +291,27 @@ impl MtlContext {
                 _ => None,
             };
 
+            // Bin the frame's lights and probes over this plane's reflected
+            // view, as `LightCull` does for the main camera's.
+            let cluster_params = self.cluster_params.with_camera(&m.cluster_camera(
+                self.cluster_params.z_near,
+                self.scene.cluster_reach.range(
+                    m.eye,
+                    self.cluster_params.z_near,
+                    self.probe.book.records(),
+                    self.state.view.view_distance,
+                ),
+                set.width,
+                set.height,
+            ));
+            let clusters = (cluster_params.use_clusters != 0).then(|| ClusterGrid {
+                params: &cluster_params,
+                lists: &set.clusters[slot],
+            });
+            if let Some(grid) = clusters {
+                self.encode_light_cull(cmd_buf, grid, None)?;
+            }
+
             let targets = &set.targets[slot];
             self.encode_main_into_face(
                 cmd_buf,
@@ -305,6 +337,7 @@ impl MtlContext {
                 FacePass {
                     icb_override,
                     scissor: Some(crop),
+                    clusters,
                     timer: PassTimer::span(PassId::PlanarReflection, i, crops.len()),
                 },
             )?;

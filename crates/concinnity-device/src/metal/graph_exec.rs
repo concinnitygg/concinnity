@@ -97,6 +97,7 @@ use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLCommandQueue as _, MTLTexture}
 use std::sync::atomic::Ordering;
 
 use super::context::MtlContext;
+use super::draw::main::ClusterGrid;
 use super::frame_pacing::FrameJoin;
 use super::graph_events;
 use super::graph_events::PassSync;
@@ -767,7 +768,14 @@ impl MtlContext {
             PassId::LightCull => {
                 let cluster_params =
                     pass_input(params.cluster_params, PassId::LightCull, "cluster_params")?;
-                self.encode_light_cull(cmd_buf, cluster_params)?
+                self.encode_light_cull(
+                    cmd_buf,
+                    ClusterGrid {
+                        params: cluster_params,
+                        lists: &self.light_cull.cluster_buffer,
+                    },
+                    Some(PassId::LightCull),
+                )?
             }
             PassId::ParticlesSim => {
                 // Integrates every live emitter's persistent pool in place. The

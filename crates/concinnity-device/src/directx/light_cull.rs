@@ -29,6 +29,14 @@ const CLUSTER_PARAMS_SLOT_STRIDE: u64 = 256;
 const CLUSTER_SLOT_CLUSTERED: u64 = 0;
 const CLUSTER_SLOT_UNCLUSTERED: u64 = 1;
 
+// A light-cluster grid: the `ClusterParams` CBV a fragment places itself in the
+// grid with and the per-cluster light lists and probe masks binned for it.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct ClusterGrid<'a> {
+    pub params_gva: u64,
+    pub lists: &'a ID3D12Resource,
+}
+
 // Clustered-lighting GPU state: the binning compute pipeline, the per-cluster
 // list buffer it writes / the forward pass reads, and the per-frame
 // `ClusterParams` constant buffers. All of it always exists (the forward shaders
@@ -89,7 +97,7 @@ pub(in crate::directx) fn create_light_cull_pso(
     compute_pso(device, root_sig, cs, "light cull")
 }
 
-// Allocate the per-cluster list buffer. Created in `COMMON` (D3D12
+// Allocate a per-cluster list buffer. Created in `COMMON` (D3D12
 // creates every buffer there regardless of the requested state); the light-cull
 // pass transitions it to UNORDERED_ACCESS to write and back to
 // PIXEL_SHADER_RESOURCE for the forward pass, matching how the GPU-cull pass
@@ -179,20 +187,30 @@ impl DxContext {
         }
     }
 
-    // Dispatch the clustered binning pass. One thread per cluster; the kernel
-    // builds the cluster's world-space AABB and tests each local light's sphere
-    // and each probe's influence box against it, writing the surviving indices
-    // into `cluster_buffer`.
-    // The executor orders this before Main, which reads the same buffer, and
-    // drives the buffer's `UAV` transition here and back at Main off that edge;
-    // it rests in `PIXEL_SHADER_RESOURCE`.
+    // The main camera's cluster grid: this frame's live params and the lists
+    // the frame's `LightCull` node bins.
+    pub(in crate::directx) fn main_cluster_grid(&self, frame_idx: usize) -> ClusterGrid<'_> {
+        ClusterGrid {
+            params_gva: self.cluster_params_gva(frame_idx, true),
+            lists: &self.light_cull.cluster_buffer,
+        }
+    }
+
+    // Dispatch the clustered binning pass for `grid`. One thread per cluster;
+    // the kernel builds the cluster's world-space AABB and tests each local
+    // light's sphere and each probe's influence box against it, writing the
+    // surviving indices into `grid.lists`, which the caller holds in
+    // `UNORDERED_ACCESS` across the dispatch. The executor does that for the
+    // main camera's lists around `LightCull`; each mirror render does it for
+    // its own.
     pub(in crate::directx) fn encode_light_cull(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-    ) -> RenderResult<()> {
-        let cluster_buffer = &self.light_cull.cluster_buffer;
-        let params_gva = self.cluster_params_gva(frame_idx, true);
+        grid: ClusterGrid<'_>,
+    ) {
+        let params_gva = grid.params_gva;
+        let cluster_buffer = grid.lists;
         let lights_gva = com::gpu_va(&self.uniforms.local_light_buffer);
         let records_gva = self.probe.gpu.records[frame_idx].gpu_va();
 
@@ -208,6 +226,5 @@ impl DxContext {
             // One thread per cluster, 64-wide threadgroups.
             cmd.Dispatch(CLUSTER_COUNT.div_ceil(64), 1, 1);
         }
-        Ok(())
     }
 }

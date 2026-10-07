@@ -533,6 +533,7 @@ impl VkContext {
                 .as_ref()
                 .map(|set| set.frame_plan(vp_mat))
                 .unwrap_or_default(),
+            cluster_params,
         };
         // Each non-composite pass is recorded into its own command buffer
         // (returned here in graph order); Composite + the post-graph work below

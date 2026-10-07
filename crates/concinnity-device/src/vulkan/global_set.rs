@@ -76,7 +76,8 @@ impl GlobalBindings<'_> {
     // A set for an off-camera render (a probe face, a planar mirror) through
     // `view`, `light` and `shadow`. It reads no probe, so a capture never
     // recurses into the set it feeds; no SSAO, which is the main camera's; and
-    // no cluster grid, which a cube face or a reflected view does not match.
+    // no cluster grid unless one binned for its viewpoint is added
+    // (`with_clusters`).
     pub(in crate::vulkan) fn off_camera(
         &self,
         view: vk::Buffer,
@@ -173,6 +174,18 @@ pub(in crate::vulkan) struct GlobalSetContents {
     ltc_magnitude: vk::ImageView,
     probe_records: vk::Buffer,
     samplers: GlobalSamplers,
+}
+
+impl GlobalSetContents {
+    // These contents shading from the cluster grid `params` describes, binned
+    // into `lists`.
+    pub(in crate::vulkan) fn with_clusters(self, params: vk::Buffer, lists: vk::Buffer) -> Self {
+        Self {
+            cluster_params: params,
+            cluster_lists: lists,
+            ..self
+        }
+    }
 }
 
 // One descriptor of a global set, by binding.

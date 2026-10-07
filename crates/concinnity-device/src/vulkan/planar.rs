@@ -24,6 +24,7 @@
 
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
+use concinnity_core::gfx::render_types::ClusterParams;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection::{self, PlanarReflectors};
 use concinnity_core::transform::mat4_inverse;
@@ -35,7 +36,11 @@ use super::descriptor_layout::{PoolSizes, global_set};
 use super::draw::ViewUniforms;
 use super::global_set::{GlobalBindings, GlobalSetContents};
 use super::graph_exec::GraphFrameParams;
+use super::light_cull::{
+    LightCullInputs, cluster_list_size, light_cull_set_bindings, write_light_cull_set,
+};
 use super::probe::FaceArea;
+use super::record::Recorder;
 use super::resources::alloc_descriptor_sets;
 use super::set_writes::SetWrites;
 use super::texture::{
@@ -94,9 +99,18 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
     // planar global set.
     view_bufs: Vec<PooledBuffer>,
     // Per-(plane, frame) global set (the bindless main set): that (plane,
-    // frame)'s reflected view and no probe set, so the mirror render reflects
-    // only the sky and never recurses into the probes it feeds.
+    // frame)'s reflected view and cluster grid, and no probe set, so the mirror
+    // render reflects only the sky and never recurses into the probes it feeds.
     global_sets: Vec<vk::DescriptorSet>,
+
+    // The frame's local lights binned over each plane's reflected view: a
+    // per-(plane, frame) `ClusterParams` UBO ring (HOST_VISIBLE, indexed like
+    // `view_bufs`), a per-plane DEVICE_LOCAL cluster list SSBO, and a
+    // per-(plane, frame) binning set writing the plane's lists from the ring
+    // entry's params.
+    cluster_params_bufs: Vec<PooledBuffer>,
+    cluster_lists: Vec<PooledBuffer>,
+    cluster_sets: Vec<vk::DescriptorSet>,
 
     // Per-(plane, frame) reflected-frustum mirror cull: a DEVICE_LOCAL indirect +
     // status SSBO each (indexed plane * frames + frame), and a cull set that reads
@@ -332,18 +346,29 @@ pub(in crate::vulkan) struct PlanarGlobalSet<'a> {
     pub(in crate::vulkan) bindings: GlobalBindings<'a>,
 }
 
-// What a planar global set holds: its (plane, frame) reflected view, and that
-// frame's light and shadow UBOs.
+// The per-(plane, frame) buffers a planar global set binds: the reflected view,
+// and the cluster grid binned for it.
+#[derive(Clone, Copy)]
+struct MirrorBuffers {
+    view: vk::Buffer,
+    cluster_params: vk::Buffer,
+    cluster_lists: vk::Buffer,
+}
+
+// What a planar global set holds: its (plane, frame) reflected view and cluster
+// grid, and that frame's light and shadow UBOs.
 fn global_contents(
     bindings: &GlobalBindings<'_>,
-    view: vk::Buffer,
+    mirror: MirrorBuffers,
     frame: usize,
 ) -> GlobalSetContents {
-    bindings.off_camera(
-        view,
-        bindings.uniforms.light_ubo_buffers[frame].buffer(),
-        bindings.shadow.ubos[frame].buffer(),
-    )
+    bindings
+        .off_camera(
+            mirror.view,
+            bindings.uniforms.light_ubo_buffers[frame].buffer(),
+            bindings.shadow.ubos[frame].buffer(),
+        )
+        .with_clusters(mirror.cluster_params, mirror.cluster_lists)
 }
 
 impl PlanarReflectionSet {
@@ -407,6 +432,25 @@ impl PlanarReflectionSet {
             )?);
         }
 
+        // Per-(plane, frame) cluster params ring and per-plane cluster lists.
+        let cluster_params_size = std::mem::size_of::<ClusterParams>() as u64;
+        let mut cluster_params_bufs = Vec::with_capacity(ring);
+        for _ in 0..ring {
+            cluster_params_bufs.push(alloc.create_buffer(
+                cluster_params_size,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                host,
+            )?);
+        }
+        let mut cluster_lists = Vec::with_capacity(plane_count);
+        for _ in 0..plane_count {
+            cluster_lists.push(alloc.create_buffer(
+                cluster_list_size(),
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )?);
+        }
+
         // Per-(plane, frame) reflected-frustum cull output: a DEVICE_LOCAL indirect +
         // status SSBO each, sized by the build-time object count (resize never
         // touches them).
@@ -431,19 +475,20 @@ impl PlanarReflectionSet {
             )?);
         }
 
-        // One pool: the per-(plane, frame) global and cull sets, and one Hi-Z
-        // set (an image and a UBO) when the world runs Hi-Z.
+        // One pool: the per-(plane, frame) global, cull and binning sets, and
+        // one Hi-Z set (an image and a UBO) when the world runs Hi-Z.
         let has_hiz = u32::from(cull.hiz.is_some());
         let ring_sets = ring as u32;
         let pool_sizes = PoolSizes::default()
             .sets(&global_set(), ring_sets)
+            .sets(&light_cull_set_bindings(), ring_sets)
             .add(vk::DescriptorType::STORAGE_BUFFER, ring_sets * 4)
             .add(vk::DescriptorType::UNIFORM_BUFFER, has_hiz)
             .add(vk::DescriptorType::SAMPLED_IMAGE, has_hiz)
             .build();
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
-            .max_sets(ring_sets * 2 + has_hiz);
+            .max_sets(ring_sets * 3 + has_hiz);
         let pool = device
             .create_descriptor_pool(&pool_info)
             .map_err(|e| super::error::map_vk_result(e, "planar descriptor pool"))?;
@@ -451,9 +496,32 @@ impl PlanarReflectionSet {
         // Per-(plane, frame) global sets: set `i` covers plane `i / frames`,
         // frame `i % frames`, through that frame's light and shadow UBOs.
         let PlanarGlobalSet { layout, bindings } = globals;
+        let mirror = |i: usize| MirrorBuffers {
+            view: view_bufs[i].buffer(),
+            cluster_params: cluster_params_bufs[i].buffer(),
+            cluster_lists: cluster_lists[i / frames].buffer(),
+        };
         let global_sets = alloc_descriptor_sets(device, pool.handle(), &vec![layout; ring])?;
         for (i, &set) in global_sets.iter().enumerate() {
-            global_contents(&bindings, view_bufs[i].buffer(), i % frames).write(device, set);
+            global_contents(&bindings, mirror(i), i % frames).write(device, set);
+        }
+
+        // Per-(plane, frame) binning sets. The mirror's global set reads no
+        // probe, so the kernel bins none: it reads the stand-in records, and the
+        // params ask for zero probes.
+        let cluster_layouts = vec![bindings.light_cull.set_layout.handle(); ring];
+        let cluster_sets = alloc_descriptor_sets(device, pool.handle(), &cluster_layouts)?;
+        for (i, &set) in cluster_sets.iter().enumerate() {
+            write_light_cull_set(
+                device,
+                set,
+                &LightCullInputs {
+                    params: cluster_params_bufs[i].buffer(),
+                    lights: bindings.uniforms.local_light_buffer.buffer(),
+                    lists: cluster_lists[i / frames].buffer(),
+                    probe_records: Some(bindings.probes.stand_in_records.buffer()),
+                },
+            );
         }
 
         // Per-(plane, frame) cull sets: read the frame's object + draw-args SSBOs
@@ -496,6 +564,9 @@ impl PlanarReflectionSet {
             framebuffers,
             view_bufs,
             global_sets,
+            cluster_params_bufs,
+            cluster_lists,
+            cluster_sets,
             cull_indirect_bufs,
             cull_status_bufs,
             cull_sets,
@@ -529,8 +600,17 @@ impl PlanarReflectionSet {
         binding: u32,
     ) {
         for (i, &set) in self.global_sets.iter().enumerate() {
-            global_contents(bindings, self.view_bufs[i].buffer(), i % self.frames)
+            global_contents(bindings, self.mirror_buffers(i), i % self.frames)
                 .write_binding(device, set, binding);
+        }
+    }
+
+    // Ring entry `i`'s reflected view and cluster grid.
+    fn mirror_buffers(&self, i: usize) -> MirrorBuffers {
+        MirrorBuffers {
+            view: self.view_bufs[i].buffer(),
+            cluster_params: self.cluster_params_bufs[i].buffer(),
+            cluster_lists: self.cluster_lists[i / self.frames].buffer(),
         }
     }
 
@@ -607,6 +687,9 @@ impl PlanarReflectionSet {
         self.framebuffers.clear();
         self.targets.clear();
         self.view_bufs.clear();
+        self.cluster_params_bufs.clear();
+        self.cluster_lists.clear();
+        self.cluster_sets.clear();
         self.cull_indirect_bufs.clear();
         self.cull_status_bufs.clear();
         self.hiz_ubo = None;
@@ -694,6 +777,24 @@ impl VkContext {
                 self.state.view.view_distance,
             );
             self.encode_probe_cull(cmd, set.cull_sets[ring], set.hiz_set, &frustum, m.eye);
+            let cluster_params = ClusterParams {
+                num_probes: 0,
+                ..params.cluster_params.with_camera(&m.cluster_camera(
+                    params.cluster_params.z_near,
+                    self.uniforms.cluster_reach.range(
+                        m.eye,
+                        params.cluster_params.z_near,
+                        &[],
+                        self.state.view.view_distance,
+                    ),
+                    set.width,
+                    set.height,
+                ))
+            };
+            set.cluster_params_bufs[ring].write_val(0, &cluster_params);
+            if cluster_params.use_clusters != 0 {
+                self.encode_mirror_light_cull(cmd, set, slot, ring);
+            }
             // Order the previous mirror render's attachment writes before this one's
             // layout transition. `main_render_pass` declares both attachments
             // `initial_layout = UNDEFINED`, so every `vkCmdBeginRenderPass` here
@@ -794,6 +895,57 @@ impl VkContext {
             );
         }
         Ok(())
+    }
+}
+
+impl VkContext {
+    // Bin the frame's local lights over plane `slot`'s reflected view (ring
+    // entry `ring`'s params) into the plane's cluster lists, ordered after the
+    // last fragment read of those lists (the plane's previous mirror render,
+    // carried across submissions by the single graphics queue) and before this
+    // render's.
+    fn encode_mirror_light_cull(
+        &self,
+        cmd: vk::CommandBuffer,
+        set: &PlanarReflectionSet,
+        slot: usize,
+        ring: usize,
+    ) {
+        let lists = set.cluster_lists[slot].buffer();
+        let barrier = |src: vk::AccessFlags, dst: vk::AccessFlags| {
+            vk::BufferMemoryBarrier::default()
+                .src_access_mask(src)
+                .dst_access_mask(dst)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .buffer(lists)
+                .offset(0)
+                .size(vk::WHOLE_SIZE)
+        };
+        // SAFETY: `cmd` is the frame's command buffer, in the recording state
+        // and owned by this device, for the whole pass this is called from.
+        let rec = unsafe { Recorder::assume_recording(&self.hw.device, cmd) };
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            &[],
+            &[barrier(
+                vk::AccessFlags::SHADER_READ,
+                vk::AccessFlags::SHADER_WRITE,
+            )],
+            &[],
+        );
+        self.bin_clusters(&rec, set.cluster_sets[ring]);
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            &[],
+            &[barrier(
+                vk::AccessFlags::SHADER_WRITE,
+                vk::AccessFlags::SHADER_READ,
+            )],
+            &[],
+        );
     }
 }
 

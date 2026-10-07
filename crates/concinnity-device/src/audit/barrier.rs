@@ -175,6 +175,11 @@ const AUDITS: &[BackendAudit] = &[
             // pass's sample. Neither the targets nor the shared mirror depth is a
             // graph resource.
             ("planar.rs", "cmd_pipeline_barrier", 2, Reason::Ungraphed),
+            // Each plane's cluster lists, binned over its reflected view: one
+            // orders the binning after the plane's previous mirror render read
+            // them, the other before this render reads them. Per-plane lists are
+            // not a graph resource.
+            ("planar.rs", "rec.pipeline_barrier(", 2, Reason::Ungraphed),
             // The refraction snapshot: both passes copy the scene image into a
             // private snapshot and sample that, because a fragment cannot read
             // the attachment it is blending into. The pair opens the copy and
@@ -344,7 +349,10 @@ const AUDITS: &[BackendAudit] = &[
                 Reason::Ungraphed,
             ),
             ("cull.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
-            ("planar.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
+            // Four for the mirror targets and their cull's indirect buffer, two
+            // flipping the per-plane cluster lists (not graph resources) into
+            // and out of `UNORDERED_ACCESS` around their binning.
+            ("planar.rs", ".ResourceBarrier(", 6, Reason::Ungraphed),
             // The last `Inline` row on this backend. One of its two barriers is
             // really intra-pass (the G-buffer depth, which the graph does not
             // model, borrowed for the upscaler's read); the other transitions the

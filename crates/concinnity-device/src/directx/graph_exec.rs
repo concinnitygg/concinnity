@@ -43,7 +43,7 @@
 //! derived from the graph rather than emitted inline.
 
 use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::TextDrawCall;
+use concinnity_core::gfx::render_types::{ClusterParams, TextDrawCall};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
@@ -592,6 +592,9 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // covers; computed once from `vp_mat` so the mirror pass and the transparent
     // pass that samples it agree.
     pub planar: PlanarFramePlan,
+    // The main camera's cluster params, which each mirror render re-aims
+    // through its reflected view.
+    pub cluster_params: ClusterParams,
 }
 
 impl DxContext {
@@ -1201,7 +1204,11 @@ impl DxContext {
                 // is live (matching `clustering_enabled`), and the RAW
                 // edge on `cluster_lists` pins it before Main, which reads
                 // the same buffer.
-                self.encode_light_cull(cmd, params.frame_idx)?;
+                self.encode_light_cull(
+                    cmd,
+                    params.frame_idx,
+                    self.main_cluster_grid(params.frame_idx),
+                );
             }
             PassId::Shadow => {
                 // Build the raymarch view only when at least one volume

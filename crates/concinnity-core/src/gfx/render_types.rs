@@ -428,6 +428,21 @@ impl ClusterParams {
     /// [`clustering_active`](crate::render::lights::clustering_active) holds for
     /// the counts; a negative `num_local_lights` bins none.
     pub fn for_camera(camera: &ClusterCamera, num_local_lights: i32, num_probes: u32) -> Self {
+        Self {
+            num_lights: num_local_lights.max(0) as u32,
+            use_clusters: u32::from(crate::render::lights::clustering_active(
+                num_local_lights,
+                num_probes as usize,
+            )),
+            num_probes,
+            ..Self::ZERO
+        }
+        .with_camera(camera)
+    }
+
+    /// The same lights and probes binned over `camera`'s grid instead: a
+    /// second viewpoint, such as a planar mirror, shading the frame's lights.
+    pub fn with_camera(&self, camera: &ClusterCamera) -> Self {
         let view = camera.view;
         Self {
             inv_view_proj: crate::transform::mat4_inverse(crate::transform::mat4_mul(
@@ -438,17 +453,9 @@ impl ClusterParams {
             z_near: camera.near.max(1e-3),
             view_forward: [-view[0][2], -view[1][2], -view[2][2]],
             z_far: camera.range,
-            grid_x: CLUSTER_GRID_X,
-            grid_y: CLUSTER_GRID_Y,
-            grid_z: CLUSTER_GRID_Z,
-            num_lights: num_local_lights.max(0) as u32,
             screen_w: camera.width as f32,
             screen_h: camera.height as f32,
-            use_clusters: u32::from(crate::render::lights::clustering_active(
-                num_local_lights,
-                num_probes as usize,
-            )),
-            num_probes,
+            ..*self
         }
     }
 }
@@ -1986,6 +1993,39 @@ mod tests {
         assert_eq!((off.num_lights, off.use_clusters), (0, 0));
         let probes_only = ClusterParams::for_camera(&camera, 0, 1);
         assert_eq!((probes_only.num_lights, probes_only.use_clusters), (0, 1));
+    }
+
+    #[test]
+    fn cluster_params_with_camera_keeps_the_counts_and_moves_the_grid() {
+        let main = ClusterCamera {
+            view: crate::transform::IDENTITY,
+            proj: crate::transform::IDENTITY,
+            position: [0.0; 3],
+            near: 0.1,
+            range: 100.0,
+            width: 1920,
+            height: 1080,
+        };
+        let mut other_view = crate::transform::IDENTITY;
+        other_view[0][2] = 1.0;
+        other_view[2][2] = 0.0;
+        let other = ClusterCamera {
+            view: other_view,
+            position: [4.0, 5.0, 6.0],
+            near: 0.2,
+            range: 40.0,
+            width: 960,
+            height: 540,
+            ..main
+        };
+        let base = ClusterParams::for_camera(&main, 9, 2);
+        let moved = base.with_camera(&other);
+        let direct = ClusterParams::for_camera(&other, 9, 2);
+        assert_eq!(bytemuck::bytes_of(&moved), bytemuck::bytes_of(&direct));
+        assert_eq!(
+            (moved.num_lights, moved.num_probes, moved.use_clusters),
+            (9, 2, 1)
+        );
     }
 
     // `cluster_types.hlsl` hardcodes the list layout every cluster reader and

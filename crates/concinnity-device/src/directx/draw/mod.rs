@@ -417,6 +417,7 @@ impl DxContext {
                 .as_ref()
                 .map(|set| set.frame_plan(vp_mat))
                 .unwrap_or_default(),
+            cluster_params,
         };
         let pass_cmd_lists = match self.execute_graph(&frame_graph, &frame_params) {
             Ok(lists) => lists,

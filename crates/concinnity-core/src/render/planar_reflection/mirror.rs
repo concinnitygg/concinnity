@@ -1,6 +1,7 @@
 //! Mirror a camera across a world plane and oblique-clip the projection so
 //! geometry behind the plane never leaks into the reflection.
 
+use crate::gfx::render_types::ClusterCamera;
 use crate::math::vec3::length;
 use crate::render::depth::camera_oblique_projection;
 use crate::transform::{Mat4, mat4_inverse, mat4_mul};
@@ -96,10 +97,30 @@ pub fn orient_plane_toward(plane: Vec4, point: [f32; 3]) -> Vec4 {
 pub struct PlanarMatrices {
     /// Reflected view matrix (world -> mirrored view).
     pub view: Mat4,
+    /// The camera projection with oblique near-plane clipping applied.
+    pub proj: Mat4,
     /// Reflected view-projection with oblique near-plane clipping applied.
     pub view_proj: Mat4,
     /// The camera eye reflected across the plane (LOD / view-direction anchor).
     pub eye: [f32; 3],
+}
+
+impl PlanarMatrices {
+    /// The camera a mirror render's light clusters are binned for, over a
+    /// `width` x `height` target: the reflected eye seen through the oblique
+    /// projection, so a fragment the mirror rasterizes lands in the cluster
+    /// built around it.
+    pub fn cluster_camera(&self, near: f32, range: f32, width: u32, height: u32) -> ClusterCamera {
+        ClusterCamera {
+            view: self.view,
+            proj: self.proj,
+            position: self.eye,
+            near,
+            range,
+            width,
+            height,
+        }
+    }
 }
 
 /// Build the mirror view + oblique-clipped view-projection + reflected eye for a
@@ -122,6 +143,7 @@ pub fn planar_matrices(
     let r_proj = camera_oblique_projection(proj, clip_view);
     PlanarMatrices {
         view: r_view,
+        proj: r_proj,
         view_proj: mat4_mul(r_proj, r_view),
         eye: reflect_point(cam_pos, plane),
     }
@@ -257,6 +279,58 @@ mod tests {
         assert!(below > 1.0, "below-water clipped: {below}");
         // The reflected eye sits below the plane (mirror of y = 3).
         assert!(approx(m.eye[1], -3.0, 1e-5), "reflected eye height");
+    }
+
+    // The light-binning kernel places a cluster by unprojecting the tile's NDC
+    // corners through `inv_view_proj` (at the far depth) and slicing along
+    // `view_forward`; the mirror's fragment places itself by its rasterized
+    // position and `-(view * p).z`. Both must agree for every reflected point,
+    // through the oblique projection.
+    #[test]
+    fn a_mirror_fragment_finds_the_cluster_built_around_it() {
+        let plane = [0.0, 1.0, 0.0, 0.0];
+        let cam_pos = [1.0, 3.0, 8.0];
+        let view = crate::gfx::projection::look_at(cam_pos, [0.0, 0.5, -6.0], [0.0, 1.0, 0.0]);
+        let proj = camera_projection(1.1, 1.6, 0.1);
+        let m = planar_matrices(view, proj, cam_pos, plane, 0.02);
+        let params = crate::gfx::render_types::ClusterParams::for_camera(
+            &m.cluster_camera(0.1, 120.0, 1600, 1000),
+            4,
+            0,
+        );
+        assert_eq!(params.use_clusters, 1);
+
+        for p in [[0.0, 2.0, -4.0], [3.5, 0.4, -12.0], [-6.0, 7.0, -30.0]] {
+            let clip = xform(m.view_proj, [p[0], p[1], p[2], 1.0]);
+            assert!(clip[3] > 0.0, "{p:?} is in front of the mirror camera");
+            let ndc = [clip[0] / clip[3], clip[1] / clip[3]];
+
+            let h = xform(params.inv_view_proj, [ndc[0], ndc[1], 0.0, 1.0]);
+            let ray = crate::math::vec3::normalize_clamped(
+                [
+                    h[0] - h[3] * params.cam_pos[0],
+                    h[1] - h[3] * params.cam_pos[1],
+                    h[2] - h[3] * params.cam_pos[2],
+                ],
+                1e-12,
+            );
+            let to_p = crate::math::vec3::normalize_clamped(
+                [p[0] - m.eye[0], p[1] - m.eye[1], p[2] - m.eye[2]],
+                1e-12,
+            );
+            let along = crate::math::vec3::dot(ray, to_p);
+            assert!(approx(along, 1.0, 1e-4), "{p:?}: ray off by {along}");
+
+            let kernel_depth = crate::math::vec3::dot(
+                [p[0] - m.eye[0], p[1] - m.eye[1], p[2] - m.eye[2]],
+                params.view_forward,
+            );
+            let fragment_depth = -xform(m.view, [p[0], p[1], p[2], 1.0])[2];
+            assert!(
+                approx(kernel_depth, fragment_depth, 1e-3),
+                "{p:?}: kernel {kernel_depth} vs fragment {fragment_depth}"
+            );
+        }
     }
 
     #[test]
