@@ -37,6 +37,16 @@ pub(crate) struct DxCompositeArgs {
     // The `ViewMode` discriminant when the frame visualizes a G-buffer channel,
     // 0 otherwise (Lit / Unlit / Wireframe all composite the scene).
     channel_view: u32,
+    // Whether a particle or transparent pass wrote the reactive mask this frame.
+    reactive_valid: bool,
+}
+
+// What the composite samples: the scene SRV (the TAA output when TAA is on, the
+// HDR scene target otherwise), and whether the reactive mask holds this frame's.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct CompositeSources {
+    pub scene_srv: SrvSlot,
+    pub reactive_valid: bool,
 }
 
 // The composite + text orchestration lives once in `gfx::fullscreen`; this impl
@@ -115,6 +125,7 @@ impl fullscreen::CompositeEncoder for DxContext {
                 view_mode: args.channel_view,
                 depth_near,
                 depth_far,
+                reactive_valid: if args.reactive_valid { 1.0 } else { 0.0 },
             };
             cmd.set_graphics_root_constants(2, &composite);
             // Root param [3]: 3D color-grading LUT SRV (t2).
@@ -139,6 +150,7 @@ impl fullscreen::CompositeEncoder for DxContext {
             cmd.set_graphics_srv_table(5, rough_srv);
             cmd.set_graphics_srv_table(6, self.ssao_ao_srv_gpu());
             cmd.set_graphics_srv_table(7, motion_srv);
+            cmd.set_graphics_srv_table(8, self.targets.reactive_mask.srv_gpu());
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );
@@ -271,7 +283,7 @@ impl DxContext {
         frame_idx: usize,
         render_target: CompositeRenderTarget<'_>,
         text_calls: &[TextDrawCall],
-        scene_srv: SrvSlot,
+        sources: CompositeSources,
         resolution: CompositeResolution,
     ) -> RenderResult<()> {
         let CompositeRenderTarget {
@@ -292,7 +304,7 @@ impl DxContext {
         let args = DxCompositeArgs {
             back_buffer: back_buffer.clone(),
             back_buffer_rtv,
-            scene_srv,
+            scene_srv: sources.scene_srv,
             width,
             height,
             frame_idx,
@@ -301,6 +313,7 @@ impl DxContext {
             } else {
                 0
             },
+            reactive_valid: sources.reactive_valid,
         };
         fullscreen::encode_composite_chain(self, cmd, &args, text_calls)
     }

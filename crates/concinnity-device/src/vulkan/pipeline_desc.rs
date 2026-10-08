@@ -26,6 +26,8 @@ pub(in crate::vulkan) enum Blend {
     PremultipliedOver,
     // `src.a * src + (1 - src.a) * dst`, alpha included.
     AlphaOver,
+    // `max(src, dst)`.
+    Max,
 }
 
 impl From<PostBlend> for Blend {
@@ -52,14 +54,19 @@ impl Blend {
                 vk::BlendFactor::SRC_ALPHA,
                 vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
             ),
+            Blend::Max => (vk::BlendFactor::ONE, vk::BlendFactor::ONE),
+        };
+        let op = match self {
+            Blend::Max => vk::BlendOp::MAX,
+            _ => vk::BlendOp::ADD,
         };
         base.blend_enable(true)
             .src_color_blend_factor(src)
             .dst_color_blend_factor(dst)
-            .color_blend_op(vk::BlendOp::ADD)
+            .color_blend_op(op)
             .src_alpha_blend_factor(src)
             .dst_alpha_blend_factor(dst)
-            .alpha_blend_op(vk::BlendOp::ADD)
+            .alpha_blend_op(op)
     }
 }
 
@@ -328,6 +335,15 @@ mod tests {
             (vk::BlendFactor::ONE, vk::BlendFactor::ONE)
         );
         assert_eq!(Blend::from(PostBlend::Replace), Blend::Opaque);
+    }
+
+    #[test]
+    fn max_blends_both_channels_by_max() {
+        let max = Blend::Max.raw();
+        assert_eq!(max.blend_enable, vk::TRUE);
+        assert_eq!(max.color_blend_op, vk::BlendOp::MAX);
+        assert_eq!(max.alpha_blend_op, vk::BlendOp::MAX);
+        assert_eq!(Blend::AlphaOver.raw().color_blend_op, vk::BlendOp::ADD);
     }
 
     #[test]

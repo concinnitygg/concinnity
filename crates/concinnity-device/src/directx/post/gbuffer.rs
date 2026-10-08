@@ -66,7 +66,7 @@ pub(in crate::directx) use concinnity_core::render::uniforms::GBufferView;
 // Root signatures
 
 // The pre-pass's three color targets, in attachment order.
-pub(super) fn gbuffer_targets(pso: GraphicsPso<'_>) -> GraphicsPso<'_> {
+pub(in crate::directx) fn gbuffer_targets(pso: GraphicsPso<'_>) -> GraphicsPso<'_> {
     pso.target(GBUFFER_NORMAL_DEPTH_FORMAT, Blend::Opaque)
         .target(GBUFFER_ROUGHNESS_FORMAT, Blend::Opaque)
         .target(GBUFFER_VELOCITY_FORMAT, Blend::Opaque)
@@ -578,6 +578,7 @@ impl DxContext {
         // tail over the deformed VB). With nothing to draw the pass is the
         // clears above, which is what "no geometry" means to every reader.
         self.encode_gbuffer_prepass_gpu_driven(cmd, frame_idx, view_gva, velocity_active);
+        self.encode_raymarch_prepass(cmd, frame_idx, &view, &view_uni);
         // The sky keeps the "no geometry" depth and roughness and adds the
         // camera's motion where nothing was drawn.
         if self.draws_sky(self.state.view.mode) {

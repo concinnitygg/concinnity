@@ -14,6 +14,10 @@ The panel is positioned by `center`, oriented by `normal` (the facing
 direction), and sized by `half_size` (half-width along the panel's tangent,
 half-height along its bitangent).
 
+Its reflection moves with neither the pane nor the scene behind it, so
+temporal anti-aliasing and upscaling favor the current frame across the
+pane in proportion to how much reflection it shows.
+
 ## Parameters
 
 - `center`: An array of 3 floats. World-space position of the panel's center. Defaults to `[0.0, 1.0, 0.0]`.

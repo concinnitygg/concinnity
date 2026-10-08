@@ -154,7 +154,9 @@ mod tests {
             flags,
             pipelines: VolumePipelines {
                 pipeline: pipeline.clone(),
+                front_pipeline: None,
                 shadow_pipeline: None,
+                prepass_pipelines: None,
             },
         }))
     }

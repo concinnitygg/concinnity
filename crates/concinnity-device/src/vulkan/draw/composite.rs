@@ -27,6 +27,8 @@ use super::super::upload_ring::UPLOAD_ALIGN;
 pub(crate) struct VkCompositeArgs {
     image_index: usize,
     frame_idx: usize,
+    // Whether a particle or transparent pass wrote the reactive mask this frame.
+    reactive_valid: bool,
 }
 
 // The composite + text orchestration lives once in `gfx::fullscreen`; this impl
@@ -102,6 +104,7 @@ impl fullscreen::CompositeEncoder for VkContext {
                 },
                 depth_near,
                 depth_far,
+                reactive_valid: if args.reactive_valid { 1.0 } else { 0.0 },
             };
             cmd_push_constants(
                 device,
@@ -246,6 +249,7 @@ impl VkContext {
         image_index: u32,
         frame_idx: usize,
         text_calls: &[TextDrawCall],
+        reactive_valid: bool,
     ) -> RenderResult<()> {
         // Reset this slot's text-upload cursor and ensure its buffer holds the
         // whole frame's text up front, so each `text_draw` only appends (and
@@ -260,6 +264,7 @@ impl VkContext {
         let args = VkCompositeArgs {
             image_index: image_index as usize,
             frame_idx,
+            reactive_valid,
         };
         fullscreen::encode_composite_chain(self, &cmd, &args, text_calls)
     }

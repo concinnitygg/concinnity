@@ -86,6 +86,7 @@ use concinnity_core::gfx::render_types::{
 };
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
+use concinnity_core::render::reactive_mask::ReactiveMaskPlan;
 #[cfg(debug_assertions)]
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{CompiledGraph, PassId, PassQueue};
@@ -213,6 +214,9 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // `RtReflections` pass is in the graph this frame (matches
     // `FrameGraphInputs::rt_reflections_enabled`).
     pub rt_reflection_params: Option<&'a RtParams>,
+    // How the particle and transparent passes treat the reactive mask, and
+    // whether TAA or the upscaler reads it.
+    pub reactive: ReactiveMaskPlan,
 }
 
 // SAFETY: see the type-level docs. The non-Sync `cmd_buf` field is used
@@ -661,11 +665,17 @@ impl MtlContext {
                         view: self.state.view.matrix,
                         cam_pos: params.cam_pos,
                     });
+                let raymarch_view = super::raymarch::RaymarchView::for_gbuffer(
+                    &self.pass_camera(params),
+                    params.gbuffer_view,
+                );
                 self.encode_gbuffer_prepass(
                     cmd_buf,
                     crate::metal::post::gbuffer::GbufferPrepassViews {
                         gbuffer: params.gbuffer_view,
                         main: &main_view,
+                        raymarch: &raymarch_view,
+                        frustum: params.frustum,
                     },
                     crate::metal::post::gbuffer::GbufferGpuBuffers {
                         object_buffer: params.object_buffer,
@@ -683,7 +693,7 @@ impl MtlContext {
             PassId::TaaResolve => {
                 let scene_pre_taa =
                     pass_input(params.scene_pre_taa, PassId::TaaResolve, "scene_pre_taa")?;
-                self.encode_taa(cmd_buf, scene_pre_taa)?
+                self.encode_taa(cmd_buf, scene_pre_taa, params.reactive.readable)?
             }
             PassId::SsrResolve => {
                 let ssr_params = pass_input(params.ssr_params, PassId::SsrResolve, "ssr_params")?;
@@ -789,21 +799,31 @@ impl MtlContext {
                 0
             }
             PassId::ParticlesDraw => {
-                if let Some(frame) = particle_frame {
-                    self.encode_particles_draw(cmd_buf, frame, params.vp, params.frustum)?
+                let write = params.reactive.particles;
+                let draws = if let Some(frame) = particle_frame {
+                    self.encode_particles_draw(cmd_buf, frame, params.vp, params.frustum, write)?
                 } else {
                     0
+                };
+                if draws == 0 {
+                    self.clear_reactive_mask(cmd_buf, write)?;
                 }
+                draws
             }
             PassId::Lines => self.encode_lines(cmd_buf, params.vp)?,
             PassId::Composite => {
                 let scene_color = pass_input(params.scene_color, PassId::Composite, "scene_color")?;
-                self.encode_composite_and_text(cmd_buf, scene_color, params.text_calls)?
+                self.encode_composite_and_text(
+                    cmd_buf,
+                    scene_color,
+                    params.text_calls,
+                    params.reactive.readable,
+                )?
             }
             PassId::Upscale => {
                 let scene_pre_taa =
                     pass_input(params.scene_pre_taa, PassId::Upscale, "scene_pre_taa")?;
-                self.encode_upscale(cmd_buf, scene_pre_taa)?
+                self.encode_upscale(cmd_buf, scene_pre_taa, params.reactive.readable)?
             }
             PassId::Transparent => {
                 let scene_pre_taa =
@@ -847,11 +867,14 @@ impl MtlContext {
                 );
                 self.encode_transparent(
                     cmd_buf,
-                    &view,
                     scene_pre_taa,
                     &draws,
-                    params.rt_reflection_params,
-                    params.bindless_tex_args,
+                    super::transparent::TransparentFrame {
+                        view: &view,
+                        rt_params: params.rt_reflection_params,
+                        bindless_tex_args: params.bindless_tex_args,
+                        reactive: params.reactive.transparent,
+                    },
                 )?
             }
             PassId::PlanarReflection => {

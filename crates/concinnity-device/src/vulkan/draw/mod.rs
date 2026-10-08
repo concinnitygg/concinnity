@@ -534,6 +534,7 @@ impl VkContext {
                 .map(|set| set.frame_plan(vp_mat))
                 .unwrap_or_default(),
             cluster_params,
+            reactive: concinnity_core::render::reactive_mask::ReactiveMaskPlan::of(&seed_inputs),
         };
         // Each non-composite pass is recorded into its own command buffer
         // (returned here in graph order); Composite + the post-graph work below
@@ -735,6 +736,13 @@ impl VkContext {
             // pyramid: the frame ends by reducing its final depth into it for the
             // next frame's phase-1 occlusion test.
             hiz_build_enabled: self.cull.hiz.is_some(),
+            // The mask is one of the scene targets, so it always exists; the
+            // writers carry it unless the device lacks per-target blending.
+            reactive_mask_enabled: self.hw.device.writer_targets().carries_mask(),
+            upscale_reads_reactive: self
+                .upscale
+                .as_ref()
+                .is_some_and(|u| u.reactive_reader().reads()),
             // Screen-space global illumination. Built only when the world
             // selected `indirect_lighting: ssgi`; the graph then inserts the
             // `Ssgi` node on the hdr_resolve RMW chain (which forces the SSR
@@ -773,6 +781,7 @@ impl VkContext {
             // Set by the view-mode mask below (occlusion view only).
             composite_reads_ao: false,
             composite_reads_motion: false,
+            composite_reads_reactive: false,
         };
         // The viewport's view mode + show flags mask the seeded inputs (the
         // per-frame counterpart of the init-time trims); Lit with every flag

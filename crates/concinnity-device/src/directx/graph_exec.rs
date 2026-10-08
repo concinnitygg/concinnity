@@ -595,6 +595,9 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // The main camera's cluster params, which each mirror render re-aims
     // through its reflected view.
     pub cluster_params: ClusterParams,
+    // How the particle and transparent passes treat the reactive mask, and
+    // whether TAA, the upscaler or the reactive view reads it.
+    pub reactive: concinnity_core::render::reactive_mask::ReactiveMaskPlan,
 }
 
 impl DxContext {
@@ -814,7 +817,10 @@ impl DxContext {
                     back_buffer_rtv: params.back_buffer_rtv,
                 },
                 params.text_calls,
-                params.scene_srv,
+                crate::directx::draw::composite::CompositeSources {
+                    scene_srv: params.scene_srv,
+                    reactive_valid: params.reactive.readable,
+                },
                 // Composite runs at drawable resolution; it samples the
                 // (output-sized) upscaler result / scene SRV through a
                 // fullscreen triangle and writes the output-sized back
@@ -1103,6 +1109,9 @@ impl DxContext {
             "gbuffer_normal_depth" => self.gbuffer.as_ref().map(|gb| (&gb.normal_depth, SAMPLED)),
             "gbuffer_roughness" => self.gbuffer.as_ref().map(|gb| (&gb.roughness, SAMPLED)),
             "gbuffer_velocity" => self.gbuffer.as_ref().map(|gb| (&gb.velocity, SAMPLED)),
+            // The reactive mask: in the graph only on a frame that stores and
+            // reads it, and sampled between frames.
+            "reactive_mask" => Some((&self.targets.reactive_mask.resource, SAMPLED)),
             // `gbuffer_depth` is deliberately unregistered: it is a depth
             // target rather than a color one, and the only pass that moves it
             // is the upscaler, which borrows it inside its own dispatch.
@@ -1114,11 +1123,11 @@ impl DxContext {
         })
     }
 
-    // The per-frame `RaymarchView` payload. Its VP is the un-jittered one the
-    // Main pass rasterizes with, so raymarched surfaces share their NDC depth
-    // space with rasterized geometry.
+    // The per-frame `RaymarchView` payload. Its VP is the jittered one the Main
+    // pass rasterizes with (`vp_mat`), so raymarched surfaces share their NDC
+    // depth space with rasterized geometry and take the same TAA jitter.
     fn build_raymarch_view(&self, params: &GraphFrameParams<'_>) -> super::raymarch::RaymarchView {
-        super::raymarch::RaymarchView::new(&self.pass_camera(params, params.cur_vp))
+        super::raymarch::RaymarchView::new(&self.pass_camera(params, params.vp_mat))
     }
 
     // The per-frame `TransparentView` payload. Its VP is the jittered one
@@ -1278,6 +1287,9 @@ impl DxContext {
                 }
             }
             PassId::ParticlesDraw => {
+                self.targets
+                    .reactive_mask
+                    .clear(cmd, params.reactive.particles);
                 if let Some(frame) = particle_frame {
                     self.encode_particles_draw(
                         cmd,
@@ -1285,6 +1297,7 @@ impl DxContext {
                         frame,
                         params.vp_mat,
                         params.frustum,
+                        params.reactive.particles,
                     );
                 }
             }
@@ -1298,7 +1311,7 @@ impl DxContext {
                 );
             }
             PassId::TaaResolve => {
-                self.encode_taa(cmd, params.frame_idx);
+                self.encode_taa(cmd, params.frame_idx, params.reactive.readable);
             }
             PassId::Bloom => {
                 self.encode_bloom(cmd, params.frame_idx, params.scene_srv)?;
@@ -1352,6 +1365,9 @@ impl DxContext {
                 // `FrameGraphInputs::transparent_enabled`
                 // (`DxContext::transparent_enabled`), so it only appears when the
                 // world declared a visible `GlassPanel` or `WaterSurface`.
+                self.targets
+                    .reactive_mask
+                    .clear(cmd, params.reactive.transparent);
                 let view = self.build_transparent_view(params);
                 self.encode_transparent(
                     cmd,
@@ -1359,6 +1375,7 @@ impl DxContext {
                     &view,
                     params.fov_y_radians,
                     params.aspect,
+                    params.reactive.transparent,
                 )?;
             }
             PassId::HizBuild | PassId::HizFinal => {

@@ -580,6 +580,9 @@ pub(super) struct HdrTargets {
     // whatever the frame's sample count is, so the volume shaders compile
     // against one declaration.
     pub depth_copy: Retained<ProtocolObject<dyn MTLTexture>>,
+    // R8 reactive mask the particle and transparent passes write beside the
+    // scene and TAA or the upscaler reads (see `core::render::reactive_mask`).
+    pub reactive_mask: Retained<ProtocolObject<dyn MTLTexture>>,
     pub width: u32,
     pub height: u32,
     // Sample count these targets were built at, and the count every pipeline
@@ -609,6 +612,13 @@ impl HdrTargets {
         }
     }
 }
+
+// The reactive mask's format, which the particle and transparent pipelines
+// declare at color(1).
+pub(super) const REACTIVE_MASK_FORMAT: MTLPixelFormat = MTLPixelFormat::R8Unorm;
+// Written as a color target, read by TAA and MetalFX.
+pub(super) const REACTIVE_MASK_USAGE: MTLTextureUsage =
+    MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0);
 
 // Create or recreate the HDR off-screen targets at `width`x`height`. The
 // MSAA color/depth attachments live in private storage; the resolve target
@@ -724,6 +734,18 @@ pub(super) fn create_hdr_targets(
         .newTextureWithDescriptor(&depth_resolve_desc)
         .ok_or_else(|| allocation_failed("depth-copy texture"))?;
 
+    let reactive_desc = TextureDesc {
+        format: REACTIVE_MASK_FORMAT,
+        width: w,
+        height: h,
+        usage: REACTIVE_MASK_USAGE,
+        ..Default::default()
+    }
+    .build();
+    let reactive_mask = device
+        .newTextureWithDescriptor(&reactive_desc)
+        .ok_or_else(|| allocation_failed("reactive mask texture"))?;
+
     Ok(HdrTargets {
         hdr_color,
         hdr_resolve,
@@ -732,6 +754,7 @@ pub(super) fn create_hdr_targets(
         depth,
         depth_resolve,
         depth_copy,
+        reactive_mask,
         width: w as u32,
         height: h as u32,
         sample_count: sample_count.max(1),

@@ -9,6 +9,7 @@ use concinnity_core::profile;
 use concinnity_core::render::depth::camera_projection;
 use concinnity_core::render::error;
 use concinnity_core::render::model_history::HistoryMode;
+use concinnity_core::render::reactive_mask::ReactiveReader;
 use concinnity_core::render::render_graph::{self, FrameGraphInputs};
 use concinnity_core::render::shadow_schedule::{CascadeCamera, CascadeLight};
 use concinnity_core::render::view_history::ViewFrame;
@@ -413,6 +414,10 @@ impl MtlContext {
             // pyramid: the frame ends by reducing its final depth into it for the
             // next frame's phase-1 occlusion test.
             hiz_build_enabled: self.cull.hiz.is_some(),
+            // The mask is one of the HDR targets, so it always exists.
+            reactive_mask_enabled: true,
+            upscale_reads_reactive: ReactiveReader::MetalFx.reads()
+                && self.upscale.scaler.as_ref().is_some_and(|s| s.reactive),
             // SSGI runs when `indirect_lighting: "ssgi"` resolved settings that
             // contribute: the composite scales by intensity, so zero would pay a
             // hemisphere trace to add nothing. The builder inserts the Ssgi
@@ -439,6 +444,7 @@ impl MtlContext {
             // Set by the view-mode mask below (occlusion view only).
             composite_reads_ao: false,
             composite_reads_motion: false,
+            composite_reads_reactive: false,
             shadowed_spot_count: self.spot_shadow.count,
             spot_shadow_slice_size: render_types::spot_shadow_slice_size(self.shadow.map_size),
         };

@@ -760,7 +760,7 @@ impl PostProcessParams {
 /// Fragment constants for the composite pass: the authored post-process
 /// tunables plus the scene-transition fade the backend owns. Pushed verbatim to
 /// the composite fragment shader, so the layout must stay in sync with the
-/// `CompositeParams` struct there. 52 bytes.
+/// `CompositeParams` struct there. 56 bytes.
 ///
 /// The fade is not a `PostProcessParams` field because that struct is resolved
 /// from the `PostProcessConfig` asset and re-pushed whenever a settings slider
@@ -786,6 +786,9 @@ pub struct CompositeParams {
     /// Distance the depth channel view shows as white; distances between map
     /// on a log scale.
     pub depth_far: f32,
+    /// 1.0 when the reactive mask was written this frame; the reactive view
+    /// shows black otherwise.
+    pub reactive_valid: f32,
 }
 
 /// The farthest distance the depth channel view tells apart for a camera that
@@ -1905,13 +1908,14 @@ mod tests {
     // depth view's two distances.
     #[test]
     fn composite_params_layout_matches_shaders() {
-        assert_eq!(size_of::<CompositeParams>(), 52);
+        assert_eq!(size_of::<CompositeParams>(), 56);
         assert_eq!(offset_of!(CompositeParams, post), 0);
         assert_eq!(size_of::<PostProcessParams>(), 36);
         assert_eq!(offset_of!(CompositeParams, fade), 36);
         assert_eq!(offset_of!(CompositeParams, view_mode), 40);
         assert_eq!(offset_of!(CompositeParams, depth_near), 44);
         assert_eq!(offset_of!(CompositeParams, depth_far), 48);
+        assert_eq!(offset_of!(CompositeParams, reactive_valid), 52);
     }
 
     #[test]

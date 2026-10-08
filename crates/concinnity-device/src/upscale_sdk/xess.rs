@@ -18,6 +18,7 @@ use std::ptr;
 use concinnity_core::components::UpscaleQuality;
 use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
 use concinnity_core::render::history_reset::UpscalerResetLatch;
+use concinnity_core::render::reactive_mask::ReactiveReader;
 
 use super::{SdkLibrary, UpscaleExtent, entry_point};
 
@@ -33,6 +34,7 @@ const XESS_QUALITY_SETTING_AA: i32 = 106;
 
 // xess_init_flags_t.
 const XESS_INIT_FLAG_INVERTED_DEPTH: u32 = 1 << 1;
+const XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK: u32 = 1 << 3;
 const XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE: u32 = 1 << 8;
 
 pub(crate) type xess_context_handle_t = *mut c_void;
@@ -122,6 +124,8 @@ impl XessExecuteFrame {
 type PfnXessDestroyContext = unsafe extern "C" fn(ctx: xess_context_handle_t) -> i32;
 type PfnXessSetVelocityScale =
     unsafe extern "C" fn(ctx: xess_context_handle_t, x: f32, y: f32) -> i32;
+type PfnXessSetMaxResponsiveMaskValue =
+    unsafe extern "C" fn(ctx: xess_context_handle_t, value: f32) -> i32;
 
 // The XeSS quality preset nearest the engine preset, native anti-aliasing at
 // native resolution. It hints XeSS's model selection; the render size itself is
@@ -138,13 +142,15 @@ fn xess_quality(quality: Option<UpscaleQuality>) -> i32 {
 
 // HDR linear color and render-resolution motion vectors scaled to pixels by
 // the velocity scale, so: XeSS's own auto-exposure (the scene is un-exposed
-// until after the upscale), and inverted depth when the near plane is device
-// depth 1.
+// until after the upscale), inverted depth when the near plane is device depth
+// 1, and the engine's reactive mask as the responsive pixel mask, which every
+// execute must then supply.
 const fn xess_init_flags(depth: DepthMapping) -> u32 {
+    let flags = XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE | XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK;
     if depth.reversed {
-        XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE | XESS_INIT_FLAG_INVERTED_DEPTH
+        flags | XESS_INIT_FLAG_INVERTED_DEPTH
     } else {
-        XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE
+        flags
     }
 }
 
@@ -153,6 +159,7 @@ const fn xess_init_flags(depth: DepthMapping) -> u32 {
 pub(crate) struct XessCommonApi {
     destroy_context: PfnXessDestroyContext,
     set_velocity_scale: PfnXessSetVelocityScale,
+    set_max_responsive_mask_value: PfnXessSetMaxResponsiveMaskValue,
 }
 
 impl XessCommonApi {
@@ -162,6 +169,10 @@ impl XessCommonApi {
             Some(Self {
                 destroy_context: entry_point(library, c"xessDestroyContext")?,
                 set_velocity_scale: entry_point(library, c"xessSetVelocityScale")?,
+                set_max_responsive_mask_value: entry_point(
+                    library,
+                    c"xessSetMaxResponsiveMaskValue",
+                )?,
             })
         }
     }
@@ -230,6 +241,19 @@ impl<L> XessContext<L> {
         }
     }
 
+    /// Clip the responsive mask at the value the engine caps XeSS's reactive
+    /// input at. A failure is logged under `label` and otherwise ignored.
+    pub(crate) fn set_responsive_mask_cap(&self, label: &str) {
+        let Some(cap) = ReactiveReader::Xess.cap() else {
+            return;
+        };
+        // SAFETY: `self.handle` is the live context; the call takes only a scalar besides it.
+        let rc = unsafe { (self.api.set_max_responsive_mask_value)(self.handle, cap) };
+        if rc != XESS_RESULT_SUCCESS {
+            tracing::warn!("{label}: xessSetMaxResponsiveMaskValue returned {rc} (non-fatal)");
+        }
+    }
+
     /// Destroy the context now; dropping it afterwards does nothing more. The
     /// device it was created on must be idle and still alive.
     pub(crate) fn destroy(&mut self) {
@@ -293,6 +317,7 @@ mod tests {
         assert_eq!(XESS_QUALITY_SETTING_QUALITY, 103);
         assert_eq!(XESS_QUALITY_SETTING_AA, 106);
         assert_eq!(XESS_INIT_FLAG_INVERTED_DEPTH, 2);
+        assert_eq!(XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK, 8);
         assert_eq!(XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE, 256);
     }
 
@@ -320,6 +345,7 @@ mod tests {
                 let flags = xess_init_flags(DepthMapping { reversed, infinite });
                 assert_eq!((flags & XESS_INIT_FLAG_INVERTED_DEPTH) != 0, reversed);
                 assert_ne!(flags & XESS_INIT_FLAG_ENABLE_AUTOEXPOSURE, 0);
+                assert_ne!(flags & XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK, 0);
             }
         }
         assert_ne!(

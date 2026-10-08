@@ -243,7 +243,7 @@ pub(super) fn acquire_hardware(
         device,
         memory_budget: memory_budget_supported,
         rt_capable,
-        depth_bias_clamp,
+        caps,
         update_after_bind,
     } = create_logical_device(
         &instance,
@@ -266,7 +266,7 @@ pub(super) fn acquire_hardware(
             messenger: debug_messenger,
             filter: debug_filter,
         },
-        depth_bias_clamp,
+        caps,
     );
 
     // SAFETY: a property query on a live handle; it only reads.

@@ -1,15 +1,16 @@
 // The raymarched SDF volume pass: three families of proxy-cube draw over one
 // authored distance field.
 //
-// A volume rasterizes the back faces of its world-space bounding box and the
-// fragment sphere-traces the field inside it. The world's `SdfVolume` supplies
+// A volume rasterizes a face of its world-space bounding box and the fragment
+// sphere-traces the field inside it. The world's `SdfVolume` supplies
 // the field itself, spliced at SDF_BODY between the helpers that forward-declare
 // it and the entry points that call it, so this source is only complete once a
 // world is loaded.
 //
-// RAYMARCH_SURFACE, RAYMARCH_VOLUMETRIC and RAYMARCH_SHADOW select the family:
-// an opaque surface writing color and depth, a participating medium blended
-// over the scene, and a depth-only caster marched from the light side.
+// RAYMARCH_SURFACE, RAYMARCH_VOLUMETRIC, RAYMARCH_SHADOW and RAYMARCH_PREPASS
+// select the family: an opaque surface writing color and depth, a participating
+// medium blended over the scene, a depth-only caster marched from the light
+// side, and the surface's share of the G-buffer pre-pass.
 //
 // CN_BACKEND_METAL / CN_BACKEND_DIRECTX select the host's binding layout. These
 // slots are private between this file and the encoders: an authored shader defines
@@ -32,7 +33,19 @@
 [[vk::binding(2, 0)]] ConstantBuffer<ShadowUniforms> shadow_cb : register(b3);
 [[vk::push_constant]] ConstantBuffer<RaymarchShadowCascade> cascade_cb : register(b4);
 
-#ifdef CN_BACKEND_METAL
+#ifdef RAYMARCH_PREPASS
+
+// The pre-pass binds the three constant buffers and no texture: it runs before
+// the shadow maps and the scene it would sample exist. `shade` still runs for
+// its roughness, so whatever it reads through these resolves to a neutral value,
+// and the hardware depth test against the pre-pass's own depth is the clip.
+float shadow_map_cmp(float3 uv_layer, float ref) { return 1.0; }
+float2 shadow_map_size() { return float2(1.0, 1.0); }
+float3 irradiance_sample(float3 d) { return (float3)(0.0); }
+float3 prefilter_sample_lod(float3 d, float lod) { return (float3)(0.0); }
+float3 scene_sample(float2 uv) { return (float3)(0.0); }
+
+#elif defined(CN_BACKEND_METAL)
 
 [[vk::binding(11, 0)]] Texture2D<float> main_depth : register(t0);
 [[vk::binding(3, 0)]] Texture2DArray<float> shadow_map : register(t1);
@@ -55,8 +68,7 @@ float rasterized_distance(float2 px, float3 cam, float4 sv_pos)
 {
     float depth_ndc = main_depth.Load(int3(int2(px), 0));
     float2 ndc_xy = (sv_pos.xy / view_cb.viewport) * 2.0 - 1.0;
-    // Metal clip space is y-down after the projection flip the engine applies,
-    // so re-mirror Y to match the inv_vp the CPU built from the unflipped one.
+    // Pixel rows count down from the top while NDC's Y points up.
     ndc_xy.y = -ndc_xy.y;
     float3 world;
     if (!depth_reconstruct(view_cb.inv_vp, ndc_xy, depth_ndc, world))
@@ -82,6 +94,8 @@ float rasterized_distance(float2 px, float3 cam, float4 sv_pos)
 float rasterized_distance(float2 px, float3 cam, float4 sv_pos) { return 1e30; }
 
 #endif
+
+#ifndef RAYMARCH_PREPASS
 
 [[vk::binding(8, 0)]] SamplerComparisonState shadow_samp : register(s0);
 [[vk::binding(9, 0)]] SamplerState cube_samp : register(s1);
@@ -125,6 +139,8 @@ float2 shadow_map_size()
     return float2(float(w), float(h));
 }
 
+#endif // RAYMARCH_PREPASS
+
 #define VIEW view_cb
 #define VOL vol_cb
 #define LIGHTS lights_cb
@@ -143,9 +159,12 @@ float2 shadow_map_size()
 
 // The proxy geometry is a unit cube at +/-1 in the engine's 56-byte vertex
 // layout; only position is fetched. Scaling by the volume's extent and offsetting
-// by its center lands it on the bounding box, and the encoders cull front faces
-// so each pixel inside the box takes exactly one fragment whether the camera is
-// outside the box or in it.
+// by its center lands it on the bounding box. A camera clear of the box draws its
+// front faces, so a hit only moves depth farther and a volume behind nearer
+// geometry is rejected before it marches; a camera in or at the box draws its
+// back faces, which cover every pixel the box does. Either way each covered
+// pixel takes one fragment, and the slab test below finds the entry and exit
+// from the camera whichever face rasterized.
 struct RaymarchVertexIn
 {
     float3 pos : POSITION;
@@ -163,7 +182,7 @@ struct RaymarchVertexOut
 
 float3 proxy_world_pos(float3 pos) { return pos * VOL.extent.xyz + VOL.center.xyz; }
 
-#if defined(RAYMARCH_SURFACE) || defined(RAYMARCH_VOLUMETRIC)
+#if defined(RAYMARCH_SURFACE) || defined(RAYMARCH_VOLUMETRIC) || defined(RAYMARCH_PREPASS)
 
 RaymarchVertexOut raymarch_proxy(RaymarchVertexIn v)
 {
@@ -181,24 +200,13 @@ RaymarchVertexOut raymarch_proxy(RaymarchVertexIn v)
 [shader("vertex")]
 RaymarchVertexOut raymarch_vertex(RaymarchVertexIn v) { return raymarch_proxy(v); }
 
-struct RaymarchFragOut
-{
-    float4 color : SV_Target;
-    // Writing a nearer depth keeps early-Z while letting the hit composite
-    // against rasterized geometry, and feeds the raymarched surface's depth to
-    // the passes downstream that sample it.
-    float depth : DEPTH_CONSERVATIVE;
-};
-
-[shader("pixel")]
-RaymarchFragOut raymarch_fragment(RaymarchVertexOut input)
+// Marches the surface family's ray through this pixel, giving the lit color and
+// the hit's depth, or discards the pixel.
+void raymarch_surface(RaymarchVertexOut input, out float4 color, out float depth)
 {
     float3 cam = VIEW.cam_pos.xyz;
     float3 ray_dir = normalize(input.world_pos - cam);
 
-    // The proxy's back faces rasterized, so `world_pos` is on the far side of
-    // the box. The slab test gives entry and exit both, and handles a camera
-    // inside the box uniformly.
     float3 box_min = VOL.center.xyz - VOL.extent.xyz;
     float3 box_max = VOL.center.xyz + VOL.extent.xyz;
     float2 box_t = rayBox(cam, ray_dir, box_min, box_max);
@@ -218,7 +226,7 @@ RaymarchFragOut raymarch_fragment(RaymarchVertexOut input)
     SdfSurface surf = shade(hit_pos, normal, VOL.params, VIEW.time, frag_uv);
 
     float3 view_dir = -ray_dir;
-    float3 color = shadeAmbientIbl(surf, normal, view_dir);
+    float3 lit = shadeAmbientIbl(surf, normal, view_dir);
     if (LIGHTS.num_dir > 0)
     {
         float shadow_factor = 1.0;
@@ -228,17 +236,49 @@ RaymarchFragOut raymarch_fragment(RaymarchVertexOut input)
             // depth for cascade selection without carrying the view matrix.
             shadow_factor = sampleSunShadow(hit_pos, hit.t, input.sv_pos.xy);
         }
-        color += shadePbrSun(surf, normal, view_dir, LIGHTS.dir[0], shadow_factor);
+        lit += shadePbrSun(surf, normal, view_dir, LIGHTS.dir[0], shadow_factor);
     }
     // Whatever the authored shader wants to show through, already attenuated.
-    color += surf.transmitted;
+    lit += surf.transmitted;
 
     // Reprojecting through the same matrix the proxy rasterized with puts the
     // hit in the rasterized geometry's depth space exactly.
     float4 hit_clip = mul(VIEW.vp, float4(hit_pos, 1.0));
-    RaymarchFragOut o;
-    o.color = float4(color, 1.0);
-    o.depth = hit_clip.z / max(hit_clip.w, 1e-6);
+    color = float4(lit, 1.0);
+    depth = hit_clip.z / max(hit_clip.w, 1e-6);
+}
+
+// The hit lies between the box's front and back faces, so it is never farther
+// than a back face nor nearer than a front one. A hit on the face itself can
+// round to the wrong side, so each entry clamps to its rasterized depth to keep
+// the side it promises.
+struct RaymarchBackOut
+{
+    float4 color : SV_Target;
+    float depth : DEPTH_CONSERVATIVE_NEARER;
+};
+
+struct RaymarchFrontOut
+{
+    float4 color : SV_Target;
+    float depth : DEPTH_CONSERVATIVE_FARTHER;
+};
+
+[shader("pixel")]
+RaymarchBackOut raymarch_fragment(RaymarchVertexOut input)
+{
+    RaymarchBackOut o;
+    raymarch_surface(input, o.color, o.depth);
+    o.depth = depth_closer(o.depth, input.sv_pos.z);
+    return o;
+}
+
+[shader("pixel")]
+RaymarchFrontOut raymarch_front_fragment(RaymarchVertexOut input)
+{
+    RaymarchFrontOut o;
+    raymarch_surface(input, o.color, o.depth);
+    o.depth = depth_farther(o.depth, input.sv_pos.z);
     return o;
 }
 
@@ -318,14 +358,14 @@ RaymarchVertexOut raymarch_shadow_vertex(RaymarchVertexIn v)
 }
 
 [shader("pixel")]
-float raymarch_shadow_fragment(RaymarchVertexOut input) : DEPTH_CONSERVATIVE
+float raymarch_shadow_fragment(RaymarchVertexOut input) : DEPTH_CONSERVATIVE_NEARER
 {
     // `dir_i.xyz` is L, surface to light, which is what `shadePbrSun` reads from
     // the same field; incoming light travels along -L, so the shadow ray does.
     float3 ray_dir = -normalize(LIGHTS.dir[0].dir_i.xyz);
 
-    // `world_pos` is on the box face farthest from the light, the encoder having
-    // culled front faces. Stepping back by the bounding-sphere diameter lets the
+    // `world_pos` is on the box face farthest from the light, the proxy drawing
+    // its back faces. Stepping back by the bounding-sphere diameter lets the
     // slab test pick up the true front-face entry from outside the box.
     float3 origin = input.world_pos - ray_dir * (length(VOL.extent.xyz) * 2.5);
     float3 box_min = VOL.center.xyz - VOL.extent.xyz;
@@ -341,11 +381,101 @@ float raymarch_shadow_fragment(RaymarchVertexOut input) : DEPTH_CONSERVATIVE
 
     // Reprojecting through the same cascade matrix the vertex rasterized with
     // shares the rasterized casters' depth space in this slice. The march is
-    // bounded by the box exit, so the hit is never behind the back face and the
-    // conservative-depth contract holds.
+    // bounded by the box exit, so the hit is never behind the back face; the
+    // clamp keeps a hit on that face from rounding past it.
     float3 hit_pos = origin + ray_dir * hit.t;
     float4 hit_clip = mul(SHADOW_UNI.light_vps[cascade_cb.cascade_idx], float4(hit_pos, 1.0));
-    return hit_clip.z / max(hit_clip.w, 1e-6);
+    return depth_closer(hit_clip.z / max(hit_clip.w, 1e-6), input.sv_pos.z);
+}
+
+#endif
+
+#ifdef RAYMARCH_PREPASS
+
+{GBUFFER_COMMON}
+{SPECULAR_AA}
+
+[shader("vertex")]
+RaymarchVertexOut raymarch_prepass_vertex(RaymarchVertexIn v) { return raymarch_proxy(v); }
+
+// The surface family's march, writing what the G-buffer pre-pass writes for a
+// rasterized surface: view normal and linear depth, the roughness `shade`
+// returns with the same specular antialiasing, and motion. A volume does not
+// move, so the hit reprojects through the previous view alone; a field animated
+// by `time` changes shape with no motion to show for it.
+//
+// Every lane runs to the end before a miss discards it, so the derivatives the
+// antialiasing takes see the whole quad on every backend.
+GbFragmentOut raymarch_prepass(RaymarchVertexOut input, out float depth)
+{
+    float3 cam = VIEW.cam_pos.xyz;
+    float3 ray_dir = normalize(input.world_pos - cam);
+
+    float3 box_min = VOL.center.xyz - VOL.extent.xyz;
+    float3 box_max = VOL.center.xyz + VOL.extent.xyz;
+    float2 box_t = rayBox(cam, ray_dir, box_min, box_max);
+    float t_enter = max(box_t.x, 0.001);
+    float t_max = min(box_t.y, VOL.max_distance);
+
+    RayHit hit = coneRaymarch(cam, ray_dir, t_enter, max(t_max, t_enter), VIEW.time);
+    bool covered = hit.hit && box_t.y >= max(box_t.x, 0.0) && t_enter < t_max;
+
+    float3 hit_pos = cam + ray_dir * (hit.hit ? hit.t : t_enter);
+    float3 normal = sdfNormal(hit_pos, VOL.params, VIEW.time, 0.001);
+    float2 frag_uv = input.sv_pos.xy / VIEW.viewport;
+    SdfSurface surf = shade(hit_pos, normal, VOL.params, VIEW.time, frag_uv);
+    float roughness = specular_aa_roughness(normal, saturate(surf.roughness));
+    if (!covered) discard;
+
+    float4 hit_clip = mul(VIEW.vp, float4(hit_pos, 1.0));
+    float view_depth = -mul(VIEW.view_mat, float4(hit_pos, 1.0)).z;
+    GbFragmentOut o;
+    o.nd    = float4(normalize(mul((float3x3)VIEW.view_mat, normal)), view_depth);
+    o.rough = roughness;
+    o.vel   = gb_motion(mul(VIEW.cur_vp, float4(hit_pos, 1.0)),
+                        mul(VIEW.prev_vp, float4(hit_pos, 1.0)));
+    depth = hit_clip.z / max(hit_clip.w, 1e-6);
+    return o;
+}
+
+struct RaymarchPrepassBackOut
+{
+    float4 nd    : SV_Target0;
+    float  rough : SV_Target1;
+    float2 vel   : SV_Target2;
+    float  depth : DEPTH_CONSERVATIVE_NEARER;
+};
+
+struct RaymarchPrepassFrontOut
+{
+    float4 nd    : SV_Target0;
+    float  rough : SV_Target1;
+    float2 vel   : SV_Target2;
+    float  depth : DEPTH_CONSERVATIVE_FARTHER;
+};
+
+[shader("pixel")]
+RaymarchPrepassBackOut raymarch_prepass_fragment(RaymarchVertexOut input)
+{
+    RaymarchPrepassBackOut o;
+    GbFragmentOut g = raymarch_prepass(input, o.depth);
+    o.depth = depth_closer(o.depth, input.sv_pos.z);
+    o.nd = g.nd;
+    o.rough = g.rough;
+    o.vel = g.vel;
+    return o;
+}
+
+[shader("pixel")]
+RaymarchPrepassFrontOut raymarch_prepass_front_fragment(RaymarchVertexOut input)
+{
+    RaymarchPrepassFrontOut o;
+    GbFragmentOut g = raymarch_prepass(input, o.depth);
+    o.depth = depth_farther(o.depth, input.sv_pos.z);
+    o.nd = g.nd;
+    o.rough = g.rough;
+    o.vel = g.vel;
+    return o;
 }
 
 #endif

@@ -12,6 +12,7 @@
 use std::ffi::{CStr, c_void};
 
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::reactive_mask::ReactiveReader;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
 
@@ -101,6 +102,9 @@ impl UpscaleBackend for FsrUpscaler {
             color: inputs.color.as_raw(),
             depth: inputs.depth.as_raw(),
             motion_vectors: inputs.motion_vectors.as_raw(),
+            reactive: inputs
+                .reactive
+                .map_or(std::ptr::null_mut(), Interface::as_raw),
             output: self.output.resource().as_raw(),
         };
         // SAFETY: `cmd` is recording; `encode_upscale` put the inputs in NON_PIXEL_SHADER_RESOURCE
@@ -111,6 +115,10 @@ impl UpscaleBackend for FsrUpscaler {
 
     fn request_history_reset(&self) {
         self.ffx.request_history_reset();
+    }
+
+    fn reactive_reader(&self) -> ReactiveReader {
+        ReactiveReader::Fsr
     }
 }
 

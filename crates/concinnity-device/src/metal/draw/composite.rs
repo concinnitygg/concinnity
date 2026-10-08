@@ -48,6 +48,8 @@ struct CompositePass<'a> {
     // The drawable's pixel size, which a per-call clip rect scales into.
     framebuffer: (u32, u32),
     channel_view: u32,
+    // Whether a particle or transparent pass wrote the reactive mask this frame.
+    reactive_valid: bool,
     draws: Cell<u32>,
 }
 
@@ -89,12 +91,13 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
                 .gbuffer_velocity()
                 .unwrap_or_else(|| self.ctx.ssao.white.as_ref());
             enc.set_fragment_texture(motion, 6);
+            enc.set_fragment_texture(self.ctx.targets.hdr.reactive_mask.as_ref(), 7);
         }
         crate::metal::post::fullscreen::set_fragment_sampler_range(
             enc,
             &self.ctx.composite.sampler,
             0,
-            7,
+            8,
         );
         // Post-process tunables (bloom intensity) plus the scene-transition
         // fade at buffer(0).
@@ -108,6 +111,7 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
             view_mode: self.channel_view,
             depth_near,
             depth_far,
+            reactive_valid: if self.reactive_valid { 1.0 } else { 0.0 },
         };
         enc.set_fragment_value(&composite, 0);
         // Fullscreen triangle: 3 vertices, no vertex buffer (the shared
@@ -223,6 +227,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         scene_color: &Retained<ProtocolObject<dyn MTLTexture>>,
         text_calls: &[TextDrawCall],
+        reactive_valid: bool,
     ) -> concinnity_core::render::error::RenderResult<u32> {
         let composite_pass_desc = self
             .window()
@@ -289,6 +294,7 @@ impl MtlContext {
             } else {
                 0
             },
+            reactive_valid,
             draws: Cell::new(0),
         };
         fullscreen::encode_composite_chain(&pass, &post_encoder, &(), text_calls)?;

@@ -23,6 +23,9 @@ pub(in crate::shader_layout) fn surface() -> Vec<Case> {
             time,
             prefilter_mip_count,
             sky_rot,
+            cur_vp,
+            prev_vp,
+            view_mat,
         })),
         // The two float4 lanes carry an xyz and a pad each; the Rust side keeps
         // them spelled as the three-component value plus the pad it uploads.

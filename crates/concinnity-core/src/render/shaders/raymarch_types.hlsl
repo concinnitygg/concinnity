@@ -2,7 +2,7 @@
 // RAYMARCH_TYPES marker. The first half of the raymarch splice: this declares
 // what a binding names, `raymarch_common.hlsl` the body that reads it.
 //
-// Layouts must match `render/uniforms/`: RaymarchView (208 B),
+// Layouts must match `render/uniforms/`: RaymarchView (400 B),
 // RaymarchVolumeUniforms (176 B), RaymarchShadowCascade (16 B). The light and
 // cascade blocks come from `light_types.hlsl` because the encoders bind the
 // same two buffers the forward main pass does.
@@ -25,6 +25,13 @@ struct RaymarchView
     // Rows of the rotation from world space into the environment cubemaps'
     // baked frame; identity when the sky does not turn.
     float4 sky_rot[3];
+    // The G-buffer pre-pass's motion inputs, read by its family alone: this
+    // frame's and the previous frame's unjittered view-projections, and the view
+    // matrix the pre-pass stores normals and depth in. Without a motion consumer
+    // `prev_vp` is `cur_vp`.
+    float4x4 cur_vp;
+    float4x4 prev_vp;
+    float4x4 view_mat;
 };
 
 // The authored parameter block, 32 floats the volume carries and the SDF

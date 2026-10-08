@@ -23,6 +23,7 @@ mod stages;
 use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::error;
 use concinnity_core::render::post::device::PostExtent;
+use concinnity_core::render::reactive_mask::ReactiveMaskPlan;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::rt_accel::RtUpdate;
 use objc2::rc::Retained;
@@ -284,6 +285,7 @@ impl MtlContext {
             ssao_params: ssao_params.as_ref(),
             ssgi_params: ssgi_params.as_ref(),
             rt_reflection_params: rt_reflection_params.as_ref(),
+            reactive: ReactiveMaskPlan::of(&graph_inputs),
         };
         // The frame's completion join. Every command buffer the frame submits
         // registers a part before it is committed and arrives from its

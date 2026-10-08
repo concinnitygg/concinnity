@@ -501,6 +501,13 @@ impl DxContext {
             // pyramid: the frame ends by reducing its final depth into it for the
             // next frame's phase-1 occlusion test.
             hiz_build_enabled: self.cull.hiz.is_some(),
+            // The mask is one of the scene targets, so it always exists.
+            reactive_mask_enabled: true,
+            upscale_reads_reactive: self
+                .upscale
+                .backend
+                .as_ref()
+                .is_some_and(|u| u.reactive_reader().reads()),
             // Screen-space global illumination: inserts the `Ssgi` RMW node
             // after `Raymarch` and before `Decals`. On when the world selected
             // `indirect_lighting: ssgi` (which also forces the SSR pre-pass on
@@ -537,6 +544,7 @@ impl DxContext {
             // Set by the view-mode mask below (occlusion view only).
             composite_reads_ao: false,
             composite_reads_motion: false,
+            composite_reads_reactive: false,
         };
         // The viewport's view mode + show flags mask the seeded inputs (the
         // per-frame counterpart of the init-time trims); Lit with every flag

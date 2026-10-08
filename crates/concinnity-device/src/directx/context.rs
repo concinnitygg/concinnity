@@ -543,6 +543,8 @@ pub(super) struct DxTargets {
     // placed resource on an `ID3D12Heap`; features read them back by label and
     // the executor's barrier registry resolves them the same way.
     pub transient_pool: super::transient_pool::TransientResourcePool,
+    // The reactive mask the particle and transparent passes write.
+    pub reactive_mask: super::reactive_mask::ReactiveMask,
 }
 
 // The world's scene assets: the IBL cubes and color-grading LUT, the area-light

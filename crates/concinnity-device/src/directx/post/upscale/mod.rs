@@ -16,6 +16,7 @@ use std::ffi::{CStr, c_void};
 
 use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::reactive_mask::ReactiveReader;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -71,6 +72,8 @@ pub(in crate::directx) trait UpscaleBackend: Send {
     fn dlss_preset(&self) -> Option<DlssPreset> {
         None
     }
+    // How it reads the reactive mask.
+    fn reactive_reader(&self) -> ReactiveReader;
 }
 
 // Render-resolution inputs the upscale consumes for one frame.
@@ -79,6 +82,9 @@ pub(in crate::directx) struct UpscaleInputs<'a> {
     pub color: &'a ID3D12Resource,
     pub depth: &'a ID3D12Resource,
     pub motion_vectors: &'a ID3D12Resource,
+    // The reactive mask, when a particle or transparent pass wrote it this
+    // frame; the graph has it in NON_PIXEL_SHADER_RESOURCE.
+    pub reactive: Option<&'a ID3D12Resource>,
 }
 
 // The heap slots of the upscaler's output texture (UAV write + SRV read),
@@ -337,12 +343,22 @@ impl crate::directx::context::DxContext {
         // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&barriers[..count]) };
 
-        upscaler.dispatch(
+        // A frame with no reactive writer leaves the mask out of the graph,
+        // resting sampled and holding an earlier frame. An upscaler that must
+        // have one gets it cleared and moved to the compute read here instead.
+        let mask = &self.targets.reactive_mask;
+        let local_mask = !params.reactive.readable && upscaler.reactive_reader().requires();
+        if local_mask {
+            mask.clear_outside_graph(cmd);
+        }
+        let reactive = (params.reactive.readable || local_mask).then_some(&mask.resource);
+        let dispatched = upscaler.dispatch(
             cmd,
             UpscaleInputs {
                 color: &scene,
                 depth: &gb.depth,
                 motion_vectors: &gb.velocity,
+                reactive,
             },
             UpscaleCamera::new(
                 self.upscale.jitter.get(),
@@ -350,7 +366,11 @@ impl crate::directx::context::DxContext {
                 params.near,
                 params.fov_y_radians,
             ),
-        )?;
+        );
+        if local_mask {
+            mask.rest_after_compute_read(cmd);
+        }
+        dispatched?;
 
         // Give the G-buffer depth back, and hand the output to the post stack.
         // The output is `scene_color` under upscaling, and the one driven

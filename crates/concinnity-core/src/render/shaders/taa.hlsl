@@ -2,24 +2,32 @@
 // reprojected, neighborhood-clipped history buffer. Single source for every
 // backend; pairs with `fullscreen_vertex` in fullscreen.hlsl.
 //
-// Each of the three sources is a `Texture2D` and a `SamplerState`: Vulkan binds
-// the textures at 0..2 and their samplers at 3..5. The register numbers are the
+// Each of the four sources is a `Texture2D` and a `SamplerState`: Vulkan binds
+// the textures at 0..3 and their samplers at 4..7. The register numbers are the
 // Metal indices (see concinnity-shader's `metal_bindings`) and the D3D root
-// signature's slots alike: texture(0..2) + sampler(0..2) with the params at
+// signature's slots alike: texture(0..3) + sampler(0..3) with the params at
 // buffer(0).
 
 struct TaaParams
 {
     // 0 on the first frame and after a resize - history is then ignored.
     float history_valid;
+    // The mask value past which the reactive mask removes no more history, or 0
+    // when no mask was written this frame; the bound texture is then a stand-in
+    // and is not read.
+    float reactive_max;
 };
 
 [[vk::binding(0, 0)]] Texture2D<float4> scene_tex : register(t0);
-[[vk::binding(3, 0)]] SamplerState scene_samp : register(s0);
+[[vk::binding(4, 0)]] SamplerState scene_samp : register(s0);
 [[vk::binding(1, 0)]] Texture2D<float4> velocity_tex : register(t1);
-[[vk::binding(4, 0)]] SamplerState velocity_samp : register(s1);
+[[vk::binding(5, 0)]] SamplerState velocity_samp : register(s1);
 [[vk::binding(2, 0)]] Texture2D<float4> history_tex : register(t2);
-[[vk::binding(5, 0)]] SamplerState history_samp : register(s2);
+[[vk::binding(6, 0)]] SamplerState history_samp : register(s2);
+// Where a particle or transparent surface tells the resolve to trust this
+// frame: its history weight falls by the mask's value, up to `reactive_max`.
+[[vk::binding(3, 0)]] Texture2D<float4> reactive_tex : register(t3);
+[[vk::binding(7, 0)]] SamplerState reactive_samp : register(s3);
 
 [[vk::push_constant]] ConstantBuffer<TaaParams> params : register(b0);
 
@@ -127,5 +135,9 @@ float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     // Accumulate only when there is valid, on-screen history; otherwise the
     // current frame passes straight through (first frame, resize, off-screen).
     float alpha = (params.history_valid > 0.5 && on_screen) ? TAA_BLEND : 0.0;
+    if (params.reactive_max > 0.0)
+    {
+        alpha *= 1.0 - min(saturate(reactive_tex.Sample(reactive_samp, uv).r), params.reactive_max);
+    }
     return float4(lerp(cur, ycocg_to_rgb(hist), alpha), 1.0);
 }

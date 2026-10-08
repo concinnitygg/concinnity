@@ -24,6 +24,7 @@ use ash::vk;
 use concinnity_core::components::UpscalerBackend;
 use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::reactive_mask::ReactiveReader;
 
 use crate::upscale_sdk::{
     Availability, SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest, preferred,
@@ -60,6 +61,9 @@ pub(in crate::vulkan) struct UpscaleInputs<'a> {
     pub(in crate::vulkan) color: &'a UpscaleImage,
     pub(in crate::vulkan) depth: &'a UpscaleImage,
     pub(in crate::vulkan) motion: &'a UpscaleImage,
+    // The reactive mask, when a particle or transparent pass wrote it this
+    // frame or the backend requires one.
+    pub(in crate::vulkan) reactive: Option<&'a UpscaleImage>,
 }
 
 // One temporal-upscaling backend. `encode_upscale` transitions the inputs and
@@ -90,6 +94,8 @@ pub(in crate::vulkan) trait VkUpscaleBackend: Send {
     fn dlss_preset(&self) -> Option<DlssPreset> {
         None
     }
+    // How it reads the reactive mask.
+    fn reactive_reader(&self) -> ReactiveReader;
     // Tear down the SDK context and the owned images. Called after
     // `device_wait_idle`, before the device is destroyed.
     fn destroy(&mut self);
@@ -687,7 +693,30 @@ impl VkContext {
             from: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             to: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         };
-        for image in [color.image, motion.image] {
+        // The reactive mask: this frame's when a writer stored it, else a
+        // cleared one for a backend that must have one.
+        let mask = self.reactive_mask(frame);
+        let reactive = match mask {
+            Some(m) if params.reactive.readable => Some(m),
+            Some(m) if upscaler.reactive_reader().requires() => {
+                crate::vulkan::reactive_mask::clear_outside_pass(&self.hw.device, cmd, m.image);
+                Some(m)
+            }
+            _ => None,
+        }
+        .map(|m| {
+            render_image(
+                m.image,
+                m.view,
+                crate::vulkan::reactive_mask::REACTIVE_MASK_FORMAT,
+                vk::ImageAspectFlags::COLOR,
+            )
+        });
+        let written_mask = reactive
+            .as_ref()
+            .filter(|_| params.reactive.readable)
+            .map(|m| m.image);
+        for image in [color.image, motion.image].into_iter().chain(written_mask) {
             image_barrier(
                 &self.hw.device,
                 cmd,
@@ -741,6 +770,7 @@ impl VkContext {
                 color: &color,
                 depth: &depth_in,
                 motion: &motion,
+                reactive: reactive.as_ref(),
             },
             UpscaleCamera::new(
                 upscaler.jitter().get(),

@@ -30,7 +30,7 @@ use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::platform::Platform;
 use concinnity_core::render::backend_init::SdfVolumeSource;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::raymarch::{Family, VolumeFlags};
+use concinnity_core::render::shader_programs::raymarch::{Family, ProxyFaces, VolumeFlags};
 use concinnity_core::transform::mat4_inverse;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -46,14 +46,15 @@ use super::texture::{
     GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
     one_shot_submit, transition_image_layout_range,
 };
-use crate::shader::raymarch_source::family_artifacts;
+use crate::shader::raymarch_source::{face_artifacts, family_artifacts};
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout,
     VkDevice,
 };
+use crate::vulkan::post::gbuffer::GbufferPrepassView;
 
-// 36 indices for the unit-cube proxy: front faces are culled so each pixel
-// inside the bounding box gets exactly one back-face fragment.
+// 36 indices for the unit-cube proxy: one face set is culled so each pixel
+// inside the bounding box gets exactly one fragment.
 const CUBE_INDEX_COUNT: u32 = 36;
 
 // One declaration for all three backends, in `core::render::uniforms`.
@@ -67,7 +68,7 @@ pub(in crate::vulkan) use concinnity_core::render::uniforms::{
 // 16-byte block is declared, not just the live `u32`: the shared source spells
 // it out to the padding the other two hosts allocate, and a range narrower than
 // what the shader declares is a validation finding.
-use concinnity_core::render::uniforms::{PassCamera, RaymarchShadowCascade};
+use concinnity_core::render::uniforms::{GBufferView, PassCamera, RaymarchShadowCascade};
 
 mod swap;
 
@@ -172,11 +173,20 @@ struct RaymarchVolumeRecord {
     // Owned, not a raw handle: the record outlives the local the pipeline was
     // built into, so storing the bare `vk::Pipeline` destroyed it at the end of
     // the loop iteration and left every draw binding a dangling one.
+    // A surface's is the back-face variant; `front_pipeline` is the other.
     pipeline: OwnedPipeline,
+    // The surface's front-face pipeline; `None` for a medium.
+    front_pipeline: Option<OwnedPipeline>,
     // Depth-only shadow-caster pipeline. `Some` when the asset's `cast_shadows`
     // is set; the shadow encoder iterates only the volumes where this is `Some`
     // and `visible`. Targets `shadow_render_pass`.
     shadow_pipeline: Option<OwnedPipeline>,
+    // The surface's G-buffer pre-pass pipelines; `None` for a medium. Target
+    // `prepass_render_pass`.
+    prepass_pipelines: Option<FacePipelines>,
+    // The world-space bounding box, which decides the faces the proxy draws.
+    center: [f32; 3],
+    extent: [f32; 3],
     // Held for the volume's lifetime; `volume_set` aliases it.
     _volume_ubo: PooledBuffer,
     volume_set: vk::DescriptorSet,
@@ -186,6 +196,26 @@ struct RaymarchVolumeRecord {
     // does; the descriptor at set 0 binding 6 stands either way, so this
     // selects no pipeline variant.
     refractive: bool,
+}
+
+impl RaymarchVolumeRecord {
+    // The faces this volume's proxy draws with from `view`: a medium always
+    // takes the back faces.
+    fn faces(&self, view: &RaymarchView) -> ProxyFaces {
+        if self.flags.volumetric {
+            ProxyFaces::Back
+        } else {
+            ProxyFaces::for_box(view, self.center, self.extent)
+        }
+    }
+
+    // The pipeline the volume's own draw takes from `view`.
+    fn draw_pipeline(&self, view: &RaymarchView) -> vk::Pipeline {
+        match (self.faces(view), &self.front_pipeline) {
+            (ProxyFaces::Front, Some(front)) => front.handle(),
+            _ => self.pipeline.handle(),
+        }
+    }
 }
 
 // Engine-side raymarch resources. Built only when at least one `SdfVolume`
@@ -231,6 +261,16 @@ pub(in crate::vulkan) struct RaymarchResources {
     _shadow_view_set_layout: OwnedSetLayout,
     shadow_view_ubos: Vec<PooledBuffer>,
     shadow_view_sets: Vec<vk::DescriptorSet>,
+
+    // G-buffer pre-pass resources, built when a surface volume exists. The
+    // pre-pass family reads the same three UBOs as the shadow family, so it
+    // draws on the shadow pipeline layout, with its own per-frame view ring
+    // (it rasterizes through the pre-pass's VP and carries the motion
+    // matrices). The render pass is this pass's own copy of the G-buffer
+    // pre-pass's, which the pipelines need to be compatible with.
+    prepass_render_pass: OwnedRenderPass,
+    prepass_view_ubos: Vec<PooledBuffer>,
+    prepass_view_sets: Vec<vk::DescriptorSet>,
 
     msaa: bool,
     volumes: Vec<RaymarchVolumeRecord>,
@@ -362,17 +402,35 @@ fn volume_set_bindings() -> [Binding; 1] {
     )]
 }
 
-// Room for `frames` view sets, one set per volume and, when any volume casts
-// shadows, `frames` shadow view sets.
+// Which of the three-UBO view rings the world's volumes need.
+#[derive(Clone, Copy)]
+struct ViewRings {
+    // Some volume casts a shadow.
+    shadow: bool,
+    // Some volume is a surface, which draws into the G-buffer pre-pass.
+    prepass: bool,
+}
+
+impl ViewRings {
+    fn of(volumes: &[SdfVolumeSource]) -> Self {
+        Self {
+            shadow: volumes.iter().any(|s| VolumeFlags::of(&s.volume).casts()),
+            prepass: volumes.iter().any(|s| !s.volume.volumetric),
+        }
+    }
+}
+
+// Room for `frames` view sets, one set per volume, and `frames` three-UBO view
+// sets for each ring in `rings`.
 fn create_descriptor_pool(
     device: &VkDevice,
     frames: usize,
     volumes: usize,
-    has_shadow: bool,
+    rings: ViewRings,
 ) -> RenderResult<OwnedDescriptorPool> {
     let f = frames as u32;
     let v = volumes as u32;
-    let shadow_sets = if has_shadow { f } else { 0 };
+    let shadow_sets = f * (u32::from(rings.shadow) + u32::from(rings.prepass));
     let sizes = PoolSizes::default()
         .sets(&view_set_bindings(), f)
         .sets(&volume_set_bindings(), v)
@@ -386,16 +444,17 @@ fn create_descriptor_pool(
         .map_err(|e| super::error::map_vk_result(e, "raymarch descriptor pool"))
 }
 
-// Minimal 3-UBO descriptor set layout for the shadow-caster pass: RaymarchView
-// (view_time), lights (sun direction), and the cascade light VPs. No texture
-// bindings (the shadow march never samples), so the shadow map being written
-// this pass is never also bound as a descriptor.
+// Minimal 3-UBO descriptor set layout for the shadow-caster pass and the
+// G-buffer pre-pass: RaymarchView (the shadow march reads its clock, the
+// pre-pass its whole camera), lights (sun direction), and the cascade light
+// VPs. No texture bindings (neither march samples), so the shadow map being
+// written by the one pass is never also bound as a descriptor.
 fn shadow_view_set_bindings() -> [Binding; 3] {
     let frag = vk::ShaderStageFlags::FRAGMENT;
     let vert_frag = vk::ShaderStageFlags::VERTEX | frag;
     let ubo = vk::DescriptorType::UNIFORM_BUFFER;
     [
-        (0, ubo, frag),      // RaymarchView (view_time)
+        (0, ubo, vert_frag), // RaymarchView
         (1, ubo, frag),      // RaymarchLights (sun direction)
         (2, ubo, vert_frag), // RaymarchShadow (light VPs)
     ]
@@ -496,49 +555,53 @@ const CUBE_VERTEX_ATTRIBUTES: [vk::VertexInputAttributeDescription; 1] =
         offset: 0,
     }];
 
-// Front-face cull. The main and shadow passes render with a negative-height
-// (Y-flipped) viewport; under that flip the proxy's near faces wind CCW, so
-// culling them as the front face leaves the back faces to rasterize (matches
-// the DirectX CULL_FRONT path).
-const CUBE_RASTER: Raster = Raster {
-    cull: vk::CullModeFlags::FRONT,
-    front_face: vk::FrontFace::COUNTER_CLOCKWISE,
-    polygon_mode: vk::PolygonMode::FILL,
-    bias: None,
-};
+// The proxy rasterizer drawing `faces`. Every pass renders with a
+// negative-height (Y-flipped) viewport, under which the proxy's near faces wind
+// CCW, so culling the front face leaves the back faces (matching the DirectX
+// path).
+const fn cube_raster(faces: ProxyFaces) -> Raster {
+    Raster {
+        cull: match faces {
+            ProxyFaces::Front => vk::CullModeFlags::BACK,
+            ProxyFaces::Back => vk::CullModeFlags::FRONT,
+        },
+        front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+        polygon_mode: vk::PolygonMode::FILL,
+        bias: None,
+    }
+}
 
-// A pipeline drawing the front-culled cube proxy into `color_targets`.
+// A pipeline drawing the cube proxy's `faces` into `color_targets`.
 fn cube_proxy<'a>(
-    vert_spv: &'a [u8],
-    frag_spv: &'a [u8],
+    (vert_spv, frag_spv): (&'a [u8], &'a [u8]),
+    faces: ProxyFaces,
     layout: vk::PipelineLayout,
     render_pass: vk::RenderPass,
     color_targets: &'a [Blend],
 ) -> GraphicsPipelineDesc<'a> {
     GraphicsPipelineDesc {
-        raster: CUBE_RASTER,
+        raster: cube_raster(faces),
         vertex_bindings: &CUBE_VERTEX_BINDINGS,
         vertex_attributes: &CUBE_VERTEX_ATTRIBUTES,
         ..GraphicsPipelineDesc::fullscreen(vert_spv, frag_spv, layout, render_pass, color_targets)
     }
 }
 
-// Build a per-volume raymarch graphics pipeline: depth-tested inclusively
-// against the camera depth with depth write (the fragment overrides
-// `gl_FragDepth`, so downstream passes see the raymarched surface), opaque.
-// Negative-height viewport is applied dynamically at encode time.
+// Build a per-volume raymarch graphics pipeline drawing the proxy's `faces`:
+// depth-tested inclusively against the camera depth with depth write (the
+// fragment overrides `gl_FragDepth`, so downstream passes see the raymarched
+// surface), opaque. Negative-height viewport is applied dynamically at encode
+// time.
 fn create_pipeline(
     device: &VkDevice,
-    render_pass: vk::RenderPass,
-    layout: vk::PipelineLayout,
-    msaa_samples: vk::SampleCountFlags,
-    vert_spv: &[u8],
-    frag_spv: &[u8],
+    t: &VolumePipelineTargets,
+    spv: (&[u8], &[u8]),
+    faces: ProxyFaces,
 ) -> RenderResult<OwnedPipeline> {
     GraphicsPipelineDesc {
         depth: Depth::write_inclusive(),
-        samples: msaa_samples,
-        ..cube_proxy(vert_spv, frag_spv, layout, render_pass, &[Blend::Opaque])
+        samples: t.msaa_samples,
+        ..cube_proxy(spv, faces, t.layout, t.render_pass, &[Blend::Opaque])
     }
     .build(device, "raymarch")
 }
@@ -626,9 +689,38 @@ fn create_shadow_pipeline(
 ) -> RenderResult<OwnedPipeline> {
     GraphicsPipelineDesc {
         depth: Depth::write(),
-        ..cube_proxy(vert_spv, frag_spv, layout, shadow_render_pass, &[])
+        ..cube_proxy(
+            (vert_spv, frag_spv),
+            ProxyFaces::Back,
+            layout,
+            shadow_render_pass,
+            &[],
+        )
     }
     .build(device, "raymarch shadow")
+}
+
+// Build a surface volume's G-buffer pre-pass pipeline drawing the proxy's
+// `faces`: the pre-pass's three color targets over its single-sample depth,
+// depth-tested inclusively with depth write like the main draw. Targets
+// `prepass_render_pass`.
+fn create_prepass_pipeline(
+    device: &VkDevice,
+    t: &VolumePipelineTargets,
+    spv: (&[u8], &[u8]),
+    faces: ProxyFaces,
+) -> RenderResult<OwnedPipeline> {
+    GraphicsPipelineDesc {
+        depth: Depth::write_inclusive(),
+        ..cube_proxy(
+            spv,
+            faces,
+            t.shadow_layout,
+            t.prepass_render_pass,
+            &crate::vulkan::post::gbuffer::PREPASS_TARGETS,
+        )
+    }
+    .build(device, "raymarch prepass")
 }
 
 // Create the pre-raymarch HDR scene snapshot (SAMPLED | TRANSFER_DST, GPU-local)
@@ -685,15 +777,34 @@ pub(in crate::vulkan) struct VolumePipelineTargets {
     layout: vk::PipelineLayout,
     shadow_render_pass: vk::RenderPass,
     shadow_layout: vk::PipelineLayout,
+    prepass_render_pass: vk::RenderPass,
     msaa_samples: vk::SampleCountFlags,
     hot_reload: bool,
 }
 
-// Every pipeline one volume draws with: its own, and its shadow caster when it
-// casts one.
+// A surface family's pipeline per set of proxy faces.
+pub(in crate::vulkan) struct FacePipelines {
+    front: OwnedPipeline,
+    back: OwnedPipeline,
+}
+
+impl FacePipelines {
+    fn get(&self, faces: ProxyFaces) -> vk::Pipeline {
+        match faces {
+            ProxyFaces::Front => self.front.handle(),
+            ProxyFaces::Back => self.back.handle(),
+        }
+    }
+}
+
+// Every pipeline one volume draws with: its own (both face sets for a
+// surface), its shadow caster when it casts one, and its G-buffer pre-pass
+// share when it is a surface.
 pub(in crate::vulkan) struct VolumePipelines {
     pipeline: OwnedPipeline,
+    front_pipeline: Option<OwnedPipeline>,
     shadow_pipeline: Option<OwnedPipeline>,
+    prepass_pipelines: Option<FacePipelines>,
 }
 
 // Build the pipelines of a volume with these flags from its compiled field. A
@@ -707,26 +818,43 @@ pub(in crate::vulkan) fn build_volume_pipelines(
     flags: VolumeFlags,
     label: &str,
 ) -> RenderResult<VolumePipelines> {
-    let family = if flags.volumetric {
-        Family::Volumetric
-    } else {
-        Family::Surface
+    let artifacts = |family, faces| {
+        face_artifacts(
+            programs,
+            family,
+            faces,
+            Platform::Vulkan,
+            t.hot_reload,
+            label,
+        )
     };
-    let (vert_spv, frag_spv) =
-        family_artifacts(programs, family, Platform::Vulkan, t.hot_reload, label)?;
-    let create = if flags.volumetric {
-        create_volumetric_pipeline
-    } else {
-        create_pipeline
+    let surface = |faces| {
+        let (vert, frag) = artifacts(Family::Surface, faces)?;
+        create_pipeline(device, t, (&vert, &frag), faces)
     };
-    let pipeline = create(
-        device,
-        t.render_pass,
-        t.layout,
-        t.msaa_samples,
-        &vert_spv,
-        &frag_spv,
-    )?;
+    let (pipeline, front_pipeline) = if flags.volumetric {
+        let (vert, frag) = family_artifacts(
+            programs,
+            Family::Volumetric,
+            Platform::Vulkan,
+            t.hot_reload,
+            label,
+        )?;
+        let medium = create_volumetric_pipeline(
+            device,
+            t.render_pass,
+            t.layout,
+            t.msaa_samples,
+            &vert,
+            &frag,
+        )?;
+        (medium, None)
+    } else {
+        (
+            surface(ProxyFaces::Back)?,
+            Some(surface(ProxyFaces::Front)?),
+        )
+    };
     let shadow_pipeline = if flags.casts() {
         let (sh_vert, sh_frag) = family_artifacts(
             programs,
@@ -745,9 +873,23 @@ pub(in crate::vulkan) fn build_volume_pipelines(
     } else {
         None
     };
+    let prepass = |faces| {
+        let (vert, frag) = artifacts(Family::Prepass, faces)?;
+        create_prepass_pipeline(device, t, (&vert, &frag), faces)
+    };
+    let prepass_pipelines = if flags.volumetric {
+        None
+    } else {
+        Some(FacePipelines {
+            front: prepass(ProxyFaces::Front)?,
+            back: prepass(ProxyFaces::Back)?,
+        })
+    };
     Ok(VolumePipelines {
         pipeline,
+        front_pipeline,
         shadow_pipeline,
+        prepass_pipelines,
     })
 }
 
@@ -804,6 +946,7 @@ impl RaymarchResources {
             layout: self.pipeline_layout.handle(),
             shadow_render_pass,
             shadow_layout: self.shadow_pipeline_layout.handle(),
+            prepass_render_pass: self.prepass_render_pass.handle(),
             msaa_samples,
             hot_reload,
         }
@@ -888,11 +1031,8 @@ impl RaymarchResources {
             )?);
         }
 
-        let has_shadow = sdf_volumes
-            .iter()
-            .any(|s| VolumeFlags::of(&s.volume).casts());
-        let descriptor_pool =
-            create_descriptor_pool(device, frames, sdf_volumes.len(), has_shadow)?;
+        let rings = ViewRings::of(sdf_volumes);
+        let descriptor_pool = create_descriptor_pool(device, frames, sdf_volumes.len(), rings)?;
         let view_layouts: Vec<_> = (0..frames).map(|_| view_set_layout.handle()).collect();
         let view_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &view_layouts)?;
         for (i, &set) in view_sets.iter().enumerate() {
@@ -916,15 +1056,19 @@ impl RaymarchResources {
             );
         }
 
-        // Shadow-caster infrastructure: a minimal 3-UBO view set with its own
-        // per-frame `RaymarchView` ring (written by the Shadow pass, never the
-        // concurrently-recorded Raymarch pass) + a pipeline layout carrying the
-        // `cascade_idx` push constant. Built only when a volume casts shadows.
+        // Shadow-caster and pre-pass infrastructure: a minimal 3-UBO view set
+        // layout + a pipeline layout carrying the `cascade_idx` push constant,
+        // built when a volume casts shadows or draws a pre-pass. Each of the
+        // two has its own per-frame `RaymarchView` ring, written by its own
+        // pass and never by the concurrently-recorded Raymarch pass.
         let mut shadow_pipeline_layout = OwnedPipelineLayout::null();
         let mut shadow_view_set_layout = OwnedSetLayout::null();
         let mut shadow_view_ubos: Vec<PooledBuffer> = Vec::new();
         let mut shadow_view_sets: Vec<vk::DescriptorSet> = Vec::new();
-        if has_shadow {
+        let mut prepass_render_pass = OwnedRenderPass::null();
+        let mut prepass_view_ubos: Vec<PooledBuffer> = Vec::new();
+        let mut prepass_view_sets: Vec<vk::DescriptorSet> = Vec::new();
+        if rings.shadow || rings.prepass {
             shadow_view_set_layout =
                 create_descriptor_set_layout(device, &shadow_view_set_bindings())?;
             let set_layouts = [shadow_view_set_layout.handle(), volume_set_layout.handle()];
@@ -938,28 +1082,38 @@ impl RaymarchResources {
             shadow_pipeline_layout = device
                 .create_pipeline_layout(&info)
                 .map_err(|e| super::error::map_vk_result(e, "raymarch shadow pipeline layout"))?;
-
-            for _ in 0..frames {
-                shadow_view_ubos.push(alloc.create_buffer(
-                    view_size,
-                    vk::BufferUsageFlags::UNIFORM_BUFFER,
-                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                )?);
-            }
-            let shadow_layouts: Vec<_> = (0..frames)
-                .map(|_| shadow_view_set_layout.handle())
-                .collect();
-            shadow_view_sets =
-                alloc_descriptor_sets(device, descriptor_pool.handle(), &shadow_layouts)?;
-            for (i, &set) in shadow_view_sets.iter().enumerate() {
-                write_shadow_view_set(
-                    device,
-                    set,
-                    shadow_view_ubos[i].buffer(),
-                    light_ubos[i].buffer(),
-                    shadow_ubos[i].buffer(),
-                );
-            }
+        }
+        let three_ubo_ring =
+            |ubos: &mut Vec<PooledBuffer>| -> RenderResult<Vec<vk::DescriptorSet>> {
+                for _ in 0..frames {
+                    ubos.push(alloc.create_buffer(
+                        view_size,
+                        vk::BufferUsageFlags::UNIFORM_BUFFER,
+                        vk::MemoryPropertyFlags::HOST_VISIBLE
+                            | vk::MemoryPropertyFlags::HOST_COHERENT,
+                    )?);
+                }
+                let layouts: Vec<_> = (0..frames)
+                    .map(|_| shadow_view_set_layout.handle())
+                    .collect();
+                let sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &layouts)?;
+                for (i, &set) in sets.iter().enumerate() {
+                    write_shadow_view_set(
+                        device,
+                        set,
+                        ubos[i].buffer(),
+                        light_ubos[i].buffer(),
+                        shadow_ubos[i].buffer(),
+                    );
+                }
+                Ok(sets)
+            };
+        if rings.shadow {
+            shadow_view_sets = three_ubo_ring(&mut shadow_view_ubos)?;
+        }
+        if rings.prepass {
+            prepass_view_sets = three_ubo_ring(&mut prepass_view_ubos)?;
+            prepass_render_pass = crate::vulkan::post::gbuffer::create_prepass_render_pass(device)?;
         }
 
         // Build per-volume records. A compile error in an active volume is a
@@ -976,7 +1130,9 @@ impl RaymarchResources {
             let flags = VolumeFlags::of(vol);
             let VolumePipelines {
                 pipeline,
+                front_pipeline,
                 shadow_pipeline,
+                prepass_pipelines,
             } = build_volume_pipelines(
                 device,
                 &VolumePipelineTargets {
@@ -984,6 +1140,7 @@ impl RaymarchResources {
                     layout: pipeline_layout.handle(),
                     shadow_render_pass,
                     shadow_layout: shadow_pipeline_layout.handle(),
+                    prepass_render_pass: prepass_render_pass.handle(),
                     msaa_samples,
                     hot_reload,
                 },
@@ -1010,7 +1167,11 @@ impl RaymarchResources {
                 label: label.clone(),
                 flags,
                 pipeline,
+                front_pipeline,
                 shadow_pipeline,
+                prepass_pipelines,
+                center: vol.center,
+                extent: vol.extent,
                 _volume_ubo: volume_ubo,
                 volume_set,
                 visible: vol.visible,
@@ -1034,6 +1195,9 @@ impl RaymarchResources {
             _shadow_view_set_layout: shadow_view_set_layout,
             shadow_view_ubos,
             shadow_view_sets,
+            prepass_render_pass,
+            prepass_view_ubos,
+            prepass_view_sets,
             msaa,
             volumes,
         }))
@@ -1113,6 +1277,7 @@ impl RaymarchResources {
         self.volumes.clear();
         self.view_ubos.clear();
         self.shadow_view_ubos.clear();
+        self.prepass_view_ubos.clear();
         self.snapshot = GpuImage::null();
         self.cube_vb = PooledBuffer::null();
         self.cube_ib = PooledBuffer::null();
@@ -1177,6 +1342,9 @@ impl VkContext {
             time: elapsed,
             prefilter_mip_count: 0.0,
             sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
+            cur_vp: [[0.0; 4]; 4],
+            prev_vp: [[0.0; 4]; 4],
+            view_mat: [[0.0; 4]; 4],
         };
         ubo.write_val(0, &view);
     }
@@ -1243,6 +1411,84 @@ impl VkContext {
                     rm.shadow_pipeline_layout.handle(),
                     1,
                     std::slice::from_ref(&vol.volume_set),
+                    &[],
+                );
+                device.cmd_draw_indexed(cmd, CUBE_INDEX_COUNT, 1, 0, 0, 0);
+                self.inc_draw_calls(1);
+            }
+        }
+    }
+
+    // Draw every visible surface volume into the G-buffer pre-pass, whose
+    // render pass the caller has begun, after the rasterized surfaces and
+    // before the sky: the march writes normal, depth, roughness and motion
+    // under the same depth test, so volumes and meshes occlude each other there
+    // as they do in the frame. The volumes march from the camera `prepass`
+    // rasterizes through and reproject through `gbuffer`. The viewport and
+    // scissor are the pre-pass's.
+    pub(in crate::vulkan) fn encode_raymarch_prepass(
+        &self,
+        cmd: vk::CommandBuffer,
+        frame_idx: usize,
+        prepass: &GbufferPrepassView,
+        gbuffer: &GBufferView,
+    ) {
+        let Some(rm) = self.raymarch.as_ref() else {
+            return;
+        };
+        let (Some(ubo), Some(&set)) = (
+            rm.prepass_view_ubos.get(frame_idx),
+            rm.prepass_view_sets.get(frame_idx),
+        ) else {
+            return;
+        };
+        let surfaces = || {
+            rm.volumes
+                .iter()
+                .filter(|v| v.visible)
+                .filter_map(|v| v.prepass_pipelines.as_ref().map(|p| (v, p)))
+        };
+        if surfaces().next().is_none() {
+            return;
+        }
+        let camera = self.pass_camera(prepass.jittered_vp, prepass.cam_pos, prepass.elapsed);
+        let view = RaymarchView::for_gbuffer(&camera, gbuffer);
+        ubo.write_val(0, &view);
+        let draws = surfaces().map(|(v, p)| (p.get(v.faces(&view)), v.volume_set));
+        let device = &self.hw.device;
+        let layout = rm.shadow_pipeline_layout.handle();
+        let push = RaymarchShadowCascade {
+            cascade_idx: 0,
+            _pad: [0; 3],
+        };
+        // SAFETY: `cmd` is a command buffer recording inside the G-buffer pre-pass's render pass,
+        // and every handle and slice these commands name is live for the call.
+        unsafe {
+            device.cmd_bind_vertex_buffers(cmd, 0, &[rm.cube_vb.buffer()], &[0]);
+            device.cmd_bind_index_buffer(cmd, rm.cube_ib.buffer(), 0, vk::IndexType::UINT16);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                layout,
+                0,
+                std::slice::from_ref(&set),
+                &[],
+            );
+            cmd_push_constants(
+                device,
+                cmd,
+                layout,
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                &push,
+            );
+            for (pipeline, volume_set) in draws {
+                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
+                device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    layout,
+                    1,
+                    std::slice::from_ref(&volume_set),
                     &[],
                 );
                 device.cmd_draw_indexed(cmd, CUBE_INDEX_COUNT, 1, 0, 0, 0);
@@ -1420,7 +1666,7 @@ impl VkContext {
                 device.cmd_bind_pipeline(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    vol.pipeline.handle(),
+                    vol.draw_pipeline(view),
                 );
                 device.cmd_bind_descriptor_sets(
                     cmd,

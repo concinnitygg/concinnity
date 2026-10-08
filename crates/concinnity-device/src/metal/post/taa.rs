@@ -75,6 +75,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         scene_input: &ProtocolObject<dyn objc2_metal::MTLTexture>,
+        reactive_written: bool,
     ) -> RenderResult<u32> {
         let pass =
             self.taa.pass.as_ref().ok_or_else(|| {
@@ -93,6 +94,7 @@ impl MtlContext {
             TaaInputs {
                 scene: scene_input,
                 velocity,
+                reactive: reactive_written.then(|| self.targets.hdr.reactive_mask.as_ref()),
             },
         )?;
         Ok(0)

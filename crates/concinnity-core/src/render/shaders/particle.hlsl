@@ -10,7 +10,9 @@
 //
 // The composited color is alpha-blended into the resolved HDR target by the
 // pipeline's blend state (Src.A * Src + (1 - Src.A) * Dst), the same envelope
-// the projected-decal pass uses.
+// the projected-decal pass uses. A sprite carries no motion of its own, so it
+// also marks the reactive mask (target 1, max-blended), telling the temporal
+// passes to trust this frame where it draws.
 //
 // `Particle` and `ParticleParams` arrive from the shared PARTICLE_TYPES
 // fragment the simulation kernel splices too, so the pool written there and the
@@ -33,6 +35,8 @@
 {DEPTH_CONVENTION}
 
 {PARTICLE_TYPES}
+
+{REACTIVE_MASK}
 
 // Per-frame view inputs to the render pass, 96 B. Mirrors `ParticleView` in
 // each backend's uniforms module. The two axis vectors are float4 for the
@@ -138,8 +142,14 @@ float particle_scene_depth(int2 pixel)
 #endif
 }
 
+struct ParticleFragmentOut
+{
+    float4 color    : SV_Target0;
+    float  reactive : SV_Target1;
+};
+
 [shader("pixel")]
-float4 particle_fragment(ParticleVertexOut i) : SV_Target
+ParticleFragmentOut particle_fragment(ParticleVertexOut i)
 {
     if (i.discard_flag > 0.5)
     {
@@ -152,5 +162,10 @@ float4 particle_fragment(ParticleVertexOut i) : SV_Target
     }
     float2 uv = float2(i.uv.x, 1.0 - i.uv.y);
     float4 sampled = albedo.Sample(albedo_sampler, uv);
-    return float4(sampled.rgb * i.color.rgb, sampled.a * i.color.a);
+    ParticleFragmentOut o;
+    o.color = float4(sampled.rgb * i.color.rgb, sampled.a * i.color.a);
+    // The light a sprite adds counts as much as its coverage: a bright spark
+    // fading out is nearly transparent yet still the brightest thing there.
+    o.reactive = reactive_write(max(o.color.a, o.color.a * reactive_luminance(o.color.rgb)));
+    return o;
 }

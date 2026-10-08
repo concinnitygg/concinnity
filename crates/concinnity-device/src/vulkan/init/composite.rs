@@ -21,7 +21,7 @@ use crate::vulkan::set_writes::SetWrites;
 use crate::vulkan::swapchain::{create_composite_framebuffers, write_composite_set};
 
 // Sources the composite fragment samples, each through a sampler of its own.
-const COMPOSITE_SOURCES: u32 = 7;
+pub(super) const COMPOSITE_SOURCES: u32 = 8;
 
 pub(super) struct CompositeInputs<'a> {
     pub(super) swapchain: &'a SwapchainState,
@@ -60,9 +60,9 @@ pub(super) fn build_composite(
     )?;
     // Composite set (set 0 for composite pass): HDR resolve image at
     // binding 0, the bloom top octave at binding 1, the 3D color LUT at binding 2,
-    // then the G-buffer channels the debug view modes visualize (3 =
-    // normal+depth, 4 = roughness, 5 = SSAO occlusion, 6 = motion), and each
-    // source's sampler at binding 7 + its own.
+    // then the channels the debug view modes visualize (3 = normal+depth, 4 =
+    // roughness, 5 = SSAO occlusion, 6 = motion, 7 = the reactive mask), and
+    // each source's sampler at binding 8 + its own.
     let set_layout = create_descriptor_set_layout(device, &source_set_bindings(COMPOSITE_SOURCES))?;
     // The composite shader reads the post-process tunables plus the scene fade,
     // so its push constant covers the wider `CompositeParams`.

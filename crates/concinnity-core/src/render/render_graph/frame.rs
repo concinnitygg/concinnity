@@ -244,6 +244,10 @@ pub struct FrameGraphInputs {
     /// the pooled target stays live to the end of the frame. No effect while
     /// the prepass does not run.
     pub composite_reads_motion: bool,
+    /// `true` when the composite samples the reactive mask directly (the
+    /// reactive view mode). Makes the composite one of the mask's readers, so
+    /// a frame with a writer declares it even with TAA and the upscaler off.
+    pub composite_reads_reactive: bool,
     /// Number of spot shadow map slices to render, i.e. how many spot lights cast
     /// shadows. Zero skips the SpotShadow pass and its imported array entirely.
     pub shadowed_spot_count: u32,
@@ -257,9 +261,43 @@ pub struct FrameGraphInputs {
     /// the previous frame left there, which is what orders this frame's cull
     /// ahead of the rebuild that overwrites it.
     pub hiz_build_enabled: bool,
+    /// `true` when the backend built the reactive mask: the single-channel
+    /// render-resolution target the particle and transparent passes write
+    /// alongside the scene, where 1 tells a temporal pass to trust the current
+    /// frame over its history. A target-exists gate like
+    /// `gbuffer_prepass_enabled`; the builder declares the mask only for a
+    /// frame where a writer runs and TAA or the upscaler reads it (see
+    /// [`FrameGraphInputs::reactive_mask_live`]).
+    pub reactive_mask_enabled: bool,
+    /// `true` when the upscaler takes the reactive mask (see
+    /// [`crate::render::reactive_mask::ReactiveReader::reads`]). No effect while
+    /// `upscale_enabled` is false.
+    pub upscale_reads_reactive: bool,
 }
 
 impl FrameGraphInputs {
+    /// Whether this frame writes and reads the reactive mask: the backend
+    /// built it, the particle or transparent pass runs to write it, and TAA,
+    /// an upscaler that takes it, or the reactive view reads it. Without a reader the writers leave it
+    /// unstored; without a writer the readers are told there is none. A hidden
+    /// world runs neither.
+    pub fn reactive_mask_live(&self) -> bool {
+        self.reactive_mask_enabled
+            && !self.world_hidden
+            && (self.particles_enabled || self.transparent_enabled)
+            && (self.temporal_reads_reactive() || self.composite_reads_reactive)
+    }
+
+    // The upscaler replaces TAA when it runs, so it alone decides whether the
+    // temporal pass reads the mask.
+    fn temporal_reads_reactive(&self) -> bool {
+        if self.upscale_enabled {
+            self.upscale_reads_reactive
+        } else {
+            self.taa_enabled
+        }
+    }
+
     /// Every gated pass off, at a representative resolution.
     ///
     /// A neutral base a caller can flip individual flags on, e.g. to plan a
@@ -297,9 +335,12 @@ impl FrameGraphInputs {
             clustering_enabled: false,
             composite_reads_ao: false,
             composite_reads_motion: false,
+            composite_reads_reactive: false,
             shadowed_spot_count: 0,
             spot_shadow_slice_size: 512,
             hiz_build_enabled: false,
+            reactive_mask_enabled: false,
+            upscale_reads_reactive: false,
         }
     }
 }
@@ -344,8 +385,15 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
     ("composite_reads_motion", |i| {
         i.composite_reads_motion = true
     }),
+    ("composite_reads_reactive", |i| {
+        i.composite_reads_reactive = true
+    }),
     ("shadowed_spots", |i| i.shadowed_spot_count = 2),
     ("hiz_build", |i| i.hiz_build_enabled = true),
+    ("reactive_mask", |i| i.reactive_mask_enabled = true),
+    ("upscale_reads_reactive", |i| {
+        i.upscale_reads_reactive = true
+    }),
 ];
 
 // Build the full per-frame render graph. Conditional passes are
@@ -420,7 +468,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             world_hidden: true,
             composite_reads_ao: inputs.composite_reads_ao,
             composite_reads_motion: inputs.composite_reads_motion,
+            composite_reads_reactive: inputs.composite_reads_reactive,
             hiz_build_enabled: inputs.hiz_build_enabled,
+            reactive_mask_enabled: inputs.reactive_mask_enabled,
             ..FrameGraphInputs::all_off()
         })
     } else {
@@ -446,6 +496,12 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         .then(|| b.import_texture("hdr_color", hdr_color_desc(inputs)));
     let hdr_depth = b.import_texture("hdr_depth", hdr_depth_desc(inputs));
     let hdr_resolve = b.import_texture("hdr_resolve", hdr_resolve_desc(inputs));
+    // The reactive mask: written beside the scene by the particle and
+    // transparent passes, read by TAA or the upscaler. Backend-owned, since the
+    // writers' pipelines draw into it whether or not this frame stores it.
+    let mut reactive_mask = inputs
+        .reactive_mask_live()
+        .then(|| b.import_texture("reactive_mask", reactive_mask_desc(inputs)));
 
     // Two-pass occlusion only applies when the bindless GPU-cull path is
     // active: Hi-Z occlusion rides that path. ANDing here means a world
@@ -790,6 +846,8 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // sprite behind it.
         particles.read_texture(depth_cur);
         h = particles.write_texture(h);
+        // The first writer of the reactive mask clears it.
+        reactive_mask = reactive_mask.map(|m| particles.write_texture(m));
     }
     if inputs.lines_enabled {
         // Last of the hdr_resolve decorations: line geometry draws over the
@@ -892,6 +950,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             // write produces the blended version downstream passes consume.
             trans.read_texture(current);
             current = trans.write_texture(current);
+            reactive_mask = reactive_mask.map(|m| trans.write_texture(m));
         }
         current
     } else if inputs.transparent_enabled {
@@ -908,6 +967,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             trans.read_texture(h);
         }
         trans.read_texture(hdr_resolve_cur);
+        reactive_mask = reactive_mask.map(|m| trans.write_texture(m));
         trans.write_texture(hdr_resolve_cur)
     } else {
         hdr_resolve_cur
@@ -939,6 +999,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         if let Some(g) = gbuffer_v1 {
             up.read_texture(g.depth);
         }
+        if let Some(m) = reactive_mask {
+            up.read_texture(m);
+        }
         up.write_texture(scene_color)
     } else if inputs.taa_enabled {
         let scene_color = b.import_texture("scene_color", scene_color_desc(inputs));
@@ -949,6 +1012,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // alone.
         if let Some(v) = velocity_v1 {
             taa.read_texture(v);
+        }
+        if let Some(m) = reactive_mask {
+            taa.read_texture(m);
         }
         taa.write_texture(scene_color)
     } else {
@@ -997,6 +1063,11 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             && let Some(v) = velocity_v1
         {
             composite.read_texture(v);
+        }
+        if inputs.composite_reads_reactive
+            && let Some(m) = reactive_mask
+        {
+            composite.read_texture(m);
         }
         composite.presents();
     }
@@ -1180,6 +1251,15 @@ fn gbuffer_depth_desc(inputs: &FrameGraphInputs) -> TextureDesc {
         inputs,
         PixelFormat::Depth32Float,
         TextureUsage::DEPTH_STENCIL.union(TextureUsage::SHADER_READ),
+    )
+}
+
+fn reactive_mask_desc(inputs: &FrameGraphInputs) -> TextureDesc {
+    // R8 at HDR dims: 0 keeps the temporal history, 1 discards it.
+    render_res_2d(
+        inputs,
+        PixelFormat::R8Unorm,
+        TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
     )
 }
 
@@ -2472,5 +2552,103 @@ mod tests {
             .pass_index(PassId::Shadow)
             .expect("Shadow is in the graph");
         assert!(g.passes[shadow].reads.is_empty());
+    }
+
+    // The passes that read or write `label`, in compiled order, with whether
+    // each writes it.
+    fn touches(g: &CompiledGraph, label: &str) -> Vec<(PassId, bool)> {
+        let Some(index) = g.resources.iter().position(|r| r.label == label) else {
+            return Vec::new();
+        };
+        g.passes
+            .iter()
+            .filter_map(|p| {
+                let writes = p.writes.iter().any(|w| w.resource_index() == index);
+                let reads = p.reads.iter().any(|r| r.resource_index() == index);
+                (writes || reads).then_some((p.id, writes))
+            })
+            .collect()
+    }
+
+    fn reactive_writers_and_taa() -> FrameGraphInputs {
+        let mut i = all_off();
+        i.reactive_mask_enabled = true;
+        i.particles_enabled = true;
+        i.transparent_enabled = true;
+        i.taa_enabled = true;
+        i.velocity_enabled = true;
+        i
+    }
+
+    #[test]
+    fn the_reactive_mask_runs_from_its_writers_to_taa() {
+        let g = build_frame_graph(&reactive_writers_and_taa()).expect("compiles");
+        assert_eq!(
+            touches(&g, "reactive_mask"),
+            [
+                (PassId::ParticlesDraw, true),
+                (PassId::Transparent, true),
+                (PassId::TaaResolve, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_upscaler_reads_the_reactive_mask_in_place_of_taa() {
+        let mut i = reactive_writers_and_taa();
+        i.particles_enabled = false;
+        i.upscale_enabled = true;
+        i.upscale_reads_reactive = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert_eq!(
+            touches(&g, "reactive_mask"),
+            [(PassId::Transparent, true), (PassId::Upscale, false)]
+        );
+    }
+
+    // An upscaler with no reactive input leaves the mask out of the frame.
+    #[test]
+    fn an_upscaler_that_takes_no_mask_declares_none() {
+        let mut i = reactive_writers_and_taa();
+        i.upscale_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert!(touches(&g, "reactive_mask").is_empty());
+    }
+
+    // A frame with no reader, or no writer, declares no mask at all, so it
+    // costs nothing there.
+    #[test]
+    fn the_reactive_mask_needs_a_writer_and_a_reader() {
+        let mut no_reader = reactive_writers_and_taa();
+        no_reader.taa_enabled = false;
+        let mut no_writer = reactive_writers_and_taa();
+        no_writer.particles_enabled = false;
+        no_writer.transparent_enabled = false;
+        let mut not_built = reactive_writers_and_taa();
+        not_built.reactive_mask_enabled = false;
+        for i in [no_reader, no_writer, not_built] {
+            assert!(!i.reactive_mask_live());
+            let g = build_frame_graph(&i).expect("compiles");
+            assert!(touches(&g, "reactive_mask").is_empty());
+        }
+        assert!(reactive_writers_and_taa().reactive_mask_live());
+    }
+
+    // The reactive view reads the mask itself, so it needs no temporal pass.
+    #[test]
+    fn the_reactive_view_reads_the_mask_without_a_temporal_pass() {
+        let mut i = reactive_writers_and_taa();
+        i.taa_enabled = false;
+        i.velocity_enabled = false;
+        i.composite_reads_reactive = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert_eq!(
+            touches(&g, "reactive_mask"),
+            [
+                (PassId::ParticlesDraw, true),
+                (PassId::Transparent, true),
+                (PassId::Composite, false),
+            ]
+        );
     }
 }

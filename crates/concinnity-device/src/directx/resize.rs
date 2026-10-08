@@ -212,6 +212,9 @@ impl DxContext {
             }
             self.targets.hdr.resolve = Some(resolve);
         }
+        self.targets
+            .reactive_mask
+            .resize(&self.hw.device, (render_w, render_h))?;
         // Recreate main depth (shader-readable so the decal/fog/auto-exposure
         // paths can sample it). The DSV is rewritten at the same slot.
         self.targets.depth.resource = create_main_depth_texture(

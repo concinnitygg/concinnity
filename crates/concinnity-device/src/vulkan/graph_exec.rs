@@ -37,6 +37,7 @@ use concinnity_core::gfx::render_types::{ClusterParams, LineVertex, TextDrawCall
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
+use concinnity_core::render::reactive_mask::{ReactiveMaskPlan, ReactiveWrite};
 use concinnity_core::render::render_graph;
 use concinnity_core::render::render_graph::{
     BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
@@ -530,6 +531,9 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // The main camera's cluster params, which each mirror render re-aims
     // through its reflected view.
     pub cluster_params: ClusterParams,
+    // How the particle and transparent passes treat the reactive mask, and
+    // whether TAA, the upscaler or the reactive view reads it.
+    pub reactive: ReactiveMaskPlan,
 }
 
 impl VkContext {
@@ -1081,7 +1085,7 @@ impl VkContext {
                 );
             }
             PassId::TaaResolve => {
-                self.encode_taa(cmd, params.frame_idx);
+                self.encode_taa(cmd, params.frame_idx, params.reactive.readable);
             }
             PassId::Upscale => {
                 self.encode_upscale(cmd, params)?;
@@ -1107,6 +1111,7 @@ impl VkContext {
                     params.image_index,
                     params.frame_idx,
                     params.text_calls,
+                    params.reactive.readable,
                 )?;
             }
             PassId::Decals => {
@@ -1145,14 +1150,21 @@ impl VkContext {
                 }
             }
             PassId::ParticlesDraw => {
-                if let Some(frame) = particle_frame {
+                let write = params.reactive.particles;
+                let drew = particle_frame.is_some_and(|frame| {
                     self.encode_particles_draw(
                         cmd,
                         params.frame_idx,
                         frame,
                         params.vp_mat,
                         params.frustum,
-                    );
+                        write,
+                    )
+                });
+                // The pass that was to clear the mask drew nothing to clear it
+                // with.
+                if !drew && write == ReactiveWrite::Clear {
+                    self.clear_reactive_mask(cmd, params.frame_idx);
                 }
             }
             PassId::Raymarch => {
@@ -1180,13 +1192,18 @@ impl VkContext {
                 // fragment shader tests against.
                 let view =
                     self.build_transparent_view(params.vp_mat, params.cam_pos, params.elapsed);
-                self.encode_transparent(
+                let write = params.reactive.transparent;
+                let drew = self.encode_transparent(
                     cmd,
                     params.frame_idx,
                     &view,
                     params.fov_y_radians,
                     params.aspect,
+                    write,
                 )?;
+                if !drew && write == ReactiveWrite::Clear {
+                    self.clear_reactive_mask(cmd, params.frame_idx);
+                }
             }
             PassId::HizBuild | PassId::HizFinal => {
                 // Two Hi-Z builds share one encoder. `HizBuild` rebuilds the

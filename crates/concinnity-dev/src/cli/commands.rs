@@ -4,7 +4,11 @@
 use concinnity_engine::app::run::LaunchRequest;
 use std::num::NonZeroU32;
 
-use super::value_enums::{BundleFormatArg, DlssPresetArg, QualityPresetArg, RtDynamicArg};
+use concinnity_core::gfx::view_modes::ShowFlags;
+
+use super::value_enums::{
+    BundleFormatArg, DlssPresetArg, QualityPresetArg, RtDynamicArg, ShowFlagArg,
+};
 
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum Commands {
@@ -142,6 +146,12 @@ pub(crate) struct RenderArgs {
     // the same place, and a pixel A/B of it is not noise.
     #[arg(long, value_name = "RATE")]
     pub(crate) fixed_frame_rate: Option<NonZeroU32>,
+
+    /// Start with a feature pass off, as the editor's View menu turns it off; repeatable
+    // So a probe can hold a frame with one pass removed against the same frame
+    // with it on, each captured at an exact frame of its own launch.
+    #[arg(long, value_enum, value_name = "FLAG")]
+    pub(crate) hide: Vec<ShowFlagArg>,
 }
 
 impl RenderArgs {
@@ -157,6 +167,9 @@ impl RenderArgs {
             rt_skinned_geometry: self.rt_skinned_geometry,
             dlss_preset: self.dlss_preset.map(Into::into),
             fixed_frame_rate: self.fixed_frame_rate,
+            show: self.hide.iter().fold(ShowFlags::all(), |show, &flag| {
+                show.with(flag.into(), false)
+            }),
         }
     }
 }
@@ -402,6 +415,7 @@ mod tests {
             assert!(render.rt_skinned_geometry.is_none(), "{argv:?}");
             assert!(render.dlss_preset.is_none(), "{argv:?}");
             assert!(render.fixed_frame_rate.is_none(), "{argv:?}");
+            assert!(render.hide.is_empty(), "{argv:?}");
         }
     }
 
@@ -420,6 +434,12 @@ mod tests {
             "m",
             "--fixed-frame-rate",
             "60",
+            "--hide",
+            "reactive",
+            "--hide",
+            "fog",
+            "--hide",
+            "reactive",
         ])
         .unwrap();
         let Commands::Run(args) = cli.resolved_command() else {
@@ -436,6 +456,9 @@ mod tests {
                 rt_skinned_geometry: Some(false),
                 dlss_preset: Some(DlssPreset::M),
                 fixed_frame_rate: NonZeroU32::new(60),
+                show: ShowFlags::all()
+                    .toggled(ShowFlags::REACTIVE)
+                    .toggled(ShowFlags::FOG),
             }
         );
     }
@@ -463,6 +486,10 @@ mod tests {
                 "l",
                 "--fixed-frame-rate",
                 "30",
+                "--hide",
+                "reactive",
+                "--hide",
+                "fog",
             ])
             .unwrap();
             let render = match cli.resolved_command() {
@@ -485,6 +512,13 @@ mod tests {
                 "{command}"
             );
             assert_eq!(render.fixed_frame_rate, NonZeroU32::new(30), "{command}");
+            assert_eq!(
+                render.launch(None, false).show,
+                ShowFlags::all()
+                    .with(ShowFlags::REACTIVE, false)
+                    .with(ShowFlags::FOG, false),
+                "{command}"
+            );
         }
     }
 

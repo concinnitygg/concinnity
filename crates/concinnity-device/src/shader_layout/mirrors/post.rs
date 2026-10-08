@@ -11,7 +11,7 @@ use crate::shader_layout::mirror::{Case, everywhere, mirror};
 
 pub(in crate::shader_layout) fn taa() -> Vec<Case> {
     vec![everywhere(
-        mirror!(TaaParams => "TaaParams" { history_valid, }),
+        mirror!(TaaParams => "TaaParams" { history_valid, reactive_max, }),
     )]
 }
 
@@ -49,6 +49,7 @@ pub(in crate::shader_layout) fn composite() -> Vec<Case> {
         view_mode,
         depth_near,
         depth_far,
+        reactive_valid,
     }))]
 }
 

@@ -1,12 +1,13 @@
 //! The verbs that change a setting live, by sending the same `SettingCommand`
 //! the settings menu emits: the graphics system applies it on its next step
 //! through its real rebuild, and persists it. The reply fires once the command
-//! is sent. `view-set` changes the view mode the same way the editor's View
-//! menu does, through the world's `ViewOverrides`.
+//! is sent. `view-set` and `show-set` change the view mode and the show flags
+//! the same way the editor's View menu does, through the world's
+//! `ViewOverrides`.
 
 use concinnity_core::components::{InputKey, SettingCommand, SettingOp};
 use concinnity_core::ecs::{ViewOverrides, World};
-use concinnity_core::gfx::view_modes::ViewMode;
+use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
 use concinnity_core::input::keymap::Bindable;
 use concinnity_core::settings::SettingKey;
 use serde_json::{Value, json};
@@ -48,7 +49,19 @@ const VIEW_MODES: [&str; ViewMode::ALL.len()] = [
     "occlusion",
     "depth",
     "motion",
+    "reactive",
 ];
+
+// The show flags `show-set` takes.
+const SHOW_FLAGS: [&str; ShowFlags::NAMED.len()] = {
+    let mut names = [""; ShowFlags::NAMED.len()];
+    let mut i = 0;
+    while i < names.len() {
+        names[i] = ShowFlags::NAMED[i].1;
+        i += 1;
+    }
+    names
+};
 
 pub(in crate::debug) const VERBS: &[Verb] = &[
     Verb {
@@ -79,6 +92,16 @@ pub(in crate::debug) const VERBS: &[Verb] = &[
             "View mode; lit restores the shipping image.",
         )],
         run: view_set,
+    },
+    Verb {
+        name: "show-set",
+        description: "Turn one feature pass on or off for the frame, the way the editor's View menu does.",
+        access: Access::Mutating,
+        params: &[
+            required("flag", Kind::Choice(&SHOW_FLAGS), "Show flag."),
+            required("state", Kind::Choice(&["on", "off"]), "Whether it shows."),
+        ],
+        run: show_set,
     },
     Verb {
         name: "rebind",
@@ -184,6 +207,46 @@ fn view_set(call: &Call, args: Args) -> Reply {
     Ok(json!({ "mode": mode.label() }))
 }
 
+#[derive(serde::Deserialize)]
+struct ShowSet {
+    flag: String,
+    state: String,
+}
+
+fn show_set(call: &Call, args: Args) -> Reply {
+    let ShowSet { flag, state } = args.parse()?;
+    let flag = show_flag(&flag).ok_or_else(|| format!("show-set: unknown flag '{flag}'"))?;
+    let on = match state.as_str() {
+        "on" => true,
+        "off" => false,
+        other => return Err(format!("show-set: unknown state '{other}' (use on | off)")),
+    };
+    call.on_world(move |world, _| {
+        let view = world
+            .resource::<ViewOverrides>()
+            .copied()
+            .unwrap_or_default();
+        let show = view.show.with(flag, on);
+        world.insert_resource(ViewOverrides { show, ..view });
+        Ok(())
+    })?;
+    Ok(json!({ "flag": flag_label(flag), "on": on }))
+}
+
+fn show_flag(name: &str) -> Option<ShowFlags> {
+    ShowFlags::NAMED
+        .iter()
+        .find(|(_, n)| n.eq_ignore_ascii_case(name))
+        .map(|&(flag, _)| flag)
+}
+
+fn flag_label(flag: ShowFlags) -> &'static str {
+    ShowFlags::LABELED
+        .iter()
+        .find(|(f, _)| *f == flag)
+        .map_or("", |(_, label)| label)
+}
+
 fn view_mode(name: &str) -> Option<ViewMode> {
     ViewMode::ALL
         .into_iter()
@@ -195,7 +258,6 @@ mod tests {
     use super::*;
     use crate::debug::verbs::testing::Engine;
     use concinnity_core::ecs::EventCursor;
-    use concinnity_core::gfx::view_modes::ShowFlags;
 
     fn sent(engine: &Engine) -> Vec<SettingCommand> {
         engine
@@ -312,5 +374,47 @@ mod tests {
                 .call("view-set", json!({ "mode": "sideways" }))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn every_show_flag_is_settable_by_its_name() {
+        for (name, (flag, _)) in SHOW_FLAGS.iter().zip(ShowFlags::LABELED) {
+            assert_eq!(show_flag(name), Some(flag), "{name}");
+        }
+    }
+
+    #[test]
+    fn show_set_flips_one_flag_and_keeps_the_mode() {
+        let mut world = World::new();
+        world.insert_resource(ViewOverrides {
+            mode: ViewMode::Motion,
+            show: ShowFlags::all(),
+        });
+        let mut engine = Engine::new(world);
+        let off = json!({ "flag": "reactive", "state": "off" });
+        assert_eq!(
+            engine.call("show-set", off.clone()),
+            Ok(json!({ "flag": "Reactive mask", "on": false }))
+        );
+        // Turning a cleared flag off again leaves it cleared.
+        assert!(engine.call("show-set", off).is_ok());
+        let view = engine.world.resource::<ViewOverrides>().copied();
+        assert_eq!(
+            view,
+            Some(ViewOverrides {
+                mode: ViewMode::Motion,
+                show: ShowFlags::all().toggled(ShowFlags::REACTIVE),
+            })
+        );
+        let on = json!({ "flag": "reactive", "state": "on" });
+        assert!(engine.call("show-set", on).is_ok());
+        let view = engine.world.resource::<ViewOverrides>().copied();
+        assert_eq!(view.map(|v| v.show), Some(ShowFlags::all()));
+        for bad in [
+            json!({ "flag": "sideways", "state": "on" }),
+            json!({ "flag": "fog", "state": "maybe" }),
+        ] {
+            assert!(engine.call("show-set", bad).is_err());
+        }
     }
 }

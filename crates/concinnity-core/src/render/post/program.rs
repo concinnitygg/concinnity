@@ -153,10 +153,10 @@ impl PostProgram {
     /// The resource counts this program declares.
     pub const fn bindings(self) -> PostProgramBindings {
         match self {
-            // scene, velocity, history; a single `float history_valid`.
+            // scene, velocity, history, reactive mask; `TaaParams`.
             PostProgram::TaaResolve => PostProgramBindings {
-                textures: 3,
-                constants: 4,
+                textures: 4,
+                constants: 8,
                 probes: false,
             },
             // scene, normal+depth, roughness, prefilter cube; `SsrParams`.

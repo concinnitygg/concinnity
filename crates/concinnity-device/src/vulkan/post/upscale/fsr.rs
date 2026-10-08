@@ -13,6 +13,7 @@ use std::ffi::c_void;
 use ash::vk;
 use ash::vk::Handle;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::reactive_mask::ReactiveReader;
 
 use super::{
     OutputWrites, UpscaleInputs, UpscaleOutput, UpscalerGpu, VkUpscaleBackend, open_library,
@@ -129,6 +130,9 @@ impl VkUpscaleBackend for FsrUpscaler {
             color: raw(inputs.color.image),
             depth: raw(inputs.depth.image),
             motion_vectors: raw(inputs.motion.image),
+            reactive: inputs
+                .reactive
+                .map_or(std::ptr::null_mut(), |m| raw(m.image)),
             output: raw(self.output.image().image),
         };
         // SAFETY: `cmd` is recording; `encode_upscale` put the inputs in SHADER_READ_ONLY_OPTIMAL
@@ -139,6 +143,10 @@ impl VkUpscaleBackend for FsrUpscaler {
 
     fn request_history_reset(&self) {
         self.ffx.request_history_reset();
+    }
+
+    fn reactive_reader(&self) -> ReactiveReader {
+        ReactiveReader::Fsr
     }
 
     fn destroy(&mut self) {

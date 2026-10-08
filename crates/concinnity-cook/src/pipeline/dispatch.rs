@@ -431,10 +431,21 @@ mod tests {
 
         let bytes = (entry("SdfVolume").compile)(&args, &ctx()).expect("sdf compiles");
         let programs: SdfPrograms = postcard::from_bytes(&bytes).expect("payload decodes");
-        // A surface volume that casts no shadow compiles its own pair only.
+        // A surface volume that casts no shadow compiles its own pair and its
+        // G-buffer pre-pass pair.
         let mut entries: Vec<&str> = programs.programs.iter().map(|p| p.entry.as_str()).collect();
         entries.sort_unstable();
-        assert_eq!(entries, ["raymarch_fragment", "raymarch_vertex"]);
+        assert_eq!(
+            entries,
+            [
+                "raymarch_fragment",
+                "raymarch_front_fragment",
+                "raymarch_prepass_fragment",
+                "raymarch_prepass_front_fragment",
+                "raymarch_prepass_vertex",
+                "raymarch_vertex"
+            ]
+        );
         assert!(programs.programs.iter().all(|p| !p.artifact.is_empty()));
         assert!(programs.field.text.contains("float map("));
         assert_eq!(

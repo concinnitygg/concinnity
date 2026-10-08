@@ -30,6 +30,7 @@ use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::fullscreen::align_up;
 use concinnity_core::render::post::rt_reflections::RtParamsInputs;
+use concinnity_core::render::reactive_mask::ReactiveWrite;
 pub(in crate::vulkan) use concinnity_core::render::uniforms::TransparentView;
 // `TransparentView` (the per-frame view UBO) is a GPU-free layout struct that
 // lives in `core::render`; re-export it so the encode path and the graph's
@@ -41,6 +42,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc};
+use super::reactive_mask::{self, WriterRenderPasses};
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
 use super::texture::{
@@ -423,7 +425,8 @@ struct TransparentRt {
 // least one `GlassPanel` or `WaterSurface`; `VkContext::transparent` stays
 // `None` otherwise and the Transparent pass is omitted from the frame graph.
 pub(in crate::vulkan) struct TransparentResources {
-    render_pass: OwnedRenderPass,
+    // One render pass per way the frame treats the reactive mask.
+    render_passes: WriterRenderPasses,
     pipeline_layout: OwnedPipelineLayout,
     _view_set_layout: OwnedSetLayout,
     _params_set_layout: OwnedSetLayout,
@@ -681,6 +684,7 @@ fn build_transparent_rt(
 fn create_transparent_render_pass(
     device: &VkDevice,
     format: vk::Format,
+    mask: Option<ReactiveWrite>,
 ) -> RenderResult<OwnedRenderPass> {
     let color = vk::AttachmentDescription::default()
         .format(format)
@@ -691,12 +695,18 @@ fn create_transparent_render_pass(
         .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
         .initial_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
         .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-    let color_ref = vk::AttachmentReference::default()
-        .attachment(0)
-        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+    // The reactive mask beside the scene, when the writers carry it.
+    let attachments = device.writer_targets().attachments(color, mask);
+    let color_refs: Vec<_> = (0..attachments.len() as u32)
+        .map(|i| {
+            vk::AttachmentReference::default()
+                .attachment(i)
+                .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        })
+        .collect();
     let subpass = vk::SubpassDescription::default()
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(std::slice::from_ref(&color_ref));
+        .color_attachments(&color_refs);
     // The encoder's explicit barrier (scene back to SHADER_READ_ONLY after the
     // snapshot copy) makes the load available; this dependency orders the load
     // after it.
@@ -712,7 +722,7 @@ fn create_transparent_render_pass(
             vk::AccessFlags::COLOR_ATTACHMENT_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
         );
     let info = vk::RenderPassCreateInfo::default()
-        .attachments(std::slice::from_ref(&color))
+        .attachments(&attachments)
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(std::slice::from_ref(&dependency));
     device
@@ -1130,15 +1140,16 @@ fn transparent_pipeline(
     // The scene pass has no depth attachment (the fragment shader does the manual
     // occlusion test); a reflection layer keeps its nearest surface. Either
     // target is single-sample regardless of the main pass's MSAA.
-    let (blend, depth) = match output {
-        TransparentOutput::Scene => (Blend::AlphaOver, Depth::Off),
-        TransparentOutput::ReflectionLayer => (Blend::Opaque, Depth::write()),
+    // The scene pass also max-blends the reactive mask when it carries one.
+    let (targets, depth): (&[Blend], Depth) = match output {
+        TransparentOutput::Scene => (device.writer_targets().blends(), Depth::Off),
+        TransparentOutput::ReflectionLayer => (&[Blend::Opaque], Depth::write()),
     };
     GraphicsPipelineDesc {
         depth,
         vertex_bindings: &binding,
         vertex_attributes: attributes,
-        ..GraphicsPipelineDesc::fullscreen(vert_spv, frag_spv, layout, render_pass, &[blend])
+        ..GraphicsPipelineDesc::fullscreen(vert_spv, frag_spv, layout, render_pass, targets)
     }
     .build(device, "transparent")
 }
@@ -1231,6 +1242,7 @@ pub(in crate::vulkan) struct TransparentBuildConfig {
 pub(in crate::vulkan) struct TransparentSceneTargets<'a> {
     pub scene_views: &'a [vk::ImageView],
     pub scene_images: &'a [vk::Image],
+    pub reactive_mask_views: &'a [vk::ImageView],
     pub depth_views: &'a [vk::ImageView],
     pub sampler: vk::Sampler,
 }
@@ -1336,6 +1348,7 @@ impl<'a> ProducerCtx<'a> {
 pub(in crate::vulkan) struct TransparentRebuildTargets<'a> {
     pub scene_views: &'a [vk::ImageView],
     pub scene_images: &'a [vk::Image],
+    pub reactive_mask_views: &'a [vk::ImageView],
     pub depth_views: &'a [vk::ImageView],
     pub planar_target_views: &'a [vk::ImageView],
     // Per-axis divisor of the glass reflection pre-pass; 1 traces in place.
@@ -1374,6 +1387,7 @@ impl TransparentResources {
         let TransparentSceneTargets {
             scene_views,
             scene_images,
+            reactive_mask_views,
             depth_views,
             sampler,
         } = scene;
@@ -1386,7 +1400,9 @@ impl TransparentResources {
             bindless_pool_size,
         } = rt_setup;
         let msaa = msaa_samples != vk::SampleCountFlags::TYPE_1;
-        let render_pass = create_transparent_render_pass(device, HDR_FORMAT)?;
+        let render_passes = WriterRenderPasses::new(device.writer_targets(), |mask| {
+            create_transparent_render_pass(device, HDR_FORMAT, mask)
+        })?;
         let reflection_render_pass = create_reflection_render_pass(device)?;
         let view_set_layout = create_descriptor_set_layout(device, &view_set_bindings())?;
         let params_set_layout = create_descriptor_set_layout(device, &params_set_bindings())?;
@@ -1474,14 +1490,20 @@ impl TransparentResources {
             &[0u8; 4],
         )?;
 
-        // Per-frame framebuffers targeting the scene image for that slot.
-        let framebuffers =
-            create_framebuffers(device, render_pass.handle(), scene_views, width, height)?;
+        // Per-frame framebuffers targeting the scene image and reactive mask
+        // for that slot.
+        let framebuffers = create_framebuffers(
+            device,
+            render_passes.compatible(),
+            (scene_views, reactive_mask_views),
+            width,
+            height,
+        )?;
 
         let producer_ctx = ProducerCtx {
             alloc,
             device,
-            render_pass: render_pass.handle(),
+            render_pass: render_passes.compatible(),
             reflection_render_pass: reflection_render_pass.handle(),
             layout: pipeline_layout.handle(),
             rt_layout_flat: rt.as_ref().map(|r| r.layout_flat.handle()),
@@ -1550,7 +1572,7 @@ impl TransparentResources {
         };
 
         let mut me = Self {
-            render_pass,
+            render_passes,
             pipeline_layout,
             _view_set_layout: view_set_layout,
             _params_set_layout: params_set_layout,
@@ -1791,6 +1813,7 @@ impl TransparentResources {
         let TransparentRebuildTargets {
             scene_views,
             scene_images,
+            reactive_mask_views,
             depth_views,
             planar_target_views,
             reflection_divisor,
@@ -1803,8 +1826,8 @@ impl TransparentResources {
 
         self.framebuffers = create_framebuffers(
             device,
-            self.render_pass.handle(),
-            scene_views,
+            self.render_passes.compatible(),
+            (scene_views, reactive_mask_views),
             width,
             height,
         )?;
@@ -1848,20 +1871,21 @@ impl TransparentResources {
     }
 }
 
-// One framebuffer per frame slot, each binding that slot's scene image view as
-// the sole color attachment.
+// One framebuffer per frame slot, each binding that slot's scene image view and,
+// when the writers carry it, reactive mask as the color attachments.
 fn create_framebuffers(
     device: &VkDevice,
     render_pass: vk::RenderPass,
-    scene_views: &[vk::ImageView],
+    (scene_views, mask_views): (&[vk::ImageView], &[vk::ImageView]),
     width: u32,
     height: u32,
 ) -> RenderResult<Vec<OwnedFramebuffer>> {
     let mut out = Vec::with_capacity(scene_views.len());
-    for &view in scene_views {
+    for (&view, &mask) in scene_views.iter().zip(mask_views) {
+        let attachments = device.writer_targets().views(view, mask);
         let info = vk::FramebufferCreateInfo::default()
             .render_pass(render_pass)
-            .attachments(std::slice::from_ref(&view))
+            .attachments(&attachments)
             .width(width.max(1))
             .height(height.max(1))
             .layers(1);
@@ -1994,9 +2018,10 @@ impl VkContext {
         // same values the RT-reflection resolve uses); only consumed on the RT path.
         fov_y_radians: f32,
         aspect: f32,
-    ) -> RenderResult<()> {
+        mask: ReactiveWrite,
+    ) -> RenderResult<bool> {
         let Some(transparent) = self.transparent.as_ref() else {
-            return Ok(());
+            return Ok(false);
         };
         let cam = [view.camera_pos[0], view.camera_pos[1], view.camera_pos[2]];
 
@@ -2022,7 +2047,7 @@ impl VkContext {
         let mesh_centers: Vec<[f32; 3]> = mesh_draws.iter().map(|d| d.center).collect();
         let order = transparent.draw_order(&mesh_centers, cam);
         if order.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
 
         // The glass reflection pre-pass runs when RT is live, the reduced layers
@@ -2234,10 +2259,12 @@ impl VkContext {
         // back-to-front, STORE. The negative-height viewport matches the main
         // pass so the manual depth test + refraction taps line up at pixel
         // coordinates.
+        let clears = [reactive_mask::REACTIVE_MASK_CLEAR; 2];
         let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(transparent.render_pass.handle())
+            .render_pass(transparent.render_passes.get(mask))
             .framebuffer(transparent.framebuffers[frame_idx].handle())
-            .render_area(vk::Rect2D::default().extent(extent));
+            .render_area(vk::Rect2D::default().extent(extent))
+            .clear_values(&clears);
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
@@ -2273,7 +2300,7 @@ impl VkContext {
         // above.
         unsafe { device.cmd_end_render_pass(cmd) };
 
-        Ok(())
+        Ok(true)
     }
 
     // Draw the traced glass into the two reduced reflection layers: each layer

@@ -26,6 +26,7 @@ use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ParticleParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSpawnState};
+use concinnity_core::render::reactive_mask::ReactiveWrite;
 use concinnity_core::render::uniforms::GpuParticle;
 use concinnity_core::render::uniforms::ParticleView;
 use std::cell::Cell;
@@ -33,7 +34,8 @@ use std::cell::Cell;
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{Binding, PoolSizes};
-use super::pipeline_desc::{Blend, GraphicsPipelineDesc, compute_pipeline};
+use super::pipeline_desc::{GraphicsPipelineDesc, compute_pipeline};
+use super::reactive_mask::{self, WriterRenderPasses};
 use super::record::cmd_push_constants;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
@@ -120,8 +122,9 @@ pub(in crate::vulkan) struct ParticleResources {
     // set 0: (pool SSBO, counter SSBO) per emitter.
     pub(in crate::vulkan) compute_set_layout: OwnedSetLayout,
 
-    // Render pass: the particle.hlsl billboard pair.
-    pub(in crate::vulkan) render_pass: OwnedRenderPass,
+    // Render passes: the particle.hlsl billboard pair over the scene and the
+    // reactive mask, one per way the frame treats the mask.
+    pub(in crate::vulkan) render_passes: WriterRenderPasses,
     pub(in crate::vulkan) render_pipeline: OwnedPipeline,
     pub(in crate::vulkan) render_pipeline_layout: OwnedPipelineLayout,
     // set 0: per-frame (ParticleView UBO, main depth).
@@ -142,7 +145,8 @@ pub(in crate::vulkan) struct ParticleResources {
     pub(in crate::vulkan) view_sets: Vec<vk::DescriptorSet>,
 
     // One framebuffer per frame-in-flight slot, each binding its frame
-    // slot's `hdr_resolve_images[i].view` as the sole color attachment.
+    // slot's `hdr_resolve_images[i].view` and reactive mask as the color
+    // attachments.
     pub(in crate::vulkan) framebuffers: Vec<OwnedFramebuffer>,
 
     // Linear-clamp sampler shared by every emitter's albedo binding.
@@ -158,8 +162,36 @@ pub(in crate::vulkan) struct ParticleResources {
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct ParticlePassTargets<'a> {
     pub(in crate::vulkan) hdr_resolve_views: &'a [vk::ImageView],
+    pub(in crate::vulkan) reactive_mask_views: &'a [vk::ImageView],
     pub(in crate::vulkan) depth_views: &'a [vk::ImageView],
     pub(in crate::vulkan) extent: vk::Extent2D,
+}
+
+// One framebuffer per frame slot over that slot's scene and reactive mask.
+fn create_framebuffers(
+    device: &VkDevice,
+    render_pass: vk::RenderPass,
+    targets: &ParticlePassTargets<'_>,
+    frames: usize,
+) -> RenderResult<Vec<OwnedFramebuffer>> {
+    targets
+        .hdr_resolve_views
+        .iter()
+        .zip(targets.reactive_mask_views)
+        .take(frames)
+        .map(|(&scene, &mask)| {
+            let attachments = device.writer_targets().views(scene, mask);
+            let fb_info = vk::FramebufferCreateInfo::default()
+                .render_pass(render_pass)
+                .attachments(&attachments)
+                .width(targets.extent.width.max(1))
+                .height(targets.extent.height.max(1))
+                .layers(1);
+            device
+                .create_framebuffer(&fb_info)
+                .map_err(|e| super::error::map_vk_result(e, "particle framebuffer"))
+        })
+        .collect()
 }
 
 impl ParticleResources {
@@ -176,12 +208,10 @@ impl ParticleResources {
         hot_reload: bool,
     ) -> RenderResult<Self> {
         let &GpuUploadContext { alloc, device, .. } = gpu;
-        let ParticlePassTargets {
-            hdr_resolve_views,
-            depth_views,
-            extent,
-        } = targets;
-        let render_pass = create_render_pass(device, HDR_FORMAT)?;
+        let depth_views = targets.depth_views;
+        let render_passes = WriterRenderPasses::new(device.writer_targets(), |mask| {
+            create_render_pass(device, HDR_FORMAT, mask)
+        })?;
         let compute_set_layout = create_descriptor_set_layout(device, &compute_set_bindings())?;
         let view_set_layout = create_descriptor_set_layout(device, &view_set_bindings())?;
         let emitter_set_layout = create_descriptor_set_layout(device, &emitter_set_bindings())?;
@@ -202,7 +232,7 @@ impl ParticleResources {
         )?;
         let render_pipeline = create_render_pipeline(
             device,
-            render_pass.handle(),
+            render_passes.compatible(),
             render_pipeline_layout.handle(),
             &vs_spv,
             &fs_spv,
@@ -234,28 +264,14 @@ impl ParticleResources {
                 .apply(device);
         }
 
-        // Per-frame framebuffers (one per frame slot binding that slot's
-        // hdr_resolve view as the color attachment).
-        let mut framebuffers = Vec::with_capacity(frames);
-        for &view in hdr_resolve_views.iter().take(frames) {
-            let attachments = [view];
-            let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(render_pass.handle())
-                .attachments(&attachments)
-                .width(extent.width.max(1))
-                .height(extent.height.max(1))
-                .layers(1);
-            let fb = device
-                .create_framebuffer(&fb_info)
-                .map_err(|e| super::error::map_vk_result(e, "particle framebuffer"))?;
-            framebuffers.push(fb);
-        }
+        let framebuffers =
+            create_framebuffers(device, render_passes.compatible(), &targets, frames)?;
 
         Ok(Self {
             compute_pipeline,
             compute_pipeline_layout,
             compute_set_layout,
-            render_pass,
+            render_passes,
             render_pipeline,
             render_pipeline_layout,
             _view_set_layout: view_set_layout,
@@ -276,27 +292,18 @@ impl ParticleResources {
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         device: &VkDevice,
-        hdr_resolve_views: &[vk::ImageView],
-        depth_views: &[vk::ImageView],
-        extent: vk::Extent2D,
+        targets: ParticlePassTargets<'_>,
     ) -> RenderResult<()> {
         for (i, &set) in self.view_sets.iter().enumerate() {
-            write_depth_binding(device, set, frame_view(depth_views, i));
+            write_depth_binding(device, set, frame_view(targets.depth_views, i));
         }
         self.framebuffers.clear();
-        for &view in hdr_resolve_views.iter().take(self.view_ubos.len()) {
-            let attachments = [view];
-            let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(self.render_pass.handle())
-                .attachments(&attachments)
-                .width(extent.width.max(1))
-                .height(extent.height.max(1))
-                .layers(1);
-            let fb = device
-                .create_framebuffer(&fb_info)
-                .map_err(|e| super::error::map_vk_result(e, "particle framebuffer (rebuild)"))?;
-            self.framebuffers.push(fb);
-        }
+        self.framebuffers = create_framebuffers(
+            device,
+            self.render_passes.compatible(),
+            &targets,
+            self.view_ubos.len(),
+        )?;
         Ok(())
     }
 
@@ -316,7 +323,7 @@ impl ParticleResources {
         )?;
         let rp = create_render_pipeline(
             device,
-            self.render_pass.handle(),
+            self.render_passes.compatible(),
             self.render_pipeline_layout.handle(),
             &vs_spv,
             &fs_spv,
@@ -415,12 +422,16 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
 
 // Render pass / descriptor / pipeline construction
 
-fn create_render_pass(device: &VkDevice, format: vk::Format) -> RenderResult<OwnedRenderPass> {
-    // One color attachment: the resolved HDR scene. The fog pass left
-    // it in SHADER_READ_ONLY_OPTIMAL; we want it in COLOR_ATTACHMENT
-    // during the subpass and SHADER_READ_ONLY_OPTIMAL again on exit so
-    // SSR / TAA / bloom / composite can sample it. Mirrors the decal /
-    // fog render passes.
+fn create_render_pass(
+    device: &VkDevice,
+    format: vk::Format,
+    mask: Option<ReactiveWrite>,
+) -> RenderResult<OwnedRenderPass> {
+    // The resolved HDR scene, and the reactive mask when the writers carry it.
+    // The fog pass left the scene in SHADER_READ_ONLY_OPTIMAL; we want it in
+    // COLOR_ATTACHMENT during the subpass and SHADER_READ_ONLY_OPTIMAL again
+    // on exit so SSR / TAA / bloom / composite can sample it. Mirrors the
+    // decal / fog render passes.
     let attachment = vk::AttachmentDescription::default()
         .format(format)
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -430,12 +441,17 @@ fn create_render_pass(device: &VkDevice, format: vk::Format) -> RenderResult<Own
         .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
         .initial_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
         .final_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-    let color_ref = vk::AttachmentReference::default()
-        .attachment(0)
-        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+    let attachments = device.writer_targets().attachments(attachment, mask);
+    let color_refs: Vec<_> = (0..attachments.len() as u32)
+        .map(|i| {
+            vk::AttachmentReference::default()
+                .attachment(i)
+                .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        })
+        .collect();
     let subpass = vk::SubpassDescription::default()
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(std::slice::from_ref(&color_ref));
+        .color_attachments(&color_refs);
     let dep_in = vk::SubpassDependency::default()
         .src_subpass(vk::SUBPASS_EXTERNAL)
         .dst_subpass(0)
@@ -457,7 +473,7 @@ fn create_render_pass(device: &VkDevice, format: vk::Format) -> RenderResult<Own
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
     let deps = [dep_in, dep_out];
     let info = vk::RenderPassCreateInfo::default()
-        .attachments(std::slice::from_ref(&attachment))
+        .attachments(&attachments)
         .subpasses(std::slice::from_ref(&subpass))
         .dependencies(&deps);
     device
@@ -599,7 +615,7 @@ fn create_render_pipeline(
             frag_spv,
             layout,
             render_pass,
-            &[Blend::AlphaOver],
+            device.writer_targets().blends(),
         )
     }
     .build(device, "particle render")
@@ -853,12 +869,13 @@ impl VkContext {
         frame: &(f32, u32, Vec<u32>),
         vp: [[f32; 4]; 4],
         frustum: &Frustum,
-    ) {
+        mask: ReactiveWrite,
+    ) -> bool {
         let Some(resources) = self.particle.resources.as_ref() else {
-            return;
+            return false;
         };
         if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
-            return;
+            return false;
         }
         let (dt, frame_index, spawn_budgets) = (frame.0, frame.1, frame.2.as_slice());
         let device = &self.hw.device;
@@ -881,7 +898,7 @@ impl VkContext {
             })
             .collect();
         if !visible.iter().any(|v| *v) {
-            return;
+            return false;
         }
         let params_per_emitter = self.particle_params(dt, frame_index, spawn_budgets);
 
@@ -907,10 +924,12 @@ impl VkContext {
         // SHADER_READ_ONLY_OPTIMAL → COLOR_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL
         // via its subpass dependencies, so no explicit image barrier is
         // needed here.
+        let clears = [reactive_mask::REACTIVE_MASK_CLEAR; 2];
         let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(resources.render_pass.handle())
+            .render_pass(resources.render_passes.get(mask))
             .framebuffer(resources.framebuffers[frame_idx].handle())
-            .render_area(vk::Rect2D::default().extent(extent));
+            .render_area(vk::Rect2D::default().extent(extent))
+            .clear_values(&clears);
         // Negative-height viewport flips clip-space Y to match the main +
         // shadow + decal passes (the engine's `camera_projection()` produces +Y-up
         // clip coords, OpenGL-style; the Vulkan framebuffer has +Y down, so
@@ -992,6 +1011,7 @@ impl VkContext {
         unsafe {
             device.cmd_end_render_pass(cmd);
         }
+        true
     }
 }
 
@@ -1020,6 +1040,12 @@ impl VkContext {
                 .iter()
                 .map(|img| img.view)
                 .collect();
+            let reactive_mask_views: Vec<vk::ImageView> = self
+                .targets
+                .reactive_mask_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
             let resources = ParticleResources::new(
                 &GpuUploadContext {
                     alloc: &self.hw.alloc,
@@ -1030,6 +1056,7 @@ impl VkContext {
                 self.frames_in_flight,
                 ParticlePassTargets {
                     hdr_resolve_views: &hdr_resolve_views,
+                    reactive_mask_views: &reactive_mask_views,
                     depth_views: &depth_views,
                     extent: self.targets.render_extent,
                 },

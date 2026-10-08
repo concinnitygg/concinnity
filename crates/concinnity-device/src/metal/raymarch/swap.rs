@@ -35,7 +35,9 @@ impl MtlContext {
         let hot_reload = self.hot_reload.enabled;
         let VolumePipelines {
             pipeline,
+            front_pipeline,
             shadow_pipeline,
+            prepass_pipelines,
         } = match volume_for(prepared, flags, hot_reload) {
             Some(pipelines) => pipelines,
             None => {
@@ -44,7 +46,9 @@ impl MtlContext {
         };
         let record = &mut self.raymarch.volumes[volume];
         record.pipeline = pipeline;
+        record.front_pipeline = front_pipeline;
         record.shadow_pipeline = shadow_pipeline;
+        record.prepass_pipelines = prepass_pipelines;
         record.refractive = raymarch_source::taps_scene(programs);
         Ok(PipelineSwap::Swapped)
     }

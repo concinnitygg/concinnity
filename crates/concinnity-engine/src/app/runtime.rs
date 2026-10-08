@@ -215,6 +215,9 @@ impl Runtime {
         self.world
             .insert_resource(Clock(crate::app::clock::monotonic_micros));
         self.world.insert_resource(self.launch);
+        if let Some(view) = self.launch.view_overrides() {
+            self.world.insert_resource(view);
+        }
         // Before `world.start`, which both drains the columns the resolution
         // reads and runs the gates that read the result.
         let mode = self.render_mode();

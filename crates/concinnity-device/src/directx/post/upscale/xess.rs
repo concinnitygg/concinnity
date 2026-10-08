@@ -9,6 +9,7 @@ use std::ptr;
 
 use concinnity_core::gfx::jitter;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::reactive_mask::ReactiveReader;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
 
@@ -158,6 +159,7 @@ impl XessUpscaler {
             return Ok(None);
         }
         ctx.set_velocity_scale(LABEL);
+        ctx.set_responsive_mask_cap(LABEL);
 
         let output = UpscaleOutput::create(target.gpu.device, extent.output, target.descriptors)?;
         tracing::info!("{LABEL}: context created: {extent}");
@@ -195,7 +197,9 @@ impl UpscaleBackend for XessUpscaler {
             p_velocity_texture: inputs.motion_vectors.as_raw(),
             p_depth_texture: inputs.depth.as_raw(),
             p_exposure_scale_texture: ptr::null_mut(),
-            p_responsive_pixel_mask_texture: ptr::null_mut(),
+            p_responsive_pixel_mask_texture: inputs
+                .reactive
+                .map_or(ptr::null_mut(), Interface::as_raw),
             p_output_texture: self.output.resource().as_raw(),
             frame: self.ctx.frame(camera.jitter_offset),
             p_descriptor_heap: ptr::null_mut(),
@@ -214,6 +218,10 @@ impl UpscaleBackend for XessUpscaler {
 
     fn request_history_reset(&self) {
         self.ctx.request_history_reset();
+    }
+
+    fn reactive_reader(&self) -> ReactiveReader {
+        ReactiveReader::Xess
     }
 }
 

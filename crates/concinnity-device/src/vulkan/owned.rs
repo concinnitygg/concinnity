@@ -128,7 +128,16 @@ struct DeviceInner {
     _entry: ash::Entry,
     queue: Mutex<RetireQueue>,
     debug: DebugMessenger,
-    depth_bias_clamp: bool,
+    caps: DeviceCaps,
+}
+
+// Optional device features the engine adapts to rather than requires.
+#[derive(Copy, Clone, Debug)]
+pub(in crate::vulkan) struct DeviceCaps {
+    // `depthBiasClamp` was enabled.
+    pub(in crate::vulkan) depth_bias_clamp: bool,
+    // `independentBlend` was enabled.
+    pub(in crate::vulkan) independent_blend: bool,
 }
 
 // The validation messenger, and the budget its callback reads.
@@ -238,7 +247,7 @@ impl VkDevice {
         raw: ash::Device,
         frames_in_flight: usize,
         debug: DebugMessenger,
-        depth_bias_clamp: bool,
+        caps: DeviceCaps,
     ) -> Self {
         Self {
             inner: Arc::new(DeviceInner {
@@ -247,15 +256,20 @@ impl VkDevice {
                 _entry: entry,
                 queue: Mutex::new(RetireQueue::new(frames_in_flight)),
                 debug,
-                depth_bias_clamp,
+                caps,
             }),
         }
+    }
+
+    // The color targets the reactive mask's writer passes draw.
+    pub(in crate::vulkan) fn writer_targets(&self) -> super::reactive_mask::WriterTargets {
+        super::reactive_mask::WriterTargets::for_device(self.inner.caps.independent_blend)
     }
 
     // Whether `depthBiasClamp` was enabled. The shadow pipelines bind the
     // convention's clamp when it was, and render unclamped when it was not.
     pub(in crate::vulkan) fn depth_bias_clamp(&self) -> f32 {
-        if self.inner.depth_bias_clamp {
+        if self.inner.caps.depth_bias_clamp {
             shadow_bias::RASTER_CLAMP
         } else {
             0.0

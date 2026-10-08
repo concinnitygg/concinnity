@@ -41,6 +41,7 @@ mod pso_library;
 mod quality;
 mod raymarch;
 mod raytrace;
+mod reactive_mask;
 mod resize;
 mod resources;
 mod root_constants;

@@ -24,7 +24,7 @@ use super::graph_exec::GraphFrameParams;
 use crate::directx::error::map_hresult;
 use stages::FrameProjection;
 
-mod composite;
+pub(in crate::directx) mod composite;
 pub(in crate::directx) mod main;
 pub(in crate::directx) mod shadow;
 pub(in crate::directx) mod spot_shadow;
@@ -418,6 +418,7 @@ impl DxContext {
                 .map(|set| set.frame_plan(vp_mat))
                 .unwrap_or_default(),
             cluster_params,
+            reactive: concinnity_core::render::reactive_mask::ReactiveMaskPlan::of(&seed_inputs),
         };
         let pass_cmd_lists = match self.execute_graph(&frame_graph, &frame_params) {
             Ok(lists) => lists,

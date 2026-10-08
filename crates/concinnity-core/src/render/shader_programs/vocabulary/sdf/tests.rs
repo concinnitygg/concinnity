@@ -48,9 +48,14 @@ fn templates() -> impl Iterator<Item = (Platform, Family, String)> {
         text: "",
     };
     Platform::ALL.into_iter().flat_map(move |p| {
-        [Family::Surface, Family::Volumetric, Family::Shadow]
-            .into_iter()
-            .map(move |f| (p, f, strip_comments(&raymarch::source(f, p, field))))
+        [
+            Family::Surface,
+            Family::Volumetric,
+            Family::Shadow,
+            Family::Prepass,
+        ]
+        .into_iter()
+        .map(move |f| (p, f, strip_comments(&raymarch::source(f, p, field))))
     })
 }
 

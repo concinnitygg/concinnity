@@ -1,6 +1,6 @@
 //! Per-frame encoder for the raymarched SDF volume pass on D3D12. Runs at
 //! `PassId::Raymarch`, between `AutoExposure` and `Decals` on the
-//! hdr_resolve RMW chain. Each `SdfVolume` rasterizes the back faces of
+//! hdr_resolve RMW chain. Each `SdfVolume` rasterizes one face set of
 //! its world-space bounding box and runs a user-authored HLSL fragment
 //! shader that sphere-traces the SDF inside the box. HLSL port of
 //! `src/metal/raymarch.rs`: same shader interface, same
@@ -13,9 +13,9 @@
 //!     template's `raymarch_fragment` can call the user's `map` / `shade`
 //!     through the forward declarations in the helpers.
 //!   * One shared unit-cube VB + IB for the proxy geometry; 8 corners /
-//!     36 indices, allocated once at init. The encoder draws back faces
-//!     only (cull mode = Front) so we get exactly one fragment per pixel
-//!     inside the box regardless of camera position.
+//!     36 indices, allocated once at init. A surface volume has a PSO per
+//!     face set and draws its front faces when the camera is clear of the
+//!     box, its back faces otherwise; either way one fragment per pixel.
 //!   * Per-volume `SdfVolumeUniforms` cbuffer (static: `center`, `extent`,
 //!     `params`, ... don't change frame-to-frame) allocated once at init.
 //!   * Per-frame `RaymarchView` cbuffer ring (triple-buffered).
@@ -43,7 +43,7 @@ use concinnity_core::gfx::render_types::LightUniforms;
 use concinnity_core::platform::Platform;
 use concinnity_core::render::backend_init::SdfVolumeSource;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::raymarch::{Family, VolumeFlags};
+use concinnity_core::render::shader_programs::raymarch::{Family, ProxyFaces, VolumeFlags};
 use std::ffi::c_void;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -55,7 +55,11 @@ pub(in crate::directx) use concinnity_core::render::uniforms::{
     RaymarchView, RaymarchVolumeUniforms,
 };
 
+use concinnity_core::render::uniforms::{GBufferView, PassCamera};
+use concinnity_core::transform::mat4_inverse;
+
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
+use super::post::gbuffer::GbufferPrepassView;
 use crate::directx::com;
 use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
 use crate::directx::depth::shadow_sample_compare;
@@ -69,7 +73,7 @@ use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::{
     HDR_FORMAT, create_fallback_white_resource, create_hdr_resolve_target, transition_barrier,
 };
-use crate::shader::raymarch_source::family_artifacts;
+use crate::shader::raymarch_source::{face_artifacts, family_artifacts};
 
 mod swap;
 
@@ -93,13 +97,18 @@ fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
 pub(in crate::directx) struct RaymarchVolumeRecord {
     // The volume's asset name, for pipeline errors.
     pub(in crate::directx) label: String,
+    // A surface's is the back-face variant; `front_pso` is the other.
     pub(in crate::directx) pso: ID3D12PipelineState,
+    // The surface's front-face PSO; `None` for a medium.
+    pub(in crate::directx) front_pso: Option<ID3D12PipelineState>,
     // Depth-only shadow PSO. `Some` when the asset's `cast_shadows`
     // is true at init; the shadow encoder iterates only the records
     // where this is `Some` AND `visible` AND `cast_shadows` (the
     // runtime flag, currently can't toggle, but the field is
     // preserved for future runtime mutation).
     pub(in crate::directx) shadow_pso: Option<ID3D12PipelineState>,
+    // The surface's G-buffer pre-pass PSOs; `None` for a medium.
+    pub(in crate::directx) prepass_psos: Option<FacePsos>,
     // Per-volume cbuffer (CPU-visible upload heap, written once at build
     // time and never modified: the asset's center / extent / params are
     // static). Held because `volume_cbuffer_gva` below is only valid while
@@ -118,6 +127,44 @@ pub(in crate::directx) struct RaymarchVolumeRecord {
     // visible volume does; the `scene_color` SRV stands either way, so this
     // selects no PSO variant.
     pub(in crate::directx) refractive: bool,
+    // The world-space bounding box, which decides the faces the proxy draws.
+    pub(in crate::directx) center: [f32; 3],
+    pub(in crate::directx) extent: [f32; 3],
+}
+
+// A surface family's PSO per set of proxy faces.
+pub(in crate::directx) struct FacePsos {
+    pub(in crate::directx) front: ID3D12PipelineState,
+    pub(in crate::directx) back: ID3D12PipelineState,
+}
+
+impl FacePsos {
+    fn get(&self, faces: ProxyFaces) -> &ID3D12PipelineState {
+        match faces {
+            ProxyFaces::Front => &self.front,
+            ProxyFaces::Back => &self.back,
+        }
+    }
+}
+
+impl RaymarchVolumeRecord {
+    // The faces this volume's proxy draws with from `view`: a medium always
+    // takes the back faces.
+    fn faces(&self, view: &RaymarchView) -> ProxyFaces {
+        if self.volumetric {
+            ProxyFaces::Back
+        } else {
+            ProxyFaces::for_box(view, self.center, self.extent)
+        }
+    }
+
+    // The PSO the volume's own draw takes from `view`.
+    fn draw_pso(&self, view: &RaymarchView) -> &ID3D12PipelineState {
+        match (self.faces(view), &self.front_pso) {
+            (ProxyFaces::Front, Some(front)) => front,
+            _ => &self.pso,
+        }
+    }
 }
 
 // Engine-side raymarch resources: shared cube buffers, per-frame view
@@ -150,6 +197,11 @@ pub(in crate::directx) struct RaymarchResources {
     // before binding `view_cbuffers[frame_idx]` at b0.
     view_cbuffers: Vec<PooledBuffer>,
     view_ptrs: Vec<*mut u8>,
+    // The G-buffer pre-pass's own view ring: its block rasterizes through the
+    // pre-pass's VP and carries the motion matrices, and the pre-pass records
+    // concurrently with the main raymarch pass.
+    prepass_view_cbuffers: Vec<PooledBuffer>,
+    prepass_view_ptrs: Vec<*mut u8>,
     // 1×1 white fallback for the `scene_color` SRV slot, kept around
     // only to hold a resource open while init runs; the live SRV at
     // `scene_color_srv_cpu` is rewritten to point at `hdr_resolve_copy`
@@ -206,17 +258,14 @@ fn create_raymarch_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12R
         .build(device, "raymarch root sig")
 }
 
-// Build the per-volume PSO. Front-face culled so back faces of the
-// proxy cube rasterize (which works regardless of whether the camera
-// is inside or outside the bbox). Depth attachment is the main scene
-// depth (D32_FLOAT); the shader writes hit depth as conservative
-// depth (`DEPTH_CONSERVATIVE`) so downstream passes see
-// raymarched-surface depth.
+// Build the per-volume PSO drawing the proxy's `faces`. Depth attachment is
+// the main scene depth (D32_FLOAT); the shader writes hit depth as
+// conservative depth so downstream passes see raymarched-surface depth.
 fn create_raymarch_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
-    vs: &[u8],
-    ps: &[u8],
+    (vs, ps): (&[u8], &[u8]),
+    faces: ProxyFaces,
     msaa_samples: u32,
 ) -> RenderResult<ID3D12PipelineState> {
     let input_layout = main_input_layout();
@@ -231,40 +280,39 @@ fn create_raymarch_pso(
         .target(HDR_FORMAT, Blend::Opaque)
         .depth(DXGI_FORMAT_D32_FLOAT, Depth::write_inclusive())
         .samples(msaa_samples.max(1))
-        .raster(proxy_raster(msaa_samples > 1))
+        .raster(proxy_raster(msaa_samples > 1, faces))
         .build(device, "raymarch")
 }
 
-// The proxy cube's rasterizer: clockwise front faces culled, so the back faces
-// rasterize.
-fn proxy_raster(multisample: bool) -> Raster {
+// The proxy cube's rasterizer, culling the face set `faces` does not draw. The
+// cube winds its outward faces counterclockwise, as every engine mesh does.
+fn proxy_raster(multisample: bool, faces: ProxyFaces) -> Raster {
     Raster {
-        cull: Cull::Front,
-        front_ccw: false,
+        cull: match faces {
+            ProxyFaces::Front => Cull::Back,
+            ProxyFaces::Back => Cull::Front,
+        },
         multisample,
         ..Raster::default()
     }
 }
 
-// Returns the wrapped HLSL for a single volume + the asset label used
-// in error messages. Bytes are compiled at the caller; the wrap
-// itself is allocation-only.
+// Compile a surface volume's PSO drawing the proxy's `faces`.
 fn compile_volume_pso(
-    device: &ID3D12Device,
-    root_sig: &ID3D12RootSignature,
+    t: &VolumePsoTargets<'_>,
     programs: &SdfPrograms,
     asset_label: &str,
-    msaa_samples: u32,
-    hot_reload: bool,
+    faces: ProxyFaces,
 ) -> RenderResult<ID3D12PipelineState> {
-    let (vs, ps) = family_artifacts(
+    let (vs, ps) = face_artifacts(
         programs,
         Family::Surface,
+        faces,
         Platform::DirectX,
-        hot_reload,
+        t.hot_reload,
         asset_label,
     )?;
-    create_raymarch_pso(device, root_sig, &vs, &ps, msaa_samples)
+    create_raymarch_pso(t.device, t.root_sig, (&vs, &ps), faces, t.msaa_samples)
 }
 
 // Volumetric variant of the raymarch PSO: same root signature + same
@@ -283,7 +331,7 @@ fn create_raymarch_volumetric_pso(
     let rasterizer = D3D12_RASTERIZER_DESC {
         FillMode: D3D12_FILL_MODE_SOLID,
         CullMode: D3D12_CULL_MODE_FRONT,
-        FrontCounterClockwise: windows::core::BOOL(0),
+        FrontCounterClockwise: windows::core::BOOL(1),
         DepthBias: 0,
         DepthBiasClamp: 0.0,
         SlopeScaledDepthBias: 0.0,
@@ -415,7 +463,7 @@ fn create_raymarch_shadow_pso(
     GraphicsPso::new(root_sig, vs, ps)
         .input_layout(&input_layout)
         .depth(DXGI_FORMAT_D32_FLOAT, Depth::write())
-        .raster(proxy_raster(false))
+        .raster(proxy_raster(false, ProxyFaces::Back))
         .build(device, "raymarch shadow")
 }
 
@@ -438,6 +486,33 @@ fn compile_volume_shadow_pso(
     create_raymarch_shadow_pso(device, root_sig, &vs, &ps)
 }
 
+// Build a surface volume's G-buffer pre-pass PSO: the pre-pass's three color
+// targets over its private single-sample depth, on the shadow family's root
+// signature, whose four constant buffers are everything the pre-pass family
+// reads. Same proxy rasterizer and inclusive depth test as the main draw.
+fn compile_volume_prepass_pso(
+    t: &VolumePsoTargets<'_>,
+    programs: &SdfPrograms,
+    asset_label: &str,
+    faces: ProxyFaces,
+) -> RenderResult<ID3D12PipelineState> {
+    let (vs, ps) = face_artifacts(
+        programs,
+        Family::Prepass,
+        faces,
+        Platform::DirectX,
+        t.hot_reload,
+        asset_label,
+    )?;
+    let input_layout = main_input_layout();
+    crate::directx::post::gbuffer::gbuffer_targets(
+        GraphicsPso::new(t.shadow_root_sig, &vs, &ps).input_layout(&input_layout),
+    )
+    .depth(DXGI_FORMAT_D32_FLOAT, Depth::write_inclusive())
+    .raster(proxy_raster(false, faces))
+    .build(t.device, "raymarch prepass")
+}
+
 // What a volume's PSOs are built against: the device, the pass's two root
 // signatures, and the target configuration the pass was built with.
 pub(in crate::directx) struct VolumePsoTargets<'a> {
@@ -449,11 +524,14 @@ pub(in crate::directx) struct VolumePsoTargets<'a> {
     pub(in crate::directx) hot_reload: bool,
 }
 
-// Every PSO one volume draws with: its own, and its shadow caster when it
-// casts one.
+// Every PSO one volume draws with: its own (both face sets for a surface), its
+// shadow caster when it casts one, and its G-buffer pre-pass share when it is a
+// surface.
 pub(in crate::directx) struct VolumePsos {
     pub(in crate::directx) pso: ID3D12PipelineState,
+    pub(in crate::directx) front_pso: Option<ID3D12PipelineState>,
     pub(in crate::directx) shadow_pso: Option<ID3D12PipelineState>,
+    pub(in crate::directx) prepass_psos: Option<FacePsos>,
 }
 
 // Build the PSOs of a volume with these flags from its compiled field. A
@@ -465,9 +543,10 @@ pub(in crate::directx) fn build_volume_psos(
     flags: VolumeFlags,
     label: &str,
 ) -> RenderResult<VolumePsos> {
-    let pso = dump_on_err(
-        t.info_queue,
-        if flags.volumetric {
+    let surface = |faces| dump_on_err(t.info_queue, compile_volume_pso(t, programs, label, faces));
+    let (pso, front_pso) = if flags.volumetric {
+        let medium = dump_on_err(
+            t.info_queue,
             compile_volume_volumetric_pso(
                 t.device,
                 t.root_sig,
@@ -475,18 +554,15 @@ pub(in crate::directx) fn build_volume_psos(
                 label,
                 t.msaa_samples,
                 t.hot_reload,
-            )
-        } else {
-            compile_volume_pso(
-                t.device,
-                t.root_sig,
-                programs,
-                label,
-                t.msaa_samples,
-                t.hot_reload,
-            )
-        },
-    )?;
+            ),
+        )?;
+        (medium, None)
+    } else {
+        (
+            surface(ProxyFaces::Back)?,
+            Some(surface(ProxyFaces::Front)?),
+        )
+    };
     let shadow_pso = if flags.casts() {
         Some(dump_on_err(
             t.info_queue,
@@ -495,11 +571,30 @@ pub(in crate::directx) fn build_volume_psos(
     } else {
         None
     };
-    Ok(VolumePsos { pso, shadow_pso })
+    let prepass = |faces| {
+        dump_on_err(
+            t.info_queue,
+            compile_volume_prepass_pso(t, programs, label, faces),
+        )
+    };
+    let prepass_psos = if flags.volumetric {
+        None
+    } else {
+        Some(FacePsos {
+            front: prepass(ProxyFaces::Front)?,
+            back: prepass(ProxyFaces::Back)?,
+        })
+    };
+    Ok(VolumePsos {
+        pso,
+        front_pso,
+        shadow_pso,
+        prepass_psos,
+    })
 }
 
 // Build the shared unit-cube proxy geometry. 8 corners at ±1; 36 CCW
-// indices (the encoder culls front faces so only back faces fire).
+// indices.
 // The vertex shader scales positions by `vol_extent` to land at the
 // AABB corners, matching the asset semantic where `extent` is the
 // half-widths.
@@ -789,6 +884,28 @@ pub(in crate::directx) struct RaymarchDescriptorHandles {
     pub sampler_descriptor_size: usize,
 }
 
+// A per-frame `RaymarchView` cbuffer ring, persistently mapped.
+fn view_ring(alloc: &DeviceAllocator) -> RenderResult<(Vec<PooledBuffer>, Vec<*mut u8>)> {
+    let view_size = align256(std::mem::size_of::<RaymarchView>() as u64);
+    let mut buffers: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
+    let mut ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
+    for _ in 0..FRAMES {
+        let buf = alloc.alloc_buffer(
+            view_size,
+            D3D12_HEAP_TYPE_UPLOAD,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+        )?;
+        let mut p = std::ptr::null_mut::<c_void>();
+        // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+        // local that receives the mapping.
+        unsafe { buf.Map(0, None, Some(&mut p)) }
+            .map_err(|e| map_hresult(e.code(), "raymarch view ubo map"))?;
+        ptrs.push(p as *mut u8);
+        buffers.push(buf);
+    }
+    Ok((buffers, ptrs))
+}
+
 impl RaymarchResources {
     // Build every raymarch resource and the per-volume records. Returns
     // `Ok(None)` when `sdf_volumes` is empty so the engine omits the pass.
@@ -831,24 +948,8 @@ impl RaymarchResources {
 
         let (cube_vb, cube_ib, cube_vbv, cube_ibv) = build_cube_buffers(alloc)?;
 
-        // Per-frame view cbuffer ring.
-        let view_size = align256(std::mem::size_of::<RaymarchView>() as u64);
-        let mut view_cbuffers: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut view_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
-            let buf = alloc.alloc_buffer(
-                view_size,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            let mut p = std::ptr::null_mut::<c_void>();
-            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
-            // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut p)) }
-                .map_err(|e| map_hresult(e.code(), "raymarch view ubo map"))?;
-            view_ptrs.push(p as *mut u8);
-            view_cbuffers.push(buf);
-        }
+        let (view_cbuffers, view_ptrs) = view_ring(alloc)?;
+        let (prepass_view_cbuffers, prepass_view_ptrs) = view_ring(alloc)?;
 
         // 1×1 white fallback retained for the resource lifetime (would
         // be needed again if a per-volume opt-out re-points the SRV
@@ -873,7 +974,12 @@ impl RaymarchResources {
         {
             let programs = crate::shader::raymarch_source::decode(payload, label)
                 .map_err(RenderError::Other)?;
-            let VolumePsos { pso, shadow_pso } = build_volume_psos(
+            let VolumePsos {
+                pso,
+                front_pso,
+                shadow_pso,
+                prepass_psos,
+            } = build_volume_psos(
                 &VolumePsoTargets {
                     device,
                     info_queue,
@@ -914,13 +1020,17 @@ impl RaymarchResources {
             volumes.push(RaymarchVolumeRecord {
                 label: label.clone(),
                 pso,
+                front_pso,
                 shadow_pso,
+                prepass_psos,
                 volume_cbuffer: cb,
                 volume_cbuffer_gva: gva,
                 visible: vol.visible,
                 volumetric: vol.volumetric,
                 cast_shadows: vol.cast_shadows,
                 refractive: crate::shader::raymarch_source::taps_scene(&programs),
+                center: vol.center,
+                extent: vol.extent,
             });
         }
 
@@ -952,6 +1062,8 @@ impl RaymarchResources {
             cube_ibv,
             view_cbuffers,
             view_ptrs,
+            prepass_view_cbuffers,
+            prepass_view_ptrs,
             scene_color_fallback,
             hdr_resolve_copy,
             scene_color_srv_cpu,
@@ -1159,7 +1271,7 @@ impl DxContext {
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
-                cmd.SetPipelineState(&vol.pso);
+                cmd.SetPipelineState(vol.draw_pso(view));
                 cmd.SetGraphicsRootConstantBufferView(1, vol.volume_cbuffer_gva);
                 cmd.DrawIndexedInstanced(36, 1, 0, 0, 0);
             }
@@ -1217,6 +1329,89 @@ impl DxContext {
     }
 }
 
+impl DxContext {
+    // Draw every visible surface volume into the G-buffer pre-pass, whose
+    // targets the caller has bound, after the rasterized surfaces and before
+    // the sky: the march writes normal, depth, roughness and motion under the
+    // same depth test, so volumes and meshes occlude each other there as they
+    // do in the frame. The volumes march from the camera `prepass` rasterizes
+    // through and reproject through `gbuffer`. Leaves the root signature for the
+    // next draw to set.
+    pub(in crate::directx) fn encode_raymarch_prepass(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+        prepass: &GbufferPrepassView,
+        gbuffer: &GBufferView,
+    ) {
+        let Some(rm) = self.raymarch.as_ref() else {
+            return;
+        };
+        let surfaces = || {
+            rm.volumes
+                .iter()
+                .filter(|v| v.visible)
+                .filter_map(|v| v.prepass_psos.as_ref().map(|psos| (v, psos)))
+        };
+        if surfaces().next().is_none() {
+            return;
+        }
+        let camera = PassCamera {
+            vp: prepass.jittered_vp,
+            inv_vp: mat4_inverse(prepass.jittered_vp),
+            cam_pos: prepass.cam_pos,
+            viewport: [
+                self.targets.extent.render_width as f32,
+                self.targets.extent.render_height as f32,
+            ],
+            time: prepass.elapsed,
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
+            sky_rot: self.state.view.sky_rot,
+        };
+        let view = &RaymarchView::for_gbuffer(&camera, gbuffer);
+        let draws = surfaces().map(|(v, psos)| (psos.get(v.faces(view)), v.volume_cbuffer_gva));
+        let (Some(&view_ptr), Some(view_cb), Some(lights), Some(shadow)) = (
+            rm.prepass_view_ptrs.get(frame_idx),
+            rm.prepass_view_cbuffers.get(frame_idx),
+            self.uniforms.light_ubo_resources.get(frame_idx),
+            self.uniforms.shadow_ubo_resources.get(frame_idx),
+        ) else {
+            return;
+        };
+        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
+        // source is a separate allocation, so the ranges cannot overlap.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                view as *const RaymarchView as *const u8,
+                view_ptr,
+                std::mem::size_of::<RaymarchView>(),
+            );
+        }
+        // SAFETY: the command list is in the recording state with the pre-pass targets bound,
+        // and every resource these commands name is live for the call.
+        unsafe {
+            cmd.SetGraphicsRootSignature(&rm.shadow_root_sig);
+            cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            cmd.IASetVertexBuffers(0, Some(&[rm.cube_vbv]));
+            cmd.IASetIndexBuffer(Some(&rm.cube_ibv));
+            cmd.SetGraphicsRootConstantBufferView(0, com::gpu_va(view_cb));
+            cmd.SetGraphicsRootConstantBufferView(2, com::gpu_va(lights));
+            cmd.SetGraphicsRootConstantBufferView(3, com::gpu_va(shadow));
+            cmd.set_graphics_root_constants(4, &[0u32; 4]);
+        }
+        for (pso, volume_gva) in draws {
+            // SAFETY: the command list is in the recording state, and every resource these
+            // commands name is live for the call.
+            unsafe {
+                cmd.SetPipelineState(pso);
+                cmd.SetGraphicsRootConstantBufferView(1, volume_gva);
+                cmd.DrawIndexedInstanced(36, 1, 0, 0, 0);
+            }
+            self.inc_draw_calls(1);
+        }
+    }
+}
+
 impl RaymarchResources {
     // True when at least one volume both opted in to shadow casting at
     // init (`cast_shadows`, gated to `Some(shadow_pso)`) AND is visible
@@ -1234,8 +1429,8 @@ impl DxContext {
     // shadow DSVs, right before `encode_shadow_pass` transitions the
     // shadow map array to `PIXEL_SHADER_RESOURCE`. One draw per visible
     // caster per cascade; the proxy unit cube rasterizes through the
-    // cascade's light VP (front-face cull means back faces produce one
-    // fragment per texel inside the box), the depth-only fragment
+    // cascade's light VP (its back faces give one fragment per texel
+    // inside the box), the depth-only fragment
     // marches the SDF, and writes the hit's NDC.z through the
     // conservative-depth semantic, so the cascade DSV's write test keeps
     // only the caster nearest the light between rasterized and raymarched.

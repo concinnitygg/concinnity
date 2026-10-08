@@ -5,6 +5,7 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use std::ffi::{CStr, CString, c_void};
 
 use super::error::map_vk_result;
+use super::owned::DeviceCaps;
 use crate::vulkan::post::{ResolvedBackend, UpscaleSdk};
 
 pub(super) fn pick_physical_device(
@@ -82,10 +83,11 @@ pub(super) struct LogicalDevice {
     // enables. False on an RT-incapable GPU or under XeSS, and the renderer stays
     // on SSR.
     pub rt_capable: bool,
-    // `depthBiasClamp` was enabled, so a shadow pipeline may bind a non-zero
-    // `depth_bias_clamp`. A device without it renders the shadow passes
-    // unclamped.
-    pub depth_bias_clamp: bool,
+    // The optional features enabled: `depthBiasClamp`, so a shadow pipeline may
+    // bind a non-zero `depth_bias_clamp` (a device without it renders the
+    // shadow passes unclamped), and `independentBlend`, so the reactive mask's
+    // writers may blend it apart from the scene (without it the mask is off).
+    pub caps: DeviceCaps,
     // `descriptorBindingSampledImageUpdateAfterBind` was enabled, so the bindless
     // texture pool's set layout may opt into
     // `VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT` and budget
@@ -346,10 +348,21 @@ pub(super) fn create_logical_device(
             "the device lacks imageCubeArray, which the reflection-probe array needs".into(),
         ));
     }
+    // The particle and transparent passes blend the scene and max-blend the
+    // reactive mask in one draw, which needs per-target blend state; without it
+    // they draw the scene alone.
+    let caps = DeviceCaps {
+        depth_bias_clamp: base_supported.depth_bias_clamp != 0,
+        independent_blend: base_supported.independent_blend != 0,
+    };
+    if !caps.independent_blend {
+        tracing::info!("the device lacks independentBlend; the reactive mask is off");
+    }
     let features = vk::PhysicalDeviceFeatures::default()
         .shader_sampled_image_array_dynamic_indexing(true)
         .multi_draw_indirect(true)
         .image_cube_array(true)
+        .independent_blend(caps.independent_blend)
         // Anisotropic filtering for the scene albedo / normal sampler now that
         // those textures carry a mip chain. Inert when the device lacks it.
         .sampler_anisotropy(base_supported.sampler_anisotropy != 0)
@@ -361,7 +374,7 @@ pub(super) fn create_logical_device(
         .fill_mode_non_solid(base_supported.fill_mode_non_solid != 0)
         // The shadow passes' depth-bias clamp. Inert (and the clamp drops to
         // 0.0) on a device without it.
-        .depth_bias_clamp(base_supported.depth_bias_clamp != 0)
+        .depth_bias_clamp(caps.depth_bias_clamp)
         .shader_int16(base_supported.shader_int16 != 0)
         .shader_storage_image_write_without_format(
             base_supported.shader_storage_image_write_without_format != 0,
@@ -465,7 +478,7 @@ pub(super) fn create_logical_device(
             device,
             memory_budget: has_memory_budget,
             rt_capable: false,
-            depth_bias_clamp: base_supported.depth_bias_clamp != 0,
+            caps,
             update_after_bind: false,
         });
     }
@@ -506,7 +519,7 @@ pub(super) fn create_logical_device(
         device,
         memory_budget: has_memory_budget,
         rt_capable,
-        depth_bias_clamp: base_supported.depth_bias_clamp != 0,
+        caps,
         update_after_bind: want_update_after_bind,
     })
 }

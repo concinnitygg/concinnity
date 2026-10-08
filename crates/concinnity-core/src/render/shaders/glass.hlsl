@@ -169,15 +169,17 @@ GlassSurface glass_surface(float4 position, float3 view_dir)
 
 // Schlick Fresnel (F0 = 0.04 dielectric) mix of the reflection over the
 // refraction: ~4% head-on, rising to a full mirror at grazing. `fresnel_power`
-// stays the author's grazing-rim shaping control for the opacity ramp.
-float4 glass_resolve(GlassSurface s, float3 view_dir, float3 reflection)
+// stays the author's grazing-rim shaping control for the opacity ramp. The
+// refraction follows the scene behind the pane, so the reactive share is the
+// reflection's: its weight in the pane's color times the pane's coverage.
+TransparentOut glass_resolve(GlassSurface s, float3 view_dir, float3 reflection)
 {
     float n_dot_v = saturate(dot(s.normal, view_dir));
     float rim = pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
     float refl_weight = saturate(0.04 + 0.96 * rim);
     float3 color = lerp(s.refracted, reflection, refl_weight);
     float alpha = saturate(lerp(params.opacity, 1.0, rim));
-    return float4(color, alpha);
+    return transparent_out(float4(color, alpha), alpha * refl_weight);
 }
 
 // The reflection a ray that hit nothing (or a pane with no trace at all) falls
@@ -216,7 +218,7 @@ bool glass_occluded(float2 full_position, float depth)
 }
 
 [shader("pixel")]
-float4 glass_rt_fragment(GlassVertexOut i) : SV_Target
+TransparentOut glass_rt_fragment(GlassVertexOut i)
 {
     float3 view_dir = normalize(view.camera_pos.xyz - i.world_pos);
     GlassSurface s = glass_surface(i.position, view_dir);
@@ -259,7 +261,7 @@ float4 glass_rt_reflection_fragment(GlassVertexOut i) : SV_Target
 #else
 
 [shader("pixel")]
-float4 glass_fragment(GlassVertexOut i) : SV_Target
+TransparentOut glass_fragment(GlassVertexOut i)
 {
     float3 view_dir = normalize(view.camera_pos.xyz - i.world_pos);
     GlassSurface s = glass_surface(i.position, view_dir);

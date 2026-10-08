@@ -33,7 +33,9 @@ impl VkContext {
         };
         let VolumePipelines {
             pipeline,
+            front_pipeline,
             shadow_pipeline,
+            prepass_pipelines,
         } = match volume_for(prepared, &self.pipeline_gate, targets, record.flags) {
             Some(pipelines) => pipelines,
             None => build_volume_pipelines(
@@ -54,7 +56,9 @@ impl VkContext {
             .and_then(|rm| rm.volumes.get_mut(volume))
         {
             record.pipeline = pipeline;
+            record.front_pipeline = front_pipeline;
             record.shadow_pipeline = shadow_pipeline;
+            record.prepass_pipelines = prepass_pipelines;
             record.refractive = raymarch_source::taps_scene(programs);
         }
         self.hw.device.reclaim_idle();

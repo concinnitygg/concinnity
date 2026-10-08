@@ -108,14 +108,19 @@ fn create_descriptor_pool(
             vk::DescriptorType::UNIFORM_BUFFER,
             gbuffer_sets_count + history_sets_count,
         )
-        // Text atlas + per-frame composite (6: HDR resolve + bloom top octave + 3D
-        // color LUT + the 3 view-mode G-buffer channels), each with a sampler,
-        // and the per-frame bindless texture pool, which has none.
+        // Text atlas + per-frame composite (HDR resolve + bloom top octave + 3D
+        // color LUT + the view-mode channels), each with a sampler, and the
+        // per-frame bindless texture pool, which has none.
         .add(
             vk::DescriptorType::SAMPLED_IMAGE,
-            n_atlas + n_frames * 6 + bindless_pool_size as u32 * bindless_sets_count,
+            n_atlas
+                + n_frames * super::composite::COMPOSITE_SOURCES
+                + bindless_pool_size as u32 * bindless_sets_count,
         )
-        .add(vk::DescriptorType::SAMPLER, n_atlas + n_frames * 6)
+        .add(
+            vk::DescriptorType::SAMPLER,
+            n_atlas + n_frames * super::composite::COMPOSITE_SOURCES,
+        )
         // One per cluster per frame (instance matrices) + two per frame for the
         // bindless set's GpuObjectData buffer and material parameter table +
         // four per frame for the GPU-cull set

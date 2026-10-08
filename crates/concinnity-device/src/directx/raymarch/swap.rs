@@ -36,7 +36,12 @@ impl DxContext {
             volumetric: record.volumetric,
             cast_shadows: record.cast_shadows,
         };
-        let VolumePsos { pso, shadow_pso } = match volume_for(prepared, &targets, flags) {
+        let VolumePsos {
+            pso,
+            front_pso,
+            shadow_pso,
+            prepass_psos,
+        } = match volume_for(prepared, &targets, flags) {
             Some(psos) => psos,
             None => build_volume_psos(
                 &VolumePsoTargets {
@@ -61,7 +66,9 @@ impl DxContext {
             return Ok(PipelineSwap::NotResident);
         };
         record.pso = pso;
+        record.front_pso = front_pso;
         record.shadow_pso = shadow_pso;
+        record.prepass_psos = prepass_psos;
         record.refractive = raymarch_source::taps_scene(programs);
         Ok(PipelineSwap::Swapped)
     }

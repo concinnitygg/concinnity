@@ -260,6 +260,7 @@ struct WaterSurfacePoint
     float3 normal;
     float2 frag_uv;
     float3 below;
+    float camera_distance;
 };
 
 WaterSurfacePoint water_surface(WaterVertexOut i)
@@ -283,6 +284,7 @@ WaterSurfacePoint water_surface(WaterVertexOut i)
     float2 ndc_xy = float2(s.frag_uv.x * 2.0 - 1.0, -(s.frag_uv.y * 2.0 - 1.0));
     float scene_dist = water_scene_distance(ndc_xy, scene_depth01);
     float water_dist = distance(i.world_pos, view.camera_pos.xyz);
+    s.camera_distance = water_dist;
     float water_depth = max(scene_dist - water_dist, 0.0);
 
     // Tint: exponential shallow to deep blend over `depth_falloff` meters.
@@ -364,13 +366,25 @@ float3 water_sun_glint(float3 normal, float3 view_dir)
 // term, which is what strengthens it toward grazing angles, so weighting it by
 // the surface Fresnel as well would count that twice.
 // Alpha 1: water fully covers what it drew over, and the pipeline's straight
-// alpha blend leaves the composited color as-is.
-float4 water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflection)
+// alpha blend leaves the composited color as-is. The reactive share is the
+// glint's, a sharp highlight riding the waves, or a part of the Fresnel weight,
+// since the reflection and the refraction move with neither the surface's
+// motion nor what they show. The Fresnel part fades out with distance: far off,
+// where a wave shrinks toward a pixel, the history is what keeps the surface
+// from crawling with the jitter.
+static const float WATER_REACTIVE_FRESNEL = 0.5;
+static const float2 WATER_REACTIVE_FADE_METERS = float2(4.0, 16.0);
+
+TransparentOut water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflection)
 {
     float n_dot_v = saturate(dot(s.normal, view_dir));
     float fresnel = 0.02 + 0.98 * pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
-    float3 color = lerp(s.below, reflection, fresnel) + water_sun_glint(s.normal, view_dir);
-    return float4(color, 1.0);
+    float3 glint = water_sun_glint(s.normal, view_dir);
+    float3 color = lerp(s.below, reflection, fresnel) + glint;
+    float near = 1.0 - smoothstep(WATER_REACTIVE_FADE_METERS.x, WATER_REACTIVE_FADE_METERS.y,
+                                  s.camera_distance);
+    float reactive = max(reactive_luminance(glint), fresnel * WATER_REACTIVE_FRESNEL * near);
+    return transparent_out(float4(color, 1.0), reactive);
 }
 
 // True where nearer opaque geometry occludes the surface. The transparent pass
@@ -385,7 +399,7 @@ bool water_occluded(WaterVertexOut i)
 #ifdef WATER_RT
 
 [shader("pixel")]
-float4 water_rt_fragment(WaterVertexOut i) : SV_Target
+TransparentOut water_rt_fragment(WaterVertexOut i)
 {
     if (water_occluded(i))
     {
@@ -418,7 +432,7 @@ float4 water_rt_fragment(WaterVertexOut i) : SV_Target
 #else
 
 [shader("pixel")]
-float4 water_fragment(WaterVertexOut i) : SV_Target
+TransparentOut water_fragment(WaterVertexOut i)
 {
     if (water_occluded(i))
     {

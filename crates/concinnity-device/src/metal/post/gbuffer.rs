@@ -174,13 +174,16 @@ pub(crate) fn build_gbuffer_prepass_pipeline(
 
 // Encoder
 
-// The two view blocks the pre-pass binds: its own (motion matrices and the
-// previous clock), and the main pass's, which the vertex hook positions the
-// surface through.
+// The view blocks the pre-pass binds: its own (motion matrices and the
+// previous clock), the main pass's, which the vertex hook positions the surface
+// through, and the raymarch block the SDF volumes march through, with the
+// frustum they are culled against.
 #[derive(Clone, Copy)]
 pub(in crate::metal) struct GbufferPrepassViews<'a> {
     pub gbuffer: &'a GBufferView,
     pub main: &'a ViewUniforms,
+    pub raymarch: &'a crate::metal::raymarch::RaymarchView,
+    pub frustum: &'a concinnity_core::gfx::frustum::Frustum,
 }
 
 // The GPU-driven per-frame buffers the G-buffer pre-pass consumes: the
@@ -321,7 +324,8 @@ impl MtlContext {
             // The encoder above cleared all four attachments, so a world with
             // nothing in the cull records still leaves the consumers a clean
             // "no geometry" G-buffer to read.
-            let draws = self.encode_gbuffer_prepass_gpu_driven(&enc, views, gpu, velocity_active);
+            let draws = self.encode_gbuffer_prepass_gpu_driven(&enc, views, gpu, velocity_active)
+                + self.encode_raymarch_prepass(&enc, views.raymarch, views.frustum);
             // The sky keeps the "no geometry" depth and roughness and adds the
             // camera's motion where nothing was drawn.
             if self.draws_sky(self.state.view.mode) {

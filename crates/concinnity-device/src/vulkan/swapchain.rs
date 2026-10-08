@@ -55,6 +55,7 @@ impl VkContext {
         self.targets.color_images.clear();
         self.targets.depth_images.clear();
         self.targets.hdr_resolve_images.clear();
+        self.targets.reactive_mask_images.clear();
         self.swapchain.image_views.clear();
     }
 
@@ -230,6 +231,13 @@ impl VkContext {
         self.targets.color_images = color_images;
         self.targets.depth_images = depth_images;
         self.targets.hdr_resolve_images = hdr_resolve_images;
+        self.targets.reactive_mask_images = crate::vulkan::reactive_mask::create_reactive_masks(
+            &self.hw.alloc,
+            &self.hw.device,
+            (self.commands.command_pool, self.hw.graphics_queue),
+            (render_ext.width, render_ext.height),
+            self.frames_in_flight,
+        )?;
         self.targets.framebuffers = create_main_framebuffers(
             &self.hw.device,
             self.targets.main_render_pass.handle(),
@@ -480,6 +488,12 @@ impl VkContext {
             .as_ref()
             .map(|s| (0..s.plane_count()).map(|i| s.target_view(i)).collect())
             .unwrap_or_default();
+        let mask_views: Vec<vk::ImageView> = self
+            .targets
+            .reactive_mask_images
+            .iter()
+            .map(|img| img.view)
+            .collect();
         if let Some(mut transparent) = self.transparent.take() {
             let (scene_views, scene_images): (Vec<vk::ImageView>, Vec<vk::Image>) = (0..self
                 .frames_in_flight)
@@ -508,6 +522,7 @@ impl VkContext {
                 TransparentRebuildTargets {
                     scene_views: &scene_views,
                     scene_images: &scene_images,
+                    reactive_mask_views: &mask_views,
                     depth_views: &depth_views,
                     planar_target_views: &planar_target_views,
                     reflection_divisor: self
@@ -580,7 +595,21 @@ impl VkContext {
                 .iter()
                 .map(|img| img.view)
                 .collect();
-            p.rebuild(&self.hw.device, &hdr_views, &depth_views, render_ext)?;
+            let mask_views: Vec<vk::ImageView> = self
+                .targets
+                .reactive_mask_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            p.rebuild(
+                &self.hw.device,
+                crate::vulkan::particle::ParticlePassTargets {
+                    hdr_resolve_views: &hdr_views,
+                    reactive_mask_views: &mask_views,
+                    depth_views: &depth_views,
+                    extent: render_ext,
+                },
+            )?;
             self.particle.resources = Some(p);
         }
 
@@ -631,8 +660,8 @@ impl VkContext {
             // The view-mode channel sources are resolution-dependent too, so
             // they follow the rebuilt G-buffer / AO targets.
             let channels = composite_channels(
+                &self.targets,
                 self.gbuffer.as_ref(),
-                &self.targets.transient_pool,
                 self.scene.ssao_white.view,
                 i,
             );
@@ -1018,13 +1047,15 @@ pub(super) fn write_composite_set(
     write_composite_images(device, set, 0, &[hdr_view, bloom_view, lut_view]);
 }
 
-// The composite's G-buffer channel sources for one frame slot, in binding
-// order from 3: normal+depth, roughness, the blurred SSAO occlusion, motion.
+// The composite's channel sources for one frame slot, in binding order from 3:
+// normal+depth, roughness, the blurred SSAO occlusion, motion, the reactive
+// mask.
 pub(super) struct CompositeChannels {
     pub normal_depth: vk::ImageView,
     pub roughness: vk::ImageView,
     pub ao: vk::ImageView,
     pub motion: vk::ImageView,
+    pub reactive: vk::ImageView,
 }
 
 // Write the composite set's G-buffer channel bindings. Only the debug view
@@ -1046,6 +1077,7 @@ pub(super) fn write_composite_channel_set(
             channels.roughness,
             channels.ao,
             channels.motion,
+            channels.reactive,
         ],
     );
 }
@@ -1053,24 +1085,33 @@ pub(super) fn write_composite_channel_set(
 // Frame slot `i`'s composite channel sources: the G-buffer's and the pooled
 // SSAO output's views, `white` wherever one does not exist.
 pub(super) fn composite_channels(
+    targets: &super::context::VkTargets,
     gbuffer: Option<&super::post::gbuffer::GbufferResources>,
-    pool: &super::transient_pool::TransientImagePool,
     white: vk::ImageView,
     i: usize,
 ) -> CompositeChannels {
-    let ao = pool.view_for("ao_output", i).unwrap_or(white);
+    let ao = targets
+        .transient_pool
+        .view_for("ao_output", i)
+        .unwrap_or(white);
+    let reactive = targets
+        .reactive_mask_images
+        .get(i)
+        .map_or(white, |m| m.view);
     match gbuffer.and_then(|gb| gb.frame(i)) {
         Some(gb) => CompositeChannels {
             normal_depth: gb.normal_depth,
             roughness: gb.roughness,
             ao,
             motion: gb.velocity,
+            reactive,
         },
         None => CompositeChannels {
             normal_depth: white,
             roughness: white,
             ao,
             motion: white,
+            reactive,
         },
     }
 }

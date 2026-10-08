@@ -24,6 +24,8 @@ pub(in crate::directx) enum Blend {
     PremultipliedOver,
     // `src.a * src + (1 - src.a) * dst`, alpha included.
     AlphaOver,
+    // `max(src, dst)`.
+    Max,
 }
 
 impl From<PostBlend> for Blend {
@@ -50,15 +52,20 @@ impl Blend {
             Blend::Additive => (D3D12_BLEND_ONE, D3D12_BLEND_ONE),
             Blend::PremultipliedOver => (D3D12_BLEND_ONE, D3D12_BLEND_INV_SRC_ALPHA),
             Blend::AlphaOver => (D3D12_BLEND_SRC_ALPHA, D3D12_BLEND_INV_SRC_ALPHA),
+            Blend::Max => (D3D12_BLEND_ONE, D3D12_BLEND_ONE),
+        };
+        let op = match self {
+            Blend::Max => D3D12_BLEND_OP_MAX,
+            _ => D3D12_BLEND_OP_ADD,
         };
         D3D12_RENDER_TARGET_BLEND_DESC {
             BlendEnable: true.into(),
             SrcBlend: src,
             DestBlend: dst,
-            BlendOp: D3D12_BLEND_OP_ADD,
+            BlendOp: op,
             SrcBlendAlpha: src,
             DestBlendAlpha: dst,
-            BlendOpAlpha: D3D12_BLEND_OP_ADD,
+            BlendOpAlpha: op,
             RenderTargetWriteMask: mask,
             ..Default::default()
         }
@@ -151,6 +158,7 @@ impl Depth {
 pub(in crate::directx) enum Cull {
     None,
     Front,
+    Back,
 }
 
 impl Cull {
@@ -158,6 +166,7 @@ impl Cull {
         match self {
             Cull::None => D3D12_CULL_MODE_NONE,
             Cull::Front => D3D12_CULL_MODE_FRONT,
+            Cull::Back => D3D12_CULL_MODE_BACK,
         }
     }
 }
@@ -467,6 +476,15 @@ mod tests {
     }
 
     #[test]
+    fn max_blends_both_channels_by_max() {
+        let max = Blend::Max.raw();
+        assert!(max.BlendEnable.as_bool());
+        assert_eq!(max.BlendOp, D3D12_BLEND_OP_MAX);
+        assert_eq!(max.BlendOpAlpha, D3D12_BLEND_OP_MAX);
+        assert_eq!(Blend::AlphaOver.raw().BlendOp, D3D12_BLEND_OP_ADD);
+    }
+
+    #[test]
     fn depth_modes_map_to_enable_write_and_compare() {
         let off = Depth::Off.raw();
         assert!(!off.DepthEnable.as_bool());
@@ -523,6 +541,7 @@ mod tests {
         .raw();
         assert_eq!(biased.FillMode, D3D12_FILL_MODE_WIREFRAME);
         assert_eq!(biased.CullMode, D3D12_CULL_MODE_FRONT);
+        assert_eq!(Cull::Back.raw(), D3D12_CULL_MODE_BACK);
         assert_eq!(
             (
                 biased.DepthBias,

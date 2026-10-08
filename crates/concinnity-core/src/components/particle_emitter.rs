@@ -14,6 +14,11 @@ use crate::ecs::TextureHandle;
 /// The pool holds `max_particles` particles; new ones spawn at `spawn_rate` per
 /// second, reusing slots as old particles die.
 ///
+/// Particles carry no motion vectors. Where one covers a pixel, temporal
+/// anti-aliasing and upscaling favor the current frame over their history in
+/// proportion to its opacity, or to the light it adds where a bright particle
+/// fading out adds more, so a moving particle does not smear.
+///
 /// ```rust
 /// # use concinnity_core::components::ParticleEmitter;
 /// ParticleEmitter {

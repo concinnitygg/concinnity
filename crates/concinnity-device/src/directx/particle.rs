@@ -24,6 +24,7 @@ use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ParticleParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSpawnState};
+use concinnity_core::render::reactive_mask::ReactiveWrite;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -36,6 +37,7 @@ use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
 use crate::directx::pso::{Blend, GraphicsPso, Raster, compute_pso};
+use crate::directx::reactive_mask::mask_target;
 use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
 use crate::directx::texture::{
     HDR_FORMAT, create_uav_buffer, transition_barrier, write_texture_srv,
@@ -164,8 +166,7 @@ fn create_render_pso(
     vs: &[u8],
     ps: &[u8],
 ) -> RenderResult<ID3D12PipelineState> {
-    GraphicsPso::new(root_sig, vs, ps)
-        .target(HDR_FORMAT, Blend::AlphaOver)
+    mask_target(GraphicsPso::new(root_sig, vs, ps).target(HDR_FORMAT, Blend::AlphaOver))
         .raster(Raster {
             depth_clip: false,
             ..Raster::default()
@@ -692,6 +693,7 @@ impl DxContext {
         frame: &ParticleFrame,
         vp: [[f32; 4]; 4],
         frustum: &Frustum,
+        reactive: ReactiveWrite,
     ) {
         let Some(resources) = self.particle.resources.as_ref() else {
             return;
@@ -742,14 +744,17 @@ impl DxContext {
         let view_gva = com::gpu_va(&resources.view_ubo_resources[frame_idx]);
 
         if any_visible {
-            let scene_rtv = self.hdr_scene_rtv();
+            let rtvs = [
+                self.hdr_scene_rtv(),
+                self.targets.reactive_mask.rtv(reactive),
+            ];
 
             let w = self.targets.extent.render_width;
             let h = self.targets.extent.render_height;
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe {
-                cmd.OMSetRenderTargets(1, Some(&scene_rtv), false, None);
+                cmd.OMSetRenderTargets(2, Some(rtvs.as_ptr()), false, None);
                 let viewport = D3D12_VIEWPORT {
                     TopLeftX: 0.0,
                     TopLeftY: 0.0,

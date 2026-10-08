@@ -22,6 +22,7 @@
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSpawnState};
+use concinnity_core::render::reactive_mask::ReactiveWrite;
 use concinnity_core::render::uniforms::ParticleView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -279,6 +280,7 @@ impl MtlContext {
         frame: &ParticleFrame,
         vp: [[f32; 4]; 4],
         frustum: &Frustum,
+        reactive: ReactiveWrite,
     ) -> RenderResult<u32> {
         let Some(pipelines) = self.particle.pipelines.as_ref() else {
             return Ok(0);
@@ -333,6 +335,7 @@ impl MtlContext {
             ca.setLoadAction(MTLLoadAction::Load);
             ca.setStoreAction(MTLStoreAction::Store);
         }
+        self.attach_reactive_mask(&pass_desc, reactive);
 
         if let Some(t) = &self.diagnostics.pass_timing {
             t.attach_render(&pass_desc, super::pass_timing::PassId::ParticlesDraw);
@@ -435,6 +438,7 @@ pub(super) fn build_particle_pipelines(
         ca.setSourceAlphaBlendFactor(MTLBlendFactor::SourceAlpha);
         ca.setDestinationAlphaBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
     }
+    super::reactive_mask::declare_target(&desc);
     let render = device
         .newRenderPipelineStateWithDescriptor_error(&desc)
         .map_err(|e| RenderError::ShaderCompile(format!("particle render pipeline: {e:?}")))?;

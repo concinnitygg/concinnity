@@ -46,6 +46,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("raymarch.hlsl", RAYMARCH),
     ("raymarch_common.hlsl", RAYMARCH_COMMON),
     ("raymarch_types.hlsl", RAYMARCH_TYPES),
+    ("reactive_mask.hlsl", REACTIVE_MASK),
     ("reflection.hlsl", REFLECTION),
     ("rt_reflections.hlsl", RT_REFLECTIONS),
     ("rt_skin.hlsl", RT_SKIN),
@@ -55,6 +56,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("shadow_bias.hlsl", SHADOW_BIAS),
     ("sky.hlsl", SKY),
     ("sky_ray.hlsl", SKY_RAY),
+    ("specular_aa.hlsl", SPECULAR_AA),
     ("ssao.hlsl", SSAO),
     ("ssgi.hlsl", SSGI),
     ("ssr.hlsl", SSR),
@@ -145,6 +147,8 @@ pub const RAYMARCH: &str = include_str!("shaders/raymarch.hlsl");
 pub const RAYMARCH_COMMON: &str = include_str!("shaders/raymarch_common.hlsl");
 /// `raymarch_types.hlsl`.
 pub const RAYMARCH_TYPES: &str = include_str!("shaders/raymarch_types.hlsl");
+/// `reactive_mask.hlsl`.
+pub const REACTIVE_MASK: &str = include_str!("shaders/reactive_mask.hlsl");
 /// `reflection.hlsl`.
 pub const REFLECTION: &str = include_str!("shaders/reflection.hlsl");
 /// `rt_reflections.hlsl`.
@@ -163,6 +167,8 @@ pub const SHADOW_BIAS: &str = include_str!("shaders/shadow_bias.hlsl");
 pub const SKY: &str = include_str!("shaders/sky.hlsl");
 /// `sky_ray.hlsl`.
 pub const SKY_RAY: &str = include_str!("shaders/sky_ray.hlsl");
+/// `specular_aa.hlsl`.
+pub const SPECULAR_AA: &str = include_str!("shaders/specular_aa.hlsl");
 /// `ssao.hlsl`.
 pub const SSAO: &str = include_str!("shaders/ssao.hlsl");
 /// `ssgi.hlsl`.

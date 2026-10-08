@@ -75,9 +75,10 @@ pub(crate) fn artifact<'a>(
         .map_err(|e| e.context(format_args!("SdfVolume '{label}': compiling '{entry}'")))
 }
 
-/// One family's artifacts on `platform`, as (vertex, fragment). The cook stores
-/// each stage as its own artifact, since a DXIL container or a Vulkan module
-/// binds one entry; a template edit makes both miss and compile here.
+/// One family's artifacts on `platform`, as (vertex, fragment), with the
+/// family's first fragment entry. The cook stores each stage as its own
+/// artifact, since a DXIL container or a Vulkan module binds one entry; a
+/// template edit makes both miss and compile here.
 #[cfg(any(backend_dx, backend_vk))]
 pub(crate) fn family_artifacts(
     programs: &SdfPrograms,
@@ -92,18 +93,59 @@ pub(crate) fn family_artifacts(
             .next()
             .unwrap_or_else(|| panic!("a family declares a {which} entry"))
             .entry;
-        let req = Request {
-            family,
-            platform,
-            entry,
-            hot_reload,
-            label,
-        };
-        artifact(programs, &req, crate::shader::compile::cooked).map(Cow::into_owned)
+        entry_artifact(programs, family, entry, platform, hot_reload, label)
     };
     let vertex = stage("vertex")?;
     let fragment = stage("fragment")?;
     Ok((vertex, fragment))
+}
+
+/// A surface family's artifacts on `platform` for drawing the proxy's `faces`,
+/// as (vertex, fragment).
+#[cfg(any(backend_dx, backend_vk))]
+pub(crate) fn face_artifacts(
+    programs: &SdfPrograms,
+    family: Family,
+    faces: raymarch::ProxyFaces,
+    platform: Platform,
+    hot_reload: bool,
+    label: &str,
+) -> RenderResult<(Vec<u8>, Vec<u8>)> {
+    let missing = || {
+        concinnity_core::render::error::RenderError::Other(format!(
+            "no {faces:?}-face entry for {family:?}"
+        ))
+    };
+    let vertex = raymarch::ALL
+        .iter()
+        .find(|p| p.family == family)
+        .ok_or_else(missing)?
+        .entry;
+    let fragment = faces.fragment(family).ok_or_else(missing)?;
+    Ok((
+        entry_artifact(programs, family, vertex, platform, hot_reload, label)?,
+        entry_artifact(programs, family, fragment, platform, hot_reload, label)?,
+    ))
+}
+
+/// The artifact of one entry of `family` on `platform`.
+#[cfg(any(backend_dx, backend_vk))]
+pub(crate) fn entry_artifact(
+    programs: &SdfPrograms,
+    family: Family,
+    entry: &str,
+    platform: Platform,
+    hot_reload: bool,
+    label: &str,
+) -> RenderResult<Vec<u8>> {
+    let req = Request {
+        family,
+        platform,
+        entry,
+        hot_reload,
+        label,
+    };
+    artifact(programs, &req, crate::shader::compile::cooked).map(Cow::into_owned)
 }
 
 // The source text this host expects for one family, preferring the checkout's
@@ -333,7 +375,12 @@ VolumeSample sampleVolume(float3 p, SdfParams params, float time)
             .expect("scratch directory");
         for platform in Platform::ALL {
             let target = concinnity_shader::HlslTarget::cooked(platform);
-            for family in [Family::Surface, Family::Volumetric, Family::Shadow] {
+            for family in [
+                Family::Surface,
+                Family::Volumetric,
+                Family::Shadow,
+                Family::Prepass,
+            ] {
                 let text = if family == Family::Volumetric {
                     VOLUMETRIC_FIELD
                 } else {

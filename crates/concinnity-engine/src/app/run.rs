@@ -13,8 +13,9 @@
 //! the command channel lives in the editor crate.
 
 use concinnity_core::components::GraphicsConfig;
-use concinnity_core::ecs::ScheduleMode;
+use concinnity_core::ecs::{ScheduleMode, ViewOverrides};
 use concinnity_core::error::WorldError;
+use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
 use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_host::store::paths::StateTree;
@@ -117,9 +118,20 @@ pub struct LaunchRequest {
     /// the wall time between frames, so a given frame sees the same clock on
     /// every launch. `None` follows the wall clock.
     pub fixed_frame_rate: Option<NonZeroU32>,
+    /// The feature passes the run starts with, as the editor's View menu shows
+    /// them. Every flag set is the shipping frame.
+    pub show: ShowFlags,
 }
 
 impl LaunchRequest {
+    /// The view state the run starts with, or `None` for the shipping frame.
+    pub fn view_overrides(&self) -> Option<ViewOverrides> {
+        (self.show != ShowFlags::all()).then_some(ViewOverrides {
+            mode: ViewMode::Lit,
+            show: self.show,
+        })
+    }
+
     /// Whether the graphics debug layers run: the request, else the build profile.
     pub fn resolve_validation(&self) -> bool {
         self.validation.unwrap_or(cfg!(debug_assertions))
@@ -440,6 +452,21 @@ mod tests {
         assert!(request(None).resolve_rt_skinned_geometry());
         assert!(request(Some(true)).resolve_rt_skinned_geometry());
         assert!(!request(Some(false)).resolve_rt_skinned_geometry());
+    }
+
+    // The shipping frame publishes no view state; a hidden pass starts the run
+    // lit with that pass off.
+    #[test]
+    fn a_hidden_pass_starts_the_run_without_it() {
+        assert_eq!(LaunchRequest::default().view_overrides(), None);
+        let hidden = LaunchRequest {
+            show: ShowFlags::all().toggled(ShowFlags::REACTIVE),
+            ..Default::default()
+        };
+        let view = hidden.view_overrides().expect("view state");
+        assert_eq!(view.mode, ViewMode::Lit);
+        assert!(!view.show.contains(ShowFlags::REACTIVE));
+        assert!(view.show.contains(ShowFlags::FOG));
     }
 
     #[test]

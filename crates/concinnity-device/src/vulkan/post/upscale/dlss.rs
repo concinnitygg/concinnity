@@ -18,6 +18,7 @@ use concinnity_core::gfx::jitter;
 use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::history_reset::UpscalerResetLatch;
+use concinnity_core::render::reactive_mask::ReactiveReader;
 
 use super::{
     ImageViewInfo, OutputWrites, UpscaleImage, UpscaleInputs, UpscaleOutput, UpscalerGpu,
@@ -381,6 +382,10 @@ impl VkUpscaleBackend for DlssUpscaler {
 
     fn request_history_reset(&self) {
         self.reset.request();
+    }
+
+    fn reactive_reader(&self) -> ReactiveReader {
+        ReactiveReader::Dlss
     }
 
     fn dlss_preset(&self) -> Option<DlssPreset> {

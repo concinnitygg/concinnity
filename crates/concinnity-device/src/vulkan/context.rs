@@ -876,6 +876,9 @@ pub(super) struct VkTargets {
     pub(super) color_images: Vec<GpuImage>, // MSAA HDR color; empty when msaa == 1
     pub(super) depth_images: Vec<GpuImage>, // MSAA depth
     pub(super) hdr_resolve_images: Vec<GpuImage>, // single-sample HDR resolve target
+    // The reactive mask the particle and transparent passes write, one per
+    // frame-in-flight slot (see `vulkan/reactive_mask.rs`).
+    pub(super) reactive_mask_images: Vec<GpuImage>,
     // Main-pass framebuffers (one per frame-in-flight slot): HDR color +
     // depth (+ resolve when multisampled).
     pub(super) framebuffers: Vec<OwnedFramebuffer>,

@@ -63,6 +63,9 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{RT_TRACE}", "rt_trace.hlsl"),
     ("{GLASS_REFLECTION}", "glass_reflection.hlsl"),
     ("{TRANSPARENT_TYPES}", "transparent_types.hlsl"),
+    // REACTIVE_MASK trails TRANSPARENT_TYPES, which carries its marker; the
+    // particle pass carries it too.
+    ("{REACTIVE_MASK}", "reactive_mask.hlsl"),
     ("{TRANSPARENT_SCENE}", "transparent_scene.hlsl"),
     ("{TRANSPARENT_RT}", "transparent_rt.hlsl"),
     // CLUSTER_TYPES trails MAIN_TYPES and TRANSPARENT_TYPES, which carry its
@@ -77,8 +80,10 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{LIGHT_TYPES}", "light_types.hlsl"),
     ("{RAYMARCH_COMMON}", "raymarch_common.hlsl"),
     ("{MAIN_SHADING}", "main_shading.hlsl"),
-    // SURFACE_INPUTS trails MAIN_SHADING, which carries its marker.
+    // SURFACE_INPUTS trails MAIN_SHADING, which carries its marker, and
+    // SPECULAR_AA trails SURFACE_INPUTS; the raymarch pre-pass carries it too.
     ("{SURFACE_INPUTS}", "surface_inputs.hlsl"),
+    ("{SPECULAR_AA}", "specular_aa.hlsl"),
     ("{GBUFFER_COMMON}", "gbuffer_common.hlsl"),
     // SHADOW_BIAS trails both halves that carry it: the cascade compare
     // offset is shared by the main pass and the raymarched surfaces, and a
@@ -537,7 +542,7 @@ mod tests {
         let body = src.find("RayHit coneRaymarch(").expect("marcher");
         let field = src.find("// the world's field").expect("world field");
         let entry = src
-            .find("RaymarchFragOut raymarch_fragment(")
+            .find("RaymarchBackOut raymarch_fragment(")
             .expect("entry");
         assert!(lights < types, "light records precede the volume block");
         assert!(types < body, "records precede the body that reads them");

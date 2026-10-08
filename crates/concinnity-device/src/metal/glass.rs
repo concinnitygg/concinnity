@@ -368,6 +368,9 @@ fn transparent_pipeline(
         ca.setSourceAlphaBlendFactor(MTLBlendFactor::SourceAlpha);
         ca.setDestinationAlphaBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
     }
+    if blend {
+        super::reactive_mask::declare_target(&desc);
+    }
 
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)

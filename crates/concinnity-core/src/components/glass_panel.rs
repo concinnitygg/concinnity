@@ -12,6 +12,10 @@
 /// direction), and sized by `half_size` (half-width along the panel's tangent,
 /// half-height along its bitangent).
 ///
+/// Its reflection moves with neither the pane nor the scene behind it, so
+/// temporal anti-aliasing and upscaling favor the current frame across the
+/// pane in proportion to how much reflection it shows.
+///
 /// ```rust
 /// # use concinnity_core::components::GlassPanel;
 /// GlassPanel {

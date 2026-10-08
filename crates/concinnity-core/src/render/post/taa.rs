@@ -15,6 +15,7 @@
 use alloc::vec::Vec;
 
 use crate::render::error::RenderResult;
+use crate::render::reactive_mask::ReactiveReader;
 use crate::render::render_graph::{
     ClearValue, PassId, PixelFormat, TextureDesc, TextureSize, TextureUsage,
 };
@@ -69,6 +70,9 @@ pub struct TaaInputs<'t, D: PostPassDevice + ?Sized + 't> {
     pub scene: D::TextureRef<'t>,
     /// The G-buffer's per-pixel motion vectors.
     pub velocity: D::TextureRef<'t>,
+    /// The reactive mask, when a particle or transparent pass wrote it this
+    /// frame.
+    pub reactive: Option<D::TextureRef<'t>>,
 }
 
 /// The temporal resolve: its pipeline, its accumulation targets, and the ring
@@ -211,7 +215,14 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
         let history = self.history_slot(write);
         let params = TaaParams {
             history_valid: if self.ring.valid() { 1.0 } else { 0.0 },
+            reactive_max: ReactiveReader::Taa
+                .cap()
+                .filter(|_| inputs.reactive.is_some())
+                .unwrap_or(0.0),
         };
+        // Without a mask the slot still needs a texture; the motion vectors
+        // stand in, and the resolve does not read them there.
+        let reactive = inputs.reactive.unwrap_or(inputs.velocity);
         let binds = [
             PostBind {
                 texture: inputs.scene,
@@ -223,6 +234,10 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
             },
             PostBind {
                 texture: device.target_ref(&self.targets[history]),
+                sampler: PostSampler::LinearClamp,
+            },
+            PostBind {
+                texture: reactive,
                 sampler: PostSampler::LinearClamp,
             },
         ];

@@ -22,6 +22,7 @@ use objc2_metal_fx::{MTLFXTemporalScaler, MTLFXTemporalScalerBase, MTLFXTemporal
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
 use crate::metal::error::allocation_failed;
+use crate::metal::texture::{REACTIVE_MASK_FORMAT, REACTIVE_MASK_USAGE};
 
 // All MetalFX-temporal-upscaling state grouped into one feature unit: the
 // scaler instance, the input/output scale ratio, the per-frame projection
@@ -73,6 +74,9 @@ pub(crate) struct MetalFXUpscaler {
     pub(crate) output_width: u32,
     // Drawable-resolution height.
     pub(crate) output_height: u32,
+    // Whether the scaler takes a reactive mask: the OS has the input
+    // (macOS 14.4) and the engine's mask carries the usage the scaler needs.
+    pub(crate) reactive: bool,
 }
 
 // Does the active device support MetalFX temporal scaling at all? Used at
@@ -165,6 +169,20 @@ impl MetalFXUpscaler {
             // auto-exposure off and let MetalFX use its built-in heuristic.
             descriptor.setAutoExposureEnabled(false);
         }
+        // The reactive mask input arrived in macOS 14.4; on an older OS the
+        // descriptor does not know the selector, and the scaler runs without it.
+        let reactive_available = objc2::runtime::NSObjectProtocol::respondsToSelector(
+            &*descriptor,
+            objc2::sel!(setReactiveMaskTextureEnabled:),
+        );
+        if reactive_available {
+            // SAFETY: plain descriptor property setters, guarded by the
+            // selector check above; R8Unorm is a single-channel color format.
+            unsafe {
+                descriptor.setReactiveMaskTextureEnabled(true);
+                descriptor.setReactiveMaskTextureFormat(REACTIVE_MASK_FORMAT);
+            }
+        }
 
         // SAFETY: `descriptor` is fully configured above and `device` is live; MetalFX returns None
         // rather than faulting when the configuration is unsupported.
@@ -193,6 +211,17 @@ impl MetalFXUpscaler {
         let output = device
             .newTextureWithDescriptor(&output_desc)
             .ok_or_else(|| allocation_failed("MetalFX upscaler output texture"))?;
+        let reactive = reactive_available && {
+            // SAFETY: a property read on the live scaler, which a descriptor
+            // with the reactive input enabled created.
+            let needed = unsafe { scaler.reactiveTextureUsage() };
+            needed.0 & !REACTIVE_MASK_USAGE.0 == 0
+        };
+        if reactive_available && !reactive {
+            tracing::warn!(
+                "MetalFX: the reactive mask lacks a usage the scaler needs; running without it"
+            );
+        }
 
         Ok(MetalFXUpscaler {
             scaler,
@@ -201,6 +230,7 @@ impl MetalFXUpscaler {
             input_height,
             output_width,
             output_height,
+            reactive,
         })
     }
 }
@@ -226,6 +256,7 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         scene_pre_taa: &Retained<ProtocolObject<dyn MTLTexture>>,
+        reactive_written: bool,
     ) -> RenderResult<u32> {
         let upscaler = self.upscale.scaler.as_ref().ok_or_else(|| {
             RenderError::Other("Upscale enabled but upscaler missing".to_string())
@@ -252,6 +283,12 @@ impl MtlContext {
             upscaler
                 .scaler
                 .setOutputTexture(Some(upscaler.output.as_ref()));
+            // A frame no particle or transparent pass wrote the mask for gives
+            // the scaler none, which it reads as no pixel being reactive.
+            if upscaler.reactive {
+                let mask = reactive_written.then(|| self.targets.hdr.reactive_mask.as_ref());
+                upscaler.scaler.setReactiveMaskTexture(mask);
+            }
 
             // Motion vectors are stored as `prev_uv - cur_uv` in UV space
             // (RG16Float). The scaler expects motion in input-pixel coords,

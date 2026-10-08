@@ -52,6 +52,12 @@ pub struct WaterWave {
 /// half-widths). The mesh itself is flat; all height variation comes from the
 /// animated waves.
 ///
+/// Its sun glint rides the waves, and its reflection and refraction move with
+/// neither the surface nor what they show, so temporal anti-aliasing and
+/// upscaling favor the current frame where the glint shows and, within about
+/// 16 meters of the camera, where the reflection is strong. Farther off they
+/// keep their history, which holds distant waves still.
+///
 /// ```rust
 /// # use concinnity_core::components::WaterSurface;
 /// WaterSurface {

@@ -1,6 +1,6 @@
 //! What the raymarched SDF volume pass compiles, on every backend.
 //!
-//! All three backends compile the same six entries out of `raymarch.hlsl`,
+//! All three backends compile the same ten entries out of `raymarch.hlsl`,
 //! differing only in the backend define the assembler leads the source with and
 //! in what dxc is asked to emit. The cook iterates it to compile a volume's
 //! field ahead of time and each renderer iterates it to find what the cook left.
@@ -9,7 +9,9 @@ use alloc::string::String;
 
 use crate::components::SdfVolume;
 use crate::platform::Platform;
+use crate::render::depth::DEPTH_NEAR;
 use crate::render::shader_source::{self, SourceFile, Splice};
+use crate::render::uniforms::RaymarchView;
 
 /// The shader file every entry below compiles from.
 pub const FILE: &str = "raymarch.hlsl";
@@ -44,6 +46,9 @@ pub enum Family {
     Volumetric,
     /// A depth-only caster marched from the light side.
     Shadow,
+    /// An opaque surface's share of the G-buffer pre-pass: normal, linear
+    /// depth, roughness and motion.
+    Prepass,
 }
 
 impl Family {
@@ -53,6 +58,7 @@ impl Family {
             Family::Surface => "RAYMARCH_SURFACE",
             Family::Volumetric => "RAYMARCH_VOLUMETRIC",
             Family::Shadow => "RAYMARCH_SHADOW",
+            Family::Prepass => "RAYMARCH_PREPASS",
         }
     }
 }
@@ -78,6 +84,10 @@ pub const ALL: &[Program] = &[
         family: Family::Surface,
     },
     Program {
+        entry: "raymarch_front_fragment",
+        family: Family::Surface,
+    },
+    Program {
         entry: "raymarch_volumetric_vertex",
         family: Family::Volumetric,
     },
@@ -93,10 +103,86 @@ pub const ALL: &[Program] = &[
         entry: "raymarch_shadow_fragment",
         family: Family::Shadow,
     },
+    Program {
+        entry: "raymarch_prepass_vertex",
+        family: Family::Prepass,
+    },
+    Program {
+        entry: "raymarch_prepass_fragment",
+        family: Family::Prepass,
+    },
+    Program {
+        entry: "raymarch_prepass_front_fragment",
+        family: Family::Prepass,
+    },
 ];
 
-/// The families a volume draws with: its own, plus the shadow caster when it
-/// casts one. A volumetric medium never casts, so the pair is exclusive.
+/// Which faces of a surface volume's bounding box its proxy rasterizes, which
+/// picks the fragment entry and the face the encoder culls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyFaces {
+    /// The faces toward the camera. The march only moves depth farther from
+    /// them, so a volume behind nearer geometry is rejected before it marches;
+    /// usable while the box stays clear of the camera's near plane.
+    Front,
+    /// The faces away from the camera, which still cover the box's pixels from
+    /// inside it.
+    Back,
+}
+
+impl ProxyFaces {
+    /// The faces to draw a box at `center` with half-size `extent` with, seen
+    /// from `view`. The box counts as clear of the near plane when the camera is
+    /// outside it grown by the farthest near-plane corner's distance.
+    pub fn for_box(view: &RaymarchView, center: [f32; 3], extent: [f32; 3]) -> Self {
+        let cam = [view.cam_pos[0], view.cam_pos[1], view.cam_pos[2]];
+        let reach = near_plane_reach(&view.inv_vp, cam);
+        let outside = (0..3).any(|i| (cam[i] - center[i]).abs() > extent[i] + reach);
+        if outside {
+            ProxyFaces::Front
+        } else {
+            ProxyFaces::Back
+        }
+    }
+
+    /// The fragment entry `family` draws these faces with, for the two families
+    /// that march a surface.
+    pub fn fragment(self, family: Family) -> Option<&'static str> {
+        match (family, self) {
+            (Family::Surface, ProxyFaces::Back) => Some("raymarch_fragment"),
+            (Family::Surface, ProxyFaces::Front) => Some("raymarch_front_fragment"),
+            (Family::Prepass, ProxyFaces::Back) => Some("raymarch_prepass_fragment"),
+            (Family::Prepass, ProxyFaces::Front) => Some("raymarch_prepass_front_fragment"),
+            _ => None,
+        }
+    }
+}
+
+// The distance from `cam` to the farthest corner of the near plane `inv_vp`
+// unprojects, or infinity when a corner does not unproject.
+fn near_plane_reach(inv_vp: &[[f32; 4]; 4], cam: [f32; 3]) -> f32 {
+    let mut reach = 0.0f32;
+    for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+        let ndc = [x, y, DEPTH_NEAR, 1.0];
+        let h: [f32; 4] =
+            core::array::from_fn(|r| (0..4).map(|c| inv_vp[c][r] * ndc[c]).sum::<f32>());
+        if h[3].abs() <= f32::EPSILON {
+            return f32::INFINITY;
+        }
+        let d2: f32 = (0..3)
+            .map(|i| {
+                let d = h[i] / h[3] - cam[i];
+                d * d
+            })
+            .sum();
+        reach = reach.max(crate::math::sqrt(d2));
+    }
+    reach
+}
+
+/// The families a volume draws with: a surface draws itself, its G-buffer
+/// pre-pass share and, when it casts one, its shadow; a medium draws itself
+/// alone, since it neither occludes nor casts.
 pub fn families(volumetric: bool, cast_shadows: bool) -> impl Iterator<Item = Family> {
     let own = if volumetric {
         Family::Volumetric
@@ -104,7 +190,8 @@ pub fn families(volumetric: bool, cast_shadows: bool) -> impl Iterator<Item = Fa
         Family::Surface
     };
     let shadow = (cast_shadows && !volumetric).then_some(Family::Shadow);
-    core::iter::once(own).chain(shadow)
+    let prepass = (!volumetric).then_some(Family::Prepass);
+    core::iter::once(own).chain(shadow).chain(prepass)
 }
 
 /// Every entry a volume with these flags needs compiled.
@@ -179,6 +266,69 @@ mod tests {
         SourceFile { path: PATH, text }
     }
 
+    // A camera at the origin looking down -Z through a 0.1 near plane.
+    fn view_at_origin() -> RaymarchView {
+        let proj = crate::render::depth::camera_projection(1.0, 16.0 / 9.0, 0.1);
+        let camera = crate::render::uniforms::PassCamera {
+            vp: proj,
+            inv_vp: crate::transform::mat4_inverse(proj),
+            cam_pos: [0.0; 3],
+            viewport: [1920.0, 1080.0],
+            time: 0.0,
+            prefilter_mip_count: 0.0,
+            sky_rot: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ],
+        };
+        RaymarchView::new(&camera)
+    }
+
+    #[test]
+    fn a_box_clear_of_the_near_plane_draws_its_front_faces() {
+        let view = view_at_origin();
+        let faces = ProxyFaces::for_box(&view, [0.0, 0.0, -10.0], [1.0; 3]);
+        assert_eq!(faces, ProxyFaces::Front);
+        assert_eq!(
+            faces.fragment(Family::Surface),
+            Some("raymarch_front_fragment")
+        );
+        assert_eq!(
+            faces.fragment(Family::Prepass),
+            Some("raymarch_prepass_front_fragment")
+        );
+    }
+
+    // From inside the box, or with its near face inside the near plane's
+    // reach, the front faces would be clipped away; the back faces still cover
+    // the box.
+    #[test]
+    fn a_box_around_or_against_the_camera_draws_its_back_faces() {
+        let view = view_at_origin();
+        let inside = ProxyFaces::for_box(&view, [0.0, 0.0, -0.5], [1.0; 3]);
+        assert_eq!(inside, ProxyFaces::Back);
+        let grazing = ProxyFaces::for_box(&view, [0.0, 0.0, -1.05], [1.0; 3]);
+        assert_eq!(grazing, ProxyFaces::Back);
+        assert_eq!(inside.fragment(Family::Surface), Some("raymarch_fragment"));
+        assert_eq!(
+            inside.fragment(Family::Prepass),
+            Some("raymarch_prepass_fragment")
+        );
+    }
+
+    #[test]
+    fn only_the_surface_families_pick_an_entry_by_face() {
+        for faces in [ProxyFaces::Front, ProxyFaces::Back] {
+            assert_eq!(faces.fragment(Family::Volumetric), None);
+            assert_eq!(faces.fragment(Family::Shadow), None);
+            for family in [Family::Surface, Family::Prepass] {
+                let entry = faces.fragment(family).expect("a surface entry");
+                assert!(ALL.iter().any(|p| p.entry == entry && p.family == family));
+            }
+        }
+    }
+
     // A medium never casts, so a volumetric volume that also sets
     // `cast_shadows` builds no caster.
     #[test]
@@ -200,9 +350,19 @@ mod tests {
     }
 
     #[test]
-    fn a_surface_volume_compiles_its_own_pair_and_nothing_else() {
+    fn a_surface_volume_compiles_its_own_pair_and_its_prepass_share() {
         let entries: Vec<&str> = programs(false, false).map(|p| p.entry).collect();
-        assert_eq!(entries, ["raymarch_vertex", "raymarch_fragment"]);
+        assert_eq!(
+            entries,
+            [
+                "raymarch_vertex",
+                "raymarch_fragment",
+                "raymarch_front_fragment",
+                "raymarch_prepass_vertex",
+                "raymarch_prepass_fragment",
+                "raymarch_prepass_front_fragment"
+            ]
+        );
     }
 
     #[test]
@@ -213,8 +373,12 @@ mod tests {
             [
                 "raymarch_vertex",
                 "raymarch_fragment",
+                "raymarch_front_fragment",
                 "raymarch_shadow_vertex",
-                "raymarch_shadow_fragment"
+                "raymarch_shadow_fragment",
+                "raymarch_prepass_vertex",
+                "raymarch_prepass_fragment",
+                "raymarch_prepass_front_fragment"
             ]
         );
     }
@@ -351,7 +515,12 @@ mod tests {
     #[test]
     fn the_field_numbers_from_its_own_first_line_and_the_template_keeps_its_own() {
         let text = "float map(float3 p, SdfParams q, float t)\n{\n    return 1.0;\n}\n";
-        for family in [Family::Surface, Family::Volumetric, Family::Shadow] {
+        for family in [
+            Family::Surface,
+            Family::Volumetric,
+            Family::Shadow,
+            Family::Prepass,
+        ] {
             let fenced = source(family, Platform::Vulkan, field(text));
             let unspliced = shader_source::assemble_with_splices(
                 FILE,

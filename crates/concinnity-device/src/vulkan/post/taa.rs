@@ -77,7 +77,12 @@ impl VkContext {
     // frame's scene with the reprojected, neighborhood-clipped history into
     // frame slot `frame_idx`'s accumulation image. Runs before bloom, and only
     // when TAA is on.
-    pub(in crate::vulkan) fn encode_taa(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
+    pub(in crate::vulkan) fn encode_taa(
+        &self,
+        cmd: vk::CommandBuffer,
+        frame_idx: usize,
+        reactive_written: bool,
+    ) {
         let Some(taa) = &self.taa else { return };
         let Some(velocity) = self.velocity_view_for_post(frame_idx) else {
             tracing::error!("TAA enabled but the G-buffer velocity view is missing");
@@ -91,6 +96,10 @@ impl VkContext {
             TaaInputs {
                 scene: self.post_scene_image(frame_idx).view,
                 velocity,
+                reactive: self
+                    .reactive_mask(frame_idx)
+                    .filter(|_| reactive_written)
+                    .map(|m| m.view),
             },
         ) {
             tracing::error!("TAA resolve: {e}");

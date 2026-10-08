@@ -292,12 +292,19 @@ mod tests {
         assert!(src.contains(&alloc::format!(
             "#define depth_offset_near(d, offset) ((d) {toward_near} (offset))\n"
         )));
-        let conservative = match DEPTH_WRITE_COMPARE {
-            DepthCompare::Less | DepthCompare::LessEqual => "SV_DepthLessEqual",
-            DepthCompare::Greater | DepthCompare::GreaterEqual => "SV_DepthGreaterEqual",
+        let (nearer, farther) = match DEPTH_WRITE_COMPARE {
+            DepthCompare::Less | DepthCompare::LessEqual => {
+                ("SV_DepthLessEqual", "SV_DepthGreaterEqual")
+            }
+            DepthCompare::Greater | DepthCompare::GreaterEqual => {
+                ("SV_DepthGreaterEqual", "SV_DepthLessEqual")
+            }
         };
         assert!(src.contains(&alloc::format!(
-            "#define DEPTH_CONSERVATIVE {conservative}\n"
+            "#define DEPTH_CONSERVATIVE_NEARER {nearer}\n"
+        )));
+        assert!(src.contains(&alloc::format!(
+            "#define DEPTH_CONSERVATIVE_FARTHER {farther}\n"
         )));
     }
 }

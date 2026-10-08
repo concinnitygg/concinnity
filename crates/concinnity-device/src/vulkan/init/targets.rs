@@ -84,6 +84,13 @@ pub(super) fn build_render_targets(
             (swapchain.extent.width, swapchain.extent.height),
         )?,
     )?;
+    let reactive_mask_images = crate::vulkan::reactive_mask::create_reactive_masks(
+        &hw.alloc,
+        device,
+        (command_pool, hw.graphics_queue),
+        (render_extent.width, render_extent.height),
+        frames,
+    )?;
     Ok(VkTargets {
         render_extent,
         main_render_pass,
@@ -91,6 +98,7 @@ pub(super) fn build_render_targets(
         color_images,
         depth_images,
         hdr_resolve_images,
+        reactive_mask_images,
         framebuffers,
         transient_pool,
     })

@@ -67,7 +67,7 @@ pub(crate) struct Cli {
 // What a bare `concinnity` runs. Launching the binary with no argv at all --
 // a double click, where there is no terminal to type a subcommand into --
 // opens the editor on the world discovered from `worlds/`.
-const DEFAULT_COMMAND: Commands = Commands::Editor(EditorArgs {
+static DEFAULT_COMMAND: Commands = Commands::Editor(EditorArgs {
     file: None,
     debug_port: None,
     validation: None,
@@ -77,6 +77,7 @@ const DEFAULT_COMMAND: Commands = Commands::Editor(EditorArgs {
         rt_skinned_geometry: None,
         dlss_preset: None,
         fixed_frame_rate: None,
+        hide: Vec::new(),
     },
 });
 

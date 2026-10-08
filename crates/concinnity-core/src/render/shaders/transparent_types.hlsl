@@ -1,6 +1,7 @@
 // The per-frame view every transparent-pass producer (glass.hlsl,
-// glass_mesh.hlsl, water.hlsl) reads, spliced into each at its
-// TRANSPARENT_TYPES marker (see shader_source.rs). Not a standalone program.
+// glass_mesh.hlsl, water.hlsl) reads and the targets each writes, spliced into
+// each at its TRANSPARENT_TYPES marker (see shader_source.rs). Not a standalone
+// program.
 // Nothing here may spell the marker itself.
 
 // Layout matches `TransparentView` / the TransparentViewBlock UBO (240 B). One
@@ -31,3 +32,23 @@ struct TransparentView
 #define SKY_DIR(d) float3(dot(view.sky_rot[0].xyz, (d)), \
                           dot(view.sky_rot[1].xyz, (d)), \
                           dot(view.sky_rot[2].xyz, (d)))
+
+{REACTIVE_MASK}
+
+// What a producer's shading fragment writes: its straight-alpha color into the
+// scene, and its share of the pixel that does not follow the motion vector under
+// it into the reactive mask, which the pipeline max-blends so the most reactive
+// layer wins.
+struct TransparentOut
+{
+    float4 color    : SV_Target0;
+    float  reactive : SV_Target1;
+};
+
+TransparentOut transparent_out(float4 color, float reactive)
+{
+    TransparentOut o;
+    o.color = color;
+    o.reactive = reactive_write(reactive);
+    return o;
+}

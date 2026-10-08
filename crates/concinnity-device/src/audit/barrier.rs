@@ -122,6 +122,16 @@ const AUDITS: &[BackendAudit] = &[
             // the draw was the third; it crosses a node boundary now, so the
             // graph derives it from the pool read the draw declares.
             ("particle.rs", "cmd_pipeline_barrier", 2, Reason::IntraPass),
+            // The reactive mask cleared outside a render pass, for a writer that
+            // draws nothing on the frame it was to clear or an upscaler that
+            // must have a mask on a frame with no writer: from its resting
+            // layout to a transfer and back, inside the node.
+            (
+                "reactive_mask.rs",
+                "cmd_pipeline_barrier",
+                2,
+                Reason::IntraPass,
+            ),
             ("texture.rs", "cmd_pipeline_barrier", 1, Reason::Upload),
             // The staged geometry copies' submit: a write-after-read barrier
             // ahead of the copies and a visibility barrier after them.
@@ -219,6 +229,13 @@ const AUDITS: &[BackendAudit] = &[
             ),
             ("line.rs", ".final_layout(", 1, Reason::AttachmentLayout),
             ("particle.rs", ".final_layout(", 1, Reason::AttachmentLayout),
+            // The reactive mask's attachment in every writer's render passes.
+            (
+                "reactive_mask.rs",
+                ".final_layout(",
+                1,
+                Reason::AttachmentLayout,
+            ),
             ("raymarch.rs", ".final_layout(", 2, Reason::AttachmentLayout),
             (
                 "post/gbuffer.rs",
@@ -269,6 +286,15 @@ const AUDITS: &[BackendAudit] = &[
             // glass reflection layers, private to the node, open for their
             // pre-pass and close for the scene pass to read.
             ("transparent.rs", ".ResourceBarrier(", 4, Reason::IntraPass),
+            // The reactive mask on a frame the graph does not carry it, cleared
+            // for an upscaler that must have one and returned to its resting
+            // state once the dispatch has read it, all inside the Upscale node.
+            (
+                "reactive_mask.rs",
+                ".ResourceBarrier(",
+                3,
+                Reason::IntraPass,
+            ),
             // The SSGI trace samples the scene the composite then blends into,
             // so this node reads and writes one resource; the graph models that
             // as a single write and the trace borrows the read state. One site,

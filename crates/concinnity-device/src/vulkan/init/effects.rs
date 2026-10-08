@@ -315,17 +315,13 @@ pub(super) fn build_taa_and_wire_scene_inputs(
         }
     }
 
-    // Composite G-buffer channel bindings (3..6), for the debug view
-    // modes. Written after the re-wire above so they point at the merged
-    // pre-pass's views; the 1x1 white fallback stands in when a world built
-    // no G-buffer / no SSAO.
+    // Composite channel bindings (3..7), for the debug view modes. Written
+    // after the re-wire above so they point at the merged pre-pass's views;
+    // the 1x1 white fallback stands in when a world built no G-buffer / no
+    // SSAO.
     for (i, &set) in composite.sets.iter().enumerate() {
-        let channels = composite_channels(
-            screen.gbuffer.as_ref(),
-            &targets.transient_pool,
-            scene.ssao_white.view,
-            i,
-        );
+        let channels =
+            composite_channels(targets, screen.gbuffer.as_ref(), scene.ssao_white.view, i);
         write_composite_channel_set(device, set, &channels);
     }
     Ok(taa)
@@ -564,6 +560,11 @@ pub(super) fn build_world_effects(
             .unzip();
         let transparent_depth_views: Vec<vk::ImageView> =
             targets.depth_images.iter().map(|img| img.view).collect();
+        let reactive_mask_views: Vec<vk::ImageView> = targets
+            .reactive_mask_images
+            .iter()
+            .map(|img| img.view)
+            .collect();
         // The initial acceleration-structure handles for the RT path (`None`
         // when RT is off at launch or there is no BVH yet; the per-frame
         // `rt_dynamic_update` fills the ring before the RT path is taken). The
@@ -601,6 +602,7 @@ pub(super) fn build_world_effects(
             crate::vulkan::transparent::TransparentSceneTargets {
                 scene_views: &scene_views,
                 scene_images: &scene_images,
+                reactive_mask_views: &reactive_mask_views,
                 depth_views: &transparent_depth_views,
                 sampler: scene.linear_sampler.handle(),
             },

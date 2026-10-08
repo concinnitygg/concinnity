@@ -51,6 +51,7 @@ mod probe_set;
 mod quality;
 mod raymarch;
 mod raytrace;
+mod reactive_mask;
 mod resources;
 mod rt_ring;
 mod scoped_encoder;

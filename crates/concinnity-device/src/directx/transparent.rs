@@ -40,6 +40,7 @@ use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::rt_reflections::RtParamsInputs;
+use concinnity_core::render::reactive_mask::ReactiveWrite;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -449,9 +450,10 @@ fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
 }
 
 // PSO for a transparent producer. Writes the single-sample post-SSR scene target
-// with src-alpha / inv-src-alpha blending. No depth attachment (the fragment
-// shader does the manual occlusion test) and no face culling (both shaders are
-// two-sided). Standard 5-attribute vertex layout shared with the main pass.
+// with src-alpha / inv-src-alpha blending, and the reactive mask beside it. No
+// depth attachment (the fragment shader does the manual occlusion test) and no
+// face culling (both shaders are two-sided). Standard 5-attribute vertex layout
+// shared with the main pass.
 pub(in crate::directx) fn create_transparent_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
@@ -500,10 +502,14 @@ fn transparent_pso(
         }
     };
     let layout = main_input_layout();
-    GraphicsPso::new(root_sig, vs, ps)
+    let pso = GraphicsPso::new(root_sig, vs, ps)
         .input_layout(&layout)
-        .target(HDR_FORMAT, blend)
-        .depth(depth_format, depth)
+        .target(HDR_FORMAT, blend);
+    let pso = match output {
+        TransparentOutput::Scene => crate::directx::reactive_mask::mask_target(pso),
+        TransparentOutput::ReflectionLayer => pso,
+    };
+    pso.depth(depth_format, depth)
         .raster(Raster {
             depth_clip: false,
             ..Raster::default()
@@ -1161,6 +1167,7 @@ impl DxContext {
         // same values the RT-reflection resolve uses); only consumed on the RT path.
         fov_y_radians: f32,
         aspect: f32,
+        reactive: ReactiveWrite,
     ) -> RenderResult<()> {
         let transparent = match &self.transparent {
             Some(t) => t,
@@ -1411,7 +1418,8 @@ impl DxContext {
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe {
-            cmd.OMSetRenderTargets(1, Some(&scene_rtv), false, None);
+            let rtvs = [scene_rtv, self.targets.reactive_mask.rtv(reactive)];
+            cmd.OMSetRenderTargets(2, Some(rtvs.as_ptr()), false, None);
             set_viewport(cmd, (w, h));
         }
 

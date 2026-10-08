@@ -16,6 +16,7 @@ use std::ptr;
 use ash::vk;
 use concinnity_core::gfx::jitter;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::reactive_mask::ReactiveReader;
 
 use super::{
     ImageViewInfo, OutputWrites, UpscaleInputs, UpscaleOutput, UpscalerGpu, VkUpscaleBackend,
@@ -276,6 +277,7 @@ impl XessUpscaler {
             return Ok(None);
         }
         ctx.set_velocity_scale(LABEL);
+        ctx.set_responsive_mask_cap(LABEL);
 
         let output = UpscaleOutput::create(gpu, extent.output, OutputWrites::storage())?;
         tracing::info!("{LABEL}: context created: {extent}");
@@ -318,7 +320,9 @@ impl VkUpscaleBackend for XessUpscaler {
             velocity_texture: ImageViewInfo::of(inputs.motion),
             depth_texture: ImageViewInfo::of(inputs.depth),
             exposure_scale_texture: ImageViewInfo::empty(),
-            responsive_pixel_mask_texture: ImageViewInfo::empty(),
+            responsive_pixel_mask_texture: inputs
+                .reactive
+                .map_or_else(ImageViewInfo::empty, ImageViewInfo::of),
             output_texture: ImageViewInfo::of(&self.output.as_upscale_image()),
             frame: self.ctx.frame(camera.jitter_offset),
         };
@@ -333,6 +337,10 @@ impl VkUpscaleBackend for XessUpscaler {
 
     fn request_history_reset(&self) {
         self.ctx.request_history_reset();
+    }
+
+    fn reactive_reader(&self) -> ReactiveReader {
+        ReactiveReader::Xess
     }
 
     fn destroy(&mut self) {

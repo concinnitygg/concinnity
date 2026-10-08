@@ -72,7 +72,9 @@ pub(in crate::vulkan) const GBUFFER_VIEW_UBO_SIZE: vk::DeviceSize =
 // without an extra barrier. The depth is STORE'd because the temporal upscaler
 // (FSR) consumes this render-resolution single-sample depth alongside the
 // motion vectors.
-fn create_prepass_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass> {
+pub(in crate::vulkan) fn create_prepass_render_pass(
+    device: &VkDevice,
+) -> RenderResult<OwnedRenderPass> {
     let attachments = [
         vk::AttachmentDescription::default()
             .format(GBUFFER_NORMAL_DEPTH_FORMAT)
@@ -158,7 +160,7 @@ fn create_prepass_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass
 // The pre-pass's three MRT targets: normal+depth, roughness, velocity. All three
 // must be byte-identical without `independentBlend` enabled at device creation;
 // the R8 roughness target stores only R under the uniform RGBA write mask.
-pub(super) const PREPASS_TARGETS: [Blend; 3] = [Blend::Opaque; 3];
+pub(in crate::vulkan) const PREPASS_TARGETS: [Blend; 3] = [Blend::Opaque; 3];
 
 // Vertex input for the G-buffer pre-pass: the main pass's attributes on binding
 // 0, which the vertex hook reads in full, plus the previous-frame position
@@ -927,6 +929,7 @@ impl VkContext {
         // ride the cull records' runtime reserve. With nothing to draw the pass
         // is the clears above, which is what "no geometry" means to every reader.
         self.encode_gbuffer_prepass_gpu_driven(cmd, frame_idx, velocity_active);
+        self.encode_raymarch_prepass(cmd, frame_idx, &view, &view_uni);
         // The sky keeps the "no geometry" depth and roughness and adds the
         // camera's motion where nothing was drawn.
         if self.draws_sky(self.state.view.mode) {

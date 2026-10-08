@@ -45,6 +45,7 @@ mod probe_set;
 mod quality;
 mod raymarch;
 mod raytrace;
+mod reactive_mask;
 mod record;
 mod render_pass;
 mod resources;

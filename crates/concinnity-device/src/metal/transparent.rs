@@ -22,6 +22,7 @@
 
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::reactive_mask::ReactiveWrite;
 use concinnity_core::render::transparent;
 use concinnity_core::render::uniforms::TransparentView;
 use objc2::rc::Retained;
@@ -97,6 +98,16 @@ const GLASS_POOL_SAMPLER_INDEX: usize = 4;
 // glass shaders.
 const GLASS_REFLECTION_TEXTURE_INDEX: usize = 4;
 const GLASS_REFLECTION_BACK_TEXTURE_INDEX: usize = 5;
+
+// What the transparent pass takes for the frame: the view and RT inputs its
+// encoders bind, and how it treats the reactive mask.
+pub(in crate::metal) struct TransparentFrame<'a> {
+    pub(in crate::metal) view: &'a TransparentView,
+    pub(in crate::metal) rt_params: Option<&'a render_types::RtParams>,
+    pub(in crate::metal) bindless_tex_args:
+        Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    pub(in crate::metal) reactive: ReactiveWrite,
+}
 
 // The per-frame inputs every transparent encoder binds before its draws.
 struct TransparentInputs<'a> {
@@ -281,13 +292,18 @@ impl MtlContext {
     pub(in crate::metal) fn encode_transparent(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
-        view: &TransparentView,
         scene_pre_taa: &Retained<ProtocolObject<dyn objc2_metal::MTLTexture>>,
         draws: &[TransparentDraw],
-        rt_params: Option<&render_types::RtParams>,
-        bindless_tex_args: Option<&Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+        frame: TransparentFrame<'_>,
     ) -> RenderResult<u32> {
+        let TransparentFrame {
+            view,
+            rt_params,
+            bindless_tex_args,
+            reactive,
+        } = frame;
         if draws.is_empty() {
+            self.clear_reactive_mask(cmd_buf, reactive)?;
             return Ok(0);
         }
 
@@ -394,6 +410,7 @@ impl MtlContext {
             ca.setLoadAction(MTLLoadAction::Load);
             ca.setStoreAction(MTLStoreAction::Store);
         }
+        self.attach_reactive_mask(&pass_desc, reactive);
         if let Some(t) = timing {
             if reflection.is_some() {
                 t.attach_render_last(&pass_desc, super::pass_timing::PassId::Transparent);

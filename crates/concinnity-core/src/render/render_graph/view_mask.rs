@@ -15,6 +15,7 @@ pub fn apply_view(inputs: &FrameGraphInputs, mode: ViewMode, show: ShowFlags) ->
     let mut out = *inputs;
     out.composite_reads_ao = false;
     out.composite_reads_motion = false;
+    out.composite_reads_reactive = false;
     if !show.contains(ShowFlags::SHADOWS) {
         out.shadow_enabled = false;
         out.shadowed_spot_count = 0;
@@ -34,6 +35,9 @@ pub fn apply_view(inputs: &FrameGraphInputs, mode: ViewMode, show: ShowFlags) ->
     }
     if !show.contains(ShowFlags::LINES) {
         out.lines_enabled = false;
+    }
+    if !show.contains(ShowFlags::REACTIVE) {
+        out.reactive_mask_enabled = false;
     }
     if mode.is_flat() {
         out.ssao_enabled = false;
@@ -57,6 +61,7 @@ pub fn apply_view(inputs: &FrameGraphInputs, mode: ViewMode, show: ShowFlags) ->
         out.bloom_enabled = false;
         out.composite_reads_ao = mode == ViewMode::Occlusion && out.ssao_enabled;
         out.composite_reads_motion = mode == ViewMode::Motion;
+        out.composite_reads_reactive = mode == ViewMode::Reactive;
     }
     out
 }
@@ -82,6 +87,7 @@ mod tests {
             transparent_enabled: true,
             lines_enabled: true,
             ssgi_enabled: true,
+            reactive_mask_enabled: true,
             shadowed_spot_count: 2,
             ..FrameGraphInputs::all_off()
         }
@@ -106,6 +112,7 @@ mod tests {
         let no_ssr = m(ShowFlags::SSR);
         assert!(!no_ssr.ssr_enabled && !no_ssr.rt_reflections_enabled);
         assert!(!m(ShowFlags::LINES).lines_enabled);
+        assert!(!m(ShowFlags::REACTIVE).reactive_mask_enabled);
     }
 
     #[test]
@@ -140,6 +147,9 @@ mod tests {
         inputs.gbuffer_prepass_enabled = true;
         let out = apply_view(&inputs, ViewMode::Motion, ShowFlags::all());
         assert!(out.composite_reads_motion && !out.composite_reads_ao);
+        assert!(!out.composite_reads_reactive);
+        let reactive = apply_view(&inputs, ViewMode::Reactive, ShowFlags::all());
+        assert!(reactive.composite_reads_reactive && !reactive.composite_reads_motion);
         let lit = apply_view(&everything_on(), ViewMode::Lit, ShowFlags::all());
         assert!(!lit.composite_reads_motion);
         // The composite's read keeps the pooled velocity alive to the present.

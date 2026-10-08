@@ -72,7 +72,12 @@ impl DxContext {
     // the current frame's neighborhood, and blends. Writes this frame's
     // ping-pong slot, reading the other as history. Called only when `self.taa`
     // is `Some`, after the unified G-buffer pre-pass.
-    pub(in crate::directx) fn encode_taa(&self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
+    pub(in crate::directx) fn encode_taa(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+        reactive_written: bool,
+    ) {
         let Some(taa) = &self.taa else { return };
         let Some(gbuffer) = &self.gbuffer else { return };
         let device = self.post_device(frame_idx);
@@ -83,6 +88,7 @@ impl DxContext {
             TaaInputs {
                 scene: self.scene_srv_for_post(),
                 velocity: gbuffer.velocity_srv_gpu,
+                reactive: reactive_written.then(|| self.targets.reactive_mask.srv_gpu()),
             },
         ) {
             tracing::error!("TAA resolve: {e}");

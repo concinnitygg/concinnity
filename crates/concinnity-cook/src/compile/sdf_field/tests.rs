@@ -25,7 +25,7 @@ fn failure(err: ProgramError) -> CompileFailure {
     }
 }
 
-// A casting surface field compiles all four of its entries on every host, each
+// A casting surface field compiles every one of its entries on every host, each
 // findable under the digest the renderer computes from the payload's own
 // field. Metal's artifact is MSL text, emitted on every host: a world cooked
 // on Windows or Linux still gives a Metal player its field without a compiler.
@@ -48,8 +48,12 @@ fn every_host_cooks_one_artifact_per_entry_for_every_target() {
             [
                 "raymarch_vertex",
                 "raymarch_fragment",
+                "raymarch_front_fragment",
                 "raymarch_shadow_vertex",
-                "raymarch_shadow_fragment"
+                "raymarch_shadow_fragment",
+                "raymarch_prepass_vertex",
+                "raymarch_prepass_fragment",
+                "raymarch_prepass_front_fragment"
             ],
             "{platform:?}"
         );
@@ -134,7 +138,7 @@ fn an_error_names_the_authors_file_and_line() {
         "{failed}"
     );
     assert!(errors[0].message.contains("undeclared_radius"), "{failed}");
-    assert_eq!(failed.failures.len(), 4, "every entry compiled the field");
+    assert_eq!(failed.failures.len(), 8, "every entry compiled the field");
     assert!(
         failed
             .to_string()

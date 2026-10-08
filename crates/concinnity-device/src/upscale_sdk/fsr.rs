@@ -48,6 +48,7 @@ const FFX_API_RESOURCE_STATE_COMPUTE_READ: u32 = 1 << 2;
 const FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT: u32 = 4;
 const FFX_API_SURFACE_FORMAT_R16G16_FLOAT: u32 = 18;
 const FFX_API_SURFACE_FORMAT_R32_FLOAT: u32 = 28;
+const FFX_API_SURFACE_FORMAT_R8_UNORM: u32 = 25;
 
 // FfxApiMessageType.
 #[cfg(windows)]
@@ -329,13 +330,15 @@ impl FfxEntryPoints {
 }
 
 /// The raw API handles of one upscale dispatch: the command list it records
-/// onto and the four textures it reads and writes, each as the pointer-sized
-/// value `ffx_api` takes.
+/// onto and the textures it reads and writes, each as the pointer-sized value
+/// `ffx_api` takes.
 pub(crate) struct FfxDispatchHandles {
     pub(crate) command_list: *mut c_void,
     pub(crate) color: *mut c_void,
     pub(crate) depth: *mut c_void,
     pub(crate) motion_vectors: *mut c_void,
+    /// The reactive mask, or null on a frame no pass wrote it.
+    pub(crate) reactive: *mut c_void,
     pub(crate) output: *mut c_void,
 }
 
@@ -520,7 +523,15 @@ impl<L: SdkLibrary> FfxContext<L> {
                 FFX_API_RESOURCE_USAGE_READ_ONLY,
             ),
             exposure: FfxApiResource::empty(),
-            reactive: FfxApiResource::empty(),
+            reactive: if handles.reactive.is_null() {
+                FfxApiResource::empty()
+            } else {
+                input(
+                    handles.reactive,
+                    FFX_API_SURFACE_FORMAT_R8_UNORM,
+                    FFX_API_RESOURCE_USAGE_READ_ONLY,
+                )
+            },
             transparency_and_composition: FfxApiResource::empty(),
             output: FfxApiResource::texture(
                 handles.output,

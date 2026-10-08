@@ -4,12 +4,16 @@
 use crate::gfx::auto_exposure::{HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN};
 
 /// Input to the TAA resolve fragment shader. Matches `TaaParams` in
-/// `shaders/taa.hlsl`. 4 bytes.
+/// `shaders/taa.hlsl`. 8 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TaaParams {
     /// 0 on the first frame / after a resize, 1.0 otherwise.
     pub history_valid: f32,
+    /// The mask value past which the reactive mask removes no more history
+    /// ([`crate::render::reactive_mask::ReactiveReader::cap`]), or 0 when
+    /// no mask was written this frame and the resolve ignores the bound one.
+    pub reactive_max: f32,
 }
 
 /// Input to the auto-exposure histogram kernels: the three luminance-mapping
@@ -74,6 +78,13 @@ pub struct HizSpdParams {
 mod tests {
     use super::*;
     use core::mem::{offset_of, size_of};
+
+    #[test]
+    fn taa_params_layout_matches_shader() {
+        assert_eq!(size_of::<TaaParams>(), 8);
+        assert_eq!(offset_of!(TaaParams, history_valid), 0);
+        assert_eq!(offset_of!(TaaParams, reactive_max), 4);
+    }
 
     // Both Hi-Z param blocks are four tightly-packed uints, which is what the
     // shader's push-constant / root-constant block expects.

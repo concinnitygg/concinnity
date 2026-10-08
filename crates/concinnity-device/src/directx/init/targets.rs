@@ -12,6 +12,7 @@ use crate::directx::context::{
     DepthState, DxDescriptors, DxTargets, Extents, HdrState, SwapchainState,
 };
 use crate::directx::post::upscale::UpscaleState;
+use crate::directx::reactive_mask::{ReactiveMask, ReactiveMaskSlots};
 use crate::directx::texture::{
     HDR_FORMAT, create_hdr_color_target, create_hdr_resolve_target, create_main_depth_texture,
     write_hdr_srv,
@@ -150,6 +151,17 @@ pub(super) fn build_targets(
         )?,
     )?;
 
+    let reactive_mask = ReactiveMask::new(
+        &hw.device,
+        (render_w, render_h),
+        ReactiveMaskSlots {
+            rtv: swapchain.rtv(rtv.reactive_mask_base_slot),
+            null_rtv: swapchain.rtv(rtv.reactive_mask_base_slot + 1),
+            srv_cpu: descriptors.slot_cpu(layout.reactive_mask_srv_slot),
+            srv_gpu: descriptors.slot_gpu(layout.reactive_mask_srv_slot),
+        },
+    )?;
+
     Ok(DxTargets {
         hdr: HdrState {
             color: hdr_color,
@@ -172,5 +184,6 @@ pub(super) fn build_targets(
             output_height: height,
         },
         transient_pool,
+        reactive_mask,
     })
 }

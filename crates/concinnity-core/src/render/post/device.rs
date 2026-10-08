@@ -478,8 +478,8 @@ mod tests {
             texture: MockTexture::External(1),
             sampler: PostSampler::LinearClamp,
         };
-        let binds = [bind; 3];
-        let constants = [0u8; 4];
+        let binds = [bind; 4];
+        let constants = [0u8; 8];
         let draw = draw_with(&pipeline, &binds, &constants);
         assert!(draw.check(PostProgram::TaaResolve.bindings()).is_ok());
     }
@@ -499,17 +499,17 @@ mod tests {
             sampler: PostSampler::LinearClamp,
         };
         let declared = PostProgram::TaaResolve.bindings();
-        let two = [bind; 2];
         let three = [bind; 3];
-        let err = draw_with(&pipeline, &two, &[0u8; 4])
+        let four = [bind; 4];
+        let err = draw_with(&pipeline, &three, &[0u8; 8])
             .check(declared)
             .expect_err("one source short");
         assert!(
-            matches!(&err, RenderError::Other(m) if m.contains("2 texture(s)")),
+            matches!(&err, RenderError::Other(m) if m.contains("3 texture(s)")),
             "{err}"
         );
         assert!(
-            draw_with(&pipeline, &three, &[]).check(declared).is_err(),
+            draw_with(&pipeline, &four, &[]).check(declared).is_err(),
             "missing constants"
         );
     }

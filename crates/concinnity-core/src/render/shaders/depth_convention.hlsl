@@ -65,10 +65,13 @@ float3 camera_view_ray(float4x4 inv_vp, float2 ndc_xy, float3 cam_pos)
     return normalize(h.xyz - h.w * cam_pos);
 }
 
-// Conservative depth output for a pass writing a depth no farther than the
-// rasterized fragment's, which keeps early depth testing: a raymarched surface
-// against the camera, or a raymarched caster against the light.
-#define DEPTH_CONSERVATIVE SV_DepthGreaterEqual
+// Conservative depth outputs, for a pass writing a depth on one side of the
+// rasterized fragment's. A fragment that only moves farther is still rejected
+// early wherever its rasterized depth already fails the test, which is what a
+// proxy drawn on the near side of what it marches gets. One that may move
+// nearer cannot be rejected early, but suits a proxy drawn on the far side.
+#define DEPTH_CONSERVATIVE_NEARER SV_DepthGreaterEqual
+#define DEPTH_CONSERVATIVE_FARTHER SV_DepthLessEqual
 
 // Depth `d` moved `offset` toward the near plane. A shadow sample's compare
 // reference is biased this way, toward the light, so a surface does not shadow

@@ -40,6 +40,7 @@
 //!   [probe_cubes_srv_slot]         the reflection-probe cube array
 //!   [spot_shadow_srv_slot]         spot shadow depth array SRV (Texture2DArray)
 //!   [ltc_srv_base_slot..+2]        area-light LTC tables (matrix, magnitude)
+//!   [reactive_mask_srv_slot]       reactive mask SRV (TAA, upscalers, composite)
 //!   srv_slots                      total descriptor count (heap size)
 //!
 //! The RTV heap follows the same cascade in `RtvHeapLayout`, and the DSV heap's
@@ -132,6 +133,7 @@ pub(in crate::directx) struct SrvHeapLayout {
     // table covers both: [0] the inverse-transform matrix (RGBA32F), [1] the
     // magnitude / Fresnel pair (RG32F).
     pub ltc_srv_base_slot: usize,
+    pub reactive_mask_srv_slot: usize,
     pub srv_slots: usize,
 }
 
@@ -192,7 +194,10 @@ impl SrvHeapLayout {
         // Area-light LTC tables. Scene-independent (fitted at build time), so
         // they are always reserved and always uploaded.
         let ltc_srv_base_slot = spot_shadow_srv_slot + 1;
-        let srv_slots = ltc_srv_base_slot + 2;
+        // The reactive mask is one of the scene targets, so it is always
+        // reserved.
+        let reactive_mask_srv_slot = ltc_srv_base_slot + 2;
+        let srv_slots = reactive_mask_srv_slot + 1;
         Self {
             atlas_base_slot,
             hdr_srv_slot,
@@ -222,6 +227,7 @@ impl SrvHeapLayout {
             probe_cubes_srv_slot,
             spot_shadow_srv_slot,
             ltc_srv_base_slot,
+            reactive_mask_srv_slot,
             srv_slots,
         }
     }
@@ -248,6 +254,8 @@ pub(super) const RT_OUTPUT_TARGETS: usize = 1;
 // the empty layer the first one peels behind.
 pub(in crate::directx) const GLASS_REFLECTION_TARGETS: usize = 2;
 pub(in crate::directx) const GLASS_REFLECTION_SRV_SLOTS: usize = 6;
+// The reactive mask's RTV and the null RTV that stands in for it.
+pub(super) const REACTIVE_MASK_RTVS: usize = 2;
 
 // DSV heap slots: the main depth, one per shadow cascade (a slice each into the
 // shadow map array), one per shadowed spot slice, the unified G-buffer
@@ -275,6 +283,9 @@ pub(super) struct RtvHeapLayout {
     pub gbuffer_base_slot: usize,
     pub rt_output_slot: usize,
     pub glass_reflection_base_slot: usize,
+    // The reactive mask's view, then a null view its writers bind in its place
+    // on a frame nothing reads it.
+    pub reactive_mask_base_slot: usize,
     pub rtv_slots: usize,
 }
 
@@ -286,7 +297,8 @@ impl RtvHeapLayout {
         let gbuffer_base_slot = decal_resolve_slot + usize::from(msaa_samples > 1);
         let rt_output_slot = gbuffer_base_slot + GBUFFER_TARGETS;
         let glass_reflection_base_slot = rt_output_slot + RT_OUTPUT_TARGETS;
-        let rtv_slots = glass_reflection_base_slot + GLASS_REFLECTION_TARGETS;
+        let reactive_mask_base_slot = glass_reflection_base_slot + GLASS_REFLECTION_TARGETS;
+        let rtv_slots = reactive_mask_base_slot + REACTIVE_MASK_RTVS;
         Self {
             hdr_slot,
             post_base_slot,
@@ -294,6 +306,7 @@ impl RtvHeapLayout {
             gbuffer_base_slot,
             rt_output_slot,
             glass_reflection_base_slot,
+            reactive_mask_base_slot,
             rtv_slots,
         }
     }
@@ -314,7 +327,7 @@ mod tests {
     // with the running total and fails the assert.
     fn assert_gap_free(p: &SrvHeapParams) {
         let l = SrvHeapLayout::compute(p);
-        let blocks: [(usize, usize); 28] = [
+        let blocks: [(usize, usize); 29] = [
             (l.atlas_base_slot, p.n_atlases.max(1)),
             (l.hdr_srv_slot, 1),
             (l.lut_srv_slot, 1),
@@ -346,6 +359,7 @@ mod tests {
             (l.probe_cubes_srv_slot, 1),
             (l.spot_shadow_srv_slot, 1),
             (l.ltc_srv_base_slot, 2),
+            (l.reactive_mask_srv_slot, 1),
         ];
         let mut expected_base = GLOBAL_SRV_COUNT;
         for (i, (base, count)) in blocks.iter().enumerate() {
@@ -421,13 +435,14 @@ mod tests {
     fn assert_rtv_gap_free(msaa_samples: u32) {
         let l = RtvHeapLayout::compute(msaa_samples);
         let decal_resolve = if msaa_samples > 1 { 1 } else { 0 };
-        let blocks: [(usize, usize); 6] = [
+        let blocks: [(usize, usize); 7] = [
             (l.hdr_slot, 1),
             (l.post_base_slot, POST_TARGET_SLOTS),
             (l.decal_resolve_slot, decal_resolve),
             (l.gbuffer_base_slot, 3),
             (l.rt_output_slot, 1),
             (l.glass_reflection_base_slot, 2),
+            (l.reactive_mask_base_slot, 2),
         ];
         let mut expected_base = FRAMES;
         for (i, (base, count)) in blocks.iter().enumerate() {

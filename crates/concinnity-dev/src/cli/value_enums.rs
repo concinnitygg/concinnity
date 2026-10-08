@@ -1,5 +1,6 @@
 // The argv mirrors of engine types. The value-enum derives live here so no
 // layer below the command line carries a clap dependency.
+use concinnity_core::gfx::view_modes::ShowFlags;
 use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_engine::gfx::quality_preset::QualityPreset;
@@ -86,6 +87,39 @@ impl From<DlssPresetArg> for DlssPreset {
     }
 }
 
+// The argv face of one of the core's `ShowFlags`, under its `ShowFlags::NAMED`
+// name.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ShowFlagArg(usize);
+
+const SHOW_FLAG_ARGS: [ShowFlagArg; ShowFlags::NAMED.len()] = {
+    let mut args = [ShowFlagArg(0); ShowFlags::NAMED.len()];
+    let mut i = 0;
+    while i < args.len() {
+        args[i] = ShowFlagArg(i);
+        i += 1;
+    }
+    args
+};
+
+impl clap::ValueEnum for ShowFlagArg {
+    fn value_variants<'a>() -> &'a [Self] {
+        &SHOW_FLAG_ARGS
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        Some(clap::builder::PossibleValue::new(
+            ShowFlags::NAMED[self.0].1,
+        ))
+    }
+}
+
+impl From<ShowFlagArg> for ShowFlags {
+    fn from(f: ShowFlagArg) -> Self {
+        ShowFlags::NAMED[f.0].0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,5 +155,12 @@ mod tests {
             .map(|&a| a.into())
             .collect();
         assert_eq!(presets, DlssPreset::ALL.to_vec());
+
+        let flags: Vec<ShowFlags> = ShowFlagArg::value_variants()
+            .iter()
+            .map(|&a| a.into())
+            .collect();
+        let labeled: Vec<ShowFlags> = ShowFlags::LABELED.iter().map(|&(f, _)| f).collect();
+        assert_eq!(flags, labeled);
     }
 }

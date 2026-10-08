@@ -29,11 +29,16 @@ pub enum ViewMode {
     /// below mid-gray in red. Zero unless a temporal consumer (TAA, an
     /// upscaler or SSGI) is on, since only they ask the prepass for motion.
     Motion = 7,
+    /// The reactive mask: where particles and transparent surfaces tell TAA
+    /// and the upscalers to trust the current frame over their history, from
+    /// black (keep history) to white (discard it). Black unless one of them
+    /// draws.
+    Reactive = 8,
 }
 
 impl ViewMode {
     /// Every mode, in the cycling/UI order.
-    pub const ALL: [ViewMode; 8] = [
+    pub const ALL: [ViewMode; 9] = [
         ViewMode::Lit,
         ViewMode::Unlit,
         ViewMode::Wireframe,
@@ -42,6 +47,7 @@ impl ViewMode {
         ViewMode::Occlusion,
         ViewMode::Depth,
         ViewMode::Motion,
+        ViewMode::Reactive,
     ];
 
     /// True for the flat-shaded modes (Unlit, Wireframe), which drop the
@@ -50,8 +56,9 @@ impl ViewMode {
         matches!(self, ViewMode::Unlit | ViewMode::Wireframe)
     }
 
-    /// True for the modes whose image is a geometry-prepass channel sampled
-    /// by the composite.
+    /// True for the modes whose image is one channel of the frame sampled by
+    /// the composite: a geometry-prepass channel, the occlusion, or the
+    /// reactive mask.
     pub fn is_gbuffer_channel(self) -> bool {
         matches!(
             self,
@@ -60,6 +67,7 @@ impl ViewMode {
                 | ViewMode::Occlusion
                 | ViewMode::Depth
                 | ViewMode::Motion
+                | ViewMode::Reactive
         )
     }
 
@@ -74,6 +82,7 @@ impl ViewMode {
             ViewMode::Occlusion => "Occlusion",
             ViewMode::Depth => "Depth",
             ViewMode::Motion => "Motion",
+            ViewMode::Reactive => "Reactive",
         }
     }
 }
@@ -98,15 +107,31 @@ impl ShowFlags {
     pub const SSR: ShowFlags = ShowFlags(1 << 4);
     /// The debug line pass.
     pub const LINES: ShowFlags = ShowFlags(1 << 5);
+    /// The reactive mask the particle and transparent passes hand the temporal
+    /// passes. Cleared, TAA and the upscalers see no mask.
+    pub const REACTIVE: ShowFlags = ShowFlags(1 << 6);
 
     /// Every flag, paired with its display label, in UI order.
-    pub const LABELED: [(ShowFlags, &'static str); 6] = [
+    pub const LABELED: [(ShowFlags, &'static str); 7] = [
         (ShowFlags::SHADOWS, "Shadows"),
         (ShowFlags::FOG, "Fog"),
         (ShowFlags::BLOOM, "Bloom"),
         (ShowFlags::SSGI, "SSGI"),
         (ShowFlags::SSR, "Reflections"),
         (ShowFlags::LINES, "Lines"),
+        (ShowFlags::REACTIVE, "Reactive mask"),
+    ];
+
+    /// Every flag, paired with the name a command line or debug verb gives it,
+    /// in `LABELED` order.
+    pub const NAMED: [(ShowFlags, &'static str); 7] = [
+        (ShowFlags::SHADOWS, "shadows"),
+        (ShowFlags::FOG, "fog"),
+        (ShowFlags::BLOOM, "bloom"),
+        (ShowFlags::SSGI, "ssgi"),
+        (ShowFlags::SSR, "reflections"),
+        (ShowFlags::LINES, "lines"),
+        (ShowFlags::REACTIVE, "reactive"),
     ];
 
     /// Every flag set.
@@ -117,7 +142,8 @@ impl ShowFlags {
                 | ShowFlags::BLOOM.0
                 | ShowFlags::SSGI.0
                 | ShowFlags::SSR.0
-                | ShowFlags::LINES.0,
+                | ShowFlags::LINES.0
+                | ShowFlags::REACTIVE.0,
         )
     }
 
@@ -130,6 +156,16 @@ impl ShowFlags {
     /// This set with `other`'s bits flipped.
     pub const fn toggled(self, other: ShowFlags) -> ShowFlags {
         ShowFlags(self.0 ^ other.0)
+    }
+
+    #[must_use]
+    /// This set with `other`'s bits set when `on`, else cleared.
+    pub const fn with(self, other: ShowFlags, on: bool) -> ShowFlags {
+        if on {
+            ShowFlags(self.0 | other.0)
+        } else {
+            ShowFlags(self.0 & !other.0)
+        }
     }
 }
 
@@ -153,6 +189,29 @@ mod tests {
     }
 
     #[test]
+    fn every_flag_is_named_in_label_order() {
+        for (i, ((flag, name), (labeled, _))) in
+            ShowFlags::NAMED.iter().zip(ShowFlags::LABELED).enumerate()
+        {
+            assert_eq!(*flag, labeled);
+            assert!(
+                ShowFlags::NAMED[..i].iter().all(|(_, n)| n != name),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn with_sets_or_clears_only_its_bits() {
+        let all = ShowFlags::all();
+        let no_fog = all.with(ShowFlags::FOG, false);
+        assert!(!no_fog.contains(ShowFlags::FOG));
+        assert_eq!(no_fog.with(ShowFlags::FOG, false), no_fog);
+        assert_eq!(no_fog.with(ShowFlags::FOG, true), all);
+        assert_eq!(all.with(ShowFlags::FOG, true), all);
+    }
+
+    #[test]
     fn toggling_clears_and_restores_one_bit() {
         let some = ShowFlags::all().toggled(ShowFlags::FOG);
         assert!(!some.contains(ShowFlags::FOG));
@@ -170,9 +229,10 @@ mod tests {
             ViewMode::Occlusion,
             ViewMode::Depth,
             ViewMode::Motion,
+            ViewMode::Reactive,
         ] {
             assert!(m.is_gbuffer_channel() && !m.is_flat());
         }
-        assert_eq!(ViewMode::ALL.len(), 8);
+        assert_eq!(ViewMode::ALL.len(), 9);
     }
 }

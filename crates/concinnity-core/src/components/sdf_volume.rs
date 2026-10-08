@@ -20,6 +20,13 @@ pub const SDF_PARAMS_LEN: usize = 32;
 /// the box, composites correctly with the surrounding scene through the depth
 /// buffer, and shades hits with the engine's lighting helpers.
 ///
+/// A surface volume (not `volumetric`) also writes the normals, depth,
+/// roughness and motion the screen-space effects read, so ambient occlusion,
+/// screen-space reflections and temporal anti-aliasing treat it like any other
+/// surface. Its motion is the camera's alone: the volume stays where it is
+/// declared, and a field animated by `time` changes shape with no motion to show
+/// for it.
+///
 /// The distance field is one `.hlsl` file for every backend. The build
 /// compiles it, so a field that does not compile fails `cn build` rather than
 /// the renderer, and a shipped player needs no shader compiler of its own.

@@ -134,15 +134,15 @@ GlassMeshSurface glass_mesh_surface(GlassMeshVertexOut i, float3 view_dir)
 
 // Schlick Fresnel (F0 = 0.04 dielectric) mix of the reflection over the
 // refraction, identical to `glass_resolve` so a mesh and a pane read the same at
-// equal inputs.
-float4 glass_mesh_resolve(GlassMeshSurface s, float3 view_dir, float3 reflection)
+// equal inputs, reactive share included.
+TransparentOut glass_mesh_resolve(GlassMeshSurface s, float3 view_dir, float3 reflection)
 {
     float n_dot_v = saturate(dot(s.normal, view_dir));
     float rim = pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
     float refl_weight = saturate(RT_F0 + 0.96 * rim);
     float3 color = lerp(s.refracted, reflection, refl_weight);
     float alpha = saturate(lerp(params.opacity, 1.0, rim));
-    return float4(color, alpha);
+    return transparent_out(float4(color, alpha), alpha * refl_weight);
 }
 
 // The mesh's reflection at `world_pos`: a ray off the interpolated world-space
@@ -174,7 +174,7 @@ bool glass_mesh_occluded(float2 full_position, float depth)
 }
 
 [shader("pixel")]
-float4 glass_mesh_rt_fragment(GlassMeshVertexOut i) : SV_Target
+TransparentOut glass_mesh_rt_fragment(GlassMeshVertexOut i)
 {
     float3 view_dir = normalize(view.camera_pos.xyz - i.world_pos);
     GlassMeshSurface s = glass_mesh_surface(i, view_dir);

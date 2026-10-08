@@ -163,7 +163,8 @@ pub(crate) fn place(world: &mut World, vw: f32, state: MenuState, mouse: [f32; 2
 }
 
 // The view state to publish this tick. One written from outside the editor
-// since its last publish (the `view-set` debug verb) wins, so the menu follows.
+// since its last publish (the `view-set` and `show-set` debug verbs, or
+// `--hide` at launch) wins, so the menu follows.
 pub(crate) fn resolve_view(
     published: ViewOverrides,
     live: Option<ViewOverrides>,
