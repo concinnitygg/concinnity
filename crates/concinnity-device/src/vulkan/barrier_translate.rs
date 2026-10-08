@@ -54,6 +54,11 @@ pub(super) enum VkResting {
     // compute or vertex stage. The particle pools rest this way: each frame's
     // simulation reads and rewrites the pool the last frame's draw read.
     Carried,
+    // A storage buffer each frame rewrites from a compute kernel, whose previous
+    // contents the previous frame last read in the fragment stage. The cluster
+    // lists rest this way: one buffer serves every frame in flight, so the next
+    // frame's write must wait on those reads.
+    Rewritten,
 }
 
 impl VkResting {
@@ -92,6 +97,11 @@ impl VkResting {
                 vk::ImageLayout::UNDEFINED,
                 vk::AccessFlags::SHADER_WRITE,
                 vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::VERTEX_SHADER,
+            ),
+            VkResting::Rewritten => (
+                vk::ImageLayout::UNDEFINED,
+                vk::AccessFlags::SHADER_READ,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
             ),
         }
     }
@@ -241,8 +251,8 @@ pub(super) fn vk_transition(
 // its `resting` layout, so the next frame's first transition opens from the
 // layout it names. `None` when the frame already ended there, or for a resource
 // that rests discarded (its next first use may name UNDEFINED from any layout),
-// or for a buffer (no layout to restore; a buffer whose contents outlive the
-// frame rests carried, and its next first use waits on the last frame's
+// or for a buffer (no layout to restore; a buffer shared across frames in flight
+// rests carried or rewritten, and its next first use waits on the last frame's
 // accesses itself).
 pub(super) fn vk_restore(
     class: GraphResourceClass,
@@ -412,6 +422,36 @@ mod tests {
         .expect("a buffer always emits its access + stage dependency");
         assert_eq!(src_access, vk::AccessFlags::empty());
         assert_eq!(src_stage, vk::PipelineStageFlags::TOP_OF_PIPE);
+    }
+
+    #[test]
+    fn rewritten_storage_opens_after_the_last_frames_fragment_reads() {
+        // The cluster lists: frame N's binning overwrites the buffer frame N-1's
+        // main, reflection and transparent shaders may still be reading.
+        let (_, _, src_access, dst_access, src_stage, dst_stage) = vk_transition(
+            GraphResourceClass::StorageBuffer,
+            VkResting::Rewritten,
+            ResourceState::Undefined,
+            ResourceState::Write,
+            ReadStages::empty(),
+        )
+        .expect("a buffer always emits its access + stage dependency");
+        assert_eq!(src_access, vk::AccessFlags::SHADER_READ);
+        assert_eq!(src_stage, vk::PipelineStageFlags::FRAGMENT_SHADER);
+        // Nothing of the old contents is read, so the write needs no visibility.
+        assert_eq!(dst_access, vk::AccessFlags::SHADER_WRITE);
+        assert_eq!(dst_stage, vk::PipelineStageFlags::COMPUTE_SHADER);
+
+        // A buffer still has no layout to restore at the end of the frame.
+        assert!(
+            vk_restore(
+                GraphResourceClass::StorageBuffer,
+                VkResting::Rewritten,
+                ResourceState::Read,
+                FRAG,
+            )
+            .is_none()
+        );
     }
 
     #[test]

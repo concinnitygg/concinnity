@@ -920,13 +920,13 @@ impl VkContext {
                 ))
             }
             // Per-cluster light lists and probe masks: `LightCull` writes them, the
-            // main, SSR and transparent fragment shaders read them. One buffer,
-            // not per-frame.
+            // main, reflection and transparent fragment shaders read them. One
+            // buffer, not per-frame, so it rests rewritten.
             "cluster_lists" => Some((
                 VkTargetObject::Buffer {
                     buffer: self.light_cull.cluster_buffer.buffer(),
                 },
-                VkResting::Discarded,
+                VkResting::Rewritten,
             )),
             // A pooled transient: fully rewritten each frame, so its first use
             // discards whatever the pool's previous tenant left.
