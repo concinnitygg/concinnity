@@ -490,7 +490,7 @@ impl GraphicsSystem {
             &mut snap.lines,
         );
 
-        // The editor's view mode + show flags, when published; a shipped
+        // The view mode + show flags the dev tools published; a shipped
         // runtime has no resource and renders the lit default.
         let view = ctx.resource::<ViewOverrides>().copied().unwrap_or_default();
 

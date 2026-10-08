@@ -98,21 +98,6 @@ impl EncodeParams {
     }
 }
 
-/// Per-frame uniforms for the TAA velocity pre-pass at buffer(0). Layout must
-/// match `VelUniforms` in `pipeline.rs`'s velocity MSL.
-#[derive(Copy, Clone)]
-#[repr(C)]
-pub struct VelocityUniforms {
-    /// Jittered current view-projection: drives the rasterized position so
-    /// the pre-pass covers exactly the same pixels as the main pass.
-    pub jittered_vp: [[f32; 4]; 4],
-    /// Un-jittered current view-projection: keeps the stored motion vector
-    /// free of the sub-pixel projection jitter.
-    pub cur_vp: [[f32; 4]; 4],
-    /// Un-jittered previous-frame view-projection.
-    pub prev_vp: [[f32; 4]; 4],
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,14 +144,5 @@ mod tests {
         assert_eq!(EncodeParams::encoded_span(0b1_0000, 4), (0, 0));
         assert_eq!(EncodeParams::encoded_span(0, 8), (0, 0));
         assert_eq!(EncodeParams::encoded_span(1 << 31, 32), (31, 1));
-    }
-
-    #[test]
-    fn velocity_uniforms_layout_matches_msl() {
-        // MSL `VelUniforms` in velocity.metal: three float4x4.
-        assert_eq!(size_of::<VelocityUniforms>(), 192);
-        assert_eq!(offset_of!(VelocityUniforms, jittered_vp), 0);
-        assert_eq!(offset_of!(VelocityUniforms, cur_vp), 64);
-        assert_eq!(offset_of!(VelocityUniforms, prev_vp), 128);
     }
 }

@@ -69,7 +69,7 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
         // 3D color-grading LUT at texture(2). Always bound -- an identity
         // LUT stands in when the world declares no ColorLut.
         enc.set_fragment_texture(self.ctx.scene.color_lut.as_ref(), 2);
-        // The channel sources at texture(3..5), bound only while a channel
+        // The channel sources at texture(3..6), bound only while a channel
         // view will sample them. The SSAO white 1x1 stands in when a
         // G-buffer was never built.
         if self.channel_view != 0 {
@@ -84,12 +84,17 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
             enc.set_fragment_texture(nd, 3);
             enc.set_fragment_texture(rough, 4);
             enc.set_fragment_texture(self.ctx.ao_output_texture(), 5);
+            let motion = self
+                .ctx
+                .gbuffer_velocity()
+                .unwrap_or_else(|| self.ctx.ssao.white.as_ref());
+            enc.set_fragment_texture(motion, 6);
         }
         crate::metal::post::fullscreen::set_fragment_sampler_range(
             enc,
             &self.ctx.composite.sampler,
             0,
-            6,
+            7,
         );
         // Post-process tunables (bloom intensity) plus the scene-transition
         // fade at buffer(0).

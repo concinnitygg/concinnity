@@ -3,9 +3,11 @@
 //! A world Shader defines two hooks, `transform` and `shade`, and the engine's
 //! own main-pass entries call them. So a world shader compiles as the engine's
 //! main-pass programs do, from `main_bindless.hlsl`, with the world's files
-//! spliced at the hook markers in place of the engine's defaults. The cook
-//! iterates this table to compile a Shader ahead of time and each renderer
-//! iterates it to find what the cook left.
+//! spliced at the hook markers in place of the engine's defaults. The G-buffer
+//! pre-pass compiles from the same file under `SURFACE_PREPASS`, so the
+//! world's `transform` places its depth and motion too. The cook iterates this
+//! table to compile a Shader ahead of time and each renderer iterates it to
+//! find what the cook left.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -18,27 +20,56 @@ pub const VERTEX_MARKER: &str = "{SURFACE_VERTEX}";
 /// The marker the world's `fragment` file is spliced at.
 pub const FRAGMENT_MARKER: &str = "{SURFACE_FRAGMENT}";
 
-/// One entry point of one main-pass file. The vertex entry carries the
-/// world's `transform`, the fragment entry its `shade`.
+/// The gate the G-buffer pre-pass entries compile under.
+pub const PREPASS_GATE: &str = "SURFACE_PREPASS";
+
+/// One entry point of one main-pass file. The vertex entries carry the
+/// world's `transform`, the main fragment entry its `shade`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Program {
     /// The shader file the entry compiles from.
     pub file: &'static str,
     /// Entry point name, as the source spells it.
     pub entry: &'static str,
+    /// Variant gates, each injected as `#define <gate> 1`.
+    pub gates: &'static [&'static str],
 }
 
-/// Every entry a world Shader compiles: the bindless pair, on every host.
-pub const ALL: &[Program] = &[
-    Program {
-        file: "main_bindless.hlsl",
-        entry: "vertex_main_bindless",
-    },
-    Program {
-        file: "main_bindless.hlsl",
-        entry: "fragment_main_bindless",
-    },
-];
+/// The bindless main-pass vertex entry.
+pub const MAIN_VERTEX: Program = Program {
+    file: "main_bindless.hlsl",
+    entry: "vertex_main_bindless",
+    gates: &[],
+};
+/// The bindless main-pass fragment entry.
+pub const MAIN_FRAGMENT: Program = Program {
+    file: "main_bindless.hlsl",
+    entry: "fragment_main_bindless",
+    gates: &[],
+};
+/// The G-buffer pre-pass vertex entry.
+pub const PREPASS_VERTEX: Program = Program {
+    file: "main_bindless.hlsl",
+    entry: "vertex_prepass_bindless",
+    gates: &[PREPASS_GATE],
+};
+/// The G-buffer pre-pass fragment entry.
+pub const PREPASS_FRAGMENT: Program = Program {
+    file: "main_bindless.hlsl",
+    entry: "fragment_prepass_bindless",
+    gates: &[PREPASS_GATE],
+};
+
+/// Every entry a world Shader compiles, on every host: the bindless main pair
+/// and the pre-pass pair.
+pub const ALL: &[Program] = &[MAIN_VERTEX, MAIN_FRAGMENT, PREPASS_VERTEX, PREPASS_FRAGMENT];
+
+impl Program {
+    /// The variant defines: each gate as `1`.
+    pub fn defines(&self) -> Vec<(&'static str, &'static str)> {
+        self.gates.iter().map(|g| (*g, "1")).collect()
+    }
+}
 
 /// The entry named `entry`.
 pub fn program(entry: &str) -> Option<&'static Program> {
@@ -70,15 +101,21 @@ impl<'a> Sources<'a> {
 
 /// The exact source text one entry compiles for one host with the world's
 /// files spliced in. `resolve` lets a hot-reload build prefer the checkout's
-/// copy of the templates over the embedded ones. No define varies it: every
-/// array the pass binds is unsized, so one text serves every device.
+/// copy of the templates over the embedded ones. Only the entry's gates vary
+/// it: every array the pass binds is unsized, so one text serves every device.
 pub fn source_with(
     program: &Program,
     platform: Platform,
     sources: &Sources<'_>,
     resolve: impl Fn(&str) -> Option<&'static str>,
 ) -> String {
-    shader_source::assemble_with_splices(program.file, platform, &[], resolve, &sources.splices())
+    shader_source::assemble_with_splices(
+        program.file,
+        platform,
+        &program.defines(),
+        resolve,
+        &sources.splices(),
+    )
 }
 
 /// The same source from the embedded templates alone.
@@ -123,7 +160,7 @@ mod tests {
                     label: String::from(p.entry),
                     file: p.file,
                     entry: p.entry,
-                    defines: Vec::new(),
+                    defines: p.defines(),
                     source: source(p, platform, &fragment_only()),
                 })
                 .collect();
@@ -131,11 +168,43 @@ mod tests {
         }
     }
 
-    // The bindless pair is the whole table.
+    // The main pair and the pre-pass pair are the whole table, and only the
+    // pre-pass compiles under its gate.
     #[test]
-    fn the_pair_is_the_whole_table() {
+    fn the_two_pairs_are_the_whole_table() {
         let entries: Vec<&str> = ALL.iter().map(|p| p.entry).collect();
-        assert_eq!(entries, ["vertex_main_bindless", "fragment_main_bindless"]);
+        assert_eq!(
+            entries,
+            [
+                "vertex_main_bindless",
+                "fragment_main_bindless",
+                "vertex_prepass_bindless",
+                "fragment_prepass_bindless",
+            ]
+        );
+        for p in ALL {
+            let gated = p.entry.contains("prepass");
+            assert_eq!(p.gates == [PREPASS_GATE], gated, "{}", p.entry);
+            assert_eq!(p.gates.is_empty(), !gated, "{}", p.entry);
+        }
+    }
+
+    // The pre-pass runs the world's vertex hook, so the world's vertex file is
+    // in its text, and the gate leads the text past the backend define.
+    #[test]
+    fn the_prepass_carries_the_world_vertex_hook_under_its_gate() {
+        for entry in ["vertex_prepass_bindless", "fragment_prepass_bindless"] {
+            let src = source(
+                program(entry).unwrap(),
+                Platform::Vulkan,
+                &vertex_and_fragment(),
+            );
+            assert!(src.starts_with("#define CN_BACKEND_VULKAN 1\n#define SURFACE_PREPASS 1\n"));
+            assert!(src.contains("VertexOut transform(float4x4 m,"));
+            assert!(src.contains(&alloc::format!("{entry}(")));
+        }
+        let main = source(&MAIN_VERTEX, Platform::Vulkan, &vertex_and_fragment());
+        assert!(!main.contains("#define SURFACE_PREPASS"));
     }
 
     #[test]
@@ -215,7 +284,7 @@ mod tests {
             let unspliced = shader_source::assemble_with_splices(
                 program.file,
                 Platform::Vulkan,
-                &[],
+                &program.defines(),
                 crate::render::shaders::embedded,
                 &markers_kept,
             );

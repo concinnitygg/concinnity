@@ -76,6 +76,7 @@ const DEFAULT_COMMAND: Commands = Commands::Editor(EditorArgs {
         rt_dynamic: None,
         rt_skinned_geometry: None,
         dlss_preset: None,
+        fixed_frame_rate: None,
     },
 });
 

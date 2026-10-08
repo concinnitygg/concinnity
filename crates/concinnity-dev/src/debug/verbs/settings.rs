@@ -1,13 +1,15 @@
 //! The verbs that change a setting live, by sending the same `SettingCommand`
 //! the settings menu emits: the graphics system applies it on its next step
 //! through its real rebuild, and persists it. The reply fires once the command
-//! is sent.
+//! is sent. `view-set` changes the view mode the same way the editor's View
+//! menu does, through the world's `ViewOverrides`.
 
 use concinnity_core::components::{InputKey, SettingCommand, SettingOp};
-use concinnity_core::ecs::World;
+use concinnity_core::ecs::{ViewOverrides, World};
+use concinnity_core::gfx::view_modes::ViewMode;
 use concinnity_core::input::keymap::Bindable;
 use concinnity_core::settings::SettingKey;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::debug::call::Call;
 use crate::debug::verb::{Access, Args, Kind, Reply, Verb, optional, queued, required};
@@ -36,6 +38,18 @@ const fn quality_settings() -> [&'static str; QUALITY_SETTING_COUNT] {
     names
 }
 
+// The view modes `view-set` takes, each a `ViewMode` label in lowercase.
+const VIEW_MODES: [&str; ViewMode::ALL.len()] = [
+    "lit",
+    "unlit",
+    "wireframe",
+    "normals",
+    "roughness",
+    "occlusion",
+    "depth",
+    "motion",
+];
+
 pub(in crate::debug) const VERBS: &[Verb] = &[
     Verb {
         name: "quality-set",
@@ -54,6 +68,17 @@ pub(in crate::debug) const VERBS: &[Verb] = &[
             ),
         ],
         run: quality_set,
+    },
+    Verb {
+        name: "view-set",
+        description: "Show one stage of the frame in place of the lit image, the way the editor's View menu does.",
+        access: Access::Mutating,
+        params: &[required(
+            "mode",
+            Kind::Choice(&VIEW_MODES),
+            "View mode; lit restores the shipping image.",
+        )],
+        run: view_set,
     },
     Verb {
         name: "rebind",
@@ -140,12 +165,37 @@ fn send_setting(world: &mut World, setting: SettingKey, op: SettingOp) {
     });
 }
 
+#[derive(serde::Deserialize)]
+struct ViewSet {
+    mode: String,
+}
+
+fn view_set(call: &Call, args: Args) -> Reply {
+    let ViewSet { mode } = args.parse()?;
+    let mode = view_mode(&mode).ok_or_else(|| format!("view-set: unknown mode '{mode}'"))?;
+    call.on_world(move |world, _| {
+        let show = world
+            .resource::<ViewOverrides>()
+            .map(|view| view.show)
+            .unwrap_or_default();
+        world.insert_resource(ViewOverrides { mode, show });
+        Ok(())
+    })?;
+    Ok(json!({ "mode": mode.label() }))
+}
+
+fn view_mode(name: &str) -> Option<ViewMode> {
+    ViewMode::ALL
+        .into_iter()
+        .find(|mode| mode.label().eq_ignore_ascii_case(name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::debug::verbs::testing::Engine;
     use concinnity_core::ecs::EventCursor;
-    use serde_json::json;
+    use concinnity_core::gfx::view_modes::ShowFlags;
 
     fn sent(engine: &Engine) -> Vec<SettingCommand> {
         engine
@@ -230,5 +280,37 @@ mod tests {
             assert!(engine.call("rebind", call).unwrap_err().contains(needle));
         }
         assert!(sent(&engine).is_empty());
+    }
+
+    #[test]
+    fn every_view_mode_is_settable_by_its_label() {
+        for (name, mode) in VIEW_MODES.iter().zip(ViewMode::ALL) {
+            assert_eq!(view_mode(name), Some(mode), "{name}");
+        }
+    }
+
+    #[test]
+    fn view_set_publishes_the_mode_and_keeps_the_show_flags() {
+        let mut world = World::new();
+        world.insert_resource(ViewOverrides {
+            mode: ViewMode::Lit,
+            show: ShowFlags(0),
+        });
+        let mut engine = Engine::new(world);
+        let reply = engine.call("view-set", json!({ "mode": "motion" }));
+        assert_eq!(reply, Ok(json!({ "mode": "Motion" })));
+        let view = engine.world.resource::<ViewOverrides>().copied();
+        assert_eq!(
+            view,
+            Some(ViewOverrides {
+                mode: ViewMode::Motion,
+                show: ShowFlags(0),
+            })
+        );
+        assert!(
+            engine
+                .call("view-set", json!({ "mode": "sideways" }))
+                .is_err()
+        );
     }
 }

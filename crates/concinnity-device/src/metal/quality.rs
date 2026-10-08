@@ -168,6 +168,9 @@ impl MtlContext {
         self.ssr = effects.ssr;
         self.gbuffer = effects.gbuffer;
         self.ssgi = effects.ssgi;
+        // Every bucket's pre-pass follows the G-buffer: built when this change
+        // added one, dropped when it removed it.
+        self.sync_prepass_pipelines();
 
         // RT resolve pipelines come from the rebuild; the acceleration structure
         // is built here (it needs the resident geometry buffers) when RT turns

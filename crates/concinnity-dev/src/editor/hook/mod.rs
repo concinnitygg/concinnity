@@ -238,6 +238,8 @@ pub(crate) struct EditorHook {
     display_menu_open: bool,
     view_mode: view_menu::ViewMode,
     show_flags: view_menu::ShowFlags,
+    // What the last tick published, to tell an outside change from its own.
+    published_view: ViewOverrides,
     show_billboards: bool,
     // The Display menu's always-on extent-outline categories (selection
     // outlines regardless; `hook/drive/outline.rs`).
@@ -510,6 +512,7 @@ impl EditorHook {
             display_menu_open: false,
             view_mode: view_menu::ViewMode::default(),
             show_flags: view_menu::ShowFlags::default(),
+            published_view: ViewOverrides::default(),
             show_billboards: true,
             extent_show: outlines::CategorySet::default(),
             shutdown: None,
@@ -755,10 +758,18 @@ impl FrameHook for EditorHook {
         // collapses those objects this frame.
         world.insert_resource(HiddenAssets(self.effective_hidden_ids()));
         // Publish the viewport view mode + show flags for this frame's draw.
-        world.insert_resource(ViewOverrides {
-            mode: self.view_mode,
-            show: self.show_flags,
-        });
+        let view = view_menu::resolve_view(
+            self.published_view,
+            world.resource::<ViewOverrides>().copied(),
+            ViewOverrides {
+                mode: self.view_mode,
+                show: self.show_flags,
+            },
+        );
+        self.view_mode = view.mode;
+        self.show_flags = view.show;
+        self.published_view = view;
+        world.insert_resource(view);
 
         // Re-anchor + recolor the top bar, then lay out (or hide) the panels.
         hud::apply_layout(world, self.hud_state());

@@ -22,7 +22,8 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("depth_convention.hlsl", DEPTH_CONVENTION),
     ("fog.hlsl", FOG),
     ("fullscreen.hlsl", FULLSCREEN),
-    ("gbuffer_prepass.hlsl", GBUFFER_PREPASS),
+    ("gbuffer_common.hlsl", GBUFFER_COMMON),
+    ("gbuffer_sky.hlsl", GBUFFER_SKY),
     ("glass.hlsl", GLASS),
     ("glass_mesh.hlsl", GLASS_MESH),
     ("glass_reflection.hlsl", GLASS_REFLECTION),
@@ -58,6 +59,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("ssgi.hlsl", SSGI),
     ("ssr.hlsl", SSR),
     ("surface_fragment_default.hlsl", SURFACE_FRAGMENT_DEFAULT),
+    ("surface_inputs.hlsl", SURFACE_INPUTS),
     ("surface_vertex_default.hlsl", SURFACE_VERTEX_DEFAULT),
     ("taa.hlsl", TAA),
     ("text.hlsl", TEXT),
@@ -95,8 +97,10 @@ pub const DEPTH_CONVENTION: &str = include_str!("shaders/depth_convention.hlsl")
 pub const FOG: &str = include_str!("shaders/fog.hlsl");
 /// `fullscreen.hlsl`.
 pub const FULLSCREEN: &str = include_str!("shaders/fullscreen.hlsl");
-/// `gbuffer_prepass.hlsl`.
-pub const GBUFFER_PREPASS: &str = include_str!("shaders/gbuffer_prepass.hlsl");
+/// `gbuffer_common.hlsl`.
+pub const GBUFFER_COMMON: &str = include_str!("shaders/gbuffer_common.hlsl");
+/// `gbuffer_sky.hlsl`.
+pub const GBUFFER_SKY: &str = include_str!("shaders/gbuffer_sky.hlsl");
 /// `glass.hlsl`.
 pub const GLASS: &str = include_str!("shaders/glass.hlsl");
 /// `glass_mesh.hlsl`.
@@ -167,6 +171,8 @@ pub const SSGI: &str = include_str!("shaders/ssgi.hlsl");
 pub const SSR: &str = include_str!("shaders/ssr.hlsl");
 /// `surface_fragment_default.hlsl`.
 pub const SURFACE_FRAGMENT_DEFAULT: &str = include_str!("shaders/surface_fragment_default.hlsl");
+/// `surface_inputs.hlsl`.
+pub const SURFACE_INPUTS: &str = include_str!("shaders/surface_inputs.hlsl");
 /// `surface_vertex_default.hlsl`.
 pub const SURFACE_VERTEX_DEFAULT: &str = include_str!("shaders/surface_vertex_default.hlsl");
 /// `taa.hlsl`.

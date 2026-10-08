@@ -156,12 +156,6 @@ impl MtlContext {
         gpu: GpuFrameBuffers,
         world_hidden: bool,
     ) -> RenderResult<u32> {
-        let MainPassCamera {
-            elapsed,
-            vp,
-            view: _,
-            cam_pos,
-        } = camera;
         // Only `object_buffer` gates the descriptor's store action below; the
         // rest of `gpu` travels intact into `encode_main_static_into`.
         let object_buffer = gpu.object_buffer;
@@ -245,17 +239,7 @@ impl MtlContext {
             encoder.setTriangleFillMode(objc2_metal::MTLTriangleFillMode::Lines);
         }
 
-        let view_uniforms = ViewUniforms {
-            vp,
-            view: self.state.view.matrix,
-            elapsed,
-            reflections_enabled: self.reflection_resolve_active(),
-            cam_pos,
-            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-            shade_mode: self.shade_mode(),
-            ambient_occlusion: 1.0,
-            sky_rot: self.state.view.sky_rot,
-        };
+        let view_uniforms = self.main_view_uniforms(&camera);
 
         // While the world is hidden behind an opaque menu, the pass stops at the
         // descriptor's Clear load action. A scene-less world (no main pipeline)
@@ -412,12 +396,6 @@ impl MtlContext {
         camera: MainPassCamera,
         gpu: GpuFrameBuffers,
     ) -> RenderResult<u32> {
-        let MainPassCamera {
-            elapsed,
-            vp,
-            view: _,
-            cam_pos,
-        } = camera;
         let GpuFrameBuffers {
             object_buffer,
             bindless_tex_args,
@@ -473,17 +451,7 @@ impl MtlContext {
             encoder.setTriangleFillMode(objc2_metal::MTLTriangleFillMode::Lines);
         }
 
-        let view_uniforms = ViewUniforms {
-            vp,
-            view: self.state.view.matrix,
-            elapsed,
-            reflections_enabled: self.reflection_resolve_active(),
-            cam_pos,
-            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
-            shade_mode: self.shade_mode(),
-            ambient_occlusion: 1.0,
-            sky_rot: self.state.view.sky_rot,
-        };
+        let view_uniforms = self.main_view_uniforms(&camera);
         self.bind_main_pass_shared(&encoder, &view_uniforms);
         // Main2 is the same main camera as phase 1, so it reads the clusters too.
         self.bind_clusters(&encoder, Some(self.main_cluster_grid()));
@@ -572,10 +540,10 @@ impl MtlContext {
                     // A bucket whose Shader is not resident yet (its scene has
                     // not pinned) has no pipeline: skip it until warmup builds
                     // one rather than drawing it with the wrong program.
-                    let Some(pso) = self.cull.world_pipelines.get(b) else {
+                    let Some(pipelines) = self.cull.world_pipelines.get(b) else {
                         continue;
                     };
-                    enc.set_pipeline(pso);
+                    enc.set_pipeline(&pipelines.main);
                 }
                 // SAFETY: the prefix spans the static + instance command slots
                 // (`ensure_icb_capacity` sized every ICB for `counts.total`).
@@ -587,9 +555,9 @@ impl MtlContext {
             // Restore the default pipeline for the skinned tail below (and for
             // the caller's subsequent sub-paths, which re-bind anyway).
             if icbs.len() > 1
-                && let Some(ps) = &self.cull.main_pipeline
+                && let Some(pipelines) = &self.cull.main_pipeline
             {
-                enc.set_pipeline(ps);
+                enc.set_pipeline(&pipelines.main);
             }
         }
 
@@ -617,6 +585,22 @@ impl MtlContext {
             draw_calls += 1;
         }
         draw_calls
+    }
+
+    // The view block the on-screen main pass shades through, which the G-buffer
+    // pre-pass binds too so a vertex hook places a surface identically in both.
+    pub(in crate::metal) fn main_view_uniforms(&self, camera: &MainPassCamera) -> ViewUniforms {
+        ViewUniforms {
+            vp: camera.vp,
+            view: self.state.view.matrix,
+            elapsed: camera.elapsed,
+            reflections_enabled: self.reflection_resolve_active(),
+            cam_pos: camera.cam_pos,
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
+            shade_mode: self.shade_mode(),
+            ambient_occlusion: 1.0,
+            sky_rot: self.state.view.sky_rot,
+        }
     }
 
     // The main camera's cluster grid, binned by the frame's `LightCull` node.
@@ -664,10 +648,10 @@ impl MtlContext {
         enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
         view_uniforms: &ViewUniforms,
     ) -> bool {
-        let Some(pipeline_state) = &self.cull.main_pipeline else {
+        let Some(pipelines) = &self.cull.main_pipeline else {
             return false;
         };
-        enc.set_pipeline(pipeline_state);
+        enc.set_pipeline(&pipelines.main);
         enc.set_depth_stencil(&self.targets.depth_state);
 
         enc.set_vertex_value(view_uniforms, 0);

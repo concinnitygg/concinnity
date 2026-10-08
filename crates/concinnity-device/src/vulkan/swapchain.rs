@@ -275,7 +275,10 @@ impl VkContext {
                 .targets
                 .transient_pool
                 .gbuffer_pooled(self.frames_in_flight);
-            gb.rebuild(
+            // A failed rebuild leaves the G-buffer without targets, which its
+            // readers skip, and the next swapchain rebuild retries it. The rest
+            // of this rebuild still runs, so nothing keeps a view of the old pool.
+            let rebuilt = gb.rebuild(
                 GbufferDeviceCtx {
                     alloc: &self.hw.alloc,
                     device: &self.hw.device,
@@ -290,8 +293,11 @@ impl VkContext {
                     frames: self.frames_in_flight,
                 },
                 &pooled,
-            )?;
+            );
             self.gbuffer = Some(gb);
+            if let Err(e) = rebuilt {
+                tracing::warn!("G-buffer targets did not rebuild, so its passes are off: {e}");
+            }
         }
 
         // Rebuild the SSR reflection target and the SSGI trace targets at the
@@ -313,7 +319,11 @@ impl VkContext {
         // all moved). The acceleration structure is resolution-independent, so it
         // survives; the per-frame TLAS + geometry-table descriptors are re-pointed
         // by `rt_dynamic_update` as usual.
-        if let Some(mut rt) = self.rt_reflections.take() {
+        // Without G-buffer targets RT stays off this round and is rebuilt with
+        // them by the rebuild that restores them.
+        if self.gbuffer_targets().is_some()
+            && let Some(mut rt) = self.rt_reflections.take()
+        {
             let hdr_views: Vec<vk::ImageView> = self
                 .targets
                 .hdr_resolve_images
@@ -322,12 +332,10 @@ impl VkContext {
                 .collect();
             // RT samples the unified G-buffer's per-frame normal+depth + roughness
             // views. The merged pre-pass was rebuilt above, so they are current.
-            let gb = self
-                .gbuffer
-                .as_ref()
-                .expect("RT keeps the unified G-buffer pre-pass alive");
-            let nd_views = gb.normal_depth_views();
-            let rough_views = gb.roughness_views();
+            let (nd_views, rough_views) = self
+                .gbuffer_targets()
+                .map(|gb| (gb.normal_depth_views(), gb.roughness_views()))
+                .unwrap_or_default();
             rt.rebuild(
                 &self.hw.alloc,
                 &self.hw.device,
@@ -622,20 +630,13 @@ impl VkContext {
             );
             // The view-mode channel sources are resolution-dependent too, so
             // they follow the rebuilt G-buffer / AO targets.
-            let (nd_view, rough_view) = match self.gbuffer.as_ref() {
-                Some(gb) => (gb.normal_depth_views()[i], gb.roughness_views()[i]),
-                None => (self.scene.ssao_white.view, self.scene.ssao_white.view),
-            };
-            write_composite_channel_set(
-                &self.hw.device,
-                set,
-                nd_view,
-                rough_view,
-                self.targets
-                    .transient_pool
-                    .view_for("ao_output", i)
-                    .unwrap_or(self.scene.ssao_white.view),
+            let channels = composite_channels(
+                self.gbuffer.as_ref(),
+                &self.targets.transient_pool,
+                self.scene.ssao_white.view,
+                i,
             );
+            write_composite_channel_set(&self.hw.device, set, &channels);
         }
 
         // The render-finished semaphores are one-per-swapchain-image; a
@@ -1017,25 +1018,61 @@ pub(super) fn write_composite_set(
     write_composite_images(device, set, 0, &[hdr_view, bloom_view, lut_view]);
 }
 
-// Write the composite set's G-buffer channel bindings: normal+depth at 3,
-// roughness at 4, the blurred SSAO occlusion at 5. Only the debug view modes
-// sample them, but the fragment references all three, so every set is bound
-// (the 1x1 white fallback stands in wherever a source does not exist). Split
-// from `write_composite_set` because these three survive the scene-input
+// The composite's G-buffer channel sources for one frame slot, in binding
+// order from 3: normal+depth, roughness, the blurred SSAO occlusion, motion.
+pub(super) struct CompositeChannels {
+    pub normal_depth: vk::ImageView,
+    pub roughness: vk::ImageView,
+    pub ao: vk::ImageView,
+    pub motion: vk::ImageView,
+}
+
+// Write the composite set's G-buffer channel bindings. Only the debug view
+// modes sample them, but the fragment references all four, so every set is
+// bound (the 1x1 white fallback stands in wherever a source does not exist).
+// Split from `write_composite_set` because these survive the scene-input
 // re-points TAA / FSR / reflections make.
 pub(super) fn write_composite_channel_set(
     device: &VkDevice,
     set: vk::DescriptorSet,
-    normal_depth_view: vk::ImageView,
-    roughness_view: vk::ImageView,
-    ao_view: vk::ImageView,
+    channels: &CompositeChannels,
 ) {
     write_composite_images(
         device,
         set,
         3,
-        &[normal_depth_view, roughness_view, ao_view],
+        &[
+            channels.normal_depth,
+            channels.roughness,
+            channels.ao,
+            channels.motion,
+        ],
     );
+}
+
+// Frame slot `i`'s composite channel sources: the G-buffer's and the pooled
+// SSAO output's views, `white` wherever one does not exist.
+pub(super) fn composite_channels(
+    gbuffer: Option<&super::post::gbuffer::GbufferResources>,
+    pool: &super::transient_pool::TransientImagePool,
+    white: vk::ImageView,
+    i: usize,
+) -> CompositeChannels {
+    let ao = pool.view_for("ao_output", i).unwrap_or(white);
+    match gbuffer.and_then(|gb| gb.frame(i)) {
+        Some(gb) => CompositeChannels {
+            normal_depth: gb.normal_depth,
+            roughness: gb.roughness,
+            ao,
+            motion: gb.velocity,
+        },
+        None => CompositeChannels {
+            normal_depth: white,
+            roughness: white,
+            ao,
+            motion: white,
+        },
+    }
 }
 
 // Write `views` into consecutive composite image bindings from `first`.

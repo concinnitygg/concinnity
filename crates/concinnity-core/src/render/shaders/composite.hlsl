@@ -5,9 +5,9 @@
 // `fullscreen_vertex` in fullscreen.hlsl.
 //
 // Each source is a texture and a `SamplerState`: Vulkan binds the textures at
-// 0..5 and their samplers at 6..11. The register numbers are the Metal indices
+// 0..6 and their samplers at 7..13. The register numbers are the Metal indices
 // (see concinnity-shader's `metal_bindings`) and the D3D root signature's slots
-// alike. Textures 3-5 are declared but sampled only while a
+// alike. Textures 3-6 are declared but sampled only while a
 // channel view is active, which is also the only time the host binds them.
 
 // Layout matches `CompositeParams` in render_types.rs (52 B): the
@@ -34,7 +34,7 @@ struct CompositeParams
     // Scene-transition fade to black in [0, 1]. 0 leaves the frame untouched.
     float fade;
     // G-buffer channel view selector (ViewMode discriminant): 0 composites the
-    // scene; 3 = normals, 4 = roughness, 5 = occlusion, 6 = depth.
+    // scene; 3 = normals, 4 = roughness, 5 = occlusion, 6 = depth, 7 = motion.
     uint view_mode;
     // Distances the depth channel view shows as black and white, on a log
     // scale between.
@@ -43,22 +43,25 @@ struct CompositeParams
 };
 
 [[vk::binding(0, 0)]] Texture2D<float4> hdr_tex : register(t0);
-[[vk::binding(6, 0)]] SamplerState hdr_tex_samp : register(s0);
+[[vk::binding(7, 0)]] SamplerState hdr_tex_samp : register(s0);
 // Bloom mip 0 (half-res). Always bound - when bloom is disabled the sample is
 // skipped, so an unwritten target is never read.
 [[vk::binding(1, 0)]] Texture2D<float4> bloom_tex : register(t1);
-[[vk::binding(7, 0)]] SamplerState bloom_tex_samp : register(s1);
+[[vk::binding(8, 0)]] SamplerState bloom_tex_samp : register(s1);
 // 3D color-grading LUT. Always bound - a 2x2x2 identity LUT stands in when the
 // world declares no ColorLut, so the grade is a no-op at any lut_strength.
 [[vk::binding(2, 0)]] Texture3D<float4> lut_tex : register(t2);
-[[vk::binding(8, 0)]] SamplerState lut_tex_samp : register(s2);
+[[vk::binding(9, 0)]] SamplerState lut_tex_samp : register(s2);
 // G-buffer channel sources for the debug view modes.
 [[vk::binding(3, 0)]] Texture2D<float4> gbuf_nd_tex : register(t3);
-[[vk::binding(9, 0)]] SamplerState gbuf_nd_tex_samp : register(s3);
+[[vk::binding(10, 0)]] SamplerState gbuf_nd_tex_samp : register(s3);
 [[vk::binding(4, 0)]] Texture2D<float4> gbuf_rough_tex : register(t4);
-[[vk::binding(10, 0)]] SamplerState gbuf_rough_tex_samp : register(s4);
+[[vk::binding(11, 0)]] SamplerState gbuf_rough_tex_samp : register(s4);
 [[vk::binding(5, 0)]] Texture2D<float4> ao_tex : register(t5);
-[[vk::binding(11, 0)]] SamplerState ao_tex_samp : register(s5);
+[[vk::binding(12, 0)]] SamplerState ao_tex_samp : register(s5);
+// The prepass's screen-space motion (RG), for the motion channel view.
+[[vk::binding(6, 0)]] Texture2D<float4> gbuf_motion_tex : register(t6);
+[[vk::binding(13, 0)]] SamplerState gbuf_motion_tex_samp : register(s6);
 
 [[vk::push_constant]] ConstantBuffer<CompositeParams> post : register(b0);
 
@@ -187,6 +190,14 @@ float3 channel_view(float2 uv)
         float t = log(max(nd.a, post.depth_near) / post.depth_near)
                 / log(post.depth_far / post.depth_near);
         return (nd.a > 0.0) ? (float3)(saturate(t)) : (float3)(1.0);
+    }
+    if (post.view_mode == 7u)
+    {
+        // The offset back to the previous position, in pixels around
+        // mid-gray: red for x and green for y, saturating at 16 px a frame.
+        float2 px = gbuf_motion_tex.Sample(gbuf_motion_tex_samp, uv).rg
+                  * texture_size(gbuf_motion_tex);
+        return float3(saturate(0.5 + px / 32.0), 0.5);
     }
     return (float3)(0.0);
 }

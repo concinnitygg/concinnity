@@ -9,6 +9,7 @@
 use std::borrow::Cow;
 
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::shader_programs::surface;
 use dispatch2::DispatchData;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -63,9 +64,12 @@ pub(super) fn cull_encode_library(
     )
 }
 
-// The two entries a world Shader's pipeline takes its stages from.
-pub(super) const WORLD_VERTEX_ENTRY: &str = "vertex_main_bindless";
-pub(super) const WORLD_FRAGMENT_ENTRY: &str = "fragment_main_bindless";
+// The entries a world Shader's main-pass and pre-pass pipelines take their
+// stages from.
+pub(super) const WORLD_VERTEX_ENTRY: &str = surface::MAIN_VERTEX.entry;
+pub(super) const WORLD_FRAGMENT_ENTRY: &str = surface::MAIN_FRAGMENT.entry;
+pub(super) const WORLD_PREPASS_VERTEX_ENTRY: &str = surface::PREPASS_VERTEX.entry;
+pub(super) const WORLD_PREPASS_FRAGMENT_ENTRY: &str = surface::PREPASS_FRAGMENT.entry;
 
 // The world Shader's MSL for `entry`: the cook's text, or a compile of the
 // current templates when it predates them.

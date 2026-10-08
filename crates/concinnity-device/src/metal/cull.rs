@@ -22,6 +22,7 @@ use objc2_metal::{
 use super::builtin_shaders::compute_pipeline;
 use super::context::*;
 use super::encode::ComputeEncode;
+use super::init::pipelines::BucketPipelines;
 use super::pipeline::{cull_encode_library, ns_str};
 use super::scoped_encoder::ScopedEncoder;
 use concinnity_core::render::uniforms::metal::*;
@@ -60,19 +61,18 @@ pub(crate) struct CullState {
     // `GpuObjectData` buffer and the bindless texture pool. False for a world
     // with no scene content, whose Main pass is a bare clear.
     pub bindless: bool,
-    // Main-pass PBR pipeline. None for a world with no 3D scene content: the
-    // Main pass then encodes as a bare clear and every geometry sub-path
-    // early-outs.
-    pub main_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    // Bucket 0's main-pass PBR and G-buffer pre-pass pipelines. None for a
+    // world with no 3D scene content: the Main pass then encodes as a bare
+    // clear and every geometry sub-path early-outs.
+    pub main_pipeline: Option<BucketPipelines>,
     // Pipelines for the material-referenced world shaders, indexed by
     // `shader_bucket - 1` (bucket 0 is `main_pipeline`). Each executes its
-    // bucket's ICB in the main pass; empty for single-shader worlds. `None`
-    // while the bucket's Shader is not resident -- init defers a shader owned
-    // by a scene other than the start scene, and `install_world_shader` builds
-    // it when that scene pins. Draws carrying a `None` bucket are skipped.
-    pub world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines<
-        Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-    >,
+    // bucket's ICB in the main pass and the pre-pass; empty for single-shader
+    // worlds. `None` while the bucket's Shader is not resident -- init defers a
+    // shader owned by a scene other than the start scene, and
+    // `install_world_shader` builds it when that scene pins. Draws carrying a
+    // `None` bucket are skipped.
+    pub world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines<BucketPipelines>,
     // The phase-1 decision kernel (`cull.hlsl`). `Some` only when `bindless`
     // is set; every other pipeline here is `Some` exactly when it is.
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,

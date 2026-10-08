@@ -4,7 +4,7 @@
 //! and draw, on the same non-panel overlay pattern as `create_menu.rs`; the
 //! hook (`hook/drive/view_menu.rs`) owns the open state and routing.
 
-use concinnity_core::ecs::World;
+use concinnity_core::ecs::{ViewOverrides, World};
 pub(crate) use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
 
 use super::hud_ids::{Family, family_base, hud_ids};
@@ -162,6 +162,19 @@ pub(crate) fn place(world: &mut World, vw: f32, state: MenuState, mouse: [f32; 2
     }
 }
 
+// The view state to publish this tick. One written from outside the editor
+// since its last publish (the `view-set` debug verb) wins, so the menu follows.
+pub(crate) fn resolve_view(
+    published: ViewOverrides,
+    live: Option<ViewOverrides>,
+    own: ViewOverrides,
+) -> ViewOverrides {
+    match live {
+        Some(live) if live != published => live,
+        _ => own,
+    }
+}
+
 pub(crate) fn hide(world: &mut World) {
     widget::set_sprite_visible(world, MENU_BG, false);
     widget::set_label_visible(world, HEADING, false);
@@ -188,6 +201,26 @@ mod tests {
             billboards: true,
             extents: CategorySet::default(),
         }
+    }
+
+    #[test]
+    fn an_outside_view_change_wins_until_the_editor_changes_again() {
+        let lit = ViewOverrides::default();
+        let motion = ViewOverrides {
+            mode: ViewMode::Motion,
+            ..lit
+        };
+        let normals = ViewOverrides {
+            mode: ViewMode::Normals,
+            ..lit
+        };
+        // Nothing published yet, or the live state is the editor's own.
+        assert_eq!(resolve_view(lit, None, normals), normals);
+        assert_eq!(resolve_view(lit, Some(lit), normals), normals);
+        // Written from outside since the last publish: adopted.
+        assert_eq!(resolve_view(lit, Some(motion), lit), motion);
+        // Once adopted and republished, the menu's next pick wins again.
+        assert_eq!(resolve_view(motion, Some(motion), normals), normals);
     }
 
     fn label_of(world: &World, id: AssetId) -> String {

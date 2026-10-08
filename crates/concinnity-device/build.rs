@@ -60,6 +60,23 @@ const MAIN_BINDLESS_REGISTERS: &[(&str, &str)] = &[
     ("cube_sampler", "s2"),
 ];
 
+// The G-buffer pre-pass root signature in `src/directx/post/gbuffer.rs`: the
+// main pass's object id, view block, records, parameter table, pool and
+// samplers at their main-pass registers, plus the pre-pass's own view block,
+// model history and draw args. Both stages read the one declaration set.
+const MAIN_PREPASS_REGISTERS: &[(&str, &str)] = &[
+    ("objid_cb", "b0"),
+    ("view_cb", "b1"),
+    ("gb_view", "b6"),
+    ("objects_sb", "t3"),
+    ("material_params_sb", "t20"),
+    ("prev_models", "t21"),
+    ("draw_args", "t22"),
+    ("tex_pool", "t0, space1"),
+    ("linear_sampler", "s1"),
+    ("cube_sampler", "s2"),
+];
+
 // Both view-cull phases, from `directx/cull.rs`.
 const CULL_REGISTERS: &[(&str, &str)] = &[
     ("cull", "b0"),
@@ -153,25 +170,20 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             ("dst_mip", "u0"),
         ],
     },
+    // The pre-pass compiles from the main pass's file, so a world Shader's
+    // pre-pass PSO builds against the same root signature as the engine's.
     DxilAbi {
-        program: &shared::GBUFFER_PREPASS_VERT_BINDLESS,
-        registers: &[
-            ("objid_cb", "b0"),
-            ("gb_view", "b1"),
-            ("objects", "t0"),
-            ("prev_models", "t1"),
-            ("draw_args", "t2"),
-        ],
+        program: &shared::MAIN_PREPASS_VERT,
+        registers: MAIN_PREPASS_REGISTERS,
     },
-    DxilAbi {
-        program: &shared::GBUFFER_PREPASS_FRAG_BINDLESS,
-        registers: &[],
-    },
-    // The sky's motion, drawn under the pre-pass root signature it reads the
-    // view block of.
+    // The sky's motion, under its own root signature.
     DxilAbi {
         program: &shared::GBUFFER_SKY_VERT,
         registers: &[("gb_view", "b1")],
+    },
+    DxilAbi {
+        program: &shared::GBUFFER_SKY_FRAG,
+        registers: &[],
     },
     // The sky, from `directx/sky.rs`: the pass's view block as a root CBV, the
     // prefilter cube in a one-entry table, and a static sampler.
@@ -770,22 +782,36 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[],
     },
-    // The GPU-driven G-buffer pre-pass vertex. Its buffers are pinned by
-    // register() numbers so they clear the vertex descriptor's streams at
-    // buffer(1) and buffer(2); the slots are what `metal/post/gbuffer.rs`
-    // binds once for every ICB-executed draw.
+    // The G-buffer pre-pass, from the main pass's file: the main pass's view
+    // block, records, parameter table, texture argument buffer and samplers at
+    // their main-pass slots, plus the pre-pass's own view block, model history
+    // and draw args, pinned clear of the vertex streams at buffer(1) and
+    // buffer(2). The slots are what `metal/post/gbuffer.rs` binds once for every
+    // ICB-executed draw.
     MetalAbi {
-        program: &shared::GBUFFER_PREPASS_VERT_BINDLESS,
+        program: &shared::MAIN_PREPASS_VERT,
         slots: &[&[
-            ("gb_view", "buffer(0)"),
-            ("objects", "buffer(9)"),
-            ("prev_models", "buffer(10)"),
-            ("draw_args", "buffer(11)"),
+            ("view_cb", "buffer(0)"),
+            ("gb_view", "buffer(3)"),
+            ("objects_sb", "buffer(9)"),
+            ("prev_models", "buffer(17)"),
+            ("draw_args", "buffer(18)"),
         ]],
         argument_ids: &[],
     },
-    // The sky's motion, at the tail of the same pre-pass encoder: the view
-    // block is the one `metal/post/gbuffer.rs` binds at buffer(0).
+    MetalAbi {
+        program: &shared::MAIN_PREPASS_FRAG,
+        slots: &[&[
+            ("gb_view", "buffer(3)"),
+            ("spvDescriptorSet1", "buffer(7)"),
+            ("objects_sb", "buffer(9)"),
+            ("spvDescriptorSet2", "buffer(10)"),
+        ]],
+        argument_ids: &[("tex_pool", bindless_textures::pool(0)), ("tex_sampler", 0)],
+    },
+    // The sky's motion, at the tail of the same pre-pass encoder. buffer(0) is
+    // the surfaces' main-pass view block until `metal/sky.rs` rebinds the
+    // sky's own there.
     MetalAbi {
         program: &shared::GBUFFER_SKY_VERT,
         slots: &[&[("gb_view", "buffer(0)")]],
@@ -1185,6 +1211,8 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("gbuf_rough_tex_samp", "sampler(4)"),
             ("ao_tex", "texture(5)"),
             ("ao_tex_samp", "sampler(5)"),
+            ("gbuf_motion_tex", "texture(6)"),
+            ("gbuf_motion_tex_samp", "sampler(6)"),
         ]],
         argument_ids: &[],
     },

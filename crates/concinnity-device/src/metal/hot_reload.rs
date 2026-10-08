@@ -10,10 +10,7 @@
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::render::error::RenderResult;
 use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
-use objc2_metal::{
-    MTLRenderPipelineState, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
-};
+use objc2_metal::{MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
 use std::sync::atomic::Ordering;
 
 use super::auto_exposure::build_auto_exposure_pipelines;
@@ -24,12 +21,12 @@ use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::fog::build_fog_pipeline;
 use super::hiz::build_hiz_pipelines;
 use super::init::pipelines::{
-    build_bindless_sampler_args, build_main_pipeline, build_shadow_bindless_pipeline,
-    make_vertex_descriptor,
+    BucketBuild, BucketPipelines, build_bindless_sampler_args, build_shadow_bindless_pipeline,
+    replacement,
 };
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
+use super::post::build_rt_reflection_pipeline;
 use super::post::post_device::MtlPostDevice;
-use super::post::{build_gbuffer_bindless_pipeline, build_rt_reflection_pipeline};
 
 // Rebuild a built-in pipeline only when it is currently live. Expands to
 // `if $cond { Some($build?) } else { None }`: the rebuild-then-swap pattern
@@ -115,14 +112,15 @@ impl MtlContext {
     // untouched: a typo in a shader edit won't crash the running session.
     //
     // Covers the main pass and its GPU cull (one builder, since the cull's
-    // argument encoder comes from the pipeline it feeds), the skinned G-buffer
-    // pre-pass variant, which compiles from the same single-source file as its
-    // static sibling under a different entry, and the shadow views' pipelines. A world Shader's own pair still wins in the main build, so a save
-    // to an engine template never swaps a world's program for the engine's.
+    // argument encoder comes from the pipeline it feeds), every shader bucket's
+    // main and pre-pass pair, and the shadow views' pipelines. A world Shader's
+    // own pair still wins in the main build, so a save to an engine template
+    // never swaps a world's program for the engine's.
     pub(super) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {
             return Ok(());
         }
+        self.hot_reload.generation += 1;
         let device = &self.hw.device;
         let hr = true;
 
@@ -156,16 +154,24 @@ impl MtlContext {
         // argument encoders, whose layouts come from the same sources. A world
         // Shader's pair wins here exactly as it does at init, so a save to an
         // engine template does not swap a world's program for the engine's.
+        // Every bucket's main and pre-pass pipelines rebuild as a pair, so
+        // shading and the G-buffer never compile from different templates.
+        let build = BucketBuild {
+            hot_reload: hr,
+            ..self.bucket_build()
+        };
         let main = rebuild_if_live!(
             self.cull.main_pipeline.is_some(),
-            build_main_pipeline(
+            replacement(
                 device,
-                &make_vertex_descriptor(),
+                0,
                 self.world_shader.as_ref(),
-                hr,
-                self.targets.hdr.sample_count,
+                build,
+                self.cull.main_pipeline.as_ref(),
+                None,
             )
         );
+        let world_buckets = self.rebuild_world_buckets(build)?;
         let main_cull = rebuild_if_live!(main.is_some(), build_cull_pipeline(device, hr));
         // The engine sampler block rides the fresh fragment's encoder.
         let main_sampler_args = rebuild_if_live!(
@@ -204,12 +210,6 @@ impl MtlContext {
         let ssao = rebuild_if_live!(
             self.ssao.pass.is_some(),
             concinnity_core::render::post::ssao::build_pipelines(&post_device)
-        );
-        // The G-buffer pipeline builds its own two-stream vertex descriptor
-        // internally.
-        let gbuffer_bindless = rebuild_if_live!(
-            self.gbuffer.bindless_pipeline.is_some(),
-            build_gbuffer_bindless_pipeline(device, hr)
         );
         let ssr_resolve = rebuild_if_live!(
             self.ssr.resolve.is_some(),
@@ -305,9 +305,6 @@ impl MtlContext {
         if let (Some(p), Some(pass)) = (ssao, self.ssao.pass.as_mut()) {
             pass.swap_pipelines(p);
         }
-        if let Some(p) = gbuffer_bindless {
-            self.gbuffer.bindless_pipeline = Some(p);
-        }
         if let (Some(p), Some(resolve)) = (ssr_resolve, self.ssr.resolve.as_mut()) {
             resolve.swap_pipeline(p);
         }
@@ -329,39 +326,43 @@ impl MtlContext {
         if let Some(p) = shadow_bindless {
             self.cull.shadow_bindless_pipeline = Some(p);
         }
+        for (bucket, pipelines) in world_buckets {
+            if let Some(live) = self.cull.world_pipelines.get_mut(bucket) {
+                *live = pipelines;
+            }
+        }
         Ok(())
     }
 
-    // Rebuild the main pipeline from the world default Shader's freshly
+    // Rebuild bucket 0's pipelines from the world default Shader's freshly
     // compiled payload, for [`Self::update_world_shader`] on bucket 0, or swap
-    // in `prepared` when a worker already built it. The replacement is built
-    // before the swap, so a typo in a shader edit leaves the live pipeline
-    // untouched and the session keeps rendering.
+    // in `prepared` when a worker already built them. The replacements are
+    // built before the swap, so a typo in a shader edit leaves the live
+    // pipelines untouched and the session keeps rendering.
     //
     // Every draw a world Shader reaches goes through the GPU-driven pass, so
-    // this is the one pipeline it owns. The cull ICBs inherit the render
-    // encoder's pipeline state, so they need no re-encode. The shadow, G-buffer
-    // and cull pipelines compile from engine-internal source and are covered by
-    // [`Self::reload_shaders`].
+    // these are the pipelines it owns: the main pass and the G-buffer
+    // pre-pass, which runs its vertex hook too. The cull ICBs inherit the
+    // render encoder's pipeline state, so they need no re-encode. The shadow
+    // and cull pipelines compile from engine-internal source and are covered
+    // by [`Self::reload_shaders`].
     pub(super) fn update_default_world_shader(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
-        prepared: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+        prepared: Option<BucketPipelines>,
     ) -> RenderResult<()> {
         // A scene-less world never built a main pipeline; there is nothing for
         // the fresh world-shader programs to replace.
         if self.cull.main_pipeline.is_some() {
-            let pipeline = match prepared {
-                Some(pipeline) => pipeline,
-                None => build_main_pipeline(
-                    &self.hw.device,
-                    &make_vertex_descriptor(),
-                    Some(programs),
-                    self.hot_reload.enabled,
-                    self.targets.hdr.sample_count,
-                )?,
-            };
-            self.cull.main_pipeline = Some(pipeline);
+            let pipelines = replacement(
+                &self.hw.device,
+                0,
+                Some(programs),
+                self.bucket_build(),
+                self.cull.main_pipeline.as_ref(),
+                prepared,
+            )?;
+            self.cull.main_pipeline = Some(pipelines);
         }
         self.world_shader = Some(programs.clone());
         Ok(())

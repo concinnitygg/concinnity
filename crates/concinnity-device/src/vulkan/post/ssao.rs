@@ -74,9 +74,9 @@ impl VkContext {
         let Some(ssao) = &self.ssao else {
             return Ok(());
         };
-        let gbuffer = self.gbuffer.as_ref().ok_or_else(|| {
-            RenderError::Other("SSAO enabled but the G-buffer pre-pass is missing".into())
-        })?;
+        let Some(gbuffer) = self.gbuffer_targets().and_then(|gb| gb.frame(frame_idx)) else {
+            return Ok(());
+        };
         let view = self
             .targets
             .transient_pool
@@ -86,7 +86,7 @@ impl VkContext {
             &self.post_device(frame_idx),
             &cmd,
             SsaoInputs {
-                normal_depth: gbuffer.normal_depth_view(frame_idx),
+                normal_depth: gbuffer.normal_depth,
                 output: VkAttachment {
                     view,
                     extent: self.targets.render_extent,

@@ -119,17 +119,26 @@ impl fullscreen::CompositeEncoder for DxContext {
             cmd.set_graphics_root_constants(2, &composite);
             // Root param [3]: 3D color-grading LUT SRV (t2).
             cmd.set_graphics_srv_table(3, self.scene.color_lut.srv_gpu);
-            // Root params [4..6]: the G-buffer channel sources the debug view
-            // modes visualize (t3 normal+depth, t4 roughness, t5 SSAO). The
-            // fragment references all three statically, so they are bound on
-            // every frame, channel view or not.
-            let (nd_srv, rough_srv) = match self.gbuffer.as_ref() {
-                Some(g) => (g.normal_depth_srv_gpu, g.roughness_srv_gpu),
-                None => (self.ssao.white_srv_gpu, self.ssao.white_srv_gpu),
+            // Root params [4..7]: the G-buffer channel sources the debug view
+            // modes visualize (t3 normal+depth, t4 roughness, t5 SSAO, t6
+            // motion). The fragment references all four statically, so they
+            // are bound on every frame, channel view or not.
+            let (nd_srv, rough_srv, motion_srv) = match self.gbuffer.as_ref() {
+                Some(g) => (
+                    g.normal_depth_srv_gpu,
+                    g.roughness_srv_gpu,
+                    g.velocity_srv_gpu,
+                ),
+                None => (
+                    self.ssao.white_srv_gpu,
+                    self.ssao.white_srv_gpu,
+                    self.ssao.white_srv_gpu,
+                ),
             };
             cmd.set_graphics_srv_table(4, nd_srv);
             cmd.set_graphics_srv_table(5, rough_srv);
             cmd.set_graphics_srv_table(6, self.ssao_ao_srv_gpu());
+            cmd.set_graphics_srv_table(7, motion_srv);
             cmd.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             );

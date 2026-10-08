@@ -10,14 +10,15 @@ use concinnity_core::render::error::RenderResult;
 use std::sync::Arc;
 
 use super::MtlContext;
-use super::init::pipelines::{build_bucket_pipeline, make_vertex_descriptor};
-use super::pipeline_builder::{MtlPipelineBuilder, PipelineTargets, world_shader_for};
+use super::bucket_pipelines::{build_bucket_pipelines, replacement};
+use super::init::pipelines::make_vertex_descriptor;
+use super::pipeline_builder::{MtlPipelineBuilder, world_shader_for};
 
 impl MtlContext {
-    // Install one shader bucket's bindless main-pass pipeline: `prepared` when
-    // it was built for this context's targets, else one built here. Replaces
-    // whatever the bucket currently holds, so a re-pin after an eviction
-    // installs cleanly.
+    // Install one shader bucket's main-pass and pre-pass pipelines: `prepared`
+    // when they were built for this context's targets, else ones built here.
+    // Replaces whatever the bucket currently holds, so a re-pin after an
+    // eviction installs cleanly.
     pub(super) fn install_world_shader(
         &mut self,
         bucket: u32,
@@ -25,26 +26,25 @@ impl MtlContext {
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
         self.cull.world_pipelines.slot(bucket)?;
-        let pso = match world_shader_for(prepared, self.pipeline_targets()) {
-            Some(pso) => pso,
-            None => build_bucket_pipeline(
+        let pipelines = match world_shader_for(prepared, self.bucket_build()) {
+            Some(pipelines) => pipelines,
+            None => build_bucket_pipelines(
                 &self.hw.device,
                 &make_vertex_descriptor(),
                 bucket as usize,
-                programs,
-                self.hot_reload.enabled,
-                self.targets.hdr.sample_count,
+                Some(programs),
+                self.bucket_build(),
             )?,
         };
-        self.cull.world_pipelines.install(bucket, pso)?;
+        self.cull.world_pipelines.install(bucket, pipelines)?;
         Ok(())
     }
 
-    // Rebuild one world Shader's pipeline from hot-reloaded programs, or swap
-    // in `prepared` when it was built for this context's targets. Bucket 0 is
-    // the main pipeline; another bucket is rebuilt only while installed, and
-    // the replacement is built before it replaces, so a failed build leaves the
-    // live pipeline bound.
+    // Rebuild one world Shader's pipelines from hot-reloaded programs, or swap
+    // in `prepared` when they were built for this context's targets. Bucket 0
+    // is the main pipeline pair; another bucket is rebuilt only while
+    // installed. Both halves are built before they replace the live pair, so
+    // a failed build of either leaves the live pipelines bound.
     pub(super) fn update_world_shader(
         &mut self,
         bucket: u32,
@@ -52,7 +52,7 @@ impl MtlContext {
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
         if bucket == 0 {
-            let prepared = world_shader_for(prepared, self.pipeline_targets());
+            let prepared = world_shader_for(prepared, self.bucket_build());
             self.update_default_world_shader(programs, prepared)?;
             return Ok(PipelineSwap::Swapped);
         }
@@ -60,16 +60,17 @@ impl MtlContext {
         if !self.cull.world_pipelines.resident(bucket as usize) {
             return Ok(PipelineSwap::NotResident);
         }
-        self.install_world_shader(bucket, programs, prepared)?;
+        let build = self.bucket_build();
+        let pipelines = replacement(
+            &self.hw.device,
+            bucket as usize,
+            Some(programs),
+            build,
+            self.cull.world_pipelines.get(bucket as usize),
+            world_shader_for(prepared, build),
+        )?;
+        self.cull.world_pipelines.install(bucket, pipelines)?;
         Ok(PipelineSwap::Swapped)
-    }
-
-    // What this context's world Shader and volume pipelines are built against.
-    pub(super) fn pipeline_targets(&self) -> PipelineTargets {
-        PipelineTargets {
-            sample_count: self.targets.hdr.sample_count,
-            hot_reload: self.hot_reload.enabled,
-        }
     }
 
     // A builder for this context's world Shader and volume pipelines, for a
@@ -77,7 +78,7 @@ impl MtlContext {
     pub(super) fn pipeline_builder(&self) -> Arc<dyn PipelineBuilder> {
         Arc::new(MtlPipelineBuilder {
             device: self.hw.device.clone(),
-            targets: self.pipeline_targets(),
+            targets: self.bucket_build(),
         })
     }
 

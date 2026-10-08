@@ -248,9 +248,59 @@ fn rt_skin_layouts_match_the_shader() {
 #[test]
 fn gbuffer_prepass_vertex_layouts_match_the_shader() {
     check(
-        &programs::GBUFFER_PREPASS_VERT,
+        &programs::MAIN_PREPASS_VERT,
         &mirrors::geometry::gbuffer_vertex(),
     );
+}
+
+// The Metal host binds the pre-pass's own buffers at the slots core names,
+// the view block to both stages; the emitted MSL of each entry is where the
+// shader actually reads them.
+#[test]
+fn the_metal_prepass_reads_its_buffers_where_the_host_binds_them() {
+    use concinnity_core::render::shader_programs::metal::prepass_buffers;
+    concinnity_shader::require_dxc!();
+    let stages = [
+        (
+            &programs::MAIN_PREPASS_VERT,
+            &[
+                ("gb_view", prepass_buffers::VIEW),
+                ("prev_models", prepass_buffers::PREV_MODELS),
+                ("draw_args", prepass_buffers::DRAW_ARGS),
+            ][..],
+        ),
+        (
+            &programs::MAIN_PREPASS_FRAG,
+            &[("gb_view", prepass_buffers::VIEW)][..],
+        ),
+    ];
+    for (program, buffers) in stages {
+        let msl = programs::msl(program).unwrap_or_else(|e| panic!("{e}"));
+        for &(name, slot) in buffers {
+            assert_eq!(
+                msl_buffer_slot(&msl, name),
+                Some(slot),
+                "{} {name}",
+                program.row.entry
+            );
+        }
+    }
+}
+
+// The `[[buffer(n)]]` an entry parameter named `name` is declared at.
+fn msl_buffer_slot(msl: &str, name: &str) -> Option<usize> {
+    let tag = format!(" {name} [[buffer(");
+    let at = msl.find(&tag)? + tag.len();
+    msl[at..].split(')').next()?.parse().ok()
+}
+
+#[test]
+fn msl_buffer_slots_are_read_off_the_parameter_list() {
+    let msl = "vertex main0_out main0(constant GbView& gb_view [[buffer(3)]], \
+               const device float4x4* prev_models [[buffer(17)]])";
+    assert_eq!(msl_buffer_slot(msl, "gb_view"), Some(3));
+    assert_eq!(msl_buffer_slot(msl, "prev_models"), Some(17));
+    assert_eq!(msl_buffer_slot(msl, "draw_args"), None);
 }
 
 #[test]

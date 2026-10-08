@@ -9,11 +9,11 @@
 
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::world_pipelines::{check_rebuild, replace_bucket};
 use std::sync::atomic::Ordering;
-use windows::Win32::Graphics::Direct3D12::ID3D12PipelineState;
 
 use super::context::DxContext;
-use super::init::pipelines::{BucketPipelineTargets, build_bucket_pipeline};
+use super::init::pipelines::{BucketPipelineTargets, BucketPsos, build_bucket_pipeline};
 
 // Shader hot-reload state. `enabled` is true only under `cn debug`: it routes
 // every built-in shader source resolve through the disk-first path (false
@@ -24,6 +24,9 @@ use super::init::pipelines::{BucketPipelineTargets, build_bucket_pipeline};
 pub(in crate::directx) struct HotReloadState {
     pub enabled: bool,
     pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    // Bumped by every engine-template reload, so a world Shader pipeline a
+    // worker built from the templates before it is never installed after it.
+    pub generation: u64,
 }
 
 impl HotReloadState {
@@ -32,6 +35,7 @@ impl HotReloadState {
             enabled,
             reload_pending: enabled
                 .then(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
+            generation: 0,
         }
     }
 }
@@ -80,13 +84,14 @@ impl DxContext {
     // average), projected-decal, transparent (glass + water), volumetric-fog, the
     // sky, the G-buffer pre-pass with the sky's motion behind it, SSAO (depth
     // copy, kernel, blur), SSR (resolve), the reflection composite (blur,
-    // composite), TAA (resolve), and bucket 0 of the GPU-driven main pass when
-    // it is live (rebuilt from the world default Shader's pair where
-    // the world declares one). The shadow PSO is out of scope here.
+    // composite), TAA (resolve), and every shader bucket of the GPU-driven main
+    // pass when it is live, each from its world Shader's pair where the world
+    // declares one. The shadow PSO is out of scope here.
     pub(super) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {
             return Ok(());
         }
+        self.hot_reload.generation += 1;
         let device = &self.hw.device;
         let info_queue = self.hw.info_queue.as_ref();
         let hr = true;
@@ -131,16 +136,18 @@ impl DxContext {
             concinnity_core::render::post::bloom::build_pipelines(&self.post_device(0))
         );
 
-        // Bucket 0 of the GPU-driven main pass, from the engine's freshly
-        // compiled pair; a world default Shader's own pair is spliced into the
-        // same templates, so it is rebuilt against them too.
+        // Every shader bucket's main and G-buffer pre-pass PSOs, from the
+        // engine's freshly compiled programs; a world Shader's own files are
+        // spliced into the same templates, so they are rebuilt against them
+        // too. Each bucket rebuilds as a pair, so shading and the G-buffer
+        // never compile from different templates.
         let bindless_main_pso = rebuild_if_live!(
             self.cull.main_bindless_root_sig.is_some() && self.cull.main_bindless_pso.is_some(),
             {
-                let (vs, ps) = super::init::pipelines::compile_main_bindless_shaders(hr)?;
-                let engine_pair = super::init::pipelines::BindlessMainShaders { vs, ps };
-                let pso = self.build_world_main_pso(self.world_shader.as_ref(), &engine_pair)?;
-                Ok::<_, RenderError>((pso, engine_pair))
+                let engine = super::init::pipelines::compile_main_bindless_shaders(hr)?;
+                let psos = self.build_world_main_pso(self.world_shader.as_ref(), &engine)?;
+                let world_buckets = self.rebuild_world_buckets(&engine)?;
+                Ok::<_, RenderError>((psos, world_buckets, engine))
             }
         );
         // The cull PSO, and its phase-2 twin (two-pass occlusion) when built,
@@ -223,24 +230,12 @@ impl DxContext {
             info_queue,
             super::sky::build_sky_pso(device, self.sky.root_sig(), msaa_samples, hr),
         )?;
-        // The G-buffer pre-pass (when the cull records drive it) and the sky's
-        // motion behind it.
-        let gbuffer_psos = self
+        // The sky's motion behind the G-buffer pre-pass; the pre-pass's own
+        // PSOs rebuild with the main pass's above.
+        let gbuffer_sky_pso = self
             .gbuffer
             .as_ref()
-            .map(|gb| {
-                let prepass = self
-                    .cull
-                    .gbuffer_bindless_root_sig
-                    .as_ref()
-                    .filter(|_| self.cull.gbuffer_bindless_pso.is_some())
-                    .map(|root_sig| {
-                        super::post::gbuffer::build_prepass_pso(device, root_sig, info_queue, hr)
-                    })
-                    .transpose()?;
-                let sky = gb.sky.rebuild_pso(device, info_queue)?;
-                Ok::<_, RenderError>((prepass, sky))
-            })
+            .map(|gb| gb.sky.rebuild_pso(device, info_queue))
             .transpose()?;
         let decal_pso = self
             .decal
@@ -359,15 +354,14 @@ impl DxContext {
         if let (Some(rebuilt), Some(bloom)) = (bloom_rebuilt, self.bloom.as_mut()) {
             bloom.swap_pipelines(rebuilt);
         }
-        if let Some((p, engine_pair)) = bindless_main_pso {
-            self.cull.main_bindless_pso = Some(p);
-            self.cull.bindless_main_shaders = engine_pair;
+        if let Some((psos, world_buckets, engine)) = bindless_main_pso {
+            self.cull.main_bindless_pso = Some(psos.main);
+            self.cull.main_prepass_pso = psos.prepass;
+            self.swap_world_buckets(world_buckets);
+            self.cull.bindless_main_shaders = engine;
         }
         self.sky.swap_pso(sky_pso);
-        if let (Some((prepass, sky)), Some(gb)) = (gbuffer_psos, self.gbuffer.as_mut()) {
-            if prepass.is_some() {
-                self.cull.gbuffer_bindless_pso = prepass;
-            }
+        if let (Some(sky), Some(gb)) = (gbuffer_sky_pso, self.gbuffer.as_mut()) {
             gb.sky.swap_pso(sky);
         }
         // The wireframe twins were built from the pre-reload shaders; drop them
@@ -430,50 +424,53 @@ impl DxContext {
 // live in the concinnity binary. See the note on the analogous block in
 // [directx/particle.rs].
 impl DxContext {
-    // Rebuild bucket 0 of the GPU-driven main pass from the world default
-    // Shader's freshly compiled programs and hot-swap it, for
-    // `update_world_shader`, or swap in `prepared` when a worker already built
-    // it. The replacement is built first; a compile / PSO-create failure
-    // early-returns with the live pipeline untouched, mirroring
-    // `reload_shaders`.
+    // Rebuild bucket 0 of the GPU-driven main pass and its G-buffer pre-pass
+    // from the world default Shader's freshly compiled programs and hot-swap
+    // them, for `update_world_shader`, or swap in `prepared` when a worker
+    // already built them. The replacements are built first; a compile /
+    // PSO-create failure early-returns with the live pipelines untouched,
+    // mirroring `reload_shaders`.
     pub(in crate::directx) fn update_default_world_shader(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
-        prepared: Option<ID3D12PipelineState>,
+        prepared: Option<BucketPsos>,
     ) -> RenderResult<()> {
-        let new_main = match prepared {
-            Some(pso) => pso,
-            None => self.build_world_main_pso(Some(programs), &self.cull.bindless_main_shaders)?,
-        };
-        // Drain the GPU before the swap releases the displaced PSO: a command
+        let new = replace_bucket(
+            0,
+            self.cull.main_prepass_pso.is_some(),
+            prepared,
+            |p: &BucketPsos| p.prepass.is_some(),
+            || self.build_world_main_pso(Some(programs), &self.cull.bindless_main_shaders),
+        )?;
+        // Drain the GPU before the swap releases the displaced PSOs: a command
         // list does not keep one alive, and the debug reload drive does not
         // wait for us.
         self.wait_idle();
-        self.cull.main_bindless_pso = Some(new_main);
+        self.cull.main_bindless_pso = Some(new.main);
+        self.cull.main_prepass_pso = new.prepass;
         self.world_shader = Some(programs.clone());
         self.invalidate_wireframe_pipelines();
         Ok(())
     }
 
-    // Bucket 0's PSO against the live bindless root signature: the world default
-    // Shader's pair where `world` declares one, `engine_default` otherwise.
+    // Bucket 0's PSOs against the live root signatures: the world default
+    // Shader's programs where `world` declares one, `engine_default` otherwise.
     // Errors when the GPU-driven pass is not live, which means the world has
-    // nothing to draw.
+    // nothing to draw, when the main PSO fails, or when the rebuild would drop
+    // the live pre-pass, so a live pair is kept whole.
     pub(super) fn build_world_main_pso(
         &self,
         world: Option<&concinnity_core::components::ShaderPrograms>,
         engine_default: &super::init::pipelines::BindlessMainShaders,
-    ) -> RenderResult<ID3D12PipelineState> {
-        let root_sig = self
-            .cull
-            .main_bindless_root_sig
-            .as_ref()
+    ) -> RenderResult<BucketPsos> {
+        let targets = self
+            .world_pso_targets()
             .ok_or_else(|| RenderError::Other("the GPU-driven main pass is not live".into()))?;
-        build_bucket_pipeline(
+        let psos = build_bucket_pipeline(
             &self.hw.device,
             self.hw.info_queue.as_ref(),
             BucketPipelineTargets {
-                root_sig,
+                root_sigs: &targets.root_sigs,
                 msaa_samples: self.targets.hdr.msaa_samples,
                 engine_default,
                 hot_reload: self.hot_reload.enabled,
@@ -483,6 +480,12 @@ impl DxContext {
                 programs: world,
                 deferred: false,
             },
-        )
+        )?;
+        check_rebuild(
+            0,
+            self.cull.main_prepass_pso.is_some(),
+            psos.prepass.is_some(),
+        )?;
+        Ok(psos)
     }
 }

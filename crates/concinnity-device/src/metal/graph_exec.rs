@@ -103,7 +103,6 @@ use super::graph_events;
 use super::graph_events::PassSync;
 use super::graph_queues::GraphQueues;
 use super::parallel_encoder::{ParallelCtxRef, SendableCmdBuf};
-use concinnity_core::render::uniforms::metal::VelocityUniforms;
 
 // What `execute_graph` leaves for `draw_frame` to finish. The composite pass
 // rides the command buffer `draw_frame` owns, so the graphics queue's frame
@@ -180,10 +179,11 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // executeCommandsInBuffer. `Some` only when bindless cull ran this
     // frame (i.e. matches `FrameGraphInputs::bindless_cull_enabled`).
     pub draw_args_buffer: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
-    // Per-pixel motion-vector pass uniforms. `Some` only when the
-    // `Velocity` pass is in the graph this frame (matches
-    // `FrameGraphInputs::velocity_enabled`).
-    pub vel_uniforms: Option<&'a VelocityUniforms>,
+    // The G-buffer pre-pass's view block: motion matrices and the previous
+    // clock, collapsed onto this frame's own when `velocity_active` is unset.
+    pub gbuffer_view: &'a GBufferView,
+    // A consumer reads the pre-pass's motion this frame.
+    pub velocity_active: bool,
     // Pre-TAA scene texture that `TaaResolve` reads (the SSR resolve
     // output when SSR is on, otherwise the raw `hdr_resolve`). `Some`
     // only when the `TaaResolve` pass is in the graph this frame.
@@ -651,36 +651,33 @@ impl MtlContext {
                 self.encode_bloom(cmd_buf, scene_color)?
             }
             PassId::GBufferPrepass => {
-                // The jittered VP rasterizes; the un-jittered cur/prev VPs (from
-                // vel_uniforms, when velocity is active) drive the motion vector.
-                let gview = match params.vel_uniforms {
-                    Some(v) => GBufferView {
-                        jittered_vp: v.jittered_vp,
-                        cur_vp: v.cur_vp,
-                        prev_vp: v.prev_vp,
+                // The surfaces rasterize through the main pass's view block, so
+                // the vertex hook places them as the main pass will; the
+                // un-jittered cur/prev VPs drive the motion vector.
+                let main_view =
+                    self.main_view_uniforms(&crate::metal::draw::main::MainPassCamera {
+                        elapsed: params.elapsed,
+                        vp: params.vp,
                         view: self.state.view.matrix,
-                    },
-                    // Velocity inactive: cur == prev so the motion channel is a
-                    // harmless zero (no consumer reads it).
-                    None => GBufferView {
-                        jittered_vp: params.vp,
-                        cur_vp: params.vp,
-                        prev_vp: params.vp,
-                        view: self.state.view.matrix,
-                    },
-                };
+                        cam_pos: params.cam_pos,
+                    });
                 self.encode_gbuffer_prepass(
                     cmd_buf,
-                    &gview,
+                    crate::metal::post::gbuffer::GbufferPrepassViews {
+                        gbuffer: params.gbuffer_view,
+                        main: &main_view,
+                    },
                     crate::metal::post::gbuffer::GbufferGpuBuffers {
                         object_buffer: params.object_buffer,
+                        material_params: params.material_params,
+                        bindless_tex_args: params.bindless_tex_args,
                         prev_model_buffer: params.prev_model_buffer,
                         draw_args_buffer: params.draw_args_buffer,
                         history_targets: params.history_targets,
                         deformed_current: params.deformed_skinned,
                         deformed_prev: params.deformed_prev,
                     },
-                    params.vel_uniforms.is_some(),
+                    params.velocity_active,
                 )?
             }
             PassId::TaaResolve => {

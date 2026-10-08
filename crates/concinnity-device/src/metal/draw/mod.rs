@@ -164,7 +164,7 @@ impl MtlContext {
             clustered,
             cluster_params,
             velocity_active,
-            vel_uniforms,
+            gbuffer_view,
             scene_input,
             scene_color,
             transparent_active,
@@ -179,6 +179,7 @@ impl MtlContext {
             vp,
             render_w,
             render_h,
+            elapsed,
         })?;
 
         // Line pipeline: built on the first frame that publishes lines,
@@ -262,7 +263,8 @@ impl MtlContext {
             prev_model_buffer: prev_model_buffer.as_ref(),
             history_targets: &history_targets,
             draw_args_buffer: cull_draw_args.as_ref(),
-            vel_uniforms: vel_uniforms.as_ref(),
+            gbuffer_view: &gbuffer_view,
+            velocity_active,
             scene_pre_taa: if self.taa.enabled
                 || self.upscale.scaler.is_some()
                 || transparent_active
@@ -352,7 +354,14 @@ impl MtlContext {
             pending_terminal: submission.pending_terminal,
             submission_token,
         });
-        self.advance_temporal_state(velocity_active, proj);
+        self.advance_temporal_state(
+            velocity_active,
+            concinnity_core::render::view_history::ViewFrame {
+                vp: concinnity_core::transform::mat4_mul(proj, self.state.view.matrix),
+                elapsed,
+                cam_pos,
+            },
+        );
 
         Ok(())
     }

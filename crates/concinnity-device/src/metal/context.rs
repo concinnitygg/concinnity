@@ -309,6 +309,9 @@ pub(super) struct TextState {
 pub(super) struct HotReloadState {
     pub enabled: bool,
     pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    // Bumped by every engine-template reload, so a world Shader pipeline a
+    // worker built from the templates before it is never installed after it.
+    pub generation: u64,
 }
 
 impl HotReloadState {
@@ -317,6 +320,7 @@ impl HotReloadState {
             enabled,
             reload_pending: enabled
                 .then(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
+            generation: 0,
         }
     }
 }

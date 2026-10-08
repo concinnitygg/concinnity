@@ -31,7 +31,6 @@ pub(super) struct SetPoolInputs<'a> {
     pub(super) instanced_clusters: &'a [InstancedCluster],
     pub(super) text_atlas_count: usize,
     pub(super) plan: &'a CullPlan,
-    pub(super) has_gbuffer: bool,
 }
 
 // Build the global set layout, the shared descriptor pool, and the per-frame
@@ -69,7 +68,6 @@ fn create_descriptor_pool(
         instanced_clusters,
         text_atlas_count,
         plan,
-        has_gbuffer,
     } = pool;
     let CullPlan {
         bindless_active,
@@ -81,14 +79,14 @@ fn create_descriptor_pool(
     let n_atlas = text_atlas_count.max(1) as u32;
     let n_frames = frames as u32;
     let bindless_sets_count = if bindless_active { n_frames } else { 0 };
-    // GPU-driven G-buffer pre-pass: one set 0 per frame (1 UBO + 2 SSBOs: the
+    // GPU-driven G-buffer pre-pass: one set per frame (1 UBO + 2 SSBOs: the
     // previous frame's model-history slot and this frame's draw args),
-    // allocated only when the bindless cull path is active AND the G-buffer is
-    // enabled. The depth/MRT draw reuses the bindless GpuObjectData set (set 1),
-    // so it adds no further sets here. The snapshot kernel that fills the ring
-    // takes a square (frame, slot) table of its own, each set 1 UBO + 2 SSBOs.
-    let gbuffer_active = bindless_active && has_gbuffer;
-    let gbuffer_sets_count = if gbuffer_active { n_frames } else { 0 };
+    // reserved whenever the bindless cull path is active, since a quality
+    // change that adds a G-buffer consumer allocates them mid-session. The
+    // depth/MRT draw reuses the global and bindless sets, so it adds no further
+    // sets here. The snapshot kernel that fills the ring takes a square
+    // (frame, slot) table of its own, each set 1 UBO + 2 SSBOs.
+    let gbuffer_sets_count = if bindless_active { n_frames } else { 0 };
     let history_sets_count = gbuffer_sets_count * n_frames;
 
     // GPU-driven shadow: one cull set per (frame, view) over the cascades and

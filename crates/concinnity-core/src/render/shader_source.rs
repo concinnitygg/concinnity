@@ -77,6 +77,9 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{LIGHT_TYPES}", "light_types.hlsl"),
     ("{RAYMARCH_COMMON}", "raymarch_common.hlsl"),
     ("{MAIN_SHADING}", "main_shading.hlsl"),
+    // SURFACE_INPUTS trails MAIN_SHADING, which carries its marker.
+    ("{SURFACE_INPUTS}", "surface_inputs.hlsl"),
+    ("{GBUFFER_COMMON}", "gbuffer_common.hlsl"),
     // SHADOW_BIAS trails both halves that carry it: the cascade compare
     // offset is shared by the main pass and the raymarched surfaces, and a
     // row placed ahead of theirs would leave the marker unreplaced.

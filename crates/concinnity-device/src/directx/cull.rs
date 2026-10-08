@@ -51,13 +51,23 @@ pub(in crate::directx) struct CullState {
     // Shader's pair where the world declares one, the engine's pair otherwise.
     pub main_bindless_root_sig: Option<ID3D12RootSignature>,
     pub main_bindless_pso: Option<ID3D12PipelineState>,
+    // The G-buffer pre-pass's root signature, the cull command signature rebuilt
+    // against it, and bucket 0's pre-pass PSO, from the same programs as
+    // `main_bindless_pso`. The PSO exists only once the world has a G-buffer
+    // and its build succeeded. The pre-pass reuses the main pass's
+    // `indirect_cmd_buffers` (camera frustum, no extra cull dispatch).
+    pub prepass_root_sig: Option<ID3D12RootSignature>,
+    pub prepass_cmd_sig: Option<ID3D12CommandSignature>,
+    pub main_prepass_pso: Option<ID3D12PipelineState>,
     // Material-referenced world shader pipelines, indexed by `shader_bucket - 1`
-    // (bucket 0 is `main_bindless_pso`). Each renders its bucket's slice of the
-    // GPU-culled command buffer through the bindless root signature. `None`
-    // marks a bucket whose Shader is not resident yet: its scene has not pinned,
-    // so the pass skips those draws (see `world_shaders.rs`).
-    pub world_pipelines:
-        concinnity_core::render::world_pipelines::WorldPipelines<ID3D12PipelineState>,
+    // (bucket 0 is `main_bindless_pso` / `main_prepass_pso`). Each renders its
+    // bucket's slice of the GPU-culled command buffer in the main pass and the
+    // pre-pass. `None` marks a bucket whose Shader is not resident yet: its
+    // scene has not pinned, so both passes skip those draws (see
+    // `world_shaders.rs`).
+    pub world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines<
+        super::init::pipelines::BucketPsos,
+    >,
     // Commands reserved per shader-bucket region in the indirect buffers, fixed
     // at init to the record capacity the buffers were sized for. Bucket `b`'s
     // region starts at command `b * bucket_stride`.
@@ -116,17 +126,6 @@ pub(in crate::directx) struct CullState {
     // shadow kernel. Its own buffer, so the spot pass shares no state with the
     // cascade pass. Empty when the world has no shadowed spot.
     pub spot_indirect_buffers: Vec<ID3D12Resource>,
-    // GPU-driven G-buffer pre-pass. A 3-MRT bindless pipeline whose VS
-    // reads `model` + `roughness` from `GpuObjectData[object_id]` (root SRV) and
-    // the previous-frame model from the model-history ring below;
-    // `gbuffer_bindless_cmd_sig`
-    // is the shared cull command signature rebuilt against its root sig. The pass
-    // reuses the main pass's `indirect_cmd_buffers` (camera frustum, no extra cull
-    // dispatch). All `Some`/non-empty only when the bindless cull path is active
-    // AND the G-buffer is enabled.
-    pub gbuffer_bindless_root_sig: Option<ID3D12RootSignature>,
-    pub gbuffer_bindless_pso: Option<ID3D12PipelineState>,
-    pub gbuffer_bindless_cmd_sig: Option<ID3D12CommandSignature>,
     // Per-frame model-history buffers (one column-major `float4x4` per cull
     // record), device-local: only the snapshot kernel writes them and only the
     // pre-pass reads them, so the host never touches their bytes. Frame `R`

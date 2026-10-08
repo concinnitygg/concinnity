@@ -14,6 +14,7 @@ use crate::gfx::view_modes::{ShowFlags, ViewMode};
 pub fn apply_view(inputs: &FrameGraphInputs, mode: ViewMode, show: ShowFlags) -> FrameGraphInputs {
     let mut out = *inputs;
     out.composite_reads_ao = false;
+    out.composite_reads_motion = false;
     if !show.contains(ShowFlags::SHADOWS) {
         out.shadow_enabled = false;
         out.shadowed_spot_count = 0;
@@ -55,6 +56,7 @@ pub fn apply_view(inputs: &FrameGraphInputs, mode: ViewMode, show: ShowFlags) ->
         // heap slot lifetime with the AO output the occlusion view extends.
         out.bloom_enabled = false;
         out.composite_reads_ao = mode == ViewMode::Occlusion && out.ssao_enabled;
+        out.composite_reads_motion = mode == ViewMode::Motion;
     }
     out
 }
@@ -130,6 +132,24 @@ mod tests {
         no_ssao.ssao_enabled = false;
         let out = apply_view(&no_ssao, ViewMode::Occlusion, ShowFlags::all());
         assert!(!out.composite_reads_ao);
+    }
+
+    #[test]
+    fn motion_view_routes_the_velocity_into_the_composite() {
+        let mut inputs = everything_on();
+        inputs.gbuffer_prepass_enabled = true;
+        let out = apply_view(&inputs, ViewMode::Motion, ShowFlags::all());
+        assert!(out.composite_reads_motion && !out.composite_reads_ao);
+        let lit = apply_view(&everything_on(), ViewMode::Lit, ShowFlags::all());
+        assert!(!lit.composite_reads_motion);
+        // The composite's read keeps the pooled velocity alive to the present.
+        let graph = build_frame_graph(&out).expect("the graph builds");
+        let velocity = graph
+            .resources
+            .iter()
+            .find(|r| r.label == "gbuffer_velocity")
+            .expect("gbuffer_velocity present");
+        assert_eq!(velocity.lifetime.last, graph.passes.len() - 1);
     }
 
     #[test]

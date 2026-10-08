@@ -28,6 +28,8 @@
 
 {DEPTH_CONVENTION}
 
+{SURFACE_INPUTS}
+
 // ---- Constants ----
 
 static const float PI = 3.14159265359;
@@ -133,33 +135,6 @@ float2 env_brdf_approx(float NdV, float rough)
     float4 r = rough * c0 + c1;
     float a004 = min(r.x * r.x, exp2(-9.28 * NdV)) * r.x + r.y;
     return float2(-1.04, 1.04) * a004 + r.zw;
-}
-
-// Decode a tangent-space normal map texel. Only X and Y are read; Z is
-// reconstructed from them, so a two-channel source (BC5) decodes the same as
-// an RGBA8 one and normal maps can ship as BC5 blocks.
-float3 decode_normal_map(float2 encoded)
-{
-    float2 nxy = encoded * 2.0 - 1.0;
-    return float3(nxy, sqrt(clamp(1.0 - dot(nxy, nxy), 0.0, 1.0)));
-}
-
-// Geometric specular antialiasing (Kaplanyan et al. 2016, as in Filament):
-// widen the NDF by the screen-space variance of the shading normal so an
-// undersampled high-frequency normal map at a distance does not alias into
-// specular fireflies. A no-op where the normal is smooth (close up), so the
-// surface detail is preserved.
-float specular_aa_roughness(float3 N, float perceptual_roughness)
-{
-    const float VARIANCE  = 0.25;
-    const float THRESHOLD = 0.18;
-    float3 dndx = ddx(N);
-    float3 dndy = ddy(N);
-    float variance = VARIANCE * (dot(dndx, dndx) + dot(dndy, dndy));
-    float alpha = perceptual_roughness * perceptual_roughness;
-    float kernel = min(2.0 * variance, THRESHOLD);
-    float filtered_alpha2 = clamp(alpha * alpha + kernel, 0.0, 1.0);
-    return sqrt(sqrt(filtered_alpha2));
 }
 
 float hash_rotation(float2 p)
@@ -375,8 +350,6 @@ float shadow_factor_cascaded(float3 world_pos, float view_depth, float2 screen_x
 // reads straight out of the per-frame buffer.
 float4 shade_surface(VertexOut v, GpuObjectData od)
 {
-    float roughness = od.tint_roughness.w;
-    float metallic  = od.emissive_metallic.w;
     float3 tint     = od.tint_roughness.xyz;
     float3 emissive = od.emissive_metallic.xyz;
 
@@ -388,13 +361,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // index non-uniform on the descriptor-indexing targets (pool_sample
     // annotates it there).
     float4 albedo_samp = pool_sample(od.albedo_index, v.uv);
-    // Alpha cutout: punch the texel out entirely so foliage and decal cards
-    // stay in the opaque pass. Disabled at cutoff 0.
-    float alpha_cutoff = od.bb_max_alpha_cutoff.w;
-    if (alpha_cutoff > 0.0 && albedo_samp.a < alpha_cutoff)
-    {
-        discard;
-    }
+    surface_cutout(od, albedo_samp.a);
     float3 albedo = albedo_samp.rgb * v.color * tint;
 
     // Unlit view mode: the surface's base color, no lighting.
@@ -410,22 +377,11 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         emissive *= pool_sample(od.emissive_map_index, v.uv).rgb;
     }
 
-    // Occlusion-roughness-metallic map: green carries roughness, blue carries
-    // metallic (glTF convention). Slot 0 is the "no map" sentinel.
-    if (od.orm_map_index != 0u)
-    {
-        float3 orm = pool_sample(od.orm_map_index, v.uv).rgb;
-        roughness = orm.g;
-        metallic  = orm.b;
-    }
+    float2 roughness_metallic = surface_roughness_metallic(od, v.uv);
+    float roughness = roughness_metallic.x;
+    float metallic  = roughness_metallic.y;
 
-    float3 norm_samp = decode_normal_map(pool_sample(od.normal_index, v.uv).rg);
-    // Tangent frame as rows so mul(v, M) applies the column-basis transform.
-    float3x3 TBN = float3x3(
-        normalize(v.tangent),
-        normalize(v.bitangent),
-        normalize(v.normal));
-    float3 N = normalize(mul(norm_samp, TBN));
+    float3 N = surface_normal(od, v.uv, v.normal, v.tangent, v.bitangent);
 
     // Geometric specular antialiasing on the normal map. Minification aliasing
     // is handled by the texture's mip chain (trilinear + anisotropic

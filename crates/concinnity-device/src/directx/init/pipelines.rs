@@ -40,16 +40,19 @@ pub(in crate::directx) fn world_entry(
         .map(|c| c.into_owned())
 }
 
-// Compile the engine's bindless static-pass pair. A bucket whose Shader is the
-// world's compiles the same file through `world_entry` instead; the engine's
-// pair is the program for every bucket that declares none and the source of
-// the Wireframe twin.
+// Compile the engine's bindless main-pass and pre-pass pairs. A bucket whose
+// Shader is the world's compiles the same file through `world_entry` instead;
+// the engine's pairs are the programs for every bucket that declares none, and
+// the main pair the source of the Wireframe twin.
 pub(in crate::directx) fn compile_main_bindless_shaders(
     hot_reload: bool,
-) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let vs = builtin_shaders::MAIN_BINDLESS_VERT.compile(hot_reload)?;
-    let ps = builtin_shaders::MAIN_BINDLESS_FRAG.compile(hot_reload)?;
-    Ok((vs, ps))
+) -> RenderResult<BindlessMainShaders> {
+    Ok(BindlessMainShaders {
+        vs: builtin_shaders::MAIN_BINDLESS_VERT.compile(hot_reload)?,
+        ps: builtin_shaders::MAIN_BINDLESS_FRAG.compile(hot_reload)?,
+        prepass_vs: builtin_shaders::MAIN_PREPASS_VERT.compile(hot_reload)?,
+        prepass_ps: builtin_shaders::MAIN_PREPASS_FRAG.compile(hot_reload)?,
+    })
 }
 
 // Compile the GPU-driven shadow pass's depth-only bindless vertex shader. Built
@@ -227,91 +230,232 @@ pub(in crate::directx) fn create_shadow_pso(
 
 // Material-referenced world shader pipelines
 
-// The engine's own compiled bindless main-pass stages, kept past init so a
-// shader bucket that resolves to the engine default can build its pipeline
-// without recompiling, and so the Wireframe twin has its source. Recompiling
-// cost ~140 ms per bucket install, which is the whole point of warming a
-// pipeline behind a loading screen.
+// The engine's own compiled bindless main-pass and pre-pass stages, kept past
+// init so a shader bucket that resolves to the engine default can build its
+// pipelines without recompiling, and so the Wireframe twin has its source.
+// Recompiling cost ~140 ms per bucket install, which is the whole point of
+// warming a pipeline behind a loading screen.
 pub(in crate::directx) struct BindlessMainShaders {
     pub vs: Vec<u8>,
     pub ps: Vec<u8>,
+    pub prepass_vs: Vec<u8>,
+    pub prepass_ps: Vec<u8>,
 }
 
-// Build one shader bucket's bindless main-pass pipeline. `bucket` is the
-// `DrawObject::shader_bucket` value (1-based; bucket 0 is the world default
-// program) and names the bucket in error messages.
+// One shader bucket's PSOs: the main pass that shades its draws, and the
+// G-buffer pre-pass that lays down their depth, normal, roughness and motion
+// from the same vertex hook.
+pub(in crate::directx) struct BucketPsos {
+    pub main: ID3D12PipelineState,
+    // `None` until the world has a G-buffer, or after this bucket's pre-pass
+    // failed to build; the pre-pass then skips the bucket's draws.
+    pub prepass: Option<ID3D12PipelineState>,
+    // The world Shader the bucket compiles, `None` for the engine's own
+    // programs, kept so the pre-pass can be built or rebuilt later.
+    pub programs: Option<concinnity_core::components::ShaderPrograms>,
+}
+
+// The root signatures a bucket's PSOs bind: the main pass's, and the G-buffer
+// pre-pass's once the world has a G-buffer, which is what decides whether a
+// bucket gets a pre-pass PSO at all.
+#[derive(Clone, PartialEq)]
+pub(in crate::directx) struct BucketRootSigs {
+    pub main: ID3D12RootSignature,
+    pub prepass: Option<ID3D12RootSignature>,
+}
+
+// Build one shader bucket's PSOs. `bucket` is the `DrawObject::shader_bucket`
+// value (bucket 0 is the world default program) and names the bucket in error
+// messages.
 //
 // A bucket with no programs is one the world declared no Shader for, so the
-// engine's own bindless program renders it.
+// engine's own bindless programs render it.
 pub(in crate::directx) fn build_bucket_pipeline(
     device: &ID3D12Device,
     info_queue: Option<&ID3D12InfoQueue>,
     targets: BucketPipelineTargets<'_>,
     bucket: usize,
     shader: backend_init::WorldShader<'_>,
-) -> RenderResult<ID3D12PipelineState> {
+) -> RenderResult<BucketPsos> {
     match shader.programs {
         Some(programs) => {
             build_world_shader_pso(device, info_queue, targets.world(), bucket, programs)
         }
-        None => create_bucket_pso(
-            device,
-            info_queue,
-            targets.world(),
-            bucket,
-            &targets.engine_default.vs,
-            &targets.engine_default.ps,
-        ),
+        None => {
+            let engine = targets.engine_default;
+            create_bucket_psos(
+                device,
+                info_queue,
+                targets.world(),
+                bucket,
+                BucketStages {
+                    vs: &engine.vs,
+                    ps: &engine.ps,
+                    prepass_vs: &engine.prepass_vs,
+                    prepass_ps: &engine.prepass_ps,
+                },
+            )
+        }
     }
 }
 
-// Build a world Shader's bindless main-pass pipeline for bucket `bucket` from
-// its own compiled stages.
+// Build a world Shader's PSOs for bucket `bucket` from its own compiled stages.
 pub(in crate::directx) fn build_world_shader_pso(
     device: &ID3D12Device,
     info_queue: Option<&ID3D12InfoQueue>,
     targets: WorldPsoTargets<'_>,
     bucket: usize,
     programs: &concinnity_core::components::ShaderPrograms,
-) -> RenderResult<ID3D12PipelineState> {
-    let vs = world_entry(programs, "vertex_main_bindless", targets.hot_reload)?;
-    let ps = world_entry(programs, "fragment_main_bindless", targets.hot_reload)?;
-    create_bucket_pso(device, info_queue, targets, bucket, &vs, &ps)
+) -> RenderResult<BucketPsos> {
+    use concinnity_core::render::shader_programs::surface;
+    let entry =
+        |program: surface::Program| world_entry(programs, program.entry, targets.hot_reload);
+    let vs = entry(surface::MAIN_VERTEX)?;
+    let ps = entry(surface::MAIN_FRAGMENT)?;
+    // A pre-pass that does not compile costs the bucket its G-buffer draws,
+    // not its shading: `create_bucket_psos` warns over the empty stages.
+    let (prepass_vs, prepass_ps) = match targets.root_sigs.prepass {
+        Some(_) => world_prepass_stages(programs, targets.hot_reload, bucket),
+        None => (Vec::new(), Vec::new()),
+    };
+    let mut psos = create_bucket_psos(
+        device,
+        info_queue,
+        targets,
+        bucket,
+        BucketStages {
+            vs: &vs,
+            ps: &ps,
+            prepass_vs: &prepass_vs,
+            prepass_ps: &prepass_ps,
+        },
+    )?;
+    psos.programs = Some(programs.clone());
+    Ok(psos)
 }
 
-fn create_bucket_pso(
+// A world Shader's pre-pass stages, or empty ones with a warning when they do
+// not compile.
+fn world_prepass_stages(
+    programs: &concinnity_core::components::ShaderPrograms,
+    hot_reload: bool,
+    bucket: usize,
+) -> (Vec<u8>, Vec<u8>) {
+    use concinnity_core::render::shader_programs::surface;
+    let stages = world_entry(programs, surface::PREPASS_VERTEX.entry, hot_reload).and_then(|vs| {
+        world_entry(programs, surface::PREPASS_FRAGMENT.entry, hot_reload).map(|ps| (vs, ps))
+    });
+    stages.unwrap_or_else(|e| {
+        tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}");
+        (Vec::new(), Vec::new())
+    })
+}
+
+// Bucket `bucket`'s pre-pass PSO over `root_sig` from its compiled stages, or
+// `None` with a warning when it cannot be built: the bucket then shades
+// without contributing to the G-buffer.
+pub(in crate::directx) fn build_bucket_prepass(
+    device: &ID3D12Device,
+    info_queue: Option<&ID3D12InfoQueue>,
+    root_sig: &ID3D12RootSignature,
+    bucket: usize,
+    stages: (&[u8], &[u8]),
+) -> Option<ID3D12PipelineState> {
+    let (vs, ps) = stages;
+    if vs.is_empty() || ps.is_empty() {
+        return None;
+    }
+    let pso = dump_on_err(
+        info_queue,
+        crate::directx::post::gbuffer::create_prepass_pso(device, root_sig, vs, ps),
+    );
+    pso.map_err(|e| tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}"))
+        .ok()
+}
+
+// Bucket `bucket`'s pre-pass PSO from the engine's programs or `world`'s,
+// for a bucket whose main PSO already exists.
+pub(in crate::directx) fn build_prepass_for(
+    device: &ID3D12Device,
+    info_queue: Option<&ID3D12InfoQueue>,
+    root_sig: &ID3D12RootSignature,
+    bucket: usize,
+    source: PrepassSource<'_>,
+) -> Option<ID3D12PipelineState> {
+    let (vs, ps) = match source {
+        PrepassSource::World(programs, hot_reload) => {
+            world_prepass_stages(programs, hot_reload, bucket)
+        }
+        PrepassSource::Engine(engine) => (engine.prepass_vs.clone(), engine.prepass_ps.clone()),
+    };
+    build_bucket_prepass(device, info_queue, root_sig, bucket, (&vs, &ps))
+}
+
+// Where a bucket's pre-pass stages come from.
+pub(in crate::directx) enum PrepassSource<'a> {
+    World(&'a concinnity_core::components::ShaderPrograms, bool),
+    Engine(&'a BindlessMainShaders),
+}
+
+// The four compiled stages one bucket's PSOs take.
+struct BucketStages<'a> {
+    vs: &'a [u8],
+    ps: &'a [u8],
+    prepass_vs: &'a [u8],
+    prepass_ps: &'a [u8],
+}
+
+fn create_bucket_psos(
     device: &ID3D12Device,
     info_queue: Option<&ID3D12InfoQueue>,
     targets: WorldPsoTargets<'_>,
     bucket: usize,
-    vs: &[u8],
-    ps: &[u8],
-) -> RenderResult<ID3D12PipelineState> {
+    stages: BucketStages<'_>,
+) -> RenderResult<BucketPsos> {
+    let BucketStages {
+        vs,
+        ps,
+        prepass_vs,
+        prepass_ps,
+    } = stages;
     if vs.is_empty() || ps.is_empty() {
         return Err(RenderError::ShaderCompile(format!(
             "shader bucket {bucket} carries no vertex/fragment bytecode"
         )));
     }
-    dump_on_err(
+    let main = dump_on_err(
         info_queue,
         create_main_pso(
             device,
-            targets.root_sig,
+            &targets.root_sigs.main,
             vs,
             ps,
             HDR_FORMAT,
             targets.msaa_samples,
         ),
     )
-    .map_err(|e| e.context(format!("shader bucket {bucket}")))
+    .map_err(|e| e.context(format!("shader bucket {bucket}")))?;
+    let prepass = targets.root_sigs.prepass.as_ref().and_then(|root_sig| {
+        build_bucket_prepass(
+            device,
+            info_queue,
+            root_sig,
+            bucket,
+            (prepass_vs, prepass_ps),
+        )
+    });
+    Ok(BucketPsos {
+        main,
+        prepass,
+        programs: None,
+    })
 }
 
-// What every bucket pipeline shares: the bindless root signature it binds
-// against, the sample count, and the engine's own pair for a bucket with no
-// programs.
+// What every bucket pipeline shares: the root signatures it binds against, the
+// sample count, and the engine's own programs for a bucket with none.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct BucketPipelineTargets<'a> {
-    pub root_sig: &'a ID3D12RootSignature,
+    pub root_sigs: &'a BucketRootSigs,
     pub msaa_samples: u32,
     pub engine_default: &'a BindlessMainShaders,
     pub hot_reload: bool,
@@ -320,17 +464,17 @@ pub(in crate::directx) struct BucketPipelineTargets<'a> {
 impl<'a> BucketPipelineTargets<'a> {
     fn world(self) -> WorldPsoTargets<'a> {
         WorldPsoTargets {
-            root_sig: self.root_sig,
+            root_sigs: self.root_sigs,
             msaa_samples: self.msaa_samples,
             hot_reload: self.hot_reload,
         }
     }
 }
 
-// What a world Shader's own pipeline is built against.
+// What a world Shader's own pipelines are built against.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct WorldPsoTargets<'a> {
-    pub root_sig: &'a ID3D12RootSignature,
+    pub root_sigs: &'a BucketRootSigs,
     pub msaa_samples: u32,
     pub hot_reload: bool,
 }
@@ -344,7 +488,7 @@ pub(super) fn build_world_pipeline_table(
     info_queue: Option<&ID3D12InfoQueue>,
     targets: BucketPipelineTargets<'_>,
     bucket_shaders: &[backend_init::WorldShader<'_>],
-) -> RenderResult<Vec<Option<ID3D12PipelineState>>> {
+) -> RenderResult<Vec<Option<BucketPsos>>> {
     let mut table = Vec::with_capacity(bucket_shaders.len());
     for (i, shader) in bucket_shaders.iter().enumerate() {
         let bucket = i + 1;

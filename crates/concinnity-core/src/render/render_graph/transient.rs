@@ -123,6 +123,9 @@ pub(crate) fn planning_inputs(build: &FrameGraphInputs) -> FrameGraphInputs {
         // keeps the richer graph.
         world_hidden: false,
         composite_reads_ao: true,
+        // The motion view extends the velocity to the Composite the same way,
+        // and a view change never replans the pool.
+        composite_reads_motion: true,
         shadow_enabled: true,
         bindless_cull_enabled: true,
         auto_exposure_enabled: true,
@@ -630,6 +633,7 @@ mod tests {
         // Composite, past the reflection resolve. A plan made without it pairs
         // `ao_output` with `ssr_reflection`, which the sweep rejects.
         assert!(planned.composite_reads_ao);
+        assert!(planned.composite_reads_motion);
         // The build flags pass through, because the pool *is* rebuilt on them.
         assert!(!planned.ssao_enabled);
         assert!(!planned.bloom_enabled);

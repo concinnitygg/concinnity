@@ -7,6 +7,7 @@
 //! published unpaused as the frame's `FrameTime`.
 
 use concinnity_core::ecs::{FrameTime, SimTiming};
+use std::num::NonZeroU32;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -45,6 +46,17 @@ impl SimClock {
             .unwrap_or(0.0);
         self.last = Some(now);
         self.advance_by(elapsed, paused)
+    }
+
+    // The tick budget and frame time for a frame that lasts exactly
+    // `1 / rate` seconds whatever the wall clock says, so every launch at that
+    // rate sees the same clock on the same frame.
+    pub(crate) fn advance_fixed(
+        &mut self,
+        rate: NonZeroU32,
+        paused: bool,
+    ) -> (SimTiming, FrameTime) {
+        self.advance_by(1.0 / rate.get() as f32, paused)
     }
 
     // The clock math, split from the wall clock so it is testable with
@@ -184,6 +196,24 @@ mod tests {
                 elapsed: 0.0
             }
         );
+    }
+
+    // A fixed rate steps the same clock on every launch, frame for frame.
+    #[test]
+    fn a_fixed_rate_steps_identically_every_launch() {
+        let run = || {
+            let mut clock = SimClock::default();
+            let frames: Vec<(u32, FrameTime)> = (0..300)
+                .map(|_| clock.advance_fixed(NonZeroU32::new(60).unwrap(), false))
+                .map(|(timing, frame)| (timing.ticks, frame))
+                .collect();
+            frames
+        };
+        let frames = run();
+        assert_eq!(run(), frames);
+        let (_, frame) = *frames.last().expect("frames ran");
+        assert_eq!(frame.dt, 1.0 / 60.0);
+        assert!((frame.elapsed - 5.0).abs() < 1.0e-4, "{}", frame.elapsed);
     }
 
     #[test]

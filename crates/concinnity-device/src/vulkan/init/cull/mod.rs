@@ -154,10 +154,10 @@ pub(super) fn build_cull(
             scene,
             material_params: &world.material_params,
             swapchain_format,
+            gbuffer_render_pass: gbuffer.map(|gb| gb.prepass_render_pass.handle()),
         },
     )?;
-    let world_pipelines =
-        bindless::build_world_pipelines(gpu, &bindless, world_shaders, targets, swapchain_format)?;
+    let world_pipelines = bindless::build_world_pipelines(gpu, &bindless, world_shaders)?;
     let shader_bucket_count = 1 + world_pipelines.len();
     let compute = compute::build_compute_cull(
         gpu,
@@ -217,6 +217,8 @@ pub(super) fn build_cull(
         ),
         bucket_stride: plan.n_cull,
         bindless_main_spv: bindless.main_spv,
+        prepass_layout: bindless.prepass_layout,
+        prepass_pipeline: bindless.prepass_pipeline,
         bindless_sets: bindless.sets,
         object_buffers: bindless.object_buffers,
         material_params: bindless.material_params,
@@ -243,9 +245,6 @@ pub(super) fn build_cull(
         shadow_indirect_buffers: shadow_cull.indirect_buffers,
         spot_cull_sets: shadow_cull.spot_cull_sets,
         spot_indirect_buffers: shadow_cull.spot_indirect_buffers,
-        gbuffer_bindless_pipeline: gbuffer_pass.pipeline,
-        gbuffer_bindless_pipeline_layout: gbuffer_pass.pipeline_layout,
-        _gbuffer_set_layout: gbuffer_pass.set_layout,
         gbuffer_sets: gbuffer_pass.sets,
         prev_model_buffers: gbuffer_pass.prev_model_buffers,
         model_history: gbuffer_pass.model_history,

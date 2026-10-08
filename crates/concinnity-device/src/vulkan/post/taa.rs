@@ -100,10 +100,6 @@ impl VkContext {
     // This frame slot's per-pixel motion vectors, from the unified G-buffer
     // pre-pass.
     fn velocity_view_for_post(&self, frame: usize) -> Option<vk::ImageView> {
-        let views = self.gbuffer.as_ref()?.velocity_views();
-        if views.is_empty() {
-            return None;
-        }
-        Some(views[frame % views.len()])
+        Some(self.gbuffer_targets()?.frame(frame)?.velocity)
     }
 }

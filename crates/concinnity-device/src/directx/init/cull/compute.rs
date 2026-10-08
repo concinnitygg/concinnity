@@ -84,7 +84,7 @@ pub(super) fn build_compute_cull(
     let cps = dump_on_err(info_queue, create_cull_pso(device, &crs, &cs))?;
     let csig = dump_on_err(
         info_queue,
-        create_cull_command_signature(device, &bindless.root_sig),
+        create_cull_command_signature(device, &bindless.root_sigs.main),
     )?;
 
     let draw_args_size =

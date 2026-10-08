@@ -1,7 +1,7 @@
 //! The verbs applied against the render backend: runtime decals and particle
 //! emitters, a screenshot of the last presented frame, and the GPU cull's
-//! status readback. Each runs once a backend is parked, so one sent before the
-//! render loop starts waits for it.
+//! status readback. Each runs once a backend is parked, so one sent before
+//! the render loop starts waits for it.
 //!
 //! `decal-add` and `emitter-add` answer with the stable slot index the matching
 //! remove takes. Their fields mirror the `Decal` and `ParticleEmitter` assets.

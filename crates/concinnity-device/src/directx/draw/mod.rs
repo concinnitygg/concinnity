@@ -432,7 +432,11 @@ impl DxContext {
         // matching inputs skips the rebuild.
         *self.graph_cache.borrow_mut() = Some((seed_inputs, frame_graph));
 
-        self.advance_temporal_state(cur_vp);
+        self.advance_temporal_state(concinnity_core::render::view_history::ViewFrame {
+            vp: cur_vp,
+            elapsed,
+            cam_pos,
+        });
 
         Ok(RecordedFrame {
             pass_cmd_lists,

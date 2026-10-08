@@ -6,7 +6,6 @@
 //!   * The cascade shadow pipelines.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::ShaderPrograms;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -19,10 +18,12 @@ use objc2_metal::{
     MTLVertexStepFunction,
 };
 
+pub(crate) use crate::metal::bucket_pipelines::{
+    BucketBuild, BucketPipelines, build_bucket_pipelines, replacement,
+};
 use crate::metal::context::{BINDLESS_SAMPLER_ARG_BUFFER_INDEX, BINDLESS_TEXTURE_ARG_BUFFER_INDEX};
 use crate::metal::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use crate::metal::error::allocation_failed;
-use crate::metal::pipeline::{WORLD_FRAGMENT_ENTRY, WORLD_VERTEX_ENTRY, world_function};
 
 // Describes the per-vertex buffer layout so Metal can map [[stage_in]]:
 //   buffer(1): interleaved [float3 pos, float3 normal, float3 tangent, float3 color, float2 uv]
@@ -69,46 +70,20 @@ pub(crate) fn make_vertex_descriptor() -> Retained<MTLVertexDescriptor> {
     )
 }
 
-// Build the main static pipeline of the GPU-driven pass, which opts into
-// indirect command buffers. The pair is the engine's own, or the world Shader's
-// compile of the same source.
+// The main-pass pipeline over `vert_fn` / `frag_fn`: the off-screen HDR pass,
+// RGBA16Float color at the world's resolved sample count. Output is linear
+// light; ACES tonemap + gamma + FXAA run in the composite pass.
 pub(crate) fn build_main_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
-    world: Option<&ShaderPrograms>,
-    hot_reload: bool,
+    vert_fn: &ProtocolObject<dyn MTLFunction>,
+    frag_fn: &ProtocolObject<dyn MTLFunction>,
     sample_count: u32,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    // Both pairs come from the single-source bindless program: the engine's
-    // own, or the world's compile of the same file with its hooks spliced in.
-    // The static pass is always GPU-driven now.
-    let (vert_fn, main_frag_fn) = match world {
-        None => (
-            super::super::builtin_shaders::entry_function(
-                device,
-                &super::super::builtin_shaders::MAIN_BINDLESS_VERT,
-                hot_reload,
-            )?,
-            super::super::builtin_shaders::entry_function(
-                device,
-                &super::super::builtin_shaders::MAIN_BINDLESS_FRAG,
-                hot_reload,
-            )?,
-        ),
-        Some(programs) => (
-            world_function(device, hot_reload, programs, WORLD_VERTEX_ENTRY)
-                .map_err(|e| e.context("the world's main pass"))?,
-            world_function(device, hot_reload, programs, WORLD_FRAGMENT_ENTRY)
-                .map_err(|e| e.context("the world's main pass"))?,
-        ),
-    };
     let pipeline_desc = MTLRenderPipelineDescriptor::new();
     pipeline_desc.setVertexDescriptor(Some(vert_desc));
-    pipeline_desc.setVertexFunction(Some(&vert_fn));
-    pipeline_desc.setFragmentFunction(Some(&main_frag_fn));
-    // Off-screen HDR pass: RGBA16Float color at the world's resolved sample
-    // count. Output is linear light; ACES tonemap + gamma + FXAA run in the
-    // composite pass.
+    pipeline_desc.setVertexFunction(Some(vert_fn));
+    pipeline_desc.setFragmentFunction(Some(frag_fn));
     pipeline_desc.setRasterSampleCount(sample_count as usize);
     // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
     // declares.
@@ -206,7 +181,7 @@ pub(crate) fn build_bindless_sampler_args(
 // Pipelines for the material-referenced world shaders past the default
 // (ShaderHandle 1..), in bucket order. Extra world shaders render only through
 // the GPU-driven bindless path (the cull kernel routes their draws into
-// per-bucket ICBs), from the bindless pair the cook compiled for each.
+// per-bucket ICBs), from the programs the cook compiled for each.
 //
 // A bucket flagged `deferred` (its Shader is owned by a scene that has not
 // pinned) stays `None` until
@@ -215,9 +190,8 @@ pub(crate) fn build_world_pipelines(
     device: &ProtocolObject<dyn MTLDevice>,
     vert_desc: &MTLVertexDescriptor,
     extra_shaders: &[backend_init::WorldShader<'_>],
-    hot_reload: bool,
-    sample_count: u32,
-) -> RenderResult<WorldPipelines<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>> {
+    build: BucketBuild,
+) -> RenderResult<WorldPipelines<BucketPipelines>> {
     let mut table = Vec::with_capacity(extra_shaders.len());
     for (i, shader) in extra_shaders.iter().enumerate() {
         // A bucket whose Shader a non-start scene owns has no payload yet; the
@@ -226,54 +200,15 @@ pub(crate) fn build_world_pipelines(
             table.push(None);
             continue;
         };
-        table.push(Some(build_bucket_pipeline(
+        table.push(Some(build_bucket_pipelines(
             device,
             vert_desc,
             i + 1,
-            programs,
-            hot_reload,
-            sample_count,
+            Some(programs),
+            build,
         )?));
     }
     Ok(WorldPipelines::new(table))
-}
-
-// One material-referenced shader bucket's bindless main-pass pipeline.
-pub(crate) fn build_bucket_pipeline(
-    device: &ProtocolObject<dyn MTLDevice>,
-    vert_desc: &MTLVertexDescriptor,
-    bucket: usize,
-    programs: &ShaderPrograms,
-    hot_reload: bool,
-    sample_count: u32,
-) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-    let world = |entry| {
-        world_function(device, hot_reload, programs, entry)
-            .map_err(|e| e.context(format_args!("shader bucket {bucket}")))
-    };
-    let vert_fn = world(WORLD_VERTEX_ENTRY)?;
-    let frag_fn = world(WORLD_FRAGMENT_ENTRY)?;
-
-    let desc = MTLRenderPipelineDescriptor::new();
-    desc.setVertexDescriptor(Some(vert_desc));
-    desc.setVertexFunction(Some(&vert_fn));
-    desc.setFragmentFunction(Some(&frag_fn));
-    desc.setRasterSampleCount(sample_count as usize);
-    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-    // declares.
-    unsafe {
-        desc.colorAttachments()
-            .objectAtIndexedSubscript(0)
-            .setPixelFormat(MTLPixelFormat::RGBA16Float);
-    }
-    desc.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
-    desc.setSupportIndirectCommandBuffers(true);
-
-    device
-        .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| {
-            RenderError::ShaderCompile(format!("shader bucket {bucket}: pipeline state: {e:?}"))
-        })
 }
 
 // GPU-driven cascaded-shadow render pipeline: depth-only, no

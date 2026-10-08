@@ -239,6 +239,11 @@ pub struct FrameGraphInputs {
     /// pool-aliased transient stays live to the end of the frame instead of
     /// dying after Main. No effect while `ssao_enabled` is false.
     pub composite_reads_ao: bool,
+    /// `true` when the composite samples the prepass's motion directly (the
+    /// motion view mode). Declares a Composite read of `gbuffer_velocity`, so
+    /// the pooled target stays live to the end of the frame. No effect while
+    /// the prepass does not run.
+    pub composite_reads_motion: bool,
     /// Number of spot shadow map slices to render, i.e. how many spot lights cast
     /// shadows. Zero skips the SpotShadow pass and its imported array entirely.
     pub shadowed_spot_count: u32,
@@ -291,6 +296,7 @@ impl FrameGraphInputs {
             world_hidden: false,
             clustering_enabled: false,
             composite_reads_ao: false,
+            composite_reads_motion: false,
             shadowed_spot_count: 0,
             spot_shadow_slice_size: 512,
             hiz_build_enabled: false,
@@ -335,6 +341,9 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
     ("world_hidden", |i| i.world_hidden = true),
     ("clustered_lighting", |i| i.clustering_enabled = true),
     ("composite_reads_ao", |i| i.composite_reads_ao = true),
+    ("composite_reads_motion", |i| {
+        i.composite_reads_motion = true
+    }),
     ("shadowed_spots", |i| i.shadowed_spot_count = 2),
     ("hiz_build", |i| i.hiz_build_enabled = true),
 ];
@@ -410,6 +419,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             gbuffer_prepass_enabled: inputs.gbuffer_prepass_enabled,
             world_hidden: true,
             composite_reads_ao: inputs.composite_reads_ao,
+            composite_reads_motion: inputs.composite_reads_motion,
             hiz_build_enabled: inputs.hiz_build_enabled,
             ..FrameGraphInputs::all_off()
         })
@@ -969,8 +979,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     }
 
     // Composite (the presenter) reads scene_color + optional bloom_top,
-    // and writes the swapchain via `presents()`. The occlusion view mode adds
-    // an ao_output read so the pooled transient survives to the present.
+    // and writes the swapchain via `presents()`. The occlusion and motion view
+    // modes add an ao_output / velocity read so the pooled transient survives
+    // to the present.
     {
         let mut composite = b.add_pass(PassId::Composite, PassKind::Render);
         composite.read_texture(scene_color_cur);
@@ -981,6 +992,11 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             && let Some(h) = ao_output_v1
         {
             composite.read_texture(h);
+        }
+        if inputs.composite_reads_motion
+            && let Some(v) = velocity_v1
+        {
+            composite.read_texture(v);
         }
         composite.presents();
     }

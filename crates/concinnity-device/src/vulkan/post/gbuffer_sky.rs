@@ -81,7 +81,7 @@ impl GbufferSky {
         hot_reload: bool,
     ) -> RenderResult<OwnedPipeline> {
         let vs = builtin_shaders::GBUFFER_SKY_VERT.compile(hot_reload)?;
-        let fs = builtin_shaders::GBUFFER_PREPASS_FRAG_BINDLESS.compile(hot_reload)?;
+        let fs = builtin_shaders::GBUFFER_SKY_FRAG.compile(hot_reload)?;
         GraphicsPipelineDesc {
             depth: Depth::read_only(),
             ..GraphicsPipelineDesc::fullscreen(&vs, &fs, layout, render_pass, &PREPASS_TARGETS)

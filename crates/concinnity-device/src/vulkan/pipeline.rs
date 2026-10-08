@@ -19,14 +19,30 @@ pub(super) fn is_spirv(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) == 0x07230203
 }
 
-// Compile the engine's bindless static-pass pair. No count reaches it: the
-// fragment declares `tex_pool[]` unsized and reads whatever the set layout
-// holds, and the probe set is a single cube array. A bucket whose Shader is the
-// world's compiles the same file through `world_entry` instead.
-pub(super) fn compile_bindless_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {
-    let vert = super::builtin_shaders::MAIN_BINDLESS_VERT.compile(hot_reload)?;
-    let frag = super::builtin_shaders::MAIN_BINDLESS_FRAG.compile(hot_reload)?;
-    Ok((vert, frag))
+// The engine's compiled bindless main-pass and G-buffer pre-pass SPIR-V,
+// retained so a bucket that resolves to the engine default can build its
+// pipelines without recompiling, and so the Wireframe twin has its source.
+pub(super) struct BindlessSpv {
+    pub vert: Vec<u8>,
+    pub frag: Vec<u8>,
+    pub prepass_vert: Vec<u8>,
+    pub prepass_frag: Vec<u8>,
+}
+
+// Compile the engine's bindless main-pass and pre-pass pairs. No count reaches
+// them: the fragments declare `tex_pool[]` unsized and read whatever the set
+// layout holds, and the probe set is a single cube array. A bucket whose Shader
+// is the world's compiles the same file through `world_entry` instead.
+pub(super) fn compile_bindless_shaders(hot_reload: bool) -> RenderResult<BindlessSpv> {
+    use super::builtin_shaders::{
+        MAIN_BINDLESS_FRAG, MAIN_BINDLESS_VERT, MAIN_PREPASS_FRAG, MAIN_PREPASS_VERT,
+    };
+    Ok(BindlessSpv {
+        vert: MAIN_BINDLESS_VERT.compile(hot_reload)?,
+        frag: MAIN_BINDLESS_FRAG.compile(hot_reload)?,
+        prepass_vert: MAIN_PREPASS_VERT.compile(hot_reload)?,
+        prepass_frag: MAIN_PREPASS_FRAG.compile(hot_reload)?,
+    })
 }
 
 // Compute cull compute kernel. One invocation per build-time `DrawObject`
@@ -102,7 +118,7 @@ impl Drop for SpvModule<'_> {
 // copy the bytes into an aligned `Vec<u32>`. A length that is not a whole
 // number of words means a truncated or corrupt module, so reject it here
 // rather than rounding it down.
-fn spirv_words(spv: &[u8]) -> RenderResult<Vec<u32>> {
+pub(super) fn spirv_words(spv: &[u8]) -> RenderResult<Vec<u32>> {
     if !spv.len().is_multiple_of(4) {
         return Err(RenderError::Other(format!(
             "SPIR-V length {} is not a whole number of words",
@@ -217,7 +233,7 @@ const fn attr(
 
 // The full Vertex struct (56 bytes).
 const MAIN_VERTEX_BINDING: [vk::VertexInputBindingDescription; 1] = vertex_binding(56);
-const MAIN_VERTEX_ATTRS: [vk::VertexInputAttributeDescription; 5] = [
+pub(super) const MAIN_VERTEX_ATTRS: [vk::VertexInputAttributeDescription; 5] = [
     attr(0, vk::Format::R32G32B32_SFLOAT, 0),
     attr(1, vk::Format::R32G32B32_SFLOAT, 12),
     attr(2, vk::Format::R32G32B32_SFLOAT, 24),
@@ -250,64 +266,161 @@ pub(super) struct MeshPipelineTargets<'a> {
     pub frag_spv: &'a [u8],
 }
 
-// The main-pass targets a material-referenced world shader's bucket pipeline is
-// built against. Every bucket shares the bindless pipeline layout and render
-// pass; only the stage SPIR-V differs.
+// One shader bucket's pipelines: the main pass that shades its draws, and the
+// G-buffer pre-pass that lays down their depth, normal, roughness and motion
+// from the same vertex hook.
+pub(super) struct BucketPipelines {
+    pub main: OwnedPipeline,
+    // `None` until the world has a G-buffer, or after this bucket's pre-pass
+    // failed to build; the pre-pass then skips the bucket's draws.
+    pub prepass: Option<OwnedPipeline>,
+    // The world Shader the bucket compiles, `None` for the engine's own
+    // programs, kept so the pre-pass can be built or rebuilt later.
+    pub programs: Option<concinnity_core::components::ShaderPrograms>,
+}
+
+// What a bucket's pre-pass pipeline is built against: the G-buffer's render
+// pass and the pre-pass layout.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub(super) struct PrepassTargets {
+    pub render_pass: vk::RenderPass,
+    pub layout: vk::PipelineLayout,
+}
+
+// What a shader bucket's pipelines are built against. Every bucket shares the
+// bindless main-pass layout and render pass, and the pre-pass's once the world
+// has a G-buffer, which is what decides whether a bucket gets a pre-pass
+// pipeline at all; only the stage SPIR-V differs.
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub(super) struct BucketPipelineTargets {
     pub render_pass: vk::RenderPass,
     pub layout: vk::PipelineLayout,
+    pub prepass: Option<PrepassTargets>,
     pub msaa_samples: vk::SampleCountFlags,
     pub swapchain_format: vk::Format,
     pub hot_reload: bool,
+    // The engine-template reload the pipelines compile from.
+    pub template_generation: u64,
 }
 
-// Build one shader bucket's bindless main-pass pipeline. `bucket` is the
-// `DrawObject::shader_bucket` value (1-based; bucket 0 is the world default
-// program) and names the bucket in error messages.
+// Build one shader bucket's pipelines. `bucket` is the
+// `DrawObject::shader_bucket` value (bucket 0 is the world default program) and
+// names the bucket in error messages.
 //
 // A bucket with no programs is one the world declared no Shader for, so the
-// engine's own bindless pair renders it.
+// engine's own bindless programs render it.
 pub(super) fn build_bucket_pipeline(
     device: &VkDevice,
     targets: BucketPipelineTargets,
     bucket: usize,
     shader: backend_init::WorldShader<'_>,
-    engine_default: &(Vec<u8>, Vec<u8>),
-) -> RenderResult<OwnedPipeline> {
+    engine_default: &BindlessSpv,
+) -> RenderResult<BucketPipelines> {
     match shader.programs {
         Some(programs) => build_world_shader_pipeline(device, targets, bucket, programs),
-        None => create_bucket_pipeline(
-            device,
-            targets,
-            bucket,
-            &engine_default.0,
-            &engine_default.1,
-        ),
+        None => {
+            let main = create_bucket_main(device, targets, bucket, engine_default)?;
+            let prepass = targets.prepass.and_then(|prepass| {
+                let stages = (
+                    &engine_default.prepass_vert[..],
+                    &engine_default.prepass_frag[..],
+                );
+                build_bucket_prepass(device, prepass, bucket, stages)
+            });
+            Ok(BucketPipelines {
+                main,
+                prepass,
+                programs: None,
+            })
+        }
     }
 }
 
-// Build a world Shader's bindless main-pass pipeline for bucket `bucket` from
-// its own compiled stages.
+// Build a world Shader's pipelines for bucket `bucket` from its own compiled
+// stages. A pre-pass that does not compile costs the bucket its G-buffer draws,
+// not its shading.
 pub(super) fn build_world_shader_pipeline(
     device: &VkDevice,
     targets: BucketPipelineTargets,
     bucket: usize,
     programs: &concinnity_core::components::ShaderPrograms,
-) -> RenderResult<OwnedPipeline> {
-    let vert_spv = world_entry(programs, "vertex_main_bindless", targets.hot_reload)?;
-    let frag_spv = world_entry(programs, "fragment_main_bindless", targets.hot_reload)?;
-    create_bucket_pipeline(device, targets, bucket, &vert_spv, &frag_spv)
+) -> RenderResult<BucketPipelines> {
+    use concinnity_core::render::shader_programs::surface;
+    let entry =
+        |program: surface::Program| world_entry(programs, program.entry, targets.hot_reload);
+    let spv = BindlessSpv {
+        vert: entry(surface::MAIN_VERTEX)?,
+        frag: entry(surface::MAIN_FRAGMENT)?,
+        prepass_vert: Vec::new(),
+        prepass_frag: Vec::new(),
+    };
+    let main = create_bucket_main(device, targets, bucket, &spv)?;
+    let prepass = targets.prepass.and_then(|prepass| {
+        build_world_prepass(device, prepass, bucket, programs, targets.hot_reload)
+    });
+    Ok(BucketPipelines {
+        main,
+        prepass,
+        programs: Some(programs.clone()),
+    })
 }
 
-fn create_bucket_pipeline(
+// Bucket `bucket`'s pre-pass pipeline from a world Shader's programs, or
+// `None` with a warning when they do not compile or the pipeline cannot be
+// built.
+pub(super) fn build_world_prepass(
+    device: &VkDevice,
+    prepass: PrepassTargets,
+    bucket: usize,
+    programs: &concinnity_core::components::ShaderPrograms,
+    hot_reload: bool,
+) -> Option<OwnedPipeline> {
+    use concinnity_core::render::shader_programs::surface;
+    let stages = world_entry(programs, surface::PREPASS_VERTEX.entry, hot_reload).and_then(|vs| {
+        world_entry(programs, surface::PREPASS_FRAGMENT.entry, hot_reload).map(|fs| (vs, fs))
+    });
+    match stages {
+        Ok((vs, fs)) => build_bucket_prepass(device, prepass, bucket, (&vs, &fs)),
+        Err(e) => {
+            tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}");
+            None
+        }
+    }
+}
+
+// Bucket `bucket`'s pre-pass pipeline from its compiled stages, or `None` with
+// a warning when it cannot be built: the bucket then shades without
+// contributing to the G-buffer.
+pub(super) fn build_bucket_prepass(
+    device: &VkDevice,
+    prepass: PrepassTargets,
+    bucket: usize,
+    stages: (&[u8], &[u8]),
+) -> Option<OwnedPipeline> {
+    let (vert_spv, frag_spv) = stages;
+    let built = super::post::gbuffer::create_prepass_pipeline(
+        device,
+        MeshPipelineTargets {
+            render_pass: prepass.render_pass,
+            layout: prepass.layout,
+            vert_spv,
+            frag_spv,
+        },
+    );
+    built
+        .map_err(|e| {
+            tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}")
+        })
+        .ok()
+}
+
+fn create_bucket_main(
     device: &VkDevice,
     targets: BucketPipelineTargets,
     bucket: usize,
-    vert_spv: &[u8],
-    frag_spv: &[u8],
+    spv: &BindlessSpv,
 ) -> RenderResult<OwnedPipeline> {
-    if vert_spv.is_empty() || frag_spv.is_empty() {
+    if spv.vert.is_empty() || spv.frag.is_empty() {
         return Err(RenderError::Other(format!(
             "shader bucket {bucket} carries no SPIR-V stages"
         )));
@@ -317,8 +430,8 @@ fn create_bucket_pipeline(
         MeshPipelineTargets {
             render_pass: targets.render_pass,
             layout: targets.layout,
-            vert_spv,
-            frag_spv,
+            vert_spv: &spv.vert,
+            frag_spv: &spv.frag,
         },
         targets.msaa_samples,
         targets.swapchain_format,
@@ -334,8 +447,8 @@ pub(super) fn build_world_pipeline_table(
     device: &VkDevice,
     targets: BucketPipelineTargets,
     bucket_shaders: &[backend_init::WorldShader<'_>],
-    engine_default: &(Vec<u8>, Vec<u8>),
-) -> RenderResult<Vec<Option<OwnedPipeline>>> {
+    engine_default: &BindlessSpv,
+) -> RenderResult<Vec<Option<BucketPipelines>>> {
     let mut table = Vec::with_capacity(bucket_shaders.len());
     for (i, shader) in bucket_shaders.iter().enumerate() {
         if shader.deferred {
@@ -533,35 +646,6 @@ mod tests {
         assert!(is_spirv(&vs), "shadow bindless VS is valid SPIR-V");
     }
 
-    // The `Location` of every `Input` variable a SPIR-V module declares, sorted.
-    fn input_locations(words: &[u32]) -> Vec<u32> {
-        const OP_DECORATE: u32 = 71;
-        const OP_VARIABLE: u32 = 59;
-        const DECORATION_LOCATION: u32 = 30;
-        const STORAGE_INPUT: u32 = 1;
-        let mut locations = std::collections::HashMap::new();
-        let mut inputs = Vec::new();
-        let mut at = 5;
-        while at < words.len() {
-            let count = (words[at] >> 16) as usize;
-            let op = words.get(at + 1..at + count.max(1)).unwrap_or(&[]);
-            match words[at] & 0xFFFF {
-                OP_DECORATE if op.len() >= 3 && op[1] == DECORATION_LOCATION => {
-                    locations.insert(op[0], op[2]);
-                }
-                OP_VARIABLE if op.len() >= 3 && op[2] == STORAGE_INPUT => inputs.push(op[1]),
-                _ => {}
-            }
-            at += count.max(1);
-        }
-        let mut found: Vec<u32> = inputs
-            .iter()
-            .filter_map(|id| locations.get(id).copied())
-            .collect();
-        found.sort_unstable();
-        found
-    }
-
     // The shadow pipeline binds exactly the vertex attributes its shader reads:
     // a missing one is a validation error at pipeline creation, an extra one a
     // warning.
@@ -572,7 +656,7 @@ mod tests {
         let words = spirv_words(&vs).expect("whole words");
         let mut bound: Vec<u32> = SHADOW_VERTEX_ATTRS.iter().map(|a| a.location).collect();
         bound.sort_unstable();
-        assert_eq!(input_locations(&words), bound);
+        assert_eq!(super::super::spirv_inputs::input_locations(&words), bound);
     }
 
     // The bindless main shaders compile to valid SPIR-V from the embedded
@@ -581,9 +665,15 @@ mod tests {
     #[test]
     fn bindless_shaders_compile() {
         concinnity_shader::require_dxc!();
-        let (vs, fs) = compile_bindless_shaders(false).expect("bindless shaders compile");
-        assert!(is_spirv(&vs), "bindless vertex is valid SPIR-V");
-        assert!(is_spirv(&fs), "bindless fragment is valid SPIR-V");
+        let spv = compile_bindless_shaders(false).expect("bindless shaders compile");
+        for (stage, bytes) in [
+            ("vertex", &spv.vert),
+            ("fragment", &spv.frag),
+            ("pre-pass vertex", &spv.prepass_vert),
+            ("pre-pass fragment", &spv.prepass_frag),
+        ] {
+            assert!(is_spirv(bytes), "bindless {stage} is valid SPIR-V");
+        }
         let frag_src = crate::vulkan::builtin_shaders::MAIN_BINDLESS_FRAG.source(false);
         let injected: Vec<&str> = frag_src
             .lines()
@@ -592,8 +682,8 @@ mod tests {
         assert_eq!(injected, ["#define CN_BACKEND_VULKAN 1"]);
     }
 
-    // A world Shader's bindless pair compiles from its programs, and is its own
-    // program rather than the engine's. No device is needed, so this guards the
+    // A world Shader's bindless entries compile from its programs, and are its
+    // own programs rather than the engine's. No device is needed, so this guards the
     // world-shader path the Vulkan-on-Windows runtime cannot unit-test end to
     // end. The payload carries no cooked artifacts, so both entries take the
     // compile branch of `surface_source`, which is also what a stale cook does.
@@ -610,10 +700,18 @@ mod tests {
             },
             programs: Vec::new(),
         };
-        let vs = world_entry(&programs, "vertex_main_bindless", false).unwrap();
-        let fs = world_entry(&programs, "fragment_main_bindless", false).unwrap();
-        assert!(is_spirv(&vs) && is_spirv(&fs), "the world's pair compiles");
-        let (_, engine_fs) = compile_bindless_shaders(false).unwrap();
-        assert_ne!(fs, engine_fs, "the world's fragment is its own program");
+        let compiled: Vec<Vec<u8>> = concinnity_core::render::shader_programs::surface::ALL
+            .iter()
+            .map(|p| world_entry(&programs, p.entry, false).unwrap())
+            .collect();
+        assert!(
+            compiled.iter().all(|s| is_spirv(s)),
+            "the world's entries compile"
+        );
+        let engine = compile_bindless_shaders(false).unwrap();
+        assert_ne!(
+            compiled[1], engine.frag,
+            "the world's fragment is its own program"
+        );
     }
 }

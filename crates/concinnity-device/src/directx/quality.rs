@@ -133,6 +133,10 @@ impl DxContext {
             )?;
             self.gbuffer = Some(gbuffer);
         }
+        // Also retries what an earlier change failed to bring up for its pre-pass.
+        if self.gbuffer.is_some() {
+            self.enable_gbuffer_prepass()?;
+        }
 
         // TAA, SSR and SSGI take their targets' descriptors from the shared post
         // block, which gets a dropped target's slots back and which every

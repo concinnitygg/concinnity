@@ -24,14 +24,16 @@ use ash::vk;
 use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::{GBufferView, ModelHistoryParams};
-use concinnity_core::render::view_history::ViewHistory;
+use concinnity_core::render::view_history::{ViewFrame, ViewHistory};
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::VkContext;
 use super::super::descriptor_layout::Binding;
+use super::super::pipeline::{MAIN_VERTEX_ATTRS, MeshPipelineTargets, spirv_words};
 use super::super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc, compute_pipeline};
 use super::super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::super::set_writes::SetWrites;
+use super::super::spirv_inputs::input_locations;
 use super::super::texture::*;
 use super::gbuffer_sky::GbufferSky;
 use crate::vulkan::builtin_shaders::CompileProgram;
@@ -56,9 +58,10 @@ pub(in crate::vulkan) const GBUFFER_ROUGHNESS_FORMAT: vk::Format = vk::Format::R
 // Screen-space motion (prev_uv - cur_uv). Cleared to 0 (no motion).
 pub(in crate::vulkan) const GBUFFER_VELOCITY_FORMAT: vk::Format = vk::Format::R16G16_SFLOAT;
 
-// Size of the per-frame view UBO: jittered_vp + cur_vp + prev_vp + view_mat
-// (four std140 mat4 = 256 B). Matches the `GbView` UBO in every pre-pass VS.
-pub(in crate::vulkan) const GBUFFER_VIEW_UBO_SIZE: vk::DeviceSize = 256;
+// Size of the per-frame view UBO: jittered_vp + cur_vp + prev_vp + view_mat and
+// the previous clock. Matches the `GbView` UBO in `gbuffer_common.hlsl`.
+pub(in crate::vulkan) const GBUFFER_VIEW_UBO_SIZE: vk::DeviceSize =
+    std::mem::size_of::<GBufferView>() as vk::DeviceSize;
 
 // `GBufferView` (the std140 `GbView` UBO) is a GPU-free layout struct that
 // lives in `core::render` (imported above).
@@ -157,13 +160,12 @@ fn create_prepass_render_pass(device: &VkDevice) -> RenderResult<OwnedRenderPass
 // the R8 roughness target stores only R under the uniform RGBA write mask.
 pub(super) const PREPASS_TARGETS: [Blend; 3] = [Blend::Opaque; 3];
 
-// Vertex input for the GPU-driven (bindless) G-buffer pre-pass: the current
-// attributes the VS reads (position 0, normal 1) on binding 0, plus the
-// previous-frame position (location 5) on binding 1. Both
-// bindings carry the 56-byte `Vertex`; the static prefix binds the static VB to
-// both (prev_pos == cur_pos), the skinned tail binds the current deformed buffer
-// to binding 0 and the previous-frame deformed buffer to binding 1. Tangent,
-// color and UV are unused (the pre-pass samples no textures).
+// Vertex input for the G-buffer pre-pass: the main pass's attributes on binding
+// 0, which the vertex hook reads in full, plus the previous-frame position
+// (location 5) on binding 1. Both bindings carry the 56-byte `Vertex`; the
+// static prefix binds the static VB to both (prev_pos == cur_pos), the skinned
+// tail binds the current deformed buffer to binding 0 and the previous-frame
+// deformed buffer to binding 1.
 const VERTEX_56_DUAL_BINDINGS: [vk::VertexInputBindingDescription; 2] = [
     vk::VertexInputBindingDescription {
         binding: 0,
@@ -176,35 +178,101 @@ const VERTEX_56_DUAL_BINDINGS: [vk::VertexInputBindingDescription; 2] = [
         input_rate: vk::VertexInputRate::VERTEX,
     },
 ];
-const VERTEX_56_DUAL_ATTRIBUTES: [vk::VertexInputAttributeDescription; 3] = [
-    position_attribute(0, 0, 0),
-    position_attribute(0, 1, 12),
-    position_attribute(1, 5, 0),
+const PREPASS_VERTEX_ATTRIBUTES: [vk::VertexInputAttributeDescription; 6] = [
+    MAIN_VERTEX_ATTRS[0],
+    MAIN_VERTEX_ATTRS[1],
+    MAIN_VERTEX_ATTRS[2],
+    MAIN_VERTEX_ATTRS[3],
+    MAIN_VERTEX_ATTRS[4],
+    vk::VertexInputAttributeDescription {
+        location: 5,
+        binding: 1,
+        format: vk::Format::R32G32B32_SFLOAT,
+        offset: 0,
+    },
 ];
 
-const fn position_attribute(
-    binding: u32,
-    location: u32,
-    offset: u32,
-) -> vk::VertexInputAttributeDescription {
-    vk::VertexInputAttributeDescription {
-        location,
-        binding,
-        format: vk::Format::R32G32B32_SFLOAT,
-        offset,
-    }
+// The layout every shader bucket's G-buffer pre-pass pipeline binds: the main
+// pass's global and bindless sets at 0 and 1 and the pre-pass's own view
+// block, model history and draw args at set 2. Built with the bindless main
+// pass, so a quality change that adds a G-buffer consumer can build the
+// pre-pass sets and pipelines against it; the pipelines themselves take the
+// G-buffer's render pass.
+pub(in crate::vulkan) struct PrepassLayout {
+    pub(in crate::vulkan) set_layout: OwnedSetLayout,
+    pub(in crate::vulkan) pipeline_layout: OwnedPipelineLayout,
 }
 
-// GPU-driven G-buffer pre-pass resources, built when the bindless cull path is
-// active AND the G-buffer is enabled. Stored on `VkCull`. The pipeline reuses the
-// G-buffer render pass; the per-frame model-history SSBOs supply the velocity
-// history, filled on the GPU by the snapshot kernel below; the per-frame set 0
-// binds the G-buffer view UBO, the PREVIOUS frame's history slot and this
-// frame's draw args, and set 1 reuses the bindless GpuObjectData set.
+pub(in crate::vulkan) fn build_prepass_layout(
+    device: &VkDevice,
+    global_set_layout: vk::DescriptorSetLayout,
+    bindless_set_layout: vk::DescriptorSetLayout,
+) -> RenderResult<PrepassLayout> {
+    let set_layout = create_descriptor_set_layout(
+        device,
+        &history_set_bindings(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+    )?;
+    let layouts = [global_set_layout, bindless_set_layout, set_layout.handle()];
+    let pipeline_layout = device
+        .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts))
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "gbuffer prepass pipeline layout"))?;
+    Ok(PrepassLayout {
+        set_layout,
+        pipeline_layout,
+    })
+}
+
+// One shader bucket's pre-pass pipeline over its `vertex_prepass_bindless` /
+// `fragment_prepass_bindless` pair: the same no-cull / camera depth test as the
+// main pass, over a private depth buffer. It binds only the attributes the
+// vertex module reads, which depend on the bucket's vertex hook.
+pub(in crate::vulkan) fn create_prepass_pipeline(
+    device: &VkDevice,
+    targets: MeshPipelineTargets<'_>,
+) -> RenderResult<OwnedPipeline> {
+    let read = input_locations(&spirv_words(targets.vert_spv)?);
+    let attributes = prepass_attributes(&read)?;
+    GraphicsPipelineDesc {
+        depth: Depth::write(),
+        vertex_bindings: &VERTEX_56_DUAL_BINDINGS,
+        vertex_attributes: &attributes,
+        ..GraphicsPipelineDesc::fullscreen(
+            targets.vert_spv,
+            targets.frag_spv,
+            targets.layout,
+            targets.render_pass,
+            &PREPASS_TARGETS,
+        )
+    }
+    .build(device, "gbuffer prepass")
+}
+
+// The attributes a pre-pass vertex module reading the input locations `read`
+// binds: each one it reads, and only those. A location the layout does not
+// offer is an error, since the module would read an unbound input.
+fn prepass_attributes(read: &[u32]) -> RenderResult<Vec<vk::VertexInputAttributeDescription>> {
+    if let Some(missing) = read
+        .iter()
+        .find(|l| !PREPASS_VERTEX_ATTRIBUTES.iter().any(|a| a.location == **l))
+    {
+        return Err(RenderError::ShaderCompile(format!(
+            "G-buffer pre-pass vertex stage reads input location {missing}, which the pre-pass \
+             vertex layout does not offer"
+        )));
+    }
+    Ok(PREPASS_VERTEX_ATTRIBUTES
+        .iter()
+        .filter(|a| read.contains(&a.location))
+        .copied()
+        .collect())
+}
+
+// The G-buffer pre-pass's model history and its per-frame sets, built when the
+// bindless cull path is active AND the G-buffer is enabled. Stored on `VkCull`.
+// The per-frame set (`PrepassLayout`'s set 2) binds the G-buffer view UBO, the
+// PREVIOUS frame's history slot and this frame's draw args; the per-frame
+// model-history SSBOs are filled on the GPU by the snapshot kernel below.
 pub(in crate::vulkan) struct GbufferBindless {
-    pub(in crate::vulkan) pipeline: OwnedPipeline,
-    pub(in crate::vulkan) pipeline_layout: OwnedPipelineLayout,
-    pub(in crate::vulkan) set_layout: OwnedSetLayout,
     pub(in crate::vulkan) sets: Vec<vk::DescriptorSet>,
     pub(in crate::vulkan) prev_model_buffers: Vec<PooledBuffer>,
     pub(in crate::vulkan) history: ModelHistoryPipeline,
@@ -240,13 +308,12 @@ pub(in crate::vulkan) struct GbufferDeviceCtx<'a> {
     pub device: &'a VkDevice,
 }
 
-// Descriptor wiring the GPU-driven pre-pass allocates against: the shared pool
-// its per-frame set 0 comes from and the bindless GpuObjectData set layout it
-// reuses as set 1.
+// Descriptor wiring the pre-pass's per-frame sets allocate against: the shared
+// pool, and `PrepassLayout`'s set 2 layout.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct GbufferBindlessDescriptors {
     pub descriptor_pool: vk::DescriptorPool,
-    pub bindless_set_layout: vk::DescriptorSetLayout,
+    pub prepass_set_layout: vk::DescriptorSetLayout,
 }
 
 // The per-frame record buffers the pre-pass and its snapshot kernel read: the
@@ -266,11 +333,10 @@ pub(in crate::vulkan) struct GbufferBindlessScene {
     pub frames: usize,
 }
 
-// Build the GPU-driven G-buffer pre-pass pipeline, the model-history ring it
-// reprojects through, the snapshot kernel that fills that ring, and the
-// descriptor sets for both. Set 0 = G-buffer view UBO + the previous frame's
-// history slot + this frame's draw args; set 1 = the shared bindless
-// GpuObjectData set (object id via gl_InstanceIndex).
+// Build the G-buffer pre-pass's model-history ring, the snapshot kernel that
+// fills it, and the descriptor sets for both. The pre-pass's per-frame set binds
+// the G-buffer view UBO, the previous frame's history slot and this frame's
+// draw args.
 pub(in crate::vulkan) fn build_gbuffer_bindless(
     ctx: GbufferDeviceCtx,
     descriptors: GbufferBindlessDescriptors,
@@ -282,29 +348,13 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     let GbufferDeviceCtx { alloc, device } = ctx;
     let GbufferBindlessDescriptors {
         descriptor_pool,
-        bindless_set_layout,
+        prepass_set_layout,
     } = descriptors;
     let GbufferBindlessScene { n_cull, frames } = scene;
     let GbufferBindlessRecords {
         object_buffers,
         draw_args_buffers,
     } = records;
-
-    // Set 0: GbView UBO (binding 0), the previous frame's model-history slot
-    // (binding 1) and this frame's draw args (binding 2), all VERTEX.
-    let set_layout =
-        create_descriptor_set_layout(device, &history_set_bindings(vk::ShaderStageFlags::VERTEX))?;
-    let layouts = [set_layout.handle(), bindless_set_layout];
-    let pipeline_layout = device
-        .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts))
-        .map_err(|e| crate::vulkan::error::map_vk_result(e, "gbuffer bindless pipeline layout"))?;
-
-    let pipeline = build_prepass_pipeline(
-        device,
-        pipeline_layout.handle(),
-        gb.prepass_render_pass.handle(),
-        hot_reload,
-    )?;
 
     // Per-frame model-history SSBOs, sized for `n_cull` column-major `float4x4`
     // records, parallel to the object buffer. Device-local: only the snapshot
@@ -320,12 +370,12 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
         )?);
     }
 
-    // One set 0 per frame: binding 0 = that frame's GbView UBO, binding 1 = the
+    // One set per frame: binding 0 = that frame's GbView UBO, binding 1 = the
     // history slot the PREVIOUS frame filled, binding 2 = that frame's draw
     // args. The frame index cycles, so the previous slot is a fixed offset and
     // every set can be written once here.
     let draw_args_size = (n_cull * std::mem::size_of::<GpuDrawArgs>()) as u64;
-    let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
+    let set_layouts: Vec<_> = (0..frames).map(|_| prepass_set_layout).collect();
     let sets = alloc_descriptor_sets(device, descriptor_pool, &set_layouts)?;
     for (f, &set) in sets.iter().enumerate() {
         SetWrites::new(set)
@@ -349,32 +399,10 @@ pub(in crate::vulkan) fn build_gbuffer_bindless(
     )?;
 
     Ok(GbufferBindless {
-        pipeline,
-        pipeline_layout,
-        set_layout,
         sets,
         prev_model_buffers,
         history,
     })
-}
-
-// The bindless pre-pass pipeline: the same no-cull / camera depth test as the
-// main pass, over a private depth buffer.
-pub(in crate::vulkan) fn build_prepass_pipeline(
-    device: &VkDevice,
-    layout: vk::PipelineLayout,
-    render_pass: vk::RenderPass,
-    hot_reload: bool,
-) -> RenderResult<OwnedPipeline> {
-    let vs = super::super::builtin_shaders::GBUFFER_PREPASS_VERT_BINDLESS.compile(hot_reload)?;
-    let fs = super::super::builtin_shaders::GBUFFER_PREPASS_FRAG_BINDLESS.compile(hot_reload)?;
-    GraphicsPipelineDesc {
-        depth: Depth::write(),
-        vertex_bindings: &VERTEX_56_DUAL_BINDINGS,
-        vertex_attributes: &VERTEX_56_DUAL_ATTRIBUTES,
-        ..GraphicsPipelineDesc::fullscreen(&vs, &fs, layout, render_pass, &PREPASS_TARGETS)
-    }
-    .build(device, "gbuffer prepass")
 }
 
 // A UBO at binding 0 and two storage buffers at 1 and 2, read by `stages`: the
@@ -475,6 +503,14 @@ pub(in crate::vulkan) struct GbufferPooled {
     pub normal_depth: Vec<PooledTarget>,
     pub roughness: Vec<PooledTarget>,
     pub velocity: Vec<PooledTarget>,
+}
+
+// One frame slot's sampled G-buffer channels.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct GbufferFrame {
+    pub normal_depth: vk::ImageView,
+    pub roughness: vk::ImageView,
+    pub velocity: vk::ImageView,
 }
 
 // Unified G-buffer pre-pass resources held by `VkContext` when any screen-space
@@ -652,43 +688,35 @@ impl GbufferResources {
         Ok(())
     }
 
-    // The per-frame normal+depth view a reader (SSR resolve, SSAO, SSGI) binds.
-    pub(in crate::vulkan) fn normal_depth_view(&self, frame: usize) -> vk::ImageView {
-        self.normal_depth_images[frame].view
+    // This frame slot's sampled channels, or `None` while the targets are
+    // missing after a failed rebuild.
+    pub(in crate::vulkan) fn frame(&self, frame: usize) -> Option<GbufferFrame> {
+        Some(GbufferFrame {
+            normal_depth: self.normal_depth_images.get(frame)?.view,
+            roughness: self.roughness_images.get(frame)?.view,
+            velocity: self.velocity_images.get(frame)?.view,
+        })
     }
 
-    // The per-frame roughness view a reader binds.
-    pub(in crate::vulkan) fn roughness_view(&self, frame: usize) -> vk::ImageView {
-        self.roughness_images[frame].view
-    }
-
-    // The per-frame velocity view the TAA resolve / FSR binds.
-    pub(in crate::vulkan) fn velocity_view(&self, frame: usize) -> vk::ImageView {
-        self.velocity_images[frame].view
+    // Whether the per-frame targets exist. A rebuild that fails leaves none,
+    // never a partial set.
+    pub(in crate::vulkan) fn has_targets(&self) -> bool {
+        !self.framebuffers.is_empty()
     }
 
     // Per-frame normal+depth views, one per frame in flight. The readers that
     // bind a per-frame descriptor set (SSR resolve, SSAO kernel/blur, SSGI, RT)
     // slice this so each set samples its own frame's unified G-buffer.
     pub(in crate::vulkan) fn normal_depth_views(&self) -> Vec<vk::ImageView> {
-        (0..self.normal_depth_images.len())
-            .map(|f| self.normal_depth_view(f))
+        self.normal_depth_images
+            .iter()
+            .map(|img| img.view)
             .collect()
     }
 
     // Per-frame roughness views, one per frame in flight.
     pub(in crate::vulkan) fn roughness_views(&self) -> Vec<vk::ImageView> {
-        (0..self.roughness_images.len())
-            .map(|f| self.roughness_view(f))
-            .collect()
-    }
-
-    // Per-frame velocity views, one per frame in flight. The TAA resolve binds
-    // its frame's slot; FSR reads `velocity_images[frame]` directly.
-    pub(in crate::vulkan) fn velocity_views(&self) -> Vec<vk::ImageView> {
-        (0..self.velocity_images.len())
-            .map(|f| self.velocity_view(f))
-            .collect()
+        self.roughness_images.iter().map(|img| img.view).collect()
     }
 
     fn destroy_targets(&mut self, _device: &VkDevice) {
@@ -706,7 +734,9 @@ impl GbufferResources {
     // already idled the device and rebuilt the transient pool, so `pooled` names
     // the new images; the framebuffers built here reference them, which is why
     // this must run after every pool rebuild and not only after a resize. The
-    // descriptor sets and UBOs are resolution-independent and untouched.
+    // descriptor sets and UBOs are resolution-independent and untouched. On
+    // failure the targets are left empty, so readers skip until a later
+    // rebuild succeeds.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         ctx: GbufferDeviceCtx,
@@ -715,8 +745,11 @@ impl GbufferResources {
         pooled: &GbufferPooled,
     ) -> RenderResult<()> {
         self.destroy_targets(ctx.device);
-        self.build_targets(ctx, queue, extent, pooled)?;
-        Ok(())
+        let built = self.build_targets(ctx, queue, extent, pooled);
+        if built.is_err() {
+            self.destroy_targets(ctx.device);
+        }
+        built
     }
 
     // Destroy every G-buffer pre-pass resource. The caller has already idled the
@@ -733,15 +766,65 @@ impl GbufferResources {
 pub(in crate::vulkan) struct GbufferPrepassView {
     pub jittered_vp: [[f32; 4]; 4],
     pub cur_vp: [[f32; 4]; 4],
+    // The main pass's clock and camera position, which a vertex hook reads.
+    pub elapsed: f32,
+    pub cam_pos: [f32; 3],
 }
 
 impl VkContext {
+    // The G-buffer while it has targets to draw into and sample.
+    pub(in crate::vulkan) fn gbuffer_targets(&self) -> Option<&GbufferResources> {
+        self.gbuffer.as_ref().filter(|gb| gb.has_targets())
+    }
+
     // Whether anything reprojects through the pre-pass's motion channel this
     // frame: TAA, the FSR upscaler, or the SSGI accumulation.
     pub(in crate::vulkan) fn reads_motion(&self) -> bool {
         self.taa.is_some()
             || self.upscale.is_some()
             || self.ssgi.as_ref().is_some_and(|s| s.settings.contributes())
+    }
+
+    // Give the G-buffer whatever its pre-pass still lacks to draw with: the
+    // per-frame sets, the model-history ring and its snapshot kernel, which
+    // init builds only for a world that starts with a G-buffer consumer, and
+    // each shader bucket's pre-pass pipeline. Builds only what is missing, so
+    // it is safe to repeat. A world with no GPU-driven pass has nothing to
+    // draw here.
+    pub(in crate::vulkan) fn enable_gbuffer_prepass(&mut self) -> RenderResult<()> {
+        if let (Some(gb), Some(prepass), None) = (
+            self.gbuffer.as_ref(),
+            self.cull.prepass_layout.as_ref(),
+            self.cull.model_history.as_ref(),
+        ) {
+            let built = build_gbuffer_bindless(
+                GbufferDeviceCtx {
+                    alloc: &self.hw.alloc,
+                    device: &self.hw.device,
+                },
+                GbufferBindlessDescriptors {
+                    descriptor_pool: self.descriptors.descriptor_pool.handle(),
+                    prepass_set_layout: prepass.set_layout.handle(),
+                },
+                GbufferBindlessRecords {
+                    object_buffers: &self.cull.object_buffers,
+                    draw_args_buffers: &self.cull.draw_args_buffers,
+                },
+                gb,
+                GbufferBindlessScene {
+                    n_cull: self.cull.bucket_stride,
+                    frames: self.frames_in_flight,
+                },
+                self.hot_reload.enabled,
+            )?;
+            self.cull.gbuffer_sets = built.sets;
+            self.cull.prev_model_buffers = built.prev_model_buffers;
+            self.cull.model_history = Some(built.history);
+            // Nothing has written the fresh ring, so the first pre-pass primes it.
+            self.state.model_history.borrow_mut().request_prime();
+        }
+        self.sync_prepass_pipelines();
+        Ok(())
     }
 
     // Encode the unified G-buffer pre-pass: one jittered traversal of the cull
@@ -765,23 +848,30 @@ impl VkContext {
         let GbufferPrepassView {
             jittered_vp,
             cur_vp,
+            elapsed,
+            cam_pos,
         } = view;
+        let Some(framebuffer) = gb.framebuffers.get(frame_idx) else {
+            return;
+        };
         let device = &self.hw.device;
         let extent = self.targets.render_extent;
 
         // Upload this frame's view UBO. When velocity is inactive the previous
-        // VP equals the current one, so instanced + sky motion is zero.
-        let prev_vp = if velocity_active {
-            gb.view_history.prev_or(cur_vp)
-        } else {
-            cur_vp
+        // camera and clock equal the current ones, so instanced + sky motion
+        // is zero and the surfaces skip reprojecting.
+        let cur = ViewFrame {
+            vp: cur_vp,
+            elapsed,
+            cam_pos,
         };
-        let view_uni = GBufferView {
+        let view_uni = GBufferView::new(
             jittered_vp,
-            cur_vp,
-            prev_vp,
-            view: self.state.view.matrix,
-        };
+            self.state.view.matrix,
+            cur,
+            gb.view_history.prev_or(cur),
+            velocity_active,
+        );
         gb.view_ubo_buffers[frame_idx].write_val(0, &view_uni);
 
         // Clears: alpha-0 normal+depth = "no geometry"; roughness 1.0 = no SSR;
@@ -804,7 +894,7 @@ impl VkContext {
         ];
         let rp_begin = vk::RenderPassBeginInfo::default()
             .render_pass(gb.prepass_render_pass.handle())
-            .framebuffer(gb.framebuffers[frame_idx].handle())
+            .framebuffer(framebuffer.handle())
             .render_area(vk::Rect2D::default().extent(extent))
             .clear_values(&clears);
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
@@ -968,14 +1058,16 @@ impl VkContext {
 
     // GPU-driven G-buffer pre-pass raster (inside the render pass the caller
     // began). Reuses the main pass's per-frame indirect buffer (the camera-frustum
-    // cull already produced it, so no extra cull dispatch) with two indirect draws:
-    // the static + instance prefix `[0, skinned_record_base())` over the static VB
-    // (bound to BOTH vertex bindings, so prev_pos == cur_pos and the motion is the
-    // per-object model delta plus camera), then the skinned tail over the current
+    // cull already produced it, so no extra cull dispatch): the static + instance
+    // prefix `[0, skinned_record_base())` once per shader bucket, each under that
+    // bucket's pre-pass pipeline, over the static VB (bound to BOTH vertex
+    // bindings, so prev_pos == cur_pos and the motion is the per-object model
+    // delta plus camera), then the skinned tail under bucket 0's over the current
     // deformed VB (binding 0) + the previous-frame deformed VB (binding 1) for
-    // per-vertex deformation motion. model + roughness ride the per-frame
-    // GpuObjectData SSBO (gl_InstanceIndex); the previous-frame model a parallel
-    // SSBO. The CPU never walks the draw lists.
+    // per-vertex deformation motion. The main pass's global and bindless sets
+    // carry the view block, records, parameter table and texture pool the
+    // vertex hook and the surface read; set 2 the pre-pass's own. The CPU never
+    // walks the draw lists.
     fn encode_gbuffer_prepass_gpu_driven(
         &self,
         cmd: vk::CommandBuffer,
@@ -983,10 +1075,10 @@ impl VkContext {
         velocity_active: bool,
     ) {
         let device = &self.hw.device;
-        let (Some(pipeline), Some(layout)) = (
-            self.cull.gbuffer_bindless_pipeline.as_ref(),
-            self.cull.gbuffer_bindless_pipeline_layout.as_ref(),
-        ) else {
+        // Bucket 0's pipeline is `None` when its pre-pass failed to build; the
+        // other buckets still draw.
+        let pipeline = self.cull.prepass_pipeline.as_ref();
+        let Some(prepass) = self.cull.prepass_layout.as_ref() else {
             return;
         };
         let Some(indirect) = self
@@ -1006,14 +1098,16 @@ impl VkContext {
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
-            // set 0 = GbView UBO + prev_model SSBO; set 1 = bindless GpuObjectData.
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
-                layout.handle(),
+                prepass.pipeline_layout.handle(),
                 0,
-                &[gset, self.cull.bindless_sets[frame_idx]],
+                &[
+                    self.descriptors.global_sets[frame_idx],
+                    self.cull.bindless_sets[frame_idx],
+                    gset,
+                ],
                 &[],
             );
 
@@ -1034,17 +1128,18 @@ impl VkContext {
                 0,
                 vk::IndexType::UINT32,
             );
-            if prefix > 0 {
+            if let (true, Some(pipeline)) = (prefix > 0, pipeline) {
+                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
                 device.cmd_draw_indexed_indirect(cmd, indirect, 0, prefix, stride);
                 self.inc_draw_calls(1);
             }
         }
         // The material-referenced shader buckets write their own regions of the
-        // command buffer. The pre-pass shades nothing, so every bucket runs under
-        // this single pipeline; a bucket whose Shader is not resident is skipped,
-        // matching what the color pass will draw.
+        // command buffer, each drawn under its own pre-pass pipeline; a bucket
+        // whose Shader is not resident is skipped, matching what the color pass
+        // will draw.
         if prefix > 0 {
-            self.inc_draw_calls(self.draw_bucket_regions_shared_pipeline(cmd, indirect, prefix));
+            self.inc_draw_calls(self.draw_prepass_bucket_regions(cmd, indirect, prefix));
         }
 
         // Skinned tail: the current deformed VB (binding 0) + the previous-frame
@@ -1054,7 +1149,7 @@ impl VkContext {
         // when velocity is inactive) it is the current buffer, so prev_pos ==
         // cur_pos gives a harmless zero skinned motion vector.
         if self.state.draw.n_skinned > 0
-            && let Some(cur) = self.skinned.deformed.get(frame_idx)
+            && let (Some(pipeline), Some(cur)) = (pipeline, self.skinned.deformed.get(frame_idx))
         {
             let frames = self.frames_in_flight.max(1);
             let use_prev = velocity_active
@@ -1072,6 +1167,8 @@ impl VkContext {
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
+                // Skinned records are always bucket 0.
+                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
                 device.cmd_bind_vertex_buffers(cmd, 0, &[cur.buffer, prev.buffer], &[0, 0]);
                 device.cmd_bind_index_buffer(
                     cmd,
@@ -1099,28 +1196,63 @@ impl VkContext {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    // The `GBufferView` layout test lives with the struct in
-    // `concinnity_core::render::uniforms::vulkan`. `GBufferView` fitting the
-    // `GBUFFER_VIEW_UBO_SIZE` allocation is checked here, where the size const
-    // (typed `vk::DeviceSize`) lives.
+    // The sky's share of the pre-pass compiles to SPIR-V; the surface entries
+    // compile with the main pass's (`pipeline::tests`).
     #[test]
-    fn gb_view_uniforms_fits_ubo_allocation() {
-        assert!(std::mem::size_of::<GBufferView>() as u64 <= GBUFFER_VIEW_UBO_SIZE);
+    fn gbuffer_sky_shaders_compile() {
+        use crate::vulkan::builtin_shaders::{CompileProgram, GBUFFER_SKY_FRAG, GBUFFER_SKY_VERT};
+        concinnity_shader::require_dxc!();
+        GBUFFER_SKY_VERT
+            .compile(false)
+            .expect("gbuffer sky vertex compiles");
+        GBUFFER_SKY_FRAG
+            .compile(false)
+            .expect("gbuffer sky fragment compiles");
     }
 
-    // The GPU-driven pre-pass pair compiles to SPIR-V. Exercises the fused
-    // ssr_prepass + velocity contract: the vertex shader emits cur_clip /
-    // prev_clip the fragment consumes for the motion vector.
+    // Only what the module reads is bound, in the layout's own order.
     #[test]
-    fn gbuffer_shaders_compile() {
+    fn the_prepass_binds_exactly_what_its_module_reads() {
+        let bound = |read: &[u32]| -> Vec<u32> {
+            super::prepass_attributes(read)
+                .expect("offered")
+                .iter()
+                .map(|a| a.location)
+                .collect()
+        };
+        assert_eq!(bound(&[0, 1, 2, 4, 5]), [0, 1, 2, 4, 5]);
+        assert_eq!(bound(&[5, 0]), [0, 5]);
+        assert!(bound(&[]).is_empty());
+    }
+
+    // A location the layout does not offer is refused rather than left
+    // unbound.
+    #[test]
+    fn an_input_the_layout_does_not_offer_is_an_error() {
+        assert!(super::prepass_attributes(&[0, 6]).is_err());
+        assert!(super::prepass_attributes(&[9]).is_err());
+    }
+
+    // The pre-pass binds the attributes its vertex module reads out of the ones
+    // it offers, so every one the engine's module reads must be offered, the
+    // current and previous positions among them.
+    #[test]
+    fn the_prepass_offers_every_attribute_its_vertex_shader_reads() {
+        use super::{PREPASS_VERTEX_ATTRIBUTES, input_locations, spirv_words};
+        use crate::vulkan::builtin_shaders::{CompileProgram, MAIN_PREPASS_VERT};
         concinnity_shader::require_dxc!();
-        super::super::super::builtin_shaders::GBUFFER_PREPASS_VERT_BINDLESS
+        let vs = MAIN_PREPASS_VERT
             .compile(false)
-            .expect("gbuffer bindless vertex compiles");
-        super::super::super::builtin_shaders::GBUFFER_PREPASS_FRAG_BINDLESS
-            .compile(false)
-            .expect("gbuffer bindless fragment compiles");
+            .expect("pre-pass vertex compiles");
+        let read = input_locations(&spirv_words(&vs).expect("whole words"));
+        let offered: Vec<u32> = PREPASS_VERTEX_ATTRIBUTES
+            .iter()
+            .map(|a| a.location)
+            .collect();
+        assert!(
+            read.iter().all(|l| offered.contains(l)),
+            "{read:?} vs {offered:?}"
+        );
+        assert!(read.contains(&0) && read.contains(&5), "{read:?}");
     }
 }

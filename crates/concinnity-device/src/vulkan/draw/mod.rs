@@ -475,7 +475,7 @@ impl VkContext {
             // ring. With no consumer of motion, or with the pre-pass not built,
             // the ring goes stale, so every record is marked `NO_HISTORY` and
             // the tracker re-primes when the pre-pass returns.
-            let history = match self.gbuffer.is_some()
+            let history = match self.gbuffer_targets().is_some()
                 && self.cull.model_history.is_some()
                 && self.reads_motion()
             {
@@ -544,7 +544,11 @@ impl VkContext {
         // matching inputs skips the rebuild.
         self.graph_cache = Some((seed_inputs, graph));
 
-        self.advance_temporal_state(cur_vp);
+        self.advance_temporal_state(concinnity_core::render::view_history::ViewFrame {
+            vp: cur_vp,
+            elapsed,
+            cam_pos,
+        });
 
         self.finish_frame_stats();
 
@@ -662,6 +666,8 @@ impl VkContext {
         //  builder ([gfx/render_graph/frame.rs](../../gfx/render_graph/frame.rs)).
         //  The flags track whether each pipeline is built: the encoders skip
         //  cheaply when there is nothing live to draw.
+        // Every reader of the G-buffer drops out while its targets are missing.
+        let gbuffer = self.gbuffer_targets().is_some();
         let seed_inputs = FrameGraphInputs {
             shadow_enabled: self.shadow.enabled(),
             shadow_map_size: self.shadow.map_size,
@@ -697,7 +703,7 @@ impl VkContext {
             // The SSR pre-pass G-buffer is shared with SSGI, so it runs whenever
             // `self.ssr` exists (built for SSR resolve *or* SSGI).
             ssr_prepass_enabled: self.ssr.is_some(),
-            ssao_enabled: self.ssao.is_some(),
+            ssao_enabled: gbuffer && self.ssao.is_some(),
             // Gated on the resources (built at init when the world declares at
             // least one SdfVolume) AND a currently-visible volume, so an
             // all-hidden world drops the pass from the graph.
@@ -707,7 +713,7 @@ impl VkContext {
             // builder then runs `Upscale` in the `TaaResolve` slot, reading the
             // post-SSR scene + velocity and writing the swapchain-res scene the
             // bloom + composite stack samples.
-            upscale_enabled: self.upscale.is_some(),
+            upscale_enabled: gbuffer && self.upscale.is_some(),
             // Transparent / translucent pass: on when the world declared a
             // visible `GlassPanel` or `WaterSurface`. The shared builder then
             // seeds the Transparent node and the executor draws every record
@@ -741,13 +747,13 @@ impl VkContext {
             // trace is live (RT takes precedence; SSR is the fallback), and also
             // while the RT pass has no BVH and no authored SSR covers for it, to
             // keep the reflection composite fed.
-            rt_reflections_enabled: self.reflection_path().rt_node,
+            rt_reflections_enabled: gbuffer && self.reflection_path().rt_node,
             // Geometry pre-pass: one `GBufferPrepass` node rasterizes the
             // normal+depth / roughness / velocity MRT every screen-space consumer
             // (SSR / SSAO / SSGI / TAA / FSR) reads. On exactly when the buffer
             // was built, which is when any of those consumers is live. Mirrors
             // DirectX's `gbuffer_prepass_enabled: self.gbuffer.is_some()`.
-            gbuffer_prepass_enabled: self.gbuffer.is_some(),
+            gbuffer_prepass_enabled: gbuffer,
             // An opaque menu backdrop hides the scene: the shared builder masks
             // every world pass off, collapsing to Main (a bare clear, fed the
             // empty scene below) -> Composite (presents the overlay).
@@ -766,6 +772,7 @@ impl VkContext {
             lines_enabled: lines_published && self.lines.resources.is_some(),
             // Set by the view-mode mask below (occlusion view only).
             composite_reads_ao: false,
+            composite_reads_motion: false,
         };
         // The viewport's view mode + show flags mask the seeded inputs (the
         // per-frame counterpart of the init-time trims); Lit with every flag

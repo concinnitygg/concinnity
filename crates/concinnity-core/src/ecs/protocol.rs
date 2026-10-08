@@ -296,10 +296,11 @@ pub struct FlyCam(pub bool);
 #[derive(Debug, Clone, Default)]
 pub struct HiddenAssets(pub alloc::collections::BTreeSet<AssetId>);
 
-/// The viewport's view mode + show flags, published per frame by the editor.
-/// GraphicsSystem forwards it to the backend's FrameParams: the mode selects
-/// what the composite presents, the flags skip feature passes for the frame.
-/// Absent outside the editor, which reads as the lit default.
+/// The viewport's view mode + show flags. GraphicsSystem forwards it to the
+/// backend's FrameParams: the mode selects what the composite presents, the
+/// flags skip feature passes for the frame. Published by the editor each frame
+/// and by the dev tools' `view-set` verb; absent otherwise, which reads as the
+/// lit default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ViewOverrides {
     /// What the composite presents.

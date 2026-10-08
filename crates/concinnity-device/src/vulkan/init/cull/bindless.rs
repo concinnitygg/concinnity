@@ -1,6 +1,6 @@
-//! The bindless static main pass: its set and pipeline layouts, bucket 0's
-//! pipeline, the per-frame object buffers and bindless sets, and one pipeline
-//! per material-referenced shader bucket.
+//! The bindless static main pass: its set and pipeline layouts, the G-buffer
+//! pre-pass's, bucket 0's pipelines, the per-frame object buffers and bindless
+//! sets, and the pipelines of each material-referenced shader bucket.
 
 use ash::vk;
 use concinnity_core::gfx::render_types;
@@ -13,6 +13,7 @@ use crate::vulkan::init::InitGpu;
 use crate::vulkan::material_params::{MATERIAL_PARAMS_BINDING, VkMaterialParams};
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout};
 use crate::vulkan::pipeline::*;
+use crate::vulkan::post::gbuffer::{PrepassLayout, build_prepass_layout};
 use crate::vulkan::resources::alloc_descriptor_sets;
 use crate::vulkan::set_writes::SetWrites;
 
@@ -20,11 +21,16 @@ use crate::vulkan::set_writes::SetWrites;
 pub(super) struct BindlessPass {
     pub(super) pipeline: Option<OwnedPipeline>,
     pub(super) pipeline_layout: Option<OwnedPipelineLayout>,
+    pub(super) prepass_layout: Option<PrepassLayout>,
+    // What every bucket's pipelines were built against; `None` when the
+    // bindless path is inactive.
+    pub(super) bucket_targets: Option<BucketPipelineTargets>,
+    pub(super) prepass_pipeline: Option<OwnedPipeline>,
     pub(super) set_layout: Option<OwnedSetLayout>,
     pub(super) sets: Vec<vk::DescriptorSet>,
     pub(super) object_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
     pub(super) material_params: Option<VkMaterialParams>,
-    pub(super) main_spv: (Vec<u8>, Vec<u8>),
+    pub(super) main_spv: BindlessSpv,
 }
 
 pub(super) struct BindlessInputs<'a> {
@@ -35,6 +41,10 @@ pub(super) struct BindlessInputs<'a> {
     pub(super) scene: &'a VkSceneAssets,
     pub(super) material_params: &'a [render_types::GpuMaterialParams],
     pub(super) swapchain_format: vk::Format,
+    // The G-buffer's render pass when the world starts with a G-buffer
+    // consumer; the buckets' pre-pass pipelines build against it, and only
+    // then.
+    pub(super) gbuffer_render_pass: Option<vk::RenderPass>,
 }
 
 // Build the bindless static pass: bucket 0's pipeline, the per-frame object
@@ -58,6 +68,7 @@ pub(super) fn build_bindless_pass(
         scene,
         material_params,
         swapchain_format,
+        gbuffer_render_pass,
     } = inputs;
     let CullPlan {
         n_cull,
@@ -74,6 +85,8 @@ pub(super) fn build_bindless_pass(
     let (
         bindless_pipeline,
         bindless_pipeline_layout,
+        bucket_targets,
+        prepass_layout,
         bindless_set_layout,
         bindless_sets,
         object_buffers,
@@ -124,23 +137,33 @@ pub(super) fn build_bindless_pass(
             .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts))
             .map_err(|e| crate::vulkan::error::map_vk_result(e, "bindless pipeline layout"))?;
 
-        // The engine's own pair is the program for every bucket that
-        // declares no Shader and the source of the Wireframe twin; bucket 0
-        // takes the world default Shader's pair where it declares one.
-        let engine_pair = compile_bindless_shaders(hot_reload)?;
-        let pipeline = build_bucket_pipeline(
+        // The G-buffer pre-pass binds the same two sets plus its own. Built
+        // whether or not the world starts with a G-buffer, so one a quality
+        // change adds has a layout to build its pipelines against.
+        let prepass_layout = build_prepass_layout(
             device,
-            BucketPipelineTargets {
-                render_pass: targets.main_render_pass.handle(),
-                layout: pipeline_layout.handle(),
-                msaa_samples: targets.msaa_samples,
-                swapchain_format,
-                hot_reload,
-            },
-            0,
-            world_shaders[0],
-            &engine_pair,
+            descriptors.global_set_layout.handle(),
+            set_layout.handle(),
         )?;
+
+        // The engine's own programs are the ones for every bucket that
+        // declares no Shader and the source of the Wireframe twin; bucket 0
+        // takes the world default Shader's where it declares one.
+        let engine_spv = compile_bindless_shaders(hot_reload)?;
+        let bucket_targets = BucketPipelineTargets {
+            render_pass: targets.main_render_pass.handle(),
+            layout: pipeline_layout.handle(),
+            prepass: gbuffer_render_pass.map(|render_pass| PrepassTargets {
+                render_pass,
+                layout: prepass_layout.pipeline_layout.handle(),
+            }),
+            msaa_samples: targets.msaa_samples,
+            swapchain_format,
+            hot_reload,
+            template_generation: 0,
+        };
+        let pipelines =
+            build_bucket_pipeline(device, bucket_targets, 0, world_shaders[0], &engine_spv)?;
 
         // Per-frame GpuObjectData storage buffers, persistently mapped.
         // Sized for `n_cull` so the instanced merge's records fit past the
@@ -198,28 +221,44 @@ pub(super) fn build_bindless_pass(
         }
 
         (
-            Some(pipeline),
+            Some(pipelines),
             Some(pipeline_layout),
+            Some(bucket_targets),
+            Some(prepass_layout),
             Some(set_layout),
             sets,
             buffers,
             Some(params),
-            engine_pair,
+            engine_spv,
         )
     } else {
         (
             None,
             None,
             None,
+            None,
+            None,
             Vec::new(),
             Vec::new(),
             None,
-            (Vec::new(), Vec::new()),
+            BindlessSpv {
+                vert: Vec::new(),
+                frag: Vec::new(),
+                prepass_vert: Vec::new(),
+                prepass_frag: Vec::new(),
+            },
         )
     };
+    let (pipeline, prepass_pipeline) = match bindless_pipeline {
+        Some(p) => (Some(p.main), p.prepass),
+        None => (None, None),
+    };
     Ok(BindlessPass {
-        pipeline: bindless_pipeline,
+        pipeline,
         pipeline_layout: bindless_pipeline_layout,
+        prepass_layout,
+        bucket_targets,
+        prepass_pipeline,
         set_layout: bindless_set_layout,
         sets: bindless_sets,
         object_buffers,
@@ -228,42 +267,27 @@ pub(super) fn build_bindless_pass(
     })
 }
 
-// Material-referenced shaders (ShaderHandle 1..) each get their own
-// bindless main-pass pipeline, so their draws route into their own region
-// of the GPU-culled command buffer.
+// Material-referenced shaders (ShaderHandle 1..) each get their own main-pass
+// and pre-pass pipelines, so their draws route into their own region of the
+// GPU-culled command buffer.
 pub(super) fn build_world_pipelines(
     gpu: &InitGpu<'_>,
     bindless: &BindlessPass,
     world_shaders: &[WorldShader<'_>],
-    targets: &VkTargets,
-    swapchain_format: vk::Format,
-) -> RenderResult<Vec<Option<OwnedPipeline>>> {
-    let InitGpu { hw, hot_reload, .. } = *gpu;
+) -> RenderResult<Vec<Option<BucketPipelines>>> {
     let bucket_shaders = world_shaders.get(1..).unwrap_or(&[]);
-    Ok(
-        match (bindless.pipeline_layout.as_ref(), bucket_shaders.is_empty()) {
-            (Some(layout), false) => {
-                let max = render_types::MAX_SHADER_BUCKETS;
-                if bucket_shaders.len() + 1 > max {
-                    return Err(RenderError::Other(format!(
-                        "world declares {} Shaders but at most {max} can be routed",
-                        bucket_shaders.len() + 1
-                    )));
-                }
-                build_world_pipeline_table(
-                    &hw.device,
-                    BucketPipelineTargets {
-                        render_pass: targets.main_render_pass.handle(),
-                        layout: layout.handle(),
-                        msaa_samples: targets.msaa_samples,
-                        swapchain_format,
-                        hot_reload,
-                    },
-                    bucket_shaders,
-                    &bindless.main_spv,
-                )?
-            }
-            _ => Vec::new(),
-        },
-    )
+    let Some(targets) = bindless
+        .bucket_targets
+        .filter(|_| !bucket_shaders.is_empty())
+    else {
+        return Ok(Vec::new());
+    };
+    let max = render_types::MAX_SHADER_BUCKETS;
+    if bucket_shaders.len() + 1 > max {
+        return Err(RenderError::Other(format!(
+            "world declares {} Shaders but at most {max} can be routed",
+            bucket_shaders.len() + 1
+        )));
+    }
+    build_world_pipeline_table(&gpu.hw.device, targets, bucket_shaders, &bindless.main_spv)
 }

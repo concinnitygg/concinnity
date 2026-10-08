@@ -51,6 +51,7 @@ mod resources;
 mod screenshot;
 mod set_writes;
 mod sky;
+mod spirv_inputs;
 mod swapchain;
 #[cfg(test)]
 mod test_gpu;

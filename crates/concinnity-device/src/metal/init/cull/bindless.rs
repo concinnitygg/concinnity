@@ -1,22 +1,17 @@
 //! The bindless main pass: the main pipeline and the material-referenced world
 //! shader pipelines the cull kernel routes draws between.
 
+use super::CullInputs;
+use crate::metal::init::InitGpu;
+use crate::metal::init::pipelines::{self, BucketPipelines};
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::world_pipelines::WorldPipelines;
-use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
-use objc2_metal::MTLRenderPipelineState;
-
-use super::CullInputs;
-use crate::metal::init::InitGpu;
-use crate::metal::init::pipelines;
 
 pub(super) struct BindlessPass {
     pub(super) active: bool,
-    pub(super) main_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    pub(super) world_pipelines:
-        WorldPipelines<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub(super) main_pipeline: Option<BucketPipelines>,
+    pub(super) world_pipelines: WorldPipelines<BucketPipelines>,
     pub(super) bucket_count: usize,
 }
 
@@ -33,13 +28,21 @@ pub(super) fn build_bindless_pass(
     // whole GPU-cull path: the Main pass then survives as a bare clear the
     // composite pass samples (the same shape a world_hidden frame takes).
     let active = inputs.features.scene;
+    // Pre-pass pipelines are built only for a world that starts with a
+    // G-buffer consumer; a quality change that adds one builds them then.
+    let build = pipelines::BucketBuild {
+        hot_reload,
+        sample_count: hdr_samples,
+        prepass: inputs.features.gbuffer_enabled,
+        template_generation: 0,
+    };
     let main_pipeline = if active {
-        Some(pipelines::build_main_pipeline(
+        Some(pipelines::build_bucket_pipelines(
             device,
             inputs.vert_desc,
+            0,
             world_shaders[0].programs,
-            hot_reload,
-            hdr_samples,
+            build,
         )?)
     } else {
         None
@@ -62,13 +65,7 @@ pub(super) fn build_bindless_pass(
                     .into(),
             ));
         }
-        pipelines::build_world_pipelines(
-            device,
-            inputs.vert_desc,
-            &world_shaders[1..],
-            hot_reload,
-            hdr_samples,
-        )?
+        pipelines::build_world_pipelines(device, inputs.vert_desc, &world_shaders[1..], build)?
     } else {
         WorldPipelines::default()
     };

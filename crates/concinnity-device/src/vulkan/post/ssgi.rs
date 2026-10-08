@@ -74,7 +74,9 @@ impl VkContext {
         let Some(ssgi) = &self.ssgi else { return };
         // With no G-buffer there is nothing to trace against, so skip rather
         // than read a stale view.
-        let Some(gbuffer) = &self.gbuffer else { return };
+        let Some(gbuffer) = self.gbuffer_targets().and_then(|gb| gb.frame(frame_idx)) else {
+            return;
+        };
         let params = ssgi
             .settings
             .params(fov_y_radians, aspect, ssgi.pass.frame());
@@ -86,8 +88,8 @@ impl VkContext {
             SsgiInputs {
                 scene: scene.view,
                 scene_target: scene,
-                normal_depth: gbuffer.normal_depth_view(frame_idx),
-                velocity: gbuffer.velocity_view(frame_idx),
+                normal_depth: gbuffer.normal_depth,
+                velocity: gbuffer.velocity,
             },
             &params,
         ) {

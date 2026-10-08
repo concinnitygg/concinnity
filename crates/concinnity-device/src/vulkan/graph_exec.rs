@@ -1235,6 +1235,8 @@ impl VkContext {
                     GbufferPrepassView {
                         jittered_vp: params.vp_mat,
                         cur_vp: params.cur_vp,
+                        elapsed: params.elapsed,
+                        cam_pos: params.cam_pos,
                     },
                     velocity_active,
                 );

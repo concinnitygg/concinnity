@@ -28,8 +28,8 @@ use crate::metal::error::allocation_failed;
 use crate::metal::post::post_device::MtlPostDevice;
 use crate::metal::post::{
     GBufferState, MetalFXUpscaler, SsaoState, SsgiState, SsrState, TaaState, UpscaleState,
-    build_gbuffer_bindless_pipeline, build_reflection_composite, build_taa_pass,
-    create_gbuffer_targets, create_reflection_target, temporal_scaler_supported,
+    build_reflection_composite, build_taa_pass, create_gbuffer_targets, create_reflection_target,
+    temporal_scaler_supported,
 };
 use crate::metal::texture::create_fallback_texture;
 
@@ -259,33 +259,29 @@ pub(in crate::metal) fn build_ssr(
     })
 }
 
-// Unified G-buffer pre-pass (Metal): the shared targets and the one
-// GPU-driven pipeline that fills them, built when any consumer (SSR / SSGI /
-// RT / SSAO / velocity) is on. The pipeline is one engine-internal shader,
-// independent of the world's fragment, so it builds the same in init and the
-// runtime quality rebuild; the encode gates on the cull-produced object
-// buffer, so a world with nothing in the cull records draws nothing here. The
-// skinned variant is built later by `upload_skinned`.
+// Unified G-buffer pre-pass (Metal): the shared targets and the model-history
+// kernel, built when any consumer (SSR / SSGI / RT / SSAO / velocity) is on.
+// The pipelines that fill the targets are the shader buckets' own, built while
+// these targets exist; the encode gates on the cull-produced object buffer, so
+// a world with nothing in the cull records draws nothing here.
 pub(in crate::metal) fn build_gbuffer(
     device: &ProtocolObject<dyn MTLDevice>,
     enabled: bool,
     render: (u32, u32),
     hot_reload: bool,
 ) -> RenderResult<GBufferState> {
-    let (targets, bindless_pipeline, history_pipeline) = if enabled {
+    let (targets, history_pipeline) = if enabled {
         (
             Some(create_gbuffer_targets(device, render.0, render.1)?),
-            Some(build_gbuffer_bindless_pipeline(device, hot_reload)?),
             Some(crate::metal::model_history::build_model_history_pipeline(
                 device, hot_reload,
             )?),
         )
     } else {
-        (None, None, None)
+        (None, None)
     };
     Ok(GBufferState {
         targets,
-        bindless_pipeline,
         history_pipeline,
     })
 }

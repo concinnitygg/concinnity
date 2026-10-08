@@ -66,7 +66,7 @@ mod tests {
         scale(ray, 1.0 / dot(rx, cross(ry, rw)))
     }
 
-    // `gbuffer_sky_vertex` + `gb_motion` in gbuffer_prepass.hlsl: the motion
+    // `gbuffer_sky_vertex` + `gb_motion` in gbuffer_sky.hlsl / gbuffer_common.hlsl: the motion
     // the pre-pass stores for the sky under NDC point `ndc`.
     fn sky_motion(jittered_vp: Mat4, cur_vp: Mat4, prev_vp: Mat4, ndc: [f32; 2]) -> [f32; 2] {
         let ray = sky_ray(jittered_vp, ndc);
@@ -74,7 +74,7 @@ mod tests {
         motion(transform(cur_vp, dir), transform(prev_vp, dir))
     }
 
-    // `GB_MOTION_LIMIT` and `GB_MIN_PREV_W` in gbuffer_prepass.hlsl.
+    // `GB_MOTION_LIMIT` and `GB_MIN_PREV_W` in gbuffer_common.hlsl.
     const MOTION_LIMIT: f32 = 2.0;
     const MIN_PREV_W: f32 = 1e-6;
 
@@ -323,10 +323,16 @@ mod tests {
     // directions a previous w of zero.
     #[test]
     fn the_first_motion_frame_gives_the_sky_no_motion() {
-        use crate::render::view_history::ViewHistory;
+        use crate::render::view_history::{ViewFrame, ViewHistory};
         use crate::transform::IDENTITY;
         let cur = camera(EYE, TARGET);
-        let prev = ViewHistory::default().prev_or(cur);
+        let prev = ViewHistory::default()
+            .prev_or(ViewFrame {
+                vp: cur,
+                elapsed: 0.0,
+                cam_pos: EYE,
+            })
+            .vp;
         for ndc in SAMPLES {
             assert_close2(sky_motion(cur, cur, prev, ndc), [0.0, 0.0], 1e-6);
             let placeholder = sky_motion(cur, cur, IDENTITY, ndc);

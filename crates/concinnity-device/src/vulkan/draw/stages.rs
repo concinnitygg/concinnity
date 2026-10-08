@@ -9,6 +9,7 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::shadow_schedule::{CascadeCamera, CascadeLight};
+use concinnity_core::render::view_history::ViewFrame;
 
 use super::upload_shadow_uniforms;
 use crate::gpu_wait::GpuWait;
@@ -395,7 +396,7 @@ impl VkContext {
     }
 
     // History the next frame reads: TAA jitter and ring, G-buffer VP, Hi-Z VP and validity.
-    pub(super) fn advance_temporal_state(&mut self, cur_vp: [[f32; 4]; 4]) {
+    pub(super) fn advance_temporal_state(&mut self, cur: ViewFrame) {
         // The Hi-Z reduction that feeds next frame's cull is the graph's terminal
         // `HizFinal` pass, so it has already been recorded; `hiz_valid` only
         // tracks whether a pyramid at the current resolution now exists.
@@ -421,13 +422,14 @@ impl VkContext {
         }
 
         // Advance the unified G-buffer's velocity-channel temporal state in
-        // lockstep with TAA's: this frame's un-jittered VP becomes next frame's
-        // `prev_vp`. The per-object half of the same history was snapshotted on
-        // the GPU by the pre-pass's own dispatch. Owned by `GbufferResources` so
-        // the motion vector works for any consumer (TAA or FSR), exactly
-        // mirroring the TAA advance above.
+        // lockstep with TAA's: this frame's un-jittered VP, clock and camera
+        // position become the previous frame next frame reprojects to. The
+        // per-object half of the same history was snapshotted on the GPU by the
+        // pre-pass's own dispatch. Owned by `GbufferResources` so the motion
+        // vector works for any consumer (TAA or FSR), exactly mirroring the TAA
+        // advance above.
         if let Some(gb) = &mut self.gbuffer {
-            gb.view_history.advance(cur_vp);
+            gb.view_history.advance(cur);
         }
 
         // Advance Hi-Z temporal state: this frame's un-jittered VP becomes next
@@ -435,7 +437,7 @@ impl VkContext {
         // `HizFinal` pass just wrote is now valid for next frame's cull (kept
         // independent of TAA, which may be off while Hi-Z is on).
         if self.cull.hiz.is_some() {
-            self.cull.hiz_prev_view_proj = cur_vp;
+            self.cull.hiz_prev_view_proj = cur.vp;
             self.cull.hiz_valid = true;
         }
     }

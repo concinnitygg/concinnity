@@ -142,9 +142,9 @@ pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u
 // scene target: the HDR resolve, or the TAA output when TAA is on), a 1-SRV
 // table at t1 (the bloom top octave), `CompositeParams` as 32-bit root constants
 // at b0, a 1-SRV descriptor table at t2 (the 3D
-// color-grading LUT), one each at t3 / t4 / t5 (the G-buffer normal+depth,
-// roughness, and SSAO channels the debug view modes visualize), and static
-// linear-clamp samplers at s0..s5 -- one per source, each the sampler half of a
+// color-grading LUT), one each at t3 / t4 / t5 / t6 (the G-buffer normal+depth,
+// roughness, SSAO and motion channels the debug view modes visualize), and
+// static linear-clamp samplers at s0..s6 -- one per source, each the sampler half of a
 // source's texture/sampler pair in the single source. The
 // scene SRV is its own table (separate from the bloom top octave) so the runtime can
 // re-point it at the per-frame TAA output without the two needing to be
@@ -166,17 +166,17 @@ pub(super) fn create_composite_root_signature(
         // [3] The 3D color-grading LUT (t2) is a separate, non-contiguous heap
         // slot, so it needs its own table.
         .srv_table(2, 1, Visibility::Pixel);
-    // [4..6] The G-buffer channel sources the debug view modes visualize (t3
-    // normal + depth, t4 roughness, t5 the blurred SSAO occlusion). Each is a
-    // separate non-contiguous heap slot, so each needs its own table. The
-    // fragment references all three statically, so they are bound every frame
-    // (the SSAO white 1x1 stands in when no G-buffer was built).
-    let sig = [3u32, 4, 5]
+    // [4..7] The G-buffer channel sources the debug view modes visualize (t3
+    // normal + depth, t4 roughness, t5 the blurred SSAO occlusion, t6 motion).
+    // Each is a separate non-contiguous heap slot, so each needs its own table.
+    // The fragment references all four statically, so they are bound every
+    // frame (the SSAO white 1x1 stands in when no G-buffer was built).
+    let sig = [3u32, 4, 5, 6]
         .into_iter()
         .fold(sig, |sig, reg| sig.srv_table(reg, 1, Visibility::Pixel));
-    // s0..s5: scene, bloom, LUT, and the three channel-view sources. Identical
+    // s0..s6: scene, bloom, LUT, and the four channel-view sources. Identical
     // descriptors; the split is the shader's, not the pass's.
-    (0u32..6)
+    (0u32..7)
         .fold(sig, |sig, reg| {
             sig.static_sampler(SamplerState::LinearClamp, reg, Visibility::Pixel)
         })

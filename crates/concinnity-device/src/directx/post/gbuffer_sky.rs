@@ -4,7 +4,7 @@
 //! draws whether or not the world has cull records.
 //!
 //! Root signature: [0] root CBV b1, the pre-pass `GbView` (the DirectX register
-//! `gbuffer_prepass.hlsl` gives it on every entry).
+//! `gbuffer_sky.hlsl` gives it).
 
 use concinnity_core::render::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::{
@@ -49,7 +49,7 @@ impl GbufferSky {
         hot_reload: bool,
     ) -> RenderResult<ID3D12PipelineState> {
         let vs = builtin_shaders::GBUFFER_SKY_VERT.compile(hot_reload)?;
-        let ps = builtin_shaders::GBUFFER_PREPASS_FRAG_BINDLESS.compile(hot_reload)?;
+        let ps = builtin_shaders::GBUFFER_SKY_FRAG.compile(hot_reload)?;
         dump_on_err(
             info_queue,
             gbuffer_targets(GraphicsPso::new(root_sig, &vs, &ps))

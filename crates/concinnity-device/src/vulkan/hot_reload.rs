@@ -10,13 +10,14 @@
 use ash::vk;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::world_pipelines::{check_rebuild, replace_bucket};
 use std::sync::atomic::Ordering;
 
 use super::context::VkContext;
 use super::pipeline::{
-    build_bucket_pipeline, compile_bindless_shaders, compile_composite_shaders,
-    compile_cull_shader, compile_cull_shader_phase2, compile_text_shaders,
-    create_composite_pipeline, create_text_pipeline,
+    BindlessSpv, BucketPipelines, build_bucket_pipeline, compile_bindless_shaders,
+    compile_composite_shaders, compile_cull_shader, compile_cull_shader_phase2,
+    compile_text_shaders, create_composite_pipeline, create_text_pipeline,
 };
 use super::pipeline_desc::compute_pipeline;
 
@@ -61,18 +62,20 @@ impl VkContext {
     //
     // Covers every runtime-bundled pipeline whose source lives in
     // `vulkan/shaders/`: composite, text, bloom (prefilter / downsample /
-    // upsample), bindless main (when live), GPU-cull compute, auto-exposure
+    // upsample), every shader bucket's main and G-buffer pre-pass pair (when
+    // the bindless main pass is live), GPU-cull compute, auto-exposure
     // (build + average), projected-decal, volumetric-fog, SSAO (depth copy,
     // kernel, blur), SSR (resolve), the reflection composite (blur, composite),
     // TAA (resolve), the sky, and the G-buffer pre-pass with the sky's motion
-    // behind it. The world-loaded main / shadow / instanced / skinned
-    // pipelines remain out of scope; same split as DirectX. The caller
+    // behind it. The shadow / instanced / skinned pipelines remain out of
+    // scope; same split as DirectX. The caller
     // has already `device_wait_idle`'d so swapping pipelines out from
     // under in-flight command buffers is safe.
     pub(in crate::vulkan) fn reload_shaders(&mut self) -> RenderResult<()> {
         if !self.hot_reload.enabled {
             return Ok(());
         }
+        self.hot_reload.generation += 1;
         let device = self.hw.device.clone();
         let device = &device;
         let hr = true;
@@ -111,16 +114,19 @@ impl VkContext {
             concinnity_core::render::post::bloom::build_pipelines(&self.post_device(0))
         );
 
-        // Bucket 0 of the GPU-driven main pass, from the engine's freshly
-        // compiled pair; a world default Shader's own pair is spliced into the
-        // same templates, so it is rebuilt against them too.
+        // Every shader bucket's main and G-buffer pre-pass pipelines, from the
+        // engine's freshly compiled programs; a world Shader's own files are
+        // spliced into the same templates, so they are rebuilt against them
+        // too. Each bucket rebuilds as a pair, so shading and the G-buffer
+        // never compile from different templates.
         let bindless_main_pipeline = rebuild_if_live!(
             self.cull.bindless_pipeline_layout.is_some() && self.cull.bindless_pipeline.is_some(),
             {
-                let engine_pair = compile_bindless_shaders(hr)?;
-                let pipeline =
-                    self.build_world_main_pipeline(self.world_shader.as_ref(), &engine_pair)?;
-                Ok::<_, RenderError>((pipeline, engine_pair))
+                let engine = compile_bindless_shaders(hr)?;
+                let pipelines =
+                    self.build_world_main_pipeline(self.world_shader.as_ref(), &engine)?;
+                let world_buckets = self.rebuild_world_buckets(&engine)?;
+                Ok::<_, RenderError>((pipelines, world_buckets, engine))
             }
         );
         let sky_pipeline = crate::vulkan::sky::build_sky_pipeline(
@@ -130,29 +136,14 @@ impl VkContext {
             self.targets.msaa_samples,
             hr,
         )?;
-        // The G-buffer pre-pass (when the cull records drive it) and the sky's
-        // motion behind it.
-        let gbuffer_pipelines = self
+        // The sky's motion behind the G-buffer pre-pass; the pre-pass's own
+        // pipelines rebuild with the main pass's above.
+        let gbuffer_sky_pipeline = self
             .gbuffer
             .as_ref()
             .map(|gb| {
-                let render_pass = gb.prepass_render_pass.handle();
-                let prepass = self
-                    .cull
-                    .gbuffer_bindless_pipeline_layout
-                    .as_ref()
-                    .filter(|_| self.cull.gbuffer_bindless_pipeline.is_some())
-                    .map(|layout| {
-                        crate::vulkan::post::gbuffer::build_prepass_pipeline(
-                            device,
-                            layout.handle(),
-                            render_pass,
-                            hr,
-                        )
-                    })
-                    .transpose()?;
-                let sky = gb.sky.rebuild_pipeline(device, render_pass)?;
-                Ok::<_, RenderError>((prepass, sky))
+                gb.sky
+                    .rebuild_pipeline(device, gb.prepass_render_pass.handle())
             })
             .transpose()?;
         // The cull kernel, and its phase-2 twin (two-pass occlusion) when built:
@@ -290,15 +281,18 @@ impl VkContext {
             bloom.swap_pipelines(rebuilt);
         }
 
-        if let Some((new_pipeline, engine_pair)) = bindless_main_pipeline {
-            self.cull.bindless_pipeline = Some(new_pipeline);
-            self.cull.bindless_main_spv = engine_pair;
+        if let Some((pipelines, world_buckets, engine)) = bindless_main_pipeline {
+            self.cull.bindless_pipeline = Some(pipelines.main);
+            self.cull.prepass_pipeline = pipelines.prepass;
+            for (bucket, fresh) in world_buckets {
+                if let Some(live) = self.cull.world_pipelines.get_mut(bucket) {
+                    *live = fresh;
+                }
+            }
+            self.cull.bindless_main_spv = engine;
         }
         self.sky.swap_pipeline(sky_pipeline);
-        if let (Some((prepass, sky)), Some(gb)) = (gbuffer_pipelines, self.gbuffer.as_mut()) {
-            if prepass.is_some() {
-                self.cull.gbuffer_bindless_pipeline = prepass;
-            }
+        if let (Some(sky), Some(gb)) = (gbuffer_sky_pipeline, self.gbuffer.as_mut()) {
             gb.sky.swap_pipeline(sky);
         }
         // The wireframe twins were built from the pre-reload shaders; drop them
@@ -359,46 +353,51 @@ impl VkContext {
         Ok(())
     }
 
-    // Rebuild bucket 0 of the GPU-driven main pass from the world default
-    // Shader's freshly compiled programs and hot-swap it, for
-    // `update_world_shader`, or swap in `prepared` when a worker already built
-    // it. Mirrors the rebuild-then-swap safety pattern of `reload_shaders`: the
-    // replacement is constructed first and the swap only runs when the build
-    // succeeds, so a typo in a shader edit leaves the live pipeline untouched
-    // and the session keeps rendering.
+    // Rebuild bucket 0 of the GPU-driven main pass and its G-buffer pre-pass
+    // from the world default Shader's freshly compiled programs and hot-swap
+    // them, for `update_world_shader`, or swap in `prepared` when a worker
+    // already built them. Mirrors the rebuild-then-swap safety pattern of
+    // `reload_shaders`: the replacements are constructed first and the swap only
+    // runs when the build succeeds, so a typo in a shader edit leaves the live
+    // pipelines untouched and the session keeps rendering.
     pub(in crate::vulkan) fn update_default_world_shader(
         &mut self,
         programs: &concinnity_core::components::ShaderPrograms,
-        prepared: Option<crate::vulkan::owned::OwnedPipeline>,
+        prepared: Option<BucketPipelines>,
     ) -> RenderResult<()> {
-        let new_main = match prepared {
-            Some(pipeline) => pipeline,
-            None => self.build_world_main_pipeline(Some(programs), &self.cull.bindless_main_spv)?,
-        };
+        let new = replace_bucket(
+            0,
+            self.cull.prepass_pipeline.is_some(),
+            prepared,
+            |p: &BucketPipelines| p.prepass.is_some(),
+            || self.build_world_main_pipeline(Some(programs), &self.cull.bindless_main_spv),
+        )?;
         // Drain the GPU before destroying the displaced pipeline so no in-flight
         // command buffer still references it: the debug hot-reload drive does
         // not `wait_idle` for us, unlike the built-in `reload_shaders` path the
         // draw loop guards.
         self.wait_idle();
-        self.cull.bindless_pipeline = Some(new_main);
+        self.cull.bindless_pipeline = Some(new.main);
+        self.cull.prepass_pipeline = new.prepass;
         self.world_shader = Some(programs.clone());
         self.invalidate_wireframe_pipelines();
         Ok(())
     }
 
-    // Bucket 0's pipeline against the live bindless layout: the world default
-    // Shader's pair where `world` declares one, `engine_pair` otherwise. Errors
-    // when the GPU-driven pass is not live, which means the world has nothing
-    // to draw.
+    // Bucket 0's pipelines against the live layouts: the world default Shader's
+    // programs where `world` declares one, `engine` otherwise. Errors when the
+    // GPU-driven pass is not live, which means the world has nothing to draw,
+    // when the main pipeline fails, or when the rebuild would drop the live
+    // pre-pass, so a live pair is kept whole.
     fn build_world_main_pipeline(
         &self,
         world: Option<&concinnity_core::components::ShaderPrograms>,
-        engine_pair: &(Vec<u8>, Vec<u8>),
-    ) -> RenderResult<crate::vulkan::owned::OwnedPipeline> {
+        engine: &BindlessSpv,
+    ) -> RenderResult<BucketPipelines> {
         let targets = self.bucket_pipeline_targets().ok_or_else(|| {
             RenderError::Other("the GPU-driven main pass is not live".to_string())
         })?;
-        build_bucket_pipeline(
+        let pipelines = build_bucket_pipeline(
             &self.hw.device,
             targets,
             0,
@@ -406,7 +405,10 @@ impl VkContext {
                 programs: world,
                 deferred: false,
             },
-            engine_pair,
-        )
+            engine,
+        )?;
+        let live_prepass = self.cull.prepass_pipeline.is_some();
+        check_rebuild(0, live_prepass, pipelines.prepass.is_some())?;
+        Ok(pipelines)
     }
 }

@@ -18,6 +18,7 @@ use concinnity_core::error::WorldError;
 use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::rt_geom::RtDynamicMode;
 use concinnity_host::store::paths::StateTree;
+use std::num::NonZeroU32;
 use std::path::Path;
 use tracing_subscriber::EnvFilter;
 
@@ -112,6 +113,10 @@ pub struct LaunchRequest {
     pub rt_skinned_geometry: Option<bool>,
     /// Force the DLSS render preset over the persisted choice, unpersisted.
     pub dlss_preset: Option<DlssPreset>,
+    /// Step the frame clock by exactly `1 / rate` seconds per frame instead of
+    /// the wall time between frames, so a given frame sees the same clock on
+    /// every launch. `None` follows the wall clock.
+    pub fixed_frame_rate: Option<NonZeroU32>,
 }
 
 impl LaunchRequest {

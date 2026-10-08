@@ -29,7 +29,9 @@ use crate::vulkan::post::ssr::SsrResources;
 use crate::vulkan::post::taa::TaaResources;
 use crate::vulkan::post::upscale::VkUpscaleBackend;
 use crate::vulkan::raymarch::RaymarchResources;
-use crate::vulkan::swapchain::{write_composite_channel_set, write_composite_set};
+use crate::vulkan::swapchain::{
+    composite_channels, write_composite_channel_set, write_composite_set,
+};
 use crate::vulkan::transparent::TransparentResources;
 
 // Temporal upscaling (FSR / DLSS / XeSS). Built before the off-screen
@@ -313,25 +315,18 @@ pub(super) fn build_taa_and_wire_scene_inputs(
         }
     }
 
-    // Composite G-buffer channel bindings (3/4/5), for the debug view
+    // Composite G-buffer channel bindings (3..6), for the debug view
     // modes. Written after the re-wire above so they point at the merged
     // pre-pass's views; the 1x1 white fallback stands in when a world built
     // no G-buffer / no SSAO.
     for (i, &set) in composite.sets.iter().enumerate() {
-        let (nd_view, rough_view) = match &screen.gbuffer {
-            Some(gb) => (gb.normal_depth_views()[i], gb.roughness_views()[i]),
-            None => (scene.ssao_white.view, scene.ssao_white.view),
-        };
-        write_composite_channel_set(
-            device,
-            set,
-            nd_view,
-            rough_view,
-            targets
-                .transient_pool
-                .view_for("ao_output", i)
-                .unwrap_or(scene.ssao_white.view),
+        let channels = composite_channels(
+            screen.gbuffer.as_ref(),
+            &targets.transient_pool,
+            scene.ssao_white.view,
+            i,
         );
+        write_composite_channel_set(device, set, &channels);
     }
     Ok(taa)
 }

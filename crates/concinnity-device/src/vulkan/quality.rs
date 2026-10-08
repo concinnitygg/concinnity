@@ -136,6 +136,10 @@ impl VkContext {
             )?;
             self.gbuffer = Some(gb);
         }
+        // Also retries what an earlier change failed to bring up for its pre-pass.
+        if self.gbuffer.is_some() {
+            self.enable_gbuffer_prepass()?;
+        }
 
         // TAA.
         if desired_taa && self.taa.is_none() {
@@ -295,7 +299,7 @@ impl VkContext {
             .iter()
             .map(|i| i.view)
             .collect();
-        let Some(gb) = self.gbuffer.as_ref() else {
+        let Some(gb) = self.gbuffer_targets() else {
             tracing::warn!(
                 "RT reflections need the unified G-buffer pre-pass, which is missing \
                  (keeping SSR)"

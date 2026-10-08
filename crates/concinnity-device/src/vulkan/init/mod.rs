@@ -237,7 +237,6 @@ impl VkContext {
                 instanced_clusters: &world.instanced_clusters,
                 text_atlas_count: media.text_atlases.len(),
                 plan: &plan,
-                has_gbuffer: features.gbuffer_enabled,
             },
             &globals,
         )?;

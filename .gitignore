@@ -4,6 +4,8 @@
 /vendor/
 /worlds/
 
+/cache
+/data
 /world.jsonl
 world-lock.json
 

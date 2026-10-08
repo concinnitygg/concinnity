@@ -367,15 +367,21 @@ pub(super) struct VkCull {
     // `None` marks a bucket whose Shader is not resident yet: its scene has not
     // pinned, so the pass skips those draws (see `world_shaders.rs`).
     pub(super) world_pipelines:
-        concinnity_core::render::world_pipelines::WorldPipelines<OwnedPipeline>,
+        concinnity_core::render::world_pipelines::WorldPipelines<super::pipeline::BucketPipelines>,
     // Commands reserved per shader-bucket region in the indirect buffers, fixed at
     // init to the record capacity the buffers were sized for. Bucket `b`'s region
     // starts at command `b * bucket_stride`.
     pub(super) bucket_stride: usize,
-    // The engine's compiled bindless main-pass SPIR-V, retained so a bucket that
-    // resolves to the engine default can build its pipeline without recompiling
-    // the GLSL. Empty when the world authored its own main shader.
-    pub(super) bindless_main_spv: (Vec<u8>, Vec<u8>),
+    // The engine's compiled bindless main-pass and pre-pass SPIR-V, retained so
+    // a bucket that resolves to the engine default can build its pipelines
+    // without recompiling.
+    pub(super) bindless_main_spv: super::pipeline::BindlessSpv,
+    // The layout every bucket's G-buffer pre-pass pipeline binds (`Some`
+    // exactly when `bindless_pipeline` is), and bucket 0's pipeline, from the
+    // same programs as `bindless_pipeline`, which exists only while a G-buffer
+    // consumer is on and its build succeeded.
+    pub(super) prepass_layout: Option<super::post::gbuffer::PrepassLayout>,
+    pub(super) prepass_pipeline: Option<OwnedPipeline>,
     // One bindless descriptor set per frame-in-flight: binding 0 is that frame's
     // GpuObjectData storage buffer, binding 1 the shared texture pool, binding 2
     // that frame's material parameter table.
@@ -456,20 +462,15 @@ pub(super) struct VkCull {
     // shadowed spot.
     pub(super) spot_cull_sets: Vec<Vec<vk::DescriptorSet>>,
     pub(super) spot_indirect_buffers: Vec<Vec<PooledBuffer>>,
-    // GPU-driven G-buffer pre-pass. A 3-MRT bindless pipeline whose VS
-    // reads `model` + `roughness` from the GpuObjectData SSBO (gl_InstanceIndex)
-    // and the previous-frame model from `prev_model_buffers`; the velocity history
-    // for the skinned tail rides the previous-frame deformed buffer. The pass
-    // reuses the main pass's `indirect_buffers` (camera frustum, no extra cull).
-    // Set 0 (`gbuffer_set_layout`) = GbView UBO + the PREVIOUS frame's history
-    // slot + this frame's draw args; set 1 = the shared bindless set.
-    // `gbuffer_sets` is one set 0 per frame; the per-frame `prev_model_*` buffers
-    // are device-local, written only by `model_history`'s snapshot dispatch. All
-    // `Some`/non-empty only when the bindless cull path is active AND the
-    // G-buffer is enabled.
-    pub(super) gbuffer_bindless_pipeline: Option<OwnedPipeline>,
-    pub(super) gbuffer_bindless_pipeline_layout: Option<OwnedPipelineLayout>,
-    pub(super) _gbuffer_set_layout: Option<OwnedSetLayout>,
+    // GPU-driven G-buffer pre-pass. Each bucket's pre-pass pipeline reads the
+    // previous-frame model from `prev_model_buffers`; the velocity history for
+    // the skinned tail rides the previous-frame deformed buffer. The pass reuses
+    // the main pass's `indirect_buffers` (camera frustum, no extra cull).
+    // `gbuffer_sets` is one `PrepassLayout` set 2 per frame (GbView UBO + the
+    // PREVIOUS frame's history slot + this frame's draw args); the per-frame
+    // `prev_model_*` buffers are device-local, written only by
+    // `model_history`'s snapshot dispatch. All non-empty only when the bindless
+    // cull path is active AND the G-buffer is enabled.
     pub(super) gbuffer_sets: Vec<vk::DescriptorSet>,
     pub(super) prev_model_buffers: Vec<PooledBuffer>,
     // The snapshot kernel that fills `prev_model_buffers`, and the per-frame
@@ -691,6 +692,9 @@ pub(super) struct AutoExposureState {
 pub(super) struct HotReloadState {
     pub enabled: bool,
     pub reload_pending: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    // Bumped by every engine-template reload, so a world Shader pipeline a
+    // worker built from the templates before it is never installed after it.
+    pub generation: u64,
 }
 
 impl HotReloadState {
@@ -699,6 +703,7 @@ impl HotReloadState {
             enabled,
             reload_pending: enabled
                 .then(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
+            generation: 0,
         }
     }
 }

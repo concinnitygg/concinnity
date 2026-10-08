@@ -84,7 +84,10 @@ impl VkContext {
                 self.cull.bindless_pipeline_layout.as_ref(),
             ) {
                 // The engine's pair, retained on the context past init.
-                let (vs, fs) = &self.cull.bindless_main_spv;
+                let (vs, fs) = (
+                    &self.cull.bindless_main_spv.vert,
+                    &self.cull.bindless_main_spv.frag,
+                );
                 built.bindless = Some(create_main_pipeline_wireframe(
                     &device,
                     MeshPipelineTargets {

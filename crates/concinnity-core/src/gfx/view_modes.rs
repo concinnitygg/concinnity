@@ -24,11 +24,16 @@ pub enum ViewMode {
     Occlusion = 5,
     /// Linear view depth.
     Depth = 6,
+    /// Screen-space motion from the geometry prepass: each pixel's offset back
+    /// to where it was the previous frame, so a surface moving right reads
+    /// below mid-gray in red. Zero unless a temporal consumer (TAA, an
+    /// upscaler or SSGI) is on, since only they ask the prepass for motion.
+    Motion = 7,
 }
 
 impl ViewMode {
     /// Every mode, in the cycling/UI order.
-    pub const ALL: [ViewMode; 7] = [
+    pub const ALL: [ViewMode; 8] = [
         ViewMode::Lit,
         ViewMode::Unlit,
         ViewMode::Wireframe,
@@ -36,6 +41,7 @@ impl ViewMode {
         ViewMode::Roughness,
         ViewMode::Occlusion,
         ViewMode::Depth,
+        ViewMode::Motion,
     ];
 
     /// True for the flat-shaded modes (Unlit, Wireframe), which drop the
@@ -49,7 +55,11 @@ impl ViewMode {
     pub fn is_gbuffer_channel(self) -> bool {
         matches!(
             self,
-            ViewMode::Normals | ViewMode::Roughness | ViewMode::Occlusion | ViewMode::Depth
+            ViewMode::Normals
+                | ViewMode::Roughness
+                | ViewMode::Occlusion
+                | ViewMode::Depth
+                | ViewMode::Motion
         )
     }
 
@@ -63,6 +73,7 @@ impl ViewMode {
             ViewMode::Roughness => "Roughness",
             ViewMode::Occlusion => "Occlusion",
             ViewMode::Depth => "Depth",
+            ViewMode::Motion => "Motion",
         }
     }
 }
@@ -158,9 +169,10 @@ mod tests {
             ViewMode::Roughness,
             ViewMode::Occlusion,
             ViewMode::Depth,
+            ViewMode::Motion,
         ] {
             assert!(m.is_gbuffer_channel() && !m.is_flat());
         }
-        assert_eq!(ViewMode::ALL.len(), 7);
+        assert_eq!(ViewMode::ALL.len(), 8);
     }
 }

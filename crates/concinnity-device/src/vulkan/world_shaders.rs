@@ -12,45 +12,66 @@
 
 use ash::vk;
 use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
+use concinnity_core::render::backend_init::WorldShader;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::world_pipelines::{check_rebuild, replace_bucket};
 
 use super::context::VkContext;
-use super::pipeline::{BucketPipelineTargets, build_world_shader_pipeline};
+use super::pipeline::{
+    BindlessSpv, BucketPipelineTargets, BucketPipelines, PrepassTargets, build_bucket_pipeline,
+    build_bucket_prepass, build_world_prepass, build_world_shader_pipeline,
+};
 use crate::vulkan::pipeline_builder::{VkPipelineBuilder, world_shader_for};
 use std::sync::Arc;
 
 impl VkContext {
-    // Install one shader bucket's bindless main-pass pipeline: `prepared` when
-    // it was built for this context's targets, else one built here. Replaces
-    // whatever the bucket currently holds, so a re-pin after an eviction
-    // installs cleanly.
+    // Install one shader bucket's main-pass and pre-pass pipelines: `prepared`
+    // when they were built for this context's targets, else ones built here.
+    // Replaces whatever the bucket currently holds, so a re-pin after an
+    // eviction installs cleanly.
     pub(in crate::vulkan) fn install_world_shader(
         &mut self,
         bucket: u32,
         programs: &concinnity_core::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
+        let pipelines = self.bucket_pipelines(bucket, programs, prepared, false)?;
+        // The displaced pipelines drop into the device's retire queue, which
+        // holds them until every frame in flight that recorded against them
+        // retires.
+        self.cull.world_pipelines.install(bucket, pipelines)?;
+        Ok(())
+    }
+
+    // One shader bucket's pipelines to replace a bucket that has a pre-pass
+    // when `live_prepass`: `prepared` when it keeps what the live bucket draws
+    // with, else ones built here. Refused when the build would drop a live
+    // pre-pass, so the caller keeps the live pair.
+    fn bucket_pipelines(
+        &self,
+        bucket: u32,
+        programs: &concinnity_core::components::ShaderPrograms,
+        prepared: Option<PreparedPipelines>,
+        live_prepass: bool,
+    ) -> RenderResult<BucketPipelines> {
         self.cull.world_pipelines.slot(bucket)?;
         let targets = self.bucket_pipeline_targets().ok_or_else(|| {
             RenderError::Other("shader buckets need the bindless main pass".to_string())
         })?;
-        let pipeline = match world_shader_for(prepared, &self.pipeline_gate, targets) {
-            Some(pipeline) => pipeline,
-            None => {
-                build_world_shader_pipeline(&self.hw.device, targets, bucket as usize, programs)?
-            }
-        };
-        // The displaced pipeline drops into the device's retire queue, which
-        // holds it until every frame in flight that recorded against it retires.
-        self.cull.world_pipelines.install(bucket, pipeline)?;
-        Ok(())
+        replace_bucket(
+            bucket as usize,
+            live_prepass,
+            world_shader_for(prepared, &self.pipeline_gate, targets),
+            |p: &BucketPipelines| p.prepass.is_some(),
+            || build_world_shader_pipeline(&self.hw.device, targets, bucket as usize, programs),
+        )
     }
 
-    // Rebuild one world Shader's pipeline from hot-reloaded programs, or swap
-    // in `prepared` when it was built for this context's targets. Bucket 0 is
-    // the main pass's pipeline; another bucket is rebuilt only while
-    // installed, and the replacement is built before the old pipeline retires,
-    // so a failed build leaves the live one bound.
+    // Rebuild one world Shader's pipelines from hot-reloaded programs, or swap
+    // in `prepared` when they were built for this context's targets. Bucket 0
+    // is the main pass's and the pre-pass's own pair; another bucket is rebuilt
+    // only while installed. Both halves are built before the old pipelines
+    // retire, so a failed build of either leaves the live ones bound.
     pub(in crate::vulkan) fn update_world_shader(
         &mut self,
         bucket: u32,
@@ -68,21 +89,109 @@ impl VkContext {
         if !self.cull.world_pipelines.resident(bucket as usize) {
             return Ok(PipelineSwap::NotResident);
         }
-        self.install_world_shader(bucket, programs, prepared)?;
+        let live_prepass = (self.cull.world_pipelines.get(bucket as usize))
+            .is_some_and(|live| live.prepass.is_some());
+        let pipelines = self.bucket_pipelines(bucket, programs, prepared, live_prepass)?;
+        self.cull.world_pipelines.install(bucket, pipelines)?;
         Ok(PipelineSwap::Swapped)
     }
 
-    // What every bucket's pipeline is built against here, or `None` when the
-    // GPU-driven main pass is not live.
+    // What every bucket's pipelines are built against here, or `None` when the
+    // GPU-driven main pass is not live. The pre-pass's half is there only once
+    // the world has a G-buffer.
     pub(in crate::vulkan) fn bucket_pipeline_targets(&self) -> Option<BucketPipelineTargets> {
         let layout = self.cull.bindless_pipeline_layout.as_ref()?;
+        let prepass = match (self.cull.prepass_layout.as_ref(), self.gbuffer.as_ref()) {
+            (Some(prepass), Some(gb)) => Some(PrepassTargets {
+                render_pass: gb.prepass_render_pass.handle(),
+                layout: prepass.pipeline_layout.handle(),
+            }),
+            _ => None,
+        };
         Some(BucketPipelineTargets {
             render_pass: self.targets.main_render_pass.handle(),
             layout: layout.handle(),
+            prepass,
             msaa_samples: self.targets.msaa_samples,
             swapchain_format: self.swapchain.format,
             hot_reload: self.hot_reload.enabled,
+            template_generation: self.hot_reload.generation,
         })
+    }
+
+    // Build the pre-pass pipeline each bucket is missing while a G-buffer
+    // exists. A pipeline that fails to build leaves its bucket without
+    // G-buffer draws, never without shading. A G-buffer stays for the
+    // context's life once built, and a failed rebuild empties only its
+    // targets, never the render pass these pipelines build against.
+    pub(in crate::vulkan) fn sync_prepass_pipelines(&mut self) {
+        let Some((targets, prepass)) = self
+            .bucket_pipeline_targets()
+            .and_then(|targets| Some((targets, targets.prepass?)))
+        else {
+            return;
+        };
+        let device = self.hw.device.clone();
+        let engine = &self.cull.bindless_main_spv;
+        let build =
+            |bucket: usize, programs: Option<&concinnity_core::components::ShaderPrograms>| {
+                match programs {
+                    Some(programs) => {
+                        build_world_prepass(&device, prepass, bucket, programs, targets.hot_reload)
+                    }
+                    None => build_bucket_prepass(
+                        &device,
+                        prepass,
+                        bucket,
+                        (&engine.prepass_vert, &engine.prepass_frag),
+                    ),
+                }
+            };
+        if self.cull.prepass_pipeline.is_none() {
+            let fresh = build(0, self.world_shader.as_ref());
+            self.cull.prepass_pipeline = fresh;
+        }
+        let buckets: Vec<usize> = self.cull.world_pipelines.resident_buckets().collect();
+        for bucket in buckets {
+            let Some(pipelines) = self.cull.world_pipelines.get(bucket) else {
+                continue;
+            };
+            if pipelines.prepass.is_some() {
+                continue;
+            }
+            let fresh = build(bucket, pipelines.programs.as_ref());
+            if let Some(pipelines) = self.cull.world_pipelines.get_mut(bucket) {
+                pipelines.prepass = fresh;
+            }
+        }
+    }
+
+    // Every resident material bucket's pipelines rebuilt from the current
+    // templates, `engine` standing in for a bucket with no Shader of its own.
+    // Fails as a whole when any bucket's main pipeline fails or its rebuild
+    // would drop a live pre-pass, so the caller keeps every live pair.
+    pub(in crate::vulkan) fn rebuild_world_buckets(
+        &self,
+        engine: &BindlessSpv,
+    ) -> RenderResult<Vec<(usize, BucketPipelines)>> {
+        let Some(targets) = self.bucket_pipeline_targets() else {
+            return Ok(Vec::new());
+        };
+        let mut rebuilt = Vec::new();
+        for bucket in self.cull.world_pipelines.resident_buckets() {
+            let Some(live) = self.cull.world_pipelines.get(bucket) else {
+                continue;
+            };
+            let shader = WorldShader {
+                programs: live.programs.as_ref(),
+                deferred: false,
+            };
+            let pipelines =
+                build_bucket_pipeline(&self.hw.device, targets, bucket, shader, engine)?;
+            check_rebuild(bucket, live.prepass.is_some(), pipelines.prepass.is_some())?;
+            rebuilt.push((bucket, pipelines));
+        }
+        Ok(rebuilt)
     }
 
     // A builder for this context's world Shader and volume pipelines, for a
@@ -96,9 +205,9 @@ impl VkContext {
         })
     }
 
-    // Release one bucket's pipeline. It drops into the device's retire queue,
-    // which destroys it only once every frame in flight that recorded against
-    // it has retired.
+    // Release one bucket's pipelines. They drop into the device's retire queue,
+    // which destroys them only once every frame in flight that recorded against
+    // them has retired.
     pub(in crate::vulkan) fn evict_world_shader(&mut self, bucket: u32) {
         self.cull.world_pipelines.evict(bucket);
     }
@@ -116,12 +225,12 @@ impl VkContext {
         draw_count: u32,
     ) -> u32 {
         self.for_each_resident_bucket(|bucket| {
-            let Some(pipeline) = self.cull.world_pipelines.get(bucket) else {
+            let Some(pipelines) = self.cull.world_pipelines.get(bucket) else {
                 return;
             };
             // Every bucket shares the bindless layout, so the Wireframe twin
             // stands in for each one while that view mode is on.
-            let pipeline = self.wireframe_or(pipeline, self.wireframe.bindless.as_ref());
+            let pipeline = self.wireframe_or(&pipelines.main, self.wireframe.bindless.as_ref());
             // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
             // these commands name is live for the call.
             unsafe {
@@ -135,20 +244,42 @@ impl VkContext {
         })
     }
 
-    // Issue the bucket 1.. regions of `indirect` under the pipeline the caller
-    // already bound. Used by the depth / velocity pre-pass, which shades nothing
-    // and so runs every bucket through its own single pipeline -- but still has to
-    // skip a non-resident bucket, or the pre-pass would lay down depth and motion
-    // for geometry the color pass omits.
-    pub(in crate::vulkan) fn draw_bucket_regions_shared_pipeline(
+    // Issue the bucket 1.. regions of `indirect`, each under its shader's
+    // G-buffer pre-pass pipeline, so a world Shader's vertex hook places its
+    // depth and motion as it places its shading. A non-resident bucket is
+    // skipped here as in the main pass, so the pre-pass never lays down depth
+    // and motion for geometry the color pass omits, and so is one whose
+    // pre-pass pipeline failed to build. Returns the regions issued, and leaves
+    // the last bucket's pipeline bound.
+    pub(in crate::vulkan) fn draw_prepass_bucket_regions(
         &self,
         cmd: vk::CommandBuffer,
         indirect: vk::Buffer,
         draw_count: u32,
     ) -> u32 {
-        self.for_each_resident_bucket(|bucket| {
-            self.draw_bucket_region(cmd, indirect, draw_count, bucket)
-        })
+        let mut issued = 0;
+        for bucket in self.cull.world_pipelines.resident_buckets() {
+            let Some(prepass) = self
+                .cull
+                .world_pipelines
+                .get(bucket)
+                .and_then(|pipelines| pipelines.prepass.as_ref())
+            else {
+                continue;
+            };
+            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
+            // these commands name is live for the call.
+            unsafe {
+                self.hw.device.cmd_bind_pipeline(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    prepass.handle(),
+                );
+            }
+            self.draw_bucket_region(cmd, indirect, draw_count, bucket);
+            issued += 1;
+        }
+        issued
     }
 
     // Run `f` for every bucket past the default whose Shader is resident,

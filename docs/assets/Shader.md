@@ -36,6 +36,16 @@ attributes, after skinning for a [SkinnedMesh](SkinnedMesh.md) and per
 instance for an [InstancedProp](InstancedProp.md), and returns the projected
 vertex; the engine's own is `project_vertex`, so a displacement is
 `return project_vertex(model, pos + offset, normal, tangent, color, uv);`.
+The same `transform` places the surface's depth, normal and motion for the
+screen-space effects. Its motion comes from the returned `world_pos`, not
+its clip-space `position`, found by running it again with the previous
+frame's model, position, `VIEW.elapsed` and camera position, so a
+displacement should depend on nothing else that changes between frames.
+
+Those effects (ambient occlusion, screen-space reflections and global
+illumination, and an upscaler's depth) see the surface the material
+record describes: its alpha cutout, normal map and roughness. A `discard`
+or a normal or roughness of `shade`'s own changes the lit color only.
 
 Both files are compiled inside the engine's own main-pass source, so they
 see the same vocabulary the engine's shading uses and declare no layout,

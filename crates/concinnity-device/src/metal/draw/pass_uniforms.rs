@@ -5,7 +5,8 @@ use concinnity_core::gfx::render_types;
 use concinnity_core::render::error;
 use concinnity_core::render::post::rt_reflections::RtParamsInputs;
 use concinnity_core::render::render_graph;
-use concinnity_core::render::uniforms::metal::VelocityUniforms;
+use concinnity_core::render::uniforms::GBufferView;
+use concinnity_core::render::view_history::ViewFrame;
 use concinnity_core::render::volumetric_fog::FogSettings;
 use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
@@ -27,6 +28,7 @@ pub(super) struct PassUniformArgs {
     pub(super) vp: [[f32; 4]; 4],
     pub(super) render_w: u32,
     pub(super) render_h: u32,
+    pub(super) elapsed: f32,
 }
 
 // One params block per pass that takes one, plus the gates the graph inputs
@@ -42,7 +44,7 @@ pub(super) struct PassUniforms {
     pub(super) clustered: bool,
     pub(super) cluster_params: render_types::ClusterParams,
     pub(super) velocity_active: bool,
-    pub(super) vel_uniforms: Option<VelocityUniforms>,
+    pub(super) gbuffer_view: GBufferView,
     pub(super) scene_input: Retained<ProtocolObject<dyn MTLTexture>>,
     pub(super) scene_color: Retained<ProtocolObject<dyn MTLTexture>>,
     pub(super) transparent_active: bool,
@@ -64,6 +66,7 @@ impl MtlContext {
             vp,
             render_w,
             render_h,
+            elapsed,
         } = args;
         // Per-frame pass uniforms hoisted upfront.
         // Every pass that needs a struct of per-frame params builds its
@@ -210,16 +213,21 @@ impl MtlContext {
         // something reprojects: TAA, the MetalFX upscaler, or the SSGI
         // accumulation.
         let velocity_active = self.reads_motion();
-        let vel_uniforms = if velocity_active {
-            let cur_vp = mat4_mul(proj, self.state.view.matrix);
-            Some(VelocityUniforms {
-                jittered_vp: vp,
-                cur_vp,
-                prev_vp: self.view_history.prev_or(cur_vp),
-            })
-        } else {
-            None
+        // The pre-pass reprojects to the previous frame's camera and clock while
+        // velocity runs; otherwise to its own, so the motion channel is a
+        // harmless zero no consumer reads and the surfaces skip reprojecting.
+        let cur = ViewFrame {
+            vp: mat4_mul(proj, self.state.view.matrix),
+            elapsed,
+            cam_pos,
         };
+        let gbuffer_view = GBufferView::new(
+            vp,
+            self.state.view.matrix,
+            cur,
+            self.view_history.prev_or(cur),
+            velocity_active,
+        );
         // `scene_input` is the engine-owned texture the post-decoration stack
         // treats as the pre-TAA scene: the reflection composite's output when a
         // reflection path is live, else the raw `hdr_resolve`.
@@ -280,7 +288,7 @@ impl MtlContext {
             clustered,
             cluster_params,
             velocity_active,
-            vel_uniforms,
+            gbuffer_view,
             scene_input,
             scene_color,
             transparent_active,

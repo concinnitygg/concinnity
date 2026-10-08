@@ -626,7 +626,7 @@ impl VkContext {
         // merged pre-pass whenever upscaling is on (it forces `taa_enabled`), so it
         // is always present here; velocity rests in SHADER_READ_ONLY and depth in
         // DEPTH_STENCIL_ATTACHMENT so the barriers below are unchanged.
-        let gb = self.gbuffer.as_ref().ok_or_else(|| {
+        let gb = self.gbuffer_targets().ok_or_else(|| {
             RenderError::Other(
                 "upscale: enabled but the unified G-buffer pre-pass is absent".into(),
             )

@@ -28,7 +28,7 @@ pub(super) mod taa;
 pub(super) mod upscale;
 
 pub(super) use bloom::{MtlBloomPass, build_bloom_pass};
-pub(super) use gbuffer::{GBufferState, build_gbuffer_bindless_pipeline, create_gbuffer_targets};
+pub(super) use gbuffer::{GBufferState, build_gbuffer_prepass_pipeline, create_gbuffer_targets};
 pub(super) use reflection_composite::build_reflection_composite;
 pub(super) use rt_reflections::build_rt_reflection_pipeline;
 pub(super) use ssao::SsaoState;

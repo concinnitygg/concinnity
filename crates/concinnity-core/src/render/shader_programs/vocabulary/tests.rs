@@ -90,19 +90,23 @@ fn every_block_is_bound_under_its_name() {
                 })
                 .map(str::trim)
                 .collect();
-            assert_eq!(
-                bound.len(),
-                1,
-                "{platform:?}: `{}` defined once",
+            assert!(
+                !bound.is_empty(),
+                "{platform:?}: `{}` defined",
                 block.name()
             );
-            let declared = alloc::format!("ConstantBuffer<{}> {}", block.declared_as(), bound[0]);
-            assert!(
-                code.contains(&declared),
-                "{platform:?}: `{}` is not a `{}`",
-                block.name(),
-                block.declared_as()
-            );
+            // A variant may bind the block to a static copy of itself, as the
+            // pre-pass does to rewind the clock.
+            for name in bound {
+                let buffer = alloc::format!("ConstantBuffer<{}> {name}", block.declared_as());
+                let copy = alloc::format!("static {} {name};", block.declared_as());
+                assert!(
+                    code.contains(&buffer) || code.contains(&copy),
+                    "{platform:?}: `{}` as `{name}` is not a `{}`",
+                    block.name(),
+                    block.declared_as()
+                );
+            }
         }
     }
 }

@@ -16,9 +16,7 @@ use objc2_metal::{
     MTLRenderPipelineDescriptor, MTLRenderPipelineState,
 };
 
-use super::builtin_shaders::{
-    self, GBUFFER_PREPASS_FRAG_BINDLESS, GBUFFER_SKY_VERT, SKY_FRAG, SKY_VERT,
-};
+use super::builtin_shaders::{self, GBUFFER_SKY_FRAG, GBUFFER_SKY_VERT, SKY_FRAG, SKY_VERT};
 use super::context::MtlContext;
 use super::encode::RenderEncode;
 
@@ -75,13 +73,13 @@ pub(super) fn build_sky_pipeline(
 }
 
 // The sky's motion into the pre-pass's normal + depth, roughness and velocity
-// targets, through the pre-pass's own fragment.
+// targets.
 pub(super) fn build_sky_velocity_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let vert = builtin_shaders::entry_function(device, &GBUFFER_SKY_VERT, hot_reload)?;
-    let frag = builtin_shaders::entry_function(device, &GBUFFER_PREPASS_FRAG_BINDLESS, hot_reload)?;
+    let frag = builtin_shaders::entry_function(device, &GBUFFER_SKY_FRAG, hot_reload)?;
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexFunction(Some(&vert));
     desc.setFragmentFunction(Some(&frag));

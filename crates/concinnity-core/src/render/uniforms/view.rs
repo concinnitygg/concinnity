@@ -73,11 +73,13 @@ pub struct ViewUniforms {
 }
 
 /// Per-frame view inputs to the unified G-buffer pre-pass. The jittered current
-/// VP drives the rasterized position (matching the main pass); `view` takes the
-/// normal + position into view space (where SSR / SSAO / SSGI / RT work); the
-/// un-jittered cur/prev VPs derive a jitter-free motion vector. Matches `GbView`
-/// in `shaders/gbuffer_prepass.hlsl`. 256 bytes (four float4x4, all naturally
-/// 16-aligned, no padding).
+/// VP drives the sky's rasterized position (the surfaces take theirs from the
+/// main pass's view block); `view` takes the normal into view space (where
+/// SSR / SSAO / SSGI / RT work); the un-jittered cur/prev VPs derive a
+/// jitter-free motion vector, and `prev_elapsed` / `prev_cam_pos` rewind a
+/// vertex hook driven by the clock or the camera to where the previous frame
+/// drew it. Matches `GbView` in `shaders/gbuffer_common.hlsl`. 288 bytes: four
+/// float4x4 and two float4 rows.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GBufferView {
@@ -89,6 +91,41 @@ pub struct GBufferView {
     pub prev_vp: [[f32; 4]; 4],
     /// View matrix, column-major.
     pub view: [[f32; 4]; 4],
+    /// The main pass's `elapsed` as the previous frame saw it.
+    pub prev_elapsed: f32,
+    /// The camera position as the previous frame saw it.
+    pub prev_cam_pos: [f32; 3],
+    /// 1 when a consumer reads motion this frame, else 0: the previous frame is
+    /// then this one, and the surfaces skip reprojecting.
+    pub motion: u32,
+    /// Pads the block to a whole float4 row.
+    pub _pad: [u32; 3],
+}
+
+impl GBufferView {
+    /// The block for a frame rasterized through `jittered_vp` and viewed
+    /// through `view`, whose motion reprojects from `cur` to `prev`. Without
+    /// `motion` the previous frame is `cur` itself, so every motion vector is
+    /// zero and the surfaces skip reprojecting.
+    pub fn new(
+        jittered_vp: [[f32; 4]; 4],
+        view: [[f32; 4]; 4],
+        cur: crate::render::view_history::ViewFrame,
+        prev: crate::render::view_history::ViewFrame,
+        motion: bool,
+    ) -> Self {
+        let prev = if motion { prev } else { cur };
+        Self {
+            jittered_vp,
+            cur_vp: cur.vp,
+            prev_vp: prev.vp,
+            view,
+            prev_elapsed: prev.elapsed,
+            prev_cam_pos: prev.cam_pos,
+            motion: u32::from(motion),
+            _pad: [0; 3],
+        }
+    }
 }
 
 // A camera whose every lane holds a distinct value, for the view-block tests.
@@ -130,13 +167,65 @@ mod tests {
         assert_eq!(size_of::<ViewUniforms>() % 16, 0);
     }
 
-    // Four float4x4s, all naturally aligned.
+    // Four float4x4s, then the previous clock and camera position, then the
+    // motion flag padded to a whole float4 row.
     #[test]
     fn gbuffer_view_layout_matches_the_shader() {
-        assert_eq!(size_of::<GBufferView>(), 256);
+        assert_eq!(size_of::<GBufferView>(), 288);
         assert_eq!(offset_of!(GBufferView, jittered_vp), 0);
         assert_eq!(offset_of!(GBufferView, cur_vp), 64);
         assert_eq!(offset_of!(GBufferView, prev_vp), 128);
         assert_eq!(offset_of!(GBufferView, view), 192);
+        assert_eq!(offset_of!(GBufferView, prev_elapsed), 256);
+        assert_eq!(offset_of!(GBufferView, prev_cam_pos), 260);
+        assert_eq!(offset_of!(GBufferView, motion), 272);
+        assert_eq!(offset_of!(GBufferView, _pad), 276);
+    }
+
+    #[test]
+    fn gbuffer_view_takes_the_previous_frame_from_its_history() {
+        use crate::render::view_history::ViewFrame;
+        let m = |k: f32| [[k; 4]; 4];
+        let cur = ViewFrame {
+            vp: m(2.0),
+            elapsed: 1.5,
+            cam_pos: [1.0, 2.0, 3.0],
+        };
+        let prev = ViewFrame {
+            vp: m(3.0),
+            elapsed: 1.25,
+            cam_pos: [0.5, 2.0, 3.0],
+        };
+        let block = GBufferView::new(m(1.0), m(4.0), cur, prev, true);
+        assert_eq!(block.jittered_vp, m(1.0));
+        assert_eq!(block.cur_vp, m(2.0));
+        assert_eq!(block.prev_vp, m(3.0));
+        assert_eq!(block.view, m(4.0));
+        assert_eq!(block.prev_elapsed, 1.25);
+        assert_eq!(block.prev_cam_pos, [0.5, 2.0, 3.0]);
+        assert_eq!(block.motion, 1);
+        assert_eq!(block._pad, [0; 3]);
+    }
+
+    // With nothing reading motion the previous frame collapses onto this one.
+    #[test]
+    fn gbuffer_view_without_motion_reprojects_onto_itself() {
+        use crate::render::view_history::ViewFrame;
+        let m = |k: f32| [[k; 4]; 4];
+        let cur = ViewFrame {
+            vp: m(2.0),
+            elapsed: 1.5,
+            cam_pos: [1.0, 2.0, 3.0],
+        };
+        let prev = ViewFrame {
+            vp: m(3.0),
+            elapsed: 1.25,
+            cam_pos: [0.5, 2.0, 3.0],
+        };
+        let block = GBufferView::new(m(1.0), m(4.0), cur, prev, false);
+        assert_eq!(block.prev_vp, block.cur_vp);
+        assert_eq!(block.prev_elapsed, 1.5);
+        assert_eq!(block.prev_cam_pos, [1.0, 2.0, 3.0]);
+        assert_eq!(block.motion, 0);
     }
 }

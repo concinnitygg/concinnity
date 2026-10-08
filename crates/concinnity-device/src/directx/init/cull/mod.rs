@@ -80,8 +80,14 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         gbuffer_enabled,
         occlusion_two_pass,
     } = inputs;
-    let bindless =
-        bindless::build_bindless_pass(gpu, world, world_shaders, plan, targets.hdr.msaa_samples)?;
+    let bindless = bindless::build_bindless_pass(
+        gpu,
+        world,
+        world_shaders,
+        plan,
+        targets.hdr.msaa_samples,
+        gbuffer_enabled,
+    )?;
     let compute = compute::build_compute_cull(
         gpu,
         compute::ComputeInputs {
@@ -109,8 +115,11 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         .collect();
 
     Ok(CullState {
-        main_bindless_root_sig: Some(bindless.root_sig),
-        main_bindless_pso: Some(bindless.pso),
+        main_bindless_root_sig: Some(bindless.root_sigs.main),
+        main_bindless_pso: Some(bindless.psos.main),
+        prepass_root_sig: Some(bindless.prepass_root_sig),
+        prepass_cmd_sig: Some(bindless.prepass_cmd_sig),
+        main_prepass_pso: bindless.psos.prepass,
         world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines::new(
             bindless.world_pipelines,
         ),
@@ -137,9 +146,6 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         shadow_indirect_buffers: shadow_cull.indirect_buffers,
         shadow_cull_status_buffers: shadow_cull.status_buffers,
         spot_indirect_buffers: shadow_cull.spot_indirect_buffers,
-        gbuffer_bindless_root_sig: gbuffer_pass.root_sig,
-        gbuffer_bindless_pso: gbuffer_pass.pso,
-        gbuffer_bindless_cmd_sig: gbuffer_pass.cmd_sig,
         prev_model_buffers: gbuffer_pass.prev_model_buffers,
         model_history_root_sig: gbuffer_pass.model_history_root_sig,
         model_history_pso: gbuffer_pass.model_history_pso,

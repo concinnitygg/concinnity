@@ -12,29 +12,25 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_metal::{MTLDevice, MTLRenderPipelineState};
+use objc2_metal::MTLDevice;
 
-use super::init::pipelines::{build_bucket_pipeline, build_main_pipeline, make_vertex_descriptor};
+use super::bucket_pipelines::{BucketBuild, BucketPipelines, build_bucket_pipelines};
+use super::init::pipelines::make_vertex_descriptor;
 use super::raymarch::{VolumePipelines, build_volume_pipelines};
 
-// What a world Shader's or a volume's pipelines are built against, beyond the
-// device. A prepared pipeline is swapped in only while the context still
+// A world Shader's or a volume's pipelines are built against the device and
+// `targets`; a prepared pipeline is swapped in only while the context still
 // matches the targets it was built for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct PipelineTargets {
-    pub sample_count: u32,
-    pub hot_reload: bool,
-}
-
 pub(super) struct MtlPipelineBuilder {
     pub device: Retained<ProtocolObject<dyn MTLDevice>>,
-    pub targets: PipelineTargets,
+    pub targets: BucketBuild,
 }
 
-// A world Shader's main-pass pipeline and what it was built for.
+// A world Shader's main-pass and pre-pass pipelines and what they were built
+// for.
 pub(super) struct PreparedWorldShader {
-    pub targets: PipelineTargets,
-    pub pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    pub targets: BucketBuild,
+    pub pipelines: BucketPipelines,
 }
 
 // A volume's pipelines and what they were built for.
@@ -50,34 +46,18 @@ impl PipelineBuilder for MtlPipelineBuilder {
         bucket: u32,
         programs: &ShaderPrograms,
     ) -> RenderResult<PreparedPipelines> {
-        let PipelineTargets {
-            sample_count,
-            hot_reload,
-        } = self.targets;
-        let pipeline = objc2::rc::autoreleasepool(|_| {
-            let vert_desc = make_vertex_descriptor();
-            if bucket == 0 {
-                build_main_pipeline(
-                    &self.device,
-                    &vert_desc,
-                    Some(programs),
-                    hot_reload,
-                    sample_count,
-                )
-            } else {
-                build_bucket_pipeline(
-                    &self.device,
-                    &vert_desc,
-                    bucket as usize,
-                    programs,
-                    hot_reload,
-                    sample_count,
-                )
-            }
+        let pipelines = objc2::rc::autoreleasepool(|_| {
+            build_bucket_pipelines(
+                &self.device,
+                &make_vertex_descriptor(),
+                bucket as usize,
+                Some(programs),
+                self.targets,
+            )
         })?;
         Ok(PreparedPipelines::new(PreparedWorldShader {
             targets: self.targets,
-            pipeline,
+            pipelines,
         }))
     }
 
@@ -99,15 +79,15 @@ impl PipelineBuilder for MtlPipelineBuilder {
     }
 }
 
-// The world Shader pipeline in `prepared` when it was built for `targets`.
+// The world Shader pipelines in `prepared` when they were built for `targets`.
 pub(super) fn world_shader_for(
     prepared: Option<PreparedPipelines>,
-    targets: PipelineTargets,
-) -> Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
+    targets: BucketBuild,
+) -> Option<BucketPipelines> {
     prepared?
         .downcast::<PreparedWorldShader>()
         .filter(|p| p.targets == targets)
-        .map(|p| p.pipeline)
+        .map(|p| p.pipelines)
 }
 
 // The volume pipelines in `prepared` when they were built for a volume with
@@ -126,11 +106,13 @@ pub(super) fn volume_for(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use objc2_metal::{MTLCreateSystemDefaultDevice, MTLPixelFormat};
+    use objc2_metal::{MTLCreateSystemDefaultDevice, MTLPixelFormat, MTLRenderPipelineState};
 
-    const TARGETS: PipelineTargets = PipelineTargets {
+    const TARGETS: BucketBuild = BucketBuild {
         sample_count: 4,
         hot_reload: true,
+        prepass: true,
+        template_generation: 1,
     };
 
     const SURFACE: VolumeFlags = VolumeFlags {
@@ -149,12 +131,16 @@ mod tests {
     }
 
     fn world(
-        targets: PipelineTargets,
+        targets: BucketBuild,
         pipeline: &Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     ) -> Option<PreparedPipelines> {
         Some(PreparedPipelines::new(PreparedWorldShader {
             targets,
-            pipeline: pipeline.clone(),
+            pipelines: BucketPipelines {
+                main: pipeline.clone(),
+                prepass: Some(pipeline.clone()),
+                programs: None,
+            },
         }))
     }
 
@@ -177,16 +163,28 @@ mod tests {
     fn a_world_shader_pipeline_is_taken_only_for_the_targets_it_was_built_for() {
         let Some(pso) = pipeline() else { return };
         assert!(world_shader_for(world(TARGETS, &pso), TARGETS).is_some());
-        let single_sample = PipelineTargets {
+        let single_sample = BucketBuild {
             sample_count: 1,
             ..TARGETS
         };
         assert!(world_shader_for(world(TARGETS, &pso), single_sample).is_none());
-        let embedded = PipelineTargets {
+        let embedded = BucketBuild {
             hot_reload: false,
             ..TARGETS
         };
         assert!(world_shader_for(world(TARGETS, &pso), embedded).is_none());
+        // Built with a pre-pass for a context that has since lost its G-buffer.
+        let no_gbuffer = BucketBuild {
+            prepass: false,
+            ..TARGETS
+        };
+        assert!(world_shader_for(world(TARGETS, &pso), no_gbuffer).is_none());
+        // Built from the templates a reload has since replaced.
+        let reloaded = BucketBuild {
+            template_generation: 2,
+            ..TARGETS
+        };
+        assert!(world_shader_for(world(TARGETS, &pso), reloaded).is_none());
         assert!(world_shader_for(volume(SURFACE, true, &pso), TARGETS).is_none());
         assert!(world_shader_for(None, TARGETS).is_none());
     }

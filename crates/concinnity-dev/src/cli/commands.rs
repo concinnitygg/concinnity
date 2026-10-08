@@ -2,6 +2,7 @@
 // arguments it takes. Parsing only -- what each command does lives behind
 // `dispatch`.
 use concinnity_engine::app::run::LaunchRequest;
+use std::num::NonZeroU32;
 
 use super::value_enums::{BundleFormatArg, DlssPresetArg, QualityPresetArg, RtDynamicArg};
 
@@ -134,6 +135,13 @@ pub(crate) struct RenderArgs {
     // writing settings. Ignored unless DLSS is the upscaler.
     #[arg(long, value_enum)]
     pub(crate) dlss_preset: Option<DlssPresetArg>,
+
+    /// Step the frame clock by exactly 1/RATE seconds per frame, whatever the wall time
+    // So a capture at frame N sees the same clock on every launch: anything
+    // animated by the clock, a world Shader's vertex hook included, lands in
+    // the same place, and a pixel A/B of it is not noise.
+    #[arg(long, value_name = "RATE")]
+    pub(crate) fixed_frame_rate: Option<NonZeroU32>,
 }
 
 impl RenderArgs {
@@ -148,6 +156,7 @@ impl RenderArgs {
             rt_dynamic: self.rt_dynamic.map(Into::into),
             rt_skinned_geometry: self.rt_skinned_geometry,
             dlss_preset: self.dlss_preset.map(Into::into),
+            fixed_frame_rate: self.fixed_frame_rate,
         }
     }
 }
@@ -392,6 +401,7 @@ mod tests {
             assert!(render.rt_dynamic.is_none(), "{argv:?}");
             assert!(render.rt_skinned_geometry.is_none(), "{argv:?}");
             assert!(render.dlss_preset.is_none(), "{argv:?}");
+            assert!(render.fixed_frame_rate.is_none(), "{argv:?}");
         }
     }
 
@@ -408,6 +418,8 @@ mod tests {
             "false",
             "--dlss-preset",
             "m",
+            "--fixed-frame-rate",
+            "60",
         ])
         .unwrap();
         let Commands::Run(args) = cli.resolved_command() else {
@@ -423,8 +435,16 @@ mod tests {
                 rt_dynamic: Some(RtDynamicMode::Rebuild),
                 rt_skinned_geometry: Some(false),
                 dlss_preset: Some(DlssPreset::M),
+                fixed_frame_rate: NonZeroU32::new(60),
             }
         );
+    }
+
+    // A rate of 0 would stop the clock, so it is refused at the flag.
+    #[test]
+    fn a_zero_fixed_frame_rate_is_refused() {
+        let parsed = Cli::try_parse_from(["concinnity", "run", "--fixed-frame-rate", "0"]);
+        assert!(parsed.is_err());
     }
 
     #[test]
@@ -441,6 +461,8 @@ mod tests {
                 "false",
                 "--dlss-preset",
                 "l",
+                "--fixed-frame-rate",
+                "30",
             ])
             .unwrap();
             let render = match cli.resolved_command() {
@@ -462,6 +484,7 @@ mod tests {
                 matches!(render.dlss_preset, Some(DlssPresetArg::L)),
                 "{command}"
             );
+            assert_eq!(render.fixed_frame_rate, NonZeroU32::new(30), "{command}");
         }
     }
 

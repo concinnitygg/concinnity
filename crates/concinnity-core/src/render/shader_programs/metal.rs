@@ -49,6 +49,19 @@ pub mod bindless_textures {
     }
 }
 
+/// The Metal buffer slots the G-buffer pre-pass binds on top of the main
+/// pass's: `main_bindless.hlsl` pins each by `register()` under
+/// `SURFACE_PREPASS`, clear of every main-pass slot and of the two vertex
+/// streams at buffer(1) and buffer(2).
+pub mod prepass_buffers {
+    /// The pre-pass view block (`gb_view`).
+    pub const VIEW: usize = 3;
+    /// The previous frame's model-history slot (`prev_models`).
+    pub const PREV_MODELS: usize = 17;
+    /// This frame's draw args (`draw_args`).
+    pub const DRAW_ARGS: usize = 18;
+}
+
 // Metal builds the Hi-Z pyramid a mip at a time: an init kernel, chosen by the
 // main pass's sample count, then one downsample dispatch per level.
 /// `hiz_init_msaa` from `hiz_build.hlsl`.

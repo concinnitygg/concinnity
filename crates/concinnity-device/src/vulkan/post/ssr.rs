@@ -83,8 +83,7 @@ impl VkContext {
         let Some(settings) = &ssr.settings else {
             return;
         };
-        let Some(gbuffer) = &self.gbuffer else {
-            tracing::error!("SSR resolve enabled but the G-buffer pre-pass is missing");
+        let Some(gbuffer) = self.gbuffer_targets().and_then(|gb| gb.frame(frame_idx)) else {
             return;
         };
         // The view-to-world rotation is the transpose of the view matrix's
@@ -113,8 +112,8 @@ impl VkContext {
             SsrInputs {
                 target: device.target_attachment(&ssr.output),
                 scene: scene.view,
-                normal_depth: gbuffer.normal_depth_view(frame_idx),
-                roughness: gbuffer.roughness_view(frame_idx),
+                normal_depth: gbuffer.normal_depth,
+                roughness: gbuffer.roughness,
                 prefilter: self.scene.env_map.prefilter.view,
             },
             &params,

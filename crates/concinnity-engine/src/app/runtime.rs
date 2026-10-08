@@ -370,7 +370,10 @@ impl Runtime {
     pub fn world_step(&mut self) -> StepResult {
         self.pacer.pace(&self.world);
         let paused = self.world.resource::<MenuActive>().is_some_and(|m| m.0);
-        let (timing, frame) = self.clock.advance(std::time::Instant::now(), paused);
+        let (timing, frame) = match self.launch.fixed_frame_rate {
+            Some(rate) => self.clock.advance_fixed(rate, paused),
+            None => self.clock.advance(std::time::Instant::now(), paused),
+        };
         self.world.insert_resource(timing);
         self.world.insert_resource(frame);
         self.world.step()

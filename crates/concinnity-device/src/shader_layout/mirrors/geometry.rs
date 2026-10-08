@@ -28,6 +28,10 @@ pub(in crate::shader_layout) fn gbuffer_vertex() -> Vec<Case> {
         cur_vp,
         prev_vp,
         [view] => ["view_mat"],
+        prev_elapsed,
+        [prev_cam_pos] => ["prev_cam_x", "prev_cam_y", "prev_cam_z"],
+        motion,
+        [_pad] => ["_pad0", "_pad1", "_pad2"],
     }))]
 }
 

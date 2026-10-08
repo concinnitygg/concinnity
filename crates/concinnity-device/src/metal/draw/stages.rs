@@ -11,6 +11,7 @@ use concinnity_core::render::error;
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::render_graph::{self, FrameGraphInputs};
 use concinnity_core::render::shadow_schedule::{CascadeCamera, CascadeLight};
+use concinnity_core::render::view_history::ViewFrame;
 use concinnity_core::render::volumetric_fog::FogSettings;
 use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
@@ -437,6 +438,7 @@ impl MtlContext {
             clustering_enabled: clustered,
             // Set by the view-mode mask below (occlusion view only).
             composite_reads_ao: false,
+            composite_reads_motion: false,
             shadowed_spot_count: self.spot_shadow.count,
             spot_shadow_slice_size: render_types::spot_shadow_slice_size(self.shadow.map_size),
         };
@@ -549,7 +551,7 @@ impl MtlContext {
         self.upscale.reset.request();
     }
 
-    pub(super) fn advance_temporal_state(&mut self, velocity_active: bool, proj: [[f32; 4]; 4]) {
+    pub(super) fn advance_temporal_state(&mut self, velocity_active: bool, cur: ViewFrame) {
         // The Hi-Z reduction that feeds next frame's cull is the graph's terminal
         // `HizFinal` pass, so it has already been encoded. Advance the temporal
         // state it depends on: the pyramid is now valid for next frame's cull, and
@@ -562,15 +564,14 @@ impl MtlContext {
         }
 
         // Advance temporal state for the next frame whenever the velocity
-        // pre-pass runs: TAA, the MetalFX upscaler or SSGI. The
-        // un-jittered VP becomes `prev_vp` so the velocity shader can
-        // diff against it; the per-object transforms were snapshotted on the
-        // GPU by the pre-pass's own history dispatch. A frame without it drops
-        // the camera history, so motion restarts from its own view. TAA-specific
+        // pre-pass runs: TAA, the MetalFX upscaler or SSGI. The un-jittered VP,
+        // clock and camera position become the previous frame the pre-pass
+        // reprojects to; the per-object transforms were snapshotted on the GPU
+        // by the pre-pass's own history dispatch. A frame without it drops the
+        // camera history, so motion restarts from its own view. TAA-specific
         // bookkeeping (history-target ping-pong) only runs when TAA itself is on.
         if velocity_active {
-            self.view_history
-                .advance(mat4_mul(proj, self.state.view.matrix));
+            self.view_history.advance(cur);
             self.taa.frame = self.taa.frame.wrapping_add(1);
             if let Some(taa) = self.taa.pass.as_mut() {
                 taa.advance();
@@ -661,7 +662,7 @@ impl MtlContext {
         let history_live = !world_hidden
             && self.reads_motion()
             && self.gbuffer.targets.is_some()
-            && self.gbuffer.bindless_pipeline.is_some();
+            && self.cull.main_pipeline.is_some();
         let (object_buffer, material_params, cull_draw_args, bindless_tex_args) = if world_hidden {
             (None, None, None, None)
         } else {
@@ -794,7 +795,7 @@ impl MtlContext {
         // models rather than an unwritten buffer.
         let (prev_model_buffer, history_targets) = if object_buffer_live
             && self.gbuffer.targets.is_some()
-            && self.gbuffer.bindless_pipeline.is_some()
+            && self.cull.main_pipeline.is_some()
         {
             let bytes = self.cull_count() * std::mem::size_of::<[[f32; 4]; 4]>();
             let prime = self.state.model_history.get_mut().take_prime();

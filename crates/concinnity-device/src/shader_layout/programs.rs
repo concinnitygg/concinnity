@@ -145,8 +145,13 @@ pub(super) static RT_SKIN_KERNEL: Program = Program {
     splices: &[],
 };
 
-pub(super) static GBUFFER_PREPASS_VERT: Program = Program {
-    row: &shared::GBUFFER_PREPASS_VERT_BINDLESS,
+pub(super) static MAIN_PREPASS_VERT: Program = Program {
+    row: &shared::MAIN_PREPASS_VERT,
+    splices: &[],
+};
+
+pub(super) static MAIN_PREPASS_FRAG: Program = Program {
+    row: &shared::MAIN_PREPASS_FRAG,
     splices: &[],
 };
 

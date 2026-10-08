@@ -105,31 +105,40 @@ pub static PROBE_GGX: ShaderProgram = ShaderProgram {
     msaa: false,
 };
 
-// The G-buffer pre-pass and shadow families. Every entry is its own program so
-// it declares only the resources it binds.
-/// `gbuffer_prepass_vertex_bindless` from `gbuffer_prepass.hlsl`.
-pub static GBUFFER_PREPASS_VERT_BINDLESS: ShaderProgram = ShaderProgram {
-    file: "gbuffer_prepass.hlsl",
-    entry: "gbuffer_prepass_vertex_bindless",
-    label: "gbuffer_prepass_vert_bindless.hlsl",
-    gates: &["GB_BINDLESS"],
+/// `vertex_prepass_bindless` from `main_bindless.hlsl`: the G-buffer
+/// pre-pass under the engine's own vertex hook.
+pub static MAIN_PREPASS_VERT: ShaderProgram = ShaderProgram {
+    file: "main_bindless.hlsl",
+    entry: "vertex_prepass_bindless",
+    label: "main_prepass_vert.hlsl",
+    gates: &[super::surface::PREPASS_GATE],
     msaa: false,
 };
-/// `gbuffer_prepass_fragment_bindless` from `gbuffer_prepass.hlsl`.
-pub static GBUFFER_PREPASS_FRAG_BINDLESS: ShaderProgram = ShaderProgram {
-    file: "gbuffer_prepass.hlsl",
-    entry: "gbuffer_prepass_fragment_bindless",
-    label: "gbuffer_prepass_frag_bindless.hlsl",
-    gates: &["GB_FRAGMENT_BINDLESS"],
+/// `fragment_prepass_bindless` from `main_bindless.hlsl`.
+pub static MAIN_PREPASS_FRAG: ShaderProgram = ShaderProgram {
+    file: "main_bindless.hlsl",
+    entry: "fragment_prepass_bindless",
+    label: "main_prepass_frag.hlsl",
+    gates: &[super::surface::PREPASS_GATE],
     msaa: false,
 };
-/// `gbuffer_sky_vertex` from `gbuffer_prepass.hlsl`: the sky's motion, drawn
-/// with the bindless fragment.
+
+// The sky's share of the G-buffer pre-pass, and the shadow family. Every entry
+// is its own program so it declares only the resources it binds.
+/// `gbuffer_sky_vertex` from `gbuffer_sky.hlsl`.
 pub static GBUFFER_SKY_VERT: ShaderProgram = ShaderProgram {
-    file: "gbuffer_prepass.hlsl",
+    file: "gbuffer_sky.hlsl",
     entry: "gbuffer_sky_vertex",
     label: "gbuffer_sky_vert.hlsl",
-    gates: &["GB_SKY"],
+    gates: &[],
+    msaa: false,
+};
+/// `gbuffer_sky_fragment` from `gbuffer_sky.hlsl`.
+pub static GBUFFER_SKY_FRAG: ShaderProgram = ShaderProgram {
+    file: "gbuffer_sky.hlsl",
+    entry: "gbuffer_sky_fragment",
+    label: "gbuffer_sky_frag.hlsl",
+    gates: &[],
     msaa: false,
 };
 /// `shadow_vertex_bindless` from `shadow.hlsl`.
@@ -571,9 +580,10 @@ pub static ALL: &[&ShaderProgram] = &[
     &PROBE_MIP0,
     &PROBE_DOWNSAMPLE,
     &PROBE_GGX,
-    &GBUFFER_PREPASS_VERT_BINDLESS,
-    &GBUFFER_PREPASS_FRAG_BINDLESS,
+    &MAIN_PREPASS_VERT,
+    &MAIN_PREPASS_FRAG,
     &GBUFFER_SKY_VERT,
+    &GBUFFER_SKY_FRAG,
     &SHADOW_VERT_BINDLESS,
     &SKY_VERT,
     &SKY_FRAG,

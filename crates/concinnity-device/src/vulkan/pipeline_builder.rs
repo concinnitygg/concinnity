@@ -15,8 +15,8 @@ use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
 
-use super::owned::{OwnedPipeline, VkDevice};
-use super::pipeline::{BucketPipelineTargets, build_world_shader_pipeline};
+use super::owned::VkDevice;
+use super::pipeline::{BucketPipelineTargets, BucketPipelines, build_world_shader_pipeline};
 use super::raymarch::{VolumePipelineTargets, VolumePipelines, build_volume_pipelines};
 
 // Whether the context that handed out builders still holds the handles they
@@ -56,11 +56,12 @@ pub(super) struct VkPipelineBuilder {
     pub volumes: Option<VolumePipelineTargets>,
 }
 
-// A world Shader's main-pass pipeline and what it was built for.
+// A world Shader's main-pass and pre-pass pipelines and what they were built
+// for.
 struct PreparedWorldShader {
     gate: PipelineGate,
     targets: BucketPipelineTargets,
-    pipeline: OwnedPipeline,
+    pipelines: BucketPipelines,
 }
 
 // A volume's pipelines and what they were built for.
@@ -81,12 +82,12 @@ impl PipelineBuilder for VkPipelineBuilder {
             .world
             .ok_or_else(|| RenderError::Other("the GPU-driven main pass is not live".into()))?;
         let _open = self.gate.enter()?;
-        let pipeline =
+        let pipelines =
             build_world_shader_pipeline(&self.device, targets, bucket as usize, programs)?;
         Ok(PreparedPipelines::new(PreparedWorldShader {
             gate: self.gate.clone(),
             targets,
-            pipeline,
+            pipelines,
         }))
     }
 
@@ -110,17 +111,17 @@ impl PipelineBuilder for VkPipelineBuilder {
     }
 }
 
-// The world Shader pipeline in `prepared` when this context's `gate` built it
-// for `targets`.
+// The world Shader pipelines in `prepared` when this context's `gate` built
+// them for `targets`.
 pub(super) fn world_shader_for(
     prepared: Option<PreparedPipelines>,
     gate: &PipelineGate,
     targets: BucketPipelineTargets,
-) -> Option<OwnedPipeline> {
+) -> Option<BucketPipelines> {
     prepared?
         .downcast::<PreparedWorldShader>()
         .filter(|p| p.gate.is(gate) && p.targets == targets)
-        .map(|p| p.pipeline)
+        .map(|p| p.pipelines)
 }
 
 // The volume pipelines in `prepared` when this context's `gate` built them for
@@ -140,6 +141,24 @@ pub(super) fn volume_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ash::vk;
+
+    // A prepared pipeline matches only the template reload it was built from,
+    // so one a worker finished after a reload is rebuilt instead.
+    #[test]
+    fn targets_differ_across_a_template_reload() {
+        let targets = |template_generation| BucketPipelineTargets {
+            render_pass: vk::RenderPass::null(),
+            layout: vk::PipelineLayout::null(),
+            prepass: None,
+            msaa_samples: vk::SampleCountFlags::TYPE_1,
+            swapchain_format: vk::Format::B8G8R8A8_UNORM,
+            hot_reload: true,
+            template_generation,
+        };
+        assert!(targets(1) == targets(1));
+        assert!(targets(1) != targets(2));
+    }
 
     #[test]
     fn a_closed_gate_refuses_every_later_build() {

@@ -1420,6 +1420,8 @@ impl DxContext {
                     crate::directx::post::gbuffer::GbufferPrepassView {
                         jittered_vp: params.vp_mat,
                         cur_vp: params.cur_vp,
+                        elapsed: params.elapsed,
+                        cam_pos: params.cam_pos,
                     },
                     crate::directx::post::gbuffer::GbufferPrepassFrame {
                         velocity_active: self.reads_motion(),

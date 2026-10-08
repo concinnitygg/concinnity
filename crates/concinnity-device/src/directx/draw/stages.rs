@@ -11,6 +11,7 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::{self, FrameGraphInputs};
 use concinnity_core::render::shadow_schedule::{CascadeCamera, CascadeLight};
+use concinnity_core::render::view_history::ViewFrame;
 use concinnity_core::transform::mat4_mul;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -535,6 +536,7 @@ impl DxContext {
             lines_enabled: !lines.is_empty() && self.lines.resources.is_some(),
             // Set by the view-mode mask below (occlusion view only).
             composite_reads_ao: false,
+            composite_reads_motion: false,
         };
         // The viewport's view mode + show flags mask the seeded inputs (the
         // per-frame counterpart of the init-time trims); Lit with every flag
@@ -625,7 +627,7 @@ impl DxContext {
     }
 
     // History the next frame reads: Hi-Z validity, cull VP, TAA jitter, G-buffer VP.
-    pub(super) fn advance_temporal_state(&self, cur_vp: [[f32; 4]; 4]) {
+    pub(super) fn advance_temporal_state(&self, cur: ViewFrame) {
         // The Hi-Z reduction that feeds next frame's cull is the graph's
         // terminal `HizFinal` pass, so it has already been recorded; `hiz_valid`
         // only tracks whether a pyramid at the current resolution now exists.
@@ -636,7 +638,7 @@ impl DxContext {
         // dispatch. Stored regardless of whether Hi-Z is on so the matrix
         // is always current when it later gets switched on by a hot-reload
         // or a re-init.
-        self.cull.prev_view_proj.set(cur_vp);
+        self.cull.prev_view_proj.set(cur.vp);
 
         // The HDR targets are graph resources: `emit_graph_restores` already
         // returned each to its resting state on the "end" cmd list, which is
@@ -652,13 +654,13 @@ impl DxContext {
         if let Some(taa) = &self.taa {
             taa.frame.set(taa.frame.get().wrapping_add(1));
         }
-        // Snapshot this frame's un-jittered VP so next frame's G-buffer pre-pass
-        // can derive motion vectors. The per-draw half of the same history was
-        // snapshotted on the GPU by the pre-pass's own dispatch. Owned by the
-        // G-buffer (decoupled from TAA, so FSR-without-engine-TAA also gets
-        // correct motion).
+        // Snapshot this frame's un-jittered VP, clock and camera position so
+        // next frame's G-buffer pre-pass can derive motion vectors. The per-draw
+        // half of the same history was snapshotted on the GPU by the pre-pass's
+        // own dispatch. Owned by the G-buffer (decoupled from TAA, so
+        // FSR-without-engine-TAA also gets correct motion).
         if let Some(gb) = &self.gbuffer {
-            gb.view_history.borrow_mut().advance(cur_vp);
+            gb.view_history.borrow_mut().advance(cur);
         }
     }
 }

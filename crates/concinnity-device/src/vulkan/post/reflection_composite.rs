@@ -121,8 +121,7 @@ impl VkContext {
         let Some(rc) = &self.reflection_composite else {
             return;
         };
-        let Some(gbuffer) = &self.gbuffer else {
-            tracing::error!("reflection composite enabled but the G-buffer pre-pass is missing");
+        let Some(gbuffer) = self.gbuffer_targets().and_then(|gb| gb.frame(frame_idx)) else {
             return;
         };
         let scene =
@@ -133,8 +132,8 @@ impl VkContext {
             ReflectionCompositeInputs {
                 reflection: reflection_view,
                 scene: scene.view,
-                normal_depth: gbuffer.normal_depth_view(frame_idx),
-                roughness: gbuffer.roughness_view(frame_idx),
+                normal_depth: gbuffer.normal_depth,
+                roughness: gbuffer.roughness,
             },
         ) {
             tracing::error!("reflection composite: {e}");
