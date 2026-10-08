@@ -901,8 +901,9 @@ impl VkContext {
             // resource covers the whole set, since the frame builder knows only
             // whether particles run this frame; the set is resolved here, from
             // the live emitters, and is persistent rather than per-frame (each
-            // frame integrates the same pool in place). `None` once every slot
-            // is tombstoned, which is also when the builder omits both nodes.
+            // frame integrates the same pool in place, so it rests carried).
+            // `None` once every slot is tombstoned, which is also when the
+            // builder omits both nodes.
             "particle_pool" => {
                 let first = arena.len();
                 arena.extend(
@@ -915,7 +916,7 @@ impl VkContext {
                 let count = arena.len() - first;
                 (count > 0).then_some((
                     VkTargetObject::BufferSet { first, count },
-                    VkResting::Discarded,
+                    VkResting::Carried,
                 ))
             }
             // Per-cluster light lists and probe masks: `LightCull` writes them, the
@@ -1002,7 +1003,7 @@ impl VkContext {
         pass_id: PassId,
         rec: &Recorder<'_>,
         params: &GraphFrameParams<'_>,
-        particle_frame: Option<&(f32, u32, Vec<u32>)>,
+        particle_frame: Option<&super::particle::ParticleFrame>,
     ) -> RenderResult<()> {
         let cmd = rec.raw();
         match pass_id {
@@ -1139,12 +1140,11 @@ impl VkContext {
                 self.encode_auto_exposure(rec, params.frame_idx);
             }
             PassId::ParticlesSim => {
-                // Resets each live emitter's spawn counter and integrates its
-                // persistent pool. The graph's only edge out of it is the draw's
-                // vertex-stage read of those pools, so the schedule is free to
-                // put it on the async queue; this executor still records it in
-                // the compiled order. The per-frame particle state was advanced
-                // on `&mut self` before the fan-out by `prepare_particle_pass`.
+                // Integrates each live emitter's persistent pool. The graph's only
+                // edge out of it is the draw's vertex-stage read of those pools, so
+                // the schedule is free to put it on the async queue; this executor
+                // still records it in the compiled order. The per-frame particle
+                // state was advanced on `&mut self` before the fan-out by `prepare_particle_pass`.
                 if let Some(frame) = particle_frame {
                     self.encode_particles_sim(cmd, frame);
                 }

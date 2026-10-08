@@ -1104,7 +1104,7 @@ pub struct FogFroxelParams {
 /// dynamic per-frame inputs the compute kernel needs to age + integrate +
 /// respawn the pool. Pushed at compute buffer(2) and vertex buffer(1) of the
 /// Metal particle passes, so the layout must stay in sync with
-/// `ParticleParams` in `shaders/particle_types.hlsl`. 144 bytes.
+/// `ParticleParams` in `shaders/particle_types.hlsl`. 128 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ParticleParams {
@@ -1136,14 +1136,18 @@ pub struct ParticleParams {
     pub size_end: f32,
     /// Frame delta time (seconds). Drives the age + integration step.
     pub dt: f32,
-    /// Integer count of new particles the compute kernel may emit this frame.
-    /// Carried atomically inside the kernel so threads racing for spawn slots
-    /// only succeed up to this many times.
-    pub spawn_budget: u32,
-    /// Per-frame seed mixed with the thread id by the kernel's cheap RNG.
+    /// Number of fresh particles the compute kernel spawns this frame.
+    pub spawn_count: u32,
+    /// Pool slot of this frame's first spawn. Spawn `k` lands in slot
+    /// `(spawn_first + k) % max_particles`.
+    pub spawn_first: u32,
+    /// Per-emitter, per-frame seed (see `spawn_seed`) mixed with each spawn's
+    /// ordinal by the kernel's cheap RNG.
     pub random_seed: u32,
     /// Pool size in slots; the kernel returns early past it.
     pub max_particles: u32,
+    /// Padding to the 16-byte multiple a constant buffer is sized in.
+    pub _pad: [u32; 3],
 }
 
 /// One text draw call: quads for all visible characters sharing one atlas texture.

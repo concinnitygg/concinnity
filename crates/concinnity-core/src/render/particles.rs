@@ -8,6 +8,7 @@ use crate::components::ParticleEmitter;
 use crate::gfx::render_types::ParticleParams;
 use crate::math::vec3::{length, normalize_or};
 use crate::math::{cos, floor};
+use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 /// Upper bound on the per-emitter pool the backend will allocate. Each slot
@@ -123,11 +124,11 @@ impl ParticleEmitterRecord {
     /// fields and the dynamic spawn / time state the runtime carries.
     ///
     /// `dt` is the elapsed seconds since the previous compute dispatch (the
-    /// integration step); `spawn_budget` is `floor(spawn_accumulator)`, the
-    /// integer count of fresh particles the kernel may emit this frame; and
-    /// `random_seed` is the per-frame seed the kernel mixes with the thread
-    /// id to drive its cheap on-GPU RNG.
-    pub fn params(&self, dt: f32, spawn_budget: u32, random_seed: u32) -> ParticleParams {
+    /// integration step); `spawns` is the run of pool slots the kernel fills
+    /// with fresh particles this frame; and `random_seed` is the emitter's frame
+    /// seed ([`spawn_seed`]), which the kernel mixes with each spawn's ordinal to
+    /// drive its cheap on-GPU RNG.
+    pub fn params(&self, dt: f32, spawns: ParticleSpawns, random_seed: u32) -> ParticleParams {
         ParticleParams {
             position: self.position,
             spread_cos: self.spread_cos,
@@ -142,9 +143,11 @@ impl ParticleEmitterRecord {
             size_start: self.size_start,
             size_end: self.size_end,
             dt: dt.max(0.0),
-            spawn_budget,
+            spawn_count: spawns.count,
+            spawn_first: spawns.first,
             random_seed,
             max_particles: self.max_particles,
+            _pad: [0; 3],
         }
     }
 }
@@ -184,21 +187,130 @@ fn sanitized_color(c: [f32; 4]) -> [f32; 4] {
     out
 }
 
-/// Per-emitter spawn accumulator. The runtime keeps one of these per record
-/// and feeds the integer overflow into the compute kernel as `spawn_budget`
-/// each frame. Fractional carry-over keeps low spawn rates honest even when
-/// the frame-time is below the per-particle interval.
-#[derive(Debug, Clone, Copy, Default)]
+/// The run of pool slots one dispatch fills with fresh particles: `count`
+/// slots starting at `first`, wrapping past the end of the pool. Spawn `k` of
+/// the run lands in slot `(first + k) % max_particles`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ParticleSpawns {
+    /// Pool slot of the run's first spawn.
+    pub first: u32,
+    /// Number of particles spawned, at most the pool size.
+    pub count: u32,
+}
+
+/// The kernel's RNG seed for the emitter in slot `emitter` on frame
+/// `frame_index`. Two emitters with the same tunables spawn different particles
+/// because their seeds differ on every frame.
+pub fn spawn_seed(frame_index: u32, emitter: usize) -> u32 {
+    // A bijective integer finalizer, so distinct inputs never share a seed.
+    let mut h = frame_index ^ (emitter as u32).wrapping_mul(0x9E37_79B9);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85EB_CA6B);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xC2B2_AE35);
+    h ^ (h >> 16)
+}
+
+// One dispatch's spawns: ordinals `first..first + count`, every particle of
+// which has died by clock time `dies_by`.
+#[derive(Debug, Clone, Copy)]
+struct SpawnedRun {
+    first: u64,
+    count: u32,
+    dies_by: f64,
+}
+
+/// Per-emitter spawn state. The runtime keeps one of these per record and
+/// hands the kernel a [`ParticleSpawns`] run each frame. Fractional carry-over
+/// keeps low spawn rates honest even when the frame-time is below the
+/// per-particle interval.
+///
+/// Spawns walk the pool as a ring, so which slot each particle lands in is
+/// decided here rather than by GPU thread scheduling, and a run replays
+/// identically on every launch. A slot is handed out again only once the
+/// particle last spawned into it has certainly died, by the same frame clock
+/// that ages it; a spawn that would land on a possibly live particle is dropped
+/// instead, so a pool needs `spawn_rate * lifetime_max` slots to emit at its
+/// full rate.
+#[derive(Debug, Clone, Default)]
 pub struct ParticleSpawnState {
-    /// Fractional particles owed by this emitter, carried forward across
-    /// frames. Cleared by `take_budget` after harvesting the integer part.
-    pub accumulator: f32,
+    // Fractional particles owed by this emitter, carried forward across frames.
+    accumulator: f32,
+    // Seconds of frame time this emitter has stepped through.
+    clock: f64,
+    // Spawns handed out so far; spawn `n` lands in slot `n % pool`.
+    issued: u64,
+    // Pool size the ring walks. A different one is a new pool, so the ring
+    // starts over.
+    pool: u32,
+    // The runs a future spawn can still land on, oldest first.
+    runs: VecDeque<SpawnedRun>,
 }
 
 impl ParticleSpawnState {
-    /// Add this frame's spawn allotment and pop off the integer part. Returns
-    /// `0` when the emitter is paused (`spawn_rate <= 0`).
-    pub fn take_budget(&mut self, dt: f32, spawn_rate: f32, max_particles: u32) -> u32 {
+    /// Step this emitter's clock by `dt`, add the frame's spawn allotment and
+    /// hand out as much of its integer part as the pool has dead slots for,
+    /// as the run of slots it fills. Spawns with no dead slot to land in are
+    /// dropped. The run is empty when the emitter is paused
+    /// (`spawn_rate <= 0`).
+    pub fn take_spawns(&mut self, dt: f32, record: &ParticleEmitterRecord) -> ParticleSpawns {
+        let pool = record.max_particles.max(1);
+        if pool != self.pool {
+            self.pool = pool;
+            self.issued = 0;
+            self.runs.clear();
+        }
+        if dt.is_finite() && dt > 0.0 {
+            self.clock += f64::from(dt);
+        }
+        let budget = self.take_budget(dt, record.spawn_rate, pool);
+        let count = self.dead_slots(budget);
+        let first = (self.issued % u64::from(pool)) as u32;
+        if count > 0 {
+            self.runs.push_back(SpawnedRun {
+                first: self.issued,
+                count,
+                dies_by: self.clock + f64::from(record.lifetime_max),
+            });
+            self.issued += u64::from(count);
+        }
+        // A run every remaining slot of which has been handed out again is
+        // never consulted.
+        let oldest_reachable = self.issued.saturating_sub(u64::from(pool));
+        while self
+            .runs
+            .front()
+            .is_some_and(|r| r.first + u64::from(r.count) <= oldest_reachable)
+        {
+            self.runs.pop_front();
+        }
+        ParticleSpawns { first, count }
+    }
+
+    // How many of the next `budget` spawns land on a slot whose last particle
+    // has died. Slots come up in the order they were filled, so the dead ones
+    // are a prefix.
+    fn dead_slots(&self, budget: u32) -> u32 {
+        let pool = u64::from(self.pool);
+        let mut runs = self.runs.iter().peekable();
+        let mut dead = 0;
+        while dead < budget {
+            // The spawn that last filled this slot, if any has.
+            if let Some(previous) = (self.issued + u64::from(dead)).checked_sub(pool) {
+                while runs
+                    .next_if(|r| r.first + u64::from(r.count) <= previous)
+                    .is_some()
+                {}
+                if runs.peek().is_some_and(|r| r.dies_by > self.clock) {
+                    break;
+                }
+            }
+            dead += 1;
+        }
+        dead
+    }
+
+    fn take_budget(&mut self, dt: f32, spawn_rate: f32, max_particles: u32) -> u32 {
         if spawn_rate <= 0.0 || dt <= 0.0 || !dt.is_finite() {
             return 0;
         }
@@ -220,6 +332,7 @@ impl ParticleSpawnState {
 mod tests {
     use super::*;
     use crate::components::ParticleEmitter;
+    use alloc::vec;
 
     #[test]
     fn invisible_emitter_is_skipped() {
@@ -380,6 +493,150 @@ mod tests {
         assert!(b <= 10);
     }
 
+    fn spawner(rate: f32, pool: u32, lifetime_max: f32) -> ParticleEmitterRecord {
+        ParticleEmitterRecord {
+            spawn_rate: rate,
+            max_particles: pool,
+            lifetime_min: lifetime_max,
+            lifetime_max,
+            ..make_record([0.0; 3])
+        }
+    }
+
+    fn runs(
+        s: &mut ParticleSpawnState,
+        rec: &ParticleEmitterRecord,
+        frames: usize,
+    ) -> Vec<ParticleSpawns> {
+        (0..frames).map(|_| s.take_spawns(1.0, rec)).collect()
+    }
+
+    fn run(first: u32, count: u32) -> ParticleSpawns {
+        ParticleSpawns { first, count }
+    }
+
+    #[test]
+    fn spawns_walk_the_pool_as_a_ring() {
+        // 3 spawns a frame into a 7-slot pool whose particles live under a frame.
+        let rec = spawner(3.0, 7, 0.5);
+        let mut s = ParticleSpawnState::default();
+        assert_eq!(
+            runs(&mut s, &rec, 4),
+            vec![run(0, 3), run(3, 3), run(6, 3), run(2, 3)]
+        );
+    }
+
+    #[test]
+    fn a_full_pool_drops_spawns_until_its_slots_die() {
+        // 3 a frame into 7 slots, each particle living 2.5 frames: slot reuse
+        // waits until the clock passes the run's last death.
+        let rec = spawner(3.0, 7, 2.5);
+        let mut s = ParticleSpawnState::default();
+        assert_eq!(
+            runs(&mut s, &rec, 6),
+            vec![
+                run(0, 3),
+                run(3, 3),
+                // Slot 6 was never used; slots 0-1 are frame 1's, still alive.
+                run(6, 1),
+                // Frame 1's run died at clock 3.5, so by clock 4 its slots are free.
+                run(0, 3),
+                // Slots 3-5 (frame 2, dying at 4.5) are free at clock 5.
+                run(3, 3),
+                // Slot 6 (frame 3, dies 5.5) is free at clock 6; 0-1 are frame 4's.
+                run(6, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn dropped_spawns_are_not_carried_over() {
+        let rec = spawner(5.0, 5, 10.0);
+        let mut s = ParticleSpawnState::default();
+        assert_eq!(s.take_spawns(1.0, &rec), run(0, 5));
+        // Everything is live for ten seconds; the frames in between spawn
+        // nothing and owe nothing.
+        for _ in 0..9 {
+            assert_eq!(s.take_spawns(1.0, &rec).count, 0);
+        }
+        assert_eq!(s.take_spawns(1.0, &rec), run(0, 5));
+    }
+
+    #[test]
+    fn the_ring_wraps_past_many_laps() {
+        let rec = spawner(4.0, 6, 1.0);
+        let mut s = ParticleSpawnState::default();
+        let all = runs(&mut s, &rec, 30);
+        // Every frame's particles die before the next frame, so nothing drops
+        // and the ring keeps advancing by four.
+        for (frame, r) in all.iter().enumerate() {
+            assert_eq!(*r, run((frame as u32 * 4) % 6, 4), "frame {frame}");
+        }
+        // Only the runs a future spawn can land on are kept.
+        assert!(s.runs.len() <= 2, "{} runs kept", s.runs.len());
+    }
+
+    #[test]
+    fn a_raised_lifetime_waits_for_the_new_particles_only() {
+        let short = spawner(2.0, 4, 1.0);
+        let long = spawner(2.0, 4, 5.0);
+        let mut s = ParticleSpawnState::default();
+        assert_eq!(s.take_spawns(1.0, &short), run(0, 2));
+        assert_eq!(s.take_spawns(1.0, &long), run(2, 2));
+        // Slots 0-1 held short-lived particles, dead by clock 2.
+        assert_eq!(s.take_spawns(1.0, &long), run(0, 2));
+        // Slots 2-3 hold particles that live until clock 7.
+        assert_eq!(s.take_spawns(1.0, &long).count, 0);
+    }
+
+    #[test]
+    fn a_lowered_lifetime_still_waits_for_the_older_particles() {
+        let long = spawner(2.0, 2, 5.0);
+        let short = spawner(2.0, 2, 1.0);
+        let mut s = ParticleSpawnState::default();
+        assert_eq!(s.take_spawns(1.0, &long), run(0, 2));
+        // The particles already in the pool were spawned to live five seconds.
+        for _ in 0..4 {
+            assert_eq!(s.take_spawns(1.0, &short).count, 0);
+        }
+        assert_eq!(s.take_spawns(1.0, &short), run(0, 2));
+    }
+
+    #[test]
+    fn a_different_pool_size_starts_the_ring_over() {
+        let mut s = ParticleSpawnState::default();
+        s.take_spawns(1.0, &spawner(3.0, 8, 10.0));
+        assert_eq!(s.take_spawns(1.0, &spawner(3.0, 5, 10.0)), run(0, 3));
+    }
+
+    #[test]
+    fn a_paused_or_stopped_emitter_hands_out_nothing() {
+        let rec = spawner(2.0, 10, 0.5);
+        let mut s = ParticleSpawnState::default();
+        s.take_spawns(1.0, &rec);
+        assert_eq!(s.take_spawns(1.0, &spawner(0.0, 10, 0.5)), run(2, 0));
+        assert_eq!(s.take_spawns(0.0, &rec), run(2, 0));
+    }
+
+    #[test]
+    fn a_run_never_laps_the_pool() {
+        let mut s = ParticleSpawnState::default();
+        assert_eq!(s.take_spawns(1.0, &spawner(1000.0, 10, 0.5)), run(0, 10));
+    }
+
+    #[test]
+    fn identical_emitters_get_different_seeds_every_frame() {
+        for frame in [0, 1, 2, 60, u32::MAX] {
+            let seeds: Vec<u32> = (0..8).map(|e| spawn_seed(frame, e)).collect();
+            for (i, a) in seeds.iter().enumerate() {
+                assert!(!seeds[i + 1..].contains(a), "frame {frame}: {seeds:?}");
+            }
+        }
+        // And the seed is a pure function of its inputs, so a launch repeats.
+        assert_eq!(spawn_seed(60, 3), spawn_seed(60, 3));
+        assert_ne!(spawn_seed(60, 3), spawn_seed(61, 3));
+    }
+
     fn make_record(position: [f32; 3]) -> ParticleEmitterRecord {
         ParticleEmitterRecord {
             texture_slot: 0,
@@ -469,7 +726,7 @@ mod tests {
     #[test]
     fn the_per_frame_uniform_carries_the_records_fields() {
         let record = one_record(ParticleEmitter::default());
-        let params = record.params(0.016, 5, 42);
+        let params = record.params(0.016, ParticleSpawns { first: 7, count: 5 }, 42);
 
         assert_eq!(params.position, record.position);
         assert_eq!(params.direction, record.direction);
@@ -486,7 +743,8 @@ mod tests {
         assert_eq!(params.max_particles, record.max_particles);
 
         assert_eq!(params.dt, 0.016);
-        assert_eq!(params.spawn_budget, 5);
+        assert_eq!(params.spawn_first, 7);
+        assert_eq!(params.spawn_count, 5);
         assert_eq!(params.random_seed, 42);
     }
 
@@ -495,7 +753,7 @@ mod tests {
     #[test]
     fn a_backwards_step_integrates_as_a_stopped_one() {
         let record = one_record(ParticleEmitter::default());
-        assert_eq!(record.params(-1.0, 0, 0).dt, 0.0);
+        assert_eq!(record.params(-1.0, ParticleSpawns::default(), 0).dt, 0.0);
     }
 
     // A non-finite authored color would propagate NaN through the gradient

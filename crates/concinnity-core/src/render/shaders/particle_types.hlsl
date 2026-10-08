@@ -19,7 +19,7 @@ struct Particle
     float4 velocity_lifetime;
 };
 
-// Per-frame emitter uniform, 112 B. Mirrors `ParticleParams` in
+// Per-frame emitter uniform, 128 B. Mirrors `ParticleParams` in
 // gfx/render_types.rs. The three (vec3, scalar) pairs are spelled as float4:
 // MSL sizes a constant-buffer float3 at 16 bytes, so a literal transcription
 // would push every following field four bytes late on Metal alone.
@@ -39,9 +39,13 @@ struct ParticleParams
     float size_start;
     float size_end;
     float dt;
-    // Particles the kernel may emit this frame. Threads race for slots through
-    // the simulation's spawn counter, so only this many succeed.
-    uint spawn_budget;
+    // This frame's spawns fill `spawn_count` pool slots from `spawn_first` on,
+    // wrapping past the end of the pool.
+    uint spawn_count;
+    uint spawn_first;
     uint random_seed;
     uint max_particles;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
 };

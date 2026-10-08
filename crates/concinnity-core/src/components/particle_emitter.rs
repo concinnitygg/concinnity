@@ -12,7 +12,10 @@ use crate::ecs::TextureHandle;
 /// textured by `texture`.
 ///
 /// The pool holds `max_particles` particles; new ones spawn at `spawn_rate` per
-/// second, reusing slots as old particles die.
+/// second, taking the pool's slots in turn. A slot is reused only once the
+/// particle in it has certainly died, so a pool smaller than `spawn_rate` times
+/// `lifetime_max` fills up and drops new particles until slots free up. Under a
+/// fixed frame rate the emitter plays out identically on every run.
 ///
 /// Particles carry no motion vectors. Where one covers a pixel, temporal
 /// anti-aliasing and upscaling favor the current frame over their history in
@@ -75,7 +78,9 @@ pub struct ParticleEmitter {
     /// empties as particles age out.
     #[asset(default = 32.0)]
     pub spawn_rate: f32,
-    /// Maximum number of particles alive at once. Clamped to `[1, 65536]`.
+    /// Maximum number of particles alive at once; while the pool is full, new
+    /// particles are dropped. Emitting at the full `spawn_rate` takes
+    /// `spawn_rate * lifetime_max` slots. Clamped to `[1, 65536]`.
     #[asset(default = 256)]
     pub max_particles: u32,
     /// Billboard side length at spawn, in world units.

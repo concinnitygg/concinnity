@@ -1,16 +1,14 @@
 //! GPU-compute particle system for the Vulkan backend. Each `ParticleEmitter`
 //! declared in the world produces one persistent `ParticleEmitterGpuState`
 //! carrying a device-local pool SSBO (read-write in the compute pass, read-only
-//! in the vertex pass) and a device-local 4-byte atomic spawn-counter SSBO.
-//! Each frame the renderer:
+//! in the vertex pass). Each frame the renderer:
 //!
-//!   1. Computes the per-emitter spawn budget CPU-side (a fractional
-//!      accumulator drives integer particle spawns per dispatch).
-//!   2. Writes that budget into the per-emitter counter buffer via a
-//!      `vkCmdUpdateBuffer` (the value fits in the inline-update 64 KiB cap).
-//!   3. Dispatches the `particle_simulate` compute kernel to age + integrate +
+//!   1. Computes the per-emitter spawn run CPU-side (a fractional accumulator
+//!      drives integer particle spawns per dispatch, into the pool slots a ring
+//!      cursor names).
+//!   2. Dispatches the `particle_simulate` compute kernel to age + integrate +
 //!      respawn each pool.
-//!   4. Rasterizes one alpha-blended billboard quad per live particle into
+//!   3. Rasterizes one alpha-blended billboard quad per live particle into
 //!      `hdr_resolve_images[frame_idx]`, its vertex stage reading the pool the
 //!      dispatch wrote. The compute -> vertex transition is the graph's: the two
 //!      halves are the `ParticlesSim` and `ParticlesDraw` nodes, and the pool set
@@ -19,17 +17,20 @@
 //! Runs after the volumetric-fog pass and before SSR / TAA so particles
 //! appear in screen-space reflections and are temporally stabilized by the
 //! TAA history. The pass attaches no depth buffer; the fragment tests the main
-//! depth itself, so opaque geometry hides a sprite behind it. Mirrors src/directx/particle.rs and src/metal/particle.rs.
+//! depth itself, so opaque geometry hides a sprite behind it. Mirrors
+//! src/directx/particle.rs and src/metal/particle.rs.
 
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ParticleParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSpawnState};
+use concinnity_core::render::particles::{
+    ParticleEmitterRecord, ParticleSpawnState, ParticleSpawns, spawn_seed,
+};
 use concinnity_core::render::reactive_mask::ReactiveWrite;
 use concinnity_core::render::uniforms::GpuParticle;
 use concinnity_core::render::uniforms::ParticleView;
-use std::cell::Cell;
+use std::cell::RefCell;
 
 use super::allocator::PooledBuffer;
 use super::context::{HDR_FORMAT, VkContext};
@@ -75,30 +76,22 @@ pub(in crate::vulkan) fn compile_particle_shaders(
     Ok((cs, vs, fs))
 }
 
-// Per-emitter persistent GPU state: the particle pool, the atomic spawn
-// counter, the CPU-side fractional spawn accumulator, and the descriptor
-// sets that bind them. Pool + counter sit in DEVICE_LOCAL memory; both
-// rest in the same access state across frames (the encoder flips the
-// pool's barrier between the compute write and the vertex read).
+// Per-emitter persistent GPU state: the particle pool, the CPU-side spawn
+// state, and the descriptor sets that bind the pool. The pool sits in
+// DEVICE_LOCAL memory.
 pub(in crate::vulkan) struct ParticleEmitterGpuState {
     // Particle pool: `record.max_particles` slots of `GpuParticle`. Used
     // as a storage buffer by both the compute pass and the vertex pass.
     // Held for the emitter's lifetime; the descriptor sets alias it, and the
     // graph executor's barrier registry resolves `particle_pool` to it.
     pub pool_buffer: PooledBuffer,
-    // One u32 atomic counter (4 bytes). Reset to the integer spawn budget
-    // each frame via `vkCmdUpdateBuffer`; decremented by the compute
-    // kernel as threads claim spawn slots.
-    pub counter_buffer: PooledBuffer,
-    // Carry-over fractional spawn count. Combined with `dt` and the
-    // emitter's `spawn_rate` to produce the integer spawn budget for each
-    // dispatch. Interior-mutable so `prepare_particle_pass` can advance it
-    // while walking `records` and `emitter_state` in lockstep.
-    pub spawn_state: Cell<ParticleSpawnState>,
-    // Compute descriptor set (set 0): binding 0 the pool SSBO, binding 1
-    // the counter SSBO. Allocated from the particle descriptor pool at
-    // emitter creation and re-pointed on a future pool/counter swap (none
-    // today; emitters keep their pool for the emitter's whole lifetime).
+    // Turns `dt` and the emitter's `spawn_rate` into each dispatch's spawn
+    // run. Interior-mutable so `prepare_particle_pass` can advance it while
+    // walking `records` and `emitter_state` in lockstep.
+    pub spawn_state: RefCell<ParticleSpawnState>,
+    // Compute descriptor set (set 0): binding 0 the pool SSBO. Allocated from
+    // the particle descriptor pool at emitter creation; emitters keep their
+    // pool for the emitter's whole lifetime.
     pub compute_set: vk::DescriptorSet,
     // Render emitter descriptor set (set 1): binding 0 the pool SSBO
     // (read-only here), binding 1 the emitter's albedo image and binding 2 its
@@ -111,6 +104,17 @@ pub(in crate::vulkan) struct ParticleEmitterGpuState {
     pub texture_slot: usize,
 }
 
+// The per-frame particle inputs `prepare_particle_pass` derives on `&mut self`
+// for the read-only encode halves to consume.
+pub(in crate::vulkan) struct ParticleFrame {
+    // Seconds since the previous prepared frame; drives ageing + integration.
+    pub dt: f32,
+    // Monotonic frame counter, mixed into the kernel's per-spawn RNG seed.
+    pub frame_index: u32,
+    // Spawn run per emitter slot, parallel to `records`.
+    pub spawns: Vec<ParticleSpawns>,
+}
+
 // Pipelines + per-frame view uniform ring + per-emitter descriptor pool
 // shared across every emitter. Owned by `VkContext` at most once; built
 // either at init (when the world declares ≥1 emitter) or on the first
@@ -119,7 +123,7 @@ pub(in crate::vulkan) struct ParticleResources {
     // Compute pass: particle_simulate.hlsl.
     pub(in crate::vulkan) compute_pipeline: OwnedPipeline,
     pub(in crate::vulkan) compute_pipeline_layout: OwnedPipelineLayout,
-    // set 0: (pool SSBO, counter SSBO) per emitter.
+    // set 0: the pool SSBO per emitter.
     pub(in crate::vulkan) compute_set_layout: OwnedSetLayout,
 
     // Render passes: the particle.hlsl billboard pair over the scene and the
@@ -343,7 +347,7 @@ impl ParticleResources {
     }
 
     // Free every owned handle. Called from `Drop for VkContext` after
-    // `device_wait_idle`. Per-emitter pools + counters live in
+    // `device_wait_idle`. Per-emitter pools live in
     // `VkContext`'s `particle.emitter_state`; their destruction is the
     // caller's responsibility.
     pub(in crate::vulkan) fn destroy(&mut self, _device: &VkDevice) {
@@ -352,10 +356,9 @@ impl ParticleResources {
     }
 }
 
-// Allocate the per-emitter GPU state: a zero-initialized pool SSBO and a
-// 4-byte atomic spawn counter SSBO, both DEVICE_LOCAL. Also allocates the
-// emitter's compute + render descriptor sets and writes the pool/counter
-// bindings. The albedo binding stays unwritten; `add_emitter` writes it
+// Allocate the per-emitter GPU state: a zero-initialized DEVICE_LOCAL pool
+// SSBO. Also allocates the emitter's compute + render descriptor sets and
+// writes the pool bindings. The albedo binding stays unwritten; `add_emitter` writes it
 // from the live texture pool.
 pub(in crate::vulkan) fn build_emitter_gpu_state(
     gpu: GpuUploadContext,
@@ -378,17 +381,6 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
     )?;
     zero_device_buffer(gpu, pool_buffer.buffer(), pool_bytes)?;
 
-    // Counter buffer: DEVICE_LOCAL, 4 bytes, used as STORAGE by the
-    // compute kernel and TRANSFER_DST for the per-frame
-    // `vkCmdUpdateBuffer` that resets it to the integer budget.
-    let counter_bytes = std::mem::size_of::<u32>() as u64;
-    let counter_buffer = alloc.create_buffer(
-        counter_bytes,
-        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-    )?;
-    zero_device_buffer(gpu, counter_buffer.buffer(), counter_bytes)?;
-
     // Allocate the (compute, render) descriptor set pair.
     let set_layouts = [
         resources.compute_set_layout.handle(),
@@ -400,7 +392,6 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
 
     SetWrites::new(compute_set)
         .storage_buffer(0, pool_buffer.buffer(), pool_bytes)
-        .storage_buffer(1, counter_buffer.buffer(), counter_bytes)
         .apply(device);
     // The render set's pool binding and the albedo's sampler never change. The
     // albedo image (binding 1) is written by `add_emitter` from the live
@@ -412,8 +403,7 @@ pub(in crate::vulkan) fn build_emitter_gpu_state(
 
     Ok(ParticleEmitterGpuState {
         pool_buffer,
-        counter_buffer,
-        spawn_state: Cell::new(ParticleSpawnState::default()),
+        spawn_state: RefCell::new(ParticleSpawnState::default()),
         compute_set,
         render_set,
         texture_slot: usize::MAX,
@@ -481,13 +471,13 @@ fn create_render_pass(
         .map_err(|e| super::error::map_vk_result(e, "particle render pass"))
 }
 
-// Compute set 0: the pool SSBO and the spawn-counter SSBO.
-fn compute_set_bindings() -> [Binding; 2] {
-    let compute = vk::ShaderStageFlags::COMPUTE;
-    [
-        (0, vk::DescriptorType::STORAGE_BUFFER, compute),
-        (1, vk::DescriptorType::STORAGE_BUFFER, compute),
-    ]
+// Compute set 0: the pool SSBO.
+fn compute_set_bindings() -> [Binding; 1] {
+    [(
+        0,
+        vk::DescriptorType::STORAGE_BUFFER,
+        vk::ShaderStageFlags::COMPUTE,
+    )]
 }
 
 // Render set 0, per frame: the ParticleView UBO (vertex) and the main depth
@@ -511,12 +501,14 @@ fn emitter_set_bindings() -> [Binding; 3] {
     ]
 }
 
-// Push-constant range covering the full 112-byte `ParticleParams` block.
+// Push-constant range covering the full `ParticleParams` block.
 // Visible to vertex (size_start/end, color_start/end) + fragment (none:
 // vertex emits the color; fragment reads it via varyings) + compute
 // (every field). The vertex stage actually only reads the gradient + size
 // fields, but binding the full struct keeps the host upload single-shot.
-const PARTICLE_PUSH_BYTES: u32 = 112;
+const PARTICLE_PUSH_BYTES: u32 = std::mem::size_of::<ParticleParams>() as u32;
+// 128 bytes is the `maxPushConstantsSize` every Vulkan device offers.
+const _: () = assert!(PARTICLE_PUSH_BYTES <= 128);
 
 fn create_compute_pipeline_layout(
     device: &VkDevice,
@@ -624,8 +616,7 @@ fn create_render_pipeline(
 // Zero-initialize a DEVICE_LOCAL buffer by recording a `vkCmdFillBuffer`
 // inside a one-shot command buffer. Cheaper than the staging-buffer
 // alternative and trivially correct since `vkCmdFillBuffer` writes a
-// 32-bit pattern; `bytes` is guaranteed to be a multiple of 4 for both
-// the pool (32 bytes per slot) and the counter (4 bytes).
+// 32-bit pattern; `bytes` is a multiple of 4 since a pool slot is 32 bytes.
 fn zero_device_buffer(gpu: GpuUploadContext, target: vk::Buffer, bytes: u64) -> RenderResult<()> {
     let GpuUploadContext {
         device,
@@ -646,17 +637,16 @@ impl VkContext {
     // Mutating prelude for the particle pass, run on `&mut self` before the
     // render-graph fan-out: advance the frame `dt` (against
     // `particle.last_elapsed`), the monotonic `particle.frame_index`, and each
-    // emitter's fractional spawn accumulator, returning the per-frame
-    // `(dt, frame_index, per_emitter_spawn_budgets)` the read-only
+    // emitter's spawn state, returning the [`ParticleFrame`] the read-only
     // `encode_particles_sim` and `encode_particles_draw` then consume. Split out
     // so both halves take `&self` and run on parallel-recording workers without
-    // touching the `Cell` state, against one consistent frame. Returns `None`
+    // touching the spawn state, against one consistent frame. Returns `None`
     // when the pass is inert (no pipeline / no live emitter). Mirrors
     // `metal::MtlContext::prepare_particle_pass`.
     pub(in crate::vulkan) fn prepare_particle_pass(
         &mut self,
         elapsed: f32,
-    ) -> Option<(f32, u32, Vec<u32>)> {
+    ) -> Option<ParticleFrame> {
         self.particle.resources.as_ref()?;
         if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
             return None;
@@ -666,37 +656,30 @@ impl VkContext {
         let frame_index = self.particle.frame_index.get().wrapping_add(1);
         self.particle.frame_index.set(frame_index);
 
-        let mut budgets = Vec::with_capacity(self.particle.records.len());
-        for (rec_slot, gpu_slot) in self
+        let spawns = self
             .particle
             .records
             .iter()
             .zip(self.particle.emitter_state.iter())
-        {
-            let budget = match (rec_slot.as_ref(), gpu_slot.as_ref()) {
-                (Some(rec), Some(gpu)) => {
-                    let mut spawn_state = gpu.spawn_state.get();
-                    let b = spawn_state.take_budget(dt, rec.spawn_rate, rec.max_particles);
-                    gpu.spawn_state.set(spawn_state);
-                    b
-                }
-                _ => 0,
-            };
-            budgets.push(budget);
-        }
-        Some((dt, frame_index, budgets))
+            .map(
+                |(rec_slot, gpu_slot)| match (rec_slot.as_ref(), gpu_slot.as_ref()) {
+                    (Some(rec), Some(gpu)) => gpu.spawn_state.borrow_mut().take_spawns(dt, rec),
+                    _ => ParticleSpawns::default(),
+                },
+            )
+            .collect();
+        Some(ParticleFrame {
+            dt,
+            frame_index,
+            spawns,
+        })
     }
 
     // Per-emitter `ParticleParams` for this frame, parallel to `records` and
     // `None` for a tombstoned slot. Both halves derive it the same way: the
-    // dispatch needs the spawn budget, and the vertex stage sends its own
-    // zero-budget copy so both share one push-constant range shape.
-    fn particle_params(
-        &self,
-        dt: f32,
-        frame_index: u32,
-        spawn_budgets: &[u32],
-    ) -> Vec<Option<(ParticleParams, u32)>> {
+    // dispatch needs the spawn run, and the vertex stage sends the same copy
+    // so both share one push-constant range shape.
+    fn particle_params(&self, frame: &ParticleFrame) -> Vec<Option<ParticleParams>> {
         self.particle
             .records
             .iter()
@@ -707,30 +690,27 @@ impl VkContext {
                     (Some(r), Some(_)) => r,
                     _ => return None,
                 };
-                // Spawn budget was advanced on `&mut self` in
-                // `prepare_particle_pass`; consume the precomputed value here.
-                let spawn_budget = spawn_budgets.get(i).copied().unwrap_or(0);
-                Some((rec.params(dt, spawn_budget, frame_index), spawn_budget))
+                let spawns = frame.spawns.get(i).copied().unwrap_or_default();
+                Some(rec.params(frame.dt, spawns, spawn_seed(frame.frame_index, i)))
             })
             .collect()
     }
 
-    // Encode the `ParticlesSim` node: reset each live emitter's spawn counter,
-    // then dispatch the simulation kernel over its pool. A no-op when no
-    // pipeline has been built (no emitter has ever existed in this session) or
-    // when every slot is tombstoned. `frame` is the
-    // `(dt, frame_index, per_emitter_spawn_budgets)` tuple
-    // `prepare_particle_pass` computed on `&mut self`; this method takes `&self`
-    // (no `Cell` mutation) so it can run on a parallel-recording worker.
+    // Encode the `ParticlesSim` node: dispatch the simulation kernel over each
+    // live emitter's pool. A no-op when no pipeline has been built (no emitter
+    // has ever existed in this session) or when every slot is tombstoned.
+    // `frame` is the state `prepare_particle_pass` computed on `&mut self`; this
+    // method takes `&self` (no spawn-state mutation) so it can run on a
+    // parallel-recording worker.
     //
-    // The compute -> vertex hazard against the draw is the graph's, derived from
-    // the `particle_pool` read the draw declares in the VERTEX stage. The two
-    // barriers left here are intra-node: they order the counter reset against
-    // the dispatch that consumes it, in both directions.
+    // Both hazards on the pool are the graph's: the compute -> vertex one against
+    // the draw, from the `particle_pool` read the draw declares in the VERTEX
+    // stage, and the one against the previous frame's dispatch and draw, from the
+    // pool's carried resting state.
     pub(in crate::vulkan) fn encode_particles_sim(
         &self,
         cmd: vk::CommandBuffer,
-        frame: &(f32, u32, Vec<u32>),
+        frame: &ParticleFrame,
     ) {
         let Some(resources) = self.particle.resources.as_ref() else {
             return;
@@ -738,82 +718,11 @@ impl VkContext {
         if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
             return;
         }
-        let (dt, frame_index, spawn_budgets) = (frame.0, frame.1, frame.2.as_slice());
         let device = &self.hw.device;
-        let params_per_emitter = self.particle_params(dt, frame_index, spawn_budgets);
+        let params_per_emitter = self.particle_params(frame);
 
-        // Counter resets first. Each emitter's counter buffer is
-        // updated to its integer spawn budget via `vkCmdUpdateBuffer`
-        // (a transfer write). A single TRANSFER_WRITE → SHADER_READ
-        // barrier between the resets and the dispatch makes the writes
-        // visible to the compute kernel.
-        //
-        // A counter is one buffer per emitter, not one per frame in flight, so
-        // the reset also has to be ordered against the previous frame's reset
-        // and dispatch: nothing else does, and the emitter would spawn against
-        // a budget from the wrong frame. DirectX gets the same dependency from
-        // its UNORDERED_ACCESS → COPY_DEST transition. Both prior writes need
-        // making available; the kernel's spawn claim also *reads* the counter,
-        // which the COMPUTE_SHADER source stage covers on its own.
-        //
-        // SAFETY: `cmd` is the frame's recording command buffer, inside a
-        // recording scope and outside a render pass, which is where
-        // `vkCmdPipelineBarrier` is legal; the barrier owns no resource handles
-        // (a global `VkMemoryBarrier`, no buffer or image references to
-        // outlive), and `from_ref` gives the one-element slice the count implies.
-        unsafe {
-            let mem_barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE | vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::TRANSFER | vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&mem_barrier),
-                &[],
-                &[],
-            );
-        }
-        for (data, gpu_slot) in params_per_emitter
-            .iter()
-            .zip(self.particle.emitter_state.iter())
-        {
-            let (Some((_, spawn_budget)), Some(gpu)) = (data.as_ref(), gpu_slot.as_ref()) else {
-                continue;
-            };
-            // `vkCmdUpdateBuffer` inlines `data` into the command stream
-            // (4-byte aligned, ≤ 65536 bytes), perfect for a 4-byte
-            // counter reset.
-            let bytes = spawn_budget.to_ne_bytes();
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_update_buffer(cmd, gpu.counter_buffer.buffer(), 0, &bytes);
-            }
-        }
-        // Barrier: TRANSFER_WRITE → SHADER_READ on every emitter's
-        // counter so the upcoming compute dispatch sees the fresh value.
-        // Use a single global memory barrier (cheaper than per-buffer).
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            let mem_barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE);
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&mem_barrier),
-                &[],
-                &[],
-            );
-        }
-
-        // Then the dispatches, one per live emitter; resources are disjoint
-        // between emitters so no inter-dispatch barrier is needed.
+        // One dispatch per live emitter; resources are disjoint between
+        // emitters so no inter-dispatch barrier is needed.
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.
         unsafe {
@@ -824,7 +733,7 @@ impl VkContext {
             );
         }
         for (i, data) in params_per_emitter.iter().enumerate() {
-            let Some((params, _)) = data.as_ref() else {
+            let Some(params) = data.as_ref() else {
                 continue;
             };
             let Some(gpu) = self.particle.emitter_state[i].as_ref() else {
@@ -866,7 +775,7 @@ impl VkContext {
         &self,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
-        frame: &(f32, u32, Vec<u32>),
+        frame: &ParticleFrame,
         vp: [[f32; 4]; 4],
         frustum: &Frustum,
         mask: ReactiveWrite,
@@ -877,7 +786,6 @@ impl VkContext {
         if self.particle.records.is_empty() || self.particle.emitter_state.is_empty() {
             return false;
         }
-        let (dt, frame_index, spawn_budgets) = (frame.0, frame.1, frame.2.as_slice());
         let device = &self.hw.device;
         let extent = self.targets.render_extent;
 
@@ -900,7 +808,7 @@ impl VkContext {
         if !visible.iter().any(|v| *v) {
             return false;
         }
-        let params_per_emitter = self.particle_params(dt, frame_index, spawn_budgets);
+        let params_per_emitter = self.particle_params(frame);
 
         // Camera basis for camera-facing billboards: rows 0 and 1 of the
         // view matrix's 3×3 are the world-space right and up vectors (the
@@ -972,7 +880,7 @@ impl VkContext {
             if !visible[i] {
                 continue;
             }
-            let Some((params, _)) = data.as_ref() else {
+            let Some(params) = data.as_ref() else {
                 continue;
             };
             let Some(gpu) = self.particle.emitter_state[i].as_ref() else {
@@ -1233,23 +1141,4 @@ impl VkContext {
 // the set.
 fn write_render_albedo_binding(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
     SetWrites::new(set).sampled_image(1, view).apply(device);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // The `GpuParticle` / `ParticleView` layout tests live with the structs in
-    // `concinnity_core::render::uniforms::vulkan`.
-
-    #[test]
-    fn particle_params_push_size_matches_glsl() {
-        // The push-constant range size declared in the pipeline layout
-        // must match the 112-byte ParticleParams struct exactly; neither
-        // the compute shader nor the vertex shader reaches past it.
-        assert_eq!(
-            std::mem::size_of::<ParticleParams>() as u32,
-            PARTICLE_PUSH_BYTES
-        );
-    }
 }

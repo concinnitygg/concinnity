@@ -49,6 +49,11 @@ pub(super) enum VkResting {
     // cascades, the froxel volume, and the Hi-Z pyramid rest this way: their
     // contents are read after the frame that wrote them.
     Sampled,
+    // A storage buffer whose contents carry into the next frame, where the
+    // previous frame last wrote it from a compute kernel and read it in the
+    // compute or vertex stage. The particle pools rest this way: each frame's
+    // simulation reads and rewrites the pool the last frame's draw read.
+    Carried,
 }
 
 impl VkResting {
@@ -80,6 +85,13 @@ impl VkResting {
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 vk::AccessFlags::SHADER_READ,
                 vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER,
+            ),
+            // Several frames are in flight, so the frame fence does not retire
+            // the last frame's accesses; the first use waits on them here.
+            VkResting::Carried => (
+                vk::ImageLayout::UNDEFINED,
+                vk::AccessFlags::SHADER_WRITE,
+                vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::VERTEX_SHADER,
             ),
         }
     }
@@ -206,7 +218,11 @@ pub(super) fn vk_transition(
     } else {
         vk_state(class, from, read_stages)
     };
-    let (new, dst_access, dst_stage) = vk_state(class, to, read_stages);
+    let (new, mut dst_access, dst_stage) = vk_state(class, to, read_stages);
+    // The first writer of carried storage also reads what the last frame left.
+    if from == ResourceState::Undefined && resting == VkResting::Carried {
+        dst_access |= vk::AccessFlags::SHADER_READ;
+    }
     // A write following a write keeps one layout but still needs the dependency:
     // consecutive writers of one resource record into separate command buffers,
     // and command buffers in a submission may overlap in execution, so nothing
@@ -225,8 +241,9 @@ pub(super) fn vk_transition(
 // its `resting` layout, so the next frame's first transition opens from the
 // layout it names. `None` when the frame already ended there, or for a resource
 // that rests discarded (its next first use may name UNDEFINED from any layout),
-// or for a buffer (no layout to restore, and the frame fence retires the
-// accesses that would need ordering).
+// or for a buffer (no layout to restore; a buffer whose contents outlive the
+// frame rests carried, and its next first use waits on the last frame's
+// accesses itself).
 pub(super) fn vk_restore(
     class: GraphResourceClass,
     resting: VkResting,
@@ -357,6 +374,44 @@ mod tests {
             mixed.2,
             vk::PipelineStageFlags::VERTEX_SHADER | vk::PipelineStageFlags::FRAGMENT_SHADER
         );
+    }
+
+    #[test]
+    fn carried_storage_opens_after_the_last_frames_writer_and_reader() {
+        // The particle pools: frame N's simulation must wait on frame N-1's
+        // dispatch (whose writes it reads) and on its draw (whose vertex reads
+        // it overwrites), neither of which the frame fence has retired.
+        let (_, _, src_access, dst_access, src_stage, dst_stage) = vk_transition(
+            GraphResourceClass::StorageBuffer,
+            VkResting::Carried,
+            ResourceState::Undefined,
+            ResourceState::Write,
+            ReadStages::empty(),
+        )
+        .expect("a buffer always emits its access + stage dependency");
+        assert_eq!(src_access, vk::AccessFlags::SHADER_WRITE);
+        assert_eq!(
+            src_stage,
+            vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::VERTEX_SHADER
+        );
+        assert_eq!(
+            dst_access,
+            vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE
+        );
+        assert_eq!(dst_stage, vk::PipelineStageFlags::COMPUTE_SHADER);
+
+        // A discarded buffer opens from nothing, which is what left the pools
+        // racing the previous frame.
+        let (_, _, src_access, _, src_stage, _) = vk_transition(
+            GraphResourceClass::StorageBuffer,
+            VkResting::Discarded,
+            ResourceState::Undefined,
+            ResourceState::Write,
+            ReadStages::empty(),
+        )
+        .expect("a buffer always emits its access + stage dependency");
+        assert_eq!(src_access, vk::AccessFlags::empty());
+        assert_eq!(src_stage, vk::PipelineStageFlags::TOP_OF_PIPE);
     }
 
     #[test]

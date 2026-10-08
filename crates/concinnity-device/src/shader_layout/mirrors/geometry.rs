@@ -96,9 +96,11 @@ pub(in crate::shader_layout) fn particle() -> Vec<Case> {
             size_start,
             size_end,
             dt,
-            spawn_budget,
+            spawn_count,
+            spawn_first,
             random_seed,
             max_particles,
+            [_pad] => ["_pad0", "_pad1", "_pad2"],
         })),
     ]
 }

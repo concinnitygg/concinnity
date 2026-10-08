@@ -621,8 +621,8 @@ impl DxContext {
         graph: &CompiledGraph,
         params: &GraphFrameParams<'_>,
     ) -> RenderResult<Vec<ID3D12GraphicsCommandList>> {
-        // Particle per-frame state (dt / frame index / per-emitter spawn budgets
-        // and their upload-ring slots) is advanced here, once, before any pass
+        // Particle per-frame state (dt / frame index / per-emitter spawn runs
+        // and their params-ring slots) is advanced here, once, before any pass
         // encodes, so the sim and draw halves record on separate workers against
         // one consistent frame. `None` when the pass is inert. Mirrors Vulkan's
         // and Metal's `prepare_particle_pass` hoist.
@@ -1276,14 +1276,13 @@ impl DxContext {
                 self.encode_fog(cmd, params.frame_idx, params.vp_mat, params.cam_pos);
             }
             PassId::ParticlesSim => {
-                // Resets each live emitter's spawn counter and integrates its
-                // persistent pool. The graph's only edge out of it is the draw's
-                // vertex-stage read of those pools, so the schedule is free to
-                // put it on the async queue; this executor still records it in
-                // the compiled order. The per-frame particle state was advanced
-                // once before the fan-out by `prepare_particle_pass`.
+                // Integrates each live emitter's persistent pool. The graph's only
+                // edge out of it is the draw's vertex-stage read of those pools, so
+                // the schedule is free to put it on the async queue; this executor
+                // still records it in the compiled order. The per-frame particle
+                // state was advanced once before the fan-out by `prepare_particle_pass`.
                 if let Some(frame) = particle_frame {
-                    self.encode_particles_sim(cmd, params.frame_idx, frame);
+                    self.encode_particles_sim(cmd, frame);
                 }
             }
             PassId::ParticlesDraw => {

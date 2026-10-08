@@ -193,7 +193,7 @@ pub(super) fn build_particles(
         let pipelines = build_particle_pipelines(device, gpu.hot_reload)?;
         let mut states = Vec::with_capacity(particles.len());
         for rec in &particles {
-            states.push(build_emitter_gpu_state(device, rec, gpu.frames_in_flight)?);
+            states.push(build_emitter_gpu_state(device, rec)?);
         }
         (Some(pipelines), states)
     } else {
@@ -206,7 +206,6 @@ pub(super) fn build_particles(
         pipelines,
         last_elapsed: 0.0,
         frame_index: 0,
-        counter_slot: 0,
     })
 }
 

@@ -637,8 +637,8 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // backend's registry resolves it to the live emitters' pool buffers, the way
     // `draw_args` resolves to this frame's slot of a ring.
     //
-    // The kernel reads no depth and no scene texture -- its inputs are the pools,
-    // the per-emitter spawn counters, and the frame's params -- so its only
+    // The kernel reads no depth and no scene texture -- its inputs are the pools
+    // and the frame's params -- so its only
     // successor is ParticlesDraw and it is concurrent with the whole raster
     // front. Declared here rather than beside the draw so the compiled order puts
     // it ahead of the passes it can overlap: the async queue runs its own passes
@@ -646,14 +646,13 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // inherit that wait.
     //
     // The pools are persistent (one per emitter, not one per frame in flight) and
-    // each frame integrates them in place, which is why they are imported rather
-    // than created.
+    // each frame integrates them in place, reading what the last frame wrote,
+    // which is why they are imported rather than created.
     let particle_pool_v1 = if inputs.particles_enabled {
         let pools = b.import_buffer("particle_pool", particle_pool_desc());
-        Some(
-            b.add_pass(PassId::ParticlesSim, PassKind::Compute)
-                .write_buffer(pools),
-        )
+        let mut sim = b.add_pass(PassId::ParticlesSim, PassKind::Compute);
+        sim.read_buffer(pools);
+        Some(sim.write_buffer(pools))
     } else {
         None
     };

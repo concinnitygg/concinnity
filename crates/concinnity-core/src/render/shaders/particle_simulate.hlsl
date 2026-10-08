@@ -2,29 +2,29 @@
 //
 // One thread per slot in the per-emitter pool. Each thread ages and integrates
 // whatever particle currently occupies its slot; if the age reaches the
-// lifetime the slot is marked dead. A dead slot then tries to consume one unit
-// of the frame's spawn budget (atomically) and respawns with a fresh velocity
-// sampled inside a cone of half-angle acos(spread_cos) around `direction`.
+// lifetime the slot is marked dead. The frame's spawns then take the run of
+// dead slots the CPU's ring cursor names, each with a fresh velocity sampled inside
+// a cone of half-angle acos(spread_cos) around `direction`. A spawn's slot and
+// random stream depend only on its place in the run and the emitter's frame
+// seed, so a frame replays the same on every launch.
 //
 // `Particle` and `ParticleParams` arrive from the shared PARTICLE_TYPES
 // fragment, which the render half (`particle.hlsl`) splices too, so the pool
 // this kernel writes and the pool that pass reads have one declaration. Both
-// are locked to the Rust struct by `particle_params_layout_matches_msl` in
-// render_types.rs.
+// are locked to the Rust structs by the layout mirrors in concinnity-device's
+// shader_layout/mirrors/geometry.rs.
 //
-// The pool and the spawn counter take their Metal index from the number on
-// their `register()` (see concinnity-shader's `metal_bindings`), which is
-// buffer(0) and buffer(1), the slots `metal/particle.rs` writes.
+// The pool takes its Metal index from the number on its `register()` (see
+// concinnity-shader's `metal_bindings`), which is buffer(0), the slot
+// `metal/particle.rs` writes.
 
 {PARTICLE_TYPES}
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<Particle> pool : register(u0);
-// Remaining spawn budget for this dispatch, as a single counter at element 0.
-[[vk::binding(1, 0)]] RWStructuredBuffer<uint> spawn_counter : register(u1);
 
 // A host difference, not a target one: DirectX takes the params as root
 // constants at b0, while Vulkan pushes them and the Metal encoder writes them to
-// buffer(2), past the two pool buffers. So the DirectX leg branches and the
+// buffer(2), past the pool. So the DirectX leg branches and the
 // register on the shared one is the Metal index.
 #ifdef CN_BACKEND_DIRECTX
 ConstantBuffer<ParticleParams> params : register(b0);
@@ -87,29 +87,23 @@ void particle_simulate(uint3 gid : SV_DispatchThreadID)
         }
     }
 
-    // A dead slot claims one unit of the remaining budget. Adding -1 in two's
-    // complement returns the pre-subtract value, so only threads that observed
-    // a positive remaining count spawn; threads racing past zero see 0 or a
-    // wrapped very large unsigned number.
-    if (pt.velocity_lifetime.w == 0.0 && params.spawn_budget > 0u)
+    // This slot's place in the frame's spawn run. The CPU hands out only slots
+    // whose last particle has died by now.
+    uint spawn = (id + params.max_particles - params.spawn_first) % params.max_particles;
+    if (spawn < params.spawn_count)
     {
-        uint claimed;
-        InterlockedAdd(spawn_counter[0], 0xFFFFFFFFu, claimed);
-        if (claimed > 0u && claimed <= params.spawn_budget)
-        {
-            uint rng = (id * 747796405u) ^ (params.random_seed * 2891336453u);
-            // Warm the RNG so adjacent threads decorrelate; the value is dropped.
-            float warm = prng(rng);
-            float3 dir = sample_cone(
-                rng,
-                normalize(params.direction_speed_min.xyz),
-                params.position_spread.w);
-            float speed = lerp(
-                params.direction_speed_min.w, params.gravity_speed_max.w, prng(rng));
-            float life = lerp(params.lifetime_min, params.lifetime_max, prng(rng));
-            pt.position_age = float4(params.position_spread.xyz, 0.0);
-            pt.velocity_lifetime = float4(dir * speed, max(life, 0.001));
-        }
+        uint rng = (spawn * 747796405u) ^ (params.random_seed * 2891336453u);
+        // Warm the RNG so adjacent spawns decorrelate; the value is dropped.
+        float warm = prng(rng);
+        float3 dir = sample_cone(
+            rng,
+            normalize(params.direction_speed_min.xyz),
+            params.position_spread.w);
+        float speed = lerp(
+            params.direction_speed_min.w, params.gravity_speed_max.w, prng(rng));
+        float life = lerp(params.lifetime_min, params.lifetime_max, prng(rng));
+        pt.position_age = float4(params.position_spread.xyz, 0.0);
+        pt.velocity_lifetime = float4(dir * speed, max(life, 0.001));
     }
 
     pool[id] = pt;

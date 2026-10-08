@@ -318,7 +318,7 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     },
     DxilAbi {
         program: &shared::PARTICLE_SIMULATE,
-        registers: &[("params", "b0"), ("pool", "u0"), ("spawn_counter", "u1")],
+        registers: &[("params", "b0"), ("pool", "u0")],
     },
     // The raster remainder, from `src/directx/{particle,decal,line}.rs` and
     // `pipeline.rs`. Only the particle pair has a `CN_BACKEND_DIRECTX` branch, and only
@@ -1254,11 +1254,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     MetalAbi {
         program: &shared::PARTICLE_SIMULATE,
-        slots: &[&[
-            ("pool", "buffer(0)"),
-            ("spawn_counter", "buffer(1)"),
-            ("params", "buffer(2)"),
-        ]],
+        slots: &[&[("pool", "buffer(0)"), ("params", "buffer(2)")]],
         argument_ids: &[],
     },
     MetalAbi {

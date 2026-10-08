@@ -1,16 +1,14 @@
 //! GPU-compute particle system for the D3D12 backend. Each `ParticleEmitter`
 //! declared in the world produces one persistent `ParticleEmitterGpuState`
 //! carrying a default-heap pool buffer (UAV in the compute pass, SRV in the
-//! vertex pass) and a default-heap atomic spawn-counter buffer. Each frame the
-//! renderer:
+//! vertex pass). Each frame the renderer:
 //!
-//!   1. Computes the per-emitter spawn budget CPU-side (a fractional
-//!      accumulator drives integer particle spawns per dispatch).
-//!   2. Copies the integer budgets into the per-emitter counter buffers from a
-//!      single per-frame upload ring.
-//!   3. Dispatches the `particle_simulate` compute kernel to age + integrate +
+//!   1. Computes the per-emitter spawn run CPU-side (a fractional accumulator
+//!      drives integer particle spawns per dispatch, into the pool slots a ring
+//!      cursor names).
+//!   2. Dispatches the `particle_simulate` compute kernel to age + integrate +
 //!      respawn each pool.
-//!   4. Transitions visible pools to NON_PIXEL_SHADER_RESOURCE and rasterizes
+//!   3. Transitions visible pools to NON_PIXEL_SHADER_RESOURCE and rasterizes
 //!      one alpha-blended billboard quad per live particle into `hdr_resolve`.
 //!
 //! The render pass alpha-blends into the resolved HDR target after the
@@ -23,7 +21,7 @@
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ParticleParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSpawnState};
+use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSpawnState, spawn_seed};
 use concinnity_core::render::reactive_mask::ReactiveWrite;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -44,7 +42,7 @@ use crate::directx::texture::{
 };
 
 // GPU-compute particle system. `resources` (compute + render PSOs + per-frame
-// uniform rings + spawn-budget upload ring) is built lazily either at init (when
+// uniform rings) is built lazily either at init (when
 // the world declared >= 1 emitter) or on the first runtime `add_emitter`; it
 // stays `None` when no emitter has ever existed. `records` and `emitter_state`
 // are parallel `Vec<Option<...>>`s walked in lockstep by the per-frame dispatch,
@@ -95,37 +93,28 @@ pub(in crate::directx) fn compile_particle_shaders(
     Ok((cs, vs, ps))
 }
 
-// Per-emitter persistent GPU state: the particle pool, the atomic spawn
-// counter, and the CPU-side spawn accumulator. Dropping releases the
-// underlying COM resources; the D3D12 driver keeps them alive until any
-// in-flight command list referencing them completes.
+// Per-emitter persistent GPU state: the particle pool and the CPU-side spawn
+// state. Dropping releases the underlying COM resources; the D3D12 driver keeps
+// them alive until any in-flight command list referencing them completes.
 pub(in crate::directx) struct ParticleEmitterGpuState {
     // Particle pool: `record.max_particles` slots of `GpuParticle`, used as a
     // UAV by the compute kernel and as a structured-buffer SRV by the vertex
     // stage. Resting state: UNORDERED_ACCESS.
     pub pool: ID3D12Resource,
-    // One u32 atomic counter (4 bytes). Reset to the integer spawn budget
-    // each frame via CopyBufferRegion from the per-frame upload ring;
-    // decremented by the compute kernel as threads claim spawn slots.
-    // Resting state: UNORDERED_ACCESS.
-    pub spawn_counter: ID3D12Resource,
-    // Carry-over fractional spawn count. Combined with `dt` and the
-    // emitter's `spawn_rate` to produce the integer spawn budget for each
-    // dispatch. Interior-mutable because `record_frame` (which calls into
+    // Turns `dt` and the emitter's `spawn_rate` into each dispatch's spawn
+    // run. Interior-mutable because `record_frame` (which calls into
     // `prepare_particle_pass`) holds `&self`; the field is only touched on the
     // render thread.
-    pub spawn_state: std::cell::Cell<ParticleSpawnState>,
+    pub spawn_state: std::cell::RefCell<ParticleSpawnState>,
 }
 
 // Compute root signature for `particle_simulate`:
 //   [0] root CBV b0 : ParticleParams (per-emitter, per-frame)
 //   [1] root UAV u0 : pool (RWStructuredBuffer<Particle>)
-//   [2] root UAV u1 : spawn_counter (RWByteAddressBuffer)
 fn create_simulate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     RootSig::new()
         .cbv(0, Visibility::All)
         .uav(0, Visibility::All)
-        .uav(1, Visibility::All)
         .build(device, "particle simulate root sig")
 }
 
@@ -193,12 +182,6 @@ pub(in crate::directx) struct ParticleResources {
     pub(in crate::directx) params_ubo_resources: Vec<PooledBuffer>,
     pub(in crate::directx) params_ubo_ptrs: Vec<*mut u8>,
     pub(in crate::directx) params_stride: u64,
-
-    // Per-frame upload ring for the integer spawn budgets. One u32 per slot;
-    // copied into each emitter's atomic counter by `encode_particles_sim`.
-    pub(in crate::directx) budget_upload_resources: Vec<PooledBuffer>,
-    pub(in crate::directx) budget_upload_ptrs: Vec<*mut u8>,
-    pub(in crate::directx) budget_stride: u64,
 
     // Heap slot of the first per-emitter albedo SRV; slot `i` is the SRV for
     // emitter id `i`. Written by `add_emitter`.
@@ -274,28 +257,6 @@ impl ParticleResources {
             params_ubo_resources.push(buf);
         }
 
-        // Per-frame spawn-budget upload ring. One u32 per slot; D3D12 requires
-        // CopyBufferRegion source offsets to be 4-byte aligned, which a u32 stride
-        // satisfies. No align256 needed here; this buffer is never bound as a CBV.
-        let budget_stride: u64 = std::mem::size_of::<u32>() as u64;
-        let budget_total = budget_stride * MAX_EMITTERS as u64;
-        let mut budget_upload_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut budget_upload_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
-            let buf = alloc.alloc_buffer(
-                budget_total,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
-            // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&mut ptr)) }
-                .map_err(|e| map_hresult(e.code(), "map particle budget upload"))?;
-            budget_upload_ptrs.push(ptr as *mut u8);
-            budget_upload_resources.push(buf);
-        }
-
         Ok(Self {
             simulate_root_sig,
             simulate_pso,
@@ -306,17 +267,14 @@ impl ParticleResources {
             params_ubo_resources,
             params_ubo_ptrs,
             params_stride,
-            budget_upload_resources,
-            budget_upload_ptrs,
-            budget_stride,
             emitter_srv_base_slot,
             depth_srv_gpu,
         })
     }
 }
 
-// Allocate the per-emitter GPU state: a zero-initialized pool buffer (UAV)
-// and a 4-byte atomic spawn counter (UAV). Both resting in UNORDERED_ACCESS.
+// Allocate the per-emitter GPU state: a zero-initialized pool buffer (UAV),
+// resting in UNORDERED_ACCESS.
 pub(in crate::directx) fn build_emitter_gpu_state(
     alloc: &DeviceAllocator,
     record: &ParticleEmitterRecord,
@@ -332,19 +290,9 @@ pub(in crate::directx) fn build_emitter_gpu_state(
     let pool = create_uav_buffer(device, pool_bytes, D3D12_RESOURCE_STATE_COMMON)?;
     zero_default_buffer(alloc, &pool, pool_bytes)?;
 
-    // 4-byte default-heap UAV counter, initial value 0. The encoder copies the
-    // per-frame integer budget into it before each compute dispatch.
-    let spawn_counter = create_uav_buffer(
-        device,
-        std::mem::size_of::<u32>() as u64,
-        D3D12_RESOURCE_STATE_COMMON,
-    )?;
-    zero_default_buffer(alloc, &spawn_counter, std::mem::size_of::<u32>() as u64)?;
-
     Ok(ParticleEmitterGpuState {
         pool,
-        spawn_counter,
-        spawn_state: std::cell::Cell::new(ParticleSpawnState::default()),
+        spawn_state: std::cell::RefCell::new(ParticleSpawnState::default()),
     })
 }
 
@@ -445,20 +393,19 @@ fn zero_default_buffer(
 }
 
 // One live emitter's GPU addresses for this frame: its slot of the per-frame
-// `ParticleParams` ring, its persistent pool, and its spawn counter. Resolved
+// `ParticleParams` ring and its persistent pool. Resolved
 // once in `prepare_particle_pass` so neither encode half re-borrows the emitter
 // state to find them.
 struct EmitterFrameData {
     params_gva: u64,
     pool_gva: u64,
-    counter_gva: u64,
 }
 
 // The per-frame particle inputs `prepare_particle_pass` derives for the two
 // read-only encode halves to consume.
 pub(in crate::directx) struct ParticleFrame {
     // Per-emitter addresses, parallel to `records`; `None` for a tombstone. The
-    // frame's `dt`, RNG seed and spawn budget are already in the
+    // frame's `dt`, RNG seed and spawn run are already in the
     // `ParticleParams` slot each entry points at, so neither half recomputes
     // them.
     emitters: Vec<Option<EmitterFrameData>>,
@@ -483,14 +430,14 @@ impl DxContext {
     // Mutating prelude for the particle pass, run once on the main thread
     // before the render-graph fan-out: advance the frame `dt` (against
     // `particle.last_elapsed`), the monotonic `particle.frame_index`, and each
-    // emitter's fractional spawn accumulator, and fill this frame's slot of the
-    // spawn-budget and `ParticleParams` upload rings. Returns the
+    // emitter's spawn state, and fill this frame's slot of the `ParticleParams`
+    // upload ring. Returns the
     // [`ParticleFrame`] both encode halves consume, or `None` when the pass is
     // inert (no pipeline built, or every slot tombstoned).
     //
     // Splitting it out is what lets the sim and the draw record into separate
     // per-pass command lists on workers: each frame's accumulator advance has to
-    // happen exactly once, and the two halves have to see the same budgets.
+    // happen exactly once, and the two halves have to see the same spawn runs.
     // `&self` because every DirectX encoder is; the per-frame mutable state is
     // in `Cell`s. Mirrors `vulkan::VkContext::prepare_particle_pass`.
     pub(in crate::directx) fn prepare_particle_pass(
@@ -526,30 +473,10 @@ impl DxContext {
                     continue;
                 }
             };
-            // Pull the persistent fractional accumulator out of the Cell,
-            // harvest this frame's integer budget, and write the updated
-            // accumulator back. `ParticleSpawnState` is `Copy`, so the
-            // get/set pair around the in-place mutation is cheap.
-            let mut spawn_state = gpu.spawn_state.get();
-            let spawn_budget = spawn_state.take_budget(dt, rec.spawn_rate, rec.max_particles);
-            gpu.spawn_state.set(spawn_state);
-
-            // Write this frame's spawn budget into the per-emitter upload slot.
-            // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer
-            // that init sized for this payload, and the source is a separate live value, so the
-            // ranges cannot overlap.
-            unsafe {
-                let dst = resources.budget_upload_ptrs[frame_idx]
-                    .add((i as u64 * resources.budget_stride) as usize);
-                std::ptr::copy_nonoverlapping(
-                    &spawn_budget as *const u32 as *const u8,
-                    dst,
-                    std::mem::size_of::<u32>(),
-                );
-            }
+            let spawns = gpu.spawn_state.borrow_mut().take_spawns(dt, rec);
 
             // Write this frame's ParticleParams into the per-emitter params slot.
-            let params = rec.params(dt, spawn_budget, frame_index);
+            let params = rec.params(dt, spawns, spawn_seed(frame_index, i));
             // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer
             // that init sized for this payload, and the source is a separate live value, so the
             // ranges cannot overlap.
@@ -566,92 +493,28 @@ impl DxContext {
             emitters.push(Some(EmitterFrameData {
                 params_gva: params_base_gva + i as u64 * resources.params_stride,
                 pool_gva: com::gpu_va(&gpu.pool),
-                counter_gva: com::gpu_va(&gpu.spawn_counter),
             }));
         }
         Some(ParticleFrame { emitters })
     }
 
-    // Encode the `ParticlesSim` node: copy each live emitter's spawn budget into
-    // its counter buffer, then dispatch the simulation kernel over its pool.
+    // Encode the `ParticlesSim` node: dispatch the simulation kernel over each
+    // live emitter's pool.
     //
     // The compute -> vertex hazard against the draw is the graph's, derived from
-    // the `particle_pool` read the draw declares in the VERTEX stage. The two
-    // barrier calls left here are intra-node: the counter rests in
-    // `UNORDERED_ACCESS` and has to visit `COPY_DEST` for the copy and come back.
+    // the `particle_pool` read the draw declares in the VERTEX stage.
     pub(in crate::directx) fn encode_particles_sim(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        frame_idx: usize,
         frame: &ParticleFrame,
     ) {
         let Some(resources) = self.particle.resources.as_ref() else {
             return;
         };
         let frame_data = frame.emitters.as_slice();
-        let budget_upload = &resources.budget_upload_resources[frame_idx];
 
-        // Copy each live emitter's spawn budget into its counter buffer. The
-        // counter is in UNORDERED_ACCESS (resting state); transition to
-        // COPY_DEST, copy, transition back to UAV. Batched into a single
-        // barrier per direction so the validation noise stays low.
-        let mut to_copy: Vec<D3D12_RESOURCE_BARRIER> = Vec::new();
-        for (i, slot) in self.particle.emitter_state.iter().enumerate() {
-            if frame_data.get(i).and_then(|d| d.as_ref()).is_none() {
-                continue;
-            }
-            if let Some(gpu) = slot.as_ref() {
-                to_copy.push(transition_barrier(
-                    &gpu.spawn_counter,
-                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                    D3D12_RESOURCE_STATE_COPY_DEST,
-                ));
-            }
-        }
-        if !to_copy.is_empty() {
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe { cmd.ResourceBarrier(&to_copy) };
-        }
-        for (i, slot) in self.particle.emitter_state.iter().enumerate() {
-            if frame_data.get(i).and_then(|d| d.as_ref()).is_none() {
-                continue;
-            }
-            if let Some(gpu) = slot.as_ref() {
-                // SAFETY: the command list is in the recording state, and every resource,
-                // descriptor and slice these commands name is live for the call.
-                unsafe {
-                    cmd.CopyBufferRegion(
-                        &gpu.spawn_counter,
-                        0,
-                        &**budget_upload,
-                        i as u64 * resources.budget_stride,
-                        std::mem::size_of::<u32>() as u64,
-                    );
-                }
-            }
-        }
-        let mut to_uav: Vec<D3D12_RESOURCE_BARRIER> = Vec::new();
-        for (i, slot) in self.particle.emitter_state.iter().enumerate() {
-            if frame_data.get(i).and_then(|d| d.as_ref()).is_none() {
-                continue;
-            }
-            if let Some(gpu) = slot.as_ref() {
-                to_uav.push(transition_barrier(
-                    &gpu.spawn_counter,
-                    D3D12_RESOURCE_STATE_COPY_DEST,
-                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                ));
-            }
-        }
-        if !to_uav.is_empty() {
-            // SAFETY: the command list is in the recording state, and every resource, descriptor
-            // and slice these commands name is live for the call.
-            unsafe { cmd.ResourceBarrier(&to_uav) };
-        }
-
-        // Then the dispatches. Pool + counter are both in UNORDERED_ACCESS
-        // state already; the kernel reads + writes through its root UAVs. Each
+        // The pool is in UNORDERED_ACCESS already; the kernel reads + writes
+        // through its root UAV. Each
         // emitter is independent so no UAV barrier is needed between dispatches
         // (resources are disjoint).
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
@@ -672,7 +535,6 @@ impl DxContext {
             unsafe {
                 cmd.SetComputeRootConstantBufferView(0, data.params_gva);
                 cmd.SetComputeRootUnorderedAccessView(1, data.pool_gva);
-                cmd.SetComputeRootUnorderedAccessView(2, data.counter_gva);
                 let groups = rec.max_particles.div_ceil(64);
                 cmd.Dispatch(groups, 1, 1);
             }
@@ -874,10 +736,9 @@ impl DxContext {
     }
 
     // Tombstone a runtime emitter slot. The id becomes invalid; the next
-    // `add_emitter` may reuse it. The pool + counter resources are dropped;
-    // the D3D12 driver keeps them alive until any in-flight command list
-    // that referenced them completes, so this is safe to call mid-frame
-    // between encode passes.
+    // `add_emitter` may reuse it. The pool resource is dropped; the D3D12
+    // driver keeps it alive until any in-flight command list that referenced it
+    // completes, so this is safe to call mid-frame between encode passes.
     pub(crate) fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()> {
         let rec_slot = self.particle.records.get_mut(emitter_id).ok_or_else(|| {
             RenderError::Other(format!("remove_emitter: id {emitter_id} out of range"))
