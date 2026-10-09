@@ -61,6 +61,17 @@ pub const fn toward_far(offset: f32) -> f32 {
     offset * (DEPTH_FAR - DEPTH_NEAR)
 }
 
+/// The farther of two device depths, as `depth_farther` in the shaders.
+pub fn farther(a: f32, b: f32) -> f32 {
+    a.min(b)
+}
+
+/// Whether device depth `a` is strictly behind `b`, as `depth_behind` in the
+/// shaders.
+pub fn behind(a: f32, b: f32) -> bool {
+    a < b
+}
+
 /// How a projection maps distance onto device depth, in the terms an
 /// upscaler's depth flags describe it.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -152,6 +163,13 @@ mod tests {
 
     // A cleared pixel must lose to every surface a write test can produce, and
     // the write test must be the strict form of the inclusive one.
+    #[test]
+    fn farther_and_behind_point_at_the_far_plane() {
+        assert_eq!(farther(DEPTH_NEAR, DEPTH_FAR), DEPTH_FAR);
+        assert!(behind(DEPTH_FAR, DEPTH_NEAR));
+        assert!(!behind(0.5, 0.5));
+    }
+
     #[test]
     fn the_clear_is_the_far_plane() {
         assert_eq!(DEPTH_CLEAR, DEPTH_FAR);

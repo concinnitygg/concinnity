@@ -62,8 +62,8 @@ pub fn level_size(base: (u32, u32), level: u32) -> (u32, u32) {
 
 impl Plan {
     /// Plan the two dispatches. `mip_count` is clamped to [`MAX_MIPS`]. A
-    /// pyramid shallower than the full chain is still sound: the cull keeps any
-    /// rect too wide for a 2x2 footprint at the deepest level it has.
+    /// pyramid shallower than the full chain is still sound: the cull reads
+    /// every texel a rect covers at the deepest level it has.
     pub fn new(width: u32, height: u32, mip_count: u32, sample_count: u32) -> Self {
         let base = (width.max(1), height.max(1));
         let mips = mip_count.clamp(1, MAX_MIPS);

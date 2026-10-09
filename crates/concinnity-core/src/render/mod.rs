@@ -40,6 +40,7 @@ pub mod fullscreen;
 pub mod geometry_repack;
 pub mod hdr_output;
 pub mod history_reset;
+pub mod hiz_cull;
 pub mod hiz_spd;
 pub mod lights;
 pub mod ltc;
