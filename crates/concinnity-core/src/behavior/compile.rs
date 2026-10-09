@@ -208,11 +208,13 @@ fn compile_node(
             position,
             rotation_deg,
             scale,
+            cut,
         } => COp::SetTransform {
             entity: compile_expr(entity, names, vars),
             position: position.as_ref().map(|e| compile_expr(e, names, vars)),
             rotation_deg: rotation_deg.as_ref().map(|e| compile_expr(e, names, vars)),
             scale: scale.as_ref().map(|e| compile_expr(e, names, vars)),
+            cut: *cut,
         },
         BehaviorNode::Spawn {
             template,

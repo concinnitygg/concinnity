@@ -4,6 +4,13 @@
 
 Declares the 3D camera. One per scene.
 
+A camera that jumps rather than travels, as at a shot change or a
+teleport, draws its first frame from the new pose afresh instead of
+blending it with the frames before the jump. Mark the jump where it is
+made: a [CameraTrack](CameraTrack.md) leg or a [Behavior](Behavior.md)
+`set_transform` with `cut` set. An unmarked jump is still recognized when it
+moves, turns or zooms the view far beyond the camera's own recent motion.
+
 ## Parameters
 
 - `fov_y_degrees`: A float. Vertical field-of-view in degrees. Defaults to `75.0`.

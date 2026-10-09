@@ -24,6 +24,7 @@ mod apply;
 mod eval;
 mod instance;
 mod neighbors;
+mod report;
 mod resolve;
 mod state;
 mod trace;
@@ -44,6 +45,7 @@ use neighbors::Neighbors;
 use resolve::{Resolved, SourceTicks};
 
 pub use eval::{EvalBucket, EvalScheduler};
+pub use report::BehaviorReporter;
 pub use state::{BehaviorState, BehaviorStore, def_hash};
 
 use crate::behavior::{Effect, Program, Val, VarTable};
@@ -60,8 +62,9 @@ use crate::ecs::{
 ///
 /// [`new`](BehaviorSystem::new) evaluates every run on the calling thread and
 /// persists nothing; a host lends it a thread pool through
-/// [`with_scheduler`](BehaviorSystem::with_scheduler) and somewhere to keep
-/// state through [`with_store`](BehaviorSystem::with_store).
+/// [`with_scheduler`](BehaviorSystem::with_scheduler), somewhere to keep
+/// state through [`with_store`](BehaviorSystem::with_store), and somewhere to
+/// report to through [`with_reporter`](BehaviorSystem::with_reporter).
 #[derive(Debug, Default)]
 pub struct BehaviorSystem {
     programs: Vec<Program>,
@@ -118,6 +121,10 @@ pub struct BehaviorSystem {
     tag_scratch: Vec<Entity>,
     // One index per distinct declared query, rebuilt on demand each tick.
     neighbors: Neighbors,
+    // `None` when the host has nowhere to report to: nothing is reported.
+    reporter: Option<Box<dyn BehaviorReporter>>,
+    // A behavior wrote a camera another system drives; reported once a world.
+    reported_driven_camera: bool,
 }
 
 /// A run waiting on a clock: a whole body a `delay` postponed, or the block an
@@ -149,6 +156,12 @@ impl BehaviorSystem {
     /// fire at once to pay for it.
     pub fn with_scheduler(mut self, scheduler: Box<dyn EvalScheduler>) -> Self {
         self.scheduler = Some(scheduler);
+        self
+    }
+
+    /// Report what an author should know about to `reporter`.
+    pub fn with_reporter(mut self, reporter: Box<dyn BehaviorReporter>) -> Self {
+        self.reporter = Some(reporter);
         self
     }
 }

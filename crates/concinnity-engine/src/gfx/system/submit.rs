@@ -27,6 +27,9 @@ pub(crate) struct SubmitOutcome {
     // The stop was a device loss: the queue can never signal, so no caller
     // may wait_idle on the way out.
     pub(crate) device_lost: bool,
+    // The frame policy dropped the draw, so nothing this snapshot carried
+    // reached the GPU.
+    pub(crate) skipped: bool,
 }
 
 impl SubmitOutcome {
@@ -36,6 +39,7 @@ impl SubmitOutcome {
             render_stats: None,
             replay: ReplayOutcome::default(),
             device_lost: false,
+            skipped: false,
         }
     }
 }
@@ -105,6 +109,7 @@ pub(crate) fn submit(
     // are in InputState before InputSystem's take_input() (scheduled right
     // after this system) snapshots and clears it.
     backend.update_view(snap.frame.view);
+    let mut skipped = false;
     match backend.draw_frame(FrameParams {
         elapsed: snap.frame.elapsed,
         fov_y_radians: snap.frame.fov_y_radians,
@@ -117,13 +122,20 @@ pub(crate) fn submit(
         view_mode: snap.frame.view_mode,
         show: snap.frame.show,
         sky_rot: snap.frame.sky_rot,
-        history_reset: snap.frame.history_reset,
+        history_reset: snap.frame.history_reset.any(),
     }) {
-        Ok(()) => policy.frame_succeeded(),
+        Ok(()) => {
+            policy.frame_succeeded();
+            // Logged once the reset reaches the GPU: a dropped frame's is
+            // handed to the next frame and logged there.
+            if snap.frame.history_reset.any() {
+                tracing::info!("temporal history reset: {}", snap.frame.history_reset);
+            }
+        }
         Err(e) => {
             replay.memory_pressure |= matches!(e, error::RenderError::OutOfDeviceMemory(_));
             match policy.on_frame_error(&e) {
-                FrameAction::SkipFrame => {}
+                FrameAction::SkipFrame => skipped = true,
                 FrameAction::Shutdown => {
                     backend.wait_idle();
                     return SubmitOutcome {
@@ -154,6 +166,7 @@ pub(crate) fn submit(
         render_stats: Some(render_stats),
         replay,
         device_lost: false,
+        skipped,
     }
 }
 

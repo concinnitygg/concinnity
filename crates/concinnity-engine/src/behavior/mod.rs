@@ -3,12 +3,14 @@
 //
 //   save.rs   a state file under the host's save directory
 //   eval.rs   the job pool a tick's evaluation fans out across
+//   report.rs the log its reports are written to
 //
 // The system itself, the VM it runs, and everything a tick does to the world
 // are in concinnity-core; the gate in `ecs::schedule` builds it with both of
 // these attached.
 
 pub(crate) mod eval;
+mod report;
 pub(crate) mod save;
 
 #[cfg(test)]
@@ -19,7 +21,9 @@ use concinnity_core::behavior::BehaviorSystem;
 // The behavior system as this host runs it: evaluation on the job pool, state
 // in a file under the world's save directory when it has one.
 pub(crate) fn build(tree: Option<&concinnity_host::store::paths::StateTree>) -> BehaviorSystem {
-    let system = BehaviorSystem::new().with_scheduler(Box::new(eval::Pool));
+    let system = BehaviorSystem::new()
+        .with_scheduler(Box::new(eval::Pool))
+        .with_reporter(Box::new(report::Log));
     match save::FileStore::new(tree) {
         Some(store) => system.with_store(Box::new(store)),
         None => system,

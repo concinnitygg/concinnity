@@ -258,5 +258,6 @@ fn step(closer: bool) -> BehaviorNode {
         )),
         rotation_deg: None,
         scale: None,
+        cut: false,
     }
 }

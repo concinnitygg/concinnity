@@ -42,8 +42,8 @@ pub struct FrameScalars {
     /// the sky's rotation. `None` leaves the backend's current set alone, which
     /// is every frame of a world whose sky does not turn.
     pub directional: Option<crate::render::lights::DirectionalLightSet>,
-    /// Whether the temporal history is invalid this frame.
-    pub history_reset: bool,
+    /// Why the temporal history is invalid this frame, if it is.
+    pub history_reset: crate::render::history_reset::HistoryResetCauses,
 }
 
 impl Default for FrameScalars {
@@ -61,7 +61,7 @@ impl Default for FrameScalars {
             menu_active: false,
             sky_rot: crate::sky::SkyOrientation::IDENTITY_ROWS,
             directional: None,
-            history_reset: false,
+            history_reset: crate::render::history_reset::HistoryResetCauses::NONE,
         }
     }
 }

@@ -892,20 +892,28 @@ fn first_declared_scene_applies_start_visibility() {
     assert_eq!(s.visibility.get(&DrawIndex(1)), Some(&true));
 }
 
+// A log writer the tests read back.
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Captured {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
 #[test]
 fn jump_to_undeclared_scene_warns_and_changes_nothing() {
-    #[derive(Clone, Default)]
-    struct Captured(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for Captured {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
     world
@@ -932,7 +940,7 @@ fn jump_to_undeclared_scene_warns_and_changes_nothing() {
     let result = tracing::subscriber::with_default(subscriber, || step(&mut gs, &mut world));
 
     assert_eq!(result, StepResult::Continue);
-    let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    let log = captured.text();
     assert!(
         log.contains("scene jump to 99 rejected: UnknownScene"),
         "{log}"
@@ -1340,6 +1348,47 @@ fn swapchain_out_of_date_skips_the_frame() {
     for _ in 0..5 {
         assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
     }
+}
+
+// A frame the policy dropped never drew the history reset it decided, so the
+// next frame draws it instead, and only the drawn one is logged.
+#[test]
+fn a_dropped_frame_hands_its_history_reset_to_the_next() {
+    use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
+
+    let (state, hooks) = recording_hooks();
+    let mut world = scene_builder().build();
+    let mut gs = init_graphics(&mut world, hooks);
+    assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+
+    let captured = Captured::default();
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(move || writer.clone())
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        PendingHistoryReset::raise(&mut world.context(), HistoryResetCauses::SETTINGS_CHANGE);
+        lock(&state).fail_draw = Some(error::RenderError::SwapchainOutOfDate);
+        assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+        lock(&state).fail_draw = None;
+        lock(&state).calls.clear();
+        for _ in 0..2 {
+            assert_eq!(step(&mut gs, &mut world), StepResult::Continue);
+        }
+    });
+    let log = captured.text();
+    assert_eq!(log.matches("temporal history reset: ").count(), 1, "{log}");
+    let resets: Vec<bool> = lock(&state)
+        .calls
+        .iter()
+        .filter_map(|c| match c {
+            Call::DrawFrame { history_reset, .. } => Some(*history_reset),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(resets, [true, false]);
 }
 
 // Device-memory exhaustion publishes the pressure resource the streaming

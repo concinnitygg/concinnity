@@ -97,6 +97,7 @@ pub(crate) enum Call {
         cam_pos: [f32; 3],
         view_mode: view_modes::ViewMode,
         show: view_modes::ShowFlags,
+        history_reset: bool,
     },
     UpdateView([[f32; 4]; 4]),
     UpdateModel(DrawIndex),
@@ -438,6 +439,7 @@ impl RenderBackend for MockBackend {
             cam_pos: params.cam_pos,
             view_mode: params.view_mode,
             show: params.show,
+            history_reset: params.history_reset,
         });
         if !s.draw_duration.is_zero() {
             std::thread::sleep(s.draw_duration);

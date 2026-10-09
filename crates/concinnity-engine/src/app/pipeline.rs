@@ -126,6 +126,7 @@ fn render_half(
             replay: outcome.replay,
             recycled: snapshot,
             stop,
+            skipped: outcome.skipped,
         };
         // A send failure means the sim already stopped; nothing left to tell.
         let _ = feedback_tx.send(feedback);

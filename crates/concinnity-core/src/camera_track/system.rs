@@ -4,7 +4,8 @@ use crate::camera_track::CameraTrackStatus;
 use crate::camera_track::timeline::{self, Key};
 use crate::components::{Camera3D, CameraTrack, CameraTurnKey};
 use crate::ecs::{Entity, MenuActive, PipelineContext, SimTiming, StepResult, System};
-use crate::math::rem_euclid;
+use crate::math::{rem_euclid, vec3};
+use crate::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
 
 const HALF_TURN_DEG: f32 = 180.0;
 const FULL_TURN_DEG: f32 = 360.0;
@@ -46,6 +47,7 @@ impl CameraTrackSystem {
                     value: key.offset,
                     end_seconds: key.end_seconds,
                     ease: key.ease,
+                    cut: key.cut,
                 })
                 .collect(),
             segments: track.travel.iter().map(|key| key.segment).collect(),
@@ -83,11 +85,13 @@ impl CameraTrackSystem {
                 .map_or(yaw, |to| yaw + shortest_turn_deg(yaw, to));
             let target_pitch = leg.pitch_deg.unwrap_or(pitch);
             let sweep = (target_yaw - yaw).abs().max((target_pitch - pitch).abs());
-            end_seconds += turn_seconds(leg, sweep);
+            let seconds = turn_seconds(leg, sweep);
+            end_seconds += seconds;
             self.turn.push(Key {
                 value: [target_yaw, target_pitch],
                 end_seconds,
                 ease: leg.ease,
+                cut: leg.cut || (seconds == 0.0 && sweep > 0.0),
             });
             yaw = target_yaw;
             pitch = target_pitch;
@@ -103,14 +107,11 @@ impl CameraTrackSystem {
         if let Some(camera) = self.camera
             && let Some(cam) = ctx.get_mut::<Camera3D>(camera)
         {
-            cam.position = [
-                self.start_position[0] + offset[0],
-                self.start_position[1] + offset[1],
-                self.start_position[2] + offset[2],
-            ];
-            cam.yaw = angles[0].to_radians();
-            cam.pitch = angles[1].to_radians();
-            cam.view_matrix = crate::gfx::camera::view_matrix(cam.position, cam.yaw, cam.pitch);
+            cam.set_pose(
+                vec3::add(self.start_position, offset),
+                angles[0].to_radians(),
+                angles[1].to_radians(),
+            );
         }
         let duration = self.duration();
         ctx.insert_resource(CameraTrackStatus {
@@ -138,9 +139,17 @@ impl System for CameraTrackSystem {
             return StepResult::Continue;
         }
         let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
+        let before = self.elapsed();
         self.ticks += u64::from(timing.ticks);
         self.tick_dt = timing.tick_dt;
+        let now = self.elapsed();
         self.apply(ctx);
+        if self.camera.is_some()
+            && (timeline::cut_crossed(&self.travel, before, now)
+                || timeline::cut_crossed(&self.turn, before, now))
+        {
+            PendingHistoryReset::raise(ctx, HistoryResetCauses::CAMERA_CUT);
+        }
         StepResult::Continue
     }
 }
@@ -148,7 +157,9 @@ impl System for CameraTrackSystem {
 // How long a turn leg runs: its authored duration, or the one its rate implies
 // over the wider of the yaw and pitch sweeps.
 fn turn_seconds(leg: &CameraTurnKey, sweep_deg: f32) -> f32 {
-    if leg.seconds > 0.0 {
+    if leg.cut {
+        0.0
+    } else if leg.seconds > 0.0 {
         leg.seconds
     } else if leg.degrees_per_second > 0.0 {
         sweep_deg / leg.degrees_per_second
@@ -549,5 +560,79 @@ mod tests {
         system.init(&mut world.context());
         run(&mut world, &mut system, 3.0);
         assert!(status(&world).finished);
+    }
+
+    // The ticks, counted from the first, on which the track raised a cut.
+    fn cut_ticks(world: &mut World, system: &mut CameraTrackSystem, seconds: f32) -> Vec<usize> {
+        let ticks = (seconds * TICKS_PER_SECOND as f32).round() as usize;
+        let mut cuts = Vec::new();
+        for tick in 0..ticks {
+            let mut ctx = world.context();
+            system.step(&mut ctx);
+            if PendingHistoryReset::take(&mut ctx).contains(HistoryResetCauses::CAMERA_CUT) {
+                cuts.push(tick);
+            }
+        }
+        cuts
+    }
+
+    #[test]
+    fn a_cut_leg_jumps_and_raises_one_camera_cut_on_the_tick_it_lands() {
+        let jump = CameraTravel {
+            cut: true,
+            ..travel([0.0, 0.0, 1.0], 12.0, 0.0)
+        };
+        let hold = CameraTravel {
+            seconds: 0.5,
+            ..Default::default()
+        };
+        let (mut world, mut system) = world_with(
+            track(vec![hold.clone(), jump, hold], vec![]),
+            [0.0; 3],
+            0.0,
+            0.0,
+        );
+        system.init(&mut world.context());
+        // The hold ends half a second in, on the 30th tick (index 29).
+        assert_eq!(cut_ticks(&mut world, &mut system, 2.0), [29]);
+        assert_eq!(camera_position(&world), [0.0, 0.0, 12.0]);
+    }
+
+    #[test]
+    fn a_cut_turn_snaps_and_raises_a_camera_cut() {
+        let hold = CameraTurn {
+            seconds: 0.5,
+            ..Default::default()
+        };
+        let snap = CameraTurn {
+            yaw_deg: Some(120.0),
+            degrees_per_second: 10.0,
+            cut: true,
+            ..Default::default()
+        };
+        let (mut world, mut system) =
+            world_with(track(vec![], vec![hold, snap]), [0.0; 3], 0.0, 0.0);
+        system.init(&mut world.context());
+        assert_eq!(cut_ticks(&mut world, &mut system, 1.0), [29]);
+        assert!((camera_yaw_deg(&world) - 120.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_track_without_cuts_raises_none() {
+        let (mut world, mut system) = world_with(
+            track(
+                vec![travel([1.0, 0.0, 0.0], 300.0, 300.0)],
+                vec![CameraTurn {
+                    yaw_deg: Some(170.0),
+                    degrees_per_second: 90.0,
+                    ..Default::default()
+                }],
+            ),
+            [0.0; 3],
+            0.0,
+            0.0,
+        );
+        system.init(&mut world.context());
+        assert!(cut_ticks(&mut world, &mut system, 3.0).is_empty());
     }
 }

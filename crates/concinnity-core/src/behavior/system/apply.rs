@@ -6,12 +6,14 @@
 use super::eval::Resume;
 use super::instance::{self, Instance};
 use super::{BehaviorSystem, Deferred};
+use crate::behavior::position;
 use crate::behavior::{Effect, Val};
 use crate::components::{
     DespawnRequest, PlayCue, ReparentRequest, SceneCommand, ScreenCommand, SpawnRequest,
-    StoryCommand, StoryPlayback, Transform, VisibilityRequest, WakeRequest,
+    StoryCommand, StoryPlayback, VisibilityRequest, WakeRequest,
 };
 use crate::ecs::{Entity, PipelineContext};
+use crate::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
 
 impl BehaviorSystem {
     // Land one body's effects. Returns whether a `save` was requested.
@@ -63,9 +65,17 @@ impl BehaviorSystem {
                         seconds,
                     });
                 }
-                Effect::SetTransform { entity, transform } => {
-                    if let Some(current) = ctx.get_mut::<Transform>(entity) {
-                        *current = transform;
+                Effect::SetTransform {
+                    entity,
+                    transform,
+                    cut,
+                } => {
+                    let moved = position::write(ctx.components, entity, transform);
+                    if moved == position::Moved::Camera {
+                        self.report_driven_camera(ctx, entity);
+                    }
+                    if moved != position::Moved::Nothing && cut {
+                        PendingHistoryReset::raise(ctx, HistoryResetCauses::CAMERA_CUT);
                     }
                 }
                 Effect::Spawn(spawn) => {
@@ -122,6 +132,24 @@ impl BehaviorSystem {
         save_requested
     }
 
+    // A camera another system rewrites every tick keeps a behavior's write for
+    // one frame only; say so once a world.
+    fn report_driven_camera(&mut self, ctx: &PipelineContext, camera: Entity) {
+        if self.reported_driven_camera {
+            return;
+        }
+        let Some(driver) = position::camera_driver(ctx, camera) else {
+            return;
+        };
+        self.reported_driven_camera = true;
+        if let Some(reporter) = &self.reporter {
+            reporter.warn(&alloc::format!(
+                "a set_transform moved the camera, but {driver} rewrites its pose every tick, \
+                 so the move lasts one frame"
+            ));
+        }
+    }
+
     fn instance_mut(&mut self, i: usize, entity: Option<Entity>) -> Option<&mut Instance> {
         let at = instance::find(&self.instances[i], entity)?;
         self.instances[i].get_mut(at)
@@ -145,7 +173,8 @@ mod tests {
     use crate::behavior::SpawnEffect;
     use crate::behavior::system::test_world::world_with;
     use crate::components::{
-        Behavior, BehaviorLiteral, BehaviorLocal, BehaviorSource, CueKind, PropInstance,
+        Behavior, BehaviorLiteral, BehaviorLocal, BehaviorSource, Camera3D, CueKind, PropInstance,
+        Transform,
     };
     use crate::ecs::World;
     use crate::ecs::{AudioClipHandle, EventCursor, System, asset_id::AssetId};
@@ -331,6 +360,7 @@ mod tests {
             vec![Effect::SetTransform {
                 entity,
                 transform: moved,
+                cut: false,
             }],
         );
         assert_eq!(
@@ -347,9 +377,83 @@ mod tests {
             vec![Effect::SetTransform {
                 entity: bare,
                 transform: moved,
+                cut: false,
             }],
         );
         assert!(world.get::<Transform>(bare).is_none());
+    }
+
+    // A camera is moved through its pose; only a move marked as a cut asks the
+    // next frame to drop its temporal history.
+    #[test]
+    fn a_transform_write_moves_a_camera_and_a_cut_raises_a_history_reset() {
+        let (mut sys, mut world, prop) = started(BehaviorLiteral::Int(0));
+        let camera = world.push(Camera3D::bake(Default::default()));
+        let mut write = |world: &mut World, x: f32, cut: bool| {
+            let transform = Transform {
+                position: [x, 0.0, 0.0],
+                ..Transform::default()
+            };
+            apply(
+                &mut sys,
+                world,
+                prop,
+                vec![Effect::SetTransform {
+                    entity: camera,
+                    transform,
+                    cut,
+                }],
+            );
+            PendingHistoryReset::take(&mut world.context())
+        };
+        assert!(!write(&mut world, 1.0, false).any());
+        assert_eq!(
+            world.get::<Camera3D>(camera).map(|c| c.position),
+            Some([1.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            write(&mut world, 500.0, true),
+            HistoryResetCauses::CAMERA_CUT
+        );
+        assert_eq!(
+            world.get::<Camera3D>(camera).map(|c| c.position),
+            Some([500.0, 0.0, 0.0])
+        );
+    }
+
+    #[derive(Debug, Default)]
+    struct Recorded(alloc::sync::Arc<spin::Mutex<Vec<String>>>);
+
+    impl crate::behavior::BehaviorReporter for Recorded {
+        fn warn(&self, message: &str) {
+            self.0.lock().push(String::from(message));
+        }
+    }
+
+    // A write to a camera the world's CameraTrack drives is undone the next
+    // tick: reported, once.
+    #[test]
+    fn a_write_to_a_driven_camera_is_reported_once() {
+        let (sys, mut world, prop) = started(BehaviorLiteral::Int(0));
+        let warnings = alloc::sync::Arc::new(spin::Mutex::new(Vec::new()));
+        let mut sys = sys.with_reporter(alloc::boxed::Box::new(Recorded(warnings.clone())));
+        let camera = world.push(Camera3D::bake(Default::default()));
+        let write = |sys: &mut BehaviorSystem, world: &mut World| {
+            let effect = Effect::SetTransform {
+                entity: camera,
+                transform: Transform::default(),
+                cut: false,
+            };
+            apply(sys, world, prop, vec![effect]);
+        };
+        write(&mut sys, &mut world);
+        assert!(warnings.lock().is_empty(), "a free camera keeps its write");
+        world.push(crate::components::CameraTrack::default());
+        write(&mut sys, &mut world);
+        write(&mut sys, &mut world);
+        let warnings = warnings.lock();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("CameraTrack"), "{warnings:?}");
     }
 
     // Adding keeps the target's declared type: the delta is read through it

@@ -24,9 +24,11 @@ mod system;
 mod value;
 
 pub use compile::compile;
+pub use position::camera_driver;
 pub use program::{CExpr, CNode, COp, Program, VarTable};
 pub use run::{Effect, Spatial, SpawnEffect, View, exec};
 pub use system::{
-    BehaviorState, BehaviorStore, BehaviorSystem, EvalBucket, EvalScheduler, def_hash,
+    BehaviorReporter, BehaviorState, BehaviorStore, BehaviorSystem, EvalBucket, EvalScheduler,
+    def_hash,
 };
 pub use value::{Arith, Cmp, Val};

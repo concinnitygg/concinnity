@@ -106,11 +106,44 @@
 //!     .writes_components(component_mask![TextLabel])
 //! # }
 //! ```
+//!
+//! # Moving the camera
+//!
+//! A system that moves the [`Camera3D`](crate::components::Camera3D), or
+//! what it follows, somewhere it did not travel to, as at a respawn or a shot
+//! change, calls [`raise_camera_cut`] on the same tick. The first frame drawn
+//! from the moved camera then starts its temporal history afresh instead of
+//! blending with the view before the jump:
+//!
+//! ```
+//! use concinnity::components::Camera3D;
+//! use concinnity::system::{PipelineContext, StepResult, System, raise_camera_cut};
+//!
+//! #[derive(Debug)]
+//! struct Respawn;
+//!
+//! impl System for Respawn {
+//!     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
+//!         for camera in ctx.query_mut::<Camera3D>() {
+//!             camera.set_pose([0.0, 1.7, 0.0], 0.0, 0.0);
+//!         }
+//!         raise_camera_cut(ctx);
+//!         StepResult::Done
+//!     }
+//! }
+//! ```
 
 pub use concinnity_core::ecs::{
     Access, ComponentId, ComponentMask, ComponentSlot, Entity, Phase, PipelineContext, StepResult,
     System,
 };
+
+/// Mark this tick's move of the camera, or of what it follows, as a cut: the
+/// first frame drawn from the moved camera starts its temporal history afresh.
+pub fn raise_camera_cut(ctx: &mut PipelineContext) {
+    use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
+    PendingHistoryReset::raise(ctx, HistoryResetCauses::CAMERA_CUT);
+}
 
 #[cfg(test)]
 mod tests {
@@ -143,6 +176,20 @@ mod tests {
                 StepResult::Continue
             }
         }
+    }
+
+    // A host can mark a camera cut, and nothing but a camera cut.
+    #[test]
+    fn raise_camera_cut_queues_a_camera_cut() {
+        use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
+
+        let mut world = concinnity_core::ecs::World::new();
+        let mut ctx = world.context();
+        super::raise_camera_cut(&mut ctx);
+        assert_eq!(
+            PendingHistoryReset::take(&mut ctx),
+            HistoryResetCauses::CAMERA_CUT
+        );
     }
 
     // The whole point: code registered from outside the engine runs on the same

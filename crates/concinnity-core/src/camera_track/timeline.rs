@@ -13,6 +13,8 @@ pub(super) struct Key<const N: usize> {
     pub end_seconds: f32,
     /// How the run up to this key is paced.
     pub ease: Ease,
+    /// The track jumps to this key rather than running to it.
+    pub cut: bool,
 }
 
 /// The value a track holds `seconds` in, having started from `start`.
@@ -51,6 +53,14 @@ pub(super) fn active<const N: usize>(keys: &[Key<N>], seconds: f32) -> Option<us
     )
 }
 
+/// Whether the clock moving from `from` to `to` seconds reaches a cut key. A
+/// key at the start of the track is where the camera already stands, so it is
+/// never crossed.
+pub(super) fn cut_crossed<const N: usize>(keys: &[Key<N>], from: f32, to: f32) -> bool {
+    keys.iter()
+        .any(|key| key.cut && from < key.end_seconds && key.end_seconds <= to)
+}
+
 /// How long a track runs, which is its last key's end.
 pub(super) fn duration<const N: usize>(keys: &[Key<N>]) -> f32 {
     keys.last().map_or(0.0, |key| key.end_seconds)
@@ -75,11 +85,13 @@ mod tests {
                 value: [10.0],
                 end_seconds: 2.0,
                 ease: Ease::Linear,
+                cut: false,
             },
             Key {
                 value: [30.0],
                 end_seconds: 6.0,
                 ease: Ease::Linear,
+                cut: false,
             },
         ]
     }
@@ -123,11 +135,13 @@ mod tests {
                 value: [5.0],
                 end_seconds: 0.0,
                 ease: Ease::Linear,
+                cut: false,
             },
             Key {
                 value: [9.0],
                 end_seconds: 1.0,
                 ease: Ease::Linear,
+                cut: false,
             },
         ];
         // At t=0 the instant key has already ended, so the run to the second
@@ -142,6 +156,7 @@ mod tests {
             value: [10.0],
             end_seconds: 2.0,
             ease: Ease::InOut,
+            cut: false,
         }];
         assert_eq!(sample([0.0], &eased, 0.0), [0.0]);
         assert_eq!(sample([0.0], &eased, 2.0), [10.0]);
@@ -161,11 +176,24 @@ mod tests {
     }
 
     #[test]
+    fn a_cut_is_crossed_once_as_the_clock_reaches_it() {
+        let mut keys = keys();
+        keys[1].cut = true;
+        keys[1].end_seconds = keys[0].end_seconds;
+        assert!(!cut_crossed(&keys, 0.0, 1.9));
+        assert!(cut_crossed(&keys, 1.9, 2.0));
+        assert!(!cut_crossed(&keys, 2.0, 2.1));
+        keys[1].end_seconds = 0.0;
+        assert!(!cut_crossed(&keys, 0.0, 0.0));
+    }
+
+    #[test]
     fn interpolation_runs_over_every_component() {
         let keys = [Key {
             value: [2.0, 4.0, 6.0],
             end_seconds: 1.0,
             ease: Ease::Linear,
+            cut: false,
         }];
         assert_eq!(sample([0.0; 3], &keys, 0.5), [1.0, 2.0, 3.0]);
     }

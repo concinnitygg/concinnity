@@ -26,6 +26,19 @@ use crate::ecs::{AnyAsset, Ref};
 /// firing decision, which is made at fire time rather than after the delay.
 /// Timers, delays, and cooldowns freeze while a menu is open, like the rest of
 /// the world clock.
+///
+/// A `set_transform` node moves an entity: `entity` names it, and the optional
+/// `position`, `rotation_deg` (Euler degrees) and `scale` vectors replace
+/// those parts of its transform. It moves the [Camera3D](#camera3d) too, with
+/// `rotation_deg`'s `x` as the camera's pitch and `y` as its yaw. `"cut":
+/// true` marks the move as a jump, of the camera or of what it follows: the
+/// first frame drawn afterwards starts afresh rather than blending with the
+/// frames before it.
+///
+/// ```json
+/// {"set_transform": {"entity": {"named": "cam"}, "position": {"vec3": [0, 2, 8]},
+///   "rotation_deg": {"vec3": [-10, 90, 0]}, "cut": true}}
+/// ```
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
 #[serde(default)]
 pub struct Behavior {
@@ -333,8 +346,15 @@ pub enum BehaviorNode {
         add: bool,
     },
     /// Writes an entity's transform. An omitted field is left unchanged, and
-    /// an entity with no transform to write (a camera, whose pose belongs to
-    /// its camera system) is left alone.
+    /// an entity with no transform to write is left alone.
+    ///
+    /// The [Camera3D](#camera3d) is moved the same way: `position` places it,
+    /// and `rotation_deg` aims it, `x` as its pitch and `y` as its yaw (a
+    /// camera does not roll, and has no scale). A first-person or free-fly
+    /// camera carries on from the written pose. A camera a
+    /// [CameraTrack](#cameratrack) or a follow controller drives is put back on
+    /// its path the next tick, so the write shows for one frame; move what it
+    /// follows instead.
     ///
     /// Writing the transform of an entity the simulation owns (one with a
     /// collider) teleports its body: it arrives at the written pose at rest,
@@ -352,6 +372,13 @@ pub enum BehaviorNode {
         /// New scale.
         #[serde(default)]
         scale: Option<BehaviorExpr>,
+        /// The move is a jump in what the camera sees: moving the camera
+        /// itself, or the character it follows, somewhere it did not travel
+        /// to. The first frame drawn afterwards starts afresh rather than
+        /// blending with the frames before the jump. Leave it off for a move
+        /// that continues smoothly from frame to frame.
+        #[serde(default)]
+        cut: bool,
     },
     /// Creates a copy of an existing placement at a world position. Binding
     /// `bind` makes the copy addressable for the rest of the body.

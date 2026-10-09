@@ -156,6 +156,8 @@ pub enum COp {
         rotation_deg: Option<CExpr>,
         /// New scale, when authored.
         scale: Option<CExpr>,
+        /// The move is a camera cut.
+        cut: bool,
     },
     /// Request a copy of a template.
     Spawn {

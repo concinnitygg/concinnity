@@ -19,10 +19,7 @@ pub(crate) fn monotonic_micros() -> u64 {
     EPOCH.get_or_init(Instant::now).elapsed().as_micros() as u64
 }
 
-// Most fixed ticks one frame may run. Accumulated time past this is dropped,
-// so a long hitch degrades to slow motion instead of a tick spiral where each
-// frame's catch-up work makes the next frame longer.
-const MAX_TICKS_PER_FRAME: u32 = 5;
+const MAX_TICKS_PER_FRAME: u32 = SimTiming::MAX_TICKS_PER_FRAME;
 
 // Accumulates wall-clock time into fixed simulation ticks. One per `Runtime`,
 // advanced once per world step.

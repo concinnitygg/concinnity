@@ -124,6 +124,13 @@ fn default_controller() -> Option<CameraController> {
 
 /// Declares the 3D camera. One per scene.
 ///
+/// A camera that jumps rather than travels, as at a shot change or a
+/// teleport, draws its first frame from the new pose afresh instead of
+/// blending it with the frames before the jump. Mark the jump where it is
+/// made: a [CameraTrack](#cameratrack) leg or a [Behavior](#behavior)
+/// `set_transform` with `cut` set. An unmarked jump is still recognized when it
+/// moves, turns or zooms the view far beyond the camera's own recent motion.
+///
 /// ```rust
 /// # use concinnity_core::components::cook::Camera3D as Camera3DArgs;
 /// Camera3DArgs {
@@ -284,5 +291,18 @@ impl Camera3D {
             interact_requested: false,
             controller: args.controller,
         }
+    }
+
+    /// Place and aim the camera, recomposing the view matrix to match.
+    ///
+    /// A pose the camera did not travel to is a cut, and needs one raised on
+    /// the same tick (`concinnity::system::raise_camera_cut` from an
+    /// application's system). Otherwise a jump too small to recognize on its
+    /// own blends the old view into the new one.
+    pub fn set_pose(&mut self, position: [f32; 3], yaw: f32, pitch: f32) {
+        self.position = position;
+        self.yaw = yaw;
+        self.pitch = pitch;
+        self.view_matrix = crate::gfx::camera::view_matrix(position, yaw, pitch);
     }
 }

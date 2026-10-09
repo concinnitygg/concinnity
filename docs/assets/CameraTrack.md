@@ -15,6 +15,9 @@ at the same time and the camera can turn toward one thing while traveling
 toward another. Each list runs from the camera's authored pose; when one
 runs out the camera holds that list's last value while the other finishes.
 
+A leg marked `cut` jumps rather than runs, which is how a track changes
+shot: the frame drawn from the new pose does not blend with the old one.
+
 The clock is the fixed simulation step, not the frame delta. A machine that
 renders half as fast visits the same poses at the same track times and
 simply samples fewer of them, which is what makes two runs comparable. The

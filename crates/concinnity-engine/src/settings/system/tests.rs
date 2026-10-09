@@ -1116,12 +1116,7 @@ fn dlss_preset_cycles_and_persists_without_resetting_history() {
         f.persisted().graphics.dlss_preset,
         Some(DlssPreset::Default)
     );
-    assert!(
-        f.world
-            .context()
-            .resource::<PendingHistoryReset>()
-            .is_none()
-    );
+    assert!(!PendingHistoryReset::take(&mut f.world.context()).any());
 }
 
 // A live quality change reports a history reset for the next frame.
@@ -1130,8 +1125,8 @@ fn a_live_quality_change_requests_a_history_reset() {
     let mut f = Fixture::new();
     f.next(SettingKey::AaMode);
     assert_eq!(
-        f.world.context().resource::<PendingHistoryReset>().copied(),
-        Some(PendingHistoryReset(HistoryResetCauses::SETTINGS_CHANGE))
+        PendingHistoryReset::take(&mut f.world.context()),
+        HistoryResetCauses::SETTINGS_CHANGE
     );
 }
 

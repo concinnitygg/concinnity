@@ -66,6 +66,12 @@ pub struct CameraTravel {
     pub seconds: f32,
     /// How the run is paced.
     pub ease: Ease,
+    /// Jump to where the leg ends instead of running to it. The leg takes no
+    /// time, whatever `speed` or `seconds` say, and the first frame drawn from
+    /// the new pose starts afresh rather than blending with the frames before
+    /// the jump, as at a shot change. A leg that takes no time anyway is a cut
+    /// as soon as it moves the camera.
+    pub cut: bool,
     /// Names the segment of the path this leg opens, for whatever reads where
     /// the track has reached. An empty label continues whichever segment the
     /// previous leg was in.
@@ -100,6 +106,12 @@ pub struct CameraTurn {
     pub seconds: f32,
     /// How the turn is paced.
     pub ease: Ease,
+    /// Snap to the leg's heading instead of turning to it. The leg takes no
+    /// time, whatever `degrees_per_second` or `seconds` say, and the first
+    /// frame drawn from the new heading starts afresh rather than blending with
+    /// the frames before the snap, as at a shot change. A leg that takes no
+    /// time anyway is a cut as soon as it turns the camera.
+    pub cut: bool,
 }
 
 /// Drives the world's [Camera3D](#camera3d) along a scripted path, so a
@@ -114,6 +126,9 @@ pub struct CameraTurn {
 /// at the same time and the camera can turn toward one thing while traveling
 /// toward another. Each list runs from the camera's authored pose; when one
 /// runs out the camera holds that list's last value while the other finishes.
+///
+/// A leg marked `cut` jumps rather than runs, which is how a track changes
+/// shot: the frame drawn from the new pose does not blend with the old one.
 ///
 /// The clock is the fixed simulation step, not the frame delta. A machine that
 /// renders half as fast visits the same poses at the same track times and
@@ -172,6 +187,9 @@ pub struct CameraTravelKey {
     pub end_seconds: f32,
     /// How the run up to this point is paced.
     pub ease: Ease,
+    /// The camera jumps here rather than running: the key takes no time and
+    /// the frame that reaches it starts afresh.
+    pub cut: bool,
     /// Index into [`CameraTrack::segments`], or `None` while no leg has yet
     /// opened one.
     pub segment: Option<u32>,
@@ -201,6 +219,9 @@ pub struct CameraTurnKey {
     pub seconds: f32,
     /// How the turn is paced.
     pub ease: Ease,
+    /// The camera snaps to this heading rather than turning: the key takes no
+    /// time and the frame that reaches it starts afresh.
+    pub cut: bool,
 }
 
 /// The runtime `CameraTrack`: the keys
@@ -254,7 +275,8 @@ impl CameraTrack {
                     }
                 });
             }
-            end_seconds += travel_seconds(leg);
+            let seconds = travel_seconds(leg);
+            end_seconds += seconds;
             offset = vec3::add(
                 offset,
                 vec3::scale(vec3::vec3_normalize(leg.direction), leg.distance),
@@ -263,6 +285,7 @@ impl CameraTrack {
                 offset,
                 end_seconds,
                 ease: leg.ease,
+                cut: leg.cut || (seconds == 0.0 && leg.distance > 0.0),
                 segment,
             });
         }
@@ -275,6 +298,7 @@ impl CameraTrack {
                 degrees_per_second: leg.degrees_per_second,
                 seconds: leg.seconds,
                 ease: leg.ease,
+                cut: leg.cut,
             })
             .collect();
         Self {
@@ -288,7 +312,9 @@ impl CameraTrack {
 // How long a travel leg runs: its authored duration, or the one its distance
 // and speed imply.
 pub(crate) fn travel_seconds(leg: &CameraTravel) -> f32 {
-    if leg.seconds > 0.0 {
+    if leg.cut {
+        0.0
+    } else if leg.seconds > 0.0 {
         leg.seconds
     } else if leg.speed > 0.0 {
         leg.distance / leg.speed
@@ -408,6 +434,32 @@ mod tests {
     }
 
     #[test]
+    fn a_cut_leg_takes_no_time_and_keeps_its_distance() {
+        let cut = CameraTravel {
+            cut: true,
+            seconds: 4.0,
+            ..travel([0.0, 0.0, 1.0], 12.0, 2.0)
+        };
+        let t = baked(vec![travel([1.0, 0.0, 0.0], 2.0, 1.0), cut], vec![]);
+        assert!(!t.travel[0].cut);
+        assert!(t.travel[1].cut);
+        assert_eq!(t.travel[1].end_seconds, t.travel[0].end_seconds);
+        assert_eq!(t.travel[1].offset, [2.0, 0.0, 12.0]);
+    }
+
+    // A leg that moves the camera in no time is a jump whether or not the
+    // author called it one; a hold that takes no time moves nothing.
+    #[test]
+    fn an_instant_move_is_a_cut_and_an_instant_hold_is_not() {
+        let t = baked(
+            vec![travel([1.0, 0.0, 0.0], 5.0, 0.0), CameraTravel::default()],
+            vec![],
+        );
+        assert!(t.travel[0].cut);
+        assert!(!t.travel[1].cut);
+    }
+
+    #[test]
     fn segments_collect_in_first_appearance_order() {
         let named = |name: &str| CameraTravel {
             segment: name.to_string(),
@@ -457,6 +509,7 @@ mod tests {
         assert_eq!(t.turn[0].degrees_per_second, 45.0);
         assert_eq!(t.turn[0].seconds, 0.0);
         assert_eq!(t.turn[0].ease, Ease::Out);
+        assert!(!t.turn[0].cut);
     }
 
     #[test]

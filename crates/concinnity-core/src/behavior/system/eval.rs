@@ -11,7 +11,6 @@ use super::BehaviorSystem;
 use super::instance::{self, Instance};
 use super::neighbors::Neighbors;
 use crate::behavior::{Effect, Program, Spatial, Val, View, exec, position, spatial};
-use crate::components::Transform;
 use crate::ecs::{ComponentStorage, Entity, EntityById, PipelineContext};
 
 // Below this many firing instances the fan-out costs more than the work.
@@ -127,7 +126,7 @@ pub(super) fn eval_one(
                 .filter(|e| ec.components.is_alive(*e))
         },
         positions: &|e| position::of(ec.components, e),
-        transforms: &|e| ec.components.get::<Transform>(e).copied(),
+        transforms: &|e| position::transform_of(ec.components, e),
         alive: &|e| ec.components.is_alive(e),
         // The behavior's own entity is never an answer: a ray cast from
         // `position(self)` starts inside self's own collider, and an entity is

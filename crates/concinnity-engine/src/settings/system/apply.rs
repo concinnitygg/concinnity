@@ -138,7 +138,7 @@ impl SettingsState {
             reset_history |= changed && settings::resets_temporal_history(cmd.setting);
         }
         if reset_history {
-            ctx.insert_resource(PendingHistoryReset(HistoryResetCauses::SETTINGS_CHANGE));
+            PendingHistoryReset::raise(ctx, HistoryResetCauses::SETTINGS_CHANGE);
         }
         // Hand the batch's snapshot to the background writer (spawned on the
         // first persisted change) and keep it as the cache the next change

@@ -33,6 +33,7 @@ fn drifting_behavior() -> Behavior {
                 )),
                 rotation_deg: None,
                 scale: None,
+                cut: false,
             },
             BehaviorNode::Story(StoryPlayback::Continue),
         ],
@@ -115,6 +116,7 @@ fn a_start_sourced_behavior_fires_once_across_a_long_run() {
             position: Some(BehaviorExpr::Vec3([7.0, 0.0, 0.0])),
             rotation_deg: None,
             scale: None,
+            cut: false,
         }],
         ..Default::default()
     });

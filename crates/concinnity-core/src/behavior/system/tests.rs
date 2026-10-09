@@ -187,6 +187,7 @@ fn self_moves_only_its_own_entity() {
             )),
             rotation_deg: None,
             scale: None,
+            cut: false,
         }],
         ..Default::default()
     }]);
@@ -239,6 +240,7 @@ fn for_each_binds_every_queried_entity() {
                 position: Some(BehaviorExpr::Vec3([5.0, 0.0, 0.0])),
                 rotation_deg: None,
                 scale: None,
+                cut: false,
             }],
         }],
         ..Default::default()
@@ -549,6 +551,7 @@ fn a_swarm_answers_its_neighbor_questions_as_the_scans_do() {
                     }))),
                     rotation_deg: None,
                     scale: None,
+                    cut: false,
                 },
             ],
             ..Default::default()
@@ -961,6 +964,7 @@ fn a_body_reads_positions_from_before_this_ticks_writes() {
             position: Some(BehaviorExpr::Vec3([9.0, 0.0, 0.0])),
             rotation_deg: None,
             scale: None,
+            cut: false,
         }],
         ..Default::default()
     };
@@ -1592,6 +1596,7 @@ fn a_vec3_variable_feeds_a_transform() {
                 position: Some(BehaviorExpr::Var("spawn".into())),
                 rotation_deg: None,
                 scale: None,
+                cut: false,
             }],
             ..Default::default()
         }],
@@ -1731,6 +1736,7 @@ fn parallel_eval_matches_serial_state() {
                     )),
                     rotation_deg: None,
                     scale: None,
+                    cut: false,
                 },
             ],
             ..Default::default()

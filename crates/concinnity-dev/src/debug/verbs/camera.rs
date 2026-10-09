@@ -1,11 +1,13 @@
-//! The verbs that pose the active camera: a one-shot teleport, and a sustained
-//! per-frame motion the debug drive re-applies until it runs out or is stopped.
-//! Both write the pose straight onto the `Camera3D` and zero the controller
-//! velocity, so a free-fly camera does not drift the pose away.
+//! The verbs that pose the active camera: a one-shot teleport, which the next
+//! frame draws as a camera cut, and a sustained per-frame motion the debug
+//! drive re-applies until it runs out or is stopped. Both write the pose
+//! straight onto the `Camera3D` and zero the controller velocity, so a
+//! free-fly camera does not drift the pose away.
 
+use concinnity_core::behavior::camera_driver;
 use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::World;
-use concinnity_core::gfx::camera;
+use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
 use concinnity_engine::controller::camera::Camera3DSystem;
 use serde_json::json;
 
@@ -177,10 +179,7 @@ pub(in crate::debug) fn advance_camera_motion(
 ) -> Option<CameraMotion> {
     let camera = world.query_mut::<Camera3D>().next()?;
     let (position, yaw, pitch) = advance_pose(camera.position, camera.yaw, camera.pitch, &motion);
-    camera.position = position;
-    camera.yaw = yaw;
-    camera.pitch = pitch;
-    camera.view_matrix = camera::view_matrix(position, yaw, pitch);
+    camera.set_pose(position, yaw, pitch);
     reset_controller_velocity(world);
     motion.advanced()
 }
@@ -211,17 +210,25 @@ fn advance_pose(
 }
 
 fn apply_camera_set(pose: &CameraPose, world: &mut World) -> Result<(), String> {
+    let driver = {
+        let ctx = world.context();
+        let camera = ctx.query_with_entity::<Camera3D>().next().map(|(e, _)| e);
+        camera.and_then(|e| camera_driver(&ctx, e))
+    };
+    if let Some(driver) = driver {
+        tracing::warn!(
+            "camera-set: {driver} rewrites the camera's pose every tick, so the pose lasts one frame"
+        );
+    }
     let Some(camera) = world.query_mut::<Camera3D>().next() else {
         return Err("camera-set: no Camera3D in world".to_string());
     };
-    camera.position = pose.position;
-    camera.yaw = pose.yaw;
-    camera.pitch = pose.pitch;
+    camera.set_pose(pose.position, pose.yaw, pose.pitch);
     if let Some(fov) = pose.fov_y_degrees {
         camera.fov_y_degrees = fov;
     }
-    camera.view_matrix = camera::view_matrix(camera.position, camera.yaw, camera.pitch);
     reset_controller_velocity(world);
+    PendingHistoryReset::raise(&mut world.context(), HistoryResetCauses::CAMERA_CUT);
     Ok(())
 }
 
@@ -280,6 +287,28 @@ mod tests {
         assert_eq!(cam.position, [10.0, 20.0, 30.0]);
         assert_eq!((cam.yaw, cam.pitch, cam.fov_y_degrees), (1.0, -0.5, 50.0));
         assert_ne!(cam.view_matrix, [[0.0; 4]; 4]);
+    }
+
+    // A teleport is a cut; a camera-move steps the pose continuously and is
+    // not.
+    #[test]
+    fn camera_set_raises_a_camera_cut_and_camera_move_does_not() {
+        let mut engine = Engine::new(camera_world());
+        let taken = |engine: &mut Engine| PendingHistoryReset::take(&mut engine.world.context());
+        let reply = engine.call("camera-set", json!({ "position": [400.0, 0.0, 0.0] }));
+        assert!(reply.is_ok(), "{reply:?}");
+        assert_eq!(taken(&mut engine), HistoryResetCauses::CAMERA_CUT);
+
+        let motion = CameraMotion::from_step(&CameraStep {
+            forward: 1.0,
+            right: 0.0,
+            up: 0.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            frames: 2,
+        });
+        advance_camera_motion(motion, &mut engine.world);
+        assert!(!taken(&mut engine).any());
     }
 
     #[test]

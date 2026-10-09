@@ -19,6 +19,19 @@ firing decision, which is made at fire time rather than after the delay.
 Timers, delays, and cooldowns freeze while a menu is open, like the rest of
 the world clock.
 
+A `set_transform` node moves an entity: `entity` names it, and the optional
+`position`, `rotation_deg` (Euler degrees) and `scale` vectors replace
+those parts of its transform. It moves the [Camera3D](Camera3D.md) too, with
+`rotation_deg`'s `x` as the camera's pitch and `y` as its yaw. `"cut":
+true` marks the move as a jump, of the camera or of what it follows: the
+first frame drawn afterwards starts afresh rather than blending with the
+frames before it.
+
+```json
+{"set_transform": {"entity": {"named": "cam"}, "position": {"vec3": [0, 2, 8]},
+  "rotation_deg": {"vec3": [-10, 90, 0]}, "cut": true}}
+```
+
 ## Parameters
 
 - `on`: An object. The event that fires this behavior. Defaults to `"start"`.

@@ -39,8 +39,9 @@ pub struct View<'a> {
     /// `position` and `distance` reach one; everything else answers from its
     /// `Transform`.
     pub positions: &'a dyn Fn(Entity) -> Option<[f32; 3]>,
-    /// Reads the transform a `set_transform` node edits. An entity with none
-    /// is not one this can move, so its nodes yield no effect.
+    /// Reads the transform a `set_transform` node edits, a camera's pose
+    /// included. An entity with neither is not one this can move, so its
+    /// nodes yield no effect.
     pub transforms: &'a dyn Fn(Entity) -> Option<Transform>,
     /// Whether an entity still exists.
     pub alive: &'a dyn Fn(Entity) -> bool,
@@ -111,12 +112,14 @@ pub enum Effect {
         /// Add to the current value rather than replacing it.
         add: bool,
     },
-    /// Replace an entity's transform.
+    /// Replace an entity's transform, or a camera's pose.
     SetTransform {
         /// The entity to move.
         entity: Entity,
         /// Its new transform.
         transform: Transform,
+        /// The move is a camera cut.
+        cut: bool,
     },
     /// Copy a template into the world.
     Spawn(SpawnEffect),
@@ -417,6 +420,7 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
             position,
             rotation_deg,
             scale,
+            cut,
         } => {
             let Some(entity) = eval(entity, view).and_then(Val::as_entity) else {
                 return;
@@ -434,7 +438,11 @@ fn exec_node(node: &CNode, view: &mut View<'_>, out: &mut Vec<Effect>) {
             field(position, &mut transform.position);
             field(rotation_deg, &mut transform.rotation_deg);
             field(scale, &mut transform.scale);
-            out.push(Effect::SetTransform { entity, transform });
+            out.push(Effect::SetTransform {
+                entity,
+                transform,
+                cut: *cut,
+            });
         }
         COp::Spawn {
             template,
@@ -1111,6 +1119,7 @@ mod tests {
             position: None,
             rotation_deg: None,
             scale: None,
+            cut: false,
         })]);
         assert!(effects.is_empty(), "{effects:?}");
 
@@ -1120,6 +1129,7 @@ mod tests {
             position: None,
             rotation_deg: None,
             scale: None,
+            cut: false,
         })]);
         assert!(effects.is_empty(), "{effects:?}");
     }
@@ -1177,6 +1187,7 @@ mod tests {
             position: Some(CExpr::Lit(Val::Vec3([9.0; 3]))),
             rotation_deg: None,
             scale: None,
+            cut: false,
         })]);
         assert!(effects.is_empty(), "{effects:?}");
     }
@@ -1195,8 +1206,14 @@ mod tests {
             // overwrites what the entity already carries.
             rotation_deg: None,
             scale: Some(CExpr::Lit(Val::Int(2))),
+            cut: false,
         })]);
-        let [Effect::SetTransform { entity, transform }] = effects.as_slice() else {
+        let [
+            Effect::SetTransform {
+                entity, transform, ..
+            },
+        ] = effects.as_slice()
+        else {
             panic!("expected one transform write, got {effects:?}");
         };
         assert_eq!(*entity, e);

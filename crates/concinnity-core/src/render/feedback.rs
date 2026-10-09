@@ -23,6 +23,9 @@ pub struct FrameFeedback {
     /// The render half stopped (window closed, frame policy shutdown, device
     /// lost); the simulation must stop too.
     pub stop: bool,
+    /// The frame policy dropped the draw, so nothing the snapshot carried
+    /// reached the GPU.
+    pub skipped: bool,
 }
 
 // The feedback must stay owned data so it can cross the thread boundary.

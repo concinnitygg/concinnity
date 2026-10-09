@@ -50,6 +50,9 @@ pub struct SimTiming {
 impl SimTiming {
     /// Seconds each fixed simulation step advances (60 Hz).
     pub const TICK_DT: f32 = 1.0 / 60.0;
+    /// Most fixed steps one frame may run. Time past this is dropped, so a
+    /// long hitch degrades to slow motion instead of a catch-up spiral.
+    pub const MAX_TICKS_PER_FRAME: u32 = 5;
 }
 
 impl Default for SimTiming {

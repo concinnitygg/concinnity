@@ -17,3 +17,4 @@ zero.
 - `degrees_per_second`: A float. Turn rate in degrees per second, taken over whichever of yaw and pitch has further to go so the two arrive together. The leg's duration follows from it, and cannot be resolved until the world starts and the heading the first leg turns away from is known. Defaults to `0.0`.
 - `seconds`: A float. Duration in seconds, overriding the one `degrees_per_second` implies. A leg with only this set holds the heading for that long. Defaults to `0.0`.
 - `ease`: A string (see [Ease](Ease.md)). How the turn is paced. Defaults to `"linear"`.
+- `cut`: A boolean. Snap to the leg's heading instead of turning to it. The leg takes no time, whatever `degrees_per_second` or `seconds` say, and the first frame drawn from the new heading starts afresh rather than blending with the frames before the snap, as at a shot change. A leg that takes no time anyway is a cut as soon as it turns the camera. Defaults to `false`.

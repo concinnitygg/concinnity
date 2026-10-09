@@ -64,6 +64,7 @@ fn build_world() -> World {
             )),
             rotation_deg: None,
             scale: None,
+            cut: false,
         }],
         ..Default::default()
     });
@@ -94,6 +95,7 @@ fn build_world() -> World {
                 position: None,
                 rotation_deg: Some(BehaviorExpr::Vec3([0.0, 1.0, 0.0])),
                 scale: None,
+                cut: false,
             },
         ],
         queries: vec![BehaviorQuery {

@@ -10,12 +10,12 @@ use concinnity_core::components::{
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{
     FlyCam, FrameTime, HiddenAssets, MenuOverride, PickEntry, PickIndex, PipelineContext,
-    StepResult, ViewOverrides,
+    SimTiming, StepResult, ViewOverrides,
 };
 use concinnity_core::gfx::frustum;
 use concinnity_core::input::snapshot::InputPacket;
 use concinnity_core::profile;
-use concinnity_core::render::history_reset::{HistoryView, PendingHistoryReset};
+use concinnity_core::render::history_reset::{FrameClock, HistoryView, PendingHistoryReset};
 use concinnity_core::render::overlay_maps;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
@@ -129,6 +129,9 @@ impl GraphicsSystem {
             super::submit::submit(&mut self.frame_policy, &mut snapshot, backend.as_mut());
         ctx.profile
             .record_render_handoff(super::submit::micros_since(submitted));
+        if outcome.skipped {
+            self.history_reset.reissue(snapshot.frame.history_reset);
+        }
         self.snapshot = snapshot;
 
         apply_frame_outcome(
@@ -197,6 +200,12 @@ impl GraphicsSystem {
         let mut stop = false;
         while let Ok(feedback) = pipe.feedback_rx.try_recv() {
             stop |= feedback.stop;
+            // A dropped frame's reset is redrawn on the next frame this side
+            // extracts, a frame later than serial execution manages.
+            if feedback.skipped {
+                self.history_reset
+                    .reissue(feedback.recycled.frame.history_reset);
+            }
             deposit_input(ctx, feedback.input);
             apply_frame_outcome(
                 ctx,
@@ -254,11 +263,12 @@ impl GraphicsSystem {
         // world is streaming, or both rebased onto the chunk render origin when
         // one is). Fall back to the absolute Camera3D values if the resource is
         // absent (a unit test driving this system without StreamingSystem).
-        let (fov_y_radians, near, view_distance, view_matrix, cam_pos) = ctx
-            .query::<Camera3D>()
+        let (camera, fov_y_radians, near, view_distance, view_matrix, cam_pos) = ctx
+            .query_with_entity::<Camera3D>()
             .next()
-            .map(|c| {
+            .map(|(entity, c)| {
                 (
+                    Some(entity),
                     c.fov_y_degrees.to_radians(),
                     c.near,
                     c.view_distance,
@@ -266,7 +276,14 @@ impl GraphicsSystem {
                     c.position,
                 )
             })
-            .unwrap_or((std::f32::consts::FRAC_PI_4, 0.05, None, IDENTITY4, [0.0; 3]));
+            .unwrap_or((
+                None,
+                std::f32::consts::FRAC_PI_4,
+                0.05,
+                None,
+                IDENTITY4,
+                [0.0; 3],
+            ));
         let (final_view, final_cam_pos) = ctx
             .resource::<crate::gfx::streaming::system::CameraRelativeView>()
             .map(|c| (c.view, c.cam_pos))
@@ -517,22 +534,26 @@ impl GraphicsSystem {
         // Whether the history the temporal passes accumulated still matches
         // this frame. Compared in absolute world space, so a chunk rebase is
         // not a cut.
-        if let Some(PendingHistoryReset(causes)) = ctx.resources.take::<PendingHistoryReset>() {
-            self.history_reset.request(causes);
-        }
+        self.history_reset.request(PendingHistoryReset::take(ctx));
         let scene = ctx
             .resource::<crate::ecs::ActiveSceneFlow>()
             .and_then(|f| f.flow.as_ref())
             .map(|f| f.current);
-        let history_reset = self.history_reset.observe(HistoryView {
-            position: cam_pos,
-            view: view_matrix,
-            fov_y_radians,
-            scene,
-        });
-        if history_reset.any() {
-            tracing::debug!("temporal history reset: {history_reset:?}");
-        }
+        let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
+        let history_reset = self.history_reset.observe(
+            HistoryView {
+                camera,
+                position: cam_pos,
+                view: view_matrix,
+                fov_y_radians,
+                scene,
+            },
+            FrameClock {
+                dt: frame_time.dt,
+                ticks: timing.ticks,
+                tick_dt: timing.tick_dt,
+            },
+        );
 
         snap.frame = FrameScalars {
             elapsed,
@@ -549,7 +570,7 @@ impl GraphicsSystem {
                 .map(|s| s.sample_rows())
                 .unwrap_or(concinnity_core::sky::SkyOrientation::IDENTITY_ROWS),
             directional,
-            history_reset: history_reset.any(),
+            history_reset,
         };
         // Adopt the overlay draw list wholesale and hand the spent one back to
         // OverlaySystem, which recycles its buffers into the next build.
@@ -853,13 +874,17 @@ mod tests {
         }
     }
 
-    // A teleport and a settings change each reset the temporal history for
-    // one frame; a rebase of the render origin, which moves the camera-relative
-    // view but not the camera, does not.
+    // A teleport, a settings change, a raised cut and a change of camera each
+    // reset the temporal history for one frame; a rebase of the render
+    // origin, which moves the camera-relative view but not the camera, does
+    // not.
     #[test]
     fn extraction_flags_a_history_reset_on_a_cut_or_a_settings_change() {
         use concinnity_core::render::history_reset::HistoryResetCauses;
 
+        let reset = |gs: &mut GraphicsSystem, world: &mut World| {
+            extract_once(gs, world).frame.history_reset
+        };
         let mut world = World::new();
         let cam = {
             let mut ctx = world.context();
@@ -868,7 +893,7 @@ mod tests {
             e
         };
         let mut gs = GraphicsSystem::new(None);
-        assert!(!extract_once(&mut gs, &mut world).frame.history_reset);
+        assert!(!reset(&mut gs, &mut world).any());
 
         world
             .context()
@@ -876,17 +901,35 @@ mod tests {
                 view: translated(-0.5),
                 cam_pos: [0.5, 0.0, 0.0],
             });
-        assert!(!extract_once(&mut gs, &mut world).frame.history_reset);
+        assert!(!reset(&mut gs, &mut world).any());
 
         *world.context().get_mut::<Camera3D>(cam).unwrap() = camera_at(500.0);
-        assert!(extract_once(&mut gs, &mut world).frame.history_reset);
-        assert!(!extract_once(&mut gs, &mut world).frame.history_reset);
+        assert_eq!(reset(&mut gs, &mut world), HistoryResetCauses::CAMERA_CUT);
+        assert!(!reset(&mut gs, &mut world).any());
 
-        world
-            .context()
-            .insert_resource(PendingHistoryReset(HistoryResetCauses::SETTINGS_CHANGE));
-        assert!(extract_once(&mut gs, &mut world).frame.history_reset);
-        assert!(!extract_once(&mut gs, &mut world).frame.history_reset);
+        PendingHistoryReset::raise(&mut world.context(), HistoryResetCauses::SETTINGS_CHANGE);
+        assert_eq!(
+            reset(&mut gs, &mut world),
+            HistoryResetCauses::SETTINGS_CHANGE
+        );
+        assert!(!reset(&mut gs, &mut world).any());
+
+        // A raised cut lands with the camera's move, however small.
+        PendingHistoryReset::raise(&mut world.context(), HistoryResetCauses::CAMERA_CUT);
+        assert!(!reset(&mut gs, &mut world).any());
+        *world.context().get_mut::<Camera3D>(cam).unwrap() = camera_at(500.5);
+        assert_eq!(reset(&mut gs, &mut world), HistoryResetCauses::CAMERA_CUT);
+        assert!(!reset(&mut gs, &mut world).any());
+
+        // Drawing from another camera.
+        {
+            let mut ctx = world.context();
+            ctx.components.despawn(cam);
+            let other = ctx.components.spawn();
+            ctx.insert(other, camera_at(500.5));
+        }
+        assert_eq!(reset(&mut gs, &mut world), HistoryResetCauses::CAMERA_CUT);
+        assert!(!reset(&mut gs, &mut world).any());
     }
 
     // An in-flight fade records its effects as scene ops instead of touching a
@@ -1037,6 +1080,7 @@ mod tests {
                         replay: Default::default(),
                         recycled: snapshot,
                         stop,
+                        skipped: false,
                     })
                     .expect("feedback is consumed");
             }

@@ -48,6 +48,7 @@ fn a_prop_scoped_behavior_fires_once_started() {
             )),
             rotation_deg: None,
             scale: None,
+            cut: false,
         }],
         ..Default::default()
     });
@@ -111,6 +112,7 @@ fn a_behavior_moves_a_prop_the_simulation_owns() {
             )),
             rotation_deg: None,
             scale: None,
+            cut: false,
         }],
         ..Default::default()
     });
@@ -248,6 +250,7 @@ fn a_distance_gate_on_the_queried_camera_decides_by_where_the_camera_is() {
                     )),
                     rotation_deg: None,
                     scale: None,
+                    cut: false,
                 }],
                 otherwise: Vec::new(),
             },

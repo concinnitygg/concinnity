@@ -321,6 +321,7 @@ fn spin_behavior() -> Behavior {
                 position: None,
                 rotation_deg: Some(spin_rotation()),
                 scale: None,
+                cut: false,
             })
             .collect(),
         ..Default::default()
