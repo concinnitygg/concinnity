@@ -65,6 +65,10 @@ pub struct RenderStats {
     /// against the recording work the workers did. Part of `render_cpu_us`.
     /// All zero on a backend that records serially.
     pub recording_fan_out: FanOutTiming,
+    /// CPU microseconds each pass took to record inside that fan-out, indexed
+    /// by `PassId as usize`. Zero for a pass that did not run or was recorded
+    /// outside the fan-out.
+    pub pass_record_us: [u32; MAX_PASS_TIMINGS],
     /// Bytes of GPU memory currently allocated by the render device. On
     /// unified-memory hardware (Apple Silicon) this is the device's share of
     /// system memory rather than dedicated VRAM.
@@ -109,6 +113,7 @@ impl Default for RenderStats {
             gpu_wait_us: 0,
             render_cpu_us: 0,
             recording_fan_out: FanOutTiming::default(),
+            pass_record_us: [0; MAX_PASS_TIMINGS],
             vram_bytes: 0,
             transient_pool_bytes: 0,
             pass_times_us: [("", 0); MAX_PASS_TIMINGS],

@@ -34,6 +34,7 @@ use ash::Device;
 use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{ClusterParams, LineVertex, TextDrawCall};
+use concinnity_core::profile::MAX_PASS_TIMINGS;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
@@ -43,6 +44,7 @@ use concinnity_core::render::render_graph::{
     BarrierOp, CompiledGraph, CompiledPass, GraphResourceClass, PassId, final_states,
 };
 use concinnity_host::thread::jobs;
+use std::sync::atomic::AtomicU32;
 
 use super::barrier_translate::{VkResting, vk_restore, vk_transition};
 use super::context::VkContext;
@@ -622,6 +624,9 @@ impl VkContext {
         let alias_barriers_ref = alias_barriers;
         let timer = jobs::fan_out_timer();
         let timer_ref = &timer;
+        let record_us: [AtomicU32; MAX_PASS_TIMINGS] =
+            [const { AtomicU32::new(0) }; MAX_PASS_TIMINGS];
+        let record_us_ref = &record_us;
 
         jobs::pool().install(|| {
             rayon::scope(|scope| {
@@ -631,7 +636,7 @@ impl VkContext {
                     }
                     let pass_id = pass.id;
                     scope.spawn(move |_| {
-                        timer_ref.job(|| {
+                        timer_ref.job_into(&record_us_ref[pass_id as usize], || {
                             let ctx = ctx_ref.as_ctx();
                             let pool_idx = frame_idx * render_graph::PASS_COUNT + pass_id as usize;
                             let buf = ctx.commands.pass_command_buffers[pool_idx];
@@ -721,6 +726,7 @@ impl VkContext {
         });
         let mut stats = self.frame_stats.get();
         stats.recording_fan_out = timer.finish();
+        stats.pass_record_us = record_us.map(AtomicU32::into_inner);
         self.frame_stats.set(stats);
 
         if let Some(e) = first_error.into_inner().unwrap() {

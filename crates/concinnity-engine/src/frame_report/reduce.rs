@@ -173,6 +173,9 @@ pub struct SlowFrame {
     /// The fan-outs it waited on, the render recording first. Ones that did
     /// not run are left out.
     pub fan_outs: Vec<FanOutCost>,
+    /// The passes that took longest to record on the CPU, largest first: which
+    /// jobs made up the render recording's job sum.
+    pub recording: Vec<FrameCost>,
 }
 
 /// What one stretch of the run measured.
@@ -305,6 +308,11 @@ fn slowest_frames(measured: &[&FrameSample], run: &FrameRun) -> Vec<SlowFrame> {
                 .map(|(slot, name)| FanOutCost::of(name, fan_out_in(sample, slot)))
                 .filter(|cost| cost.wall_us > 0)
                 .collect(),
+            recording: largest(
+                PassId::ALL
+                    .iter()
+                    .map(|id| (id.name(), sample.pass_record_us[*id as usize])),
+            ),
         })
         .collect()
 }
@@ -575,6 +583,7 @@ mod tests {
             gpu_wait_us: 100,
             render_cpu_us: 0,
             recording_fan_out: FanOutTiming::default(),
+            pass_record_us: [0; MAX_PASS_TIMINGS],
             draw_calls: 50,
             objects: 400,
             vram_bytes: 1 << 20,
@@ -1053,6 +1062,29 @@ mod tests {
             report.slowest[1].fan_outs,
             [FanOutCost::of("render recording", fan_out(300))]
         );
+    }
+
+    #[test]
+    fn a_slow_frame_names_the_passes_that_took_longest_to_record() {
+        let mut hitch = sample(1.0, Some(0), 40_000);
+        hitch.pass_record_us[PassId::Main as usize] = 8_000;
+        hitch.pass_record_us[PassId::Shadow as usize] = 3_000;
+        hitch.pass_record_us[PassId::Bloom as usize] = 20;
+        let run = run_of(vec![sample(0.0, Some(0), 10_000), hitch]);
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        let cost = |name: &str, us| FrameCost {
+            name: name.to_string(),
+            us,
+        };
+        assert_eq!(
+            report.slowest[0].recording,
+            [
+                cost("main", 8_000),
+                cost("shadow", 3_000),
+                cost("bloom", 20)
+            ]
+        );
+        assert!(report.slowest[1].recording.is_empty());
     }
 
     #[test]

@@ -32,6 +32,9 @@ pub struct FrameSample {
     /// The render thread's wait on the parallel pass recording, against the
     /// recording work inside it.
     pub recording_fan_out: FanOutTiming,
+    /// CPU microseconds each pass took to record inside that fan-out, indexed
+    /// by `PassId as usize`.
+    pub pass_record_us: [u32; MAX_PASS_TIMINGS],
     /// Geometry draw calls issued.
     pub draw_calls: u32,
     /// Renderable objects in the scene.
@@ -90,6 +93,7 @@ impl FrameSample {
             gpu_wait_us: render.gpu_wait_us,
             render_cpu_us: render.render_cpu_us,
             recording_fan_out: render.recording_fan_out,
+            pass_record_us: render.pass_record_us,
             draw_calls: render.draw_calls,
             objects: render.objects,
             vram_bytes: render.vram_bytes,
@@ -245,6 +249,7 @@ mod tests {
         };
         let mut render = render_with(&[]);
         render.recording_fan_out = fan_out(2_000);
+        render.pass_record_us[3] = 1_700;
         let s = FrameSample::new(
             0.0,
             None,
@@ -255,6 +260,7 @@ mod tests {
             &[("BehaviorSystem", fan_out(800))],
         );
         assert_eq!(s.recording_fan_out, fan_out(2_000));
+        assert_eq!(s.pass_record_us, render.pass_record_us);
         assert_eq!(s.system_fan_out[0], FanOutTiming::default());
         assert_eq!(s.system_fan_out[1], fan_out(800));
     }

@@ -163,6 +163,7 @@ fn write_slowest(out: &mut String, frames: &[SlowFrame]) {
         );
         write_costs(out, "cpu", &frame.cpu);
         write_costs(out, "gpu", &frame.passes);
+        write_costs(out, "record", &frame.recording);
         for f in &frame.fan_outs {
             let _ = writeln!(
                 out,
@@ -221,6 +222,7 @@ mod tests {
     use crate::frame_report::sample::MAX_SYSTEM_TIMINGS;
     use crate::frame_report::sample::{FrameRun, FrameSample};
     use concinnity_core::profile::{FanOutTiming, MAX_PASS_TIMINGS};
+    use concinnity_core::render::render_graph::PassId;
 
     fn sample(run_seconds: f32, segment: Option<u32>, frame_us: u32) -> FrameSample {
         FrameSample {
@@ -231,6 +233,7 @@ mod tests {
             gpu_wait_us: 250,
             render_cpu_us: 0,
             recording_fan_out: FanOutTiming::default(),
+            pass_record_us: [0; MAX_PASS_TIMINGS],
             draw_calls: 64,
             objects: 512,
             vram_bytes: 512 << 20,
@@ -345,6 +348,7 @@ mod tests {
         hitch.render_cpu_us = 700;
         hitch.system_us[0] = 1_200;
         hitch.pass_us[0] = 4_000;
+        hitch.pass_record_us[PassId::Main as usize] = 2_500;
         let run = FrameRun {
             samples: vec![sample(0.0, Some(0), 10_000), hitch],
             segments: vec!["approach".to_string(), "rays".to_string()],
@@ -365,6 +369,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("    gpu: main 4.00\n"), "{text}");
+        assert!(text.contains("    record: main 2.50\n"), "{text}");
         assert!(text.contains("10.00 ms at 0.00 s in approach"), "{text}");
     }
 

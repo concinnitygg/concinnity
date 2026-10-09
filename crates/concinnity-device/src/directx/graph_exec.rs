@@ -44,6 +44,7 @@
 
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::{ClusterParams, TextDrawCall};
+use concinnity_core::profile::MAX_PASS_TIMINGS;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
@@ -55,6 +56,7 @@ use concinnity_core::render::uniforms::PassCamera;
 use concinnity_core::transform::mat4_inverse;
 use concinnity_host::thread::jobs;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU32;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::barrier_translate::{DxBarrier, d3d12_barrier, d3d12_restore};
@@ -671,6 +673,9 @@ impl DxContext {
         let frame_idx = params.frame_idx;
         let timer = jobs::fan_out_timer();
         let timer_ref = &timer;
+        let record_us: [AtomicU32; MAX_PASS_TIMINGS] =
+            [const { AtomicU32::new(0) }; MAX_PASS_TIMINGS];
+        let record_us_ref = &record_us;
 
         jobs::pool().install(|| {
             rayon::scope(|scope| {
@@ -682,7 +687,7 @@ impl DxContext {
                     let first_error_ref = &first_error;
                     let worker_slots_ref = &worker_slots;
                     scope.spawn(move |_| {
-                        timer_ref.job(|| {
+                        timer_ref.job_into(&record_us_ref[pass_id as usize], || {
                             let ctx = ctx_ref.as_ctx();
                             let pool_idx = pool_index(frame_idx, pass_id);
                             let alloc = &ctx.commands.pass_allocators[pool_idx];
@@ -787,6 +792,7 @@ impl DxContext {
         });
         let mut stats = self.diagnostics.frame_stats.get();
         stats.recording_fan_out = timer.finish();
+        stats.pass_record_us = record_us.map(AtomicU32::into_inner);
         self.diagnostics.frame_stats.set(stats);
 
         if let Some(err) = first_error.into_inner().unwrap_or(None) {

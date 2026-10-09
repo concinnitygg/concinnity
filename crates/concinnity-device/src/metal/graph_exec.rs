@@ -84,6 +84,7 @@ use concinnity_core::gfx::render_types::{
     ClusterParams, FogFroxelParams, FogParams, RtParams, SsaoParams, SsgiParams, SsrParams,
     TextDrawCall,
 };
+use concinnity_core::profile::MAX_PASS_TIMINGS;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::reactive_mask::ReactiveMaskPlan;
@@ -95,7 +96,7 @@ use concinnity_host::thread::jobs;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLCommandQueue as _, MTLTexture};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::context::MtlContext;
 use super::draw::main::ClusterGrid;
@@ -332,6 +333,9 @@ impl MtlContext {
         let ctx_ref = ParallelCtxRef::new(self);
         let timer = jobs::fan_out_timer();
         let timer_ref = &timer;
+        let record_us: [AtomicU32; MAX_PASS_TIMINGS] =
+            [const { AtomicU32::new(0) }; MAX_PASS_TIMINGS];
+        let record_us_ref = &record_us;
         jobs::pool().install(|| {
             rayon::scope(|scope| {
                 for (idx, pass) in graph.passes.iter().enumerate() {
@@ -349,7 +353,7 @@ impl MtlContext {
                     // among them) would be retained for the life of the
                     // process.
                     scope.spawn(move |_| {
-                        timer_ref.job(|| {
+                        timer_ref.job_into(&record_us_ref[pass_id as usize], || {
                             objc2::rc::autoreleasepool(|_| {
                                 let ctx = ctx_ref.as_ctx();
                                 let queue = match ctx.hw.graph_queues.as_ref() {
@@ -407,6 +411,7 @@ impl MtlContext {
             });
         });
         self.diagnostics.frame_stats.recording_fan_out = timer.finish();
+        self.diagnostics.frame_stats.pass_record_us = record_us.map(AtomicU32::into_inner);
 
         // Nothing has been committed yet, so an encode failure leaves the
         // frame's event values unsignaled and unrecorded: the next frame

@@ -6,7 +6,7 @@
 //! waking) and the tail after the last one ends (the waiting thread resuming),
 //! which is what this records alongside the job times.
 
-use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
 
 /// A monotonic clock reading nanoseconds since the fan-out it times began.
 ///
@@ -78,6 +78,18 @@ impl<C: FanOutClock> FanOutTimer<C> {
 
     /// Run one job, recording when it started and how long it took.
     pub fn job<R>(&self, job: impl FnOnce() -> R) -> R {
+        self.timed(job).0
+    }
+
+    /// Run one job as [`job`](Self::job) does, also storing its duration in
+    /// microseconds in `slot`, so the caller can say which job took the time.
+    pub fn job_into<R>(&self, slot: &AtomicU32, job: impl FnOnce() -> R) -> R {
+        let (value, duration) = self.timed(job);
+        slot.store(micros(duration), Relaxed);
+        value
+    }
+
+    fn timed<R>(&self, job: impl FnOnce() -> R) -> (R, u64) {
         let start = self.clock.elapsed_ns();
         let value = job();
         let end = self.clock.elapsed_ns();
@@ -86,7 +98,7 @@ impl<C: FanOutClock> FanOutTimer<C> {
         self.last_end_ns.fetch_max(end, Relaxed);
         self.job_sum_ns.fetch_add(duration, Relaxed);
         self.longest_job_ns.fetch_max(duration, Relaxed);
-        value
+        (value, duration)
     }
 
     /// The fan-out's timing, read now. Call it once the waiting thread has
@@ -174,6 +186,19 @@ mod tests {
         timer.job(|| ());
         let t = timer.finish();
         assert_eq!((t.first_job_us, t.tail_us), (100, 100));
+    }
+
+    #[test]
+    fn a_job_run_into_a_slot_stores_its_own_duration_there() {
+        let timer = FanOutTimer::new(Scripted::new(&[
+            100_000, 350_000, 200_000, 1_200_000, 1_300_000,
+        ]));
+        let (a, b) = (AtomicU32::new(0), AtomicU32::new(0));
+        assert_eq!(timer.job_into(&a, || 3), 3);
+        timer.job_into(&b, || ());
+        assert_eq!((a.into_inner(), b.into_inner()), (250, 1_000));
+        let t = timer.finish();
+        assert_eq!((t.job_sum_us, t.longest_job_us), (1_250, 1_000));
     }
 
     #[test]
