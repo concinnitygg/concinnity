@@ -495,7 +495,7 @@ impl BehaviorSystem {
                 }
                 let jobs = &jobs;
                 let ec = &ec;
-                scheduler.run(&mut buckets, &|bucket| {
+                let timing = scheduler.run(&mut buckets, &|bucket| {
                     bucket.effects.clear();
                     bucket.produced.clear();
                     bucket.fired.clear();
@@ -510,6 +510,7 @@ impl BehaviorSystem {
                         }
                     }
                 });
+                ctx.profile.record_fan_out(timing);
             } else {
                 for job in &jobs {
                     if let Some((count, nodes)) =

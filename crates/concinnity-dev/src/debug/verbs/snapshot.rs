@@ -1,6 +1,7 @@
 //! The verbs answered from the per-frame snapshot, or from a handle it holds,
 //! without waiting on the engine.
 
+use concinnity_core::profile::FanOutTiming;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
@@ -211,6 +212,9 @@ fn profile(call: &Call, _: Args) -> Reply {
             if let Some((_, allocs)) = s.profile_allocs.get(i) {
                 entry["allocs"] = json!(allocs);
             }
+            if let Some((_, timing)) = s.profile_fan_outs.iter().find(|(n, _)| n == name) {
+                entry["fan_out"] = fan_out_json(timing);
+            }
             entry
         })
         .collect();
@@ -232,6 +236,8 @@ fn profile(call: &Call, _: Args) -> Reply {
             "skinned_pool_free": r.skinned_pool_free,
             "gpu_frame_us": r.gpu_frame_us,
             "gpu_wait_us": r.gpu_wait_us,
+            "render_cpu_us": r.render_cpu_us,
+            "recording_fan_out": fan_out_json(&r.recording_fan_out),
             "vram_bytes": r.vram_bytes,
             "transient_pool_bytes": r.transient_pool_bytes,
             "auto_exposure_ev": r.auto_exposure_ev,
@@ -239,6 +245,17 @@ fn profile(call: &Call, _: Args) -> Reply {
             "passes": passes,
         },
     }))
+}
+
+// How long a fan-out held the thread waiting on it, against its jobs' work.
+fn fan_out_json(t: &FanOutTiming) -> Value {
+    json!({
+        "wall_us": t.wall_us,
+        "first_job_us": t.first_job_us,
+        "job_sum_us": t.job_sum_us,
+        "longest_job_us": t.longest_job_us,
+        "tail_us": t.tail_us,
+    })
 }
 
 fn camera_get(call: &Call, _: Args) -> Reply {
@@ -468,6 +485,37 @@ mod tests {
         // zeroes that read as "this frame allocated nothing".
         assert!(r["systems"][0].get("allocs").is_none());
         assert!(r["frame_allocs"].is_null());
+    }
+
+    #[test]
+    fn profile_reports_fan_outs_for_the_render_recording_and_each_system() {
+        let timing = FanOutTiming {
+            wall_us: 2_000,
+            first_job_us: 900,
+            job_sum_us: 1_200,
+            longest_job_us: 300,
+            tail_us: 250,
+        };
+        let st = DebugState {
+            profile_systems: vec![("PhysicsSystem".into(), 10), ("BehaviorSystem".into(), 900)],
+            profile_fan_outs: vec![("BehaviorSystem".into(), timing)],
+            profile_render: RenderStats {
+                recording_fan_out: timing,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let r = answer("profile", st);
+        let expected = json!({
+            "wall_us": 2_000,
+            "first_job_us": 900,
+            "job_sum_us": 1_200,
+            "longest_job_us": 300,
+            "tail_us": 250,
+        });
+        assert_eq!(r["render"]["recording_fan_out"], expected);
+        assert!(r["systems"][0].get("fan_out").is_none());
+        assert_eq!(r["systems"][1]["fan_out"], expected);
     }
 
     #[test]

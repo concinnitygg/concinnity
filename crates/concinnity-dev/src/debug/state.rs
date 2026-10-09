@@ -45,6 +45,9 @@ pub(crate) struct DebugState {
     // Whole-frame heap-allocation count from the most recent frame, `None`
     // under the same conditions `profile_allocs` is empty.
     pub(super) profile_frame_allocs: Option<u32>,
+    // Per-system parallel fan-out timing from the last completed frame. Only
+    // the systems that fanned work out appear.
+    pub(super) profile_fan_outs: Vec<(String, profile::FanOutTiming)>,
     // Render-backend stats from the most recent frame, for `profile`.
     pub(super) profile_render: profile::RenderStats,
     // Runtime shutdown token, set once via `FrameHook::attach_shutdown`. The

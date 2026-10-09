@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::frame_report::reduce::{FrameCost, Report, SegmentReport, SlowFrame};
+use crate::frame_report::reduce::{FanOutCost, FrameCost, Report, SegmentReport, SlowFrame};
 
 const MICROS_PER_MILLI: f32 = 1_000.0;
 const BYTES_PER_MIB: f32 = (1 << 20) as f32;
@@ -83,8 +83,37 @@ pub fn to_text(report: &Report) -> String {
                 .iter()
                 .map(|s| (s.name.clone(), s.mean_us, s.share)),
         );
+        write_fan_outs(&mut out, &segment.name, &segment.fan_outs);
     }
     out
+}
+
+// A segment's fan-outs: how long each held the thread waiting on it, against
+// the work its jobs contained. Nothing when none ran.
+fn write_fan_outs(out: &mut String, segment: &str, fan_outs: &[FanOutCost]) {
+    if fan_outs.is_empty() {
+        return;
+    }
+    let ms = |us: u32| us as f32 / MICROS_PER_MILLI;
+    let _ = writeln!(out);
+    let _ = writeln!(out, "{segment} fan-outs, mean ms waited against work:");
+    let _ = writeln!(
+        out,
+        "  {:<20} {:>8} {:>9} {:>8} {:>8} {:>8}",
+        "", "wall", "first job", "job sum", "longest", "tail",
+    );
+    for f in fan_outs {
+        let _ = writeln!(
+            out,
+            "  {:<20} {:>8.3} {:>9.3} {:>8.3} {:>8.3} {:>8.3}",
+            f.name,
+            ms(f.wall_us),
+            ms(f.first_job_us),
+            ms(f.job_sum_us),
+            ms(f.longest_job_us),
+            ms(f.tail_us),
+        );
+    }
 }
 
 // A named cost breakdown, or nothing at all when there is none to show. An
@@ -134,6 +163,18 @@ fn write_slowest(out: &mut String, frames: &[SlowFrame]) {
         );
         write_costs(out, "cpu", &frame.cpu);
         write_costs(out, "gpu", &frame.passes);
+        for f in &frame.fan_outs {
+            let _ = writeln!(
+                out,
+                "    fan-out {}: wall {:.2}, first job {:.2}, job sum {:.2}, longest {:.2}, tail {:.2}",
+                f.name,
+                ms(f.wall_us),
+                ms(f.first_job_us),
+                ms(f.job_sum_us),
+                ms(f.longest_job_us),
+                ms(f.tail_us),
+            );
+        }
     }
 }
 
@@ -179,7 +220,7 @@ mod tests {
     use crate::frame_report::reduce::ReduceOptions;
     use crate::frame_report::sample::MAX_SYSTEM_TIMINGS;
     use crate::frame_report::sample::{FrameRun, FrameSample};
-    use concinnity_core::profile::MAX_PASS_TIMINGS;
+    use concinnity_core::profile::{FanOutTiming, MAX_PASS_TIMINGS};
 
     fn sample(run_seconds: f32, segment: Option<u32>, frame_us: u32) -> FrameSample {
         FrameSample {
@@ -189,11 +230,13 @@ mod tests {
             gpu_frame_us: frame_us / 2,
             gpu_wait_us: 250,
             render_cpu_us: 0,
+            recording_fan_out: FanOutTiming::default(),
             draw_calls: 64,
             objects: 512,
             vram_bytes: 512 << 20,
             pass_us: [0; MAX_PASS_TIMINGS],
             system_us: [0; MAX_SYSTEM_TIMINGS],
+            system_fan_out: [FanOutTiming::default(); MAX_SYSTEM_TIMINGS],
         }
     }
 
@@ -340,6 +383,51 @@ mod tests {
         let text = to_text(&report_of(run));
         assert!(text.contains("approach CPU work, mean 1.00 ms:"), "{text}");
         assert!(text.contains("40.0% of the CPU work"), "{text}");
+    }
+
+    #[test]
+    fn fan_outs_are_listed_per_segment_and_per_slow_frame() {
+        let recording = FanOutTiming {
+            wall_us: 2_400,
+            first_job_us: 1_200,
+            job_sum_us: 1_300,
+            longest_job_us: 350,
+            tail_us: 600,
+        };
+        let mut only = sample(0.0, Some(0), 10_000);
+        only.recording_fan_out = recording;
+        only.system_fan_out[0] = FanOutTiming {
+            wall_us: 900,
+            ..recording
+        };
+        let run = FrameRun {
+            samples: vec![only],
+            segments: vec!["approach".to_string()],
+            pass_names: Vec::new(),
+            system_names: vec!["BehaviorSystem".to_string()],
+            completed: true,
+        };
+        let text = to_text(&report_of(run));
+        assert!(
+            text.contains("approach fan-outs, mean ms waited against work:"),
+            "{text}"
+        );
+        assert!(
+            text.contains("  render recording        2.400     1.200    1.300    0.350    0.600\n"),
+            "{text}"
+        );
+        assert!(text.contains("  BehaviorSystem          0.900 "), "{text}");
+        assert!(
+            text.contains(
+                "    fan-out render recording: wall 2.40, first job 1.20, job sum 1.30, longest 0.35, tail 0.60\n"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_run_with_no_fan_outs_lists_no_fan_out_block() {
+        assert!(!rendered().contains("fan-out"), "{}", rendered());
     }
 
     #[test]

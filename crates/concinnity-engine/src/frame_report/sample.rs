@@ -1,6 +1,6 @@
 // What the sampler records for one frame, and the run it accumulates into.
 
-use concinnity_core::profile::{MAX_PASS_TIMINGS, RenderStats};
+use concinnity_core::profile::{FanOutTiming, MAX_PASS_TIMINGS, RenderStats};
 
 /// How many per-system CPU timings a sample carries. The engine's own table is
 /// well inside this, and a world registering its own systems has headroom.
@@ -29,6 +29,9 @@ pub struct FrameSample {
     /// Microseconds of CPU work the render side spent submitting the frame,
     /// its wait on the GPU excluded.
     pub render_cpu_us: u32,
+    /// The render thread's wait on the parallel pass recording, against the
+    /// recording work inside it.
+    pub recording_fan_out: FanOutTiming,
     /// Geometry draw calls issued.
     pub draw_calls: u32,
     /// Renderable objects in the scene.
@@ -43,11 +46,15 @@ pub struct FrameSample {
     /// side's, and `render_cpu_us` carries its work. Named by
     /// [`FrameRun::system_names`], which shares the order.
     pub system_us: [u32; MAX_SYSTEM_TIMINGS],
+    /// Per-system parallel fan-out timing, in the same order as `system_us`.
+    /// All zero for a system that fanned nothing out.
+    pub system_fan_out: [FanOutTiming; MAX_SYSTEM_TIMINGS],
 }
 
 impl FrameSample {
     /// Fold one frame's render stats and system timings into a sample.
-    /// `handoffs` is the per-system render handoff recorded beside `systems`.
+    /// `handoffs` and `fan_outs` are the per-system render handoff and fan-out
+    /// timing recorded beside `systems`.
     pub fn new(
         run_seconds: f32,
         segment: Option<u32>,
@@ -55,6 +62,7 @@ impl FrameSample {
         render: &RenderStats,
         systems: &[(&'static str, u32)],
         handoffs: &[(&'static str, u32)],
+        fan_outs: &[(&'static str, FanOutTiming)],
     ) -> Self {
         let mut pass_us = [0_u32; MAX_PASS_TIMINGS];
         for (slot, (_, us)) in pass_us.iter_mut().zip(render.pass_times_us.iter()) {
@@ -68,6 +76,12 @@ impl FrameSample {
                 .map_or(0, |(_, us)| *us);
             *slot = us.saturating_sub(handoff);
         }
+        let mut system_fan_out = [FanOutTiming::default(); MAX_SYSTEM_TIMINGS];
+        for (slot, (name, _)) in system_fan_out.iter_mut().zip(systems.iter()) {
+            if let Some((_, timing)) = fan_outs.iter().find(|(fanned, _)| fanned == name) {
+                *slot = *timing;
+            }
+        }
         Self {
             run_seconds,
             segment,
@@ -75,11 +89,13 @@ impl FrameSample {
             gpu_frame_us: render.gpu_frame_us,
             gpu_wait_us: render.gpu_wait_us,
             render_cpu_us: render.render_cpu_us,
+            recording_fan_out: render.recording_fan_out,
             draw_calls: render.draw_calls,
             objects: render.objects,
             vram_bytes: render.vram_bytes,
             pass_us,
             system_us,
+            system_fan_out,
         }
     }
 }
@@ -174,6 +190,7 @@ mod tests {
             &render_with(&[("main", 4_000)]),
             &[("GraphicsSystem", 700)],
             &[],
+            &[],
         );
         assert_eq!(s.run_seconds, 1.5);
         assert_eq!(s.segment, Some(2));
@@ -197,6 +214,7 @@ mod tests {
             &render_with(&[]),
             &[("PhysicsSystem", 400), ("GraphicsSystem", 9_000)],
             &[("GraphicsSystem", 8_700)],
+            &[],
         );
         assert_eq!(s.system_us[0], 400);
         assert_eq!(s.system_us[1], 300);
@@ -211,8 +229,34 @@ mod tests {
             &render_with(&[]),
             &[("GraphicsSystem", 100)],
             &[("GraphicsSystem", 900)],
+            &[],
         );
         assert_eq!(s.system_us[0], 0);
+    }
+
+    #[test]
+    fn a_sample_carries_the_recording_fan_out_and_each_systems_own() {
+        let fan_out = |wall_us| FanOutTiming {
+            wall_us,
+            first_job_us: wall_us / 4,
+            job_sum_us: wall_us * 2,
+            longest_job_us: wall_us / 2,
+            tail_us: wall_us / 8,
+        };
+        let mut render = render_with(&[]);
+        render.recording_fan_out = fan_out(2_000);
+        let s = FrameSample::new(
+            0.0,
+            None,
+            16_000,
+            &render,
+            &[("PhysicsSystem", 400), ("BehaviorSystem", 900)],
+            &[],
+            &[("BehaviorSystem", fan_out(800))],
+        );
+        assert_eq!(s.recording_fan_out, fan_out(2_000));
+        assert_eq!(s.system_fan_out[0], FanOutTiming::default());
+        assert_eq!(s.system_fan_out[1], fan_out(800));
     }
 
     #[test]

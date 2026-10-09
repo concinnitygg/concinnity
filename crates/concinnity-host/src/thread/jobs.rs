@@ -11,7 +11,9 @@
 //! and built once, by whichever of `configure` and `pool()` is reached first.
 
 use std::sync::OnceLock;
+use std::time::Instant;
 
+use concinnity_core::profile::{FanOutClock, FanOutTimer, FanOutTiming};
 use rayon::prelude::*;
 
 /// A dedicated thread pool for per-frame data-parallel work.
@@ -55,14 +57,25 @@ impl JobPool {
         self.pool.install(|| items.par_iter_mut().for_each(f));
     }
 
+    /// [`parallel_for`](Self::parallel_for), reporting how long the calling
+    /// thread waited against how much work the items took.
+    pub fn parallel_for_timed<T, F>(&self, items: &mut [T], f: F) -> FanOutTiming
+    where
+        T: Send,
+        F: Fn(&mut T) + Send + Sync,
+    {
+        let timer = fan_out_timer();
+        self.parallel_for(items, |item| timer.job(|| f(item)));
+        timer.finish()
+    }
+
     /// Run a closure inside this pool's scope so any nested rayon
     /// `par_iter` / `par_iter_mut` calls dispatch to JobPool's bounded thread
     /// count (`available_parallelism() - 1`) instead of rayon's global pool
     /// (which defaults to every core and would starve the render thread when
     /// invoked from a worker that is itself competing for CPU).
     ///
-    /// Used by the DirectX / Metal parallel command-buffer recording; the Vulkan
-    /// backend records single-threaded, so it is unused under `backend_vk`.
+    /// Used by every backend's parallel command-buffer recording.
     pub fn install<R, F>(&self, f: F) -> R
     where
         F: FnOnce() -> R + Send,
@@ -85,6 +98,21 @@ impl concinnity_core::bake::environment_map::RowScheduler for PoolRows<'_> {
     fn run<T: Send>(&self, items: &mut [T], compute: &(dyn Fn(&mut T) + Send + Sync)) {
         self.0.parallel_for(items, compute);
     }
+}
+
+/// The wall clock a fan-out is timed against: nanoseconds since it started.
+#[derive(Debug, Clone, Copy)]
+pub struct SinceStart(Instant);
+
+impl FanOutClock for SinceStart {
+    fn elapsed_ns(&self) -> u64 {
+        self.0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
+    }
+}
+
+/// A timer for a fan-out that starts now.
+pub fn fan_out_timer() -> FanOutTimer<SinceStart> {
+    FanOutTimer::new(SinceStart(Instant::now()))
 }
 
 // The process-wide pool, built by whichever of `configure` and `pool` gets
@@ -195,6 +223,25 @@ mod tests {
         let mut data: Vec<u32> = (0..10_000).collect();
         pool().parallel_for(&mut data, |x| *x += 1);
         assert!(data.iter().enumerate().all(|(i, &x)| x == i as u32 + 1));
+    }
+
+    #[test]
+    fn a_timed_parallel_for_reports_the_work_inside_the_wait() {
+        let pool = JobPool::new(2);
+        let mut items = [0u32; 4];
+        let timing = pool.parallel_for_timed(&mut items, |x| {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            *x += 1;
+        });
+        assert_eq!(items, [1; 4]);
+        // Four 2 ms jobs: at least 8 ms of work, each job at least 2 ms, and
+        // the wait covers the longest job, its start latency and its tail.
+        assert!(timing.job_sum_us >= 8_000, "{timing:?}");
+        assert!(timing.longest_job_us >= 2_000, "{timing:?}");
+        assert!(
+            timing.wall_us >= timing.first_job_us + timing.longest_job_us,
+            "{timing:?}"
+        );
     }
 
     #[test]

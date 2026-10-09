@@ -669,6 +669,8 @@ impl DxContext {
         let alias_barriers = self.build_alias_barriers(graph, &registry);
         let alias_barriers_ref = &alias_barriers;
         let frame_idx = params.frame_idx;
+        let timer = jobs::fan_out_timer();
+        let timer_ref = &timer;
 
         jobs::pool().install(|| {
             rayon::scope(|scope| {
@@ -680,107 +682,112 @@ impl DxContext {
                     let first_error_ref = &first_error;
                     let worker_slots_ref = &worker_slots;
                     scope.spawn(move |_| {
-                        let ctx = ctx_ref.as_ctx();
-                        let pool_idx = pool_index(frame_idx, pass_id);
-                        let alloc = &ctx.commands.pass_allocators[pool_idx];
-                        let cmd = &ctx.commands.pass_cmd_lists[pool_idx];
+                        timer_ref.job(|| {
+                            let ctx = ctx_ref.as_ctx();
+                            let pool_idx = pool_index(frame_idx, pass_id);
+                            let alloc = &ctx.commands.pass_allocators[pool_idx];
+                            let cmd = &ctx.commands.pass_cmd_lists[pool_idx];
 
-                        // Reset this pass's allocator + cmd list so we
-                        // can record fresh into it. The previous frame's
-                        // submission for this same (frame, pass) slot
-                        // has already retired by the time we get here
-                        // (the frames-in-flight-deep fence wait at the top of
-                        // `draw_frame` gates the entire slot).
-                        // SAFETY: the fence for this frame slot was already waited on, so no
-                        // submission still references what is being reset.
-                        if let Err(e) = unsafe { alloc.Reset() } {
-                            let mut lock = first_error_ref.lock().unwrap();
-                            if lock.is_none() {
-                                *lock = Some(super::error::map_hresult(
-                                    e.code(),
-                                    &format!("per-pass allocator reset ({})", pass_id.name()),
-                                ));
-                            }
-                            return;
-                        }
-                        // SAFETY: the fence for this frame slot was already waited on, so no
-                        // submission still references what is being reset.
-                        if let Err(e) = unsafe { cmd.Reset(alloc, None) } {
-                            let mut lock = first_error_ref.lock().unwrap();
-                            if lock.is_none() {
-                                *lock = Some(super::error::map_hresult(
-                                    e.code(),
-                                    &format!("per-pass cmd list reset ({})", pass_id.name()),
-                                ));
-                            }
-                            return;
-                        }
-
-                        // Per-pass GPU timing: bracket the encoder with
-                        // start + end TIMESTAMP `EndQuery` calls into
-                        // pre-allocated heap slots. The frame's whole
-                        // block is resolved by the "end" outer cmd list
-                        // at the end of the frame and read back at the
-                        // top of the next frame. See
-                        // [`pass_timing`] for the slot layout.
-                        if let Some(heap) = ctx.timestamps.query_heap.as_ref() {
-                            let (start_slot, _) = pass_timing::pass_pair(frame_idx, pass_id);
-                            // SAFETY: the command list is in the recording state, and every
-                            // resource, descriptor and slice these commands name is live for the
-                            // call.
-                            unsafe {
-                                cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, start_slot);
-                            }
-                        }
-
-                        emit_pass_prologue(cmd, registry_ref, alias_barriers_ref, idx, pass);
-
-                        let encode_result =
-                            ctx.encode_pass_into(pass_id, cmd, params, particle_ref);
-
-                        if encode_result.is_ok() {
-                            emit_pass_epilogue(cmd, registry_ref, pass);
-                        }
-
-                        if let Some(heap) = ctx.timestamps.query_heap.as_ref() {
-                            let (_, end_slot) = pass_timing::pass_pair(frame_idx, pass_id);
-                            // SAFETY: the command list is in the recording state, and every
-                            // resource, descriptor and slice these commands name is live for the
-                            // call.
-                            unsafe {
-                                cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, end_slot);
-                            }
-                        }
-
-                        // SAFETY: the command list is live and in the recording state, which is
-                        // what `Close` requires.
-                        if let Err(e) = unsafe { cmd.Close() } {
-                            let mut lock = first_error_ref.lock().unwrap();
-                            if lock.is_none() {
-                                *lock = Some(super::error::map_hresult(
-                                    e.code(),
-                                    &format!("per-pass cmd list close ({})", pass_id.name()),
-                                ));
-                            }
-                            return;
-                        }
-
-                        match encode_result {
-                            Ok(()) => {
-                                let mut lock = worker_slots_ref.lock().unwrap();
-                                lock[idx] = Some(SendableCmdList(cmd.clone()));
-                            }
-                            Err(e) => {
+                            // Reset this pass's allocator + cmd list so we
+                            // can record fresh into it. The previous frame's
+                            // submission for this same (frame, pass) slot
+                            // has already retired by the time we get here
+                            // (the frames-in-flight-deep fence wait at the top of
+                            // `draw_frame` gates the entire slot).
+                            // SAFETY: the fence for this frame slot was already waited on, so no
+                            // submission still references what is being reset.
+                            if let Err(e) = unsafe { alloc.Reset() } {
                                 let mut lock = first_error_ref.lock().unwrap();
                                 if lock.is_none() {
-                                    *lock = Some(e);
+                                    *lock = Some(super::error::map_hresult(
+                                        e.code(),
+                                        &format!("per-pass allocator reset ({})", pass_id.name()),
+                                    ));
+                                }
+                                return;
+                            }
+                            // SAFETY: the fence for this frame slot was already waited on, so no
+                            // submission still references what is being reset.
+                            if let Err(e) = unsafe { cmd.Reset(alloc, None) } {
+                                let mut lock = first_error_ref.lock().unwrap();
+                                if lock.is_none() {
+                                    *lock = Some(super::error::map_hresult(
+                                        e.code(),
+                                        &format!("per-pass cmd list reset ({})", pass_id.name()),
+                                    ));
+                                }
+                                return;
+                            }
+
+                            // Per-pass GPU timing: bracket the encoder with
+                            // start + end TIMESTAMP `EndQuery` calls into
+                            // pre-allocated heap slots. The frame's whole
+                            // block is resolved by the "end" outer cmd list
+                            // at the end of the frame and read back at the
+                            // top of the next frame. See
+                            // [`pass_timing`] for the slot layout.
+                            if let Some(heap) = ctx.timestamps.query_heap.as_ref() {
+                                let (start_slot, _) = pass_timing::pass_pair(frame_idx, pass_id);
+                                // SAFETY: the command list is in the recording state, and every
+                                // resource, descriptor and slice these commands name is live for the
+                                // call.
+                                unsafe {
+                                    cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, start_slot);
                                 }
                             }
-                        }
+
+                            emit_pass_prologue(cmd, registry_ref, alias_barriers_ref, idx, pass);
+
+                            let encode_result =
+                                ctx.encode_pass_into(pass_id, cmd, params, particle_ref);
+
+                            if encode_result.is_ok() {
+                                emit_pass_epilogue(cmd, registry_ref, pass);
+                            }
+
+                            if let Some(heap) = ctx.timestamps.query_heap.as_ref() {
+                                let (_, end_slot) = pass_timing::pass_pair(frame_idx, pass_id);
+                                // SAFETY: the command list is in the recording state, and every
+                                // resource, descriptor and slice these commands name is live for the
+                                // call.
+                                unsafe {
+                                    cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, end_slot);
+                                }
+                            }
+
+                            // SAFETY: the command list is live and in the recording state, which is
+                            // what `Close` requires.
+                            if let Err(e) = unsafe { cmd.Close() } {
+                                let mut lock = first_error_ref.lock().unwrap();
+                                if lock.is_none() {
+                                    *lock = Some(super::error::map_hresult(
+                                        e.code(),
+                                        &format!("per-pass cmd list close ({})", pass_id.name()),
+                                    ));
+                                }
+                                return;
+                            }
+
+                            match encode_result {
+                                Ok(()) => {
+                                    let mut lock = worker_slots_ref.lock().unwrap();
+                                    lock[idx] = Some(SendableCmdList(cmd.clone()));
+                                }
+                                Err(e) => {
+                                    let mut lock = first_error_ref.lock().unwrap();
+                                    if lock.is_none() {
+                                        *lock = Some(e);
+                                    }
+                                }
+                            }
+                        })
                     });
                 }
             });
         });
+        let mut stats = self.diagnostics.frame_stats.get();
+        stats.recording_fan_out = timer.finish();
+        self.diagnostics.frame_stats.set(stats);
 
         if let Some(err) = first_error.into_inner().unwrap_or(None) {
             return Err(err);

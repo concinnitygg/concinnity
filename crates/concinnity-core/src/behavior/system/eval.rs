@@ -12,6 +12,7 @@ use super::instance::{self, Instance};
 use super::neighbors::Neighbors;
 use crate::behavior::{Effect, Program, Spatial, Val, View, exec, position, spatial};
 use crate::ecs::{ComponentStorage, Entity, EntityById, PipelineContext};
+use crate::profile::FanOutTiming;
 
 // Below this many firing instances the fan-out costs more than the work.
 pub(super) const PARALLEL_EVAL_MIN_JOBS: usize = 64;
@@ -39,8 +40,14 @@ pub trait EvalScheduler: core::fmt::Debug + Send {
     /// How many buckets to split a tick's firing instances into.
     fn workers(&self) -> usize;
 
-    /// Apply `eval` to every bucket, then return.
-    fn run(&self, buckets: &mut [EvalBucket], eval: &(dyn Fn(&mut EvalBucket) + Send + Sync));
+    /// Apply `eval` to every bucket, then return how long the caller waited
+    /// against how long the buckets took. A scheduler that does not time its
+    /// work returns the default.
+    fn run(
+        &self,
+        buckets: &mut [EvalBucket],
+        eval: &(dyn Fn(&mut EvalBucket) + Send + Sync),
+    ) -> FanOutTiming;
 }
 
 // The entity sets a body iterates this tick, resolved before anything runs.

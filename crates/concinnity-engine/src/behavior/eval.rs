@@ -3,6 +3,7 @@
 // they go straight to `parallel_for` and join before the tick continues.
 
 use concinnity_core::behavior::{EvalBucket, EvalScheduler};
+use concinnity_core::profile::FanOutTiming;
 use concinnity_host::thread::jobs::pool;
 
 #[derive(Debug)]
@@ -13,7 +14,11 @@ impl EvalScheduler for Pool {
         pool().thread_count().max(1)
     }
 
-    fn run(&self, buckets: &mut [EvalBucket], eval: &(dyn Fn(&mut EvalBucket) + Send + Sync)) {
-        pool().parallel_for(buckets, eval);
+    fn run(
+        &self,
+        buckets: &mut [EvalBucket],
+        eval: &(dyn Fn(&mut EvalBucket) + Send + Sync),
+    ) -> FanOutTiming {
+        pool().parallel_for_timed(buckets, eval)
     }
 }

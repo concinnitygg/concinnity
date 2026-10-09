@@ -138,6 +138,7 @@ impl System for FrameReportSystem {
                 &frame.render,
                 systems,
                 ctx.profile.render_handoffs(),
+                ctx.profile.system_fan_outs(),
             ));
         }
 

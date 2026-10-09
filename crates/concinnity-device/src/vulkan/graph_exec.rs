@@ -620,6 +620,8 @@ impl VkContext {
         let first_error_ref = &first_error;
         let registry_ref = registry;
         let alias_barriers_ref = alias_barriers;
+        let timer = jobs::fan_out_timer();
+        let timer_ref = &timer;
 
         jobs::pool().install(|| {
             rayon::scope(|scope| {
@@ -629,90 +631,97 @@ impl VkContext {
                     }
                     let pass_id = pass.id;
                     scope.spawn(move |_| {
-                        let ctx = ctx_ref.as_ctx();
-                        let pool_idx = frame_idx * render_graph::PASS_COUNT + pass_id as usize;
-                        let buf = ctx.commands.pass_command_buffers[pool_idx];
-                        let set_err = |error: RenderError| {
-                            let mut lock = first_error_ref.lock().unwrap();
-                            if lock.is_none() {
-                                *lock = Some(error);
-                            }
-                        };
-                        // Reset + begin this pass's own buffer (its own pool, so
-                        // no cross-worker pool contention), encode, end.
-                        // SAFETY: `buf` belongs to this frame slot, whose fence was already
-                        // waited on, so it is not in flight and may be reset.
-                        let reset = unsafe {
-                            device_ref
-                                .reset_command_buffer(buf, vk::CommandBufferResetFlags::empty())
-                        };
-                        if let Err(e) = reset {
-                            set_err(super::error::map_vk_result(
-                                e,
-                                &format!("reset pass cmd buf ({})", pass_id.name()),
-                            ));
-                            return;
-                        }
-                        let rec = match Recorder::begin(
-                            device_ref,
-                            buf,
-                            vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
-                        ) {
-                            Ok(rec) => rec,
-                            Err(e) => {
+                        timer_ref.job(|| {
+                            let ctx = ctx_ref.as_ctx();
+                            let pool_idx = frame_idx * render_graph::PASS_COUNT + pass_id as usize;
+                            let buf = ctx.commands.pass_command_buffers[pool_idx];
+                            let set_err = |error: RenderError| {
+                                let mut lock = first_error_ref.lock().unwrap();
+                                if lock.is_none() {
+                                    *lock = Some(error);
+                                }
+                            };
+                            // Reset + begin this pass's own buffer (its own pool, so
+                            // no cross-worker pool contention), encode, end.
+                            // SAFETY: `buf` belongs to this frame slot, whose fence was already
+                            // waited on, so it is not in flight and may be reset.
+                            let reset = unsafe {
+                                device_ref
+                                    .reset_command_buffer(buf, vk::CommandBufferResetFlags::empty())
+                            };
+                            if let Err(e) = reset {
                                 set_err(super::error::map_vk_result(
                                     e,
-                                    &format!("begin pass cmd buf ({})", pass_id.name()),
+                                    &format!("reset pass cmd buf ({})", pass_id.name()),
                                 ));
                                 return;
                             }
-                        };
-                        // Per-pass GPU timing: bracket this pass's encode with a
-                        // (start, end) timestamp pair in its own buffer. The block
-                        // was reset in the start buffer (submitted first), so these
-                        // writes are valid. A pass absent from a later frame's graph
-                        // leaves its slots unwritten; the readback's
-                        // `WITH_AVAILABILITY` reports those as 0.
-                        if let Some(pool) = ctx.hw.timestamp_query_pool {
-                            let (ts_start, _) = pass_timing::pass_pair(frame_idx, pass_id);
-                            rec.write_timestamp(
-                                vk::PipelineStageFlags::TOP_OF_PIPE,
-                                pool,
-                                ts_start,
+                            let rec = match Recorder::begin(
+                                device_ref,
+                                buf,
+                                vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+                            ) {
+                                Ok(rec) => rec,
+                                Err(e) => {
+                                    set_err(super::error::map_vk_result(
+                                        e,
+                                        &format!("begin pass cmd buf ({})", pass_id.name()),
+                                    ));
+                                    return;
+                                }
+                            };
+                            // Per-pass GPU timing: bracket this pass's encode with a
+                            // (start, end) timestamp pair in its own buffer. The block
+                            // was reset in the start buffer (submitted first), so these
+                            // writes are valid. A pass absent from a later frame's graph
+                            // leaves its slots unwritten; the readback's
+                            // `WITH_AVAILABILITY` reports those as 0.
+                            if let Some(pool) = ctx.hw.timestamp_query_pool {
+                                let (ts_start, _) = pass_timing::pass_pair(frame_idx, pass_id);
+                                rec.write_timestamp(
+                                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                                    pool,
+                                    ts_start,
+                                );
+                            }
+                            emit_pass_prologue(
+                                device_ref,
+                                buf,
+                                registry_ref,
+                                &alias_barriers_ref[idx],
+                                pass,
                             );
-                        }
-                        emit_pass_prologue(
-                            device_ref,
-                            buf,
-                            registry_ref,
-                            &alias_barriers_ref[idx],
-                            pass,
-                        );
-                        if let Err(e) = ctx.encode_pass_into(pass_id, &rec, params, particle_ref) {
-                            set_err(e);
-                            return;
-                        }
-                        emit_pass_epilogue(device_ref, buf, registry_ref, pass);
-                        if let Some(pool) = ctx.hw.timestamp_query_pool {
-                            let (_, ts_end) = pass_timing::pass_pair(frame_idx, pass_id);
-                            rec.write_timestamp(
-                                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                                pool,
-                                ts_end,
-                            );
-                        }
-                        if let Err(e) = rec.end() {
-                            set_err(super::error::map_vk_result(
-                                e,
-                                &format!("end pass cmd buf ({})", pass_id.name()),
-                            ));
-                            return;
-                        }
-                        worker_slots_ref.lock().unwrap()[idx] = Some(buf);
+                            if let Err(e) =
+                                ctx.encode_pass_into(pass_id, &rec, params, particle_ref)
+                            {
+                                set_err(e);
+                                return;
+                            }
+                            emit_pass_epilogue(device_ref, buf, registry_ref, pass);
+                            if let Some(pool) = ctx.hw.timestamp_query_pool {
+                                let (_, ts_end) = pass_timing::pass_pair(frame_idx, pass_id);
+                                rec.write_timestamp(
+                                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                                    pool,
+                                    ts_end,
+                                );
+                            }
+                            if let Err(e) = rec.end() {
+                                set_err(super::error::map_vk_result(
+                                    e,
+                                    &format!("end pass cmd buf ({})", pass_id.name()),
+                                ));
+                                return;
+                            }
+                            worker_slots_ref.lock().unwrap()[idx] = Some(buf);
+                        })
                     });
                 }
             });
         });
+        let mut stats = self.frame_stats.get();
+        stats.recording_fan_out = timer.finish();
+        self.frame_stats.set(stats);
 
         if let Some(e) = first_error.into_inner().unwrap() {
             return Err(e);

@@ -6,6 +6,7 @@
 // kept in. A host's own store (a file, say) covers the medium itself.
 
 use crate::ecs::Ref;
+use crate::profile::FanOutTiming;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -1708,14 +1709,29 @@ impl EvalScheduler for ThreadedEval {
         4
     }
 
-    fn run(&self, buckets: &mut [EvalBucket], eval: &(dyn Fn(&mut EvalBucket) + Send + Sync)) {
+    fn run(
+        &self,
+        buckets: &mut [EvalBucket],
+        eval: &(dyn Fn(&mut EvalBucket) + Send + Sync),
+    ) -> FanOutTiming {
         std::thread::scope(|scope| {
             for bucket in buckets.iter_mut() {
                 scope.spawn(move || eval(bucket));
             }
         });
+        THREADED_EVAL_TIMING
     }
 }
+
+// What `ThreadedEval` reports for every run, so a test can follow it into the
+// profile.
+const THREADED_EVAL_TIMING: FanOutTiming = FanOutTiming {
+    wall_us: 900,
+    first_job_us: 300,
+    job_sum_us: 1_200,
+    longest_job_us: 400,
+    tail_us: 100,
+};
 
 // The fanned-out evaluation path (a scheduler, ScheduleMode::Parallel, enough
 // firing instances) must land exactly the state the serial path lands: same
@@ -1782,6 +1798,37 @@ fn parallel_eval_matches_serial_state() {
     assert_eq!(serial, parallel);
     // 150 movers over 5 ticks; the mover really fired every tick.
     assert_eq!(serial.0[0], 750);
+}
+
+// The scheduler's timing for a fanned-out tick reaches the frame profile,
+// attributed to the system that waited on it; a serial tick records none.
+#[test]
+fn a_fanned_out_tick_records_its_timing_on_the_profile() {
+    fn recorded(parallel: bool) -> Vec<(&'static str, FanOutTiming)> {
+        let mut world = world_with(vec![Behavior {
+            on: BehaviorSource::Tick,
+            scope: vec!["Prop".into()],
+            body: vec![set_var("n", 1, true)],
+            ..Default::default()
+        }]);
+        world.insert_resource(ScheduleMode::Parallel);
+        for i in 0..PARALLEL_EVAL_MIN_JOBS {
+            spawn_prop(&mut world, [i as f32, 0.0, 0.0]);
+        }
+        let mut sys = BehaviorSystem::new();
+        if parallel {
+            sys = sys.with_scheduler(Box::new(ThreadedEval));
+        }
+        sys.init(&mut world.context());
+        let mut ctx = world.context();
+        sys.tick(&mut ctx, 0.016, 0.016);
+        ctx.profile.record_system("BehaviorSystem", 1_000);
+        ctx.profile.begin_frame();
+        ctx.profile.system_fan_outs().to_vec()
+    }
+
+    assert_eq!(recorded(true), [("BehaviorSystem", THREADED_EVAL_TIMING)]);
+    assert!(recorded(false).is_empty());
 }
 
 // Picking up an edited source column without a world reload.

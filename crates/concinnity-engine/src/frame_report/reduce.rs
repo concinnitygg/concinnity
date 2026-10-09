@@ -1,5 +1,6 @@
 // Samples in, report out. Pure: no clock, no world, no I/O.
 
+use concinnity_core::profile::FanOutTiming;
 use concinnity_core::render::render_graph::PassId;
 use serde::Serialize;
 
@@ -28,6 +29,10 @@ const SYSTEM_FLOOR_SHARE: f32 = 0.01;
 /// draw. It runs on the stepping thread or on its own render thread, and in
 /// neither case inside any one system's share.
 const RENDER_SUBMIT: &str = "render submit";
+
+/// The row for the render thread's parallel pass recording among the
+/// fan-outs.
+const RENDER_RECORDING: &str = "render recording";
 
 /// How many of the run's slowest frames the report names.
 const SLOW_FRAMES_REPORTED: usize = 3;
@@ -94,6 +99,42 @@ pub struct SystemCost {
     pub share: f32,
 }
 
+/// A parallel fan-out's wait against its work: the render side's pass
+/// recording, or a system that fanned its own work out. Microseconds, either
+/// within one frame or as means over the frames of a segment it ran in.
+///
+/// A wall time well above the longest job is a fan-out not limited by its
+/// work; `first_job_us` and `tail_us` say whether the gap is the workers
+/// starting late or the waiting thread resuming late.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FanOutCost {
+    /// `render recording`, or the schedule's name for the system.
+    pub name: String,
+    /// How long the waiting thread was held.
+    pub wall_us: u32,
+    /// From the start of the fan-out to the first job starting.
+    pub first_job_us: u32,
+    /// Every job's duration, summed.
+    pub job_sum_us: u32,
+    /// The longest single job.
+    pub longest_job_us: u32,
+    /// From the last job ending to the waiting thread resuming.
+    pub tail_us: u32,
+}
+
+impl FanOutCost {
+    fn of(name: &str, timing: FanOutTiming) -> Self {
+        Self {
+            name: name.to_string(),
+            wall_us: timing.wall_us,
+            first_job_us: timing.first_job_us,
+            job_sum_us: timing.job_sum_us,
+            longest_job_us: timing.longest_job_us,
+            tail_us: timing.tail_us,
+        }
+    }
+}
+
 /// A named cost within one frame.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FrameCost {
@@ -129,6 +170,9 @@ pub struct SlowFrame {
     /// The largest passes of the GPU frame it reported, largest first, leaving
     /// out a pass timed inside another.
     pub passes: Vec<FrameCost>,
+    /// The fan-outs it waited on, the render recording first. Ones that did
+    /// not run are left out.
+    pub fan_outs: Vec<FanOutCost>,
 }
 
 /// What one stretch of the run measured.
@@ -166,6 +210,11 @@ pub struct SegmentReport {
     /// them, largest first. Empty on a stretch where none was a meaningful
     /// share of it.
     pub systems: Vec<SystemCost>,
+    /// The fan-outs, the render recording first, each as means over the
+    /// frames it ran in: a system that fans out only above a threshold would
+    /// otherwise read as faster than any one of its fan-outs. Ones that never
+    /// ran are left out.
+    pub fan_outs: Vec<FanOutCost>,
 }
 
 /// A whole run, reduced.
@@ -252,7 +301,50 @@ fn slowest_frames(measured: &[&FrameSample], run: &FrameRun) -> Vec<SlowFrame> {
                         .map(|(slot, name)| (name, sample.pass_us[slot])),
                 )
             },
+            fan_outs: fan_out_slots(run)
+                .map(|(slot, name)| FanOutCost::of(name, fan_out_in(sample, slot)))
+                .filter(|cost| cost.wall_us > 0)
+                .collect(),
         })
+        .collect()
+}
+
+// Every fan-out a sample can carry, named: the render recording (no slot),
+// then each named system's.
+fn fan_out_slots(run: &FrameRun) -> impl Iterator<Item = (Option<usize>, &str)> {
+    core::iter::once((None, RENDER_RECORDING))
+        .chain(named_slots(&run.system_names).map(|(slot, name)| (Some(slot), name)))
+}
+
+// One sample's reading of a fan-out slot.
+fn fan_out_in(sample: &FrameSample, slot: Option<usize>) -> FanOutTiming {
+    slot.map_or(sample.recording_fan_out, |slot| sample.system_fan_out[slot])
+}
+
+// The fan-outs over a stretch, each as means over the frames it ran in,
+// leaving out the ones that never ran.
+fn fan_out_means(frames: &[&FrameSample], run: &FrameRun) -> Vec<FanOutCost> {
+    fan_out_slots(run)
+        .map(|(slot, name)| {
+            let mean = |field: fn(FanOutTiming) -> u32| {
+                mean_u32(
+                    frames
+                        .iter()
+                        .map(|s| fan_out_in(s, slot))
+                        .filter(|t| t.wall_us > 0)
+                        .map(field),
+                )
+            };
+            FanOutCost {
+                name: name.to_string(),
+                wall_us: mean(|t| t.wall_us),
+                first_job_us: mean(|t| t.first_job_us),
+                job_sum_us: mean(|t| t.job_sum_us),
+                longest_job_us: mean(|t| t.longest_job_us),
+                tail_us: mean(|t| t.tail_us),
+            }
+        })
+        .filter(|cost| cost.wall_us > 0)
         .collect()
 }
 
@@ -326,6 +418,7 @@ fn summarize(
         vram_peak_bytes: frames.iter().map(|s| s.vram_bytes).max().unwrap_or(0),
         passes: pass_shares(frames, run, gpu.p50_us, options.budget_us),
         systems: system_costs(frames, run),
+        fan_outs: fan_out_means(frames, run),
     }
 }
 
@@ -481,11 +574,13 @@ mod tests {
             gpu_frame_us: frame_us / 2,
             gpu_wait_us: 100,
             render_cpu_us: 0,
+            recording_fan_out: FanOutTiming::default(),
             draw_calls: 50,
             objects: 400,
             vram_bytes: 1 << 20,
             pass_us: [0; MAX_PASS_TIMINGS],
             system_us: [0; MAX_SYSTEM_TIMINGS],
+            system_fan_out: [FanOutTiming::default(); MAX_SYSTEM_TIMINGS],
         }
     }
 
@@ -882,6 +977,82 @@ mod tests {
         run.system_names = vec!["PhysicsSystem".to_string()];
         let report = Report::of(&run, no_warmup()).expect("measured frames");
         assert!(report.overall.systems.is_empty());
+    }
+
+    fn fan_out(wall_us: u32) -> FanOutTiming {
+        FanOutTiming {
+            wall_us,
+            first_job_us: wall_us / 2,
+            job_sum_us: wall_us / 4,
+            longest_job_us: wall_us / 8,
+            tail_us: wall_us / 10,
+        }
+    }
+
+    #[test]
+    fn a_segment_reports_each_fan_outs_means_with_the_recording_first() {
+        let mut a = sample(0.0, Some(0), 10_000);
+        a.recording_fan_out = fan_out(2_000);
+        a.system_fan_out[1] = fan_out(800);
+        let mut b = sample(1.0, Some(0), 10_000);
+        b.recording_fan_out = fan_out(4_000);
+        b.system_fan_out[1] = fan_out(400);
+        let mut run = run_of(vec![a, b]);
+        run.system_names = vec!["PhysicsSystem".to_string(), "BehaviorSystem".to_string()];
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        // PhysicsSystem fanned nothing out, so it gets no row.
+        assert_eq!(
+            report.segments[0].fan_outs,
+            [
+                FanOutCost::of("render recording", fan_out(3_000)),
+                FanOutCost::of("BehaviorSystem", fan_out(600)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_fan_out_is_averaged_over_the_frames_it_ran_in() {
+        let mut fanned = sample(0.0, Some(0), 10_000);
+        fanned.system_fan_out[0] = fan_out(800);
+        let serial = sample(1.0, Some(0), 10_000);
+        let mut run = run_of(vec![fanned, serial]);
+        run.system_names = vec!["BehaviorSystem".to_string()];
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        assert_eq!(
+            report.overall.fan_outs,
+            [FanOutCost::of("BehaviorSystem", fan_out(800))]
+        );
+    }
+
+    #[test]
+    fn a_run_with_no_fan_outs_reports_none() {
+        let run = run_of(vec![sample(0.0, Some(0), 10_000)]);
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        assert!(report.overall.fan_outs.is_empty());
+        assert!(report.slowest[0].fan_outs.is_empty());
+    }
+
+    #[test]
+    fn a_slow_frame_carries_its_own_fan_outs() {
+        let mut quick = sample(0.0, Some(0), 10_000);
+        quick.recording_fan_out = fan_out(300);
+        let mut hitch = sample(1.0, Some(0), 40_000);
+        hitch.recording_fan_out = fan_out(3_400);
+        hitch.system_fan_out[0] = fan_out(2_400);
+        let mut run = run_of(vec![quick, hitch]);
+        run.system_names = vec!["BehaviorSystem".to_string()];
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        assert_eq!(
+            report.slowest[0].fan_outs,
+            [
+                FanOutCost::of("render recording", fan_out(3_400)),
+                FanOutCost::of("BehaviorSystem", fan_out(2_400)),
+            ]
+        );
+        assert_eq!(
+            report.slowest[1].fan_outs,
+            [FanOutCost::of("render recording", fan_out(300))]
+        );
     }
 
     #[test]

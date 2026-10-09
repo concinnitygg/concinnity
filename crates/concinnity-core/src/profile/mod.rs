@@ -6,6 +6,10 @@
 
 use alloc::vec::Vec;
 
+mod fan_out;
+
+pub use fan_out::{FanOutClock, FanOutTimer, FanOutTiming};
+
 /// Maximum number of per-pass GPU timings tracked by [`RenderStats`]: one per
 /// render-graph `PassId`, which a compile-time assertion in
 /// `render::pass_timing` holds it to, with headroom for new passes. Unused
@@ -57,6 +61,10 @@ pub struct RenderStats {
     /// always describe one frame. Left at zero by the backend itself, which
     /// cannot see the whole submission.
     pub render_cpu_us: u32,
+    /// The render thread's wait on this frame's parallel pass recording,
+    /// against the recording work the workers did. Part of `render_cpu_us`.
+    /// All zero on a backend that records serially.
+    pub recording_fan_out: FanOutTiming,
     /// Bytes of GPU memory currently allocated by the render device. On
     /// unified-memory hardware (Apple Silicon) this is the device's share of
     /// system memory rather than dedicated VRAM.
@@ -100,6 +108,7 @@ impl Default for RenderStats {
             gpu_frame_us: 0,
             gpu_wait_us: 0,
             render_cpu_us: 0,
+            recording_fan_out: FanOutTiming::default(),
             vram_bytes: 0,
             transient_pool_bytes: 0,
             pass_times_us: [("", 0); MAX_PASS_TIMINGS],
@@ -138,6 +147,13 @@ pub struct FrameProfile {
     // recorded one appear.
     last_handoffs: Vec<(&'static str, u32)>,
     current_handoffs: Vec<(&'static str, u32)>,
+    // Fan-out timing recorded by the step in progress, claimed by that step's
+    // `record_system` like the handoff.
+    pending_fan_out: Option<FanOutTiming>,
+    // Per-system fan-out timing, rotated with the timings. Only systems that
+    // recorded one appear.
+    last_fan_outs: Vec<(&'static str, FanOutTiming)>,
+    current_fan_outs: Vec<(&'static str, FanOutTiming)>,
     /// Render-backend stats for the most recent drawn frame. Left at the
     /// default when no graphics backend is running.
     pub render: RenderStats,
@@ -155,6 +171,9 @@ impl FrameProfile {
         core::mem::swap(&mut self.last_handoffs, &mut self.current_handoffs);
         self.current_handoffs.clear();
         self.pending_handoff = 0;
+        core::mem::swap(&mut self.last_fan_outs, &mut self.current_fan_outs);
+        self.current_fan_outs.clear();
+        self.pending_fan_out = None;
     }
 
     /// Record one system's CPU step time for the in-progress frame. A render
@@ -164,6 +183,9 @@ impl FrameProfile {
         let handoff = core::mem::take(&mut self.pending_handoff);
         if handoff > 0 {
             self.current_handoffs.push((name, handoff));
+        }
+        if let Some(fan_out) = self.pending_fan_out.take() {
+            self.current_fan_outs.push((name, fan_out));
         }
     }
 
@@ -175,6 +197,16 @@ impl FrameProfile {
     /// of the step's span to leave the step's own work.
     pub fn record_render_handoff(&mut self, micros: u32) {
         self.pending_handoff = self.pending_handoff.saturating_add(micros);
+    }
+
+    /// Record a parallel fan-out the step in progress waited on. Several in one
+    /// step are merged, and the result is attributed to the system by its
+    /// `record_system`.
+    pub fn record_fan_out(&mut self, timing: FanOutTiming) {
+        self.pending_fan_out = Some(match self.pending_fan_out {
+            Some(earlier) => earlier.merge(timing),
+            None => timing,
+        });
     }
 
     /// Record the heap allocations counted during one system's step.
@@ -214,6 +246,13 @@ impl FrameProfile {
     /// systems that recorded one appear.
     pub fn render_handoffs(&self) -> &[(&'static str, u32)] {
         &self.last_handoffs
+    }
+
+    /// Per-system fan-out timing from the last fully completed frame, paired
+    /// with that frame's [`system_timings`](Self::system_timings). Only the
+    /// systems that fanned work out appear.
+    pub fn system_fan_outs(&self) -> &[(&'static str, FanOutTiming)] {
+        &self.last_fan_outs
     }
 }
 
@@ -256,6 +295,33 @@ mod tests {
         p.record_system("A", 10);
         p.begin_frame();
         assert!(p.render_handoffs().is_empty());
+    }
+
+    #[test]
+    fn a_fan_out_is_attributed_to_the_step_that_waited_on_it() {
+        let fan_out = |wall_us| FanOutTiming {
+            wall_us,
+            longest_job_us: wall_us / 2,
+            ..FanOutTiming::default()
+        };
+        let mut p = FrameProfile::default();
+        p.record_system("A", 10);
+        p.record_fan_out(fan_out(300));
+        p.record_fan_out(fan_out(500));
+        p.record_system("B", 900);
+        p.record_system("C", 20);
+        assert!(p.system_fan_outs().is_empty());
+        p.begin_frame();
+        assert_eq!(
+            p.system_fan_outs(),
+            &[("B", fan_out(300).merge(fan_out(500)))]
+        );
+        // One no step claimed does not leak into the next frame.
+        p.record_fan_out(fan_out(40));
+        p.begin_frame();
+        p.record_system("B", 40);
+        p.begin_frame();
+        assert!(p.system_fan_outs().is_empty());
     }
 
     #[test]

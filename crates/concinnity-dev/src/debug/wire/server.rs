@@ -207,6 +207,11 @@ impl FrameHook for DebugServer {
             .map(|&(name, allocs)| (name.to_string(), allocs))
             .collect();
         state.profile_frame_allocs = profile.frame_allocs();
+        state.profile_fan_outs = profile
+            .system_fan_outs()
+            .iter()
+            .map(|&(name, timing)| (name.to_string(), timing))
+            .collect();
         state.profile_render = profile.render;
 
         // Active-camera pose for `camera-get`. One component read, so refresh

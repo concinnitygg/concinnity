@@ -330,6 +330,8 @@ impl MtlContext {
 
         let plan_ref = plan.as_ref();
         let ctx_ref = ParallelCtxRef::new(self);
+        let timer = jobs::fan_out_timer();
+        let timer_ref = &timer;
         jobs::pool().install(|| {
             rayon::scope(|scope| {
                 for (idx, pass) in graph.passes.iter().enumerate() {
@@ -347,60 +349,64 @@ impl MtlContext {
                     // among them) would be retained for the life of the
                     // process.
                     scope.spawn(move |_| {
-                        objc2::rc::autoreleasepool(|_| {
-                            let ctx = ctx_ref.as_ctx();
-                            let queue = match ctx.hw.graph_queues.as_ref() {
-                                Some(queues) => queues.queue(pass_queue, &ctx.hw.command_queue),
-                                None => &ctx.hw.command_queue,
-                            };
-                            let cmd_buf = match queue.commandBuffer() {
-                                Some(cb) => cb,
-                                None => {
-                                    let mut e = first_error_ref.lock().unwrap();
-                                    if e.is_none() {
-                                        *e = Some(RenderError::Other(
-                                            "graph executor: failed to mint per-pass cmd buf"
-                                                .into(),
-                                        ));
+                        timer_ref.job(|| {
+                            objc2::rc::autoreleasepool(|_| {
+                                let ctx = ctx_ref.as_ctx();
+                                let queue = match ctx.hw.graph_queues.as_ref() {
+                                    Some(queues) => queues.queue(pass_queue, &ctx.hw.command_queue),
+                                    None => &ctx.hw.command_queue,
+                                };
+                                let cmd_buf = match queue.commandBuffer() {
+                                    Some(cb) => cb,
+                                    None => {
+                                        let mut e = first_error_ref.lock().unwrap();
+                                        if e.is_none() {
+                                            *e = Some(RenderError::Other(
+                                                "graph executor: failed to mint per-pass cmd buf"
+                                                    .into(),
+                                            ));
+                                        }
+                                        return;
                                     }
-                                    return;
+                                };
+                                // Waits before the pass's own encoders, signals
+                                // after them: Metal accepts an event command only
+                                // while the command buffer has no open encoder.
+                                let sync = ctx.hw.graph_queues.as_ref().zip(plan_ref);
+                                if let Some((queues, plan)) = sync {
+                                    encode_waits(&cmd_buf, queues, plan.pass(idx));
                                 }
-                            };
-                            // Waits before the pass's own encoders, signals
-                            // after them: Metal accepts an event command only
-                            // while the command buffer has no open encoder.
-                            let sync = ctx.hw.graph_queues.as_ref().zip(plan_ref);
-                            if let Some((queues, plan)) = sync {
-                                encode_waits(&cmd_buf, queues, plan.pass(idx));
-                            }
-                            match ctx.encode_pass_into(pass_id, &cmd_buf, params, particle_ref) {
-                                Ok(count) => {
-                                    if let Some((queues, plan)) = sync {
-                                        encode_signals(
-                                            &cmd_buf,
-                                            queues,
-                                            plan.pass(idx),
-                                            pass_queue,
-                                        );
+                                match ctx.encode_pass_into(pass_id, &cmd_buf, params, particle_ref)
+                                {
+                                    Ok(count) => {
+                                        if let Some((queues, plan)) = sync {
+                                            encode_signals(
+                                                &cmd_buf,
+                                                queues,
+                                                plan.pass(idx),
+                                                pass_queue,
+                                            );
+                                        }
+                                        ctx.diagnostics
+                                            .draw_calls_accum
+                                            .fetch_add(count, Ordering::Relaxed);
+                                        let mut lock = worker_slots_ref.lock().unwrap();
+                                        lock[idx] = Some(SendableCmdBuf(cmd_buf));
                                     }
-                                    ctx.diagnostics
-                                        .draw_calls_accum
-                                        .fetch_add(count, Ordering::Relaxed);
-                                    let mut lock = worker_slots_ref.lock().unwrap();
-                                    lock[idx] = Some(SendableCmdBuf(cmd_buf));
-                                }
-                                Err(e) => {
-                                    let mut lock = first_error_ref.lock().unwrap();
-                                    if lock.is_none() {
-                                        *lock = Some(e);
+                                    Err(e) => {
+                                        let mut lock = first_error_ref.lock().unwrap();
+                                        if lock.is_none() {
+                                            *lock = Some(e);
+                                        }
                                     }
                                 }
-                            }
+                            })
                         })
                     });
                 }
             });
         });
+        self.diagnostics.frame_stats.recording_fan_out = timer.finish();
 
         // Nothing has been committed yet, so an encode failure leaves the
         // frame's event values unsignaled and unrecorded: the next frame
