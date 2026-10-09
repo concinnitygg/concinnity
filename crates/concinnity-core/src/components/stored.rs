@@ -7,6 +7,7 @@
 //! This is the module `concinnity::components` globs, so a type reaches the
 //! framework's runtime namespace by reaching this one.
 
+pub use super::app_config::FramePriority;
 pub use super::audio_bus::AudioBus;
 pub use super::audio_cue::{AudioCue, CueKind};
 pub use super::audio_emitter::{AudioEmitter, Rolloff};

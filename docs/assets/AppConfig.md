@@ -29,6 +29,9 @@ a per-user directory on its own.
 both from the host machine. A non-zero value overrides that choice, clamped
 to what the machine can safely give.
 
+`frame_priority` decides which frame threads run ahead of the other
+applications on the machine; see [FramePriority](FramePriority.md).
+
 `headless` keeps a world that could draw from opening a window. A world
 that draws nothing runs that way already.
 
@@ -42,4 +45,5 @@ that draws nothing runs that way already.
 - `home`: A string. Where the running application writes its settings, saves, crash reports, and shader caches. Empty means beside the application's data; a relative path resolves against that directory; an absolute path is used verbatim. Defaults to `""`.
 - `max_memory_mb`: An integer. Soft ceiling on host memory the runtime aims to stay under, in mebibytes. `0` = auto (a fraction of total RAM, capped by a built-in ceiling). A non-zero value is clamped so it never exceeds what the machine can safely give. Defaults to `0`.
 - `job_threads`: An integer. Worker threads for the shared job pool. `0` = auto (one per core, less one for the main thread). A non-zero value never exceeds the core count. Defaults to `0`.
+- `frame_priority`: A string (see [FramePriority](FramePriority.md)). Which of the frame's threads run above normal priority, ahead of the other applications on the machine. Defaults to `"all_threads"`.
 - `headless`: A boolean. Run with no window and no renderer, whatever the world holds. `false` (the default) lets the content decide: a world with something to draw opens a window, one without runs headless either way.

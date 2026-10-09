@@ -2,12 +2,17 @@
 //! machine and the world's `AppConfig` overrides, then published as world
 //! resources so systems (and the debug server) can read them. Two budgets:
 //!
-//!   ThreadBudget  how many worker threads the shared job pool runs.
+//!   ThreadBudget  how many worker threads the shared job pool runs, and
+//!                 which frame threads run above normal priority.
 //!   MemoryBudget  a soft ceiling on host memory the runtime aims to stay under.
 //!
 //! The budgets are advisory today: they are computed, logged, and reported.
 //! Cooperative enforcement (streaming byte budgets, back-off near the ceiling)
 //! is a separate follow-up; nothing here aborts or caps an allocation.
+
+use concinnity_core::components::FramePriority;
+use concinnity_core::ecs::World;
+use concinnity_host::thread::ThreadRole;
 
 // Absolute default cap on the memory budget regardless of how much RAM the
 // machine has, so a workstation with hundreds of GiB does not implicitly invite
@@ -22,21 +27,23 @@ const DEFAULT_FRACTION_PCT: u64 = 70;
 const MAX_FRACTION_PCT: u64 = 85;
 
 /// How many threads the runtime plans to run, computed from the machine's core
-/// count and the optional `AppConfig` override. Advisory: it sizes the shared
-/// job pool (`jobs::configure`) and is reported, but does not cap the streaming
-/// workers or the audio thread.
+/// count and the optional `AppConfig` override, and how they are scheduled.
+/// Advisory as a count: it sizes the shared job pool (`jobs::configure`) and is
+/// reported, but does not cap the streaming workers or the audio thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ThreadBudget {
     /// Logical cores the machine reports.
     pub total_cores: usize,
     /// Worker threads for the shared rayon job pool.
     pub job_threads: usize,
+    /// Which frame threads run above normal priority (`AppConfig`'s setting).
+    pub frame_priority: FramePriority,
 }
 
 impl ThreadBudget {
     // `job_threads_override` of 0 means "auto", deferring to the job pool's own
     // default. A non-zero override is honored but never exceeds the core count.
-    pub(crate) fn compute(job_threads_override: u32) -> Self {
+    pub(crate) fn compute(job_threads_override: u32, frame_priority: FramePriority) -> Self {
         let total_cores = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1);
@@ -48,8 +55,23 @@ impl ThreadBudget {
         Self {
             total_cores,
             job_threads,
+            frame_priority,
         }
     }
+
+    /// The role the render and simulation threads take.
+    pub fn main_thread_role(&self) -> ThreadRole {
+        ThreadRole::Frame(self.frame_priority)
+    }
+}
+
+/// The role the render and simulation threads take for `world`: its published
+/// budget's, or the default priority's before `Runtime::start` publishes one.
+pub(crate) fn main_thread_role(world: &World) -> ThreadRole {
+    world.resource::<ThreadBudget>().map_or(
+        ThreadRole::Frame(FramePriority::default()),
+        ThreadBudget::main_thread_role,
+    )
 }
 
 /// A soft ceiling on host memory the runtime aims to stay under, computed from
@@ -100,18 +122,45 @@ mod tests {
 
     #[test]
     fn auto_thread_budget_leaves_a_core_for_the_main_thread() {
-        let tb = ThreadBudget::compute(0);
+        let tb = ThreadBudget::compute(0, FramePriority::default());
         assert_eq!(tb.job_threads, tb.total_cores.saturating_sub(1).max(1));
         assert!(tb.job_threads >= 1);
     }
 
     #[test]
     fn thread_override_is_honored_but_capped_at_core_count() {
-        let tb = ThreadBudget::compute(2);
+        let tb = ThreadBudget::compute(2, FramePriority::default());
         assert_eq!(tb.job_threads, 2.min(tb.total_cores));
         // An absurd override never exceeds the machine's cores.
-        let huge = ThreadBudget::compute(9999);
+        let huge = ThreadBudget::compute(9999, FramePriority::default());
         assert_eq!(huge.job_threads, huge.total_cores);
+    }
+
+    #[test]
+    fn a_world_without_a_budget_takes_the_default_role() {
+        let mut world = World::new();
+        assert_eq!(
+            main_thread_role(&world),
+            ThreadRole::Frame(FramePriority::default())
+        );
+        world.insert_resource(ThreadBudget::compute(0, FramePriority::Normal));
+        assert_eq!(
+            main_thread_role(&world),
+            ThreadRole::Frame(FramePriority::Normal)
+        );
+    }
+
+    #[test]
+    fn main_threads_take_the_configured_priority() {
+        for priority in [
+            FramePriority::Normal,
+            FramePriority::MainThreads,
+            FramePriority::AllThreads,
+        ] {
+            let tb = ThreadBudget::compute(0, priority);
+            assert_eq!(tb.frame_priority, priority);
+            assert_eq!(tb.main_thread_role(), ThreadRole::Frame(priority));
+        }
     }
 
     #[test]

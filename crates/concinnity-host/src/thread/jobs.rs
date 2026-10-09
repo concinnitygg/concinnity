@@ -8,12 +8,14 @@
 //!
 //! The pool wraps a dedicated `rayon::ThreadPool` rather than rayon's global
 //! pool so the worker count, thread names and scheduling are controlled: every
-//! worker runs as a [`ThreadRole::Frame`] thread. It is process-wide and built
-//! once, by whichever of `configure` and `pool()` is reached first.
+//! worker runs as a [`ThreadRole::FrameWorker`] thread at the pool's
+//! [`FramePriority`]. It is process-wide and built once, by whichever of
+//! `configure` and `pool()` is reached first.
 
 use std::sync::OnceLock;
 use std::time::Instant;
 
+use concinnity_core::components::FramePriority;
 use concinnity_core::profile::{FanOutClock, FanOutTimer, FanOutTiming};
 use rayon::prelude::*;
 
@@ -22,26 +24,33 @@ use super::role::{ThreadRole, set_current_thread_role};
 /// A dedicated thread pool for per-frame data-parallel work.
 pub struct JobPool {
     pool: rayon::ThreadPool,
+    priority: FramePriority,
 }
 
 impl JobPool {
-    /// Build a pool with an explicit worker count (floored at one), for work
-    /// that must not size the process-wide pool before the runtime configures it.
-    pub fn new(threads: usize) -> JobPool {
+    /// Build a pool with an explicit worker count (floored at one) whose
+    /// workers are scheduled as `priority` asks, for work that must not size
+    /// the process-wide pool before the runtime configures it.
+    pub fn new(threads: usize, priority: FramePriority) -> JobPool {
         let threads = threads.max(1);
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .thread_name(|i| format!("cn-job-{i}"))
-            .start_handler(|_| set_current_thread_role(ThreadRole::Frame))
+            .start_handler(move |_| set_current_thread_role(ThreadRole::FrameWorker(priority)))
             .build()
             .expect("failed to build job thread pool");
-        tracing::info!("JobPool: {threads} worker thread(s)");
-        JobPool { pool }
+        tracing::info!("JobPool: {threads} worker thread(s), priority {priority:?}");
+        JobPool { pool, priority }
     }
 
     /// Number of worker threads in this pool.
     pub fn thread_count(&self) -> usize {
         self.pool.current_num_threads()
+    }
+
+    /// The priority setting the workers were started with.
+    pub fn priority(&self) -> FramePriority {
+        self.priority
     }
 
     /// Apply `f` to every item in parallel, blocking until all are done.
@@ -131,30 +140,30 @@ pub fn default_threads() -> usize {
         .unwrap_or(1)
 }
 
-/// Build the process-wide job pool at `threads` workers, returning whether
-/// this call sized it. The runtime calls this from its `ThreadBudget` at start,
-/// before any system uses the pool. The pool is built once, so a call that
-/// finds it already there sizes nothing and is reported as `false`; a value
-/// below one is clamped.
-pub fn configure(threads: usize) -> bool {
-    size_pool(&POOL, threads)
+/// Build the process-wide job pool at `threads` workers scheduled as
+/// `priority` asks, returning whether this call built it. The runtime calls
+/// this from its `ThreadBudget` at start, before any system uses the pool. The
+/// pool is built once, so a call that finds it already there changes nothing
+/// and is reported as `false`; a value below one is clamped.
+pub fn configure(threads: usize, priority: FramePriority) -> bool {
+    size_pool(&POOL, threads, priority)
 }
 
 // Sizing a pool cell, shared with the test so both outcomes are reachable
 // without depending on what else in the process has touched `POOL`.
-fn size_pool(cell: &OnceLock<JobPool>, threads: usize) -> bool {
+fn size_pool(cell: &OnceLock<JobPool>, threads: usize, priority: FramePriority) -> bool {
     // A cheap refusal before paying for the worker threads a full `set` would
     // build and then drop.
     if cell.get().is_some() {
         return false;
     }
-    cell.set(JobPool::new(threads.max(1))).is_ok()
+    cell.set(JobPool::new(threads.max(1), priority)).is_ok()
 }
 
-/// The process-wide job pool, built at the auto default worker count if
-/// `configure` has not already sized it.
+/// The process-wide job pool, built at the auto default worker count and the
+/// default priority if `configure` has not already built it.
 pub fn pool() -> &'static JobPool {
-    POOL.get_or_init(|| JobPool::new(default_threads()))
+    POOL.get_or_init(|| JobPool::new(default_threads(), FramePriority::default()))
 }
 
 /// A single-worker pool: the same execution shape as `pool()` with the jobs
@@ -163,7 +172,7 @@ pub fn pool() -> &'static JobPool {
 /// concurrency.
 pub fn serial_pool() -> &'static JobPool {
     static SERIAL: OnceLock<JobPool> = OnceLock::new();
-    SERIAL.get_or_init(|| JobPool::new(1))
+    SERIAL.get_or_init(|| JobPool::new(1, FramePriority::default()))
 }
 
 #[cfg(test)]
@@ -178,13 +187,17 @@ mod tests {
     #[test]
     fn sizing_a_pool_reports_whether_it_built_one() {
         let cell = OnceLock::new();
-        assert!(size_pool(&cell, 3));
-        assert_eq!(cell.get().expect("the sized pool").thread_count(), 3);
+        assert!(size_pool(&cell, 3, FramePriority::AllThreads));
+        let sized = cell.get().expect("the sized pool");
+        assert_eq!(sized.thread_count(), 3);
+        assert_eq!(sized.priority(), FramePriority::AllThreads);
 
-        // The pool is built once, so a later call sizes nothing and says so
+        // The pool is built once, so a later call changes nothing and says so
         // rather than recording a count nobody reads.
-        assert!(!size_pool(&cell, 7));
-        assert_eq!(cell.get().expect("the sized pool").thread_count(), 3);
+        assert!(!size_pool(&cell, 7, FramePriority::Normal));
+        let kept = cell.get().expect("the sized pool");
+        assert_eq!(kept.thread_count(), 3);
+        assert_eq!(kept.priority(), FramePriority::AllThreads);
     }
 
     #[test]
@@ -192,7 +205,7 @@ mod tests {
         // Order-independent: reaching `pool()` is what closes configuration,
         // whichever test in this process got there first.
         let workers = pool().thread_count();
-        assert!(!configure(workers + 1));
+        assert!(!configure(workers + 1, FramePriority::Normal));
         assert_eq!(pool().thread_count(), workers);
     }
 
@@ -202,14 +215,14 @@ mod tests {
     // other tests that also touch it.
     #[test]
     fn new_sets_the_worker_count() {
-        assert_eq!(JobPool::new(3).thread_count(), 3);
-        assert_eq!(JobPool::new(0).thread_count(), 1);
+        assert_eq!(JobPool::new(3, FramePriority::default()).thread_count(), 3);
+        assert_eq!(JobPool::new(0, FramePriority::default()).thread_count(), 1);
     }
 
     #[cfg(target_vendor = "apple")]
     #[test]
     fn workers_run_at_the_frame_qos_class() {
-        let class = JobPool::new(1).install(|| {
+        let class = JobPool::new(1, FramePriority::Normal).install(|| {
             let mut class = libc::qos_class_t::QOS_CLASS_UNSPECIFIED;
             let mut relative = 0;
             // SAFETY: both out-pointers are live locals, and `pthread_self`
@@ -225,11 +238,36 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn workers_run_at_the_priority_the_pool_was_built_with() {
+        use windows::Win32::System::Threading::{
+            GetCurrentThread, GetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+            THREAD_PRIORITY_NORMAL,
+        };
+
+        let worker_priority = |priority| {
+            JobPool::new(1, priority).install(|| {
+                // SAFETY: `GetCurrentThread` is a pseudo-handle valid for the
+                // calling worker.
+                unsafe { GetThreadPriority(GetCurrentThread()) }
+            })
+        };
+        assert_eq!(
+            worker_priority(FramePriority::MainThreads),
+            THREAD_PRIORITY_NORMAL.0
+        );
+        assert_eq!(
+            worker_priority(FramePriority::AllThreads),
+            THREAD_PRIORITY_ABOVE_NORMAL.0
+        );
+    }
+
     #[test]
     fn pool_rows_visit_every_row_exactly_once() {
         use concinnity_core::bake::environment_map::RowScheduler;
 
-        let pool = JobPool::new(2);
+        let pool = JobPool::new(2, FramePriority::default());
         let mut rows = vec![0u32; 257];
         PoolRows(&pool).run(&mut rows, &|visits| *visits += 1);
         assert!(rows.iter().all(|&visits| visits == 1));
@@ -250,7 +288,7 @@ mod tests {
 
     #[test]
     fn a_timed_parallel_for_reports_the_work_inside_the_wait() {
-        let pool = JobPool::new(2);
+        let pool = JobPool::new(2, FramePriority::default());
         let mut items = [0u32; 4];
         let timing = pool.parallel_for_timed(&mut items, |x| {
             std::thread::sleep(std::time::Duration::from_millis(2));

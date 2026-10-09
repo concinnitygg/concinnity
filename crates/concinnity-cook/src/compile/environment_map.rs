@@ -34,7 +34,7 @@
 
 use concinnity_core::bake::environment_map::source::generate_sky_equirect;
 use concinnity_core::bake::environment_map::stars::generate_stars_equirect;
-use concinnity_core::components::EnvironmentMap;
+use concinnity_core::components::{EnvironmentMap, FramePriority};
 use concinnity_host::thread::jobs;
 use serde::Deserialize;
 use std::path::Path;
@@ -164,7 +164,7 @@ pub(crate) fn compile_environment_map_payload(
     };
     // A build-scoped pool, so a build never sizes the process-wide one before
     // the runtime configures it.
-    let pool = jobs::JobPool::new(jobs::default_threads());
+    let pool = jobs::JobPool::new(jobs::default_threads(), FramePriority::default());
     Ok(bake_payload(
         &hdr,
         params.prefilter_face_size,

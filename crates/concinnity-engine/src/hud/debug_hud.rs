@@ -535,6 +535,7 @@ mod tests {
         world.insert_resource(ThreadBudget {
             total_cores: 12,
             job_threads: 11,
+            frame_priority: concinnity_core::components::FramePriority::default(),
         });
         // The budget defaults to a fraction of total RAM, so derive the expected
         // MiB from the same value rather than assuming it equals total RAM.

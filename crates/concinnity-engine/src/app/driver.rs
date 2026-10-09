@@ -28,7 +28,7 @@ impl Driver for Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::AppConfig;
+    use concinnity_core::components::{AppConfig, FramePriority};
 
     // Starting through the trait reaches the windowed loop's own start, budgets
     // and all, and the second call is refused the same way the inherent one is.
@@ -49,6 +49,7 @@ mod tests {
             home: String::new(),
             max_memory_mb: 512,
             job_threads: 2,
+            frame_priority: FramePriority::default(),
             headless: false,
         });
 

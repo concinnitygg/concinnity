@@ -308,22 +308,25 @@ impl Runtime {
             .cloned()
             .unwrap_or_default();
 
-        let threads = budget::ThreadBudget::compute(config.job_threads);
+        let threads = budget::ThreadBudget::compute(config.job_threads, config.frame_priority);
         let memory =
             budget::MemoryBudget::compute(sysmem::total_physical_bytes(), config.max_memory_mb);
 
-        let sized = configure(threads.job_threads);
+        let sized = configure(threads.job_threads, threads.frame_priority);
         let job_workers = pool().thread_count();
-        if !sized && job_workers != threads.job_threads {
+        let job_priority = pool().priority();
+        if !sized && (job_workers, job_priority) != (threads.job_threads, threads.frame_priority) {
             tracing::warn!(
-                "job pool already built with {job_workers} worker(s); the requested {} cannot take effect",
-                threads.job_threads
+                "job pool already built with {job_workers} worker(s) at {job_priority:?}; the requested {} at {:?} cannot take effect",
+                threads.job_threads,
+                threads.frame_priority
             );
         }
         tracing::info!(
-            "Thread budget: {} core(s), {} job worker(s){}",
+            "Thread budget: {} core(s), {} job worker(s), frame priority {:?}{}",
             threads.total_cores,
             threads.job_threads,
+            threads.frame_priority,
             if config.job_threads > 0 {
                 " [AppConfig override]"
             } else {
@@ -421,7 +424,7 @@ fn resolve_home(home: &str, content_root: &std::path::Path) -> Option<std::path:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::AppConfig;
+    use concinnity_core::components::{AppConfig, FramePriority};
     use concinnity_core::ecs::FrameRateCap;
 
     // Starting the runtime publishes the thread + memory budgets as world resources,
@@ -434,6 +437,7 @@ mod tests {
             home: String::new(),
             max_memory_mb: 512,
             job_threads: 2,
+            frame_priority: FramePriority::default(),
             headless: false,
         });
         runtime.start().unwrap();
@@ -487,6 +491,7 @@ mod tests {
             home: String::new(),
             max_memory_mb: 256,
             job_threads: 1,
+            frame_priority: FramePriority::default(),
             headless: false,
         });
         runtime.load_world(world);
@@ -528,6 +533,7 @@ mod tests {
             home: String::new(),
             max_memory_mb: 128,
             job_threads: 1,
+            frame_priority: FramePriority::default(),
             headless: false,
         });
 
@@ -586,6 +592,7 @@ mod tests {
             home: "state".to_string(),
             max_memory_mb: 0,
             job_threads: 0,
+            frame_priority: FramePriority::default(),
             headless: false,
         });
         runtime.start().unwrap();

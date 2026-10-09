@@ -1,14 +1,17 @@
 // Quality-of-service classes: the scheduler wakes higher classes sooner and
-// prefers performance cores for them.
+// prefers performance cores for them. Every frame thread takes the top class
+// whatever the priority setting, which only reaches platforms that schedule by
+// priority.
 
 use libc::qos_class_t;
 
 use super::ThreadRole;
 
 pub(super) fn qos_class(role: ThreadRole) -> qos_class_t {
-    match role {
-        ThreadRole::Frame => qos_class_t::QOS_CLASS_USER_INTERACTIVE,
-        ThreadRole::Background => qos_class_t::QOS_CLASS_UTILITY,
+    if role.is_frame() {
+        qos_class_t::QOS_CLASS_USER_INTERACTIVE
+    } else {
+        qos_class_t::QOS_CLASS_UTILITY
     }
 }
 
@@ -44,7 +47,7 @@ mod tests {
 
     #[test]
     fn a_role_sets_the_thread_qos_class() {
-        for role in [ThreadRole::Frame, ThreadRole::Background] {
+        for role in super::super::EVERY_ROLE {
             let class = std::thread::spawn(move || {
                 apply(role).expect("the role applies");
                 current_qos_class()
@@ -56,7 +59,18 @@ mod tests {
     }
 
     #[test]
-    fn frame_outranks_background() {
-        assert!(qos_class(ThreadRole::Frame) as u32 > qos_class(ThreadRole::Background) as u32);
+    fn every_frame_thread_outranks_background() {
+        let background = qos_class(ThreadRole::Background) as u32;
+        for role in super::super::EVERY_ROLE
+            .into_iter()
+            .filter(|r| r.is_frame())
+        {
+            assert_eq!(
+                qos_class(role) as u32,
+                qos_class_t::QOS_CLASS_USER_INTERACTIVE as u32,
+                "{role:?}"
+            );
+            assert!(qos_class(role) as u32 > background, "{role:?}");
+        }
     }
 }

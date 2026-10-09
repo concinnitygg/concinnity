@@ -160,6 +160,7 @@ pub use animation_graph::{
 };
 pub use animation_params::AnimationParams;
 pub use app_config::AppConfig;
+pub use app_config::FramePriority;
 pub use audio_bus::AudioBus;
 pub use audio_clip::AudioClip;
 pub use audio_command::{AudioCommand, AudioTarget};

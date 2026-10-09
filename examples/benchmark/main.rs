@@ -58,13 +58,18 @@
 //! a texture handle is only ever resolved from a declared name.
 //!
 //! Run it with `cargo run --release --features cook --example benchmark`.
+//! `--frame-priority normal|main_threads|all_threads` runs it under that
+//! `AppConfig::frame_priority` instead of the default, which is how the
+//! setting's cost and benefit are compared on a busy machine.
 
 mod overlay;
 mod palette;
 mod stations;
 mod track;
 
-use concinnity::components::{FrameReport, GraphicsConfig, PostProcessConfig, Window};
+use concinnity::components::{
+    FramePriority, FrameReport, GraphicsConfig, PostProcessConfig, Window,
+};
 use concinnity::cook::{self, Camera3D, CameraTrack};
 use concinnity::{App, World};
 
@@ -80,12 +85,49 @@ const CAMERA_FOV_Y_DEGREES: f32 = 65.0;
 const WARMUP_SECONDS: f32 = 2.5;
 
 fn main() {
-    let world = benchmark_world().expect("the benchmark world compiles");
+    let priority = match frame_priority(std::env::args().skip(1)) {
+        Ok(priority) => priority,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
+    let world = benchmark_world(priority).expect("the benchmark world compiles");
     App::from_world(world).run().expect("the app runs");
 }
 
-fn benchmark_world() -> Result<World, String> {
+// The priority `--frame-priority NAME` names, or the default without one.
+fn frame_priority(mut args: impl Iterator<Item = String>) -> Result<FramePriority, String> {
+    let mut priority = FramePriority::default();
+    while let Some(arg) = args.next() {
+        if arg != "--frame-priority" {
+            return Err(format!("unknown argument {arg:?}"));
+        }
+        let name = args.next().ok_or("--frame-priority needs a value")?;
+        priority = FramePriority::ALL
+            .iter()
+            .copied()
+            .find(|p| p.as_str() == name)
+            .ok_or_else(|| {
+                format!(
+                    "--frame-priority takes one of {}",
+                    FramePriority::NAMES.join(", ")
+                )
+            })?;
+    }
+    Ok(priority)
+}
+
+fn benchmark_world(frame_priority: FramePriority) -> Result<World, String> {
     let mut world = cook::world();
+
+    world.add(
+        "app",
+        cook::AppConfig {
+            frame_priority,
+            ..Default::default()
+        },
+    );
 
     world.add(
         "window",

@@ -5,6 +5,59 @@
 
 use alloc::string::String;
 
+use crate::components::Vocabulary;
+
+/// Which of the threads every frame waits on run above normal priority, ahead
+/// of the other applications on the machine.
+///
+/// A frame waits on three kinds of thread: the render thread, the simulation
+/// thread, and the job workers both of them fan work out to. Raising a thread
+/// keeps a busy machine (a browser, a build, a stream) from holding it off a
+/// core, which is what keeps frame times steady under load. The cost lands on
+/// those other applications: while the raised threads have work, an
+/// application at normal priority waits for a core.
+///
+/// `all_threads` (the default) raises all three. A frame waits on its job
+/// workers as much as on its render and simulation threads, so on a busy
+/// machine raising only the main two keeps frames no steadier than raising
+/// nothing. `main_threads` does exactly that, leaving the workers to share
+/// the machine. `normal` raises nothing, for an application that should yield
+/// to whatever else is running.
+///
+/// Every frame thread is kept off power throttling whichever is chosen. The
+/// setting applies where the platform schedules by priority (Windows); on
+/// macOS and iOS frame threads always run at the user-interactive
+/// quality-of-service class, and elsewhere they keep the system's defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default, Vocabulary)]
+pub enum FramePriority {
+    /// Every frame thread at normal priority.
+    #[vocab("normal")]
+    Normal,
+    /// The render and simulation threads above normal priority, the job
+    /// workers at normal priority.
+    #[vocab("main_threads")]
+    MainThreads,
+    /// The render and simulation threads and every job worker above normal
+    /// priority.
+    #[default]
+    #[vocab("all_threads")]
+    AllThreads,
+}
+
+impl FramePriority {
+    /// Whether the render and simulation threads run above normal priority.
+    pub fn raises_main_threads(self) -> bool {
+        !matches!(self, FramePriority::Normal)
+    }
+
+    /// Whether the job workers run above normal priority.
+    pub fn raises_job_workers(self) -> bool {
+        matches!(self, FramePriority::AllThreads)
+    }
+}
+
 /// Names, identifies, and sizes the application.
 ///
 /// Declare at most one `AppConfig` per world. It supplies the display name,
@@ -31,6 +84,9 @@ use alloc::string::String;
 /// `max_memory_mb` and `job_threads` are `0` for "auto", where the engine sizes
 /// both from the host machine. A non-zero value overrides that choice, clamped
 /// to what the machine can safely give.
+///
+/// `frame_priority` decides which frame threads run ahead of the other
+/// applications on the machine; see [FramePriority].
 ///
 /// `headless` keeps a world that could draw from opening a window. A world
 /// that draws nothing runs that way already.
@@ -72,6 +128,9 @@ pub struct AppConfigArgs {
     /// Worker threads for the shared job pool. `0` = auto (one per core, less
     /// one for the main thread). A non-zero value never exceeds the core count.
     pub job_threads: u32,
+    /// Which of the frame's threads run above normal priority, ahead of the
+    /// other applications on the machine.
+    pub frame_priority: FramePriority,
     /// Run with no window and no renderer, whatever the world holds. `false`
     /// (the default) lets the content decide: a world with something to draw
     /// opens a window, one without runs headless either way.
@@ -89,6 +148,7 @@ mod tests {
             home: "state".into(),
             max_memory_mb: 2048,
             job_threads: 8,
+            frame_priority: FramePriority::Normal,
             headless: true,
             ..Default::default()
         };
@@ -96,7 +156,25 @@ mod tests {
         assert_eq!(c.home, "state");
         assert_eq!(c.max_memory_mb, 2048);
         assert_eq!(c.job_threads, 8);
+        assert_eq!(c.frame_priority, FramePriority::Normal);
         assert!(c.headless);
+    }
+
+    #[test]
+    fn every_frame_thread_is_raised_by_default() {
+        assert_eq!(FramePriority::default(), FramePriority::AllThreads);
+        assert_eq!(
+            AppConfigArgs::default().frame_priority,
+            FramePriority::AllThreads
+        );
+    }
+
+    #[test]
+    fn each_priority_raises_its_threads() {
+        let raised = |p: FramePriority| (p.raises_main_threads(), p.raises_job_workers());
+        assert_eq!(raised(FramePriority::Normal), (false, false));
+        assert_eq!(raised(FramePriority::MainThreads), (true, false));
+        assert_eq!(raised(FramePriority::AllThreads), (true, true));
     }
 }
 
@@ -112,6 +190,8 @@ pub struct AppConfig {
     pub max_memory_mb: u32,
     /// Worker threads for the shared job pool. `0` = auto.
     pub job_threads: u32,
+    /// Which of the frame's threads run above normal priority.
+    pub frame_priority: FramePriority,
     /// Run with no window and no renderer, whatever the world holds.
     pub headless: bool,
 }
@@ -125,6 +205,7 @@ impl AppConfig {
             home: args.home,
             max_memory_mb: args.max_memory_mb,
             job_threads: args.job_threads,
+            frame_priority: args.frame_priority,
             headless: args.headless,
         }
     }

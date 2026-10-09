@@ -1,8 +1,8 @@
 // Power throttling (EcoQoS): a throttled thread is steered to efficiency cores
 // on hybrid parts and run at lower clocks. Frame threads opt out explicitly so
-// a power plan cannot throttle them; background threads opt in. Frame threads
-// also run above normal priority, so a busy machine's normal-priority work
-// cannot hold them off a core.
+// a power plan cannot throttle them; background threads opt in. A raised frame
+// thread also runs above normal priority, so a busy machine's normal-priority
+// work cannot hold it off a core.
 
 use windows::Win32::System::Threading::{
     GetCurrentThread, SetThreadInformation, SetThreadPriority,
@@ -17,17 +17,19 @@ pub(super) fn throttling_state(role: ThreadRole) -> THREAD_POWER_THROTTLING_STAT
     THREAD_POWER_THROTTLING_STATE {
         Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
         ControlMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
-        StateMask: match role {
-            ThreadRole::Frame => 0,
-            ThreadRole::Background => THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask: if role.is_frame() {
+            0
+        } else {
+            THREAD_POWER_THROTTLING_EXECUTION_SPEED
         },
     }
 }
 
 pub(super) fn priority(role: ThreadRole) -> THREAD_PRIORITY {
-    match role {
-        ThreadRole::Frame => THREAD_PRIORITY_ABOVE_NORMAL,
-        ThreadRole::Background => THREAD_PRIORITY_NORMAL,
+    if role.raised() {
+        THREAD_PRIORITY_ABOVE_NORMAL
+    } else {
+        THREAD_PRIORITY_NORMAL
     }
 }
 
@@ -55,11 +57,12 @@ pub(super) fn apply(role: ThreadRole) -> std::io::Result<()> {
 mod tests {
     use windows::Win32::System::Threading::GetThreadPriority;
 
+    use super::super::EVERY_ROLE;
     use super::*;
 
     #[test]
     fn a_role_sets_the_thread_priority() {
-        for role in [ThreadRole::Frame, ThreadRole::Background] {
+        for role in EVERY_ROLE {
             let current = std::thread::spawn(move || {
                 apply(role).expect("the role applies");
                 // SAFETY: `GetCurrentThread` is a pseudo-handle valid for the
@@ -73,10 +76,21 @@ mod tests {
     }
 
     #[test]
-    fn frame_opts_out_and_background_opts_in() {
-        let frame = throttling_state(ThreadRole::Frame);
-        assert_eq!(frame.ControlMask, THREAD_POWER_THROTTLING_EXECUTION_SPEED);
-        assert_eq!(frame.StateMask, 0);
+    fn only_raised_frame_threads_run_above_normal() {
+        let above: Vec<bool> = EVERY_ROLE
+            .iter()
+            .map(|&role| priority(role) == THREAD_PRIORITY_ABOVE_NORMAL)
+            .collect();
+        assert_eq!(above, [false, true, true, false, false, true, false]);
+    }
+
+    #[test]
+    fn frame_threads_opt_out_and_background_opts_in() {
+        for role in EVERY_ROLE.into_iter().filter(|r| r.is_frame()) {
+            let frame = throttling_state(role);
+            assert_eq!(frame.ControlMask, THREAD_POWER_THROTTLING_EXECUTION_SPEED);
+            assert_eq!(frame.StateMask, 0, "{role:?}");
+        }
 
         let background = throttling_state(ThreadRole::Background);
         assert_eq!(
