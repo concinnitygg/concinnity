@@ -7,7 +7,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::CullPlan;
 use super::bindless::BindlessPass;
 use super::compute::{ComputeCull, indirect_buffer_size};
-use crate::directx::context::{FRAMES, dump_on_err};
+use crate::directx::context::dump_on_err;
 use crate::directx::cull::{compile_cull_shader_phase2, create_cull_pso};
 use crate::directx::init::InitGpu;
 use crate::directx::texture::create_uav_buffer;
@@ -46,8 +46,8 @@ pub(super) fn build_two_pass_cull(
     let indirect_size = indirect_buffer_size(1 + bindless.world_pipelines.len(), plan.n_cull);
     // One per frame plus the reserved reflection-probe capture slot, matching
     // the phase-1 indirect buffers.
-    let mut indirect_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES + 1);
-    for _ in 0..FRAMES + 1 {
+    let mut indirect_buffers: Vec<ID3D12Resource> = Vec::with_capacity(gpu.hw.frames() + 1);
+    for _ in 0..gpu.hw.frames() + 1 {
         indirect_buffers.push(create_uav_buffer(
             device,
             indirect_size,

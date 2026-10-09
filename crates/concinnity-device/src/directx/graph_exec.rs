@@ -689,7 +689,7 @@ impl DxContext {
                         // can record fresh into it. The previous frame's
                         // submission for this same (frame, pass) slot
                         // has already retired by the time we get here
-                        // (the FRAMES-deep fence wait at the top of
+                        // (the frames-in-flight-deep fence wait at the top of
                         // `draw_frame` gates the entire slot).
                         // SAFETY: the fence for this frame slot was already waited on, so no
                         // submission still references what is being reset.

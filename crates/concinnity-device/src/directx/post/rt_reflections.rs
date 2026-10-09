@@ -24,7 +24,7 @@ use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::com;
-use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::context::{DxContext, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
@@ -207,9 +207,10 @@ impl RtReflectionsResources {
         write_format_srv(device, &output, output_srv.0, HDR_FORMAT);
 
         let params_size = align256(RT_PARAMS_UBO_SIZE);
-        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let frames = alloc.frames_in_flight();
+        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 params_size,
                 D3D12_HEAP_TYPE_UPLOAD,

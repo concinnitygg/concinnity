@@ -136,9 +136,10 @@ mod tests {
     #[test]
     fn the_blend_margin_matches_the_shader() {
         let src = crate::render::shaders::PROBE_TYPES;
-        assert!(src.contains(&alloc::format!(
-            "static const float PROBE_BLEND_MARGIN = {PROBE_BLEND_MARGIN:?};"
-        )));
+        assert_eq!(
+            crate::render::shader_consts::float(src, "PROBE_BLEND_MARGIN"),
+            PROBE_BLEND_MARGIN
+        );
     }
 
     #[test]

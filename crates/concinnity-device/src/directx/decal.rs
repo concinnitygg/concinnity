@@ -21,7 +21,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::context::{DxContext, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
@@ -68,11 +68,9 @@ pub(in crate::directx) fn rebuild_decal_pso(
     dump_on_err(info_queue, create_decal_pso(device, root_sig, &vs, &ps))
 }
 
-// Cap on the number of active decals: the SRV heap reserves a fixed block
-// of `MAX_DECALS` per-decal albedo descriptors at init, so runtime adds past
-// this many return an error. 256 is well under the 1024 SRV slot heap cap
-// the existing backend allocates.
-pub(in crate::directx) const MAX_DECALS: usize = 256;
+// The SRV heap reserves a fixed block of `MAX_DECALS` per-decal albedo
+// descriptors at init.
+pub(in crate::directx) const MAX_DECALS: usize = concinnity_core::render::decal::MAX_DECALS;
 
 // Eight unit-cube corners in `[-0.5, 0.5]^3`. Matches the Metal vertex list.
 const CUBE_VERTS: [f32; 24] = [
@@ -234,9 +232,10 @@ impl DecalResources {
 
         // Per-frame view UBO.
         let view_size = align256(std::mem::size_of::<DecalView>() as u64);
-        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let frames = alloc.frames_in_flight();
+        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -255,9 +254,9 @@ impl DecalResources {
         // each slot to align256(sizeof(DecalParams)).
         let params_stride = align256(std::mem::size_of::<DecalParams>() as u64);
         let params_total = params_stride * MAX_DECALS as u64;
-        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 params_total,
                 D3D12_HEAP_TYPE_UPLOAD,

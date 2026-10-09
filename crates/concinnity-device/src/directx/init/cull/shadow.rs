@@ -9,7 +9,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::CullPlan;
 use super::compute::{ComputeCull, status_buffer_size};
-use crate::directx::context::{FRAMES, align256, dump_on_err};
+use crate::directx::context::{align256, dump_on_err};
 use crate::directx::cull::{
     INDIRECT_COMMAND_STRIDE, compile_cull_shader_shadow, create_cull_command_signature,
     create_cull_pso,
@@ -76,10 +76,10 @@ pub(super) fn build_shadow_cull(
     let status_size = status_buffer_size(plan.n_cull);
     let spot_indirect_size =
         align256(spot_slices as u64 * (plan.n_cull as u64) * INDIRECT_COMMAND_STRIDE as u64);
-    let mut indirect_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
-    let mut status_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
+    let mut indirect_buffers: Vec<ID3D12Resource> = Vec::with_capacity(gpu.hw.frames());
+    let mut status_buffers: Vec<ID3D12Resource> = Vec::with_capacity(gpu.hw.frames());
     let mut spot_indirect_buffers: Vec<ID3D12Resource> = Vec::new();
-    for _ in 0..FRAMES {
+    for _ in 0..gpu.hw.frames() {
         if spot_indirect_size > 0 {
             spot_indirect_buffers.push(create_uav_buffer(
                 device,

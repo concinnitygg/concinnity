@@ -674,7 +674,7 @@ impl DxContext {
     }
 
     // Cull one reflection-probe cube face into the reserved capture slot
-    // (`directx/probe.rs::bake_ring_slot` = `FRAMES`). Mirrors `encode_cull` but
+    // (`directx/probe.rs::bake_ring_slot`, index `frames`). Mirrors `encode_cull` but
     // (a) indexes the reserved ring slot the frame never touches, (b) forces Hi-Z
     // occlusion OFF (the only pyramid is in the main camera's screen space, useless
     // for a cube face), and (c) does NOT rebuild the draw-args buffer -- the bake

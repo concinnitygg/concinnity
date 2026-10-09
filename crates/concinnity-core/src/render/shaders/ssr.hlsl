@@ -77,12 +77,13 @@ struct SsrParams
 #define CLUSTER cluster
 #define CLUSTER_LIST cluster_list
 
+// Locked to MAX_STEPS in concinnity_core::render::post::ssr::settings by unit
+// test.
 static const int   SSR_MAX_STEPS = 48;
 static const int   SSR_REFINE    = 5;
 // Surfaces rougher than REFLECTION_ROUGHNESS_CUT get no SSR; glossiness ramps
-// in below it. Locked to concinnity_core::render::post::ssr::settings::REFLECTION_ROUGHNESS_CUT by
-// unit test so the SSR, RT, and composite passes can never disagree on it.
-static const float REFLECTION_ROUGHNESS_CUT = 0.6;
+// in below it.
+{REFLECTION_CUT}
 // Dielectric base reflectance (water, glass, polished stone) for the Fresnel.
 static const float SSR_F0        = 0.04;
 // UV margin over which a hit near the screen border fades out.

@@ -30,10 +30,11 @@
 //!
 //! Frees are deferred and leases are RAII. Dropping a `PooledBuffer` /
 //! `PooledTexture` returns its byte range to the pool tagged with a retire frame
-//! `FRAMES + 1` ticks out, so the bytes are not handed to another resource until
-//! no in-flight command list can still reference them. This matters more than it
-//! did before pooling: a committed resource released early is merely undefined,
-//! whereas a range released early is placed again almost immediately.
+//! one tick past the frames in flight, so the bytes are not handed to another
+//! resource until no in-flight command list can still reference them. This
+//! matters more than it did before pooling: a committed resource released early
+//! is merely undefined, whereas a range released early is placed again almost
+//! immediately.
 //!
 //! A range handed out after another resource used it is activated with an
 //! aliasing barrier, submitted on its own one-shot list. Doing it in the
@@ -333,6 +334,7 @@ pub(super) struct DeviceAllocator {
     device: ID3D12Device,
     queue: ID3D12CommandQueue,
     heap_tier: D3D12_RESOURCE_HEAP_TIER,
+    frames_in_flight: usize,
     inner: Rc<RefCell<Inner>>,
 }
 
@@ -346,6 +348,7 @@ impl DeviceAllocator {
             device: device.clone(),
             queue: queue.clone(),
             heap_tier: resource_heap_tier(device),
+            frames_in_flight,
             inner: Rc::new(RefCell::new(Inner {
                 pools: HashMap::new(),
                 parked: RetirePool::new(),
@@ -368,6 +371,12 @@ impl DeviceAllocator {
     // The queue the pooled resources' uploads are submitted on.
     pub(super) fn queue(&self) -> &ID3D12CommandQueue {
         &self.queue
+    }
+
+    // The frames-in-flight ring depth this allocator was built for, fixed for its
+    // lifetime. Per-frame rings built from the allocator are sized to it.
+    pub(super) fn frames_in_flight(&self) -> usize {
+        self.frames_in_flight
     }
 
     // Place a `size`-byte buffer in `heap_type`. D3D12 ignores `initial_state`

@@ -13,9 +13,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::InitGpu;
 use crate::directx::allocator::PooledTexture;
 use crate::directx::com;
-use crate::directx::context::{
-    AreaLightState, DxDescriptors, DxGeometry, DxSceneAssets, FRAMES, align256,
-};
+use crate::directx::context::{AreaLightState, DxDescriptors, DxGeometry, DxSceneAssets, align256};
 use crate::directx::draw::upload_static_records;
 use crate::directx::texture::*;
 
@@ -113,7 +111,7 @@ pub(super) fn build_scene_assets(
         flat_albedo_count + gpu_fallbacks.len(),
         descriptors.flat_pool_len
     );
-    for f in 0..FRAMES {
+    for f in 0..hw.frames() {
         let copy_base = layout.flat_pool_base_slot + f * descriptors.flat_pool_len;
         for (k, tex) in gpu_textures.iter().enumerate() {
             write_texture_srv(&hw.device, tex, descriptors.slot_cpu(copy_base + k));

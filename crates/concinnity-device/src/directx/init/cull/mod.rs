@@ -8,7 +8,7 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::transform::IDENTITY;
 
 use super::InitGpu;
-use crate::directx::context::{DxDescriptors, DxTargets, FRAMES};
+use crate::directx::context::{DxDescriptors, DxTargets};
 use crate::directx::cull::{CullKernels, CullState};
 use crate::directx::probe_prefilter::ProbePrefilterPipelines;
 use bindless::BindlessPass;
@@ -107,7 +107,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     // copy; pool index `texture_slot` lands on the albedo SRV and
     // `albedo_count + normal_slot` on the normal SRV. The bindless main pass
     // and the RT hit shader bind the recording frame's copy.
-    let bindless_pool_gpu = (0..FRAMES)
+    let bindless_pool_gpu = (0..gpu.hw.frames())
         .map(|f| {
             descriptors
                 .slot_gpu(descriptors.layout.flat_pool_base_slot + f * descriptors.flat_pool_len)

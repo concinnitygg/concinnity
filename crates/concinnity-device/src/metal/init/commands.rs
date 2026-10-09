@@ -42,7 +42,7 @@ pub(super) fn build_rings(
 pub(super) fn build_diagnostics(gpu: &InitGpu<'_>) -> Diagnostics {
     // `None` when the device does not expose the timestamp counter set; the
     // per-pass GPU timer then stays at zero for every pass.
-    let pass_timing = PassTimingResources::new(&gpu.hw.device);
+    let pass_timing = PassTimingResources::new(&gpu.hw.device, gpu.frames_in_flight);
     tracing::info!(
         "pass-timing: per-pass GPU sample buffers {}",
         if pass_timing.is_some() {

@@ -30,7 +30,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::context::{DxContext, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
@@ -361,9 +361,10 @@ impl FogResources {
 
         // Per-frame FogParams ring.
         let params_ubo_size = align256(std::mem::size_of::<FogParams>() as u64);
-        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let frames = alloc.frames_in_flight();
+        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 params_ubo_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -380,9 +381,9 @@ impl FogResources {
 
         // Per-frame FogFroxelParams ring.
         let froxel_ubo_size = align256(std::mem::size_of::<FogFroxelParams>() as u64);
-        let mut froxel_params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut froxel_params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let mut froxel_params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut froxel_params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 froxel_ubo_size,
                 D3D12_HEAP_TYPE_UPLOAD,

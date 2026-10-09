@@ -30,7 +30,9 @@
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ClusterParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::planar_reflection::{self, PixelRect, PlanarReflectors};
+use concinnity_core::render::planar_reflection::{
+    self, PLANAR_CLIP_BIAS, PLANAR_CROP_MARGIN, PixelRect, PlanarReflectors,
+};
 use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -38,7 +40,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
-use super::context::{DxContext, FRAMES, align256};
+use super::context::{DxContext, align256};
 use super::cull::{INDIRECT_COMMAND_STRIDE, RegionCull};
 use super::draw::ViewUniforms;
 use super::error::map_hresult;
@@ -58,15 +60,6 @@ use crate::directx::descriptor_slot::SrvSlot;
 // quality preset / GPU tier, never higher; panes past it fall back to the
 // box-projected probe cube.
 pub(in crate::directx) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_PLANAR_PLANES;
-
-// Clip the reflection a hair toward the kept (camera) side of the plane so
-// geometry exactly on the surface is not lost to near-plane precision. Matches
-// `metal::planar::PLANAR_CLIP_BIAS`.
-const PLANAR_CLIP_BIAS: f32 = 0.02;
-
-// Texels a mirror's crop is grown by on every side, covering the bilinear
-// footprint of the reflector's lookup.
-const PLANAR_CROP_MARGIN: u32 = 2;
 
 // Byte offset of a mirror ring entry's `ClusterParams` CBV, past its
 // `ViewUniforms` one; root CBVs are 256-byte aligned.
@@ -124,11 +117,13 @@ pub(in crate::directx) struct PlanarReflectionSet {
 
     // Per-(plane, frame) ring of the reflected `ViewUniforms` CBV and, past it
     // at `MIRROR_CLUSTER_OFFSET`, the reflected view's `ClusterParams` CBV,
-    // persistently mapped. Indexed `plane * FRAMES + frame_idx`, so each frame
-    // writes its own slot and never races the GPU reading a prior frame's.
+    // persistently mapped. Indexed by `ring_index`, so each frame writes its own
+    // slot and never races the GPU reading a prior frame's.
     _view_cbvs: Vec<PooledBuffer>,
     view_ptrs: Vec<*mut u8>,
     view_gvas: Vec<u64>,
+    // Frames in flight the view ring is sized for.
+    frames: usize,
 
     // Per-frame reflected-frustum cull output: one indirect buffer per frame
     // holding `plane_count` regions of `n_cull` commands each, plus a per-frame
@@ -151,7 +146,7 @@ pub(in crate::directx) struct PlanarReflectionSet {
 unsafe impl Send for PlanarReflectionSet {}
 // SAFETY: the only writes through a shared reference are the mirror views and their cluster
 // params, recorded by the one `PlanarReflection` pass a frame encodes (on whichever worker
-// records it). Each write lands in its own `slot * FRAMES + frame` entry, which no other pass
+// records it). Each write lands in its own `ring_index(slot, frame)` entry, which no other pass
 // touches and which the GPU last read a frames-in-flight fence ago, so no two writers or a
 // writer and the GPU share an entry.
 unsafe impl Sync for PlanarReflectionSet {}
@@ -249,10 +244,11 @@ impl PlanarReflectionSet {
             },
         )?;
 
-        let mut view_cbvs = Vec::with_capacity(planes.len() * FRAMES);
-        let mut view_ptrs = Vec::with_capacity(planes.len() * FRAMES);
-        let mut view_gvas = Vec::with_capacity(planes.len() * FRAMES);
-        for _ in 0..planes.len() * FRAMES {
+        let frames = alloc.frames_in_flight();
+        let mut view_cbvs = Vec::with_capacity(planes.len() * frames);
+        let mut view_ptrs = Vec::with_capacity(planes.len() * frames);
+        let mut view_gvas = Vec::with_capacity(planes.len() * frames);
+        for _ in 0..planes.len() * frames {
             let cbv = alloc.alloc_buffer(
                 MIRROR_CBV_SIZE,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -274,9 +270,9 @@ impl PlanarReflectionSet {
         let indirect_size =
             align256((planes.len() * n_cull * INDIRECT_COMMAND_STRIDE as usize) as u64);
         let status_size = align256((n_cull * std::mem::size_of::<u32>()) as u64).max(256);
-        let mut planar_indirect = Vec::with_capacity(FRAMES);
-        let mut planar_status = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let mut planar_indirect = Vec::with_capacity(frames);
+        let mut planar_status = Vec::with_capacity(frames);
+        for _ in 0..frames {
             planar_indirect.push(create_uav_buffer(
                 device,
                 indirect_size.max(256),
@@ -313,6 +309,7 @@ impl PlanarReflectionSet {
             _view_cbvs: view_cbvs,
             view_ptrs,
             view_gvas,
+            frames,
             planar_indirect,
             planar_status,
             n_cull,
@@ -401,11 +398,16 @@ impl PlanarReflectionSet {
         }
     }
 
+    // Plane `slot`'s entry in frame `frame` of the view ring.
+    fn ring_index(&self, slot: usize, frame: usize) -> usize {
+        slot * self.frames + frame
+    }
+
     // Plane `slot`'s cluster grid for frame `frame`: the params written beside
     // its reflected view and the lists binned for them.
     fn cluster_grid(&self, slot: usize, frame: usize) -> ClusterGrid<'_> {
         ClusterGrid {
-            params_gva: self.view_gvas[slot * FRAMES + frame] + MIRROR_CLUSTER_OFFSET as u64,
+            params_gva: self.view_gvas[self.ring_index(slot, frame)] + MIRROR_CLUSTER_OFFSET as u64,
             lists: &self.cluster_lists[slot],
         }
     }
@@ -544,8 +546,8 @@ impl DxContext {
                 ambient_occlusion: 0.0,
                 sky_rot: self.state.view.sky_rot,
             };
-            let ring = slot * FRAMES + params.frame_idx;
-            // SAFETY: `ring < planes.len() * FRAMES`; the CBV is 256 bytes and
+            let ring = set.ring_index(slot, params.frame_idx);
+            // SAFETY: `ring < planes.len() * frames`; the CBV is 256 bytes and
             // `ViewUniforms` is 208. The slot is this frame's own, written before
             // the GPU reads it later on this cmd list.
             unsafe {
@@ -613,7 +615,7 @@ impl DxContext {
         let frame_object_gva = com::gpu_va(&self.cull.object_buffer_resources[params.frame_idx]);
         let indirect = set.indirect(params.frame_idx);
         for &(slot, crop) in crops {
-            let ring = slot * FRAMES + params.frame_idx;
+            let ring = set.ring_index(slot, params.frame_idx);
             set.begin_plane(cmd, slot);
             self.encode_main_into_face(
                 cmd,

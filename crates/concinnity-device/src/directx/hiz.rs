@@ -123,23 +123,6 @@ fn create_hiz_signature(
         .build(device, label)
 }
 
-// Mip count for a Hi-Z of size (w, h): `floor(log2(max(w, h))) + 1`. Power-
-// of-two sources end exactly at 1x1; non-power-of-two sources stop one mip
-// short of true 1x1 in the smaller dimension, which is fine; the cull
-// kernel clamps to the actual mip dims.
-pub(super) fn hiz_mip_count(width: u32, height: u32) -> u32 {
-    let m = width.max(height).max(1);
-    32 - m.leading_zeros()
-}
-
-// Pyramid depth the two SPD dispatches actually write, which is what the
-// texture is allocated with and what the cull is told. Never more than the
-// reserved descriptor slots.
-fn hiz_plan_mip_count(width: u32, height: u32, uav_slots: usize) -> u32 {
-    let requested = hiz_mip_count(width, height).min(uav_slots as u32);
-    Plan::new(width, height, requested, 1).mip_count()
-}
-
 // Write a per-mip UAV into every reserved slot. Slots past the last live mip
 // repeat it: an SPD dispatch binds a fixed-length table, and D3D12 requires
 // each descriptor in a bound range to be valid even where the kernel's
@@ -289,7 +272,7 @@ impl HiZResources {
             mip_uav_cpus,
             mip_uav_gpus,
         } = target;
-        let mip_count = hiz_plan_mip_count(width, height, mip_uav_cpus.len());
+        let mip_count = hiz_spd::pyramid_mip_count(width, height);
         if mip_count == 0 {
             return Err(RenderError::Other("hiz: zero mip count".to_string()));
         }
@@ -340,7 +323,7 @@ impl HiZResources {
         width: u32,
         height: u32,
     ) -> RenderResult<()> {
-        let new_mip_count = hiz_plan_mip_count(width, height, self.mip_uav_cpus.len());
+        let new_mip_count = hiz_spd::pyramid_mip_count(width, height);
         let texture = create_hiz_texture(device, width, height, new_mip_count)?;
         write_hiz_srv(device, &texture, new_mip_count, self.srv_cpu);
         write_hiz_mip_uavs(device, &texture, new_mip_count, &self.mip_uav_cpus);

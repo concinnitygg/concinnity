@@ -151,6 +151,15 @@ mod tests {
     use crate::gfx::auto_exposure::HDR_MIDDLE_GRAY_LOG2;
 
     #[test]
+    fn histogram_bins_match_the_shader() {
+        let src = crate::render::shaders::AUTO_EXPOSURE;
+        assert_eq!(
+            crate::render::shader_consts::uint(src, "HISTOGRAM_BINS"),
+            HISTOGRAM_BINS
+        );
+    }
+
+    #[test]
     fn update_pulls_current_ev_toward_target() {
         let settings = AutoExposureSettings::resolve(-8.0, 8.0, 4.0, false);
         let mut state = AutoExposureState { current_ev: 0.0 };

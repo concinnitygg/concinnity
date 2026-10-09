@@ -49,7 +49,7 @@
 use concinnity_core::gfx::render_types::{MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES};
 
 use super::HIZ_MAX_MIPS;
-use crate::directx::context::FRAMES;
+use crate::directx::context::BACK_BUFFERS;
 use crate::directx::decal::MAX_DECALS;
 use crate::directx::particle::MAX_EMITTERS;
 use crate::directx::post::descriptors::POST_TARGET_SLOTS;
@@ -81,6 +81,8 @@ pub(in crate::directx) struct SrvHeapParams {
     // `normal_count` includes the slot-0 flat-normal fallback.
     pub albedo_count: usize,
     pub normal_count: usize,
+    // Frames in flight: the flat pool holds one copy per frame.
+    pub frames: usize,
 }
 
 // Resolved slot indices into the CBV/SRV/UAV heap. Field order matches the
@@ -187,7 +189,8 @@ impl SrvHeapLayout {
         // the device to rewrite one shared region while lists reference it.
         let flat_pool_base_slot = planar_resolve_srv_base_slot + p.planar_resolve_srv_extra;
         // Reflection-probe cube array at the heap tail: one SRV over every cube.
-        let probe_cubes_srv_slot = flat_pool_base_slot + FRAMES * (p.albedo_count + p.normal_count);
+        let probe_cubes_srv_slot =
+            flat_pool_base_slot + p.frames * (p.albedo_count + p.normal_count);
         // Spot shadow array SRV. Always reserved: a world with no shadowed spot
         // binds a 1x1 fallback array there so the descriptor is never unwritten.
         let spot_shadow_srv_slot = probe_cubes_srv_slot + 1;
@@ -268,7 +271,7 @@ pub(super) const DSV_GLASS_REFLECTION_DEPTH_SLOT: usize = DSV_GBUFFER_DEPTH_SLOT
 pub(super) const DSV_SLOTS: usize = DSV_GLASS_REFLECTION_DEPTH_SLOT + 1;
 
 // Resolved slot indices into the RTV heap, after the back-buffer views at
-// `[0, FRAMES)`. `rtv_slots` is the total descriptor count the heap is created
+// `[0, BACK_BUFFERS)`. `rtv_slots` is the total descriptor count the heap is created
 // with.
 pub(super) struct RtvHeapLayout {
     // HDR scene target.
@@ -291,7 +294,7 @@ pub(super) struct RtvHeapLayout {
 
 impl RtvHeapLayout {
     pub(super) fn compute(msaa_samples: u32) -> Self {
-        let hdr_slot = FRAMES;
+        let hdr_slot = BACK_BUFFERS;
         let post_base_slot = hdr_slot + 1;
         let decal_resolve_slot = post_base_slot + POST_TARGET_SLOTS;
         let gbuffer_base_slot = decal_resolve_slot + usize::from(msaa_samples > 1);
@@ -354,7 +357,7 @@ mod tests {
             (l.planar_resolve_srv_base_slot, p.planar_resolve_srv_extra),
             (
                 l.flat_pool_base_slot,
-                FRAMES * (p.albedo_count + p.normal_count),
+                p.frames * (p.albedo_count + p.normal_count),
             ),
             (l.probe_cubes_srv_slot, 1),
             (l.spot_shadow_srv_slot, 1),
@@ -386,6 +389,7 @@ mod tests {
             planar_resolve_srv_extra: 2,
             albedo_count: 9,
             normal_count: 4,
+            frames: 3,
         });
     }
 
@@ -398,6 +402,7 @@ mod tests {
             planar_resolve_srv_extra: 0,
             albedo_count: 1,
             normal_count: 1,
+            frames: 3,
         });
     }
 
@@ -410,7 +415,32 @@ mod tests {
             planar_resolve_srv_extra: 1,
             albedo_count: 50,
             normal_count: 12,
+            frames: 3,
         });
+    }
+
+    // The flat pool repeats once per frame in flight, so every block after it
+    // shifts by one pool length per frame.
+    #[test]
+    fn flat_pool_scales_with_frames_in_flight() {
+        let params = |frames| SrvHeapParams {
+            n_atlases: 1,
+            gbuffer_srv_extra: 3,
+            rt_output_srv_extra: 1,
+            planar_resolve_srv_extra: 1,
+            albedo_count: 7,
+            normal_count: 2,
+            frames,
+        };
+        for frames in [1, 2, 3] {
+            assert_gap_free(&params(frames));
+        }
+        let one = SrvHeapLayout::compute(&params(1));
+        let two = SrvHeapLayout::compute(&params(2));
+        assert_eq!(one.flat_pool_base_slot, two.flat_pool_base_slot);
+        assert_eq!(one.probe_cubes_srv_slot - one.flat_pool_base_slot, 9);
+        assert_eq!(two.probe_cubes_srv_slot - two.flat_pool_base_slot, 18);
+        assert_eq!(two.srv_slots - one.srv_slots, 9);
     }
 
     // The per-world blocks must start past the three fixed global SRVs
@@ -424,6 +454,7 @@ mod tests {
             planar_resolve_srv_extra: 0,
             albedo_count: 1,
             normal_count: 1,
+            frames: 3,
         });
         assert_eq!(l.atlas_base_slot, GLOBAL_SRV_COUNT);
         assert!(l.hdr_srv_slot >= GLOBAL_SRV_COUNT);
@@ -444,7 +475,7 @@ mod tests {
             (l.glass_reflection_base_slot, 2),
             (l.reactive_mask_base_slot, 2),
         ];
-        let mut expected_base = FRAMES;
+        let mut expected_base = BACK_BUFFERS;
         for (i, (base, count)) in blocks.iter().enumerate() {
             assert_eq!(
                 *base, expected_base,
@@ -468,7 +499,7 @@ mod tests {
     #[test]
     fn rtv_post_block_follows_the_hdr_target() {
         let l = RtvHeapLayout::compute(1);
-        assert_eq!(l.post_base_slot, FRAMES + 1);
+        assert_eq!(l.post_base_slot, BACK_BUFFERS + 1);
         assert_eq!(l.decal_resolve_slot, l.gbuffer_base_slot);
     }
 

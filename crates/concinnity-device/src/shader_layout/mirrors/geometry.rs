@@ -6,7 +6,9 @@
 //! across separate buffers. Each leg mirrors the struct its own host binds;
 //! everything else is one declaration for all three.
 
-use concinnity_core::gfx::render_types::{ParticleParams, ShadowPassPush, TextUniforms};
+use concinnity_core::gfx::render_types::{
+    ParticleParams, ShadowPassPush, ShadowUniforms, TextUniforms,
+};
 use concinnity_core::render::uniforms::directx::CullParams as DxCullParams;
 use concinnity_core::render::uniforms::metal::CullUniforms as MetalCullParams;
 use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams as VkCullParams};
@@ -36,13 +38,21 @@ pub(in crate::shader_layout) fn gbuffer_vertex() -> Vec<Case> {
 }
 
 pub(in crate::shader_layout) fn shadow() -> Vec<Case> {
-    vec![on(
-        METAL,
-        mirror!(ShadowPassPush => "ShadowPassPush" {
-            cascade_idx,
+    vec![
+        everywhere(mirror!(ShadowUniforms => "ShadowUniforms" {
+            light_vps,
+            cascade_splits,
+            active_cascades,
             [_pad] => ["_pad0", "_pad1", "_pad2"],
-        }),
-    )]
+        })),
+        on(
+            METAL,
+            mirror!(ShadowPassPush => "ShadowPassPush" {
+                cascade_idx,
+                [_pad] => ["_pad0", "_pad1", "_pad2"],
+            }),
+        ),
+    ]
 }
 
 pub(in crate::shader_layout) fn decal() -> Vec<Case> {

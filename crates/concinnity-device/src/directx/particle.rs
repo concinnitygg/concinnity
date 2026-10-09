@@ -30,7 +30,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::com;
-use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::context::{DxContext, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
@@ -62,11 +62,9 @@ pub(in crate::directx) struct ParticleState {
     pub frame_index: std::cell::Cell<u32>,
 }
 
-// Cap on the number of simultaneously-live particle emitters. The SRV heap
-// reserves a fixed block of `MAX_EMITTERS` per-emitter albedo SRV slots at
-// init, so runtime `add_emitter` past this many returns an error. Matches
-// the storage shape of `MAX_DECALS`.
-pub(in crate::directx) const MAX_EMITTERS: usize = 256;
+// The SRV heap reserves a fixed block of `MAX_EMITTERS` per-emitter albedo
+// SRV slots at init.
+pub(in crate::directx) const MAX_EMITTERS: usize = concinnity_core::render::particles::MAX_EMITTERS;
 
 // `GpuParticle` (one simulation-pool slot) and `ParticleView` (the render-pass
 // view cbuffer) are GPU-free layout structs that live in `core::render`;
@@ -219,9 +217,10 @@ impl ParticleResources {
 
         // Per-frame view UBO.
         let view_size = align256(std::mem::size_of::<ParticleView>() as u64);
-        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let frames = alloc.frames_in_flight();
+        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -240,9 +239,9 @@ impl ParticleResources {
         // each slot to align256(sizeof(ParticleParams)).
         let params_stride = align256(std::mem::size_of::<ParticleParams>() as u64);
         let params_total = params_stride * MAX_EMITTERS as u64;
-        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let mut params_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut params_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 params_total,
                 D3D12_HEAP_TYPE_UPLOAD,

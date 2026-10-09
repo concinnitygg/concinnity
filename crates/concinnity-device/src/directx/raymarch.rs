@@ -61,7 +61,7 @@ use concinnity_core::transform::mat4_inverse;
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::post::gbuffer::GbufferPrepassView;
 use crate::directx::com;
-use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::context::{DxContext, align256, dump_on_err};
 use crate::directx::depth::shadow_sample_compare;
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
@@ -887,9 +887,10 @@ pub(in crate::directx) struct RaymarchDescriptorHandles {
 // A per-frame `RaymarchView` cbuffer ring, persistently mapped.
 fn view_ring(alloc: &DeviceAllocator) -> RenderResult<(Vec<PooledBuffer>, Vec<*mut u8>)> {
     let view_size = align256(std::mem::size_of::<RaymarchView>() as u64);
-    let mut buffers: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-    let mut ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-    for _ in 0..FRAMES {
+    let frames = alloc.frames_in_flight();
+    let mut buffers: Vec<PooledBuffer> = Vec::with_capacity(frames);
+    let mut ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+    for _ in 0..frames {
         let buf = alloc.alloc_buffer(
             view_size,
             D3D12_HEAP_TYPE_UPLOAD,

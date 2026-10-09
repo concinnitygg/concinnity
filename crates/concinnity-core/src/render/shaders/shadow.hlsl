@@ -22,12 +22,7 @@
 
 {OBJECT_COMMON}
 
-// Layout matches `ShadowUniforms` in render_types.rs.
-struct ShadowUniforms
-{
-    float4x4 light_vps[4];
-    float4 cascade_splits;
-};
+{LIGHT_TYPES}
 
 #ifdef CN_BACKEND_DIRECTX
 // b0 carries the object id root constant, so the shadow CBV follows at b1.

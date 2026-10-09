@@ -28,7 +28,9 @@
 use super::error::allocation_failed;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::planar_reflection::{self, PlanarReflectors};
+use concinnity_core::render::planar_reflection::{
+    self, PLANAR_CLIP_BIAS, PLANAR_CROP_MARGIN, PlanarReflectors,
+};
 use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
 use objc2::rc::Retained;
@@ -43,14 +45,6 @@ use super::descriptors::TextureDesc;
 use super::draw::main::{ClusterGrid, FacePass, FaceTargets, GpuFrameBuffers, MainPassCamera};
 use super::light_cull::build_cluster_light_buffer;
 use super::pass_timing::{PassId, PassTimer};
-
-// Clip the reflection a hair toward the kept (camera) side of the plane so
-// geometry exactly on the surface is not lost to near-plane precision.
-const PLANAR_CLIP_BIAS: f32 = 0.02;
-
-// Texels a mirror's crop is grown by on every side, covering the bilinear
-// footprint of the reflector's lookup.
-const PLANAR_CROP_MARGIN: u32 = 2;
 
 // The engine capacity ceiling for distinct reflection planes (water + glass): the
 // count the mirror-target set + mirror ICB slots below are sized to. Single-sourced

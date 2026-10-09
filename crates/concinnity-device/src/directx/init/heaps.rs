@@ -8,7 +8,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::InitGpu;
 use super::bootstrap::DxgiSwapchain;
 use super::heap_layout::{DSV_SLOTS, RtvHeapLayout};
-use crate::directx::context::{FRAMES, SwapchainState};
+use crate::directx::context::{BACK_BUFFERS, SwapchainState};
 use crate::directx::depth::shadow_sample_compare;
 use crate::directx::error::map_hresult;
 
@@ -52,7 +52,7 @@ impl SwapchainState {
 }
 
 // The swapchain with its RTV heap sized to `rtv`: a view per back buffer in
-// `[0, FRAMES)`, every later slot written by the stage that renders into it.
+// `[0, BACK_BUFFERS)`, every later slot written by the stage that renders into it.
 pub(super) fn build_swapchain(
     gpu: &InitGpu<'_>,
     swapchain: DxgiSwapchain,
@@ -72,8 +72,8 @@ pub(super) fn build_swapchain(
     .map_err(|e| map_hresult(e.code(), "RTV heap"))?;
     let rtv_descriptor_size = descriptor_size(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
-    let mut back_buffers = Vec::with_capacity(FRAMES);
-    for i in 0..FRAMES {
+    let mut back_buffers = Vec::with_capacity(BACK_BUFFERS);
+    for i in 0..BACK_BUFFERS {
         // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
         // it fills are live locals that outlive the call.
         let buf: ID3D12Resource = unsafe { swapchain.handle.GetBuffer(i as u32) }

@@ -49,11 +49,10 @@ mod shadow;
 mod targets;
 mod text;
 
-// Maximum Hi-Z mip count we reserve descriptor slots for. 15 mips covers
-// every render target up to 16384 pixels in the larger dimension; an
-// 8K display sits at 13. The Hi-Z resource clamps `mip_count` against this
-// so the heap layout stays anchored even when the window resizes.
-pub(in crate::directx) const HIZ_MAX_MIPS: usize = 15;
+// Per-mip Hi-Z UAV slots reserved at init: the deepest pyramid the two SPD
+// dispatches write at any size, so the heap layout survives a resize.
+pub(in crate::directx) const HIZ_MAX_MIPS: usize =
+    concinnity_core::render::hiz_spd::MAX_MIPS as usize;
 
 // The hardware every init stage creates resources through, and whether the
 // shader compiles it makes resolve from disk for hot reload.
@@ -147,8 +146,6 @@ impl DxContext {
         let BackendInit {
             window,
             validation,
-            // D3D12 always renders FRAMES=3 in flight; this is retained only so
-            // `hot_swap_config` can report the world's request for the reload gate.
             frames_in_flight,
             vsync,
             clear_color,
@@ -238,6 +235,7 @@ impl DxContext {
                 // followed by the reserved fallback pair.
                 albedo_count: media.textures.len().max(1),
                 normal_count: FALLBACK_TEXTURE_COUNT,
+                frames: hw.frames(),
             },
             anisotropy,
         )?;
@@ -246,8 +244,11 @@ impl DxContext {
             scene_assets::build_scene_assets(&gpu, &descriptors, &media, &area_lights, &world)?;
         // The probe set, with the stand-in array in the SRV slot until a world
         // places a probe.
-        let probe_gpu =
-            crate::directx::probe_set::ProbeSetGpu::new(&gpu.hw.device, &gpu.hw.alloc, FRAMES)?;
+        let probe_gpu = crate::directx::probe_set::ProbeSetGpu::new(
+            &gpu.hw.device,
+            &gpu.hw.alloc,
+            hw.frames(),
+        )?;
         probe_gpu.stand_in.write_srv(
             &gpu.hw.device,
             descriptors.slot_cpu(descriptors.layout.probe_cubes_srv_slot),
@@ -404,7 +405,7 @@ impl DxContext {
             spot_shadow,
             scene,
             descriptors,
-            geometry_uploads: std::cell::RefCell::new(GeometryUploads::new(FRAMES)),
+            geometry_uploads: std::cell::RefCell::new(GeometryUploads::new(hw.frames())),
             skinned: SkinnedState::new(),
             uniforms,
             light_cull,
@@ -432,7 +433,7 @@ impl DxContext {
             commands,
             frame_sync,
             current_frame: 0,
-            stream: StreamState::new(),
+            stream: StreamState::new(hw.frames()),
             state: SceneState::new(
                 DrawList::with_runtime_reserve(
                     world.draw_objects,

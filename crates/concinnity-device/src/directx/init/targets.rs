@@ -71,7 +71,7 @@ pub(super) fn build_targets(
 
     // Off-screen HDR scene target
     // The main + instanced passes render linear-light HDR into this; the
-    // composite pass tonemaps it onto the swapchain. RTV heap slot [FRAMES]
+    // composite pass tonemaps it onto the swapchain. RTV heap slot [BACK_BUFFERS]
     // (after the back-buffer RTVs) holds its render-target view.
     let hdr_color_rtv = swapchain.rtv(rtv.hdr_slot);
     let hdr_color = create_hdr_color_target(

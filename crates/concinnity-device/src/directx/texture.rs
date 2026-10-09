@@ -196,10 +196,10 @@ pub(super) fn upload_buffer_padded(
 
 // A streamed texture swap's GPU debris, parked on `DxContext`'s `stream.retires`
 // until its window closes: the replaced pool resource (pending lists may still
-// sample it, and the per-frame flat-pool copies re-point over the next FRAMES
-// ticks) plus the upload's staging buffer and one-shot allocator + list (still
-// executing when parked; covered by the first frame fence signaled after the
-// upload's submission). The handles are held only so dropping the entry
+// sample it, and the per-frame flat-pool copies re-point over the next
+// frames-in-flight ticks) plus the upload's staging buffer and one-shot
+// allocator + list (still executing when parked; covered by the first frame
+// fence signaled after the upload's submission). The handles are held only so dropping the entry
 // releases them (COM refcounts), hence never read.
 pub(super) struct StreamedUploadRetire {
     #[expect(

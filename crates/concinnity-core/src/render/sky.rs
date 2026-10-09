@@ -78,6 +78,14 @@ mod tests {
     const MOTION_LIMIT: f32 = 2.0;
     const MIN_PREV_W: f32 = 1e-6;
 
+    #[test]
+    fn the_motion_mirror_matches_the_shader() {
+        use crate::render::shader_consts::float;
+        let src = crate::render::shaders::GBUFFER_COMMON;
+        assert_eq!(float(src, "GB_MOTION_LIMIT"), MOTION_LIMIT);
+        assert_eq!(float(src, "GB_MIN_PREV_W"), MIN_PREV_W);
+    }
+
     fn motion(cur_clip: [f32; 4], prev_clip: [f32; 4]) -> [f32; 2] {
         if prev_clip[3].is_nan() || prev_clip[3] <= MIN_PREV_W {
             return [MOTION_LIMIT; 2];

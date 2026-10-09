@@ -47,12 +47,9 @@ use crate::vulkan::owned::{
     OwnedSampler, OwnedSetLayout, VkDevice,
 };
 
-// Cap on the number of simultaneously-live particle emitters. The
-// per-emitter descriptor pool reserves a fixed block of `2 * MAX_EMITTERS`
-// sets at init (one compute set + one render set per emitter), so runtime
-// `add_emitter` past this many returns an error. Matches the Metal /
-// DirectX cap.
-pub(in crate::vulkan) const MAX_EMITTERS: usize = 256;
+// The per-emitter descriptor pool reserves a fixed block of `2 * MAX_EMITTERS`
+// sets at init (one compute set + one render set per emitter).
+pub(in crate::vulkan) const MAX_EMITTERS: usize = concinnity_core::render::particles::MAX_EMITTERS;
 
 // `GpuParticle` (one simulation-pool slot) and `ParticleView` (the render-pass
 // view UBO) are GPU-free layout structs that live in `core::render`

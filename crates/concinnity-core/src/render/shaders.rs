@@ -48,6 +48,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("raymarch_types.hlsl", RAYMARCH_TYPES),
     ("reactive_mask.hlsl", REACTIVE_MASK),
     ("reflection.hlsl", REFLECTION),
+    ("reflection_cut.hlsl", REFLECTION_CUT),
     ("rt_reflections.hlsl", RT_REFLECTIONS),
     ("rt_skin.hlsl", RT_SKIN),
     ("rt_trace.hlsl", RT_TRACE),
@@ -153,6 +154,8 @@ pub const REACTIVE_MASK: &str = include_str!("shaders/reactive_mask.hlsl");
 pub const REFLECTION: &str = include_str!("shaders/reflection.hlsl");
 /// `rt_reflections.hlsl`.
 pub const RT_REFLECTIONS: &str = include_str!("shaders/rt_reflections.hlsl");
+/// `reflection_cut.hlsl`.
+pub const REFLECTION_CUT: &str = include_str!("shaders/reflection_cut.hlsl");
 /// `rt_skin.hlsl`.
 pub const RT_SKIN: &str = include_str!("shaders/rt_skin.hlsl");
 /// `rt_trace.hlsl`.

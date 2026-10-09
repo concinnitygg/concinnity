@@ -20,10 +20,10 @@ const MIN_DISTANCE: f32 = 1.0;
 // would be too unreliable (and too expensive) to be worth marching.
 const MAX_DISTANCE: f32 = 200.0;
 
-// Number of ray-march samples the resolve shader takes. The step length is
-// `max_distance / MARCH_STEPS`, so a longer ray spends a longer stride rather
-// than more samples. Must match `SSR_MAX_STEPS` in ssr.hlsl.
-const MARCH_STEPS: f32 = 48.0;
+// Number of ray-march samples the resolve shader takes (`SSR_MAX_STEPS` in
+// ssr.hlsl). The step length is `max_distance / MAX_STEPS`, so a longer ray
+// spends a longer stride rather than more samples.
+const MAX_STEPS: u32 = 48;
 
 // View-space intersection tolerance as a multiple of the march stride. A ray
 // point is a hit when it lands behind the scene surface by less than this:
@@ -94,7 +94,7 @@ impl SsrSettings {
         prefilter_mip_count: f32,
         sky_rot: [[f32; 4]; 3],
     ) -> SsrParams {
-        let stride = self.max_distance / MARCH_STEPS;
+        let stride = self.max_distance / MAX_STEPS as f32;
         // The resolve rebuilds the world-space surface position the reflection
         // probe box-projects against, so it needs the full camera-to-world.
         let inv_view = camera_to_world(inv_view_rot, cam_pos);
@@ -118,35 +118,25 @@ impl SsrSettings {
 mod tests {
     use super::*;
     use crate::gfx::camera::MIN_ASPECT;
+    use crate::render::shader_consts;
     use crate::sky::SkyOrientation;
     use crate::transform::IDENTITY;
 
-    // Every shader that declares the cut spells this value, and the four that
-    // gate on it all declare it.
     #[test]
-    fn every_shader_roughness_cut_matches_canonical() {
-        let expected = alloc::format!(
-            "static const float REFLECTION_ROUGHNESS_CUT = {REFLECTION_ROUGHNESS_CUT:?};"
-        );
-        let mut declaring = alloc::vec::Vec::new();
-        for (name, src) in crate::render::shaders::SOURCES {
-            if src.contains("static const float REFLECTION_ROUGHNESS_CUT") {
-                assert!(
-                    src.contains(&expected),
-                    "{name} drifted from REFLECTION_ROUGHNESS_CUT"
-                );
-                declaring.push(*name);
-            }
-        }
-        declaring.sort_unstable();
+    fn the_roughness_cut_matches_the_shader() {
+        let src = crate::render::shaders::REFLECTION_CUT;
         assert_eq!(
-            declaring,
-            [
-                "main_shading.hlsl",
-                "reflection.hlsl",
-                "rt_reflections.hlsl",
-                "ssr.hlsl"
-            ]
+            shader_consts::float(src, "REFLECTION_ROUGHNESS_CUT"),
+            REFLECTION_ROUGHNESS_CUT
+        );
+    }
+
+    #[test]
+    fn the_march_step_count_matches_the_shader() {
+        let src = crate::render::shaders::SSR;
+        assert_eq!(
+            shader_consts::uint(src, "SSR_MAX_STEPS"),
+            MAX_STEPS as usize
         );
     }
 

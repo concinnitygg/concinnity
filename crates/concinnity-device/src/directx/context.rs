@@ -55,7 +55,9 @@ use crate::win32::window;
 use crate::win32::window::{WindowState, frame_tick, take_input_snapshot};
 
 // Constants
-pub(super) const FRAMES: usize = 3; // triple-buffered
+// Swapchain back buffers. Indexed by `GetCurrentBackBufferIndex`, independent of
+// the frames-in-flight ring depth (`DxHardware::frames`).
+pub(super) const BACK_BUFFERS: usize = 3;
 // Constant buffer alignment required by D3D12.
 pub(super) const CB_ALIGN: u64 = 256;
 
@@ -104,7 +106,7 @@ pub(super) fn build_timestamp_resources(
     // here, so those slots stay zero and drop out of the on-screen chip.
     let heap_desc = D3D12_QUERY_HEAP_DESC {
         Type: D3D12_QUERY_HEAP_TYPE_TIMESTAMP,
-        Count: (pass_timing::SLOTS_PER_FRAME * FRAMES) as u32,
+        Count: (pass_timing::SLOTS_PER_FRAME * alloc.frames_in_flight()) as u32,
         NodeMask: 0,
     };
     let mut heap: Option<ID3D12QueryHeap> = None;
@@ -115,7 +117,7 @@ pub(super) fn build_timestamp_resources(
         return (None, None, std::ptr::null(), 0);
     }
     let readback = match alloc.alloc_buffer(
-        pass_timing::FRAME_BLOCK_BYTES * FRAMES as u64,
+        pass_timing::FRAME_BLOCK_BYTES * alloc.frames_in_flight() as u64,
         D3D12_HEAP_TYPE_READBACK,
         D3D12_RESOURCE_STATE_COPY_DEST,
     ) {
@@ -140,12 +142,12 @@ pub(super) fn build_timestamp_resources(
 // per-pass chip then reports 0 us. See [`pass_timing`] for the slot
 // helpers and [`build_timestamp_resources`] for construction.
 pub(super) struct TimestampState {
-    // Timestamp query heap with `SLOTS_PER_FRAME * FRAMES` slots: one block
-    // per in-flight frame, each laid out as a whole-frame start/end pair
-    // followed by one (start, end) pair per `PassId`.
+    // Timestamp query heap with one block of `SLOTS_PER_FRAME` slots per
+    // in-flight frame, each laid out as a whole-frame start/end pair followed by
+    // one (start, end) pair per `PassId`.
     pub query_heap: Option<ID3D12QueryHeap>,
     // Persistently-mapped READBACK buffer paired with `query_heap`, holding
-    // `FRAMES` blocks of `SLOTS_PER_FRAME` `u64` ticks each.
+    // one block of `SLOTS_PER_FRAME` `u64` ticks per frame in flight.
     pub readback: Option<PooledBuffer>,
     pub readback_ptr: *const u64,
     // Ticks per second from `ID3D12CommandQueue::GetTimestampFrequency`; zero
@@ -218,7 +220,7 @@ pub(super) struct DxUniforms {
     pub shadow_ubo_resources: Vec<PooledBuffer>,
     pub shadow_ubo_ptrs: Vec<*mut u8>,
     // Per-frame CBVs holding the live probe count, bound at root param [11] by
-    // the main pass. A `FRAMES` ring so a frame writes its
+    // the main pass. A frames-in-flight ring so a frame writes its
     // own slot without racing a prior frame's in-flight GPU read.
     pub probe_set_cbvs: Vec<PooledBuffer>,
     pub probe_set_cbv_ptrs: Vec<*mut u8>,
@@ -268,10 +270,10 @@ impl DxUniforms {
 //   * `command_allocators` / `command_lists`: "start" outer cmd list. Holds the
 //     timestamp pre-init at the top of every frame (D3D12 debug layer flags an
 //     unwritten slot in the `ResolveQueryData` range, so every pass's pair is
-//     pre-initialized here). FRAMES-sized.
+//     pre-initialized here). One per frame in flight.
 //
 //   * `pass_allocators` / `pass_cmd_lists`: per-pass pool. Sized
-//     `FRAMES * PASS_COUNT` so each pass owns its own allocator + cmd list per
+//     `frames * PASS_COUNT` so each pass owns its own allocator + cmd list per
 //     in-flight slot. Workers reset their own allocator + cmd list before
 //     recording, so multiple workers can encode in parallel without contending.
 //     Indexed as `frame_idx * PASS_COUNT + (PassId as usize)`. Passes the graph
@@ -281,7 +283,7 @@ impl DxUniforms {
 //   * `end_command_allocators` / `end_command_lists`: "end" outer cmd list.
 //     Holds the composite pass + the final timestamp `EndQuery` +
 //     `ResolveQueryData`. Submitted after every per-pass cmd list so the resolve
-//     sees every prior pass's `EndQuery` writes. FRAMES-sized.
+//     sees every prior pass's `EndQuery` writes. One per frame in flight.
 pub(super) struct DxCommands {
     pub command_allocators: Vec<ID3D12CommandAllocator>,
     pub command_lists: Vec<ID3D12GraphicsCommandList>,
@@ -410,26 +412,26 @@ impl ProbeState {
 // frames' lists are pending; `stream.pool_rewrites` carries the slot to each frame's
 // copy right after its fence wait (`apply_streamed_texture_rewrites`). The
 // replaced resource and the upload's transients are parked on `retires` against
-// the monotonic `frame` tick and released `RETIRE_DEPTH` ticks later: by then
+// the monotonic `frame` tick and released `retire_depth` ticks later: by then
 // every copy has been re-pointed, every list recorded against the old resource
 // has retired, and the tick's fence wait covers the upload submission itself.
 pub(super) struct StreamState {
     pub pool_rewrites: slot_rewrites::SlotRewriteQueue,
     pub frame: u64,
     pub retires: RetirePool<super::texture::StreamedUploadRetire>,
+    // `frames + 1`: a swap lands between frames, after the previous frame's
+    // submit, so the first frame fence that covers the upload submission is the
+    // one signaled by the NEXT draw, waited `frames` ticks after that draw's tick.
+    pub retire_depth: u64,
 }
 
 impl StreamState {
-    // `FRAMES + 1`: a swap lands between frames, after the previous frame's
-    // submit, so the first frame fence that covers the upload submission is the
-    // one signaled by the NEXT draw, waited FRAMES ticks after that draw's tick.
-    pub(super) const RETIRE_DEPTH: u64 = FRAMES as u64 + 1;
-
-    pub(super) fn new() -> Self {
+    pub(super) fn new(frames: usize) -> Self {
         Self {
-            pool_rewrites: slot_rewrites::SlotRewriteQueue::new(FRAMES),
+            pool_rewrites: slot_rewrites::SlotRewriteQueue::new(frames),
             frame: 0,
             retires: RetirePool::new(),
+            retire_depth: frames as u64 + 1,
         }
     }
 }
@@ -651,7 +653,11 @@ impl DxHardware {
                 &mut self.fullscreen_display,
                 crate::win32::display_mode::FullscreenDisplayMode::new(),
             ),
-            alloc: DeviceAllocator::new(&self.device, &self.command_queue, FRAMES),
+            alloc: DeviceAllocator::new(
+                &self.device,
+                &self.command_queue,
+                self.alloc.frames_in_flight(),
+            ),
             device: self.device.clone(),
             command_queue: self.command_queue.clone(),
             adapter: self.adapter.clone(),
@@ -660,6 +666,12 @@ impl DxHardware {
             hdr_mode: self.hdr_mode,
             swapchain_config: self.swapchain_config,
         })
+    }
+
+    // Frames in flight: the depth of every per-frame ring, fixed for this
+    // hardware's lifetime (a change rebuilds it through `hot_swap_config`).
+    pub(super) fn frames(&self) -> usize {
+        self.alloc.frames_in_flight()
     }
 
     // Maximum extended-range multiplier on the HDR path, `None` on SDR.
@@ -1094,7 +1106,7 @@ impl DxContext {
     // Render statistics for the most recent `draw_frame`, for the profiler
     // overlay. `gpu_frame_us` is filled at the top of each `draw_frame` from
     // the timestamp pair this slot resolved on its previous trip through the
-    // ring (so a `FRAMES`-stale window, matching Metal's "frame or two
+    // ring (so a frames-in-flight-stale window, matching Metal's "frame or two
     // stale" reading).
     pub(crate) fn render_stats(&self) -> profile::RenderStats {
         self.diagnostics.frame_stats.get()

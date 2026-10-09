@@ -7,15 +7,20 @@
 // Layouts must match `LightUniforms` and `ShadowUniforms` in
 // `render/uniforms/`, and `GpuLight` in render_types.rs. The two trailing scalars of `LightUniforms` are live
 // fields, not padding: a pass that binds the buffer and calls them padding is
-// reading a stale layout.
+// reading a stale layout. The array lengths are locked to gfx::render_types by
+// unit test.
+
+static const uint MAX_DIRECTIONAL_LIGHTS = 4u;
+static const uint MAX_POINT_LIGHTS = 8u;
+static const uint NUM_SHADOW_CASCADES = 4u;
 
 struct DirLight   { float4 dir_i; float4 col; };
 struct PointLight { float4 pos_r; float4 col_i; };
 
 struct LightUniforms
 {
-    DirLight   dir[4];
-    PointLight pt[8];
+    DirLight   dir[MAX_DIRECTIONAL_LIGHTS];
+    PointLight pt[MAX_POINT_LIGHTS];
     int num_dir;
     int num_pt;
     // Indirect-ambient multiplier (PostProcessConfig.ambient_intensity); 1.0
@@ -27,10 +32,13 @@ struct LightUniforms
 
 struct ShadowUniforms
 {
-    float4x4 light_vps[4];
+    float4x4 light_vps[NUM_SHADOW_CASCADES];
     float4 cascade_splits;
     // Live cascade count (1..4); slots at or beyond it are unrendered.
     uint active_cascades;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
 };
 
 // Each (vec3, scalar) pair is spelled as one float4: MSL sizes a float3 at 16

@@ -13,7 +13,7 @@ use windows::Win32::Graphics::Dxgi::*;
 use windows::core::Interface;
 
 use crate::directx::allocator::DeviceAllocator;
-use crate::directx::context::{DxHardware, FRAMES};
+use crate::directx::context::{BACK_BUFFERS, DxHardware};
 use crate::directx::error::map_hresult;
 use crate::directx::texture::HDR_FORMAT;
 use crate::win32::display_mode::FullscreenDisplayMode;
@@ -226,7 +226,7 @@ pub(super) fn setup(
             Quality: 0,
         },
         BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-        BufferCount: FRAMES as u32,
+        BufferCount: BACK_BUFFERS as u32,
         SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
         Flags: if allow_tearing {
             DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0 as u32
@@ -329,7 +329,11 @@ pub(super) fn setup(
     let hw = DxHardware {
         // Built before the first resource so nothing has to fall back to a
         // committed allocation.
-        alloc: DeviceAllocator::new(&device, &command_queue, FRAMES),
+        alloc: DeviceAllocator::new(
+            &device,
+            &command_queue,
+            swapchain_config.frames_in_flight.max(1),
+        ),
         rt_capable: crate::directx::raytrace::raytracing_supported(&device),
         device,
         command_queue,
@@ -390,10 +394,11 @@ fn try_color_space(swapchain: &IDXGISwapChain3, space: DXGI_COLOR_SPACE_TYPE) ->
 // Largest extended-range color-component multiplier any output on this
 // adapter reports. Returns `1.0` on an SDR-only adapter (or when no output
 // is available, a head-less unit test) so the resolver stays on the SDR
-// path. An HDR output's `MaxLuminance` is in cd/m²; SDR reference white is
-// 80 nits, so the EDR multiplier is `MaxLuminance / 80.0`.
+// path. An HDR output's `MaxLuminance` is in cd/m²; the multiplier is in
+// scRGB units, where 1.0 is 80 nits by definition (the PQ encode's 203-nit
+// reference white is a different quantity).
 fn measure_max_edr(adapter: &IDXGIAdapter1) -> f32 {
-    const SDR_REFERENCE_NITS: f32 = 80.0;
+    const SCRGB_UNIT_NITS: f32 = 80.0;
     let mut best: f32 = 1.0;
     let mut i: u32 = 0;
     loop {
@@ -421,7 +426,7 @@ fn measure_max_edr(adapter: &IDXGIAdapter1) -> f32 {
         }
         let nits = desc1.MaxLuminance;
         if nits.is_finite() && nits > 0.0 {
-            let edr = nits / SDR_REFERENCE_NITS;
+            let edr = nits / SCRGB_UNIT_NITS;
             if edr > best {
                 best = edr;
             }

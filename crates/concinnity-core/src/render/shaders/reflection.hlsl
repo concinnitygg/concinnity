@@ -28,11 +28,10 @@
 
 {TEXTURE_SIZE}
 
-// Surfaces rougher than this get no reflection (the resolve already wrote
-// weight 0); below it the blur cone ramps from a sharp mirror at 0 to
-// REFL_BLUR_MAX. Locked to concinnity_core::render::post::ssr::settings::REFLECTION_ROUGHNESS_CUT
-// by unit test, so the SSR, RT, and composite passes can never disagree on it.
-static const float REFLECTION_ROUGHNESS_CUT = 0.6;
+// Surfaces rougher than REFLECTION_ROUGHNESS_CUT get no reflection (the
+// resolve already wrote weight 0); below it the blur cone ramps from a sharp
+// mirror at 0 to REFL_BLUR_MAX.
+{REFLECTION_CUT}
 
 #if defined(REFLECTION_BLUR)
 

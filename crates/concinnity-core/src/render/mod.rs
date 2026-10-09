@@ -67,6 +67,8 @@ pub mod rt_topology;
 pub mod scene_flow;
 pub mod scene_residency;
 pub mod scene_state;
+#[cfg(test)]
+pub(crate) mod shader_consts;
 pub mod shader_programs;
 pub mod shader_source;
 pub mod shaders;

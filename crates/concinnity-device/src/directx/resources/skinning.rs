@@ -163,9 +163,10 @@ impl DxContext {
         // arrives: every joint is identity, so the mesh shows in bind pose.
         let joint_buf_bytes = (MAX_JOINTS * std::mem::size_of::<[[f32; 4]; 4]>()) as u64;
         let identity_seed: Vec<[[f32; 4]; 4]> = vec![IDENTITY; MAX_JOINTS];
-        let mut joint_buffers: Vec<Vec<PooledBuffer>> = Vec::with_capacity(FRAMES);
-        let mut joint_ptrs: Vec<Vec<*mut u8>> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let frames = self.hw.frames();
+        let mut joint_buffers: Vec<Vec<PooledBuffer>> = Vec::with_capacity(frames);
+        let mut joint_ptrs: Vec<Vec<*mut u8>> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let mut frame_bufs: Vec<PooledBuffer> = Vec::with_capacity(draw_objects.len());
             let mut frame_ptrs: Vec<*mut u8> = Vec::with_capacity(draw_objects.len());
             for _ in 0..draw_objects.len() {
@@ -235,9 +236,9 @@ impl DxContext {
         {
             let stride = std::mem::size_of::<Vertex>();
             let deformed_bytes = (vertices.len() * stride).max(stride) as u64;
-            let mut deformed_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
-            let mut deformed_vbvs: Vec<D3D12_VERTEX_BUFFER_VIEW> = Vec::with_capacity(FRAMES);
-            for _ in 0..FRAMES {
+            let mut deformed_buffers: Vec<ID3D12Resource> = Vec::with_capacity(frames);
+            let mut deformed_vbvs: Vec<D3D12_VERTEX_BUFFER_VIEW> = Vec::with_capacity(frames);
+            for _ in 0..frames {
                 let buf = create_uav_buffer(
                     &self.hw.device,
                     deformed_bytes,
@@ -432,7 +433,7 @@ impl DxContext {
         // allocated when some object carries morphs.
         let (mut weight_buffers, mut weight_ptrs) = (Vec::new(), Vec::new());
         if target_counts.iter().any(|&c| c > 0) {
-            for _ in 0..FRAMES {
+            for _ in 0..self.hw.frames() {
                 let mut frame_bufs: Vec<PooledBuffer> = Vec::with_capacity(n);
                 let mut frame_ptrs: Vec<*mut u8> = Vec::with_capacity(n);
                 for count in &target_counts {

@@ -57,6 +57,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_table_size_matches_the_shader() {
+        let src = crate::render::shaders::MAIN_SHADING;
+        assert_eq!(
+            crate::render::shader_consts::float(src, "LTC_LUT_SIZE"),
+            LTC_LUT_SIZE as f32
+        );
+    }
+
+    #[test]
     fn the_generated_tables_are_the_expected_size() {
         assert_eq!(matrix_texels().len(), LTC_LUT_SIZE * LTC_LUT_SIZE * 4);
         assert_eq!(magnitude_texels().len(), LTC_LUT_SIZE * LTC_LUT_SIZE * 2);

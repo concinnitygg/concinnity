@@ -7,7 +7,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::CullPlan;
 use super::compute::ComputeCull;
-use crate::directx::context::{FRAMES, align256};
+use crate::directx::context::align256;
 use crate::directx::init::InitGpu;
 use crate::directx::texture::create_uav_buffer;
 
@@ -41,8 +41,8 @@ pub(super) fn build_gbuffer_pass(
     let (mhrs, mhpso) =
         crate::directx::post::gbuffer::build_model_history(device, info_queue, hot_reload)?;
     let prev_model_size = align256((plan.n_cull * std::mem::size_of::<[[f32; 4]; 4]>()) as u64);
-    let mut prev_model_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES);
-    for _ in 0..FRAMES {
+    let mut prev_model_buffers: Vec<ID3D12Resource> = Vec::with_capacity(gpu.hw.frames());
+    for _ in 0..gpu.hw.frames() {
         prev_model_buffers.push(create_uav_buffer(
             device,
             prev_model_size,

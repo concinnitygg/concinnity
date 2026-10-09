@@ -42,8 +42,8 @@
 //! (a depth-only shadow pass alongside a shading pass), which is a real overlap
 //! both spans report honestly.
 //!
-//! Race avoidance. The sample buffer is per-frame: a ring of
-//! `FRAMES_IN_FLIGHT` buffers is rotated each frame so the CPU-side resolve
+//! Race avoidance. The sample buffer is per-frame: a ring of one buffer per
+//! frame in flight is rotated each frame so the CPU-side resolve
 //! of frame N-1's buffer never overlaps frame N's GPU writes. The completion
 //! handler for frame N reads frame-N's buffer and publishes the results into
 //! `MtlContext.pass_times_us_atomic[..]`; `render_stats()` then copies the
@@ -71,10 +71,6 @@ use objc2_metal::{
 // forces those edits at compile time, and `slot_pair` debug_asserts the index
 // at runtime, so a missed registration cannot silently report zero GPU time.
 pub(super) use concinnity_core::render::render_graph::{PASS_COUNT, PASS_NAMES, PassId};
-
-// Frames in flight on Apple Silicon. The sample buffer ring is sized to
-// this so frame N's resolve never overlaps frame N+1's GPU writes.
-pub(super) const FRAMES_IN_FLIGHT: usize = 3;
 
 // `NSUInteger::MAX` sentinel for an unused sample slot inside a render-pass
 // or compute-pass `sampleBufferAttachments[0]`. Metal treats this as
@@ -108,8 +104,10 @@ unsafe impl Send for SendableSampleBuf {}
 // One frame's worth of pass timestamps. The sample buffer lives on the GPU
 // (private storage); `resolve` reads it back into CPU-visible bytes.
 pub(super) struct PassTimingResources {
-    buffers: [Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>; FRAMES_IN_FLIGHT],
-    // Rotates 0..FRAMES_IN_FLIGHT each frame. The active index picks which
+    // One per frame in flight, so frame N's resolve never overlaps a later
+    // frame's GPU writes.
+    buffers: Vec<Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>>,
+    // Rotates through `buffers` each frame. The active index picks which
     // buffer the next `attach_*` call binds to.
     frame_slot: usize,
     // Bitmask (1 << PassId index) of the passes attached this frame, cleared by
@@ -125,7 +123,10 @@ impl PassTimingResources {
     // Build per-frame timestamp sample buffers. Returns `None` if the
     // device does not expose the timestamp counter set (older Apple GPUs
     // or an Intel Mac without the right driver path).
-    pub(super) fn new(device: &ProtocolObject<dyn MTLDevice>) -> Option<Self> {
+    pub(super) fn new(
+        device: &ProtocolObject<dyn MTLDevice>,
+        frames_in_flight: usize,
+    ) -> Option<Self> {
         // Every boundary the `attach_*` helpers name is a stage boundary, so a
         // device that cannot sample there reports no per-pass timing at all
         // rather than a table of zeroes.
@@ -162,11 +163,11 @@ impl PassTimingResources {
                 .newCounterSampleBufferWithDescriptor_error(&desc)
                 .ok()
         };
-        let b0 = make_buf()?;
-        let b1 = make_buf()?;
-        let b2 = make_buf()?;
+        let buffers = (0..frames_in_flight.max(1))
+            .map(|_| make_buf())
+            .collect::<Option<Vec<_>>>()?;
         Some(Self {
-            buffers: [b0, b1, b2],
+            buffers,
             frame_slot: 0,
             attached: std::sync::atomic::AtomicU64::new(0),
         })
@@ -184,7 +185,7 @@ impl PassTimingResources {
     // frame resolves the same buffer.
     pub(super) fn begin_frame(&mut self) -> usize {
         let slot = self.frame_slot;
-        self.frame_slot = (self.frame_slot + 1) % FRAMES_IN_FLIGHT;
+        self.frame_slot = (self.frame_slot + 1) % self.buffers.len();
         // Reset the per-frame attached mask; the passes that run this frame set
         // their bits via `attach_*`, and the resolve zeroes the rest.
         self.attached.store(0, std::sync::atomic::Ordering::Relaxed);

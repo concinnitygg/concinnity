@@ -1815,6 +1815,7 @@ impl SkinnedDrawObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::shader_consts;
     use crate::test_support::draw_object;
     use alloc::vec;
     use core::mem::{offset_of, size_of};
@@ -2048,10 +2049,38 @@ mod tests {
             ("CLUSTER_PROBE_MASK_WORDS", CLUSTER_PROBE_MASK_WORDS),
             ("MAX_CLUSTERED_PROBES", MAX_CLUSTERED_PROBES),
         ] {
-            assert!(
-                src.contains(&alloc::format!("static const uint {name} = {value}u;")),
+            assert_eq!(
+                shader_consts::uint(src, name),
+                value as usize,
                 "cluster_types.hlsl {name} drifted from render_types"
             );
+        }
+    }
+
+    // The light and shadow blocks' array lengths, which every pass that splices
+    // `light_types.hlsl` sizes them by.
+    #[test]
+    fn light_limits_match_shaders() {
+        let src = crate::render::shaders::LIGHT_TYPES;
+        for (name, value) in [
+            ("MAX_DIRECTIONAL_LIGHTS", MAX_DIRECTIONAL_LIGHTS),
+            ("MAX_POINT_LIGHTS", MAX_POINT_LIGHTS),
+            ("NUM_SHADOW_CASCADES", NUM_SHADOW_CASCADES),
+        ] {
+            assert_eq!(shader_consts::uint(src, name), value, "{name}");
+        }
+    }
+
+    #[test]
+    fn draw_flags_match_shaders() {
+        let src = crate::render::shaders::OBJECT_COMMON;
+        for (name, value) in [
+            ("DRAW_ENABLED", DrawArgsFlags::ENABLED),
+            ("DRAW_CULLABLE", DrawArgsFlags::CULLABLE),
+            ("DRAW_NO_HISTORY", DrawArgsFlags::NO_HISTORY),
+            ("DRAW_BUCKET_SHIFT", DrawArgsFlags::BUCKET_SHIFT),
+        ] {
+            assert_eq!(shader_consts::uint(src, name), value as usize, "{name}");
         }
     }
 

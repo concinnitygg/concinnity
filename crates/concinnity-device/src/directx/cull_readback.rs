@@ -14,7 +14,7 @@ use concinnity_core::gfx::cull_status;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
-use super::context::{DxContext, FRAMES};
+use super::context::DxContext;
 use super::texture::one_shot_submit;
 use crate::directx::error::map_hresult;
 
@@ -41,7 +41,8 @@ impl DxContext {
 
         // The ring cursor advances past the frame it just recorded, so the
         // buffer holding the newest cull results is the slot behind it.
-        let slot = (self.current_frame + FRAMES - 1) % FRAMES;
+        let frames = self.hw.frames();
+        let slot = (self.current_frame + frames - 1) % frames;
         let src = self.cull.cull_status_buffers[slot].clone();
         let byte_size = (count * std::mem::size_of::<u32>()) as u64;
 

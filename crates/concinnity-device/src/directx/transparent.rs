@@ -48,7 +48,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
-use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::context::{DxContext, align256, dump_on_err};
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
@@ -287,9 +287,10 @@ impl GlassMeshProducer {
     ) -> RenderResult<Self> {
         let block = align256(std::mem::size_of::<GlassMeshParams>() as u64);
         let ring_size = block * object_indices.len().max(1) as u64;
-        let mut params_ring: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut params_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let frames = alloc.frames_in_flight();
+        let mut params_ring: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut params_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 ring_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -586,9 +587,10 @@ type RtParamsRing = (Vec<PooledBuffer>, Vec<*mut u8>);
 
 fn build_rt_params_ring(alloc: &DeviceAllocator) -> RenderResult<RtParamsRing> {
     let params_size = align256(RT_PARAMS_UBO_SIZE);
-    let mut resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-    let mut ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-    for _ in 0..FRAMES {
+    let frames = alloc.frames_in_flight();
+    let mut resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+    let mut ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+    for _ in 0..frames {
         let buf = alloc.alloc_buffer(
             params_size,
             D3D12_HEAP_TYPE_UPLOAD,
@@ -865,9 +867,10 @@ impl TransparentResources {
 
         // Per-frame view UBO ring.
         let view_size = align256(std::mem::size_of::<TransparentView>() as u64);
-        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let frames = alloc.frames_in_flight();
+        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,

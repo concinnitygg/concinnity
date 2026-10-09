@@ -54,25 +54,10 @@ use crate::vulkan::owned::{
 };
 use crate::vulkan::record::Recorder;
 
-// Upper bound on the Hi-Z mip count, used to size the dedicated descriptor pool
-// for the tail's sets. `hiz_mip_count` caps at 32 - leading_zeros,
-// so 16 covers any render target up to 32768 px on its longer edge.
-const MAX_HIZ_MIPS: usize = 16;
-
 use crate::vulkan::builtin_shaders::CompileProgram;
 use concinnity_core::render::hiz_spd::{self, Plan};
 use concinnity_core::render::uniforms::HizSpdParams;
 use concinnity_core::render::uniforms::vulkan::CullHizParams;
-
-// Mip count for a Hi-Z of size (w, h): `floor(log2(max(w, h))) + 1`. Power-of-
-// two sources end exactly at 1x1; non-power-of-two sources stop one mip short
-// of true 1x1 in the smaller dimension, which is fine: the cull kernel clamps
-// to the actual mip dims. Mirrors `directx::hiz::hiz_mip_count` /
-// `metal::hiz::hiz_mip_count`.
-pub(super) fn hiz_mip_count(width: u32, height: u32) -> u32 {
-    let m = width.max(height).max(1);
-    32 - m.leading_zeros()
-}
 
 // Compute pipelines + image + per-mip views + descriptor sets for the Hi-Z
 // build, plus the cull-read set (set 1 of the cull pipeline) and its per-frame
@@ -359,12 +344,7 @@ impl HiZResources {
             height,
             depth_views,
         } = target;
-        let requested = hiz_mip_count(width, height).min(MAX_HIZ_MIPS as u32).max(1);
-        // The depth the two SPD dispatches actually reach, which is what the
-        // image carries and what the cull is told: a mip the plan skipped is
-        // never written, and sampling one would feed the cull uninitialized
-        // memory.
-        let mip_count = Plan::new(width, height, requested, 1).mip_count();
+        let mip_count = hiz_spd::pyramid_mip_count(width, height);
         let pyramid = create_hiz_image(alloc, width, height, mip_count)?;
         // Rest in SHADER_READ_ONLY so the cull-read descriptor's layout is
         // satisfied on the first frame (the cull kernel won't sample it -
@@ -723,33 +703,4 @@ fn write_read_set(
         .sampled_image(0, view)
         .uniform_buffer(1, ubo, ubo_size)
         .apply(device);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::hiz_mip_count;
-
-    // The `HizParams` / `CullHizParams` layout tests live with the structs in
-    // `concinnity_core::render::uniforms::vulkan`.
-
-    #[test]
-    fn mip_count_power_of_two() {
-        assert_eq!(hiz_mip_count(1, 1), 1);
-        assert_eq!(hiz_mip_count(2, 2), 2);
-        assert_eq!(hiz_mip_count(256, 256), 9);
-        assert_eq!(hiz_mip_count(1024, 1024), 11);
-    }
-
-    #[test]
-    fn mip_count_uses_larger_dimension() {
-        assert_eq!(hiz_mip_count(1920, 1080), hiz_mip_count(1920, 1920));
-        assert_eq!(hiz_mip_count(1920, 1080), 11);
-        assert_eq!(hiz_mip_count(1280, 720), 11);
-    }
-
-    #[test]
-    fn mip_count_clamps_zero() {
-        assert_eq!(hiz_mip_count(0, 0), 1);
-        assert_eq!(hiz_mip_count(0, 8), 4);
-    }
 }

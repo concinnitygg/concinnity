@@ -261,6 +261,15 @@ mod tests {
     use alloc::vec;
     use core::mem::{offset_of, size_of};
 
+    #[test]
+    fn the_wave_count_matches_the_shader() {
+        let src = crate::render::shaders::WATER;
+        assert_eq!(
+            crate::render::shader_consts::uint(src, "MAX_WATER_WAVES"),
+            WATER_MAX_WAVES
+        );
+    }
+
     // Every backend binds this block under the same layout, so it is checked
     // here rather than per backend: a float4x4 model, a float4 tint, then four
     // scalars. `model` is first, so its 16-byte GPU alignment is satisfied at

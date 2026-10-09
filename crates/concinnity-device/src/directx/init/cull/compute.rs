@@ -9,7 +9,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::CullPlan;
 use super::bindless::BindlessPass;
 use crate::directx::allocator::PooledBuffer;
-use crate::directx::context::{DxDescriptors, DxTargets, FRAMES, align256, dump_on_err};
+use crate::directx::context::{DxDescriptors, DxTargets, align256, dump_on_err};
 use crate::directx::cull::{
     CullKernels, INDIRECT_COMMAND_STRIDE, compile_cull_shader, create_cull_command_signature,
     create_cull_pso, create_cull_root_signature,
@@ -93,15 +93,16 @@ pub(super) fn build_compute_cull(
     // Always allocated when the cull path is active (matches Metal); resting
     // state `UAV` so it binds as a root UAV with no transition.
     let status_size = status_buffer_size(n_cull);
-    let mut draw_args_buffers: Vec<PooledBuffer> = Vec::with_capacity(FRAMES + 1);
-    let mut draw_args_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES + 1);
-    let mut indirect_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES + 1);
-    let mut status_buffers: Vec<ID3D12Resource> = Vec::with_capacity(FRAMES + 1);
-    // `FRAMES + 1`: the extra slot (index `FRAMES`) is the reserved
+    // `frames + 1`: the extra slot (index `frames`) is the reserved
     // reflection-probe capture slot (see the object-buffer loop). The
-    // bake culls each cube face into `indirect_cmd_buffers[FRAMES]` reading
-    // `draw_args_buffer_resources[FRAMES]`, a slot the frame never overwrites.
-    for _ in 0..FRAMES + 1 {
+    // bake culls each cube face into `indirect_cmd_buffers[frames]` reading
+    // `draw_args_buffer_resources[frames]`, a slot the frame never overwrites.
+    let slots = gpu.hw.frames() + 1;
+    let mut draw_args_buffers: Vec<PooledBuffer> = Vec::with_capacity(slots);
+    let mut draw_args_ptrs: Vec<*mut u8> = Vec::with_capacity(slots);
+    let mut indirect_buffers: Vec<ID3D12Resource> = Vec::with_capacity(slots);
+    let mut status_buffers: Vec<ID3D12Resource> = Vec::with_capacity(slots);
+    for _ in 0..slots {
         let da = gpu.hw.alloc.alloc_buffer(
             draw_args_size,
             D3D12_HEAP_TYPE_UPLOAD,

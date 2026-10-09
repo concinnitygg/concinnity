@@ -40,15 +40,30 @@ pub struct Plan {
     pub tail: Option<Dispatch>,
 }
 
+/// Mips in a full chain over a `width` x `height` source,
+/// `floor(log2(max(w, h))) + 1`. A non-power-of-two source stops one mip short
+/// of 1x1 in its smaller dimension; the cull clamps to the actual mip size.
+pub fn full_mip_count(width: u32, height: u32) -> u32 {
+    let m = width.max(height).max(1);
+    32 - m.leading_zeros()
+}
+
+/// Pyramid depth the two dispatches write over a `width` x `height` depth
+/// target: the full chain, clamped to what the plan reaches. Both the image and
+/// the cull's mip count use it.
+pub fn pyramid_mip_count(width: u32, height: u32) -> u32 {
+    Plan::new(width, height, full_mip_count(width, height), 1).mip_count()
+}
+
 /// Size of mip `level` of a `base`-sized image, floored at 1.
 pub fn level_size(base: (u32, u32), level: u32) -> (u32, u32) {
     ((base.0 >> level).max(1), (base.1 >> level).max(1))
 }
 
 impl Plan {
-    /// Plan the two dispatches. `mip_count` is clamped to [`MAX_MIPS`]; a
-    /// shallower pyramid than requested only costs the cull a coarser level to
-    /// pick from, which makes it more permissive rather than wrong.
+    /// Plan the two dispatches. `mip_count` is clamped to [`MAX_MIPS`]. A
+    /// pyramid shallower than the full chain is still sound: the cull keeps any
+    /// rect too wide for a 2x2 footprint at the deepest level it has.
     pub fn new(width: u32, height: u32, mip_count: u32, sample_count: u32) -> Self {
         let base = (width.max(1), height.max(1));
         let mips = mip_count.clamp(1, MAX_MIPS);
@@ -119,6 +134,14 @@ fn tail_level_count(base: (u32, u32), groups: (u32, u32), requested: u32) -> u32
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::shader_consts;
+
+    #[test]
+    fn the_kernel_tile_matches_the_plan() {
+        let src = crate::render::shaders::HIZ_BUILD;
+        assert_eq!(shader_consts::uint(src, "HIZ_SPD_LEVELS"), LEVELS as usize);
+        assert_eq!(shader_consts::uint(src, "HIZ_SPD_TILE"), TILE as usize);
+    }
 
     // 1024x768 is 11 mips, exactly what two dispatches reach: phase 1 takes
     // 0..5 over a 32x24 grid, the tail takes 6..10 from the 32x24 mip 5 in a
@@ -164,8 +187,7 @@ mod tests {
             (3840, 2160),
             (7680, 4320),
         ] {
-            let mips = 32 - w.max(h).leading_zeros();
-            let Some(tail) = Plan::new(w, h, mips, 1).tail else {
+            let Some(tail) = Plan::new(w, h, full_mip_count(w, h), 1).tail else {
                 continue;
             };
             let base = (tail.params.base_width, tail.params.base_height);
@@ -177,6 +199,39 @@ mod tests {
                 tail.groups
             );
         }
+    }
+
+    #[test]
+    fn full_mip_count_keys_off_the_larger_dimension() {
+        assert_eq!(full_mip_count(1, 1), 1);
+        assert_eq!(full_mip_count(2, 2), 2);
+        assert_eq!(full_mip_count(256, 256), 9);
+        assert_eq!(full_mip_count(1024, 1024), 11);
+        assert_eq!(full_mip_count(1920, 1080), 11);
+        assert_eq!(full_mip_count(1280, 720), 11);
+        assert_eq!(full_mip_count(16384, 16384), 15);
+    }
+
+    // A zero dimension (minimized window) must not underflow.
+    #[test]
+    fn full_mip_count_clamps_zero() {
+        assert_eq!(full_mip_count(0, 0), 1);
+        assert_eq!(full_mip_count(0, 8), 4);
+    }
+
+    #[test]
+    fn a_target_pyramid_never_exceeds_max_mips() {
+        for (w, h) in [
+            (1u32, 1u32),
+            (1280, 720),
+            (1920, 1080),
+            (3840, 2160),
+            (16384, 16384),
+        ] {
+            let mips = pyramid_mip_count(w, h);
+            assert!((1..=MAX_MIPS.min(full_mip_count(w, h))).contains(&mips));
+        }
+        assert_eq!(pyramid_mip_count(1024, 768), 11);
     }
 
     // Beyond MAX_MIPS the plan clamps rather than leaving levels unwritten.

@@ -21,7 +21,7 @@ use super::heap_layout::{DSV_GBUFFER_DEPTH_SLOT, DSV_GLASS_REFLECTION_DEPTH_SLOT
 use super::{Features, InitGpu, heaps};
 use crate::directx::auto_exposure::AutoExposureState;
 use crate::directx::context::{
-    DxDescriptors, DxSceneAssets, DxTargets, FRAMES, SwapchainState, dump_on_err,
+    DxDescriptors, DxSceneAssets, DxTargets, SwapchainState, dump_on_err,
 };
 use crate::directx::decal::DecalState;
 use crate::directx::descriptor_slot::SamplerSlot;
@@ -348,7 +348,7 @@ pub(super) fn build_decals(
     }
     // The slot table the decal pass draws from. Each authored decal takes
     // the slot whose albedo SRV was just written above, in the same order.
-    let mut decal_set = decal::DecalSet::new(crate::directx::decal::MAX_DECALS, FRAMES);
+    let mut decal_set = decal::DecalSet::new(crate::directx::decal::MAX_DECALS, hw.frames());
     for record in decals {
         decal_set.insert(record).map_err(|_| {
             RenderError::Other("decals: authored decals exceed MAX_DECALS".to_string())

@@ -27,7 +27,7 @@ use crate::directx::allocator::{DeviceAllocator, PooledBuffer};
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::com;
-use crate::directx::context::{DxContext, FRAMES, align256, dump_on_err};
+use crate::directx::context::{DxContext, align256, dump_on_err};
 use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
 use crate::directx::pso::{Blend, Depth, GraphicsPso, compute_pso};
@@ -335,9 +335,10 @@ impl GbufferResources {
 
         // Per-frame view UBO.
         let view_size = align256(GBUFFER_VIEW_UBO_SIZE);
-        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let frames = alloc.frames_in_flight();
+        let mut view_ubo_resources: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 view_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -463,8 +464,8 @@ impl DxContext {
                 build_model_history(device, self.hw.info_queue.as_ref(), self.hot_reload.enabled)?;
             let size =
                 align256((self.cull.bucket_stride * std::mem::size_of::<[[f32; 4]; 4]>()) as u64);
-            let mut ring = Vec::with_capacity(FRAMES);
-            for _ in 0..FRAMES {
+            let mut ring = Vec::with_capacity(self.hw.frames());
+            for _ in 0..self.hw.frames() {
                 ring.push(crate::directx::texture::create_uav_buffer(
                     device,
                     size,
@@ -759,14 +760,17 @@ impl DxContext {
             // first frame (or after a runtime ring rebuild) the prev slot is
             // unposed, so bind the current deformed buffer as the previous one --
             // prev_pos == cur_pos gives a harmless zero skinned motion vector
-            // instead of garbage. Same collapse `velocity_active == false` uses.
+            // instead of garbage. Same collapse `velocity_active == false` uses,
+            // and with one frame in flight the previous slot is this one anyway.
+            let frames = self.hw.frames();
             let use_prev_pose = velocity_active
+                && frames >= 2
                 && self
                     .skinned
                     .deformed_primed
                     .load(std::sync::atomic::Ordering::Relaxed);
             let prev_frame_idx = if use_prev_pose {
-                (frame_idx + FRAMES - 1) % FRAMES
+                (frame_idx + frames - 1) % frames
             } else {
                 frame_idx
             };

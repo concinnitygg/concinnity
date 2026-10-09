@@ -163,9 +163,8 @@ SamplerState pool_sampler : register(s2);
 #endif
 
 // Surfaces rougher than REFLECTION_ROUGHNESS_CUT get no reflection; glossiness
-// ramps in below it. Locked to concinnity_core::render::post::ssr::settings::REFLECTION_ROUGHNESS_CUT
-// by unit test so the SSR, RT, and composite gates agree.
-static const float REFLECTION_ROUGHNESS_CUT = 0.6;
+// ramps in below it.
+{REFLECTION_CUT}
 
 {PROBE_COMMON}
 

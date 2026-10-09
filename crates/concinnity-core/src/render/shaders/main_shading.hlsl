@@ -34,15 +34,13 @@
 
 static const float PI = 3.14159265359;
 
-// Surfaces rougher than this get no SSR / RT reflection; the forward fade
-// ramps in below it. Locked to REFLECTION_ROUGHNESS_CUT in
-// concinnity_core::render::post::ssr::settings by unit test, like the SSR, RT
-// and composite passes' copies.
-static const float REFLECTION_ROUGHNESS_CUT = 0.6;
+// Surfaces rougher than REFLECTION_ROUGHNESS_CUT get no SSR / RT reflection;
+// the forward fade ramps in below it.
+{REFLECTION_CUT}
 
 // Edge of the LTC lookup tables, and the scale / bias that map [0, 1] onto
 // texel centers. Must match LTC_LUT_SIZE in `core::render`'s ltc module.
-static const float LTC_LUT_SIZE  = 64.0;
+static const float LTC_LUT_SIZE = 64.0;
 static const float LTC_LUT_SCALE = (LTC_LUT_SIZE - 1.0) / LTC_LUT_SIZE;
 static const float LTC_LUT_BIAS  = 0.5 / LTC_LUT_SIZE;
 

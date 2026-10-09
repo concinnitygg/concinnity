@@ -53,7 +53,7 @@ use windows::core::Interface;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
-use super::context::{DxGeometry, FRAMES};
+use super::context::DxGeometry;
 use super::error::map_hresult;
 use super::texture::{create_uav_buffer, transition_barrier};
 use crate::directx::builtin_shaders::CompileProgram;
@@ -258,7 +258,7 @@ fn scratch_capacity(needed: u64) -> u64 {
 // This frame's build scratch (see `ScratchRing`), covering a build requiring
 // `needed` bytes. A replaced buffer is released in place: its last writer was
 // this slot's frame a full ring cycle ago, which the frame-begin fence wait
-// (`FRAMES` deep) has retired. At most one path replaces a frame's slot per frame
+// (frames-in-flight deep) has retired. At most one path replaces a frame's slot per frame
 // (`rebuild_tlas` and `rebuild_skinned` are mutually exclusive, and a topology
 // refresh builds over its own dedicated scratch), so a replacement can never pull
 // the buffer out from under a build already recorded this frame.
@@ -463,7 +463,7 @@ fn ring_slot_needs_grow(present: bool, capacity: u64, needed: u64) -> bool {
 // One frame slot of the per-frame skinned-rebuild buffers. The skinned RT rebuild
 // reuses these in place every frame and only (re)allocates a slot when a larger
 // size is needed, so the steady state allocates nothing. Reuse is hazard-free:
-// the frame-begin fence wait gates this slot's prior GPU work (`FRAMES` deep), so
+// the frame-begin fence wait gates this slot's prior GPU work (frames-in-flight deep), so
 // the prior trace that read the slot has finished before the rebuild overwrites
 // it. This replaces the old allocate-fresh-every-frame + retire-pool path, whose
 // per-frame committed-resource churn grew the driver's video-memory pool without
@@ -495,7 +495,7 @@ struct SkinnedFrameRing {
 // buffers in place, growing one only when a later rebuild outgrows it (the static
 // instance count is fixed, so the steady state allocates nothing). Reuse is
 // hazard-free: the cursor revisits a slot only after a full ring cycle, by which
-// point the frame-begin fence wait (`FRAMES` deep) has retired every trace that
+// point the frame-begin fence wait (frames-in-flight deep) has retired every trace that
 // read it. This replaces the allocate-fresh-every-rebuild + retire-pool path,
 // whose per-frame committed-resource churn grew the driver's video-memory pool
 // without bound when a prop animated continuously. The live `self.tlas` /
@@ -718,7 +718,7 @@ pub(super) struct RtDynamicInputs<'a> {
     pub mode: RtDynamicMode,
     // Per-frame joint palettes + visible skinned objects (None skips the skinned path).
     pub skinned: Option<SkinnedRtInputs<'a>>,
-    // Index into the per-frame ring (frame_idx % FRAMES).
+    // Index into the per-frame ring.
     pub frame_idx: usize,
     // The live shared buffers a topology refresh builds new draw BLAS over.
     pub shared: SharedGeometry,
@@ -797,7 +797,8 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
     let tlas = create_as_buffer(device, tlas_pre.ResultDataMaxSizeInBytes)?;
     // One scratch buffer per frame in flight. The init builds below are their own
     // fence-waited submit, so they record over slot 0 before any frame exists.
-    let scratch = ScratchRing::filled(FRAMES, scratch_capacity(max_scratch), |capacity| {
+    let frames = alloc.frames_in_flight();
+    let scratch = ScratchRing::filled(frames, scratch_capacity(max_scratch), |capacity| {
         create_scratch(device, capacity)
     })?;
     let scratch_gva = scratch.get(0).map_or(0, com::gpu_va);
@@ -845,7 +846,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
     // the cursor wraps back to it a full ring cycle later. The remaining slots fill
     // lazily on their first rebuild.
     let static_ring = StaticRing::new(
-        FRAMES,
+        frames,
         StaticFrameRing {
             tlas: Some(tlas.clone()),
             tlas_cap: tlas_pre.ResultDataMaxSizeInBytes.max(256),
@@ -864,7 +865,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry) -> RenderResult<Option<Rt
         scratch,
         tlas_size: tlas_pre.ResultDataMaxSizeInBytes,
         static_ring,
-        skinned_ring: FrameRing::new(FRAMES),
+        skinned_ring: FrameRing::new(frames),
         deformed_verts,
         skinned_indices,
         skinned_scratch: SkinnedScratch::default(),
@@ -1350,7 +1351,7 @@ impl RtAccelData {
     // build scratch in the `ScratchRing` slot for the same frame; all are rebuilt
     // IN PLACE: they are allocated once and only grown when a larger size is
     // needed, so the steady state allocates nothing. Reuse is hazard-free because
-    // the frame-begin fence wait gates this slot's prior GPU work (`FRAMES` deep),
+    // the frame-begin fence wait gates this slot's prior GPU work (frames-in-flight deep),
     // so the prior frame's trace that read this slot has finished.
     //
     // The three GPU steps are recorded in dependency order on the one DIRECT cmd
@@ -1772,12 +1773,12 @@ impl super::context::DxContext {
     pub(super) fn rt_dynamic_update(&mut self, cmd: &ID3D12GraphicsCommandList, frame_idx: usize) {
         let mut topology_dirty = std::mem::take(&mut self.state.gpu_dirty.rt_topology);
         // Drop the dropped BVHs no in-flight frame can trace any more: the
-        // frame-begin fence wait bounds that at `FRAMES` frames, plus the one this
+        // frame-begin fence wait bounds that at the frames in flight, plus the one this
         // frame records.
         self.rt.retire_tick += 1;
         self.rt
             .retired
-            .collect(self.rt.retire_tick, FRAMES as u64 + 1);
+            .collect(self.rt.retire_tick, self.hw.frames() as u64 + 1);
 
         // Only the two shared skinned GVAs are read up-front; the per-object
         // joint palettes are borrowed straight out of this frame's slot below (a

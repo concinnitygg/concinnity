@@ -46,7 +46,7 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             light_vps,
             cascade_splits,
             active_cascades,
-            [_pad] => [],
+            [_pad] => ["_pad0", "_pad1", "_pad2"],
         })),
         everywhere(mirror!(SpotShadowData => "SpotShadowData" {
             light_vp,

@@ -8,7 +8,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::CullPlan;
 use crate::directx::allocator::PooledBuffer;
-use crate::directx::context::{FRAMES, align256, dump_on_err};
+use crate::directx::context::{align256, dump_on_err};
 use crate::directx::error::map_hresult;
 use crate::directx::init::InitGpu;
 use crate::directx::init::pipelines::{
@@ -106,11 +106,11 @@ pub(super) fn build_bindless_pass(
     if n_cull > 0 {
         let object_buffer_size =
             align256((n_cull * std::mem::size_of::<render_types::GpuObjectData>()) as u64);
-        // `FRAMES + 1`: the extra slot (index `FRAMES`) is reserved for the
+        // `frames + 1`: the extra slot (index `frames`) is reserved for the
         // asynchronous reflection-probe capture, which builds its CPU-written
         // bindless buffers into a slot the frame never touches (it uses
-        // `[0, FRAMES)`). See `directx/probe.rs::bake_ring_slot`.
-        for _ in 0..FRAMES + 1 {
+        // `[0, frames)`). See `directx/probe.rs::bake_ring_slot`.
+        for _ in 0..gpu.hw.frames() + 1 {
             let buf = gpu.hw.alloc.alloc_buffer(
                 object_buffer_size,
                 D3D12_HEAP_TYPE_UPLOAD,
@@ -131,7 +131,7 @@ pub(super) fn build_bindless_pass(
         _ => Some(DxMaterialParams::new(
             &gpu.hw.alloc,
             world.material_params.clone(),
-            FRAMES + 1,
+            gpu.hw.frames() + 1,
         )?),
     };
 

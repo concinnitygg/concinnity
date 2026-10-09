@@ -8,5 +8,9 @@
 mod record;
 mod set;
 
+/// Live decals a backend that reserves a descriptor block per decal at init
+/// can hold; adds past it return an error.
+pub const MAX_DECALS: usize = 256;
+
 pub use record::{DecalRecord, build_decal_records, decal_model_matrix, invert_decal_model};
 pub use set::{AtCapacity, DecalSet, RemoveError, VisibleDecal};

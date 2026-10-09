@@ -30,7 +30,7 @@ impl DxContext {
     // so one re-point per copy refreshes every consumer at once.
     fn rewrite_bound_texture_srvs(&self, slot: usize) {
         let resource = &self.scene.textures[slot];
-        for f in 0..FRAMES {
+        for f in 0..self.hw.frames() {
             write_texture_srv(
                 &self.hw.device,
                 resource,
@@ -133,7 +133,7 @@ impl DxContext {
         }
         self.stream
             .retires
-            .collect(self.stream.frame, StreamState::RETIRE_DEPTH);
+            .collect(self.stream.frame, self.stream.retire_depth);
     }
 
     // Reset texture-pool `slot` to a 1x1 mid-gray placeholder.

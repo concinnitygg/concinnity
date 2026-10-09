@@ -18,7 +18,7 @@ use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Threading::WaitForSingleObject;
 use windows::core::Interface;
 
-use crate::directx::context::{DxContext, FRAMES};
+use crate::directx::context::DxContext;
 use crate::directx::error::{self, map_hresult};
 use crate::gpu_wait::GpuWait;
 
@@ -103,7 +103,7 @@ impl DxContext {
         self.apply_streamed_texture_rewrites(frame);
 
         // Tick the placement pool: the same fence wait retired every list that
-        // could still reference a range freed `FRAMES + 1` ticks ago, so those
+        // could still reference a range freed `frames + 1` ticks ago, so those
         // bytes become placeable again here.
         self.hw.alloc.begin_frame();
         // Same tick for the staged geometry writes' ring and copy lists.
@@ -141,14 +141,14 @@ impl DxContext {
         // Pull the most recently completed GPU times for this slot. The fence
         // wait in `wait_frame_slot` already ensured the GPU work
         // that wrote this slot's readback bytes has retired, so the
-        // persistently-mapped pointer reflects fully committed pairs (`FRAMES`
-        // frames stale by construction). Zero before the slot has been visited
+        // persistently-mapped pointer reflects fully committed pairs (one ring
+        // cycle stale by construction). Zero before the slot has been visited
         // a second time (the readback buffer starts zero-initialized). Inactive
         // passes keep the frame-start timestamp in both slots (see the pre-init
         // loop in `record_frame`), so they read 0 us.
         if !self.timestamps.readback_ptr.is_null() && self.timestamps.frequency > 0 {
             // SAFETY: `readback_ptr` is the persistently-mapped base of a READBACK buffer
-            // sized for FRAMES blocks of SLOTS_PER_FRAME u64s each (see
+            // sized for one block of SLOTS_PER_FRAME u64s per frame in flight (see
             // build_timestamp_resources). The `wait_frame_slot` fence wait ensures this block's writes
             // have retired.
             let block_base = unsafe {
@@ -414,7 +414,7 @@ impl DxContext {
         }
         .map_err(|e| error::map_hresult(e.code(), "Signal"))?;
 
-        self.current_frame = (self.current_frame + 1) % FRAMES;
+        self.current_frame = (self.current_frame + 1) % self.hw.frames();
         Ok(())
     }
 

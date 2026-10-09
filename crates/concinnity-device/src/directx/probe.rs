@@ -53,7 +53,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
-use super::context::{DxContext, FRAMES};
+use super::context::DxContext;
 use super::error::map_hresult;
 use super::light_cull::ClusterGrid;
 use super::probe_prefilter::PrefilterGpu;
@@ -182,10 +182,10 @@ impl DxContext {
     }
 
     // The reserved transient-ring slot the asynchronous bake builds its bindless
-    // buffers into. The cull rings are sized `FRAMES + 1` in `init/pipelines.rs`
-    // to make room.
+    // buffers into. The cull rings are sized one past the frames in
+    // flight to make room.
     fn bake_ring_slot(&self) -> usize {
-        capture_ring_slot(FRAMES)
+        capture_ring_slot(self.hw.frames())
     }
 
     // GPU descriptor handle of the reflection-probe cube array's SRV (root param

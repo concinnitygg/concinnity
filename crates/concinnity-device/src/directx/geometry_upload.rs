@@ -7,7 +7,7 @@
 //! build. `draw_frame` flushes right after its frame-slot wait, and `wait_idle`
 //! flushes before it waits, so an idle GPU has applied every staged write.
 //!
-//! The ring's bytes and the command list are held `FRAMES + 1` ticks past the
+//! The ring's bytes and the command list are held one tick beyond the frames in flight past the
 //! submit that read them, the window the device allocator retires on. A list
 //! also holds the ring buffers its copies read until it is reused, so one a
 //! larger ring replaced outlives the submits that still name it.

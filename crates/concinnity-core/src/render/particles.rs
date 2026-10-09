@@ -11,6 +11,10 @@ use crate::math::{cos, floor};
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
+/// Live emitters a backend that reserves per-emitter descriptors at init can
+/// hold; adds past it return an error.
+pub const MAX_EMITTERS: usize = 256;
+
 /// Upper bound on the per-emitter pool the backend will allocate. Each slot
 /// is 32 bytes on the GPU (matching `Particle` in `shaders/particle_types.hlsl`),
 /// so 65 536 slots = 2 MiB per emitter, already well past the visual point

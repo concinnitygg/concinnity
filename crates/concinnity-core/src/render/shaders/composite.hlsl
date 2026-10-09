@@ -73,11 +73,10 @@ struct CompositeParams
 
 {TEXTURE_SIZE}
 
-// SDR reference white in cd/m2 (nits). BT.2408 recommends 203 nits as the HDR
-// mixing reference; it keeps SDR content from looking dim alongside HDR
-// highlights and matches the value mainstream HDR pipelines use as the
-// linear-to-PQ mapping reference.
-static const float PQ_SDR_REFERENCE_NITS = 203.0;
+// Luminance in cd/m2 (nits) the PQ encode assigns to linear 1.0: the BT.2408
+// HDR reference white, which keeps SDR-range content from looking dim beside
+// HDR highlights. Not the scRGB unit, which is 80 nits by definition.
+static const float PQ_REFERENCE_WHITE_NITS = 203.0;
 
 // Width of the color-grading LUT along one axis.
 float lut_axis_size()
@@ -243,7 +242,7 @@ float4 composite_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
         float3 hdr_vig = scene_sample(uv) * vig;
         if (post.pq_output > 0.5)
         {
-            return float4(pq_encode(hdr_vig * PQ_SDR_REFERENCE_NITS), 1.0);
+            return float4(pq_encode(hdr_vig * PQ_REFERENCE_WHITE_NITS), 1.0);
         }
         return float4(hdr_vig, 1.0);
     }

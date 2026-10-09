@@ -350,6 +350,13 @@ bool hiz_occluded(float3 bb_min, float3 bb_max)
     int2 max_xy = int2(mip_dim) - int2(1, 1);
     lo = clamp(lo, int2(0, 0), max_xy);
     hi = clamp(hi, int2(0, 0), max_xy);
+    // A pyramid shorter than the full chain can leave the rect wider than the
+    // 2x2 footprint at its deepest mip; the corners alone would miss the
+    // interior, so keep it.
+    if (any(hi - lo > int2(1, 1)))
+    {
+        return false;
+    }
     float d0 = hiz_tex.Load(int3(lo.x, lo.y, mip));
     float d1 = hiz_tex.Load(int3(hi.x, lo.y, mip));
     float d2 = hiz_tex.Load(int3(lo.x, hi.y, mip));

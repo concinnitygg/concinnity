@@ -26,7 +26,9 @@ use ash::vk;
 use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::render_types::ClusterParams;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::planar_reflection::{self, PlanarReflectors};
+use concinnity_core::render::planar_reflection::{
+    self, PLANAR_CLIP_BIAS, PLANAR_CROP_MARGIN, PlanarReflectors,
+};
 use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
 
@@ -55,15 +57,7 @@ use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, OwnedRenderPas
 // tier, never higher; panes past it fall back to the box-projected probe cube.
 pub(in crate::vulkan) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_PLANAR_PLANES;
 
-// Clip the reflection a hair toward the kept (camera) side of the plane so
-// geometry exactly on the surface is not lost to near-plane precision. Matches
-// the other backends' PLANAR_CLIP_BIAS.
-const PLANAR_CLIP_BIAS: f32 = 0.02;
 const PLANAR_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
-
-// Texels a mirror's crop is grown by on every side, covering the bilinear
-// footprint of the reflector's lookup.
-const PLANAR_CROP_MARGIN: u32 = 2;
 
 // The set of distinct reflection planes for the world, each rendering its mirror
 // into the shared color + depth then resolving into its own shader-readable

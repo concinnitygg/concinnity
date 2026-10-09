@@ -43,7 +43,7 @@
 
 {DEPTH_CONVENTION}
 
-static const uint NUM_SHADOW_CASCADES = 4u;
+{LIGHT_TYPES}
 
 struct FogParams
 {
@@ -92,16 +92,6 @@ struct FogFroxelParams
 };
 
 #ifdef FOG_FROXEL
-
-struct ShadowUniforms
-{
-    float4x4 light_vps[NUM_SHADOW_CASCADES];
-    float4 cascade_splits;
-    uint active_cascades;
-    uint _pad0;
-    uint _pad1;
-    uint _pad2;
-};
 
 [[vk::binding(0, 0)]] ConstantBuffer<FogParams> fog : register(b0);
 [[vk::binding(1, 0)]] ConstantBuffer<FogFroxelParams> froxel : register(b1);

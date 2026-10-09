@@ -3,9 +3,9 @@
 //! EV, and the histogram build + average compute dispatches that produce next
 //! frame's average. The compute passes are encoded after the main HDR resolve
 //! (where `hdr_srv_gpu` carries this frame's scene color) and read CPU-side at
-//! the top of a later frame, so there is `FRAMES - 1` frames of latency between
-//! the scene's actual luminance and the exposure applied to it, invisible at
-//! human-scale eye-adaptation rates. Mirrors `metal/auto_exposure.rs`.
+//! the top of the slot's next trip through the frames-in-flight ring, a latency
+//! between the scene's actual luminance and the exposure applied to it that is
+//! invisible at human-scale eye-adaptation rates. Mirrors `metal/auto_exposure.rs`.
 
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
@@ -17,7 +17,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::context::{DxContext, FRAMES};
+use crate::directx::context::DxContext;
 use crate::directx::descriptor_slot::DescriptorTables;
 use crate::directx::error::map_hresult;
 use crate::directx::pso::compute_pso;
@@ -136,9 +136,10 @@ impl AutoExposureResources {
 
         // Per-frame readback buffers. READBACK heap resources start in
         // COPY_DEST and never need a barrier.
-        let mut readback_bufs: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-        let mut readback_ptrs: Vec<*const f32> = Vec::with_capacity(FRAMES);
-        for _ in 0..FRAMES {
+        let frames = alloc.frames_in_flight();
+        let mut readback_bufs: Vec<PooledBuffer> = Vec::with_capacity(frames);
+        let mut readback_ptrs: Vec<*const f32> = Vec::with_capacity(frames);
+        for _ in 0..frames {
             let buf = alloc.alloc_buffer(
                 std::mem::size_of::<f32>() as u64,
                 D3D12_HEAP_TYPE_READBACK,

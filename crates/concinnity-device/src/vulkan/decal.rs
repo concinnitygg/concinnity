@@ -34,10 +34,9 @@ use crate::vulkan::owned::{
     OwnedSetLayout, VkDevice,
 };
 
-// Cap on the number of active decals: the descriptor pool reserves a
-// fixed block of `MAX_DECALS` per-decal albedo sets at init, so runtime
-// adds past this many return an error.
-pub(in crate::vulkan) const MAX_DECALS: usize = 256;
+// The descriptor pool reserves a fixed block of `MAX_DECALS` per-decal albedo
+// sets at init.
+pub(in crate::vulkan) const MAX_DECALS: usize = concinnity_core::render::decal::MAX_DECALS;
 
 // Eight unit-cube corners in [-0.5, 0.5]^3. Matches the DirectX / Metal
 // vertex lists.

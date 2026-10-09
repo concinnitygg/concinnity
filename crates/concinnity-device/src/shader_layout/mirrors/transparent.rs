@@ -1,9 +1,8 @@
 //! The transparent pass's three producers, the ray-traced reflection resolve, and
 //! the fog pair. `TransparentView` is declared by glass.hlsl, glass_mesh.hlsl
 //! and water.hlsl alike, so all three are mirrored: they are separate
-//! declarations that can drift apart. The fog froxel kernel carries the third declaration of
-//! `ShadowUniforms` -- the only one that spells out the trailing pad the CPU
-//! uploads.
+//! declarations that can drift apart. The fog froxel kernel binds the shared
+//! `ShadowUniforms` from `light_types.hlsl`.
 
 use concinnity_core::gfx::render_types::{
     FogFroxelParams, FogParams, RtGeomEntry, RtParams, ShadowUniforms,

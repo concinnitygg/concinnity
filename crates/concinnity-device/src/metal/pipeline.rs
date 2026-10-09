@@ -231,4 +231,29 @@ mod tests {
     fn hot_reload_reads_the_checkout_copy() {
         assert!(cull_encode_source(true).contains("kernel void cull_encode("));
     }
+
+    // Value of a `constant uint <name> = <N>u;` line in the encode kernel.
+    fn encode_const(name: &str) -> u32 {
+        let src = cull_encode_source(false);
+        src.lines()
+            .find_map(|line| {
+                let (decl, value) = line
+                    .trim()
+                    .strip_prefix("constant uint ")?
+                    .split_once('=')?;
+                (decl.trim() == name)
+                    .then(|| value.trim().trim_end_matches(";").trim_end_matches('u'))
+            })
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("cull_encode.metal declares no `{name}`"))
+    }
+
+    #[test]
+    fn the_bucket_count_matches_render_types() {
+        use concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
+        assert_eq!(
+            encode_const("MAX_SHADER_BUCKETS") as usize,
+            MAX_SHADER_BUCKETS
+        );
+    }
 }

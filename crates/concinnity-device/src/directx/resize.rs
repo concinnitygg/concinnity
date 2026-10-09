@@ -16,7 +16,7 @@ use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 
-use crate::directx::context::{DxContext, FRAMES};
+use crate::directx::context::{BACK_BUFFERS, DxContext};
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
 use crate::directx::texture::{
@@ -57,7 +57,7 @@ impl DxContext {
         self.swapchain.back_buffers.clear();
         // SAFETY: a property query on a live descriptor heap; it only reads.
         let rtv_base = unsafe { self.swapchain.rtv_heap.GetCPUDescriptorHandleForHeapStart() };
-        for i in 0..FRAMES {
+        for i in 0..BACK_BUFFERS {
             // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters
             // it fills are live locals that outlive the call.
             let buf: ID3D12Resource = unsafe { self.swapchain.handle.GetBuffer(i as u32) }
@@ -131,7 +131,7 @@ impl DxContext {
         //    (the GPU is already drained by `wait_idle`) so no reference outlives
         //    the clear. Without this, `ResizeBuffers` fails with
         //    DXGI_ERROR_INVALID_CALL and the window can never be resized.
-        for i in 0..FRAMES {
+        for i in 0..self.hw.frames() {
             // SAFETY: the fence for this frame slot was already waited on, so no submission still
             // references what is being reset.
             unsafe {
@@ -156,7 +156,7 @@ impl DxContext {
         // above, and the call takes only scalars besides the format and flags.
         if let Err(e) = unsafe {
             self.swapchain.handle.ResizeBuffers(
-                FRAMES as u32,
+                BACK_BUFFERS as u32,
                 new_w,
                 new_h,
                 self.swapchain.format,

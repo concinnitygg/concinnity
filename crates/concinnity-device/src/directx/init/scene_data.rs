@@ -9,7 +9,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::InitGpu;
 use crate::directx::allocator::PooledBuffer;
-use crate::directx::context::{DxUniforms, FRAMES, align256, dump_on_err};
+use crate::directx::context::{DxUniforms, align256, dump_on_err};
 use crate::directx::draw::{upload_light_uniforms, upload_static_records};
 use crate::directx::error::map_hresult;
 use crate::directx::light_cull::{self as lc, LightCullState};
@@ -20,14 +20,15 @@ pub(super) fn build_uniforms(
     local_lights: &[GpuLight],
 ) -> RenderResult<DxUniforms> {
     let hw = gpu.hw;
-    // ProbeSet constant buffers: a `FRAMES` ring the main pass binds at root
+    let frames = hw.frames();
+    // ProbeSet constant buffers: a frames-in-flight ring the main pass binds at root
     // param [11] (written per frame with the live probe count), plus a static count-0 CBV
     // the asynchronous capture binds so a probe face samples the sky, not other
     // probes (and never reads the live ring while `record_frame` rewrites it).
     let probe_set_size = align256(std::mem::size_of::<ProbeSet>() as u64);
-    let mut probe_set_cbvs: Vec<PooledBuffer> = Vec::with_capacity(FRAMES);
-    let mut probe_set_cbv_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-    for _ in 0..FRAMES {
+    let mut probe_set_cbvs: Vec<PooledBuffer> = Vec::with_capacity(frames);
+    let mut probe_set_cbv_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+    for _ in 0..frames {
         let buf = hw.alloc.alloc_buffer(
             probe_set_size,
             D3D12_HEAP_TYPE_UPLOAD,
@@ -82,9 +83,9 @@ pub(super) fn build_uniforms(
     let light_ubo_size = align256(std::mem::size_of::<LightUniforms>() as u64);
     let shadow_ubo_size = align256(std::mem::size_of::<ShadowUniforms>() as u64);
 
-    let mut view_ubo_resources = Vec::with_capacity(FRAMES);
-    let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-    for _ in 0..FRAMES {
+    let mut view_ubo_resources = Vec::with_capacity(frames);
+    let mut view_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+    for _ in 0..frames {
         let buf = hw.alloc.alloc_buffer(
             view_ubo_size,
             D3D12_HEAP_TYPE_UPLOAD,
@@ -103,9 +104,9 @@ pub(super) fn build_uniforms(
     // frame so a live directional-light or ambient change is a CPU write
     // rather than a queue drain: a turning sky rewrites the set every frame,
     // and a single shared buffer would stall on every one of them.
-    let mut light_ubo_resources = Vec::with_capacity(FRAMES);
-    let mut light_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-    for _ in 0..FRAMES {
+    let mut light_ubo_resources = Vec::with_capacity(frames);
+    let mut light_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+    for _ in 0..frames {
         let buf = hw.alloc.alloc_buffer(
             light_ubo_size,
             D3D12_HEAP_TYPE_UPLOAD,
@@ -122,9 +123,9 @@ pub(super) fn build_uniforms(
 
     // Triple-buffer the shadow UBO since cascade VPs are recomputed each
     // frame from the camera. Persistently mapped.
-    let mut shadow_ubo_resources = Vec::with_capacity(FRAMES);
-    let mut shadow_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(FRAMES);
-    for _ in 0..FRAMES {
+    let mut shadow_ubo_resources = Vec::with_capacity(frames);
+    let mut shadow_ubo_ptrs: Vec<*mut u8> = Vec::with_capacity(frames);
+    for _ in 0..frames {
         let buf = hw.alloc.alloc_buffer(
             shadow_ubo_size,
             D3D12_HEAP_TYPE_UPLOAD,
@@ -183,7 +184,7 @@ pub(super) fn build_uniforms(
         cluster_reach: concinnity_core::render::cluster_range::ClusterReach::new(local_lights),
         light_uniforms,
         light_dirty: std::cell::Cell::new(concinnity_core::render::frame_dirty::FrameDirty::new(
-            FRAMES,
+            frames,
         )),
         shadow_ubo_resources,
         shadow_ubo_ptrs,
@@ -200,7 +201,7 @@ pub(super) fn build_uniforms(
 pub(super) fn build_light_cull(gpu: &InitGpu<'_>) -> RenderResult<LightCullState> {
     let hw = gpu.hw;
     let cluster_buffer = lc::build_cluster_light_buffer(&hw.device)?;
-    let (params_resources, params_ptrs) = lc::build_cluster_params_buffers(&hw.alloc, FRAMES)?;
+    let (params_resources, params_ptrs) = lc::build_cluster_params_buffers(&hw.alloc, hw.frames())?;
     let cs = lc::compile_light_cull_shader(gpu.hot_reload)?;
     let root_sig = dump_on_err(
         hw.info_queue.as_ref(),
