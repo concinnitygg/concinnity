@@ -12,6 +12,7 @@
 //! DirectX renderers expect.
 
 use concinnity_core::ecs::StepResult;
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
 use crate::app::runtime::Runtime;
 
@@ -55,6 +56,7 @@ pub fn activate_app_macos() {
 /// caller sets it from whether the world actually renders, so a headless macOS
 /// world uses the same tight loop as every other platform.
 pub fn run_loop(runtime: &mut Runtime, pump_events: bool, mut on_tick: impl FnMut(&mut Runtime)) {
+    set_current_thread_role(ThreadRole::Frame);
     let shutdown = runtime.shutdown_token();
 
     loop {

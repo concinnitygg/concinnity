@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use concinnity_cook::build_only::LoadedWorld;
 use concinnity_cook::{BuildProgress, BuildReport, BuildStage};
 use concinnity_core::platform::Platform;
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
 use board::{Board, NoteLevel, Outcome, RowState, Step};
 use terminal::Surface;
@@ -100,6 +101,7 @@ impl BuildStatus {
         let redraw = std::thread::Builder::new()
             .name("build-status".into())
             .spawn(move || {
+                set_current_thread_role(ThreadRole::Background);
                 let mut tick = 0;
                 while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(period) {
                     tick += 1;

@@ -17,6 +17,7 @@ use concinnity_core::input::snapshot::InputPacket;
 use concinnity_core::render::backend::RenderBackend;
 use concinnity_core::render::feedback::FrameFeedback;
 use concinnity_core::render::snapshot::RenderSnapshot;
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use std::sync::mpsc::{Receiver, Sender};
 
 use crate::app::runtime::Runtime;
@@ -37,6 +38,7 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
         crate::app::runloop::run_loop(&mut runtime, false, |_| {});
         return;
     };
+    set_current_thread_role(ThreadRole::Frame);
     let shutdown = runtime.shutdown_token();
     let (snapshot_tx, snapshot_rx) = std::sync::mpsc::sync_channel::<RenderSnapshot>(0);
     let (feedback_tx, feedback_rx) = std::sync::mpsc::channel::<FrameFeedback>();
@@ -51,6 +53,7 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
     let sim = std::thread::Builder::new()
         .name("sim".to_string())
         .spawn(move || {
+            set_current_thread_role(ThreadRole::Frame);
             loop {
                 if sim_shutdown.is_canceled() {
                     return;

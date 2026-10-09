@@ -6,6 +6,7 @@
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines, RenderBackend};
 use concinnity_core::render::error::RenderResult;
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
@@ -87,6 +88,7 @@ impl BuildRequest {
         let spawned = std::thread::Builder::new()
             .name("shader-warmup".into())
             .spawn(move || {
+                set_current_thread_role(ThreadRole::Background);
                 let built = self.run(builder.as_deref());
                 let _ = self.done.send(built);
             });

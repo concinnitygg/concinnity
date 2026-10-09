@@ -8,6 +8,7 @@ use concinnity_core::components::Camera3D;
 use concinnity_core::ecs::World;
 use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_host::thread::asset_id;
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
@@ -61,7 +62,10 @@ impl DebugServer {
         let shared_for_thread = Arc::clone(&shared);
         std::thread::Builder::new()
             .name("debug-server".to_string())
-            .spawn(move || serve(listener, shared_for_thread))?;
+            .spawn(move || {
+                set_current_thread_role(ThreadRole::Background);
+                serve(listener, shared_for_thread)
+            })?;
 
         tracing::info!("debug server listening on http://127.0.0.1:{port}/mcp");
         Ok(Self {
@@ -275,6 +279,7 @@ fn serve(listener: TcpListener, shared: Arc<Mutex<DebugState>>) {
         };
         let server = Arc::clone(&server);
         std::thread::spawn(move || {
+            set_current_thread_role(ThreadRole::Background);
             if let Err(e) = handle_conn(stream, &server) {
                 tracing::debug!("debug client closed: {e}");
             }

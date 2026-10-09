@@ -3,6 +3,7 @@
 //! generation: only a key's newest request is applied, so an older compile that
 //! finishes late never overwrites a newer save.
 
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -81,6 +82,7 @@ where
         std::thread::Builder::new()
             .name("cn-shader-reload".into())
             .spawn(move || {
+                set_current_thread_role(ThreadRole::Background);
                 // A dropped receiver means the reload state was rebuilt for
                 // another world; the result is no longer wanted.
                 let _ = tx.send(Finished {

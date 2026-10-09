@@ -4,6 +4,7 @@
 //! the one-cook-at-a-time guard.
 
 use concinnity_host::thread::jobs::pool;
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
 use super::EditorHook;
 
@@ -21,6 +22,7 @@ impl EditorHook {
         let running = self.console_build_running.clone();
         let op = self.notifier.begin_op(label);
         std::thread::spawn(move || {
+            set_current_thread_role(ThreadRole::Background);
             let start = std::time::Instant::now();
             // Fractional progress from the parallel payload compile; the
             // other stages leave the bar indeterminate. The bounded pool

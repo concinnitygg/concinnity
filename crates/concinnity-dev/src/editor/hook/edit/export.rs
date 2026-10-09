@@ -4,6 +4,7 @@
 //! reports through the log sink and a toast.
 
 use concinnity_host::thread::jobs::pool;
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use std::sync::atomic::Ordering;
 
 use crate::editor::entry_list::build_text;
@@ -49,6 +50,7 @@ impl EditorHook {
         let op = self.notifier.begin_op("Exporting");
         sink.info(&format!("export of '{mesh}' started"));
         std::thread::spawn(move || {
+            set_current_thread_role(ThreadRole::Background);
             // The bounded pool keeps the compile off rayon's global pool,
             // like the cook worker.
             let outcome = pool()

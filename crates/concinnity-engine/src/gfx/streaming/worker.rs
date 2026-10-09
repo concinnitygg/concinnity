@@ -6,6 +6,8 @@
 use std::sync::mpsc::Sender;
 use std::thread::JoinHandle;
 
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
+
 pub(crate) struct Worker<Req> {
     request_tx: Option<Sender<Req>>,
     handle: Option<JoinHandle<()>>,
@@ -22,7 +24,10 @@ impl<Req: Send + 'static> Worker<Req> {
     ) -> Self {
         let handle = std::thread::Builder::new()
             .name(name.to_string())
-            .spawn(move || work(requests))
+            .spawn(move || {
+                set_current_thread_role(ThreadRole::Background);
+                work(requests)
+            })
             .unwrap_or_else(|e| panic!("failed to spawn {name} worker: {e}"));
         Self {
             request_tx: Some(request_tx),

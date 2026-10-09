@@ -5,6 +5,7 @@
 //! in Drop: dropping the request sender ends the worker's recv loop, then the
 //! thread is joined, so a world rebuild never leaks the thread.
 
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use kira::sound::static_sound::StaticSoundData;
 use std::io::Cursor;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -29,6 +30,7 @@ impl DecodeWorker {
         let thread = std::thread::Builder::new()
             .name("audio-decode".into())
             .spawn(move || {
+                set_current_thread_role(ThreadRole::Background);
                 while let Ok((key, bytes)) = requests.recv() {
                     let decoded = decode(bytes);
                     if result_tx.send(DecodeResult { key, decoded }).is_err() {

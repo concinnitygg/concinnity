@@ -7,14 +7,17 @@
 //! systems concurrently.
 //!
 //! The pool wraps a dedicated `rayon::ThreadPool` rather than rayon's global
-//! pool so the worker count and thread names are controlled. It is process-wide
-//! and built once, by whichever of `configure` and `pool()` is reached first.
+//! pool so the worker count, thread names and scheduling are controlled: every
+//! worker runs as a [`ThreadRole::Frame`] thread. It is process-wide and built
+//! once, by whichever of `configure` and `pool()` is reached first.
 
 use std::sync::OnceLock;
 use std::time::Instant;
 
 use concinnity_core::profile::{FanOutClock, FanOutTimer, FanOutTiming};
 use rayon::prelude::*;
+
+use super::role::{ThreadRole, set_current_thread_role};
 
 /// A dedicated thread pool for per-frame data-parallel work.
 pub struct JobPool {
@@ -29,6 +32,7 @@ impl JobPool {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .thread_name(|i| format!("cn-job-{i}"))
+            .start_handler(|_| set_current_thread_role(ThreadRole::Frame))
             .build()
             .expect("failed to build job thread pool");
         tracing::info!("JobPool: {threads} worker thread(s)");
@@ -70,10 +74,10 @@ impl JobPool {
     }
 
     /// Run a closure inside this pool's scope so any nested rayon
-    /// `par_iter` / `par_iter_mut` calls dispatch to JobPool's bounded thread
-    /// count (`available_parallelism() - 1`) instead of rayon's global pool
-    /// (which defaults to every core and would starve the render thread when
-    /// invoked from a worker that is itself competing for CPU).
+    /// `par_iter` / `par_iter_mut` calls dispatch to this pool's bounded
+    /// workers instead of rayon's global pool (which defaults to every core
+    /// and would starve the render thread when invoked from a worker that is
+    /// itself competing for CPU).
     ///
     /// Used by every backend's parallel command-buffer recording.
     pub fn install<R, F>(&self, f: F) -> R
@@ -200,6 +204,25 @@ mod tests {
     fn new_sets_the_worker_count() {
         assert_eq!(JobPool::new(3).thread_count(), 3);
         assert_eq!(JobPool::new(0).thread_count(), 1);
+    }
+
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn workers_run_at_the_frame_qos_class() {
+        let class = JobPool::new(1).install(|| {
+            let mut class = libc::qos_class_t::QOS_CLASS_UNSPECIFIED;
+            let mut relative = 0;
+            // SAFETY: both out-pointers are live locals, and `pthread_self`
+            // names the calling worker, which outlives the call.
+            let status = unsafe {
+                libc::pthread_get_qos_class_np(libc::pthread_self(), &mut class, &mut relative)
+            };
+            (status, class as u32)
+        });
+        assert_eq!(
+            class,
+            (0, libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE as u32)
+        );
     }
 
     #[test]

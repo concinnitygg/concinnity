@@ -8,6 +8,7 @@ use concinnity_core::gfx::render_types;
 use concinnity_core::render::backend;
 use concinnity_engine::live_edit::hot_reload_sources::*;
 use concinnity_host::thread::jobs::pool;
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
 use super::state::*;
 
@@ -65,6 +66,7 @@ fn spawn_asset_decode_worker(state: &AssetHotReloadState) {
     match std::thread::Builder::new()
         .name("cn-asset-reload".into())
         .spawn(move || {
+            set_current_thread_role(ThreadRole::Background);
             // Run inside JobPool::install so any nested rayon `par_iter`
             // dispatches to the bounded `available_parallelism() - 1` pool
             // (mirroring the envmap worker). decode_asset_batch itself uses
@@ -121,6 +123,7 @@ fn spawn_envmap_worker(state: &AssetHotReloadState) {
     match std::thread::Builder::new()
         .name("cn-envmap-reload".into())
         .spawn(move || {
+            set_current_thread_role(ThreadRole::Background);
             let result = pool().install(|| {
                 concinnity_cook::compile::environment_map::decode_source(
                     &env_map_copy.resolved_path,

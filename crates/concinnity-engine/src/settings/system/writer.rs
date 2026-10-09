@@ -6,6 +6,7 @@
 //! flushed before shutdown.
 
 use concinnity_host::store::paths::StateTree;
+use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use std::sync::mpsc;
 
 use crate::config::Settings;
@@ -29,6 +30,7 @@ impl SettingsWriter {
         let thread = std::thread::Builder::new()
             .name("cn-settings-writer".into())
             .spawn(move || {
+                set_current_thread_role(ThreadRole::Background);
                 while let Ok(mut cfg) = rx.recv() {
                     // Coalesce queued snapshots; the newest wins.
                     while let Ok(newer) = rx.try_recv() {
