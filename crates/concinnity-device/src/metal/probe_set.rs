@@ -20,7 +20,7 @@ use objc2_metal::{
     MTLBuffer, MTLDevice, MTLRenderCommandEncoder, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
 
-use super::context::MtlContext;
+use super::context::{MtlContext, write_buffer_region};
 use super::descriptors::TextureDesc;
 use super::encode::RenderEncode;
 use super::error::allocation_failed;
@@ -186,9 +186,18 @@ impl MtlContext {
         } else {
             self.probe.book.records()
         };
-        self.rings
-            .probe_records
-            .write(&self.hw.device, ring_slot, bytemuck::cast_slice(records))
+        let bytes: &[u8] = bytemuck::cast_slice(records);
+        let (buf, fresh) =
+            self.rings
+                .probe_records
+                .slot_fresh(&self.hw.device, ring_slot, bytes.len())?;
+        // The records change only when a probe installs or the placements are
+        // replaced, so a slot already holding this revision is left alone.
+        let revision = self.probe.book.revision();
+        if self.rings.probe_tail.take(ring_slot, revision, fresh) {
+            write_buffer_region(&buf, 0, bytes)?;
+        }
+        Ok(buf)
     }
 
     // This frame's probe set, for a render pass to bind.

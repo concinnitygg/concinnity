@@ -30,6 +30,9 @@ pub(crate) mod png_encode;
 // Consuming a temporal upscaler's history reset, the same on every backend.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod upscale_reset;
+// Packing the per-draw cull records, inline or across the job pool.
+#[cfg(any(backend_metal, backend_dx, backend_vk))]
+pub(crate) mod record_pack;
 // How the reflection-probe bake is logged, the same on every backend.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
 pub(crate) mod probe_report;

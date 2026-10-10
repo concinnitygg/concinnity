@@ -227,7 +227,7 @@ pub(super) fn build_compute_cull(
     // record (+ `GpuDrawArgs`) once into every frame buffer, after the
     // `n_objects` static records. Instances are placed at world load and
     // never move, so these records are static -- the per-frame static fill
-    // (`build_object_buffer` / `build_draw_args_buffer`) writes only
+    // (`build_record_buffers`) writes only
     // `[0, n_objects)`, leaving the instance tail intact. Only runs when the
     // bindless cull buffers exist (the bindless pass is active with build-time
     // geometry) and the world declares instanced props. Mirrors
@@ -239,7 +239,7 @@ pub(super) fn build_compute_cull(
         let records =
             instance_object_records(&world.instanced_clusters, scene.textures.len() as u32);
         // Cluster base LOD slice (absolute indices, so `base_vertex = 0`),
-        // which `build_draw_args_buffer` patches per frame for the clusters
+        // which `build_record_buffers` patches per frame for the clusters
         // that declare alternates. Every instance is visible + resident +
         // cullable, so its finite per-instance world AABB is frustum /
         // distance / Hi-Z tested independently by the cull kernel.

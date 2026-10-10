@@ -237,15 +237,14 @@ impl DxContext {
         // Build the reserved-slot bindless buffers once: the per-object record buffer
         // and the draw-args buffer (LOD by distance from the probe eye). Both are
         // frustum-independent, reused by every face's cull.
-        self.build_object_buffer(slot);
-        if let Some(params) = self.cull.material_params.as_mut() {
-            params.upload(slot);
-        }
-        self.build_draw_args_buffer(
+        self.build_record_buffers(
             slot,
             eye,
             concinnity_core::render::model_history::HistoryMode::Untracked,
         );
+        if let Some(params) = self.cull.material_params.as_mut() {
+            params.upload(slot);
+        }
 
         let alloc = &self.hw.alloc;
         let device = &self.hw.device;

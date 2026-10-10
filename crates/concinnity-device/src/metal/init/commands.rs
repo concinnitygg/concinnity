@@ -11,6 +11,8 @@ use crate::metal::context::{Diagnostics, FrameRings};
 use crate::metal::frame_rings::{JointRing, TransientRing};
 use crate::metal::material_params::MaterialParamRing;
 use crate::metal::pass_timing::PassTimingResources;
+use crate::record_pack::RecordPacker;
+use concinnity_core::render::record_pack::StaticSlots;
 
 // The bindless buffers an async reflection-probe bake reads across frames
 // (object, draw-args, and the skinned joint palettes) get one EXTRA ring
@@ -29,12 +31,13 @@ pub(super) fn build_rings(
     FrameRings {
         object: TransientRing::new(frames_in_flight.max(1) + 1),
         draw_args: TransientRing::new(frames_in_flight.max(1) + 1),
+        instance_tail: StaticSlots::new(frames_in_flight.max(1) + 1),
+        packer: RecordPacker::default(),
         model_history: TransientRing::new(frames_in_flight),
         bindless_tex: TransientRing::new(frames_in_flight.max(1)),
         probe_records: TransientRing::new(frames_in_flight.max(1) + 1),
+        probe_tail: StaticSlots::new(frames_in_flight.max(1) + 1),
         joint: JointRing::new(frames_in_flight.max(1) + 1),
-        object_scratch: Vec::new(),
-        draw_args_scratch: Vec::new(),
         material_params: MaterialParamRing::new(material_params, frames_in_flight.max(1) + 1),
     }
 }

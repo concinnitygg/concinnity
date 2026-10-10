@@ -11,8 +11,8 @@
 //! The shape mirrors `metal/cull.rs::encode_cull`; the graph executor
 //! in [`graph_exec.rs`](graph_exec.rs) dispatches `PassId::Cull` here.
 //!
-//! CPU-side per-frame buffer rebuilds (`build_object_buffer` +
-//! `build_draw_args_buffer`) stay in `record_frame`: they're host
+//! CPU-side per-frame buffer rebuilds (`build_record_buffers`) stay in
+//! `record_frame`: they're host
 //! writes to mapped GPU memory, not part of the GPU command stream the
 //! graph orders.
 

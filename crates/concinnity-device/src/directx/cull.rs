@@ -17,6 +17,7 @@
 use concinnity_core::gfx::frustum::{Frustum, Plane};
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types::{self, MAX_SHADOWED_SPOTS};
+use concinnity_core::profile::FanOutTiming;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::uniforms::directx::CullParams;
@@ -47,6 +48,8 @@ pub(in crate::directx) struct CullKernels {
 // issues each bucket's region with one `ExecuteIndirect`. All `Some`/non-empty
 // only when the world has anything to drive.
 pub(in crate::directx) struct CullState {
+    // Packs the static draws' records into the object and draw-args buffers.
+    pub packer: crate::record_pack::RecordPacker,
     // The main pass's root signature and bucket 0's PSO: the world default
     // Shader's pair where the world declares one, the engine's pair otherwise.
     pub main_bindless_root_sig: Option<ID3D12RootSignature>,
@@ -386,84 +389,98 @@ impl DxContext {
         }
     }
 
-    // Rebuild this frame's `StructuredBuffer<GpuDrawArgs>` for the GPU-cull
-    // compute kernel: one 16-byte record per build-time `DrawObject`, carrying
-    // the indexed-draw arguments the kernel encodes plus the per-frame
-    // cull-decision bits (`update_visibility` / streaming residency). Streamed
-    // chunks (past `draw.n_objects`) are skipped; a no-op when the bindless pass is
-    // inactive. The per-object `(index_offset, index_count)` is the active LOD
-    // slice picked by camera distance, so the bindless main pass renders the
-    // chosen LOD with no shader-side change. Mirrors `metal/cull.rs`.
-    pub(in crate::directx) fn build_draw_args_buffer(
+    // Pack ring slot `slot`'s `StructuredBuffer<GpuObjectData>` and
+    // `StructuredBuffer<GpuDrawArgs>`: one record each per draw, indexed by
+    // object id, carrying the bindless pass's per-object data and the
+    // indexed-draw arguments plus per-frame cull-decision bits the cull kernel
+    // encodes. Each draw's `(index_offset, index_count)` is the active LOD slice
+    // picked by distance from `cam_pos`. The static draws are packed in place
+    // across the job pool once that pays; the runtime reserve and skinned tail
+    // follow, and the instance tail (filled at init) only has its LOD slices
+    // patched. Returns the static draws' packing time; a no-op when the bindless
+    // pass is inactive. Mirrors `metal/cull.rs`.
+    pub(in crate::directx) fn build_record_buffers(
         &self,
-        frame_idx: usize,
+        slot: usize,
         cam_pos: [f32; 3],
         history: HistoryMode,
-    ) {
+    ) -> FanOutTiming {
         use concinnity_core::gfx::render_types::{
-            GpuDrawArgs, draw_args_bucket_bits, draw_args_flags,
+            GpuDrawArgs, GpuObjectData, albedo_pool_index, draw_args_bucket_bits, draw_args_flags,
+            normal_pool_index, pack_skinned_record,
         };
-        let Some(&ptr) = self.cull.draw_args_buffer_ptrs.get(frame_idx) else {
-            return;
+        use concinnity_core::render::record_pack::{PackView, StaticPack, pool_object_record};
+        let (Some(&objects), Some(&args)) = (
+            self.cull.object_buffer_ptrs.get(slot),
+            self.cull.draw_args_buffer_ptrs.get(slot),
+        ) else {
+            return FanOutTiming::default();
         };
-        let stride = std::mem::size_of::<GpuDrawArgs>();
+        let n_cull = self.cull_count();
+        // SAFETY: both buffers were mapped at init with room for `cull_count()`
+        // records, which never changes; slot `slot` is this frame's (its fence has
+        // signaled) or the probe bake's reserved slot before its capture is
+        // submitted, so the GPU reads neither, and these are the only views of
+        // either mapping until this function returns.
+        let records = unsafe { mapped_records::<GpuObjectData>(objects, n_cull) };
+        // SAFETY: as above, for the draw-args mapping.
+        let draw_args = unsafe { mapped_records::<GpuDrawArgs>(args, n_cull) };
+        let (Some(records), Some(draw_args)) = (records, draw_args) else {
+            tracing::error!("directx: cull record buffers are not mapped for {n_cull} records");
+            return FanOutTiming::default();
+        };
+        // Shared handle-indexed pool indices, identical to Vulkan/Metal: albedo =
+        // texture_slot, normal = the normal map's own handle (or the flat-normal
+        // fallback slot for a normal-less draw). The bindless main pass + RT hit
+        // shader bind the pool base, so a shared texture resolves to one descriptor.
+        let texture_count = self.scene.textures.len() as u32;
         // Main thread only, ahead of the encode fan-out: no worker borrows the tracker.
         let mut model_history = self.state.model_history.borrow_mut();
-        model_history.begin(history, self.cull_count());
+        model_history.begin(history, n_cull);
         // A see-through glass mesh (Layer 2) is disabled in the opaque pass when
-        // the RT path is live: it draws in the transparent pass instead. Clearing
-        // ENABLED makes the cull kernel reset its command to a no-op (the same
-        // path invisible / non-resident objects take), so it neither draws opaque
-        // nor occludes the refraction snapshot. The object keeps its slot, so
-        // every parallel cull / object-buffer / prev-model index stays intact.
+        // the RT path is live: it draws in the transparent pass instead.
         let mesh_glass_active = self.mesh_glass_active();
-        for (i, obj) in self
+
+        let n_static = self
             .state
             .draw
-            .objects
-            .iter()
-            .take(self.state.draw.n_objects)
-            .enumerate()
-        {
-            // Per-frame active LOD pick. Objects with no alternates fall
-            // straight through to LOD0.
-            let d = lod::camera_distance(obj, cam_pos);
-            let (index_offset, index_count) = obj.active_lod(d);
-            let opaque_visible =
-                obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
-            let rec = GpuDrawArgs {
-                index_count: index_count as u32,
-                index_offset: index_offset as u32,
-                base_vertex: obj.base_vertex as u32,
-                // The record's shader bucket rides the upper flag bits so the
-                // cull kernel can route its command into that bucket's region.
-                flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | draw_args_bucket_bits(obj.shader_bucket)
-                    | model_history.draw_flags(i, i),
-            };
-            // SAFETY: the buffer was sized for `draw.n_objects` records and the
-            // loop is bounded by `take(draw.n_objects)`, so `i * stride` is in range.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &rec as *const GpuDrawArgs as *const u8,
-                    ptr.add(i * stride),
-                    stride,
-                );
-            }
-        }
+            .n_objects
+            .min(self.state.draw.objects.len())
+            .min(n_cull);
+        let (static_records, _) = records.split_at_mut(n_static);
+        let (static_args, _) = draw_args.split_at_mut(n_static);
+        let packing = self.cull.packer.pack(
+            StaticPack {
+                objects: &self.state.draw.objects[..n_static],
+                records: static_records,
+                args: static_args,
+                history: model_history.window(),
+            },
+            &PackView {
+                cam_pos,
+                mesh_glass_active,
+            },
+            &|obj| pool_object_record(obj, texture_count),
+        );
 
-        // Runtime objects -- streamed chunks and spawned clones -- one draw-arg
-        // each in the reserved region at `[runtime_record_base() + k]`. Their
-        // geometry lives in the shared VB/IB, so the args carry the object's own
-        // `base_vertex` + index slice and it rides the static + instance prefix
-        // `ExecuteIndirect`. Both kinds are non-cullable (NaN AABB ->
-        // `cullable()` false, because the init-time BVH cannot refit to admit
+        // Runtime objects -- streamed chunks and spawned clones -- one record each
+        // in the reserved region at `[runtime_record_base() + k]`, packed exactly
+        // like a static object. Their geometry already lives in the shared VB/IB
+        // with their own `base_vertex` and index slice, so they ride the static +
+        // instance prefix `ExecuteIndirect`. Both kinds are non-cullable (NaN AABB
+        // -> `cullable()` false, because the init-time BVH cannot refit to admit
         // them), so a resident one draws unconditionally; a freed slot's
-        // `resident` clear disables it. The unused reserve tail is disabled
-        // (ENABLED clear -> the cull kernel emits a no-op and never reads its
-        // stale object record).
+        // `resident` clear disables it, and the cull kernel never reads a disabled
+        // record's stale object.
         let runtime_base = self.runtime_record_base();
         let n_resident_runtime = self.for_each_runtime_record(|k, i, obj| {
+            let Some((rec, arg)) = records
+                .get_mut(runtime_base + k)
+                .zip(draw_args.get_mut(runtime_base + k))
+            else {
+                return;
+            };
+            *rec = pool_object_record(obj, texture_count);
             // `camera_distance` falls back to the model translation for a
             // non-cullable object, so the LOD pick works off a NaN AABB. Chunks
             // carry no alternates and land on LOD0 either way; a clone inherits
@@ -471,10 +488,10 @@ impl DxContext {
             let d = lod::camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             // A clone copies its template's material, so a see-through one
-            // leaves the opaque pass the way the static loop's does.
+            // leaves the opaque pass the way a static one does.
             let opaque_visible =
                 obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
-            let rec = GpuDrawArgs {
+            *arg = GpuDrawArgs {
                 index_count: index_count as u32,
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
@@ -482,73 +499,58 @@ impl DxContext {
                     | draw_args_bucket_bits(obj.shader_bucket)
                     | model_history.draw_flags(runtime_base + k, i),
             };
-            // SAFETY: the reserve is `[runtime_base, runtime_base + draw.n_runtime)`
-            // and `for_each_runtime_record` caps `k < draw.n_runtime`, so the
-            // write is in range.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &rec as *const GpuDrawArgs as *const u8,
-                    ptr.add((runtime_base + k) * stride),
-                    stride,
-                );
-            }
         });
         // Disable the unused reserve tail so vacated / never-used slots draw
-        // nothing (the cull kernel skips `objects[i]` for an ENABLED-clear record).
+        // nothing (ENABLED clear -> the cull kernel emits a no-op and never reads
+        // its stale object record).
         let disabled = GpuDrawArgs {
             index_count: 0,
             index_offset: 0,
             base_vertex: 0,
             flags: 0,
         };
-        for k in n_resident_runtime..self.state.draw.n_runtime {
-            // SAFETY: `k < draw.n_runtime`, so `runtime_base + k < skinned_record_base()`.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &disabled as *const GpuDrawArgs as *const u8,
-                    ptr.add((runtime_base + k) * stride),
-                    stride,
-                );
-            }
+        let reserve_end = (runtime_base + self.state.draw.n_runtime).min(draw_args.len());
+        for arg in draw_args
+            .get_mut(runtime_base + n_resident_runtime..reserve_end)
+            .unwrap_or_default()
+        {
+            *arg = disabled;
         }
 
         // Skinned objects: one record each in the reserved tail at
-        // `[skinned_record_base(), cull_count())`. The main pass's 2nd
-        // `ExecuteIndirect` draws them against the per-frame deformed-vertex
-        // buffer with the skinned index buffer bound, so `base_vertex = 0`
-        // and the active-LOD slice is the element offset into the skinned IB.
-        // Active LOD is picked from the camera distance to the model translation.
-        let base = self.skinned_record_base();
-        for (k, obj) in self
+        // `[skinned_record_base(), cull_count())`. `model = obj.model` (applied
+        // after the per-frame skin deform), flat-pool texture indices like a
+        // static object, and a padded bind-pose AABB so the cull kernel can
+        // frustum/Hi-Z test them, so they are cullable + resident. The main
+        // pass's 2nd `ExecuteIndirect` draws them against the per-frame
+        // deformed-vertex buffer with the skinned index buffer bound, so
+        // `base_vertex = 0` and the active-LOD slice is the element offset into
+        // the skinned IB.
+        let skinned_base = self.skinned_record_base();
+        let skinned = self
             .state
             .skinned
             .draw_objects
             .iter()
-            .take(self.state.draw.n_skinned)
+            .take(self.state.draw.n_skinned);
+        let skinned_records = records.get_mut(skinned_base..).unwrap_or_default();
+        let skinned_args = draw_args.get_mut(skinned_base..).unwrap_or_default();
+        for (k, (obj, (rec, arg))) in skinned
+            .zip(skinned_records.iter_mut().zip(skinned_args.iter_mut()))
             .enumerate()
         {
+            let albedo = albedo_pool_index(obj.texture_slot, texture_count);
+            let normal = normal_pool_index(obj.normal_map_slot, texture_count);
+            *rec = pack_skinned_record(obj, albedo, normal);
             let d = lod::skinned_camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
-            let rec = GpuDrawArgs {
+            *arg = GpuDrawArgs {
                 index_count: index_count as u32,
                 index_offset: index_offset as u32,
                 base_vertex: 0,
-                // Skinned objects always carry a finite padded bind-pose AABB
-                // (`pack_skinned_record`), so they are cullable + resident; the
-                // cull kernel frustum/Hi-Z tests them like any static object.
                 flags: draw_args_flags(obj.visible, true, true)
-                    | model_history.skinned_flags(base + k, k),
+                    | model_history.skinned_flags(skinned_base + k, k),
             };
-            // SAFETY: the buffers reserved `draw.n_skinned` records past
-            // `skinned_record_base()` at init (threaded capacity), and the loop
-            // is bounded by `self.state.skinned.draw_objects.len() == self.state.draw.n_skinned`.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &rec as *const GpuDrawArgs as *const u8,
-                    ptr.add((base + k) * stride),
-                    stride,
-                );
-            }
         }
 
         // Instance tail: overwrite each instance's record with its active LOD
@@ -562,26 +564,18 @@ impl DxContext {
                 &self.instanced.clusters,
                 cam_pos,
                 |record, index_offset, index_count| {
-                    let rec = GpuDrawArgs {
-                        index_count: index_count as u32,
-                        index_offset: index_offset as u32,
-                        base_vertex: 0,
-                        flags: draw_args_flags(true, true, true),
-                    };
-                    // SAFETY: the buffers reserved `n_instances` records past
-                    // `draw.n_objects` at init and `for_each_instance_lod`
-                    // visits each of those records at most once, so
-                    // `instance_base + record` is in range.
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            &rec as *const GpuDrawArgs as *const u8,
-                            ptr.add((instance_base + record) * stride),
-                            stride,
-                        );
+                    if let Some(arg) = draw_args.get_mut(instance_base + record) {
+                        *arg = GpuDrawArgs {
+                            index_count: index_count as u32,
+                            index_offset: index_offset as u32,
+                            base_vertex: 0,
+                            flags: draw_args_flags(true, true, true),
+                        };
                     }
                 },
             );
         }
+        packing
     }
 
     // Dispatch the cull compute pass: packs the camera frustum planes + Hi-Z
@@ -1076,4 +1070,27 @@ impl DxContext {
             && self.cull.main_bindless_pso.is_some()
             && self.cull_count() > 0
     }
+}
+
+// The first `len` records of a persistently mapped upload buffer, viewed as
+// `T`s for a pack to write in place. `None` when the mapping is null or
+// misaligned for `T`.
+//
+// # Safety
+//
+// `ptr` must start a live CPU mapping of at least `len` records of `T`, and
+// while the slice lives nothing else may read or write those bytes: the GPU
+// must be done with them and no other view of the mapping may exist.
+unsafe fn mapped_records<'a, T: bytemuck::AnyBitPattern + bytemuck::NoUninit>(
+    ptr: *mut u8,
+    len: usize,
+) -> Option<&'a mut [T]> {
+    let base = ptr.cast::<T>();
+    if base.is_null() || !base.is_aligned() {
+        return None;
+    }
+    // SAFETY: the caller guarantees `len` records of live mapping from `base`
+    // and exclusive access to them; the check above proved it aligned, and any
+    // bit pattern is a valid `T`.
+    Some(unsafe { std::slice::from_raw_parts_mut(base, len) })
 }

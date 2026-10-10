@@ -233,6 +233,7 @@ mod tests {
             gpu_wait_us: 250,
             render_cpu_us: 0,
             recording_fan_out: FanOutTiming::default(),
+            packing_fan_out: FanOutTiming::default(),
             pass_record_us: [0; MAX_PASS_TIMINGS],
             draw_calls: 64,
             objects: 512,

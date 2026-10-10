@@ -34,6 +34,10 @@ const RENDER_SUBMIT: &str = "render submit";
 /// fan-outs.
 const RENDER_RECORDING: &str = "render recording";
 
+/// The row for the render thread's packing of the per-draw cull records among
+/// the fan-outs.
+const RENDER_PACKING: &str = "render packing";
+
 /// How many of the run's slowest frames the report names.
 const SLOW_FRAMES_REPORTED: usize = 3;
 
@@ -317,16 +321,32 @@ fn slowest_frames(measured: &[&FrameSample], run: &FrameRun) -> Vec<SlowFrame> {
         .collect()
 }
 
-// Every fan-out a sample can carry, named: the render recording (no slot),
-// then each named system's.
-fn fan_out_slots(run: &FrameRun) -> impl Iterator<Item = (Option<usize>, &str)> {
-    core::iter::once((None, RENDER_RECORDING))
-        .chain(named_slots(&run.system_names).map(|(slot, name)| (Some(slot), name)))
+// Where a sample keeps one fan-out's timing.
+#[derive(Clone, Copy)]
+enum FanOutSlot {
+    Recording,
+    Packing,
+    System(usize),
+}
+
+// Every fan-out a sample can carry, named: the render recording, the render
+// packing, then each named system's.
+fn fan_out_slots(run: &FrameRun) -> impl Iterator<Item = (FanOutSlot, &str)> {
+    [
+        (FanOutSlot::Recording, RENDER_RECORDING),
+        (FanOutSlot::Packing, RENDER_PACKING),
+    ]
+    .into_iter()
+    .chain(named_slots(&run.system_names).map(|(slot, name)| (FanOutSlot::System(slot), name)))
 }
 
 // One sample's reading of a fan-out slot.
-fn fan_out_in(sample: &FrameSample, slot: Option<usize>) -> FanOutTiming {
-    slot.map_or(sample.recording_fan_out, |slot| sample.system_fan_out[slot])
+fn fan_out_in(sample: &FrameSample, slot: FanOutSlot) -> FanOutTiming {
+    match slot {
+        FanOutSlot::Recording => sample.recording_fan_out,
+        FanOutSlot::Packing => sample.packing_fan_out,
+        FanOutSlot::System(slot) => sample.system_fan_out[slot],
+    }
 }
 
 // The fan-outs over a stretch, each as means over the frames it ran in,
@@ -583,6 +603,7 @@ mod tests {
             gpu_wait_us: 100,
             render_cpu_us: 0,
             recording_fan_out: FanOutTiming::default(),
+            packing_fan_out: FanOutTiming::default(),
             pass_record_us: [0; MAX_PASS_TIMINGS],
             draw_calls: 50,
             objects: 400,
@@ -1015,6 +1036,30 @@ mod tests {
             [
                 FanOutCost::of("render recording", fan_out(3_000)),
                 FanOutCost::of("BehaviorSystem", fan_out(600)),
+            ]
+        );
+    }
+
+    // Packing runs every frame, inline or fanned out, so it is listed after
+    // the recording and before any system.
+    #[test]
+    fn the_render_packing_is_listed_after_the_recording() {
+        let mut a = sample(0.0, Some(0), 10_000);
+        a.recording_fan_out = fan_out(2_000);
+        a.packing_fan_out = fan_out(100);
+        a.system_fan_out[0] = fan_out(800);
+        let mut b = sample(1.0, Some(0), 10_000);
+        b.recording_fan_out = fan_out(2_000);
+        b.packing_fan_out = fan_out(100);
+        let mut run = run_of(vec![a, b]);
+        run.system_names = vec!["BehaviorSystem".to_string()];
+        let report = Report::of(&run, no_warmup()).expect("measured frames");
+        assert_eq!(
+            report.overall.fan_outs,
+            [
+                FanOutCost::of("render recording", fan_out(2_000)),
+                FanOutCost::of("render packing", fan_out(100)),
+                FanOutCost::of("BehaviorSystem", fan_out(800)),
             ]
         );
     }

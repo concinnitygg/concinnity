@@ -1367,7 +1367,7 @@ impl DrawObject {
 /// occupy reserved slots past the real textures: an object with no normal map
 /// addresses the flat-normal entry and one with no albedo addresses the white
 /// entry, so neither index needs a shader branch.
-#[derive(Copy, Clone, bytemuck::NoUninit)]
+#[derive(Copy, Clone, bytemuck::NoUninit, bytemuck::AnyBitPattern)]
 #[repr(C)]
 pub struct GpuObjectData {
     /// Column-major model-to-world matrix.
@@ -1602,7 +1602,7 @@ pub fn pack_skinned_record(
 ///
 /// Layout (16 bytes) must stay in sync with the `GpuDrawArgs` struct in
 /// `cull.hlsl` and in the Metal ICB encode kernel, `cull_encode.metal`.
-#[derive(Copy, Clone, bytemuck::NoUninit)]
+#[derive(Copy, Clone, bytemuck::NoUninit, bytemuck::AnyBitPattern)]
 #[repr(C)]
 pub struct GpuDrawArgs {
     /// Number of indices to draw (`DrawObject::index_count`).

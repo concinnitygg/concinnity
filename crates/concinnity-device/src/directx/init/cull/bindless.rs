@@ -100,7 +100,7 @@ pub(super) fn build_bindless_pass(
 
     // Per-frame StructuredBuffer<GpuObjectData> upload buffers. Allocated only
     // when the world has anything to drive; rebuilt each frame in
-    // `build_object_buffer`.
+    // `build_record_buffers`.
     let mut object_buffers: Vec<PooledBuffer> = Vec::new();
     let mut object_ptrs: Vec<*mut u8> = Vec::new();
     if n_cull > 0 {

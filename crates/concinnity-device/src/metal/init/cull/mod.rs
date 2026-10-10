@@ -97,15 +97,15 @@ pub(super) fn build_probe(gpu: &InitGpu<'_>, cull: &CullState) -> RenderResult<P
 // Fold every instanced-cluster instance into the GPU-driven bindless
 // main pass: each becomes a `GpuObjectData` record appended after the
 // static objects, drawn through the shared cull + indirect path
-// (`build_object_buffer` / `build_draw_args_buffer` re-append these every
-// frame; see `cull_count`). Built once here against the final bindless
+// (`build_record_buffers` copies these into each ring slot whose copy is
+// stale; see `cull_count`). Built once here against the final bindless
 // pool counts (the texture pool, the same count the static fill uses) via
 // the Metal-local `metal_instance_records`, which addresses the flat pool
 // with Metal's CPU-bias convention (NOT the shared core
 // `instance_object_records`, which is the DX/VK raw-index convention):
 // instances are placed at world load and never move, so the records are
 // static. The draw args carry the cluster base index range;
-// `build_draw_args_buffer` patches per-instance LOD over it each frame for
+// `build_record_buffers` patches per-instance LOD over it each frame for
 // the clusters that declare alternates.
 pub(super) fn build_instanced(
     clusters: Vec<InstancedCluster>,

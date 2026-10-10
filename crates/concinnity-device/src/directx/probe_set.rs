@@ -10,6 +10,7 @@
 // write state.
 
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::record_pack::StaticSlots;
 use concinnity_core::render::reflection_probe::PrefilterPlan;
 use concinnity_core::render::uniforms::{ProbeUniforms, grown_probe_capacity};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -305,6 +306,8 @@ pub(in crate::directx) struct ProbeSetGpu {
     pub(in crate::directx) cubes: Option<ProbeCubeArray>,
     pub(in crate::directx) stand_in: ProbeCubeArray,
     pub(in crate::directx) records: Vec<ProbeRecords>,
+    // Which `records` buffers hold the book's current records.
+    pub(in crate::directx) records_current: StaticSlots,
     pub(in crate::directx) stand_in_records: ProbeRecords,
 }
 
@@ -321,6 +324,7 @@ impl ProbeSetGpu {
             records: (0..frames)
                 .map(|_| ProbeRecords::new(alloc, capacity))
                 .collect::<RenderResult<_>>()?,
+            records_current: StaticSlots::new(frames),
             stand_in_records: ProbeRecords::new(alloc, 1)?,
         })
     }
@@ -393,10 +397,21 @@ impl DxContext {
         }
         let floor = self.probe.gpu.bound_cubes().capacity();
         let have = self.probe.gpu.records[frame_idx].capacity;
-        if let Some(capacity) = grown_probe_capacity(have, self.probe.book.count(), floor) {
+        let grown = grown_probe_capacity(have, self.probe.book.count(), floor);
+        if let Some(capacity) = grown {
             self.probe.gpu.records[frame_idx] = ProbeRecords::new(&self.hw.alloc, capacity)?;
         }
-        self.probe.gpu.records[frame_idx].write(self.probe.book.records());
+        // The records change only when a probe installs or the placements are
+        // replaced, so a buffer already holding this revision is left alone.
+        let revision = self.probe.book.revision();
+        if self
+            .probe
+            .gpu
+            .records_current
+            .take(frame_idx, revision, grown.is_some())
+        {
+            self.probe.gpu.records[frame_idx].write(self.probe.book.records());
+        }
         Ok(())
     }
 }

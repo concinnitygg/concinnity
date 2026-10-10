@@ -238,6 +238,7 @@ fn profile(call: &Call, _: Args) -> Reply {
             "gpu_wait_us": r.gpu_wait_us,
             "render_cpu_us": r.render_cpu_us,
             "recording_fan_out": fan_out_json(&r.recording_fan_out),
+            "packing_fan_out": fan_out_json(&r.packing_fan_out),
             "vram_bytes": r.vram_bytes,
             "transient_pool_bytes": r.transient_pool_bytes,
             "auto_exposure_ev": r.auto_exposure_ev,
@@ -488,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn profile_reports_fan_outs_for_the_render_recording_and_each_system() {
+    fn profile_reports_fan_outs_for_the_render_side_and_each_system() {
         let timing = FanOutTiming {
             wall_us: 2_000,
             first_job_us: 900,
@@ -501,6 +502,7 @@ mod tests {
             profile_fan_outs: vec![("BehaviorSystem".into(), timing)],
             profile_render: RenderStats {
                 recording_fan_out: timing,
+                packing_fan_out: timing,
                 ..Default::default()
             },
             ..Default::default()
@@ -514,6 +516,7 @@ mod tests {
             "tail_us": 250,
         });
         assert_eq!(r["render"]["recording_fan_out"], expected);
+        assert_eq!(r["render"]["packing_fan_out"], expected);
         assert!(r["systems"][0].get("fan_out").is_none());
         assert_eq!(r["systems"][1]["fan_out"], expected);
     }

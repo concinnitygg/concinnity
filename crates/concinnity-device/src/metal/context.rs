@@ -75,10 +75,10 @@ pub(super) struct InstancedState {
     pub clusters: Vec<InstancedCluster>,
     // The per-instance `GpuObjectData` / `GpuDrawArgs` records, built once at
     // init (instances are placed at world load and never move).
-    // `build_object_buffer` / `build_draw_args_buffer` append these after their
-    // per-frame static fill, so the transient object / draw-args rings carry
-    // both. `draw_args` carries each cluster's base LOD slice; the per-frame
-    // build patches the instances of clusters that declare alternates.
+    // `build_record_buffers` copies them after the static records into each
+    // object / draw-args ring slot whose copy is stale. `draw_args` carries each
+    // cluster's base LOD slice; the per-frame build patches the instances of
+    // clusters that declare alternates.
     pub records: Vec<render_types::GpuObjectData>,
     pub draw_args: Vec<render_types::GpuDrawArgs>,
     // Whether any cluster declares LOD alternates. False skips the per-frame
@@ -179,16 +179,19 @@ impl SpotShadowState {
     }
 }
 
-// Per-frame-in-flight transient buffer rings, plus the CPU scratch that fills
-// them. Each ring hands out this frame's slot so a build reuses a buffer instead
-// of allocating one per frame; the scratch `Vec`s are `mem::take`n during a build
-// and returned after, so the per-frame `collect` reuses one heap allocation.
+// Per-frame-in-flight transient buffer rings, plus what fills them. Each ring
+// hands out this frame's slot so a build reuses a buffer instead of allocating
+// one per frame.
 pub(super) struct FrameRings {
-    // Ring of per-frame `GpuObjectData` buffers. Written by `build_object_buffer`.
+    // Ring of per-frame `GpuObjectData` buffers. Written by `build_record_buffers`.
     pub object: super::frame_rings::TransientRing,
-    // Ring of per-frame `GpuDrawArgs` buffers for the GPU-cull pass. Written by
-    // `build_draw_args_buffer`.
+    // Ring of per-frame `GpuDrawArgs` buffers for the GPU-cull pass, over the
+    // same slots as `object`. Written by `build_record_buffers`.
     pub draw_args: super::frame_rings::TransientRing,
+    // Which `object` / `draw_args` slots already hold the instance tail.
+    pub instance_tail: concinnity_core::render::record_pack::StaticSlots,
+    // Packs the static draws' records into those slots.
+    pub packer: crate::record_pack::RecordPacker,
     // Ring of per-frame model-history buffers for the GPU-driven G-buffer /
     // velocity pre-pass: one column-major `float4x4` per cull record, indexed
     // identically to the object buffer. Filled on the GPU by
@@ -201,11 +204,11 @@ pub(super) struct FrameRings {
     // Ring of per-frame probe record buffers, written by
     // `build_probe_records`.
     pub probe_records: super::frame_rings::TransientRing,
+    // Which `probe_records` slots hold the book's current records.
+    pub probe_tail: concinnity_core::render::record_pack::StaticSlots,
     // Ring of per-skinned-object joint-palette buffers, one inner buffer per
     // object. Written by `build_joint_buffers`.
     pub joint: super::frame_rings::JointRing,
-    pub object_scratch: Vec<render_types::GpuObjectData>,
-    pub draw_args_scratch: Vec<render_types::GpuDrawArgs>,
     // The material parameter table, over the same slots as `object`.
     pub material_params: super::material_params::MaterialParamRing,
 }

@@ -16,6 +16,7 @@ use concinnity_core::gfx::jitter;
 use concinnity_core::gfx::lod;
 use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
+use concinnity_core::profile::FanOutTiming;
 use concinnity_core::render::depth::camera_projection;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
@@ -57,115 +58,37 @@ pub(super) struct RecordFrameView<'a> {
 }
 
 impl VkContext {
-    // Rebuild this frame's `GpuObjectData` storage buffer for the bindless
-    // static pass: one record per build-time `DrawObject`, indexed
-    // by object id. Streamed `VoxelWorld` chunks (past `draw.n_objects`) are
-    // skipped: they fill the runtime reserve instead. The pool indices
-    // address the shared handle-indexed texture pool: albedo = `texture_slot`,
-    // normal = the normal map's own handle (or the flat-normal fallback slot
-    // for a normal-less draw). Rebuilt every frame so `update_model` /
-    // `update_visibility` edits are reflected; a no-op when bindless is off.
-    fn build_object_buffer(&mut self, frame_idx: usize) {
+    // Pack this frame's bindless cull records into frame `frame_idx`'s
+    // `GpuObjectData` and `GpuDrawArgs` storage buffers, indexed by object id,
+    // and bring its material parameter table up to date. Returns the static
+    // draws' packing time for the frame report; a no-op when bindless is off.
+    fn build_record_buffers(
+        &mut self,
+        frame_idx: usize,
+        cam_pos: [f32; 3],
+        history: HistoryMode,
+    ) -> FanOutTiming {
         if let Some(params) = self.cull.material_params.as_mut() {
             params.upload(frame_idx);
         }
-        let Some(buf) = self.cull.object_buffers.get(frame_idx) else {
-            return;
+        let (Some(objects), Some(args)) = (
+            self.cull.object_buffers.get(frame_idx),
+            self.cull.draw_args_buffers.get(frame_idx),
+        ) else {
+            return FanOutTiming::default();
         };
-        self.build_object_records_into(buf);
-    }
-
-    // Write the bindless `GpuObjectData` records (static + streamed-chunk +
-    // skinned-tail) into `buf`. Factored out of `build_object_buffer` so the
-    // reflection-probe capture can build the same records into its own bake-owned
-    // buffer (the instance tail is left untouched, so a bake buffer must be zeroed
-    // first -- a zero record is a disabled draw the cull kernel skips, which is how
-    // the probe omits instanced geometry in V1).
-    pub(in crate::vulkan) fn build_object_records_into(
-        &self,
-        buf: &super::allocator::PooledBuffer,
-    ) {
-        use concinnity_core::gfx::render_types::{
-            GpuObjectData, albedo_pool_index, normal_pool_index, pack_object_record,
-            pack_skinned_record,
-        };
-        let texture_count = self.scene.textures.len() as u32;
-        let stride = std::mem::size_of::<GpuObjectData>();
-        for (i, obj) in self
-            .state
-            .draw
-            .objects
-            .iter()
-            .take(self.state.draw.n_objects)
-            .enumerate()
-        {
-            let albedo = albedo_pool_index(obj.texture_slot, texture_count);
-            let normal = normal_pool_index(obj.normal_map_slot, texture_count);
-            let rec = pack_object_record(obj, albedo, normal);
-            buf.write_val(i * stride, &rec);
-        }
-
-        // Runtime objects -- streamed chunks and spawned clones -- one record each
-        // in the reserved region at `[runtime_record_base() + k]`, packed like a
-        // static object (their geometry already lives in the shared VB/IB with
-        // their own `base_vertex`, so they ride the static + instance prefix
-        // indirect draw). Flat-pool texture indices give each its own material. A
-        // non-resident / unused slot's stale record here is never read --
-        // `build_draw_args_buffer` disables it, and the cull kernel skips
-        // `objects[i]` for a disabled record.
-        let runtime_base = self.runtime_record_base();
-        self.for_each_runtime_record(|k, _, obj| {
-            let albedo = albedo_pool_index(obj.texture_slot, texture_count);
-            let normal = normal_pool_index(obj.normal_map_slot, texture_count);
-            let rec = pack_object_record(obj, albedo, normal);
-            buf.write_val((runtime_base + k) * stride, &rec);
-        });
-
-        // Skinned objects: one record each in the reserved tail at
-        // `[skinned_record_base(), cull_count())`. `model = obj.model` (applied
-        // after the per-frame skin deform), flat-pool texture indices like a static
-        // object, and a padded bind-pose AABB so the cull kernel can frustum/Hi-Z
-        // test them. Drawn by the main pass's 2nd indirect draw. `take(n_skinned)`
-        // no-ops when the fold is inactive.
-        let skinned_base = self.skinned_record_base();
-        for (k, obj) in self
-            .state
-            .skinned
-            .draw_objects
-            .iter()
-            .take(self.state.draw.n_skinned)
-            .enumerate()
-        {
-            let albedo = albedo_pool_index(obj.texture_slot, texture_count);
-            let normal = normal_pool_index(obj.normal_map_slot, texture_count);
-            let rec = pack_skinned_record(obj, albedo, normal);
-            buf.write_val((skinned_base + k) * stride, &rec);
-        }
-    }
-
-    // Rebuild this frame's `GpuDrawArgs` storage buffer for the GPU-cull
-    // compute kernel: one 16-byte record per build-time `DrawObject`, carrying
-    // the indexed-draw arguments the kernel encodes plus the per-frame
-    // cull-decision bits (`update_visibility` / streaming residency). Streamed
-    // chunks (past `draw.n_objects`) are skipped; a no-op when bindless is off.
-    // The per-object `(index_offset, index_count)` is the active LOD slice
-    // picked by camera distance, so the bindless main pass renders the
-    // chosen LOD with no shader-side change. Mirrors `directx/cull.rs`.
-    fn build_draw_args_buffer(&self, frame_idx: usize, cam_pos: [f32; 3], history: HistoryMode) {
-        let Some(buf) = self.cull.draw_args_buffers.get(frame_idx) else {
-            return;
-        };
-        self.build_draw_args_records_into(buf, cam_pos, history);
-        self.patch_instance_lod_into(buf, cam_pos);
+        let packing = self.build_records_into(objects, args, cam_pos, history);
+        self.patch_instance_lod_into(args, cam_pos);
+        packing
     }
 
     // Overwrite the instance tail's `GpuDrawArgs` with each instance's active
     // LOD slice, for the clusters that declare alternates. The init-time fill
     // wrote every cluster's base slice into every frame's buffer, so this is a
     // no-op for a world without alternates and touches only the instances of
-    // the clusters that have them. Not part of `build_draw_args_records_into`:
-    // the probe bake shares that body and deliberately leaves its instance tail
-    // zeroed, which disables instances in a bake.
+    // the clusters that have them. Not part of `build_records_into`: the probe
+    // bake shares that body and deliberately leaves its instance tail zeroed,
+    // which disables instances in a bake.
     fn patch_instance_lod_into(&self, buf: &super::allocator::PooledBuffer, cam_pos: [f32; 3]) {
         use concinnity_core::gfx::render_types::{GpuDrawArgs, draw_args_flags};
         if !self.instanced.any_lod {
@@ -188,22 +111,32 @@ impl VkContext {
         );
     }
 
-    // Write the GPU-cull `GpuDrawArgs` records (static + streamed-chunk +
-    // skinned-tail, the per-object active-LOD slice picked by distance from
-    // `cam_pos`) into `buf`. Factored out of `build_draw_args_buffer` so the
-    // reflection-probe capture can build the same args into its own bake-owned
-    // buffer against the probe eye. The instance tail is left untouched (a zeroed
-    // bake buffer keeps it disabled = skipped).
-    pub(in crate::vulkan) fn build_draw_args_records_into(
+    // Write the bindless `GpuObjectData` and GPU-cull `GpuDrawArgs` records --
+    // static, streamed-chunk and spawned-clone, and skinned-tail, each draw's
+    // active-LOD slice picked by distance from `cam_pos` -- into `objects` and
+    // `args`. The pool indices address the shared handle-indexed texture pool:
+    // albedo = `texture_slot`, normal = the normal map's own handle (or the
+    // flat-normal fallback slot for a normal-less draw). Shared with the
+    // reflection-probe capture, which builds into its own bake-owned buffers
+    // against the probe eye; the instance tail is left untouched, so a bake
+    // buffer must be zeroed first (a zero record is a disabled draw the cull
+    // kernel skips, which is how the probe omits instanced geometry). Returns
+    // the static draws' packing time.
+    pub(in crate::vulkan) fn build_records_into(
         &self,
-        buf: &super::allocator::PooledBuffer,
+        objects: &super::allocator::PooledBuffer,
+        args: &super::allocator::PooledBuffer,
         cam_pos: [f32; 3],
         history: HistoryMode,
-    ) {
+    ) -> FanOutTiming {
         use concinnity_core::gfx::render_types::{
-            GpuDrawArgs, draw_args_bucket_bits, draw_args_flags,
+            GpuDrawArgs, GpuObjectData, albedo_pool_index, draw_args_bucket_bits, draw_args_flags,
+            normal_pool_index, pack_skinned_record,
         };
-        let stride = std::mem::size_of::<GpuDrawArgs>();
+        use concinnity_core::render::record_pack::{PackView, StaticPack, pool_object_record};
+        let texture_count = self.scene.textures.len() as u32;
+        let record_stride = std::mem::size_of::<GpuObjectData>();
+        let args_stride = std::mem::size_of::<GpuDrawArgs>();
         let mut model_history = self.state.model_history.borrow_mut();
         model_history.begin(history, self.cull_count());
         // Hand the dispatch the rebuild's prime request here, on the one thread
@@ -214,49 +147,59 @@ impl VkContext {
             mh.prime.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         // A see-through glass mesh (Layer 2) is disabled in the opaque pass when
-        // the RT path is live: it draws in the transparent pass instead. Clearing
-        // ENABLED makes the cull kernel reset its command to a no-op (the same
-        // path invisible / non-resident objects take), so it neither draws opaque
-        // nor occludes the refraction snapshot. The object keeps its slot, so
-        // every parallel cull / object-buffer / prev-model index stays intact.
+        // the RT path is live: it draws in the transparent pass instead.
         let mesh_glass_active = self.mesh_glass_active();
-        for (i, obj) in self
-            .state
-            .draw
-            .objects
-            .iter()
-            .take(self.state.draw.n_objects)
-            .enumerate()
-        {
-            // Per-frame active LOD pick. Objects with no alternates fall
-            // straight through to LOD0.
-            let d = lod::camera_distance(obj, cam_pos);
-            let (index_offset, index_count) = obj.active_lod(d);
-            let opaque_visible =
-                obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
-            let rec = GpuDrawArgs {
-                index_count: index_count as u32,
-                index_offset: index_offset as u32,
-                base_vertex: obj.base_vertex as u32,
-                // The record's shader bucket rides the upper flag bits so the
-                // cull kernel can route its command into that bucket's region.
-                flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | draw_args_bucket_bits(obj.shader_bucket)
-                    | model_history.draw_flags(i, i),
-            };
-            buf.write_val(i * stride, &rec);
-        }
 
-        // Runtime objects -- streamed chunks and spawned clones -- one draw-arg
-        // each in the reserved region at `[runtime_record_base() + k]`. Their
-        // geometry lives in the shared VB/IB, so the args carry the object's own
-        // `base_vertex` + index slice and it rides the static + instance prefix
-        // indirect draw. Both kinds are non-cullable (NaN AABB, because the
-        // init-time BVH cannot refit to admit them), so a resident one draws
-        // unconditionally; a freed slot's `resident` clear disables it. The unused
-        // reserve tail is disabled.
+        // The static draws, one record each at their own index, packed in
+        // place across the job pool once that pays.
+        let n_static = self.state.draw.n_objects.min(self.state.draw.objects.len());
+        let static_draws = &self.state.draw.objects[..n_static];
+        // SAFETY: `objects` and `args` are this frame's copies (its fence has
+        // signaled) or bake buffers not yet submitted, so the GPU reads neither,
+        // and these are the only views of either range until the pack returns.
+        let packed = unsafe {
+            (
+                objects.records_mut::<GpuObjectData>(0, static_draws.len()),
+                args.records_mut::<GpuDrawArgs>(0, static_draws.len()),
+            )
+        };
+        let packing = match packed {
+            (Some(records), Some(draw_args)) => self.cull.packer.pack(
+                StaticPack {
+                    objects: static_draws,
+                    records,
+                    args: draw_args,
+                    history: model_history.window(),
+                },
+                &PackView {
+                    cam_pos,
+                    mesh_glass_active,
+                },
+                &|obj| pool_object_record(obj, texture_count),
+            ),
+            _ => {
+                tracing::error!(
+                    "vulkan: cull record buffers cannot hold {} static draws",
+                    static_draws.len()
+                );
+                FanOutTiming::default()
+            }
+        };
+
+        // Runtime objects -- streamed chunks and spawned clones -- one record each
+        // in the reserved region at `[runtime_record_base() + k]`, packed like a
+        // static object. Their geometry already lives in the shared VB/IB with
+        // their own `base_vertex` and index slice, so they ride the static +
+        // instance prefix indirect draw. Both kinds are non-cullable (NaN AABB,
+        // because the init-time BVH cannot refit to admit them), so a resident
+        // one draws unconditionally; a freed slot's `resident` clear disables
+        // it, and the cull kernel skips a disabled record's stale object.
         let runtime_base = self.runtime_record_base();
         let n_resident_runtime = self.for_each_runtime_record(|k, i, obj| {
+            objects.write_val(
+                (runtime_base + k) * record_stride,
+                &pool_object_record(obj, texture_count),
+            );
             // `camera_distance` falls back to the model translation for a
             // non-cullable object, so the LOD pick works off a NaN AABB. Chunks
             // carry no alternates and land on LOD0 either way; a clone inherits
@@ -264,7 +207,7 @@ impl VkContext {
             let d = lod::camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             // A clone copies its template's material, so a see-through one
-            // leaves the opaque pass the way the static loop's does.
+            // leaves the opaque pass the way a static one does.
             let opaque_visible =
                 obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
             let rec = GpuDrawArgs {
@@ -272,9 +215,10 @@ impl VkContext {
                 index_offset: index_offset as u32,
                 base_vertex: obj.base_vertex as u32,
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
+                    | draw_args_bucket_bits(obj.shader_bucket)
                     | model_history.draw_flags(runtime_base + k, i),
             };
-            buf.write_val((runtime_base + k) * stride, &rec);
+            args.write_val((runtime_base + k) * args_stride, &rec);
         });
         // Disable the unused reserve tail so vacated / never-used slots draw
         // nothing (the cull kernel skips `objects[i]` for an ENABLED-clear record).
@@ -285,15 +229,18 @@ impl VkContext {
             flags: 0,
         };
         for k in n_resident_runtime..self.state.draw.n_runtime {
-            buf.write_val((runtime_base + k) * stride, &disabled);
+            args.write_val((runtime_base + k) * args_stride, &disabled);
         }
 
-        // Skinned objects: one record each in the reserved tail. The main pass's
-        // 2nd indirect draw binds the per-frame deformed VB + the skinned IB,
-        // so `base_vertex = 0` (the deformed buffer mirrors global skinned indexing)
-        // and the active-LOD slice is the element offset into the skinned IB.
-        // Skinned objects carry a finite padded bind-pose AABB (`pack_skinned_record`),
-        // so they are cullable + resident. `take(n_skinned)` no-ops when inactive.
+        // Skinned objects: one record each in the reserved tail at
+        // `[skinned_record_base(), cull_count())`. `model = obj.model` (applied
+        // after the per-frame skin deform), flat-pool texture indices like a
+        // static object, and a padded bind-pose AABB so the cull kernel can
+        // frustum/Hi-Z test them, so they are cullable + resident. The main
+        // pass's 2nd indirect draw binds the per-frame deformed VB + the skinned
+        // IB, so `base_vertex = 0` (the deformed buffer mirrors global skinned
+        // indexing) and the active-LOD slice is the element offset into the
+        // skinned IB. `take(n_skinned)` no-ops when the fold is inactive.
         let skinned_base = self.skinned_record_base();
         for (k, obj) in self
             .state
@@ -303,6 +250,12 @@ impl VkContext {
             .take(self.state.draw.n_skinned)
             .enumerate()
         {
+            let albedo = albedo_pool_index(obj.texture_slot, texture_count);
+            let normal = normal_pool_index(obj.normal_map_slot, texture_count);
+            objects.write_val(
+                (skinned_base + k) * record_stride,
+                &pack_skinned_record(obj, albedo, normal),
+            );
             let d = lod::skinned_camera_distance(obj, cam_pos);
             let (index_offset, index_count) = obj.active_lod(d);
             let rec = GpuDrawArgs {
@@ -312,8 +265,9 @@ impl VkContext {
                 flags: draw_args_flags(obj.visible, true, true)
                     | model_history.skinned_flags(skinned_base + k, k),
             };
-            buf.write_val((skinned_base + k) * stride, &rec);
+            args.write_val((skinned_base + k) * args_stride, &rec);
         }
+        packing
     }
 
     pub(super) fn record_frame(
@@ -482,8 +436,10 @@ impl VkContext {
                 true => HistoryMode::Track,
                 false => HistoryMode::Stale,
             };
-            self.build_object_buffer(frame_idx);
-            self.build_draw_args_buffer(frame_idx, cam_pos, history);
+            let packing = self.build_record_buffers(frame_idx, cam_pos, history);
+            let mut stats = self.frame_stats.get();
+            stats.packing_fan_out = packing;
+            self.frame_stats.set(stats);
         }
 
         //  Single merged frame graph dispatched in one

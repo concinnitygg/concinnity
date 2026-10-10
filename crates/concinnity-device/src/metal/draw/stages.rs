@@ -678,10 +678,22 @@ impl MtlContext {
             // compute pass consume. They must outlive the command buffer,
             // hence the bindings handed back to the caller, which holds them
             // through to `cmd_buf.commit()`.
-            let object_buffer = if self.cull.bindless {
-                self.build_object_buffer(ring_slot)?
+            let history = if history_live {
+                HistoryMode::Track
+            } else {
+                HistoryMode::Stale
+            };
+            let records = if self.cull.bindless {
+                self.build_record_buffers(ring_slot, cam_pos, history)?
             } else {
                 None
+            };
+            let (object_buffer, draw_args) = match records {
+                Some(records) => {
+                    self.diagnostics.frame_stats.packing_fan_out = records.packing;
+                    (Some(records.objects), Some(records.draw_args))
+                }
+                None => (None, None),
             };
             let material_params = match object_buffer {
                 Some(_) => Some(
@@ -691,37 +703,24 @@ impl MtlContext {
                 ),
                 None => None,
             };
-            let cull_draw_args = if object_buffer.is_some() {
-                let draw_args = self.build_draw_args_buffer(
-                    cam_pos,
-                    ring_slot,
-                    if history_live {
-                        HistoryMode::Track
-                    } else {
-                        HistoryMode::Stale
-                    },
-                )?;
-                if draw_args.is_some() {
-                    self.ensure_icb_capacity(self.cull_count())?;
-                    // GPU-driven shadow views: size the cascade ICB to
-                    // NUM_SHADOW_CASCADES * cull_count and the spot ICB to one
-                    // region per slice. A no-op when the shadow-bindless path is
-                    // inactive (no shadow cull pipeline).
-                    self.ensure_shadow_icb_capacity(self.cull_count())?;
-                    // Per-planar-slot mirror cull ICBs: one per distinct reflection
-                    // plane, each sized to cull_count. A no-op (clears the slots) when
-                    // the world has no planar set (RT on, or no flat reflectors).
-                    let mirror_slots = self
-                        .planar_reflection
-                        .as_ref()
-                        .map(|s| s.layout.planes().len())
-                        .unwrap_or(0);
-                    self.ensure_mirror_icb_capacity(mirror_slots, self.cull_count())?;
-                }
-                draw_args
-            } else {
-                None
-            };
+            if draw_args.is_some() {
+                self.ensure_icb_capacity(self.cull_count())?;
+                // GPU-driven shadow views: size the cascade ICB to
+                // NUM_SHADOW_CASCADES * cull_count and the spot ICB to one
+                // region per slice. A no-op when the shadow-bindless path is
+                // inactive (no shadow cull pipeline).
+                self.ensure_shadow_icb_capacity(self.cull_count())?;
+                // Per-planar-slot mirror cull ICBs: one per distinct reflection
+                // plane, each sized to cull_count. A no-op (clears the slots) when
+                // the world has no planar set (RT on, or no flat reflectors).
+                let mirror_slots = self
+                    .planar_reflection
+                    .as_ref()
+                    .map(|s| s.layout.planes().len())
+                    .unwrap_or(0);
+                self.ensure_mirror_icb_capacity(mirror_slots, self.cull_count())?;
+            }
+            let cull_draw_args = draw_args;
             let bindless_tex_args = if object_buffer.is_some() {
                 self.build_bindless_texture_args(ring_slot, texture_signature)?
             } else {

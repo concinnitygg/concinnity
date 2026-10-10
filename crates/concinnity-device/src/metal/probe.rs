@@ -238,17 +238,15 @@ impl MtlContext {
         // CPU-written buffers stay valid for the whole asynchronous capture. They are
         // frustum-independent (only the per-face view/projection differs), so they are
         // built once and reused by every face.
-        let object_buffer = self
-            .build_object_buffer(slot)?
-            .ok_or_else(|| RenderError::Other("probe: no static geometry to bake".into()))?;
-        let material_params = self.rings.material_params.buffer(&self.hw.device, slot)?;
-        let draw_args = self
-            .build_draw_args_buffer(
-                eye,
+        let records = self
+            .build_record_buffers(
                 slot,
+                eye,
                 concinnity_core::render::model_history::HistoryMode::Untracked,
             )?
-            .ok_or_else(|| RenderError::Other("probe: no draw args to bake".into()))?;
+            .ok_or_else(|| RenderError::Other("probe: no static geometry to bake".into()))?;
+        let (object_buffer, draw_args) = (records.objects, records.draw_args);
+        let material_params = self.rings.material_params.buffer(&self.hw.device, slot)?;
         let counts = self.draw_record_counts();
         let joint_bufs = self.build_joint_buffers(slot)?;
         let morph_weight_bufs = self.build_morph_weight_buffers(slot)?;

@@ -176,7 +176,7 @@ const CULL_ENCODE_PARAMS_INDEX: usize = 7;
 // fallback slot (`normal_pool_index`, at `texture_count`). Every index is
 // clamped to the `BINDLESS_TEXTURE_COUNT` cap (the slots the host writes, so an
 // over-cap index would read past them). Shared by the per-frame static fill
-// (`build_object_buffer`) and the init-time instanced records
+// (`build_record_buffers`) and the init-time instanced records
 // (`metal_instance_records`) so a folded instance addresses the pool identically
 // to a static object.
 pub(super) struct FlatPoolIndices {
@@ -219,7 +219,7 @@ pub(super) fn metal_flat_pool_indices(
 
 // Build the GPU-driven bindless instanced records: one `GpuObjectData` per
 // cluster instance, in cluster-then-instance order, addressing the bindless pool
-// with the SAME convention as `build_object_buffer`'s static fill (via
+// with the SAME convention as `build_record_buffers`' static fill (via
 // `metal_flat_pool_indices`). Bounds are the cluster's mesh-local AABB
 // transformed by each instance's model, so the cull kernel frustum/distance/
 // Hi-Z-tests each instance independently. Built once at init (instances are
@@ -270,6 +270,37 @@ pub(super) fn metal_skinned_record(
     idx.onto(render_types::pack_skinned_record(
         obj, idx.albedo, idx.normal,
     ))
+}
+
+// A static draw's object record, addressing the pool the same way the instance
+// and skinned records do.
+fn metal_object_record(
+    obj: &render_types::DrawObject,
+    texture_count: usize,
+) -> render_types::GpuObjectData {
+    let idx = metal_flat_pool_indices(
+        texture_count,
+        obj.texture_slot,
+        obj.normal_map_slot,
+        &obj.material,
+    );
+    idx.onto(render_types::pack_object_record(
+        obj, idx.albedo, idx.normal,
+    ))
+}
+
+// Copy as much of `src` as `dst` holds.
+fn copy_prefix<T: Copy>(dst: &mut [T], src: &[T]) {
+    let n = dst.len().min(src.len());
+    dst[..n].copy_from_slice(&src[..n]);
+}
+
+// One frame's packed cull records: the ring slot buffers both the cull and the
+// main pass bind, and how long the static draws took to pack.
+pub(super) struct RecordBuffers {
+    pub objects: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+    pub draw_args: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+    pub packing: concinnity_core::profile::FanOutTiming,
 }
 
 // The per-frame cull IO buffers: the packed DrawObject records the kernel tests
@@ -378,168 +409,133 @@ impl MtlContext {
         )
     }
 
-    // Build the per-frame `GpuObjectData` buffer the GPU-driven pass consumes:
-    // one record per static `DrawObject`, then one per folded instance, then
-    // one per folded skinned object, each indexed by the id the draw call
-    // passes as `[[base_instance]]`. Returns `None` when the world has nothing
-    // to draw. Rebuilt every frame so `update_model` / `update_visibility`
-    // changes are reflected; the committed command buffer keeps the transient
-    // buffer alive until the GPU is done with it.
-    pub(super) fn build_object_buffer(
+    // Pack this frame's cull records into ring slot `ring_slot` of the object
+    // and draw-args rings, indexed by the id the draw call passes as
+    // `[[base_instance]]`: one per static `DrawObject`, then one per folded
+    // instance, then one per folded skinned object. The static draws are packed
+    // every frame (models, visibility, residency and the LOD pick change), across
+    // the job pool once that pays; the instance records never change, so a slot
+    // gets them only when its copy is stale, and then only their LOD slices
+    // follow the camera; the skinned tail follows its animated poses. `None`
+    // when the world has nothing to draw.
+    pub(super) fn build_record_buffers(
         &mut self,
         ring_slot: usize,
-    ) -> RenderResult<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>> {
-        if self.cull_count() == 0 {
+        cam_pos: [f32; 3],
+        history: HistoryMode,
+    ) -> RenderResult<Option<RecordBuffers>> {
+        use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData, draw_args_flags};
+        use concinnity_core::render::record_pack::{PackView, StaticPack};
+        let n_cull = self.cull_count();
+        if n_cull == 0 {
             return Ok(None);
         }
+        let n_static = self.state.draw.objects.len();
+        let n_instances = self.state.draw.n_instances;
+        let view = PackView {
+            cam_pos,
+            mesh_glass_active: self.mesh_glass_active(),
+        };
         let texture_count = self.scene.textures.len();
-        // Reuse a persistent scratch Vec across frames; `mem::take` lifts it out
-        // so the build loop borrows only `draw.objects` while the ring + device
-        // borrows below stay on disjoint fields.
-        let mut objects = std::mem::take(&mut self.rings.object_scratch);
-        objects.clear();
-        for obj in &self.state.draw.objects {
-            // Shared-pool indices (each the texture's own handle, a normal-less
-            // draw's normal being the flat-normal fallback slot, all clamped to
-            // the cap); the identical mapping the folded instance records use, so
-            // static + instances address the pool the same way.
-            let idx = metal_flat_pool_indices(
-                texture_count,
-                obj.texture_slot,
-                obj.normal_map_slot,
-                &obj.material,
-            );
-            objects.push(idx.onto(render_types::pack_object_record(
-                obj, idx.albedo, idx.normal,
-            )));
-        }
-        // Fold the instanced clusters into the same buffer: each instance's
-        // pre-built record is appended after the static objects so one cull
-        // dispatch + one indirect draw cover both (the ring auto-grows to the
-        // written slice). The records are static (built once at init), so this
-        // is a memcpy, and every instance draws the cluster base LOD. `objects`
-        // was `mem::take`n, so this borrows only `instanced.records`, leaving
-        // the other fields free.
-        if self.state.draw.n_instances > 0 {
-            objects.extend_from_slice(&self.instanced.records);
-        }
-        // Append a record per skinned object: the compute-deformed
-        // geometry draws as rigid static geometry, so it folds into the same
-        // cull. Rebuilt every frame (the record's AABB + model follow obj.model,
-        // which animates), unlike the cached static instance records.
-        if self.state.draw.n_skinned > 0 {
-            for obj in &self.state.skinned.draw_objects {
-                objects.push(metal_skinned_record(obj, texture_count));
-            }
-        }
-        let result = self.rings.object.write(
+        let (objects, objects_fresh) = self.rings.object.slot_fresh(
             &self.hw.device,
             ring_slot,
-            super::context::bytes_of_slice(&objects),
+            n_cull * size_of::<GpuObjectData>(),
+        )?;
+        let (draw_args, args_fresh) = self.rings.draw_args.slot_fresh(
+            &self.hw.device,
+            ring_slot,
+            n_cull * size_of::<GpuDrawArgs>(),
+        )?;
+        // SAFETY: the frames-in-flight fence retired this ring slot's last GPU
+        // read before this frame acquired it (the probe bake's reserved slot is
+        // only built before its capture is submitted), and these are the only
+        // views of either buffer until this function returns.
+        let records =
+            unsafe { super::frame_rings::records_mut::<GpuObjectData>(&objects, n_cull) }?;
+        // SAFETY: as above, for the draw-args ring's slot.
+        let args = unsafe { super::frame_rings::records_mut::<GpuDrawArgs>(&draw_args, n_cull) }?;
+        let (static_records, tail_records) = records.split_at_mut(n_static.min(n_cull));
+        let (static_args, tail_args) = args.split_at_mut(n_static.min(n_cull));
+
+        let model_history = self.state.model_history.get_mut();
+        model_history.begin(history, n_cull);
+        let packing = self.rings.packer.pack(
+            StaticPack {
+                objects: &self.state.draw.objects,
+                records: static_records,
+                args: static_args,
+                history: model_history.window(),
+            },
+            &view,
+            &|obj| metal_object_record(obj, texture_count),
         );
-        self.rings.object_scratch = objects;
-        result.map(Some)
-    }
 
-    // Build the per-frame `GpuDrawArgs` buffer for the GPU-driven cull pass:
-    // one record per `DrawObject` (same indexing as the `GpuObjectData`
-    // buffer), carrying the indexed-draw arguments the cull kernel encodes
-    // into the indirect command buffer plus the per-frame cull-decision bits.
-    // Returns `None` when there is nothing to draw. Rebuilt every frame so
-    // `update_visibility` / streaming residency changes (*and* per-frame LOD
-    // swaps driven by camera distance) take effect.
-    pub(super) fn build_draw_args_buffer(
-        &mut self,
-        cam_pos: [f32; 3],
-        ring_slot: usize,
-        history: HistoryMode,
-    ) -> RenderResult<Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>> {
-        use concinnity_core::gfx::render_types::{GpuDrawArgs, draw_args_flags};
-        if self.cull_count() == 0 {
-            return Ok(None);
-        }
-        let n_cull = self.cull_count();
-        self.state.model_history.get_mut().begin(history, n_cull);
-        // A transparent glass mesh (Layer 2) is disabled in the opaque pass when
-        // the RT path is live: it draws in the transparent pass instead. Clearing
-        // ENABLED makes the cull kernel reset its ICB slot to a no-op (the same
-        // path invisible / non-resident objects take), so it neither draws opaque
-        // nor occludes the refraction snapshot. The object keeps its slot, so every
-        // parallel cull / object-buffer / prev-model index stays intact.
-        let mesh_glass_active = self.mesh_glass_active();
-        let mut args = std::mem::take(&mut self.rings.draw_args_scratch);
-        args.clear();
-        for (i, obj) in self.state.draw.objects.iter().enumerate() {
-            // Pick this frame's active LOD by camera distance: the bindless
-            // main pass then renders the chosen slice with no shader-side
-            // change. Objects with no alternates fall straight through to LOD0.
-            let d = lod::camera_distance(obj, cam_pos);
-            let (index_offset, index_count) = obj.active_lod(d);
-            let opaque_visible =
-                obj.visible && !(mesh_glass_active && obj.material.see_through != 0);
-
-            args.push(GpuDrawArgs {
-                index_count: index_count as u32,
-                index_offset: index_offset as u32,
-                base_vertex: obj.base_vertex as u32,
-                // The record's shader bucket rides the upper flag bits so the
-                // cull kernel can route its command into that bucket's ICB.
-                flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | render_types::draw_args_bucket_bits(obj.shader_bucket)
-                    | self.state.model_history.get_mut().draw_flags(i, i),
-            });
-        }
-        // Append the instances' draw args in the SAME cluster-then-instance
-        // order as `instanced.records`, so cull index `draw.objects.len() + k`
-        // reads matching object + draw-args records. The cached args are each
-        // cluster's base LOD slice, so this is a memcpy; clusters that declare
-        // alternates then get their instances' active slice patched over it.
-        if self.state.draw.n_instances > 0 {
-            let instance_base = args.len();
-            args.extend_from_slice(&self.instanced.draw_args);
+        // The instance tail, in the cluster-then-instance order of
+        // `instanced.records`, so cull index `draw.objects.len() + k` reads
+        // matching records. It moves when the static list grows, so a slot's
+        // copy is keyed by where it starts. Clusters that declare alternates get
+        // their instances' active slice patched over the base slice every frame.
+        let n_instances = n_instances.min(tail_records.len());
+        let (instance_records, skinned_records) = tail_records.split_at_mut(n_instances);
+        let (instance_args, skinned_args) = tail_args.split_at_mut(n_instances);
+        if n_instances > 0 {
+            let fresh = objects_fresh || args_fresh;
+            if self
+                .rings
+                .instance_tail
+                .take(ring_slot, n_static as u64, fresh)
+            {
+                copy_prefix(instance_records, &self.instanced.records);
+                copy_prefix(instance_args, &self.instanced.draw_args);
+            }
             if self.instanced.any_lod {
                 lod::for_each_instance_lod(
                     &self.instanced.clusters,
                     cam_pos,
                     |record, index_offset, index_count| {
-                        let rec = &mut args[instance_base + record];
-                        rec.index_offset = index_offset as u32;
-                        rec.index_count = index_count as u32;
+                        if let Some(rec) = instance_args.get_mut(record) {
+                            rec.index_offset = index_offset as u32;
+                            rec.index_count = index_count as u32;
+                        }
                     },
                 );
             }
         }
-        // Skinned draw args: one per skinned object, the active-LOD
-        // slice into the skinned index buffer with base_vertex 0 (the
-        // deformed buffer mirrors global skinned indexing). Cullable + gated on
-        // obj.visible; rebuilt every frame (pose-driven LOD + visibility). The
-        // cull kernel routes records at/after `skinned_record_base()` through the
-        // skinned index buffer (see encode_cull's `skinned_base`).
-        if self.state.draw.n_skinned > 0 {
-            let base = args.len();
-            for (k, obj) in self.state.skinned.draw_objects.iter().enumerate() {
-                let d = lod::skinned_camera_distance(obj, cam_pos);
-                let (index_offset, index_count) = obj.active_lod(d);
-                args.push(GpuDrawArgs {
-                    index_count: index_count as u32,
-                    index_offset: index_offset as u32,
-                    base_vertex: 0,
-                    flags: draw_args_flags(obj.visible, true, true)
-                        | self
-                            .state
-                            .model_history
-                            .get_mut()
-                            .skinned_flags(base + k, k),
-                });
-            }
+
+        // One record per skinned object: the compute-deformed geometry draws as
+        // rigid geometry through the same cull, its AABB and model following the
+        // animated pose. Its args are the active-LOD slice into the skinned index
+        // buffer with base_vertex 0 (the deformed buffer mirrors global skinned
+        // indexing); the cull kernel routes records at/after
+        // `skinned_record_base()` through that buffer.
+        let skinned_base = n_static + n_instances;
+        let skinned = self
+            .state
+            .skinned
+            .draw_objects
+            .iter()
+            .take(self.state.draw.n_skinned);
+        for (k, (obj, (rec, arg))) in skinned
+            .zip(skinned_records.iter_mut().zip(skinned_args.iter_mut()))
+            .enumerate()
+        {
+            *rec = metal_skinned_record(obj, texture_count);
+            let (index_offset, index_count) =
+                obj.active_lod(lod::skinned_camera_distance(obj, cam_pos));
+            *arg = GpuDrawArgs {
+                index_count: index_count as u32,
+                index_offset: index_offset as u32,
+                base_vertex: 0,
+                flags: draw_args_flags(obj.visible, true, true)
+                    | model_history.skinned_flags(skinned_base + k, k),
+            };
         }
-        let result = self.rings.draw_args.write(
-            &self.hw.device,
-            ring_slot,
-            super::context::bytes_of_slice(&args),
-        );
-        self.rings.draw_args_scratch = args;
-        result.map(Some)
+        Ok(Some(RecordBuffers {
+            objects,
+            draw_args,
+            packing,
+        }))
     }
 
     // Encode the GPU-driven cull compute pass: one thread per

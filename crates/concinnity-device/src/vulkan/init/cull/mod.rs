@@ -207,6 +207,7 @@ pub(super) fn build_cull(
         ..kernels
     });
     let cull = VkCull {
+        packer: crate::record_pack::RecordPacker::default(),
         bindless_pipeline: bindless.pipeline,
         bindless_pipeline_layout: bindless.pipeline_layout,
         bindless_set_layout: bindless.set_layout,

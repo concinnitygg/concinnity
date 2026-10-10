@@ -7,8 +7,12 @@
 use alloc::vec::Vec;
 
 mod fan_out;
+mod gate;
+mod judge;
 
 pub use fan_out::{FanOutClock, FanOutTimer, FanOutTiming};
+pub use gate::FanOutGate;
+pub use judge::FanOutJudge;
 
 /// Maximum number of per-pass GPU timings tracked by [`RenderStats`]: one per
 /// render-graph `PassId`, which a compile-time assertion in
@@ -65,6 +69,10 @@ pub struct RenderStats {
     /// against the recording work the workers did. Part of `render_cpu_us`.
     /// All zero on a backend that records serially.
     pub recording_fan_out: FanOutTiming,
+    /// The render thread's packing of this frame's per-draw cull records: on
+    /// that thread alone while the work is small, across the job pool once it
+    /// is large enough to pay. All zero on a frame that packed none.
+    pub packing_fan_out: FanOutTiming,
     /// CPU microseconds each pass took to record inside that fan-out, indexed
     /// by `PassId as usize`. Zero for a pass that did not run or was recorded
     /// outside the fan-out.
@@ -113,6 +121,7 @@ impl Default for RenderStats {
             gpu_wait_us: 0,
             render_cpu_us: 0,
             recording_fan_out: FanOutTiming::default(),
+            packing_fan_out: FanOutTiming::default(),
             pass_record_us: [0; MAX_PASS_TIMINGS],
             vram_bytes: 0,
             transient_pool_bytes: 0,

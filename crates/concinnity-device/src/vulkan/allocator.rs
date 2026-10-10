@@ -236,6 +236,42 @@ impl PooledBuffer {
         self._lease.as_ref().map_or(0, |l| l.size as usize)
     }
 
+    // Records `first..first + len` of this buffer's mapping viewed as `T`s, for a
+    // pack to write in place. `None` when the buffer has no host mapping, the
+    // range runs past the leased bytes, or the mapping is misaligned for `T`.
+    //
+    // # Safety
+    //
+    // While the slice lives, nothing else may read or write those bytes: the
+    // GPU must be done with them (a frame-in-flight copy whose fence has
+    // signaled, or a bake buffer not yet submitted), and no other slice or
+    // `write_*` call may touch the range.
+    #[expect(
+        clippy::mut_from_ref,
+        reason = "the bytes are the device's mapping, lent out under the caller's contract"
+    )]
+    pub(super) unsafe fn records_mut<T: bytemuck::AnyBitPattern + bytemuck::NoUninit>(
+        &self,
+        first: usize,
+        len: usize,
+    ) -> Option<&mut [T]> {
+        let stride = size_of::<T>();
+        let end = first.checked_add(len)?.checked_mul(stride)?;
+        if self.mapped.is_null() || end > self.byte_len() {
+            return None;
+        }
+        // SAFETY: `first * stride <= end <= byte_len()`, and the lease's mapping
+        // covers `byte_len()` bytes.
+        let base = unsafe { self.mapped.add(first * stride) }.cast::<T>();
+        if !base.is_aligned() {
+            return None;
+        }
+        // SAFETY: the checks above proved `len` aligned `T`s fit the live mapping
+        // from `base`; any bit pattern is a valid `T`; the caller guarantees no
+        // other access to the range while the slice lives.
+        Some(unsafe { std::slice::from_raw_parts_mut(base, len) })
+    }
+
     // Assert the buffer is host-visible and `[offset, offset + len)` is within
     // the leased range, then hand back the write cursor.
     fn write_dst(&self, offset: usize, len: usize) -> *mut u8 {

@@ -659,8 +659,8 @@ impl ProbeBakeDevice for VkContext {
         let args_size = self.cull_count() * std::mem::size_of::<render_types::GpuDrawArgs>();
         bake.object_buf.zero_bytes(0, object_size);
         bake.draw_args_buf.zero_bytes(0, args_size);
-        self.build_object_records_into(&bake.object_buf);
-        self.build_draw_args_records_into(
+        self.build_records_into(
+            &bake.object_buf,
             &bake.draw_args_buf,
             eye,
             concinnity_core::render::model_history::HistoryMode::Untracked,

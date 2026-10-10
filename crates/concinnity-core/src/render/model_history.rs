@@ -98,26 +98,23 @@ impl ModelHistory {
     /// written for a different occupant, nothing when it can be trusted. Call
     /// exactly once per record per build.
     pub fn draw_flags(&mut self, record: usize, draw_idx: usize) -> u32 {
-        if self.mode != HistoryMode::Track {
-            return draw_args_no_history();
-        }
-        let generation = self.draw_gen.get(draw_idx).copied().unwrap_or(0);
-        self.flags(record, token(KIND_DRAW, generation, draw_idx))
+        self.window().draw_flags(record, draw_idx)
     }
 
     /// [`Self::draw_flags`] for a record in the skinned tail.
     pub fn skinned_flags(&mut self, record: usize, skinned_idx: usize) -> u32 {
-        if self.mode != HistoryMode::Track {
-            return draw_args_no_history();
-        }
-        let generation = self.skinned_gen.get(skinned_idx).copied().unwrap_or(0);
-        self.flags(record, token(KIND_SKINNED, generation, skinned_idx))
+        self.window().skinned_flags(record, skinned_idx)
     }
 
-    fn flags(&mut self, record: usize, token: u64) -> u32 {
-        match self.observe(record, token) {
-            true => draw_args_no_history(),
-            false => 0,
+    /// Every record, as one window that [`HistoryWindow::split_at`] divides
+    /// into disjoint runs a build can query from separate threads.
+    pub fn window(&mut self) -> HistoryWindow<'_> {
+        HistoryWindow {
+            mode: self.mode,
+            draw_gen: &self.draw_gen,
+            skinned_gen: &self.skinned_gen,
+            observed: &mut self.observed,
+            first: 0,
         }
     }
 
@@ -146,15 +143,74 @@ impl ModelHistory {
     pub fn reoccupy_skinned(&mut self, skinned_idx: SkinnedIndex) {
         bump(&mut self.skinned_gen, skinned_idx.index());
     }
+}
 
-    fn observe(&mut self, record: usize, token: u64) -> bool {
-        let Some(slot) = self.observed.get_mut(record) else {
-            // A record past the tracked range has no history to trust.
-            return true;
+/// A run of cull records lent out of a [`ModelHistory`] for one build: the
+/// flag queries for records `first..`, writing only this run's entries.
+#[derive(Debug)]
+pub struct HistoryWindow<'a> {
+    mode: HistoryMode,
+    draw_gen: &'a [u32],
+    skinned_gen: &'a [u32],
+    // Entries for records `first..first + observed.len()`. Shorter than the
+    // run when the tracker is: a record past the tracked range reads stale.
+    observed: &'a mut [u64],
+    first: usize,
+}
+
+impl<'a> HistoryWindow<'a> {
+    /// The first record this window answers for.
+    pub fn first(&self) -> usize {
+        self.first
+    }
+
+    /// Split into records `first..first + mid` and the rest.
+    pub fn split_at(self, mid: usize) -> (Self, Self) {
+        let (mode, draw_gen, skinned_gen, first) =
+            (self.mode, self.draw_gen, self.skinned_gen, self.first);
+        let (head, tail) = self.observed.split_at_mut(mid.min(self.observed.len()));
+        let part = |observed, first| Self {
+            mode,
+            draw_gen,
+            skinned_gen,
+            observed,
+            first,
+        };
+        (part(head, first), part(tail, first + mid))
+    }
+
+    /// [`ModelHistory::draw_flags`], for a record in this window.
+    pub fn draw_flags(&mut self, record: usize, draw_idx: usize) -> u32 {
+        if self.mode != HistoryMode::Track {
+            return draw_args_no_history();
+        }
+        let generation = self.draw_gen.get(draw_idx).copied().unwrap_or(0);
+        self.flags(record, token(KIND_DRAW, generation, draw_idx))
+    }
+
+    /// [`ModelHistory::skinned_flags`], for a record in this window.
+    pub fn skinned_flags(&mut self, record: usize, skinned_idx: usize) -> u32 {
+        if self.mode != HistoryMode::Track {
+            return draw_args_no_history();
+        }
+        let generation = self.skinned_gen.get(skinned_idx).copied().unwrap_or(0);
+        self.flags(record, token(KIND_SKINNED, generation, skinned_idx))
+    }
+
+    fn flags(&mut self, record: usize, token: u64) -> u32 {
+        let slot = record
+            .checked_sub(self.first)
+            .and_then(|i| self.observed.get_mut(i));
+        // A record past the tracked range has no history to trust.
+        let Some(slot) = slot else {
+            return draw_args_no_history();
         };
         let stale = *slot != token;
         *slot = token;
-        stale
+        match stale {
+            true => draw_args_no_history(),
+            false => 0,
+        }
     }
 }
 
@@ -342,5 +398,55 @@ mod tests {
         h.reoccupy_draw(DrawIndex(9));
         h.begin(HistoryMode::Track, 4);
         assert_eq!(h.draw_flags(0, 9), draw_args_no_history());
+    }
+
+    // Two windows split from one build observe exactly the records a single
+    // build over the whole tracker would, each touching only its own run.
+    #[test]
+    fn split_windows_observe_like_one_build() {
+        let mut whole = ModelHistory::new();
+        let mut split = ModelHistory::new();
+        whole.reoccupy_draw(DrawIndex(2));
+        split.reoccupy_draw(DrawIndex(2));
+        for frame in 0..3 {
+            whole.begin(HistoryMode::Track, 6);
+            split.begin(HistoryMode::Track, 6);
+            if frame == 2 {
+                whole.reoccupy_draw(DrawIndex(4));
+                split.reoccupy_draw(DrawIndex(4));
+            }
+            let expected: Vec<u32> = (0..6).map(|i| whole.draw_flags(i, i)).collect();
+            let (mut head, mut tail) = split.window().split_at(4);
+            assert_eq!((head.first(), tail.first()), (0, 4));
+            let mut got: Vec<u32> = (0..4).map(|i| head.draw_flags(i, i)).collect();
+            got.extend((4..6).map(|i| tail.draw_flags(i, i)));
+            assert_eq!(got, expected, "frame {frame}");
+        }
+    }
+
+    // A window answers only for its own run: a record before it, or past the
+    // tracked range, reads stale without touching another window's entries.
+    #[test]
+    fn a_window_reads_records_outside_its_run_as_stale() {
+        let mut h = ModelHistory::new();
+        h.begin(HistoryMode::Track, 4);
+        h.window().draw_flags(1, 1);
+        h.begin(HistoryMode::Track, 4);
+        let (_, mut tail) = h.window().split_at(2);
+        assert_eq!(tail.draw_flags(1, 1), draw_args_no_history());
+        let (_, mut past) = h.window().split_at(9);
+        assert_eq!(past.draw_flags(9, 9), draw_args_no_history());
+        assert_eq!(h.draw_flags(1, 1), KEEP);
+    }
+
+    #[test]
+    fn an_untracked_window_flags_everything() {
+        let mut h = ModelHistory::new();
+        h.begin(HistoryMode::Track, 2);
+        h.draw_flags(0, 0);
+        h.begin(HistoryMode::Untracked, 2);
+        let (mut head, _) = h.window().split_at(1);
+        assert_eq!(head.draw_flags(0, 0), draw_args_no_history());
+        assert_eq!(head.skinned_flags(0, 0), draw_args_no_history());
     }
 }

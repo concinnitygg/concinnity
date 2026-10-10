@@ -42,7 +42,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use eval::{EvalCtx, Job, Resume, Snapshot, eval_one};
-use gate::FanOutGate;
+use gate::EvalGate;
 use instance::Instance;
 use neighbors::Neighbors;
 use resolve::{Resolved, SourceTicks};
@@ -111,7 +111,7 @@ pub struct BehaviorSystem {
     // flat. A tick kept on the calling thread uses the first.
     eval_buckets: Vec<EvalBucket>,
     // Whether the next tick's runs are worth fanning out.
-    gate: FanOutGate,
+    gate: EvalGate,
     // The tick's firing list, kept for its capacity across ticks.
     jobs: Vec<Job>,
     // The tick's resolved entity sets and the tag-intersection scratch, kept

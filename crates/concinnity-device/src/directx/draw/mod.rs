@@ -242,8 +242,10 @@ impl DxContext {
         // graph drops the Cull pass and Main runs as a bare clear, so these
         // per-object buffer rebuilds would feed nothing.
         if !world_hidden && bindless_cull_enabled {
-            self.build_object_buffer(frame_idx);
-            self.build_draw_args_buffer(frame_idx, cam_pos, self.model_history_mode());
+            let packing = self.build_record_buffers(frame_idx, cam_pos, self.model_history_mode());
+            let mut stats = self.diagnostics.frame_stats.get();
+            stats.packing_fan_out = packing;
+            self.diagnostics.frame_stats.set(stats);
         }
 
         // Clustered binning runs while a local light or a baked probe is live,

@@ -58,6 +58,7 @@ pub mod probe_bake;
 pub mod probe_book;
 pub mod range_alloc;
 pub mod reactive_mask;
+pub mod record_pack;
 pub mod reflection_probe;
 pub mod render_graph;
 pub mod retire_pool;

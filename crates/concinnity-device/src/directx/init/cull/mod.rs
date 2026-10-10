@@ -115,6 +115,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         .collect();
 
     Ok(CullState {
+        packer: crate::record_pack::RecordPacker::default(),
         main_bindless_root_sig: Some(bindless.root_sigs.main),
         main_bindless_pso: Some(bindless.psos.main),
         prepass_root_sig: Some(bindless.prepass_root_sig),

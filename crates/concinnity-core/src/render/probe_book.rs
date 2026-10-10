@@ -22,6 +22,7 @@ pub struct ProbeBook {
     placements: Vec<ProbePlacement>,
     records: Vec<ProbeUniforms>,
     queue: ProbeBakeQueue,
+    revision: u64,
 }
 
 /// How far the bake has come: probes installed out of probes placed.
@@ -52,6 +53,7 @@ impl ProbeBook {
             placements: Vec::new(),
             records: Vec::new(),
             queue: ProbeBakeQueue::new(0),
+            revision: 0,
         }
     }
 
@@ -61,6 +63,7 @@ impl ProbeBook {
         self.records.clear();
         self.queue = ProbeBakeQueue::new(placements.len());
         self.placements = placements;
+        self.revision += 1;
     }
 
     /// The next placement to bake and its index, advancing the queue. `None`
@@ -94,6 +97,7 @@ impl ProbeBook {
             ))
         })?;
         self.records.push(placement.uniforms());
+        self.revision += 1;
         Ok(self.progress())
     }
 
@@ -118,6 +122,12 @@ impl ProbeBook {
     /// The record of every installed probe, in placement order.
     pub fn records(&self) -> &[ProbeUniforms] {
         &self.records
+    }
+
+    /// Changes whenever [`Self::records`] does, so a backend can skip
+    /// rewriting a copy of them that is already current.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// The header the shaders read the live count and the cubes' mip count
@@ -250,5 +260,33 @@ mod tests {
         assert_eq!(book.placed(), 0);
         assert!(!book.pending());
         assert!(book.take_next().is_none());
+    }
+
+    // A backend skips its copy of the records while the revision holds, so it
+    // must move with every change to them and with nothing else.
+    #[test]
+    fn the_revision_moves_exactly_when_the_records_do() {
+        let mut book = ProbeBook::new();
+        let start = book.revision();
+        book.reset(alloc::vec![placement(0.0), placement(1.0)]);
+        let placed = book.revision();
+        assert_ne!(placed, start);
+        let (index, _) = book.take_next().unwrap();
+        assert_eq!(
+            book.revision(),
+            placed,
+            "handing out a bake changes no record"
+        );
+        book.install(index).unwrap();
+        let installed = book.revision();
+        assert_ne!(installed, placed);
+        assert!(book.install(0).is_err());
+        assert_eq!(
+            book.revision(),
+            installed,
+            "a refused install changes nothing"
+        );
+        book.abort();
+        assert_eq!(book.revision(), installed, "an abort keeps every record");
     }
 }

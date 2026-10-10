@@ -344,6 +344,8 @@ pub(super) struct VkCullKernels {
 // are kept verbatim (heterogeneous prefixes, no single cluster prefix to drop).
 // The two-pass Hi-Z pyramid + its temporal state live here too.
 pub(super) struct VkCull {
+    // Packs the static draws' records into `object_buffers` / `draw_args_buffers`.
+    pub(super) packer: crate::record_pack::RecordPacker,
     // Bindless static main pass: bucket 0's pipeline, the world default Shader's
     // pair where the world declares one and the engine's otherwise. The bindless
     // descriptor sets are freed with the shared descriptor pool.

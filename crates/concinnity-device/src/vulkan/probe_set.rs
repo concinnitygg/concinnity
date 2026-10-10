@@ -12,6 +12,7 @@
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::record_pack::StaticSlots;
 use concinnity_core::render::reflection_probe::PrefilterPlan;
 use concinnity_core::render::uniforms::{ProbeSet, ProbeUniforms, grown_probe_capacity};
 
@@ -269,6 +270,8 @@ pub(super) struct ProbeSetGpu {
     pub(super) cubes: Option<ProbeCubeArray>,
     pub(super) stand_in: ProbeCubeArray,
     pub(super) records: Vec<ProbeRecords>,
+    // Which `records` buffers hold the book's current records.
+    pub(super) records_current: StaticSlots,
     pub(super) stand_in_records: ProbeRecords,
     pub(super) stand_in_set: PooledBuffer,
 }
@@ -288,6 +291,7 @@ impl ProbeSetGpu {
             records: (0..frames)
                 .map(|_| ProbeRecords::new(upload.alloc, capacity))
                 .collect::<RenderResult<_>>()?,
+            records_current: StaticSlots::new(frames),
             stand_in_records: ProbeRecords::new(upload.alloc, 1)?,
             stand_in_set,
         })
@@ -352,9 +356,8 @@ impl VkContext {
         let count = self.probe.book.count();
         self.uniforms.probe_set_ubo_buffers[frame_idx].write_val(0, &self.probe.book.header());
         let floor = self.probe.gpu.bound_cubes().capacity();
-        if let Some(capacity) =
-            grown_probe_capacity(self.probe.gpu.records[frame_idx].capacity, count, floor)
-        {
+        let grown = grown_probe_capacity(self.probe.gpu.records[frame_idx].capacity, count, floor);
+        if let Some(capacity) = grown {
             self.probe.gpu.records[frame_idx] = ProbeRecords::new(&self.hw.alloc, capacity)?;
             // This frame's fence has signaled, so no submission still reads its set.
             self.global_bindings().frame(frame_idx).write_binding(
@@ -366,9 +369,19 @@ impl VkContext {
             self.light_cull
                 .write_probe_records(&self.hw.device, frame_idx, info);
         }
-        self.probe.gpu.records[frame_idx]
-            .buffer
-            .write_slice(0, self.probe.book.records());
+        // The records change only when a probe installs or the placements are
+        // replaced, so a buffer already holding this revision is left alone.
+        let revision = self.probe.book.revision();
+        if self
+            .probe
+            .gpu
+            .records_current
+            .take(frame_idx, revision, grown.is_some())
+        {
+            self.probe.gpu.records[frame_idx]
+                .buffer
+                .write_slice(0, self.probe.book.records());
+        }
         Ok(())
     }
 }
