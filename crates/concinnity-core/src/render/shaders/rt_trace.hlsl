@@ -17,8 +17,12 @@
 
 // Dielectric base reflectance for the Fresnel.
 static const float RT_F0 = 0.04;
-// Floats per `Vertex` (56-byte stride): position, normal, tangent, color, uv.
+// Floats per `Vertex` (56-byte stride): position, normal, tangent, color, uv,
+// and the float each attribute the trace reads starts at.
 static const uint VERTEX_FLOATS = 14u;
+static const uint VERTEX_NORMAL_FLOAT = 3u;
+static const uint VERTEX_TANGENT_FLOAT = 6u;
+static const uint VERTEX_UV_FLOAT = 12u;
 // Skinned objects flag bit 31 of `normal_index`; the trace then fetches the hit
 // triangle from the deformed-vertex / skinned index buffers, which mirror
 // the static layout. The flag is masked off before the pool sample, so skinned
@@ -46,38 +50,38 @@ float3 pool_sample_level0(uint idx, float2 uv)
 }
 #endif
 
-// Attribute fetchers into the shared 14-float `Vertex` (normal at float 3,
-// tangent at 6, uv at 12), addressed by absolute vertex index `vi`. The
-// `skinned` set reads the deformed buffer, which carries the identical layout.
+// Attribute fetchers into the shared 14-float `Vertex`, addressed by absolute
+// vertex index `vi`. The `skinned` set reads the deformed buffer, which carries
+// the identical layout.
 float3 rt_vertex_normal(uint vi)
 {
-    uint b = vi * VERTEX_FLOATS;
-    return float3(vert_float(b + 3u), vert_float(b + 4u), vert_float(b + 5u));
+    uint b = vi * VERTEX_FLOATS + VERTEX_NORMAL_FLOAT;
+    return float3(vert_float(b), vert_float(b + 1u), vert_float(b + 2u));
 }
 float3 rt_vertex_tangent(uint vi)
 {
-    uint b = vi * VERTEX_FLOATS;
-    return float3(vert_float(b + 6u), vert_float(b + 7u), vert_float(b + 8u));
+    uint b = vi * VERTEX_FLOATS + VERTEX_TANGENT_FLOAT;
+    return float3(vert_float(b), vert_float(b + 1u), vert_float(b + 2u));
 }
 float2 rt_vertex_uv(uint vi)
 {
-    uint b = vi * VERTEX_FLOATS;
-    return float2(vert_float(b + 12u), vert_float(b + 13u));
+    uint b = vi * VERTEX_FLOATS + VERTEX_UV_FLOAT;
+    return float2(vert_float(b), vert_float(b + 1u));
 }
 float3 rt_skinned_normal(uint vi)
 {
-    uint b = vi * VERTEX_FLOATS;
-    return float3(svert_float(b + 3u), svert_float(b + 4u), svert_float(b + 5u));
+    uint b = vi * VERTEX_FLOATS + VERTEX_NORMAL_FLOAT;
+    return float3(svert_float(b), svert_float(b + 1u), svert_float(b + 2u));
 }
 float3 rt_skinned_tangent(uint vi)
 {
-    uint b = vi * VERTEX_FLOATS;
-    return float3(svert_float(b + 6u), svert_float(b + 7u), svert_float(b + 8u));
+    uint b = vi * VERTEX_FLOATS + VERTEX_TANGENT_FLOAT;
+    return float3(svert_float(b), svert_float(b + 1u), svert_float(b + 2u));
 }
 float2 rt_skinned_uv(uint vi)
 {
-    uint b = vi * VERTEX_FLOATS;
-    return float2(svert_float(b + 12u), svert_float(b + 13u));
+    uint b = vi * VERTEX_FLOATS + VERTEX_UV_FLOAT;
+    return float2(svert_float(b), svert_float(b + 1u));
 }
 
 // One index from the skinned index buffer. The skinned BLAS bakes absolute

@@ -104,20 +104,22 @@ pub(in crate::vulkan) fn alloc_descriptor_sets(
 }
 
 // Usage every (re)creation of the shared vertex / index buffers must carry, on
-// top of its VERTEX_BUFFER / INDEX_BUFFER role. On an RT-capable device the
-// shared buffers double as acceleration-structure build inputs (device
-// addressed) and as storage buffers the RT / glass shaders fetch hit-triangle
-// attributes from; the flags ride on capability rather than on RT being live,
-// since a later quality toggle cannot add usage to an existing buffer. Every
-// path that replaces the buffers (chunk-streaming headroom, hot-reload
-// geometry rebuild) routes through here: dropping these leaves the shared
-// buffers un-addressable and every later acceleration-structure build invalid.
+// top of its VERTEX_BUFFER / INDEX_BUFFER role. They are always storage
+// buffers, which the grass kernel reads a planet's tile meshes from and the RT
+// / glass shaders fetch hit-triangle attributes from. On an RT-capable device
+// they also double as acceleration-structure build inputs (device addressed);
+// the flags ride on capability rather than on RT being live, since a later
+// quality toggle cannot add usage to an existing buffer. Every path that
+// replaces the buffers (chunk-streaming headroom, hot-reload geometry rebuild)
+// routes through here: dropping these leaves the shared buffers
+// un-addressable and every later acceleration-structure build invalid.
 pub(in crate::vulkan) fn shared_geometry_usage(rt_capable: bool) -> vk::BufferUsageFlags {
-    let base = vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST;
+    let base = vk::BufferUsageFlags::TRANSFER_SRC
+        | vk::BufferUsageFlags::TRANSFER_DST
+        | vk::BufferUsageFlags::STORAGE_BUFFER;
     if rt_capable {
         base | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
             | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
-            | vk::BufferUsageFlags::STORAGE_BUFFER
     } else {
         base
     }

@@ -55,6 +55,8 @@ pub mod quality_preset;
 pub(crate) mod render_config;
 // Every Terrain's cooked payload, decoded for the draw list and the grass.
 pub(crate) mod terrain;
+// A planet's grass layers, resolved at graphics init.
+pub(crate) mod planet_grass;
 // Handle -> asset id bridge for SkinnedMesh correlation references, published by
 // GraphicsSystem and read by the animation / third-person systems.
 pub(crate) mod skinned_mesh_map;

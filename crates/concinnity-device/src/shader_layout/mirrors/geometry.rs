@@ -11,7 +11,7 @@ use concinnity_core::gfx::render_types::{
 };
 use concinnity_core::render::uniforms::directx::CullParams as DxCullParams;
 use concinnity_core::render::uniforms::grass::{
-    GpuGrassBlade, GrassBendParams, GrassLayerGpu, GrassParams,
+    GpuGrassBlade, GrassBendParams, GrassLayerGpu, GrassParams, PlanetGrassTileGpu,
 };
 use concinnity_core::render::uniforms::metal::CullUniforms as MetalCullParams;
 use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams as VkCullParams};
@@ -113,7 +113,27 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             bend_prev_valid,
             shadow_vp,
             shadow_light,
+            [planet_center, planet_density_scale] => ["planet_center_scale"],
+            ground,
+            planet_tile_base,
+            planet_tile_count,
+            _pad,
+            wind_map,
+            bend_prev_map,
+            planet_density,
             layers,
+        })),
+        everywhere(mirror!(PlanetGrassTileGpu => "PlanetGrassTile" {
+            model,
+            vertex_base,
+            face_level,
+            tile,
+            first_group,
+            block_origin,
+            block_count,
+            grass_tiles,
+            radial,
+            _pad,
         })),
         everywhere(mirror!(GrassLayerGpu => "GrassLayer" {
             rect,
@@ -156,6 +176,7 @@ pub(in crate::shader_layout) fn grass_bend() -> Vec<Case> {
         write_half,
         prev_valid,
         _pad,
+        prev_map,
         stamps,
     }))]
 }

@@ -15,7 +15,7 @@
 //! - [`ground_patch`]: the ground around one point as a height grid in the
 //!   simulated frame, for bodies to collide with.
 
-mod dvec;
+pub(crate) mod dvec;
 mod frame;
 mod ground;
 mod lod;
@@ -37,6 +37,10 @@ pub const MIN_PLANET_RADIUS: f32 = 100.0;
 /// Most tiles a planet keeps resident at once, wherever the camera is: the
 /// bound the GPU pools for its meshes are sized from.
 pub const MAX_RESIDENT_TILES: usize = 960;
+
+/// The widest a tile mesh's cells are under the camera, in meters: how deep
+/// the quadtree a planet is drawn with goes.
+pub const FINEST_CELL_SIZE: f64 = 1.0;
 
 /// How far the camera strays from the simulated frame's origin before the
 /// frame moves to it, in meters.

@@ -129,6 +129,9 @@ pub struct TileMesh {
     pub vertices: Vec<Vertex>,
     /// Two triangles per cell wound to face outward, then the skirt's.
     pub indices: Vec<u16>,
+    /// The lowest and highest the surface's corners lie along the up at
+    /// `origin`, in meters from it: every point of the surface lies between.
+    pub radial: [f32; 2],
 }
 
 /// The mesh of `tile` on `shape`.
@@ -194,6 +197,14 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
         }
     }
 
+    let up = shape.up_at(origin);
+    let radial = vertices
+        .iter()
+        .fold([f32::INFINITY, f32::NEG_INFINITY], |[lo, hi], v| {
+            let h = dvec::dot(dvec::from_f32(v.pos), up) as f32;
+            [lo.min(h), hi.max(h)]
+        });
+
     let mut indices = Vec::with_capacity(n * n * 6 + 4 * n * 6);
     let corner = |i: usize, j: usize| (j * side + i) as u16;
     for j in 0..n {
@@ -240,6 +251,7 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
         origin,
         vertices,
         indices,
+        radial,
     }
 }
 
@@ -309,6 +321,26 @@ mod tests {
         // A face is 50 km * (pi / 2) across the middle, its 512 tiles a level
         // narrower near its center, where the spherified cube crowds them.
         assert!(b.width > 100.0 && b.width < 153.4, "{}", b.width);
+    }
+
+    #[test]
+    fn the_radial_range_holds_the_surface() {
+        let s = shape();
+        let mesh = tile_mesh(&s, deep_tile());
+        let up = s.up_at(mesh.origin);
+        let side = TILE_CELLS as usize + 1;
+        let [lo, hi] = mesh.radial;
+        assert!(lo < hi);
+        for v in &mesh.vertices[..side * side] {
+            let h = dvec::dot(dvec::from_f32(v.pos), up) as f32;
+            assert!(h >= lo && h <= hi);
+        }
+        // Skirts hang below the surface's range.
+        assert!(
+            mesh.vertices[side * side..]
+                .iter()
+                .any(|v| (dvec::dot(dvec::from_f32(v.pos), up) as f32) < lo)
+        );
     }
 
     // Every surface triangle faces away from the center, and so does its

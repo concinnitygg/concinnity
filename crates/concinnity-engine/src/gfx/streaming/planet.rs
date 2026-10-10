@@ -17,8 +17,9 @@ use concinnity_core::gfx::render_types::{DrawIndex, MaterialUniforms};
 use concinnity_core::planet::{
     DVec3, LocalFrame, MAX_RESIDENT_TILES, PlanetFrame, TileId, TileLod, TileMesh, tile_mesh,
 };
-use concinnity_core::render::backend::ChunkMesh;
+use concinnity_core::render::backend::{ChunkMesh, PlanetChunk};
 use concinnity_core::render::error;
+use concinnity_core::render::grass::planet::tint::PlanetFarField;
 use concinnity_core::render::ops::{OpFailure, RenderOps};
 
 use super::worker::Worker;
@@ -30,9 +31,6 @@ const WORKERS: usize = 3;
 
 // Tiles being built at once, so a jump does not queue work it will discard.
 const MAX_IN_FLIGHT: usize = 24;
-
-// The finest cells a tile reaches under the camera, in meters.
-const FINEST_CELL_M: f64 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tile {
@@ -145,19 +143,26 @@ pub(crate) fn tile_mesh_size() -> (usize, usize) {
 }
 
 impl PlanetTiles {
-    pub(crate) fn new(planet: &PlanetFrame, material: TileMaterial) -> Self {
-        let lod = TileLod::new(planet.shape, FINEST_CELL_M);
+    /// Tiles of `planet` drawn with `material`; with `far_field`, every
+    /// tile's vertices carry the color its grass shows from afar.
+    pub(crate) fn new(
+        planet: &PlanetFrame,
+        material: TileMaterial,
+        far_field: Option<PlanetFarField>,
+    ) -> Self {
+        let lod = TileLod::new(planet.shape, concinnity_core::planet::FINEST_CELL_SIZE);
         let (result_tx, results) = std::sync::mpsc::channel::<(TileId, TileMesh)>();
         let workers = (0..WORKERS)
             .map(|i| {
                 let (request_tx, request_rx) = std::sync::mpsc::channel::<TileId>();
                 let results = result_tx.clone();
                 let shape = lod.shape;
+                let far_field = far_field.clone();
                 Worker::spawn(
                     &format!("cn-planet-tiles-{i}"),
                     request_rx,
                     request_tx,
-                    move |rx| build_tiles(shape, rx, results),
+                    move |rx| build_tiles(shape, far_field, rx, results),
                 )
             })
             .collect();
@@ -282,6 +287,10 @@ impl PlanetTiles {
                         normal_map_slot,
                         material,
                         frame,
+                        planet_tile: Some(PlanetChunk {
+                            tile: id,
+                            radial: mesh.radial,
+                        }),
                     },
                     dst,
                 );
@@ -299,15 +308,20 @@ impl PlanetTiles {
     }
 }
 
-// A worker: build every requested tile's mesh and send it back, until the
-// streamer is dropped.
+// A worker: build every requested tile's mesh, tinted with `far_field`, and
+// send it back, until the streamer is dropped.
 fn build_tiles(
     shape: concinnity_core::planet::PlanetShape,
+    far_field: Option<PlanetFarField>,
     requests: Receiver<TileId>,
     results: Sender<(TileId, TileMesh)>,
 ) {
     while let Ok(id) = requests.recv() {
-        if results.send((id, tile_mesh(&shape, id))).is_err() {
+        let mut mesh = tile_mesh(&shape, id);
+        if let Some(far) = &far_field {
+            far.tint(&shape, &mut mesh);
+        }
+        if results.send((id, mesh)).is_err() {
             break;
         }
     }
@@ -328,7 +342,7 @@ mod tests {
                 octaves: 6,
                 seed: 5,
             },
-            FINEST_CELL_M,
+            concinnity_core::planet::FINEST_CELL_SIZE,
         )
     }
 

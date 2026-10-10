@@ -13,22 +13,25 @@
 //! draw cull's Hi-Z read set, which holds the pyramid it tests tiles against.
 //! The visible-blade and draw-argument buffers carry across frames; the graph
 //! orders the kernel's writes against the draws that read them, this frame's
-//! and the last.
+//! and the last. On a planet the kernel also reads the frame's drawn tiles,
+//! from a host-visible buffer per frame in flight, and their meshes, from the
+//! shared vertex buffer.
 
 use ash::vk;
+use concinnity_core::planet::Rebase;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::grass::bend::GRASS_BEND_WORDS;
 use concinnity_core::render::grass::lod::GRASS_LOD_COUNT;
 use concinnity_core::render::grass::{
-    GrassBender, GrassCamera, GrassField, GrassFrameInputs, GrassHistory, GrassHiz, GrassPass,
-    GrassShadowView,
+    DrawnPlanetTile, GrassBender, GrassCamera, GrassField, GrassFrameInputs, GrassHistory,
+    GrassHiz, GrassPass, GrassShadowView,
 };
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::PassId;
 use concinnity_core::render::shadow_bias;
 use concinnity_core::render::uniforms::grass::{
     GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassParams,
-    grass_args_offset,
+    MAX_PLANET_GRASS_TILES, PlanetGrassTileGpu, grass_args_offset,
 };
 
 use super::allocator::PooledBuffer;
@@ -56,8 +59,9 @@ fn draw_set_bindings() -> [Binding; 2] {
 }
 
 // The kernel's block, the blades it appends, the draw arguments, the terrain
-// heights and mask texels it reads, and the bend field.
-fn kernel_set_bindings() -> [Binding; 6] {
+// heights and mask texels it reads, the bend field, the planet tiles and the
+// shared vertex stream.
+fn kernel_set_bindings() -> [Binding; 8] {
     use vk::DescriptorType as T;
     let compute = vk::ShaderStageFlags::COMPUTE;
     [
@@ -67,8 +71,17 @@ fn kernel_set_bindings() -> [Binding; 6] {
         (3, T::STORAGE_BUFFER, compute),
         (4, T::STORAGE_BUFFER, compute),
         (5, T::STORAGE_BUFFER, compute),
+        (6, T::STORAGE_BUFFER, compute),
+        (7, T::STORAGE_BUFFER, compute),
     ]
 }
+
+// Where the kernel set holds the planet tiles and the shared vertex stream.
+const KERNEL_PLANET_TILES_BINDING: u32 = 6;
+const KERNEL_VERTICES_BINDING: u32 = 7;
+
+// Planet tile records one frame holds: the view's run and the cascade's.
+const PLANET_TILE_RECORDS: usize = 2 * MAX_PLANET_GRASS_TILES;
 
 // The bend pass's block and the field it reads and writes.
 fn bend_set_bindings() -> [Binding; 2] {
@@ -240,6 +253,9 @@ pub(in crate::vulkan) struct GrassResources {
     params: Vec<PooledBuffer>,
     shadow_params: Vec<PooledBuffer>,
     bend_params: Vec<PooledBuffer>,
+    // Per frame in flight, persistently mapped: the planet tile records both
+    // runs read.
+    planet_tiles: Vec<PooledBuffer>,
     // Per frame: the view's draw and kernel sets, the cascade's, and the bend
     // pass's set, each over that frame's block.
     draw_sets: Vec<vk::DescriptorSet>,
@@ -298,6 +314,7 @@ impl GrassResources {
         passes: GrassPassLayouts<'_>,
         targets: GrassTargets,
         frames: usize,
+        (vertices, vertex_bytes): (vk::Buffer, u64),
         hot_reload: bool,
     ) -> RenderResult<Self> {
         let GpuUploadContext { alloc, device, .. } = gpu;
@@ -360,7 +377,7 @@ impl GrassResources {
         let bend_field = zeroed_storage(&gpu, bend_bytes, vk::BufferUsageFlags::empty())?;
 
         let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
-        let heights_data: &[u8] = bytemuck::cast_slice(&field.buffers.heights);
+        let heights_data: &[u8] = bytemuck::cast_slice(field.buffers.bound_heights());
         let masks_data: &[u8] = bytemuck::cast_slice(field.buffers.bound_mask_words());
         let heights = super::decal::upload_static_buffer(
             alloc,
@@ -384,6 +401,16 @@ impl GrassResources {
         let params = uniform_blocks(alloc, params_bytes, frames)?;
         let shadow_params = uniform_blocks(alloc, params_bytes, frames)?;
         let bend_params = uniform_blocks(alloc, bend_params_bytes, frames)?;
+        let planet_bytes = (PLANET_TILE_RECORDS * std::mem::size_of::<PlanetGrassTileGpu>()) as u64;
+        let planet_tiles = (0..frames)
+            .map(|_| {
+                alloc.create_buffer(
+                    planet_bytes,
+                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                )
+            })
+            .collect::<RenderResult<Vec<_>>>()?;
 
         let n = frames as u32;
         let sizes = PoolSizes::default()
@@ -407,10 +434,12 @@ impl GrassResources {
         let shadow_kernel_sets = sets(&layouts.kernel_set)?;
         let bend_sets = sets(&layouts.bend_set)?;
         // One placement's draw and kernel sets: its block, its blades and its
-        // draw arguments, over the shared terrain and bend field.
+        // draw arguments, over the shared terrain, bend field, planet tiles and
+        // vertex stream.
         let write_placement = |block: &PooledBuffer,
                                (blades, blades_bytes): (&PooledBuffer, u64),
                                args: &PooledBuffer,
+                               planet: &PooledBuffer,
                                draw: vk::DescriptorSet,
                                kernel: vk::DescriptorSet| {
             SetWrites::new(draw)
@@ -424,6 +453,8 @@ impl GrassResources {
                 .storage_buffer(3, heights.buffer(), heights_data.len() as u64)
                 .storage_buffer(4, masks.buffer(), masks_data.len() as u64)
                 .storage_buffer(5, bend_field.buffer(), bend_bytes)
+                .storage_buffer(KERNEL_PLANET_TILES_BINDING, planet.buffer(), planet_bytes)
+                .storage_buffer(KERNEL_VERTICES_BINDING, vertices, vertex_bytes)
                 .apply(device);
         };
         for f in 0..frames {
@@ -431,6 +462,7 @@ impl GrassResources {
                 &params[f],
                 (&blades, blade_bytes),
                 &args,
+                &planet_tiles[f],
                 draw_sets[f],
                 kernel_sets[f],
             );
@@ -438,6 +470,7 @@ impl GrassResources {
                 &shadow_params[f],
                 (&shadow_blades, shadow_bytes),
                 &shadow_args,
+                &planet_tiles[f],
                 shadow_draw_sets[f],
                 shadow_kernel_sets[f],
             );
@@ -461,6 +494,7 @@ impl GrassResources {
             params,
             shadow_params,
             bend_params,
+            planet_tiles,
             draw_sets,
             kernel_sets,
             shadow_draw_sets,
@@ -469,6 +503,20 @@ impl GrassResources {
             _pool: pool,
             history: std::cell::Cell::new(GrassHistory::default()),
         })
+    }
+
+    // Point every kernel set at the shared vertex stream `vertices`, after it
+    // was replaced. The device is idle whenever the stream is.
+    pub(in crate::vulkan) fn rewire_vertices(
+        &self,
+        device: &VkDevice,
+        (vertices, vertex_bytes): (vk::Buffer, u64),
+    ) {
+        for &set in self.kernel_sets.iter().chain(&self.shadow_kernel_sets) {
+            SetWrites::new(set)
+                .storage_buffer(KERNEL_VERTICES_BINDING, vertices, vertex_bytes)
+                .apply(device);
+        }
     }
 
     // Rebuild the kernel and the lit draw from the current shader sources.
@@ -548,6 +596,15 @@ pub(in crate::vulkan) struct GrassRequest<'a> {
 }
 
 impl VkContext {
+    // Carry the grass into the frame the world moved to.
+    pub(in crate::vulkan) fn rebase_grass(&self, rebase: &Rebase) {
+        if let Some(grass) = &self.grass {
+            let mut history = grass.history.get();
+            history.rebase(rebase);
+            grass.history.set(history);
+        }
+    }
+
     // Build the grass pre-pass draw against the G-buffer once one exists, or
     // `rebuild` it after a shader edit.
     pub(in crate::vulkan) fn sync_grass_prepass(&mut self, rebuild: bool) {
@@ -595,6 +652,11 @@ impl VkContext {
             cast,
             benders,
         } = request;
+        let planet_tiles: Vec<DrawnPlanetTile> = if grass.field.planet.is_some() {
+            self.state.drawn_planet_tiles()
+        } else {
+            Vec::new()
+        };
         // The pyramid holds last frame's depth once a pyramid at this
         // resolution has been built, tested through the view-projection the
         // draw cull tests through.
@@ -620,12 +682,15 @@ impl VkContext {
                 to_light: self.shadow.light_dir,
             }),
             benders,
+            planet_tiles: &planet_tiles,
         };
         let mut history = grass.history.get();
         let frame = grass.field.frame(&inputs, &mut history);
         grass.history.set(history);
         grass.params[frame_idx].write_val(0, &frame.view.params);
         grass.bend_params[frame_idx].write_val(0, &frame.bend.params);
+        let records = &frame.planet_tiles[..frame.planet_tiles.len().min(PLANET_TILE_RECORDS)];
+        grass.planet_tiles[frame_idx].write_slice(0, records);
         let shadow = frame.shadow.map(|pass| {
             grass.shadow_params[frame_idx].write_val(0, &pass.params);
             GrassPlacement::of(&pass)

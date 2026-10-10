@@ -1,7 +1,8 @@
 //! The grass pass's blocks: the per-frame parameters every grass stage reads
 //! and the layers inside them, one visible blade as the kernel appends it, the
-//! draw arguments the kernel fills, and the bend pass's parameters. Match
-//! `GrassParams` / `GrassLayer` / `GrassBlade` / `GrassBendParams` in
+//! draw arguments the kernel fills, the bend pass's parameters, and the drawn
+//! planet tiles the kernel grows blades on. Match `GrassParams` / `GrassLayer`
+//! / `GrassBlade` / `GrassBendParams` / `PlanetGrassTile` in
 //! `shaders/grass.hlsl`.
 
 use crate::render::grass::lod::{GRASS_LOD_COUNT, GRASS_LOD_VERTEX_STRIDE, GRASS_LOD_VERTICES};
@@ -144,8 +145,78 @@ pub struct GrassParams {
     /// The direction toward the light (`xyz`) and the clock the shadow draw
     /// sways the blades at (`w`); unused outside the shadow block.
     pub shadow_light: [f32; 4],
+    /// The planet's center in the simulated frame; unused on terrain.
+    pub planet_center: [f32; 3],
+    /// Lattice cells of the planet's meadow noise per unit of direction.
+    pub planet_density_scale: f32,
+    /// What the layers grow on: [`GRASS_GROUND_TERRAIN`] or
+    /// [`GRASS_GROUND_PLANET`].
+    pub ground: u32,
+    /// The first of this run's records in the planet tile buffer.
+    pub planet_tile_base: u32,
+    /// Records this run reads from the planet tile buffer.
+    pub planet_tile_count: u32,
+    /// Keeps the wind map on a 16-byte row.
+    pub _pad: u32,
+    /// The rows that take a point of the simulated frame, `(x, y, z, 1)`, to
+    /// the ground-plane coordinates the wind's gusts are laid out in: the same
+    /// place on the ground keeps its coordinates when the frame moves.
+    pub wind_map: [[f32; 4]; 2],
+    /// The rows that take a point of this frame, `(x, y, z, 1)`, to its `x`
+    /// and `z` in last frame's: identity unless the frame moved in between.
+    /// Last frame's bend field is read through them.
+    pub bend_prev_map: [[f32; 4]; 2],
+    /// Each layer's density on a planet, in blades per square meter.
+    pub planet_density: [f32; MAX_GRASS_LAYERS],
     /// The layers this frame grows.
     pub layers: [GrassLayerGpu; MAX_GRASS_LAYERS],
+}
+
+/// [`GrassParams::ground`] for layers grown on terrains.
+pub const GRASS_GROUND_TERRAIN: u32 = 0;
+
+/// [`GrassParams::ground`] for layers grown on a planet.
+pub const GRASS_GROUND_PLANET: u32 = 1;
+
+/// The rows of [`GrassParams::wind_map`] and [`GrassParams::bend_prev_map`]
+/// that leave a point where it is: its `x` and its `z`.
+pub const GRASS_IDENTITY_MAP: [[f32; 4]; 2] = [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+
+/// Most planet tiles one run of the kernel grows grass on: a quarter more
+/// than the most a run within the grass draw distance can reach on any
+/// planet.
+pub const MAX_PLANET_GRASS_TILES: usize = 256;
+
+/// One drawn planet tile as the kernel reads it: where its mesh sits in the
+/// shared vertex buffer and in the simulated frame, which square of the
+/// planet it covers, and the block of its grass tiles this run covers. 96
+/// bytes, every member in its own 16-byte row.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct PlanetGrassTileGpu {
+    /// The first three rows of the tile's model matrix: local point
+    /// `dot(row.xyz, v) + row.w` per axis for mesh vertex position `v`.
+    pub model: [[f32; 4]; 3],
+    /// Index of the tile's first vertex in the shared vertex buffer.
+    pub vertex_base: u32,
+    /// The cube face in the low 8 bits, the quadtree level in the next 8.
+    pub face_level: u32,
+    /// The tile's column and row on its face, at its level.
+    pub tile: [u32; 2],
+    /// The run's first kernel group row (dispatch `y`) on this tile.
+    pub first_group: u32,
+    /// The first grass tile of the block, column in the low 16 bits, row in
+    /// the high 16.
+    pub block_origin: u32,
+    /// Grass tiles in the block, across in the low 16 bits, down in the high.
+    pub block_count: u32,
+    /// Grass tiles along each side of the whole tile.
+    pub grass_tiles: u32,
+    /// The lowest and highest the tile's surface lies along the up at its
+    /// origin, in meters from the origin.
+    pub radial: [f32; 2],
+    /// Keeps the record a whole number of rows.
+    pub _pad: [f32; 2],
 }
 
 /// One visible blade, as the kernel appends it and the draws read it.
@@ -159,7 +230,8 @@ pub struct GpuGrassBlade {
     /// bits and the layer it belongs to.
     pub shape: [u32; 4],
     /// How far it is trampled, `[x, z]` as two halves, this frame (`x`) and
-    /// last frame (`y`); `zw` unused.
+    /// last frame (`y`); the `x` and `z` of the up it stands along as two
+    /// halves (`z`), its `y` the rest of the unit length; `w` unused.
     pub bend: [u32; 4],
 }
 
@@ -185,8 +257,12 @@ pub struct GrassBendParams {
     pub write_half: u32,
     /// 1 when the other half holds last frame's field.
     pub prev_valid: u32,
-    /// Keeps the stamps on a 16-byte row.
+    /// Keeps the map on a 16-byte row.
     pub _pad: [u32; 2],
+    /// The rows that take a cell center's `(x, z, 1)` in this frame to its
+    /// `x` and `z` in last frame's, where last frame's field is read: identity
+    /// unless the frame moved in between.
+    pub prev_map: [[f32; 4]; 2],
     /// Each footprint: center `x`, `z`, radius and strength.
     pub stamps: [[f32; 4]; MAX_GRASS_STAMPS],
 }
@@ -216,7 +292,7 @@ mod tests {
 
     #[test]
     fn grass_params_layout_matches_msl() {
-        assert_eq!(size_of::<GrassParams>(), 416 + 128 * MAX_GRASS_LAYERS);
+        assert_eq!(size_of::<GrassParams>(), 576 + 128 * MAX_GRASS_LAYERS);
         assert_eq!(offset_of!(GrassParams, cam_pos), 0);
         assert_eq!(offset_of!(GrassParams, draw_distance), 12);
         assert_eq!(offset_of!(GrassParams, frustum), 16);
@@ -241,7 +317,16 @@ mod tests {
         assert_eq!(offset_of!(GrassParams, bend_prev_valid), 332);
         assert_eq!(offset_of!(GrassParams, shadow_vp), 336);
         assert_eq!(offset_of!(GrassParams, shadow_light), 400);
-        assert_eq!(offset_of!(GrassParams, layers), 416);
+        assert_eq!(offset_of!(GrassParams, planet_center), 416);
+        assert_eq!(offset_of!(GrassParams, planet_density_scale), 428);
+        assert_eq!(offset_of!(GrassParams, ground), 432);
+        assert_eq!(offset_of!(GrassParams, planet_tile_base), 436);
+        assert_eq!(offset_of!(GrassParams, planet_tile_count), 440);
+        assert_eq!(offset_of!(GrassParams, _pad), 444);
+        assert_eq!(offset_of!(GrassParams, wind_map), 448);
+        assert_eq!(offset_of!(GrassParams, bend_prev_map), 480);
+        assert_eq!(offset_of!(GrassParams, planet_density), 512);
+        assert_eq!(offset_of!(GrassParams, layers), 576);
         // Metal sets the block inline, which caps it at 4 KiB.
         assert!(size_of::<GrassParams>() <= 4096);
     }
@@ -274,6 +359,21 @@ mod tests {
     }
 
     #[test]
+    fn planet_grass_tile_layout_matches_msl() {
+        assert_eq!(size_of::<PlanetGrassTileGpu>(), 96);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, model), 0);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, vertex_base), 48);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, face_level), 52);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, tile), 56);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, first_group), 64);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, block_origin), 68);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, block_count), 72);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, grass_tiles), 76);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, radial), 80);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, _pad), 88);
+    }
+
+    #[test]
     fn grass_blade_layout_matches_msl() {
         assert_eq!(size_of::<GpuGrassBlade>(), 48);
         assert_eq!(offset_of!(GpuGrassBlade, root_facing), 0);
@@ -283,7 +383,7 @@ mod tests {
 
     #[test]
     fn grass_bend_params_layout_matches_msl() {
-        assert_eq!(size_of::<GrassBendParams>(), 48 + 16 * MAX_GRASS_STAMPS);
+        assert_eq!(size_of::<GrassBendParams>(), 80 + 16 * MAX_GRASS_STAMPS);
         assert_eq!(offset_of!(GrassBendParams, window), 0);
         assert_eq!(offset_of!(GrassBendParams, resolution), 16);
         assert_eq!(offset_of!(GrassBendParams, cell_size), 20);
@@ -292,7 +392,8 @@ mod tests {
         assert_eq!(offset_of!(GrassBendParams, write_half), 32);
         assert_eq!(offset_of!(GrassBendParams, prev_valid), 36);
         assert_eq!(offset_of!(GrassBendParams, _pad), 40);
-        assert_eq!(offset_of!(GrassBendParams, stamps), 48);
+        assert_eq!(offset_of!(GrassBendParams, prev_map), 48);
+        assert_eq!(offset_of!(GrassBendParams, stamps), 80);
         assert!(size_of::<GrassBendParams>() <= 4096);
     }
 

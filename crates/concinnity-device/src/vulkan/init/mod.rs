@@ -330,7 +330,20 @@ impl VkContext {
             },
             &globals,
         )?;
-        let grass = build_grass(&gpu, fx.grass, &descriptors, &cull, &targets, &shadow)?;
+        let grass = build_grass(
+            &gpu,
+            fx.grass,
+            (
+                geometry.vertex_buffer.buffer(),
+                geometry.vertex_buffer_bytes,
+            ),
+            GrassInit {
+                descriptors: &descriptors,
+                cull: &cull,
+                targets: &targets,
+                shadow: &shadow,
+            },
+        )?;
         let (commands, frame_sync) = commands::build_frame_commands(&gpu, &swapchain)?;
         let sky = crate::vulkan::sky::VkSky::build(
             &hw.device,
@@ -497,14 +510,26 @@ impl VkContext {
 // The grass field's buffers and pipelines, extending the GPU-driven pass's
 // layouts and reading its Hi-Z pyramid. A world without that pass draws no
 // grass.
+// What the grass draws extend and render into.
+struct GrassInit<'a> {
+    descriptors: &'a VkDescriptors,
+    cull: &'a VkCull,
+    targets: &'a VkTargets,
+    shadow: &'a super::context::VkShadow,
+}
+
 fn build_grass(
     gpu: &InitGpu<'_>,
     field: Option<concinnity_core::render::grass::GrassField>,
-    descriptors: &VkDescriptors,
-    cull: &VkCull,
-    targets: &VkTargets,
-    shadow: &super::context::VkShadow,
+    vertices: (vk::Buffer, u64),
+    passes: GrassInit<'_>,
 ) -> RenderResult<Option<super::grass::GrassResources>> {
+    let GrassInit {
+        descriptors,
+        cull,
+        targets,
+        shadow,
+    } = passes;
     let (Some(field), Some(bindless), Some(prepass), Some(hiz)) = (
         field,
         cull.bindless_set_layout.as_ref(),
@@ -530,6 +555,7 @@ fn build_grass(
             shadow_bias_clamp: gpu.hw.device.depth_bias_clamp(),
         },
         gpu.frames,
+        vertices,
         gpu.hot_reload,
     )
     .map(Some)

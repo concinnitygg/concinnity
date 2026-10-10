@@ -73,7 +73,7 @@ pub(crate) fn load_terrains(ctx: &mut PipelineContext) -> Option<(Vec<LoadedTerr
 
 // Every `Grass` in the world by id, read in place: the effects drain them
 // later.
-fn grass_by_id(ctx: &PipelineContext) -> HashMap<AssetId, Grass> {
+pub(crate) fn grass_by_id(ctx: &PipelineContext) -> HashMap<AssetId, Grass> {
     ctx.query_with_entity::<Grass>()
         .filter_map(|(entity, g)| Some((ctx.get::<Identity>(entity)?.id(), g.clone())))
         .collect()

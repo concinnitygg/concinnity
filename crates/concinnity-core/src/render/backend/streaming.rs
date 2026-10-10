@@ -36,6 +36,20 @@ pub struct ChunkMesh<'a> {
     pub material: MaterialUniforms,
     /// Current frame number, used to reclaim retired deferred frees.
     pub frame: u64,
+    /// The planet tile the chunk draws, when it is one.
+    pub planet_tile: Option<PlanetChunk>,
+}
+
+/// The planet tile a streamed chunk draws: which square of the planet, and
+/// how far its surface lies along the up at its origin, so the passes that
+/// read a planet's ground can find it in the shared vertex buffer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlanetChunk {
+    /// The tile.
+    pub tile: crate::planet::TileId,
+    /// The lowest and highest its surface lies along the up at its origin, in
+    /// meters from the origin.
+    pub radial: [f32; 2],
 }
 
 /// Slot residency: the mesh, texture and chunk uploads and evictions a

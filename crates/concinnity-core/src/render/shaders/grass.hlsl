@@ -18,6 +18,19 @@
 // dispatch fills this frame's draw-argument slot and resets the other one for
 // the next frame.
 //
+// On a planet (grass.ground == GRASS_GROUND_PLANET) the group's y walks the
+// grass tiles of the drawn planet tiles in reach instead: each record names a
+// tile's mesh in the shared vertex buffer, its model matrix in the simulated
+// frame, and the block of its grass tiles this run covers. A blade's cell is
+// counted across its cube face, so its hash is the planet's, never the
+// frame's; it roots on the tile's own triangles, stands along the radial up,
+// and is thinned by the area its cell covers and by the meadow noise laid
+// over the sphere (render::grass::planet). The blade carries its up to the
+// draws, which stand the curve along it. The wind's gusts and last frame's
+// bend field are read through maps the host carries across every move of the
+// simulated frame, so the same blade in the same wind reads the same values
+// on either side of a move.
+//
 // GRASS_GENERATE also runs a second time for the nearest shadow cascade, under
 // its own block: the frustum is the cascade's light frustum, the cull distance
 // is the cast distance, there is no occlusion test, and every blade it keeps
@@ -133,7 +146,48 @@ struct GrassParams
     // light (xyz) with the clock the shadow draw sways at (w).
     float4x4 shadow_vp;
     float4 shadow_light;
+    // xyz = the planet's center in the simulated frame, w = the meadow noise's
+    // lattice cells per unit of direction.
+    float4 planet_center_scale;
+    // GRASS_GROUND_TERRAIN or GRASS_GROUND_PLANET.
+    uint ground;
+    uint planet_tile_base;
+    uint planet_tile_count;
+    uint _pad;
+    // Rows over (x, y, z, 1): the ground-plane coordinates the wind's gusts
+    // are laid out in.
+    float4 wind_map[2];
+    // Rows over (x, y, z, 1): a point's x and z in last frame's frame.
+    float4 bend_prev_map[2];
+    // Each layer's density on a planet, four layers to a row.
+    float4 planet_density[4];
     GrassLayer layers[GRASS_MAX_LAYERS];
+};
+
+// Matches GRASS_GROUND_TERRAIN and GRASS_GROUND_PLANET in
+// render::uniforms::grass.
+#define GRASS_GROUND_TERRAIN 0u
+#define GRASS_GROUND_PLANET 1u
+
+// Mirrors `PlanetGrassTileGpu` in render::uniforms::grass (96 B).
+struct PlanetGrassTile
+{
+    // The model matrix's first three rows: local = dot(row.xyz, v) + row.w.
+    float4 model[3];
+    uint vertex_base;
+    // Face in the low 8 bits, quadtree level in the next 8.
+    uint face_level;
+    uint2 tile;
+    // The run's first group row on this tile.
+    uint first_group;
+    // The block of grass tiles: origin and count, x low 16 bits, y high.
+    uint block_origin;
+    uint block_count;
+    // Grass tiles along each side of the whole tile.
+    uint grass_tiles;
+    // The lowest and highest the surface lies along the up at the origin.
+    float2 radial;
+    float2 _pad;
 };
 
 // Mirrors `GpuGrassBlade` in render::uniforms::grass (48 B).
@@ -144,7 +198,8 @@ struct GrassBlade
     // x = height and y = root width (f32 bits), z = static lean [x, z] as two
     // halves, w = the blade's bits (see grass_blade_bits).
     uint4 shape;
-    // How far it is trampled, [x, z] as two halves: x this frame, y last frame.
+    // How far it is trampled, [x, z] as two halves: x this frame, y last frame;
+    // z = the x and z of the up it stands along as two halves.
     uint4 bend;
 };
 
@@ -211,6 +266,19 @@ float2 grass_unpack_half2(uint v)
     return float2(f16tof32(v & 0xffffu), f16tof32(v >> 16u));
 }
 
+// `v` turned by the shortest arc that takes +Y onto the unit `up`.
+float3 grass_turn_up(float3 up, float3 v)
+{
+    float3 k = float3(up.z, 0.0, -up.x);
+    return v * up.y + cross(k, v) + k * (dot(k, v) / (1.0 + up.y));
+}
+
+// The x and z of a point `p` of this frame through `rows`.
+float2 grass_map(float4 rows[2], float3 p)
+{
+    return float2(dot(rows[0], float4(p, 1.0)), dot(rows[1], float4(p, 1.0)));
+}
+
 #if defined(GRASS_BEND)
 
 // Matches MAX_GRASS_STAMPS in render::uniforms::grass.
@@ -234,6 +302,8 @@ struct GrassBendParams
     uint write_half;
     uint prev_valid;
     uint2 _pad;
+    // Rows over a cell center's (x, z, 1): its x and z in last frame's frame.
+    float4 prev_map[2];
     // Center x, z, radius and strength of each footprint.
     float4 stamps[GRASS_MAX_STAMPS];
 };
@@ -255,6 +325,34 @@ float2 grass_stamp_bend(float4 stamp, float2 xz)
     return dir * (GRASS_TRAMPLE_BEND * stamp.w * falloff);
 }
 
+// Last frame's bend of cell `c`; a cell outside last frame's window stands
+// upright.
+float2 grass_bend_prev_cell(int2 c)
+{
+    uint n = bend.resolution;
+    int2 prev = bend.window.zw;
+    if (any(c < prev) || any(c >= prev + int(n)))
+    {
+        return (float2)(0.0);
+    }
+    uint2 s = uint2(c & int(n - 1u));
+    return grass_unpack_half2(bend_field[(1u - bend.write_half) * n * n + s.y * n + s.x]);
+}
+
+// Last frame's field at last frame's `xz`, bilinear between cell centers: at a
+// cell's center, exactly that cell.
+float2 grass_bend_prev(float2 xz)
+{
+    float2 g = xz / bend.cell_size - 0.5;
+    int2 c = int2(floor(g));
+    float2 f = g - float2(c);
+    float2 b00 = grass_bend_prev_cell(c);
+    float2 b10 = grass_bend_prev_cell(c + int2(1, 0));
+    float2 b01 = grass_bend_prev_cell(c + int2(0, 1));
+    float2 b11 = grass_bend_prev_cell(c + int2(1, 1));
+    return lerp(lerp(b00, b10, f.x), lerp(b01, b11, f.x), f.y);
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void grass_bend(uint3 tid : SV_DispatchThreadID)
@@ -272,12 +370,15 @@ void grass_bend(uint3 tid : SV_DispatchThreadID)
     int2 origin = bend.window.xy;
     int2 cell = origin + ((s - origin) & int(n - 1u));
     float2 value = (float2)(0.0);
-    int2 prev = bend.window.zw;
-    if (bend.prev_valid != 0u && all(cell >= prev) && all(cell < prev + int(n)))
-    {
-        value = grass_unpack_half2(bend_field[(1u - bend.write_half) * n * n + slot]) * bend.decay;
-    }
     float2 xz = (float2(cell) + 0.5) * bend.cell_size;
+    if (bend.prev_valid != 0u)
+    {
+        // Where this cell's center was last frame: itself, unless the
+        // simulated frame moved in between.
+        float2 was = float2(dot(bend.prev_map[0].xyz, float3(xz, 1.0)),
+                            dot(bend.prev_map[1].xyz, float3(xz, 1.0)));
+        value = grass_bend_prev(was) * bend.decay;
+    }
     for (uint i = 0u; i < bend.stamp_count; i++)
     {
         float2 pressed = grass_stamp_bend(bend.stamps[i], xz);
@@ -307,6 +408,23 @@ void grass_bend(uint3 tid : SV_DispatchThreadID)
 [[vk::binding(0, 1)]] Texture2D<float> grass_hiz : register(t5);
 // The bend field, both halves (see grass_bend).
 [[vk::binding(5, 0)]] StructuredBuffer<uint> grass_bend_field : register(t6);
+// The drawn planet tiles this frame's runs read (see PlanetGrassTile).
+[[vk::binding(6, 0)]] StructuredBuffer<PlanetGrassTile> planet_tiles : register(t7);
+// The shared vertex stream every mesh draws from: 14 floats a vertex,
+// position first, then normal. DirectX binds it as a raw view.
+#ifdef CN_BACKEND_DIRECTX
+ByteAddressBuffer mesh_vertices : register(t8);
+float mesh_float(uint i) { return asfloat(mesh_vertices.Load(i * 4u)); }
+#else
+[[vk::binding(7, 0)]] StructuredBuffer<float> mesh_vertices : register(t8);
+float mesh_float(uint i) { return mesh_vertices[i]; }
+#endif
+
+// Floats in one vertex of the shared stream, and the float each attribute the
+// kernel reads starts at. Matches `Vertex` in gfx::mesh_payload.
+static const uint GRASS_VERTEX_FLOATS = 14u;
+static const uint GRASS_VERTEX_POS = 0u;
+static const uint GRASS_VERTEX_NORMAL = 3u;
 
 // Matches GRASS_GROUP_SIZE in render::grass::tiles.
 #define GRASS_GROUP_SIZE 64
@@ -320,6 +438,10 @@ static const float GRASS_SLOPE_LEAN = 0.6;
 groupshared uint gs_count[GRASS_LOD_COUNT];
 groupshared uint gs_base[GRASS_LOD_COUNT];
 groupshared uint gs_tile_visible;
+// On a planet: the record of the drawn tile this group grows on, and the
+// grass tile within it.
+groupshared uint gs_planet_tile;
+groupshared uint2 gs_grass_tile;
 
 float hiz_load(int3 texel_mip)
 {
@@ -379,17 +501,10 @@ bool grass_tile_occluded(float3 bmin, float3 bmax)
     return hiz_rect_occluded(ndc_min, ndc_max, nearest, grass.hiz_size, grass.hiz_mip_count);
 }
 
-// Whether any blade rooted in `tile` can be seen: its box, spanning the
-// terrain's heights and grown by how far a blade reaches, meets the frustum
-// and the draw distance, and was not hidden last frame. Mirrors
-// render::grass::tile_bounds.
-bool grass_tile_visible(GrassLayer L, int2 tile)
+// Whether anything in the box `bmin..bmax` can be seen: it meets the frustum
+// and the draw distance, and was not hidden last frame.
+bool grass_box_visible(float3 bmin, float3 bmax)
 {
-    float reach = L.root_color_reach.w;
-    float2 lo = float2(tile) * grass.tile_size - reach;
-    float2 hi = float2(tile + 1) * grass.tile_size + reach;
-    float3 bmin = float3(lo.x, L.min_y - reach, lo.y);
-    float3 bmax = float3(hi.x, L.max_y + reach, hi.y);
     [unroll]
     for (uint i = 0u; i < 6u; i++)
     {
@@ -410,6 +525,36 @@ bool grass_tile_visible(GrassLayer L, int2 tile)
     }
     return !grass_tile_occluded(bmin, bmax);
 }
+
+// Whether any blade rooted in `tile` can be seen: its box, spanning the
+// terrain's heights and grown by how far a blade reaches, is visible. Mirrors
+// render::grass::tile_bounds.
+bool grass_tile_visible(GrassLayer L, int2 tile)
+{
+    float reach = L.root_color_reach.w;
+    float2 lo = float2(tile) * grass.tile_size - reach;
+    float2 hi = float2(tile + 1) * grass.tile_size + reach;
+    return grass_box_visible(float3(lo.x, L.min_y - reach, lo.y),
+                             float3(hi.x, L.max_y + reach, hi.y));
+}
+
+// Where a blade grows, whatever ground it grows on: its root, the ground's
+// normal and the up it stands along, its place on the ground's own plane (for
+// the clump lattice) with the plane's two axes in the frame, its hash, and the
+// share of the layer's density that grows there.
+struct GrassSite
+{
+    float3 root;
+    float3 normal;
+    float3 up;
+    float2 plane;
+    float3 plane_u;
+    float3 plane_v;
+    uint hash;
+    // Salts the clump lattice, so lattices on different faces differ.
+    uint clump_salt;
+    float density;
+};
 
 // The ground under world `xz` on layer `L`'s terrain: the unit normal (xyz)
 // blended across the cell, and the world height (w) on the grid triangle the
@@ -467,8 +612,9 @@ float grass_mask_density(GrassLayer L, float2 st)
 }
 
 // The clump `xz` belongs to on layer `L`: the nearest center of a jittered
-// lattice of clump-sized cells. Returns its hash and writes its center.
-uint grass_clump(GrassLayer L, float2 xz, out float2 center)
+// lattice of clump-sized cells, salted by `salt`. Returns its hash and writes
+// its center.
+uint grass_clump(GrassLayer L, float2 xz, uint salt, out float2 center)
 {
     float2 p = xz / L.clump_size;
     int2 base = int2(floor(p));
@@ -482,7 +628,7 @@ uint grass_clump(GrassLayer L, float2 xz, out float2 center)
         for (int dx = -1; dx <= 1; dx++)
         {
             int2 cell = base + int2(dx, dz);
-            uint h = grass_hash(grass_hash2(cell) ^ L.seed) ^ 0x9e3779b9u;
+            uint h = grass_hash(grass_hash2(cell) ^ L.seed ^ salt) ^ 0x9e3779b9u;
             float2 c = float2(cell) + float2(grass_unit(h, 1u), grass_unit(h, 2u));
             float d = dot(c - p, c - p);
             if (d < best)
@@ -557,13 +703,11 @@ float grass_coverage(float keep)
     return (grass_shrink_ramp(keep, band) - grass_shrink_ramp(keep - span, band)) / span;
 }
 
-// Place the blade of world cell `cell` on layer `L` (frame slot `slot`) and
-// pick its detail level. False when it falls off the terrain, where the mask
-// thins it out, where distance thins it out, or out of view.
-bool grass_place(GrassLayer L, uint slot, int2 cell, out GrassBlade blade, out uint lod)
+// The site of world cell `cell` on layer `L`'s terrain. False when it falls
+// off the terrain.
+bool grass_terrain_site(GrassLayer L, int2 cell, out GrassSite site)
 {
-    blade = (GrassBlade)0;
-    lod = 0u;
+    site = (GrassSite)0;
     uint h = grass_hash(grass_hash2(cell) ^ L.seed);
     float2 xz = (float2(cell) + float2(grass_unit(h, 3u), grass_unit(h, 4u))) * L.cell_size;
     if (any(xz < L.rect.xy) || any(xz >= L.rect.zw))
@@ -571,12 +715,226 @@ bool grass_place(GrassLayer L, uint slot, int2 cell, out GrassBlade blade, out u
         return false;
     }
     float2 st = (xz - L.rect.xy) / (L.rect.zw - L.rect.xy);
-    if (grass_unit(h, 17u) >= grass_mask_density(L, st))
+    float4 ground = grass_ground(L, xz);
+    site.root = float3(xz.x, ground.w, xz.y);
+    site.normal = ground.xyz;
+    site.up = float3(0.0, 1.0, 0.0);
+    site.plane = xz;
+    site.plane_u = float3(1.0, 0.0, 0.0);
+    site.plane_v = float3(0.0, 0.0, 1.0);
+    site.hash = h;
+    site.clump_salt = 0u;
+    site.density = grass_mask_density(L, st);
+    return true;
+}
+
+// ---- A planet's ground ----
+
+// The unit direction through face coordinates (s, t) of cube face `face`.
+// Mirrors render::grass::planet::cells::face_direction and
+// planet::CubeFace::direction.
+float3 grass_face_direction(uint face, float s, float t)
+{
+    float3 n;
+    float3 u;
+    float3 v;
+    switch (face)
+    {
+    case 0u: n = float3(1, 0, 0); u = float3(0, 0, -1); v = float3(0, 1, 0); break;
+    case 1u: n = float3(-1, 0, 0); u = float3(0, 0, 1); v = float3(0, 1, 0); break;
+    case 2u: n = float3(0, 1, 0); u = float3(1, 0, 0); v = float3(0, 0, -1); break;
+    case 3u: n = float3(0, -1, 0); u = float3(1, 0, 0); v = float3(0, 0, 1); break;
+    case 4u: n = float3(0, 0, 1); u = float3(1, 0, 0); v = float3(0, 1, 0); break;
+    default: n = float3(0, 0, -1); u = float3(-1, 0, 0); v = float3(0, 1, 0); break;
+    }
+    float3 c = n + u * s + v * t;
+    float3 c2 = c * c;
+    float3 p = c * sqrt(max(float3(1.0 - c2.y * 0.5 - c2.z * 0.5 + c2.y * c2.z / 3.0,
+                                   1.0 - c2.z * 0.5 - c2.x * 0.5 + c2.z * c2.x / 3.0,
+                                   1.0 - c2.x * 0.5 - c2.y * 0.5 + c2.x * c2.y / 3.0), 0.0));
+    float len = length(p);
+    return len > 1e-12 ? p / len : float3(0.0, 1.0, 0.0);
+}
+
+// A unit value at a 3D lattice point, salted. Mirrors
+// render::grass::planet::density.
+float grass_lattice3(int3 c, uint salt)
+{
+    uint h = grass_hash(asuint(c.x) + grass_hash(asuint(c.y) + grass_hash(asuint(c.z) ^ salt)));
+    return float(h >> 8u) * (1.0 / 16777216.0);
+}
+
+float grass_value_noise3(float3 p, uint salt)
+{
+    float3 cell = floor(p);
+    float3 f = p - cell;
+    f = f * f * (3.0 - 2.0 * f);
+    int3 c = int3(cell);
+    float x00 = lerp(grass_lattice3(c, salt), grass_lattice3(c + int3(1, 0, 0), salt), f.x);
+    float x10 = lerp(grass_lattice3(c + int3(0, 1, 0), salt), grass_lattice3(c + int3(1, 1, 0), salt), f.x);
+    float x01 = lerp(grass_lattice3(c + int3(0, 0, 1), salt), grass_lattice3(c + int3(1, 0, 1), salt), f.x);
+    float x11 = lerp(grass_lattice3(c + int3(0, 1, 1), salt), grass_lattice3(c + int3(1, 1, 1), salt), f.x);
+    return lerp(lerp(x00, x10, f.y), lerp(x01, x11, f.y), f.z);
+}
+
+// The share of a layer's density the meadow grows in unit direction `dir`
+// from the planet's center. Mirrors
+// render::grass::planet::density::meadow_density.
+float grass_meadow_density(float3 dir, float scale, uint seed)
+{
+    float3 p = dir * scale;
+    float3 q = p * 2.07 + 13.1;
+    float n = grass_value_noise3(p, seed) * 0.65 + grass_value_noise3(q, seed ^ 0x68e31da4u) * 0.35;
+    float t = saturate((n - 0.30) / (0.42 - 0.30));
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// Vertex `i` of the shared stream: its position (xyz) and normal.
+float3 grass_mesh_position(uint i)
+{
+    uint f = i * GRASS_VERTEX_FLOATS + GRASS_VERTEX_POS;
+    return float3(mesh_float(f), mesh_float(f + 1u), mesh_float(f + 2u));
+}
+
+float3 grass_mesh_normal(uint i)
+{
+    uint f = i * GRASS_VERTEX_FLOATS + GRASS_VERTEX_NORMAL;
+    return float3(mesh_float(f), mesh_float(f + 1u), mesh_float(f + 2u));
+}
+
+// Matches TILE_CELLS in planet::tile.
+#define GRASS_PLANET_TILE_CELLS 32u
+
+// A point of planet tile `T`'s surface: the tile's own triangle under (fs, ft)
+// across it, each in [0, 1], interpolated in the mesh's frame. The cell
+// splits along the same diagonal the mesh's indices do.
+struct GrassMeshPoint
+{
+    float3 position;
+    float3 normal;
+    // The triangle's edges along the tile's s and t, one mesh cell long.
+    float3 edge_s;
+    float3 edge_t;
+};
+
+GrassMeshPoint grass_mesh_point(PlanetGrassTile T, float2 f)
+{
+    float n = float(GRASS_PLANET_TILE_CELLS);
+    float2 g = saturate(f) * n;
+    float2 cell = min(floor(g), n - 1.0);
+    float2 r = g - cell;
+    uint side = GRASS_PLANET_TILE_CELLS + 1u;
+    uint i00 = T.vertex_base + uint(cell.y) * side + uint(cell.x);
+    float3 p00 = grass_mesh_position(i00);
+    float3 p10 = grass_mesh_position(i00 + 1u);
+    float3 p01 = grass_mesh_position(i00 + side);
+    float3 p11 = grass_mesh_position(i00 + side + 1u);
+    GrassMeshPoint m;
+    if (r.x + r.y <= 1.0)
+    {
+        m.position = p00 + (p10 - p00) * r.x + (p01 - p00) * r.y;
+        m.edge_s = p10 - p00;
+        m.edge_t = p01 - p00;
+    }
+    else
+    {
+        m.position = p11 + (p01 - p11) * (1.0 - r.x) + (p10 - p11) * (1.0 - r.y);
+        m.edge_s = p11 - p01;
+        m.edge_t = p11 - p10;
+    }
+    float3 n00 = grass_mesh_normal(i00);
+    float3 n10 = grass_mesh_normal(i00 + 1u);
+    float3 n01 = grass_mesh_normal(i00 + side);
+    float3 n11 = grass_mesh_normal(i00 + side + 1u);
+    m.normal = lerp(lerp(n00, n10, r.x), lerp(n01, n11, r.x), r.y);
+    return m;
+}
+
+float3 grass_tile_point(PlanetGrassTile T, float3 v)
+{
+    return float3(dot(T.model[0], float4(v, 1.0)), dot(T.model[1], float4(v, 1.0)),
+                  dot(T.model[2], float4(v, 1.0)));
+}
+
+float3 grass_tile_vector(PlanetGrassTile T, float3 v)
+{
+    return float3(dot(T.model[0].xyz, v), dot(T.model[1].xyz, v), dot(T.model[2].xyz, v));
+}
+
+// Whether any blade rooted in grass tile `g` of planet tile `T` can be seen:
+// the box over the grass tile's corners on the surface, spanning the whole
+// tile's height range along its origin's up, grown by how far a blade reaches.
+bool grass_planet_tile_visible(PlanetGrassTile T, uint2 g, float reach)
+{
+    float3 origin = float3(T.model[0].w, T.model[1].w, T.model[2].w);
+    float3 up = normalize(origin - grass.planet_center_scale.xyz);
+    float3 bmin = (float3)(1e30);
+    float3 bmax = (float3)(-1e30);
+    [unroll]
+    for (uint i = 0u; i < 4u; i++)
+    {
+        float2 f = (float2(g) + float2(i & 1u, i >> 1u)) / float(T.grass_tiles);
+        float3 c = grass_tile_point(T, grass_mesh_point(T, f).position);
+        float h = dot(c - origin, up);
+        float3 lo = c + up * (T.radial.x - h);
+        float3 hi = c + up * (T.radial.y - h);
+        bmin = min(bmin, min(lo, hi));
+        bmax = max(bmax, max(lo, hi));
+    }
+    return grass_box_visible(bmin - reach, bmax + reach);
+}
+
+// The site of cell `cell` of grass tile `g` of planet tile `T` for layer `L`,
+// the layer's density on the planet being `density`. Mirrors
+// PlanetGrassGrid::face_cell for the cell's place on its face.
+GrassSite grass_planet_site(GrassLayer L, PlanetGrassTile T, uint2 g, uint2 cell, float density)
+{
+    GrassSite site = (GrassSite)0;
+    uint k = L.cells_per_side;
+    uint face = T.face_level & 0xffu;
+    uint level = (T.face_level >> 8u) & 0xffu;
+    int2 face_cell = (int2(T.tile * T.grass_tiles + g)) * int(k) + int2(cell);
+    uint face_salt = grass_hash(face + 0x51ed27u);
+    uint h = grass_hash(grass_hash2(face_cell) ^ face_salt ^ L.seed);
+    float2 jitter = float2(grass_unit(h, 3u), grass_unit(h, 4u));
+    float cells = float(T.grass_tiles * k);
+    GrassMeshPoint m = grass_mesh_point(T, (float2(g * k + cell) + jitter) / cells);
+
+    site.root = grass_tile_point(T, m.position);
+    site.normal = normalize(grass_tile_vector(T, m.normal));
+    site.up = normalize(site.root - grass.planet_center_scale.xyz);
+    float3 edge_s = grass_tile_vector(T, m.edge_s);
+    float3 edge_t = grass_tile_vector(T, m.edge_t);
+    site.plane = (float2(face_cell) + jitter) * L.cell_size;
+    site.plane_u = normalize(edge_s);
+    site.plane_v = normalize(edge_t);
+    site.hash = h;
+    site.clump_salt = face_salt;
+
+    // The share of a blade's ground this cell holds, then the meadow.
+    float per_mesh_cell = cells / float(GRASS_PLANET_TILE_CELLS);
+    float area = length(cross(edge_s, edge_t)) / (per_mesh_cell * per_mesh_cell);
+    float face_cells = float((T.grass_tiles << level) * k);
+    float2 st = (float2(face_cell) + jitter) / face_cells * 2.0 - 1.0;
+    float3 dir = grass_face_direction(face, st.x, st.y);
+    site.density = saturate(density * area)
+                 * grass_meadow_density(dir, grass.planet_center_scale.w, L.seed);
+    return site;
+}
+
+// Place the blade at `site` on layer `L` (frame slot `slot`) and pick its
+// detail level. False where the site's density thins it out, where distance
+// thins it out, or out of view.
+bool grass_grow(GrassLayer L, uint slot, GrassSite site, out GrassBlade blade, out uint lod)
+{
+    blade = (GrassBlade)0;
+    lod = 0u;
+    uint h = site.hash;
+    if (grass_unit(h, 17u) >= site.density)
     {
         return false;
     }
-    float4 ground = grass_ground(L, xz);
-    float3 root = float3(xz.x, ground.w, xz.y);
+    float3 root = site.root;
     float dist = distance(root, grass.cam_pos_distance.xyz);
     if (dist > grass.cull_distance)
     {
@@ -595,7 +953,7 @@ bool grass_place(GrassLayer L, uint slot, int2 cell, out GrassBlade blade, out u
     float shrink = saturate((keep - threshold) / band);
 
     float2 clump_center;
-    uint ch = grass_clump(L, xz, clump_center);
+    uint ch = grass_clump(L, site.plane, site.clump_salt, clump_center);
     float clump_r = grass_unit(ch, 6u);
     float height = L.height
                  * (1.0 + L.height_variance * ((clump_r - 0.5) * 1.2 + (grass_unit(h, 7u) - 0.5) * 0.8));
@@ -603,36 +961,52 @@ bool grass_place(GrassLayer L, uint slot, int2 cell, out GrassBlade blade, out u
     // The survivors widen by the coverage thinning took, so the field's
     // coverage and color hold steady with distance.
     float width = L.width * (0.75 + 0.5 * grass_unit(h, 13u)) / grass_coverage(thin);
-    if (grass_outside(root + float3(0.0, 0.5 * height, 0.0), height + width))
+    if (grass_outside(root + site.up * (0.5 * height), height + width))
     {
         return false;
     }
 
     // A clump's blades lean the clump's way and splay away from its middle,
-    // and every blade leans downhill with the ground.
+    // and every blade leans downhill with the ground. The directions are laid
+    // out on the ground's plane, then read in the blade's own frame: +X and +Z
+    // turned onto its up, the frame the draws bend it in.
     float clump_angle = grass_unit(ch, 8u) * GRASS_TAU;
     float2 shared_dir = float2(cos(clump_angle), sin(clump_angle));
-    float2 out_dir = xz - clump_center;
+    float2 out_dir = site.plane - clump_center;
     float out_len = length(out_dir);
     out_dir = out_len > 1e-4 ? out_dir / out_len : shared_dir;
-    float2 front = normalize(shared_dir * 0.6 + out_dir * 0.8
-                             + (float2(grass_unit(h, 9u), grass_unit(h, 10u)) - 0.5) * 0.9);
+    float2 front_plane = normalize(shared_dir * 0.6 + out_dir * 0.8
+                                   + (float2(grass_unit(h, 9u), grass_unit(h, 10u)) - 0.5) * 0.9);
+    float3 front3 = front_plane.x * site.plane_u + front_plane.y * site.plane_v;
+    float3 axis_x = grass_turn_up(site.up, float3(1.0, 0.0, 0.0));
+    float3 axis_z = grass_turn_up(site.up, float3(0.0, 0.0, 1.0));
+    float2 front = normalize(float2(dot(front3, axis_x), dot(front3, axis_z)));
     // front = (-sin, cos) of the facing angle.
     float facing = atan2(-front.x, front.y);
     float lean = (0.15 + 0.35 * grass_unit(ch, 11u)) * (0.6 + 0.8 * grass_unit(h, 12u));
-    float2 lean2 = front * lean + ground.xz * GRASS_SLOPE_LEAN;
+    float2 downhill = float2(dot(site.normal, axis_x), dot(site.normal, axis_z));
+    float2 lean2 = front * lean + downhill * GRASS_SLOPE_LEAN;
 
-    float2 bend_now = grass_field_bend(grass.bend_half, grass.bend_window.xy, xz);
+    // Last frame's field is read where the blade was last frame.
+    float2 bend_now = grass_field_bend(grass.bend_half, grass.bend_window.xy, root.xz);
     float2 bend_prev = grass.bend_prev_valid != 0u
-                     ? grass_field_bend(1u - grass.bend_half, grass.bend_window.zw, xz)
+                     ? grass_field_bend(1u - grass.bend_half, grass.bend_window.zw,
+                                        grass_map(grass.bend_prev_map, root))
                      : bend_now;
 
     blade.root_facing = float4(root, facing);
     blade.shape = uint4(asuint(height), asuint(width), grass_pack_half2(lean2),
                         grass_blade_bits(ch, h, slot));
-    blade.bend = uint4(grass_pack_half2(bend_now), grass_pack_half2(bend_prev), 0u, 0u);
+    blade.bend = uint4(grass_pack_half2(bend_now), grass_pack_half2(bend_prev),
+                       grass_pack_half2(site.up.xz), 0u);
     lod = grass_lod_at(grass, dist);
     return true;
+}
+
+// Layer `L`'s density on a planet, in blades per square meter.
+float grass_planet_density(uint layer_slot)
+{
+    return grass.planet_density[layer_slot >> 2u][layer_slot & 3u];
 }
 
 [shader("compute")]
@@ -659,6 +1033,7 @@ void grass_generate(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     uint layer_slot = gid.z;
     bool in_layer = layer_slot < grass.layer_count;
     GrassLayer L = grass.layers[min(layer_slot, GRASS_MAX_LAYERS - 1u)];
+    bool planet = grass.ground == GRASS_GROUND_PLANET;
     uint tiles_x = max(L.tile_count.x, 1u);
     int2 tile = L.tile_origin + int2(gid.y % tiles_x, gid.y / tiles_x);
     if (gi < GRASS_LOD_COUNT)
@@ -667,8 +1042,45 @@ void grass_generate(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     }
     if (gi == 0u)
     {
-        bool in_block = in_layer && gid.y < L.tile_count.x * L.tile_count.y;
-        gs_tile_visible = in_block && grass_tile_visible(L, tile) ? 1u : 0u;
+        if (planet)
+        {
+            // The record whose block holds this group row: the last whose
+            // first row is not past it.
+            uint lo = 0u;
+            uint hi = grass.planet_tile_count;
+            while (hi - lo > 1u)
+            {
+                uint mid = (lo + hi) / 2u;
+                if (planet_tiles[grass.planet_tile_base + mid].first_group <= gid.y)
+                {
+                    lo = mid;
+                }
+                else
+                {
+                    hi = mid;
+                }
+            }
+            uint record = grass.planet_tile_base + lo;
+            gs_planet_tile = record;
+            bool visible = false;
+            if (in_layer && grass.planet_tile_count > 0u)
+            {
+                PlanetGrassTile T = planet_tiles[record];
+                uint row = gid.y - T.first_group;
+                uint2 count = uint2(T.block_count & 0xffffu, T.block_count >> 16u);
+                uint2 origin = uint2(T.block_origin & 0xffffu, T.block_origin >> 16u);
+                uint2 g = origin + uint2(row % max(count.x, 1u), row / max(count.x, 1u));
+                gs_grass_tile = g;
+                visible = row < count.x * count.y
+                       && grass_planet_tile_visible(T, g, L.root_color_reach.w);
+            }
+            gs_tile_visible = visible ? 1u : 0u;
+        }
+        else
+        {
+            bool in_block = in_layer && gid.y < L.tile_count.x * L.tile_count.y;
+            gs_tile_visible = in_block && grass_tile_visible(L, tile) ? 1u : 0u;
+        }
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -679,8 +1091,20 @@ void grass_generate(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     uint index = gid.x * GRASS_GROUP_SIZE + gi;
     if (gs_tile_visible != 0u && index < n * n)
     {
-        int2 cell = tile * int(n) + int2(index % n, index / n);
-        keep = grass_place(L, layer_slot, cell, blade, lod);
+        uint2 at = uint2(index % n, index / n);
+        GrassSite site;
+        bool grows;
+        if (planet)
+        {
+            site = grass_planet_site(L, planet_tiles[gs_planet_tile], gs_grass_tile, at,
+                                     grass_planet_density(layer_slot));
+            grows = true;
+        }
+        else
+        {
+            grows = grass_terrain_site(L, tile * int(n) + int2(at), site);
+        }
+        keep = grows && grass_grow(L, layer_slot, site, blade, lod);
     }
 
     uint local = 0u;
@@ -760,9 +1184,10 @@ struct GrassVertex
     float u;
 };
 
-// How far the wind bends a blade of `stiffness` at `root_xz` at time `time`,
-// as a horizontal tip offset per meter of blade. The blade's own phase makes
-// neighbors flutter out of step.
+// How far the wind bends a blade of `stiffness` at `root_xz` on the wind's own
+// ground plane (see GrassParams::wind_map) at time `time`, as a horizontal tip
+// offset per meter of blade. The blade's own phase makes neighbors flutter out
+// of step.
 float2 grass_wind_bend(float2 root_xz, float time, float phase, float stiffness)
 {
     Wind w = wind_unpack(grass.wind, grass.wind_gust);
@@ -804,7 +1229,8 @@ GrassCurve grass_curve(GrassBlade blade, float time, float2 trample)
     float trample_len = length(trample);
     float pressed = saturate(trample_len / GRASS_TRAMPLE_FULL) * lerp(1.0, 0.8, stiffness);
     float2 flat = trample_len > 1e-4 ? trample * (0.95 / trample_len) : (float2)(0.0);
-    float2 bend = lerp(lean + grass_wind_bend(root.xz, time, phase, stiffness), flat, pressed);
+    float2 wind_at = grass_map(grass.wind_map, root);
+    float2 bend = lerp(lean + grass_wind_bend(wind_at, time, phase, stiffness), flat, pressed);
     float bend_len = length(bend);
     if (bend_len > 0.95)
     {
@@ -821,11 +1247,14 @@ GrassCurve grass_curve(GrassBlade blade, float time, float2 trample)
     float approx_len = (2.0 * chord + length(d1) + length(d2 - d1)) / 3.0;
     float scale = height / max(approx_len, 1e-4);
 
+    // The curve is built about +Y, then stood along the blade's own up.
+    float2 up_xz = grass_unpack_half2(blade.bend.z);
+    float3 up = float3(up_xz.x, sqrt(saturate(1.0 - dot(up_xz, up_xz))), up_xz.y);
     GrassCurve c;
     c.root = root;
-    c.d1 = d1 * scale;
-    c.d2 = d2 * scale;
-    c.side = float3(cos(facing), 0.0, sin(facing));
+    c.d1 = grass_turn_up(up, d1 * scale);
+    c.d2 = grass_turn_up(up, d2 * scale);
+    c.side = grass_turn_up(up, float3(cos(facing), 0.0, sin(facing)));
     c.width = asfloat(blade.shape.y);
     return c;
 }

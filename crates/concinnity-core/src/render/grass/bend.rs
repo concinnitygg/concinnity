@@ -153,20 +153,21 @@ pub fn stamp_of(bender: &GrassBender, ground_y: f32, blade_height: f32) -> Optio
 }
 
 /// The footprints this frame stamps into `window`: each bender's, where
-/// `ground` finds terrain under it, whose reach touches the window, nearest
-/// `camera` first, at most [`MAX_GRASS_STAMPS`] of them.
+/// `ground` finds ground under its base (the ground's height), whose reach
+/// touches the window, nearest `camera` first, at most [`MAX_GRASS_STAMPS`]
+/// of them.
 pub fn gather_stamps(
     benders: &[GrassBender],
     window: &BendWindow,
     camera: [f32; 3],
     blade_height: f32,
-    ground: impl Fn([f32; 2]) -> Option<f32>,
+    ground: impl Fn([f32; 3]) -> Option<f32>,
 ) -> Vec<[f32; 4]> {
     let [x0, z0, x1, z1] = window.rect();
     let mut stamps: Vec<(f32, [f32; 4])> = benders
         .iter()
         .filter_map(|b| {
-            let ground_y = ground([b.base[0], b.base[2]])?;
+            let ground_y = ground(b.base)?;
             let stamp = stamp_of(b, ground_y, blade_height)?;
             let reach = stamp[2] * GRASS_STAMP_REACH;
             let inside = stamp[0] + reach > x0
@@ -373,7 +374,7 @@ mod tests {
         let far = N as f32 * GRASS_BEND_CELL_SIZE;
         let benders = [at(5.0, 0.0), at(far, 0.0), at(1.0, 1.0), at(-3.0, 50.0)];
         // The last has no ground under it.
-        let ground = |xz: [f32; 2]| (xz[1] < 40.0).then_some(0.0);
+        let ground = |base: [f32; 3]| (base[2] < 40.0).then_some(0.0);
         let stamps = gather_stamps(&benders, &window, [0.0; 3], 0.5, ground);
         assert_eq!(stamps.len(), 2);
         assert_eq!(&stamps[0][..2], &[1.0, 1.0]);

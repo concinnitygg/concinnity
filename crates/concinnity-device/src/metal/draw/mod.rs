@@ -87,9 +87,11 @@ impl MtlContext {
         self.state.view.view_distance = view_distance;
         self.state.view.sky_rot = sky_rot;
         self.apply_pending_rebuilds()?;
-        // A moved world's decals move with it whatever happens to history.
+        // A moved world's decals and grass move with it whatever happens to
+        // history.
         if let Some(rebase) = &rebase {
             self.decal.set.rebase(rebase);
+            self.rebase_grass(rebase);
         }
         if history_reset {
             self.reset_temporal_history();
@@ -241,6 +243,7 @@ impl MtlContext {
                     elapsed,
                     cast: graph_inputs.grass_shadow_enabled,
                     benders: grass_benders,
+                    ring_slot,
                 })
             })
             .flatten();

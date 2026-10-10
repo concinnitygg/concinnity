@@ -62,7 +62,7 @@ pub use probe::{
 };
 pub use scene_host::{GeometryEdit, SceneHost};
 pub use skinned::SkinnedDraws;
-pub use streaming::{ChunkMesh, DrawStreaming};
+pub use streaming::{ChunkMesh, DrawStreaming, PlanetChunk};
 pub use tuning::{QualitySettings, RenderTuning};
 pub use window::WindowControl;
 
@@ -384,6 +384,7 @@ mod tests {
                         normal_map_slot: 0,
                         material: MaterialUniforms::DEFAULT,
                         frame: 0,
+                        planet_tile: None,
                     },
                     crate::render::draw_slot::SlotAlloc::Append(DrawIndex(0)),
                 )),

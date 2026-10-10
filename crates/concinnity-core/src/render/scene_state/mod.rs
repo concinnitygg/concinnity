@@ -9,11 +9,14 @@
 //! engine's per-frame pushes. The only bytes that reach the GPU from here go
 //! through a [`GeometryWriter`], which is where the backends differ.
 
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
-use crate::gfx::render_types::{DrawObject, clone_reserve, runtime_reserve_full};
+use crate::gfx::render_types::{DrawIndex, DrawObject, clone_reserve, runtime_reserve_full};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
+use crate::render::backend::PlanetChunk;
+use crate::render::grass::DrawnPlanetTile;
 use crate::render::model_history::ModelHistory;
 use crate::render::skinned_slots::SkinnedSlots;
 use crate::sky::SkyOrientation;
@@ -42,6 +45,8 @@ pub struct SceneState {
     pub placement: GeometryPlacement,
     /// What the GPU side must rebuild before the next frame reads the scene.
     pub gpu_dirty: GpuDirty,
+    /// The streamed chunks that draw a planet's tiles.
+    pub planet_chunks: BTreeMap<DrawIndex, PlanetChunk>,
 }
 
 impl SceneState {
@@ -54,7 +59,25 @@ impl SceneState {
             model_history: RefCell::new(ModelHistory::new()),
             placement: GeometryPlacement::default(),
             gpu_dirty: GpuDirty::default(),
+            planet_chunks: BTreeMap::new(),
         }
+    }
+
+    /// The planet tiles drawn this frame: every planet chunk shown and
+    /// resident, with the model and first vertex its draw renders with.
+    pub fn drawn_planet_tiles(&self) -> Vec<DrawnPlanetTile> {
+        self.planet_chunks
+            .iter()
+            .filter_map(|(&draw, chunk)| {
+                let obj = self.draw.objects.get(draw.index())?;
+                (obj.visible && obj.resident).then_some(DrawnPlanetTile {
+                    id: chunk.tile,
+                    model: obj.model,
+                    vertex_base: obj.base_vertex as u32,
+                    radial: chunk.radial,
+                })
+            })
+            .collect()
     }
 }
 

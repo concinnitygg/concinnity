@@ -21,7 +21,10 @@ use super::*;
 use crate::gfx::material_entry::MaterialEntry;
 use crate::gfx::streaming::planet::{PlanetTiles, TileMaterial, tile_mesh_size};
 use concinnity_core::components::Planet;
+use concinnity_core::gfx::render_types::FarFieldTint;
 use concinnity_core::planet::{LocalFrame, MAX_RESIDENT_TILES, PlanetFrame};
+use concinnity_core::render::grass::planet::tint::PlanetFarField;
+use concinnity_core::render::grass::tint::far_field_band;
 
 // Default fractions of the GPU's reported memory each streaming pool may hold
 // resident when a world sets no explicit byte budget. The remainder is left for
@@ -702,6 +705,7 @@ impl GraphicsSystem {
     pub(super) fn setup_planet_streaming(
         &mut self,
         planet: &Planet,
+        far_field: Option<PlanetFarField>,
         material_map: &std::collections::HashMap<MaterialHandle, MaterialEntry>,
     ) {
         let entry = planet
@@ -719,6 +723,15 @@ impl GraphicsSystem {
                 material: render_types::MaterialUniforms::DEFAULT,
             },
         };
+        let mut material = material;
+        if let Some(far) = &far_field {
+            let [start, end] = far_field_band();
+            material.material.far_field = FarFieldTint {
+                start,
+                end,
+                luma: far.luma,
+            };
+        }
         let (vertices, indices) = tile_mesh_size();
         let tiles = MAX_RESIDENT_TILES as u64;
         let vertex_bytes = tiles * (vertices * std::mem::size_of::<Vertex>()) as u64;
@@ -743,7 +756,7 @@ impl GraphicsSystem {
             MAX_RESIDENT_TILES,
             (vertex_bytes + index_bytes) / 1024,
         );
-        self.planet_tiles = Some(PlanetTiles::new(&frame, material));
+        self.planet_tiles = Some(PlanetTiles::new(&frame, material, far_field));
     }
 }
 

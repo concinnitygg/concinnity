@@ -106,7 +106,7 @@ impl CubeFace {
     pub const ALL: [Self; 6] = [Self(0), Self(1), Self(2), Self(3), Self(4), Self(5)];
 
     // (outward normal, u axis, v axis), with u x v = normal.
-    fn axes(self) -> [DVec3; 3] {
+    pub(crate) fn axes(self) -> [DVec3; 3] {
         match self.0 {
             0 => [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]],
             1 => [[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],

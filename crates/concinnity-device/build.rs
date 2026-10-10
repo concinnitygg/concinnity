@@ -191,6 +191,8 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             ("grass_masks", "t4"),
             ("grass_hiz", "t5"),
             ("grass_bend_field", "t6"),
+            ("planet_tiles", "t7"),
+            ("mesh_vertices", "t8"),
         ],
     },
     // The bend pass and the cascade's depth-only draw, each under its own root
@@ -860,8 +862,9 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     // The grass kernel, from `metal/grass.rs`: its block, the blades it
     // appends, the draw arguments, and the terrain heights and mask texels it
-    // reads, at buffer(0..4) by register, and last frame's depth pyramid at
-    // texture(5).
+    // reads, at buffer(0..4) by register, last frame's depth pyramid at
+    // texture(5), the bend field, the planet tiles and the shared vertex
+    // stream at buffer(6..8).
     MetalAbi {
         program: &shared::GRASS_GENERATE,
         slots: &[&[
@@ -872,6 +875,8 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("grass_masks", "buffer(4)"),
             ("grass_hiz", "texture(5)"),
             ("grass_bend_field", "buffer(6)"),
+            ("planet_tiles", "buffer(7)"),
+            ("mesh_vertices", "buffer(8)"),
         ]],
         argument_ids: &[],
     },

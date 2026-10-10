@@ -10,10 +10,16 @@
 //! cells within the tile. A tile off every terrain is never dispatched. The
 //! nearest shadow cascade gets a second, smaller dispatch of its own (see
 //! [`shadow`]), and the bend field one ahead of both (see [`bend`]).
+//!
+//! On a planet the layers grow over the planet's drawn tiles instead (see
+//! [`planet`]): the dispatch's `y` walks the grass tiles of the tiles in
+//! reach, and the field's frames carry the wind's and the bend field's
+//! coordinates through every move of the simulated frame.
 
 pub mod bend;
 mod ground;
 pub mod lod;
+pub mod planet;
 pub mod shadow;
 pub mod tiles;
 pub mod tint;
@@ -21,6 +27,8 @@ pub mod tint;
 pub use bend::{BendHistory, GrassBender};
 pub use ground::{GrassGround, GrassGroundBuffers, GrassMask, GroundSample};
 pub use lod::GrassCapacity;
+pub use planet::PlanetGrass;
+pub use planet::tiles::DrawnPlanetTile;
 pub use shadow::GrassShadowView;
 
 use alloc::vec::Vec;
@@ -28,17 +36,21 @@ use alloc::vec::Vec;
 use crate::components::{Grass, Wind};
 use crate::gfx::frustum::Frustum;
 use crate::math::noise::lcg_hash;
+use crate::planet::Rebase;
 use crate::render::uniforms::grass::{
-    GRASS_ARGS_SLOTS, GrassBendParams, GrassLayerGpu, GrassParams, MAX_GRASS_LAYERS,
-    MAX_GRASS_STAMPS,
+    GRASS_ARGS_SLOTS, GRASS_GROUND_PLANET, GRASS_GROUND_TERRAIN, GRASS_IDENTITY_MAP,
+    GrassBendParams, GrassLayerGpu, GrassParams, MAX_GRASS_LAYERS, MAX_GRASS_STAMPS,
+    PlanetGrassTileGpu,
 };
 use crate::render::wind::WindField;
 use crate::terrain::{DensityMask, TerrainGrid};
+use crate::transform::Mat4;
 use bend::{BendStep, GRASS_BEND_CELL_SIZE, GRASS_BEND_RESOLUTION};
 use lod::{
     GRASS_FULL_DENSITY_DISTANCE, GRASS_LOD_COUNT, GRASS_LOD_DISTANCES, GRASS_MIN_KEEP,
     GRASS_MORPH_FRACTION, GRASS_SHRINK_BAND,
 };
+use planet::tiles::{PlanetGrassTiles, planet_center, tiles_in_reach};
 use shadow::GRASS_SHADOW_DISTANCE;
 use tiles::{GRASS_DRAW_DISTANCE, GRASS_GROUP_SIZE, GRASS_TILE_SIZE, GrassGrid, TileRange};
 
@@ -64,7 +76,7 @@ pub struct GrassBladeLook {
 }
 
 impl GrassBladeLook {
-    fn of(g: &Grass) -> Self {
+    pub(crate) fn of(g: &Grass) -> Self {
         Self {
             height: g.height,
             height_variance: g.height_variance,
@@ -141,14 +153,54 @@ pub struct GrassFrameInputs<'a> {
     pub shadow: Option<GrassShadowView>,
     /// Everything that may be trampling the grass.
     pub benders: &'a [GrassBender],
+    /// The planet tiles drawn this frame, when the grass grows on a planet.
+    pub planet_tiles: &'a [DrawnPlanetTile],
 }
 
 /// What a field's frames carry from one to the next.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GrassHistory {
     // Frames placed so far, which picks the draw-argument slot each fills.
     runs: u32,
     bend: BendHistory,
+    // Where the wind's gusts are laid out, as rows over this frame's points.
+    wind_map: [[f32; 4]; 2],
+    // This frame's points in last frame's, since the last frame placed.
+    prev_map: [[f32; 4]; 2],
+}
+
+impl Default for GrassHistory {
+    fn default() -> Self {
+        Self {
+            runs: 0,
+            bend: BendHistory::default(),
+            wind_map: GRASS_IDENTITY_MAP,
+            prev_map: GRASS_IDENTITY_MAP,
+        }
+    }
+}
+
+impl GrassHistory {
+    /// Carry the field into the frame the world moved to: the wind keeps its
+    /// gusts where they were on the ground, and the next frame reads the bend
+    /// field it inherits where the blades were.
+    pub fn rebase(&mut self, rebase: &Rebase) {
+        let back = rebase.inverse_matrix();
+        self.wind_map = map_then(self.wind_map, &back);
+        self.prev_map = map_then(self.prev_map, &back);
+    }
+}
+
+/// `rows` (each taking a point `(x, y, z, 1)` to one coordinate) applied after
+/// the column-major affine `m`.
+pub fn map_then(rows: [[f32; 4]; 2], m: &Mat4) -> [[f32; 4]; 2] {
+    rows.map(|row| core::array::from_fn(|c| (0..4).map(|k| row[k] * m[c][k]).sum()))
+}
+
+/// Rows over a point `(x, y, z, 1)` applied at fixed height `y`, as rows over
+/// `(x, z, 1)`.
+pub fn map_at_height(rows: [[f32; 4]; 2], y: f32) -> [[f32; 4]; 2] {
+    rows.map(|r| [r[0], r[2], r[1] * y + r[3], 0.0])
 }
 
 /// One run of the blade kernel: the block it and the draws of its blades read,
@@ -173,7 +225,7 @@ pub struct GrassBendPass {
 
 /// A frame's grass work: the bend field's step, the blades placed for the
 /// view, and those placed for the nearest shadow cascade.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GrassFrame {
     /// The blades the view draws.
     pub view: GrassPass,
@@ -181,6 +233,8 @@ pub struct GrassFrame {
     pub shadow: Option<GrassPass>,
     /// The bend field's step.
     pub bend: GrassBendPass,
+    /// The planet tiles both runs read, the view's first; empty on terrain.
+    pub planet_tiles: Vec<PlanetGrassTileGpu>,
 }
 
 /// Every grass layer in the world, resolved once from its terrains.
@@ -199,6 +253,17 @@ pub struct GrassField {
     /// The tallest blade of any layer, in meters: how high above the ground a
     /// bender still presses the grass.
     pub blade_height: f32,
+    /// The planet the layers grow on instead of terrains.
+    pub planet: Option<PlanetGrass>,
+}
+
+// The frame a planet's tiles are drawn in this frame, from any one of them.
+#[derive(Debug, Clone, Copy)]
+struct PlanetView<'a> {
+    grass: &'a PlanetGrass,
+    center: [f32; 3],
+    model: Mat4,
+    tiles: &'a [DrawnPlanetTile],
 }
 
 impl GrassField {
@@ -256,7 +321,50 @@ impl GrassField {
             capacity: GrassCapacity::sum(capacities),
             shadow_capacity: shadow_capacity.clamp(1, tiles::MAX_GRASS_BLADES),
             blade_height,
+            planet: None,
         })
+    }
+
+    /// The grass `planet` grows, swaying in `wind`.
+    pub fn resolve_planet(planet: PlanetGrass, wind: Option<&Wind>) -> Self {
+        // A planet's ground is unbounded; its blades stand at most at the
+        // layer's density, with a margin for slopes holding more ground than
+        // their footprint.
+        let ground = tiles::GroundRect::centered([0.0, 0.0], [1.0e7, 1.0e7]);
+        let grid_of = |l: &planet::PlanetGrassLayer| GrassGrid::for_density(l.density * 1.15);
+        let capacity = GrassCapacity::sum(planet.layers.iter().filter_map(|l| {
+            Some(lod::lod_capacities(
+                &ground,
+                &grid_of(l)?,
+                GRASS_DRAW_DISTANCE,
+            ))
+        }));
+        let shadow_capacity = planet
+            .layers
+            .iter()
+            .filter_map(|l| {
+                Some(lod::shadow_capacity(
+                    &ground,
+                    &grid_of(l)?,
+                    GRASS_SHADOW_DISTANCE,
+                    GRASS_DRAW_DISTANCE,
+                ))
+            })
+            .fold(0u32, u32::saturating_add);
+        let blade_height = planet
+            .layers
+            .iter()
+            .map(|l| l.look.height * (1.0 + l.look.height_variance))
+            .fold(0.0f32, f32::max);
+        Self {
+            layers: Vec::new(),
+            buffers: GrassGroundBuffers::default(),
+            wind: WindField::new(wind),
+            capacity,
+            shadow_capacity: shadow_capacity.clamp(1, tiles::MAX_GRASS_BLADES),
+            blade_height,
+            planet: Some(planet),
+        }
     }
 
     /// The tiles of each layer within `distance` of a camera at `position`,
@@ -285,19 +393,64 @@ impl GrassField {
         let args_slot = history.runs % GRASS_ARGS_SLOTS as u32;
         history.runs = history.runs.wrapping_add(1);
         let step = history.bend.advance(camera.position, inputs.elapsed);
-        let params = self.view_params(camera, &step, args_slot);
-        let shadow = inputs
-            .shadow
-            .map(|light| self.shadow_pass(camera.position, &light, inputs.elapsed, params));
+        let prev_map = core::mem::replace(&mut history.prev_map, GRASS_IDENTITY_MAP);
+        let maps = [history.wind_map, prev_map];
+        let planet = self.planet_view(inputs.planet_tiles);
+        let params = self.view_params(camera, &step, args_slot, maps, planet.as_ref());
+        let mut planet_tiles = Vec::new();
+        let view = self.place(
+            planet.as_ref(),
+            camera.position,
+            GRASS_DRAW_DISTANCE,
+            params,
+            &mut planet_tiles,
+        );
+        let shadow = inputs.shadow.map(|light| {
+            let params = self.shadow_params(&light, inputs.elapsed, params);
+            self.place(
+                planet.as_ref(),
+                camera.position,
+                GRASS_SHADOW_DISTANCE,
+                params,
+                &mut planet_tiles,
+            )
+        });
         GrassFrame {
-            view: self.place(camera.position, GRASS_DRAW_DISTANCE, params),
+            view,
             shadow,
-            bend: self.bend_pass(&step, camera.position, inputs.benders),
+            bend: self.bend_pass(
+                &step,
+                camera.position,
+                inputs.benders,
+                prev_map,
+                planet.as_ref(),
+            ),
+            planet_tiles,
         }
     }
 
+    // The planet's frame this frame, from its drawn tiles; `None` off a
+    // planet or before any tile is drawn.
+    fn planet_view<'a>(&'a self, tiles: &'a [DrawnPlanetTile]) -> Option<PlanetView<'a>> {
+        let grass = self.planet.as_ref()?;
+        let first = tiles.first()?;
+        Some(PlanetView {
+            grass,
+            center: planet_center(&grass.shape, first),
+            model: first.model,
+            tiles,
+        })
+    }
+
     // The view's block, all but its layers.
-    fn view_params(&self, camera: &GrassCamera, step: &BendStep, args_slot: u32) -> GrassParams {
+    fn view_params(
+        &self,
+        camera: &GrassCamera,
+        step: &BendStep,
+        args_slot: u32,
+        [wind_map, bend_prev_map]: [[[f32; 4]; 2]; 2],
+        planet: Option<&PlanetView<'_>>,
+    ) -> GrassParams {
         let frustum = Frustum::from_camera(camera.vp, Some(GRASS_DRAW_DISTANCE));
         let [wind, wind_gust] = self.wind.gpu_rows();
         let hiz = camera.hiz;
@@ -344,24 +497,36 @@ impl GrassField {
             bend_prev_valid: u32::from(step.prev.is_some()),
             shadow_vp: camera.vp,
             shadow_light: [0.0; 4],
+            planet_center: planet.map_or([0.0; 3], |p| p.center),
+            planet_density_scale: self.planet.as_ref().map_or(0.0, |p| p.meadow_scale),
+            ground: if self.planet.is_some() {
+                GRASS_GROUND_PLANET
+            } else {
+                GRASS_GROUND_TERRAIN
+            },
+            planet_tile_base: 0,
+            planet_tile_count: 0,
+            _pad: 0,
+            wind_map,
+            bend_prev_map,
+            planet_density: [0.0; MAX_GRASS_LAYERS],
             layers: [GrassLayerGpu::default(); MAX_GRASS_LAYERS],
         }
     }
 
-    // The cascade's run: the view's block culled against the light's frustum
-    // and the cast distance instead, with no occlusion test, every blade
-    // appended to the coarsest level's region of its own buffer.
-    fn shadow_pass(
+    // The cascade's block: the view's culled against the light's frustum and
+    // the cast distance instead, with no occlusion test, every blade appended
+    // to the coarsest level's region of its own buffer.
+    fn shadow_params(
         &self,
-        position: [f32; 3],
         light: &GrassShadowView,
         elapsed: f32,
         view: GrassParams,
-    ) -> GrassPass {
+    ) -> GrassParams {
         let coarsest = GRASS_LOD_COUNT - 1;
         let mut lod_capacity = [0; 4];
         lod_capacity[coarsest] = self.shadow_capacity;
-        let params = GrassParams {
+        GrassParams {
             frustum: planes(&light.frustum()),
             hiz_enabled: 0,
             lod_base: [0; 4],
@@ -376,13 +541,44 @@ impl GrassField {
                 elapsed,
             ],
             ..view
-        };
-        self.place(position, GRASS_SHADOW_DISTANCE, params)
+        }
     }
 
     // `params` with the layers within `distance` of `position` and the
-    // dispatch that covers their tiles.
-    fn place(&self, position: [f32; 3], distance: f32, mut params: GrassParams) -> GrassPass {
+    // dispatch that covers their tiles; on a planet, the tiles in reach are
+    // appended to `planet_tiles`.
+    fn place(
+        &self,
+        planet: Option<&PlanetView<'_>>,
+        position: [f32; 3],
+        distance: f32,
+        params: GrassParams,
+        planet_tiles: &mut Vec<PlanetGrassTileGpu>,
+    ) -> GrassPass {
+        match &self.planet {
+            Some(grass) => {
+                let tiles = planet.map_or_else(PlanetGrassTiles::default, |p| {
+                    tiles_in_reach(
+                        &grass.shape,
+                        &grass.grid,
+                        p.tiles,
+                        p.center,
+                        position,
+                        distance,
+                    )
+                });
+                place_planet(grass, &tiles, params, planet_tiles)
+            }
+            None => self.place_terrain(position, distance, params),
+        }
+    }
+
+    fn place_terrain(
+        &self,
+        position: [f32; 3],
+        distance: f32,
+        mut params: GrassParams,
+    ) -> GrassPass {
         let reach = self.layers_in_reach(position, distance);
         let mut dispatch = [1u32; 3];
         for (slot, (layer, tiles)) in reach.iter().enumerate() {
@@ -402,10 +598,17 @@ impl GrassField {
         step: &BendStep,
         position: [f32; 3],
         benders: &[GrassBender],
+        prev_map: [[f32; 4]; 2],
+        planet: Option<&PlanetView<'_>>,
     ) -> GrassBendPass {
-        let found = bend::gather_stamps(benders, &step.window, position, self.blade_height, |xz| {
-            self.ground_under(xz)
-        });
+        let found =
+            bend::gather_stamps(benders, &step.window, position, self.blade_height, |base| {
+                match planet {
+                    Some(p) => Some(planet_ground_under(p, base)),
+                    None if self.planet.is_some() => None,
+                    None => self.ground_under([base[0], base[2]]),
+                }
+            });
         let mut stamps = [[0.0; 4]; MAX_GRASS_STAMPS];
         stamps[..found.len()].copy_from_slice(&found);
         let prev = step.prev.unwrap_or(step.window);
@@ -425,6 +628,7 @@ impl GrassField {
                 write_half: step.write_half,
                 prev_valid: u32::from(step.prev.is_some()),
                 _pad: [0; 2],
+                prev_map: map_at_height(prev_map, position[1]),
                 stamps,
             },
             dispatch: [cells.div_ceil(GRASS_GROUP_SIZE), 1, 1],
@@ -441,6 +645,71 @@ impl GrassField {
                 (0..2).all(|i| xz[i] >= r.min[i] && xz[i] <= r.max[i])
             })
             .map(|l| l.ground.surface_at(&self.buffers, xz).y)
+    }
+}
+
+// The local height of the ground under the bender standing at local `base`
+// on `planet`: the planet's own surface along the radial through it, set
+// below `base` along the frame's vertical.
+fn planet_ground_under(planet: &PlanetView<'_>, base: [f32; 3]) -> f32 {
+    use crate::planet::dvec;
+    let offset = dvec::sub(dvec::from_f32(base), dvec::from_f32(planet.center));
+    let m = &planet.model;
+    // The model's rotation takes planet directions into the frame; its
+    // transpose takes them back.
+    let world: [f64; 3] =
+        core::array::from_fn(|c| (0..3).map(|r| f64::from(m[c][r]) * offset[r]).sum());
+    let dir = dvec::normalize_or(world, [0.0, 1.0, 0.0]);
+    let shape = &planet.grass.shape;
+    let gap = dvec::length(offset) - (shape.radius + shape.height(dir));
+    base[1] - gap as f32
+}
+
+// `params` with `planet`'s layers and `tiles`, whose records are appended to
+// `planet_tiles`.
+fn place_planet(
+    planet: &PlanetGrass,
+    tiles: &PlanetGrassTiles,
+    mut params: GrassParams,
+    planet_tiles: &mut Vec<PlanetGrassTileGpu>,
+) -> GrassPass {
+    let mut dispatch = [1u32; 3];
+    let layers = if tiles.groups == 0 {
+        0
+    } else {
+        planet.layers.len().min(MAX_GRASS_LAYERS)
+    };
+    for (slot, layer) in planet.layers.iter().take(layers).enumerate() {
+        params.layers[slot] = planet_layer_gpu(layer);
+        params.planet_density[slot] = layer.density;
+        dispatch[0] = dispatch[0].max((layer.cells * layer.cells).div_ceil(GRASS_GROUP_SIZE));
+    }
+    params.layer_count = layers as u32;
+    params.tile_size = planet.grid.tile_size() as f32;
+    params.planet_tile_base = planet_tiles.len() as u32;
+    params.planet_tile_count = tiles.records.len() as u32;
+    planet_tiles.extend_from_slice(&tiles.records);
+    dispatch[1] = tiles.groups.max(1);
+    dispatch[2] = (layers as u32).max(1);
+    GrassPass { params, dispatch }
+}
+
+fn planet_layer_gpu(layer: &planet::PlanetGrassLayer) -> GrassLayerGpu {
+    let look = &layer.look;
+    GrassLayerGpu {
+        seed: layer.seed,
+        height: look.height,
+        height_variance: look.height_variance,
+        width: look.width,
+        clump_size: look.clump_size,
+        stiffness: look.stiffness,
+        color_variation: look.color_variation,
+        cell_size: layer.cell_size,
+        cells_per_side: layer.cells,
+        root_color: look.root_color,
+        reach: blade_reach(look),
+        tip_color: [look.tip_color[0], look.tip_color[1], look.tip_color[2], 0.0],
+        ..GrassLayerGpu::default()
     }
 }
 
@@ -543,6 +812,7 @@ mod tests {
             elapsed: 0.0,
             shadow: None,
             benders: &[],
+            planet_tiles: &[],
         }
     }
 
@@ -844,5 +1114,172 @@ mod tests {
         assert_eq!(b2.window[0], b.window[0] + 16);
         assert_eq!(second.view.params.bend_window, b2.window);
         assert_eq!(second.view.params.bend_half, 1);
+    }
+
+    fn apply_rows(rows: [[f32; 4]; 2], p: [f32; 3]) -> [f32; 2] {
+        rows.map(|r| r[0] * p[0] + r[1] * p[1] + r[2] * p[2] + r[3])
+    }
+
+    fn turn() -> Rebase {
+        Rebase {
+            rotation: crate::math::quat_from_axis_angle([1.0, 0.0, 0.4], 0.02),
+            translation: [12.0, -19.0, 998.0],
+        }
+    }
+
+    // A move leaves the wind's gusts where they were on the ground, and the
+    // frame after it reads last frame's bend field where each point was, then
+    // back to reading it in place.
+    #[test]
+    fn a_move_carries_the_wind_and_the_bend_field() {
+        let t = terrain([0.0; 3], [100.0, 100.0], vec![grass(10.0)]);
+        let f = GrassField::resolve(&[t], None).unwrap();
+        let mut history = GrassHistory::default();
+        let p = [3.0, 1.0, -998.0];
+        let before = f.frame(&inputs([0.0, 2.0, -990.0]), &mut history);
+        assert_eq!(before.view.params.wind_map, GRASS_IDENTITY_MAP);
+        assert_eq!(before.view.params.bend_prev_map, GRASS_IDENTITY_MAP);
+        let wind_before = apply_rows(before.view.params.wind_map, p);
+        let r = turn();
+        history.rebase(&r);
+        let q = r.apply_point(p);
+        let after = f.frame(&inputs(r.apply_point([0.0, 2.0, -990.0])), &mut history);
+        let wind_after = apply_rows(after.view.params.wind_map, q);
+        let prev = apply_rows(after.view.params.bend_prev_map, q);
+        for i in 0..2 {
+            assert!((wind_before[i] - wind_after[i]).abs() < 2e-3);
+        }
+        assert!((prev[0] - p[0]).abs() < 2e-3 && (prev[1] - p[2]).abs() < 2e-3);
+        // The bend pass reads at the camera's height through the same map.
+        let cam_y = r.apply_point([0.0, 2.0, -990.0])[1];
+        let rows = after.bend.params.prev_map;
+        let at = rows.map(|row| row[0] * q[0] + row[1] * q[2] + row[2]);
+        let expected = apply_rows(after.view.params.bend_prev_map, [q[0], cam_y, q[2]]);
+        assert!((at[0] - expected[0]).abs() < 1e-3 && (at[1] - expected[1]).abs() < 1e-3);
+        let next = f.frame(&inputs(r.apply_point([0.0, 2.0, -990.0])), &mut history);
+        assert_eq!(next.view.params.bend_prev_map, GRASS_IDENTITY_MAP);
+        assert_eq!(next.view.params.wind_map, after.view.params.wind_map);
+    }
+
+    mod on_a_planet {
+        use super::*;
+        use crate::planet::{LocalFrame, PlanetShape, TileLod, tile_mesh};
+
+        fn shape() -> PlanetShape {
+            PlanetShape {
+                center: [0.0, -50_000.0, 0.0],
+                radius: 50_000.0,
+                amplitude: 40.0,
+                feature_size: 2_000.0,
+                octaves: 8,
+                seed: 4,
+            }
+        }
+
+        fn field() -> GrassField {
+            let grass = PlanetGrass::resolve(shape(), &[Grass::default(), grass(30.0)]).unwrap();
+            GrassField::resolve_planet(grass, None)
+        }
+
+        // Every tile a standing camera draws, and the camera, in the
+        // authored frame.
+        fn standing() -> (Vec<DrawnPlanetTile>, [f32; 3]) {
+            let s = shape();
+            let lod = TileLod::new(s, crate::planet::FINEST_CELL_SIZE);
+            let cam = [0.0, s.height([0.0, 1.0, 0.0]) as f32 + 1.7, 0.0];
+            let cam_world = LocalFrame::AUTHORED.to_world(cam);
+            let tiles = lod
+                .select(cam_world, &|_| true)
+                .draw
+                .into_iter()
+                .map(|id| {
+                    let mesh = tile_mesh(&s, id);
+                    DrawnPlanetTile {
+                        id,
+                        model: LocalFrame::AUTHORED.model_at(mesh.origin),
+                        vertex_base: 0,
+                        radial: mesh.radial,
+                    }
+                })
+                .collect();
+            (tiles, cam)
+        }
+
+        #[test]
+        fn the_frame_grows_every_layer_over_the_tiles_in_reach() {
+            let f = field();
+            assert!(f.capacity.total() > 0 && f.shadow_capacity > 0);
+            let (tiles, cam) = standing();
+            let frame = f.frame(
+                &GrassFrameInputs {
+                    shadow: Some(light()),
+                    planet_tiles: &tiles,
+                    ..inputs(cam)
+                },
+                &mut GrassHistory::default(),
+            );
+            let view = &frame.view;
+            let cast = frame.shadow.as_ref().unwrap();
+            assert_eq!(view.params.ground, GRASS_GROUND_PLANET);
+            assert_eq!(view.params.layer_count, 2);
+            assert_eq!(view.dispatch[2], 2);
+            assert_eq!(view.params.planet_tile_base, 0);
+            assert_eq!(cast.params.planet_tile_base, view.params.planet_tile_count);
+            assert_eq!(
+                frame.planet_tiles.len() as u32,
+                view.params.planet_tile_count + cast.params.planet_tile_count
+            );
+            assert!(cast.dispatch[1] < view.dispatch[1]);
+            assert_eq!(
+                view.params.planet_density[..2],
+                [Grass::default().density, 30.0]
+            );
+            let cells = f.planet.as_ref().unwrap().layers[0].cells;
+            assert_eq!(view.dispatch[0], (cells * cells).div_ceil(GRASS_GROUP_SIZE));
+            let c = view.params.planet_center;
+            assert!((c[1] + 50_000.0).abs() < 0.05, "{c:?}");
+        }
+
+        // Before any tile is drawn, nothing grows, but the frame still runs.
+        #[test]
+        fn a_planet_with_no_drawn_tiles_grows_nothing() {
+            let frame = field().frame(&inputs([0.0, 42.0, 0.0]), &mut GrassHistory::default());
+            assert_eq!(frame.view.params.layer_count, 0);
+            assert_eq!(frame.view.dispatch, [1, 1, 1]);
+            assert!(frame.planet_tiles.is_empty());
+        }
+
+        // A bender standing on the planet presses fully; one well above the
+        // blades does not.
+        #[test]
+        fn benders_press_from_the_planets_own_ground() {
+            let f = field();
+            let (tiles, cam) = standing();
+            let s = shape();
+            let ground = s.height([0.0, 1.0, 0.0]) as f32;
+            let benders = [
+                GrassBender {
+                    base: [0.5, ground, 0.5],
+                    radius: 0.3,
+                    height: 1.7,
+                },
+                GrassBender {
+                    base: [1.5, ground + 5.0, 0.5],
+                    radius: 0.3,
+                    height: 1.7,
+                },
+            ];
+            let frame = f.frame(
+                &GrassFrameInputs {
+                    benders: &benders,
+                    planet_tiles: &tiles,
+                    ..inputs(cam)
+                },
+                &mut GrassHistory::default(),
+            );
+            let b = frame.bend.params;
+            assert_eq!(b.stamp_count, 1);
+            assert!((b.stamps[0][3] - 1.0).abs() < 1e-3, "{:?}", b.stamps[0]);
+        }
     }
 }

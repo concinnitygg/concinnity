@@ -322,6 +322,7 @@ impl SceneState {
             normal_map_slot,
             material,
             frame,
+            planet_tile,
         } = mesh;
         if verts.is_empty() || idxs.is_empty() {
             return Err(RenderError::Other(
@@ -370,6 +371,10 @@ impl SceneState {
             lod_alternates: Vec::new(),
         };
         self.place_draw_object(obj, dst);
+        match planet_tile {
+            Some(chunk) => self.planet_chunks.insert(dst.slot(), chunk),
+            None => self.planet_chunks.remove(&dst.slot()),
+        };
         self.gpu_dirty.rt_topology = true;
         Ok(())
     }
@@ -384,6 +389,7 @@ impl SceneState {
     ) -> RenderResult<()> {
         let region = draw_slot::retire_chunk_slot(&mut self.draw.objects, draw_idx)
             .map_err(RenderError::Other)?;
+        self.planet_chunks.remove(&draw_idx);
         // The slot is already hidden, so its ranges go back first: a failed
         // release below must not strand them.
         self.placement
@@ -776,6 +782,7 @@ mod tests {
             normal_map_slot: 3,
             material: MaterialUniforms::DEFAULT,
             frame: 0,
+            planet_tile: None,
         }
     }
 
@@ -810,6 +817,56 @@ mod tests {
         assert!(obj.visible && obj.resident && !obj.cullable());
         assert!(obj.lod_alternates.is_empty());
         assert!(scene.gpu_dirty.rt_topology);
+    }
+
+    // A planet chunk is listed with its tile while it is shown, with the model
+    // and first vertex its draw renders with, and forgotten when removed.
+    #[test]
+    fn a_planet_chunk_is_listed_while_drawn() {
+        use crate::planet::{CubeFace, TileId};
+        use crate::render::backend::PlanetChunk;
+        let mut scene = chunked(8, 8);
+        let tile = TileId {
+            face: CubeFace(4),
+            level: 7,
+            x: 3,
+            y: 90,
+        };
+        let mut w = Recorder::default();
+        let verts = vertices(3);
+        let mesh = ChunkMesh {
+            planet_tile: Some(PlanetChunk {
+                tile,
+                radial: [-1.0, 2.0],
+            }),
+            ..chunk(&verts, &[0, 1, 2])
+        };
+        scene
+            .add_chunk_mesh(mesh, SlotAlloc::Append(DrawIndex(0)), &mut w)
+            .expect("room for the chunk");
+        scene
+            .add_chunk_mesh(
+                chunk(&vertices(3), &[0, 1, 2]),
+                SlotAlloc::Append(DrawIndex(1)),
+                &mut w,
+            )
+            .expect("room for the chunk");
+        let drawn = scene.drawn_planet_tiles();
+        assert_eq!(drawn.len(), 1);
+        assert_eq!(drawn[0].id, tile);
+        assert_eq!(drawn[0].radial, [-1.0, 2.0]);
+        assert_eq!(
+            drawn[0].vertex_base,
+            scene.draw.objects[0].base_vertex as u32
+        );
+        scene.update_visibility(DrawIndex(0), false);
+        assert!(scene.drawn_planet_tiles().is_empty());
+        scene.update_visibility(DrawIndex(0), true);
+        scene
+            .remove_chunk_mesh(DrawIndex(0), 1, &mut w)
+            .expect("a placed chunk");
+        assert!(scene.planet_chunks.is_empty());
+        assert!(scene.drawn_planet_tiles().is_empty());
     }
 
     #[test]

@@ -13,6 +13,9 @@ use alloc::vec::Vec;
 /// grows the full density, black leaves the ground bare. The mask is stretched
 /// over the terrain's extent, its first row along the terrain's `-Z` edge and
 /// its first column along `-X`.
+///
+/// On a [Planet](#planet) a layer grows over the planet's own meadow instead,
+/// and `density_mask` is not supported.
 #[derive(
     Debug,
     Clone,

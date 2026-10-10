@@ -19,6 +19,8 @@ pub mod fault;
 pub(crate) mod instanced_prop;
 pub(crate) mod mesh;
 pub(crate) mod physics;
+/// `Planet` argument checks.
+pub(crate) mod planet;
 /// `Prop` argument checks.
 pub(crate) mod prop;
 /// `SdfVolume` argument checks.
@@ -49,6 +51,7 @@ fn check_authored_asset(
         RegisteredType::Variables => behavior::check_variables(name, args),
         RegisteredType::Shader => shader::check(name, args),
         RegisteredType::Prop => prop::check(name, args),
+        RegisteredType::Planet => planet::check(name, args),
         RegisteredType::SdfVolume => sdf_volume::check(name, args),
         RegisteredType::VoxelChunk => voxel_chunk::check(name, args),
         RegisteredType::VoxelWorld => voxel_world::check(name, args),

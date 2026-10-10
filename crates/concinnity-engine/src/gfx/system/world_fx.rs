@@ -7,7 +7,7 @@ use concinnity_core::components::{
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::backend_init::{SdfVolumeSource, WorldFx};
-use concinnity_core::render::grass::GrassField;
+use concinnity_core::render::grass::{GrassField, PlanetGrass};
 use concinnity_core::render::{decal, particles, volumetric_fog};
 use concinnity_host::thread::asset_id;
 
@@ -18,6 +18,7 @@ pub(super) fn drain_world_fx(
     ctx: &mut PipelineContext,
     texture_count: usize,
     terrains: &[LoadedTerrain],
+    planet_grass: Option<PlanetGrass>,
 ) -> WorldFx {
     let decals: Vec<Decal> = ctx.drain::<Decal>();
     let decals = decal::build_decal_records(&decals.iter().collect::<Vec<_>>(), texture_count);
@@ -41,7 +42,20 @@ pub(super) fn drain_world_fx(
         .into_iter()
         .filter_map(|(id, g)| Some((id?, g)))
         .collect();
-    let grass = GrassField::resolve(&grass_terrains(terrains, &grass), wind.as_ref());
+    let terrain_grass = GrassField::resolve(&grass_terrains(terrains, &grass), wind.as_ref());
+    // One field per world: a planet's grass, or the terrains'.
+    let grass = match planet_grass {
+        Some(planet) => {
+            if terrain_grass.is_some() {
+                tracing::warn!(
+                    "GraphicsSystem: a world grows grass on a Planet or on Terrains, not both; \
+                     the Terrains' grass is not drawn"
+                );
+            }
+            Some(GrassField::resolve_planet(planet, wind.as_ref()))
+        }
+        None => terrain_grass,
+    };
     WorldFx {
         decals,
         particles,

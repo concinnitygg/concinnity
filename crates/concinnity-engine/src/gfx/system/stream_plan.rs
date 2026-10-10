@@ -9,6 +9,7 @@ use concinnity_core::ecs::{MaterialHandle, PayloadLocator};
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::mesh_seed::MeshSeedRegion;
 use concinnity_core::gfx::render_types::{DrawIndex, DrawObject, InstancedCluster};
+use concinnity_core::render::grass::planet::tint::PlanetFarField;
 
 use super::GraphicsSystem;
 use super::mesh_seed_compaction::{
@@ -115,6 +116,8 @@ pub(super) struct StreamingSetup<'a> {
     pub(super) deferred_mesh_seeds: &'a HashMap<usize, DeferredMeshSeed>,
     pub(super) voxel_world: Option<VoxelWorld>,
     pub(super) planet: Option<Planet>,
+    // The color the planet's ground blends toward past its grass.
+    pub(super) planet_far_field: Option<PlanetFarField>,
     pub(super) block_types: &'a HashMap<AssetId, BlockType>,
     pub(super) material_map: &'a HashMap<MaterialHandle, MaterialEntry>,
 }
@@ -132,6 +135,7 @@ impl GraphicsSystem {
             deferred_mesh_seeds,
             voxel_world,
             planet,
+            planet_far_field,
             block_types,
             material_map,
         } = setup;
@@ -176,7 +180,9 @@ impl GraphicsSystem {
             (Some(_), Some(_)) => tracing::error!(
                 "GraphicsSystem: a world streams a VoxelWorld or a Planet, not both; the Planet is not drawn"
             ),
-            (None, Some(planet)) => self.setup_planet_streaming(&planet, material_map),
+            (None, Some(planet)) => {
+                self.setup_planet_streaming(&planet, planet_far_field, material_map)
+            }
             (voxel_world, None) => {
                 self.setup_voxel_world_streaming(voxel_world, block_types, material_map)
             }

@@ -69,7 +69,11 @@ pub struct Planet {
     /// Pull toward the center, in meters per second squared.
     #[asset(default = crate::physics::GRAVITY)]
     pub gravity: f32,
-    /// The grass that grows on the planet, one entry per look.
+    /// The grass that grows on the planet, one entry per look. Each grows
+    /// over the whole planet as a meadow: soft-edged bare patches a couple of
+    /// dozen meters across are laid over the ground, different for every
+    /// layer, and the same every run. A layer's `density_mask` is not
+    /// supported on a planet: a world that sets one fails validation.
     pub layers: Vec<TerrainLayer>,
 }
 

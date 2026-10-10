@@ -2500,6 +2500,12 @@ impl super::context::VkContext {
         if let Some(transparent) = self.transparent.as_ref() {
             transparent.wire_rt_geometry(&self.hw.device, vertex_buffer, index_buffer);
         }
+        if let Some(grass) = self.grass.as_ref() {
+            grass.rewire_vertices(
+                &self.hw.device,
+                (vertex_buffer, self.geometry.vertex_buffer_bytes),
+            );
+        }
     }
 
     // Build the GPU-driven main-pass skinning resources: the `rt_skin` compute

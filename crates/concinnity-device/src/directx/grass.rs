@@ -10,23 +10,27 @@
 //! lit blades shade on the lights, shadows and environment the surfaces bound.
 //! The bend pass and the cascade draw have small root signatures of their own.
 //! The blade, draw-argument and bend buffers rest in UNORDERED_ACCESS; the
-//! graph moves them to the states their readers need.
+//! graph moves them to the states their readers need. On a planet the kernel
+//! also reads the frame's drawn tiles, from an upload-heap buffer per frame in
+//! flight, and their meshes, from the shared vertex buffer, which rests in
+//! GENERIC_READ.
 
 use std::cell::Cell;
 
+use concinnity_core::planet::Rebase;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::grass::bend::GRASS_BEND_WORDS;
 use concinnity_core::render::grass::lod::{GRASS_LOD_COUNT, GRASS_LOD_VERTEX_STRIDE};
 use concinnity_core::render::grass::{
-    GrassBender, GrassCamera, GrassField, GrassFrameInputs, GrassHistory, GrassHiz, GrassPass,
-    GrassShadowView,
+    DrawnPlanetTile, GrassBender, GrassCamera, GrassField, GrassFrameInputs, GrassHistory,
+    GrassHiz, GrassPass, GrassShadowView,
 };
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::PassId;
 use concinnity_core::render::shadow_bias;
 use concinnity_core::render::uniforms::grass::{
     GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassParams,
-    grass_args_offset,
+    MAX_PLANET_GRASS_TILES, PlanetGrassTileGpu, grass_args_offset,
 };
 use windows::Win32::Graphics::Direct3D::{
     D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
@@ -58,8 +62,9 @@ pub(in crate::directx) const PREPASS_GRASS_BLADES_PARAM: u32 = 10;
 
 // The kernel's root signature: the block at b0, the blades it appends at u1,
 // the draw arguments at u2, the terrain heights and mask texels it reads at t3
-// and t4, last frame's depth pyramid at t5, and the bend field at t6, as
-// `grass.hlsl` declares them.
+// and t4, last frame's depth pyramid at t5, the bend field at t6, the planet
+// tiles at t7 and the shared vertex stream at t8, as `grass.hlsl` declares
+// them.
 fn create_generate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     RootSig::new()
         .cbv(0, Visibility::All)
@@ -69,13 +74,20 @@ fn create_generate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12R
         .srv(4, Visibility::All)
         .srv_table(5, 1, Visibility::All)
         .srv(6, Visibility::All)
+        .srv(7, Visibility::All)
+        .srv(8, Visibility::All)
         .build(device, "grass generate root sig")
 }
 
-// The kernel's root parameters holding the pyramid's descriptor table and the
-// bend field.
+// The kernel's root parameters holding the pyramid's descriptor table, the
+// bend field, the planet tiles and the shared vertex stream.
 const KERNEL_HIZ_PARAM: u32 = 5;
 const KERNEL_BEND_PARAM: u32 = 6;
+const KERNEL_PLANET_TILES_PARAM: u32 = 7;
+const KERNEL_VERTICES_PARAM: u32 = 8;
+
+// Planet tile records one frame holds: the view's run and the cascade's.
+const PLANET_TILE_RECORDS: usize = 2 * MAX_PLANET_GRASS_TILES;
 
 // The bend pass's root signature: its block at b0 and the field at u1.
 fn create_bend_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
@@ -216,6 +228,9 @@ pub(in crate::directx) struct GrassResources {
     params: MappedBlocks,
     shadow_params: MappedBlocks,
     bend_params: MappedBlocks,
+    // Per frame in flight, persistently mapped: the planet tile records both
+    // runs read.
+    planet_tiles: MappedBlocks,
     // What the field's frames carry from one to the next. Advanced from
     // `&self` on the render thread before the fan-out.
     history: Cell<GrassHistory>,
@@ -225,6 +240,7 @@ pub(in crate::directx) struct GrassResources {
 struct MappedBlocks {
     buffers: Vec<PooledBuffer>,
     ptrs: Vec<*mut u8>,
+    size: usize,
 }
 
 impl MappedBlocks {
@@ -247,15 +263,26 @@ impl MappedBlocks {
             ptrs.push(ptr as *mut u8);
             buffers.push(buf);
         }
-        Ok(Self { buffers, ptrs })
+        Ok(Self {
+            buffers,
+            ptrs,
+            size: size as usize,
+        })
     }
 
     // Write `value` into frame `frame_idx`'s block and return its address.
     fn write<T: bytemuck::NoUninit>(&self, frame_idx: usize, value: &T) -> u64 {
-        let bytes = bytemuck::bytes_of(value);
-        // SAFETY: the destination is the persistent mapping of this frame's UPLOAD-heap constant
-        // buffer, sized for `T`, which the GPU no longer reads once this frame's slot has been
-        // waited on; the source is a separate live value, so the ranges cannot overlap.
+        self.write_bytes(frame_idx, bytemuck::bytes_of(value))
+    }
+
+    // Write `bytes`, at most the block's size, into frame `frame_idx`'s block
+    // and return its address.
+    fn write_bytes(&self, frame_idx: usize, bytes: &[u8]) -> u64 {
+        let bytes = &bytes[..bytes.len().min(self.size)];
+        // SAFETY: the destination is the persistent mapping of this frame's UPLOAD-heap buffer,
+        // `size` bytes long and `bytes` no longer, which the GPU no longer reads once this
+        // frame's slot has been waited on; the source is a separate live value, so the ranges
+        // cannot overlap.
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.ptrs[frame_idx], bytes.len());
         }
@@ -291,7 +318,11 @@ impl GrassResources {
         let bend_field = create_uav_buffer(device, bend_bytes, D3D12_RESOURCE_STATE_COMMON)?;
         super::particle::zero_default_buffer(alloc, &bend_field, bend_bytes)?;
         let read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        let heights = upload_buffer(alloc, bytemuck::cast_slice(&field.buffers.heights), read)?;
+        let heights = upload_buffer(
+            alloc,
+            bytemuck::cast_slice(field.buffers.bound_heights()),
+            read,
+        )?;
         let masks = upload_buffer(
             alloc,
             bytemuck::cast_slice(field.buffers.bound_mask_words()),
@@ -316,6 +347,11 @@ impl GrassResources {
                 alloc,
                 std::mem::size_of::<GrassBendParams>(),
                 "map grass bend params",
+            )?,
+            planet_tiles: MappedBlocks::new(
+                alloc,
+                PLANET_TILE_RECORDS * std::mem::size_of::<PlanetGrassTileGpu>(),
+                "map grass planet tiles",
             )?,
             history: Cell::new(GrassHistory::default()),
         })
@@ -348,6 +384,7 @@ pub(in crate::directx) struct GrassFrame {
     shadow: Option<GrassPlacement>,
     bend_gva: u64,
     bend_dispatch: [u32; 3],
+    planet_tiles_gva: u64,
 }
 
 // What a frame's grass is prepared from.
@@ -363,6 +400,15 @@ pub(in crate::directx) struct GrassRequest<'a> {
 }
 
 impl DxContext {
+    // Carry the grass into the frame the world moved to.
+    pub(in crate::directx) fn rebase_grass(&self, rebase: &Rebase) {
+        if let Some(grass) = &self.grass {
+            let mut history = grass.history.get();
+            history.rebase(rebase);
+            grass.history.set(history);
+        }
+    }
+
     // Whether this frame's grass casts into the nearest cascade: shadows are on
     // and that cascade re-renders.
     pub(in crate::directx) fn grass_casts(&self) -> bool {
@@ -384,6 +430,11 @@ impl DxContext {
             cast,
             benders,
         } = request;
+        let planet_tiles: Vec<DrawnPlanetTile> = if grass.field.planet.is_some() {
+            self.state.drawn_planet_tiles()
+        } else {
+            Vec::new()
+        };
         // The pyramid holds last frame's depth once one has been built, tested
         // through the view-projection the draw cull tests through.
         let hiz = self
@@ -408,6 +459,7 @@ impl DxContext {
                 to_light: self.shadow.light_dir,
             }),
             benders,
+            planet_tiles: &planet_tiles,
         };
         let mut history = grass.history.get();
         let frame = grass.field.frame(&inputs, &mut history);
@@ -416,11 +468,15 @@ impl DxContext {
         let shadow = frame.shadow.map(|pass| {
             GrassPlacement::of(grass.shadow_params.write(frame_idx, &pass.params), &pass)
         });
+        let records = &frame.planet_tiles[..frame.planet_tiles.len().min(PLANET_TILE_RECORDS)];
         Some(GrassFrame {
             view: GrassPlacement::of(view_gva, &frame.view),
             shadow,
             bend_gva: grass.bend_params.write(frame_idx, &frame.bend.params),
             bend_dispatch: frame.bend.dispatch,
+            planet_tiles_gva: grass
+                .planet_tiles
+                .write_bytes(frame_idx, bytemuck::cast_slice(records)),
         })
     }
 
@@ -459,7 +515,7 @@ impl DxContext {
         self.place_blades(
             cmd,
             grass,
-            shadow,
+            (shadow, frame.planet_tiles_gva),
             (&grass.shadow_blades, &grass.shadow_args),
         );
     }
@@ -512,16 +568,21 @@ impl DxContext {
         let Some(grass) = &self.grass else {
             return;
         };
-        self.place_blades(cmd, grass, &frame.view, (&grass.blades, &grass.args));
+        self.place_blades(
+            cmd,
+            grass,
+            (&frame.view, frame.planet_tiles_gva),
+            (&grass.blades, &grass.args),
+        );
     }
 
-    // One run of the blade kernel for `placement`, appending to `blades` and
-    // filling `args`.
+    // One run of the blade kernel for `placement`, reading the planet tile
+    // records at `planet_tiles_gva`, appending to `blades` and filling `args`.
     fn place_blades(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         grass: &GrassResources,
-        placement: &GrassPlacement,
+        (placement, planet_tiles_gva): (&GrassPlacement, u64),
         (blades, args): (&ID3D12Resource, &ID3D12Resource),
     ) {
         let [x, y, z] = placement.dispatch;
@@ -536,6 +597,11 @@ impl DxContext {
             cmd.SetComputeRootShaderResourceView(3, com::gpu_va(&grass.heights));
             cmd.SetComputeRootShaderResourceView(4, com::gpu_va(&grass.masks));
             cmd.SetComputeRootShaderResourceView(KERNEL_BEND_PARAM, com::gpu_va(&grass.bend_field));
+            cmd.SetComputeRootShaderResourceView(KERNEL_PLANET_TILES_PARAM, planet_tiles_gva);
+            cmd.SetComputeRootShaderResourceView(
+                KERNEL_VERTICES_PARAM,
+                com::gpu_va(&self.scene.geometry.vertex_buffer),
+            );
             // The pyramid's descriptor lives in the shader-visible SRV heap.
             // Bound whenever it exists so the table always points at a live
             // descriptor; the block's `hiz_enabled` gates the reads.

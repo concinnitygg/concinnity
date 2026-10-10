@@ -49,6 +49,16 @@ impl GrassGroundBuffers {
         }
     }
 
+    /// The heights as the kernel binds them: never empty, since every backend
+    /// needs a buffer to bind even when no terrain grows grass.
+    pub fn bound_heights(&self) -> &[f32] {
+        if self.heights.is_empty() {
+            &[0.0]
+        } else {
+            &self.heights
+        }
+    }
+
     /// The mask words as the kernel binds them: never empty, since every
     /// backend needs a buffer to bind even when no layer is masked.
     pub fn bound_mask_words(&self) -> &[u32] {
@@ -270,5 +280,6 @@ mod tests {
         assert_eq!(GrassMask::packed_size(None), 0);
         assert_eq!(buffers.bound_mask_words(), &buffers.mask_words[..]);
         assert_eq!(GrassGroundBuffers::default().bound_mask_words(), &[0]);
+        assert_eq!(GrassGroundBuffers::default().bound_heights(), &[0.0]);
     }
 }

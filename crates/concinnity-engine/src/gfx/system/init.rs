@@ -1578,7 +1578,11 @@ impl GraphicsSystem {
         let cluster_count = instanced_clusters.len();
         let total_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
 
-        let fx = drain_world_fx(ctx, texture_count, &terrains);
+        let planet_grass = planet.as_ref().and_then(|p| {
+            crate::gfx::planet_grass::resolve(p, &crate::gfx::terrain::grass_by_id(ctx))
+        });
+        let planet_far_field = planet_grass.as_ref().and_then(|g| g.far_field());
+        let fx = drain_world_fx(ctx, texture_count, &terrains, planet_grass);
         self.grows_grass = fx.grass.is_some();
         let sdf_fields = if capture_sources {
             super::sdf_field_sources::SdfFieldMap::resolve(
@@ -1755,6 +1759,7 @@ impl GraphicsSystem {
             deferred_mesh_seeds: &deferred_mesh_seeds,
             voxel_world,
             planet,
+            planet_far_field,
             block_types: &block_types,
             material_map: &material_map,
         });

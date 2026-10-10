@@ -267,7 +267,13 @@ impl MtlContext {
         let grass = fx
             .grass
             .map(|field| {
-                super::grass::GrassState::build(&hw.device, field, features.hdr_samples, hot_reload)
+                super::grass::GrassState::build(
+                    &hw.device,
+                    field,
+                    features.hdr_samples,
+                    frames_in_flight,
+                    hot_reload,
+                )
             })
             .transpose()?;
         let sky = super::sky::SkyState::build(
