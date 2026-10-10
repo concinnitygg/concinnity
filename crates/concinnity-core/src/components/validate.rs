@@ -240,6 +240,7 @@ pub fn reflection_probe(mut args: ReflectionProbe) -> ReflectionProbe {
         *e = e.max(0.0);
     }
     args.capture_distance = args.capture_distance.map(|d| d.max(0.0));
+    args.blend_distance = args.blend_distance.map(|d| d.max(0.0));
     args
 }
 

@@ -36,7 +36,12 @@ pub(in crate::shader_layout) fn glass() -> Vec<Case> {
             fresnel_power,
             planar,
         })),
-        everywhere(mirror!(ProbeUniforms => "ProbeUniforms" { box_min, box_max, probe_pos, })),
+        everywhere(mirror!(ProbeUniforms => "ProbeUniforms" {
+            box_min,
+            box_max,
+            probe_pos,
+            blend_margin,
+        })),
         everywhere(mirror!(ProbeSet => "ProbeSet" {
             count,
             mip_count,

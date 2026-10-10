@@ -13,15 +13,12 @@
 // per record. Their lengths are whatever the host allocated; the shader reads
 // only the first `count`.
 
-// Fraction of a probe box's half-extent along each axis over which its blend
-// weight ramps from 0 to 1 across the box surface on that axis.
-static const float PROBE_BLEND_MARGIN = 0.2;
-
 struct ProbeUniforms
 {
-    float4 box_min;   // xyz = influence-box min, w = enabled
-    float4 box_max;   // xyz = influence-box max
-    float4 probe_pos; // xyz = capture position
+    float4 box_min;      // xyz = influence-box min, w = enabled
+    float4 box_max;      // xyz = influence-box max
+    float4 probe_pos;    // xyz = capture position
+    float4 blend_margin; // xyz = per-axis distance the weight fades over across the box surface
 };
 
 // Mirror of `uniforms::ProbeSet`: the live record count and each cube's mip

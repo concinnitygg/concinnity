@@ -4,16 +4,11 @@
 //! probe's prefiltered radiance, a cube per probe. Matches `shaders/probe_types.hlsl`.
 //! Nothing in a shader depends on how many probes the host allocated room for.
 
-/// Fraction of a probe box's half-extent along each axis its blend weight ramps
-/// over across the box surface on that axis, so the probe's influence reaches
-/// that far outside the box. Matches `PROBE_BLEND_MARGIN` in `shaders/probe_types.hlsl`.
-pub const PROBE_BLEND_MARGIN: f32 = 0.2;
-
 /// One reflection probe's parallax box. The specular IBL term box-projects the
 /// reflection vector against [box_min, box_max] (the probe's influence volume)
 /// and re-anchors the cube sample at the box hit relative to `probe_pos` (the
 /// capture point), so a static captured cube tracks a moving first-person
-/// camera. Three float4s keep every field 16-byte aligned. `box_min.w` is the
+/// camera. Four float4s keep every field 16-byte aligned. `box_min.w` is the
 /// enabled flag: 0 disables parallax (and signals no baked probe), so the shader
 /// samples the raw reflection vector.
 #[derive(Copy, Clone, bytemuck::Zeroable, bytemuck::Pod)]
@@ -25,15 +20,18 @@ pub struct ProbeUniforms {
     pub box_max: [f32; 4],
     /// xyz = probe capture position; w unused.
     pub probe_pos: [f32; 4],
+    /// xyz = distance along each axis the blend weight ramps over across the
+    /// box surface, so the probe's influence reaches that far outside the box;
+    /// w unused.
+    pub blend_margin: [f32; 4],
 }
 
 impl ProbeUniforms {
     /// The distance along each axis the probe's blend weight ramps over across
-    /// its influence box's surface, as the shaders ramp it.
+    /// its influence box's surface, as the shaders read it.
     pub fn blend_margin(&self) -> [f32; 3] {
-        core::array::from_fn(|i| {
-            (PROBE_BLEND_MARGIN * 0.5 * (self.box_max[i] - self.box_min[i])).max(1e-4)
-        })
+        let [x, y, z, _] = self.blend_margin;
+        [x, y, z]
     }
 
     /// The corners of everywhere the probe's blend weight can be non-zero: the
@@ -124,35 +122,28 @@ mod tests {
     use super::*;
     use core::mem::{offset_of, size_of};
 
-    // `ProbeUniforms` in `shaders/probe_types.hlsl`: three float4s, the element
+    // `ProbeUniforms` in `shaders/probe_types.hlsl`: four float4s, the element
     // stride of the probe record buffer on every target.
     #[test]
     fn probe_uniforms_layout_matches_the_shader() {
-        assert_eq!(size_of::<ProbeUniforms>(), 48);
+        assert_eq!(size_of::<ProbeUniforms>(), 64);
         assert_eq!(offset_of!(ProbeUniforms, box_min), 0);
         assert_eq!(offset_of!(ProbeUniforms, box_max), 16);
         assert_eq!(offset_of!(ProbeUniforms, probe_pos), 32);
-    }
-
-    // The shaders grow a box by the same margin the CPU bounds it with.
-    #[test]
-    fn the_blend_margin_matches_the_shader() {
-        let src = crate::render::shaders::PROBE_TYPES;
-        assert_eq!(
-            crate::render::shader_consts::float(src, "PROBE_BLEND_MARGIN"),
-            PROBE_BLEND_MARGIN
-        );
+        assert_eq!(offset_of!(ProbeUniforms, blend_margin), 48);
     }
 
     #[test]
-    fn influence_bounds_grow_each_axis_by_its_own_half_extent() {
+    fn influence_bounds_grow_each_axis_by_its_margin() {
         let probe = ProbeUniforms {
             box_min: [-4.0, 0.0, -10.0, 1.0],
             box_max: [4.0, 2.0, 10.0, 0.0],
             probe_pos: [0.0; 4],
+            blend_margin: [0.5, 0.25, 2.0, 0.0],
         };
+        assert_eq!(probe.blend_margin(), [0.5, 0.25, 2.0]);
         let (lo, hi) = probe.influence_bounds();
-        assert_eq!((lo, hi), ([-4.8, -0.2, -12.0], [4.8, 2.2, 12.0]));
+        assert_eq!((lo, hi), ([-4.5, -0.25, -12.0], [4.5, 2.25, 12.0]));
     }
 
     // `ProbeSet` in `shaders/probe_types.hlsl`: the count and the cube mip

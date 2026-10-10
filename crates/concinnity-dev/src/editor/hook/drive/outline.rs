@@ -551,6 +551,7 @@ mod tests {
                 position: [1.0, 2.0, 3.0],
                 half_extents: [2.0; 3],
                 capture_distance: Some(6.0),
+                blend_distance: None,
             },
         );
         let mut h = hook(vec![entry("probe", "ReflectionProbe")]);

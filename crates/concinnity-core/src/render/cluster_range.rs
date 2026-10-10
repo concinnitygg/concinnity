@@ -63,7 +63,6 @@ fn farthest_corner(p: [f32; 3], lo: [f32; 3], hi: [f32; 3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::uniforms::probe::PROBE_BLEND_MARGIN;
 
     fn light(position: [f32; 3], range: f32) -> GpuLight {
         GpuLight {
@@ -78,6 +77,7 @@ mod tests {
             box_min: [box_min[0], box_min[1], box_min[2], 1.0],
             box_max: [box_max[0], box_max[1], box_max[2], 0.0],
             probe_pos: [0.0; 4],
+            blend_margin: [1.0, 0.6, 1.2, 0.0],
         }
     }
 
@@ -103,7 +103,7 @@ mod tests {
     fn a_probe_reaches_its_farthest_grown_corner() {
         let reach = ClusterReach::default();
         let p = probe([10.0, -2.0, -6.0], [20.0, 4.0, 6.0]);
-        let margin = [5.0, 3.0, 6.0].map(|h| PROBE_BLEND_MARGIN * h);
+        let margin = p.blend_margin();
         let corner = [20.0 + margin[0], 4.0 + margin[1], 6.0 + margin[2]];
         let expected = length(corner);
         assert!(close(reach.range([0.0; 3], 0.05, &[p], None), expected));

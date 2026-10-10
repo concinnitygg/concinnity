@@ -40,6 +40,26 @@
 ///     position: [0.0, 1.5, 0.0],
 ///     half_extents: [3.0, 1.5, 3.0],
 ///     capture_distance: Some(10.0),
+///     ..Default::default()
+/// };
+/// ```
+///
+/// A probe's influence fades out across its box surface rather than stopping
+/// at it, reaching `blend_distance` past the box on every axis. By default
+/// that is a fifth of the box's smallest half-extent, which keeps a room's
+/// reflection from leaking far into the next room through a shared wall.
+/// Raise it where neighboring boxes meet in open space (two halves of a
+/// courtyard, a hall opening into a corridor) so the hand-off between them is
+/// a gradual cross-fade instead of a visible step.
+///
+/// ```rust
+/// # use concinnity_core::components::ReflectionProbe;
+/// // A long hall that cross-fades with its neighbors over 2 m.
+/// ReflectionProbe {
+///     position: [0.0, 1.7, 0.0],
+///     half_extents: [12.0, 3.0, 4.0],
+///     blend_distance: Some(2.0),
+///     ..Default::default()
 /// };
 /// ```
 #[derive(
@@ -69,6 +89,12 @@ pub struct ReflectionProbe {
     /// whole, never cut, and the sky shows wherever an object was left out.
     /// `null` (the default) captures without limit.
     pub capture_distance: Option<f32>,
+    /// How far past the influence box the probe's influence reaches, in
+    /// meters, the same on every axis. A surface fades from this probe's
+    /// reflection into its neighbors' over that distance either side of the box
+    /// surface. `null` (the default) is a fifth of the box's smallest
+    /// half-extent.
+    pub blend_distance: Option<f32>,
 }
 
 #[cfg(test)]
@@ -85,6 +111,24 @@ mod tests {
             crate::components::validate::reflection_probe(set).capture_distance,
             Some(12.5)
         );
+    }
+
+    #[test]
+    fn the_blend_distance_is_derived_from_the_box_unless_set() {
+        let bare: ReflectionProbe = crate::test_support::from_json("{}");
+        assert_eq!(bare.blend_distance, None);
+        let set: ReflectionProbe = crate::test_support::from_json(r#"{"blend_distance":1.5}"#);
+        assert_eq!(set.blend_distance, Some(1.5));
+    }
+
+    #[test]
+    fn a_negative_blend_distance_does_not_blend() {
+        let probe = ReflectionProbe {
+            blend_distance: Some(-2.0),
+            ..Default::default()
+        };
+        let probe = crate::components::validate::reflection_probe(probe);
+        assert_eq!(probe.blend_distance, Some(0.0));
     }
 
     #[test]

@@ -72,12 +72,42 @@ pub struct ProbePlacement {
     /// How far each cube face's capture reaches along its view axis. `None`
     /// captures without limit.
     pub capture_distance: Option<f32>,
+    /// Distance along each axis the probe's blend weight fades over across
+    /// the box surface.
+    pub blend_margin: [f32; 3],
+}
+
+/// Fraction of a box's half-extent a probe's blend margin spans when nothing
+/// sets it.
+const BLEND_MARGIN_FRACTION: f32 = 0.2;
+
+/// Floor of a blend margin, which keeps a zero margin from dividing by zero in
+/// the blend weight.
+const MIN_BLEND_MARGIN: f32 = 1e-4;
+
+/// A blend margin the same on every axis: `blend_distance`, or a fraction of
+/// the box's smallest half-extent, so a declared probe reaches only a little
+/// past its walls whichever way it is long.
+fn uniform_blend_margin(half_extents: [f32; 3], blend_distance: Option<f32>) -> [f32; 3] {
+    let smallest = half_extents[0].min(half_extents[1]).min(half_extents[2]);
+    let margin = blend_distance.unwrap_or(BLEND_MARGIN_FRACTION * smallest);
+    [margin.max(MIN_BLEND_MARGIN); 3]
+}
+
+/// A blend margin that scales with the box's extent along each axis, so a wide,
+/// shallow seeded cell fades across its width as gradually as a cube of that
+/// width would.
+fn per_axis_blend_margin(box_min: [f32; 3], box_max: [f32; 3]) -> [f32; 3] {
+    core::array::from_fn(|i| {
+        (BLEND_MARGIN_FRACTION * 0.5 * (box_max[i] - box_min[i])).max(MIN_BLEND_MARGIN)
+    })
 }
 
 impl From<&ReflectionProbe> for ProbePlacement {
     fn from(probe: &ReflectionProbe) -> ProbePlacement {
         ProbePlacement {
             capture_distance: probe.capture_distance,
+            blend_margin: uniform_blend_margin(probe.half_extents, probe.blend_distance),
             ..ProbePlacement::from_center_extents(probe.position, probe.half_extents)
         }
     }
@@ -85,34 +115,43 @@ impl From<&ReflectionProbe> for ProbePlacement {
 
 impl ProbePlacement {
     /// A placement captured from `position` without limit, whose box is
-    /// `position` plus or minus `half_extents`.
+    /// `position` plus or minus `half_extents`, blending as a declared probe
+    /// with no `blend_distance` does.
     pub fn from_center_extents(position: [f32; 3], half_extents: [f32; 3]) -> ProbePlacement {
         ProbePlacement {
             position,
-            box_min: [
-                position[0] - half_extents[0],
-                position[1] - half_extents[1],
-                position[2] - half_extents[2],
-            ],
-            box_max: [
-                position[0] + half_extents[0],
-                position[1] + half_extents[1],
-                position[2] + half_extents[2],
-            ],
+            box_min: core::array::from_fn(|i| position[i] - half_extents[i]),
+            box_max: core::array::from_fn(|i| position[i] + half_extents[i]),
             capture_distance: None,
+            blend_margin: uniform_blend_margin(half_extents, None),
+        }
+    }
+
+    /// An auto-seeded placement captured from `position` without limit over the
+    /// box `box_min..box_max`, blending over a margin per axis.
+    fn seeded(position: [f32; 3], box_min: [f32; 3], box_max: [f32; 3]) -> ProbePlacement {
+        ProbePlacement {
+            position,
+            box_min,
+            box_max,
+            capture_distance: None,
+            blend_margin: per_axis_blend_margin(box_min, box_max),
         }
     }
 
     /// The record the shaders read for this placement once its cube is baked:
-    /// the box with parallax enabled (`box_min.w = 1`) and the capture point.
+    /// the box with parallax enabled (`box_min.w = 1`), the capture point and
+    /// the blend margin.
     pub fn uniforms(&self) -> crate::render::uniforms::ProbeUniforms {
         let [x0, y0, z0] = self.box_min;
         let [x1, y1, z1] = self.box_max;
         let [px, py, pz] = self.position;
+        let [mx, my, mz] = self.blend_margin;
         crate::render::uniforms::ProbeUniforms {
             box_min: [x0, y0, z0, 1.0],
             box_max: [x1, y1, z1, 0.0],
             probe_pos: [px, py, pz, 0.0],
+            blend_margin: [mx, my, mz, 0.0],
         }
     }
 }
@@ -813,12 +852,7 @@ fn interior_probes_from_solid(
                     box_max[a] = box_max[a].max(c[a] + vs * 0.5);
                 }
             }
-            ProbePlacement {
-                position,
-                box_min,
-                box_max,
-                capture_distance: None,
-            }
+            ProbePlacement::seeded(position, box_min, box_max)
         })
         .collect()
 }
@@ -975,12 +1009,11 @@ fn seed_grid_probes(
             let z0 = lerp(aabb_min[2], aabb_max[2], iz as f32 / nz as f32);
             let z1 = lerp(aabb_min[2], aabb_max[2], (iz + 1) as f32 / nz as f32);
             let center = [(x0 + x1) * 0.5, y_eye, (z0 + z1) * 0.5];
-            out.push(ProbePlacement {
-                position: open_capture_point(center, x0, x1, z0, z1, occupancy),
-                box_min: [x0, aabb_min[1], z0],
-                box_max: [x1, aabb_max[1], z1],
-                capture_distance: None,
-            });
+            out.push(ProbePlacement::seeded(
+                open_capture_point(center, x0, x1, z0, z1, occupancy),
+                [x0, aabb_min[1], z0],
+                [x1, aabb_max[1], z1],
+            ));
         }
     }
     out
@@ -1182,6 +1215,51 @@ mod tests {
         assert_eq!(u.box_min, [-3.0, -3.0, -3.0, 1.0]);
         assert_eq!(u.box_max, [5.0, 7.0, 9.0, 0.0]);
         assert_eq!(u.probe_pos, [1.0, 2.0, 3.0, 0.0]);
+        assert_eq!(u.blend_margin, [0.8, 0.8, 0.8, 0.0]);
+    }
+
+    // A long room reaches as far past its end walls as past its side walls, so
+    // it does not leak into the room beyond either.
+    #[test]
+    fn a_declared_probe_blends_over_its_smallest_half_extent() {
+        let probe = ReflectionProbe {
+            position: [0.0; 3],
+            half_extents: [10.0, 1.5, 3.0],
+            ..Default::default()
+        };
+        let u = ProbePlacement::from(&probe).uniforms();
+        let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5);
+        assert!(near(u.blend_margin(), [0.3; 3]), "{:?}", u.blend_margin());
+        let (lo, hi) = u.influence_bounds();
+        assert!(near(lo, [-10.3, -1.8, -3.3]), "{lo:?}");
+        assert!(near(hi, [10.3, 1.8, 3.3]), "{hi:?}");
+    }
+
+    #[test]
+    fn a_declared_blend_distance_is_used_on_every_axis() {
+        let probe = ReflectionProbe {
+            position: [0.0; 3],
+            half_extents: [10.0, 1.5, 3.0],
+            blend_distance: Some(2.0),
+            ..Default::default()
+        };
+        let u = ProbePlacement::from(&probe).uniforms();
+        assert_eq!(u.blend_margin(), [2.0; 3]);
+        assert_eq!(
+            u.influence_bounds(),
+            ([-12.0, -3.5, -5.0], [12.0, 3.5, 5.0])
+        );
+    }
+
+    // A probe validated to no blend still divides by a positive margin.
+    #[test]
+    fn a_zero_blend_distance_keeps_a_positive_margin() {
+        let probe = ReflectionProbe {
+            blend_distance: Some(0.0),
+            ..Default::default()
+        };
+        let margin = ProbePlacement::from(&probe).blend_margin;
+        assert!(margin.iter().all(|&m| m > 0.0 && m <= 1e-3), "{margin:?}");
     }
 
     #[test]
@@ -1198,6 +1276,7 @@ mod tests {
             position: [1.0, 2.0, 3.0],
             half_extents: [4.0, 5.0, 6.0],
             capture_distance: Some(7.5),
+            blend_distance: None,
         };
         let p = ProbePlacement::from(&probe);
         assert_eq!(p.capture_distance, Some(7.5));
@@ -1348,6 +1427,29 @@ mod tests {
             let margin = p.uniforms().blend_margin();
             assert!(margin[0] >= 0.05 * width, "{margin:?} across {width}");
             assert!(margin[1] <= 0.5 * height, "{margin:?} over {height}");
+        }
+    }
+
+    #[test]
+    fn auto_seeded_probes_blend_over_each_axis_half_extent() {
+        let probes = auto_seed_probes([0.0, 0.0, 0.0], [96.0, 4.0, 12.0], &[]);
+        assert!(!probes.is_empty());
+        for p in &probes {
+            let u = p.uniforms();
+            let expected: [f32; 3] =
+                core::array::from_fn(|i| 0.2 * 0.5 * (p.box_max[i] - p.box_min[i]));
+            for (m, e) in u.blend_margin().iter().zip(expected) {
+                assert!(
+                    (m - e).abs() < 1e-5,
+                    "{:?} vs {expected:?}",
+                    u.blend_margin()
+                );
+            }
+            let (lo, hi) = u.influence_bounds();
+            for i in 0..3 {
+                assert_eq!(lo[i], p.box_min[i] - u.blend_margin()[i]);
+                assert_eq!(hi[i], p.box_max[i] + u.blend_margin()[i]);
+            }
         }
     }
 

@@ -13,7 +13,7 @@
 // (see concinnity-shader's `metal_bindings`).
 //
 // Layouts must match render_types.rs: ClusterParams (128 B), GpuLight (64 B)
-// and ProbeUniforms (48 B).
+// and ProbeUniforms (64 B).
 
 {CLUSTER_TYPES}
 
@@ -142,8 +142,7 @@ void light_cull_kernel(uint3 tid : SV_DispatchThreadID)
         {
             float3 box_min = probe_records[pj].box_min.xyz;
             float3 box_max = probe_records[pj].box_max.xyz;
-            float3 he = 0.5 * (box_max - box_min);
-            float3 margin = max(PROBE_BLEND_MARGIN * he, (float3)(1e-4));
+            float3 margin = probe_records[pj].blend_margin.xyz;
             if (all(box_min - margin <= probe_max) && all(box_max + margin >= probe_min))
             {
                 influence |= 1u << (pj - first);

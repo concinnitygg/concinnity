@@ -134,14 +134,12 @@ float3 sample_probe_radiance(uint i, ProbeUniforms probe, float3 world_pos, floa
 }
 
 // Blend weight of probe `i` at `world_pos`: 1 deep inside its influence box, 0.5
-// on the surface, 0 a margin outside. Each axis's margin scales with the box's
-// extent along it, so a wide, shallow box fades across its width as gradually
-// as a cube of that width would.
+// on the surface, 0 its per-axis blend margin outside.
 float probe_weight(uint i, float3 world_pos)
 {
     float3 c = 0.5 * (PROBE_RECORDS[i].box_min.xyz + PROBE_RECORDS[i].box_max.xyz);
     float3 he = 0.5 * (PROBE_RECORDS[i].box_max.xyz - PROBE_RECORDS[i].box_min.xyz);
-    float3 margin = max(PROBE_BLEND_MARGIN * he, (float3)(1e-4));
+    float3 margin = PROBE_RECORDS[i].blend_margin.xyz;
     // Signed distance to the box surface in margins: positive inside, negative out.
     float3 q = (abs(world_pos - c) - he) / margin;
     float sd = -(length(max(q, (float3)(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0));
