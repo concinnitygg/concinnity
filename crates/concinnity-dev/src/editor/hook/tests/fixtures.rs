@@ -218,6 +218,7 @@ pub(in crate::editor::hook) fn pick_world(
         view_distance: None,
         yaw: 0.0,
         pitch: 0.0,
+        up: [0.0, 1.0, 0.0],
         desired_move: [0.0; 3],
         jump_requested: false,
         interact_requested: false,

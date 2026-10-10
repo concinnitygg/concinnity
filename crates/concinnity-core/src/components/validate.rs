@@ -7,7 +7,7 @@
 
 use crate::components::{
     CameraTrackArgs, Decal, DirectionalLight, GlassPanel, Grass, InstancedProp, MAX_WATER_WAVES,
-    Material, ParticleEmitter, PointLight, Prop, RectAreaLight, ReflectionProbe, RigidBody,
+    Material, ParticleEmitter, Planet, PointLight, Prop, RectAreaLight, ReflectionProbe, RigidBody,
     SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, Terrain, VolumetricFog, VoxelChunk,
     WaterSurface, WaterWave, Wind,
 };
@@ -206,6 +206,26 @@ pub fn terrain(mut args: Terrain) -> Terrain {
     args.amplitude = finite_at_least(args.amplitude, 0.0, 0.0);
     args.elevation_min = finite_or(args.elevation_min, 0.0);
     args.elevation_max = finite_or(args.elevation_max, args.elevation_min);
+    args
+}
+
+/// Clamp a `Planet`'s authored values into their valid ranges.
+pub fn planet(mut args: Planet) -> Planet {
+    let defaults = Planet::default();
+    for (c, d) in args.center.iter_mut().zip(defaults.center) {
+        *c = finite_or(*c, d);
+    }
+    args.radius = finite_at_least(
+        args.radius,
+        crate::planet::MIN_PLANET_RADIUS,
+        defaults.radius,
+    );
+    args.amplitude = finite_at_least(args.amplitude, 0.0, 0.0).min(args.radius * 0.25);
+    args.feature_size = finite_at_least(args.feature_size, 1.0, defaults.feature_size);
+    args.octaves = args
+        .octaves
+        .clamp(crate::planet::MIN_OCTAVES, crate::planet::MAX_OCTAVES);
+    args.gravity = finite_at_least(args.gravity, 0.0, defaults.gravity);
     args
 }
 

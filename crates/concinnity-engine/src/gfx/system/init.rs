@@ -5,6 +5,7 @@ use concinnity_core::bake::font;
 use concinnity_core::bake::texture;
 use concinnity_core::components::DebugHud;
 use concinnity_core::components::KeyBinding;
+use concinnity_core::components::Planet;
 use concinnity_core::components::ShaderPrograms;
 use concinnity_core::components::SkeletonJoint;
 use concinnity_core::components::SkinnedMesh;
@@ -1404,6 +1405,9 @@ impl GraphicsSystem {
         // with none declared, no chunks stream. BlockTypes are drained here so
         // the runtime can resolve the VoxelWorld palette to chunk-mesh data.
         let voxel_world = ctx.drain::<VoxelWorld>().into_iter().next();
+        // A planet's terrain streams through the same chunk pool, so a world
+        // declares one or the other.
+        let planet = ctx.query::<Planet>().next().cloned();
         let block_types: std::collections::HashMap<AssetId, BlockType> = ctx
             .drain_with_ids::<BlockType>()
             .into_iter()
@@ -1640,9 +1644,14 @@ impl GraphicsSystem {
                 n_skinned: skinned_draw_objects.len(),
                 // Worst-case resident chunk count, so the GPU-cull buffers
                 // reserve a chunk record region (0 for a non-voxel world).
-                n_chunk_max: voxel_world
-                    .as_ref()
-                    .map_or(0, super::streaming::chunk_reserve_count),
+                n_chunk_max: voxel_world.as_ref().map_or_else(
+                    || {
+                        planet
+                            .as_ref()
+                            .map_or(0, |_| concinnity_core::planet::MAX_RESIDENT_TILES)
+                    },
+                    super::streaming::chunk_reserve_count,
+                ),
                 material_params,
             },
             // One entry per world Shader, indexed by ShaderHandle value;
@@ -1745,6 +1754,7 @@ impl GraphicsSystem {
             disk_backed: blob_disk_backed,
             deferred_mesh_seeds: &deferred_mesh_seeds,
             voxel_world,
+            planet,
             block_types: &block_types,
             material_map: &material_map,
         });

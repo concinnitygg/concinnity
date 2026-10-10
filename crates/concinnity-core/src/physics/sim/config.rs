@@ -6,6 +6,7 @@
 // the substep count changes, where a raw bias factor does not.
 
 use crate::physics::GRAVITY;
+use crate::physics::sim::math::{Vec3, vec3};
 
 /// Tuning for one simulation.
 ///
@@ -14,8 +15,12 @@ use crate::physics::GRAVITY;
 /// can set them explicitly.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SimConfig {
-    /// Downward acceleration in world units per second squared.
+    /// Acceleration due to gravity in world units per second squared: down,
+    /// or toward `gravity_center` when one is set.
     pub gravity: f32,
+    /// The point gravity pulls every body toward, from wherever it is, as a
+    /// planet does. `None` pulls straight down along `-Y`.
+    pub gravity_center: Option<[f32; 3]>,
     /// Velocity/position passes per step. More substeps buy stiffer stacks at
     /// a near-linear cost; below `1` the step does nothing.
     pub substeps: u32,
@@ -76,6 +81,7 @@ impl Default for SimConfig {
     fn default() -> Self {
         SimConfig {
             gravity: GRAVITY,
+            gravity_center: None,
             substeps: 4,
             contact_hertz: 30.0,
             contact_damping_ratio: 10.0,
@@ -97,6 +103,16 @@ impl Default for SimConfig {
 }
 
 impl SimConfig {
+    /// The acceleration gravity gives a body at `position`.
+    pub(crate) fn gravity_at(&self, position: Vec3) -> Vec3 {
+        match self.gravity_center {
+            Some(center) => {
+                (Vec3::from_array(center) - position).normalize_or(-Vec3::Y) * self.gravity
+            }
+            None => vec3(0.0, -self.gravity, 0.0),
+        }
+    }
+
     /// Substeps as a positive count, so a caller cannot configure a step that
     /// integrates nothing.
     pub(crate) fn substep_count(&self) -> u32 {

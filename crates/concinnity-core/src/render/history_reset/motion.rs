@@ -133,6 +133,11 @@ pub(super) struct MotionReference {
 }
 
 impl MotionReference {
+    /// The last step's travel turned into the frame the world moved to.
+    pub(super) fn rebase(&mut self, rebase: &crate::planet::Rebase) {
+        self.last.translation = rebase.apply_vector(self.last.translation);
+    }
+
     /// A camera that just took `step`, as if it were its ordinary motion.
     fn moving_like(step: &ViewStep) -> Self {
         let mut reference = Self::default();

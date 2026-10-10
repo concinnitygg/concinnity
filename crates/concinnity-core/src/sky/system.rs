@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::components::{SkyRotation, Transform};
 use crate::ecs::{Entity, MenuActive, PipelineContext, SimTiming, StepResult, System};
-use crate::sky::SkyOrientation;
+use crate::sky::{SkyFrame, SkyOrientation};
 
 const FULL_TURN_DEG: f32 = 360.0;
 
@@ -33,7 +33,10 @@ impl SkyRotationSystem {
 
     // Publish the current orientation and carry it onto every pivot entity.
     fn publish(&self, ctx: &mut PipelineContext) {
-        let sky = SkyOrientation::new(self.axis, self.angle_deg);
+        let mut sky = SkyOrientation::new(self.axis, self.angle_deg);
+        if let Some(frame) = ctx.resource::<SkyFrame>() {
+            sky = sky.in_frame(&frame.0);
+        }
         let rotation_deg = sky.euler_deg();
         for &pivot in &self.pivots {
             match ctx.get_mut::<Transform>(pivot) {

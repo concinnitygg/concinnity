@@ -18,6 +18,7 @@ use concinnity_core::render::decal;
 use concinnity_core::render::error;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights;
+use concinnity_core::render::lights::LightData;
 use concinnity_core::render::particles;
 use concinnity_core::render::probe_book::ProbeBook;
 use concinnity_core::render::render_graph;
@@ -117,6 +118,8 @@ pub(super) struct VkSpotShadow {
     // for the world's lifetime, so unlike the cascade UBO this needs no
     // per-frame copy. One descriptor set per slice binds its own range.
     pub(super) ubo: PooledBuffer,
+    // Bytes between two slices' uniforms in `ubo`.
+    pub(super) ubo_stride: u64,
 
     pub(super) sets: Vec<vk::DescriptorSet>,
     pub(super) _descriptor_pool: OwnedDescriptorPool,
@@ -1381,6 +1384,7 @@ impl VkContext {
             show,
             sky_rot,
             history_reset,
+            rebase,
             grass_benders,
         } = params;
         // Snapped for the passes recorded below (the wireframe pipeline
@@ -1392,8 +1396,14 @@ impl VkContext {
         self.state.view.view_distance = view_distance;
         self.state.view.sky_rot = sky_rot;
         self.apply_pending_rebuilds()?;
+        // A moved world's decals move with it whatever happens to history.
+        if let Some(rebase) = &rebase {
+            self.decal.set.rebase(rebase);
+        }
         if history_reset {
             self.reset_temporal_history();
+        } else if let Some(rebase) = rebase {
+            self.rebase_temporal_history(&rebase);
         }
 
         // Minimized window: the client area is 0x0. Vulkan rejects every
@@ -1720,6 +1730,35 @@ impl VkContext {
         self.fog.sun_dir = self.shadow.light_dir;
         self.fog.sun_color = lights::sun_color(&self.uniforms.light_uniforms);
         self.uniforms.light_dirty.mark_all();
+    }
+
+    // Move the local lights in place. The light SSBO, the area table and the
+    // spot projections are single host-visible buffers every in-flight frame
+    // reads, so the GPU is drained before they are rewritten; the cluster
+    // reach and the spot frusta are re-derived, and the light UBO ring is
+    // re-armed for the point array.
+    pub(crate) fn move_local_lights(
+        &mut self,
+        data: &LightData,
+        uniforms: &LightUniforms,
+    ) -> error::RenderResult<()> {
+        if data.lights.len() as i32 != self.uniforms.light_uniforms.num_local_lights
+            || data.spot_shadows.len() != self.spot_shadow.count() as usize
+        {
+            return Err(error::RenderError::Other(
+                "move_local_lights: the light count changed since init".into(),
+            ));
+        }
+        self.wait_idle();
+        super::draw::upload_static_records(&self.uniforms.local_light_buffer, &data.lights);
+        super::draw::upload_static_records(&self.area_light.buffer, &data.area_lights);
+        self.spot_shadow.rewrite(&data.spot_shadows);
+        self.uniforms.cluster_reach =
+            concinnity_core::render::cluster_range::ClusterReach::new(&data.lights);
+        self.uniforms.light_uniforms.point = uniforms.point;
+        self.uniforms.light_uniforms.num_point = uniforms.num_point;
+        self.uniforms.light_dirty.mark_all();
+        Ok(())
     }
 
     pub(crate) fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {

@@ -39,6 +39,12 @@ pub enum OpFailure {
         /// The chunk whose mesh add failed.
         coord: ChunkCoord,
     },
+    /// A planet tile's mesh add failed; the tile's tracking and draw slot
+    /// roll back, and the tile is built again if still wanted.
+    PlanetTileAdd {
+        /// The tile whose mesh add failed.
+        tile: crate::planet::TileId,
+    },
 }
 
 /// What one queue replay produced, for the simulation side.

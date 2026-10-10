@@ -54,10 +54,97 @@ pub fn view_matrix(position: [f32; 3], yaw: f32, pitch: f32) -> [[f32; 4]; 4] {
     ]
 }
 
+/// [`view_matrix`] with yaw turning about `up` and pitch measured from the
+/// plane square to it, rather than about and from `+Y`: the `+Y` camera
+/// tilted onto `up` along the shortest arc. A camera standing on a planet sees
+/// its horizon level this way wherever it stands.
+pub fn view_matrix_about(position: [f32; 3], yaw: f32, pitch: f32, up: [f32; 3]) -> [[f32; 4]; 4] {
+    let m = view_matrix([0.0; 3], yaw, pitch);
+    // The view's rows are the camera's right, up and back axes.
+    let row = |r: usize| [m[0][r], m[1][r], m[2][r]];
+    let [right, cam_up, back] = [0, 1, 2].map(|r| tilt_to_up(up, row(r)));
+    let axes = [right, cam_up, back];
+    let mut out = [[0.0; 4]; 4];
+    for (r, axis) in axes.iter().enumerate() {
+        for c in 0..3 {
+            out[c][r] = axis[c];
+        }
+        out[3][r] = -(axis[0] * position[0] + axis[1] * position[1] + axis[2] * position[2]);
+    }
+    out[3][3] = 1.0;
+    out
+}
+
+/// `v`, given in a frame whose up is `+Y`, turned into the frame whose up is
+/// `up` along the shortest arc between the two. A level direction stays
+/// level, and nothing turns about `up` itself.
+pub fn tilt_to_up(up: [f32; 3], v: [f32; 3]) -> [f32; 3] {
+    let u = normalize_or(up, 1e-7, [0.0, 1.0, 0.0]);
+    let c = u[1];
+    if c >= 1.0 {
+        return v;
+    }
+    if c <= -1.0 + 1e-6 {
+        return [v[0], -v[1], -v[2]];
+    }
+    // Rodrigues about k = Y x up = (u.z, 0, -u.x): v c + (k x v) + k (k.v) / (1 + c).
+    let (kx, kz) = (u[2], -u[0]);
+    let kv = kx * v[0] + kz * v[2];
+    let f = kv / (1.0 + c);
+    [
+        v[0] * c - kz * v[1] + kx * f,
+        v[1] * c + (kz * v[0] - kx * v[2]),
+        v[2] * c + kx * v[1] + kz * f,
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::math::vec3::dot;
+
+    fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
+        (0..3).all(|i| (a[i] - b[i]).abs() < tol)
+    }
+
+    // Tilting onto +Y is no tilt at all, so a level world's view is unchanged.
+    #[test]
+    fn the_view_about_plus_y_is_the_plain_view() {
+        let a = view_matrix([1.0, 2.0, 3.0], 0.7, -0.2);
+        let b = view_matrix_about([1.0, 2.0, 3.0], 0.7, -0.2, [0.0, 1.0, 0.0]);
+        for c in 0..4 {
+            for r in 0..4 {
+                assert!((a[c][r] - b[c][r]).abs() < 1e-6);
+            }
+        }
+    }
+
+    // The tilt lands +Y on `up` and keeps a direction square to it level.
+    #[test]
+    fn the_tilt_lands_plus_y_on_up() {
+        let up = normalize_or([0.02, 1.0, -0.01], 1e-7, [0.0; 3]);
+        assert!(close(tilt_to_up(up, [0.0, 1.0, 0.0]), up, 1e-6));
+        let level = tilt_to_up(up, [0.0, 0.0, -1.0]);
+        assert!(dot(level, up).abs() < 1e-6);
+        assert!((dot(level, level) - 1.0).abs() < 1e-6);
+    }
+
+    // A camera with zero pitch looks square to its own up, and its view's up
+    // row is that up.
+    #[test]
+    fn a_level_camera_about_a_tilted_up_looks_square_to_it() {
+        let up = normalize_or([0.1, 1.0, 0.05], 1e-7, [0.0; 3]);
+        let m = view_matrix_about([5.0, 0.0, -2.0], 1.1, 0.0, up);
+        let back = [m[0][2], m[1][2], m[2][2]];
+        let view_up = [m[0][1], m[1][1], m[2][1]];
+        assert!(dot(back, up).abs() < 1e-6);
+        assert!(close(view_up, up, 1e-6));
+        // The eye maps to the view's origin.
+        let p = [5.0, 0.0, -2.0];
+        let eye: [f32; 3] =
+            core::array::from_fn(|r| m[0][r] * p[0] + m[1][r] * p[1] + m[2][r] * p[2] + m[3][r]);
+        assert!(close(eye, [0.0; 3], 1e-5), "{eye:?}");
+    }
 
     #[test]
     fn view_matrix_at_origin_with_zero_angles_is_identity() {

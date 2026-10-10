@@ -38,6 +38,8 @@ mod fanout;
 mod handle;
 // The sorted lookup containers the driver's indices are kept in.
 mod index;
+// Bodies held where they are while a planet's ground patch is elsewhere.
+mod held;
 // Prev/curr pose snapshots blended by the frame's accumulator alpha.
 mod interp;
 // The constraints two bodies can be tied together by, and their motors.

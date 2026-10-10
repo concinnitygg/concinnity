@@ -9,7 +9,8 @@ mod scalar;
 pub mod vec3;
 
 pub use rotation::{
-    Quat, euler_yxz_deg_from_quat, quat_from_axis_angle, quat_from_euler_yxz_deg, quat_normalize,
+    Quat, euler_yxz_deg_from_quat, quat_from_axis_angle, quat_from_euler_yxz_deg, quat_mul,
+    quat_normalize, quat_rotate,
 };
 
 pub use scalar::{

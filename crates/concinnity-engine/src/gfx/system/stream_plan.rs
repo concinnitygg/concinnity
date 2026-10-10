@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use concinnity_core::components::{BlockType, StreamingConfig, VoxelWorld};
+use concinnity_core::components::{BlockType, Planet, StreamingConfig, VoxelWorld};
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{MaterialHandle, PayloadLocator};
 use concinnity_core::gfx::mesh_payload::Vertex;
@@ -114,6 +114,7 @@ pub(super) struct StreamingSetup<'a> {
     pub(super) disk_backed: bool,
     pub(super) deferred_mesh_seeds: &'a HashMap<usize, DeferredMeshSeed>,
     pub(super) voxel_world: Option<VoxelWorld>,
+    pub(super) planet: Option<Planet>,
     pub(super) block_types: &'a HashMap<AssetId, BlockType>,
     pub(super) material_map: &'a HashMap<MaterialHandle, MaterialEntry>,
 }
@@ -130,6 +131,7 @@ impl GraphicsSystem {
             disk_backed,
             deferred_mesh_seeds,
             voxel_world,
+            planet,
             block_types,
             material_map,
         } = setup;
@@ -170,7 +172,15 @@ impl GraphicsSystem {
                 deferred_payloads,
             },
         );
-        self.setup_voxel_world_streaming(voxel_world, block_types, material_map);
+        match (voxel_world, planet) {
+            (Some(_), Some(_)) => tracing::error!(
+                "GraphicsSystem: a world streams a VoxelWorld or a Planet, not both; the Planet is not drawn"
+            ),
+            (None, Some(planet)) => self.setup_planet_streaming(&planet, material_map),
+            (voxel_world, None) => {
+                self.setup_voxel_world_streaming(voxel_world, block_types, material_map)
+            }
+        }
     }
 }
 

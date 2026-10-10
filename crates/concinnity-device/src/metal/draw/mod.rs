@@ -74,6 +74,7 @@ impl MtlContext {
             show,
             sky_rot,
             history_reset,
+            rebase,
             grass_benders,
         } = params;
         let mtm = objc2::MainThreadMarker::new().ok_or_else(|| {
@@ -86,8 +87,14 @@ impl MtlContext {
         self.state.view.view_distance = view_distance;
         self.state.view.sky_rot = sky_rot;
         self.apply_pending_rebuilds()?;
+        // A moved world's decals move with it whatever happens to history.
+        if let Some(rebase) = &rebase {
+            self.decal.set.rebase(rebase);
+        }
         if history_reset {
             self.reset_temporal_history();
+        } else if let Some(rebase) = rebase {
+            self.rebase_temporal_history(&rebase);
         }
 
         let pass_timing_slot = self.begin_frame_stats();

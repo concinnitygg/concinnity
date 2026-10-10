@@ -3,6 +3,7 @@
 
 use ash::vk;
 use concinnity_core::components;
+use concinnity_core::planet::Rebase;
 use concinnity_core::profile;
 use concinnity_core::profile::PassTiming;
 use concinnity_core::render::error::RenderResult;
@@ -393,6 +394,18 @@ impl VkContext {
         if let Some(upscaler) = &self.upscale {
             upscaler.request_history_reset();
         }
+    }
+
+    // Carry the temporal history into the frame the world moved to: the
+    // camera half of the motion history, the view-projection the occlusion
+    // test reprojects last frame's pyramid through, and the per-object
+    // transforms, which are distrusted for one frame.
+    pub(in crate::vulkan) fn rebase_temporal_history(&mut self, rebase: &Rebase) {
+        if let Some(gb) = &mut self.gbuffer {
+            gb.view_history.rebase(rebase);
+        }
+        self.cull.hiz_prev_view_proj = rebase.reproject(self.cull.hiz_prev_view_proj);
+        self.state.model_history.get_mut().forget();
     }
 
     // History the next frame reads: TAA jitter and ring, G-buffer VP, Hi-Z VP and validity.

@@ -476,6 +476,7 @@ mod tests {
             position: [1.0, 2.0, 3.0],
             yaw: 0.5,
             pitch: -0.2,
+            up: [0.0, 1.0, 0.0],
             desired_move: [0.0; 3],
             jump_requested: false,
             interact_requested: false,

@@ -19,6 +19,9 @@ use concinnity_core::render::scene_residency;
 use super::stream_sources::{block_type_to_chunk, build_texture_payload_source};
 use super::*;
 use crate::gfx::material_entry::MaterialEntry;
+use crate::gfx::streaming::planet::{PlanetTiles, TileMaterial, tile_mesh_size};
+use concinnity_core::components::Planet;
+use concinnity_core::planet::{LocalFrame, MAX_RESIDENT_TILES, PlanetFrame};
 
 // Default fractions of the GPU's reported memory each streaming pool may hold
 // resident when a world sets no explicit byte budget. The remainder is left for
@@ -396,6 +399,7 @@ impl GraphicsSystem {
             mesh_streamer: self.mesh_streamer.take(),
             mesh_stream_draw_indices: std::mem::take(&mut self.mesh_stream_draw_indices),
             chunk_stream: self.chunk_stream.take(),
+            planet_tiles: self.planet_tiles.take(),
             shader_warmup: self.shader_warmup.take(),
             scene_residency,
             frame_count: 0,
@@ -688,6 +692,58 @@ impl GraphicsSystem {
             normal_map_slot,
             material,
         });
+    }
+}
+
+impl GraphicsSystem {
+    // Stand up a planet's terrain streaming: grow the GPU buffers by a chunk
+    // headroom holding the most tiles a planet keeps resident, resolve the
+    // planet's material, and start the tile workers.
+    pub(super) fn setup_planet_streaming(
+        &mut self,
+        planet: &Planet,
+        material_map: &std::collections::HashMap<MaterialHandle, MaterialEntry>,
+    ) {
+        let entry = planet
+            .material
+            .and_then(|id| material_map.get(&id).copied());
+        let material = match entry {
+            Some(entry) => TileMaterial {
+                texture_slot: entry.albedo_slot,
+                normal_map_slot: entry.normal_map_slot,
+                material: entry.uniforms,
+            },
+            None => TileMaterial {
+                texture_slot: 0,
+                normal_map_slot: render_types::NO_NORMAL_MAP_SLOT,
+                material: render_types::MaterialUniforms::DEFAULT,
+            },
+        };
+        let (vertices, indices) = tile_mesh_size();
+        let tiles = MAX_RESIDENT_TILES as u64;
+        let vertex_bytes = tiles * (vertices * std::mem::size_of::<Vertex>()) as u64;
+        let index_bytes = tiles * (indices * std::mem::size_of::<u32>()) as u64;
+        let setup = match self.backend.as_deref_mut() {
+            Some(backend) => {
+                backend.setup_chunk_streaming(vertex_bytes as usize, index_bytes as usize)
+            }
+            None => return,
+        };
+        if let Err(e) = setup {
+            tracing::error!("GraphicsSystem: Planet terrain streaming: {e}");
+            return;
+        }
+        let frame = PlanetFrame {
+            shape: planet.shape(),
+            frame: LocalFrame::AUTHORED,
+        };
+        tracing::info!(
+            "GraphicsSystem: Planet terrain streaming enabled (radius {} m, up to {} tiles, {} KiB headroom)",
+            planet.radius,
+            MAX_RESIDENT_TILES,
+            (vertex_bytes + index_bytes) / 1024,
+        );
+        self.planet_tiles = Some(PlanetTiles::new(&frame, material));
     }
 }
 

@@ -7,6 +7,7 @@
 // Transform write boundary).
 
 use crate::math::vec3::lerp;
+use crate::planet::Rebase;
 use crate::transform::quat_slerp;
 
 // A position with prev/curr tick snapshots.
@@ -43,6 +44,13 @@ impl PointInterp {
 
     pub(crate) fn sample(&self, alpha: f32) -> [f32; 3] {
         lerp(self.prev, self.curr, alpha)
+    }
+
+    // Both snapshots carried into another frame, so the blend between them
+    // does not see the move.
+    pub(crate) fn rebase(&mut self, rebase: &Rebase) {
+        self.prev = rebase.apply_point(self.prev);
+        self.curr = rebase.apply_point(self.curr);
     }
 }
 
@@ -84,6 +92,13 @@ impl PoseInterp {
             quat_slerp(self.prev.1, self.curr.1, alpha),
         )
     }
+
+    // Both snapshots carried into another frame.
+    pub(crate) fn rebase(&mut self, rebase: &Rebase) {
+        for pose in [&mut self.prev, &mut self.curr] {
+            *pose = (rebase.apply_point(pose.0), rebase.apply_rotation(pose.1));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -101,6 +116,31 @@ mod tests {
         for axis in 0..3 {
             assert!((a[axis] - b[axis]).abs() < 1.0e-4, "{a:?} != {b:?}");
         }
+    }
+
+    // A rebased blend samples the rebased poses: the move is not motion.
+    #[test]
+    fn a_rebased_blend_samples_the_carried_poses() {
+        let r = Rebase {
+            rotation: quat_y(30.0),
+            translation: [5.0, -1.0, 2.0],
+        };
+        let mut p = PointInterp::new([1.0, 0.0, 0.0]);
+        p.push([2.0, 0.0, 0.0]);
+        let before = p.sample(0.5);
+        p.rebase(&r);
+        assert_close3(p.sample(0.5), r.apply_point(before));
+        let mut pose = PoseInterp::new([1.0, 0.0, 0.0], IDENTITY);
+        pose.push([3.0, 0.0, 0.0], quat_y(20.0));
+        let (pos, rot) = pose.sample(0.5);
+        pose.rebase(&r);
+        let (moved_pos, moved_rot) = pose.sample(0.5);
+        assert_close3(moved_pos, r.apply_point(pos));
+        let probe = [0.0, 0.0, 1.0];
+        assert_close3(
+            crate::math::quat_rotate(moved_rot, probe),
+            r.apply_vector(crate::math::quat_rotate(rot, probe)),
+        );
     }
 
     #[test]

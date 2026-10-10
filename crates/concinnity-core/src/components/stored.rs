@@ -41,6 +41,7 @@ pub use super::model::{Model, SubMeshRef};
 pub use super::particle_emitter::ParticleEmitter;
 pub use super::physics_config::PhysicsConfig;
 pub use super::physics_joint::{PhysicsJoint, PhysicsJointKind};
+pub use super::planet::Planet;
 pub use super::point_light::PointLight;
 pub use super::post_process_config::{
     AaMode, IndirectLighting, PassResolution, PostProcessConfig, UpscaleQuality, UpscalerBackend,

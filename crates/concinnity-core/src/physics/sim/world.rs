@@ -809,6 +809,86 @@ impl Simulation {
         true
     }
 
+    /// Pull every body toward `center` from wherever it is, as a planet does,
+    /// or straight down along `-Y` with `None`. The strength stays the
+    /// configured `gravity`.
+    pub fn set_gravity_center(&mut self, center: Option<[f32; 3]>) {
+        self.config.gravity_center = center;
+    }
+
+    /// Carry every body into another frame: each position becomes
+    /// `rotation * position + translation`, and orientations, velocities and
+    /// drive targets turn with it. Nothing moves relative to anything else,
+    /// so the step after behaves as if nothing had happened; a sleeping body
+    /// stays asleep.
+    ///
+    /// Height grids cannot turn: they keep their place, and the caller
+    /// replaces them ([`Simulation::replace_heightfield`]) with grids built in
+    /// the new frame.
+    pub fn rebase(&mut self, rotation: [f32; 4], translation: [f32; 3]) {
+        let q = Quat::from_xyzw(rotation).normalize();
+        let t = Vec3::from_array(translation);
+        let center = self.config.gravity_center;
+        let margin = self.config.bounds_margin;
+        let Simulation {
+            bodies, broadphase, ..
+        } = self;
+        for (handle, body) in bodies.iter_mut() {
+            if body.convex().is_none() {
+                continue;
+            }
+            body.position = q.rotate(body.position) + t;
+            body.orientation = q.mul(body.orientation).normalize();
+            body.linear_velocity = q.rotate(body.linear_velocity);
+            body.angular_velocity = q.rotate(body.angular_velocity);
+            body.kinematic_target = body.kinematic_target.map(|k| q.rotate(k) + t);
+            body.bounds = body.tight_bounds().expanded(margin);
+            broadphase.set_proxy(handle.index() as u32, proxy_for(body));
+        }
+        self.config.gravity_center = center.map(|c| (q.rotate(Vec3::from_array(c)) + t).to_array());
+    }
+
+    /// Put a new height grid in place of the one `handle` stands for, at
+    /// `pos`: the same body, so whatever it was configured with stays.
+    /// Returns whether `handle` named a height grid and the new one is valid.
+    ///
+    /// Whatever rested on the old grid is woken to settle on the new one.
+    pub fn replace_heightfield(
+        &mut self,
+        handle: BodyHandle,
+        rows: usize,
+        cols: usize,
+        heights: Vec<f32>,
+        scale: [f32; 3],
+        pos: [f32; 3],
+    ) -> bool {
+        let margin = self.config.bounds_margin;
+        let Some(index) = self
+            .bodies
+            .get(pool_handle(handle))
+            .and_then(Body::terrain_index)
+        else {
+            return false;
+        };
+        let origin = Vec3::from_array(pos);
+        let Some(field) = Heightfield::new(rows, cols, heights, Vec3::from_array(scale), origin)
+        else {
+            return false;
+        };
+        let bounds = field.bounds();
+        self.fields.replace(index, field);
+        let Some(body) = self.bodies.get_mut(pool_handle(handle)) else {
+            return false;
+        };
+        *body = Body::terrain(index, bounds, origin, body.friction, body.mask);
+        body.refresh_bounds(margin);
+        let proxy = proxy_for(body);
+        let slot = handle.index();
+        self.broadphase.set_proxy(slot, proxy);
+        self.disturb(slot);
+        true
+    }
+
     /// Switch a body to position-driven control, keeping its handle and the
     /// mass it was authored with. Returns whether the handle named a live
     /// body.

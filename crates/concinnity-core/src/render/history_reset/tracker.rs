@@ -102,6 +102,16 @@ impl HistoryResetTracker {
         self.requested = self.requested.union(causes);
     }
 
+    /// Carry the previous frame's view, and the motion learned from it, into
+    /// the frame the world moved to, so the move is not taken for a jump.
+    pub fn rebase(&mut self, rebase: &crate::planet::Rebase) {
+        if let Some(prev) = self.prev.as_mut() {
+            prev.position = rebase.apply_point(prev.position);
+            prev.view = rebase.reproject(prev.view);
+        }
+        self.motion.rebase(rebase);
+    }
+
     /// A frame that decided `causes` was dropped before it drew: apply them
     /// to the next observed frame as they are.
     pub fn reissue(&mut self, causes: HistoryResetCauses) {
@@ -382,6 +392,30 @@ mod tests {
             (Pose::at([50.0, 0.0, 0.0]), ran(dt)),
         ]);
         assert_eq!(causes, [1]);
+    }
+
+    // A walker whose frame moves to it between two frames is not a jump,
+    // while the same move unannounced is.
+    #[test]
+    fn a_frame_rebase_is_not_a_cut() {
+        use crate::planet::Rebase;
+        let dt = 1.0 / 60.0;
+        let rebase = Rebase {
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            translation: [-1_000.0, 0.0, 0.0],
+        };
+        let walk = |x: f32| Pose::at([x, 1.7, 0.0]).view();
+        let mut told = HistoryResetTracker::default();
+        let mut untold = HistoryResetTracker::default();
+        for i in 0..30 {
+            let v = walk(1_000.0 - 3.0 + i as f32 * 0.05);
+            told.observe(v, ran(dt));
+            untold.observe(v, ran(dt));
+        }
+        told.rebase(&rebase);
+        let after = walk(30.0 * 0.05 - 3.0);
+        assert!(!told.observe(after, ran(dt)).any());
+        assert!(untold.observe(after, ran(dt)).contains(CUT));
     }
 
     #[test]

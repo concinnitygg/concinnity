@@ -48,6 +48,20 @@ impl SkyOrientation {
         }
     }
 
+    /// The same sky seen from a frame turned away from the one it was
+    /// authored in: `frame` is the column-major rotation taking an authored
+    /// direction into that frame.
+    #[must_use]
+    pub fn in_frame(self, frame: &[[f32; 3]; 3]) -> Self {
+        let r = &self.rotation;
+        let rotation = core::array::from_fn(|col| {
+            core::array::from_fn(|row| {
+                frame[0][row] * r[col][0] + frame[1][row] * r[col][1] + frame[2][row] * r[col][2]
+            })
+        });
+        Self { rotation, ..self }
+    }
+
     /// `dir` carried by the sky's rotation: an authored direction in the baked
     /// frame, answered in world space.
     pub fn rotate(&self, dir: [f32; 3]) -> [f32; 3] {
@@ -97,6 +111,19 @@ mod tests {
         // Partway up on the first quarter turn, never below the horizon.
         let quarter = SkyOrientation::new(axis, 45.0).rotate(body);
         assert!(quarter[1] > 0.0 && quarter[2] > 0.0, "{quarter:?}");
+    }
+
+    // A sky seen from a turned frame carries a direction into the sky and
+    // then into the frame.
+    #[test]
+    fn a_framed_sky_turns_with_the_frame() {
+        let sky = SkyOrientation::new([1.0, 0.0, 0.0], 30.0);
+        let q = crate::math::quat_from_axis_angle([0.0, 0.3, 1.0], 0.4);
+        let frame = quat_to_mat3(q);
+        let d = [0.2, 0.9, -0.3];
+        let expected = crate::math::quat_rotate(q, sky.rotate(d));
+        assert!(close(sky.in_frame(&frame).rotate(d), expected));
+        assert_eq!(sky.in_frame(&frame).angle_deg, 30.0);
     }
 
     // The shader rows undo the rotation, so a direction carried by the sky and

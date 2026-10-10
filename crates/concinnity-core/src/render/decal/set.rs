@@ -148,6 +148,19 @@ impl DecalSet {
         Ok(())
     }
 
+    /// Carry every live decal into the frame `rebase` moves the world to,
+    /// keeping its id; each slot is re-uploaded for every frame in flight.
+    pub fn rebase(&mut self, rebase: &crate::planet::Rebase) {
+        let frames = self.frames;
+        for slot in self.slots.iter_mut().flatten() {
+            let mut record = slot.record;
+            record.model = rebase.apply_matrix(record.model);
+            record.inv_model =
+                crate::transform::mat4_mul(record.inv_model, rebase.inverse_matrix());
+            *slot = Slot::new(record, frames);
+        }
+    }
+
     /// Whether no slot is live, so the pass can be skipped outright.
     pub fn is_empty(&self) -> bool {
         self.live == 0
@@ -204,6 +217,43 @@ impl VisibleDecal<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A frame move carries every live decal's box and its inverse to where
+    // the move says, keeps ids and tombstones, and re-arms the uploads.
+    #[test]
+    fn a_frame_move_carries_every_live_decal() {
+        use crate::planet::Rebase;
+        let rebase = Rebase {
+            rotation: crate::math::quat_from_axis_angle([1.0, 0.0, 0.0], 0.02),
+            translation: [-1_000.0, 5.0, 3.0],
+        };
+        let mut set = DecalSet::new(4, 2);
+        let a = set.insert(record_at([1_002.0, 0.0, -1.0])).unwrap();
+        let gone = set.insert(record_at([0.0; 3])).unwrap();
+        set.remove(gone).unwrap();
+        let uploaded = &set.slots[a].as_ref().unwrap().dirty;
+        let mut d = uploaded.get();
+        d.take(0);
+        uploaded.set(d);
+        set.rebase(&rebase);
+
+        let slot = set.slots[a].as_ref().unwrap();
+        let corner = |m: crate::transform::Mat4, p: [f32; 3]| -> [f32; 3] {
+            core::array::from_fn(|i| m[0][i] * p[0] + m[1][i] * p[1] + m[2][i] * p[2] + m[3][i])
+        };
+        let moved = corner(slot.record.model, [0.5, 0.5, 0.5]);
+        let expected = rebase.apply_point([1_002.5, 0.5, -0.5]);
+        assert!(
+            (0..3).all(|i| (moved[i] - expected[i]).abs() < 1e-3),
+            "{moved:?}"
+        );
+        let back = corner(slot.record.inv_model, moved);
+        assert!((0..3).all(|i| (back[i] - 0.5).abs() < 1e-3), "{back:?}");
+        assert_eq!(slot.params.model, slot.record.model);
+        assert!(set.slots[gone].is_none(), "a tombstone stays a tombstone");
+        let mut dirty = slot.dirty.get();
+        assert!(dirty.take(0), "re-uploaded");
+    }
     use crate::render::decal::decal_model_matrix;
     use crate::render::decal::invert_decal_model;
 

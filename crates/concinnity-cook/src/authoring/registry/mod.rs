@@ -1257,6 +1257,7 @@ mod tests {
                 "EngineDefaults",
                 "SkyRotation",
                 "Wind",
+                "Planet",
             ]
         );
         assert_eq!(
@@ -1278,6 +1279,7 @@ mod tests {
                 "TextInput",
                 "LoadingOverlay",
                 "Terrain",
+                "Planet",
                 // The build-only group sorts after the stored one, and the
                 // resource group after that.
                 "MainMenu",

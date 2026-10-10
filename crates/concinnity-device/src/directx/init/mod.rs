@@ -45,7 +45,7 @@ pub(in crate::directx) mod pipelines;
 mod ray_tracing;
 mod scene_assets;
 mod scene_data;
-mod shadow;
+pub(super) mod shadow;
 mod targets;
 mod text;
 

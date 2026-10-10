@@ -34,6 +34,9 @@
 //!     events (the mailbox deposit happens in Graphics' step).
 //!   * LoadingOverlay after Streaming (reads the residency status published
 //!     this tick) and before UiInput (its screen commands apply same tick).
+//!   * Planet after Graphics, before Physics and the camera controllers: a
+//!     move of a planet world's simulated frame lands between a drawn frame
+//!     and the next tick, so everything after it works in the new frame.
 //!   * Physics before the camera controllers: physics consumes the camera's
 //!     previous-frame `desired_move` (a one-frame-lagged resolution).
 //!   * CameraTrack after Physics, before Audio: it sits where the input
@@ -143,6 +146,13 @@ crate::define_systems! {
         phase: Late,
         after: [StreamingSystem],
         before: [UiInputSystem],
+    },
+    PlanetSystem => crate::planet::PlanetSystem {
+        gate: schedule::planet,
+        present_when: "the world declares a Planet",
+        phase: Late,
+        after: [GraphicsSystem],
+        before: [PhysicsSystem, Camera3DSystem, ThirdPersonSystem, CameraTrackSystem],
     },
     PhysicsSystem => concinnity_core::physics::PhysicsSystem {
         gate: schedule::physics,

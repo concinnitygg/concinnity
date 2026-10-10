@@ -317,6 +317,14 @@ impl Heightfields {
         (self.fields.len() - 1) as u32
     }
 
+    /// Put `field` in place of the grid at `index`, which the body naming it
+    /// keeps naming. An index past the stored grids is ignored.
+    pub(crate) fn replace(&mut self, index: u32, field: Heightfield) {
+        if let Some(slot) = self.fields.get_mut(index as usize) {
+            *slot = field;
+        }
+    }
+
     pub(crate) fn get(&self, index: u32) -> Option<&Heightfield> {
         self.fields.get(index as usize)
     }

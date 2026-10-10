@@ -130,6 +130,9 @@ pub(crate) struct GraphicsSystem {
     // and evictions are applied to the right draw. Empty when not streaming.
     mesh_stream_draw_indices: Vec<DrawIndex>,
     chunk_stream: Option<crate::gfx::streaming::system::ChunkStreamState>,
+    // A planet's streamed terrain, built at init and handed to the streaming
+    // state like `chunk_stream`.
+    planet_tiles: Option<crate::gfx::streaming::planet::PlanetTiles>,
     // Shader buckets whose pipeline init deferred, with the payload source the
     // pump reads when their scene pins. Init scratch like the pools above.
     shader_warmup: Option<crate::gfx::streaming::shader::ShaderWarmup>,
@@ -151,9 +154,13 @@ pub(crate) struct GraphicsSystem {
     // (`propagation::propagate_transforms_cached`): buffers are refilled in place
     // and the pass is skipped on frames where no Transform / Parent changed.
     transform_cache: propagation::TransformCache,
-    // The sky angle the directional-light set was last carried at. `None` until
-    // the first frame, so a world whose sky never turns carries it exactly once.
-    pushed_sky_angle: Option<f32>,
+    // The sky rotation the directional-light set was last carried at. `None`
+    // until the first frame, so a world whose sky never turns carries it
+    // exactly once.
+    pushed_sky_rows: Option<[[f32; 4]; 3]>,
+    // How far the frame extraction has caught up with the moves of a planet
+    // world's simulated frame.
+    rebases: concinnity_core::planet::RebaseCursor,
     // The previous frame's view, which decides whether this frame's temporal
     // history is still valid.
     history_reset: HistoryResetTracker,
@@ -247,13 +254,15 @@ impl GraphicsSystem {
             mesh_streamer: None,
             mesh_stream_draw_indices: Vec::new(),
             chunk_stream: None,
+            planet_tiles: None,
             shader_warmup: None,
             deferred_shader_scenes: Vec::new(),
             clip_rects: overlay_maps::ClipRects::new(),
             // All-capable until the backend reports otherwise at init.
             caps: backend::DeviceCapabilities::ALL,
             transform_cache: propagation::TransformCache::default(),
-            pushed_sky_angle: None,
+            pushed_sky_rows: None,
+            rebases: concinnity_core::planet::RebaseCursor::default(),
             history_reset: HistoryResetTracker::default(),
             model_push: model_push::ModelPushCache::default(),
             skinned_model_push: model_push::ModelPushCache::default(),

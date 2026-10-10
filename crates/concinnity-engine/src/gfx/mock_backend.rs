@@ -99,6 +99,7 @@ pub(crate) enum Call {
         view_mode: view_modes::ViewMode,
         show: view_modes::ShowFlags,
         history_reset: bool,
+        rebase: Option<concinnity_core::planet::Rebase>,
     },
     UpdateView([[f32; 4]; 4]),
     UpdateModel(DrawIndex),
@@ -442,6 +443,7 @@ impl RenderBackend for MockBackend {
             view_mode: params.view_mode,
             show: params.show,
             history_reset: params.history_reset,
+            rebase: params.rebase,
         });
         if !s.draw_duration.is_zero() {
             std::thread::sleep(s.draw_duration);

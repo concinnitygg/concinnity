@@ -140,6 +140,10 @@ fn streaming(call: &Call, _: Args) -> Reply {
         "texture": pool(pools.texture, pools.texture_bytes),
         "mesh": pool(pools.mesh, pools.mesh_bytes),
         "chunk": chunk_pool(pools.chunk, pools.chunk_bytes),
+        "planet": pools.planet.map(|(resident, pending)| json!({
+            "resident": resident,
+            "pending": pending,
+        })),
         "pressure": s.streaming_pressure,
     }))
 }
@@ -413,6 +417,7 @@ mod tests {
         let r = answer("streaming", DebugState::default());
         assert!(r["texture"].is_null());
         assert!(r["chunk"].is_null());
+        assert!(r["planet"].is_null());
         assert!(r["pressure"].is_null());
     }
 
@@ -424,6 +429,7 @@ mod tests {
                 texture: Some((10, 2, 1)),
                 mesh: Some((4, 0, 3)),
                 chunk: Some((7, 5)),
+                planet: Some((300, 12)),
                 texture_bytes: Some((2048, 4096)),
                 mesh_bytes: Some((1024, 0)),
                 chunk_bytes: Some((3072, 8192)),
@@ -444,6 +450,7 @@ mod tests {
         );
         // A 0 byte_budget flags a count-only pool.
         assert_eq!(r["mesh"]["byte_budget"], 0);
+        assert_eq!(r["planet"], json!({ "resident": 300, "pending": 12 }));
         assert_eq!(
             r["chunk"],
             json!({

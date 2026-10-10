@@ -21,7 +21,9 @@ use crate::ecs::{
     Entity, EventCursor, MenuActive, PipelineContext, ScheduleMode, SimTiming, StepResult, System,
     WorldPhysicsBudget,
 };
+use crate::math::vec3::{normalize_or, scale, sub};
 use crate::math::{cos, sin, sqrt};
+use crate::planet::{FrameRebases, PlanetGravity, PlanetGround, RebaseCursor};
 
 use super::budget::DriverCapacities;
 use super::contacts::{ContactBatch, ContactGate};
@@ -95,6 +97,15 @@ pub struct PhysicsSystem {
     // Where a step's independent work runs. `SerialFanout` until a host lends
     // its own.
     fanout: Box<dyn PhysicsFanout>,
+    // How far this system has caught up with the moves of a planet world's
+    // simulated frame.
+    rebases: RebaseCursor,
+    // The planet's ground patch body and the revision it holds.
+    planet_ground: Option<(BodyHandle, u64)>,
+    // Props held off the planet's ground while the patch is elsewhere.
+    off_ground: super::held::HeldBodies,
+    // Gravity's strength: the engine's, or the planet's.
+    gravity: f32,
 }
 
 // Runtime physics state for the player camera capsule.
@@ -161,6 +172,10 @@ impl PhysicsSystem {
             spawn_headroom: config.spawn_headroom,
             body_cap: 0,
             fanout: Box::new(SerialFanout),
+            rebases: RebaseCursor::default(),
+            planet_ground: None,
+            off_ground: super::held::HeldBodies::default(),
+            gravity: GRAVITY,
         }
     }
 
@@ -205,6 +220,7 @@ impl PhysicsSystem {
     fn reserve(&mut self, budget: &PhysicsBudget) {
         let caps = DriverCapacities::derive(budget);
         self.props = PropBodies::with_capacity(&caps);
+        self.off_ground = super::held::HeldBodies::with_capacity(caps.props);
         self.rigs = Vec::with_capacity(caps.rigs);
         self.new_props = Vec::with_capacity(caps.new_props);
         self.motion_scratch = Vec::with_capacity(caps.root_motions);
@@ -258,6 +274,74 @@ impl PhysicsSystem {
     }
 }
 
+impl PhysicsSystem {
+    // Catch up with a planet world: carry the bodies through every move of
+    // the simulated frame this system has not yet seen, swap in a newer
+    // ground patch, and aim gravity at the planet's center in this frame.
+    fn follow_planet(&mut self, ctx: &mut PipelineContext) {
+        let Some(world) = self.world.as_mut() else {
+            return;
+        };
+        if let Some(rebase) = self.rebases.take(ctx.resource::<FrameRebases>()) {
+            world.rebase(rebase.rotation, rebase.translation);
+            self.props.rebase(&rebase, |entity| {
+                ctx.get::<Transform>(entity)
+                    .map(|t| (t.position, t.rotation_deg))
+            });
+            if let Some(player) = self.player.as_mut() {
+                player.center.rebase(&rebase);
+                player.written_eye = ctx.query::<Camera3D>().next().map(|c| c.position);
+            }
+            // The authored regions, whose sensor bodies the move just carried.
+            for volume in ctx.query_mut::<TriggerVolume>() {
+                volume.position = rebase.apply_point(volume.position);
+                volume.rotation_deg = rebase.apply_euler_deg(volume.rotation_deg);
+            }
+            for rig in &mut self.rigs {
+                let written = ctx
+                    .query::<crate::components::CharacterRig>()
+                    .find(|r| r.target == rig.target)
+                    .map(|r| r.position);
+                rig.rebase(&rebase, written);
+            }
+        }
+        if let Some(gravity) = ctx.resource::<PlanetGravity>() {
+            world.set_gravity_center(Some(gravity.center));
+            self.gravity = gravity.strength;
+        }
+        if let (Some((handle, revision)), Some(ground)) =
+            (self.planet_ground.as_mut(), ctx.resource::<PlanetGround>())
+            && ground.revision != *revision
+            && super::terrain::replace_patch(world, *handle, &ground.patch)
+        {
+            *revision = ground.revision;
+        }
+        // The ground is only the patch: a prop off it is held until it is
+        // back on, rather than falling into the planet.
+        if self.planet_ground.is_some()
+            && let Some(ground) = ctx.resource::<PlanetGround>()
+        {
+            let carried = self.held.and_then(|i| self.props.get(i)).map(|p| p.handle);
+            let bodies = self
+                .props
+                .iter()
+                .filter(|p| p.dynamic)
+                .map(|p| p.handle)
+                .filter(move |h| Some(*h) != carried);
+            self.off_ground
+                .update(world, bodies, &super::held::Footprint::of(&ground.patch));
+        }
+    }
+}
+
+// Up at `p`: away from the pull, which is `+Y` without a planet.
+fn up_at(world: &Simulation, p: [f32; 3]) -> [f32; 3] {
+    match world.config().gravity_center {
+        Some(center) => normalize_or(sub(p, center), 1e-6, [0.0, 1.0, 0.0]),
+        None => [0.0, 1.0, 0.0],
+    }
+}
+
 impl System for PhysicsSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
         // Before anything is built, and before the joint wiring below drains
@@ -269,13 +353,17 @@ impl System for PhysicsSystem {
         // The simulation reserves the whole budget here, so nothing on the
         // step path allocates and a body past the reservation is refused
         // rather than grown into.
+        let planet_gravity = ctx.resource::<PlanetGravity>().copied();
+        self.gravity = planet_gravity.map_or(GRAVITY, |g| g.strength);
         let mut world = Simulation::new(
             SimConfig {
-                gravity: GRAVITY,
+                gravity: self.gravity,
+                gravity_center: planet_gravity.map(|g| g.center),
                 ..SimConfig::default()
             },
             budget.body_cap() as usize,
         );
+        self.rebases = RebaseCursor::at(ctx.resource::<FrameRebases>());
         world.set_contact_min_impulse(self.contact_min_impulse, SimTiming::TICK_DT);
         // The step's per-worker scratch, reserved from the schedule this world
         // will run under. A serial schedule reserves one worker's worth, which
@@ -286,9 +374,14 @@ impl System for PhysicsSystem {
         );
         let world_mask = self.layers.mask(LAYER_WORLD);
 
-        // The ground: every terrain's heightfield, or a flat slab when the
-        // world lays down none.
-        if build_terrain_colliders(&mut world, world_mask, ctx) == 0 {
+        // The ground: every terrain's heightfield and the planet's patch, or a
+        // flat slab when the world lays down neither.
+        self.planet_ground = ctx.resource::<PlanetGround>().and_then(|ground| {
+            let handle = super::terrain::add_patch(&mut world, &ground.patch, world_mask)?;
+            Some((handle, ground.revision))
+        });
+        if build_terrain_colliders(&mut world, world_mask, ctx) == 0 && self.planet_ground.is_none()
+        {
             // A large thin slab whose top face sits at Y = 0.
             world.add_fixed(
                 &ColliderShape::Cuboid {
@@ -472,6 +565,10 @@ impl System for PhysicsSystem {
         // and writes the freshly simulated state.
         let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
 
+        // A planet world's frame moved since the last step: carry every body
+        // along, then take the ground and the pull as they are in the new frame.
+        self.follow_planet(ctx);
+
         // snapshot reads (released before any query_mut below)
         let (cam_pos, cam_yaw, cam_pitch, desired_move, jump_req, interact_req) = ctx
             .query::<Camera3D>()
@@ -604,9 +701,10 @@ impl System for PhysicsSystem {
         if let Some(player) = self.player.as_mut()
             && player.written_eye != Some(cam_pos)
         {
+            let up = up_at(world, cam_pos);
             player
                 .center
-                .snap([cam_pos[0], cam_pos[1] - player.eye_offset, cam_pos[2]]);
+                .snap(sub(cam_pos, scale(up, player.eye_offset)));
         }
 
         // The carried prop's hover point in front of the camera, refreshed
@@ -642,15 +740,22 @@ impl System for PhysicsSystem {
 
             // move the player capsule
             if let Some(player) = self.player.as_mut() {
+                let gravity = self.gravity;
                 if player.has_gravity {
                     if tick == 0 && jump_req && player.grounded && player.jump_height > 0.0 {
-                        player.vy = sqrt(2.0 * GRAVITY * player.gravity_scale * player.jump_height);
+                        player.vy = sqrt(2.0 * gravity * player.gravity_scale * player.jump_height);
                     }
-                    player.vy -= GRAVITY * player.gravity_scale * dt;
+                    player.vy -= gravity * player.gravity_scale * dt;
                 }
 
+                // Up is away from the pull, so the vertical speed rides it.
                 let center = player.center.current();
-                let desired = [desired_move[0] * dt, player.vy * dt, desired_move[2] * dt];
+                let up = up_at(world, center);
+                let desired = [
+                    desired_move[0] * dt + up[0] * player.vy * dt,
+                    desired_move[1] * dt + up[1] * player.vy * dt,
+                    desired_move[2] * dt + up[2] * player.vy * dt,
+                ];
                 let moved = world.move_character(
                     &player.shape,
                     &CharacterMoveInput {
@@ -682,7 +787,7 @@ impl System for PhysicsSystem {
                 &mut self.rigs,
                 if tick == 0 { &self.motion_scratch } else { &[] },
                 dt,
-                GRAVITY,
+                self.gravity,
                 self.layers.mask(LAYER_CHARACTER),
             );
 
@@ -786,13 +891,20 @@ impl System for PhysicsSystem {
         let mut grounded = true;
         if let Some(player) = self.player.as_mut() {
             let center = player.center.sample(alpha);
-            let eye = [center[0], center[1] + player.eye_offset, center[2]];
+            let up = self
+                .world
+                .as_ref()
+                .map_or([0.0, 1.0, 0.0], |w| up_at(w, center));
+            let eye = [
+                center[0] + up[0] * player.eye_offset,
+                center[1] + up[1] * player.eye_offset,
+                center[2] + up[2] * player.eye_offset,
+            ];
             player.written_eye = Some(eye);
             grounded = player.grounded;
             for camera in ctx.query_mut::<Camera3D>() {
                 camera.position = eye;
-                camera.view_matrix =
-                    crate::gfx::camera::view_matrix(camera.position, camera.yaw, camera.pitch);
+                camera.recompose_view();
             }
         }
 
@@ -863,6 +975,7 @@ mod tests {
             position: [0.0, 1.0, 0.0],
             yaw: 0.0,
             pitch: 0.0,
+            up: [0.0, 1.0, 0.0],
             desired_move: [0.0; 3],
             jump_requested: false,
             interact_requested: false,
@@ -900,6 +1013,93 @@ mod tests {
         assert!(
             physics.player.is_some(),
             "first-person camera keeps its capsule"
+        );
+    }
+
+    // A walker standing on a planet's ground patch has the simulated frame
+    // moved under it, with the ground rebuilt in the new frame: it keeps
+    // standing where it was carried to, with gravity toward the carried center.
+    #[test]
+    fn a_walker_on_a_planet_stands_through_a_frame_move() {
+        use crate::planet::{
+            FrameRebases, LocalFrame, PlanetGravity, PlanetGround, PlanetShape, ground_patch,
+        };
+        let shape = PlanetShape {
+            center: [0.0, -5_000.0, 0.0],
+            radius: 5_000.0,
+            amplitude: 0.0,
+            feature_size: 100.0,
+            octaves: 1,
+            seed: 0,
+        };
+        let mut world = World::new();
+        world.push(RigidBody::default());
+        world.push(Camera3D {
+            position: [400.0, 2.0, 0.0],
+            ..controlled_camera()
+        });
+        let region = world.push(TriggerVolume {
+            position: [404.0, 1.0, -2.0],
+            rotation_deg: [0.0, 30.0, 0.0],
+            ..Default::default()
+        });
+        let publish = |world: &mut World, frame: &LocalFrame, around: [f32; 3], revision| {
+            let patch = ground_patch(&shape, frame, around, 32, 16.0).unwrap();
+            world.insert_resource(PlanetGround { revision, patch });
+            world.insert_resource(PlanetGravity {
+                center: frame.to_local(shape.center),
+                strength: 20.0,
+            });
+        };
+        let authored = LocalFrame::AUTHORED;
+        publish(&mut world, &authored, [400.0, 0.0, 0.0], 0);
+        world.insert_resource(FrameRebases::default());
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.context());
+        for _ in 0..180 {
+            physics.step(&mut world.context());
+        }
+        let eye = |world: &World| world.query::<Camera3D>().next().unwrap().position;
+        let height = |p: [f32; 3], frame: &LocalFrame| {
+            let world_p = frame.to_world(p);
+            let d = world_p
+                .iter()
+                .zip(shape.center)
+                .map(|(a, c)| (a - c) * (a - c))
+                .sum::<f64>();
+            libm::sqrt(d) - shape.radius
+        };
+        let standing = height(eye(&world), &authored);
+        assert!(
+            standing > 0.5 && standing < 3.0,
+            "on the ground: {standing}"
+        );
+
+        let at = eye(&world);
+        let (moved, rebase) = authored.recentered(at, shape.up_at(authored.to_world(at)));
+        for camera in world.context().query_mut::<Camera3D>() {
+            camera.position = rebase.apply_point(camera.position);
+        }
+        let mut rebases = FrameRebases::default();
+        rebases.push(rebase);
+        world.insert_resource(rebases);
+        publish(&mut world, &moved, [0.0; 3], 1);
+        for _ in 0..120 {
+            physics.step(&mut world.context());
+        }
+        let after = eye(&world);
+        assert!(
+            after.iter().all(|c| c.abs() < 0.05),
+            "carried, not moved: {after:?}"
+        );
+        let still = height(after, &moved);
+        assert!((still - standing).abs() < 0.02, "{still} vs {standing}");
+        let volume = world.get::<TriggerVolume>(region).unwrap();
+        let expected = rebase.apply_point([404.0, 1.0, -2.0]);
+        assert!((0..3).all(|i| (volume.position[i] - expected[i]).abs() < 1e-3));
+        assert_eq!(
+            volume.rotation_deg,
+            rebase.apply_euler_deg([0.0, 30.0, 0.0])
         );
     }
 

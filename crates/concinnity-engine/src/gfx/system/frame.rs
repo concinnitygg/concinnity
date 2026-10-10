@@ -15,7 +15,9 @@ use concinnity_core::ecs::{
 use concinnity_core::gfx::frustum;
 use concinnity_core::input::snapshot::InputPacket;
 use concinnity_core::profile;
-use concinnity_core::render::history_reset::{FrameClock, HistoryView, PendingHistoryReset};
+use concinnity_core::render::history_reset::{
+    FrameClock, HistoryResetCauses, HistoryView, PendingHistoryReset,
+};
 use concinnity_core::render::overlay_maps;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
@@ -45,6 +47,17 @@ fn deposit_input(ctx: &mut PipelineContext, packet: InputPacket) {
 
 // The engine-owned skinned instance pool's free count, for the profiler's
 // pool chip.
+// What a frame that never drew leaves the next one to reset: its own causes,
+// and a cut for a move of the simulated frame its history was never carried
+// through.
+fn skipped_causes(frame: &concinnity_core::render::snapshot::FrameScalars) -> HistoryResetCauses {
+    if frame.rebase.is_some() {
+        frame.history_reset.union(HistoryResetCauses::CAMERA_CUT)
+    } else {
+        frame.history_reset
+    }
+}
+
 fn skinned_pool_free(ctx: &PipelineContext) -> u32 {
     ctx.resource::<crate::ecs::ActiveRenderQueues>()
         .and_then(|slot| slot.0.as_ref())
@@ -130,7 +143,7 @@ impl GraphicsSystem {
         ctx.profile
             .record_render_handoff(super::submit::micros_since(submitted));
         if outcome.skipped {
-            self.history_reset.reissue(snapshot.frame.history_reset);
+            self.history_reset.reissue(skipped_causes(&snapshot.frame));
         }
         self.snapshot = snapshot;
 
@@ -204,7 +217,7 @@ impl GraphicsSystem {
             // extracts, a frame later than serial execution manages.
             if feedback.skipped {
                 self.history_reset
-                    .reissue(feedback.recycled.frame.history_reset);
+                    .reissue(skipped_causes(&feedback.recycled.frame));
             }
             deposit_input(ctx, feedback.input);
             apply_frame_outcome(
@@ -526,13 +539,32 @@ impl GraphicsSystem {
             .copied();
         let mut directional = None;
         if let Some(sky) = sky
-            && self.pushed_sky_angle != Some(sky.angle_deg)
+            && self.pushed_sky_rows != Some(sky.sample_rows())
         {
-            self.pushed_sky_angle = Some(sky.angle_deg);
+            self.pushed_sky_rows = Some(sky.sample_rows());
             directional = Some(super::scene_lights::lights_under_sky(
                 ctx.query::<DirectionalLight>(),
                 &sky,
             ));
+        }
+
+        // A planet world's frame moved since the last drawn frame: the
+        // previous view is carried into the new frame before it is compared,
+        // and the backend carries its own history the same way.
+        let rebase = self
+            .rebases
+            .take(ctx.resource::<concinnity_core::planet::FrameRebases>());
+        if let Some(rebase) = &rebase {
+            self.history_reset.rebase(rebase);
+            // The local lights were packed into the backend at init; they are
+            // moved with the world and rewritten in place.
+            if let Some((data, uniforms)) = super::scene_lights::carry_local_lights(ctx, rebase) {
+                snap.ops.record(move |backend| {
+                    if let Err(e) = backend.move_local_lights(&data, &uniforms) {
+                        tracing::error!("GraphicsSystem: moving the local lights: {e}");
+                    }
+                });
+            }
         }
 
         // Whether the history the temporal passes accumulated still matches
@@ -575,6 +607,7 @@ impl GraphicsSystem {
                 .unwrap_or(concinnity_core::sky::SkyOrientation::IDENTITY_ROWS),
             directional,
             history_reset,
+            rebase,
         };
         // Adopt the overlay draw list wholesale and hand the spent one back to
         // OverlaySystem, which recycles its buffers into the next build.
@@ -842,6 +875,7 @@ mod tests {
                     position: [1.0, 2.0, 3.0],
                     yaw: 0.0,
                     pitch: 0.0,
+                    up: [0.0, 1.0, 0.0],
                     desired_move: [0.0; 3],
                     jump_requested: false,
                     interact_requested: false,
@@ -871,6 +905,7 @@ mod tests {
             position: [x, 0.0, 0.0],
             yaw: 0.0,
             pitch: 0.0,
+            up: [0.0, 1.0, 0.0],
             desired_move: [0.0; 3],
             jump_requested: false,
             interact_requested: false,

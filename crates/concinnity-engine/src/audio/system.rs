@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::occlusion::OcclusionSmoother;
 use super::{AudioEngine, AudioVolumes, EmitterId, EmitterParams};
+use concinnity_core::planet::{FrameRebases, Rebase, RebaseCursor};
 
 // Audio behavior. Constructed internally by `World::start` when the world
 // declares any `AudioEmitter` or `AudioCue`; never a world-declared asset, so
@@ -59,6 +60,9 @@ pub(crate) struct AudioSystem {
     clips_queued: usize,
     // Contacts that resolved to an impact clip; same kind of observable.
     impacts_played: usize,
+    // How far the emitters have caught up with the moves of a planet world's
+    // simulated frame.
+    rebases: RebaseCursor,
 }
 
 // Links one engine emitter to the world data that positions it.
@@ -123,6 +127,7 @@ impl AudioSystem {
             cues_matched: 0,
             clips_queued: 0,
             impacts_played: 0,
+            rebases: RebaseCursor::default(),
         }
     }
 
@@ -225,11 +230,31 @@ impl AudioSystem {
     }
 }
 
+impl AudioSystem {
+    // Carry the free-standing emitters, and the components they were bound
+    // from, into the frame `rebase` moves the world to.
+    fn carry(&mut self, ctx: &mut PipelineContext, rebase: &Rebase) {
+        for (&entity, binding) in &mut self.emitters {
+            if binding.follows.is_some() {
+                continue;
+            }
+            binding.position = rebase.apply_point(binding.position);
+            if let Some(id) = binding.id {
+                self.engine.set_emitter_position(id, binding.position);
+            }
+            if let Some(emitter) = ctx.get_mut::<AudioEmitter>(entity) {
+                emitter.position = binding.position;
+            }
+        }
+    }
+}
+
 impl System for AudioSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
         // Acquire the output device (a disabled no-op engine when none is
         // available), deferred out of `new` so construction stays cheap.
         self.engine = AudioEngine::new();
+        self.rebases = RebaseCursor::at(ctx.resource::<FrameRebases>());
         // Snapshot the emitters, then the clip payload locators indexed by
         // AudioClipHandle. The `AudioClipTable` resource is built from the blob's
         // resource stream, dense in handle order, so index N is the clip with
@@ -424,6 +449,12 @@ impl System for AudioSystem {
                         .play_sound_at(contact.point, clip.0 as u64, gain, 0);
                 }
             }
+        }
+
+        // A planet world's frame moved: every emitter that stands on its own
+        // moves with it (a prop-bound one follows its prop below).
+        if let Some(rebase) = self.rebases.take(ctx.resource::<FrameRebases>()) {
+            self.carry(ctx, &rebase);
         }
 
         // The listener rides the camera.
@@ -674,6 +705,42 @@ mod tests {
         assert_eq!(probe.to, [3.0, 1.0, -2.0]);
         assert_eq!(probe.blocked, None, "unanswered until physics steps");
         assert_eq!(ctx.query::<AudioOcclusionProbe>().count(), 1);
+    }
+
+    // A planet world's frame move carries a free-standing emitter, its
+    // component and its occlusion ray's end to where the move says.
+    #[test]
+    fn a_frame_move_carries_free_standing_emitters() {
+        use concinnity_core::planet::{FrameRebases, Rebase};
+        let mut clips = AudioClips::new();
+        let clip = clips.clip(b"loop-bytes");
+        let mut world = clips.seal();
+        let entity = world.push(AudioEmitter {
+            clip: Some(clip),
+            position: [1_003.0, 2.0, -4.0],
+            ..Default::default()
+        });
+        world.insert_resource(FrameRebases::default());
+        let mut sys = AudioSystem::new(AudioVolumes::default());
+        sys.init(&mut world.context());
+        let rebase = Rebase {
+            rotation: concinnity_core::math::quat_from_axis_angle([0.0, 0.0, 1.0], 0.02),
+            translation: [-1_000.0, 20.0, 0.0],
+        };
+        let mut rebases = FrameRebases::default();
+        rebases.push(rebase);
+        world.insert_resource(rebases);
+        sys.step(&mut world.context());
+
+        let expected = rebase.apply_point([1_003.0, 2.0, -4.0]);
+        assert_eq!(sys.emitters[&entity].position, expected);
+        {
+            let ctx = world.context();
+            assert_eq!(ctx.get::<AudioEmitter>(entity).unwrap().position, expected);
+            assert_eq!(ctx.get::<AudioOcclusionProbe>(entity).unwrap().to, expected);
+        }
+        sys.step(&mut world.context());
+        assert_eq!(sys.emitters[&entity].position, expected, "carried once");
     }
 
     // An AudioEmitter appearing after init is adopted on the next step, and

@@ -4,7 +4,8 @@ use crate::camera_track::CameraTrackStatus;
 use crate::camera_track::timeline::{self, Key};
 use crate::components::{Camera3D, CameraTrack, CameraTurnKey};
 use crate::ecs::{Entity, MenuActive, PipelineContext, SimTiming, StepResult, System};
-use crate::math::{rem_euclid, vec3};
+use crate::math::{quat_mul, quat_normalize, quat_rotate, rem_euclid, vec3};
+use crate::planet::{FrameRebases, RebaseCursor};
 use crate::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
 
 const HALF_TURN_DEG: f32 = 180.0;
@@ -27,6 +28,14 @@ pub struct CameraTrackSystem {
     turn: Vec<Key<2>>,
     start_position: [f32; 3],
     start_angles_deg: [f32; 2],
+    // Where travel continues from after a planet world's frame moved: the
+    // camera's carried position, the track offset it was at, and the turn
+    // every later offset rides through. The start, a zero offset and no turn
+    // until the frame first moves.
+    anchor: [f32; 3],
+    anchor_offset: [f32; 3],
+    frame_turn: crate::math::Quat,
+    rebases: RebaseCursor,
     // Ticks are counted and multiplied rather than accumulated: a long run
     // stays free of float drift, and two hosts running the same track at
     // different frame rates land on exactly the same pose.
@@ -55,6 +64,10 @@ impl CameraTrackSystem {
             turn: Vec::new(),
             start_position: [0.0; 3],
             start_angles_deg: [0.0; 2],
+            anchor: [0.0; 3],
+            anchor_offset: [0.0; 3],
+            frame_turn: [0.0, 0.0, 0.0, 1.0],
+            rebases: RebaseCursor::default(),
             ticks: 0,
             tick_dt: SimTiming::TICK_DT,
             camera: None,
@@ -107,8 +120,9 @@ impl CameraTrackSystem {
         if let Some(camera) = self.camera
             && let Some(cam) = ctx.get_mut::<Camera3D>(camera)
         {
+            let traveled = quat_rotate(self.frame_turn, vec3::sub(offset, self.anchor_offset));
             cam.set_pose(
-                vec3::add(self.start_position, offset),
+                vec3::add(self.anchor, traveled),
                 angles[0].to_radians(),
                 angles[1].to_radians(),
             );
@@ -130,6 +144,8 @@ impl System for CameraTrackSystem {
             self.start_position = camera.position;
             self.start_angles_deg = [camera.yaw.to_degrees(), camera.pitch.to_degrees()];
         }
+        self.anchor = self.start_position;
+        self.rebases = RebaseCursor::at(ctx.resource::<FrameRebases>());
         self.resolve_turn();
         self.apply(ctx);
     }
@@ -137,6 +153,15 @@ impl System for CameraTrackSystem {
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
         if ctx.resource::<MenuActive>().is_some_and(|m| m.0) {
             return StepResult::Continue;
+        }
+        // The frame moved the camera: travel carries on from where it was
+        // carried to, its offsets turned with the frame.
+        if let Some(rebase) = self.rebases.take(ctx.resource::<FrameRebases>())
+            && let Some(cam) = self.camera.and_then(|c| ctx.get::<Camera3D>(c))
+        {
+            self.anchor = cam.position;
+            self.anchor_offset = timeline::sample([0.0; 3], &self.travel, self.elapsed());
+            self.frame_turn = quat_normalize(quat_mul(rebase.rotation, self.frame_turn));
         }
         let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
         let before = self.elapsed();
@@ -258,6 +283,40 @@ mod tests {
         assert!((camera_yaw_deg(&world) - 45.0).abs() < 1e-3);
         assert_eq!(status(&world).elapsed_seconds, 0.0);
         assert!(!status(&world).finished);
+    }
+
+    // A frame move mid-track carries the camera on from where it was carried
+    // to, its later travel turned with the frame, as if the track ran on in
+    // the old frame and every pose were carried after.
+    #[test]
+    fn a_frame_move_carries_the_track_on() {
+        use crate::planet::Rebase;
+        let (mut world, mut system) = world_with(
+            track(vec![travel([1.0, 0.0, 0.0], 20.0, 4.0)], vec![]),
+            [0.0; 3],
+            0.0,
+            0.0,
+        );
+        world.insert_resource(FrameRebases::default());
+        system.init(&mut world.context());
+        run(&mut world, &mut system, 1.0);
+        let rebase = Rebase {
+            rotation: crate::math::quat_from_axis_angle([0.0, 0.0, 1.0], 0.02),
+            translation: [-4.0, 0.1, 0.0],
+        };
+        let mut rebases = FrameRebases::default();
+        rebases.push(rebase);
+        world.insert_resource(rebases);
+        for camera in world.context().query_mut::<Camera3D>() {
+            camera.position = rebase.apply_point(camera.position);
+        }
+        run(&mut world, &mut system, 1.0);
+        let expected = rebase.apply_point([8.0, 0.0, 0.0]);
+        let got = camera_position(&world);
+        assert!(
+            (0..3).all(|i| (got[i] - expected[i]).abs() < 1e-3),
+            "{got:?} {expected:?}"
+        );
     }
 
     #[test]

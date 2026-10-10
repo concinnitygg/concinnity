@@ -8,7 +8,8 @@ use alloc::vec::Vec;
 
 use crate::components::Terrain;
 use crate::ecs::PipelineContext;
-use crate::physics::{LayerMask, Simulation};
+use crate::physics::{BodyHandle, LayerMask, Simulation};
+use crate::planet::GroundPatch;
 use crate::terrain::TerrainGrid;
 use crate::terrain::payload::TerrainPayload;
 
@@ -47,19 +48,44 @@ fn add_heightfield(
     center: [f32; 3],
     mask: LayerMask,
 ) -> Result<(), String> {
-    let side = grid.side();
-    let [hx, hz] = grid.extent();
+    let (rows, cols, heights, scale) = grid_field(grid);
     world
-        .add_heightfield(
-            side,
-            side,
-            grid.heights().to_vec(),
-            [2.0 * hx, 1.0, 2.0 * hz],
-            center,
-            mask,
-        )
+        .add_heightfield(rows, cols, heights, scale, center, mask)
         .map(|_| ())
         .ok_or_else(|| String::from("the simulation declined the heightfield"))
+}
+
+// The heightfield body for a planet's ground patch.
+pub(super) fn add_patch(
+    world: &mut Simulation,
+    patch: &GroundPatch,
+    mask: LayerMask,
+) -> Option<BodyHandle> {
+    let (rows, cols, heights, scale) = grid_field(&patch.grid);
+    world.add_heightfield(rows, cols, heights, scale, patch.center, mask)
+}
+
+// Put `patch` in place of the planet ground `handle` holds. Returns whether it
+// took.
+pub(super) fn replace_patch(
+    world: &mut Simulation,
+    handle: BodyHandle,
+    patch: &GroundPatch,
+) -> bool {
+    let (rows, cols, heights, scale) = grid_field(&patch.grid);
+    world.replace_heightfield(handle, rows, cols, heights, scale, patch.center)
+}
+
+// A grid as the simulation's heightfield arguments.
+fn grid_field(grid: &TerrainGrid) -> (usize, usize, Vec<f32>, [f32; 3]) {
+    let side = grid.side();
+    let [hx, hz] = grid.extent();
+    (
+        side,
+        side,
+        grid.heights().to_vec(),
+        [2.0 * hx, 1.0, 2.0 * hz],
+    )
 }
 
 #[cfg(test)]

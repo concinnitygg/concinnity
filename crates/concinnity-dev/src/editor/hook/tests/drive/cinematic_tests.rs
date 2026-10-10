@@ -53,6 +53,7 @@ fn camera(controller: Option<CameraController>) -> Camera3D {
         position: AUTHORED.position,
         yaw: AUTHORED.yaw,
         pitch: AUTHORED.pitch,
+        up: [0.0, 1.0, 0.0],
         desired_move: [0.0; 3],
         jump_requested: false,
         interact_requested: false,

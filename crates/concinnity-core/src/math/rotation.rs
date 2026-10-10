@@ -14,8 +14,8 @@ use crate::math::{atan2, sin_cos, sqrt};
 /// Unit quaternion `(x, y, z, w)` representing a rotation.
 pub type Quat = [f32; 4];
 
-/// Hamilton product `a * b`.
-fn mul(a: Quat, b: Quat) -> Quat {
+/// Hamilton product `a * b`: the rotation `b` followed by `a`.
+pub fn quat_mul(a: Quat, b: Quat) -> Quat {
     let [ax, ay, az, aw] = a;
     let [bx, by, bz, bw] = b;
     [
@@ -56,12 +56,28 @@ pub fn quat_normalize(q: Quat) -> Quat {
     [q[0] / len, q[1] / len, q[2] / len, q[3] / len]
 }
 
+/// `v` turned by the unit quaternion `q`.
+pub fn quat_rotate(q: Quat, v: [f32; 3]) -> [f32; 3] {
+    let [x, y, z, w] = q;
+    // v + 2w (q x v) + 2 q x (q x v), with q the vector part.
+    let t = [
+        2.0 * (y * v[2] - z * v[1]),
+        2.0 * (z * v[0] - x * v[2]),
+        2.0 * (x * v[1] - y * v[0]),
+    ];
+    [
+        v[0] + w * t[0] + (y * t[2] - z * t[1]),
+        v[1] + w * t[1] + (z * t[0] - x * t[2]),
+        v[2] + w * t[2] + (x * t[1] - y * t[0]),
+    ]
+}
+
 /// The rotation quaternion for engine Euler degrees `[pitch, yaw, roll]`,
 /// applied yaw then pitch then roll.
 pub fn quat_from_euler_yxz_deg(euler_deg: [f32; 3]) -> Quat {
     let [pitch, yaw, roll] = euler_deg;
-    mul(
-        mul(
+    quat_mul(
+        quat_mul(
             about_axis(1, yaw.to_radians()),
             about_axis(0, pitch.to_radians()),
         ),
@@ -109,6 +125,25 @@ mod tests {
 
     // The axis-angle quaternion agrees with the canonical single-axis one, and
     // a zero axis has no direction to turn about.
+    // Rotating by a quaternion agrees with the rotation matrix the transform
+    // convention builds from the same Euler angles.
+    #[test]
+    fn quat_rotate_matches_the_euler_matrix() {
+        let euler = [20.0, -35.0, 12.0];
+        let q = quat_from_euler_yxz_deg(euler);
+        let m = crate::transform::trs_matrix([0.0; 3], euler, [1.0; 3]);
+        let v = [0.3, -1.2, 0.7];
+        let expected: [f32; 3] =
+            core::array::from_fn(|i| m[0][i] * v[0] + m[1][i] * v[1] + m[2][i] * v[2]);
+        assert!(close(quat_rotate(q, v), expected, 1e-5));
+        let q90 = quat_from_axis_angle([0.0, 1.0, 0.0], core::f32::consts::FRAC_PI_2);
+        assert!(close(
+            quat_rotate(q90, [1.0, 0.0, 0.0]),
+            [0.0, 0.0, -1.0],
+            1e-6
+        ));
+    }
+
     #[test]
     fn axis_angle_matches_the_canonical_axis_rotation() {
         let want = about_axis(1, 0.7);

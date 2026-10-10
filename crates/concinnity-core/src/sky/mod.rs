@@ -13,3 +13,10 @@ mod system;
 
 pub use orientation::SkyOrientation;
 pub use system::SkyRotationSystem;
+
+/// The rotation taking a direction in the frame the world was authored in
+/// into the frame it is simulated in, column-major: published by whatever
+/// moves the simulated frame (a planet world's), and composed into the sky's
+/// orientation so the sky stays put while the frame turns under it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkyFrame(pub [[f32; 3]; 3]);

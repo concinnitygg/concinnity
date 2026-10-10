@@ -112,6 +112,11 @@ pub struct FrameParams<'a> {
     /// this one (see [`crate::render::history_reset`]): every temporal pass and
     /// upscaler starts over instead of reprojecting it.
     pub history_reset: bool,
+    /// The world moved to another simulated frame since the last frame (a
+    /// planet world following its camera): everything this frame draws is in
+    /// the new frame, so every temporal pass carries what it remembers of the
+    /// previous frame into it instead of reading the move as motion.
+    pub rebase: Option<crate::planet::Rebase>,
     /// The characters and bodies that may be trampling grass this frame,
     /// stamped into the grass's bend field near the camera.
     pub grass_benders: &'a [crate::render::grass::GrassBender],

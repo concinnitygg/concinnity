@@ -10,6 +10,7 @@ mod fixtures;
 mod heightfield;
 mod joints;
 mod parallel;
+mod planet;
 mod sensor;
 mod settling;
 mod surface;

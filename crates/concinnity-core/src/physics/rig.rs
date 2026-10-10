@@ -32,6 +32,15 @@ pub(crate) struct RigPhysics {
     written_pos: Option<[f32; 3]>,
 }
 
+impl RigPhysics {
+    // Carry the rig's capsule snapshots into another frame, with the rig
+    // component's position, already carried, as the one last written back.
+    pub(crate) fn rebase(&mut self, rebase: &crate::planet::Rebase, written: Option<[f32; 3]>) {
+        self.center.rebase(rebase);
+        self.written_pos = written.or(self.written_pos.map(|p| rebase.apply_point(p)));
+    }
+}
+
 // Capsule center for a rig's mesh-origin position: the capsule stands on
 // the origin (the mesh's feet).
 fn center_of(rig: &CharacterRig) -> [f32; 3] {

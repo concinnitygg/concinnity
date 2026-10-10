@@ -11,6 +11,7 @@ use concinnity_core::ecs::{
     Access, Entity, EventCursor, FrameTime, PipelineContext, StepResult, System,
 };
 use concinnity_core::gfx::camera;
+use concinnity_core::planet::{FrameRebases, RebaseCursor};
 
 // Reach distance for interacting with a Prop, in world units.
 const INTERACT_REACH: f32 = 3.0;
@@ -40,6 +41,9 @@ pub struct Camera3DSystem {
     interactable_entities: Vec<Entity>,
     // Cursor into the Events<ControlsCommand> queue (live settings changes).
     controls_cursor: EventCursor,
+    // How far the smoothed velocity has caught up with the moves of a planet
+    // world's simulated frame.
+    rebases: RebaseCursor,
 }
 
 impl Camera3DSystem {
@@ -57,6 +61,7 @@ impl Camera3DSystem {
             velocity: [0.0; 3],
             interactable_entities: Vec::new(),
             controls_cursor: EventCursor::default(),
+            rebases: RebaseCursor::default(),
         }
     }
 
@@ -77,7 +82,11 @@ impl System for Camera3DSystem {
                 concinnity_core::components::Identity
             ])
             .writes_components(crate::component_mask![Camera3D, Transform])
-            .reads_resources(crate::resource_mask![ControlsCommand, FrameTime,])
+            .reads_resources(crate::resource_mask![
+                ControlsCommand,
+                FrameTime,
+                FrameRebases
+            ])
             .writes_resources(crate::resource_mask![InteractEvent])
     }
 
@@ -89,6 +98,8 @@ impl System for Camera3DSystem {
                 gamepad_look_sensitivity: &mut self.gamepad_look_sensitivity,
             },
         );
+
+        self.rebases = RebaseCursor::at(ctx.resource::<FrameRebases>());
 
         // Collect interact targets: every entity carrying the Interactable tag.
         self.interactable_entities = ctx
@@ -128,6 +139,12 @@ impl System for Camera3DSystem {
             None => return StepResult::Continue,
         };
 
+        // The velocity is a direction in the simulated frame, so it turns with
+        // the frame when a planet world moves it.
+        if let Some(rebase) = self.rebases.take(ctx.resource::<FrameRebases>()) {
+            self.velocity = rebase.apply_vector(self.velocity);
+        }
+
         let dt = ctx
             .resource::<FrameTime>()
             .copied()
@@ -165,6 +182,8 @@ impl System for Camera3DSystem {
             // committed differ. Free-fly drives the camera position
             // directly and adds a vertical component; the FPS walker keeps
             // motion horizontal and delegates to PhysicsSystem.
+            // The bases are built level about +Y, then tilted onto the camera's
+            // own up, which on a planet points away from its center.
             let (fwd, right) = if self.free_fly {
                 let cp = camera.pitch.cos();
                 (
@@ -181,6 +200,8 @@ impl System for Camera3DSystem {
                     [camera.yaw.cos(), 0.0_f32, -camera.yaw.sin()],
                 )
             };
+            let fwd = camera::tilt_to_up(camera.up, fwd);
+            let right = camera::tilt_to_up(camera.up, right);
 
             // build the target velocity from current key state
             let mut target = [0.0_f32; 3];
@@ -196,20 +217,25 @@ impl System for Camera3DSystem {
             }
             if input.right {
                 target[0] += right[0] * speed;
+                target[1] += right[1] * speed;
                 target[2] += right[2] * speed;
             }
             if input.left {
                 target[0] -= right[0] * speed;
+                target[1] -= right[1] * speed;
                 target[2] -= right[2] * speed;
             }
             // The left stick rides the same bases: partial deflection walks
             // proportionally slower (the axis magnitude is at most 1).
             target[0] += (fwd[0] * input.move_axis[1] + right[0] * input.move_axis[0]) * speed;
-            target[1] += fwd[1] * input.move_axis[1] * speed;
+            target[1] += (fwd[1] * input.move_axis[1] + right[1] * input.move_axis[0]) * speed;
             target[2] += (fwd[2] * input.move_axis[1] + right[2] * input.move_axis[0]) * speed;
             // Free-fly: jump is "rise"; no down key, descend by pitching down + W.
             if self.free_fly && input.jump {
-                target[1] += speed;
+                let up = camera::tilt_to_up(camera.up, [0.0, 1.0, 0.0]);
+                target[0] += up[0] * speed;
+                target[1] += up[1] * speed;
+                target[2] += up[2] * speed;
             }
 
             // exponential decay toward target -- time-correct so frame rate does not
@@ -246,7 +272,7 @@ impl System for Camera3DSystem {
 
             // write the view matrix as a fallback for worlds with no
             // PhysicsSystem; PhysicsSystem overwrites it once it has moved.
-            camera.view_matrix = camera::view_matrix(camera.position, camera.yaw, camera.pitch);
+            camera.recompose_view();
         }
 
         // interactable props: press the interact key while facing one to rotate
@@ -315,6 +341,7 @@ mod tests {
             position: [0.0; 3],
             yaw: 0.0,
             pitch: 0.0,
+            up: [0.0, 1.0, 0.0],
             desired_move: [0.0; 3],
             jump_requested: false,
             interact_requested: false,

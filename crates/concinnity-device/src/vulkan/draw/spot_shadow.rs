@@ -99,16 +99,7 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
     if !spot_shadows.is_empty() {
-        let uniforms: Vec<ShadowUniforms> = spot_shadows
-            .iter()
-            .map(|sd| {
-                let mut u = csm::empty_shadow_uniforms();
-                u.light_vps[0] = sd.light_vp;
-                u.active_cascades = 1;
-                u
-            })
-            .collect();
-        upload_strided(&ubo, &uniforms, stride);
+        upload_strided(&ubo, &slice_uniforms(spot_shadows), stride);
     }
 
     // The pass's own descriptor pool: one single-UBO set per slice. Kept
@@ -146,6 +137,7 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
         slice_size,
         data_buffer,
         ubo,
+        ubo_stride: stride,
         sets,
         _descriptor_pool: descriptor_pool,
         frusta: spot_shadows
@@ -159,6 +151,37 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
 
 // One-shot tightly packed upload of a record slice into a host-visible pooled
 // buffer.
+// Each slice's `ShadowUniforms`: the spot's matrix in `light_vps[0]`.
+fn slice_uniforms(spot_shadows: &[SpotShadowData]) -> Vec<ShadowUniforms> {
+    spot_shadows
+        .iter()
+        .map(|sd| {
+            let mut u = csm::empty_shadow_uniforms();
+            u.light_vps[0] = sd.light_vp;
+            u.active_cascades = 1;
+            u
+        })
+        .collect()
+}
+
+impl VkSpotShadow {
+    // Rewrite every slice's projection in place for moved spot lights, and
+    // start the refresh schedule over so each slice re-renders. The caller has
+    // drained the GPU: both buffers are single, read by every in-flight frame.
+    pub(in crate::vulkan) fn rewrite(&mut self, spot_shadows: &[SpotShadowData]) {
+        if spot_shadows.is_empty() {
+            return;
+        }
+        upload_records(&self.data_buffer, spot_shadows);
+        upload_strided(&self.ubo, &slice_uniforms(spot_shadows), self.ubo_stride);
+        self.frusta = spot_shadows
+            .iter()
+            .map(spot_shadow::slice_frustum)
+            .collect();
+        self.scheduler = Default::default();
+    }
+}
+
 fn upload_records<T: Copy>(buffer: &PooledBuffer, records: &[T]) {
     buffer.write_slice(0, records);
 }

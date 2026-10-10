@@ -135,9 +135,10 @@ fn local_bounds(verts: &[Vertex]) -> ([f32; 3], [f32; 3]) {
 // `decomposed_renderable_item`.
 //
 // An entity is dynamic (pulled out of the BVH and always drawn after a per-object
-// frustum test) when it carries a Pickup, Interactable, Parent, or Collider tag.
-// The BVH is built once at init and does not refit, so a moving entity would
-// otherwise risk being culled against its stale init-time AABB.
+// frustum test) when it carries a Pickup, Interactable, Parent, or Collider tag,
+// or lives in a planet world, where every entity moves whenever the simulated
+// frame moves. The BVH is built once at init and does not refit, so a moving
+// entity would otherwise risk being culled against its stale init-time AABB.
 #[derive(Debug, PartialEq)]
 pub(crate) struct RenderableItem {
     pub asset_id: Option<AssetId>,
@@ -150,10 +151,11 @@ pub(crate) struct RenderableItem {
 
 // Build one entity's RenderableItem: read its renderer fields from its
 // MeshRenderer xor ModelRenderer, its dynamic flag from the Pickup /
-// Interactable / Parent / Collider tags, and its asset id from its Identity.
+// Interactable / Parent / Collider tags or a Planet in the world, and its asset
+// id from its Identity.
 pub(crate) fn decomposed_renderable_item(ctx: &PipelineContext, entity: Entity) -> RenderableItem {
     use concinnity_core::components::{
-        Collider, Interactable, MeshRenderer, ModelRenderer, Parent, Pickup,
+        Collider, Interactable, MeshRenderer, ModelRenderer, Parent, Pickup, Planet,
     };
 
     let (model, mesh, material, cull_distance) = if let Some(m) = ctx.get::<ModelRenderer>(entity) {
@@ -166,7 +168,8 @@ pub(crate) fn decomposed_renderable_item(ctx: &PipelineContext, entity: Entity) 
     let is_dynamic = ctx.get::<Pickup>(entity).is_some()
         || ctx.get::<Interactable>(entity).is_some()
         || ctx.get::<Parent>(entity).is_some()
-        || ctx.get::<Collider>(entity).is_some();
+        || ctx.get::<Collider>(entity).is_some()
+        || ctx.query::<Planet>().next().is_some();
     RenderableItem {
         asset_id: ctx.get::<Identity>(entity).map(|i| i.id()),
         model,
@@ -1240,6 +1243,18 @@ mod tests {
                 is_dynamic: true,
             }
         );
+    }
+
+    // In a planet world every placement moves with the simulated frame, so
+    // none is frozen into the static BVH.
+    #[test]
+    fn a_planet_world_makes_every_placement_dynamic() {
+        use concinnity_core::components::{MeshRenderer, Planet};
+        let mut world = World::new();
+        let e = world.push(MeshRenderer::default());
+        assert!(!decomposed_renderable_item(&world.context(), e).is_dynamic);
+        world.push(Planet::default());
+        assert!(decomposed_renderable_item(&world.context(), e).is_dynamic);
     }
 
     fn mesh_item(mesh: AssetId) -> RenderableItem {

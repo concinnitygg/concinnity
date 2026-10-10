@@ -4,6 +4,7 @@
 use concinnity_core::components;
 use concinnity_core::gfx::jitter;
 use concinnity_core::gfx::render_types::LineVertex;
+use concinnity_core::planet::Rebase;
 use concinnity_core::profile;
 use concinnity_core::profile::PassTiming;
 use concinnity_core::render::depth::camera_projection;
@@ -636,6 +637,20 @@ impl DxContext {
         if let Some(upscaler) = &self.upscale.backend {
             upscaler.request_history_reset();
         }
+    }
+
+    // Carry the temporal history into the frame the world moved to: the
+    // camera half of the motion history, the view-projection the occlusion
+    // test reprojects last frame's pyramid through, and the per-object
+    // transforms, which are distrusted for one frame.
+    pub(in crate::directx) fn rebase_temporal_history(&mut self, rebase: &Rebase) {
+        if let Some(gb) = &self.gbuffer {
+            gb.view_history.borrow_mut().rebase(rebase);
+        }
+        self.cull
+            .prev_view_proj
+            .set(rebase.reproject(self.cull.prev_view_proj.get()));
+        self.state.model_history.get_mut().forget();
     }
 
     // History the next frame reads: Hi-Z validity, cull VP, TAA jitter, G-buffer VP.

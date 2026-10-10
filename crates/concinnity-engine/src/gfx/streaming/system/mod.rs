@@ -94,6 +94,8 @@ pub struct StreamingStats {
     pub mesh: Option<(usize, usize, usize)>,
     /// `(resident, pending)` chunk counts when a `VoxelWorld` is streaming.
     pub chunk: Option<(usize, usize)>,
+    /// `(resident, pending)` terrain tile counts when a `Planet` is streaming.
+    pub planet: Option<(usize, usize)>,
     /// `(resident_bytes, byte_budget)` for the texture pool when streaming;
     /// `byte_budget` is 0 when the pool runs count-only (no byte budget).
     pub texture_bytes: Option<(u64, u64)>,
@@ -138,6 +140,8 @@ pub(crate) struct StreamingState {
     // Infinite voxel-world chunk streaming. `Some` only when a `VoxelWorld` was
     // declared.
     pub(crate) chunk_stream: Option<ChunkStreamState>,
+    // A planet's terrain tiles. `Some` only when a `Planet` was declared.
+    pub(crate) planet_tiles: Option<crate::gfx::streaming::planet::PlanetTiles>,
     // Deferred shader-bucket pipelines, built off the frame thread as their
     // scene pins. `Some` only when init deferred at least one bucket.
     pub(crate) shader_warmup: Option<crate::gfx::streaming::shader::ShaderWarmup>,
@@ -217,6 +221,9 @@ impl System for StreamingSystem {
         let ram_budget = ctx
             .resource::<crate::app::budget::MemoryBudget>()
             .map(|b| b.budget_bytes);
+        let planet = ctx
+            .resource::<concinnity_core::planet::PlanetFrame>()
+            .copied();
         // The camera the draw will use (written by the camera controller last
         // tick) is the absolute fallback when no chunk streaming rebases it.
         let (view_matrix, cam_pos) = ctx
@@ -304,6 +311,20 @@ impl System for StreamingSystem {
         // so this frame's dispatch sees the corrected residency.
         if let Some(failures) = failures {
             state.apply_op_failures(&failures.0, &mut queues.slots);
+        }
+
+        // A planet's tiles, around the camera in the frame the planet system
+        // last published.
+        if let (Some(tiles), Some(planet)) = (state.planet_tiles.as_mut(), planet.as_ref()) {
+            let retire_frame = state.frame_count + state.frames_in_flight as u64;
+            tiles.step(
+                planet,
+                cam_pos,
+                &mut queues.ops,
+                &mut queues.slots,
+                state.frame_count,
+                retire_frame,
+            );
         }
 
         let (view, cam_pos) = state.drive(
@@ -398,6 +419,11 @@ impl StreamingState {
                     }
                     if let Some(residency) = &mut self.scene_residency {
                         residency.note_resident((CHANNEL_TEXTURE, slot as u32), true);
+                    }
+                }
+                OpFailure::PlanetTileAdd { tile } => {
+                    if let Some(tiles) = &mut self.planet_tiles {
+                        tiles.roll_back(tile, slots);
                     }
                 }
                 OpFailure::ChunkAdd { coord } => {
@@ -872,6 +898,7 @@ impl StreamingState {
             texture: self.texture_streamer.as_ref().map(|s| s.stats()),
             mesh: self.mesh_streamer.as_ref().map(|s| s.stats()),
             chunk: self.chunk_stream.as_ref().map(|cs| cs.streamer.stats()),
+            planet: self.planet_tiles.as_ref().map(|t| t.stats()),
             texture_bytes: self
                 .texture_streamer
                 .as_ref()
@@ -1013,6 +1040,7 @@ mod tests {
             mesh_streamer: None,
             mesh_stream_draw_indices: Vec::new(),
             chunk_stream: None,
+            planet_tiles: None,
             shader_warmup: None,
             scene_residency: None,
             frame_count: 0,

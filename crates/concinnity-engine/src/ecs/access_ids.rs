@@ -99,6 +99,7 @@ define_access_ids! {
         crate::gfx::overlay::OverlayFrame,
         crate::gfx::overlay::OverlayAssets,
         crate::gfx::overlay::OverlayRecycle,
+        concinnity_core::planet::FrameRebases,
     ],
     events: [
         ControlsCommand,

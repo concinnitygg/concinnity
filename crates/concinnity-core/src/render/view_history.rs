@@ -42,6 +42,15 @@ impl ViewHistory {
     pub fn reset(&mut self) {
         self.prev = None;
     }
+
+    /// Carry the history into the frame the world moved to, so a point that
+    /// stayed put reprojects to where the previous frame drew it.
+    pub fn rebase(&mut self, rebase: &crate::planet::Rebase) {
+        if let Some(prev) = self.prev.as_mut() {
+            prev.vp = rebase.reproject(prev.vp);
+            prev.cam_pos = rebase.apply_point(prev.cam_pos);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -76,6 +85,36 @@ mod tests {
         let mut history = ViewHistory::default();
         history.advance(EARLIER);
         assert_eq!(history.prev_or(CUR), EARLIER);
+    }
+
+    // A rebased history sees a carried point at the clip position the
+    // recorded frame saw the point at before it was carried.
+    #[test]
+    fn a_rebased_history_reprojects_a_still_point_where_it_was() {
+        use crate::planet::Rebase;
+        let rebase = Rebase {
+            rotation: crate::math::quat_from_axis_angle([1.0, 0.0, 0.0], 0.02),
+            translation: [-900.0, 4.0, 10.0],
+        };
+        let mut history = ViewHistory::default();
+        history.advance(CUR);
+        history.rebase(&rebase);
+        let prev = history.prev_or(EARLIER);
+        let p = [905.0, -3.0, -12.0];
+        let clip = |m: crate::transform::Mat4, p: [f32; 3]| -> [f32; 4] {
+            core::array::from_fn(|i| m[0][i] * p[0] + m[1][i] * p[1] + m[2][i] * p[2] + m[3][i])
+        };
+        let before = clip(CUR.vp, p);
+        let after = clip(prev.vp, rebase.apply_point(p));
+        for i in 0..4 {
+            assert!((before[i] - after[i]).abs() < 1e-2, "{before:?} {after:?}");
+        }
+        let cam = rebase.apply_point(CUR.cam_pos);
+        assert!((0..3).all(|i| (prev.cam_pos[i] - cam[i]).abs() < 1e-3));
+        // Nothing recorded, nothing to carry.
+        let mut empty = ViewHistory::default();
+        empty.rebase(&rebase);
+        assert_eq!(empty.prev_or(CUR), CUR);
     }
 
     #[test]

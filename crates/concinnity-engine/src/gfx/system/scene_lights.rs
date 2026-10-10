@@ -4,6 +4,7 @@
 use concinnity_core::components::{DirectionalLight, PointLight, RectAreaLight, SpotLight};
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::gfx::render_types::LightUniforms;
+use concinnity_core::planet::Rebase;
 use concinnity_core::render::lights::{self, DirectionalLightSet, LightData};
 use concinnity_core::sky::SkyOrientation;
 
@@ -24,6 +25,32 @@ pub(super) fn gather_lights(
     (data, uniforms)
 }
 
+// Carry every local light into the frame `rebase` moves the world to, and pack
+// the moved lights for the backend to rewrite in place. `None` for a world with
+// no local light. The ambient scale rides `LightUniforms` but is not part of
+// what moves, so it is left at zero here.
+pub(super) fn carry_local_lights(
+    ctx: &mut PipelineContext,
+    rebase: &Rebase,
+) -> Option<(LightData, LightUniforms)> {
+    let mut any = false;
+    for light in ctx.query_mut::<PointLight>() {
+        light.position = rebase.apply_point(light.position);
+        any = true;
+    }
+    for light in ctx.query_mut::<SpotLight>() {
+        light.position = rebase.apply_point(light.position);
+        light.direction = rebase.apply_vector(light.direction);
+        any = true;
+    }
+    for light in ctx.query_mut::<RectAreaLight>() {
+        light.center = rebase.apply_point(light.center);
+        light.normal = rebase.apply_vector(light.normal);
+        any = true;
+    }
+    any.then(|| gather_lights(ctx, 0.0))
+}
+
 // Every authored direction carried by the sky's current rotation. A
 // directional light is at infinity by definition, so it rides the celestial
 // sphere and turns with it. Returned inline so the per-frame extraction that
@@ -42,6 +69,51 @@ pub(super) fn lights_under_sky<'a>(
 mod tests {
     use super::*;
     use concinnity_core::ecs::World;
+
+    // A frame move carries each kind of local light to where the move says,
+    // and the packed lights the backend rewrites are the carried ones.
+    #[test]
+    fn a_frame_move_carries_every_local_light() {
+        let rebase = Rebase {
+            rotation: concinnity_core::math::quat_from_axis_angle([1.0, 0.0, 0.2], 0.02),
+            translation: [-1_000.0, 12.0, 4.0],
+        };
+        let mut world = World::new();
+        world.push(PointLight {
+            position: [1_001.0, 2.0, 3.0],
+            ..Default::default()
+        });
+        world.push(SpotLight {
+            position: [998.0, 5.0, -2.0],
+            direction: [0.0, -1.0, 0.0],
+            ..Default::default()
+        });
+        world.push(RectAreaLight {
+            center: [1_004.0, 3.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            ..Default::default()
+        });
+        let (data, uniforms) =
+            carry_local_lights(&mut world.context(), &rebase).expect("the world has lights");
+        let ctx = world.context();
+        let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-3);
+        let point = ctx.query::<PointLight>().next().unwrap();
+        assert!(close(
+            point.position,
+            rebase.apply_point([1_001.0, 2.0, 3.0])
+        ));
+        let spot = ctx.query::<SpotLight>().next().unwrap();
+        assert!(close(spot.position, rebase.apply_point([998.0, 5.0, -2.0])));
+        assert!(close(spot.direction, rebase.apply_vector([0.0, -1.0, 0.0])));
+        let rect = ctx.query::<RectAreaLight>().next().unwrap();
+        assert!(close(rect.center, rebase.apply_point([1_004.0, 3.0, 0.0])));
+        assert!(close(rect.normal, rebase.apply_vector([0.0, 0.0, 1.0])));
+        assert_eq!(data.lights.len(), 3);
+        assert!(close(data.lights[0].position, point.position));
+        assert!(close(uniforms.point[0].position, point.position));
+        assert_eq!(uniforms.num_point, 1);
+        assert!(carry_local_lights(&mut World::new().context(), &rebase).is_none());
+    }
 
     // The lights stay resident after packing, and the ambient reaches the uniforms.
     #[test]

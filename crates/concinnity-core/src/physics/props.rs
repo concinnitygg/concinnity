@@ -234,7 +234,7 @@ impl PropBodies {
         self.bodies.get(index)
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &PropPhysics> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &PropPhysics> + Clone {
         self.bodies.iter()
     }
 
@@ -260,6 +260,24 @@ impl PropBodies {
                 prop.written = (position, rotation_deg);
                 prop.rest_written = false;
             }
+        }
+    }
+
+    // Carry every prop's blend snapshots into another frame (the simulation
+    // carries the bodies), taking the pose last written back from `written`:
+    // the entity's Transform, already carried by whatever moved the frame, so
+    // the next frame does not read it as an outside move.
+    pub(crate) fn rebase(
+        &mut self,
+        rebase: &crate::planet::Rebase,
+        written: impl Fn(Entity) -> Option<([f32; 3], [f32; 3])>,
+    ) {
+        for prop in self.bodies.iter_mut() {
+            prop.pose.rebase(rebase);
+            prop.written = written(prop.entity).unwrap_or((
+                rebase.apply_point(prop.written.0),
+                rebase.apply_euler_deg(prop.written.1),
+            ));
         }
     }
 

@@ -5,6 +5,7 @@ use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::gfx::jitter;
 use concinnity_core::gfx::render_types::{self, LineVertex};
 use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
+use concinnity_core::planet::Rebase;
 use concinnity_core::profile;
 use concinnity_core::render::depth::camera_projection;
 use concinnity_core::render::error;
@@ -559,6 +560,16 @@ impl MtlContext {
         }
         self.view_history.reset();
         self.upscale.reset.request();
+    }
+
+    // Carry the temporal history into the frame the world moved to: the
+    // camera half of the motion history, the view-projection the occlusion
+    // test reprojects last frame's pyramid through, and the per-object
+    // transforms, which are distrusted for one frame.
+    pub(super) fn rebase_temporal_history(&mut self, rebase: &Rebase) {
+        self.view_history.rebase(rebase);
+        self.cull.prev_view_proj = rebase.reproject(self.cull.prev_view_proj);
+        self.state.model_history.get_mut().forget();
     }
 
     pub(super) fn advance_temporal_state(&mut self, velocity_active: bool, cur: ViewFrame) {

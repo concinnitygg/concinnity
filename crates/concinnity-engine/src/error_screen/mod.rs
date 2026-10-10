@@ -102,6 +102,7 @@ fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
             show: Default::default(),
             sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
             history_reset: false,
+            rebase: None,
             grass_benders: &[],
         }) {
             // The screen cannot report its own failure to draw; the log is all

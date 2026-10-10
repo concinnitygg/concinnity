@@ -100,6 +100,26 @@ pub trait RenderTuning {
         let _ = lights;
     }
 
+    /// Move the local lights (point, spot and rect area) in place: `lights` is
+    /// `lights::build_light_data` over the same lights in the same order, so
+    /// the count and every slot assignment are unchanged and only positions
+    /// and directions differ. `uniforms` supplies the point array world shader
+    /// hooks read; its other fields are ignored. This is how a world that
+    /// moves to another simulated frame carries its lights. The spot shadow
+    /// slices re-render from their first refresh. Default:
+    /// [`RenderError::Unsupported`]; an `Err` also reports a count that does
+    /// not match the lights built at init.
+    fn move_local_lights(
+        &mut self,
+        lights: &crate::render::lights::LightData,
+        uniforms: &crate::gfx::render_types::LightUniforms,
+    ) -> RenderResult<()> {
+        let _ = (lights, uniforms);
+        Err(RenderError::Unsupported {
+            op: "move_local_lights",
+        })
+    }
+
     /// Apply a change to the quality-feature toggles (TAA / SSAO / SSR / RT
     /// reflections / SSGI / auto-exposure) live. Unlike the post-process params,
     /// these gate render passes whose GPU resources (pipelines, render targets,

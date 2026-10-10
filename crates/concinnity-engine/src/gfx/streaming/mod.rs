@@ -8,9 +8,10 @@
 pub(crate) mod chunk;
 mod file_range;
 pub(crate) mod mesh;
+pub(crate) mod planet;
 pub(crate) mod shader;
 pub(crate) mod texture;
-mod worker;
+pub(crate) mod worker;
 
 /// Asset-streaming drive (texture / mesh / voxel-world chunk pools) + the
 /// camera-relative view publish. Internal system, constructed alongside

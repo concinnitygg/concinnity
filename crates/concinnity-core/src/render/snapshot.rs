@@ -44,6 +44,9 @@ pub struct FrameScalars {
     pub directional: Option<crate::render::lights::DirectionalLightSet>,
     /// Why the temporal history is invalid this frame, if it is.
     pub history_reset: crate::render::history_reset::HistoryResetCauses,
+    /// The move of the simulated frame since the last drawn frame, if it
+    /// moved: what the temporal history is carried through.
+    pub rebase: Option<crate::planet::Rebase>,
 }
 
 impl Default for FrameScalars {
@@ -62,6 +65,7 @@ impl Default for FrameScalars {
             sky_rot: crate::sky::SkyOrientation::IDENTITY_ROWS,
             directional: None,
             history_reset: crate::render::history_reset::HistoryResetCauses::NONE,
+            rebase: None,
         }
     }
 }

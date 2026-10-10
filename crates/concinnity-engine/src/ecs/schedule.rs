@@ -24,6 +24,7 @@ use concinnity_core::components::HitRegion;
 use concinnity_core::components::KeyBinding;
 use concinnity_core::components::LoadingOverlay;
 use concinnity_core::components::PhysicsConfig;
+use concinnity_core::components::Planet;
 use concinnity_core::components::PropBody;
 use concinnity_core::components::RigidBody;
 use concinnity_core::components::Screen;
@@ -188,6 +189,17 @@ pub(crate) fn physics(world: &World) -> Option<concinnity_core::physics::Physics
     Some(crate::physics::build(config))
 }
 
+// PlanetSystem: present whenever the world declares a `Planet`. Scheduled
+// after the frame is drawn and before physics and the camera controllers, so
+// a move of the simulated frame lands between two ticks.
+pub(crate) fn planet(world: &World) -> Option<crate::planet::PlanetSystem> {
+    world
+        .query::<Planet>()
+        .next()
+        .cloned()
+        .map(crate::planet::PlanetSystem::new)
+}
+
 // The first controlled `Camera3D` picks the controller flavor: no `follow`
 // block selects this first-person / fly controller, a `follow` block selects
 // the adjacent ThirdPersonSystem entry instead (a camera never gets both). A
@@ -342,6 +354,7 @@ mod tests {
             position: [0.0, 1.0, 0.0],
             yaw: 0.0,
             pitch: 0.0,
+            up: [0.0, 1.0, 0.0],
             desired_move: [0.0; 3],
             jump_requested: false,
             interact_requested: false,

@@ -80,6 +80,9 @@ pub mod live_edit;
 // The rigid-body simulation driver: builds a `concinnity_core::physics::Simulation`
 // from the world's physics content and steps it on the fixed tick.
 pub(crate) mod physics;
+// Keeps a planet world simulating around its camera: the moving frame, the
+// pull toward the center, and the ground patch near the camera.
+pub(crate) mod planet;
 // The user-facing settings registry and the system that applies setting
 // changes.
 pub(crate) mod settings;

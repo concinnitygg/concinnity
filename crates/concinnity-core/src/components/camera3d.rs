@@ -241,6 +241,10 @@ mod tests {
     }
 }
 
+fn plus_y() -> [f32; 3] {
+    [0.0, 1.0, 0.0]
+}
+
 /// The runtime `Camera3D`: the authored fields of
 /// [`cook::Camera3D`](crate::components::cook::Camera3D) plus the view matrix and
 /// per-frame input intent, which are not declared.
@@ -261,6 +265,10 @@ pub struct Camera3D {
     pub yaw: f32,
     /// Current pitch in radians.
     pub pitch: f32,
+    /// The direction yaw turns about and pitch is measured from: `+Y`, or
+    /// on a [Planet](#planet) away from its center where the camera stands.
+    #[serde(default = "plus_y")]
+    pub up: [f32; 3],
     /// World-space horizontal movement intent (units/second). Written by
     /// Camera3DSystem each frame, consumed by PhysicsSystem. Runtime-only.
     pub desired_move: [f32; 3],
@@ -286,6 +294,7 @@ impl Camera3D {
             position: args.position,
             yaw: args.yaw,
             pitch: args.pitch,
+            up: plus_y(),
             desired_move: [0.0; 3],
             jump_requested: false,
             interact_requested: false,
@@ -303,6 +312,12 @@ impl Camera3D {
         self.position = position;
         self.yaw = yaw;
         self.pitch = pitch;
-        self.view_matrix = crate::gfx::camera::view_matrix(position, yaw, pitch);
+        self.recompose_view();
+    }
+
+    /// Rebuild the view matrix from the position, yaw, pitch and up.
+    pub fn recompose_view(&mut self) {
+        self.view_matrix =
+            crate::gfx::camera::view_matrix_about(self.position, self.yaw, self.pitch, self.up);
     }
 }

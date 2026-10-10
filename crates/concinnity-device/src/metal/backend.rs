@@ -118,6 +118,7 @@ impl RenderTuning for MtlContext {
         fn update_post_process(&mut self, tunables: PostProcessTunables);
         fn set_ambient_intensity(&mut self, value: f32);
         fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
+        fn move_local_lights(&mut self, lights: &concinnity_core::render::lights::LightData, uniforms: &concinnity_core::gfx::render_types::LightUniforms) -> RenderResult<()>;
         fn apply_quality_settings(&mut self, settings: QualitySettings) -> RenderResult<()>;
         fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence);
         fn update_quality_params(&mut self, settings: QualitySettings);

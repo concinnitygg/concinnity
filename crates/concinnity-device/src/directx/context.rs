@@ -962,6 +962,7 @@ impl DxContext {
             show,
             sky_rot,
             history_reset,
+            rebase,
             grass_benders,
         } = params;
         // Snapped for the passes recorded below (the wireframe pipeline
@@ -973,8 +974,14 @@ impl DxContext {
         self.state.view.view_distance = view_distance;
         self.state.view.sky_rot = sky_rot;
         self.apply_pending_rebuilds()?;
+        // A moved world's decals move with it whatever happens to history.
+        if let Some(rebase) = &rebase {
+            self.decal.set.rebase(rebase);
+        }
         if history_reset {
             self.reset_temporal_history();
+        } else if let Some(rebase) = rebase {
+            self.rebase_temporal_history(&rebase);
         }
 
         let frame = self.current_frame;
@@ -1508,6 +1515,64 @@ impl DxContext {
         }
         self.uniforms.light_uniforms.ambient_intensity = value;
         self.uniforms.mark_lights_dirty();
+    }
+
+    // Move the local lights in place. The light, area and spot tables and the
+    // spot slice CBVs are single UPLOAD buffers every in-flight frame reads,
+    // so the GPU is drained before they are rewritten; the cluster reach, the
+    // spot frusta and the spot refresh schedule are re-derived, and the light
+    // CBV ring is re-armed for the point array.
+    pub(crate) fn move_local_lights(
+        &mut self,
+        data: &lights::LightData,
+        uniforms: &LightUniforms,
+    ) -> error::RenderResult<()> {
+        if data.lights.len() as i32 != self.uniforms.light_uniforms.num_local_lights
+            || data.spot_shadows.len() != self.spot_shadow.count() as usize
+        {
+            return Err(error::RenderError::Other(
+                "move_local_lights: the light count changed since init".into(),
+            ));
+        }
+        self.wait_idle();
+        if !data.lights.is_empty() {
+            super::draw::upload_static_records(
+                &self.uniforms.local_light_buffer,
+                &data.lights,
+                "local-light",
+            )?;
+        }
+        if !data.area_lights.is_empty() {
+            super::draw::upload_static_records(
+                &self.scene.area_light.buffer,
+                &data.area_lights,
+                "area-light",
+            )?;
+        }
+        if !data.spot_shadows.is_empty() {
+            super::draw::upload_static_records(
+                &self.spot_shadow.buffer,
+                &data.spot_shadows,
+                "spot-shadow",
+            )?;
+            super::init::shadow::write_spot_uniforms(
+                &self.spot_shadow.ubo,
+                &data.spot_shadows,
+                self.spot_shadow.ubo_stride,
+            )?;
+        }
+        self.spot_shadow.frusta = data
+            .spot_shadows
+            .iter()
+            .map(concinnity_core::render::spot_shadow::slice_frustum)
+            .collect();
+        self.spot_shadow.scheduler = Default::default();
+        self.uniforms.cluster_reach =
+            concinnity_core::render::cluster_range::ClusterReach::new(&data.lights);
+        self.uniforms.light_uniforms.point = uniforms.point;
+        self.uniforms.light_uniforms.num_point = uniforms.num_point;
+        self.uniforms.mark_lights_dirty();
+        Ok(())
     }
 
     // Replace the live directional lights. The cascade shadow direction and the

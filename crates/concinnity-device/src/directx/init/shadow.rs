@@ -80,6 +80,38 @@ pub(super) fn build_shadow(
     })
 }
 
+// Write each slice's `ShadowUniforms` (the spot's matrix in `light_vps[0]`)
+// into `buf`, `stride` bytes apart. `buf` holds a slot per slice.
+pub(in crate::directx) fn write_spot_uniforms(
+    buf: &ID3D12Resource,
+    spot_shadows: &[SpotShadowData],
+    stride: u64,
+) -> RenderResult<()> {
+    let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
+    // local that receives the mapping.
+    unsafe { buf.Map(0, None, Some(&mut ptr)) }
+        .map_err(|e| map_hresult(e.code(), "map spot-shadow UBO"))?;
+    for (i, sd) in spot_shadows.iter().enumerate() {
+        let mut u = csm::empty_shadow_uniforms();
+        u.light_vps[0] = sd.light_vp;
+        u.active_cascades = 1;
+        // SAFETY: the mapping covers an UPLOAD-heap buffer created with a slot per slice,
+        // and the source is a separate allocation, so the ranges cannot overlap.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                &u as *const ShadowUniforms as *const u8,
+                (ptr as *mut u8).add(i * stride as usize),
+                size_of::<ShadowUniforms>(),
+            );
+        }
+    }
+    // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping
+    // past this call.
+    unsafe { buf.Unmap(0, None) };
+    Ok(())
+}
+
 pub(super) fn build_spot_shadow(
     gpu: &InitGpu<'_>,
     descriptors: &DxDescriptors,
@@ -150,28 +182,7 @@ pub(super) fn build_spot_shadow(
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
-        let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-        // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
-        // local that receives the mapping.
-        unsafe { buf.Map(0, None, Some(&mut ptr)) }
-            .map_err(|e| map_hresult(e.code(), "map spot-shadow UBO"))?;
-        for (i, sd) in spot_shadows.iter().enumerate() {
-            let mut u = csm::empty_shadow_uniforms();
-            u.light_vps[0] = sd.light_vp;
-            u.active_cascades = 1;
-            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload,
-            // and the source is a separate allocation, so the ranges cannot overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &u as *const ShadowUniforms as *const u8,
-                    (ptr as *mut u8).add(i * spot_shadow_ubo_stride as usize),
-                    size_of::<ShadowUniforms>(),
-                );
-            }
-        }
-        // SAFETY: the resource is live and this code mapped it, and nothing keeps the mapping
-        // past this call.
-        unsafe { buf.Unmap(0, None) };
+        write_spot_uniforms(&buf, spot_shadows, spot_shadow_ubo_stride)?;
         buf
     };
 

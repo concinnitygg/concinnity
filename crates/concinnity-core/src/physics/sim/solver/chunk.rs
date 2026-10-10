@@ -16,7 +16,6 @@
 use crate::physics::sim::config::{SimConfig, Softness};
 use crate::physics::sim::contact::Manifold;
 use crate::physics::sim::joint::{JointSolver, Prepared, Push};
-use crate::physics::sim::math::vec3;
 
 use super::bodies::Bodies;
 use super::contact::{self, ContactConstraint};
@@ -57,7 +56,7 @@ pub(crate) fn run(chunk: &mut Chunk<'_>, tuning: &Tuning<'_>) {
         &chunk.bodies,
     );
     for _ in 0..tuning.substeps {
-        integrate_velocities(chunk, tuning.config.gravity, tuning.h);
+        integrate_velocities(chunk, tuning.config, tuning.h);
         JointSolver::warm_start(chunk.joints, &mut chunk.bodies);
         contact::warm_start(chunk.constraints, &mut chunk.bodies);
         JointSolver::solve(
@@ -95,11 +94,11 @@ pub(crate) fn run(chunk: &mut Chunk<'_>, tuning: &Tuning<'_>) {
     contact::apply_restitution(chunk.constraints, &mut chunk.bodies, tuning.config);
 }
 
-fn integrate_velocities(chunk: &mut Chunk<'_>, gravity: f32, h: f32) {
-    let pull = vec3(0.0, -gravity, 0.0);
+fn integrate_velocities(chunk: &mut Chunk<'_>, config: &SimConfig, h: f32) {
     let Chunk { bodies, active, .. } = chunk;
     for &slot in active.iter() {
         let body = bodies.get_mut(slot);
+        let pull = config.gravity_at(body.position);
         body.linear_velocity += pull * (body.gravity_scale * h);
         // Implicit damping: stable at any timestep, unlike scaling by
         // (1 - h * damping), which turns a body inside out past h = 1/d.

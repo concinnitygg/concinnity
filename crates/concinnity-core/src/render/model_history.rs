@@ -59,6 +59,8 @@ pub struct ModelHistory {
     prime: bool,
     // This frame's mode, from `begin`.
     mode: HistoryMode,
+    // Set by `forget`: the next tracked build treats the ring as stale.
+    forget: bool,
 }
 
 // `kind`'s occupant at `index`, at generation `generation`.
@@ -85,6 +87,10 @@ impl ModelHistory {
     /// Open a draw-args build over `n_cull` records. Call once per build, before
     /// any of the flag queries; a `Track` build in steady state is a no-op.
     pub fn begin(&mut self, mode: HistoryMode, n_cull: usize) {
+        let mode = match mode {
+            HistoryMode::Track if core::mem::take(&mut self.forget) => HistoryMode::Stale,
+            mode => mode,
+        };
         self.mode = mode;
         match mode {
             HistoryMode::Track if self.observed.len() == n_cull => {}
@@ -129,6 +135,15 @@ impl ModelHistory {
     /// snapshot reached the GPU, so the ring may still hold unwritten slots.
     pub fn request_prime(&mut self) {
         self.prime = true;
+    }
+
+    /// Distrust every transform in the ring for the next tracked build: the
+    /// world moved to another frame, so last frame's transforms place last
+    /// frame's objects in the old one. Each record reprojects through its own
+    /// current transform for that frame, which is exact for anything that
+    /// did not move.
+    pub fn forget(&mut self) {
+        self.forget = true;
     }
 
     /// Note that draw slot `draw_idx` now holds a different object. Call
@@ -329,6 +344,27 @@ mod tests {
         assert!(h.take_prime());
         h.begin(HistoryMode::Track, 2);
         assert_eq!(h.draw_flags(0, 0), draw_args_no_history());
+    }
+
+    // A forgotten ring is stale for the next tracked build only, and a probe
+    // bake in between does not use the forgetting up.
+    #[test]
+    fn a_forgotten_ring_is_stale_for_one_tracked_build() {
+        let mut h = ModelHistory::new();
+        h.begin(HistoryMode::Track, 2);
+        h.draw_flags(0, 0);
+        h.begin(HistoryMode::Track, 2);
+        assert_eq!(h.draw_flags(0, 0), KEEP);
+        h.take_prime();
+        h.forget();
+        h.begin(HistoryMode::Untracked, 2);
+        h.begin(HistoryMode::Track, 2);
+        assert_eq!(h.draw_flags(0, 0), draw_args_no_history());
+        assert!(h.take_prime(), "every slot is refilled in the new frame");
+        h.begin(HistoryMode::Track, 2);
+        h.draw_flags(0, 0);
+        h.begin(HistoryMode::Track, 2);
+        assert_eq!(h.draw_flags(0, 0), KEEP);
     }
 
     // A probe bake builds its own records into its own buffers: it flags
