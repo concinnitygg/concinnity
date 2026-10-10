@@ -218,6 +218,25 @@ pass_ids! {
     /// encoder boundaries and counts it in `Main` alone. No backend's graph
     /// executor dispatches this id.
     Sky => "sky",
+    /// Grass blade generation. A compute pass that places the grass field's
+    /// blades in the tiles around the camera, culls them against the view
+    /// frustum and the draw distance, and appends the survivors to a
+    /// visible-blade buffer with the indirect draw arguments the grass draws in
+    /// `GBufferPrepass` and `Main` consume. Gated on
+    /// `FrameGraphInputs::grass_enabled`.
+    Grass => "grass",
+    /// The grass blades drawn into the lit scene. Not a standalone graph node:
+    /// one indirect draw at the tail of `Main`'s opaque geometry. It carries its
+    /// own timing slot so its cost is visible inside `Main`'s (see
+    /// [`PassId::enclosing`]): Vulkan and DirectX time it with timestamps around
+    /// the draw, while Metal samples only at encoder boundaries and counts it in
+    /// `Main` alone. No backend's graph executor dispatches this id.
+    GrassDraw => "grass_draw",
+    /// The grass blades drawn into the G-buffer pre-pass: normals, depth and
+    /// the motion of each blade's sway. Timed inside `GBufferPrepass` the way
+    /// [`PassId::GrassDraw`] is timed inside `Main`. No backend's graph executor
+    /// dispatches this id.
+    GrassPrepass => "grass_prepass",
 }
 
 impl PassId {
@@ -237,7 +256,8 @@ impl PassId {
     /// breakdown of the frame lists it under that pass rather than beside it.
     pub const fn enclosing(self) -> Option<PassId> {
         match self {
-            PassId::Sky => Some(PassId::Main),
+            PassId::Sky | PassId::GrassDraw => Some(PassId::Main),
+            PassId::GrassPrepass => Some(PassId::GBufferPrepass),
             _ => None,
         }
     }
@@ -279,6 +299,12 @@ mod tests {
             }
         }
         assert_eq!(PassId::Sky.enclosing(), Some(PassId::Main));
+        assert_eq!(PassId::GrassDraw.enclosing(), Some(PassId::Main));
+        assert_eq!(
+            PassId::GrassPrepass.enclosing(),
+            Some(PassId::GBufferPrepass)
+        );
+        assert_eq!(PassId::Grass.enclosing(), None);
     }
 
     #[test]

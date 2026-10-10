@@ -28,6 +28,7 @@ mod gpu_profile;
 mod graph_events;
 mod graph_exec;
 mod graph_queues;
+mod grass;
 mod hiz;
 mod hot_reload;
 mod init;

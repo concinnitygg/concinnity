@@ -27,11 +27,13 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("glass.hlsl", GLASS),
     ("glass_mesh.hlsl", GLASS_MESH),
     ("glass_reflection.hlsl", GLASS_REFLECTION),
+    ("grass.hlsl", GRASS),
     ("hiz_build.hlsl", HIZ_BUILD),
     ("light_cull.hlsl", LIGHT_CULL),
     ("light_types.hlsl", LIGHT_TYPES),
     ("line.hlsl", LINE),
     ("main_bindless.hlsl", MAIN_BINDLESS),
+    ("main_resources.hlsl", MAIN_RESOURCES),
     ("main_shading.hlsl", MAIN_SHADING),
     ("main_types.hlsl", MAIN_TYPES),
     ("model_history.hlsl", MODEL_HISTORY),
@@ -73,6 +75,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("transparent_types.hlsl", TRANSPARENT_TYPES),
     ("view_uniforms.hlsl", VIEW_UNIFORMS),
     ("water.hlsl", WATER),
+    ("wind.hlsl", WIND),
 ];
 
 /// One shader's embedded text, by file name.
@@ -110,6 +113,8 @@ pub const GLASS: &str = include_str!("shaders/glass.hlsl");
 pub const GLASS_MESH: &str = include_str!("shaders/glass_mesh.hlsl");
 /// `glass_reflection.hlsl`.
 pub const GLASS_REFLECTION: &str = include_str!("shaders/glass_reflection.hlsl");
+/// `grass.hlsl`.
+pub const GRASS: &str = include_str!("shaders/grass.hlsl");
 /// `hiz_build.hlsl`.
 pub const HIZ_BUILD: &str = include_str!("shaders/hiz_build.hlsl");
 /// `light_cull.hlsl`.
@@ -120,6 +125,8 @@ pub const LIGHT_TYPES: &str = include_str!("shaders/light_types.hlsl");
 pub const LINE: &str = include_str!("shaders/line.hlsl");
 /// `main_bindless.hlsl`.
 pub const MAIN_BINDLESS: &str = include_str!("shaders/main_bindless.hlsl");
+/// `main_resources.hlsl`.
+pub const MAIN_RESOURCES: &str = include_str!("shaders/main_resources.hlsl");
 /// `main_shading.hlsl`.
 pub const MAIN_SHADING: &str = include_str!("shaders/main_shading.hlsl");
 /// `main_types.hlsl`.
@@ -202,3 +209,5 @@ pub const TRANSPARENT_TYPES: &str = include_str!("shaders/transparent_types.hlsl
 pub const VIEW_UNIFORMS: &str = include_str!("shaders/view_uniforms.hlsl");
 /// `water.hlsl`.
 pub const WATER: &str = include_str!("shaders/water.hlsl");
+/// `wind.hlsl`.
+pub const WIND: &str = include_str!("shaders/wind.hlsl");

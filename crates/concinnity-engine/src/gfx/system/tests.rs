@@ -3800,14 +3800,15 @@ fn instanced_prop_bakes_its_instances_into_one_cluster() {
     );
 }
 
-// The one-shot world FX (decals, emitters, water, glass, SDF volumes) are
+// The one-shot world FX (decals, emitters, water, glass, SDF volumes, grass
+// and its wind) are
 // resolved at init and drained: each is baked into a backend record at
 // construction and has no per-frame update path, so leaving the components
 // behind would only invite a second, stale build.
 #[test]
 fn one_shot_world_fx_are_resolved_and_drained_at_init() {
     use concinnity_core::components::{
-        Decal, GlassPanel, ParticleEmitter, SdfVolume, WaterSurface,
+        Decal, GlassPanel, Grass, ParticleEmitter, SdfVolume, WaterSurface, Wind,
     };
 
     let (state, hooks) = recording_hooks();
@@ -3832,6 +3833,8 @@ fn one_shot_world_fx_are_resolved_and_drained_at_init() {
     );
     b.push(WaterSurface::default());
     b.push(GlassPanel::default());
+    b.push(Wind::default());
+    b.push(Grass::default());
     let sdf_frag = b.payload(b"sdf-fragment-bytes");
     b.push_identified(
         AssetId(832),
@@ -3864,6 +3867,12 @@ fn one_shot_world_fx_are_resolved_and_drained_at_init() {
     assert_eq!(ctx.query::<WaterSurface>().count(), 0);
     assert_eq!(ctx.query::<GlassPanel>().count(), 0);
     assert_eq!(ctx.query::<SdfVolume>().count(), 0);
+    assert_eq!(ctx.query::<Wind>().count(), 0);
+    assert_eq!(ctx.query::<Grass>().count(), 0);
+    assert!(
+        lock(&state).init.as_ref().unwrap().grass,
+        "the grass field reaches the backend"
+    );
 }
 
 // An SDF volume with no compiled payload, or one whose payload cannot be read, is

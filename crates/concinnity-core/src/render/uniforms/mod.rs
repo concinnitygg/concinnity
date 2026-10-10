@@ -12,6 +12,7 @@
 pub mod bindless;
 pub mod directx;
 pub mod geometry;
+pub mod grass;
 pub mod metal;
 pub mod post;
 pub mod probe;

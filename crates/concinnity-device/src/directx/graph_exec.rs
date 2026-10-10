@@ -630,6 +630,16 @@ impl DxContext {
         // and Metal's `prepare_particle_pass` hoist.
         let particle_frame = self.prepare_particle_pass(params.frame_idx, params.elapsed);
         let particle_ref = particle_frame.as_ref();
+        // The grass block for the kernel and both draws, written once here and
+        // only on a frame whose graph runs the kernel, so the draw-argument
+        // slot it fills alternates frame to frame.
+        let grass_frame = graph
+            .passes
+            .iter()
+            .any(|p| p.id == PassId::Grass)
+            .then(|| self.prepare_grass_frame(params.frame_idx, params.cam_pos, params.cur_vp))
+            .flatten();
+        let grass_ref = grass_frame.as_ref();
 
         // Find Composite's slot (if any) so we can skip it in the
         // worker fan-out and run it inline on the main thread instead.
@@ -744,7 +754,7 @@ impl DxContext {
                             emit_pass_prologue(cmd, registry_ref, alias_barriers_ref, idx, pass);
 
                             let encode_result =
-                                ctx.encode_pass_into(pass_id, cmd, params, particle_ref);
+                                ctx.encode_pass_into(pass_id, cmd, params, particle_ref, grass_ref);
 
                             if encode_result.is_ok() {
                                 emit_pass_epilogue(cmd, registry_ref, pass);
@@ -979,6 +989,26 @@ impl DxContext {
         // there, and where the frame's restore returns them -- because that is
         // the binding the simulation writes them through; the draw's SRV read is
         // the only state they leave it for.
+        // The grass kernel's two outputs: the blades the draws' vertex stage
+        // reads, and the draw arguments both draws consume. Both rest in the
+        // UNORDERED_ACCESS state the kernel writes them through.
+        if let Some(grass) = &self.grass {
+            match label {
+                "grass_blades" => {
+                    return Some((
+                        DxTargetObject::One(&grass.blades),
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                    ));
+                }
+                "grass_args" => {
+                    return Some((
+                        DxTargetObject::One(&grass.args),
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                    ));
+                }
+                _ => {}
+            }
+        }
         if label == "particle_pool" {
             let first = arena.len();
             arena.extend(
@@ -1182,6 +1212,7 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         params: &GraphFrameParams<'_>,
         particle_frame: Option<&super::particle::ParticleFrame>,
+        grass_frame: Option<&super::grass::GrassFrame>,
     ) -> RenderResult<()> {
         match pass_id {
             PassId::Cull => {
@@ -1202,9 +1233,16 @@ impl DxContext {
                     pass_id.name()
                 )));
             }
-            PassId::Sky => {
-                // Drawn inline at the tail of Main and of every probe face and
-                // mirror render; it only names a timing slot.
+            PassId::Grass => {
+                if let Some(frame) = grass_frame {
+                    self.encode_grass(cmd, frame);
+                }
+            }
+            PassId::Sky | PassId::GrassDraw | PassId::GrassPrepass => {
+                // Drawn inline at the tail of the opaque scene passes (the sky
+                // in Main and every probe face and mirror render, the grass in
+                // Main and the G-buffer pre-pass); each only names a timing
+                // slot.
                 return Err(RenderError::Other(format!(
                     "graph executor (directx): pass {} is drawn inline by the opaque \
                      scene passes and should not appear as a graph node",
@@ -1277,6 +1315,7 @@ impl DxContext {
                         shadow_ubo_gva: params.shadow_ubo_gva,
                     },
                     params.world_hidden,
+                    grass_frame,
                 );
             }
             PassId::Decals => {
@@ -1455,6 +1494,7 @@ impl DxContext {
                     crate::directx::post::gbuffer::GbufferPrepassFrame {
                         velocity_active: self.reads_motion(),
                         prime_history: params.prime_model_history,
+                        grass: grass_frame,
                     },
                 );
             }

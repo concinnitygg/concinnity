@@ -69,6 +69,14 @@ pub(in crate::metal) struct GpuFrameBuffers<'a> {
 // into `resolve`. A face reuses the main pipelines, so it carries whatever
 // sample count they were built at: at one sample `color_msaa` is `None` and the
 // pass draws straight into `resolve`.
+// What the main pass draws besides the surfaces: nothing at all behind an
+// opaque menu, and the grass field when its kernel ran this frame.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct MainPassExtras<'a> {
+    pub world_hidden: bool,
+    pub grass: Option<&'a crate::metal::grass::GrassFrame>,
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::metal) struct FaceTargets<'a> {
     pub color_msaa: Option<&'a ProtocolObject<dyn objc2_metal::MTLTexture>>,
@@ -154,8 +162,12 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         camera: MainPassCamera,
         gpu: GpuFrameBuffers,
-        world_hidden: bool,
+        extras: MainPassExtras<'_>,
     ) -> RenderResult<u32> {
+        let MainPassExtras {
+            world_hidden,
+            grass,
+        } = extras;
         // Only `object_buffer` gates the descriptor's store action below; the
         // rest of `gpu` travels intact into `encode_main_static_into`.
         let object_buffer = gpu.object_buffer;
@@ -250,13 +262,22 @@ impl MtlContext {
 
         // Main camera: bind the per-cluster light lists once for the pass.
         self.bind_clusters(&encoder, Some(self.main_cluster_grid()));
-        let draw_calls = self.encode_main_geometry_into(
+        let mut draw_calls = self.encode_main_geometry_into(
             &encoder,
             &view_uniforms,
             gpu,
             // Main pass: the main cull ICB (no override).
             None,
         );
+        // The blades shade on the lights, shadows and argument buffers the
+        // surfaces just bound, which they bind only with an indirect stream to
+        // execute.
+        let surfaces_bound = gpu.object_buffer.is_some()
+            && gpu.bindless_tex_args.is_some()
+            && !self.cull.icbs.is_empty();
+        if let (Some(frame), true) = (grass, surfaces_bound) {
+            draw_calls += self.encode_grass_main(&encoder, frame, &view_uniforms);
+        }
         // The sky lands behind phase 1's geometry. Under two-pass occlusion
         // `Main2` then draws the disoccluded rest over it, which wins the depth
         // test because the sky writes none.

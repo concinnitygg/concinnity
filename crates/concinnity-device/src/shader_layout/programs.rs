@@ -197,6 +197,11 @@ pub(super) static PARTICLE_VERT: Program = Program {
     splices: &[],
 };
 
+pub(super) static GRASS_GENERATE: Program = Program {
+    row: &shared::GRASS_GENERATE,
+    splices: &[],
+};
+
 pub(super) static TEXT_VERT: Program = Program {
     row: &shared::TEXT_VERT,
     splices: &[],

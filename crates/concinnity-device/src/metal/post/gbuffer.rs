@@ -207,6 +207,8 @@ pub(in crate::metal) struct GbufferGpuBuffers<'a> {
     pub history_targets: &'a [Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>],
     pub deformed_current: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     pub deformed_prev: Option<&'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    // This frame's grass inputs, when the grass kernel ran.
+    pub grass: Option<&'a crate::metal::grass::GrassFrame>,
 }
 
 impl MtlContext {
@@ -324,8 +326,13 @@ impl MtlContext {
             // The encoder above cleared all four attachments, so a world with
             // nothing in the cull records still leaves the consumers a clean
             // "no geometry" G-buffer to read.
-            let draws = self.encode_gbuffer_prepass_gpu_driven(&enc, views, gpu, velocity_active)
-                + self.encode_raymarch_prepass(&enc, views.raymarch, views.frustum);
+            let grass = gpu.grass;
+            let mut draws =
+                self.encode_gbuffer_prepass_gpu_driven(&enc, views, gpu, velocity_active);
+            if let Some(frame) = grass {
+                draws += self.encode_grass_prepass(&enc, frame, views.main, views.gbuffer);
+            }
+            draws += self.encode_raymarch_prepass(&enc, views.raymarch, views.frustum);
             // The sky keeps the "no geometry" depth and roughness and adds the
             // camera's motion where nothing was drawn.
             if self.draws_sky(self.state.view.mode) {
@@ -371,6 +378,7 @@ impl MtlContext {
             history_targets: _,
             deformed_current,
             deformed_prev,
+            grass: _,
         } = gpu;
         let (
             Some(default),

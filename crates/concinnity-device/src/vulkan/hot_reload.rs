@@ -266,6 +266,12 @@ impl VkContext {
             .as_ref()
             .map(|particles| particles.rebuild_pipelines(device, hr))
             .transpose()?;
+        let grass_targets = self.grass_targets();
+        let grass_rebuilt = self
+            .grass
+            .as_ref()
+            .map(|grass| grass.rebuild_pipelines(device, grass_targets, hr))
+            .transpose()?;
 
         // All builds succeeded: swap the freshly compiled pipelines in. Each
         // assignment drops the pipeline it displaces, which retires it through
@@ -350,6 +356,10 @@ impl VkContext {
         if let (Some((cp, rp)), Some(p)) = (particle_rebuilt, self.particle.resources.as_mut()) {
             p.swap_pipelines(cp, rp);
         }
+        if let (Some(rebuilt), Some(grass)) = (grass_rebuilt, self.grass.as_mut()) {
+            grass.swap_pipelines(rebuilt);
+        }
+        self.sync_grass_prepass(true);
         Ok(())
     }
 

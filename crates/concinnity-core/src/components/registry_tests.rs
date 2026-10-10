@@ -110,5 +110,5 @@ fn every_authored_type_reads_its_default_from_nothing_and_round_trips() {
     let checked = check_every_type(&mut failures);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     // Every authored entry: a type that drops out of the walk fails here.
-    assert_eq!(checked, 67, "the walk reached {checked} authored types");
+    assert_eq!(checked, 69, "the walk reached {checked} authored types");
 }

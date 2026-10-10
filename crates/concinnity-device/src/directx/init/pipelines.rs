@@ -74,7 +74,7 @@ pub(in crate::directx) fn compile_shadow_bindless_vs(hot_reload: bool) -> Render
 pub(super) fn create_main_bindless_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
-    use Visibility::{All, Pixel};
+    use Visibility::{All, Pixel, Vertex};
     RootSig::new()
         // [0] per-draw object id at b0 (1 DWORD).
         .constant_dwords(0, 1, All)
@@ -125,6 +125,10 @@ pub(super) fn create_main_bindless_root_signature(
         // [20] the material parameter table at t20, which either world hook may
         // read.
         .srv(20, All)
+        // [21] the grass block at b7 and [22] the visible blades at t23, which
+        // the grass draw's vertex stage reads (`directx/grass.rs`).
+        .cbv(7, Vertex)
+        .srv(23, Vertex)
         .input_layout()
         .build(device, "main bindless root sig")
 }

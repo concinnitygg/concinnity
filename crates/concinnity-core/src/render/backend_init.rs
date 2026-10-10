@@ -190,6 +190,8 @@ pub struct WorldFx {
     pub glass_panels: Vec<GlassPanel>,
     /// Raymarched SDF volumes, each paired with its compiled payload.
     pub sdf_volumes: Vec<SdfVolumeSource>,
+    /// The grass field, or `None` when the world grows none.
+    pub grass: Option<crate::render::grass::GrassField>,
 }
 
 /// One raymarched SDF volume with the payload its pipelines build from.
@@ -348,7 +350,8 @@ impl RenderRequirements {
             || !fx.glass_panels.is_empty()
             || !fx.sdf_volumes.is_empty()
             || !fx.particles.is_empty()
-            || !fx.decals.is_empty();
+            || !fx.decals.is_empty()
+            || fx.grass.is_some();
         RenderRequirements {
             scene: scene_present,
         }
@@ -436,6 +439,7 @@ impl<'a> BackendInit<'a> {
                 water_surfaces: Vec::new(),
                 glass_panels: Vec::new(),
                 sdf_volumes: Vec::new(),
+                grass: None,
             },
             requirements: Default::default(),
         };
@@ -523,6 +527,7 @@ mod tests {
             water_surfaces: Vec::new(),
             glass_panels: Vec::new(),
             sdf_volumes: Vec::new(),
+            grass: None,
         }
     }
 
@@ -626,6 +631,12 @@ mod tests {
         let scene = empty_scene();
         let mut fx = empty_fx();
         fx.water_surfaces.push(WaterSurface::default());
+        assert!(RenderRequirements::derive(&scene, &fx, false).scene);
+
+        let mut fx = empty_fx();
+        fx.grass =
+            crate::render::grass::GrassField::resolve(&[crate::components::Grass::default()], None);
+        assert!(fx.grass.is_some());
         assert!(RenderRequirements::derive(&scene, &fx, false).scene);
     }
 

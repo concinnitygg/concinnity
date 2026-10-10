@@ -739,6 +739,8 @@ pub(crate) struct MtlContext {
     pub(super) frame_ring_index: u64,
     pub(super) rings: FrameRings,
     pub(super) water: WaterState,
+    // The grass field, when the world grows one. See [`super::grass`].
+    pub(super) grass: Option<super::grass::GrassState>,
     // Planar reflection targets, one set per distinct reflector plane (water
     // surfaces + glass panes, grouped by `assign_planar_slots`). `Some` only when
     // the world declared >=1 such reflector; the scene is re-rendered mirrored

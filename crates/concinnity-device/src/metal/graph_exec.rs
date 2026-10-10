@@ -186,6 +186,9 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     pub gbuffer_view: &'a GBufferView,
     // A consumer reads the pre-pass's motion this frame.
     pub velocity_active: bool,
+    // This frame's grass inputs. `Some` only when the `Grass` pass is in the
+    // graph this frame (matches `FrameGraphInputs::grass_enabled`).
+    pub grass: Option<&'a super::grass::GrassFrame>,
     // Pre-TAA scene texture that `TaaResolve` reads (the SSR resolve
     // output when SSR is on, otherwise the raw `hdr_resolve`). `Some`
     // only when the `TaaResolve` pass is in the graph this frame.
@@ -658,8 +661,16 @@ impl MtlContext {
                     deformed_skinned: params.deformed_skinned,
                     counts: self.draw_record_counts(),
                 },
-                params.world_hidden,
+                crate::metal::draw::main::MainPassExtras {
+                    world_hidden: params.world_hidden,
+                    grass: params.grass,
+                },
             )?,
+            PassId::Grass => {
+                let frame = pass_input(params.grass, PassId::Grass, "grass")?;
+                self.encode_grass(cmd_buf, frame)?;
+                0
+            }
             PassId::AutoExposure => self.encode_auto_exposure(cmd_buf, params.ring_slot)?,
             PassId::Bloom => {
                 let scene_color = pass_input(params.scene_color, PassId::Bloom, "scene_color")?;
@@ -697,6 +708,7 @@ impl MtlContext {
                         history_targets: params.history_targets,
                         deformed_current: params.deformed_skinned,
                         deformed_prev: params.deformed_prev,
+                        grass: params.grass,
                     },
                     params.velocity_active,
                 )?
@@ -745,9 +757,11 @@ impl MtlContext {
                     pass_id.name()
                 )));
             }
-            PassId::Sky => {
-                // Drawn inline at the tail of Main and of every probe face and
-                // mirror render; it only names a timing slot.
+            PassId::Sky | PassId::GrassDraw | PassId::GrassPrepass => {
+                // Drawn inline at the tail of the opaque scene passes (the sky
+                // in Main and every probe face and mirror render, the grass in
+                // Main and the G-buffer pre-pass); each only names a timing
+                // slot.
                 return Err(RenderError::Other(format!(
                     "graph executor: pass {} is drawn inline by the opaque scene \
                          passes; it should not appear as its own graph node",

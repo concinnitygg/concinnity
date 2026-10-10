@@ -1256,6 +1256,7 @@ mod tests {
                 "LoadingOverlay",
                 "EngineDefaults",
                 "SkyRotation",
+                "Wind",
             ]
         );
         assert_eq!(
@@ -1276,6 +1277,7 @@ mod tests {
                 "DebugHud",
                 "TextInput",
                 "LoadingOverlay",
+                "Grass",
                 // The build-only group sorts after the stored one, and the
                 // resource group after that.
                 "MainMenu",

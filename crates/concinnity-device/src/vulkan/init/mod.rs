@@ -330,6 +330,7 @@ impl VkContext {
             },
             &globals,
         )?;
+        let grass = build_grass(&gpu, fx.grass, &descriptors, &cull, &targets)?;
         let (commands, frame_sync) = commands::build_frame_commands(&gpu, &swapchain)?;
         let sky = crate::vulkan::sky::VkSky::build(
             &hw.device,
@@ -372,6 +373,7 @@ impl VkContext {
             transparent: world_fx.transparent,
             planar_reflection: world_fx.planar_reflection,
             particle: Default::default(),
+            grass,
             auto_exposure: world_fx.auto_exposure,
             hot_reload: HotReloadState::new(hot_reload),
             pipeline_gate: Default::default(),
@@ -415,6 +417,7 @@ impl VkContext {
         // routes through `add_particle_emitter` so its pool, counter, and
         // descriptor sets land before the first frame.
         me.upload_initial_particles(fx.particles)?;
+        me.sync_grass_prepass(false);
         // Every init upload above was synchronous (its one-shot idled the
         // queue), so init's remaining staging debris is retirable now; reclaim
         // it so the stats below report the steady footprint, not init's peak.
@@ -489,4 +492,39 @@ impl VkContext {
             }
         }
     }
+}
+
+// The grass field's buffers and pipelines, extending the GPU-driven pass's
+// layouts. A world without that pass draws no grass.
+fn build_grass(
+    gpu: &InitGpu<'_>,
+    field: Option<concinnity_core::render::grass::GrassField>,
+    descriptors: &VkDescriptors,
+    cull: &VkCull,
+    targets: &VkTargets,
+) -> RenderResult<Option<super::grass::GrassResources>> {
+    let (Some(field), Some(bindless), Some(prepass)) = (
+        field,
+        cull.bindless_set_layout.as_ref(),
+        cull.prepass_layout.as_ref(),
+    ) else {
+        return Ok(None);
+    };
+    let main = [descriptors.global_set_layout.handle(), bindless.handle()];
+    let prepass = [main[0], main[1], prepass.set_layout.handle()];
+    super::grass::GrassResources::build(
+        gpu.upload(),
+        field,
+        super::grass::GrassPassLayouts {
+            main: &main,
+            prepass: &prepass,
+        },
+        super::grass::GrassTargets {
+            main_render_pass: targets.main_render_pass.handle(),
+            msaa_samples: targets.msaa_samples,
+        },
+        gpu.frames,
+        gpu.hot_reload,
+    )
+    .map(Some)
 }

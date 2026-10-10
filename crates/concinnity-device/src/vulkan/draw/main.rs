@@ -28,6 +28,7 @@ impl VkContext {
         cmd: vk::CommandBuffer,
         frame_idx: usize,
         world_hidden: bool,
+        grass: Option<&crate::vulkan::grass::GrassFrame>,
     ) {
         let device = self.hw.device.clone();
         let device = &device;
@@ -291,6 +292,12 @@ impl VkContext {
                 );
             }
             self.inc_draw_calls(1);
+        }
+
+        // The blades shade on the lights, shadows and environment the surfaces
+        // just bound in sets 0 and 1.
+        if let (Some(frame), true) = (grass, use_bindless) {
+            self.encode_grass_main(cmd, frame_idx, frame);
         }
 
         // The sky lands behind phase 1's geometry. Under two-pass occlusion

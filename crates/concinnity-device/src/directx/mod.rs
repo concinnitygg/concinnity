@@ -21,6 +21,7 @@ mod geometry_upload;
 mod glass;
 mod gpu_profile;
 mod graph_exec;
+mod grass;
 mod hiz;
 mod hot_reload;
 mod init;

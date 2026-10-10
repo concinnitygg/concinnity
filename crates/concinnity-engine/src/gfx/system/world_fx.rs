@@ -1,11 +1,12 @@
 // The world's one-shot effect content, drained from its components at init.
 
 use concinnity_core::components::{
-    Decal, GlassPanel, ParticleEmitter, SdfVolume, VolumetricFog, WaterSurface,
+    Decal, GlassPanel, Grass, ParticleEmitter, SdfVolume, VolumetricFog, WaterSurface, Wind,
 };
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::backend_init::{SdfVolumeSource, WorldFx};
+use concinnity_core::render::grass::GrassField;
 use concinnity_core::render::{decal, particles, volumetric_fog};
 use concinnity_host::thread::asset_id;
 
@@ -28,6 +29,9 @@ pub(super) fn drain_world_fx(ctx: &mut PipelineContext, texture_count: usize) ->
         .into_iter()
         .find(|f| f.enabled)
         .and_then(|f| volumetric_fog::resolve_asset(&f));
+    // One wind per world; the grass pass draws the first visible field in it.
+    let wind = ctx.drain::<Wind>().into_iter().next();
+    let grass = GrassField::resolve(&ctx.drain::<Grass>(), wind.as_ref());
     WorldFx {
         decals,
         particles,
@@ -35,6 +39,7 @@ pub(super) fn drain_world_fx(ctx: &mut PipelineContext, texture_count: usize) ->
         water_surfaces,
         glass_panels,
         sdf_volumes,
+        grass,
     }
 }
 

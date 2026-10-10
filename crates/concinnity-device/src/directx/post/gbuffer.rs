@@ -120,6 +120,10 @@ pub(in crate::directx) fn create_prepass_root_signature(
         .table(&[Range::bindless_srv(1)], Pixel)
         // [8] linear repeat (s1) + cube sampler (s2).
         .sampler_table(1, 2, Pixel)
+        // [9] the grass block at b7 and [10] the visible blades at t23, which
+        // the grass draw's vertex stage reads (`directx/grass.rs`).
+        .cbv(7, Vertex)
+        .srv(23, Vertex)
         .input_layout()
         .build(device, "gbuffer prepass root sig")
 }
@@ -434,13 +438,15 @@ pub(in crate::directx) struct GbufferPrepassView {
 
 // Per-frame decisions the G-buffer pre-pass takes as data, made on the main
 // thread before the encode fan-out.
-pub(in crate::directx) struct GbufferPrepassFrame {
+pub(in crate::directx) struct GbufferPrepassFrame<'a> {
     // A consumer (TAA, FSR or SSGI) reads motion; when false, cur == prev so the
     // motion channel is a harmless zero.
     pub velocity_active: bool,
     // The model-history snapshot fills every ring slot rather than only this
     // frame's, because a rebuild left the ring unwritten.
     pub prime_history: bool,
+    // This frame's grass block, when the grass kernel ran.
+    pub grass: Option<&'a crate::directx::grass::GrassFrame>,
 }
 
 impl DxContext {
@@ -490,7 +496,7 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
         view: GbufferPrepassView,
-        frame: GbufferPrepassFrame,
+        frame: GbufferPrepassFrame<'_>,
     ) {
         let GbufferPrepassView {
             jittered_vp,
@@ -501,6 +507,7 @@ impl DxContext {
         let GbufferPrepassFrame {
             velocity_active,
             prime_history,
+            grass,
         } = frame;
         let gb = match &self.gbuffer {
             Some(g) => g,
@@ -579,6 +586,9 @@ impl DxContext {
         // tail over the deformed VB). With nothing to draw the pass is the
         // clears above, which is what "no geometry" means to every reader.
         self.encode_gbuffer_prepass_gpu_driven(cmd, frame_idx, view_gva, velocity_active);
+        if let Some(grass) = grass {
+            self.encode_grass_prepass(cmd, frame_idx, view_gva, grass);
+        }
         self.encode_raymarch_prepass(cmd, frame_idx, &view, &view_uni);
         // The sky keeps the "no geometry" depth and roughness and adds the
         // camera's motion where nothing was drawn.

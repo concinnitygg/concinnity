@@ -648,6 +648,11 @@ impl VkContext {
             ssr_enabled: self.ssr_resolve_active(),
             particles_enabled: self.particle.resources.is_some()
                 && self.particle.records.iter().any(|p| p.is_some()),
+            // The blades draw over the GPU-driven pass's sets, so grass rides
+            // that path.
+            grass_enabled: self.grass.is_some()
+                && self.cull.cull_kernels.is_some()
+                && self.cull_count() > 0,
             // Gated on the resources (built at init when the world declared a
             // VolumetricFog) and on live settings that can affect the frame, so
             // runtime `update_fog_settings(None)` -- or an authored zero density,

@@ -567,6 +567,49 @@ pub static WATER_FRAG_RT_TEXTURED: ShaderProgram = ShaderProgram {
     msaa: true,
 };
 
+// Grass: the blade kernel, then the blade pair the G-buffer pre-pass draws
+// (under the pre-pass's own gate, like the surfaces') and the pair Main draws.
+/// `grass_generate` from `grass.hlsl`.
+pub static GRASS_GENERATE: ShaderProgram = ShaderProgram {
+    file: "grass.hlsl",
+    entry: "grass_generate",
+    label: "grass_generate.hlsl",
+    gates: &["GRASS_GENERATE"],
+    msaa: false,
+};
+/// `grass_prepass_vertex` from `grass.hlsl`.
+pub static GRASS_PREPASS_VERT: ShaderProgram = ShaderProgram {
+    file: "grass.hlsl",
+    entry: "grass_prepass_vertex",
+    label: "grass_prepass_vert.hlsl",
+    gates: &[super::surface::PREPASS_GATE],
+    msaa: false,
+};
+/// `grass_prepass_fragment` from `grass.hlsl`.
+pub static GRASS_PREPASS_FRAG: ShaderProgram = ShaderProgram {
+    file: "grass.hlsl",
+    entry: "grass_prepass_fragment",
+    label: "grass_prepass_frag.hlsl",
+    gates: &[super::surface::PREPASS_GATE],
+    msaa: false,
+};
+/// `grass_vertex` from `grass.hlsl`.
+pub static GRASS_VERT: ShaderProgram = ShaderProgram {
+    file: "grass.hlsl",
+    entry: "grass_vertex",
+    label: "grass_vert.hlsl",
+    gates: &[],
+    msaa: false,
+};
+/// `grass_fragment` from `grass.hlsl`.
+pub static GRASS_FRAG: ShaderProgram = ShaderProgram {
+    file: "grass.hlsl",
+    entry: "grass_fragment",
+    label: "grass_frag.hlsl",
+    gates: &[],
+    msaa: false,
+};
+
 /// Every program in this module.
 pub static ALL: &[&ShaderProgram] = &[
     &MAIN_BINDLESS_VERT,
@@ -633,6 +676,11 @@ pub static ALL: &[&ShaderProgram] = &[
     &WATER_FRAG,
     &WATER_FRAG_RT,
     &WATER_FRAG_RT_TEXTURED,
+    &GRASS_GENERATE,
+    &GRASS_PREPASS_VERT,
+    &GRASS_PREPASS_FRAG,
+    &GRASS_VERT,
+    &GRASS_FRAG,
 ];
 
 #[cfg(test)]

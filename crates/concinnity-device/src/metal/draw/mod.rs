@@ -223,6 +223,11 @@ impl MtlContext {
             _ => render_graph::build_frame_graph(&graph_inputs)
                 .map_err(|e| error::RenderError::Other(format!("frame graph: {e}")))?,
         };
+        // The grass kernel's inputs, advanced only on a frame whose graph runs it,
+        // so the draw-argument slot it fills alternates frame to frame.
+        let grass_frame = (graph_inputs.grass_enabled && !graph_inputs.world_hidden)
+            .then(|| self.prepare_grass_frame(cam_pos, gbuffer_view.cur_vp))
+            .flatten();
         let HistoryBuffers {
             deformed_this_frame,
             deformed_prev_frame,
@@ -266,6 +271,7 @@ impl MtlContext {
             draw_args_buffer: cull_draw_args.as_ref(),
             gbuffer_view: &gbuffer_view,
             velocity_active,
+            grass: grass_frame.as_ref(),
             scene_pre_taa: if self.taa.enabled
                 || self.upscale.scaler.is_some()
                 || transparent_active

@@ -324,6 +324,11 @@ fn particle_layouts_match_the_shader() {
 }
 
 #[test]
+fn grass_layouts_match_the_shader() {
+    check(&programs::GRASS_GENERATE, &mirrors::geometry::grass());
+}
+
+#[test]
 fn text_layouts_match_the_shader() {
     check(&programs::TEXT_VERT, &mirrors::geometry::text());
 }

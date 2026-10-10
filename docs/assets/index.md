@@ -29,6 +29,7 @@
 - [FrameReport](FrameReport.md) - Times every frame of a run and prints what they cost when it ends.
 - [GlassPanel](GlassPanel.md) - A flat translucent panel of colored glass. A fixed-orientation rectangular quad that refracts and tints the scene behind it and brightens the grazing-angle rim with a Fresnel highlight.
 - [GraphicsConfig](GraphicsConfig.md) - Rendering settings for the world: frame pacing, shadows, and clear color. One per world. The GPU backend is chosen by the engine for the platform and is not user-configurable.
+- [Grass](Grass.md) - A field of individual grass blades, grown on the GPU each frame and swayed by the world's [Wind](Wind.md).
 - [HitRegion](HitRegion.md) - A responsive invisible rectangular region in screen space.
 - [Include](Include.md) - Inlines the entries of another world file at this line.
 - [InstancedProp](InstancedProp.md) - A single mesh + material drawn at many world-space transforms.
@@ -81,6 +82,7 @@
 - [VoxelChunk](VoxelChunk.md) - A voxel grid that compiles into a single mesh.
 - [VoxelWorld](VoxelWorld.md) - An infinite, procedurally generated voxel world.
 - [WaterSurface](WaterSurface.md) - A translucent animated water surface.
+- [Wind](Wind.md) - The wind blowing across the world: a steady breeze along one horizontal direction, broken up by gusts that roll through with it.
 - [Window](Window.md) - Declares the application window.
 
 ## Reference types

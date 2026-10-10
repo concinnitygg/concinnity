@@ -1217,6 +1217,9 @@ pub(crate) struct VkContext {
 
     // GPU-compute particle system. See [`ParticleState`].
     pub(super) particle: ParticleState,
+    // The grass field, when the world grows one and the GPU-driven main pass
+    // exists to draw it in. See [`super::grass`].
+    pub(super) grass: Option<super::grass::GrassResources>,
 
     // Auto-exposure (EV adaptation). See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,
@@ -1883,6 +1886,7 @@ impl VkContext {
             return;
         }
         self.world_content_destroyed = true;
+        self.grass = None;
         let device = self.hw.device.clone();
         let device = &device;
 

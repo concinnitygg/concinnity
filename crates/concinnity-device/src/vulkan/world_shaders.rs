@@ -125,6 +125,7 @@ impl VkContext {
     // context's life once built, and a failed rebuild empties only its
     // targets, never the render pass these pipelines build against.
     pub(in crate::vulkan) fn sync_prepass_pipelines(&mut self) {
+        self.sync_grass_prepass(false);
         let Some((targets, prepass)) = self
             .bucket_pipeline_targets()
             .and_then(|targets| Some((targets, targets.prepass?)))

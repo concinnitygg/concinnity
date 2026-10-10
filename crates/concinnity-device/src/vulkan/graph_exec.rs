@@ -560,6 +560,15 @@ impl VkContext {
         // worker) never mutates the particle `Cell`s. `None` when the pass is
         // inert. Mirrors Metal's `prepare_particle_pass` hoist.
         let particle_frame = self.prepare_particle_pass(params.elapsed);
+        // The grass block for the kernel and both draws, written once here and
+        // only on a frame whose graph runs the kernel, so the draw-argument
+        // slot it fills alternates frame to frame.
+        let grass_frame = graph
+            .passes
+            .iter()
+            .any(|p| p.id == PassId::Grass)
+            .then(|| self.prepare_grass_frame(params.frame_idx, params.cam_pos, params.cur_vp))
+            .flatten();
 
         // Composite stays on the main thread (it writes the swapchain image
         // and allocates + drops transient text buffers through the RefCell
@@ -617,6 +626,7 @@ impl VkContext {
         } = &scratch;
         let ctx_ref = ParallelCtxRef::new(self);
         let particle_ref = particle_frame.as_ref();
+        let grass_ref = grass_frame.as_ref();
         let device_ref = &device;
         let worker_slots_ref = &worker_slots;
         let first_error_ref = &first_error;
@@ -697,7 +707,7 @@ impl VkContext {
                                 pass,
                             );
                             if let Err(e) =
-                                ctx.encode_pass_into(pass_id, &rec, params, particle_ref)
+                                ctx.encode_pass_into(pass_id, &rec, params, particle_ref, grass_ref)
                             {
                                 set_err(e);
                                 return;
@@ -762,7 +772,13 @@ impl VkContext {
             // SAFETY: `params.cmd` is the buffer `draw_frame` reset and began above this call, and
             // it belongs to this device.
             let rec = unsafe { Recorder::assume_recording(&self.hw.device, params.cmd) };
-            self.encode_pass_into(PassId::Composite, &rec, params, particle_frame.as_ref())?;
+            self.encode_pass_into(
+                PassId::Composite,
+                &rec,
+                params,
+                particle_frame.as_ref(),
+                None,
+            )?;
             emit_pass_epilogue(&self.hw.device, params.cmd, registry, &graph.passes[idx]);
             if let Some(pool) = self.hw.timestamp_query_pool {
                 let (_, ts_end) = pass_timing::pass_pair(frame_idx, PassId::Composite);
@@ -919,6 +935,26 @@ impl VkContext {
             // frame integrates the same pool in place, so it rests carried).
             // `None` once every slot is tombstoned, which is also when the
             // builder omits both nodes.
+            // The grass kernel's two outputs: the blades the draws' vertex stage
+            // reads and the draw arguments both draws consume. One buffer each,
+            // carried across frames, so the kernel's writes wait on the last
+            // frame's draws.
+            "grass_blades" => self.grass.as_ref().map(|g| {
+                (
+                    VkTargetObject::Buffer {
+                        buffer: g.blades.buffer(),
+                    },
+                    VkResting::Carried,
+                )
+            }),
+            "grass_args" => self.grass.as_ref().map(|g| {
+                (
+                    VkTargetObject::Buffer {
+                        buffer: g.args.buffer(),
+                    },
+                    VkResting::Carried,
+                )
+            }),
             "particle_pool" => {
                 let first = arena.len();
                 arena.extend(
@@ -1019,6 +1055,7 @@ impl VkContext {
         rec: &Recorder<'_>,
         params: &GraphFrameParams<'_>,
         particle_frame: Option<&super::particle::ParticleFrame>,
+        grass_frame: Option<&super::grass::GrassFrame>,
     ) -> RenderResult<()> {
         let cmd = rec.raw();
         match pass_id {
@@ -1054,9 +1091,16 @@ impl VkContext {
                     pass_id.name()
                 )));
             }
-            PassId::Sky => {
-                // Drawn inline at the tail of Main and of every probe face and
-                // mirror render; it only names a timing slot.
+            PassId::Grass => {
+                if let Some(frame) = grass_frame {
+                    self.encode_grass(cmd, params.frame_idx, frame);
+                }
+            }
+            PassId::Sky | PassId::GrassDraw | PassId::GrassPrepass => {
+                // Drawn inline at the tail of the opaque scene passes (the sky
+                // in Main and every probe face and mirror render, the grass in
+                // Main and the G-buffer pre-pass); each only names a timing
+                // slot.
                 return Err(RenderError::Other(format!(
                     "graph executor (vulkan): pass {} is drawn inline by the opaque \
                      scene passes and should not appear as a graph node",
@@ -1119,7 +1163,7 @@ impl VkContext {
                 self.encode_spot_shadow_pass(cmd, params.frame_idx, params.cam_pos);
             }
             PassId::Main => {
-                self.encode_main_pass(cmd, params.frame_idx, params.world_hidden);
+                self.encode_main_pass(cmd, params.frame_idx, params.world_hidden, grass_frame);
             }
             PassId::Composite => {
                 self.encode_composite_and_text(
@@ -1271,6 +1315,7 @@ impl VkContext {
                         cam_pos: params.cam_pos,
                     },
                     velocity_active,
+                    grass_frame,
                 );
             }
         }

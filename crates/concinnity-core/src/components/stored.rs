@@ -30,6 +30,7 @@ pub use super::fps_counter::FpsCounter;
 pub use super::frame_report::FrameReport;
 pub use super::glass_panel::GlassPanel;
 pub use super::graphics_config::{GraphicsConfig, ShadowUpdate};
+pub use super::grass::Grass;
 pub use super::hit_region::HitRegion;
 pub use super::instanced_prop::{InstanceTransform, InstancedProp};
 pub use super::key_binding::KeyBinding;
@@ -72,6 +73,7 @@ pub use super::volumetric_fog::VolumetricFog;
 pub use super::voxel_chunk::VoxelChunk;
 pub use super::voxel_world::VoxelWorld;
 pub use super::water_surface::{WaterSurface, WaterWave};
+pub use super::wind::Wind;
 pub use super::window::{Window, WindowMode};
 
 pub use super::{

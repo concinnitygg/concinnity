@@ -273,6 +273,12 @@ pub struct FrameGraphInputs {
     /// [`crate::render::reactive_mask::ReactiveReader::reads`]). No effect while
     /// `upscale_enabled` is false.
     pub upscale_reads_reactive: bool,
+    /// `true` when the world grows a grass field and the backend built its
+    /// pipelines. The graph adds a `Grass` compute pass that writes the
+    /// visible-blade buffer and its indirect draw arguments, which
+    /// `GBufferPrepass` and `Main` read to draw the blades at the tail of their
+    /// opaque geometry.
+    pub grass_enabled: bool,
 }
 
 impl FrameGraphInputs {
@@ -341,6 +347,7 @@ impl FrameGraphInputs {
             hiz_build_enabled: false,
             reactive_mask_enabled: false,
             upscale_reads_reactive: false,
+            grass_enabled: false,
         }
     }
 }
@@ -394,6 +401,7 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
     ("upscale_reads_reactive", |i| {
         i.upscale_reads_reactive = true
     }),
+    ("grass", |i| i.grass_enabled = true),
 ];
 
 // Build the full per-frame render graph. Conditional passes are
@@ -444,6 +452,23 @@ struct GBufferHandles {
     roughness: TextureHandle,
     velocity: TextureHandle,
     depth: TextureHandle,
+}
+
+// The grass pass's two outputs. The blades are read by the draws' vertex stage
+// and the arguments by the indirect draw itself, so each needs its own read
+// state and is its own resource.
+#[derive(Copy, Clone)]
+struct GrassHandles {
+    blades: super::types::BufferHandle,
+    args: super::types::BufferHandle,
+}
+
+impl GrassHandles {
+    // Declare a draw pass's reads of both outputs.
+    fn read_into(self, pass: &mut super::builder::PassBuilder<'_>) {
+        pass.read_buffer_in_stage(self.blades, ReadStages::VERTEX);
+        pass.read_buffer(self.args);
+    }
 }
 
 /// Compile the frame graph for `inputs`: the pass list above, gated down to the
@@ -543,6 +568,23 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         (None, None)
     };
 
+    // Grass (compute): places, culls and appends this frame's visible blades,
+    // and fills the indirect arguments the pre-pass and Main draw them with.
+    // It reads nothing the frame produces, so its readers are its only edges
+    // and the schedule may overlap it with the raster front. Both buffers are
+    // persistent and backend-owned, hence imported.
+    let grass_v1 = if inputs.grass_enabled {
+        let blades = b.import_buffer("grass_blades", grass_blades_desc());
+        let args = b.import_buffer("grass_args", draw_args_desc());
+        let mut grass = b.add_pass(PassId::Grass, PassKind::Compute);
+        Some(GrassHandles {
+            blades: grass.write_buffer(blades),
+            args: grass.write_buffer(args),
+        })
+    } else {
+        None
+    };
+
     // Geometry pre-pass: one node writes the view-space normal+depth /
     // roughness / velocity / depth that SSR, SSAO, SSGI, RT, TAA, and the
     // upscaler read. Runs when the backend built the targets and any of those
@@ -563,6 +605,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // off, where draw_args_v1 is None). Mirrors the Main pass's edge.
         if let Some(h) = draw_args_v1 {
             gb.read_buffer(h);
+        }
+        if let Some(g) = grass_v1 {
+            g.read_into(&mut gb);
         }
         // One draw writes all four attachments; they are separate resources
         // because their shapes and their consumers differ.
@@ -697,6 +742,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         }
         if let Some(h) = ao_output_v1 {
             main.read_texture(h);
+        }
+        if let Some(g) = grass_v1 {
+            g.read_into(&mut main);
         }
         if let Some(h) = hdr_color {
             let _ = main.write_texture(h);
@@ -1158,6 +1206,17 @@ fn draw_args_desc() -> BufferDesc {
     BufferDesc {
         size_bytes: None,
         usage: BufferUsage::STORAGE.union(BufferUsage::INDIRECT),
+    }
+}
+
+fn grass_blades_desc() -> BufferDesc {
+    // One `GpuGrassBlade` per visible blade. `STORAGE` alone, like the particle
+    // pools: the kernel appends through an unordered-access binding and the
+    // draws read it as a shader resource in their vertex stage. The executor
+    // owns the allocation (sized to the field's blade capacity).
+    BufferDesc {
+        size_bytes: None,
+        usage: BufferUsage::STORAGE,
     }
 }
 

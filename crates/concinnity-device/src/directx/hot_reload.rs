@@ -237,6 +237,22 @@ impl DxContext {
             .as_ref()
             .map(|gb| gb.sky.rebuild_pso(device, info_queue))
             .transpose()?;
+        let grass = match (
+            self.grass.as_ref(),
+            self.cull.main_bindless_root_sig.as_ref(),
+            self.cull.prepass_root_sig.as_ref(),
+        ) {
+            (Some(_), Some(main), Some(prepass)) => Some(super::context::dump_on_err(
+                info_queue,
+                super::grass::GrassPipelines::build(
+                    device,
+                    super::grass::GrassRootSigs { main, prepass },
+                    msaa_samples,
+                    hr,
+                ),
+            )?),
+            _ => None,
+        };
         let decal_pso = self
             .decal
             .state
@@ -363,6 +379,9 @@ impl DxContext {
         self.sky.swap_pso(sky_pso);
         if let (Some(sky), Some(gb)) = (gbuffer_sky_pso, self.gbuffer.as_mut()) {
             gb.sky.swap_pso(sky);
+        }
+        if let (Some(p), Some(grass)) = (grass, self.grass.as_mut()) {
+            grass.pipelines = p;
         }
         // The wireframe twins were built from the pre-reload shaders; drop them
         // so the next wireframe frame rebuilds against these.

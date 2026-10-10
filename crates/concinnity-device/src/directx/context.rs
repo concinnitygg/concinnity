@@ -851,6 +851,10 @@ pub(crate) struct DxContext {
     // GPU-compute particle system. See [`ParticleState`].
     pub(super) particle: ParticleState,
 
+    // The grass field, when the world grows one and the GPU-driven main pass
+    // exists to draw it in. See [`super::grass`].
+    pub(super) grass: Option<super::grass::GrassResources>,
+
     // Per-frame command allocators + lists (start / per-pass / end). See
     // `DxCommands`.
     pub(super) commands: DxCommands,

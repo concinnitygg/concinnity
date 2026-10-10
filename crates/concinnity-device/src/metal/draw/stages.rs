@@ -430,6 +430,9 @@ impl MtlContext {
             // inserts the RtReflections pass in the SsrResolve slot, which a live
             // trace takes from SSR.
             rt_reflections_enabled: reflection_path.rt_trace,
+            // The lit blades shade on the bindings the GPU-driven surfaces leave
+            // bound, so grass rides that path.
+            grass_enabled: self.grass.is_some() && bindless_cull_enabled,
             // Metal collapses the SSR / SSAO / velocity pre-passes into one
             // GBufferPrepass node; the other backends keep them separate.
             gbuffer_prepass_enabled: true,

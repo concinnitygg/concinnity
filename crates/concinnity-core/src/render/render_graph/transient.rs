@@ -143,6 +143,7 @@ pub(crate) fn planning_inputs(build: &FrameGraphInputs) -> FrameGraphInputs {
         ssgi_enabled: true,
         clustering_enabled: true,
         hiz_build_enabled: true,
+        grass_enabled: true,
         ..*build
     }
 }

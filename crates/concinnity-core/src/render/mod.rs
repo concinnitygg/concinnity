@@ -38,6 +38,7 @@ pub mod feedback;
 pub mod frame_dirty;
 pub mod fullscreen;
 pub mod geometry_repack;
+pub mod grass;
 pub mod hdr_output;
 pub mod history_reset;
 pub mod hiz_cull;
@@ -93,4 +94,5 @@ pub mod uniforms;
 
 pub mod view_history;
 pub mod volumetric_fog;
+pub mod wind;
 pub mod world_pipelines;

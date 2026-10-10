@@ -59,6 +59,7 @@ mod gamepad_map;
 mod geometry;
 mod glass_panel;
 mod graphics_config;
+mod grass;
 mod ground_probes;
 mod hit_region;
 mod input_key;
@@ -123,6 +124,7 @@ mod voxel_chunk;
 mod voxel_world;
 mod wake_request;
 mod water_surface;
+mod wind;
 mod window;
 
 // Per-instance components an entity is composed from: its placement, render
@@ -216,6 +218,7 @@ pub use geometry::SPOT_MAX_ANGLE_DEG;
 pub use glass_panel::GlassPanel;
 pub use graphics_config::GraphicsConfig;
 pub use graphics_config::ShadowUpdate;
+pub use grass::Grass;
 pub use ground_probes::{GroundProbe, GroundProbes};
 pub use hit_region::HitRegion;
 pub use input_key::InputKey;
@@ -327,6 +330,7 @@ pub use wake_request::WakeRequest;
 pub use water_surface::MAX_WATER_WAVES;
 pub use water_surface::WaterSurface;
 pub use water_surface::WaterWave;
+pub use wind::Wind;
 pub use window::Window;
 pub use window::WindowMode;
 

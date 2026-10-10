@@ -46,6 +46,9 @@ use crate::render::shaders;
 /// splice runs the table once, so a nested marker is only replaced if its own
 /// row comes later.
 pub const FRAGMENTS: &[(&str, &str)] = &[
+    // MAIN_RESOURCES leads every fragment it carries: the main pass's records,
+    // bindings and shading, which the bindless pass and the grass draws share.
+    ("{MAIN_RESOURCES}", "main_resources.hlsl"),
     ("{POST_COMMON}", "post_common.hlsl"),
     // MAIN_TYPES leads OBJECT_COMMON because it carries that marker itself:
     // the object record belongs with the rest of the main pass's vocabulary,
@@ -93,6 +96,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // RAYMARCH_COMMON), for the same reason.
     ("{DEPTH_CONVENTION}", "depth_convention.hlsl"),
     ("{SKY_RAY}", "sky_ray.hlsl"),
+    ("{WIND}", "wind.hlsl"),
     // REFLECTION_CUT trails MAIN_SHADING, which carries its marker.
     ("{REFLECTION_CUT}", "reflection_cut.hlsl"),
     // The two hooks a world Shader defines, with the engine's own shading as

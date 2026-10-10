@@ -298,6 +298,22 @@ impl DxContext {
                 occlusion_two_pass: post.occlusion_two_pass,
             },
         )?;
+        // The blades draw under the GPU-driven pass's two root signatures, so a
+        // world without that pass draws no grass.
+        let grass = match (
+            fx.grass,
+            cull.main_bindless_root_sig.as_ref(),
+            cull.prepass_root_sig.as_ref(),
+        ) {
+            (Some(field), Some(main), Some(prepass)) => Some(super::grass::GrassResources::build(
+                &gpu.hw.alloc,
+                field,
+                super::grass::GrassRootSigs { main, prepass },
+                features.msaa_samples,
+                hot_reload,
+            )?),
+            _ => None,
+        };
         let probe_prefilter = cull::build_probe_prefilter(&gpu, &cull)?;
         let text = text::build_text(&gpu, &descriptors, &media, swapchain.format)?;
         let composite = composite::build_composite(&gpu, swapchain.format)?;
@@ -430,6 +446,7 @@ impl DxContext {
             planar_reflection,
             fog,
             particle,
+            grass,
             commands,
             frame_sync,
             current_frame: 0,

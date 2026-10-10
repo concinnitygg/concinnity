@@ -6,10 +6,10 @@
 //! world -- a baked record is already validated.
 
 use crate::components::{
-    CameraTrackArgs, Decal, DirectionalLight, GlassPanel, InstancedProp, MAX_WATER_WAVES, Material,
-    ParticleEmitter, PointLight, Prop, RectAreaLight, ReflectionProbe, RigidBody,
+    CameraTrackArgs, Decal, DirectionalLight, GlassPanel, Grass, InstancedProp, MAX_WATER_WAVES,
+    Material, ParticleEmitter, PointLight, Prop, RectAreaLight, ReflectionProbe, RigidBody,
     SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, VolumetricFog, VoxelChunk, WaterSurface,
-    WaterWave,
+    WaterWave, Wind,
 };
 use crate::math::sqrt;
 use crate::math::vec3;
@@ -170,6 +170,42 @@ pub fn water_surface(mut args: WaterSurface) -> WaterSurface {
     args
 }
 
+/// Clamp a `Wind`'s authored fields into their valid ranges.
+pub fn wind(mut args: Wind) -> Wind {
+    args.direction = args.unit_direction();
+    args.strength = finite_at_least(args.strength, 0.0, 0.0);
+    args.gustiness = finite_at_least(args.gustiness, 0.0, 0.0).min(1.0);
+    args.gust_scale = finite_at_least(args.gust_scale, 0.5, 20.0);
+    args
+}
+
+/// Clamp a `Grass` field's authored values into their valid ranges.
+pub fn grass(mut args: Grass) -> Grass {
+    for e in &mut args.extent {
+        *e = finite_at_least(*e, 0.0, 0.0);
+    }
+    args.height = finite_at_least(args.height, 0.01, 0.5);
+    args.height_variance = finite_at_least(args.height_variance, 0.0, 0.0).min(1.0);
+    args.width = finite_at_least(args.width, 0.001, 0.03);
+    args.density = finite_at_least(args.density, 0.0, 0.0);
+    args.clump_size = finite_at_least(args.clump_size, 0.05, 0.6);
+    args.stiffness = finite_at_least(args.stiffness, 0.0, 0.0).min(1.0);
+    args.color_variation = finite_at_least(args.color_variation, 0.0, 0.0).min(1.0);
+    for c in args.root_color.iter_mut().chain(args.tip_color.iter_mut()) {
+        *c = finite_at_least(*c, 0.0, 0.0);
+    }
+    args
+}
+
+// `value` floored at `min`, or `fallback` when it is not a finite number.
+fn finite_at_least(value: f32, min: f32, fallback: f32) -> f32 {
+    if value.is_finite() {
+        value.max(min)
+    } else {
+        fallback
+    }
+}
+
 /// Clamp a `Decal`'s authored fields into their valid ranges.
 pub fn decal(mut args: Decal) -> Decal {
     // Clamp the alpha to [0, 1] so a stray > 1 doesn't blow out the
@@ -292,6 +328,74 @@ mod tests {
         });
         assert_eq!(w.subdivisions, 8);
         assert_eq!(w.waves.len(), 1);
+    }
+
+    #[test]
+    fn wind_normalizes_its_direction_and_floors_its_speeds() {
+        let w = wind(Wind {
+            direction: [3.0, 4.0],
+            strength: -1.0,
+            gustiness: 2.0,
+            gust_scale: 0.0,
+        });
+        assert_eq!(w.direction, [0.6, 0.8]);
+        assert_eq!(w.strength, 0.0);
+        assert_eq!(w.gustiness, 1.0);
+        assert_eq!(w.gust_scale, 0.5);
+        let still = wind(Wind {
+            direction: [0.0, 0.0],
+            strength: f32::NAN,
+            ..Wind::default()
+        });
+        assert_eq!(still.direction, [1.0, 0.0]);
+        assert_eq!(still.strength, 0.0);
+    }
+
+    #[test]
+    fn grass_clamps_every_blade_parameter() {
+        let g = grass(Grass {
+            extent: [-1.0, f32::INFINITY],
+            height: 0.0,
+            height_variance: 3.0,
+            width: -0.5,
+            density: -10.0,
+            clump_size: 0.0,
+            stiffness: 1.5,
+            root_color: [-1.0, f32::NAN, 0.5],
+            tip_color: [0.2, 0.3, 0.4],
+            color_variation: -0.2,
+            ..Grass::default()
+        });
+        assert_eq!(g.extent, [0.0, 0.0]);
+        assert_eq!(g.height, 0.01);
+        assert_eq!(g.height_variance, 1.0);
+        assert_eq!(g.width, 0.001);
+        assert_eq!(g.density, 0.0);
+        assert_eq!(g.clump_size, 0.05);
+        assert_eq!(g.stiffness, 1.0);
+        assert_eq!(g.root_color, [0.0, 0.0, 0.5]);
+        assert_eq!(g.tip_color, [0.2, 0.3, 0.4]);
+        assert_eq!(g.color_variation, 0.0);
+    }
+
+    #[test]
+    fn grass_defaults_pass_validation_unchanged() {
+        let d = Grass::default();
+        let g = grass(d.clone());
+        assert_eq!(
+            (g.extent, g.height, g.width, g.density, g.clump_size),
+            (d.extent, d.height, d.width, d.density, d.clump_size)
+        );
+        let w = wind(Wind::default());
+        assert_eq!(
+            (w.direction, w.strength, w.gustiness, w.gust_scale),
+            (
+                Wind::default().direction,
+                Wind::default().strength,
+                Wind::default().gustiness,
+                Wind::default().gust_scale
+            )
+        );
     }
 
     #[test]

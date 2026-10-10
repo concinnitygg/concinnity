@@ -846,6 +846,7 @@ impl VkContext {
         frame_idx: usize,
         view: GbufferPrepassView,
         velocity_active: bool,
+        grass: Option<&crate::vulkan::grass::GrassFrame>,
     ) {
         let GbufferPrepassView {
             jittered_vp,
@@ -929,6 +930,9 @@ impl VkContext {
         // ride the cull records' runtime reserve. With nothing to draw the pass
         // is the clears above, which is what "no geometry" means to every reader.
         self.encode_gbuffer_prepass_gpu_driven(cmd, frame_idx, velocity_active);
+        if let Some(grass) = grass {
+            self.encode_grass_prepass(cmd, frame_idx, grass);
+        }
         self.encode_raymarch_prepass(cmd, frame_idx, &view, &view_uni);
         // The sky keeps the "no geometry" depth and roughness and adds the
         // camera's motion where nothing was drawn.

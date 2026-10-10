@@ -77,6 +77,10 @@ const MAIN_PREPASS_REGISTERS: &[(&str, &str)] = &[
     ("cube_sampler", "s2"),
 ];
 
+// The grass block and the visible blades, which the grass draws add to the
+// main and pre-pass root signatures (`directx/grass.rs`).
+const GRASS_DRAW_REGISTERS: &[(&str, &str)] = &[("grass", "b7"), ("grass_blades", "t23")];
+
 // Both view-cull phases, from `directx/cull.rs`.
 const CULL_REGISTERS: &[(&str, &str)] = &[
     ("cull", "b0"),
@@ -175,6 +179,33 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     DxilAbi {
         program: &shared::MAIN_PREPASS_VERT,
         registers: MAIN_PREPASS_REGISTERS,
+    },
+    // The grass kernel, under its own root signature in `directx/grass.rs`.
+    DxilAbi {
+        program: &shared::GRASS_GENERATE,
+        registers: &[("grass", "b0"), ("blades_out", "u1"), ("draw_args", "u2")],
+    },
+    // The grass draws compile from the main pass's resources, so each stage
+    // states those registers and the grass pair on top of them.
+    DxilAbi {
+        program: &shared::GRASS_VERT,
+        registers: MAIN_BINDLESS_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::GRASS_VERT,
+        registers: GRASS_DRAW_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::GRASS_FRAG,
+        registers: MAIN_BINDLESS_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::GRASS_PREPASS_VERT,
+        registers: MAIN_PREPASS_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::GRASS_PREPASS_VERT,
+        registers: GRASS_DRAW_REGISTERS,
     },
     // The sky's motion, under its own root signature.
     DxilAbi {
@@ -808,6 +839,71 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("spvDescriptorSet2", "buffer(10)"),
         ]],
         argument_ids: &[("tex_pool", bindless_textures::pool(0)), ("tex_sampler", 0)],
+    },
+    // The grass kernel, from `metal/grass.rs`: its block, the blades it
+    // appends and the draw arguments, at buffer(0..2) by register.
+    MetalAbi {
+        program: &shared::GRASS_GENERATE,
+        slots: &[&[
+            ("grass", "buffer(0)"),
+            ("blades_out", "buffer(1)"),
+            ("draw_args", "buffer(2)"),
+        ]],
+        argument_ids: &[],
+    },
+    // The grass draws at the tail of the pre-pass and the main pass: the
+    // pass's view blocks where the surfaces left them, and the grass block and
+    // blades at buffer(19) and buffer(20), clear of every main-pass slot.
+    MetalAbi {
+        program: &shared::GRASS_PREPASS_VERT,
+        slots: &[&[
+            ("view_cb", "buffer(0)"),
+            ("gb_view", "buffer(3)"),
+            ("grass", "buffer(19)"),
+            ("grass_blades", "buffer(20)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::GRASS_PREPASS_FRAG,
+        slots: &[&[("gb_view", "buffer(3)")]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::GRASS_VERT,
+        slots: &[&[
+            ("view_cb", "buffer(0)"),
+            ("grass", "buffer(19)"),
+            ("grass_blades", "buffer(20)"),
+        ]],
+        argument_ids: &[],
+    },
+    // The lit blades read the main pass's lights, shadows, clusters and
+    // environment where the surfaces left them, through the same two argument
+    // buffers.
+    MetalAbi {
+        program: &shared::GRASS_FRAG,
+        slots: &[&[
+            ("view_cb", "buffer(0)"),
+            ("lights_cb", "buffer(4)"),
+            ("shadow_cb", "buffer(5)"),
+            ("spvDescriptorSet1", "buffer(7)"),
+            ("local_lights_sb", "buffer(8)"),
+            ("spvDescriptorSet2", "buffer(10)"),
+            ("cluster_cb", "buffer(11)"),
+            ("cluster_list_sb", "buffer(12)"),
+            ("spot_shadows_sb", "buffer(13)"),
+        ]],
+        argument_ids: &[
+            ("shadow_map", bindless_textures::SHADOW_MAP),
+            ("irradiance_cube", bindless_textures::IRRADIANCE_CUBE),
+            ("ssao_tex", bindless_textures::SSAO),
+            ("spot_shadow_map", bindless_textures::SPOT_SHADOW_MAP),
+            ("tex_pool", bindless_textures::pool(0)),
+            ("tex_sampler", 0),
+            ("shadow_sampler", 1),
+            ("cube_sampler", 2),
+        ],
     },
     // The sky's motion, at the tail of the same pre-pass encoder. buffer(0) is
     // the surfaces' main-pass view block until `metal/sky.rs` rebinds the

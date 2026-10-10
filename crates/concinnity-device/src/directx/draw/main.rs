@@ -54,6 +54,7 @@ impl DxContext {
         extent: MainPassExtent,
         gpu: FrameGpuBuffers,
         world_hidden: bool,
+        grass: Option<&crate::directx::grass::GrassFrame>,
     ) {
         let MainPassExtent { width, height } = extent;
         let FrameGpuBuffers {
@@ -322,6 +323,12 @@ impl DxContext {
                 );
             }
             self.inc_draw_calls(1);
+        }
+
+        // The blades shade on the lights, shadows and environment the surfaces
+        // just bound under the main root signature.
+        if let (Some(frame), true) = (grass, use_bindless) {
+            self.encode_grass_main(cmd, frame_idx, frame);
         }
 
         // The sky lands behind phase 1's geometry. Under two-pass occlusion

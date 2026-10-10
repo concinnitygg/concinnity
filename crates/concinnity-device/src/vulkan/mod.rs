@@ -22,6 +22,7 @@ mod glass;
 mod global_set;
 mod gpu_profile;
 mod graph_exec;
+mod grass;
 mod hiz;
 mod hot_reload;
 mod init;

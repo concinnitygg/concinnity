@@ -299,7 +299,7 @@ pub(in crate::directx) fn build_emitter_gpu_state(
 // from a temporary upload-heap buffer through a one-shot command list. The target
 // is transitioned COMMON → COPY_DEST for the copy and then to UNORDERED_ACCESS,
 // its resting state for the per-frame compute passes.
-fn zero_default_buffer(
+pub(in crate::directx) fn zero_default_buffer(
     alloc: &DeviceAllocator,
     target: &ID3D12Resource,
     bytes: u64,

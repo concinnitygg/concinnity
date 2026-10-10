@@ -264,6 +264,12 @@ impl MtlContext {
         )?;
         let planar_reflection = world_fx::build_planar_reflection(&gpu, planar, &features)?;
         let raymarch = world_fx::build_raymarch(&gpu, &fx.sdf_volumes)?;
+        let grass = fx
+            .grass
+            .map(|field| {
+                super::grass::GrassState::build(&hw.device, field, features.hdr_samples, hot_reload)
+            })
+            .transpose()?;
         let sky = super::sky::SkyState::build(
             &hw.device,
             features.hdr_samples,
@@ -331,6 +337,7 @@ impl MtlContext {
             frame_ring_index: 0,
             rings,
             water,
+            grass,
             planar_reflection,
             glass,
             raymarch,

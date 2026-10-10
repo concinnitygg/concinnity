@@ -455,6 +455,9 @@ impl DxContext {
             auto_exposure_enabled: self.auto_exposure.resources.is_some(),
             particles_enabled: self.particle.resources.is_some()
                 && !self.particle.records.is_empty(),
+            // The blades draw under the GPU-driven pass's root signatures, so
+            // grass rides that path.
+            grass_enabled: self.grass.is_some() && bindless_cull_enabled,
             // Gated on the resources (built at init when the world declared a
             // VolumetricFog) and on live settings that can affect the frame, so
             // runtime `update_fog_settings(None)` -- or an authored zero density,
