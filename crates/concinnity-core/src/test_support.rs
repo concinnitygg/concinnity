@@ -17,7 +17,7 @@ use std::println;
 use std::time::Instant;
 
 use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::{DrawObject, MaterialUniforms, SkinnedDrawObject};
+use crate::gfx::render_types::{DrawObject, FarFieldTint, MaterialUniforms, SkinnedDrawObject};
 use crate::transform::IDENTITY;
 
 // One measured pass runs at least this long before its time is trusted.
@@ -148,6 +148,7 @@ pub(crate) fn draw_object() -> DrawObject {
             transparent: 0,
             see_through: 0,
             params_index: 5,
+            far_field: FarFieldTint::NONE,
         },
         visible: true,
         resident: true,

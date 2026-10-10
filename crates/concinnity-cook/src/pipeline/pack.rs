@@ -243,6 +243,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         BuildStage::Compile,
         (jobs.len() + resource_jobs.len()) as u32,
     );
+    let cook_only_textures = super::cook_only::cook_only_textures(assets);
     let shared = CompileShared {
         assets,
         named_src,
@@ -251,6 +252,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         mesh_cache,
         stage: &stage,
         cache_hits: &cache_hits,
+        cook_only_textures: &cook_only_textures,
     };
     let (pending, resource_pending) = super::build_pool::build_pool()?.install(|| {
         rayon::join(
@@ -423,6 +425,8 @@ struct CompileShared<'a> {
     mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
     stage: &'a StageProgress<'a>,
     cache_hits: &'a AtomicUsize,
+    // Textures only the cook reads (see `cook_only`).
+    cook_only_textures: &'a std::collections::HashSet<String>,
 }
 
 // Compile one component payload, or serve it from the probe or the payload
@@ -502,7 +506,11 @@ fn compile_resource(
         assets_dir: shared.assets_dir,
         all_assets: shared.assets,
     };
-    let extra_data = rt.compile_data(&asset.id, &asset.args)?.unwrap_or_default();
+    let extra_data = if *rt == RegisteredType::Texture {
+        texture_record(shared.cook_only_textures.contains(&asset.id))
+    } else {
+        rt.compile_data(&asset.id, &asset.args)?.unwrap_or_default()
+    };
     // A glTF/FBX-sourced mesh was probed before desugar; honor that result so
     // the source parse really is skipped on a hit and the pre-desugar key is
     // reused at store time (same contract as the component gltf-cache path).
@@ -546,6 +554,16 @@ fn compile_resource(
         is_data: rt.is_data(),
         extra_data,
     })
+}
+
+// A texture's runtime record: empty for one the GPU samples, so only a texture
+// the cook alone reads carries bytes.
+fn texture_record(cook_only: bool) -> Vec<u8> {
+    if cook_only {
+        concinnity_core::resource::TextureRecord { cook_only }.to_bytes()
+    } else {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
@@ -990,6 +1008,16 @@ mod tests {
         let (hero_id, _): (u32, concinnity_core::components::SkinnedMesh) =
             postcard::from_bytes(&out.resources[2].data_bytes).unwrap();
         assert_eq!(hero_id, 4);
+    }
+
+    #[test]
+    fn only_a_cook_only_texture_carries_a_record() {
+        use concinnity_core::resource::TextureRecord;
+        assert!(texture_record(false).is_empty());
+        assert_eq!(
+            TextureRecord::from_bytes(&texture_record(true)),
+            Ok(TextureRecord { cook_only: true })
+        );
     }
 
     // A world whose assets all carry inline args produces no payload sections

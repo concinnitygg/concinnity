@@ -97,6 +97,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{DEPTH_CONVENTION}", "depth_convention.hlsl"),
     ("{SKY_RAY}", "sky_ray.hlsl"),
     ("{WIND}", "wind.hlsl"),
+    ("{HIZ_TEST}", "hiz_test.hlsl"),
     // REFLECTION_CUT trails MAIN_SHADING, which carries its marker.
     ("{REFLECTION_CUT}", "reflection_cut.hlsl"),
     // The two hooks a world Shader defines, with the engine's own shading as

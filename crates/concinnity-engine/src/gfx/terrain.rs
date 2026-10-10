@@ -1,8 +1,8 @@
 //! Every `Terrain`'s cooked payload, decoded once at graphics init: its grid
 //! becomes the terrain's static draws, and with its masks the ground its grass
-//! layers grow on. The components stay in place for the physics system, which
-//! inits after graphics and builds each terrain's collider from the same
-//! payload.
+//! layers grow on and the far-field color its surface blends toward past the
+//! blades. The components stay in place for the physics system, which inits
+//! after graphics and builds each terrain's collider from the same payload.
 
 use std::collections::HashMap;
 
@@ -11,10 +11,11 @@ use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::gfx::frustum;
 use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::DrawObject;
+use concinnity_core::gfx::render_types::{DrawObject, FarFieldTint};
 use concinnity_core::render::grass::GrassTerrain;
+use concinnity_core::render::grass::tint::{FarField, far_field_band};
 use concinnity_core::terrain::payload::TerrainPayload;
-use concinnity_core::terrain::terrain_chunks;
+use concinnity_core::terrain::{terrain_chunks, terrain_chunks_colored};
 use concinnity_core::transform::trs_matrix;
 
 use crate::gfx::material_entry::MaterialEntry;
@@ -23,6 +24,9 @@ use crate::gfx::material_entry::MaterialEntry;
 pub(crate) struct LoadedTerrain {
     pub(crate) terrain: Terrain,
     pub(crate) payload: TerrainPayload,
+    /// The color its surface blends toward past the blades, when it grows
+    /// grass.
+    pub(crate) far_field: Option<FarField>,
 }
 
 /// Decode every terrain's payload, plus the blobs they live in for the
@@ -54,9 +58,25 @@ pub(crate) fn load_terrains(ctx: &mut PipelineContext) -> Option<(Vec<LoadedTerr
                 return None;
             }
         };
-        loaded.push(LoadedTerrain { terrain, payload });
+        loaded.push(LoadedTerrain {
+            terrain,
+            payload,
+            far_field: None,
+        });
+    }
+    let grass = grass_by_id(ctx);
+    for t in &mut loaded {
+        t.far_field = FarField::of(&grass_terrain(t, &grass));
     }
     Some((loaded, blobs))
+}
+
+// Every `Grass` in the world by id, read in place: the effects drain them
+// later.
+fn grass_by_id(ctx: &PipelineContext) -> HashMap<AssetId, Grass> {
+    ctx.query_with_entity::<Grass>()
+        .filter_map(|(entity, g)| Some((ctx.get::<Identity>(entity)?.id(), g.clone())))
+        .collect()
 }
 
 /// The terrains as the grass resolves them: each layer's `Grass` looked up in
@@ -65,35 +85,48 @@ pub(crate) fn grass_terrains(
     terrains: &[LoadedTerrain],
     grass: &HashMap<AssetId, Grass>,
 ) -> Vec<GrassTerrain> {
-    terrains
-        .iter()
-        .map(|t| GrassTerrain {
-            center: t.terrain.center,
-            grid: t.payload.grid.clone(),
-            layers: t
-                .terrain
-                .layers
-                .iter()
-                .zip(t.payload.masks.iter())
-                .filter_map(|(layer, mask)| {
-                    Some((grass.get(&layer.grass.id())?.clone(), mask.clone()))
-                })
-                .collect(),
-        })
-        .collect()
+    terrains.iter().map(|t| grass_terrain(t, grass)).collect()
+}
+
+fn grass_terrain(t: &LoadedTerrain, grass: &HashMap<AssetId, Grass>) -> GrassTerrain {
+    GrassTerrain {
+        center: t.terrain.center,
+        grid: t.payload.grid.clone(),
+        layers: t
+            .terrain
+            .layers
+            .iter()
+            .zip(t.payload.masks.iter())
+            .filter_map(|(layer, mask)| Some((grass.get(&layer.grass.id())?.clone(), mask.clone())))
+            .collect(),
+    }
 }
 
 /// Append `terrain`'s chunks to the shared buffers as static, frustum-culled
-/// draws under `material`.
+/// draws under `material`. A terrain growing grass carries its far-field
+/// colors in its vertex colors and the band its surface blends over.
 pub(crate) fn append_terrain_draws(
     terrain: &LoadedTerrain,
-    material: MaterialEntry,
+    mut material: MaterialEntry,
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,
     draws: &mut Vec<DrawObject>,
 ) {
     let model = trs_matrix(terrain.terrain.center, [0.0; 3], [1.0; 3]);
-    for chunk in terrain_chunks(&terrain.payload.grid) {
+    let grid = &terrain.payload.grid;
+    let chunks = match &terrain.far_field {
+        Some(far) => {
+            let [start, end] = far_field_band();
+            material.uniforms.far_field = FarFieldTint {
+                start,
+                end,
+                luma: far.luma,
+            };
+            terrain_chunks_colored(grid, &far.colors)
+        }
+        None => terrain_chunks(grid),
+    };
+    for chunk in chunks {
         let vertex_offset = vertices.len() * std::mem::size_of::<Vertex>();
         let index_offset = indices.len();
         let base = vertices.len() as u32;
@@ -149,6 +182,7 @@ mod tests {
                 grid: TerrainGrid::new(resolution, [20.0, 10.0], heights).unwrap(),
                 masks,
             },
+            far_field: None,
         }
     }
 
@@ -186,6 +220,51 @@ mod tests {
         }
         let cells = (TERRAIN_CHUNK_CELLS + 2) * (TERRAIN_CHUNK_CELLS + 2);
         assert_eq!(indices.len(), cells * 6);
+        // No grass: the vertex colors stay a white multiplier, with no band.
+        assert!(vertices[1..].iter().all(|v| v.color == [1.0; 3]));
+        assert!(
+            draws
+                .iter()
+                .all(|d| d.material.far_field == FarFieldTint::NONE)
+        );
+    }
+
+    // A terrain under grass carries its far-field colors per corner and the
+    // blade fade's band in every chunk's material.
+    #[test]
+    fn a_grassy_terrain_carries_its_far_field() {
+        let mut t = loaded(4, Vec::new());
+        let side = t.payload.grid.side();
+        let colors: Vec<[f32; 3]> = (0..side * side)
+            .map(|i| [0.01 * i as f32, 0.1, 0.0])
+            .collect();
+        t.far_field = Some(FarField {
+            colors: colors.clone(),
+            luma: 0.07,
+        });
+        let (mut vertices, mut indices, mut draws) = (Vec::new(), Vec::new(), Vec::new());
+        append_terrain_draws(
+            &t,
+            MaterialEntry::UNTEXTURED,
+            &mut vertices,
+            &mut indices,
+            &mut draws,
+        );
+        let [start, end] = far_field_band();
+        for d in &draws {
+            assert_eq!(
+                d.material.far_field,
+                FarFieldTint {
+                    start,
+                    end,
+                    luma: 0.07
+                }
+            );
+        }
+        assert_eq!(vertices.len(), colors.len());
+        for (v, c) in vertices.iter().zip(&colors) {
+            assert_eq!(v.color, *c);
+        }
     }
 
     #[test]

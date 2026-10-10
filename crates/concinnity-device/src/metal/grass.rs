@@ -1,17 +1,18 @@
 //! The grass field on Metal (see `concinnity_core::render::grass`): the kernel
-//! that places this frame's visible blades, and the two indirect draws that
-//! render them at the tail of the G-buffer pre-pass and the main pass. Both
-//! draws ride the encoder their pass already has open, after the surfaces
-//! bound the pass's view blocks, lights and argument buffers, so grass adds
-//! only its own block and blade buffer.
+//! that places this frame's visible blades, and the indirect draws, one per
+//! detail level, that render them at the tail of the G-buffer pre-pass and the
+//! main pass. The draws ride the encoder their pass already has open, after
+//! the surfaces bound the pass's view blocks, lights and argument buffers, so
+//! grass adds only its own block and blade buffer.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::render::error::{RenderError, RenderResult};
 pub(in crate::metal) use concinnity_core::render::grass::GrassFrame;
-use concinnity_core::render::grass::{GrassCamera, GrassField};
+use concinnity_core::render::grass::lod::GRASS_LOD_COUNT;
+use concinnity_core::render::grass::{GrassCamera, GrassField, GrassHiz};
 use concinnity_core::render::shader_programs::metal::prepass_buffers;
 use concinnity_core::render::uniforms::grass::{
-    GRASS_ARGS_BYTES, GpuGrassBlade, grass_args_offset,
+    GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, grass_args_offset,
 };
 use concinnity_core::render::uniforms::{GBufferView, ViewUniforms};
 use objc2::rc::Retained;
@@ -43,6 +44,7 @@ const KERNEL_BLADES_INDEX: usize = 1;
 const KERNEL_ARGS_INDEX: usize = 2;
 const KERNEL_HEIGHTS_INDEX: usize = 3;
 const KERNEL_MASKS_INDEX: usize = 4;
+const KERNEL_HIZ_TEXTURE_INDEX: usize = 5;
 
 pub(super) struct GrassPipelines {
     generate: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
@@ -69,10 +71,11 @@ impl GrassPipelines {
 pub(super) struct GrassState {
     pub(super) field: GrassField,
     pub(super) pipelines: GrassPipelines,
-    // The visible blades the kernel appends, `field.capacity` of them. Written
-    // and read only on the GPU.
+    // The visible blades the kernel appends, `field.capacity` of them, each
+    // detail level's region after the last. Written and read only on the GPU.
     blades: Retained<ProtocolObject<dyn MTLBuffer>>,
-    // Two slots of non-indexed draw arguments; see `GRASS_ARGS_SLOTS`.
+    // Two slots of non-indexed draw arguments, one per detail level; see
+    // `GRASS_ARGS_SLOTS`.
     args: Retained<ProtocolObject<dyn MTLBuffer>>,
     // Every terrain's heights and every layer's mask texels, which the kernel
     // reads to root and thin the blades.
@@ -110,12 +113,12 @@ impl GrassState {
         sample_count: u32,
         hot_reload: bool,
     ) -> RenderResult<Self> {
-        let blade_bytes = field.capacity as usize * size_of::<GpuGrassBlade>();
+        let blade_bytes = field.capacity.total() as usize * size_of::<GpuGrassBlade>();
         let blades = device
             .newBufferWithLength_options(blade_bytes, MTLResourceOptions::StorageModePrivate)
             .ok_or_else(|| allocation_failed("grass blade buffer"))?;
         // Shared, so the CPU can zero it: the kernel then owns every word but
-        // the instance count of the slot it fills first.
+        // the instance counts of the slot it fills first.
         let args = device
             .newBufferWithLength_options(GRASS_ARGS_BYTES, MTLResourceOptions::StorageModeShared)
             .ok_or_else(|| allocation_failed("grass args buffer"))?;
@@ -195,10 +198,23 @@ impl MtlContext {
         cam_pos: [f32; 3],
         vp: [[f32; 4]; 4],
     ) -> Option<GrassFrame> {
+        // The pyramid holds last frame's depth once the cull has seen a frame
+        // through, and is tested through last frame's view-projection.
+        let hiz = self
+            .cull
+            .hiz
+            .as_ref()
+            .filter(|_| self.cull.hiz_valid)
+            .map(|h| GrassHiz {
+                prev_vp: self.cull.prev_view_proj,
+                size: [h.width as f32, h.height as f32],
+                mip_count: h.mip_count,
+            });
         let grass = self.grass.as_mut()?;
         let camera = GrassCamera {
             position: cam_pos,
             vp,
+            hiz,
         };
         let frame = grass.field.frame(&camera, grass.runs);
         grass.runs = grass.runs.wrapping_add(1);
@@ -230,6 +246,11 @@ impl MtlContext {
         enc.set_buffer(&grass.args, 0, KERNEL_ARGS_INDEX);
         enc.set_buffer(&grass.heights, 0, KERNEL_HEIGHTS_INDEX);
         enc.set_buffer(&grass.masks, 0, KERNEL_MASKS_INDEX);
+        // Bound whenever it exists so the kernel's texture always resolves; the
+        // block's `hiz_enabled` gates the reads.
+        if let Some(hiz) = &self.cull.hiz {
+            enc.set_texture(&hiz.texture, KERNEL_HIZ_TEXTURE_INDEX);
+        }
         let [x, y, z] = frame.dispatch;
         let groups = MTLSize {
             width: x as usize,
@@ -265,7 +286,7 @@ impl MtlContext {
         enc.set_fragment_value(gbuffer, prepass_buffers::VIEW);
         self.draw_grass(enc, grass, frame);
         enc.popDebugGroup();
-        1
+        GRASS_LOD_COUNT as u32
     }
 
     // Draw the lit blades into the main pass `enc` has open. The fragment reads
@@ -286,11 +307,11 @@ impl MtlContext {
         enc.set_vertex_value(view, 0);
         self.draw_grass(enc, grass, frame);
         enc.popDebugGroup();
-        1
+        GRASS_LOD_COUNT as u32
     }
 
-    // The one indirect draw both passes issue: a strip per visible blade,
-    // two-sided.
+    // The draws both passes issue, one per detail level: a strip per visible
+    // blade, two-sided.
     fn draw_grass(
         &self,
         enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
@@ -300,15 +321,19 @@ impl MtlContext {
         enc.setCullMode(MTLCullMode::None);
         enc.set_vertex_value(&frame.params, PARAMS_INDEX);
         enc.set_vertex_buffer(&grass.blades, 0, BLADES_INDEX);
-        // SAFETY: the args buffer holds GRASS_ARGS_SLOTS whole draw-argument
-        // records and the offset names one of them; the kernel that filled it
-        // was committed ahead of this pass, and hazard tracking orders the read.
-        unsafe {
-            enc.drawPrimitives_indirectBuffer_indirectBufferOffset(
-                MTLPrimitiveType::TriangleStrip,
-                &grass.args,
-                grass_args_offset(frame.params.args_slot),
-            );
+        let slot = grass_args_offset(frame.params.args_slot);
+        for lod in 0..GRASS_LOD_COUNT {
+            // SAFETY: the args buffer holds GRASS_ARGS_SLOTS whole slots of
+            // GRASS_LOD_COUNT draw-argument records and the offset names one of
+            // them; the kernel that filled it was committed ahead of this pass,
+            // and hazard tracking orders the read.
+            unsafe {
+                enc.drawPrimitives_indirectBuffer_indirectBufferOffset(
+                    MTLPrimitiveType::TriangleStrip,
+                    &grass.args,
+                    slot + lod * GRASS_ARGS_STRIDE,
+                );
+            }
         }
     }
 }

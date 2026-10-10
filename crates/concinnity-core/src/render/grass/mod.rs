@@ -9,9 +9,12 @@
 //! cells within the tile. A tile off every terrain is never dispatched.
 
 mod ground;
+pub mod lod;
 pub mod tiles;
+pub mod tint;
 
 pub use ground::{GrassGround, GrassGroundBuffers, GrassMask, GroundSample};
+pub use lod::GrassCapacity;
 
 use alloc::vec::Vec;
 
@@ -23,7 +26,11 @@ use crate::render::uniforms::grass::{
 };
 use crate::render::wind::WindField;
 use crate::terrain::{DensityMask, TerrainGrid};
-use tiles::{GRASS_DRAW_DISTANCE, GRASS_TILE_SIZE, GrassGrid, MAX_GRASS_BLADES, TileRange};
+use lod::{
+    GRASS_FULL_DENSITY_DISTANCE, GRASS_LOD_DISTANCES, GRASS_MIN_KEEP, GRASS_MORPH_FRACTION,
+    GRASS_SHRINK_BAND,
+};
+use tiles::{GRASS_DRAW_DISTANCE, GRASS_TILE_SIZE, GrassGrid, TileRange};
 
 /// What every blade of a layer looks like, wherever it grows.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -95,6 +102,21 @@ pub struct GrassCamera {
     pub position: [f32; 3],
     /// This frame's unjittered view-projection, column-major.
     pub vp: [[f32; 4]; 4],
+    /// The depth pyramid tiles are occlusion-tested against, when it holds
+    /// the previous frame's depth.
+    pub hiz: Option<GrassHiz>,
+}
+
+/// The previous frame's depth pyramid, as the kernel's tile test reads it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GrassHiz {
+    /// The view-projection the pyramid's depth was rendered through,
+    /// column-major.
+    pub prev_vp: [[f32; 4]; 4],
+    /// Base size in texels.
+    pub size: [f32; 2],
+    /// Mip levels.
+    pub mip_count: u32,
 }
 
 /// A frame's grass work: the parameters every grass stage reads and the
@@ -117,8 +139,8 @@ pub struct GrassField {
     pub buffers: GrassGroundBuffers,
     /// The wind the blades sway in.
     pub wind: WindField,
-    /// Blades the visible-blade buffer is sized for.
-    pub capacity: u32,
+    /// Blades each detail level's region of the visible-blade buffer holds.
+    pub capacity: GrassCapacity,
 }
 
 impl GrassField {
@@ -127,7 +149,7 @@ impl GrassField {
     pub fn resolve(terrains: &[GrassTerrain], wind: Option<&Wind>) -> Option<Self> {
         let mut buffers = GrassGroundBuffers::default();
         let mut layers = Vec::new();
-        let mut capacity: u64 = 0;
+        let mut capacities = Vec::new();
         for terrain in terrains {
             let mut heights_offset = None;
             for (grass, mask) in &terrain.layers {
@@ -141,7 +163,7 @@ impl GrassField {
                 let offset =
                     *heights_offset.get_or_insert_with(|| buffers.push_heights(&terrain.grid));
                 let ground = GrassGround::new(terrain.center, &terrain.grid, offset);
-                capacity += u64::from(tiles::blade_capacity(
+                capacities.push(lod::lod_capacities(
                     &ground.rect,
                     &grid,
                     GRASS_DRAW_DISTANCE,
@@ -162,7 +184,7 @@ impl GrassField {
             layers,
             buffers,
             wind: WindField::new(wind),
-            capacity: capacity.min(u64::from(MAX_GRASS_BLADES)) as u32,
+            capacity: GrassCapacity::sum(capacities),
         })
     }
 
@@ -191,6 +213,9 @@ impl GrassField {
         let reach = self.layers_in_reach(camera.position);
         let frustum = Frustum::from_camera(camera.vp, Some(GRASS_DRAW_DISTANCE));
         let [wind, wind_gust] = self.wind.gpu_rows();
+        let hiz = camera.hiz;
+        let lod_base = self.capacity.bases();
+        let lod_capacity = self.capacity.lods;
         let mut params = GrassParams {
             cam_pos: camera.position,
             draw_distance: GRASS_DRAW_DISTANCE,
@@ -199,10 +224,28 @@ impl GrassField {
                 .map(|p| [p.normal[0], p.normal[1], p.normal[2], p.d]),
             wind,
             wind_gust,
+            prev_vp: hiz.map_or(camera.vp, |h| h.prev_vp),
+            hiz_size: hiz.map_or([1.0, 1.0], |h| h.size),
+            hiz_mip_count: hiz.map_or(1, |h| h.mip_count),
+            hiz_enabled: u32::from(hiz.is_some()),
+            lod_base: [lod_base[0], lod_base[1], lod_base[2], 0],
+            lod_capacity: [lod_capacity[0], lod_capacity[1], lod_capacity[2], 0],
+            lod_distances: [
+                GRASS_LOD_DISTANCES[0],
+                GRASS_LOD_DISTANCES[1],
+                GRASS_MORPH_FRACTION,
+                GRASS_FULL_DENSITY_DISTANCE,
+            ],
+            thinning: [
+                GRASS_MIN_KEEP,
+                GRASS_SHRINK_BAND,
+                lod::fade_start(GRASS_DRAW_DISTANCE),
+                lod::max_width_scale(),
+            ],
             layer_count: reach.len() as u32,
-            capacity: self.capacity,
             args_slot: args_slot % GRASS_ARGS_SLOTS as u32,
             tile_size: GRASS_TILE_SIZE,
+            _pad: 0,
             layers: [GrassLayerGpu::default(); MAX_GRASS_LAYERS],
         };
         let mut dispatch = [1u32; 3];
@@ -216,8 +259,36 @@ impl GrassField {
     }
 }
 
+/// How far a blade of `look` can reach from its root in any direction: its
+/// tallest height, since a bent blade keeps its length, plus half its widest
+/// width, distance widening and edge-on widening included. Mirrors the
+/// kernel's height and width draws.
+pub fn blade_reach(look: &GrassBladeLook) -> f32 {
+    let tallest = look.height * (1.0 + look.height_variance);
+    let widest = look.width * 1.25 * lod::max_width_scale() * 1.3;
+    tallest + 0.5 * widest
+}
+
+/// The box every blade rooted in tile `tile` of `layer` stays inside, swaying
+/// in any wind: the tile's columns over the terrain's heights, grown by the
+/// blades' reach. Mirrors the kernel's tile test.
+pub fn tile_bounds(layer: &GrassLayerGpu, tile_size: f32, tile: [i32; 2]) -> ([f32; 3], [f32; 3]) {
+    let r = layer.reach;
+    let lo = [
+        tile[0] as f32 * tile_size - r,
+        tile[1] as f32 * tile_size - r,
+    ];
+    let hi = [
+        (tile[0] + 1) as f32 * tile_size + r,
+        (tile[1] + 1) as f32 * tile_size + r,
+    ];
+    (
+        [lo[0], layer.min_y - r, lo[1]],
+        [hi[0], layer.max_y + r, hi[1]],
+    )
+}
+
 fn layer_gpu(layer: &GrassLayer, tiles: &TileRange) -> GrassLayerGpu {
-    let rgb = |c: [f32; 3]| [c[0], c[1], c[2], 0.0];
     let ground = &layer.ground;
     let look = &layer.look;
     let mask = layer.mask.as_ref();
@@ -246,8 +317,9 @@ fn layer_gpu(layer: &GrassLayer, tiles: &TileRange) -> GrassLayerGpu {
         color_variation: look.color_variation,
         cell_size: layer.grid.cell_size(),
         cells_per_side: layer.grid.cells_per_side,
-        root_color: rgb(look.root_color),
-        tip_color: rgb(look.tip_color),
+        root_color: look.root_color,
+        reach: blade_reach(look),
+        tip_color: [look.tip_color[0], look.tip_color[1], look.tip_color[2], 0.0],
     }
 }
 
@@ -269,6 +341,7 @@ mod tests {
         GrassCamera {
             position,
             vp: identity(),
+            hiz: None,
         }
     }
 
@@ -318,11 +391,11 @@ mod tests {
         assert_eq!(f.layers[2].ground.heights_offset, 25);
         assert_eq!(f.layers[2].ground.base_y, 3.0);
         assert_ne!(f.layers[0].seed, f.layers[1].seed);
-        let expected: u32 = f
-            .layers
-            .iter()
-            .map(|l| tiles::blade_capacity(&l.ground.rect, &l.grid, GRASS_DRAW_DISTANCE))
-            .sum();
+        let expected = GrassCapacity::sum(
+            f.layers
+                .iter()
+                .map(|l| lod::lod_capacities(&l.ground.rect, &l.grid, GRASS_DRAW_DISTANCE)),
+        );
         assert_eq!(f.capacity, expected);
     }
 
@@ -362,8 +435,10 @@ mod tests {
         assert_eq!(frame.dispatch, [25, 44, 1]);
         assert_eq!(p.cam_pos, [10.0, 3.0, -4.0]);
         assert_eq!(p.draw_distance, GRASS_DRAW_DISTANCE);
-        assert_eq!(p.capacity, f.capacity);
+        assert_eq!(p.lod_capacity[..3], f.capacity.lods);
+        assert_eq!(p.lod_base[..3], f.capacity.bases());
         assert_eq!(p.args_slot, 1);
+        assert_eq!(p.hiz_enabled, 0);
         assert_eq!(p.tile_size, GRASS_TILE_SIZE);
         assert_eq!(p.layers[1], GrassLayerGpu::default());
     }

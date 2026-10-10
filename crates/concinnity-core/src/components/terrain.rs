@@ -50,7 +50,9 @@ pub struct TerrainLayer {
 /// grass blade roots in are the same triangles. Grass grows only on terrain:
 /// each entry in `layers` grows one [Grass](#grass) look over the terrain,
 /// optionally masked. Several terrains, and several layers on one terrain, may
-/// overlap.
+/// overlap. Where the blades thin out in the distance, the surface blends from
+/// its material toward the color its grass shows from afar, in proportion to
+/// how densely the grass grows there, so a covered field reaches the horizon.
 ///
 /// ```rust
 /// # use concinnity_core::components::Terrain;

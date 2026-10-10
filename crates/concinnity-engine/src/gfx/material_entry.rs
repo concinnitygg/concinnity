@@ -7,7 +7,9 @@
 
 use concinnity_core::components::Material;
 use concinnity_core::ecs::{MaterialHandle, TextureHandle};
-use concinnity_core::gfx::render_types::{MaterialUniforms, NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT};
+use concinnity_core::gfx::render_types::{
+    FarFieldTint, MaterialUniforms, NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT,
+};
 use concinnity_core::render::material_params;
 
 // One decoded material as build_draw_list consumes it: resolved texture pool
@@ -76,6 +78,7 @@ pub(crate) fn of(
             transparent: u32::from(mat.transparent),
             see_through: u32::from(mat.see_through),
             params_index: material_params::row_of(Some(handle)),
+            far_field: FarFieldTint::NONE,
         },
         shader_bucket: mat.shader.map_or(0, |h| h.0),
     })

@@ -12,11 +12,13 @@ mod environment_map;
 mod handles;
 mod install;
 mod runtime;
+mod texture;
 
 pub use environment_map::EnvironmentMapRecord;
 pub use handles::{MeshBlock, ResourceHandles};
 pub use install::{append_environment_map, append_font, append_material, append_mesh};
 pub use runtime::RuntimeMeshPayloads;
+pub use texture::TextureRecord;
 
 use alloc::collections::BTreeSet;
 use alloc::vec;
@@ -159,7 +161,8 @@ resource_tables! {
     AudioClipTable => AudioClip,
     // Textures, indexed by `TextureHandle`. The renderer reads this at init to
     // build its shared texture pool. Every texture (file or procedural) has a
-    // compiled payload, so an entry's `payload` is normally `Some`.
+    // compiled payload, so an entry's `payload` is normally `Some`; its
+    // `data_bytes` carry a `TextureRecord`, empty for the defaults.
     TextureTable => Texture,
     // Color-grading LUTs, indexed by `ColorLutHandle`. The renderer uses only
     // the first (handle 0) and warns when a world declares more.

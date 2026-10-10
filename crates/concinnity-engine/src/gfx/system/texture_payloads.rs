@@ -1,7 +1,7 @@
 // Texture pool decode: one image per texture slot, plus the raw payloads the
 // streamer re-decodes after init.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use concinnity_core::bake::texture::{self, TextureImage};
 use concinnity_core::ecs::{PayloadLocator, PipelineContext};
@@ -15,19 +15,35 @@ pub(super) struct TexturePayloads {
     pub(super) payloads: Vec<Vec<u8>>,
 }
 
-// Decode every texture slot. A deferred slot (owned by a scene other than the
-// start scene) enters the pool as a 1x1 placeholder, and the streamer decodes
-// it once its scene pins. `None` when a payload cannot be read or decoded.
+// The slots that enter the pool as placeholders rather than their images.
+pub(super) struct TextureSlotSkips<'a> {
+    // Owned by a scene other than the start scene: the streamer decodes them
+    // once their scene pins.
+    pub(super) deferred: &'a HashSet<usize>,
+    // Read only by the cook, so nothing samples them and their payloads are
+    // never read.
+    pub(super) cook_only: &'a BTreeSet<usize>,
+}
+
+// Decode every texture slot. A skipped slot enters the pool as a 1x1
+// placeholder. `None` when a payload cannot be read or decoded.
 pub(super) fn decode_texture_payloads(
     ctx: &mut PipelineContext,
     locators: &[PayloadLocator],
-    deferred_slots: &HashSet<usize>,
+    skips: TextureSlotSkips<'_>,
     blob_disk_backed: bool,
 ) -> Option<TexturePayloads> {
     let mut images = Vec::with_capacity(locators.len());
     let mut payloads = Vec::new();
     for (slot, locator) in locators.iter().enumerate() {
-        let deferred = deferred_slots.contains(&slot);
+        if skips.cook_only.contains(&slot) {
+            images.push(TextureImage::rgba8(1, 1, vec![0, 0, 0, 255]));
+            if !blob_disk_backed {
+                payloads.push(Vec::new());
+            }
+            continue;
+        }
+        let deferred = skips.deferred.contains(&slot);
         let needs_bytes = !deferred || !blob_disk_backed;
         let bytes = if needs_bytes {
             match ctx.read_payload(locator) {
@@ -55,10 +71,10 @@ pub(super) fn decode_texture_payloads(
             payloads.push(bytes);
         }
     }
-    if !deferred_slots.is_empty() {
+    if !skips.deferred.is_empty() {
         tracing::info!(
             "GraphicsSystem: deferred {} scene-owned texture payload(s) past init",
-            deferred_slots.len()
+            skips.deferred.len()
         );
     }
     Some(TexturePayloads { images, payloads })

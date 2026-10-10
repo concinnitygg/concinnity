@@ -60,7 +60,7 @@ use super::prop_draws::PropDrawInputs;
 use super::scene_lights::gather_lights;
 use super::skinned_templates::{SkinnedSkeletonEntry, SkinnedUpload};
 use super::stream_plan::{StreamGeometry, StreamingSetup, plan_stream_geometry};
-use super::texture_payloads::{TexturePayloads, decode_texture_payloads};
+use super::texture_payloads::{TexturePayloads, TextureSlotSkips, decode_texture_payloads};
 use super::world_fx::drain_world_fx;
 use super::*;
 use crate::app::run::LaunchRequest;
@@ -123,6 +123,8 @@ struct TextureTableDecode {
     source_map: super::hot_reload_sources::TextureSourceMap,
     name_to_slot: std::collections::HashMap<AssetId, usize>,
     count: usize,
+    // Slots only the cook reads, which stay placeholders on the GPU.
+    cook_only: std::collections::BTreeSet<usize>,
 }
 
 // The MaterialTable decoded by `build_material_map`: each material's draw entry
@@ -797,11 +799,19 @@ impl GraphicsSystem {
             }
         }
         let count = texture_table.len();
+        let cook_only = match texture_table.cook_only_slots() {
+            Ok(slots) => slots,
+            Err(e) => {
+                tracing::error!("GraphicsSystem: malformed texture record: {e}");
+                return None;
+            }
+        };
         Some(TextureTableDecode {
             locators: texture_locators,
             source_map: asset_source_map,
             name_to_slot: texture_name_to_slot,
             count,
+            cook_only,
         })
     }
 
@@ -1455,6 +1465,7 @@ impl GraphicsSystem {
             source_map: asset_source_map,
             name_to_slot: texture_name_to_slot,
             count: texture_count,
+            cook_only: cook_only_textures,
         } = self.decode_texture_table(ctx, capture_sources)?;
         let DecodedMaterials {
             map: material_map,
@@ -1482,7 +1493,15 @@ impl GraphicsSystem {
         let TexturePayloads {
             images: texture_data,
             payloads: texture_payloads,
-        } = decode_texture_payloads(ctx, &texture_locators, &deferred_slots, blob_disk_backed)?;
+        } = decode_texture_payloads(
+            ctx,
+            &texture_locators,
+            TextureSlotSkips {
+                deferred: &deferred_slots,
+                cook_only: &cook_only_textures,
+            },
+            blob_disk_backed,
+        )?;
 
         // Read the sole EnvironmentMap + ColorLut payloads, then build the shared
         // text/sprite atlas pool.
@@ -1721,6 +1740,7 @@ impl GraphicsSystem {
             plan: stream_plan,
             texture_payloads,
             texture_locators: &texture_locators,
+            cook_only_textures: &cook_only_textures,
             disk_backed: blob_disk_backed,
             deferred_mesh_seeds: &deferred_mesh_seeds,
             voxel_world,

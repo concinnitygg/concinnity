@@ -570,13 +570,18 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
 
     // Grass (compute): places, culls and appends this frame's visible blades,
     // and fills the indirect arguments the pre-pass and Main draw them with.
-    // It reads nothing the frame produces, so its readers are its only edges
-    // and the schedule may overlap it with the raster front. Both buffers are
-    // persistent and backend-owned, hence imported.
+    // Its tiles are occlusion-tested against the pyramid the previous frame
+    // left, a read that, like Cull's, gives the pyramid's rebuilds a WAR edge to
+    // wait on. It reads nothing else, so the schedule may overlap it with the
+    // raster front. Both buffers are persistent and backend-owned, hence
+    // imported.
     let grass_v1 = if inputs.grass_enabled {
         let blades = b.import_buffer("grass_blades", grass_blades_desc());
         let args = b.import_buffer("grass_args", draw_args_desc());
         let mut grass = b.add_pass(PassId::Grass, PassKind::Compute);
+        if let Some(h) = hiz_pyramid {
+            grass.read_texture(h);
+        }
         Some(GrassHandles {
             blades: grass.write_buffer(blades),
             args: grass.write_buffer(args),
@@ -1529,6 +1534,34 @@ mod tests {
                 .any(|r| r.resource_index() == hiz)
         );
         assert!(pos(PassId::Cull) < pos(PassId::HizFinal));
+    }
+
+    #[test]
+    fn grass_reads_the_pyramid_ahead_of_its_rebuilds() {
+        // The grass kernel occlusion-tests its tiles against the pyramid the
+        // previous frame left, so both rebuilds must wait for it, the mid-frame
+        // one under two-pass occlusion included.
+        for two_pass in [false, true] {
+            let mut i = all_off();
+            i.hiz_build_enabled = true;
+            i.bindless_cull_enabled = true;
+            i.two_pass_occlusion_enabled = two_pass;
+            i.grass_enabled = true;
+            let g = build_frame_graph(&i).expect("compiles");
+            let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+            let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+            let hiz = resource_of(&g, "hiz_pyramid");
+            assert!(
+                g.passes[pos(PassId::Grass)]
+                    .reads
+                    .iter()
+                    .any(|r| r.resource_index() == hiz)
+            );
+            assert!(pos(PassId::Grass) < pos(PassId::HizFinal));
+            if two_pass {
+                assert!(pos(PassId::Grass) < pos(PassId::HizBuild));
+            }
+        }
     }
 
     #[test]

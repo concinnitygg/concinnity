@@ -1,7 +1,7 @@
 // Asset streaming across the backend build: the inputs captured from the draw
 // list before it moves into the backend, and the pool wiring that consumes them.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use concinnity_core::components::{BlockType, StreamingConfig, VoxelWorld};
 use concinnity_core::ecs::asset_id::AssetId;
@@ -109,6 +109,8 @@ pub(super) struct StreamingSetup<'a> {
     pub(super) plan: StreamPlan,
     pub(super) texture_payloads: Vec<Vec<u8>>,
     pub(super) texture_locators: &'a [PayloadLocator],
+    // Texture slots only the cook reads, which never stream in.
+    pub(super) cook_only_textures: &'a BTreeSet<usize>,
     pub(super) disk_backed: bool,
     pub(super) deferred_mesh_seeds: &'a HashMap<usize, DeferredMeshSeed>,
     pub(super) voxel_world: Option<VoxelWorld>,
@@ -124,6 +126,7 @@ impl GraphicsSystem {
             plan,
             texture_payloads,
             texture_locators,
+            cook_only_textures,
             disk_backed,
             deferred_mesh_seeds,
             voxel_world,
@@ -137,6 +140,11 @@ impl GraphicsSystem {
             disk_backed,
             plan.texture_centers,
         );
+        if let Some(streamer) = self.texture_streamer.as_mut() {
+            for &slot in cook_only_textures {
+                streamer.exclude(slot);
+            }
+        }
         // Per-stream-id payload refs for the deferred meshes, so the worker
         // can decode them from the blob payload when their scene pins.
         let deferred_payloads = deferred_mesh_payloads(

@@ -189,6 +189,7 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             ("draw_args", "u2"),
             ("terrain_heights", "t3"),
             ("grass_masks", "t4"),
+            ("grass_hiz", "t5"),
         ],
     },
     // The grass draws compile from the main pass's resources, so each stage
@@ -848,7 +849,8 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     // The grass kernel, from `metal/grass.rs`: its block, the blades it
     // appends, the draw arguments, and the terrain heights and mask texels it
-    // reads, at buffer(0..4) by register.
+    // reads, at buffer(0..4) by register, and last frame's depth pyramid at
+    // texture(5).
     MetalAbi {
         program: &shared::GRASS_GENERATE,
         slots: &[&[
@@ -857,6 +859,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("draw_args", "buffer(2)"),
             ("terrain_heights", "buffer(3)"),
             ("grass_masks", "buffer(4)"),
+            ("grass_hiz", "texture(5)"),
         ]],
         argument_ids: &[],
     },

@@ -233,7 +233,7 @@ impl<'a> GraphicsPipelineDesc<'a> {
             .vertex_attribute_descriptions(self.vertex_attributes);
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(self.topology)
-            .primitive_restart_enable(false);
+            .primitive_restart_enable(primitive_restart(self.topology));
         let viewport = vk::PipelineViewportStateCreateInfo::default()
             .viewport_count(1)
             .scissor_count(1);
@@ -299,9 +299,31 @@ pub(in crate::vulkan) fn compute_pipeline(
         .map_err(|e| map_vk_result(e, &format!("create {label} pipeline")))
 }
 
+// Whether `topology` keeps primitive restart on. Metal restarts every strip at
+// the restart index and cannot turn that off, so strips enable it everywhere:
+// it only ever applies to indexed draws, and no draw here indexes a strip with
+// the restart value. Lists keep it off, since enabling it for them needs a
+// device feature.
+fn primitive_restart(topology: vk::PrimitiveTopology) -> bool {
+    use vk::PrimitiveTopology as T;
+    matches!(
+        topology,
+        T::LINE_STRIP | T::TRIANGLE_STRIP | T::TRIANGLE_FAN
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strips_keep_primitive_restart_on_and_lists_off() {
+        assert!(primitive_restart(vk::PrimitiveTopology::TRIANGLE_STRIP));
+        assert!(primitive_restart(vk::PrimitiveTopology::LINE_STRIP));
+        assert!(!primitive_restart(vk::PrimitiveTopology::TRIANGLE_LIST));
+        assert!(!primitive_restart(vk::PrimitiveTopology::LINE_LIST));
+        assert!(!primitive_restart(vk::PrimitiveTopology::POINT_LIST));
+    }
 
     #[test]
     fn blends_set_their_factors_and_opaque_disables_blending() {

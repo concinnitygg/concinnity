@@ -3,20 +3,22 @@
 //! the draw arguments the kernel fills. Match `GrassParams` / `GrassLayer` /
 //! `GrassBlade` in `shaders/grass.hlsl`.
 
-/// Vertices in one blade strip: seven pairs up the blade and the tip.
-pub const GRASS_BLADE_VERTICES: u32 = 15;
+use crate::render::grass::lod::{GRASS_LOD_COUNT, GRASS_LOD_VERTEX_STRIDE, GRASS_LOD_VERTICES};
 
 /// Draw-argument slots the args buffer holds. The kernel fills one each frame
 /// and resets the other for the next, so no separate clear runs.
 pub const GRASS_ARGS_SLOTS: usize = 2;
 
-/// Bytes in one slot of non-indexed draw arguments, the layout Metal, DirectX
-/// and Vulkan share: vertex count, instance count, first vertex, first
+/// Bytes in one record of non-indexed draw arguments, the layout Metal,
+/// DirectX and Vulkan share: vertex count, instance count, first vertex, first
 /// instance.
 pub const GRASS_ARGS_STRIDE: usize = 16;
 
+/// Bytes in one slot: one draw per detail level, coarsening in order.
+pub const GRASS_ARGS_SLOT_BYTES: usize = GRASS_LOD_COUNT * GRASS_ARGS_STRIDE;
+
 /// Bytes in the whole args buffer.
-pub const GRASS_ARGS_BYTES: usize = GRASS_ARGS_SLOTS * GRASS_ARGS_STRIDE;
+pub const GRASS_ARGS_BYTES: usize = GRASS_ARGS_SLOTS * GRASS_ARGS_SLOT_BYTES;
 
 /// Most grass layers one frame grows: the layers within reach of the camera,
 /// in the order the world declares them.
@@ -67,15 +69,19 @@ pub struct GrassLayerGpu {
     pub cell_size: f32,
     /// Cells along each tile edge.
     pub cells_per_side: u32,
-    /// Linear RGB at the root; `w` unused.
-    pub root_color: [f32; 4],
+    /// Linear RGB at the root.
+    pub root_color: [f32; 3],
+    /// How far, in meters, a blade can reach from its root in any direction:
+    /// its tallest height, bent any way, plus half its widest width.
+    pub reach: f32,
     /// Linear RGB at the tip; `w` unused.
     pub tip_color: [f32; 4],
 }
 
-/// Per-frame grass parameters: the camera, the wind, and the layers in reach.
-/// Every member a `float4` row, a run of four scalars, or a whole layer, so
-/// the constant-buffer and storage layouts agree on every target.
+/// Per-frame grass parameters: the camera, the wind, the occlusion test, the
+/// detail levels, and the layers in reach. Every member a `float4` row, a run
+/// of four scalars, or a whole layer, so the constant-buffer and storage
+/// layouts agree on every target.
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GrassParams {
@@ -90,14 +96,34 @@ pub struct GrassParams {
     pub wind: [f32; 4],
     /// Inverse gust width; `yzw` unused.
     pub wind_gust: [f32; 4],
+    /// The previous frame's view-projection, which the Hi-Z pyramid was built
+    /// through, column-major.
+    pub prev_vp: [[f32; 4]; 4],
+    /// Pyramid base size in texels.
+    pub hiz_size: [f32; 2],
+    /// Pyramid mip levels.
+    pub hiz_mip_count: u32,
+    /// 1 when the pyramid holds last frame's depth and tiles are tested
+    /// against it.
+    pub hiz_enabled: u32,
+    /// The first blade of each detail level's region; `w` unused.
+    pub lod_base: [u32; 4],
+    /// Blades each level's region holds; `w` unused.
+    pub lod_capacity: [u32; 4],
+    /// Where the second and third levels start, the morph fraction, and the
+    /// distance thinning starts at.
+    pub lod_distances: [f32; 4],
+    /// The fewest blades thinning keeps, the shrink band, where the fade
+    /// starts, and the widest a blade grows.
+    pub thinning: [f32; 4],
     /// Entries of `layers` in use.
     pub layer_count: u32,
-    /// Blades the visible-blade buffer holds.
-    pub capacity: u32,
     /// The draw-argument slot this frame fills; the other one is reset.
     pub args_slot: u32,
     /// Edge of one tile, in meters.
     pub tile_size: f32,
+    /// Keeps the layers on a 16-byte row.
+    pub _pad: u32,
     /// The layers this frame grows.
     pub layers: [GrassLayerGpu; MAX_GRASS_LAYERS],
 }
@@ -114,19 +140,22 @@ pub struct GpuGrassBlade {
     pub shape: [u32; 4],
 }
 
-/// The initial contents of the args buffer: every slot a draw of one blade
-/// strip with no instances.
-pub fn initial_grass_args() -> [u32; GRASS_ARGS_SLOTS * 4] {
-    let mut args = [0u32; GRASS_ARGS_SLOTS * 4];
-    for slot in args.chunks_exact_mut(4) {
-        slot[0] = GRASS_BLADE_VERTICES;
+/// The initial contents of the args buffer: every record a draw of its
+/// level's strip with no instances, starting at the level's vertex ids.
+pub fn initial_grass_args() -> [u32; GRASS_ARGS_BYTES / 4] {
+    let mut args = [0u32; GRASS_ARGS_BYTES / 4];
+    for (i, record) in args.chunks_exact_mut(4).enumerate() {
+        let lod = i % GRASS_LOD_COUNT;
+        record[0] = GRASS_LOD_VERTICES[lod];
+        record[2] = lod as u32 * GRASS_LOD_VERTEX_STRIDE;
     }
     args
 }
 
-/// Byte offset of draw-argument slot `slot`.
+/// Byte offset of draw-argument slot `slot`: its levels' records follow it,
+/// [`GRASS_ARGS_STRIDE`] apart.
 pub fn grass_args_offset(slot: u32) -> usize {
-    (slot as usize % GRASS_ARGS_SLOTS) * GRASS_ARGS_STRIDE
+    (slot as usize % GRASS_ARGS_SLOTS) * GRASS_ARGS_SLOT_BYTES
 }
 
 #[cfg(test)]
@@ -136,17 +165,27 @@ mod tests {
 
     #[test]
     fn grass_params_layout_matches_msl() {
-        assert_eq!(size_of::<GrassParams>(), 160 + 128 * MAX_GRASS_LAYERS);
+        assert_eq!(size_of::<GrassParams>(), 304 + 128 * MAX_GRASS_LAYERS);
         assert_eq!(offset_of!(GrassParams, cam_pos), 0);
         assert_eq!(offset_of!(GrassParams, draw_distance), 12);
         assert_eq!(offset_of!(GrassParams, frustum), 16);
         assert_eq!(offset_of!(GrassParams, wind), 112);
         assert_eq!(offset_of!(GrassParams, wind_gust), 128);
-        assert_eq!(offset_of!(GrassParams, layer_count), 144);
-        assert_eq!(offset_of!(GrassParams, capacity), 148);
-        assert_eq!(offset_of!(GrassParams, args_slot), 152);
-        assert_eq!(offset_of!(GrassParams, tile_size), 156);
-        assert_eq!(offset_of!(GrassParams, layers), 160);
+        assert_eq!(offset_of!(GrassParams, prev_vp), 144);
+        assert_eq!(offset_of!(GrassParams, hiz_size), 208);
+        assert_eq!(offset_of!(GrassParams, hiz_mip_count), 216);
+        assert_eq!(offset_of!(GrassParams, hiz_enabled), 220);
+        assert_eq!(offset_of!(GrassParams, lod_base), 224);
+        assert_eq!(offset_of!(GrassParams, lod_capacity), 240);
+        assert_eq!(offset_of!(GrassParams, lod_distances), 256);
+        assert_eq!(offset_of!(GrassParams, thinning), 272);
+        assert_eq!(offset_of!(GrassParams, layer_count), 288);
+        assert_eq!(offset_of!(GrassParams, args_slot), 292);
+        assert_eq!(offset_of!(GrassParams, tile_size), 296);
+        assert_eq!(offset_of!(GrassParams, _pad), 300);
+        assert_eq!(offset_of!(GrassParams, layers), 304);
+        // Metal sets the block inline, which caps it at 4 KiB.
+        assert!(size_of::<GrassParams>() <= 4096);
     }
 
     #[test]
@@ -172,6 +211,7 @@ mod tests {
         assert_eq!(offset_of!(GrassLayerGpu, cell_size), 88);
         assert_eq!(offset_of!(GrassLayerGpu, cells_per_side), 92);
         assert_eq!(offset_of!(GrassLayerGpu, root_color), 96);
+        assert_eq!(offset_of!(GrassLayerGpu, reach), 108);
         assert_eq!(offset_of!(GrassLayerGpu, tip_color), 112);
     }
 
@@ -183,16 +223,18 @@ mod tests {
     }
 
     #[test]
-    fn every_args_slot_starts_as_an_empty_strip_draw() {
+    fn every_args_record_starts_as_an_empty_draw_of_its_level() {
         let args = initial_grass_args();
-        assert_eq!(args, [15, 0, 0, 0, 15, 0, 0, 0]);
+        let slot = [15, 0, 0, 0, 9, 0, 16, 0, 5, 0, 32, 0];
+        assert_eq!(args[..12], slot);
+        assert_eq!(args[12..], slot);
         assert_eq!(core::mem::size_of_val(&args), GRASS_ARGS_BYTES);
     }
 
     #[test]
     fn the_args_offset_alternates_between_the_two_slots() {
         assert_eq!(grass_args_offset(0), 0);
-        assert_eq!(grass_args_offset(1), 16);
+        assert_eq!(grass_args_offset(1), 48);
         assert_eq!(grass_args_offset(2), 0);
     }
 }

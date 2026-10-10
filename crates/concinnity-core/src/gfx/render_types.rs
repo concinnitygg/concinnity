@@ -154,6 +154,35 @@ pub struct MaterialUniforms {
     /// Row of the material parameter table holding this material's `params`;
     /// row 0 is the all-zero row a draw without a material reads.
     pub params_index: u32,
+    /// How a terrain under a grass field blends toward its far-field color;
+    /// [`FarFieldTint::NONE`] for every other surface.
+    pub far_field: FarFieldTint,
+}
+
+/// The distance band over which a terrain's surface blends from its material
+/// toward the far-field color its grass shows from afar. A surface with a band
+/// carries that color, premultiplied by the grass's coverage, in its vertex
+/// color, rather than a multiplier on its albedo.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct FarFieldTint {
+    /// Distance from the camera, in meters, where the blend starts.
+    pub start: f32,
+    /// Distance where the surface shows the far-field color alone; 0 for no
+    /// band.
+    pub end: f32,
+    /// Luminance of a fully covered far-field color: a vertex color's
+    /// luminance over it is the coverage there.
+    pub luma: f32,
+}
+
+impl FarFieldTint {
+    /// No band: the vertex color multiplies the albedo.
+    pub const NONE: Self = Self {
+        start: 0.0,
+        end: 0.0,
+        luma: 0.0,
+    };
 }
 
 /// Runtime-clone cap: how many spawned clones the GPU-driven cull records
@@ -202,6 +231,7 @@ impl MaterialUniforms {
         transparent: 0,
         see_through: 0,
         params_index: 0,
+        far_field: FarFieldTint::NONE,
     };
 }
 
@@ -1402,8 +1432,9 @@ pub struct GpuObjectData {
     /// Row of the material parameter table this object reads. Mirrors
     /// `MaterialUniforms::params_index`.
     pub params_index: u32,
-    /// Padding that keeps the record a whole number of 16-byte rows.
-    pub _pad: [u32; 3],
+    /// The far-field blend band, for a terrain under grass. Mirrors
+    /// `MaterialUniforms::far_field`.
+    pub far_field: FarFieldTint,
 }
 
 /// Number of generic floats a `Material` carries for its Shader.
@@ -1481,7 +1512,7 @@ impl GpuObjectData {
             bb_max: bounds.bb_max,
             alpha_cutoff: material.alpha_cutoff,
             params_index: material.params_index,
-            _pad: [0; 3],
+            far_field: material.far_field,
         }
     }
 }
@@ -2167,7 +2198,11 @@ mod tests {
         assert_eq!(offset_of!(GpuObjectData, bb_max), 128);
         assert_eq!(offset_of!(GpuObjectData, alpha_cutoff), 140);
         assert_eq!(offset_of!(GpuObjectData, params_index), 144);
-        assert_eq!(offset_of!(GpuObjectData, _pad), 148);
+        assert_eq!(offset_of!(GpuObjectData, far_field), 148);
+        assert_eq!(offset_of!(FarFieldTint, start), 0);
+        assert_eq!(offset_of!(FarFieldTint, end), 4);
+        assert_eq!(offset_of!(FarFieldTint, luma), 8);
+        assert_eq!(size_of::<FarFieldTint>(), 12);
     }
 
     #[test]
@@ -2381,17 +2416,32 @@ mod tests {
         assert_eq!(rec.bb_max, obj.bb_max);
         assert_eq!(rec.cull_distance, obj.cull_distance);
         assert_eq!(rec.params_index, obj.material.params_index);
+        assert_eq!(rec.far_field, obj.material.far_field);
     }
 
     #[test]
-    fn pack_object_record_zeroes_padding() {
+    fn pack_object_record_leaves_unset_maps_and_band_empty() {
         // The trailing index slots come straight from the material; the
         // sample material leaves the emissive + ORM map indices unset (0),
-        // which the shader reads as "no map".
+        // which the shader reads as "no map", and carries no far-field band.
         let rec = pack_object_record(&draw_object(), 0, 1);
         assert_eq!(rec.emissive_map_index, 0);
         assert_eq!(rec.orm_map_index, 0);
-        assert_eq!(rec._pad, [0; 3]);
+        assert_eq!(rec.far_field, FarFieldTint::NONE);
+    }
+
+    #[test]
+    fn a_terrain_material_carries_its_band_into_the_record() {
+        let mut obj = draw_object();
+        obj.material.far_field = FarFieldTint {
+            start: 45.0,
+            end: 60.0,
+            luma: 0.12,
+        };
+        assert_eq!(
+            pack_object_record(&obj, 0, 1).far_field,
+            obj.material.far_field
+        );
     }
 
     #[test]

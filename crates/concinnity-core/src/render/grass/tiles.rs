@@ -1,17 +1,18 @@
 //! Where the grass kernel looks for blades: the world-aligned tile grid around
-//! the camera, the jittered cell grid inside each tile that holds one blade
-//! per cell, and the bounds the visible-blade buffer is sized from.
+//! the camera, and the jittered cell grid inside each tile that holds one blade
+//! per cell.
 //!
 //! Cells are counted from the world origin, so a blade's place depends only on
 //! its cell and not on which tiles the camera currently covers.
 
 use crate::math::{ceil, floor, round, sqrt};
 
-/// Edge of one grass tile, in meters: the unit the kernel frustum-culls.
+/// Edge of one grass tile, in meters: the unit the kernel frustum- and
+/// occlusion-culls.
 pub const GRASS_TILE_SIZE: f32 = 4.0;
 
 /// Distance from the camera past which no blade is drawn, in meters.
-pub const GRASS_DRAW_DISTANCE: f32 = 60.0;
+pub const GRASS_DRAW_DISTANCE: f32 = 90.0;
 
 /// Highest density the grid places, in blades per square meter.
 pub const MAX_GRASS_DENSITY: f32 = 1000.0;
@@ -147,20 +148,6 @@ pub fn tiles_in_reach(ground: &GroundRect, cam_xz: [f32; 2], distance: f32) -> T
     }
 }
 
-/// An upper bound on the blades one frame can keep on `ground`: every cell
-/// within `distance` of the camera, wherever the camera stands, plus a tile of
-/// slack for the cells a disc boundary cuts. Capped at [`MAX_GRASS_BLADES`].
-pub fn blade_capacity(ground: &GroundRect, grid: &GrassGrid, distance: f32) -> u32 {
-    let disc = core::f32::consts::PI * distance * distance;
-    let area = ground.area().min(disc);
-    let blades = ceil(area * grid.density()) + grid.blades_per_tile() as f32;
-    if blades >= MAX_GRASS_BLADES as f32 {
-        MAX_GRASS_BLADES
-    } else {
-        (blades as u32).max(1)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,33 +210,5 @@ mod tests {
         let range = tiles_in_reach(&ground, [500.0, 0.0], 60.0);
         assert!(range.is_empty());
         assert_eq!(range, TileRange::EMPTY);
-    }
-
-    #[test]
-    fn capacity_covers_the_ground_or_the_draw_disc_whichever_is_smaller() {
-        let grid = GrassGrid::for_density(100.0).unwrap();
-        let small = GroundRect::centered([0.0, 0.0], [5.0, 5.0]);
-        assert_eq!(blade_capacity(&small, &grid, 60.0), 100 * 100 + 1600);
-        let huge = GroundRect::centered([0.0, 0.0], [1000.0, 1000.0]);
-        let disc = blade_capacity(&huge, &grid, 10.0);
-        let expected = ceil(core::f32::consts::PI * 100.0 * 100.0) as u32 + 1600;
-        assert_eq!(disc, expected);
-    }
-
-    #[test]
-    fn capacity_is_capped() {
-        let grid = GrassGrid::for_density(MAX_GRASS_DENSITY).unwrap();
-        let huge = GroundRect::centered([0.0, 0.0], [1000.0, 1000.0]);
-        assert_eq!(
-            blade_capacity(&huge, &grid, GRASS_DRAW_DISTANCE),
-            MAX_GRASS_BLADES
-        );
-    }
-
-    #[test]
-    fn an_empty_ground_still_holds_a_tile() {
-        let grid = GrassGrid::for_density(4.0).unwrap();
-        let empty = GroundRect::centered([0.0, 0.0], [0.0, 0.0]);
-        assert_eq!(blade_capacity(&empty, &grid, 60.0), grid.blades_per_tile());
     }
 }

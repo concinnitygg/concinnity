@@ -33,9 +33,11 @@ struct GpuObjectData
     float4 bb_max_alpha_cutoff;
     // Row of the material parameter table the main pass binds.
     uint params_index;
-    uint _pad0;
-    uint _pad1;
-    uint _pad2;
+    // The far-field blend band of a terrain under grass (see
+    // `surface_albedo`); far_end 0 for every other surface.
+    float far_start;
+    float far_end;
+    float far_luma;
 };
 
 // Mirrors `GpuDrawArgs` in concinnity-core/src/gfx/render_types.rs (16 B): the

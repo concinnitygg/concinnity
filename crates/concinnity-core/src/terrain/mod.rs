@@ -16,7 +16,7 @@ mod source;
 
 pub use grid::TerrainGrid;
 pub use mask::{DensityMask, MAX_MASK_SIZE};
-pub use mesh::{TERRAIN_CHUNK_CELLS, TerrainChunk, terrain_chunks};
+pub use mesh::{TERRAIN_CHUNK_CELLS, TerrainChunk, terrain_chunks, terrain_chunks_colored};
 pub use source::{heightmap_heights, noise_heights};
 
 /// Fewest grid cells along a terrain's side.

@@ -344,6 +344,23 @@ float shadow_factor_cascaded(float3 world_pos, float view_depth, float2 screen_x
 
 // ---- The shading model ----
 
+// The surface's albedo from its material's: multiplied by the vertex color,
+// or, on a terrain under grass, blended toward the far-field color its vertex
+// color carries across the band where the blades fade out. That color is
+// premultiplied by the grass's coverage, which its luminance gives back, so
+// bare ground keeps the material.
+float3 surface_albedo(GpuObjectData od, float3 material, float3 color, float dist)
+{
+    if (od.far_end <= 0.0)
+    {
+        return material * color;
+    }
+    float w = saturate((dist - od.far_start) / max(od.far_end - od.far_start, 1e-3));
+    float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
+    float coverage = od.far_luma > 0.0 ? saturate(luma / od.far_luma) : 0.0;
+    return lerp(material, color + (1.0 - coverage) * material, w);
+}
+
 // The forward shading model. `od` is the object record the GPU-driven pass
 // reads straight out of the per-frame buffer.
 float4 shade_surface(VertexOut v, GpuObjectData od)
@@ -360,7 +377,8 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // annotates it there).
     float4 albedo_samp = pool_sample(od.albedo_index, v.uv);
     surface_cutout(od, albedo_samp.a);
-    float3 albedo = albedo_samp.rgb * v.color * tint;
+    float3 albedo = surface_albedo(od, albedo_samp.rgb * tint, v.color,
+                                   distance(cam_pos, v.world_pos));
 
     // Unlit view mode: the surface's base color, no lighting.
     if (VIEW.shade_mode > 0.5)

@@ -1,6 +1,7 @@
 //! The grass field on DirectX 12 (see `concinnity_core::render::grass`): the
-//! kernel that places this frame's visible blades, and the two indirect draws
-//! that render them at the tail of the G-buffer pre-pass and the main pass.
+//! kernel that places this frame's visible blades, and the indirect draws, one
+//! per detail level, that render them at the tail of the G-buffer pre-pass and
+//! the main pass.
 //!
 //! Both draws run under their pass's own root signature, which carries the
 //! grass block and the blade buffer as two extra root parameters, so the lit
@@ -11,7 +12,10 @@
 use std::cell::Cell;
 
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::grass::{GrassCamera, GrassField, GrassFrame as GrassFrameWork};
+use concinnity_core::render::grass::lod::{GRASS_LOD_COUNT, GRASS_LOD_VERTEX_STRIDE};
+use concinnity_core::render::grass::{
+    GrassCamera, GrassField, GrassFrame as GrassFrameWork, GrassHiz,
+};
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::PassId;
 use concinnity_core::render::uniforms::grass::{
@@ -27,8 +31,10 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::builtin_shaders::{self, CompileProgram};
 use super::com;
 use super::context::{DxContext, align256};
+use super::descriptor_slot::DescriptorTables;
 use super::error::map_hresult;
 use super::pso::{Blend, Depth, GraphicsPso, compute_pso};
+use super::root_constants::RootConstants;
 use super::root_sig::{RootSig, Visibility};
 use super::texture::{HDR_FORMAT, create_uav_buffer, upload_buffer};
 
@@ -36,13 +42,16 @@ use super::texture::{HDR_FORMAT, create_uav_buffer, upload_buffer};
 /// visible blades (t23).
 pub(in crate::directx) const MAIN_GRASS_PARAMS_PARAM: u32 = 21;
 pub(in crate::directx) const MAIN_GRASS_BLADES_PARAM: u32 = 22;
+/// The b0 root constant both pass root signatures lead with, which carries each
+/// grass draw's first vertex: D3D's vertex ids ignore the draw's own.
+const FIRST_VERTEX_PARAM: u32 = 0;
 /// The same pair in the G-buffer pre-pass's root signature.
 pub(in crate::directx) const PREPASS_GRASS_PARAMS_PARAM: u32 = 9;
 pub(in crate::directx) const PREPASS_GRASS_BLADES_PARAM: u32 = 10;
 
 // The kernel's root signature: the block at b0, the blades it appends at u1,
-// the draw arguments at u2, and the terrain heights and mask texels it reads
-// at t3 and t4, as `grass.hlsl` declares them.
+// the draw arguments at u2, the terrain heights and mask texels it reads at t3
+// and t4, and last frame's depth pyramid at t5, as `grass.hlsl` declares them.
 fn create_generate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     RootSig::new()
         .cbv(0, Visibility::All)
@@ -50,11 +59,15 @@ fn create_generate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12R
         .uav(2, Visibility::All)
         .srv(3, Visibility::All)
         .srv(4, Visibility::All)
+        .srv_table(5, 1, Visibility::All)
         .build(device, "grass generate root sig")
 }
 
-// One non-indexed draw per command, matching the slots the kernel fills. It
-// sets no root argument, so it needs no root signature.
+// The kernel's root parameter holding the pyramid's descriptor table.
+const KERNEL_HIZ_PARAM: u32 = 5;
+
+// One non-indexed draw per command, matching the records the kernel fills, one
+// per detail level. It sets no root argument, so it needs no root signature.
 fn create_draw_signature(device: &ID3D12Device) -> RenderResult<ID3D12CommandSignature> {
     let arg_descs = [D3D12_INDIRECT_ARGUMENT_DESC {
         Type: D3D12_INDIRECT_ARGUMENT_TYPE_DRAW,
@@ -131,9 +144,10 @@ pub(in crate::directx) struct GrassResources {
     pub(in crate::directx) field: GrassField,
     pub(in crate::directx) pipelines: GrassPipelines,
     draw_signature: ID3D12CommandSignature,
-    // The visible blades the kernel appends, `field.capacity` of them.
+    // The visible blades the kernel appends, `field.capacity` of them, each
+    // detail level's region after the last.
     pub(in crate::directx) blades: ID3D12Resource,
-    // Two slots of draw arguments; see `GRASS_ARGS_SLOTS`.
+    // Two slots of one draw per detail level; see `GRASS_ARGS_SLOTS`.
     pub(in crate::directx) args: ID3D12Resource,
     // Every terrain's heights and every layer's mask texels, which the kernel
     // reads to root and thin the blades.
@@ -158,7 +172,8 @@ impl GrassResources {
         let device = alloc.device();
         let pipelines = GrassPipelines::build(device, roots, msaa_samples, hot_reload)?;
         let draw_signature = create_draw_signature(device)?;
-        let blade_bytes = field.capacity as u64 * std::mem::size_of::<GpuGrassBlade>() as u64;
+        let blade_bytes =
+            u64::from(field.capacity.total()) * std::mem::size_of::<GpuGrassBlade>() as u64;
         let blades = create_uav_buffer(device, blade_bytes, D3D12_RESOURCE_STATE_COMMON)?;
         super::particle::zero_default_buffer(alloc, &blades, blade_bytes)?;
         let args = create_uav_buffer(device, GRASS_ARGS_BYTES as u64, D3D12_RESOURCE_STATE_COMMON)?;
@@ -225,9 +240,22 @@ impl DxContext {
         let grass = self.grass.as_ref()?;
         let runs = grass.runs.get();
         grass.runs.set(runs.wrapping_add(1));
+        // The pyramid holds last frame's depth once one has been built, tested
+        // through the view-projection the draw cull tests through.
+        let hiz = self
+            .cull
+            .hiz
+            .as_ref()
+            .filter(|_| self.cull.hiz_valid.get())
+            .map(|h| GrassHiz {
+                prev_vp: self.cull.prev_view_proj.get(),
+                size: [h.width as f32, h.height as f32],
+                mip_count: h.mip_count,
+            });
         let camera = GrassCamera {
             position: cam_pos,
             vp,
+            hiz,
         };
         let GrassFrameWork { params, dispatch } = grass.field.frame(&camera, runs);
         // SAFETY: the destination is the persistent mapping of this frame's UPLOAD-heap constant
@@ -268,6 +296,13 @@ impl DxContext {
             cmd.SetComputeRootUnorderedAccessView(2, com::gpu_va(&grass.args));
             cmd.SetComputeRootShaderResourceView(3, com::gpu_va(&grass.heights));
             cmd.SetComputeRootShaderResourceView(4, com::gpu_va(&grass.masks));
+            // The pyramid's descriptor lives in the shader-visible SRV heap.
+            // Bound whenever it exists so the table always points at a live
+            // descriptor; the block's `hiz_enabled` gates the reads.
+            if let Some(hiz) = &self.cull.hiz {
+                cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
+                cmd.set_compute_srv_table(KERNEL_HIZ_PARAM, hiz.srv_gpu);
+            }
             cmd.Dispatch(x, y, z);
         }
     }
@@ -332,29 +367,36 @@ impl DxContext {
         });
     }
 
-    // The one indirect draw both passes issue: a strip per visible blade. The
-    // pass's list topology is put back for whatever draws after it.
+    // The draws both passes issue, one per detail level: a strip per visible
+    // blade. Each level's first vertex rides the b0 root constant, which the
+    // pass's surfaces set per command, so it is free here. The pass's list
+    // topology is put back for whatever draws after it.
     fn draw_grass(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         grass: &GrassResources,
         frame: &GrassFrame,
     ) {
-        // SAFETY: the command list is in the recording state; the args buffer is in
-        // INDIRECT_ARGUMENT for this pass and the offset names one of its whole slots.
+        // SAFETY: the command list is in the recording state under a root signature whose
+        // parameter 0 is one root-constant DWORD; the args buffer is in INDIRECT_ARGUMENT for this
+        // pass and each offset names one whole record of it.
         unsafe {
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-            cmd.ExecuteIndirect(
-                &grass.draw_signature,
-                1,
-                &grass.args,
-                frame.args_offset,
-                None::<&ID3D12Resource>,
-                0,
-            );
+            for lod in 0..GRASS_LOD_COUNT {
+                let first_vertex = lod as u32 * GRASS_LOD_VERTEX_STRIDE;
+                cmd.set_graphics_root_constants(FIRST_VERTEX_PARAM, &first_vertex);
+                cmd.ExecuteIndirect(
+                    &grass.draw_signature,
+                    1,
+                    &grass.args,
+                    frame.args_offset + (lod * GRASS_ARGS_STRIDE) as u64,
+                    None::<&ID3D12Resource>,
+                    0,
+                );
+            }
             cmd.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         }
-        self.inc_draw_calls(1);
+        self.inc_draw_calls(GRASS_LOD_COUNT as u32);
     }
 
     // `record` bracketed by `pass`'s timestamps inside the enclosing pass's

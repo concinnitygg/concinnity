@@ -27,6 +27,18 @@ pub struct TerrainChunk {
 /// Normals are the grid's smooth corner normals, so neighboring chunks shade
 /// seamlessly; texture coordinates are the corner's position in meters.
 pub fn terrain_chunks(grid: &TerrainGrid) -> Vec<TerrainChunk> {
+    chunks_with(grid, |_| [1.0; 3])
+}
+
+/// [`terrain_chunks`] with each vertex colored from `colors`, one per grid
+/// corner, row-major like the grid's heights. A corner past the slice's end is
+/// white.
+pub fn terrain_chunks_colored(grid: &TerrainGrid, colors: &[[f32; 3]]) -> Vec<TerrainChunk> {
+    chunks_with(grid, |i| colors.get(i).copied().unwrap_or([1.0; 3]))
+}
+
+// Every chunk, each vertex colored by `color` of its corner's row-major index.
+fn chunks_with(grid: &TerrainGrid, color: impl Fn(usize) -> [f32; 3]) -> Vec<TerrainChunk> {
     let cells = grid.resolution() as usize;
     let starts = || (0..cells).step_by(TERRAIN_CHUNK_CELLS);
     let mut chunks = Vec::new();
@@ -34,14 +46,19 @@ pub fn terrain_chunks(grid: &TerrainGrid) -> Vec<TerrainChunk> {
         for col0 in starts() {
             let col1 = (col0 + TERRAIN_CHUNK_CELLS).min(cells);
             let row1 = (row0 + TERRAIN_CHUNK_CELLS).min(cells);
-            chunks.push(chunk(grid, [col0, col1], [row0, row1]));
+            chunks.push(chunk(grid, [col0, col1], [row0, row1], &color));
         }
     }
     chunks
 }
 
 // The chunk spanning corners `cols[0]..=cols[1]` by `rows[0]..=rows[1]`.
-fn chunk(grid: &TerrainGrid, cols: [usize; 2], rows: [usize; 2]) -> TerrainChunk {
+fn chunk(
+    grid: &TerrainGrid,
+    cols: [usize; 2],
+    rows: [usize; 2],
+    color: &impl Fn(usize) -> [f32; 3],
+) -> TerrainChunk {
     let across = cols[1] - cols[0] + 1;
     let down = rows[1] - rows[0] + 1;
     let mut vertices = Vec::with_capacity(across * down);
@@ -63,7 +80,7 @@ fn chunk(grid: &TerrainGrid, cols: [usize; 2], rows: [usize; 2]) -> TerrainChunk
                 pos,
                 normal,
                 tangent,
-                color: [1.0; 3],
+                color: color(row * grid.side() + col),
                 uv: [pos[0], pos[2]],
             });
         }
@@ -88,6 +105,7 @@ fn chunk(grid: &TerrainGrid, cols: [usize; 2], rows: [usize; 2]) -> TerrainChunk
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::round;
     use crate::math::vec3::cross;
     use alloc::vec;
 
@@ -161,6 +179,26 @@ mod tests {
             assert_eq!(v.tangent, [1.0, 0.0, 0.0]);
             assert_eq!(v.normal, [0.0, 1.0, 0.0]);
             assert_eq!(v.uv, [v.pos[0], v.pos[2]]);
+        }
+    }
+
+    // Colors follow their grid corner into whichever chunk holds it, edge
+    // corners shared by two chunks included.
+    #[test]
+    fn colored_chunks_carry_each_corners_color() {
+        let g = grid(TERRAIN_CHUNK_CELLS as u32 + 2);
+        let side = g.side();
+        let colors: Vec<[f32; 3]> = (0..side * side).map(|i| [i as f32, 0.5, 0.0]).collect();
+        let n = g.resolution() as f32;
+        for c in terrain_chunks_colored(&g, &colors) {
+            for v in &c.vertices {
+                let col = round((v.pos[0] + 10.0) / 20.0 * n) as usize;
+                let row = round((v.pos[2] + 6.0) / 12.0 * n) as usize;
+                assert_eq!(v.color, colors[row * side + col]);
+            }
+        }
+        for c in terrain_chunks_colored(&g, &[]) {
+            assert!(c.vertices.iter().all(|v| v.color == [1.0; 3]));
         }
     }
 }

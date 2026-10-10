@@ -1,6 +1,7 @@
 //! The draw cull's Hi-Z occlusion test: which mip and texel rect of the pyramid
 //! an object's screen rect is tested against, and how that rect is reduced to
-//! one occluder depth. Mirrors `hiz_occluded` in `cull.hlsl`.
+//! one occluder depth. Mirrors `hiz_rect_occluded` in `hiz_test.hlsl`, which
+//! the draw cull and the grass kernel share.
 
 use crate::math::{ceil, floor, log2};
 use crate::render::depth;
@@ -129,7 +130,7 @@ mod tests {
     #[test]
     fn the_gather_bound_matches_the_shader() {
         assert_eq!(
-            shader_consts::uint(shaders::CULL, "HIZ_GATHER_MAX_SPAN"),
+            shader_consts::uint(shaders::HIZ_TEST, "HIZ_GATHER_MAX_SPAN"),
             MAX_GATHER_SPAN as usize
         );
     }

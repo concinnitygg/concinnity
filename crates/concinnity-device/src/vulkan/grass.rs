@@ -1,22 +1,28 @@
 //! The grass field on Vulkan (see `concinnity_core::render::grass`): the kernel
-//! that places this frame's visible blades, and the two indirect draws that
-//! render them at the tail of the G-buffer pre-pass and the main pass.
+//! that places this frame's visible blades, and the indirect draws, one per
+//! detail level, that render them at the tail of the G-buffer pre-pass and the
+//! main pass.
 //!
 //! Each draw's pipeline layout is its pass's own with one more set, holding the
 //! grass block and the blade buffer: set 2 under the main pass's global and
 //! bindless sets, set 3 under the pre-pass's three. Sets 0 and up stay
 //! compatible with what the surfaces bound, so the lit blades shade on the
-//! lights, shadows and environment already in place. The visible-blade and
-//! draw-argument buffers carry across frames; the graph orders the kernel's
-//! writes against the draws that read them, this frame's and the last.
+//! lights, shadows and environment already in place. The kernel's set 1 is the
+//! draw cull's Hi-Z read set, which holds the pyramid it tests tiles against.
+//! The visible-blade and draw-argument buffers carry across frames; the graph
+//! orders the kernel's writes against the draws that read them, this frame's
+//! and the last.
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::grass::{GrassCamera, GrassField, GrassFrame as GrassFrameWork};
+use concinnity_core::render::grass::lod::GRASS_LOD_COUNT;
+use concinnity_core::render::grass::{
+    GrassCamera, GrassField, GrassFrame as GrassFrameWork, GrassHiz,
+};
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::PassId;
 use concinnity_core::render::uniforms::grass::{
-    GRASS_ARGS_BYTES, GpuGrassBlade, GrassParams, grass_args_offset,
+    GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassParams, grass_args_offset,
 };
 
 use super::allocator::PooledBuffer;
@@ -66,11 +72,12 @@ fn pipeline_layout(
 }
 
 // The pass layouts the grass draws extend: the main pass's two sets, and the
-// pre-pass's three.
+// pre-pass's three; and the Hi-Z read set the kernel takes as its set 1.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct GrassPassLayouts<'a> {
     pub main: &'a [vk::DescriptorSetLayout],
     pub prepass: &'a [vk::DescriptorSetLayout],
+    pub hiz_read: vk::DescriptorSetLayout,
 }
 
 // What a grass draw pipeline renders into.
@@ -154,9 +161,10 @@ pub(in crate::vulkan) struct GrassResources {
     pipelines: GrassPipelines,
     // `None` until a G-buffer exists to render into.
     prepass: Option<OwnedPipeline>,
-    // The visible blades the kernel appends, `field.capacity` of them.
+    // The visible blades the kernel appends, `field.capacity` of them, each
+    // detail level's region after the last.
     pub(in crate::vulkan) blades: PooledBuffer,
-    // Two slots of draw arguments; see `GRASS_ARGS_SLOTS`.
+    // Two slots of one draw per detail level; see `GRASS_ARGS_SLOTS`.
     pub(in crate::vulkan) args: PooledBuffer,
     // Every terrain's heights and every layer's mask texels, which the kernel
     // reads to root and thin the blades.
@@ -185,7 +193,11 @@ impl GrassResources {
         let GpuUploadContext { alloc, device, .. } = gpu;
         let draw_set = create_descriptor_set_layout(device, &draw_set_bindings())?;
         let kernel_set = create_descriptor_set_layout(device, &kernel_set_bindings())?;
-        let kernel = pipeline_layout(device, &[kernel_set.handle()], "grass kernel layout")?;
+        let kernel = pipeline_layout(
+            device,
+            &[kernel_set.handle(), passes.hiz_read],
+            "grass kernel layout",
+        )?;
         let main_sets: Vec<_> = passes
             .main
             .iter()
@@ -209,7 +221,8 @@ impl GrassResources {
         };
         let pipelines = GrassPipelines::build(device, &layouts, targets, hot_reload)?;
 
-        let blade_bytes = field.capacity as u64 * std::mem::size_of::<GpuGrassBlade>() as u64;
+        let blade_bytes =
+            u64::from(field.capacity.total()) * std::mem::size_of::<GpuGrassBlade>() as u64;
         let blades = alloc.create_buffer(
             blade_bytes,
             vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -223,7 +236,7 @@ impl GrassResources {
                 | vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        // The kernel owns every word but the instance count of the slot it
+        // The kernel owns every word but the instance counts of the slot it
         // fills first.
         let args_buffer = args.buffer();
         super::texture::one_shot_submit(device, gpu.command_pool, gpu.queue, |cmd| {
@@ -398,9 +411,23 @@ impl VkContext {
         let grass = self.grass.as_ref()?;
         let runs = grass.runs.get();
         grass.runs.set(runs.wrapping_add(1));
+        // The pyramid holds last frame's depth once a pyramid at this
+        // resolution has been built, tested through the view-projection the
+        // draw cull tests through.
+        let hiz = self
+            .cull
+            .hiz
+            .as_ref()
+            .filter(|_| self.cull.hiz_valid)
+            .map(|h| GrassHiz {
+                prev_vp: self.cull.hiz_prev_view_proj,
+                size: [h.width as f32, h.height as f32],
+                mip_count: h.mip_count,
+            });
         let camera = GrassCamera {
             position: cam_pos,
             vp,
+            hiz,
         };
         let GrassFrameWork { params, dispatch } = grass.field.frame(&camera, runs);
         grass.params[frame_idx].write_val(0, &params);
@@ -420,6 +447,11 @@ impl VkContext {
         let Some(grass) = &self.grass else {
             return;
         };
+        // The kernel's layout takes the Hi-Z read set, which exists whenever
+        // the grass does.
+        let Some(hiz) = &self.cull.hiz else {
+            return;
+        };
         let device = &self.hw.device;
         let [x, y, z] = frame.dispatch;
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle these commands
@@ -435,7 +467,7 @@ impl VkContext {
                 vk::PipelineBindPoint::COMPUTE,
                 grass.layouts.kernel.handle(),
                 0,
-                &[grass.kernel_sets[frame_idx]],
+                &[grass.kernel_sets[frame_idx], hiz.read_sets[frame_idx]],
                 &[],
             );
             device.cmd_dispatch(cmd, x, y, z);
@@ -501,7 +533,8 @@ impl VkContext {
         });
     }
 
-    // The one indirect draw both passes issue: a strip per visible blade.
+    // The draws both passes issue, one per detail level: a strip per visible
+    // blade.
     fn draw_grass(
         &self,
         cmd: vk::CommandBuffer,
@@ -513,7 +546,7 @@ impl VkContext {
         let device = &self.hw.device;
         // SAFETY: `cmd` is a command buffer in the recording state inside a render pass the
         // pipeline is compatible with; every handle these commands name is live for the call, and
-        // the offset names one whole slot of the args buffer.
+        // each offset names one whole record of the args buffer.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
             device.cmd_bind_descriptor_sets(
@@ -524,9 +557,12 @@ impl VkContext {
                 sets,
                 &[],
             );
-            device.cmd_draw_indirect(cmd, grass.args.buffer(), frame.args_offset, 1, 0);
+            for lod in 0..GRASS_LOD_COUNT {
+                let offset = frame.args_offset + (lod * GRASS_ARGS_STRIDE) as u64;
+                device.cmd_draw_indirect(cmd, grass.args.buffer(), offset, 1, 0);
+            }
         }
-        self.inc_draw_calls(1);
+        self.inc_draw_calls(GRASS_LOD_COUNT as u32);
     }
 
     // `record` bracketed by `pass`'s timestamps inside the enclosing pass.

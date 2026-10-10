@@ -16,6 +16,7 @@
 //! callers that only want the checks.
 
 mod build_pool;
+mod cook_only;
 mod desugar;
 mod dispatch;
 mod entry;

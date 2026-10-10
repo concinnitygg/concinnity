@@ -3598,11 +3598,16 @@ fn a_deferred_texture_slot_decodes_to_a_placeholder() {
         .collect();
     let mut world = b.build();
     let deferred = HashSet::from([1]);
+    let cook_only = std::collections::BTreeSet::new();
+    let skips = || super::texture_payloads::TextureSlotSkips {
+        deferred: &deferred,
+        cook_only: &cook_only,
+    };
 
     let disk = super::texture_payloads::decode_texture_payloads(
         &mut world.context(),
         &locators,
-        &deferred,
+        skips(),
         true,
     )
     .expect("decodes");
@@ -3614,7 +3619,7 @@ fn a_deferred_texture_slot_decodes_to_a_placeholder() {
     let ram = super::texture_payloads::decode_texture_payloads(
         &mut world.context(),
         &locators,
-        &deferred,
+        skips(),
         false,
     )
     .expect("decodes");
@@ -3623,6 +3628,41 @@ fn a_deferred_texture_slot_decodes_to_a_placeholder() {
         ram.payloads,
         vec![texture_payload(2, 2), texture_payload(4, 4)]
     );
+}
+
+// A texture only the cook reads enters the pool as a 1x1 placeholder whether
+// or not its scene is resident, and its payload is never read: RAM-backed, its
+// slot keeps an empty entry so the streamer's slots stay dense.
+#[test]
+fn a_cook_only_texture_slot_stays_a_placeholder() {
+    use std::collections::{BTreeSet, HashSet};
+
+    let mut b = scene_builder();
+    b.push_resource(
+        concinnity_core::ecs::ResourceKind::Texture,
+        &texture_payload(4, 4),
+    );
+    let locators: Vec<PayloadLocator> = b
+        .texture_records
+        .iter()
+        .filter_map(|r| r.payload.clone())
+        .collect();
+    let mut world = b.build();
+    let cook_only = BTreeSet::from([0]);
+    let skips = super::texture_payloads::TextureSlotSkips {
+        deferred: &HashSet::new(),
+        cook_only: &cook_only,
+    };
+    let ram = super::texture_payloads::decode_texture_payloads(
+        &mut world.context(),
+        &locators,
+        skips,
+        false,
+    )
+    .expect("decodes");
+    assert_eq!((ram.images[0].width(), ram.images[0].height()), (1, 1));
+    assert_eq!((ram.images[1].width(), ram.images[1].height()), (4, 4));
+    assert_eq!(ram.payloads, vec![Vec::new(), texture_payload(4, 4)]);
 }
 
 // The EnvironmentMap and ColorLut payloads are read from their resource tables

@@ -495,7 +495,8 @@ impl VkContext {
 }
 
 // The grass field's buffers and pipelines, extending the GPU-driven pass's
-// layouts. A world without that pass draws no grass.
+// layouts and reading its Hi-Z pyramid. A world without that pass draws no
+// grass.
 fn build_grass(
     gpu: &InitGpu<'_>,
     field: Option<concinnity_core::render::grass::GrassField>,
@@ -503,10 +504,11 @@ fn build_grass(
     cull: &VkCull,
     targets: &VkTargets,
 ) -> RenderResult<Option<super::grass::GrassResources>> {
-    let (Some(field), Some(bindless), Some(prepass)) = (
+    let (Some(field), Some(bindless), Some(prepass), Some(hiz)) = (
         field,
         cull.bindless_set_layout.as_ref(),
         cull.prepass_layout.as_ref(),
+        cull.hiz.as_ref(),
     ) else {
         return Ok(None);
     };
@@ -518,6 +520,7 @@ fn build_grass(
         super::grass::GrassPassLayouts {
             main: &main,
             prepass: &prepass,
+            hiz_read: hiz.read_set_layout.handle(),
         },
         super::grass::GrassTargets {
             main_render_pass: targets.main_render_pass.handle(),

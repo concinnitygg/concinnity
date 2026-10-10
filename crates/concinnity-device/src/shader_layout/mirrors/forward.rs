@@ -69,7 +69,7 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             [bb_min, cull_distance] => ["bb_min_cull_distance"],
             [bb_max, alpha_cutoff] => ["bb_max_alpha_cutoff"],
             params_index,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            [far_field] => ["far_start", "far_end", "far_luma"],
         })),
     ];
     cases.extend(light_cull());

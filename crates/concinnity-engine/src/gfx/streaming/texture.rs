@@ -133,6 +133,9 @@ pub(crate) struct TextureStreamer {
     // samples texture slot `id`; the streaming priority is the squared
     // distance from the camera to the nearest of them.
     centers: Vec<Vec<[f32; 3]>>,
+    // Slots that never load, whatever scene residency asks: textures only the
+    // cook reads.
+    excluded: std::collections::HashSet<usize>,
     worker: super::worker::Worker<usize>,
     result_rx: Receiver<LoadResult>,
 }
@@ -162,6 +165,7 @@ impl TextureStreamer {
         Self {
             planner,
             centers,
+            excluded: std::collections::HashSet::new(),
             result_rx,
             worker,
         }
@@ -185,9 +189,19 @@ impl TextureStreamer {
     }
 
     // Block or unblock a slot for scene residency: a blocked slot never loads
-    // and is evicted by the next plan if resident.
+    // and is evicted by the next plan if resident. An excluded slot stays
+    // blocked.
     pub(crate) fn set_blocked(&mut self, slot: usize, blocked: bool) {
+        if !blocked && self.excluded.contains(&slot) {
+            return;
+        }
         self.planner.set_blocked(slot, blocked);
+    }
+
+    // Keep `slot` from ever loading: nothing samples it.
+    pub(crate) fn exclude(&mut self, slot: usize) {
+        self.excluded.insert(slot);
+        self.planner.set_blocked(slot, true);
     }
 
     // The active resident-byte budget, or `None` when byte accounting is off.
@@ -438,6 +452,24 @@ mod tests {
         streamer.plan_and_dispatch();
         drain_until(&mut streamer, 3, 3);
         assert_eq!(streamer.stats(), (3, 0, 0));
+    }
+
+    // An excluded slot never loads, not even when scene residency unblocks it,
+    // while its neighbors stream as usual.
+    #[test]
+    fn an_excluded_slot_never_loads() {
+        let centers = vec![vec![], vec![[2.0, 0.0, 0.0]]];
+        let mut streamer = TextureStreamer::new(Arc::new(ConstSource), centers, 4, 8);
+        streamer.exclude(0);
+        streamer.set_blocked(0, false);
+        for frame in 1..4 {
+            streamer.update_scores([0.0, 0.0, 0.0], frame);
+            streamer.plan_and_dispatch();
+            drain_until(&mut streamer, frame, 1);
+        }
+        assert_eq!(streamer.stats().0, 1);
+        assert_eq!(streamer.planner.state(0), Some(StreamState::Unloaded));
+        assert_eq!(streamer.planner.state(1), Some(StreamState::Resident));
     }
 
     // A payload that will never decode.
