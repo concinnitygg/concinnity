@@ -6,6 +6,7 @@
 //! instance.rs  one behavior's firing state and its clocks
 //! resolve.rs   compiling the source columns, at start and after an edit
 //! eval.rs      the read phase: the tick's view, its buffers, its schedule
+//! gate.rs      whether a tick's runs are worth fanning out
 //! neighbors.rs the neighbor indexes, one per distinct declared query
 //! apply.rs     the write phase: effects landing on the world
 //! state.rs     persisted variables and `once` flags, behind a host's store
@@ -22,6 +23,7 @@
 
 mod apply;
 mod eval;
+mod gate;
 mod instance;
 mod neighbors;
 mod report;
@@ -39,7 +41,8 @@ mod tests;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use eval::{EvalCtx, Job, PARALLEL_EVAL_MIN_JOBS, Resume, Snapshot, eval_one};
+use eval::{EvalCtx, Job, Resume, Snapshot, eval_one};
+use gate::FanOutGate;
 use instance::Instance;
 use neighbors::Neighbors;
 use resolve::{Resolved, SourceTicks};
@@ -48,7 +51,7 @@ pub use eval::{EvalBucket, EvalScheduler};
 pub use report::BehaviorReporter;
 pub use state::{BehaviorState, BehaviorStore, def_hash};
 
-use crate::behavior::{Effect, Program, Val, VarTable};
+use crate::behavior::{Program, Val, VarTable};
 use crate::components::{
     Behavior, BehaviorSource, Identity, InteractEvent, Variables, VolumeEvent,
 };
@@ -104,17 +107,13 @@ pub struct BehaviorSystem {
     // population, so `spawned` does not fire for them.
     populated: bool,
     // Per-worker evaluation state, grown to the scheduler's width on the first
-    // parallel tick and reused thereafter so steady-state allocations stay
-    // flat.
+    // fanned-out tick and reused thereafter so steady-state allocations stay
+    // flat. A tick kept on the calling thread uses the first.
     eval_buckets: Vec<EvalBucket>,
-    // The tick's firing list and the serial path's binding scratch, kept for
-    // their capacity across ticks.
+    // Whether the next tick's runs are worth fanning out.
+    gate: FanOutGate,
+    // The tick's firing list, kept for its capacity across ticks.
     jobs: Vec<Job>,
-    bindings: Vec<Option<Val>>,
-    // The serial path's effect/record buffers, kept for their capacity like
-    // the parallel path's per-worker buckets.
-    serial_effects: Vec<Effect>,
-    serial_produced: Vec<(usize, Option<Entity>, usize)>,
     // The tick's resolved entity sets and the tag-intersection scratch, kept
     // for their capacity across ticks like the buffers above.
     snapshot: Snapshot,
@@ -152,8 +151,8 @@ impl BehaviorSystem {
         self
     }
 
-    /// Fan a tick's evaluation out through `scheduler` once enough instances
-    /// fire at once to pay for it.
+    /// Fan a tick's evaluation out through `scheduler` once its runs cost
+    /// enough to pay for it.
     pub fn with_scheduler(mut self, scheduler: Box<dyn EvalScheduler>) -> Self {
         self.scheduler = Some(scheduler);
         self
@@ -453,25 +452,33 @@ impl BehaviorSystem {
 
         // Read phase: every body runs against an unchanged world, so the
         // borrow here is shared and the effects it produces are applied only
-        // after it ends. Serially each run appends into one buffer and
-        // records how much it added; with enough firing instances under the
-        // parallel schedule, contiguous job chunks evaluate through the host's
-        // scheduler into per-worker buffers instead. Either way a body observes
+        // after it ends. The job list splits into contiguous chunks, one per
+        // bucket: one bucket on the calling thread, or one per worker when the
+        // gate judges the tick worth fanning out. Either way a body observes
         // only the tick's starting state, so the results are identical; only
         // the apply order below is observable, and it walks jobs in list order
         // in both modes.
-        let parallel = self.scheduler.is_some()
-            && jobs.len() >= PARALLEL_EVAL_MIN_JOBS
-            && ScheduleMode::current(ctx.resources) == ScheduleMode::Parallel;
-        let scheduler = self.scheduler.as_deref().filter(|_| parallel);
-        let mut effects = core::mem::take(&mut self.serial_effects);
-        let mut produced = core::mem::take(&mut self.serial_produced);
-        effects.clear();
-        produced.clear();
+        let scheduler = self
+            .scheduler
+            .as_deref()
+            .filter(|_| ScheduleMode::current(ctx.resources) == ScheduleMode::Parallel);
+        let workers = scheduler.map_or(1, |s| s.workers().max(1));
+        let used = if self.gate.fans_out(jobs.len(), workers) {
+            workers
+        } else {
+            1
+        };
         let mut buckets = core::mem::take(&mut self.eval_buckets);
-        let mut serial_bindings = core::mem::take(&mut self.bindings);
+        if buckets.len() < used {
+            buckets.resize_with(used, EvalBucket::default);
+        }
+        let buckets_used = &mut buckets[..used];
+        let chunk = jobs.len().div_ceil(used).max(1);
+        for (b, bucket) in buckets_used.iter_mut().enumerate() {
+            bucket.jobs = (b * chunk).min(jobs.len())..((b + 1) * chunk).min(jobs.len());
+        }
         self.neighbors.reset();
-        {
+        let timing = {
             let ec = EvalCtx {
                 components: ctx.components,
                 names: ctx.resource::<EntityById>(),
@@ -484,74 +491,54 @@ impl BehaviorSystem {
                 elapsed,
                 tracing,
             };
-            if let Some(scheduler) = scheduler {
-                let workers = scheduler.workers().max(1);
-                while buckets.len() < workers {
-                    buckets.push(EvalBucket::default());
-                }
-                let chunk = jobs.len().div_ceil(buckets.len()).max(1);
-                for (b, bucket) in buckets.iter_mut().enumerate() {
-                    bucket.jobs = (b * chunk).min(jobs.len())..((b + 1) * chunk).min(jobs.len());
-                }
-                let jobs = &jobs;
-                let ec = &ec;
-                let timing = scheduler.run(&mut buckets, &|bucket| {
-                    bucket.effects.clear();
-                    bucket.produced.clear();
-                    bucket.fired.clear();
-                    for job in &jobs[bucket.jobs.clone()] {
-                        if let Some((count, nodes)) =
-                            eval_one(ec, &mut bucket.bindings, job, &mut bucket.effects)
-                        {
-                            bucket.produced.push((job.program, job.entity, count));
-                            if ec.tracing {
-                                bucket.fired.push((job.program, nodes));
-                            }
-                        }
-                    }
-                });
-                ctx.profile.record_fan_out(timing);
-            } else {
-                for job in &jobs {
+            let jobs = &jobs;
+            let eval = |bucket: &mut EvalBucket| {
+                bucket.effects.clear();
+                bucket.produced.clear();
+                bucket.fired.clear();
+                for job in &jobs[bucket.jobs.clone()] {
                     if let Some((count, nodes)) =
-                        eval_one(&ec, &mut serial_bindings, job, &mut effects)
+                        eval_one(&ec, &mut bucket.bindings, job, &mut bucket.effects)
                     {
-                        produced.push((job.program, job.entity, count));
-                        if tracing {
-                            fired.push((job.program, nodes));
+                        bucket.produced.push((job.program, job.entity, count));
+                        if ec.tracing {
+                            bucket.fired.push((job.program, nodes));
                         }
                     }
                 }
+            };
+            match scheduler {
+                Some(scheduler) if !jobs.is_empty() => Some(scheduler.run(buckets_used, &eval)),
+                _ => {
+                    eval(&mut buckets_used[0]);
+                    None
+                }
+            }
+        };
+        if let Some(timing) = timing {
+            self.gate.observe(jobs.len(), timing);
+            if used > 1 {
+                ctx.profile.record_fan_out(timing);
             }
         }
 
         // Walking each buffer once hands each run exactly the effects it
         // appended, in record order, without copying or reshuffling them.
-        // Bucket order is job order, so the parallel apply is byte-identical
-        // to the serial one.
+        // Bucket order is job order, so a fanned-out apply is byte-identical
+        // to one kept on the calling thread.
         let mut save_requested = false;
-        if parallel {
-            for bucket in &mut buckets {
-                let mut recorded = bucket.effects.drain(..);
-                for k in 0..bucket.produced.len() {
-                    let (i, entity, count) = bucket.produced[k];
-                    save_requested |= self.apply(ctx, i, entity, recorded.by_ref().take(count));
-                }
-                if tracing {
-                    fired.append(&mut bucket.fired);
-                }
-            }
-        } else {
-            let mut recorded = effects.drain(..);
-            for &(i, entity, count) in &produced {
+        for bucket in &mut buckets[..used] {
+            let mut recorded = bucket.effects.drain(..);
+            for k in 0..bucket.produced.len() {
+                let (i, entity, count) = bucket.produced[k];
                 save_requested |= self.apply(ctx, i, entity, recorded.by_ref().take(count));
+            }
+            if tracing {
+                fired.append(&mut bucket.fired);
             }
         }
         self.eval_buckets = buckets;
         self.jobs = jobs;
-        self.bindings = serial_bindings;
-        self.serial_effects = effects;
-        self.serial_produced = produced;
         self.snapshot = snapshot;
 
         // One write per tick, after every effect has landed, so the store holds

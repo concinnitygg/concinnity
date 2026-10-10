@@ -14,11 +14,9 @@ use crate::behavior::{Effect, Program, Spatial, Val, View, exec, position, spati
 use crate::ecs::{ComponentStorage, Entity, EntityById, PipelineContext};
 use crate::profile::FanOutTiming;
 
-// Below this many firing instances the fan-out costs more than the work.
-pub(super) const PARALLEL_EVAL_MIN_JOBS: usize = 64;
-
-/// One worker's share of a tick's evaluation: a contiguous slice of the tick's
-/// job list, its own effect and trace buffers, and its own binding scratch.
+/// One worker's share of a tick's evaluation, or the whole of a tick kept on the
+/// calling thread: a contiguous slice of the tick's job list, its own effect and
+/// trace buffers, and its own binding scratch.
 /// Opaque to a scheduler, which only hands each bucket to the closure it was
 /// given. Everything inside keeps its capacity across ticks.
 #[derive(Debug, Default)]
@@ -36,13 +34,17 @@ pub struct EvalBucket {
 /// writes only its own effects, so a host with a thread pool can work them
 /// through in parallel. A world whose host installs none evaluates every run on
 /// the calling thread.
+///
+/// A tick judged too small to fan out arrives as a single bucket, which the
+/// scheduler should run on the calling thread. It is still timed: what each
+/// tick's work measured decides whether the next one fans out.
 pub trait EvalScheduler: core::fmt::Debug + Send {
     /// How many buckets to split a tick's firing instances into.
     fn workers(&self) -> usize;
 
     /// Apply `eval` to every bucket, then return how long the caller waited
     /// against how long the buckets took. A scheduler that does not time its
-    /// work returns the default.
+    /// work returns the default, and the system then never fans out.
     fn run(
         &self,
         buckets: &mut [EvalBucket],

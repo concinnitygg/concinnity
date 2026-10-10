@@ -578,11 +578,12 @@ fn a_swarm_answers_its_neighbor_questions_as_the_scans_do() {
 
         let mut sys = BehaviorSystem::new();
         if parallel {
-            sys = sys.with_scheduler(Box::new(ThreadedEval));
+            sys = sys.with_scheduler(Box::new(ThreadedEval::expensive()));
         }
         sys.init(&mut world.context());
         // Twice, so the second tick answers from a tree rebuilt over the
-        // positions the first one moved.
+        // positions the first one moved. With a scheduler the first tick is
+        // measured on the calling thread and the second fans out.
         let mut crowd = 0;
         for round in 0..2 {
             let (counted, nearest) = scanned(&mut world, &props);
@@ -1698,11 +1699,34 @@ fn a_retyped_variable_ignores_its_stale_save() {
 }
 
 // A scheduler that really does run the buckets concurrently, so the fan-out
-// path is exercised rather than described. Four workers, one scoped thread
-// each: enough to interleave, and it joins before the run returns like any
-// pool would.
-#[derive(Debug)]
-struct ThreadedEval;
+// path is exercised rather than described. Up to four workers, one scoped
+// thread each: enough to interleave, and it joins before the run returns like
+// any pool would. It reports the job sums it is given in turn, cycling, so a
+// test decides what the gate sees, and logs how many buckets each run got.
+#[derive(Debug, Clone)]
+struct ThreadedEval {
+    job_sums_us: &'static [u32],
+    runs: Arc<Mutex<Vec<usize>>>,
+}
+
+impl ThreadedEval {
+    // Every run measures as THREADED_EVAL_TIMING: well past the gate, so every
+    // tick after the first fans out.
+    fn expensive() -> Self {
+        Self::costing(&[THREADED_EVAL_TIMING.job_sum_us])
+    }
+
+    fn costing(job_sums_us: &'static [u32]) -> Self {
+        Self {
+            job_sums_us,
+            runs: Arc::default(),
+        }
+    }
+
+    fn bucket_counts(&self) -> Vec<usize> {
+        self.runs.lock().unwrap().clone()
+    }
+}
 
 impl EvalScheduler for ThreadedEval {
     fn workers(&self) -> usize {
@@ -1719,12 +1743,18 @@ impl EvalScheduler for ThreadedEval {
                 scope.spawn(move || eval(bucket));
             }
         });
-        THREADED_EVAL_TIMING
+        let mut runs = self.runs.lock().unwrap();
+        let job_sum_us = self.job_sums_us[runs.len() % self.job_sums_us.len()];
+        runs.push(buckets.len());
+        FanOutTiming {
+            job_sum_us,
+            ..THREADED_EVAL_TIMING
+        }
     }
 }
 
-// What `ThreadedEval` reports for every run, so a test can follow it into the
-// profile.
+// What `ThreadedEval::expensive` reports for every run, so a test can follow it
+// into the profile.
 const THREADED_EVAL_TIMING: FanOutTiming = FanOutTiming {
     wall_us: 900,
     first_job_us: 300,
@@ -1733,78 +1763,134 @@ const THREADED_EVAL_TIMING: FanOutTiming = FanOutTiming {
     tail_us: 100,
 };
 
-// The fanned-out evaluation path (a scheduler, ScheduleMode::Parallel, enough
-// firing instances) must land exactly the state the serial path lands: same
+// Measured job sums either side of the gate for the 151 runs the worlds below
+// fire a tick.
+const CHEAP_US: u32 = 50;
+const COSTLY_US: u32 = 5_000;
+
+// `movers` scoped instances, each nudging its prop and counting itself, beside
+// one world-scoped behavior that reads the count: effects from every bucket
+// land on shared state, so a reordered apply would show.
+fn movers_world(movers: usize, parallel: bool) -> World {
+    let mover = Behavior {
+        on: BehaviorSource::Tick,
+        scope: vec!["Prop".into()],
+        body: vec![
+            set_var("total", 1, true),
+            BehaviorNode::SetTransform {
+                entity: BehaviorExpr::SelfEntity,
+                position: Some(BehaviorExpr::Add(
+                    Box::new(BehaviorExpr::Position(Box::new(BehaviorExpr::SelfEntity))),
+                    Box::new(BehaviorExpr::Vec3([0.25, 0.0, 0.0])),
+                )),
+                rotation_deg: None,
+                scale: None,
+                cut: false,
+            },
+        ],
+        ..Default::default()
+    };
+    let counter = Behavior {
+        on: BehaviorSource::Tick,
+        body: vec![BehaviorNode::Set {
+            var: "double".into(),
+            value: BehaviorExpr::Mul(
+                Box::new(BehaviorExpr::Var("total".into())),
+                Box::new(BehaviorExpr::Int(2)),
+            ),
+            add: false,
+        }],
+        ..Default::default()
+    };
+    let mut world = world_with(vec![mover, counter]);
+    if parallel {
+        world.insert_resource(ScheduleMode::Parallel);
+    }
+    for i in 0..movers {
+        spawn_prop(&mut world, [i as f32, 0.0, 0.0]);
+    }
+    world
+}
+
+// Ticks `movers_world(150)` and returns its vars and positions, evaluated
+// through `scheduler` when given one.
+fn run_movers(scheduler: Option<ThreadedEval>, ticks: usize) -> (Vec<i32>, Vec<[f32; 3]>) {
+    let mut world = movers_world(150, scheduler.is_some());
+    let mut sys = BehaviorSystem::new();
+    if let Some(scheduler) = scheduler {
+        sys = sys.with_scheduler(Box::new(scheduler));
+    }
+    sys.init(&mut world.context());
+    for _ in 0..ticks {
+        tick(&mut sys, &mut world, 0.016);
+    }
+    let vars = vec![var(&sys, "total"), var(&sys, "double")];
+    let positions = world
+        .context()
+        .query::<Transform>()
+        .map(|t| t.position)
+        .collect();
+    (vars, positions)
+}
+
+// The fanned-out evaluation path (a scheduler, ScheduleMode::Parallel, runs
+// that cost enough) must land exactly the state the serial path lands: same
 // var values, same transforms, same effect order.
 #[test]
 fn parallel_eval_matches_serial_state() {
-    fn run(parallel: bool) -> (Vec<i32>, Vec<[f32; 3]>) {
-        let mover = Behavior {
-            on: BehaviorSource::Tick,
-            scope: vec!["Prop".into()],
-            body: vec![
-                set_var("total", 1, true),
-                BehaviorNode::SetTransform {
-                    entity: BehaviorExpr::SelfEntity,
-                    position: Some(BehaviorExpr::Add(
-                        Box::new(BehaviorExpr::Position(Box::new(BehaviorExpr::SelfEntity))),
-                        Box::new(BehaviorExpr::Vec3([0.25, 0.0, 0.0])),
-                    )),
-                    rotation_deg: None,
-                    scale: None,
-                    cut: false,
-                },
-            ],
-            ..Default::default()
-        };
-        let counter = Behavior {
-            on: BehaviorSource::Tick,
-            body: vec![BehaviorNode::Set {
-                var: "double".into(),
-                value: BehaviorExpr::Mul(
-                    Box::new(BehaviorExpr::Var("total".into())),
-                    Box::new(BehaviorExpr::Int(2)),
-                ),
-                add: false,
-            }],
-            ..Default::default()
-        };
-        let mut world = world_with(vec![mover, counter]);
-        if parallel {
-            world.insert_resource(ScheduleMode::Parallel);
-        }
-        for i in 0..150 {
-            spawn_prop(&mut world, [i as f32, 0.0, 0.0]);
-        }
-        let mut sys = BehaviorSystem::new();
-        if parallel {
-            sys = sys.with_scheduler(Box::new(ThreadedEval));
-        }
-        sys.init(&mut world.context());
-        for _ in 0..5 {
-            tick(&mut sys, &mut world, 0.016);
-        }
-        let vars = vec![var(&sys, "total"), var(&sys, "double")];
-        let positions = world
-            .context()
-            .query::<Transform>()
-            .map(|t| t.position)
-            .collect();
-        (vars, positions)
-    }
-
-    let serial = run(false);
-    let parallel = run(true);
+    let scheduler = ThreadedEval::expensive();
+    let serial = run_movers(None, 5);
+    let parallel = run_movers(Some(scheduler.clone()), 5);
     assert_eq!(serial, parallel);
     // 150 movers over 5 ticks; the mover really fired every tick.
     assert_eq!(serial.0[0], 750);
+    // The first tick is measured on the calling thread; the rest fan out.
+    assert_eq!(scheduler.bucket_counts(), [1, 4, 4, 4, 4]);
+}
+
+// Ticks whose runs measured cheap stay on the calling thread, still timed so
+// the gate keeps a current estimate.
+#[test]
+fn cheap_ticks_stay_on_the_calling_thread() {
+    let scheduler = ThreadedEval::costing(&[CHEAP_US]);
+    run_movers(Some(scheduler.clone()), 4);
+    assert_eq!(scheduler.bucket_counts(), [1, 1, 1, 1]);
+}
+
+// Work that turns expensive fans out from the tick after it was measured, and
+// back in once it turns cheap again; the state lands as serial lands it on
+// every side of the gate.
+#[test]
+fn eval_crossing_the_gate_matches_serial_state() {
+    let scheduler = ThreadedEval::costing(&[CHEAP_US, COSTLY_US, COSTLY_US, CHEAP_US]);
+    let serial = run_movers(None, 8);
+    let crossing = run_movers(Some(scheduler.clone()), 8);
+    assert_eq!(serial, crossing);
+    assert_eq!(scheduler.bucket_counts(), [1, 1, 4, 4, 1, 1, 4, 4]);
+}
+
+// In serial schedule mode the scheduler is never asked, however costly the
+// last run was.
+#[test]
+fn serial_schedule_mode_never_asks_the_scheduler() {
+    let scheduler = ThreadedEval::expensive();
+    let mut world = movers_world(150, false);
+    let mut sys = BehaviorSystem::new().with_scheduler(Box::new(scheduler.clone()));
+    sys.init(&mut world.context());
+    for _ in 0..3 {
+        tick(&mut sys, &mut world, 0.016);
+    }
+    assert!(scheduler.bucket_counts().is_empty());
+    assert_eq!(var(&sys, "total"), 450);
 }
 
 // The scheduler's timing for a fanned-out tick reaches the frame profile,
-// attributed to the system that waited on it; a serial tick records none.
+// attributed to the system that waited on it; a tick kept on the calling
+// thread records none.
 #[test]
 fn a_fanned_out_tick_records_its_timing_on_the_profile() {
-    fn recorded(parallel: bool) -> Vec<(&'static str, FanOutTiming)> {
+    // The fan-outs recorded on each of `ticks` frames.
+    fn recorded(scheduler: ThreadedEval, ticks: usize) -> Vec<Vec<(&'static str, FanOutTiming)>> {
         let mut world = world_with(vec![Behavior {
             on: BehaviorSource::Tick,
             scope: vec!["Prop".into()],
@@ -1812,23 +1898,27 @@ fn a_fanned_out_tick_records_its_timing_on_the_profile() {
             ..Default::default()
         }]);
         world.insert_resource(ScheduleMode::Parallel);
-        for i in 0..PARALLEL_EVAL_MIN_JOBS {
+        for i in 0..64 {
             spawn_prop(&mut world, [i as f32, 0.0, 0.0]);
         }
-        let mut sys = BehaviorSystem::new();
-        if parallel {
-            sys = sys.with_scheduler(Box::new(ThreadedEval));
-        }
+        let mut sys = BehaviorSystem::new().with_scheduler(Box::new(scheduler));
         sys.init(&mut world.context());
         let mut ctx = world.context();
-        sys.tick(&mut ctx, 0.016, 0.016);
-        ctx.profile.record_system("BehaviorSystem", 1_000);
-        ctx.profile.begin_frame();
-        ctx.profile.system_fan_outs().to_vec()
+        (0..ticks)
+            .map(|_| {
+                sys.tick(&mut ctx, 0.016, 0.016);
+                ctx.profile.record_system("BehaviorSystem", 1_000);
+                ctx.profile.begin_frame();
+                ctx.profile.system_fan_outs().to_vec()
+            })
+            .collect()
     }
 
-    assert_eq!(recorded(true), [("BehaviorSystem", THREADED_EVAL_TIMING)]);
-    assert!(recorded(false).is_empty());
+    let fanned = recorded(ThreadedEval::expensive(), 2);
+    assert!(fanned[0].is_empty());
+    assert_eq!(fanned[1], [("BehaviorSystem", THREADED_EVAL_TIMING)]);
+    let kept = recorded(ThreadedEval::costing(&[CHEAP_US]), 2);
+    assert!(kept.iter().all(Vec::is_empty));
 }
 
 // Picking up an edited source column without a world reload.
