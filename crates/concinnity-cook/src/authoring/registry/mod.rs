@@ -893,12 +893,12 @@ mod tests {
     fn reserialize_args_round_trips_and_rejects_bad_types() {
         let ty = RegisteredType::parse("ProceduralMesh").unwrap();
         let bytes = ty
-            .reserialize_args(&serde_json::json!({ "source": "a.glb" }))
+            .reserialize_args(&serde_json::json!({ "generator": "box" }))
             .unwrap();
         let back: ProceduralMesh = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(back.source.as_deref(), Some("a.glb"));
+        assert_eq!(back.generator, "box");
         let error = ty
-            .reserialize_args(&serde_json::json!({ "source": 42 }))
+            .reserialize_args(&serde_json::json!({ "generator": 42 }))
             .unwrap_err();
         assert!(
             matches!(
@@ -1191,10 +1191,10 @@ mod tests {
             ref_pairs(RegisteredType::PropBody)[0],
             ("prop_name", vec!["Prop"])
         );
-        assert_eq!(
-            ref_pairs(RegisteredType::PhysicsConfig),
-            [("terrain_mesh", vec!["ProceduralMesh"])]
-        );
+        let terrain = ref_pairs(RegisteredType::Terrain);
+        assert!(terrain.contains(&("layers.grass", vec!["Grass"])));
+        assert!(terrain.contains(&("layers.density_mask", vec!["Texture"])));
+        assert!(terrain.contains(&("heightmap", vec!["Texture"])));
         // A type without references reports none.
         assert!(RegisteredType::PointLight.ref_fields().is_empty());
         // Every derived ref field names a real target type -- a component or a
@@ -1277,7 +1277,7 @@ mod tests {
                 "DebugHud",
                 "TextInput",
                 "LoadingOverlay",
-                "Grass",
+                "Terrain",
                 // The build-only group sorts after the stored one, and the
                 // resource group after that.
                 "MainMenu",

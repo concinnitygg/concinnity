@@ -21,6 +21,7 @@ pub(super) struct PropDrawInputs<'a> {
     pub(super) model_map: &'a HashMap<AssetId, Vec<SubMeshRef>>,
     pub(super) mesh_geometry: &'a [LoadedMesh],
     pub(super) room_geometry: &'a [RoomGeometry],
+    pub(super) terrains: &'a [crate::gfx::terrain::LoadedTerrain],
     pub(super) texture_count: usize,
     pub(super) material_map: &'a HashMap<MaterialHandle, MaterialEntry>,
 }
@@ -65,6 +66,7 @@ impl GraphicsSystem {
             model_map: inputs.model_map,
             mesh_geometry: inputs.mesh_geometry,
             room_geometry: inputs.room_geometry,
+            terrains: inputs.terrains,
             texture_count: inputs.texture_count,
             material_map: inputs.material_map,
         })?;

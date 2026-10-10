@@ -1,27 +1,25 @@
 // World-level physics configuration schema.
 
-use crate::components::ProceduralMesh;
-use crate::ecs::Ref;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// Configures the world's physics floor / terrain.
+/// Configures the world's physics: the floor, collision layers, and how many
+/// bodies to reserve.
 ///
 /// Optional: a world with physics bodies but no `PhysicsConfig` simulates over a
 /// flat floor at Y = 0, and receives one carrying these values at start so the
 /// settings are a component rather than a fallback. Physics runs whenever the world
 /// declares a `PhysicsConfig`, a [RigidBody](#rigidbody), a
 /// [PropBody](#propbody), a [TriggerVolume](#triggervolume), or a
-/// [SkinnedMesh](#skinnedmesh) with a `capsule`. Declare a `PhysicsConfig` to
-/// put bodies on terrain or a non-zero floor.
+/// [SkinnedMesh](#skinnedmesh) with a `capsule`.
 ///
-/// For terrain-based outdoor scenes the terrain parameters must match the
-/// terrain mesh exactly.
+/// Every [Terrain](#terrain) in the world is solid ground. A world with no
+/// terrain stands on a flat floor at Y = 0.
 ///
 /// ```rust
 /// # use concinnity_core::components::PhysicsConfig;
 /// PhysicsConfig {
-///     terrain_offset_y: -0.5,
+///     contact_min_impulse: 2.0,
 ///     ..Default::default()
 /// };
 /// ```
@@ -38,25 +36,6 @@ pub struct PhysicsConfig {
     /// Y coordinate of the floor. When left at 0.0 it is auto-detected from the
     /// camera; set it explicitly to override.
     pub floor_y: f32,
-    /// Half-width of the terrain mesh along X. Must match the terrain mesh.
-    /// Leave at 0.0 (with `terrain_subdivisions` = 0) for flat-floor scenes.
-    pub terrain_half_width: f32,
-    /// Half-depth of the terrain mesh along Z. Must match the terrain mesh.
-    pub terrain_half_depth: f32,
-    /// Subdivision count of the terrain mesh. When 0, a flat floor at Y = 0 is
-    /// used instead of a heightfield.
-    pub terrain_subdivisions: u32,
-    /// Height variation of the terrain mesh. Must match the terrain mesh.
-    pub terrain_amplitude: f32,
-    /// World-space Y offset of the terrain: the height of the prop that renders
-    /// the terrain mesh. Leave at 0.0 when the terrain sits at the origin.
-    pub terrain_offset_y: f32,
-    /// Name of a [ProceduralMesh](#proceduralmesh) with `generator:
-    /// "heightfield"`. When set, the physics surface is built from that mesh's
-    /// source image so props rest on the visible terrain. Takes precedence over
-    /// the `terrain_*` values above.
-    #[serde(default)]
-    pub terrain_mesh: Option<Ref<ProceduralMesh>>,
     /// Extra collision layer names beyond the built-ins (`world`, `prop`,
     /// `character`, `trigger`). At most 28; referenced by collider `layer`
     /// fields and `no_collide` pairs.

@@ -11,7 +11,7 @@
 use std::cell::Cell;
 
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::grass::{GrassCamera, GrassField};
+use concinnity_core::render::grass::{GrassCamera, GrassField, GrassFrame as GrassFrameWork};
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::PassId;
 use concinnity_core::render::uniforms::grass::{
@@ -30,7 +30,7 @@ use super::context::{DxContext, align256};
 use super::error::map_hresult;
 use super::pso::{Blend, Depth, GraphicsPso, compute_pso};
 use super::root_sig::{RootSig, Visibility};
-use super::texture::{HDR_FORMAT, create_uav_buffer};
+use super::texture::{HDR_FORMAT, create_uav_buffer, upload_buffer};
 
 /// Where the main pass's root signature carries the grass block (b7) and the
 /// visible blades (t23).
@@ -40,13 +40,16 @@ pub(in crate::directx) const MAIN_GRASS_BLADES_PARAM: u32 = 22;
 pub(in crate::directx) const PREPASS_GRASS_PARAMS_PARAM: u32 = 9;
 pub(in crate::directx) const PREPASS_GRASS_BLADES_PARAM: u32 = 10;
 
-// The kernel's root signature: the block at b0, the blades it appends at u1 and
-// the draw arguments at u2, as `grass.hlsl` declares them.
+// The kernel's root signature: the block at b0, the blades it appends at u1,
+// the draw arguments at u2, and the terrain heights and mask texels it reads
+// at t3 and t4, as `grass.hlsl` declares them.
 fn create_generate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     RootSig::new()
         .cbv(0, Visibility::All)
         .uav(1, Visibility::All)
         .uav(2, Visibility::All)
+        .srv(3, Visibility::All)
+        .srv(4, Visibility::All)
         .build(device, "grass generate root sig")
 }
 
@@ -132,6 +135,10 @@ pub(in crate::directx) struct GrassResources {
     pub(in crate::directx) blades: ID3D12Resource,
     // Two slots of draw arguments; see `GRASS_ARGS_SLOTS`.
     pub(in crate::directx) args: ID3D12Resource,
+    // Every terrain's heights and every layer's mask texels, which the kernel
+    // reads to root and thin the blades.
+    heights: PooledBuffer,
+    masks: PooledBuffer,
     // One `GrassParams` block per frame in flight, persistently mapped.
     params: Vec<PooledBuffer>,
     params_ptrs: Vec<*mut u8>,
@@ -156,6 +163,13 @@ impl GrassResources {
         super::particle::zero_default_buffer(alloc, &blades, blade_bytes)?;
         let args = create_uav_buffer(device, GRASS_ARGS_BYTES as u64, D3D12_RESOURCE_STATE_COMMON)?;
         super::particle::zero_default_buffer(alloc, &args, GRASS_ARGS_BYTES as u64)?;
+        let read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        let heights = upload_buffer(alloc, bytemuck::cast_slice(&field.buffers.heights), read)?;
+        let masks = upload_buffer(
+            alloc,
+            bytemuck::cast_slice(field.buffers.bound_mask_words()),
+            read,
+        )?;
 
         let size = align256(std::mem::size_of::<GrassParams>() as u64);
         let frames = alloc.frames_in_flight();
@@ -181,6 +195,8 @@ impl GrassResources {
             draw_signature,
             blades,
             args,
+            heights,
+            masks,
             params,
             params_ptrs,
             runs: Cell::new(0),
@@ -213,7 +229,7 @@ impl DxContext {
             position: cam_pos,
             vp,
         };
-        let params = grass.field.frame_params(&camera, runs);
+        let GrassFrameWork { params, dispatch } = grass.field.frame(&camera, runs);
         // SAFETY: the destination is the persistent mapping of this frame's UPLOAD-heap constant
         // buffer, sized for the payload, which the GPU no longer reads once this frame's slot has
         // been waited on; the source is a separate live value, so the ranges cannot overlap.
@@ -227,7 +243,7 @@ impl DxContext {
         Some(GrassFrame {
             params_gva: com::gpu_va(&grass.params[frame_idx]),
             args_offset: grass_args_offset(params.args_slot) as u64,
-            dispatch: grass.field.dispatch(cam_pos),
+            dispatch,
         })
     }
 
@@ -250,6 +266,8 @@ impl DxContext {
             cmd.SetComputeRootConstantBufferView(0, frame.params_gva);
             cmd.SetComputeRootUnorderedAccessView(1, com::gpu_va(&grass.blades));
             cmd.SetComputeRootUnorderedAccessView(2, com::gpu_va(&grass.args));
+            cmd.SetComputeRootShaderResourceView(3, com::gpu_va(&grass.heights));
+            cmd.SetComputeRootShaderResourceView(4, com::gpu_va(&grass.masks));
             cmd.Dispatch(x, y, z);
         }
     }

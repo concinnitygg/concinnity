@@ -272,12 +272,8 @@ pub(crate) fn load_mesh_geometry(
             }
         }
     }
-    // ProceduralMesh components are cloned rather than drained: PhysicsSystem
-    // inits after GraphicsSystem and resolves its `terrain_mesh` reference by
-    // querying ProceduralMesh for the live heightfield args. Same precedent as
-    // the audio-clip residency the graphics init leaves resident for AudioSystem:
-    // leave the component in place so a later init step can still read it.
-    // A generator the world baked for itself at start carries no locator: its
+    // ProceduralMesh components are cloned rather than drained, so the column
+    // stays the world's record of what its generators built. A generator the world baked for itself at start carries no locator: its
     // payload is in the runtime store with the rest of the trailing
     // `MeshBlock::Runtime` block, loaded after the compiled ones so a handle
     // the build assigned keeps its index.
@@ -551,6 +547,8 @@ pub(crate) struct DrawListInputs<'a> {
     // reference's `MeshHandle` indexes it directly.
     pub mesh_geometry: &'a [LoadedMesh],
     pub room_geometry: &'a [RoomGeometry],
+    // Every terrain, appended as static culled chunks.
+    pub terrains: &'a [crate::gfx::terrain::LoadedTerrain],
     // Size of the shared texture pool; a texture handle is in range when its
     // index is below this. A legacy texture-on-mesh reference past it falls back
     // to slot 0.
@@ -566,6 +564,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
         model_map,
         mesh_geometry,
         room_geometry,
+        terrains,
         texture_count,
         material_map,
     } = inputs;
@@ -1001,6 +1000,26 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
         });
     }
 
+    for terrain in terrains {
+        let material = match resolve_material_slots(terrain.terrain.material, material_map) {
+            Ok(entry) => entry,
+            Err(mat_id) => {
+                tracing::error!(
+                    "GraphicsSystem: a Terrain references unknown material {} -- add a Material asset with that id",
+                    mat_id.index()
+                );
+                return None;
+            }
+        };
+        crate::gfx::terrain::append_terrain_draws(
+            terrain,
+            material,
+            &mut all_vertices,
+            &mut all_indices,
+            &mut draw_objects,
+        );
+    }
+
     Some(DrawListData {
         vertices: all_vertices,
         indices: all_indices,
@@ -1103,6 +1122,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh_geometry,
             room_geometry: &[],
+            terrains: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
         })
@@ -1163,6 +1183,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh_geometry,
             room_geometry: &[],
+            terrains: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
         })
@@ -1284,6 +1305,7 @@ mod tests {
             model_map: &model_map,
             mesh_geometry: &mesh_geometry,
             room_geometry: &[],
+            terrains: &[],
             texture_count: 0,
             material_map: &material_map,
         })
@@ -1328,6 +1350,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh_geometry,
             room_geometry: &[],
+            terrains: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
         })
@@ -1378,6 +1401,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &[],
             room_geometry: &room_geometry,
+            terrains: &[],
             texture_count: 7,
             material_map: &std::collections::HashMap::new(),
         })
@@ -1424,6 +1448,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh_geometry,
             room_geometry: &[],
+            terrains: &[],
             texture_count: 3,
             material_map: &std::collections::HashMap::new(),
         })
@@ -1450,6 +1475,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh(),
             room_geometry: &[],
+            terrains: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
         }));
@@ -1470,6 +1496,7 @@ mod tests {
             model_map: &model_no_mesh,
             mesh_geometry: &mesh(),
             room_geometry: &[],
+            terrains: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
         }));
@@ -1490,6 +1517,7 @@ mod tests {
             model_map: &model_bad_geo,
             mesh_geometry: &mesh(),
             room_geometry: &[],
+            terrains: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
         }));
@@ -1510,6 +1538,7 @@ mod tests {
             model_map: &model_bad_mat,
             mesh_geometry: &mesh(),
             room_geometry: &[],
+            terrains: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
         }));
@@ -1522,6 +1551,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh(),
             room_geometry: &[],
+            terrains: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
         }));
@@ -1536,6 +1566,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh(),
             room_geometry: &[],
+            terrains: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
         }));
@@ -1555,6 +1586,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh(),
             room_geometry: &[],
+            terrains: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
         }));
@@ -1573,6 +1605,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh(),
             room_geometry: &[],
+            terrains: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
         }));
@@ -1591,6 +1624,7 @@ mod tests {
             model_map: &std::collections::HashMap::new(),
             mesh_geometry: &mesh(),
             room_geometry: &[],
+            terrains: &[],
             texture_count: 0,
             material_map: &std::collections::HashMap::new(),
         }));

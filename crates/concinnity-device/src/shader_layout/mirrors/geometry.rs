@@ -10,7 +10,7 @@ use concinnity_core::gfx::render_types::{
     ParticleParams, ShadowPassPush, ShadowUniforms, TextUniforms,
 };
 use concinnity_core::render::uniforms::directx::CullParams as DxCullParams;
-use concinnity_core::render::uniforms::grass::{GpuGrassBlade, GrassParams};
+use concinnity_core::render::uniforms::grass::{GpuGrassBlade, GrassLayerGpu, GrassParams};
 use concinnity_core::render::uniforms::metal::CullUniforms as MetalCullParams;
 use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams as VkCullParams};
 use concinnity_core::render::uniforms::{
@@ -88,27 +88,38 @@ pub(in crate::shader_layout) fn line() -> Vec<Case> {
 pub(in crate::shader_layout) fn grass() -> Vec<Case> {
     vec![
         everywhere(mirror!(GrassParams => "GrassParams" {
-            patch_rect,
-            ground_y,
-            tile_size,
-            cell_size,
-            cells_per_side,
-            tile_origin,
-            tile_count,
             [cam_pos, draw_distance] => ["cam_pos_distance"],
             frustum,
+            wind,
+            wind_gust,
+            layer_count,
+            capacity,
+            args_slot,
+            tile_size,
+            layers,
+        })),
+        everywhere(mirror!(GrassLayerGpu => "GrassLayer" {
+            rect,
+            tile_origin,
+            tile_count,
+            base_y,
+            min_y,
+            max_y,
+            grid_resolution,
+            heights_offset,
+            mask_offset,
+            mask_size,
+            seed,
             height,
             height_variance,
             width,
             clump_size,
             stiffness,
             color_variation,
-            capacity,
-            args_slot,
+            cell_size,
+            cells_per_side,
             root_color,
             tip_color,
-            wind,
-            wind_gust,
         })),
         everywhere(mirror!(GpuGrassBlade => "GrassBlade" {
             root_facing,

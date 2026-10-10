@@ -1439,6 +1439,7 @@ impl GraphicsSystem {
         // decode Room payloads before shaders/textures are read; all payloads
         // live in the same blob and must be consumed before it is released
         let (room_geometry, room_blob_indices) = draw_list::load_room_geometry(ctx)?;
+        let (terrains, terrain_blob_indices) = crate::gfx::terrain::load_terrains(ctx)?;
 
         let DecodedShaders {
             locators: shader_locators,
@@ -1510,6 +1511,7 @@ impl GraphicsSystem {
             .map(|l| l.blob_index)
             .chain(texture_locators.iter().map(|l| l.blob_index))
             .chain(room_blob_indices)
+            .chain(terrain_blob_indices)
             .chain(font_blob_indices)
             .chain(skinned_blob_indices);
         for idx in blobs_to_release(consumed, &retained_blobs(ctx)) {
@@ -1531,6 +1533,7 @@ impl GraphicsSystem {
                 model_map: &model_map,
                 mesh_geometry: &mesh_geometry,
                 room_geometry: &room_geometry,
+                terrains: &terrains,
                 texture_count,
                 material_map: &material_map,
             },
@@ -1552,7 +1555,7 @@ impl GraphicsSystem {
         let cluster_count = instanced_clusters.len();
         let total_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
 
-        let fx = drain_world_fx(ctx, texture_count);
+        let fx = drain_world_fx(ctx, texture_count, &terrains);
         let sdf_fields = if capture_sources {
             super::sdf_field_sources::SdfFieldMap::resolve(
                 &fx.sdf_volumes,

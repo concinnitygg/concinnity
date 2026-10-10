@@ -87,6 +87,13 @@ pub(crate) trait BuildAsset: Component {
     fn source_files(_args: &serde_json::Value, _ctx: &BuildCtx<'_>) -> SourceFiles {
         SourceFiles::Extra(Vec::new())
     }
+
+    // The args of the other assets this asset's `compile_payload` reads, such
+    // as a texture it decodes. The cache key folds each in, with the files its
+    // args name, so editing one invalidates this asset's cached payload too.
+    fn dependency_args(_args: &serde_json::Value, _ctx: &BuildCtx<'_>) -> Vec<serde_json::Value> {
+        Vec::new()
+    }
 }
 
 // An asset's contribution to its payload cache key: the inputs its compile
@@ -96,6 +103,8 @@ pub(crate) trait BuildAsset: Component {
 pub(crate) struct CacheInputs {
     pub sources: SourceFiles,
     pub(crate) target_dependent: bool,
+    // The args of the other assets the compile reads.
+    pub(crate) dependencies: Vec<serde_json::Value>,
 }
 
 impl CacheInputs {
@@ -105,6 +114,7 @@ impl CacheInputs {
         Self {
             sources: SourceFiles::Extra(paths),
             target_dependent: false,
+            dependencies: Vec::new(),
         }
     }
 }

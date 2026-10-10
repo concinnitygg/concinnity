@@ -183,7 +183,13 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     // The grass kernel, under its own root signature in `directx/grass.rs`.
     DxilAbi {
         program: &shared::GRASS_GENERATE,
-        registers: &[("grass", "b0"), ("blades_out", "u1"), ("draw_args", "u2")],
+        registers: &[
+            ("grass", "b0"),
+            ("blades_out", "u1"),
+            ("draw_args", "u2"),
+            ("terrain_heights", "t3"),
+            ("grass_masks", "t4"),
+        ],
     },
     // The grass draws compile from the main pass's resources, so each stage
     // states those registers and the grass pair on top of them.
@@ -841,13 +847,16 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         argument_ids: &[("tex_pool", bindless_textures::pool(0)), ("tex_sampler", 0)],
     },
     // The grass kernel, from `metal/grass.rs`: its block, the blades it
-    // appends and the draw arguments, at buffer(0..2) by register.
+    // appends, the draw arguments, and the terrain heights and mask texels it
+    // reads, at buffer(0..4) by register.
     MetalAbi {
         program: &shared::GRASS_GENERATE,
         slots: &[&[
             ("grass", "buffer(0)"),
             ("blades_out", "buffer(1)"),
             ("draw_args", "buffer(2)"),
+            ("terrain_heights", "buffer(3)"),
+            ("grass_masks", "buffer(4)"),
         ]],
         argument_ids: &[],
     },

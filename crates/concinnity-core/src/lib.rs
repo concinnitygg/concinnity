@@ -83,6 +83,7 @@ pub mod resource;
 pub mod settings;
 pub mod sky;
 pub mod spawn;
+pub mod terrain;
 #[cfg(test)]
 mod test_support;
 pub mod transform;

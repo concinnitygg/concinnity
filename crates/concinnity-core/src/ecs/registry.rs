@@ -148,7 +148,8 @@ macro_rules! for_each_component {
                 SkyRotation       => $crate::components::SkyRotation { gen, external, singleton, validate: sky_rotation },
                 Identity          => $crate::components::Identity { runtime },
                 Wind              => $crate::components::Wind { gen, external, singleton, validate: wind, consumed },
-                Grass             => $crate::components::Grass { gen, external, useful_blank, renders, validate: grass, consumed },
+                Grass             => $crate::components::Grass { gen, external, useful_blank, validate: grass, consumed },
+                Terrain           => $crate::components::Terrain { gen, external, compiled, useful_blank, renders, validate: terrain },
             },
 
             // Resource: declared in a world and compiled into the blob's

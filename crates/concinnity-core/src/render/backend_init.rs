@@ -634,8 +634,12 @@ mod tests {
         assert!(RenderRequirements::derive(&scene, &fx, false).scene);
 
         let mut fx = empty_fx();
-        fx.grass =
-            crate::render::grass::GrassField::resolve(&[crate::components::Grass::default()], None);
+        let terrain = crate::render::grass::GrassTerrain {
+            center: [0.0; 3],
+            grid: crate::terrain::TerrainGrid::new(4, [8.0, 8.0], alloc::vec![0.0; 25]).unwrap(),
+            layers: alloc::vec![(crate::components::Grass::default(), None)],
+        };
+        fx.grass = crate::render::grass::GrassField::resolve(&[terrain], None);
         assert!(fx.grass.is_some());
         assert!(RenderRequirements::derive(&scene, &fx, false).scene);
     }

@@ -1,6 +1,5 @@
 //! `ProceduralMesh`'s `Component` impl is generated centrally (see
-//! `cn_impl_components!`); this module keeps the blob-residency helper
-//! `PhysicsSystem` relies on.
+//! `cn_impl_components!`).
 
 use crate::ecs::PayloadLocator;
 use alloc::string::String;
@@ -34,14 +33,14 @@ use alloc::vec::Vec;
 #[serde(default)]
 pub struct ProceduralMesh {
     /// Built-in generator name (required), e.g. `room`, `box`, `cylinder`,
-    /// `sphere`, `terrain`, `heightfield`, or `extrude`.
+    /// `sphere`, `plane`, `water_grid`, or `extrude`.
     pub generator: String,
 
     // Room / box / plane dimensions
-    /// Half-width along X (room / box / plane / terrain), in world units.
+    /// Half-width along X (room / plane / water grid), in world units.
     #[asset(default = 8.0)]
     pub half_width: f32,
-    /// Half-depth along Z (room / box / plane / terrain), in world units.
+    /// Half-depth along Z (room / plane / water grid), in world units.
     #[asset(default = 10.0)]
     pub half_depth: f32,
     /// Ceiling height for the `room` generator, in world units.
@@ -64,20 +63,10 @@ pub struct ProceduralMesh {
     /// Number of horizontal rings on the `sphere` generator.
     pub rings: Option<u32>,
 
-    // Terrain
-    /// Grid subdivisions for the `terrain` and `heightfield` generators. Higher
-    /// is more detailed.
+    // Water grid
+    /// Grid subdivisions for the `water_grid` generator. Higher is more
+    /// detailed.
     pub subdivisions: Option<u32>,
-    /// Maximum height variation for the `terrain` generator, in world units.
-    pub amplitude: Option<f32>,
-
-    // Heightfield (grayscale image → height grid)
-    /// Path to a grayscale heightmap image for the `heightfield` generator.
-    pub source: Option<String>,
-    /// Height mapped to black pixels in the `heightfield` source, in world units.
-    pub elevation_min: Option<f32>,
-    /// Height mapped to white pixels in the `heightfield` source, in world units.
-    pub elevation_max: Option<f32>,
 
     // Extrude
     /// 2D outline `[[x, z], ...]` extruded by the `extrude` generator.
@@ -98,17 +87,4 @@ pub struct ProceduralMesh {
     /// Injected at load time from the compiled blob payload.
     #[serde(skip)]
     pub locator: Option<PayloadLocator>,
-}
-
-/// Blob indices of heightfield-generator ProceduralMeshes. GraphicsSystem's
-/// init release sweep must spare these blobs: PhysicsSystem inits afterwards and
-/// reads the baked heightfield collider grid from the payload, mirroring the
-/// AudioClip / SdfVolume precedent of holding a blob resident for a later system.
-pub fn heightfield_blob_indices(
-    ctx: &crate::ecs::PipelineContext,
-) -> alloc::collections::BTreeSet<u32> {
-    ctx.query::<ProceduralMesh>()
-        .filter(|m| m.generator == "heightfield")
-        .filter_map(|m| m.locator.as_ref().map(|l| l.blob_index))
-        .collect()
 }

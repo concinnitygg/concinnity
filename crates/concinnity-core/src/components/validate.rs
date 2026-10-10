@@ -8,8 +8,8 @@
 use crate::components::{
     CameraTrackArgs, Decal, DirectionalLight, GlassPanel, Grass, InstancedProp, MAX_WATER_WAVES,
     Material, ParticleEmitter, PointLight, Prop, RectAreaLight, ReflectionProbe, RigidBody,
-    SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, VolumetricFog, VoxelChunk, WaterSurface,
-    WaterWave, Wind,
+    SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, Terrain, VolumetricFog, VoxelChunk,
+    WaterSurface, WaterWave, Wind,
 };
 use crate::math::sqrt;
 use crate::math::vec3;
@@ -181,9 +181,6 @@ pub fn wind(mut args: Wind) -> Wind {
 
 /// Clamp a `Grass` field's authored values into their valid ranges.
 pub fn grass(mut args: Grass) -> Grass {
-    for e in &mut args.extent {
-        *e = finite_at_least(*e, 0.0, 0.0);
-    }
     args.height = finite_at_least(args.height, 0.01, 0.5);
     args.height_variance = finite_at_least(args.height_variance, 0.0, 0.0).min(1.0);
     args.width = finite_at_least(args.width, 0.001, 0.03);
@@ -195,6 +192,26 @@ pub fn grass(mut args: Grass) -> Grass {
         *c = finite_at_least(*c, 0.0, 0.0);
     }
     args
+}
+
+/// Clamp a `Terrain`'s authored values into their valid ranges.
+pub fn terrain(mut args: Terrain) -> Terrain {
+    for c in &mut args.center {
+        *c = finite_or(*c, 0.0);
+    }
+    for e in &mut args.extent {
+        *e = finite_at_least(*e, crate::terrain::MIN_TERRAIN_EXTENT, 50.0);
+    }
+    args.resolution = crate::terrain::clamp_resolution(args.resolution);
+    args.amplitude = finite_at_least(args.amplitude, 0.0, 0.0);
+    args.elevation_min = finite_or(args.elevation_min, 0.0);
+    args.elevation_max = finite_or(args.elevation_max, args.elevation_min);
+    args
+}
+
+// `value`, or `fallback` when it is not a finite number.
+fn finite_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() { value } else { fallback }
 }
 
 // `value` floored at `min`, or `fallback` when it is not a finite number.
@@ -354,7 +371,6 @@ mod tests {
     #[test]
     fn grass_clamps_every_blade_parameter() {
         let g = grass(Grass {
-            extent: [-1.0, f32::INFINITY],
             height: 0.0,
             height_variance: 3.0,
             width: -0.5,
@@ -366,7 +382,6 @@ mod tests {
             color_variation: -0.2,
             ..Grass::default()
         });
-        assert_eq!(g.extent, [0.0, 0.0]);
         assert_eq!(g.height, 0.01);
         assert_eq!(g.height_variance, 1.0);
         assert_eq!(g.width, 0.001);
@@ -383,8 +398,8 @@ mod tests {
         let d = Grass::default();
         let g = grass(d.clone());
         assert_eq!(
-            (g.extent, g.height, g.width, g.density, g.clump_size),
-            (d.extent, d.height, d.width, d.density, d.clump_size)
+            (g.height, g.width, g.density, g.clump_size),
+            (d.height, d.width, d.density, d.clump_size)
         );
         let w = wind(Wind::default());
         assert_eq!(
@@ -395,6 +410,43 @@ mod tests {
                 Wind::default().gustiness,
                 Wind::default().gust_scale
             )
+        );
+    }
+
+    #[test]
+    fn terrain_clamps_its_grid_and_heights() {
+        let t = terrain(Terrain {
+            center: [f32::NAN, 2.0, 3.0],
+            extent: [-4.0, f32::INFINITY],
+            resolution: 1,
+            amplitude: -1.0,
+            elevation_min: f32::NAN,
+            elevation_max: f32::INFINITY,
+            ..Terrain::default()
+        });
+        assert_eq!(t.center, [0.0, 2.0, 3.0]);
+        assert_eq!(
+            t.extent,
+            [crate::terrain::MIN_TERRAIN_EXTENT, 50.0],
+            "a negative extent floors, a non-finite one takes the default"
+        );
+        assert_eq!(t.resolution, crate::terrain::MIN_TERRAIN_RESOLUTION);
+        assert_eq!(t.amplitude, 0.0);
+        assert_eq!((t.elevation_min, t.elevation_max), (0.0, 0.0));
+        let huge = terrain(Terrain {
+            resolution: u32::MAX,
+            ..Terrain::default()
+        });
+        assert_eq!(huge.resolution, crate::terrain::MAX_TERRAIN_RESOLUTION);
+    }
+
+    #[test]
+    fn terrain_defaults_pass_validation_unchanged() {
+        let d = Terrain::default();
+        let t = terrain(d.clone());
+        assert_eq!(
+            (t.extent, t.resolution, t.amplitude, t.elevation_max),
+            (d.extent, d.resolution, d.amplitude, d.elevation_max)
         );
     }
 

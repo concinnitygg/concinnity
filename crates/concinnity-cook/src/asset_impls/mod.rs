@@ -9,4 +9,5 @@ mod procedural_mesh;
 mod room;
 mod sdf_volume;
 mod shader;
+mod terrain;
 mod voxel_chunk;

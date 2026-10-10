@@ -31,5 +31,6 @@ pub(crate) mod scene_partition;
 pub mod sdf_field;
 pub mod shader;
 pub(crate) mod spawn_population;
+pub(crate) mod terrain;
 pub mod texture;
 pub(crate) mod thumbnail;

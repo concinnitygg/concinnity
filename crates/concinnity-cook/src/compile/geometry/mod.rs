@@ -1,7 +1,7 @@
 // The JSON front half of mesh compilation: per-generator arg parsing and the
 // `compile_*_payload` functions that pack generator output into the binary
-// blob. The generators themselves (room, extrude, primitives, terrain,
-// heightfield) and the payload tail (tangents, LOD alternates, serialization)
+// blob. The generators themselves (room, extrude, primitives, water grid)
+// and the payload tail (tangents, LOD alternates, serialization)
 // live in `concinnity_core::geometry` / `concinnity_core::bake::mesh`; this
 // module parses world.jsonl args and calls down into them.
 //
@@ -11,10 +11,8 @@
 // 3. Add a branch to the match in compile_mesh_payload().
 
 mod extrude;
-mod heightfield;
 mod primitives;
 mod room;
-mod terrain;
 
 use concinnity_core::bake::mesh::{bounding_sphere_radius, vertices_from_data};
 use concinnity_core::components::MorphDelta;
@@ -51,16 +49,6 @@ pub(crate) fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
         "cylinder" => primitives::build_cylinder(args)?,
         "plane" => primitives::build_plane(args)?,
         "sphere" => primitives::build_sphere(args)?,
-        "terrain" => terrain::build_terrain(args)?,
-        "heightfield" => {
-            // The heightfield generator needs the source image decoded, which
-            // the build crate does before calling compile_heightfield_payload.
-            return Err(
-                "the `heightfield` generator decodes a source image; compile it \
-                 through the build crate's heightfield path"
-                    .to_string(),
-            );
-        }
         // The `water_grid` generator stays in the runtime crate (the GPU
         // backends call it directly), so reach it there for the compile branch.
         "water_grid" => {
@@ -91,28 +79,6 @@ pub(crate) fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
     finish_mesh_payload(vertices, indices, args)
 }
 
-// Compile a heightfield mesh from a pre-decoded source image into a packed
-// payload with a baked collider height grid. The build crate decodes the source
-// image (the runtime links no image decoders) and passes the RGBA pixels in. The
-// collider grid is the mesh's own per-vertex Y in row-major order, so the
-// physics terrain collider tracks the rendered surface vertex-for-vertex with
-// no runtime image decode.
-pub(crate) fn compile_heightfield_payload(
-    args: &serde_json::Value,
-    img_w: u32,
-    img_h: u32,
-    rgba: Vec<u8>,
-) -> Result<Vec<u8>, String> {
-    let (vertices, indices) =
-        heightfield::build_heightfield_from_pixels(args, img_w, img_h, &rgba)?;
-    // Read the LOD0 mesh's per-vertex Y for the collider grid before the payload
-    // tail consumes the vertices.
-    let (n, heights) = heightfield_collider_grid(&vertices)?;
-    let mut payload = finish_mesh_payload(vertices, indices, args)?;
-    payload.extend_from_slice(&mesh_payload::serialize_heightfield_trailer(n, n, &heights));
-    Ok(payload)
-}
-
 // Shared payload tail for every generator, parsed from `args` and delegated
 // to the core bake: `lod_levels` is the total count including LOD0 and
 // `lod_distances` gives explicit switch thresholds (empty derives a default
@@ -138,22 +104,6 @@ fn finish_mesh_payload(
         })
         .unwrap_or_default();
     concinnity_core::bake::mesh::finish_mesh_payload(vertices, indices, lod_levels, &lod_distances)
-}
-
-// Extract the square collider height grid from a heightfield mesh's vertices.
-// The generator emits exactly `(subdivisions + 1)²` vertices in row-major
-// order with each vertex's Y already mapped through the elevation range, so the
-// grid is just those Y values; `n` is the side length.
-fn heightfield_collider_grid(verts: &[Vert]) -> Result<(usize, Vec<f32>), String> {
-    let n = verts.len().isqrt();
-    if n * n != verts.len() {
-        return Err(format!(
-            "heightfield mesh has {} vertices, not a square grid",
-            verts.len()
-        ));
-    }
-    let heights = verts.iter().map(|v| v.0[1]).collect();
-    Ok((n, heights))
 }
 
 // Compile typed vertex and index data into a packed binary mesh payload.
@@ -558,13 +508,12 @@ mod tests {
     use super::*;
     use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
     use concinnity_core::gfx::mesh_payload::{
-        Vertex, deserialize_heightfield, deserialize_skinned_with_lods, deserialize_with_lods,
+        Vertex, deserialize_skinned_with_lods, deserialize_with_lods,
     };
 
     // core's plain `deserialize` is `#[cfg(test)]`-scoped to that crate, so it is
     // not linkable here; recover the (vertices, indices) pair from the public
-    // with-LODs reader (it ignores any collider trailer, so heightfield payloads
-    // read back fine too).
+    // with-LODs reader.
     fn deserialize(bytes: &[u8]) -> Result<(Vec<Vertex>, Vec<u16>), String> {
         let (verts, indices, _) = deserialize_with_lods(bytes)?;
         Ok((verts, indices))
@@ -591,7 +540,7 @@ mod tests {
 
     #[test]
     fn compile_mesh_payload_known_generators_ok() {
-        for name in &["room", "box", "cylinder", "plane", "sphere", "terrain"] {
+        for name in &["room", "box", "cylinder", "plane", "sphere"] {
             let args = serde_json::json!({"generator": name});
             assert!(
                 compile_mesh_payload(&args).is_ok(),
@@ -811,65 +760,6 @@ mod tests {
         assert_eq!(verts.len(), 3);
         assert!(lod0.is_empty());
         assert!(alternates.is_empty());
-    }
-
-    #[test]
-    fn heightfield_generator_is_routed_through_the_build_crate() {
-        let args = serde_json::json!({"generator": "heightfield"});
-        let err = compile_mesh_payload(&args).unwrap_err();
-        assert!(err.contains("heightfield"), "error was: {err}");
-    }
-
-    #[test]
-    fn heightfield_payload_bakes_a_square_collider_grid() {
-        let args = serde_json::json!({
-            "subdivisions": 4,
-            "elevation_min": 0.0,
-            "elevation_max": 10.0,
-        });
-        // A uniform white 2x2 source image maps every sample to elevation_max.
-        let rgba = vec![255u8; 2 * 2 * 4];
-        let payload = compile_heightfield_payload(&args, 2, 2, rgba).unwrap();
-        let (verts, _) = deserialize(&payload).unwrap();
-        assert_eq!(verts.len(), 25);
-        let grid = deserialize_heightfield(&payload)
-            .unwrap()
-            .expect("collider trailer");
-        assert_eq!((grid.rows, grid.cols), (5, 5));
-        assert_eq!(grid.heights.len(), 25);
-        assert!(grid.heights.iter().all(|h| (h - 10.0).abs() < 1e-4));
-    }
-
-    #[test]
-    fn heightfield_payload_requires_elevation_max() {
-        let args = serde_json::json!({"subdivisions": 4});
-        let rgba = vec![255u8; 2 * 2 * 4];
-        assert!(compile_heightfield_payload(&args, 2, 2, rgba).is_err());
-    }
-
-    #[test]
-    fn heightfield_payload_surfaces_lod_configuration_errors() {
-        let args = serde_json::json!({
-            "subdivisions": 4,
-            "elevation_max": 10.0,
-            "lod_levels": 3,
-            "lod_distances": [10.0],
-        });
-        let rgba = vec![255u8; 2 * 2 * 4];
-        let err = compile_heightfield_payload(&args, 2, 2, rgba).unwrap_err();
-        assert!(
-            err.contains("lod_distances has 1 entries"),
-            "error was: {err}"
-        );
-    }
-
-    #[test]
-    fn collider_grid_rejects_non_square_vertex_counts() {
-        let v = |y: f32| -> Vert { ([0.0, y, 0.0], [0.0, 1.0, 0.0], [1.0; 3], [0.0, 0.0]) };
-        assert!(heightfield_collider_grid(&[v(0.0), v(1.0), v(2.0)]).is_err());
-        let (n, heights) = heightfield_collider_grid(&[v(0.0), v(1.0), v(2.0), v(3.0)]).unwrap();
-        assert_eq!(n, 2);
-        assert_eq!(heights, vec![0.0, 1.0, 2.0, 3.0]);
     }
 
     #[test]

@@ -53,6 +53,8 @@ pub mod quality_preset;
 // How the world's authored render settings resolve against the user's persisted
 // settings-menu choices and the active quality preset's ceiling.
 pub(crate) mod render_config;
+// Every Terrain's cooked payload, decoded for the draw list and the grass.
+pub(crate) mod terrain;
 // Handle -> asset id bridge for SkinnedMesh correlation references, published by
 // GraphicsSystem and read by the animation / third-person systems.
 pub(crate) mod skinned_mesh_map;

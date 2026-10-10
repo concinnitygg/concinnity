@@ -20,7 +20,7 @@ use crate::bake::mesh::{finish_mesh_payload, vertices_from_data};
 use crate::components::{EnvironmentMap, Font, Material, Mesh, ProceduralMesh, validate};
 use crate::geometry::{
     Vert, build_box, build_cylinder, build_extrude, build_plane, build_room_geometry, build_sphere,
-    build_terrain, water_grid,
+    water_grid,
 };
 
 // Fallbacks for the generator arguments a `ProceduralMesh` leaves unset. Each
@@ -32,8 +32,6 @@ const CYLINDER_SEGMENTS: u32 = 16;
 const SPHERE_RADIUS: f32 = 1.0;
 const SPHERE_RINGS: u32 = 12;
 const SPHERE_SEGMENTS: u32 = 16;
-const TERRAIN_SUBDIVISIONS: u32 = 64;
-const TERRAIN_AMPLITUDE: f32 = 4.0;
 const EXTRUDE_HEIGHT: f32 = 1.0;
 const EXTRUDE_CORNER_RADIUS: f32 = 0.0;
 const EXTRUDE_CORNER_SEGMENTS: u32 = 8;
@@ -85,12 +83,6 @@ pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, String> {
             mesh.rings.unwrap_or(SPHERE_RINGS),
             mesh.segments.unwrap_or(SPHERE_SEGMENTS),
         )?,
-        "terrain" => build_terrain(
-            mesh.half_width,
-            mesh.half_depth,
-            mesh.subdivisions.unwrap_or(TERRAIN_SUBDIVISIONS),
-            mesh.amplitude.unwrap_or(TERRAIN_AMPLITUDE),
-        )?,
         "extrude" => {
             let profile = mesh
                 .profile
@@ -108,15 +100,6 @@ pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, String> {
             mesh.half_depth,
             mesh.subdivisions.unwrap_or(WATER_SUBDIVISIONS),
         )?,
-        // The heightfield generator reads a grayscale image, which is an
-        // importer's job.
-        "heightfield" => {
-            return Err(
-                "the `heightfield` generator reads a source image; compile it with the \
-                 cook module"
-                    .to_string(),
-            );
-        }
         "" => return Err("a ProceduralMesh needs a `generator`".to_string()),
         other => return Err(alloc::format!("unknown mesh generator '{other}'")),
     };
@@ -231,7 +214,6 @@ mod tests {
             mesh("cylinder"),
             mesh("plane"),
             mesh("sphere"),
-            mesh("terrain"),
             mesh("water_grid"),
             extrude,
         ] {
@@ -255,9 +237,8 @@ mod tests {
     }
 
     #[test]
-    fn a_generator_that_needs_an_importer_says_so() {
+    fn a_generator_that_cannot_bake_says_why() {
         for (m, needle) in [
-            (mesh("heightfield"), "source image"),
             (mesh(""), "needs a `generator`"),
             (mesh("nonesuch"), "unknown mesh generator"),
             (mesh("extrude"), "needs a `profile`"),

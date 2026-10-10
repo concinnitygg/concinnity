@@ -65,6 +65,7 @@ pub use super::story::{
     StoryPage, StoryPlayback, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
 };
 pub use super::streaming_config::StreamingConfig;
+pub use super::terrain::{Terrain, TerrainLayer};
 pub use super::text_input::TextInput;
 pub use super::text_label::{TextAlign, TextLabel};
 pub use super::trigger_volume::{TriggerFilter, TriggerVolume};

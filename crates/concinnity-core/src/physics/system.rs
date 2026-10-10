@@ -1,7 +1,7 @@
 //! The rigid-body simulation driver. An internal system (not a declarable
 //! asset): a schedule constructs one when the world declares a `PhysicsConfig`,
 //! a `RigidBody`, a `PropBody`, or a `TriggerVolume`, reading the optional
-//! `PhysicsConfig` for the floor / terrain.
+//! `PhysicsConfig`, and laying every `Terrain` down as ground.
 
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -18,8 +18,8 @@ use crate::components::{
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
-    Entity, EventCursor, MenuActive, PipelineContext, Ref, ScheduleMode, SimTiming, StepResult,
-    System, WorldPhysicsBudget,
+    Entity, EventCursor, MenuActive, PipelineContext, ScheduleMode, SimTiming, StepResult, System,
+    WorldPhysicsBudget,
 };
 use crate::math::{cos, sin, sqrt};
 
@@ -31,7 +31,7 @@ use super::index::SortedMap;
 use super::interp::PointInterp;
 use super::layers::{LAYER_CHARACTER, LAYER_PROP, LAYER_TRIGGER, LAYER_WORLD, LayerTable};
 use super::props::{PropBodies, PropCollSnap, STATIC_FRICTION};
-use super::terrain::{TerrainParams, build_heightfield, build_heightfield_collider};
+use super::terrain::build_terrain_colliders;
 
 // Reach distance for picking up a Prop, in world units.
 const PICKUP_REACH: f32 = 3.0;
@@ -54,16 +54,6 @@ pub struct PhysicsSystem {
     // Camera eye Y at spawn; the flat-floor fallback derives nothing from it,
     // but it seeds a sensible fallback camera position.
     floor_y: f32,
-    // Terrain parameters. None when terrain_subdivisions == 0 (flat floor).
-    terrain: Option<TerrainParams>,
-    // Reference to a `ProceduralMesh` asset whose `heightfield` generator
-    // drives the physics collider. Resolved against the live component list
-    // at `init`. Takes precedence over `terrain` when both are set.
-    terrain_mesh: Option<AssetId>,
-    // World-space Y offset applied to whichever terrain source is active
-    // (procedural noise or heightfield mesh). Matches the rendering Prop's
-    // `position[1]`.
-    terrain_offset_y: f32,
     // The simulation, built in init() and sized from the world's budget.
     world: Option<Simulation>,
     // The player capsule, when the world has a Camera3D + RigidBody.
@@ -147,25 +137,11 @@ impl PhysicsSystem {
         self.world.as_ref().map_or(0, |w| w.collider_count())
     }
 
-    /// Build the simulation from the world's `PhysicsConfig` (floor / terrain).
-    /// Bodies and colliders are added from the ECS in [`System::init`].
+    /// Build the simulation from the world's `PhysicsConfig`. Bodies,
+    /// colliders and the ground are added from the ECS in [`System::init`].
     pub fn new(config: PhysicsConfig) -> Self {
-        let terrain = if config.terrain_subdivisions > 0 {
-            Some(TerrainParams {
-                half_width: config.terrain_half_width,
-                half_depth: config.terrain_half_depth,
-                subdivisions: config.terrain_subdivisions,
-                amplitude: config.terrain_amplitude,
-                offset_y: config.terrain_offset_y,
-            })
-        } else {
-            None
-        };
         Self {
             floor_y: config.floor_y,
-            terrain,
-            terrain_mesh: config.terrain_mesh.map(Ref::id),
-            terrain_offset_y: config.terrain_offset_y,
             world: None,
             player: None,
             rigs: Vec::new(),
@@ -310,44 +286,19 @@ impl System for PhysicsSystem {
         );
         let world_mask = self.layers.mask(LAYER_WORLD);
 
-        // floor: heightfield-mesh-driven, procedural noise, or flat slab
-        let mut floor_built = false;
-        if let Some(mesh_id) = self.terrain_mesh {
-            let mesh_snap = ctx
-                .get_by_id::<crate::components::ProceduralMesh>(mesh_id)
-                .cloned();
-            // Anything else (missing asset, wrong generator, a collider that
-            // fails to build) leaves `floor_built` false and falls through to
-            // the flat-slab fallback below.
-            if let Some(m) = mesh_snap
-                && m.generator == "heightfield"
-                && build_heightfield_collider(
-                    &mut world,
-                    &m,
-                    self.terrain_offset_y,
-                    world_mask,
-                    ctx,
-                )
-                .is_ok()
-            {
-                floor_built = true;
-            }
-        }
-        if !floor_built {
-            if let Some(terrain) = self.terrain.clone() {
-                build_heightfield(&mut world, &terrain, world_mask);
-            } else {
-                // A large thin slab whose top face sits at Y = 0.
-                world.add_fixed(
-                    &ColliderShape::Cuboid {
-                        half_extents: [500.0, 5.0, 500.0],
-                    },
-                    [0.0, -5.0, 0.0],
-                    [0.0; 3],
-                    STATIC_FRICTION,
-                    world_mask,
-                );
-            }
+        // The ground: every terrain's heightfield, or a flat slab when the
+        // world lays down none.
+        if build_terrain_colliders(&mut world, world_mask, ctx) == 0 {
+            // A large thin slab whose top face sits at Y = 0.
+            world.add_fixed(
+                &ColliderShape::Cuboid {
+                    half_extents: [500.0, 5.0, 500.0],
+                },
+                [0.0, -5.0, 0.0],
+                [0.0; 3],
+                STATIC_FRICTION,
+                world_mask,
+            );
         }
 
         // Sensor regions: one fixed sensor body per TriggerVolume, tagged with
@@ -863,10 +814,9 @@ mod tests {
     use alloc::string::ToString;
     use alloc::vec;
 
-    use crate::components::{
-        CameraController, CharacterRig, FollowController, ProceduralMesh, PropCollider,
-    };
+    use crate::components::{CameraController, CharacterRig, FollowController, PropCollider};
     use crate::components::{Collider, Pickup, PropColliderShape};
+    use crate::ecs::Ref;
     use crate::ecs::SkinnedMeshHandle;
     use crate::ecs::World;
     use crate::physics::LayerMask;
@@ -1578,81 +1528,27 @@ mod tests {
             .map(|hit| hit.point[1])
     }
 
-    fn terrain_config() -> PhysicsConfig {
-        PhysicsConfig {
-            terrain_half_width: 32.0,
-            terrain_half_depth: 32.0,
-            terrain_subdivisions: 32,
-            terrain_amplitude: 4.0,
-            ..PhysicsConfig::default()
-        }
-    }
-
-    // A config that authors subdivisions gets a noise floor whose height
-    // varies with position, rather than the flat slab a bare config gets.
     #[test]
-    fn authored_subdivisions_build_a_noise_floor_instead_of_a_slab() {
-        let mut world = World::new();
-        let mut physics = PhysicsSystem::new(terrain_config());
-        assert!(physics.terrain.is_some(), "the config authored a terrain");
-        physics.init(&mut world.context());
-
-        let a = floor_height(&physics, 0.0, 0.0).expect("the ray meets the floor");
-        let b = floor_height(&physics, 12.0, -7.0).expect("the ray meets the floor");
-        assert_ne!(a, b, "a noise floor is not level");
-    }
-
-    #[test]
-    fn no_subdivisions_leaves_a_level_slab() {
+    fn a_world_without_terrain_stands_on_a_level_slab() {
         let mut world = World::new();
         let mut physics = PhysicsSystem::new(PhysicsConfig::default());
-        assert!(physics.terrain.is_none());
         physics.init(&mut world.context());
 
         let a = floor_height(&physics, 0.0, 0.0).expect("the ray meets the floor");
         let b = floor_height(&physics, 12.0, -7.0).expect("the ray meets the floor");
         assert_eq!(a, b, "a slab is level");
+        assert_eq!(a, 0.0);
     }
 
-    // A named terrain mesh that does not resolve to a usable heightfield
-    // collider falls through to the fallback floor rather than leaving the
-    // world without one. Each way it can fail to resolve takes that path:
-    // no such asset, the wrong generator, and a payload the store cannot read
-    // (this world carries no blob, so the read always fails).
+    // A terrain that cannot be read still leaves the world a floor to stand
+    // on rather than none at all.
     #[test]
-    fn an_unusable_terrain_mesh_falls_through_to_the_fallback_floor() {
-        let cases: [(&str, Option<ProceduralMesh>); 3] = [
-            ("no such asset", None),
-            (
-                "wrong generator",
-                Some(ProceduralMesh {
-                    generator: "box".to_string(),
-                    ..ProceduralMesh::default()
-                }),
-            ),
-            (
-                "unreadable payload",
-                Some(ProceduralMesh {
-                    generator: "heightfield".to_string(),
-                    ..ProceduralMesh::default()
-                }),
-            ),
-        ];
-
-        for (what, mesh) in cases {
-            let mut world = World::new();
-            if let Some(mesh) = mesh {
-                world.context().push_identified(AssetId(7), mesh);
-            }
-            let mut config = terrain_config();
-            config.terrain_mesh = Some(Ref::new(AssetId(7)));
-            let mut physics = PhysicsSystem::new(config);
-            physics.init(&mut world.context());
-            assert!(
-                floor_height(&physics, 0.0, 0.0).is_some(),
-                "{what}: the world was left with no floor at all"
-            );
-        }
+    fn an_unreadable_terrain_falls_back_to_the_slab() {
+        let mut world = World::new();
+        world.push(crate::components::Terrain::default());
+        let mut physics = PhysicsSystem::new(PhysicsConfig::default());
+        physics.init(&mut world.context());
+        assert_eq!(floor_height(&physics, 3.0, 4.0), Some(0.0));
     }
 
     // A capsule that jumps leaves the ground, then lands: the impulse is

@@ -1,5 +1,6 @@
 // The world's one-shot effect content, drained from its components at init.
 
+use crate::gfx::terrain::{LoadedTerrain, grass_terrains};
 use concinnity_core::components::{
     Decal, GlassPanel, Grass, ParticleEmitter, SdfVolume, VolumetricFog, WaterSurface, Wind,
 };
@@ -13,7 +14,11 @@ use concinnity_host::thread::asset_id;
 // Drain every effect component into the backend's effect inputs. Each record
 // is resolved once here (texture slots, inverted decal matrices, clamped
 // emitter tunables): the runtime keeps no per-frame update path for them.
-pub(super) fn drain_world_fx(ctx: &mut PipelineContext, texture_count: usize) -> WorldFx {
+pub(super) fn drain_world_fx(
+    ctx: &mut PipelineContext,
+    texture_count: usize,
+    terrains: &[LoadedTerrain],
+) -> WorldFx {
     let decals: Vec<Decal> = ctx.drain::<Decal>();
     let decals = decal::build_decal_records(&decals.iter().collect::<Vec<_>>(), texture_count);
     let emitters: Vec<ParticleEmitter> = ctx.drain::<ParticleEmitter>();
@@ -29,9 +34,14 @@ pub(super) fn drain_world_fx(ctx: &mut PipelineContext, texture_count: usize) ->
         .into_iter()
         .find(|f| f.enabled)
         .and_then(|f| volumetric_fog::resolve_asset(&f));
-    // One wind per world; the grass pass draws the first visible field in it.
+    // One wind per world, which every terrain's grass sways in.
     let wind = ctx.drain::<Wind>().into_iter().next();
-    let grass = GrassField::resolve(&ctx.drain::<Grass>(), wind.as_ref());
+    let grass: std::collections::HashMap<AssetId, Grass> = ctx
+        .drain_with_ids::<Grass>()
+        .into_iter()
+        .filter_map(|(id, g)| Some((id?, g)))
+        .collect();
+    let grass = GrassField::resolve(&grass_terrains(terrains, &grass), wind.as_ref());
     WorldFx {
         decals,
         particles,

@@ -3,7 +3,9 @@
 
 use crate::asset::{BuildAsset, BuildCtx, CacheInputs};
 use crate::authoring::registry::RegisteredType;
-use concinnity_core::components::{File, ProceduralMesh, Room, SdfVolume, Shader, VoxelChunk};
+use concinnity_core::components::{
+    File, ProceduralMesh, Room, SdfVolume, Shader, Terrain, VoxelChunk,
+};
 
 type CompileFn = fn(&serde_json::Value, &BuildCtx<'_>) -> std::io::Result<Vec<u8>>;
 type CacheInputsFn = fn(&serde_json::Value, &BuildCtx<'_>) -> CacheInputs;
@@ -31,6 +33,7 @@ fn cache_inputs_of<T: BuildAsset>(args: &serde_json::Value, ctx: &BuildCtx<'_>) 
     CacheInputs {
         sources: T::source_files(args, ctx),
         target_dependent: T::TARGET_DEPENDENT,
+        dependencies: T::dependency_args(args, ctx),
     }
 }
 
@@ -44,6 +47,7 @@ pub(super) fn build_asset(ct: RegisteredType) -> Option<BuildAssetEntry> {
         RegisteredType::Room => BuildAssetEntry::of::<Room>(),
         RegisteredType::Shader => BuildAssetEntry::of::<Shader>(),
         RegisteredType::SdfVolume => BuildAssetEntry::of::<SdfVolume>(),
+        RegisteredType::Terrain => BuildAssetEntry::of::<Terrain>(),
         _ => return None,
     })
 }
@@ -122,7 +126,7 @@ mod tests {
     #[test]
     fn cache_inputs_entry_covers_the_args_walk_arms() {
         use crate::asset::SourceFiles;
-        for name in ["ProceduralMesh", "VoxelChunk", "File", "Room"] {
+        for name in ["ProceduralMesh", "VoxelChunk", "File", "Room", "Terrain"] {
             let inputs = (entry(name).cache_inputs)(&serde_json::json!({}), &ctx());
             assert_eq!(
                 inputs.sources,

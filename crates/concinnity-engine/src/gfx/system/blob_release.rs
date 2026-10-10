@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use concinnity_core::components::{procedural_mesh, sdf_volume};
+use concinnity_core::components::{sdf_volume, terrain};
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::resource::AudioClipTable;
 
@@ -15,8 +15,8 @@ pub(super) fn retained_blobs(ctx: &PipelineContext) -> BTreeSet<u32> {
         .unwrap_or_default();
     // SdfVolume payloads are drained later in this same init.
     retained.extend(sdf_volume::sdf_volume_blob_indices(ctx));
-    // PhysicsSystem inits after GraphicsSystem and reads the baked heightfield grid.
-    retained.extend(procedural_mesh::heightfield_blob_indices(ctx));
+    // PhysicsSystem inits after GraphicsSystem and reads each terrain's grid.
+    retained.extend(terrain::terrain_blob_indices(ctx));
     retained
 }
 

@@ -3,9 +3,9 @@ use concinnity_core::components::ProceduralMesh;
 impl crate::asset::BuildAsset for ProceduralMesh {
     fn compile_payload(
         args: &serde_json::Value,
-        ctx: &crate::asset::BuildCtx<'_>,
+        _ctx: &crate::asset::BuildCtx<'_>,
     ) -> std::io::Result<Vec<u8>> {
-        crate::compile::mesh::compile_mesh_payload(args, ctx.assets_dir)
+        crate::compile::mesh::compile_mesh_payload(args)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 }
@@ -30,7 +30,7 @@ mod tests {
         let payload = ProceduralMesh::compile_payload(&args, &ctx()).expect("box compiles");
         assert_eq!(
             payload,
-            crate::compile::mesh::compile_mesh_payload(&args, None).unwrap()
+            crate::compile::mesh::compile_mesh_payload(&args).unwrap()
         );
     }
 

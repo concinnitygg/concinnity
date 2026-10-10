@@ -228,13 +228,8 @@ pub(super) fn reload_procedural_meshes(
             continue;
         }
 
-        // Regenerate from the new args. Routed through the build wrapper so a
-        // live-edited `heightfield` ProceduralMesh still decodes its source
-        // image (core's compile_mesh_payload links no image decoders).
-        let payload = match concinnity_cook::compile::mesh::compile_mesh_payload(
-            raw_args,
-            crate::project::assets_dir().as_deref(),
-        ) {
+        // Regenerate from the new args.
+        let payload = match concinnity_cook::compile::mesh::compile_mesh_payload(raw_args) {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!(

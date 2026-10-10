@@ -512,7 +512,7 @@ fn create_decal_pipeline(
 
 // Helpers for upload + casting
 
-fn upload_static_buffer(
+pub(in crate::vulkan) fn upload_static_buffer(
     alloc: &DeviceAllocator,
     device: &VkDevice,
     command_pool: vk::CommandPool,

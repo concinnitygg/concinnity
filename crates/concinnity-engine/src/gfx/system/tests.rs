@@ -3804,12 +3804,16 @@ fn instanced_prop_bakes_its_instances_into_one_cluster() {
 // and its wind) are
 // resolved at init and drained: each is baked into a backend record at
 // construction and has no per-frame update path, so leaving the components
-// behind would only invite a second, stale build.
+// behind would only invite a second, stale build. The terrain the grass grows
+// on stays, since physics builds its collider after graphics init.
 #[test]
 fn one_shot_world_fx_are_resolved_and_drained_at_init() {
     use concinnity_core::components::{
-        Decal, GlassPanel, Grass, ParticleEmitter, SdfVolume, WaterSurface, Wind,
+        Decal, GlassPanel, Grass, ParticleEmitter, SdfVolume, Terrain, TerrainLayer, WaterSurface,
+        Wind,
     };
+    use concinnity_core::terrain::TerrainGrid;
+    use concinnity_core::terrain::payload::TerrainPayload;
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -3834,7 +3838,24 @@ fn one_shot_world_fx_are_resolved_and_drained_at_init() {
     b.push(WaterSurface::default());
     b.push(GlassPanel::default());
     b.push(Wind::default());
-    b.push(Grass::default());
+    b.push_identified(AssetId(834), Grass::default());
+    let ground = b.payload(
+        &TerrainPayload {
+            grid: TerrainGrid::new(4, [8.0, 8.0], vec![0.0; 25]).unwrap(),
+            masks: vec![None],
+        }
+        .encode(),
+    );
+    b.push(Terrain {
+        extent: [8.0, 8.0],
+        resolution: 4,
+        layers: vec![TerrainLayer {
+            grass: concinnity_core::ecs::Ref::new(AssetId(834)),
+            density_mask: None,
+        }],
+        locator: Some(ground),
+        ..Default::default()
+    });
     let sdf_frag = b.payload(b"sdf-fragment-bytes");
     b.push_identified(
         AssetId(832),
@@ -3869,6 +3890,7 @@ fn one_shot_world_fx_are_resolved_and_drained_at_init() {
     assert_eq!(ctx.query::<SdfVolume>().count(), 0);
     assert_eq!(ctx.query::<Wind>().count(), 0);
     assert_eq!(ctx.query::<Grass>().count(), 0);
+    assert_eq!(ctx.query::<Terrain>().count(), 1);
     assert!(
         lock(&state).init.as_ref().unwrap().grass,
         "the grass field reaches the backend"

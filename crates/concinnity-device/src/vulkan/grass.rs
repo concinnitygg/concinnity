@@ -12,7 +12,7 @@
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::grass::{GrassCamera, GrassField};
+use concinnity_core::render::grass::{GrassCamera, GrassField, GrassFrame as GrassFrameWork};
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::PassId;
 use concinnity_core::render::uniforms::grass::{
@@ -41,14 +41,17 @@ fn draw_set_bindings() -> [Binding; 2] {
     ]
 }
 
-// The kernel's block, the blades it appends and the draw arguments.
-fn kernel_set_bindings() -> [Binding; 3] {
+// The kernel's block, the blades it appends, the draw arguments, and the
+// terrain heights and mask texels it reads.
+fn kernel_set_bindings() -> [Binding; 5] {
     use vk::DescriptorType as T;
     let compute = vk::ShaderStageFlags::COMPUTE;
     [
         (0, T::UNIFORM_BUFFER, compute),
         (1, T::STORAGE_BUFFER, compute),
         (2, T::STORAGE_BUFFER, compute),
+        (3, T::STORAGE_BUFFER, compute),
+        (4, T::STORAGE_BUFFER, compute),
     ]
 }
 
@@ -155,6 +158,10 @@ pub(in crate::vulkan) struct GrassResources {
     pub(in crate::vulkan) blades: PooledBuffer,
     // Two slots of draw arguments; see `GRASS_ARGS_SLOTS`.
     pub(in crate::vulkan) args: PooledBuffer,
+    // Every terrain's heights and every layer's mask texels, which the kernel
+    // reads to root and thin the blades.
+    _heights: PooledBuffer,
+    _masks: PooledBuffer,
     // One `GrassParams` block per frame in flight, persistently mapped.
     params: Vec<PooledBuffer>,
     // Per frame: the draws' set and the kernel's set over that frame's block.
@@ -225,6 +232,26 @@ impl GrassResources {
             unsafe { device.cmd_fill_buffer(cmd, args_buffer, 0, args_bytes, 0) };
         })?;
 
+        let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
+        let heights_data: &[u8] = bytemuck::cast_slice(&field.buffers.heights);
+        let masks_data: &[u8] = bytemuck::cast_slice(field.buffers.bound_mask_words());
+        let heights = super::decal::upload_static_buffer(
+            alloc,
+            device,
+            gpu.command_pool,
+            gpu.queue,
+            heights_data,
+            storage,
+        )?;
+        let masks = super::decal::upload_static_buffer(
+            alloc,
+            device,
+            gpu.command_pool,
+            gpu.queue,
+            masks_data,
+            storage,
+        )?;
+
         let params_bytes = std::mem::size_of::<GrassParams>() as u64;
         let params = (0..frames)
             .map(|_| {
@@ -267,6 +294,8 @@ impl GrassResources {
                 .uniform_buffer(0, block.buffer(), params_bytes)
                 .storage_buffer(1, blades.buffer(), blade_bytes)
                 .storage_buffer(2, args.buffer(), args_bytes)
+                .storage_buffer(3, heights.buffer(), heights_data.len() as u64)
+                .storage_buffer(4, masks.buffer(), masks_data.len() as u64)
                 .apply(device);
         }
         Ok(Self {
@@ -276,6 +305,8 @@ impl GrassResources {
             prepass: None,
             blades,
             args,
+            _heights: heights,
+            _masks: masks,
             params,
             draw_sets,
             kernel_sets,
@@ -371,11 +402,11 @@ impl VkContext {
             position: cam_pos,
             vp,
         };
-        let params = grass.field.frame_params(&camera, runs);
+        let GrassFrameWork { params, dispatch } = grass.field.frame(&camera, runs);
         grass.params[frame_idx].write_val(0, &params);
         Some(GrassFrame {
             args_offset: grass_args_offset(params.args_slot) as u64,
-            dispatch: grass.field.dispatch(cam_pos),
+            dispatch,
         })
     }
 

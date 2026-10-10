@@ -7,10 +7,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::render::error::{RenderError, RenderResult};
+pub(in crate::metal) use concinnity_core::render::grass::GrassFrame;
 use concinnity_core::render::grass::{GrassCamera, GrassField};
 use concinnity_core::render::shader_programs::metal::prepass_buffers;
 use concinnity_core::render::uniforms::grass::{
-    GRASS_ARGS_BYTES, GpuGrassBlade, GrassParams, grass_args_offset,
+    GRASS_ARGS_BYTES, GpuGrassBlade, grass_args_offset,
 };
 use concinnity_core::render::uniforms::{GBufferView, ViewUniforms};
 use objc2::rc::Retained;
@@ -40,6 +41,8 @@ const BLADES_INDEX: usize = 20;
 const KERNEL_PARAMS_INDEX: usize = 0;
 const KERNEL_BLADES_INDEX: usize = 1;
 const KERNEL_ARGS_INDEX: usize = 2;
+const KERNEL_HEIGHTS_INDEX: usize = 3;
+const KERNEL_MASKS_INDEX: usize = 4;
 
 pub(super) struct GrassPipelines {
     generate: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
@@ -71,8 +74,33 @@ pub(super) struct GrassState {
     blades: Retained<ProtocolObject<dyn MTLBuffer>>,
     // Two slots of non-indexed draw arguments; see `GRASS_ARGS_SLOTS`.
     args: Retained<ProtocolObject<dyn MTLBuffer>>,
+    // Every terrain's heights and every layer's mask texels, which the kernel
+    // reads to root and thin the blades.
+    heights: Retained<ProtocolObject<dyn MTLBuffer>>,
+    masks: Retained<ProtocolObject<dyn MTLBuffer>>,
     // Frames the kernel has run, which picks the slot it fills.
     runs: u32,
+}
+
+// A shared buffer holding a copy of `data`.
+fn buffer_with<T: bytemuck::NoUninit>(
+    device: &ProtocolObject<dyn MTLDevice>,
+    data: &[T],
+    label: &str,
+) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
+    let bytes: &[u8] = bytemuck::cast_slice(data);
+    let ptr = std::ptr::NonNull::new(bytes.as_ptr() as *mut _)
+        .ok_or_else(|| RenderError::Other(format!("{label}: source pointer is null")))?;
+    // SAFETY: the pointer and length describe the live `data` slice, and Metal
+    // copies those bytes into the new buffer before the call returns.
+    unsafe {
+        device.newBufferWithBytes_length_options(
+            ptr,
+            bytes.len(),
+            MTLResourceOptions::StorageModeShared,
+        )
+    }
+    .ok_or_else(|| allocation_failed(label))
 }
 
 impl GrassState {
@@ -96,26 +124,17 @@ impl GrassState {
         unsafe {
             std::ptr::write_bytes(args.contents().as_ptr().cast::<u8>(), 0, GRASS_ARGS_BYTES);
         }
+        let heights = buffer_with(device, &field.buffers.heights, "grass terrain heights")?;
+        let masks = buffer_with(device, field.buffers.bound_mask_words(), "grass masks")?;
         Ok(Self {
             field,
             pipelines: GrassPipelines::build(device, sample_count, hot_reload)?,
             blades,
             args,
+            heights,
+            masks,
             runs: 0,
         })
-    }
-}
-
-// One frame's grass inputs, prepared on `&mut self` before the fan-out so the
-// encoders can take `&self`.
-pub(in crate::metal) struct GrassFrame {
-    params: GrassParams,
-    dispatch: [u32; 3],
-}
-
-impl GrassFrame {
-    fn args_offset(&self) -> usize {
-        grass_args_offset(self.params.args_slot)
     }
 }
 
@@ -181,10 +200,7 @@ impl MtlContext {
             position: cam_pos,
             vp,
         };
-        let frame = GrassFrame {
-            params: grass.field.frame_params(&camera, grass.runs),
-            dispatch: grass.field.dispatch(cam_pos),
-        };
+        let frame = grass.field.frame(&camera, grass.runs);
         grass.runs = grass.runs.wrapping_add(1);
         Some(frame)
     }
@@ -212,6 +228,8 @@ impl MtlContext {
         enc.set_value(&frame.params, KERNEL_PARAMS_INDEX);
         enc.set_buffer(&grass.blades, 0, KERNEL_BLADES_INDEX);
         enc.set_buffer(&grass.args, 0, KERNEL_ARGS_INDEX);
+        enc.set_buffer(&grass.heights, 0, KERNEL_HEIGHTS_INDEX);
+        enc.set_buffer(&grass.masks, 0, KERNEL_MASKS_INDEX);
         let [x, y, z] = frame.dispatch;
         let groups = MTLSize {
             width: x as usize,
@@ -289,7 +307,7 @@ impl MtlContext {
             enc.drawPrimitives_indirectBuffer_indirectBufferOffset(
                 MTLPrimitiveType::TriangleStrip,
                 &grass.args,
-                frame.args_offset(),
+                grass_args_offset(frame.params.args_slot),
             );
         }
     }

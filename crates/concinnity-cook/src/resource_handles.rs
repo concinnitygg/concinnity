@@ -53,7 +53,7 @@ impl RegisteredType {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::Material => compile_material_data(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::Mesh => crate::compile::mesh::compile_mesh_payload(args, assets_dir)
+            Self::Mesh => crate::compile::mesh::compile_mesh_payload(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::SkinnedMesh => compile_skinned_mesh_payload(args),
             // The registry spans every declarable type; only the resource group

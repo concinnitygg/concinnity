@@ -29,7 +29,7 @@
 - [FrameReport](FrameReport.md) - Times every frame of a run and prints what they cost when it ends.
 - [GlassPanel](GlassPanel.md) - A flat translucent panel of colored glass. A fixed-orientation rectangular quad that refracts and tints the scene behind it and brightens the grazing-angle rim with a Fresnel highlight.
 - [GraphicsConfig](GraphicsConfig.md) - Rendering settings for the world: frame pacing, shadows, and clear color. One per world. The GPU backend is chosen by the engine for the platform and is not user-configurable.
-- [Grass](Grass.md) - A field of individual grass blades, grown on the GPU each frame and swayed by the world's [Wind](Wind.md).
+- [Grass](Grass.md) - The look of a grass cover: individual blades, grown on the GPU each frame and swayed by the world's [Wind](Wind.md).
 - [HitRegion](HitRegion.md) - A responsive invisible rectangular region in screen space.
 - [Include](Include.md) - Inlines the entries of another world file at this line.
 - [InstancedProp](InstancedProp.md) - A single mesh + material drawn at many world-space transforms.
@@ -45,7 +45,7 @@
 - [OptionSelect](OptionSelect.md) - A settings row that cycles through a fixed set of values on click.
 - [Panel](Panel.md) - A titled background container for grouping UI overlay elements.
 - [ParticleEmitter](ParticleEmitter.md) - A billboard particle emitter.
-- [PhysicsConfig](PhysicsConfig.md) - Configures the world's physics floor / terrain.
+- [PhysicsConfig](PhysicsConfig.md) - Configures the world's physics: the floor, collision layers, and how many bodies to reserve.
 - [PhysicsJoint](PhysicsJoint.md) - A physics constraint connecting two [Prop](Prop.md)s that own a `collider`.
 - [PointLight](PointLight.md) - A spherical point light with quadratic distance attenuation.
 - [PostProcessConfig](PostProcessConfig.md) - Tunables for the post-process stack. One per world; the first declared instance wins. With no `PostProcessConfig` present, the defaults below are used.
@@ -73,6 +73,7 @@
 - [Story](Story.md) - A compiled branching story graph, played at runtime by the story system.
 - [StoryImport](StoryImport.md) - Imports a Markdown story file as a single declaration.
 - [StreamingConfig](StreamingConfig.md) - Enables and tunes asset streaming.
+- [Terrain](Terrain.md) - A rectangle of ground shaped by a height grid: rendered as a mesh with `material`, collided by physics, and covered by grass `layers`.
 - [TextInput](TextInput.md) - An editable single-line text field drawn as a UI overlay.
 - [TextLabel](TextLabel.md) - Screen-space text drawn as a UI overlay on top of the 3D scene each frame.
 - [Texture](Texture.md) - A 2D texture image.
@@ -156,6 +157,7 @@
 - [SubMeshRef](SubMeshRef.md) - One geometric part of a Model, referencing a mesh and its surface material.
 - [SynthParams](SynthParams.md) - Generator parameters for a synthesized target. Each generator reads the fields it needs and ignores the rest.
 - [SynthesizedTarget](SynthesizedTarget.md) - A morph target the build generates from the mesh instead of reading from the source.
+- [TerrainLayer](TerrainLayer.md) - One ground cover a [Terrain](Terrain.md) grows: a [Grass](Grass.md) look, and where on the terrain it grows.
 - [TextAlign](TextAlign.md) - Horizontal alignment of a [TextLabel](TextLabel.md) relative to its `x`.
 - [TriggerFilter](TriggerFilter.md) - What a [TriggerVolume](TriggerVolume.md) senses.
 - [UpscaleQuality](UpscaleQuality.md) - Render-scale preset for `PostProcessConfig.temporal_upscaling`. The ratio applies to both axes (input pixel count = output * ratio per axis), so `Quality` renders at 4/9 of the output pixel count, `Performance` at 1/4, and `UltraPerformance` at 1/9.

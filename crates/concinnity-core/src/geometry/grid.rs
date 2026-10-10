@@ -1,15 +1,10 @@
 // A regular XZ vertex grid: (subdivisions + 1)^2 vertices spanning
 // [-half_width, half_width] x [-half_depth, half_depth], row-major with rows
-// running along Z, two triangles per cell. The terrain, heightfield and water
-// generators differ only in how they fill each vertex.
+// running along Z, two triangles per cell, which the water generator fills.
 
 use alloc::format;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
-
-use super::Vert;
-use crate::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
 
 pub(super) struct Grid {
     half_width: f32,
@@ -17,11 +12,9 @@ pub(super) struct Grid {
     subdivisions: usize,
 }
 
-// One grid vertex: its lattice cell, its normalized position in [0, 1] on each
-// axis, and its world XZ.
+// One grid vertex: its normalized position in [0, 1] on each axis, and its
+// world XZ.
 pub(super) struct GridPoint {
-    pub(super) col: usize,
-    pub(super) row: usize,
     pub(super) s: f32,
     pub(super) t: f32,
     pub(super) x: f32,
@@ -61,8 +54,6 @@ impl Grid {
                 let s = col as f32 / n;
                 let t = row as f32 / n;
                 GridPoint {
-                    col,
-                    row,
                     s,
                     t,
                     x: -self.half_width + s * self.half_width * 2.0,
@@ -86,34 +77,6 @@ impl Grid {
         }
         idxs
     }
-
-    // Vertices displaced to `height` at each grid point, with smooth normals
-    // accumulated from every triangle sharing a vertex and a world-XZ uv.
-    pub(super) fn displaced(
-        &self,
-        color: [f32; 3],
-        mut height: impl FnMut(&GridPoint) -> f32,
-    ) -> Vec<Vert> {
-        let positions: Vec<[f32; 3]> = self.points().map(|p| [p.x, height(&p), p.z]).collect();
-        let normals = self.smooth_normals(&positions);
-        positions
-            .iter()
-            .zip(normals)
-            .map(|(&[x, y, z], n)| ([x, y, z], vec3_normalize(n), color, [x, z]))
-            .collect()
-    }
-
-    fn smooth_normals(&self, positions: &[[f32; 3]]) -> Vec<[f32; 3]> {
-        let mut normals = vec![[0.0; 3]; positions.len()];
-        for tri in self.indices().chunks_exact(3) {
-            let [a, b, c] = [tri[0], tri[1], tri[2]].map(usize::from);
-            let n = vec3_face_normal(positions[a], positions[b], positions[c]);
-            for v in [a, b, c] {
-                vec3_add(&mut normals[v], n);
-            }
-        }
-        normals
-    }
 }
 
 #[cfg(test)]
@@ -126,12 +89,9 @@ mod tests {
         let points: Vec<GridPoint> = grid.points().collect();
         assert_eq!(points.len(), 9);
         let first = &points[0];
-        assert_eq!((first.col, first.row, first.x, first.z), (0, 0, -2.0, -1.0));
+        assert_eq!((first.s, first.t, first.x, first.z), (0.0, 0.0, -2.0, -1.0));
         let second = &points[1];
-        assert_eq!(
-            (second.col, second.row, second.s, second.x),
-            (1, 0, 0.5, 0.0)
-        );
+        assert_eq!((second.s, second.x), (0.5, 0.0));
         let last = &points[8];
         assert_eq!((last.s, last.t, last.x, last.z), (1.0, 1.0, 2.0, 1.0));
     }
@@ -149,29 +109,5 @@ mod tests {
         assert!(Grid::new("test", 1.0, 1.0, 255).is_ok());
         let err = Grid::new("water_grid", 1.0, 1.0, 256).err().unwrap();
         assert!(err.starts_with("water_grid subdivisions 256"), "{err}");
-    }
-
-    #[test]
-    fn a_flat_displacement_faces_up_with_world_xz_uvs() {
-        let grid = Grid::new("test", 3.0, 3.0, 4).unwrap();
-        let verts = grid.displaced([0.1, 0.2, 0.3], |_| 0.0);
-        assert_eq!(verts.len(), 25);
-        for (pos, n, color, uv) in &verts {
-            assert_eq!(*n, [0.0, 1.0, 0.0]);
-            assert_eq!(*color, [0.1, 0.2, 0.3]);
-            assert_eq!(*uv, [pos[0], pos[2]]);
-        }
-    }
-
-    #[test]
-    fn a_slope_tilts_every_normal_against_it() {
-        let grid = Grid::new("test", 1.0, 1.0, 2).unwrap();
-        let verts = grid.displaced([1.0; 3], |p| p.x);
-        let expected = vec3_normalize([-1.0, 1.0, 0.0]);
-        for (_, n, ..) in &verts {
-            for k in 0..3 {
-                assert!((n[k] - expected[k]).abs() < 1e-5, "{n:?}");
-            }
-        }
     }
 }

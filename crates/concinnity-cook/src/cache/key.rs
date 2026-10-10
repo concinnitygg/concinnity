@@ -71,7 +71,7 @@ pub(crate) fn payload_key(
     ctx: &BuildCtx<'_>,
     inputs: &CacheInputs,
 ) -> String {
-    let files = match &inputs.sources {
+    let mut files = match &inputs.sources {
         SourceFiles::Extra(extra) => {
             let mut files = referenced_files(args, ctx);
             for path in extra {
@@ -87,7 +87,16 @@ pub(crate) fn payload_key(
             .collect(),
     };
     let target = inputs.target_dependent.then(|| ctx.platform.key());
-    key_from_parts(discriminant, args, &files, target)
+    if inputs.dependencies.is_empty() {
+        return key_from_parts(discriminant, args, &files, target);
+    }
+    // Another asset the compile reads counts as one more argument, and the
+    // files it names as more inputs.
+    for dependency in &inputs.dependencies {
+        files.extend(referenced_files(dependency, ctx));
+    }
+    let args = serde_json::json!({"args": args, "dependencies": inputs.dependencies});
+    key_from_parts(discriminant, &args, &files, target)
 }
 
 // Cache key for a SceneImport expansion. The generated asset-entry list is a
@@ -398,6 +407,7 @@ mod tests {
         let reported = CacheInputs {
             sources: SourceFiles::Only(vec![used.to_str().unwrap().to_string()]),
             target_dependent: false,
+            dependencies: Vec::new(),
         };
 
         let before = only(&reported);
@@ -418,6 +428,27 @@ mod tests {
         // The same args under the generic walk do pick the unused file up:
         // `Only` is what narrows the input set, not the args themselves.
         assert_eq!(referenced_files(&args, &ctx()).len(), 2);
+    }
+
+    // An asset whose compile reads another one keys on that one's args too:
+    // editing the texture a terrain decodes misses the terrain's cache.
+    #[test]
+    fn a_dependency_edit_changes_the_key() {
+        let args = json!({"heightmap": "bumps"});
+        let with = |dependency: serde_json::Value| {
+            let inputs = CacheInputs {
+                dependencies: vec![dependency],
+                ..CacheInputs::extra(vec![])
+            };
+            payload_key(5, &args, &ctx(), &inputs)
+        };
+        let checker = with(json!({"generator": "checker"}));
+        assert_eq!(checker, with(json!({"generator": "checker"})));
+        assert_ne!(checker, with(json!({"generator": "brick"})));
+        assert_ne!(
+            checker,
+            payload_key(5, &args, &ctx(), &CacheInputs::extra(vec![]))
+        );
     }
 
     #[test]
@@ -506,6 +537,7 @@ mod tests {
         let dependent = CacheInputs {
             sources: SourceFiles::Only(Vec::new()),
             target_dependent: true,
+            dependencies: Vec::new(),
         };
         assert_eq!(
             payload_key(1, &args, &ctx(), &dependent),
@@ -529,6 +561,7 @@ mod tests {
                 &CacheInputs {
                     sources: SourceFiles::Only(Vec::new()),
                     target_dependent: false,
+                    dependencies: Vec::new(),
                 }
             ),
         );

@@ -7,7 +7,7 @@
 //! under the grove is a displaced grid rather than a plane, which is the
 //! station's vertex load and the surface every shadow lands on.
 
-use concinnity::components::{ProceduralMesh, Prop, SpotLight};
+use concinnity::components::{ProceduralMesh, Prop, SpotLight, Terrain};
 use concinnity::cook::WorldBuilder;
 
 use crate::palette;
@@ -16,7 +16,7 @@ use crate::stations::spread;
 // The ground under the grove: a dense displaced grid, which is also the
 // station's vertex load.
 const TERRAIN_HALF_EXTENT: f32 = 22.0;
-const TERRAIN_SUBDIVISIONS: u32 = 130;
+const TERRAIN_RESOLUTION: u32 = 130;
 const TERRAIN_AMPLITUDE: f32 = 1.6;
 
 // The grove: how many trees across and deep, and how far apart.
@@ -38,26 +38,17 @@ const SPOT_HEIGHT: f32 = 13.0;
 
 /// Declare the grove, the ground under it, and the lights over it.
 pub(crate) fn declare(world: &mut WorldBuilder, center: [f32; 3]) {
-    world.add(
-        "shadows_terrain_mesh",
-        ProceduralMesh {
-            generator: "terrain".to_string(),
-            half_width: TERRAIN_HALF_EXTENT,
-            half_depth: TERRAIN_HALF_EXTENT,
-            subdivisions: Some(TERRAIN_SUBDIVISIONS),
-            amplitude: Some(TERRAIN_AMPLITUDE),
-            ..Default::default()
-        },
-    );
     world
         .add(
             "shadows_terrain",
-            Prop {
-                position: [center[0], 0.05, center[2]],
+            Terrain {
+                center: [center[0], 0.05, center[2]],
+                extent: [TERRAIN_HALF_EXTENT, TERRAIN_HALF_EXTENT],
+                resolution: TERRAIN_RESOLUTION,
+                amplitude: TERRAIN_AMPLITUDE,
                 ..Default::default()
             },
         )
-        .reference("mesh", "shadows_terrain_mesh")
         .reference("material", palette::GRASS);
 
     world.add(

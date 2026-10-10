@@ -45,10 +45,28 @@ pub(crate) fn compile_texture_payload(
     args: &serde_json::Value,
     assets_dir: Option<&Path>,
 ) -> Result<Vec<u8>, String> {
+    Ok(serialize(&texture_image(args, assets_dir)?))
+}
+
+// A Texture's args decoded to RGBA8 pixels: (width, height, pixels). For the
+// assets that read a texture's texels at build time rather than sampling it on
+// the GPU; a block-compressed source has none to read and is refused.
+pub(crate) fn texture_rgba8(
+    args: &serde_json::Value,
+    assets_dir: Option<&Path>,
+) -> Result<(u32, u32, Vec<u8>), String> {
+    texture_image(args, assets_dir)?.into_rgba8()
+}
+
+// The image a Texture's args describe, before it is tagged into a payload.
+fn texture_image(
+    args: &serde_json::Value,
+    assets_dir: Option<&Path>,
+) -> Result<TextureImage, String> {
     let tex: Texture =
         Deserialize::deserialize(args).map_err(|e| format!("Texture: invalid args: {}", e))?;
 
-    let image = match tex.generator.as_str() {
+    Ok(match tex.generator.as_str() {
         "checker" => rgba8_image(generate_checker(tex.resolution)),
         "brick" => rgba8_image(generate_brick(tex.resolution)),
         "concrete" => rgba8_image(generate_concrete(tex.resolution)),
@@ -67,9 +85,7 @@ pub(crate) fn compile_texture_payload(
             compile_image_source(&tex.source, tex.image_index, tex.max_size, assets_dir)?
         }
         other => return Err(format!("unknown texture generator '{other}'")),
-    };
-
-    Ok(serialize(&image))
+    })
 }
 
 fn rgba8_image((width, height, pixels): (u32, u32, Vec<u8>)) -> TextureImage {
@@ -1597,6 +1613,16 @@ mod tests {
     fn compile_texture_payload_checker_succeeds() {
         let args = serde_json::json!({"generator": "checker", "resolution": 64});
         assert!(compile_texture_payload(&args, None).is_ok());
+    }
+
+    #[test]
+    fn texture_rgba8_reads_the_texels_the_payload_carries() {
+        let args = serde_json::json!({"generator": "checker", "resolution": 16});
+        let (w, h, px) = texture_rgba8(&args, None).unwrap();
+        assert_eq!((w, h, px.len()), (16, 16, 16 * 16 * 4));
+        let tagged = serialize(&TextureImage::rgba8(w, h, px));
+        assert_eq!(tagged, compile_texture_payload(&args, None).unwrap());
+        assert!(texture_rgba8(&serde_json::json!({}), None).is_err());
     }
 
     #[test]

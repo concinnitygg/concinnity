@@ -313,14 +313,6 @@ mod tests {
     // What cannot be computed is refused with directions, not a wrong payload.
     #[test]
     fn a_file_backed_value_is_refused_toward_the_cook() {
-        let err = procedural_mesh(ProceduralMesh {
-            generator: "heightfield".into(),
-            ..Default::default()
-        })
-        .expect_err("an image-decoding generator");
-        assert!(matches!(err, crate::Error::Bake(_)), "{err:?}");
-        assert!(err.to_string().contains("cook"), "{err}");
-
         let err = font(&Font {
             path: "face.ttf".into(),
             ..Default::default()
