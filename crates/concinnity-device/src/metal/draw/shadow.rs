@@ -64,6 +64,9 @@ impl MtlContext {
         // shadow cast and the live surface agree. `None` when no volume opts
         // into `cast_shadows`. Mirrors the DirectX shadow pass.
         raymarch_view: Option<&crate::metal::raymarch::RaymarchView>,
+        // This frame's grass, whose cascade blades draw into the nearest
+        // cascade after its rasterized casters, when it casts this frame.
+        grass: Option<&crate::metal::grass::GrassFrame>,
     ) -> RenderResult<u32> {
         // Without a cascade array there is nothing to render into.
         if !self.shadow.enabled {
@@ -139,6 +142,11 @@ impl MtlContext {
                     object_buffer,
                     deformed_skinned,
                 );
+            }
+            if cascade_idx == 0
+                && let Some(frame) = grass
+            {
+                total_draws += self.encode_grass_shadow_draw(&shadow_enc, frame);
             }
         }
 

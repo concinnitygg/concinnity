@@ -190,7 +190,18 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             ("terrain_heights", "t3"),
             ("grass_masks", "t4"),
             ("grass_hiz", "t5"),
+            ("grass_bend_field", "t6"),
         ],
+    },
+    // The bend pass and the cascade's depth-only draw, each under its own root
+    // signature in `directx/grass.rs`.
+    DxilAbi {
+        program: &shared::GRASS_BEND,
+        registers: &[("bend", "b0"), ("bend_field", "u1")],
+    },
+    DxilAbi {
+        program: &shared::GRASS_SHADOW_VERT,
+        registers: &[("grass", "b0"), ("grass_blades", "t1")],
     },
     // The grass draws compile from the main pass's resources, so each stage
     // states those registers and the grass pair on top of them.
@@ -860,7 +871,20 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("terrain_heights", "buffer(3)"),
             ("grass_masks", "buffer(4)"),
             ("grass_hiz", "texture(5)"),
+            ("grass_bend_field", "buffer(6)"),
         ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::GRASS_BEND,
+        slots: &[&[("bend", "buffer(0)"), ("bend_field", "buffer(1)")]],
+        argument_ids: &[],
+    },
+    // The cascade's blades draw in the shadow pass under their own pipeline,
+    // which binds only the shadow block and the cascade's blades.
+    MetalAbi {
+        program: &shared::GRASS_SHADOW_VERT,
+        slots: &[&[("grass", "buffer(0)"), ("grass_blades", "buffer(1)")]],
         argument_ids: &[],
     },
     // The grass draws at the tail of the pre-pass and the main pass: the

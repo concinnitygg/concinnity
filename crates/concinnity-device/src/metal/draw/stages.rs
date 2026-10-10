@@ -433,6 +433,7 @@ impl MtlContext {
             // The lit blades shade on the bindings the GPU-driven surfaces leave
             // bound, so grass rides that path.
             grass_enabled: self.grass.is_some() && bindless_cull_enabled,
+            grass_shadow_enabled: self.grass_casts(),
             // Metal collapses the SSR / SSAO / velocity pre-passes into one
             // GBufferPrepass node; the other backends keep them separate.
             gbuffer_prepass_enabled: true,

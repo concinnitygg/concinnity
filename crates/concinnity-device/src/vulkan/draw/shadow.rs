@@ -54,6 +54,9 @@ impl VkContext {
         frame_idx: usize,
         cam_pos: [f32; 3],
         elapsed: f32,
+        // This frame's grass, whose cascade blades draw into the nearest
+        // cascade after its rasterized casters, when it casts this frame.
+        grass: Option<&crate::vulkan::grass::GrassFrame>,
     ) {
         if !self.shadow.enabled() {
             return;
@@ -113,6 +116,12 @@ impl VkContext {
                         indirect: indirect.buffer(),
                     },
                 );
+            }
+
+            if cascade_idx == 0
+                && let Some(frame) = grass
+            {
+                self.encode_grass_shadow_draw(cmd, frame_idx, frame);
             }
 
             // Raymarched SDF shadow casters into this cascade's DSV, after the

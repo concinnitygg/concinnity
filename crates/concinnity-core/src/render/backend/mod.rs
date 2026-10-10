@@ -112,6 +112,9 @@ pub struct FrameParams<'a> {
     /// this one (see [`crate::render::history_reset`]): every temporal pass and
     /// upscaler starts over instead of reprojecting it.
     pub history_reset: bool,
+    /// The characters and bodies that may be trampling grass this frame,
+    /// stamped into the grass's bend field near the camera.
+    pub grass_benders: &'a [crate::render::grass::GrassBender],
 }
 
 /// The per-frame drive: what every graphics backend must implement for a world

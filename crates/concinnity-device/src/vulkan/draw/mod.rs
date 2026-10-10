@@ -55,6 +55,8 @@ pub(super) struct RecordFrameView<'a> {
     // This frame's expanded line ribbons. Empty whenever nothing published
     // lines, which also drops the pass from the graph.
     pub lines: &'a [LineVertex],
+    // What may be trampling the grass this frame.
+    pub grass_benders: &'a [concinnity_core::render::grass::GrassBender],
 }
 
 impl VkContext {
@@ -289,6 +291,7 @@ impl VkContext {
             cam_pos,
             text_calls,
             lines,
+            grass_benders,
         } = view;
         let device = self.hw.device.clone();
         let device = &device;
@@ -484,6 +487,7 @@ impl VkContext {
             aspect,
             elapsed,
             near,
+            grass_benders,
             planar: self
                 .planar_reflection
                 .as_ref()
@@ -653,6 +657,7 @@ impl VkContext {
             grass_enabled: self.grass.is_some()
                 && self.cull.cull_kernels.is_some()
                 && self.cull_count() > 0,
+            grass_shadow_enabled: self.grass_casts(),
             // Gated on the resources (built at init when the world declared a
             // VolumetricFog) and on live settings that can affect the frame, so
             // runtime `update_fog_settings(None)` -- or an authored zero density,

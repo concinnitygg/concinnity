@@ -172,6 +172,8 @@ pub struct RenderSnapshot {
     pub lines: Vec<LineVertex>,
     /// Scene fade / visibility effects recorded this frame.
     pub scene_ops: Vec<SceneOp>,
+    /// Everything that may be trampling grass this frame.
+    pub grass_benders: Vec<crate::render::grass::GrassBender>,
 }
 
 impl RenderSnapshot {
@@ -186,6 +188,7 @@ impl RenderSnapshot {
         self.morphs.clear();
         self.lines.clear();
         self.scene_ops.clear();
+        self.grass_benders.clear();
     }
 }
 

@@ -962,6 +962,7 @@ impl DxContext {
             show,
             sky_rot,
             history_reset,
+            grass_benders,
         } = params;
         // Snapped for the passes recorded below (the wireframe pipeline
         // variant, the unlit shade flag, the composite's channel visualization
@@ -1061,6 +1062,7 @@ impl DxContext {
                 cam_pos,
                 text_calls,
                 lines,
+                grass_benders,
             },
             crate::directx::draw::RecordFrameResolution {
                 width: self.targets.extent.render_width.max(1),

@@ -639,6 +639,7 @@ impl MtlContext {
                     params.object_buffer,
                     params.deformed_skinned,
                     raymarch_view.as_ref(),
+                    params.grass,
                 )?
             }
             PassId::SpotShadow => self.encode_spot_shadow_pass(
@@ -669,6 +670,16 @@ impl MtlContext {
             PassId::Grass => {
                 let frame = pass_input(params.grass, PassId::Grass, "grass")?;
                 self.encode_grass(cmd_buf, frame)?;
+                0
+            }
+            PassId::GrassBend => {
+                let frame = pass_input(params.grass, PassId::GrassBend, "grass")?;
+                self.encode_grass_bend(cmd_buf, frame)?;
+                0
+            }
+            PassId::GrassShadow => {
+                let frame = pass_input(params.grass, PassId::GrassShadow, "grass")?;
+                self.encode_grass_shadow(cmd_buf, frame)?;
                 0
             }
             PassId::AutoExposure => self.encode_auto_exposure(cmd_buf, params.ring_slot)?,
@@ -757,11 +768,11 @@ impl MtlContext {
                     pass_id.name()
                 )));
             }
-            PassId::Sky | PassId::GrassDraw | PassId::GrassPrepass => {
+            PassId::Sky | PassId::GrassDraw | PassId::GrassPrepass | PassId::GrassShadowDraw => {
                 // Drawn inline at the tail of the opaque scene passes (the sky
                 // in Main and every probe face and mirror render, the grass in
-                // Main and the G-buffer pre-pass); each only names a timing
-                // slot.
+                // Main, the G-buffer pre-pass and the nearest shadow cascade);
+                // each only names a timing slot.
                 return Err(RenderError::Other(format!(
                     "graph executor: pass {} is drawn inline by the opaque scene \
                          passes; it should not appear as its own graph node",

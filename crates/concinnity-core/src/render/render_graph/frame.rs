@@ -277,8 +277,15 @@ pub struct FrameGraphInputs {
     /// pipelines. The graph adds a `Grass` compute pass that writes the
     /// visible-blade buffer and its indirect draw arguments, which
     /// `GBufferPrepass` and `Main` read to draw the blades at the tail of their
-    /// opaque geometry.
+    /// opaque geometry. It also adds the `GrassBend` compute pass ahead of it,
+    /// which relaxes and stamps the bend field the kernel reads.
     pub grass_enabled: bool,
+    /// `true` when the grass also casts into the nearest shadow cascade this
+    /// frame: the backend built the grass shadow draw and that cascade
+    /// re-renders. With `grass_enabled` and `shadow_enabled` the graph adds a
+    /// `GrassShadow` compute pass whose blades and draw arguments `Shadow`
+    /// reads.
+    pub grass_shadow_enabled: bool,
 }
 
 impl FrameGraphInputs {
@@ -348,6 +355,7 @@ impl FrameGraphInputs {
             reactive_mask_enabled: false,
             upscale_reads_reactive: false,
             grass_enabled: false,
+            grass_shadow_enabled: false,
         }
     }
 }
@@ -402,6 +410,11 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
         i.upscale_reads_reactive = true
     }),
     ("grass", |i| i.grass_enabled = true),
+    ("grass_shadow", |i| {
+        i.grass_enabled = true;
+        i.shadow_enabled = true;
+        i.grass_shadow_enabled = true;
+    }),
 ];
 
 // Build the full per-frame render graph. Conditional passes are
@@ -575,19 +588,47 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // wait on. It reads nothing else, so the schedule may overlap it with the
     // raster front. Both buffers are persistent and backend-owned, hence
     // imported.
-    let grass_v1 = if inputs.grass_enabled {
+    //
+    // GrassBend (compute) runs first: it relaxes the camera-centered bend field
+    // and stamps this frame's characters and bodies into it, reading the half
+    // the last frame wrote and writing the other, so the one persistent buffer
+    // is both its read and its write. Both kernels that place blades read it.
+    let grass_bend_v1 = inputs.grass_enabled.then(|| {
+        let field = b.import_buffer("grass_bend", grass_bend_desc());
+        let mut bend = b.add_pass(PassId::GrassBend, PassKind::Compute);
+        bend.read_buffer(field);
+        bend.write_buffer(field)
+    });
+    let grass_v1 = if let Some(bend) = grass_bend_v1 {
         let blades = b.import_buffer("grass_blades", grass_blades_desc());
         let args = b.import_buffer("grass_args", draw_args_desc());
         let mut grass = b.add_pass(PassId::Grass, PassKind::Compute);
         if let Some(h) = hiz_pyramid {
             grass.read_texture(h);
         }
+        grass.read_buffer(bend);
         Some(GrassHandles {
             blades: grass.write_buffer(blades),
             args: grass.write_buffer(args),
         })
     } else {
         None
+    };
+
+    // GrassShadow (compute): the same kernel placing the blades the nearest
+    // cascade sees, into their own buffers, which the Shadow pass draws.
+    let grass_shadow_v1 = match grass_bend_v1 {
+        Some(bend) if inputs.shadow_enabled && inputs.grass_shadow_enabled => {
+            let blades = b.import_buffer("grass_shadow_blades", grass_blades_desc());
+            let args = b.import_buffer("grass_shadow_args", draw_args_desc());
+            let mut shadow = b.add_pass(PassId::GrassShadow, PassKind::Compute);
+            shadow.read_buffer(bend);
+            Some(GrassHandles {
+                blades: shadow.write_buffer(blades),
+                args: shadow.write_buffer(args),
+            })
+        }
+        _ => None,
     };
 
     // Geometry pre-pass: one node writes the view-space normal+depth /
@@ -661,6 +702,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // bindless cull is off, where the cascades draw per-object.
         if let Some(h) = draw_args_v1 {
             shadow.read_buffer(h);
+        }
+        if let Some(g) = grass_shadow_v1 {
+            g.read_into(&mut shadow);
         }
         Some(shadow.write_texture(shadow_map))
     } else {
@@ -1225,6 +1269,16 @@ fn grass_blades_desc() -> BufferDesc {
     }
 }
 
+fn grass_bend_desc() -> BufferDesc {
+    // Two halves of packed bends, one per frame parity: the bend pass reads one
+    // and writes the other through the same read-write binding, and the
+    // placement kernels read both. The executor owns the allocation.
+    BufferDesc {
+        size_bytes: None,
+        usage: BufferUsage::STORAGE,
+    }
+}
+
 fn cull_status_desc() -> BufferDesc {
     // One u32 per draw object: phase-1 cull writes drawn / hi-z-candidate /
     // culled, Cull2 reads it. Both phases bind it the same read-write way, so it
@@ -1561,6 +1615,45 @@ mod tests {
             if two_pass {
                 assert!(pos(PassId::Grass) < pos(PassId::HizBuild));
             }
+        }
+    }
+
+    // The bend pass stamps the field both placement kernels read, and the
+    // cascade's blades are drawn by the Shadow pass, so the order is bend,
+    // then the kernels, then their draws.
+    #[test]
+    fn grass_bends_before_it_places_and_casts_before_main() {
+        let mut i = all_off();
+        i.bindless_cull_enabled = true;
+        i.gbuffer_prepass_enabled = true;
+        i.velocity_enabled = true;
+        i.grass_enabled = true;
+        i.shadow_enabled = true;
+        i.grass_shadow_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+        let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+        assert!(pos(PassId::GrassBend) < pos(PassId::Grass));
+        assert!(pos(PassId::GrassBend) < pos(PassId::GrassShadow));
+        assert!(pos(PassId::GrassShadow) < pos(PassId::Shadow));
+        assert!(pos(PassId::Grass) < pos(PassId::GBufferPrepass));
+        assert!(pos(PassId::Shadow) < pos(PassId::Main));
+        let blades = resource_of(&g, "grass_shadow_blades");
+        assert!(
+            g.passes[pos(PassId::Shadow)]
+                .reads
+                .iter()
+                .any(|r| r.resource_index() == blades)
+        );
+
+        // Without shadows, or with the cascade's draw off, nothing is placed
+        // for it; the bend pass still runs for the drawn blades.
+        for (shadow, cast) in [(false, true), (true, false)] {
+            i.shadow_enabled = shadow;
+            i.grass_shadow_enabled = cast;
+            let g = build_frame_graph(&i).expect("compiles");
+            assert!(g.passes.iter().all(|p| p.id != PassId::GrassShadow));
+            assert!(g.passes.iter().any(|p| p.id == PassId::GrassBend));
         }
     }
 

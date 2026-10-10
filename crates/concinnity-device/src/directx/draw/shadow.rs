@@ -82,6 +82,9 @@ impl DxContext {
         // raymarch pass will use later this frame, so the shadow cast
         // and the live pass agree on the SDF surface.
         raymarch_view: Option<&crate::directx::raymarch::RaymarchView>,
+        // This frame's grass, whose cascade blades draw into the nearest
+        // cascade after its rasterized casters, when it casts this frame.
+        grass: Option<&crate::directx::grass::GrassFrame>,
     ) {
         // No cascade DSVs means shadows are not configured.
         if self.shadow.dsvs.is_empty() {
@@ -137,6 +140,12 @@ impl DxContext {
                     },
                 );
             }
+        }
+
+        if render_mask & 1 != 0
+            && let Some(frame) = grass
+        {
+            self.encode_grass_shadow_draw(cmd, frame_idx, self.shadow.dsvs[0], frame);
         }
 
         // Raymarched SDF shadow casters: depth-only draws into the same

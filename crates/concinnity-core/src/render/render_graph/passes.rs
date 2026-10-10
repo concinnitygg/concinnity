@@ -237,6 +237,20 @@ pass_ids! {
     /// [`PassId::GrassDraw`] is timed inside `Main`. No backend's graph executor
     /// dispatches this id.
     GrassPrepass => "grass_prepass",
+    /// The grass bend field: a compute pass that relaxes the camera-centered
+    /// field the blades are pressed down by and stamps every nearby
+    /// character's and body's footprint into it, ahead of the passes that
+    /// place blades. Gated on `FrameGraphInputs::grass_enabled`.
+    GrassBend => "grass_bend",
+    /// Grass blade placement for the nearest shadow cascade: the grass kernel
+    /// run again over the tiles near the camera, culled against the cascade's
+    /// light frustum rather than the view, so blades off screen still cast.
+    /// Gated on `FrameGraphInputs::grass_shadow_enabled`.
+    GrassShadow => "grass_shadow",
+    /// The grass blades drawn into the nearest shadow cascade. Timed inside
+    /// `Shadow` the way [`PassId::GrassDraw`] is timed inside `Main`. No
+    /// backend's graph executor dispatches this id.
+    GrassShadowDraw => "grass_shadow_draw",
 }
 
 impl PassId {
@@ -258,6 +272,7 @@ impl PassId {
         match self {
             PassId::Sky | PassId::GrassDraw => Some(PassId::Main),
             PassId::GrassPrepass => Some(PassId::GBufferPrepass),
+            PassId::GrassShadowDraw => Some(PassId::Shadow),
             _ => None,
         }
     }
@@ -304,7 +319,10 @@ mod tests {
             PassId::GrassPrepass.enclosing(),
             Some(PassId::GBufferPrepass)
         );
+        assert_eq!(PassId::GrassShadowDraw.enclosing(), Some(PassId::Shadow));
         assert_eq!(PassId::Grass.enclosing(), None);
+        assert_eq!(PassId::GrassBend.enclosing(), None);
+        assert_eq!(PassId::GrassShadow.enclosing(), None);
     }
 
     #[test]

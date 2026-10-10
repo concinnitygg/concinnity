@@ -330,7 +330,7 @@ impl VkContext {
             },
             &globals,
         )?;
-        let grass = build_grass(&gpu, fx.grass, &descriptors, &cull, &targets)?;
+        let grass = build_grass(&gpu, fx.grass, &descriptors, &cull, &targets, &shadow)?;
         let (commands, frame_sync) = commands::build_frame_commands(&gpu, &swapchain)?;
         let sky = crate::vulkan::sky::VkSky::build(
             &hw.device,
@@ -503,6 +503,7 @@ fn build_grass(
     descriptors: &VkDescriptors,
     cull: &VkCull,
     targets: &VkTargets,
+    shadow: &super::context::VkShadow,
 ) -> RenderResult<Option<super::grass::GrassResources>> {
     let (Some(field), Some(bindless), Some(prepass), Some(hiz)) = (
         field,
@@ -525,6 +526,8 @@ fn build_grass(
         super::grass::GrassTargets {
             main_render_pass: targets.main_render_pass.handle(),
             msaa_samples: targets.msaa_samples,
+            shadow_render_pass: shadow.render_pass.handle(),
+            shadow_bias_clamp: gpu.hw.device.depth_bias_clamp(),
         },
         gpu.frames,
         gpu.hot_reload,

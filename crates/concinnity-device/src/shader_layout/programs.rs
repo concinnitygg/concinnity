@@ -202,6 +202,11 @@ pub(super) static GRASS_GENERATE: Program = Program {
     splices: &[],
 };
 
+pub(super) static GRASS_BEND: Program = Program {
+    row: &shared::GRASS_BEND,
+    splices: &[],
+};
+
 pub(super) static TEXT_VERT: Program = Program {
     row: &shared::TEXT_VERT,
     splices: &[],

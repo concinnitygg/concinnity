@@ -1381,6 +1381,7 @@ impl VkContext {
             show,
             sky_rot,
             history_reset,
+            grass_benders,
         } = params;
         // Snapped for the passes recorded below (the wireframe pipeline
         // variant, the unlit shade flag, the composite's channel visualization
@@ -1458,6 +1459,7 @@ impl VkContext {
                 cam_pos,
                 text_calls,
                 lines,
+                grass_benders,
             },
             world_hidden,
         )?;

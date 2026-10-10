@@ -87,6 +87,8 @@ pub(crate) struct GraphicsSystem {
     // cursor capture is driven each frame by whether a menu screen is active
     // (release while open, capture otherwise) rather than fixed at startup.
     menu_mode: bool,
+    // The world grows grass, so each frame gathers what tramples it.
+    grows_grass: bool,
     // The render backend while init constructs and wires it. Boxed
     // `dyn RenderBackend` so the setup logic in init.rs / streaming.rs /
     // scene.rs runs as one cfg-free path across Metal, DirectX, and Vulkan.
@@ -232,6 +234,7 @@ impl GraphicsSystem {
             frame_count: 0,
             frame_policy: frame_policy::FramePolicy::default(),
             menu_mode: false,
+            grows_grass: false,
             backend: None,
             scene_flow: None,
             scene_visibility: Default::default(),
@@ -335,6 +338,7 @@ pub(crate) mod character_shape;
 mod draw_geometry;
 mod frame;
 pub(crate) mod frame_policy;
+mod grass_benders;
 pub mod hot_reload_sources;
 mod init;
 mod lines;

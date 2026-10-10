@@ -567,14 +567,31 @@ pub static WATER_FRAG_RT_TEXTURED: ShaderProgram = ShaderProgram {
     msaa: true,
 };
 
-// Grass: the blade kernel, then the blade pair the G-buffer pre-pass draws
-// (under the pre-pass's own gate, like the surfaces') and the pair Main draws.
+// Grass: the blade kernel, the bend pass and the cascade's depth-only draw, then
+// the blade pair the G-buffer pre-pass draws (under the pre-pass's own gate,
+// like the surfaces') and the pair Main draws.
 /// `grass_generate` from `grass.hlsl`.
 pub static GRASS_GENERATE: ShaderProgram = ShaderProgram {
     file: "grass.hlsl",
     entry: "grass_generate",
     label: "grass_generate.hlsl",
     gates: &["GRASS_GENERATE"],
+    msaa: false,
+};
+/// `grass_bend` from `grass.hlsl`.
+pub static GRASS_BEND: ShaderProgram = ShaderProgram {
+    file: "grass.hlsl",
+    entry: "grass_bend",
+    label: "grass_bend.hlsl",
+    gates: &["GRASS_BEND"],
+    msaa: false,
+};
+/// `grass_shadow_vertex` from `grass.hlsl`.
+pub static GRASS_SHADOW_VERT: ShaderProgram = ShaderProgram {
+    file: "grass.hlsl",
+    entry: "grass_shadow_vertex",
+    label: "grass_shadow_vert.hlsl",
+    gates: &["GRASS_SHADOW"],
     msaa: false,
 };
 /// `grass_prepass_vertex` from `grass.hlsl`.
@@ -677,6 +694,8 @@ pub static ALL: &[&ShaderProgram] = &[
     &WATER_FRAG_RT,
     &WATER_FRAG_RT_TEXTURED,
     &GRASS_GENERATE,
+    &GRASS_BEND,
+    &GRASS_SHADOW_VERT,
     &GRASS_PREPASS_VERT,
     &GRASS_PREPASS_FRAG,
     &GRASS_VERT,

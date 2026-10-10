@@ -1,7 +1,9 @@
-//! The grass field on Vulkan (see `concinnity_core::render::grass`): the kernel
-//! that places this frame's visible blades, and the indirect draws, one per
-//! detail level, that render them at the tail of the G-buffer pre-pass and the
-//! main pass.
+//! The grass field on Vulkan (see `concinnity_core::render::grass`): the bend
+//! pass that relaxes and stamps the trampling field, the kernel that places
+//! this frame's visible blades and, a second time, the nearest shadow
+//! cascade's, the indirect draws, one per detail level, that render them at the
+//! tail of the G-buffer pre-pass and the main pass, and the cascade's
+//! depth-only draw inside the shadow pass.
 //!
 //! Each draw's pipeline layout is its pass's own with one more set, holding the
 //! grass block and the blade buffer: set 2 under the main pass's global and
@@ -15,14 +17,18 @@
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::grass::bend::GRASS_BEND_WORDS;
 use concinnity_core::render::grass::lod::GRASS_LOD_COUNT;
 use concinnity_core::render::grass::{
-    GrassCamera, GrassField, GrassFrame as GrassFrameWork, GrassHiz,
+    GrassBender, GrassCamera, GrassField, GrassFrameInputs, GrassHistory, GrassHiz, GrassPass,
+    GrassShadowView,
 };
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph::PassId;
+use concinnity_core::render::shadow_bias;
 use concinnity_core::render::uniforms::grass::{
-    GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassParams, grass_args_offset,
+    GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassParams,
+    grass_args_offset,
 };
 
 use super::allocator::PooledBuffer;
@@ -32,7 +38,9 @@ use super::descriptor_layout::{Binding, PoolSizes};
 use super::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
 };
-use super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc, compute_pipeline};
+use super::pipeline_desc::{
+    Blend, Depth, DepthBias, GraphicsPipelineDesc, Raster, compute_pipeline,
+};
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
 use super::texture::GpuUploadContext;
@@ -47,9 +55,9 @@ fn draw_set_bindings() -> [Binding; 2] {
     ]
 }
 
-// The kernel's block, the blades it appends, the draw arguments, and the
-// terrain heights and mask texels it reads.
-fn kernel_set_bindings() -> [Binding; 5] {
+// The kernel's block, the blades it appends, the draw arguments, the terrain
+// heights and mask texels it reads, and the bend field.
+fn kernel_set_bindings() -> [Binding; 6] {
     use vk::DescriptorType as T;
     let compute = vk::ShaderStageFlags::COMPUTE;
     [
@@ -58,6 +66,17 @@ fn kernel_set_bindings() -> [Binding; 5] {
         (2, T::STORAGE_BUFFER, compute),
         (3, T::STORAGE_BUFFER, compute),
         (4, T::STORAGE_BUFFER, compute),
+        (5, T::STORAGE_BUFFER, compute),
+    ]
+}
+
+// The bend pass's block and the field it reads and writes.
+fn bend_set_bindings() -> [Binding; 2] {
+    use vk::DescriptorType as T;
+    let compute = vk::ShaderStageFlags::COMPUTE;
+    [
+        (0, T::UNIFORM_BUFFER, compute),
+        (1, T::STORAGE_BUFFER, compute),
     ]
 }
 
@@ -85,13 +104,19 @@ pub(in crate::vulkan) struct GrassPassLayouts<'a> {
 pub(in crate::vulkan) struct GrassTargets {
     pub main_render_pass: vk::RenderPass,
     pub msaa_samples: vk::SampleCountFlags,
+    pub shadow_render_pass: vk::RenderPass,
+    // The device's depth-bias clamp, as the shadow casters use it.
+    pub shadow_bias_clamp: f32,
 }
 
-// The kernel and the lit draw, rebuilt as a pair on a shader reload. The
-// pre-pass draw is built apart, once the G-buffer it renders into exists.
+// The kernels, the lit draw and the cascade draw, rebuilt as a set on a shader
+// reload. The pre-pass draw is built apart, once the G-buffer it renders into
+// exists.
 pub(in crate::vulkan) struct GrassPipelines {
     generate: OwnedPipeline,
+    bend: OwnedPipeline,
     main: OwnedPipeline,
+    shadow: OwnedPipeline,
 }
 
 impl GrassPipelines {
@@ -103,6 +128,31 @@ impl GrassPipelines {
     ) -> RenderResult<Self> {
         let cs = builtin_shaders::GRASS_GENERATE.compile(hot_reload)?;
         let generate = compute_pipeline(device, layouts.kernel.handle(), &cs, "grass generate")?;
+        let cs = builtin_shaders::GRASS_BEND.compile(hot_reload)?;
+        let bend = compute_pipeline(device, layouts.bend.handle(), &cs, "grass bend")?;
+        let vs = builtin_shaders::GRASS_SHADOW_VERT.compile(hot_reload)?;
+        let shadow = GraphicsPipelineDesc {
+            frag: None,
+            color_targets: &[],
+            depth: Depth::write(),
+            topology: vk::PrimitiveTopology::TRIANGLE_STRIP,
+            raster: Raster {
+                bias: Some(DepthBias {
+                    constant: shadow_bias::RASTER_CONSTANT,
+                    clamp: targets.shadow_bias_clamp,
+                    slope: shadow_bias::RASTER_SLOPE,
+                }),
+                ..Raster::default()
+            },
+            ..GraphicsPipelineDesc::fullscreen(
+                &vs,
+                &[],
+                layouts.shadow.handle(),
+                targets.shadow_render_pass,
+                &[],
+            )
+        }
+        .build(device, "grass shadow")?;
         let vs = builtin_shaders::GRASS_VERT.compile(hot_reload)?;
         let fs = builtin_shaders::GRASS_FRAG.compile(hot_reload)?;
         let main = GraphicsPipelineDesc {
@@ -118,7 +168,12 @@ impl GrassPipelines {
             )
         }
         .build(device, "grass")?;
-        Ok(Self { generate, main })
+        Ok(Self {
+            generate,
+            bend,
+            main,
+            shadow,
+        })
     }
 }
 
@@ -144,13 +199,17 @@ fn build_prepass_pipeline(
     .build(device, "grass prepass")
 }
 
-// The set and pipeline layouts the grass pipelines are built against.
+// The set and pipeline layouts the grass pipelines are built against. The
+// cascade draw's set has the view draws' shape.
 struct GrassLayouts {
     draw_set: OwnedSetLayout,
     kernel_set: OwnedSetLayout,
+    bend_set: OwnedSetLayout,
     kernel: OwnedPipelineLayout,
+    bend: OwnedPipelineLayout,
     main: OwnedPipelineLayout,
     prepass: OwnedPipelineLayout,
+    shadow: OwnedPipelineLayout,
 }
 
 // The grass field and what draws it: built once at init when the world grows
@@ -166,19 +225,70 @@ pub(in crate::vulkan) struct GrassResources {
     pub(in crate::vulkan) blades: PooledBuffer,
     // Two slots of one draw per detail level; see `GRASS_ARGS_SLOTS`.
     pub(in crate::vulkan) args: PooledBuffer,
+    // The nearest shadow cascade's blades and draw arguments, laid out like
+    // the view's.
+    pub(in crate::vulkan) shadow_blades: PooledBuffer,
+    pub(in crate::vulkan) shadow_args: PooledBuffer,
+    // The bend field's two halves.
+    pub(in crate::vulkan) bend_field: PooledBuffer,
     // Every terrain's heights and every layer's mask texels, which the kernel
     // reads to root and thin the blades.
     _heights: PooledBuffer,
     _masks: PooledBuffer,
-    // One `GrassParams` block per frame in flight, persistently mapped.
+    // Per frame in flight, persistently mapped: the view's `GrassParams`, the
+    // cascade's, and the bend pass's block.
     params: Vec<PooledBuffer>,
-    // Per frame: the draws' set and the kernel's set over that frame's block.
+    shadow_params: Vec<PooledBuffer>,
+    bend_params: Vec<PooledBuffer>,
+    // Per frame: the view's draw and kernel sets, the cascade's, and the bend
+    // pass's set, each over that frame's block.
     draw_sets: Vec<vk::DescriptorSet>,
     kernel_sets: Vec<vk::DescriptorSet>,
+    shadow_draw_sets: Vec<vk::DescriptorSet>,
+    shadow_kernel_sets: Vec<vk::DescriptorSet>,
+    bend_sets: Vec<vk::DescriptorSet>,
     _pool: OwnedDescriptorPool,
-    // Frames the kernel has run, which picks the slot it fills. Advanced from
+    // What the field's frames carry from one to the next. Advanced from
     // `&self` on the render thread before the fan-out.
-    runs: std::cell::Cell<u32>,
+    history: std::cell::Cell<GrassHistory>,
+}
+
+// One host-visible uniform block of `bytes` per frame in flight.
+fn uniform_blocks(
+    alloc: &super::allocator::DeviceAllocator,
+    bytes: u64,
+    frames: usize,
+) -> RenderResult<Vec<PooledBuffer>> {
+    (0..frames)
+        .map(|_| {
+            alloc.create_buffer(
+                bytes,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )
+        })
+        .collect()
+}
+
+// A device-local buffer of `bytes` the kernels write, zeroed.
+fn zeroed_storage(
+    gpu: &GpuUploadContext,
+    bytes: u64,
+    usage: vk::BufferUsageFlags,
+) -> RenderResult<PooledBuffer> {
+    let buffer = gpu.alloc.create_buffer(
+        bytes,
+        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | usage,
+        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+    )?;
+    let handle = buffer.buffer();
+    let device = gpu.device;
+    super::texture::one_shot_submit(device, gpu.command_pool, gpu.queue, |cmd| {
+        // SAFETY: `cmd` is a command buffer in the recording state, and the buffer is live and
+        // created with TRANSFER_DST.
+        unsafe { device.cmd_fill_buffer(cmd, handle, 0, bytes, 0) };
+    })?;
+    Ok(buffer)
 }
 
 impl GrassResources {
@@ -193,11 +303,14 @@ impl GrassResources {
         let GpuUploadContext { alloc, device, .. } = gpu;
         let draw_set = create_descriptor_set_layout(device, &draw_set_bindings())?;
         let kernel_set = create_descriptor_set_layout(device, &kernel_set_bindings())?;
+        let bend_set = create_descriptor_set_layout(device, &bend_set_bindings())?;
         let kernel = pipeline_layout(
             device,
             &[kernel_set.handle(), passes.hiz_read],
             "grass kernel layout",
         )?;
+        let bend = pipeline_layout(device, &[bend_set.handle()], "grass bend layout")?;
+        let shadow = pipeline_layout(device, &[draw_set.handle()], "grass shadow layout")?;
         let main_sets: Vec<_> = passes
             .main
             .iter()
@@ -215,9 +328,12 @@ impl GrassResources {
         let layouts = GrassLayouts {
             draw_set,
             kernel_set,
+            bend_set,
             kernel,
+            bend,
             main,
             prepass,
+            shadow,
         };
         let pipelines = GrassPipelines::build(device, &layouts, targets, hot_reload)?;
 
@@ -229,21 +345,19 @@ impl GrassResources {
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
         let args_bytes = GRASS_ARGS_BYTES as u64;
-        let args = alloc.create_buffer(
-            args_bytes,
-            vk::BufferUsageFlags::STORAGE_BUFFER
-                | vk::BufferUsageFlags::INDIRECT_BUFFER
-                | vk::BufferUsageFlags::TRANSFER_DST,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?;
         // The kernel owns every word but the instance counts of the slot it
         // fills first.
-        let args_buffer = args.buffer();
-        super::texture::one_shot_submit(device, gpu.command_pool, gpu.queue, |cmd| {
-            // SAFETY: `cmd` is a command buffer in the recording state, and the buffer is live and
-            // created with TRANSFER_DST.
-            unsafe { device.cmd_fill_buffer(cmd, args_buffer, 0, args_bytes, 0) };
-        })?;
+        let args = zeroed_storage(&gpu, args_bytes, vk::BufferUsageFlags::INDIRECT_BUFFER)?;
+        let shadow_args = zeroed_storage(&gpu, args_bytes, vk::BufferUsageFlags::INDIRECT_BUFFER)?;
+        let shadow_bytes =
+            u64::from(field.shadow_capacity) * std::mem::size_of::<GpuGrassBlade>() as u64;
+        let shadow_blades = alloc.create_buffer(
+            shadow_bytes,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+        let bend_bytes = (GRASS_BEND_WORDS * 4) as u64;
+        let bend_field = zeroed_storage(&gpu, bend_bytes, vk::BufferUsageFlags::empty())?;
 
         let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
         let heights_data: &[u8] = bytemuck::cast_slice(&field.buffers.heights);
@@ -266,49 +380,70 @@ impl GrassResources {
         )?;
 
         let params_bytes = std::mem::size_of::<GrassParams>() as u64;
-        let params = (0..frames)
-            .map(|_| {
-                alloc.create_buffer(
-                    params_bytes,
-                    vk::BufferUsageFlags::UNIFORM_BUFFER,
-                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                )
-            })
-            .collect::<RenderResult<Vec<_>>>()?;
+        let bend_params_bytes = std::mem::size_of::<GrassBendParams>() as u64;
+        let params = uniform_blocks(alloc, params_bytes, frames)?;
+        let shadow_params = uniform_blocks(alloc, params_bytes, frames)?;
+        let bend_params = uniform_blocks(alloc, bend_params_bytes, frames)?;
 
         let n = frames as u32;
         let sizes = PoolSizes::default()
-            .sets(&draw_set_bindings(), n)
-            .sets(&kernel_set_bindings(), n)
+            .sets(&draw_set_bindings(), 2 * n)
+            .sets(&kernel_set_bindings(), 2 * n)
+            .sets(&bend_set_bindings(), n)
             .build();
         let pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
-                    .max_sets(2 * n)
+                    .max_sets(5 * n)
                     .pool_sizes(&sizes),
             )
             .map_err(|e| super::error::map_vk_result(e, "grass descriptor pool"))?;
-        let draw_sets = alloc_descriptor_sets(
-            device,
-            pool.handle(),
-            &vec![layouts.draw_set.handle(); frames],
-        )?;
-        let kernel_sets = alloc_descriptor_sets(
-            device,
-            pool.handle(),
-            &vec![layouts.kernel_set.handle(); frames],
-        )?;
-        for ((block, &draw), &kernel) in params.iter().zip(&draw_sets).zip(&kernel_sets) {
+        let sets = |layout: &OwnedSetLayout| {
+            alloc_descriptor_sets(device, pool.handle(), &vec![layout.handle(); frames])
+        };
+        let draw_sets = sets(&layouts.draw_set)?;
+        let kernel_sets = sets(&layouts.kernel_set)?;
+        let shadow_draw_sets = sets(&layouts.draw_set)?;
+        let shadow_kernel_sets = sets(&layouts.kernel_set)?;
+        let bend_sets = sets(&layouts.bend_set)?;
+        // One placement's draw and kernel sets: its block, its blades and its
+        // draw arguments, over the shared terrain and bend field.
+        let write_placement = |block: &PooledBuffer,
+                               (blades, blades_bytes): (&PooledBuffer, u64),
+                               args: &PooledBuffer,
+                               draw: vk::DescriptorSet,
+                               kernel: vk::DescriptorSet| {
             SetWrites::new(draw)
                 .uniform_buffer(0, block.buffer(), params_bytes)
-                .storage_buffer(1, blades.buffer(), blade_bytes)
+                .storage_buffer(1, blades.buffer(), blades_bytes)
                 .apply(device);
             SetWrites::new(kernel)
                 .uniform_buffer(0, block.buffer(), params_bytes)
-                .storage_buffer(1, blades.buffer(), blade_bytes)
+                .storage_buffer(1, blades.buffer(), blades_bytes)
                 .storage_buffer(2, args.buffer(), args_bytes)
                 .storage_buffer(3, heights.buffer(), heights_data.len() as u64)
                 .storage_buffer(4, masks.buffer(), masks_data.len() as u64)
+                .storage_buffer(5, bend_field.buffer(), bend_bytes)
+                .apply(device);
+        };
+        for f in 0..frames {
+            write_placement(
+                &params[f],
+                (&blades, blade_bytes),
+                &args,
+                draw_sets[f],
+                kernel_sets[f],
+            );
+            write_placement(
+                &shadow_params[f],
+                (&shadow_blades, shadow_bytes),
+                &shadow_args,
+                shadow_draw_sets[f],
+                shadow_kernel_sets[f],
+            );
+            SetWrites::new(bend_sets[f])
+                .uniform_buffer(0, bend_params[f].buffer(), bend_params_bytes)
+                .storage_buffer(1, bend_field.buffer(), bend_bytes)
                 .apply(device);
         }
         Ok(Self {
@@ -318,13 +453,21 @@ impl GrassResources {
             prepass: None,
             blades,
             args,
+            shadow_blades,
+            shadow_args,
+            bend_field,
             _heights: heights,
             _masks: masks,
             params,
+            shadow_params,
+            bend_params,
             draw_sets,
             kernel_sets,
+            shadow_draw_sets,
+            shadow_kernel_sets,
+            bend_sets,
             _pool: pool,
-            runs: std::cell::Cell::new(0),
+            history: std::cell::Cell::new(GrassHistory::default()),
         })
     }
 
@@ -368,10 +511,40 @@ impl GrassResources {
     }
 }
 
-// One frame's grass inputs, prepared before the fan-out.
-pub(in crate::vulkan) struct GrassFrame {
+// One run of the blade kernel, as the frame's passes read it.
+#[derive(Clone, Copy)]
+struct GrassPlacement {
     args_offset: u64,
     dispatch: [u32; 3],
+}
+
+impl GrassPlacement {
+    fn of(pass: &GrassPass) -> Self {
+        Self {
+            args_offset: grass_args_offset(pass.params.args_slot) as u64,
+            dispatch: pass.dispatch,
+        }
+    }
+}
+
+// One frame's grass inputs, prepared before the fan-out.
+pub(in crate::vulkan) struct GrassFrame {
+    view: GrassPlacement,
+    // The cascade's run, when the grass casts this frame.
+    shadow: Option<GrassPlacement>,
+    bend_dispatch: [u32; 3],
+}
+
+// What a frame's grass is prepared from.
+pub(in crate::vulkan) struct GrassRequest<'a> {
+    pub frame_idx: usize,
+    pub cam_pos: [f32; 3],
+    // The unjittered view-projection.
+    pub vp: [[f32; 4]; 4],
+    pub elapsed: f32,
+    // The grass casts into the nearest cascade this frame.
+    pub cast: bool,
+    pub benders: &'a [GrassBender],
 }
 
 impl VkContext {
@@ -391,26 +564,37 @@ impl VkContext {
         }
     }
 
-    // The targets the lit grass draw renders into.
+    // The targets the lit grass draw and the cascade draw render into.
     pub(in crate::vulkan) fn grass_targets(&self) -> GrassTargets {
         GrassTargets {
             main_render_pass: self.targets.main_render_pass.handle(),
             msaa_samples: self.targets.msaa_samples,
+            shadow_render_pass: self.shadow.render_pass.handle(),
+            shadow_bias_clamp: self.hw.device.depth_bias_clamp(),
         }
     }
 
-    // Write this frame's grass block for a camera at `cam_pos` seeing through
-    // the unjittered `vp`, advancing the draw-argument slot. `None` when the
-    // world grows no grass.
+    // Whether this frame's grass casts into the nearest cascade: shadows are on
+    // and that cascade re-renders.
+    pub(in crate::vulkan) fn grass_casts(&self) -> bool {
+        self.grass.is_some() && self.shadow.enabled() && self.shadow.render_mask & 1 != 0
+    }
+
+    // Write this frame's grass blocks for `request`, advancing the field's
+    // history. `None` when the world grows no grass.
     pub(in crate::vulkan) fn prepare_grass_frame(
         &self,
-        frame_idx: usize,
-        cam_pos: [f32; 3],
-        vp: [[f32; 4]; 4],
+        request: GrassRequest<'_>,
     ) -> Option<GrassFrame> {
         let grass = self.grass.as_ref()?;
-        let runs = grass.runs.get();
-        grass.runs.set(runs.wrapping_add(1));
+        let GrassRequest {
+            frame_idx,
+            cam_pos,
+            vp,
+            elapsed,
+            cast,
+            benders,
+        } = request;
         // The pyramid holds last frame's depth once a pyramid at this
         // resolution has been built, tested through the view-projection the
         // draw cull tests through.
@@ -424,17 +608,123 @@ impl VkContext {
                 size: [h.width as f32, h.height as f32],
                 mip_count: h.mip_count,
             });
-        let camera = GrassCamera {
-            position: cam_pos,
-            vp,
-            hiz,
+        let inputs = GrassFrameInputs {
+            camera: GrassCamera {
+                position: cam_pos,
+                vp,
+                hiz,
+            },
+            elapsed,
+            shadow: cast.then(|| GrassShadowView {
+                vp: self.shadow.uniforms.light_vps[0],
+                to_light: self.shadow.light_dir,
+            }),
+            benders,
         };
-        let GrassFrameWork { params, dispatch } = grass.field.frame(&camera, runs);
-        grass.params[frame_idx].write_val(0, &params);
+        let mut history = grass.history.get();
+        let frame = grass.field.frame(&inputs, &mut history);
+        grass.history.set(history);
+        grass.params[frame_idx].write_val(0, &frame.view.params);
+        grass.bend_params[frame_idx].write_val(0, &frame.bend.params);
+        let shadow = frame.shadow.map(|pass| {
+            grass.shadow_params[frame_idx].write_val(0, &pass.params);
+            GrassPlacement::of(&pass)
+        });
         Some(GrassFrame {
-            args_offset: grass_args_offset(params.args_slot) as u64,
-            dispatch,
+            view: GrassPlacement::of(&frame.view),
+            shadow,
+            bend_dispatch: frame.bend.dispatch,
         })
+    }
+
+    // Encode the `GrassBend` node: relax the bend field and stamp this frame's
+    // footprints into it.
+    pub(in crate::vulkan) fn encode_grass_bend(
+        &self,
+        cmd: vk::CommandBuffer,
+        frame_idx: usize,
+        frame: &GrassFrame,
+    ) {
+        let Some(grass) = &self.grass else {
+            return;
+        };
+        let device = &self.hw.device;
+        let [x, y, z] = frame.bend_dispatch;
+        // SAFETY: `cmd` is a command buffer in the recording state, and every handle these commands
+        // name is live for the call.
+        unsafe {
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                grass.pipelines.bend.handle(),
+            );
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                grass.layouts.bend.handle(),
+                0,
+                &[grass.bend_sets[frame_idx]],
+                &[],
+            );
+            device.cmd_dispatch(cmd, x, y, z);
+        }
+    }
+
+    // Encode the `GrassShadow` node: place the blades the nearest cascade
+    // draws.
+    pub(in crate::vulkan) fn encode_grass_shadow(
+        &self,
+        cmd: vk::CommandBuffer,
+        frame_idx: usize,
+        frame: &GrassFrame,
+    ) {
+        let (Some(grass), Some(shadow)) = (&self.grass, frame.shadow.as_ref()) else {
+            return;
+        };
+        self.place_blades(
+            cmd,
+            frame_idx,
+            grass,
+            shadow,
+            grass.shadow_kernel_sets[frame_idx],
+        );
+    }
+
+    // Draw the cascade's blades into the shadow slice `cmd` has begun, with
+    // the coarsest strip.
+    pub(in crate::vulkan) fn encode_grass_shadow_draw(
+        &self,
+        cmd: vk::CommandBuffer,
+        frame_idx: usize,
+        frame: &GrassFrame,
+    ) {
+        let (Some(grass), Some(shadow)) = (&self.grass, frame.shadow.as_ref()) else {
+            return;
+        };
+        let device = &self.hw.device;
+        let coarsest = shadow.args_offset + ((GRASS_LOD_COUNT - 1) * GRASS_ARGS_STRIDE) as u64;
+        self.timed(cmd, frame_idx, PassId::GrassShadowDraw, || {
+            // SAFETY: `cmd` is a command buffer in the recording state inside the shadow render
+            // pass the pipeline was built against; every handle these commands name is live for
+            // the call, and the offset names one whole record of the args buffer.
+            unsafe {
+                device.cmd_bind_pipeline(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    grass.pipelines.shadow.handle(),
+                );
+                device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    grass.layouts.shadow.handle(),
+                    0,
+                    &[grass.shadow_draw_sets[frame_idx]],
+                    &[],
+                );
+                device.cmd_draw_indirect(cmd, grass.shadow_args.buffer(), coarsest, 1, 0);
+            }
+        });
+        self.inc_draw_calls(1);
     }
 
     // Encode the `Grass` node: place, cull and append this frame's blades.
@@ -447,13 +737,31 @@ impl VkContext {
         let Some(grass) = &self.grass else {
             return;
         };
+        self.place_blades(
+            cmd,
+            frame_idx,
+            grass,
+            &frame.view,
+            grass.kernel_sets[frame_idx],
+        );
+    }
+
+    // One run of the blade kernel for `placement` over `kernel_set`.
+    fn place_blades(
+        &self,
+        cmd: vk::CommandBuffer,
+        frame_idx: usize,
+        grass: &GrassResources,
+        placement: &GrassPlacement,
+        kernel_set: vk::DescriptorSet,
+    ) {
         // The kernel's layout takes the Hi-Z read set, which exists whenever
         // the grass does.
         let Some(hiz) = &self.cull.hiz else {
             return;
         };
         let device = &self.hw.device;
-        let [x, y, z] = frame.dispatch;
+        let [x, y, z] = placement.dispatch;
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle these commands
         // name is live for the call.
         unsafe {
@@ -467,7 +775,7 @@ impl VkContext {
                 vk::PipelineBindPoint::COMPUTE,
                 grass.layouts.kernel.handle(),
                 0,
-                &[grass.kernel_sets[frame_idx], hiz.read_sets[frame_idx]],
+                &[kernel_set, hiz.read_sets[frame_idx]],
                 &[],
             );
             device.cmd_dispatch(cmd, x, y, z);
@@ -558,7 +866,7 @@ impl VkContext {
                 &[],
             );
             for lod in 0..GRASS_LOD_COUNT {
-                let offset = frame.args_offset + (lod * GRASS_ARGS_STRIDE) as u64;
+                let offset = frame.view.args_offset + (lod * GRASS_ARGS_STRIDE) as u64;
                 device.cmd_draw_indirect(cmd, grass.args.buffer(), offset, 1, 0);
             }
         }

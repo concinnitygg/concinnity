@@ -348,6 +348,10 @@ impl GraphicsSystem {
             }
         }
 
+        if self.grows_grass {
+            super::grass_benders::gather_into(ctx, &mut snap.grass_benders);
+        }
+
         // Refresh the editor's viewport-pick index from the freshly
         // propagated transforms. Candidates exist only when the editor
         // opted in at init (an injected PickIndex resource); a shipped

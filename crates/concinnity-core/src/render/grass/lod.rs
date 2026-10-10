@@ -164,10 +164,6 @@ pub fn lod_capacities(
     grid: &GrassGrid,
     draw_distance: f32,
 ) -> [u32; GRASS_LOD_COUNT] {
-    // Ring width the disc is integrated in; each ring takes the alive fraction
-    // at its inner edge, the largest within it.
-    const RING: f32 = 0.25;
-    let density = grid.density();
     core::array::from_fn(|lod| {
         let inner = if lod == 0 {
             0.0
@@ -179,22 +175,55 @@ pub fn lod_capacities(
             .copied()
             .unwrap_or(draw_distance)
             .min(draw_distance);
-        let mut disc = 0.0f32;
-        let mut r = 0.0f32;
-        while r < outer {
-            let next = (r + RING).min(outer);
-            let ring = core::f32::consts::PI * (next * next - r * r);
-            disc += ring * alive(r.max(inner), draw_distance);
-            r = next;
-        }
-        let whole = ground.area() * alive(inner, draw_distance);
-        let blades = ceil(disc.min(whole) * density) + grid.blades_per_tile() as f32;
-        if blades >= MAX_GRASS_BLADES as f32 {
-            MAX_GRASS_BLADES
-        } else {
-            blades as u32
-        }
+        band_capacity(ground, grid, [inner, outer], draw_distance)
     })
+}
+
+/// An upper bound on the blades one frame keeps on `ground` within
+/// `cull_distance` of the camera, wherever it stands, with a field drawn to
+/// `draw_distance`: the region the nearest shadow cascade's blades fill.
+pub fn shadow_capacity(
+    ground: &GroundRect,
+    grid: &GrassGrid,
+    cull_distance: f32,
+    draw_distance: f32,
+) -> u32 {
+    band_capacity(
+        ground,
+        grid,
+        [0.0, cull_distance.min(draw_distance)],
+        draw_distance,
+    )
+}
+
+// The blades kept at distances in `[inner, outer)` of the camera: the alive
+// fraction at `max(r, inner)` integrated over the disc of the outer radius,
+// bounded by the whole ground at the inner radius's alive fraction, plus a
+// tile of slack for the cells the disc's boundary cuts.
+fn band_capacity(
+    ground: &GroundRect,
+    grid: &GrassGrid,
+    [inner, outer]: [f32; 2],
+    draw_distance: f32,
+) -> u32 {
+    // Ring width the disc is integrated in; each ring takes the alive fraction
+    // at its inner edge, the largest within it.
+    const RING: f32 = 0.25;
+    let mut disc = 0.0f32;
+    let mut r = 0.0f32;
+    while r < outer {
+        let next = (r + RING).min(outer);
+        let ring = core::f32::consts::PI * (next * next - r * r);
+        disc += ring * alive(r.max(inner), draw_distance);
+        r = next;
+    }
+    let whole = ground.area() * alive(inner, draw_distance);
+    let blades = ceil(disc.min(whole) * grid.density()) + grid.blades_per_tile() as f32;
+    if blades >= MAX_GRASS_BLADES as f32 {
+        MAX_GRASS_BLADES
+    } else {
+        blades as u32
+    }
 }
 
 /// How many blades each level's region of the visible-blade buffer holds.
@@ -431,6 +460,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    // The cascade's region covers every blade the field keeps within its cull
+    // distance, from any camera height, and is far smaller than the view's.
+    #[test]
+    fn the_shadow_capacity_bounds_the_blades_near_the_camera() {
+        let (ground, grid) = field();
+        let r = 24.0;
+        let cap = shadow_capacity(&ground, &grid, r, D);
+        let cell = grid.cell_size();
+        let n = (r / cell) as i32 + 1;
+        let mut kept = 0.0f32;
+        for z in -n..=n {
+            for x in -n..=n {
+                let p = [(x as f32 + 0.5) * cell, (z as f32 + 0.5) * cell];
+                let d = sqrt(p[0] * p[0] + p[1] * p[1]);
+                if d < r {
+                    kept += alive(d, D);
+                }
+            }
+        }
+        assert!(kept <= cap as f32, "{kept} > {cap}");
+        assert!((cap as f32) < 1.2 * kept + grid.blades_per_tile() as f32);
+        let view: u32 = lod_capacities(&ground, &grid, D).iter().sum();
+        assert!(cap < view / 2, "{cap} vs {view}");
+        // Past the draw distance there is nothing more to cast.
+        assert_eq!(
+            shadow_capacity(&ground, &grid, 2.0 * D, D),
+            shadow_capacity(&ground, &grid, D, D)
+        );
     }
 
     #[test]

@@ -10,7 +10,9 @@ use concinnity_core::gfx::render_types::{
     ParticleParams, ShadowPassPush, ShadowUniforms, TextUniforms,
 };
 use concinnity_core::render::uniforms::directx::CullParams as DxCullParams;
-use concinnity_core::render::uniforms::grass::{GpuGrassBlade, GrassLayerGpu, GrassParams};
+use concinnity_core::render::uniforms::grass::{
+    GpuGrassBlade, GrassBendParams, GrassLayerGpu, GrassParams,
+};
 use concinnity_core::render::uniforms::metal::CullUniforms as MetalCullParams;
 use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams as VkCullParams};
 use concinnity_core::render::uniforms::{
@@ -103,7 +105,14 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             layer_count,
             args_slot,
             tile_size,
-            _pad,
+            cull_distance,
+            bend_window,
+            bend_cell_size,
+            bend_resolution,
+            bend_half,
+            bend_prev_valid,
+            shadow_vp,
+            shadow_light,
             layers,
         })),
         everywhere(mirror!(GrassLayerGpu => "GrassLayer" {
@@ -132,8 +141,23 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
         everywhere(mirror!(GpuGrassBlade => "GrassBlade" {
             root_facing,
             shape,
+            bend,
         })),
     ]
+}
+
+pub(in crate::shader_layout) fn grass_bend() -> Vec<Case> {
+    vec![everywhere(mirror!(GrassBendParams => "GrassBendParams" {
+        window,
+        resolution,
+        cell_size,
+        decay,
+        stamp_count,
+        write_half,
+        prev_valid,
+        _pad,
+        stamps,
+    }))]
 }
 
 pub(in crate::shader_layout) fn particle() -> Vec<Case> {

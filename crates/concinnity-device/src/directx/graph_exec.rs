@@ -600,6 +600,8 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // How the particle and transparent passes treat the reactive mask, and
     // whether TAA, the upscaler or the reactive view reads it.
     pub reactive: concinnity_core::render::reactive_mask::ReactiveMaskPlan,
+    // What may be trampling the grass this frame.
+    pub grass_benders: &'a [concinnity_core::render::grass::GrassBender],
 }
 
 impl DxContext {
@@ -637,7 +639,16 @@ impl DxContext {
             .passes
             .iter()
             .any(|p| p.id == PassId::Grass)
-            .then(|| self.prepare_grass_frame(params.frame_idx, params.cam_pos, params.cur_vp))
+            .then(|| {
+                self.prepare_grass_frame(super::grass::GrassRequest {
+                    frame_idx: params.frame_idx,
+                    cam_pos: params.cam_pos,
+                    vp: params.cur_vp,
+                    elapsed: params.elapsed,
+                    cast: graph.passes.iter().any(|p| p.id == PassId::GrassShadow),
+                    benders: params.grass_benders,
+                })
+            })
             .flatten();
         let grass_ref = grass_frame.as_ref();
 
@@ -989,24 +1000,24 @@ impl DxContext {
         // there, and where the frame's restore returns them -- because that is
         // the binding the simulation writes them through; the draw's SRV read is
         // the only state they leave it for.
-        // The grass kernel's two outputs: the blades the draws' vertex stage
-        // reads, and the draw arguments both draws consume. Both rest in the
-        // UNORDERED_ACCESS state the kernel writes them through.
+        // The grass kernel's outputs, the view's and the cascade's: the blades
+        // the draws' vertex stage reads, and the draw arguments the draws
+        // consume; and the bend field the bend pass writes and both kernels
+        // read. All rest in the UNORDERED_ACCESS state they are written through.
         if let Some(grass) = &self.grass {
-            match label {
-                "grass_blades" => {
-                    return Some((
-                        DxTargetObject::One(&grass.blades),
-                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                    ));
-                }
-                "grass_args" => {
-                    return Some((
-                        DxTargetObject::One(&grass.args),
-                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                    ));
-                }
-                _ => {}
+            let resource = match label {
+                "grass_blades" => Some(&grass.blades),
+                "grass_args" => Some(&grass.args),
+                "grass_shadow_blades" => Some(&grass.shadow_blades),
+                "grass_shadow_args" => Some(&grass.shadow_args),
+                "grass_bend" => Some(&grass.bend_field),
+                _ => None,
+            };
+            if let Some(resource) = resource {
+                return Some((
+                    DxTargetObject::One(resource),
+                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                ));
             }
         }
         if label == "particle_pool" {
@@ -1238,11 +1249,21 @@ impl DxContext {
                     self.encode_grass(cmd, frame);
                 }
             }
-            PassId::Sky | PassId::GrassDraw | PassId::GrassPrepass => {
+            PassId::GrassBend => {
+                if let Some(frame) = grass_frame {
+                    self.encode_grass_bend(cmd, frame);
+                }
+            }
+            PassId::GrassShadow => {
+                if let Some(frame) = grass_frame {
+                    self.encode_grass_shadow(cmd, frame);
+                }
+            }
+            PassId::Sky | PassId::GrassDraw | PassId::GrassPrepass | PassId::GrassShadowDraw => {
                 // Drawn inline at the tail of the opaque scene passes (the sky
                 // in Main and every probe face and mirror render, the grass in
-                // Main and the G-buffer pre-pass); each only names a timing
-                // slot.
+                // Main, the G-buffer pre-pass and the nearest shadow cascade);
+                // each only names a timing slot.
                 return Err(RenderError::Other(format!(
                     "graph executor (directx): pass {} is drawn inline by the opaque \
                      scene passes and should not appear as a graph node",
@@ -1289,6 +1310,7 @@ impl DxContext {
                     params.shadow_ubo_gva,
                     params.cam_pos,
                     raymarch_view.as_ref(),
+                    grass_frame,
                 );
             }
             PassId::SpotShadow => {

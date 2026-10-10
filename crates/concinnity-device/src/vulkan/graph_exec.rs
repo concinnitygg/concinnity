@@ -481,6 +481,8 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
 // needs neither (it reads per-frame state straight off `&self`), Cull needs
 // the frustum + camera position.
 pub(in crate::vulkan) struct GraphFrameParams<'a> {
+    // What may be trampling the grass this frame.
+    pub grass_benders: &'a [concinnity_core::render::grass::GrassBender],
     pub cmd: vk::CommandBuffer,
     pub image_index: u32,
     pub frame_idx: usize,
@@ -567,7 +569,16 @@ impl VkContext {
             .passes
             .iter()
             .any(|p| p.id == PassId::Grass)
-            .then(|| self.prepare_grass_frame(params.frame_idx, params.cam_pos, params.cur_vp))
+            .then(|| {
+                self.prepare_grass_frame(super::grass::GrassRequest {
+                    frame_idx: params.frame_idx,
+                    cam_pos: params.cam_pos,
+                    vp: params.cur_vp,
+                    elapsed: params.elapsed,
+                    cast: graph.passes.iter().any(|p| p.id == PassId::GrassShadow),
+                    benders: params.grass_benders,
+                })
+            })
             .flatten();
 
         // Composite stays on the main thread (it writes the swapchain image
@@ -955,6 +966,32 @@ impl VkContext {
                     VkResting::Carried,
                 )
             }),
+            // The cascade's blades and draw arguments, and the bend field both
+            // kernels read, carried across frames the same way.
+            "grass_shadow_blades" => self.grass.as_ref().map(|g| {
+                (
+                    VkTargetObject::Buffer {
+                        buffer: g.shadow_blades.buffer(),
+                    },
+                    VkResting::Carried,
+                )
+            }),
+            "grass_shadow_args" => self.grass.as_ref().map(|g| {
+                (
+                    VkTargetObject::Buffer {
+                        buffer: g.shadow_args.buffer(),
+                    },
+                    VkResting::Carried,
+                )
+            }),
+            "grass_bend" => self.grass.as_ref().map(|g| {
+                (
+                    VkTargetObject::Buffer {
+                        buffer: g.bend_field.buffer(),
+                    },
+                    VkResting::Carried,
+                )
+            }),
             "particle_pool" => {
                 let first = arena.len();
                 arena.extend(
@@ -1096,11 +1133,21 @@ impl VkContext {
                     self.encode_grass(cmd, params.frame_idx, frame);
                 }
             }
-            PassId::Sky | PassId::GrassDraw | PassId::GrassPrepass => {
+            PassId::GrassBend => {
+                if let Some(frame) = grass_frame {
+                    self.encode_grass_bend(cmd, params.frame_idx, frame);
+                }
+            }
+            PassId::GrassShadow => {
+                if let Some(frame) = grass_frame {
+                    self.encode_grass_shadow(cmd, params.frame_idx, frame);
+                }
+            }
+            PassId::Sky | PassId::GrassDraw | PassId::GrassPrepass | PassId::GrassShadowDraw => {
                 // Drawn inline at the tail of the opaque scene passes (the sky
                 // in Main and every probe face and mirror render, the grass in
-                // Main and the G-buffer pre-pass); each only names a timing
-                // slot.
+                // Main, the G-buffer pre-pass and the nearest shadow cascade);
+                // each only names a timing slot.
                 return Err(RenderError::Other(format!(
                     "graph executor (vulkan): pass {} is drawn inline by the opaque \
                      scene passes and should not appear as a graph node",
@@ -1154,7 +1201,13 @@ impl VkContext {
                 self.encode_bloom(cmd, params.frame_idx)?;
             }
             PassId::Shadow => {
-                self.encode_shadow_pass(cmd, params.frame_idx, params.cam_pos, params.elapsed);
+                self.encode_shadow_pass(
+                    cmd,
+                    params.frame_idx,
+                    params.cam_pos,
+                    params.elapsed,
+                    grass_frame,
+                );
             }
             PassId::SpotShadow => {
                 // One depth-only render per scheduled spot slice. The builder

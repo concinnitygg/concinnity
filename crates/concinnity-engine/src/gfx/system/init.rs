@@ -1575,6 +1575,7 @@ impl GraphicsSystem {
         let total_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
 
         let fx = drain_world_fx(ctx, texture_count, &terrains);
+        self.grows_grass = fx.grass.is_some();
         let sdf_fields = if capture_sources {
             super::sdf_field_sources::SdfFieldMap::resolve(
                 &fx.sdf_volumes,

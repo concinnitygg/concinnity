@@ -123,6 +123,7 @@ pub(crate) fn submit(
         show: snap.frame.show,
         sky_rot: snap.frame.sky_rot,
         history_reset: snap.frame.history_reset.any(),
+        grass_benders: &snap.grass_benders,
     }) {
         Ok(()) => {
             policy.frame_succeeded();

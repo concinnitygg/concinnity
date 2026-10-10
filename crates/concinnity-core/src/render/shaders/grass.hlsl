@@ -18,6 +18,20 @@
 // dispatch fills this frame's draw-argument slot and resets the other one for
 // the next frame.
 //
+// GRASS_GENERATE also runs a second time for the nearest shadow cascade, under
+// its own block: the frustum is the cascade's light frustum, the cull distance
+// is the cast distance, there is no occlusion test, and every blade it keeps
+// goes to the coarsest level's region of its own buffer. The blades it keeps
+// are the ones the view keeps, so the shadow and the blades agree.
+//
+// GRASS_BEND compiles the bend pass: one thread per cell of the camera-centered
+// field trampled blades are pressed by (render::grass::bend). Each cell keeps
+// last frame's bend, relaxed toward upright, when last frame's window held it,
+// and takes the strongest press of any footprint stamped this frame. The kernel
+// reads the field at each blade's root, this frame's and last frame's, into the
+// blade, so every draw bends it the same way and its motion includes the
+// trampling.
+//
 // The other entries draw the blades with one indirect draw per detail level: a
 // strip of 15, 9 or 5 vertices per blade, bent along a quadratic Bezier by the
 // blade's lean and the wind. Level k's draw starts at vertex id
@@ -35,6 +49,10 @@
 //   CN_BACKEND_METAL   buffer(19) params, buffer(20) blades
 //   CN_BACKEND_DIRECTX b7 params, t23 blades in both root signatures
 //   Vulkan             set 2 (main) or set 3 (pre-pass), bindings 0 and 1
+//
+// GRASS_SHADOW compiles the depth-only draw of the cascade's blades with the
+// coarsest strip, through the cascade's light view-projection, swaying at the
+// view's clock. It binds only its block and its blades, at b0 and t1.
 
 {WIND}
 
@@ -102,11 +120,23 @@ struct GrassParams
     uint layer_count;
     uint args_slot;
     float tile_size;
-    uint _pad;
+    // How far from the camera a blade may be placed.
+    float cull_distance;
+    // xy = the bend field window's corner cell this frame, zw = last frame.
+    int4 bend_window;
+    float bend_cell_size;
+    uint bend_resolution;
+    // The half of the bend buffer this frame's field is in.
+    uint bend_half;
+    uint bend_prev_valid;
+    // The shadow block's light view-projection, and the direction toward the
+    // light (xyz) with the clock the shadow draw sways at (w).
+    float4x4 shadow_vp;
+    float4 shadow_light;
     GrassLayer layers[GRASS_MAX_LAYERS];
 };
 
-// Mirrors `GpuGrassBlade` in render::uniforms::grass (32 B).
+// Mirrors `GpuGrassBlade` in render::uniforms::grass (48 B).
 struct GrassBlade
 {
     // xyz = root, w = facing angle in radians.
@@ -114,6 +144,8 @@ struct GrassBlade
     // x = height and y = root width (f32 bits), z = static lean [x, z] as two
     // halves, w = the blade's bits (see grass_blade_bits).
     uint4 shape;
+    // How far it is trampled, [x, z] as two halves: x this frame, y last frame.
+    uint4 bend;
 };
 
 static const float GRASS_TAU = 6.28318530718;
@@ -169,7 +201,95 @@ uint grass_bits_layer(uint bits)
     return bits & 0xfu;
 }
 
-#ifdef GRASS_GENERATE
+uint grass_pack_half2(float2 v)
+{
+    return f32tof16(v.x) | (f32tof16(v.y) << 16u);
+}
+
+float2 grass_unpack_half2(uint v)
+{
+    return float2(f16tof32(v & 0xffffu), f16tof32(v >> 16u));
+}
+
+#if defined(GRASS_BEND)
+
+// Matches MAX_GRASS_STAMPS in render::uniforms::grass.
+#define GRASS_MAX_STAMPS 64
+
+// Matches GRASS_STAMP_CORE, GRASS_STAMP_REACH and GRASS_TRAMPLE_BEND in
+// render::grass::bend.
+static const float GRASS_STAMP_CORE = 0.8;
+static const float GRASS_STAMP_REACH = 1.5;
+static const float GRASS_TRAMPLE_BEND = 0.85;
+
+// Mirrors `GrassBendParams` in render::uniforms::grass.
+struct GrassBendParams
+{
+    // xy = the window's corner cell this frame, zw = last frame.
+    int4 window;
+    uint resolution;
+    float cell_size;
+    float decay;
+    uint stamp_count;
+    uint write_half;
+    uint prev_valid;
+    uint2 _pad;
+    // Center x, z, radius and strength of each footprint.
+    float4 stamps[GRASS_MAX_STAMPS];
+};
+
+[[vk::binding(0, 0)]] ConstantBuffer<GrassBendParams> bend : register(b0);
+// Two halves of one packed bend per cell, one per frame parity.
+[[vk::binding(1, 0)]] RWStructuredBuffer<uint> bend_field : register(u1);
+
+// The press footprint `stamp` gives the blades at world `xz`. Mirrors
+// render::grass::bend::stamp_bend.
+float2 grass_stamp_bend(float4 stamp, float2 xz)
+{
+    float2 d = xz - stamp.xy;
+    float dist = length(d);
+    float inner = stamp.z * GRASS_STAMP_CORE;
+    float outer = stamp.z * GRASS_STAMP_REACH;
+    float falloff = 1.0 - smoothstep(inner, max(outer, inner + 1e-4), dist);
+    float2 dir = dist > 1e-4 ? d / dist : float2(1.0, 0.0);
+    return dir * (GRASS_TRAMPLE_BEND * stamp.w * falloff);
+}
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void grass_bend(uint3 tid : SV_DispatchThreadID)
+{
+    uint n = bend.resolution;
+    uint slot = tid.x;
+    if (slot >= n * n)
+    {
+        return;
+    }
+    // The world cell this slot holds: the window's cells wrap onto the slots,
+    // so a cell keeps its slot while the window scrolls over it. Mirrors
+    // BendWindow::cell_at_slot.
+    int2 s = int2(slot % n, slot / n);
+    int2 origin = bend.window.xy;
+    int2 cell = origin + ((s - origin) & int(n - 1u));
+    float2 value = (float2)(0.0);
+    int2 prev = bend.window.zw;
+    if (bend.prev_valid != 0u && all(cell >= prev) && all(cell < prev + int(n)))
+    {
+        value = grass_unpack_half2(bend_field[(1u - bend.write_half) * n * n + slot]) * bend.decay;
+    }
+    float2 xz = (float2(cell) + 0.5) * bend.cell_size;
+    for (uint i = 0u; i < bend.stamp_count; i++)
+    {
+        float2 pressed = grass_stamp_bend(bend.stamps[i], xz);
+        if (dot(pressed, pressed) > dot(value, value))
+        {
+            value = pressed;
+        }
+    }
+    bend_field[bend.write_half * n * n + slot] = grass_pack_half2(value);
+}
+
+#elif defined(GRASS_GENERATE)
 
 {DEPTH_CONVENTION}
 
@@ -185,6 +305,8 @@ uint grass_bits_layer(uint bits)
 // Last frame's depth pyramid, read by texel coordinate only. Vulkan reads it
 // through the Hi-Z read set the draw cull binds as set 1.
 [[vk::binding(0, 1)]] Texture2D<float> grass_hiz : register(t5);
+// The bend field, both halves (see grass_bend).
+[[vk::binding(5, 0)]] StructuredBuffer<uint> grass_bend_field : register(t6);
 
 // Matches GRASS_GROUP_SIZE in render::grass::tiles.
 #define GRASS_GROUP_SIZE 64
@@ -282,7 +404,7 @@ bool grass_tile_visible(GrassLayer L, int2 tile)
     }
     float3 cam = grass.cam_pos_distance.xyz;
     float3 nearest = clamp(cam, bmin, bmax);
-    if (distance(nearest, cam) > grass.cam_pos_distance.w)
+    if (distance(nearest, cam) > grass.cull_distance)
     {
         return false;
     }
@@ -374,6 +496,32 @@ uint grass_clump(GrassLayer L, float2 xz, out float2 center)
     return best_hash;
 }
 
+// The bend of the field's cell `cell` in half `half_index` of the window whose
+// corner cell is `origin`; a cell outside the window stands upright.
+float2 grass_field_cell(uint half_index, int2 origin, int2 cell)
+{
+    uint n = grass.bend_resolution;
+    if (any(cell < origin) || any(cell >= origin + int(n)))
+    {
+        return (float2)(0.0);
+    }
+    uint2 s = uint2(cell & int(n - 1u));
+    return grass_unpack_half2(grass_bend_field[half_index * n * n + s.y * n + s.x]);
+}
+
+// The field's bend at world `xz`, bilinear between cell centers.
+float2 grass_field_bend(uint half_index, int2 origin, float2 xz)
+{
+    float2 g = xz / grass.bend_cell_size - 0.5;
+    int2 c = int2(floor(g));
+    float2 f = g - float2(c);
+    float2 b00 = grass_field_cell(half_index, origin, c);
+    float2 b10 = grass_field_cell(half_index, origin, c + int2(1, 0));
+    float2 b01 = grass_field_cell(half_index, origin, c + int2(0, 1));
+    float2 b11 = grass_field_cell(half_index, origin, c + int2(1, 1));
+    return lerp(lerp(b00, b10, f.x), lerp(b01, b11, f.x), f.y);
+}
+
 // The fraction of the field distance thinning keeps at `dist`. Mirrors
 // render::grass::lod::thinning.
 float grass_thinning(float dist)
@@ -430,6 +578,10 @@ bool grass_place(GrassLayer L, uint slot, int2 cell, out GrassBlade blade, out u
     float4 ground = grass_ground(L, xz);
     float3 root = float3(xz.x, ground.w, xz.y);
     float dist = distance(root, grass.cam_pos_distance.xyz);
+    if (dist > grass.cull_distance)
+    {
+        return false;
+    }
     // A blade survives while the keep fraction at its distance exceeds its
     // hash, and sinks into the ground over the shrink band before it goes.
     float thin = grass_thinning(dist);
@@ -470,10 +622,15 @@ bool grass_place(GrassLayer L, uint slot, int2 cell, out GrassBlade blade, out u
     float lean = (0.15 + 0.35 * grass_unit(ch, 11u)) * (0.6 + 0.8 * grass_unit(h, 12u));
     float2 lean2 = front * lean + ground.xz * GRASS_SLOPE_LEAN;
 
+    float2 bend_now = grass_field_bend(grass.bend_half, grass.bend_window.xy, xz);
+    float2 bend_prev = grass.bend_prev_valid != 0u
+                     ? grass_field_bend(1u - grass.bend_half, grass.bend_window.zw, xz)
+                     : bend_now;
+
     blade.root_facing = float4(root, facing);
-    blade.shape = uint4(asuint(height), asuint(width),
-                        f32tof16(lean2.x) | (f32tof16(lean2.y) << 16u),
+    blade.shape = uint4(asuint(height), asuint(width), grass_pack_half2(lean2),
                         grass_blade_bits(ch, h, slot));
+    blade.bend = uint4(grass_pack_half2(bend_now), grass_pack_half2(bend_prev), 0u, 0u);
     lod = grass_lod_at(grass, dist);
     return true;
 }
@@ -567,9 +724,15 @@ void grass_generate(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
 
 #else // the draws
 
+#ifdef GRASS_SHADOW
+[[vk::binding(0, 0)]] ConstantBuffer<GrassParams> grass : register(b0);
+[[vk::binding(1, 0)]] StructuredBuffer<GrassBlade> grass_blades : register(t1);
+#else
 {MAIN_RESOURCES}
+#endif
 
-#ifdef CN_BACKEND_METAL
+#ifdef GRASS_SHADOW
+#elif defined(CN_BACKEND_METAL)
 [[vk::binding(20, 0)]] ConstantBuffer<GrassParams> grass : register(b19);
 [[vk::binding(21, 0)]] StructuredBuffer<GrassBlade> grass_blades : register(t20);
 #elif defined(CN_BACKEND_DIRECTX)
@@ -622,8 +785,13 @@ struct GrassCurve
     float width;
 };
 
-// `blade` bent by its lean and the wind at time `time`.
-GrassCurve grass_curve(GrassBlade blade, float time)
+// Matches GRASS_TRAMPLE_BEND in render::grass::bend.
+static const float GRASS_TRAMPLE_FULL = 0.85;
+
+// `blade` bent by its lean and the wind at time `time`, pressed over by
+// `trample`: a fully pressed blade lies nearly flat its way, giving up its own
+// lean and its sway, and a stiff one springs up a little sooner.
+GrassCurve grass_curve(GrassBlade blade, float time, float2 trample)
 {
     float3 root = blade.root_facing.xyz;
     float facing = blade.root_facing.w;
@@ -633,7 +801,10 @@ GrassCurve grass_curve(GrassBlade blade, float time)
     float stiffness = grass.layers[grass_bits_layer(bits)].stiffness;
     float phase = grass_unit(bits, 14u);
 
-    float2 bend = lean + grass_wind_bend(root.xz, time, phase, stiffness);
+    float trample_len = length(trample);
+    float pressed = saturate(trample_len / GRASS_TRAMPLE_FULL) * lerp(1.0, 0.8, stiffness);
+    float2 flat = trample_len > 1e-4 ? trample * (0.95 / trample_len) : (float2)(0.0);
+    float2 bend = lerp(lean + grass_wind_bend(root.xz, time, phase, stiffness), flat, pressed);
     float bend_len = length(bend);
     if (bend_len > 0.95)
     {
@@ -659,9 +830,17 @@ GrassCurve grass_curve(GrassBlade blade, float time)
     return c;
 }
 
+// The direction a blade point `pos` is seen along, toward the viewer: `eye` is
+// the viewer's position (w = 1) or, for a light at infinity, the direction
+// toward it (w = 0).
+float3 grass_view_dir(float4 eye, float3 pos)
+{
+    return eye.w > 0.5 ? normalize(eye.xyz - pos) : eye.xyz;
+}
+
 // Strip pair `q` of the full-detail strip (7 is the tip), on side `u` of the
-// blade, seen from `cam`.
-GrassVertex grass_curve_vertex(GrassCurve c, uint q, float u, float3 cam)
+// blade, seen from `eye`.
+GrassVertex grass_curve_vertex(GrassCurve c, uint q, float u, float4 eye)
 {
     float t = float(min(q, 7u)) / 7.0;
     float s = 1.0 - t;
@@ -671,7 +850,7 @@ GrassVertex grass_curve_vertex(GrassCurve c, uint q, float u, float3 cam)
 
     // A blade seen edge-on would thin to nothing and shimmer, so its width
     // swings toward the screen as it turns away.
-    float3 view = normalize(cam - pos);
+    float3 view = grass_view_dir(eye, pos);
     float edge = 1.0 - abs(dot(view, normal));
     float3 toward = cross(view, tangent);
     float toward_len = length(toward);
@@ -689,6 +868,7 @@ GrassVertex grass_curve_vertex(GrassCurve c, uint q, float u, float3 cam)
     return v;
 }
 
+#ifndef GRASS_SHADOW
 // The vertex id within the level ranges: D3D numbers a draw's vertices from 0
 // whatever its first vertex, so the host passes each level's first vertex in
 // the pass's b0 root constant; elsewhere the id already counts from it.
@@ -700,6 +880,7 @@ uint grass_draw_vertex(uint vid)
     return vid;
 #endif
 }
+#endif
 
 // Vertex `vid` of a detail-level draw: the level its id range names, the pair
 // of the full-detail strip it stands for (7 for the tip) and its side.
@@ -712,37 +893,50 @@ void grass_lod_vertex(uint vid, out uint lod, out uint q, out float u)
     u = tip ? 0.0 : ((local & 1u) != 0u ? 1.0 : -1.0);
 }
 
-// Vertex `vid` of `blade` at time `time`, seen from `cam`. Pairs climb the
+// Vertex `vid` of `blade` at time `time`, pressed over by `trample`, seen from
+// `eye` (see grass_view_dir). Pairs climb the
 // blade root to tip and the last vertex is the tip, so the strip narrows to a
 // point. A vertex the next level drops folds onto the midpoint of its two
 // neighbors over the last stretch of its level's reach, so the next level's
 // strip takes over exactly where this one has become it. Mirrors
 // render::grass::lod::morph.
-GrassVertex grass_blade_vertex(GrassBlade blade, uint vid, float time, float3 cam)
+GrassVertex grass_blade_vertex(GrassBlade blade, uint vid, float time, float4 eye,
+                               float2 trample)
 {
     uint lod;
     uint q;
     float u;
     grass_lod_vertex(vid, lod, q, u);
-    GrassCurve c = grass_curve(blade, time);
-    GrassVertex v = grass_curve_vertex(c, q, u, cam);
+    GrassCurve c = grass_curve(blade, time, trample);
+    GrassVertex v = grass_curve_vertex(c, q, u, eye);
     uint step = 1u << lod;
-    if (lod + 1u < GRASS_LOD_COUNT && q < 7u && (q & step) != 0u)
+    if (eye.w > 0.5 && lod + 1u < GRASS_LOD_COUNT && q < 7u && (q & step) != 0u)
     {
         float end = lod == 0u ? grass.lod_distances.x : grass.lod_distances.y;
         float band = end * grass.lod_distances.z;
-        float m = saturate((distance(c.root, cam) - (end - band)) / band);
+        float m = saturate((distance(c.root, eye.xyz) - (end - band)) / band);
         if (m > 0.0)
         {
             uint qb = q + step;
-            GrassVertex a = grass_curve_vertex(c, q - step, u, cam);
-            GrassVertex b = grass_curve_vertex(c, qb, qb >= 7u ? 0.0 : u, cam);
+            GrassVertex a = grass_curve_vertex(c, q - step, u, eye);
+            GrassVertex b = grass_curve_vertex(c, qb, qb >= 7u ? 0.0 : u, eye);
             v.world_pos = lerp(v.world_pos, 0.5 * (a.world_pos + b.world_pos), m);
             v.t = lerp(v.t, 0.5 * (a.t + b.t), m);
             v.u = lerp(v.u, 0.5 * (a.u + b.u), m);
         }
     }
     return v;
+}
+
+// How far `blade` is trampled this frame and how far it was last frame.
+float2 grass_trample_now(GrassBlade blade)
+{
+    return grass_unpack_half2(blade.bend.x);
+}
+
+float2 grass_trample_prev(GrassBlade blade)
+{
+    return grass_unpack_half2(blade.bend.y);
 }
 
 // The blade drawn by instance `iid` of the draw vertex `vid` belongs to: the
@@ -782,7 +976,24 @@ float3 grass_shading_normal(float3 normal, float3 side, float u, float3 to_camer
     return normalize(n + side * (u * 0.45));
 }
 
-#ifndef SURFACE_PREPASS
+#if defined(GRASS_SHADOW)
+
+// The cascade's blades, every one with the coarsest strip: its draw starts at
+// that level's first vertex, which D3D leaves out of the id, so the id is
+// taken within the level's range on every backend.
+[shader("vertex")]
+float4 grass_shadow_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) : SV_Position
+{
+    uint lod = GRASS_LOD_COUNT - 1u;
+    uint v = lod * GRASS_LOD_VERTEX_STRIDE + (vid & (GRASS_LOD_VERTEX_STRIDE - 1u));
+    GrassBlade blade = grass_blades[grass.lod_base[lod] + iid];
+    float4 toward_light = float4(grass.shadow_light.xyz, 0.0);
+    GrassVertex gv = grass_blade_vertex(blade, v, grass.shadow_light.w, toward_light,
+                                        grass_trample_now(blade));
+    return mul(grass.shadow_vp, float4(gv.world_pos, 1.0));
+}
+
+#elif !defined(SURFACE_PREPASS)
 
 struct GrassVertexOut
 {
@@ -802,7 +1013,8 @@ GrassVertexOut grass_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     vid = grass_draw_vertex(vid);
     GrassBlade blade = grass_drawn_blade(vid, iid);
     float3 cam = float3(VIEW.cam_x, VIEW.cam_y, VIEW.cam_z);
-    GrassVertex v = grass_blade_vertex(blade, vid, VIEW.elapsed, cam);
+    GrassVertex v = grass_blade_vertex(blade, vid, VIEW.elapsed, float4(cam, 1.0),
+                                       grass_trample_now(blade));
     GrassVertexOut o;
     o.position = mul(VIEW.vp, float4(v.world_pos, 1.0));
     o.world_pos = v.world_pos;
@@ -941,12 +1153,14 @@ GrassPrepassOut grass_prepass_vertex(uint vid : SV_VertexID, uint iid : SV_Insta
     vid = grass_draw_vertex(vid);
     GrassBlade blade = grass_drawn_blade(vid, iid);
     float3 cam = float3(view_cb.cam_x, view_cb.cam_y, view_cb.cam_z);
-    GrassVertex v = grass_blade_vertex(blade, vid, view_cb.elapsed, cam);
+    GrassVertex v = grass_blade_vertex(blade, vid, view_cb.elapsed, float4(cam, 1.0),
+                                       grass_trample_now(blade));
     float3 prev_world = v.world_pos;
     if (gb_view.motion != 0u)
     {
         float3 prev_cam = float3(gb_view.prev_cam_x, gb_view.prev_cam_y, gb_view.prev_cam_z);
-        prev_world = grass_blade_vertex(blade, vid, gb_view.prev_elapsed, prev_cam).world_pos;
+        prev_world = grass_blade_vertex(blade, vid, gb_view.prev_elapsed, float4(prev_cam, 1.0),
+                                        grass_trample_prev(blade)).world_pos;
     }
     GrassPrepassOut o;
     o.position = mul(view_cb.vp, float4(v.world_pos, 1.0));
@@ -974,6 +1188,6 @@ GbFragmentOut grass_prepass_fragment(GrassPrepassOut p)
     return o;
 }
 
-#endif // SURFACE_PREPASS
+#endif // GRASS_SHADOW / SURFACE_PREPASS
 
-#endif // GRASS_GENERATE
+#endif // GRASS_BEND / GRASS_GENERATE

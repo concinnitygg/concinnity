@@ -458,6 +458,7 @@ impl DxContext {
             // The blades draw under the GPU-driven pass's root signatures, so
             // grass rides that path.
             grass_enabled: self.grass.is_some() && bindless_cull_enabled,
+            grass_shadow_enabled: self.grass_casts(),
             // Gated on the resources (built at init when the world declared a
             // VolumetricFog) and on live settings that can affect the frame, so
             // runtime `update_fog_settings(None)` -- or an authored zero density,

@@ -1,7 +1,8 @@
 //! The grass pass's blocks: the per-frame parameters every grass stage reads
-//! and the layers inside them, one visible blade as the kernel appends it, and
-//! the draw arguments the kernel fills. Match `GrassParams` / `GrassLayer` /
-//! `GrassBlade` in `shaders/grass.hlsl`.
+//! and the layers inside them, one visible blade as the kernel appends it, the
+//! draw arguments the kernel fills, and the bend pass's parameters. Match
+//! `GrassParams` / `GrassLayer` / `GrassBlade` / `GrassBendParams` in
+//! `shaders/grass.hlsl`.
 
 use crate::render::grass::lod::{GRASS_LOD_COUNT, GRASS_LOD_VERTEX_STRIDE, GRASS_LOD_VERTICES};
 
@@ -122,8 +123,27 @@ pub struct GrassParams {
     pub args_slot: u32,
     /// Edge of one tile, in meters.
     pub tile_size: f32,
-    /// Keeps the layers on a 16-byte row.
-    pub _pad: u32,
+    /// Distance from the camera past which the kernel places no blade: the
+    /// draw distance for the view, nearer for the shadow cascade.
+    pub cull_distance: f32,
+    /// The bend field's window: the cell at its corner this frame (`xy`) and
+    /// last frame (`zw`), in field cells.
+    pub bend_window: [i32; 4],
+    /// Edge of one bend field cell, in meters.
+    pub bend_cell_size: f32,
+    /// Bend field cells along each side of the window.
+    pub bend_resolution: u32,
+    /// The half of the bend buffer this frame's field is in; last frame's is
+    /// the other.
+    pub bend_half: u32,
+    /// 1 when the other half holds last frame's field.
+    pub bend_prev_valid: u32,
+    /// The light view-projection the shadow draw projects through,
+    /// column-major; unused outside the shadow block.
+    pub shadow_vp: [[f32; 4]; 4],
+    /// The direction toward the light (`xyz`) and the clock the shadow draw
+    /// sways the blades at (`w`); unused outside the shadow block.
+    pub shadow_light: [f32; 4],
     /// The layers this frame grows.
     pub layers: [GrassLayerGpu; MAX_GRASS_LAYERS],
 }
@@ -138,6 +158,37 @@ pub struct GpuGrassBlade {
     /// as two halves, and the blade's bits: the clump's and the blade's random
     /// bits and the layer it belongs to.
     pub shape: [u32; 4],
+    /// How far it is trampled, `[x, z]` as two halves, this frame (`x`) and
+    /// last frame (`y`); `zw` unused.
+    pub bend: [u32; 4],
+}
+
+/// Most footprints one frame stamps into the bend field.
+pub const MAX_GRASS_STAMPS: usize = 64;
+
+/// The bend pass's parameters: where the field's window lies now and lay last
+/// frame, how far it relaxes this frame, and the footprints it stamps.
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::NoUninit)]
+#[repr(C)]
+pub struct GrassBendParams {
+    /// The cell at the window's corner this frame (`xy`) and last frame (`zw`).
+    pub window: [i32; 4],
+    /// Cells along each side of the window.
+    pub resolution: u32,
+    /// Edge of one cell, in meters.
+    pub cell_size: f32,
+    /// What last frame's bend is scaled by as it springs back.
+    pub decay: f32,
+    /// Entries of `stamps` in use.
+    pub stamp_count: u32,
+    /// The half of the buffer this frame writes; it reads the other.
+    pub write_half: u32,
+    /// 1 when the other half holds last frame's field.
+    pub prev_valid: u32,
+    /// Keeps the stamps on a 16-byte row.
+    pub _pad: [u32; 2],
+    /// Each footprint: center `x`, `z`, radius and strength.
+    pub stamps: [[f32; 4]; MAX_GRASS_STAMPS],
 }
 
 /// The initial contents of the args buffer: every record a draw of its
@@ -165,7 +216,7 @@ mod tests {
 
     #[test]
     fn grass_params_layout_matches_msl() {
-        assert_eq!(size_of::<GrassParams>(), 304 + 128 * MAX_GRASS_LAYERS);
+        assert_eq!(size_of::<GrassParams>(), 416 + 128 * MAX_GRASS_LAYERS);
         assert_eq!(offset_of!(GrassParams, cam_pos), 0);
         assert_eq!(offset_of!(GrassParams, draw_distance), 12);
         assert_eq!(offset_of!(GrassParams, frustum), 16);
@@ -182,8 +233,15 @@ mod tests {
         assert_eq!(offset_of!(GrassParams, layer_count), 288);
         assert_eq!(offset_of!(GrassParams, args_slot), 292);
         assert_eq!(offset_of!(GrassParams, tile_size), 296);
-        assert_eq!(offset_of!(GrassParams, _pad), 300);
-        assert_eq!(offset_of!(GrassParams, layers), 304);
+        assert_eq!(offset_of!(GrassParams, cull_distance), 300);
+        assert_eq!(offset_of!(GrassParams, bend_window), 304);
+        assert_eq!(offset_of!(GrassParams, bend_cell_size), 320);
+        assert_eq!(offset_of!(GrassParams, bend_resolution), 324);
+        assert_eq!(offset_of!(GrassParams, bend_half), 328);
+        assert_eq!(offset_of!(GrassParams, bend_prev_valid), 332);
+        assert_eq!(offset_of!(GrassParams, shadow_vp), 336);
+        assert_eq!(offset_of!(GrassParams, shadow_light), 400);
+        assert_eq!(offset_of!(GrassParams, layers), 416);
         // Metal sets the block inline, which caps it at 4 KiB.
         assert!(size_of::<GrassParams>() <= 4096);
     }
@@ -217,9 +275,25 @@ mod tests {
 
     #[test]
     fn grass_blade_layout_matches_msl() {
-        assert_eq!(size_of::<GpuGrassBlade>(), 32);
+        assert_eq!(size_of::<GpuGrassBlade>(), 48);
         assert_eq!(offset_of!(GpuGrassBlade, root_facing), 0);
         assert_eq!(offset_of!(GpuGrassBlade, shape), 16);
+        assert_eq!(offset_of!(GpuGrassBlade, bend), 32);
+    }
+
+    #[test]
+    fn grass_bend_params_layout_matches_msl() {
+        assert_eq!(size_of::<GrassBendParams>(), 48 + 16 * MAX_GRASS_STAMPS);
+        assert_eq!(offset_of!(GrassBendParams, window), 0);
+        assert_eq!(offset_of!(GrassBendParams, resolution), 16);
+        assert_eq!(offset_of!(GrassBendParams, cell_size), 20);
+        assert_eq!(offset_of!(GrassBendParams, decay), 24);
+        assert_eq!(offset_of!(GrassBendParams, stamp_count), 28);
+        assert_eq!(offset_of!(GrassBendParams, write_half), 32);
+        assert_eq!(offset_of!(GrassBendParams, prev_valid), 36);
+        assert_eq!(offset_of!(GrassBendParams, _pad), 40);
+        assert_eq!(offset_of!(GrassBendParams, stamps), 48);
+        assert!(size_of::<GrassBendParams>() <= 4096);
     }
 
     #[test]

@@ -74,6 +74,7 @@ impl MtlContext {
             show,
             sky_rot,
             history_reset,
+            grass_benders,
         } = params;
         let mtm = objc2::MainThreadMarker::new().ok_or_else(|| {
             error::RenderError::Other("draw_frame must be called from the main thread".into())
@@ -226,7 +227,15 @@ impl MtlContext {
         // The grass kernel's inputs, advanced only on a frame whose graph runs it,
         // so the draw-argument slot it fills alternates frame to frame.
         let grass_frame = (graph_inputs.grass_enabled && !graph_inputs.world_hidden)
-            .then(|| self.prepare_grass_frame(cam_pos, gbuffer_view.cur_vp))
+            .then(|| {
+                self.prepare_grass_frame(crate::metal::grass::GrassRequest {
+                    cam_pos,
+                    vp: gbuffer_view.cur_vp,
+                    elapsed,
+                    cast: graph_inputs.grass_shadow_enabled,
+                    benders: grass_benders,
+                })
+            })
             .flatten();
         let HistoryBuffers {
             deformed_this_frame,

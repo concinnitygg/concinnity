@@ -60,6 +60,8 @@ pub(super) struct RecordFrameView<'a> {
     // This frame's expanded line ribbons. Empty whenever nothing published
     // lines, which also drops the pass from the graph.
     pub lines: &'a [LineVertex],
+    // What may be trampling the grass this frame.
+    pub grass_benders: &'a [concinnity_core::render::grass::GrassBender],
 }
 
 // Scene render resolution (every scene pass) plus output resolution (composite).
@@ -180,6 +182,7 @@ impl DxContext {
             cam_pos,
             text_calls,
             lines,
+            grass_benders,
         } = view;
         let RecordFrameResolution {
             width,
@@ -414,6 +417,7 @@ impl DxContext {
             elapsed,
             near,
             prime_model_history,
+            grass_benders,
             planar: self
                 .planar_reflection
                 .as_ref()

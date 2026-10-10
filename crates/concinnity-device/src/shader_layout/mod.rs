@@ -329,6 +329,11 @@ fn grass_layouts_match_the_shader() {
 }
 
 #[test]
+fn grass_bend_layouts_match_the_shader() {
+    check(&programs::GRASS_BEND, &mirrors::geometry::grass_bend());
+}
+
+#[test]
 fn text_layouts_match_the_shader() {
     check(&programs::TEXT_VERT, &mirrors::geometry::text());
 }
