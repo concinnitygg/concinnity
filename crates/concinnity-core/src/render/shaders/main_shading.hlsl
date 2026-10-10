@@ -453,7 +453,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         uint cid = cluster_at(screen_xy / float2(CLUSTER.screen_w, CLUSTER.screen_h), v.view_depth);
         cluster_base = cid * CLUSTER_LIGHT_LIST_STRIDE;
         local_count = int(CLUSTER_LIST[cluster_base]);
-        probes = probe_cluster_mask(cid, screen_xy);
+        probes = probe_cluster_mask(cid);
     }
     else
     {
@@ -586,9 +586,9 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
 
     // Local reflection probes when the host binds a probe set and any are
     // baked (box-parallax partition of unity), else the imported environment
-    // prefilter cube, each at a roughness-keyed mip. Both taps use SampleBias
-    // (not SampleLevel) so the reflection vector's screen-space footprint
-    // widens the mip at grazing or distant angles. A forced LOD defeats
+    // prefilter cube, each at a roughness-keyed mip. Both taps widen that mip
+    // by the reflection vector's screen-space footprint (not a fixed level) at
+    // grazing or distant angles. A forced LOD defeats
     // minification filtering and aliases the environment into sparkle on near
     // mirrors; flat close-up pixels have a near-zero footprint, so they keep
     // the plain roughness mip.

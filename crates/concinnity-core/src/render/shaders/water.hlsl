@@ -319,12 +319,12 @@ float3 water_planar_reflection(WaterSurfacePoint s)
 // The coverage test matters more here than anywhere else: a pool routinely
 // stretches past every probe box in the world, and the probe set's own
 // out-of-box fallback would hand the whole surface one foreign capture.
-float3 water_environment(float3 world_pos, float3 r, float2 pixel)
+float3 water_environment(float3 world_pos, float3 r)
 {
     float horizon = saturate(r.y * 0.5 + 0.5);
     float3 gradient = lerp(float3(0.55, 0.62, 0.7), float3(0.25, 0.45, 0.7), horizon);
     // Blurrier water reads a coarser cube level.
-    return transparent_environment(world_pos, r, saturate(params.roughness), gradient, pixel);
+    return transparent_environment(world_pos, r, saturate(params.roughness), gradient);
 }
 
 // The sun's specular lobe off this fragment's wave normal: GGX with a
@@ -423,7 +423,7 @@ TransparentOut water_rt_fragment(WaterVertexOut i)
                                  view.prefilter_mip_count > 0.5,
                                  view.prefilter_mip_count - 1.0, reflection))
         {
-            reflection = water_environment(i.world_pos, r, i.position.xy);
+            reflection = water_environment(i.world_pos, r);
         }
     }
     return water_resolve(s, view_dir, reflection);
@@ -448,7 +448,7 @@ TransparentOut water_fragment(WaterVertexOut i)
     }
     else
     {
-        reflection = water_environment(i.world_pos, reflect(-view_dir, s.normal), i.position.xy);
+        reflection = water_environment(i.world_pos, reflect(-view_dir, s.normal));
     }
     return water_resolve(s, view_dir, reflection);
 }

@@ -103,14 +103,17 @@ mod tests {
     fn a_probe_reaches_its_farthest_grown_corner() {
         let reach = ClusterReach::default();
         let p = probe([10.0, -2.0, -6.0], [20.0, 4.0, 6.0]);
-        let margin = PROBE_BLEND_MARGIN * 3.0;
-        let corner = [20.0 + margin, 4.0 + margin, 6.0 + margin];
+        let margin = [5.0, 3.0, 6.0].map(|h| PROBE_BLEND_MARGIN * h);
+        let corner = [20.0 + margin[0], 4.0 + margin[1], 6.0 + margin[2]];
         let expected = length(corner);
         assert!(close(reach.range([0.0; 3], 0.05, &[p], None), expected));
 
         // Inside the box the range still covers the whole influence.
         let inside = [15.0, 0.0, 0.0];
-        let expected = length(sub([10.0 - margin, 4.0 + margin, 6.0 + margin], inside));
+        let expected = length(sub(
+            [10.0 - margin[0], 4.0 + margin[1], 6.0 + margin[2]],
+            inside,
+        ));
         assert!(close(reach.range(inside, 0.05, &[p], None), expected));
     }
 

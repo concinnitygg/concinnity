@@ -143,7 +143,7 @@ void light_cull_kernel(uint3 tid : SV_DispatchThreadID)
             float3 box_min = probe_records[pj].box_min.xyz;
             float3 box_max = probe_records[pj].box_max.xyz;
             float3 he = 0.5 * (box_max - box_min);
-            float margin = max(PROBE_BLEND_MARGIN * min(he.x, min(he.y, he.z)), 1e-4);
+            float3 margin = max(PROBE_BLEND_MARGIN * he, (float3)(1e-4));
             if (all(box_min - margin <= probe_max) && all(box_max + margin >= probe_min))
             {
                 influence |= 1u << (pj - first);

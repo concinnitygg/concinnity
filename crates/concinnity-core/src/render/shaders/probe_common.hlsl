@@ -18,19 +18,29 @@ float probe_lod(float roughness)
     return roughness * (float(PROBE_SET.mip_count) - 1.0);
 }
 
-// Slice `i` of the probe cube array at an LOD bias.
-float3 probe_cube_sample_bias(uint i, float3 dir, float lod)
+// The probe cube mip a reflection ray `R` reads at: `lod`, widened by how many
+// cube texels the ray sweeps across one pixel, which grows at grazing or
+// distant angles. It follows the ray itself rather than the box-projected
+// direction, which kinks across a box face.
+float probe_footprint_lod(float3 R, float lod)
 {
-    return probe_cubes.SampleBias(probe_cube_sampler, float4(dir, float(i)), lod).rgb;
+    uint size, height, slices;
+    probe_cubes.GetDimensions(size, height, slices);
+    float sweep = max(length(ddx(R)), length(ddy(R)));
+    return lod + max(log2(sweep * 0.5 * float(size)), 0.0);
+}
+
+// Slice `i` of the probe cube array at mip `lod`.
+float3 probe_cube_sample(uint i, float3 dir, float lod)
+{
+    return probe_cubes.SampleLevel(probe_cube_sampler, float4(dir, float(i)), lod).rgb;
 }
 
 // The probes a lookup may read: a cluster's two masks at CLUSTER_LIST[`base`],
-// or with `base` at PROBE_MASK_ALL every probe of the set. `lane` is the
-// fragment's pixel position within its 2x2 quad.
+// or with `base` at PROBE_MASK_ALL every probe of the set.
 struct ProbeMask
 {
     uint base;
-    uint2 lane;
 };
 
 static const uint PROBE_MASK_ALL = 0xffffffffu;
@@ -40,7 +50,6 @@ ProbeMask probe_mask_all()
 {
     ProbeMask m;
     m.base = PROBE_MASK_ALL;
-    m.lane = uint2(0u, 0u);
     return m;
 }
 
@@ -79,100 +88,96 @@ uint cluster_at(float2 uv, float view_depth)
     return cx + cy * CLUSTER.grid_x + cz * CLUSTER.grid_x * CLUSTER.grid_y;
 }
 
-// The probes binned into cluster `cid`, for the fragment at render-target pixel
-// position `pixel`.
-ProbeMask probe_cluster_mask(uint cid, float2 pixel)
+// The probes binned into cluster `cid`.
+ProbeMask probe_cluster_mask(uint cid)
 {
     ProbeMask m;
     m.base = cluster_probe_mask_base(CLUSTER.grid_x * CLUSTER.grid_y * CLUSTER.grid_z, cid);
-    m.lane = uint2(pixel) & 1u;
     return m;
 }
 
 // The probes that may matter at world-space point `world_pos`, seen at screen
-// UV `uv` and render-target pixel position `pixel`: its cluster's on the main
-// camera's view, else the whole set.
-ProbeMask probe_mask_at(float2 uv, float3 world_pos, float2 pixel)
+// UV `uv`: its cluster's on the main camera's view, else the whole set.
+ProbeMask probe_mask_at(float2 uv, float3 world_pos)
 {
     if (CLUSTER.use_clusters == 0u)
     {
         return probe_mask_all();
     }
     float view_depth = dot(world_pos - CLUSTER.cam_pos_znear.xyz, CLUSTER.view_forward_zfar.xyz);
-    return probe_cluster_mask(cluster_at(uv, view_depth), pixel);
+    return probe_cluster_mask(cluster_at(uv, view_depth));
 }
 
 #endif
 
-// The next probe bit a blend visits: the least `own` (the fragment's next set
-// bit, 32 for none) over its 2x2 quad, read back through the derivatives, but
-// never below `lower` nor past `own`.
-//
-// Every pixel of a quad walking the same probes in the same order is what keeps
-// the implicit derivatives `SampleBias` takes one probe's, however different the
-// quad's masks: the quad visits the union of them, and a pixel whose own mask
-// lacks a probe weighs it zero and skips its sample, as the whole set's walk
-// would. The derivatives of these small integers are exact wherever the quad
-// runs this in step; where it does not (a divergent caller), the clamps still
-// visit every own bit and advance each step, so the walk stays complete and
-// ends.
-uint probe_next_bit(ProbeMask m, uint own, uint lower)
-{
-    uint next = own;
-    if (m.base != PROBE_MASK_ALL)
-    {
-        float v = float(own);
-        float dx = ddx_fine(v);
-        float row = min(v, m.lane.x == 0u ? v + dx : v - dx);
-        float dy = ddy_fine(row);
-        next = uint(min(row, m.lane.y == 0u ? row + dy : row - dy));
-    }
-    return min(own, max(next, lower));
-}
-
 // Box-parallax sample of probe cube `i`: intersect the world-space reflection
 // ray with the probe's influence box and re-anchor the sample direction at that
 // hit relative to the capture point, so a static captured cube tracks a moving
-// camera. Falls back to the raw ray when the probe has no baked box
-// (box_min.w <= 0.5) or the box does not lie ahead of the ray. `lod` rides as
-// the texture bias, the same semantics the prefilter-cube tap uses.
+// camera. A point outside the box casts from the nearest point of the box, so
+// the sample stays continuous across the box surface, where a neighboring
+// probe blends in. Falls back to the raw ray when the probe has no baked box
+// (box_min.w <= 0.5).
 float3 sample_probe_radiance(uint i, ProbeUniforms probe, float3 world_pos, float3 R, float lod)
 {
     float3 sample_dir = R;
     if (probe.box_min.w > 0.5)
     {
+        float3 p = clamp(world_pos, probe.box_min.xyz, probe.box_max.xyz);
         float3 inv_r = 1.0 / R;
-        float3 t_max = (probe.box_max.xyz - world_pos) * inv_r;
-        float3 t_min = (probe.box_min.xyz - world_pos) * inv_r;
+        float3 t_max = (probe.box_max.xyz - p) * inv_r;
+        float3 t_min = (probe.box_min.xyz - p) * inv_r;
         float3 t_far = max(t_max, t_min);
-        float dist = min(min(t_far.x, t_far.y), t_far.z);
-        if (dist > 0.0)
-        {
-            float3 hit = world_pos + R * dist;
-            sample_dir = hit - probe.probe_pos.xyz;
-        }
+        float dist = max(min(min(t_far.x, t_far.y), t_far.z), 0.0);
+        sample_dir = p + R * dist - probe.probe_pos.xyz;
     }
-    return probe_cube_sample_bias(i, sample_dir, lod);
+    return probe_cube_sample(i, sample_dir, lod);
 }
 
 // Blend weight of probe `i` at `world_pos`: 1 deep inside its influence box, 0.5
-// on the surface, 0 a margin outside. The margin scales with the box, so a small
-// probe fades over a short distance and a room-sized one over a longer one.
+// on the surface, 0 a margin outside. Each axis's margin scales with the box's
+// extent along it, so a wide, shallow box fades across its width as gradually
+// as a cube of that width would.
 float probe_weight(uint i, float3 world_pos)
 {
     float3 c = 0.5 * (PROBE_RECORDS[i].box_min.xyz + PROBE_RECORDS[i].box_max.xyz);
     float3 he = 0.5 * (PROBE_RECORDS[i].box_max.xyz - PROBE_RECORDS[i].box_min.xyz);
-    // Signed distance to the box surface: positive inside, negative out.
-    float3 q = abs(world_pos - c) - he;
+    float3 margin = max(PROBE_BLEND_MARGIN * he, (float3)(1e-4));
+    // Signed distance to the box surface in margins: positive inside, negative out.
+    float3 q = (abs(world_pos - c) - he) / margin;
     float sd = -(length(max(q, (float3)(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0));
-    float margin = max(PROBE_BLEND_MARGIN * min(he.x, min(he.y, he.z)), 1e-4);
-    return smoothstep(-margin, margin, sd);
+    return smoothstep(-1.0, 1.0, sd);
+}
+
+// `probe_mask_blend` at mip `level`, the footprint already applied.
+bool probe_mask_blend_level(ProbeMask probes, float3 world_pos, float3 R, float level,
+                            out float3 radiance)
+{
+    float3 acc = (float3)(0.0);
+    float wsum = 0.0;
+    for (uint w = 0u; w * 32u < PROBE_SET.count; w++)
+    {
+        uint bits = probe_live_bits(probe_mask_word(probes, 0u, w), w);
+        while (bits != 0u)
+        {
+            uint i = w * 32u + firstbitlow(bits);
+            bits &= bits - 1u;
+            float wt = probe_weight(i, world_pos);
+            if (wt > 0.0)
+            {
+                acc += wt * sample_probe_radiance(i, PROBE_RECORDS[i], world_pos, R, level);
+                wsum += wt;
+            }
+        }
+    }
+    radiance = wsum > 0.0 ? acc / wsum : (float3)(0.0);
+    return wsum > 0.0;
 }
 
 // The influence-weighted blend of `probes` at `world_pos` along world-space ray
 // `R` (partition of unity): the weight-normalized sum of each covering probe's
-// box-projected sample, in index order, into `radiance`. False, with `radiance`
-// zero, when no probe's influence reaches the point.
+// box-projected sample at the roughness mip `lod`, in index order, into
+// `radiance`. False, with `radiance` zero, when no probe's influence reaches the
+// point.
 //
 // Uncovered points take one of two fallbacks. The main pass, SSR and RT
 // reflections call `probe_mask_specular`, which falls back to the nearest probe
@@ -181,44 +186,16 @@ float probe_weight(uint i, float3 world_pos)
 // outside every box would otherwise show one capture of somewhere else.
 bool probe_mask_blend(ProbeMask probes, float3 world_pos, float3 R, float lod, out float3 radiance)
 {
-    float3 acc = (float3)(0.0);
-    float wsum = 0.0;
-    for (uint w = 0u; w * 32u < PROBE_SET.count; w++)
-    {
-        uint bits = probe_live_bits(probe_mask_word(probes, 0u, w), w);
-        uint lower = 0u;
-        for (;;)
-        {
-            uint own = bits != 0u ? firstbitlow(bits) : 32u;
-            uint b = probe_next_bit(probes, own, lower);
-            if (b >= 32u)
-            {
-                break;
-            }
-            if (b == own)
-            {
-                uint i = w * 32u + b;
-                float wt = probe_weight(i, world_pos);
-                if (wt > 0.0)
-                {
-                    acc += wt * sample_probe_radiance(i, PROBE_RECORDS[i], world_pos, R, lod);
-                    wsum += wt;
-                }
-            }
-            bits &= ~((2u << b) - 1u);
-            lower = b + 1u;
-        }
-    }
-    radiance = wsum > 0.0 ? acc / wsum : (float3)(0.0);
-    return wsum > 0.0;
+    return probe_mask_blend_level(probes, world_pos, R, probe_footprint_lod(R, lod), radiance);
 }
 
 // Probe radiance for `world_pos` along world-space ray `R`: the blend of every
 // probe covering the point, else the nearest probe by capture distance.
 float3 probe_mask_specular(ProbeMask probes, float3 world_pos, float3 R, float lod)
 {
+    float level = probe_footprint_lod(R, lod);
     float3 blended;
-    if (probe_mask_blend(probes, world_pos, R, lod, blended))
+    if (probe_mask_blend_level(probes, world_pos, R, level, blended))
     {
         return blended;
     }
@@ -239,6 +216,6 @@ float3 probe_mask_specular(ProbeMask probes, float3 world_pos, float3 R, float l
             }
         }
     }
-    return sample_probe_radiance(near_i, PROBE_RECORDS[near_i], world_pos, R, lod);
+    return sample_probe_radiance(near_i, PROBE_RECORDS[near_i], world_pos, R, level);
 }
 

@@ -179,8 +179,7 @@ float3 rt_view_pos(float2 uv, float depth, float tan_y, float aspect)
 }
 
 [shader("pixel")]
-float4 rt_reflections_fragment([[vk::location(0)]] float2 uv : TEXCOORD0,
-                               float4 frag_pos : SV_Position) : SV_Target
+float4 rt_reflections_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
 {
     // At a reduced trace resolution each output texel stands for a block of
     // G-buffer pixels; trace from exactly one of them so the surface point is
@@ -227,7 +226,7 @@ float4 rt_reflections_fragment([[vk::location(0)]] float2 uv : TEXCOORD0,
         // prefilter sky, else the base shading.
         if (probe_set.count > 0u)
         {
-            reflected = probe_mask_specular(probe_mask_at(uv, pw, frag_pos.xy), pw, dir,
+            reflected = probe_mask_specular(probe_mask_at(uv, pw), pw, dir,
                                             probe_lod(roughness));
         }
         else

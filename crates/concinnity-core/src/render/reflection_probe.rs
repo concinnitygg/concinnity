@@ -1327,6 +1327,30 @@ mod tests {
         assert!(big.len() <= AUTO_SEED_BUDGET);
     }
 
+    // A wide, shallow field tiles into cells far wider than they are tall.
+    // Neighbors hand off across their shared side over a span set by the cell's
+    // width, not its height, so two captures meet without a visible step.
+    #[test]
+    fn auto_seeded_neighbors_blend_across_their_width() {
+        let probes = auto_seed_probes([-200.0, -1.0, -200.0], [200.0, 2.0, 200.0], &[]);
+        let west = probes
+            .iter()
+            .find(|p| p.box_max[0] == 0.0)
+            .expect("a cell ends at x = 0");
+        let east = probes
+            .iter()
+            .find(|p| p.box_min[0] == 0.0 && p.box_min[2] == west.box_min[2])
+            .expect("its neighbor starts there");
+        for p in [west, east] {
+            let width = p.box_max[0] - p.box_min[0];
+            let height = p.box_max[1] - p.box_min[1];
+            assert!(width > 20.0 * height, "{width} x {height}");
+            let margin = p.uniforms().blend_margin();
+            assert!(margin[0] >= 0.05 * width, "{margin:?} across {width}");
+            assert!(margin[1] <= 0.5 * height, "{margin:?} over {height}");
+        }
+    }
+
     #[test]
     fn auto_seed_nudges_capture_point_out_of_geometry() {
         // One probe (small scene), with a wall-like box covering the cell center at

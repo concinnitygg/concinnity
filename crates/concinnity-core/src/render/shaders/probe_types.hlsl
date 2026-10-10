@@ -13,8 +13,8 @@
 // per record. Their lengths are whatever the host allocated; the shader reads
 // only the first `count`.
 
-// Fraction of a probe box's smallest half-extent over which its blend weight
-// ramps from 0 to 1 across the box surface.
+// Fraction of a probe box's half-extent along each axis over which its blend
+// weight ramps from 0 to 1 across the box surface on that axis.
 static const float PROBE_BLEND_MARGIN = 0.2;
 
 struct ProbeUniforms

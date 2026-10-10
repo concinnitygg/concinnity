@@ -108,8 +108,7 @@ float2 ssr_project(float3 q, float tan_y, float aspect)
 {PROBE_COMMON}
 
 [shader("pixel")]
-float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0,
-                            float4 frag_pos : SV_Position) : SV_Target
+float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
 {
     float3 base = scene.Sample(scene_samp, uv).rgb;
     float4 c = gbuffer.Sample(gbuffer_samp, uv);
@@ -150,7 +149,7 @@ float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0,
         // position) lifts the view-space surface point p to world space,
         // which the probe box-projection needs.
         float3 world_pos = mul(params.inv_view, float4(p, 1.0)).xyz;
-        env = probe_mask_specular(probe_mask_at(uv, world_pos, frag_pos.xy), world_pos, r_world,
+        env = probe_mask_specular(probe_mask_at(uv, world_pos), world_pos, r_world,
                                   probe_lod(roughness));
     }
     else if (params.prefilter_mip_count > 0.5)

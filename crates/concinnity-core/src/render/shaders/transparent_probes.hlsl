@@ -45,16 +45,15 @@ float2 transparent_screen_uv(float3 p)
 {PROBE_COMMON}
 
 // The reflection a transparent surface of `roughness` at `world_pos` falls back
-// to along `r`, seen at render-target pixel position `pixel`: the probes
+// to along `r`: the probes
 // covering the point, else the sky prefilter cube where an EnvironmentMap is
 // bound, else `bare`. Each cube is read at its own roughness-keyed mip.
-float3 transparent_environment(float3 world_pos, float3 r, float roughness, float3 bare,
-                               float2 pixel)
+float3 transparent_environment(float3 world_pos, float3 r, float roughness, float3 bare)
 {
     if (PROBE_SET.count > 0u)
     {
         float3 radiance;
-        ProbeMask probes = probe_mask_at(transparent_screen_uv(world_pos), world_pos, pixel);
+        ProbeMask probes = probe_mask_at(transparent_screen_uv(world_pos), world_pos);
         if (probe_mask_blend(probes, world_pos, r, probe_lod(roughness), radiance))
         {
             return radiance;

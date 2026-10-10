@@ -4,9 +4,9 @@
 //! probe's prefiltered radiance, a cube per probe. Matches `shaders/probe_types.hlsl`.
 //! Nothing in a shader depends on how many probes the host allocated room for.
 
-/// Fraction of a probe box's smallest half-extent its blend weight ramps over
-/// across the box surface, so the probe's influence reaches that far outside
-/// the box. Matches `PROBE_BLEND_MARGIN` in `shaders/probe_types.hlsl`.
+/// Fraction of a probe box's half-extent along each axis its blend weight ramps
+/// over across the box surface on that axis, so the probe's influence reaches
+/// that far outside the box. Matches `PROBE_BLEND_MARGIN` in `shaders/probe_types.hlsl`.
 pub const PROBE_BLEND_MARGIN: f32 = 0.2;
 
 /// One reflection probe's parallax box. The specular IBL term box-projects the
@@ -28,19 +28,21 @@ pub struct ProbeUniforms {
 }
 
 impl ProbeUniforms {
+    /// The distance along each axis the probe's blend weight ramps over across
+    /// its influence box's surface, as the shaders ramp it.
+    pub fn blend_margin(&self) -> [f32; 3] {
+        core::array::from_fn(|i| {
+            (PROBE_BLEND_MARGIN * 0.5 * (self.box_max[i] - self.box_min[i])).max(1e-4)
+        })
+    }
+
     /// The corners of everywhere the probe's blend weight can be non-zero: the
     /// influence box grown by its blend margin, as the shaders grow it.
     pub fn influence_bounds(&self) -> ([f32; 3], [f32; 3]) {
-        let (lo, hi) = (self.box_min, self.box_max);
-        let half = [
-            0.5 * (hi[0] - lo[0]),
-            0.5 * (hi[1] - lo[1]),
-            0.5 * (hi[2] - lo[2]),
-        ];
-        let margin = (PROBE_BLEND_MARGIN * half[0].min(half[1]).min(half[2])).max(1e-4);
+        let margin = self.blend_margin();
         (
-            [lo[0] - margin, lo[1] - margin, lo[2] - margin],
-            [hi[0] + margin, hi[1] + margin, hi[2] + margin],
+            core::array::from_fn(|i| self.box_min[i] - margin[i]),
+            core::array::from_fn(|i| self.box_max[i] + margin[i]),
         )
     }
 }
@@ -143,14 +145,14 @@ mod tests {
     }
 
     #[test]
-    fn influence_bounds_grow_the_box_by_its_smallest_half_extent() {
+    fn influence_bounds_grow_each_axis_by_its_own_half_extent() {
         let probe = ProbeUniforms {
             box_min: [-4.0, 0.0, -10.0, 1.0],
             box_max: [4.0, 2.0, 10.0, 0.0],
             probe_pos: [0.0; 4],
         };
         let (lo, hi) = probe.influence_bounds();
-        assert_eq!((lo, hi), ([-4.2, -0.2, -10.2], [4.2, 2.2, 10.2]));
+        assert_eq!((lo, hi), ([-4.8, -0.2, -12.0], [4.8, 2.2, 12.0]));
     }
 
     // `ProbeSet` in `shaders/probe_types.hlsl`: the count and the cube mip

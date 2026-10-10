@@ -186,9 +186,9 @@ TransparentOut glass_resolve(GlassSurface s, float3 view_dir, float3 reflection)
 // back to: the box-projected probe set where a probe actually covers this pane,
 // else the sky prefilter cube, else a white rim so a probe-less, env-less world
 // still reads as glass. A pane is smooth, so every path is sharp (mip 0).
-float3 glass_environment(float3 world_pos, float3 r, float2 pixel)
+float3 glass_environment(float3 world_pos, float3 r)
 {
-    return transparent_environment(world_pos, r, 0.0, (float3)(1.0), pixel);
+    return transparent_environment(world_pos, r, 0.0, (float3)(1.0));
 }
 
 #ifdef GLASS_RT
@@ -196,7 +196,7 @@ float3 glass_environment(float3 world_pos, float3 r, float2 pixel)
 // The pane's reflection at `world_pos`: a ray off the world-space pane surface
 // point, so a window mirrors real off-screen geometry. A pane is smooth, so the
 // trace is sharp and the miss falls back to the probe / sky chain.
-float3 glass_rt_reflection(float3 world_pos, float3 view_dir, float3 normal, float2 pixel)
+float3 glass_rt_reflection(float3 world_pos, float3 view_dir, float3 normal)
 {
     float3 r = reflect(-view_dir, normal);
     float3 reflection;
@@ -204,7 +204,7 @@ float3 glass_rt_reflection(float3 world_pos, float3 view_dir, float3 normal, flo
                              view.prefilter_mip_count > 0.5,
                              view.prefilter_mip_count - 1.0, reflection))
     {
-        reflection = glass_environment(world_pos, r, pixel);
+        reflection = glass_environment(world_pos, r);
     }
     return reflection;
 }
@@ -231,7 +231,7 @@ TransparentOut glass_rt_fragment(GlassVertexOut i)
     if (!glass_reflection_lookup(s.frag_uv, distance(view.camera_pos.xyz, i.world_pos),
                                  reflection))
     {
-        reflection = glass_rt_reflection(i.world_pos, view_dir, s.normal, i.position.xy);
+        reflection = glass_rt_reflection(i.world_pos, view_dir, s.normal);
     }
     return glass_resolve(s, view_dir, reflection);
 }
@@ -255,7 +255,7 @@ float4 glass_rt_reflection_fragment(GlassVertexOut i) : SV_Target
     {
         normal = -normal;
     }
-    return float4(glass_rt_reflection(i.world_pos, view_dir, normal, i.position.xy), dist);
+    return float4(glass_rt_reflection(i.world_pos, view_dir, normal), dist);
 }
 
 #else
@@ -282,7 +282,7 @@ TransparentOut glass_fragment(GlassVertexOut i)
     // distortion.
     float3 r = reflect(-view_dir, s.normal);
     float3 reflection = params.planar > 0.5 ? planar_sample(s.frag_uv).rgb
-                                            : glass_environment(i.world_pos, r, i.position.xy);
+                                            : glass_environment(i.world_pos, r);
     return glass_resolve(s, view_dir, reflection);
 }
 

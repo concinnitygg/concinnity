@@ -150,7 +150,7 @@ TransparentOut glass_mesh_resolve(GlassMeshSurface s, float3 view_dir, float3 re
 // whole span. The mesh is excluded from the BLAS (glass does not reflect glass),
 // so the trace never self-hits. Glass is smooth, so the trace is sharp and the
 // miss falls back to the probe / sky chain.
-float3 glass_mesh_reflection(float3 world_pos, float3 view_dir, float3 normal, float2 pixel)
+float3 glass_mesh_reflection(float3 world_pos, float3 view_dir, float3 normal)
 {
     bool ibl = params.prefilter_mip_count > 0.5;
     float3 r = reflect(-view_dir, normal);
@@ -160,7 +160,7 @@ float3 glass_mesh_reflection(float3 world_pos, float3 view_dir, float3 normal, f
     {
         // Glass is smooth, so the fallback is sharp (mip 0), with a white rim
         // where there is neither a probe nor a sky.
-        reflection = transparent_environment(world_pos, r, 0.0, (float3)(1.0), pixel);
+        reflection = transparent_environment(world_pos, r, 0.0, (float3)(1.0));
     }
     return reflection;
 }
@@ -187,7 +187,7 @@ TransparentOut glass_mesh_rt_fragment(GlassMeshVertexOut i)
     if (!glass_reflection_lookup(s.frag_uv, distance(view.camera_pos.xyz, i.world_pos),
                                  reflection))
     {
-        reflection = glass_mesh_reflection(i.world_pos, view_dir, s.normal, i.position.xy);
+        reflection = glass_mesh_reflection(i.world_pos, view_dir, s.normal);
     }
     return glass_mesh_resolve(s, view_dir, reflection);
 }
@@ -211,5 +211,5 @@ float4 glass_mesh_reflection_fragment(GlassMeshVertexOut i) : SV_Target
     {
         normal = -normal;
     }
-    return float4(glass_mesh_reflection(i.world_pos, view_dir, normal, i.position.xy), dist);
+    return float4(glass_mesh_reflection(i.world_pos, view_dir, normal), dist);
 }
