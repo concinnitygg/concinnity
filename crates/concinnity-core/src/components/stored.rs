@@ -8,6 +8,7 @@
 //! framework's runtime namespace by reaching this one.
 
 pub use super::app_config::FramePriority;
+pub use super::atmosphere::Atmosphere;
 pub use super::audio_bus::AudioBus;
 pub use super::audio_cue::{AudioCue, CueKind};
 pub use super::audio_emitter::{AudioEmitter, Rolloff};

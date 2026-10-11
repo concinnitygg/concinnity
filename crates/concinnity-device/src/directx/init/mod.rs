@@ -349,12 +349,20 @@ impl DxContext {
         let frame_sync = commands::build_frame_sync(&gpu)?;
         let timestamps = commands::build_timestamps(&gpu);
         let auto_exposure = effects::build_auto_exposure(&gpu, &post)?;
+        let atmosphere = effects::build_atmosphere(
+            &gpu,
+            &descriptors,
+            &scene,
+            fx.atmosphere,
+            features.msaa_samples,
+        )?;
         let raymarch = effects::build_raymarch(
             &gpu,
             &descriptors,
             &targets,
             &shadow,
             &scene,
+            atmosphere.as_ref(),
             &fx.sdf_volumes,
         )?;
         let sky = super::sky::DxSky::build(
@@ -442,6 +450,7 @@ impl DxContext {
             lines: super::line::LineState::empty(),
             raymarch,
             sky,
+            atmosphere,
             transparent,
             planar_reflection,
             fog,

@@ -350,6 +350,17 @@ impl VkContext {
         // motion vector is free of the sub-pixel projection jitter.
         let cur_vp = mat4_mul(proj, self.state.view.matrix);
         let vp_mat = mat4_mul(render_proj, self.state.view.matrix);
+        // The haze volume is laid along the un-jittered view rays, like the fog
+        // volume, so it holds still under the temporal jitter.
+        self.prepare_atmosphere(
+            frame_idx,
+            concinnity_core::render::atmosphere::AtmosphereView {
+                inv_vp: concinnity_core::transform::mat4_inverse(cur_vp),
+                cam_pos,
+                viewport: [extent.width as f32, extent.height as f32],
+                sky_rot: self.state.view.sky_rot,
+            },
+        );
 
         // Clustered light-binning params (main camera). The compute pass reads
         // these to build each cluster's world-space AABB (un-jittered inverse VP
@@ -400,6 +411,8 @@ impl VkContext {
             shade_mode: self.shade_mode(),
             ambient_occlusion: 1.0,
             sky_rot: self.state.view.sky_rot,
+            irradiance: self.irradiance_lane(),
+            _pad: [0.0; 3],
         };
         self.uniforms.view_ubo_buffers[frame_idx].write_val(0, &view_uni);
 
@@ -671,6 +684,8 @@ impl VkContext {
             // Metal's gate.
             fog_enabled: self.fog.resources.is_some()
                 && self.fog.settings.is_some_and(|s| s.contributes()),
+            // The atmosphere runs on every frame that carries its inputs.
+            atmosphere_enabled: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
             decals_enabled: self.decal.resources.is_some() && !self.decal.set.is_empty(),
             // The SSR pre-pass G-buffer is shared with SSGI, so it runs whenever
             // `self.ssr` exists (built for SSR resolve *or* SSGI).

@@ -1201,6 +1201,9 @@ pub(crate) struct VkContext {
 
     // The environment drawn behind the opaque scene. See `vulkan/sky.rs`.
     pub(super) sky: crate::vulkan::sky::VkSky,
+    // The world's atmosphere, when it declares one: the sky, the haze and the
+    // ambient light. See `vulkan/atmosphere.rs`.
+    pub(super) atmosphere: Option<crate::vulkan::atmosphere::VkAtmosphere>,
 
     // The shared `PassId::Transparent` slot and its two producers, translucent
     // glass panes and water surfaces. `Some` only when the world declared a
@@ -1386,7 +1389,11 @@ impl VkContext {
             history_reset,
             rebase,
             grass_benders,
+            atmosphere,
         } = params;
+        if let Some(atmo) = self.atmosphere.as_mut() {
+            atmo.frame = atmosphere;
+        }
         // Snapped for the passes recorded below (the wireframe pipeline
         // variant, the unlit shade flag, the composite's channel visualization
         // + depth normalization) and for the graph-input mask in record_frame.
@@ -2057,6 +2064,11 @@ impl VkContext {
         // Volumetric-fog resources (pipeline + per-frame uniforms).
         if let Some(mut fog) = self.fog.resources.take() {
             fog.destroy(device);
+        }
+
+        // The atmosphere's tables, uniforms and framebuffers.
+        if let Some(mut atmosphere) = self.atmosphere.take() {
+            atmosphere.destroy();
         }
 
         // Raymarched SDF volume resources (per-volume pipelines + UBOs, view

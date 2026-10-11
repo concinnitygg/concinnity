@@ -471,6 +471,8 @@ impl DxContext {
             // reset it.
             fog_enabled: self.fog.resources.is_some()
                 && self.fog.settings.is_some_and(|s| s.contributes()),
+            // The atmosphere runs on every frame that carries its inputs.
+            atmosphere_enabled: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
             // `DecalState` is built at init unconditionally so a runtime
             // `add_decal` works from a world that declared none, so the
             // resources half alone is always true. The live half drops the

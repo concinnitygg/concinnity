@@ -89,6 +89,9 @@ pub(crate) struct GraphicsSystem {
     menu_mode: bool,
     // The world grows grass, so each frame gathers what tramples it.
     grows_grass: bool,
+    // The world's atmosphere, which each frame places about the planet and
+    // which drives the sun light.
+    atmosphere: Option<atmosphere::AtmosphereDrive>,
     // The render backend while init constructs and wires it. Boxed
     // `dyn RenderBackend` so the setup logic in init.rs / streaming.rs /
     // scene.rs runs as one cfg-free path across Metal, DirectX, and Vulkan.
@@ -242,6 +245,7 @@ impl GraphicsSystem {
             frame_policy: frame_policy::FramePolicy::default(),
             menu_mode: false,
             grows_grass: false,
+            atmosphere: None,
             backend: None,
             scene_flow: None,
             scene_visibility: Default::default(),
@@ -341,6 +345,7 @@ pub(crate) fn derive_quality_settings(cfg: &PostProcessConfig) -> backend::Quali
     }
 }
 
+mod atmosphere;
 mod backend_handoff;
 mod blob_release;
 pub(crate) mod character_shape;

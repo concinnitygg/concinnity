@@ -442,6 +442,24 @@ impl VkContext {
             self.fog.resources = Some(fog);
         }
 
+        // The haze pass draws into the scene and reads its depth, like fog.
+        if let Some(mut atmosphere) = self.atmosphere.take() {
+            let hdr_views: Vec<vk::ImageView> = self
+                .targets
+                .hdr_resolve_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            let depth_views: Vec<vk::ImageView> = self
+                .targets
+                .depth_images
+                .iter()
+                .map(|img| img.view)
+                .collect();
+            atmosphere.rebuild(&self.hw.device, &hdr_views, &depth_views, render_ext)?;
+            self.atmosphere = Some(atmosphere);
+        }
+
         // Recreate the raymarch scene snapshot at the new resolution + re-point
         // the `scene_color` binding of every view set. The pipelines, layouts,
         // UBOs, cube buffers, and render passes survive; the pass reuses the

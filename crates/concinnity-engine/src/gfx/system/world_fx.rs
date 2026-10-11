@@ -2,10 +2,12 @@
 
 use crate::gfx::terrain::{LoadedTerrain, grass_terrains};
 use concinnity_core::components::{
-    Decal, GlassPanel, Grass, ParticleEmitter, SdfVolume, VolumetricFog, WaterSurface, Wind,
+    Atmosphere, Decal, GlassPanel, Grass, ParticleEmitter, Planet, SdfVolume, VolumetricFog,
+    WaterSurface, Wind,
 };
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_core::render::atmosphere::AtmosphereSettings;
 use concinnity_core::render::backend_init::{SdfVolumeSource, WorldFx};
 use concinnity_core::render::grass::{GrassField, PlanetGrass};
 use concinnity_core::render::{decal, particles, volumetric_fog};
@@ -19,6 +21,7 @@ pub(super) fn drain_world_fx(
     texture_count: usize,
     terrains: &[LoadedTerrain],
     planet_grass: Option<PlanetGrass>,
+    planet: Option<&Planet>,
 ) -> WorldFx {
     let decals: Vec<Decal> = ctx.drain::<Decal>();
     let decals = decal::build_decal_records(&decals.iter().collect::<Vec<_>>(), texture_count);
@@ -56,6 +59,10 @@ pub(super) fn drain_world_fx(
         }
         None => terrain_grass,
     };
+    // One atmosphere per world, wrapped around the world's planet if it has one.
+    let atmosphere = ctx.drain::<Atmosphere>().into_iter().next().map(|a| {
+        AtmosphereSettings::resolve(&a, planet.map(|p| (p.center.map(f64::from), p.radius)))
+    });
     WorldFx {
         decals,
         particles,
@@ -64,6 +71,7 @@ pub(super) fn drain_world_fx(
         glass_panels,
         sdf_volumes,
         grass,
+        atmosphere,
     }
 }
 

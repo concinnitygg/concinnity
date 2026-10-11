@@ -751,6 +751,9 @@ pub(crate) struct MtlContext {
     pub(super) raymarch: RaymarchState,
     // The environment drawn behind the opaque scene. See `metal/sky.rs`.
     pub(super) sky: super::sky::SkyState,
+    // The world's atmosphere, when it declares one: the sky, the haze and the
+    // ambient light. See `metal/atmosphere.rs`.
+    pub(super) atmosphere: Option<super::atmosphere::AtmosphereState>,
     // Device, queues, allocator and window. Declared last so every resource
     // above releases before the device layer and the window it presents to.
     pub(super) hw: MtlHardware,

@@ -3,6 +3,7 @@
 // feature. macOS runs over the MoltenVK portability driver.
 
 mod allocator;
+mod atmosphere;
 mod auto_exposure;
 mod backend;
 mod barrier_translate;

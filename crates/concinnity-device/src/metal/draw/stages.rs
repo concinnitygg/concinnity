@@ -415,6 +415,8 @@ impl MtlContext {
             // pyramid: the frame ends by reducing its final depth into it for the
             // next frame's phase-1 occlusion test.
             hiz_build_enabled: self.cull.hiz.is_some(),
+            // The atmosphere runs on every frame that carries its inputs.
+            atmosphere_enabled: self.atmosphere.as_ref().is_some_and(|a| a.params.is_some()),
             // The mask is one of the HDR targets, so it always exists.
             reactive_mask_enabled: true,
             upscale_reads_reactive: ReactiveReader::MetalFx.reads()

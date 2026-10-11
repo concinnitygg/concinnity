@@ -251,6 +251,18 @@ pass_ids! {
     /// `Shadow` the way [`PassId::GrassDraw`] is timed inside `Main`. No
     /// backend's graph executor dispatches this id.
     GrassShadowDraw => "grass_shadow_draw",
+    /// The atmosphere's lookup tables: a compute pass that builds the sky-view
+    /// table the sky draws from, the aerial-perspective volume the haze pass
+    /// reads and the irradiance cube the surfaces take their ambient light
+    /// from (and, when the air changes, the transmittance and
+    /// multiple-scattering tables those read). Gated on
+    /// `FrameGraphInputs::atmosphere_enabled`.
+    Atmosphere => "atmosphere",
+    /// Aerial perspective: the air between the camera and each opaque surface,
+    /// blended over the scene from the atmosphere's volume. Sits on the
+    /// hdr_resolve RMW chain just before `Fog`, so a volumetric fog stays the
+    /// nearer layer. Gated on `FrameGraphInputs::atmosphere_enabled`.
+    AerialPerspective => "aerial_perspective",
 }
 
 impl PassId {

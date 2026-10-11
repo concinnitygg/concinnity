@@ -828,6 +828,9 @@ pub(crate) struct DxContext {
 
     // The environment drawn behind the opaque scene. See `directx/sky.rs`.
     pub(super) sky: super::sky::DxSky,
+    // The world's atmosphere, when it declares one: the sky, the haze and the
+    // ambient light. See `directx/atmosphere.rs`.
+    pub(super) atmosphere: Option<super::atmosphere::DxAtmosphere>,
 
     // The shared `PassId::Transparent` slot and its two producers, translucent
     // glass panes and water surfaces. `Some` only when the world declared a
@@ -964,7 +967,11 @@ impl DxContext {
             history_reset,
             rebase,
             grass_benders,
+            atmosphere,
         } = params;
+        if let Some(atmo) = self.atmosphere.as_mut() {
+            atmo.frame = atmosphere;
+        }
         // Snapped for the passes recorded below (the wireframe pipeline
         // variant, the unlit shade flag, the composite's channel visualization
         // + depth normalization) and for the graph-input mask in record_frame.

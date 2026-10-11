@@ -47,7 +47,13 @@ impl DxSky {
             .srv_table(0, 1, Visibility::Pixel)
             .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
             .build(device, "sky root sig")?;
-        let pso = build_sky_pso(device, &root_sig, msaa_samples, hot_reload)?;
+        let pso = build_sky_pso(
+            device,
+            &builtin_shaders::SKY_FRAG,
+            &root_sig,
+            msaa_samples,
+            hot_reload,
+        )?;
         Ok(Self {
             root_sig,
             pso,
@@ -69,12 +75,13 @@ impl DxSky {
 // that passes only where the depth still holds the clear.
 pub(in crate::directx) fn build_sky_pso(
     device: &ID3D12Device,
+    fragment: &concinnity_core::render::shader_programs::ShaderProgram,
     root_sig: &ID3D12RootSignature,
     msaa_samples: u32,
     hot_reload: bool,
 ) -> RenderResult<ID3D12PipelineState> {
     let vs = builtin_shaders::SKY_VERT.compile(hot_reload)?;
-    let ps = builtin_shaders::SKY_FRAG.compile(hot_reload)?;
+    let ps = fragment.compile(hot_reload)?;
     GraphicsPso::fullscreen(root_sig, &vs, &ps, HDR_FORMAT, Blend::Opaque)
         .depth(DXGI_FORMAT_D32_FLOAT, Depth::read_only())
         .samples(msaa_samples.max(1))
@@ -86,8 +93,16 @@ pub(in crate::directx) fn build_sky_pso(
 }
 
 impl DxContext {
-    // Whether a view rendered in `mode` draws the sky.
+    // Whether a view rendered in `mode` draws the sky: the atmosphere's once it
+    // has a frame's inputs, else the environment map's.
     pub(in crate::directx) fn draws_sky(&self, mode: ViewMode) -> bool {
+        if self
+            .atmosphere
+            .as_ref()
+            .is_some_and(|a| a.params.get().is_some())
+        {
+            return sky::draws_sky(true, true, mode);
+        }
         sky::draws_sky(
             self.scene.env_map.prefilter_mip_count > 0,
             self.sky.background,
@@ -97,8 +112,17 @@ impl DxContext {
 
     // Draw the environment behind everything drawn so far into the bound HDR
     // color and depth, from the viewpoint the ViewUniforms at `view_gva`
-    // describe. The shader-visible heaps must be set on `cmd`.
-    pub(in crate::directx) fn encode_sky(&self, cmd: &ID3D12GraphicsCommandList, view_gva: u64) {
+    // describe; `frame_idx` picks the atmosphere's constants. The
+    // shader-visible heaps must be set on `cmd`.
+    pub(in crate::directx) fn encode_sky(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        view_gva: u64,
+        frame_idx: usize,
+    ) {
+        if self.encode_atmosphere_sky(cmd, view_gva, frame_idx) {
+            return;
+        }
         // SAFETY: the command list is in the recording state with the CBV/SRV/UAV heap set, and the
         // root signature bound here declares the CBV and the one-entry table these commands set;
         // every resource and descriptor they name is live for the call.
@@ -127,7 +151,7 @@ impl DxContext {
             // SAFETY: the command list is in the recording state and the query heap is live.
             unsafe { cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, start) };
         }
-        self.encode_sky(cmd, view_gva);
+        self.encode_sky(cmd, view_gva, frame_idx);
         if let Some(heap) = heap {
             // SAFETY: as above.
             unsafe { cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, end) };

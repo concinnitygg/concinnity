@@ -5,6 +5,7 @@
 - [Animation](Animation.md) - A skeletal animation clip that animates one [SkinnedMesh](SkinnedMesh.md).
 - [AnimationGraph](AnimationGraph.md) - An animation state machine for one [SkinnedMesh](SkinnedMesh.md).
 - [AppConfig](AppConfig.md) - Names, identifies, and sizes the application.
+- [Atmosphere](Atmosphere.md) - The air above the ground: a physically based sky that scatters sunlight into blue overhead, white haze at the horizon and red at sunset, and that looks right from the ground to high above it.
 - [AudioClip](AudioClip.md) - A baked audio clip: the sound an [AudioEmitter](AudioEmitter.md) plays.
 - [AudioCue](AudioCue.md) - Plays audio when a [Screen](Screen.md) is shown.
 - [AudioEmitter](AudioEmitter.md) - A point source of sound in the world.
@@ -47,6 +48,7 @@
 - [ParticleEmitter](ParticleEmitter.md) - A billboard particle emitter.
 - [PhysicsConfig](PhysicsConfig.md) - Configures the world's physics: the floor, collision layers, and how many bodies to reserve.
 - [PhysicsJoint](PhysicsJoint.md) - A physics constraint connecting two [Prop](Prop.md)s that own a `collider`.
+- [Planet](Planet.md) - A whole world to stand on: a sphere of ground `radius` meters around `center`, raised into hills, rendered with `material`, and pulling every body toward its center.
 - [PointLight](PointLight.md) - A spherical point light with quadratic distance attenuation.
 - [PostProcessConfig](PostProcessConfig.md) - Tunables for the post-process stack. One per world; the first declared instance wins. With no `PostProcessConfig` present, the defaults below are used.
 - [Prefab](Prefab.md) - A reusable template of [Prop](Prop.md)s, [PointLight](PointLight.md)s, and nested prefabs.

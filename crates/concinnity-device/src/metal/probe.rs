@@ -439,9 +439,10 @@ impl ProbeBakeDevice for MtlContext {
     }
 
     // Geometry may still be streaming in on the first frames: a zero cull would
-    // start an empty capture.
+    // start an empty capture. An atmosphere's sky and ambient light come from
+    // tables the frame writes, so a capture also waits for the first of them.
     fn capture_ready(&self, _prefilter_in_flight: bool) -> bool {
-        self.cull_count() > 0
+        self.cull_count() > 0 && self.atmosphere_tables_ready()
     }
 
     fn reserve_cubes(&mut self, count: usize) -> RenderResult<()> {

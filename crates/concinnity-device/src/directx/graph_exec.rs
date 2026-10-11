@@ -1207,6 +1207,7 @@ impl DxContext {
             viewport: [params.width as f32, params.height as f32],
             time: params.elapsed,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
+            irradiance: self.irradiance_lane(),
             sky_rot: self.state.view.sky_rot,
         }
     }
@@ -1349,6 +1350,8 @@ impl DxContext {
             PassId::Fog => {
                 self.encode_fog(cmd, params.frame_idx, params.vp_mat, params.cam_pos);
             }
+            PassId::Atmosphere => self.encode_atmosphere(cmd, params.frame_idx),
+            PassId::AerialPerspective => self.encode_aerial_perspective(cmd, params.frame_idx),
             PassId::ParticlesSim => {
                 // Integrates each live emitter's persistent pool. The graph's only
                 // edge out of it is the draw's vertex-stage read of those pools, so

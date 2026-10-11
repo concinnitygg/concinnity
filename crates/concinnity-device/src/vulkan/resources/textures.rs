@@ -234,12 +234,17 @@ impl VkContext {
             view.prefilter_face,
             &view.prefilter_mip_bytes,
         )?;
-        let new_irradiance_view = new_env.irradiance.view;
         let new_prefilter_view = new_env.prefilter.view;
         let new_mip_count = new_env.prefilter_mip_count;
         // Rewrite every set before destroying the previous cubes; see the
         // texture-pool rewires above for the rationale.
-        let old = std::mem::replace(&mut self.scene.env_map, new_env);
+        let mut old = std::mem::replace(&mut self.scene.env_map, new_env);
+        // An atmosphere writes the irradiance cube; the map brings only its
+        // reflections.
+        if self.atmosphere.is_some() {
+            std::mem::swap(&mut self.scene.env_map.irradiance, &mut old.irradiance);
+        }
+        let new_irradiance_view = self.scene.env_map.irradiance.view;
         self.scene.prefilter_mip_count = new_mip_count;
         self.rewrite_global_binding(IRRADIANCE_CUBE_BINDING);
         self.rewrite_global_binding(PREFILTER_CUBE_BINDING);

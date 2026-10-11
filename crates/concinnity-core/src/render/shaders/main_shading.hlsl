@@ -369,7 +369,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     float3 emissive = od.emissive_metallic.xyz;
 
     float3 cam_pos = float3(VIEW.cam_x, VIEW.cam_y, VIEW.cam_z);
-    bool ibl_enabled = VIEW.prefilter_mip_count > 0.5;
+    bool ibl_enabled = VIEW.irradiance > 0.5;
 
     // The record is per-object, so a fragment wave that straddles two objects
     // of one indirect draw carries two pool indices. That makes every pool

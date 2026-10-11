@@ -1367,6 +1367,7 @@ impl DxContext {
             ],
             time: prepass.elapsed,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
+            irradiance: self.irradiance_lane(),
             sky_rot: self.state.view.sky_rot,
         };
         let view = &RaymarchView::for_gbuffer(&camera, gbuffer);

@@ -204,7 +204,7 @@ impl MtlContext {
         let features = Features::resolve(&hw, &post, requirements.scene, output, &upscale);
         let vert_desc = pipelines::make_vertex_descriptor();
 
-        let scene = scene_assets::build_scene_assets(
+        let mut scene = scene_assets::build_scene_assets(
             &gpu,
             scene_assets::SceneInputs {
                 world: &world,
@@ -215,6 +215,23 @@ impl MtlContext {
                 bindless: features.scene,
             },
         )?;
+        // An atmosphere writes the irradiance cube every pass takes its ambient
+        // light from, so it replaces the environment map's before anything
+        // binds it.
+        let atmosphere = match fx.atmosphere {
+            Some(settings) => {
+                let (state, irradiance) = super::atmosphere::AtmosphereState::build(
+                    &hw.device,
+                    &hw.allocator,
+                    settings,
+                    features.hdr_samples,
+                    hot_reload,
+                )?;
+                scene.env_map.irradiance = irradiance;
+                Some(state)
+            }
+            None => None,
+        };
         let targets = targets::build_targets(&gpu, &features)?;
         let light_cull = scene_data::build_light_cull(&gpu)?;
         let shadow = shadow::build_shadow(&gpu, &shadows, &light_uniforms)?;
@@ -348,6 +365,7 @@ impl MtlContext {
             glass,
             raymarch,
             sky,
+            atmosphere,
             hw,
         };
         let pooled = ctx.hw.allocator.stats();

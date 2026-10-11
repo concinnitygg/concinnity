@@ -385,6 +385,8 @@ impl MtlContext {
             shade_mode: 0.0,
             ambient_occlusion: 0.0,
             sky_rot: self.state.view.sky_rot,
+            irradiance: self.irradiance_lane(),
+            _pad: [0.0; 3],
         };
 
         self.bind_clusters(&encoder, pass.clusters);
@@ -621,6 +623,8 @@ impl MtlContext {
             shade_mode: self.shade_mode(),
             ambient_occlusion: 1.0,
             sky_rot: self.state.view.sky_rot,
+            irradiance: self.irradiance_lane(),
+            _pad: [0.0; 3],
         }
     }
 

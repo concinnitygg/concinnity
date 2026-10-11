@@ -276,6 +276,7 @@ mod tests {
             viewport: [1920.0, 1080.0],
             time: 0.0,
             prefilter_mip_count: 0.0,
+            irradiance: 0.0,
             sky_rot: [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],

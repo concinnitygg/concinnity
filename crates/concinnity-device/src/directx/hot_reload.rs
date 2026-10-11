@@ -228,8 +228,17 @@ impl DxContext {
         let msaa_samples = self.targets.hdr.msaa_samples;
         let sky_pso = super::context::dump_on_err(
             info_queue,
-            super::sky::build_sky_pso(device, self.sky.root_sig(), msaa_samples, hr),
+            super::sky::build_sky_pso(
+                device,
+                &super::builtin_shaders::SKY_FRAG,
+                self.sky.root_sig(),
+                msaa_samples,
+                hr,
+            ),
         )?;
+        if let Some(atmosphere) = self.atmosphere.as_mut() {
+            atmosphere.rebuild_pipelines(device, msaa_samples)?;
+        }
         // The sky's motion behind the G-buffer pre-pass; the pre-pass's own
         // PSOs rebuild with the main pass's above.
         let gbuffer_sky_pso = self

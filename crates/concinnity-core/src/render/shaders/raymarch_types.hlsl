@@ -2,7 +2,7 @@
 // RAYMARCH_TYPES marker. The first half of the raymarch splice: this declares
 // what a binding names, `raymarch_common.hlsl` the body that reads it.
 //
-// Layouts must match `render/uniforms/`: RaymarchView (400 B),
+// Layouts must match `render/uniforms/`: RaymarchView (416 B),
 // RaymarchVolumeUniforms (176 B), RaymarchShadowCascade (16 B). The light and
 // cascade blocks come from `light_types.hlsl` because the encoders bind the
 // same two buffers the forward main pass does.
@@ -32,6 +32,13 @@ struct RaymarchView
     float4x4 cur_vp;
     float4x4 prev_vp;
     float4x4 view_mat;
+    // 1 when the irradiance cube holds diffuse light, from an EnvironmentMap
+    // or an Atmosphere; 0 means the ambient helper takes its hemispheric
+    // fallback.
+    float irradiance;
+    float _pad_view0;
+    float _pad_view1;
+    float _pad_view2;
 };
 
 // The authored parameter block, 32 floats the volume carries and the SDF

@@ -96,6 +96,8 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // RAYMARCH_COMMON), for the same reason.
     ("{DEPTH_CONVENTION}", "depth_convention.hlsl"),
     ("{SKY_RAY}", "sky_ray.hlsl"),
+    ("{ATMOSPHERE_TYPES}", "atmosphere_types.hlsl"),
+    ("{ATMOSPHERE_COMMON}", "atmosphere_common.hlsl"),
     ("{WIND}", "wind.hlsl"),
     ("{HIZ_TEST}", "hiz_test.hlsl"),
     // REFLECTION_CUT trails MAIN_SHADING, which carries its marker.

@@ -13,7 +13,9 @@ overhead through `+Y`, and sets toward `-Z`.
 
 The component's own entity carries that rotation as its transform, so a
 `Prop` naming this asset as its `parent` orbits with the sky. Reflection
-probes are baked once and do not turn.
+probes are baked once and do not turn. Under an [Atmosphere](Atmosphere.md)
+the air itself stays put and the sun moves through it, so the rotation is
+the time of day.
 
 ## Parameters
 

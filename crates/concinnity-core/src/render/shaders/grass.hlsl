@@ -1557,7 +1557,7 @@ float4 grass_fragment(GrassVertexOut p) : SV_Target
         Lo += grass_light(albedo, N, V, L, radiance);
     }
 
-    float3 ambient = VIEW.prefilter_mip_count > 0.5
+    float3 ambient = VIEW.irradiance > 0.5
                    ? albedo * irradiance_sample(N) / PI
                    : (float3)(0.03) * albedo;
     ambient *= LIGHTS.ambient_intensity * occlusion;

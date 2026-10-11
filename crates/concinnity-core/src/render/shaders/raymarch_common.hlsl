@@ -235,10 +235,11 @@ float3 raymarchFresnelSchlick(float cosTheta, float3 F0)
 // Image-based ambient, mirroring the main pass's ambient term: the irradiance
 // cube for diffuse and the prefilter cube at a roughness-selected mip for
 // specular, combined through the Karis split-sum. Falls back to the hemispheric
-// fill when no EnvironmentMap is bound.
+// fill when the irradiance cube holds no light, and drops the specular term
+// when no EnvironmentMap is bound.
 float3 shadeAmbientIbl(SdfSurface s, float3 normal, float3 view_dir)
 {
-    if (VIEW.prefilter_mip_count <= 0.5)
+    if (VIEW.irradiance <= 0.5)
     {
         return shadeAmbient(s, normal);
     }
@@ -250,10 +251,15 @@ float3 shadeAmbientIbl(SdfSurface s, float3 normal, float3 view_dir)
     float3 irradiance = irradiance_sample(RM_SKY_DIR(normal));
     float3 diffuse_ibl = kd_ibl * s.albedo * irradiance / 3.14159265;
 
-    float3 R = reflect(-view_dir, normal);
-    float lod = s.roughness * (VIEW.prefilter_mip_count - 1.0);
-    float3 prefiltered = prefilter_sample_lod(RM_SKY_DIR(R), lod);
-    float2 ab = raymarchEnvBrdfApprox(NdV, s.roughness);
+    float3 specular_ibl = (float3)(0.0);
+    if (VIEW.prefilter_mip_count > 0.5)
+    {
+        float3 R = reflect(-view_dir, normal);
+        float lod = s.roughness * (VIEW.prefilter_mip_count - 1.0);
+        float3 prefiltered = prefilter_sample_lod(RM_SKY_DIR(R), lod);
+        float2 ab = raymarchEnvBrdfApprox(NdV, s.roughness);
+        specular_ibl = prefiltered * (F0 * ab.x + ab.y);
+    }
 
-    return diffuse_ibl + prefiltered * (F0 * ab.x + ab.y) + s.emissive;
+    return diffuse_ibl + specular_ibl + s.emissive;
 }

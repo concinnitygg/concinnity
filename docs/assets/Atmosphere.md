@@ -1,0 +1,56 @@
+<!-- Auto-generated - do not edit. -->
+
+# Atmosphere
+
+The air above the ground: a physically based sky that scatters sunlight
+into blue overhead, white haze at the horizon and red at sunset, and that
+looks right from the ground to high above it.
+
+The air is a shell `height_km` thick around the planet. With a
+[Planet](Planet.md) in the world it wraps that planet, at its center and
+radius. Without one, it wraps a sphere of `planet_radius_km` whose top is at
+height 0, so a flat world sits on a gently curved ground far below it.
+
+Two kinds of particle scatter the light. Air molecules (Rayleigh) scatter
+short wavelengths most, which makes the sky blue and the low sun red; they
+thin by a factor of e every `rayleigh_scale_height_km` up. Haze and dust
+(Mie) scatter all colors alike, mostly forward, which whitens the horizon
+and draws a glow around the sun; they hug the ground more closely. An ozone
+layer `ozone_center_km` up absorbs a little orange, which keeps the
+twilight sky blue rather than gray. Coefficients are per kilometer of air
+at the ground (for ozone, at the layer's center).
+
+The sun is the first [DirectionalLight](DirectionalLight.md): its direction
+is where the sun is, and its `color * intensity` is the sunlight above the
+air. The light that reaches the camera is that sunlight dimmed and
+reddened by the air it crossed, and that is what lights the scene: white at
+noon, orange and weak at sunset, gone once the sun is below the horizon. A
+[SkyRotation](SkyRotation.md) is the day cycle: with its axis along the
+planet's pole the sun rises and sets as the sky turns, and on a planet its
+height also follows where on the planet the camera stands.
+
+The sky is drawn behind everything, with the sun's disc in it. Distant
+surfaces fade into the air's color (aerial perspective), behind any
+[VolumetricFog](VolumetricFog.md), which stays the nearer layer. The light
+the sky casts fills the shadows as the ambient light, in place of the
+diffuse light of an [EnvironmentMap](EnvironmentMap.md); an environment map's
+reflections are still used when the world declares one.
+
+One per world. The defaults are Earth's.
+
+## Parameters
+
+- `height_km`: A float. Thickness of the air above the lowest ground, in kilometers. At least 1. Defaults to `100.0`.
+- `planet_radius_km`: A float. Radius of the ground the air wraps, in kilometers, when the world has no `Planet`; a planet's own radius is used when it has one. At least 1. Defaults to `6360.0`.
+- `rayleigh_scattering`: An array of 3 floats. Rayleigh (air molecule) scattering per kilometer at the ground, for red, green and blue. Defaults to `[0.005802, 0.013558, 0.0331]`.
+- `rayleigh_scale_height_km`: A float. Height over which the air thins by a factor of e, in kilometers. Defaults to `8.0`.
+- `mie_scattering`: An array of 3 floats. Mie (haze) scattering per kilometer at the ground. Defaults to `[0.003996, 0.003996, 0.003996]`.
+- `mie_absorption`: An array of 3 floats. Mie (haze) absorption per kilometer at the ground: haze that darkens rather than brightens. Defaults to `[0.000444, 0.000444, 0.000444]`.
+- `mie_scale_height_km`: A float. Height over which the haze thins by a factor of e, in kilometers. Defaults to `1.2`.
+- `mie_anisotropy`: A float. How strongly haze scatters forward, in `[-0.99, 0.99]`: higher draws a tighter, brighter glow around the sun. Defaults to `0.8`.
+- `ozone_absorption`: An array of 3 floats. Ozone absorption per kilometer at the center of the ozone layer. Defaults to `[0.00065, 0.001881, 0.000085]`.
+- `ozone_center_km`: A float. Height of the ozone layer's densest point, in kilometers. Defaults to `25.0`.
+- `ozone_width_km`: A float. Full width of the ozone layer, in kilometers: its density falls off linearly to nothing half this far above and below its center. Defaults to `30.0`.
+- `ground_albedo`: An array of 3 floats. Linear-space color of the ground as seen from far above: the light it bounces back into the air. Defaults to `[0.3, 0.3, 0.3]`.
+- `sun_angular_diameter_deg`: A float. Angular diameter of the sun's disc, in degrees. Clamped to `[0.05, 10]`. Defaults to `0.53`.
+- `sun_disc_intensity`: A float. Brightness of the sun's disc, as a multiple of the sunlight it casts. 0 hides the disc. Defaults to `1000.0`.

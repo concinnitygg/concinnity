@@ -202,7 +202,12 @@ impl MtlContext {
             build_decal_pipeline(device, hr)
         );
         let fog = rebuild_if_live!(self.fog.pipeline.is_some(), build_fog_pipeline(device, hr));
-        let sky = super::sky::build_sky_pipeline(device, self.targets.hdr.sample_count, hr)?;
+        let sky = super::sky::build_sky_pipeline(
+            device,
+            &super::builtin_shaders::SKY_FRAG,
+            self.targets.hdr.sample_count,
+            hr,
+        )?;
         let sky_velocity = super::sky::build_sky_velocity_pipeline(device, hr)?;
         let grass = rebuild_if_live!(
             self.grass.is_some(),

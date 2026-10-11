@@ -21,6 +21,7 @@
 //! one.
 
 pub mod area_light;
+pub mod atmosphere;
 pub mod backend;
 pub mod backend_init;
 pub mod buffer_growth;

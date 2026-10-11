@@ -547,6 +547,16 @@ impl GraphicsSystem {
                 &sky,
             ));
         }
+        // An atmosphere lights the scene with the sun as it reaches the camera
+        // through the air, so the set is re-pushed whenever that light changes,
+        // with the sun tinted.
+        let atmosphere = self.atmosphere.as_mut().map(|drive| {
+            let (frame, set) = drive.frame(ctx, cam_pos, directional);
+            if set.is_some() {
+                directional = set;
+            }
+            frame
+        });
 
         // A planet world's frame moved since the last drawn frame: the
         // previous view is carried into the new frame before it is compared,
@@ -608,6 +618,7 @@ impl GraphicsSystem {
             directional,
             history_reset,
             rebase,
+            atmosphere,
         };
         // Adopt the overlay draw list wholesale and hand the spent one back to
         // OverlaySystem, which recycles its buffers into the next build.

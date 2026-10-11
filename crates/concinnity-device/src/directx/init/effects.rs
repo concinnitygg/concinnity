@@ -503,12 +503,47 @@ pub(super) fn build_auto_exposure(
 // shadow + IBL handles passed here mirror the matching slot-0/1/2
 // bindings the main pass uses, so raymarched surfaces sample the
 // same CSM cascades + IBL cubes as rasterized geometry.
+// The atmosphere, when the world declares one: its tables in the atmosphere's
+// heap slots, and its irradiance cube's SRV in the environment's irradiance
+// slot, so every pass that reaches the environment's diffuse light reads it.
+pub(super) fn build_atmosphere(
+    gpu: &InitGpu<'_>,
+    descriptors: &DxDescriptors,
+    scene: &DxSceneAssets,
+    settings: Option<concinnity_core::render::atmosphere::AtmosphereSettings>,
+    msaa_samples: u32,
+) -> RenderResult<Option<crate::directx::atmosphere::DxAtmosphere>> {
+    use crate::directx::atmosphere::{
+        ATMOSPHERE_SRV_SLOTS, ATMOSPHERE_UAV_SLOTS, AtmosphereSlots, DxAtmosphere,
+    };
+    let Some(settings) = settings else {
+        return Ok(None);
+    };
+    let layout = &descriptors.layout;
+    let srv = |i| layout.atmosphere_srv_base_slot + i;
+    let uav = |i| layout.atmosphere_uav_base_slot + i;
+    let slots = AtmosphereSlots {
+        srv_cpu: core::array::from_fn::<_, ATMOSPHERE_SRV_SLOTS, _>(|i| {
+            descriptors.slot_cpu(srv(i))
+        }),
+        srv_gpu: core::array::from_fn(|i| descriptors.slot_gpu(srv(i))),
+        uav_cpu: core::array::from_fn::<_, ATMOSPHERE_UAV_SLOTS, _>(|i| {
+            descriptors.slot_cpu(uav(i))
+        }),
+        uav_gpu: core::array::from_fn(|i| descriptors.slot_gpu(uav(i))),
+        irradiance_srv_cpu: scene.env_map.irradiance.srv_cpu,
+        depth_srv_gpu: descriptors.slot_gpu(layout.decal_depth_srv_slot),
+    };
+    DxAtmosphere::new(&gpu.hw.alloc, settings, slots, msaa_samples, gpu.hot_reload).map(Some)
+}
+
 pub(super) fn build_raymarch(
     gpu: &InitGpu<'_>,
     descriptors: &DxDescriptors,
     targets: &DxTargets,
     shadow: &ShadowState,
     scene: &DxSceneAssets,
+    atmosphere: Option<&crate::directx::atmosphere::DxAtmosphere>,
     sdf_volumes: &[SdfVolumeSource],
 ) -> RenderResult<Option<RaymarchResources>> {
     let hw = gpu.hw;
@@ -528,7 +563,11 @@ pub(super) fn build_raymarch(
         crate::directx::raymarch::RaymarchSharedBindings {
             shadow_resource: shadow.resource.as_ref().map(|r| &r.resource),
             shadow_layers: shadow.layers,
-            irradiance_resource: &scene.env_map.irradiance.resource,
+            // An atmosphere writes the diffuse light into its own cube.
+            irradiance_resource: match atmosphere {
+                Some(atmosphere) => atmosphere.irradiance(),
+                None => &scene.env_map.irradiance.resource,
+            },
             prefilter_resource: &scene.env_map.prefilter.resource,
         },
         crate::directx::raymarch::RaymarchDescriptorHandles {

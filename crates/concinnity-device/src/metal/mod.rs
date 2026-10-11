@@ -2,6 +2,7 @@
 //! declaration in lib.rs; compiled on macOS only.
 
 mod allocator;
+mod atmosphere;
 mod auto_exposure;
 mod backend;
 mod bindless_args;

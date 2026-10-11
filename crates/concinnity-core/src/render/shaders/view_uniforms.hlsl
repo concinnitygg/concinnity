@@ -21,6 +21,12 @@ struct ViewUniforms
     // Rows of the rotation from world space into the environment cubemaps'
     // baked frame; identity when the sky does not turn.
     float4 sky_rot[3];
+    // 1.0 when the irradiance cube holds the environment's diffuse light (an
+    // environment map's or an atmosphere's); 0.0 falls back to a flat ambient.
+    float irradiance;
+    float _pad_view0;
+    float _pad_view1;
+    float _pad_view2;
 };
 
 // A world direction in the environment cubemaps' own frame. Every sky tap goes

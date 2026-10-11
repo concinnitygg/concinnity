@@ -5,9 +5,29 @@
 use concinnity_core::gfx::render_types::{
     CompositeParams, PostProcessParams, SsaoParams, SsgiParams, SsrParams,
 };
+use concinnity_core::render::atmosphere::AtmosphereParams;
 use concinnity_core::render::uniforms::{AutoExposureParams, HizParams, TaaParams};
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
+
+pub(in crate::shader_layout) fn atmosphere() -> Vec<Case> {
+    vec![everywhere(mirror!(AtmosphereParams => "AtmosphereParams" {
+        inv_vp,
+        rayleigh,
+        mie_scattering,
+        mie_extinction,
+        ozone,
+        ground_albedo,
+        radii,
+        camera,
+        sun_direction,
+        sun_illuminance,
+        sun_disc,
+        cam_pos,
+        viewport,
+        sky_rot,
+    }))]
+}
 
 pub(in crate::shader_layout) fn taa() -> Vec<Case> {
     vec![everywhere(

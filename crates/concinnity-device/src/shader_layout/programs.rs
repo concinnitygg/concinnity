@@ -247,6 +247,11 @@ pub(super) static FOG_FROXEL: Program = Program {
     splices: &[],
 };
 
+pub(super) static ATMOSPHERE_AERIAL: Program = Program {
+    row: &shared::ATMOSPHERE_AERIAL,
+    splices: &[],
+};
+
 pub(super) static AUTO_EXPOSURE_BUILD: Program = Program {
     row: &shared::AUTO_EXPOSURE_BUILD,
     splices: &[],

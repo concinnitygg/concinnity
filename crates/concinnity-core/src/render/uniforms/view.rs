@@ -18,6 +18,9 @@ pub struct PassCamera {
     pub time: f32,
     /// Mip count of the bound IBL prefilter cube; 0 when none is bound.
     pub prefilter_mip_count: f32,
+    /// 1 when the irradiance cube holds diffuse light, from an
+    /// `EnvironmentMap` or an `Atmosphere`; 0 otherwise.
+    pub irradiance: f32,
     /// Rows of the rotation taking a world direction into the environment
     /// cubemaps' baked frame.
     pub sky_rot: [[f32; 4]; 3],
@@ -70,6 +73,12 @@ pub struct ViewUniforms {
     /// the sky, the ambient fill and the glossy reflections turn together.
     /// One `float4` per row; `w` is unused.
     pub sky_rot: [[f32; 4]; 3],
+    /// 1.0 when the bound irradiance cube holds the environment's diffuse
+    /// light (an environment map's, or an atmosphere's), so surfaces take
+    /// their ambient light from it; 0.0 falls back to a flat ambient.
+    pub irradiance: f32,
+    /// Pads the block to a whole `float4`.
+    pub _pad: [f32; 3],
 }
 
 /// Per-frame view inputs to the unified G-buffer pre-pass. The jittered current
@@ -139,6 +148,7 @@ pub(super) fn test_camera() -> PassCamera {
         viewport: [640.0, 480.0],
         time: 6.5,
         prefilter_mip_count: 7.0,
+        irradiance: 1.0,
         sky_rot: [[8.0; 4]; 3],
     }
 }
@@ -153,7 +163,7 @@ mod tests {
     // moved.
     #[test]
     fn view_uniforms_layout_matches_msl() {
-        assert_eq!(size_of::<ViewUniforms>(), 208);
+        assert_eq!(size_of::<ViewUniforms>(), 224);
         assert_eq!(offset_of!(ViewUniforms, vp), 0);
         assert_eq!(offset_of!(ViewUniforms, view), 64);
         assert_eq!(offset_of!(ViewUniforms, elapsed), 128);
@@ -164,6 +174,8 @@ mod tests {
         assert_eq!(offset_of!(ViewUniforms, ambient_occlusion), 156);
         // A float4 array is 16-byte aligned on every target.
         assert_eq!(offset_of!(ViewUniforms, sky_rot), 160);
+        assert_eq!(offset_of!(ViewUniforms, irradiance), 208);
+        assert_eq!(offset_of!(ViewUniforms, _pad), 212);
         assert_eq!(size_of::<ViewUniforms>() % 16, 0);
     }
 

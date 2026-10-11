@@ -151,6 +151,7 @@ macro_rules! for_each_component {
                 Grass             => $crate::components::Grass { gen, external, useful_blank, validate: grass, consumed },
                 Terrain           => $crate::components::Terrain { gen, external, compiled, useful_blank, renders, validate: terrain },
                 Planet            => $crate::components::Planet { gen, external, singleton, renders, validate: planet },
+                Atmosphere        => $crate::components::Atmosphere { gen, external, singleton, renders, validate: atmosphere, consumed },
             },
 
             // Resource: declared in a world and compiled into the blob's

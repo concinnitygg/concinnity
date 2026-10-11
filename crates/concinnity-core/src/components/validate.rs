@@ -6,10 +6,10 @@
 //! world -- a baked record is already validated.
 
 use crate::components::{
-    CameraTrackArgs, Decal, DirectionalLight, GlassPanel, Grass, InstancedProp, MAX_WATER_WAVES,
-    Material, ParticleEmitter, Planet, PointLight, Prop, RectAreaLight, ReflectionProbe, RigidBody,
-    SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, Terrain, VolumetricFog, VoxelChunk,
-    WaterSurface, WaterWave, Wind,
+    Atmosphere, CameraTrackArgs, Decal, DirectionalLight, GlassPanel, Grass, InstancedProp,
+    MAX_WATER_WAVES, Material, ParticleEmitter, Planet, PointLight, Prop, RectAreaLight,
+    ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, Terrain,
+    VolumetricFog, VoxelChunk, WaterSurface, WaterWave, Wind,
 };
 use crate::math::sqrt;
 use crate::math::vec3;
@@ -226,6 +226,43 @@ pub fn planet(mut args: Planet) -> Planet {
         .octaves
         .clamp(crate::planet::MIN_OCTAVES, crate::planet::MAX_OCTAVES);
     args.gravity = finite_at_least(args.gravity, 0.0, defaults.gravity);
+    args
+}
+
+/// Clamp an `Atmosphere`'s authored values into their valid ranges: lengths
+/// positive, coefficients and albedo non-negative, the haze's anisotropy short
+/// of a singular phase function and the sun's disc a real size.
+pub fn atmosphere(mut args: Atmosphere) -> Atmosphere {
+    let defaults = Atmosphere::default();
+    args.height_km = finite_at_least(args.height_km, 1.0, defaults.height_km);
+    args.planet_radius_km = finite_at_least(args.planet_radius_km, 1.0, defaults.planet_radius_km);
+    args.rayleigh_scale_height_km = finite_at_least(
+        args.rayleigh_scale_height_km,
+        0.01,
+        defaults.rayleigh_scale_height_km,
+    );
+    args.mie_scale_height_km =
+        finite_at_least(args.mie_scale_height_km, 0.01, defaults.mie_scale_height_km);
+    args.ozone_center_km = finite_at_least(args.ozone_center_km, 0.0, defaults.ozone_center_km);
+    args.ozone_width_km = finite_at_least(args.ozone_width_km, 0.01, defaults.ozone_width_km);
+    for c in args
+        .rayleigh_scattering
+        .iter_mut()
+        .chain(args.mie_scattering.iter_mut())
+        .chain(args.mie_absorption.iter_mut())
+        .chain(args.ozone_absorption.iter_mut())
+        .chain(args.ground_albedo.iter_mut())
+    {
+        *c = finite_at_least(*c, 0.0, 0.0);
+    }
+    args.mie_anisotropy =
+        finite_or(args.mie_anisotropy, defaults.mie_anisotropy).clamp(-0.99, 0.99);
+    args.sun_angular_diameter_deg = finite_or(
+        args.sun_angular_diameter_deg,
+        defaults.sun_angular_diameter_deg,
+    )
+    .clamp(0.05, 10.0);
+    args.sun_disc_intensity = finite_at_least(args.sun_disc_intensity, 0.0, 0.0);
     args
 }
 

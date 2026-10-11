@@ -535,6 +535,7 @@ impl MtlContext {
             ],
             time: params.elapsed,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
+            irradiance: self.irradiance_lane(),
             sky_rot: self.state.view.sky_rot,
         }
     }
@@ -793,6 +794,8 @@ impl MtlContext {
             PassId::Decals => {
                 self.encode_decals(cmd_buf, params.vp, params.inv_vp, params.frustum)?
             }
+            PassId::Atmosphere => self.encode_atmosphere(cmd_buf)?,
+            PassId::AerialPerspective => self.encode_aerial_perspective(cmd_buf)?,
             PassId::Fog => {
                 let fog_params = pass_input(params.fog_params, PassId::Fog, "fog_params")?;
                 let fog_froxel_params =

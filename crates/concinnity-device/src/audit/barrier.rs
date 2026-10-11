@@ -209,6 +209,24 @@ const AUDITS: &[BackendAudit] = &[
             ),
             ("decal.rs", ".final_layout(", 1, Reason::AttachmentLayout),
             ("fog.rs", ".final_layout(", 1, Reason::AttachmentLayout),
+            // The atmosphere's kernels: each samples what the one before it
+            // wrote, the irradiance cube opens for its kernel and closes for the
+            // passes that sample it, and last frame's readers finish before the
+            // tables are rewritten. All inside the one node; the tables rest in
+            // GENERAL and the cube sampled on either side of it.
+            (
+                "atmosphere.rs",
+                "rec.pipeline_barrier(",
+                4,
+                Reason::IntraPass,
+            ),
+            // The haze pass's scene attachment, like the fog pass's.
+            (
+                "atmosphere.rs",
+                ".final_layout(",
+                1,
+                Reason::AttachmentLayout,
+            ),
             // The scene attachment's round trip, and the glass reflection
             // pre-pass's layer + depth, private to the transparent node.
             (
@@ -258,6 +276,10 @@ const AUDITS: &[BackendAudit] = &[
             // The single-pass downsampler takes one barrier, between the
             // dispatch that writes mip 5 and the tail that reduces it.
             ("hiz.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
+            // The atmosphere's tables and irradiance cube rest readable by every
+            // shader stage; each kernel opens its output for unordered access
+            // and closes it again inside the node.
+            ("atmosphere.rs", ".ResourceBarrier(", 6, Reason::IntraPass),
             // The one-shot zero-init of a new emitter's pool, into COPY_DEST and
             // back to its UNORDERED_ACCESS resting state. The pool's
             // UAV -> NON_PIXEL_SHADER_RESOURCE pair crosses the sim -> draw node

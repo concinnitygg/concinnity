@@ -16,7 +16,9 @@ use objc2_metal::{
     MTLRenderPipelineDescriptor, MTLRenderPipelineState,
 };
 
-use super::builtin_shaders::{self, GBUFFER_SKY_FRAG, GBUFFER_SKY_VERT, SKY_FRAG, SKY_VERT};
+use super::builtin_shaders::{
+    self, GBUFFER_SKY_FRAG, GBUFFER_SKY_VERT, SKY_FRAG, SKY_VERT, ShaderProgram,
+};
 use super::context::MtlContext;
 use super::encode::RenderEncode;
 
@@ -39,22 +41,24 @@ impl SkyState {
         hot_reload: bool,
     ) -> RenderResult<Self> {
         Ok(Self {
-            pipeline: build_sky_pipeline(device, sample_count, hot_reload)?,
+            pipeline: build_sky_pipeline(device, &SKY_FRAG, sample_count, hot_reload)?,
             velocity_pipeline: build_sky_velocity_pipeline(device, hot_reload)?,
             background,
         })
     }
 }
 
-// The sky over the HDR color and the main depth: no blending, and no vertex
-// stream, since the vertex stage generates its triangle.
+// The sky over the HDR color and the main depth, shaded by `fragment` (the
+// environment map's or the atmosphere's): no blending, and no vertex stream,
+// since the vertex stage generates its triangle.
 pub(super) fn build_sky_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
+    fragment: &ShaderProgram,
     sample_count: u32,
     hot_reload: bool,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
     let vert = builtin_shaders::entry_function(device, &SKY_VERT, hot_reload)?;
-    let frag = builtin_shaders::entry_function(device, &SKY_FRAG, hot_reload)?;
+    let frag = builtin_shaders::entry_function(device, fragment, hot_reload)?;
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexFunction(Some(&vert));
     desc.setFragmentFunction(Some(&frag));
@@ -99,8 +103,12 @@ pub(super) fn build_sky_velocity_pipeline(
 }
 
 impl MtlContext {
-    // Whether a view rendered in `mode` draws the sky.
+    // Whether a view rendered in `mode` draws the sky: the atmosphere's once it
+    // has a frame's inputs, else the environment map's.
     pub(super) fn draws_sky(&self, mode: ViewMode) -> bool {
+        if self.atmosphere.as_ref().is_some_and(|a| a.params.is_some()) {
+            return sky::draws_sky(true, true, mode);
+        }
         sky::draws_sky(
             self.scene.env_map.prefilter_mip_count > 0,
             self.sky.background,
@@ -117,12 +125,26 @@ impl MtlContext {
         view: &ViewUniforms,
     ) {
         enc.pushDebugGroup(objc2_foundation::ns_string!("sky"));
-        enc.set_pipeline(&self.sky.pipeline);
         enc.set_depth_stencil(&self.targets.depth_state_read_only);
         enc.set_vertex_value(view, 0);
         enc.set_fragment_value(view, 0);
-        enc.set_fragment_texture(&self.scene.env_map.prefilter, 0);
-        enc.set_fragment_sampler(&self.scene.cube_sampler, 0);
+        match self
+            .atmosphere
+            .as_ref()
+            .and_then(|a| Some((a, a.params.as_ref()?)))
+        {
+            Some((atmo, params)) => {
+                enc.set_pipeline(&atmo.sky_pipeline);
+                enc.set_fragment_value(params, 1);
+                enc.set_fragment_texture(&atmo.sky_view, 0);
+                enc.set_fragment_sampler(&self.composite.sampler, 0);
+            }
+            None => {
+                enc.set_pipeline(&self.sky.pipeline);
+                enc.set_fragment_texture(&self.scene.env_map.prefilter, 0);
+                enc.set_fragment_sampler(&self.scene.cube_sampler, 0);
+            }
+        }
         // SAFETY: the vertex stage generates all three vertices, so the draw reads no bound vertex
         // buffer.
         unsafe {

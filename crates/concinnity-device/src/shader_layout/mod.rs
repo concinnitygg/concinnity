@@ -370,6 +370,11 @@ fn fog_layouts_match_the_shader() {
 }
 
 #[test]
+fn atmosphere_layouts_match_the_shader() {
+    check(&programs::ATMOSPHERE_AERIAL, &mirrors::post::atmosphere());
+}
+
+#[test]
 fn raymarch_layouts_match_the_shader() {
     check(&programs::RAYMARCH_FRAG, &mirrors::raymarch::surface());
 }

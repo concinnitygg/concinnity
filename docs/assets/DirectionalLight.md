@@ -6,6 +6,8 @@ An infinitely distant directional light (sun, moon, or sky fill).
 
 Up to 4 directional lights may be declared; extras beyond 4 are silently ignored.
 When no directional light is present, a built-in warm sun is used as a fallback.
+Under an [Atmosphere](Atmosphere.md) the first one is the sun: its color is the
+sunlight above the air, and it lights the scene dimmed and reddened by the air.
 
 ## Parameters
 

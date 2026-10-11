@@ -131,6 +131,7 @@ impl VkContext {
         );
         let sky_pipeline = crate::vulkan::sky::build_sky_pipeline(
             &self.hw.device,
+            &super::builtin_shaders::SKY_FRAG,
             self.sky.layout(),
             self.targets.main_render_pass.handle(),
             self.targets.msaa_samples,
@@ -331,6 +332,17 @@ impl VkContext {
         if let (Some((render, froxel)), Some(fog)) = (fog_pipelines, self.fog.resources.as_mut()) {
             fog.pipeline = render;
             fog.froxel_pipeline = froxel;
+        }
+        if let Some(atmosphere) = self.atmosphere.as_mut() {
+            atmosphere.rebuild_pipelines(
+                &self.hw.device,
+                crate::vulkan::atmosphere::AtmosphereSky {
+                    global_set_layout: self.descriptors.global_set_layout.handle(),
+                    main_render_pass: self.targets.main_render_pass.handle(),
+                    samples: self.targets.msaa_samples,
+                },
+                self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
+            )?;
         }
         if let (Some(rebuilt), Some(ssao)) = (ssao_rebuilt, self.ssao.as_mut()) {
             ssao.swap_pipelines(rebuilt);

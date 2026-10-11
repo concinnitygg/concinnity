@@ -321,6 +321,8 @@ impl DxContext {
                 shade_mode: 0.0,
                 ambient_occlusion: 0.0,
                 sky_rot: self.state.view.sky_rot,
+                irradiance: self.irradiance_lane(),
+                _pad: [0.0; 3],
             };
             let cbv = alloc.alloc_buffer(
                 256,
@@ -810,7 +812,7 @@ impl DxContext {
         self.inc_draw_calls(1);
         // A face is always rendered lit, whatever the viewport shows.
         if self.draws_sky(concinnity_core::gfx::view_modes::ViewMode::Lit) {
-            self.encode_sky(cmd, view_gva);
+            self.encode_sky(cmd, view_gva, self.current_frame);
         }
     }
 }
@@ -843,9 +845,11 @@ impl ProbeBakeDevice for DxContext {
     // Geometry may still be streaming: a zero cull would bake an empty cube. Both
     // cubes of a bake are addressed through ONE reserved SRV-heap block, written
     // when a capture starts, so a capture waits for the previous convolution to
-    // install rather than rewriting the descriptors its dispatches bind.
+    // install rather than rewriting the descriptors its dispatches bind. An
+    // atmosphere's sky and ambient light come from tables the frame writes, so
+    // a capture also waits for the first of them.
     fn capture_ready(&self, prefilter_in_flight: bool) -> bool {
-        self.cull_count() > 0 && !prefilter_in_flight
+        self.cull_count() > 0 && !prefilter_in_flight && self.atmosphere_tables_ready()
     }
 
     fn reserve_cubes(&mut self, count: usize) -> RenderResult<()> {

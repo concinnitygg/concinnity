@@ -8,7 +8,7 @@
 use super::{GBufferView, PassCamera};
 use crate::components::sdf_volume::SDF_PARAMS_LEN;
 
-/// Per-frame view inputs, 400 bytes. Every field after `inv_vp` is a `float4`
+/// Per-frame view inputs, 416 bytes. Every field after `inv_vp` is a `float4`
 /// lane or smaller, which is what keeps the three targets agreeing: a `float3`
 /// occupies 16 bytes in a Metal constant buffer and 12 on SPIR-V and DXIL.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
@@ -38,6 +38,12 @@ pub struct RaymarchView {
     pub prev_vp: [[f32; 4]; 4],
     /// The view matrix the pre-pass stores normals and linear depth in.
     pub view_mat: [[f32; 4]; 4],
+    /// 1 when the irradiance cube holds diffuse light, from an
+    /// `EnvironmentMap` or an `Atmosphere`; 0 means the ambient helper takes
+    /// its hemispheric fallback.
+    pub irradiance: f32,
+    /// Padding completing the lane `irradiance` opens.
+    pub _pad: [f32; 3],
 }
 
 impl RaymarchView {
@@ -56,6 +62,8 @@ impl RaymarchView {
             cur_vp: camera.vp,
             prev_vp: camera.vp,
             view_mat: IDENTITY,
+            irradiance: camera.irradiance,
+            _pad: [0.0; 3],
         }
     }
 
@@ -127,7 +135,7 @@ mod tests {
     // spelling that lays out differently on one target than on the others.
     #[test]
     fn the_blocks_are_the_sizes_the_hosts_bind() {
-        assert_eq!(size_of::<RaymarchView>(), 400);
+        assert_eq!(size_of::<RaymarchView>(), 416);
         assert_eq!(size_of::<RaymarchVolumeUniforms>(), 176);
         assert_eq!(size_of::<RaymarchShadowCascade>(), 16);
     }
@@ -146,6 +154,7 @@ mod tests {
         assert_eq!(view.cur_vp, camera.vp);
         assert_eq!(view.prev_vp, camera.vp);
         assert_eq!(view.view_mat, IDENTITY);
+        assert_eq!(view.irradiance, camera.irradiance);
     }
 
     #[test]

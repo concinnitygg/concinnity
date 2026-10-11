@@ -47,6 +47,9 @@ pub struct FrameScalars {
     /// The move of the simulated frame since the last drawn frame, if it
     /// moved: what the temporal history is carried through.
     pub rebase: Option<crate::planet::Rebase>,
+    /// Where the camera and the sun are about the planet, for a world with an
+    /// `Atmosphere`.
+    pub atmosphere: Option<crate::render::atmosphere::AtmosphereFrame>,
 }
 
 impl Default for FrameScalars {
@@ -66,6 +69,7 @@ impl Default for FrameScalars {
             directional: None,
             history_reset: crate::render::history_reset::HistoryResetCauses::NONE,
             rebase: None,
+            atmosphere: None,
         }
     }
 }

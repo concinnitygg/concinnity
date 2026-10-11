@@ -196,7 +196,7 @@ impl VkContext {
             effects::build_upscale(&gpu, swapchain.extent, &post, &mut upscale_requested)?;
         commands::reset_timestamp_queries(&gpu)?;
         let area_light = scene_data::build_area_lights(&gpu, &area_lights)?;
-        let scene = scene_assets::build_scene_assets(&gpu, &media, anisotropy)?;
+        let mut scene = scene_assets::build_scene_assets(&gpu, &media, anisotropy)?;
         let targets = targets::build_render_targets(
             &gpu,
             targets::TargetInputs {
@@ -206,6 +206,17 @@ impl VkContext {
                 ssao_enabled: post.ssao.is_some(),
             },
         )?;
+        // An atmosphere writes the irradiance cube every set takes ambient light
+        // from, so it replaces the environment map's before any set binds it.
+        let atmosphere_cube = match fx.atmosphere {
+            Some(_) => {
+                let (image, cube) =
+                    crate::vulkan::atmosphere::create_irradiance_cube(&gpu.upload())?;
+                scene.env_map.irradiance = image;
+                Some(cube)
+            }
+            None => None,
+        };
         let (geometry, uniforms, light_cull) = scene_data::build_scene_resources(
             &gpu,
             scene_data::SceneInputs {
@@ -354,6 +365,38 @@ impl VkContext {
             hot_reload,
         )?;
 
+        let atmosphere = match (fx.atmosphere, atmosphere_cube) {
+            (Some(settings), Some(cube)) => {
+                let hdr_resolve_views: Vec<vk::ImageView> = targets
+                    .hdr_resolve_images
+                    .iter()
+                    .map(|img| img.view)
+                    .collect();
+                let depth_views: Vec<vk::ImageView> =
+                    targets.depth_images.iter().map(|img| img.view).collect();
+                Some(crate::vulkan::atmosphere::VkAtmosphere::new(
+                    &gpu.upload(),
+                    settings,
+                    cube,
+                    frames,
+                    crate::vulkan::atmosphere::AtmosphereTargets {
+                        hdr_resolve_views: &hdr_resolve_views,
+                        depth_views: &depth_views,
+                        extent: render_extent,
+                        msaa: targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
+                        hdr_format: super::context::HDR_FORMAT,
+                    },
+                    crate::vulkan::atmosphere::AtmosphereSky {
+                        global_set_layout: descriptors.global_set_layout.handle(),
+                        main_render_pass: targets.main_render_pass.handle(),
+                        samples: targets.msaa_samples,
+                    },
+                    hot_reload,
+                )?)
+            }
+            _ => None,
+        };
+
         let mut me = Self {
             swapchain,
             targets,
@@ -383,6 +426,7 @@ impl VkContext {
             fog: world_fx.fog,
             raymarch: world_fx.raymarch,
             sky,
+            atmosphere,
             transparent: world_fx.transparent,
             planar_reflection: world_fx.planar_reflection,
             particle: Default::default(),

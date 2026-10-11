@@ -20,12 +20,14 @@ mod shadow;
 mod spot_shadow;
 mod stages;
 
+use concinnity_core::render::atmosphere::AtmosphereView;
 use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::error;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::reactive_mask::ReactiveMaskPlan;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::rt_accel::RtUpdate;
+use concinnity_core::transform::{mat4_inverse, mat4_mul};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandQueue as _};
@@ -76,6 +78,7 @@ impl MtlContext {
             history_reset,
             rebase,
             grass_benders,
+            atmosphere,
         } = params;
         let mtm = objc2::MainThreadMarker::new().ok_or_else(|| {
             error::RenderError::Other("draw_frame must be called from the main thread".into())
@@ -192,6 +195,18 @@ impl MtlContext {
             render_h,
             elapsed,
         })?;
+
+        // The haze volume is laid along the un-jittered view rays, like the fog
+        // volume, so it holds still under the temporal jitter.
+        self.prepare_atmosphere(
+            atmosphere,
+            AtmosphereView {
+                inv_vp: mat4_inverse(mat4_mul(proj, self.state.view.matrix)),
+                cam_pos,
+                viewport: [render_w as f32, render_h as f32],
+                sky_rot,
+            },
+        );
 
         // Line pipeline: built on the first frame that publishes lines,
         // so the graph gate below can see it live this same frame.

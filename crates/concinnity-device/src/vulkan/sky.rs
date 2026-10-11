@@ -43,6 +43,7 @@ impl VkSky {
             .map_err(|e| super::error::map_vk_result(e, "sky pipeline layout"))?;
         let pipeline = build_sky_pipeline(
             device,
+            &super::builtin_shaders::SKY_FRAG,
             layout.handle(),
             main_render_pass,
             samples,
@@ -65,17 +66,19 @@ impl VkSky {
 }
 
 // The sky over the HDR color and the main depth, at the main pass's sample
-// count: no blending, no vertex input, and the inclusive read-only depth test
-// that passes only where the depth still holds the clear.
+// count, shaded by `fragment` (the environment map's or the atmosphere's): no
+// blending, no vertex input, and the inclusive read-only depth test that passes
+// only where the depth still holds the clear.
 pub(in crate::vulkan) fn build_sky_pipeline(
     device: &VkDevice,
+    fragment: &concinnity_core::render::shader_programs::ShaderProgram,
     layout: vk::PipelineLayout,
     main_render_pass: vk::RenderPass,
     samples: vk::SampleCountFlags,
     hot_reload: bool,
 ) -> RenderResult<OwnedPipeline> {
     let vs = super::builtin_shaders::SKY_VERT.compile(hot_reload)?;
-    let fs = super::builtin_shaders::SKY_FRAG.compile(hot_reload)?;
+    let fs = fragment.compile(hot_reload)?;
     GraphicsPipelineDesc {
         depth: Depth::read_only(),
         samples,
@@ -85,8 +88,12 @@ pub(in crate::vulkan) fn build_sky_pipeline(
 }
 
 impl VkContext {
-    // Whether a view rendered in `mode` draws the sky.
+    // Whether a view rendered in `mode` draws the sky: the atmosphere's once it
+    // has a frame's inputs, else the environment map's.
     pub(in crate::vulkan) fn draws_sky(&self, mode: ViewMode) -> bool {
+        if self.atmosphere.as_ref().is_some_and(|a| a.params.is_some()) {
+            return sky::draws_sky(true, true, mode);
+        }
         sky::draws_sky(
             self.scene.prefilter_mip_count > 0,
             self.sky.background,
@@ -96,13 +103,32 @@ impl VkContext {
 
     // Draw the environment behind everything drawn so far in the open render
     // pass, which must be `main_render_pass`-compatible, from the viewpoint
-    // `global_set` describes.
+    // `global_set` describes. `frame_idx` picks the atmosphere's constants.
     pub(in crate::vulkan) fn encode_sky(
         &self,
         cmd: vk::CommandBuffer,
         global_set: vk::DescriptorSet,
+        frame_idx: usize,
     ) {
         let device = &self.hw.device;
+        if let Some((pipeline, layout, atmosphere_set)) = self.atmosphere_sky(frame_idx) {
+            // SAFETY: as below, with the atmosphere's sky pipeline, whose layout
+            // takes the global set and the atmosphere's set.
+            unsafe {
+                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline);
+                device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    layout,
+                    0,
+                    &[global_set, atmosphere_set],
+                    &[],
+                );
+                device.cmd_draw(cmd, 3, 1, 0, 0);
+            }
+            self.inc_draw_calls(1);
+            return;
+        }
         // SAFETY: `cmd` is a command buffer in the recording state inside a render pass the sky
         // pipeline is compatible with, and every handle these commands name is live for the call.
         unsafe {
@@ -140,7 +166,7 @@ impl VkContext {
                 device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, start)
             };
         }
-        self.encode_sky(cmd, self.descriptors.global_sets[frame_idx]);
+        self.encode_sky(cmd, self.descriptors.global_sets[frame_idx], frame_idx);
         if let Some((pool, (_, end))) = stamps {
             // SAFETY: as above.
             unsafe {

@@ -126,6 +126,7 @@ pub(crate) fn submit(
         history_reset: snap.frame.history_reset.any(),
         rebase: snap.frame.rebase,
         grass_benders: &snap.grass_benders,
+        atmosphere: snap.frame.atmosphere,
     }) {
         Ok(()) => {
             policy.frame_succeeded();

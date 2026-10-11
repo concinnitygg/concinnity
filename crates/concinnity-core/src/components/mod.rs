@@ -23,6 +23,7 @@ mod animation;
 mod animation_graph;
 mod animation_params;
 mod app_config;
+mod atmosphere;
 mod audio_bus;
 mod audio_clip;
 mod audio_command;
@@ -165,6 +166,7 @@ pub use animation_graph::{
 pub use animation_params::AnimationParams;
 pub use app_config::AppConfig;
 pub use app_config::FramePriority;
+pub use atmosphere::Atmosphere;
 pub use audio_bus::AudioBus;
 pub use audio_clip::AudioClip;
 pub use audio_command::{AudioCommand, AudioTarget};

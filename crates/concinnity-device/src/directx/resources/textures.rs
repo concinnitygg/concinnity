@@ -199,6 +199,11 @@ impl DxContext {
             },
         )?;
         self.scene.env_map = new_env;
+        // An atmosphere writes the irradiance cube; the map brings only its
+        // reflections.
+        if let Some(atmosphere) = self.atmosphere.as_ref() {
+            atmosphere.reclaim_irradiance_slot(&self.hw.device);
+        }
         Ok(())
     }
 }

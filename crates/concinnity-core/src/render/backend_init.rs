@@ -192,6 +192,9 @@ pub struct WorldFx {
     pub sdf_volumes: Vec<SdfVolumeSource>,
     /// The grass field, or `None` when the world grows none.
     pub grass: Option<crate::render::grass::GrassField>,
+    /// The atmosphere the sky is drawn from, or `None` when the world declares
+    /// none.
+    pub atmosphere: Option<crate::render::atmosphere::AtmosphereSettings>,
 }
 
 /// One raymarched SDF volume with the payload its pipelines build from.
@@ -338,9 +341,11 @@ impl Default for RenderRequirements {
 
 impl RenderRequirements {
     /// Derive the requirements a scene plus its effect content imposes, where
-    /// `sky` says the world draws its environment map as the background.
+    /// `sky` says the world draws its environment map as the background. An
+    /// atmosphere is a sky too.
     pub fn derive(scene: &SceneData, fx: &WorldFx, sky: bool) -> Self {
         let scene_present = sky
+            || fx.atmosphere.is_some()
             || !scene.vertices.is_empty()
             || !scene.draw_objects.is_empty()
             || !scene.instanced_clusters.is_empty()
@@ -440,6 +445,7 @@ impl<'a> BackendInit<'a> {
                 glass_panels: Vec::new(),
                 sdf_volumes: Vec::new(),
                 grass: None,
+                atmosphere: None,
             },
             requirements: Default::default(),
         };
@@ -528,6 +534,7 @@ mod tests {
             glass_panels: Vec::new(),
             sdf_volumes: Vec::new(),
             grass: None,
+            atmosphere: None,
         }
     }
 

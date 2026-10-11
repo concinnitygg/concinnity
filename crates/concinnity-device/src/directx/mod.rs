@@ -3,6 +3,7 @@
 
 mod agility;
 mod allocator;
+mod atmosphere;
 mod auto_exposure;
 mod backend;
 mod barrier_translate;

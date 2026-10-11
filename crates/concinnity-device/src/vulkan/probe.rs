@@ -128,7 +128,11 @@ impl VkContext {
     // caller has idled the device.
     pub(super) fn rewrite_probe_capture_views(&self) {
         if let Some(rendering) = self.probe.bake.capture() {
-            rendering.write_face_views(self.scene.prefilter_mip_count, self.state.view.sky_rot);
+            rendering.write_face_views(
+                self.scene.prefilter_mip_count,
+                self.irradiance_lane(),
+                self.state.view.sky_rot,
+            );
         }
     }
 
@@ -601,7 +605,7 @@ impl VkContext {
         }
         // A face is always rendered lit, whatever the viewport shows.
         if self.draws_sky(concinnity_core::gfx::view_modes::ViewMode::Lit) {
-            self.encode_sky(cmd, global_set);
+            self.encode_sky(cmd, global_set, self.current_frame);
         }
         // SAFETY: `cmd` is a command buffer in the recording state inside the render pass begun
         // above.
@@ -626,9 +630,11 @@ impl ProbeBakeDevice for VkContext {
             && self.probe.prefilter.is_some()
     }
 
-    // Geometry may still be streaming: a zero cull would bake an empty cube.
+    // Geometry may still be streaming: a zero cull would bake an empty cube. An
+    // atmosphere's sky and ambient light come from tables the frame writes, so
+    // a capture also waits for the first of them.
     fn capture_ready(&self, _prefilter_in_flight: bool) -> bool {
-        self.cull_count() > 0
+        self.cull_count() > 0 && self.atmosphere_tables_ready()
     }
 
     fn reserve_cubes(&mut self, count: usize) -> RenderResult<()> {
@@ -693,7 +699,11 @@ impl ProbeBakeDevice for VkContext {
             face_cmds: Vec::with_capacity(CAPTURE_FACES),
             face_fences: Vec::with_capacity(CAPTURE_FACES),
         };
-        rendering.write_face_views(self.scene.prefilter_mip_count, self.state.view.sky_rot);
+        rendering.write_face_views(
+            self.scene.prefilter_mip_count,
+            self.irradiance_lane(),
+            self.state.view.sky_rot,
+        );
         Ok(rendering)
     }
 
@@ -829,7 +839,7 @@ impl RenderingBake {
     // the sky the capture lights with. reflections_enabled stays 0: no resolve
     // runs over a probe face, so the bake captures the full forward probe
     // specular -- here the sky, since the bake binds an EMPTY ProbeSet.
-    fn write_face_views(&self, prefilter_mip_count: u32, sky_rot: [[f32; 4]; 3]) {
+    fn write_face_views(&self, prefilter_mip_count: u32, irradiance: f32, sky_rot: [[f32; 4]; 3]) {
         let eye = self.eye;
         for (face, buf) in self.bake.view_bufs.iter().enumerate() {
             let view = ViewUniforms {
@@ -843,6 +853,8 @@ impl RenderingBake {
                 shade_mode: 0.0,
                 ambient_occlusion: 0.0,
                 sky_rot,
+                irradiance,
+                _pad: [0.0; 3],
             };
             buf.write_val(0, &view);
         }

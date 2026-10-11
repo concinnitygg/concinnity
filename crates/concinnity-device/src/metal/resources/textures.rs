@@ -67,7 +67,12 @@ impl MtlContext {
             view.prefilter_face,
             &view.prefilter_mip_bytes,
         )?;
-        self.scene.env_map = new_env;
+        let old = std::mem::replace(&mut self.scene.env_map, new_env);
+        // An atmosphere writes the irradiance cube; the map brings only its
+        // reflections.
+        if self.atmosphere.is_some() {
+            self.scene.env_map.irradiance = old.irradiance;
+        }
         self.arg_buffers.texture_epoch += 1;
         Ok(())
     }

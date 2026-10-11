@@ -168,6 +168,14 @@ pub static SKY_FRAG: ShaderProgram = ShaderProgram {
     gates: &[],
     msaa: false,
 };
+/// `sky_atmosphere_fragment` from `sky.hlsl`: the atmosphere's sky.
+pub static SKY_ATMOSPHERE_FRAG: ShaderProgram = ShaderProgram {
+    file: "sky.hlsl",
+    entry: "sky_atmosphere_fragment",
+    label: "sky_atmosphere_frag.hlsl",
+    gates: &["SKY_ATMOSPHERE"],
+    msaa: false,
+};
 
 // The fullscreen-triangle vertex stage every post pass pairs with, and the post
 // fragments.
@@ -316,6 +324,56 @@ pub static FOG_FRAG: ShaderProgram = ShaderProgram {
     entry: "fog_fragment",
     label: "fog_frag.hlsl",
     gates: &[],
+    msaa: true,
+};
+// The atmosphere's table kernels and its haze pass. The haze fragment's
+// vertex half is `FULLSCREEN_VERT`.
+/// `atmosphere_transmittance_kernel` from `atmosphere.hlsl`.
+pub static ATMOSPHERE_TRANSMITTANCE: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "atmosphere_transmittance_kernel",
+    label: "atmosphere_transmittance.hlsl",
+    gates: &["ATMOSPHERE_TRANSMITTANCE"],
+    msaa: false,
+};
+/// `atmosphere_multiscatter_kernel` from `atmosphere.hlsl`.
+pub static ATMOSPHERE_MULTISCATTER: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "atmosphere_multiscatter_kernel",
+    label: "atmosphere_multiscatter.hlsl",
+    gates: &["ATMOSPHERE_MULTISCATTER"],
+    msaa: false,
+};
+/// `atmosphere_sky_view_kernel` from `atmosphere.hlsl`.
+pub static ATMOSPHERE_SKY_VIEW: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "atmosphere_sky_view_kernel",
+    label: "atmosphere_sky_view.hlsl",
+    gates: &["ATMOSPHERE_SKY_VIEW"],
+    msaa: false,
+};
+/// `atmosphere_aerial_kernel` from `atmosphere.hlsl`.
+pub static ATMOSPHERE_AERIAL: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "atmosphere_aerial_kernel",
+    label: "atmosphere_aerial.hlsl",
+    gates: &["ATMOSPHERE_AERIAL"],
+    msaa: false,
+};
+/// `atmosphere_irradiance_kernel` from `atmosphere.hlsl`.
+pub static ATMOSPHERE_IRRADIANCE: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "atmosphere_irradiance_kernel",
+    label: "atmosphere_irradiance.hlsl",
+    gates: &["ATMOSPHERE_IRRADIANCE"],
+    msaa: false,
+};
+/// `aerial_perspective_fragment` from `atmosphere.hlsl`.
+pub static AERIAL_PERSPECTIVE_FRAG: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "aerial_perspective_fragment",
+    label: "aerial_perspective_frag.hlsl",
+    gates: &["AERIAL_PERSPECTIVE"],
     msaa: true,
 };
 /// `histogram_build` from `auto_exposure.hlsl`.
@@ -647,6 +705,7 @@ pub static ALL: &[&ShaderProgram] = &[
     &SHADOW_VERT_BINDLESS,
     &SKY_VERT,
     &SKY_FRAG,
+    &SKY_ATMOSPHERE_FRAG,
     &FULLSCREEN_VERT,
     &TAA_FRAG,
     &BLOOM_PREFILTER,
@@ -665,6 +724,12 @@ pub static ALL: &[&ShaderProgram] = &[
     &REFLECTION_COMPOSITE,
     &FOG_FROXEL,
     &FOG_FRAG,
+    &ATMOSPHERE_TRANSMITTANCE,
+    &ATMOSPHERE_MULTISCATTER,
+    &ATMOSPHERE_SKY_VIEW,
+    &ATMOSPHERE_AERIAL,
+    &ATMOSPHERE_IRRADIANCE,
+    &AERIAL_PERSPECTIVE_FRAG,
     &AUTO_EXPOSURE_BUILD,
     &AUTO_EXPOSURE_AVERAGE,
     &PARTICLE_SIMULATE,
@@ -727,6 +792,7 @@ mod tests {
         assert_eq!(
             sampled,
             [
+                "aerial_perspective_frag.hlsl",
                 "decal_frag.hlsl",
                 "fog_frag.hlsl",
                 "glass_frag.hlsl",

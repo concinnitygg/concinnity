@@ -13,6 +13,9 @@
 /// Every embedded shader, as (file name, source). `embedded` looks up by name;
 /// a build script iterating the set walks this table.
 pub const SOURCES: &[(&str, &str)] = &[
+    ("atmosphere.hlsl", ATMOSPHERE),
+    ("atmosphere_common.hlsl", ATMOSPHERE_COMMON),
+    ("atmosphere_types.hlsl", ATMOSPHERE_TYPES),
     ("auto_exposure.hlsl", AUTO_EXPOSURE),
     ("bloom.hlsl", BLOOM),
     ("cluster_types.hlsl", CLUSTER_TYPES),
@@ -86,6 +89,12 @@ pub fn embedded(file: &str) -> Option<&'static str> {
         .find_map(|(name, text)| (*name == file).then_some(*text))
 }
 
+/// `atmosphere.hlsl`.
+pub const ATMOSPHERE: &str = include_str!("shaders/atmosphere.hlsl");
+/// `atmosphere_common.hlsl`.
+pub const ATMOSPHERE_COMMON: &str = include_str!("shaders/atmosphere_common.hlsl");
+/// `atmosphere_types.hlsl`.
+pub const ATMOSPHERE_TYPES: &str = include_str!("shaders/atmosphere_types.hlsl");
 /// `auto_exposure.hlsl`.
 pub const AUTO_EXPOSURE: &str = include_str!("shaders/auto_exposure.hlsl");
 /// `bloom.hlsl`.

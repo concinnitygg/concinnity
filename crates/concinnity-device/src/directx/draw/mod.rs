@@ -271,6 +271,17 @@ impl DxContext {
             cur_vp,
             vp_mat,
         } = self.frame_projection(fov_y_radians, aspect, near, width, height);
+        // The haze volume is laid along the un-jittered view rays, like the fog
+        // volume, so it holds still under the temporal jitter.
+        self.prepare_atmosphere(
+            frame_idx,
+            concinnity_core::render::atmosphere::AtmosphereView {
+                inv_vp: concinnity_core::transform::mat4_inverse(cur_vp),
+                cam_pos,
+                viewport: [width as f32, height as f32],
+                sky_rot: self.state.view.sky_rot,
+            },
+        );
 
         // Clustered light-binning params (main camera). The compute pass reads
         // these to build each cluster's world-space AABB (un-jittered inverse VP
@@ -322,6 +333,8 @@ impl DxContext {
             shade_mode: self.shade_mode(),
             ambient_occlusion: 1.0,
             sky_rot: self.state.view.sky_rot,
+            irradiance: self.irradiance_lane(),
+            _pad: [0.0; 3],
         };
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges

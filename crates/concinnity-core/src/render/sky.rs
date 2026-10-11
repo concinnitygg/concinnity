@@ -21,6 +21,17 @@ pub fn draws_sky(environment_loaded: bool, background: bool, mode: ViewMode) -> 
     environment_loaded && background && mode != ViewMode::Wireframe
 }
 
+/// The view block's `irradiance` lane: 1 when the bound irradiance cube holds
+/// the environment's diffuse light, which an environment map or an
+/// atmosphere puts there; 0 leaves the surfaces a flat ambient.
+pub fn irradiance_lane(environment_loaded: bool, atmosphere: bool) -> f32 {
+    if environment_loaded || atmosphere {
+        1.0
+    } else {
+        0.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::gfx::projection::{look_at, view_from_basis};

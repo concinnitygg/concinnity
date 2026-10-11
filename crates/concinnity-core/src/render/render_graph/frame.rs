@@ -286,6 +286,12 @@ pub struct FrameGraphInputs {
     /// `GrassShadow` compute pass whose blades and draw arguments `Shadow`
     /// reads.
     pub grass_shadow_enabled: bool,
+    /// `true` when the world declares an `Atmosphere` and the backend built
+    /// its tables. The graph adds an `Atmosphere` compute pass ahead of `Main`
+    /// (which draws the sky from its tables and lights with its irradiance)
+    /// and an `AerialPerspective` render pass on the hdr_resolve chain ahead
+    /// of `Fog`.
+    pub atmosphere_enabled: bool,
 }
 
 impl FrameGraphInputs {
@@ -356,6 +362,7 @@ impl FrameGraphInputs {
             upscale_reads_reactive: false,
             grass_enabled: false,
             grass_shadow_enabled: false,
+            atmosphere_enabled: false,
         }
     }
 }
@@ -410,6 +417,7 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
         i.upscale_reads_reactive = true
     }),
     ("grass", |i| i.grass_enabled = true),
+    ("atmosphere", |i| i.atmosphere_enabled = true),
     ("grass_shadow", |i| {
         i.grass_enabled = true;
         i.shadow_enabled = true;
@@ -716,6 +724,15 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // cluster buffer; Main's read below pins LightCull before Main in the
     // toposort. Backend-owned buffer, so the import is a dependency-tracking
     // stub.
+    // The atmosphere's tables (compute). Backend-owned and carried across
+    // frames, so the import only orders the pass ahead of its readers: Main and
+    // the mirrors (the sky and the ambient light) and the haze pass.
+    let atmosphere_luts = inputs.atmosphere_enabled.then(|| {
+        let luts = b.import_texture("atmosphere_luts", atmosphere_luts_desc());
+        b.add_pass(PassId::Atmosphere, PassKind::Compute)
+            .write_texture(luts)
+    });
+
     let cluster_lists = if inputs.clustering_enabled {
         let lists = b.import_buffer("cluster_lists", cluster_lists_desc());
         Some(
@@ -788,6 +805,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         }
         if let Some(h) = cluster_lists {
             main.read_buffer(h);
+        }
+        if let Some(h) = atmosphere_luts {
+            main.read_texture(h);
         }
         if let Some(h) = ao_output_v1 {
             main.read_texture(h);
@@ -909,6 +929,14 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         decals.read_texture(depth_cur);
         h = decals.write_texture(h);
     }
+    if let Some(luts) = atmosphere_luts {
+        // The air in front of each surface, under the fog: a volumetric fog is
+        // the nearer layer, so it blends over the haze rather than under it.
+        let mut aerial = b.add_pass(PassId::AerialPerspective, PassKind::Render);
+        aerial.read_texture(luts);
+        aerial.read_texture(depth_cur);
+        h = aerial.write_texture(h);
+    }
     if inputs.fog_enabled {
         // FogFroxel (compute) populates the 3D scatter/transmittance
         // volume the Fog fragment shader samples. The post-write handle
@@ -971,6 +999,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         }
         if let Some(h) = draw_args_v1 {
             planar.read_buffer(h);
+        }
+        if let Some(h) = atmosphere_luts {
+            planar.read_texture(h);
         }
         Some(planar.write_texture(mirrors))
     } else {
@@ -1169,6 +1200,19 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     }
 
     b.compile()
+}
+
+fn atmosphere_luts_desc() -> TextureDesc {
+    // Stands for the atmosphere's whole table set, whose largest member is the
+    // aerial-perspective volume; the backend owns and transitions the tables.
+    use crate::render::atmosphere::AERIAL_SIZE;
+    TextureDesc::volume_3d(
+        TextureSize::Absolute(AERIAL_SIZE),
+        TextureSize::Absolute(AERIAL_SIZE),
+        AERIAL_SIZE,
+        PixelFormat::Rgba16Float,
+        TextureUsage::STORAGE.union(TextureUsage::SHADER_READ),
+    )
 }
 
 fn froxel_volume_desc() -> TextureDesc {
@@ -2593,6 +2637,28 @@ mod tests {
         assert_eq!(raymarch.writes[0].version(), 2);
         let decals = &g.passes[3];
         assert_eq!(decals.writes[0].version(), 3);
+    }
+
+    // The atmosphere's tables are built before Main draws the sky and lights
+    // with them, and the haze lands on the decorated scene under the fog.
+    #[test]
+    fn the_atmosphere_feeds_main_and_hazes_under_the_fog() {
+        let mut i = all_off();
+        i.atmosphere_enabled = true;
+        i.decals_enabled = true;
+        i.fog_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+        let at = |p| order.iter().position(|x| *x == p).expect("pass present");
+        assert!(at(PassId::Atmosphere) < at(PassId::Main));
+        assert!(at(PassId::Decals) < at(PassId::AerialPerspective));
+        assert!(at(PassId::AerialPerspective) < at(PassId::Fog));
+        let off = build_frame_graph(&all_off()).expect("compiles");
+        assert!(
+            off.passes
+                .iter()
+                .all(|p| p.id != PassId::Atmosphere && p.id != PassId::AerialPerspective)
+        );
     }
 
     #[test]

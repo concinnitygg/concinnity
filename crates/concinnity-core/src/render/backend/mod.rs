@@ -120,6 +120,9 @@ pub struct FrameParams<'a> {
     /// The characters and bodies that may be trampling grass this frame,
     /// stamped into the grass's bend field near the camera.
     pub grass_benders: &'a [crate::render::grass::GrassBender],
+    /// Where the camera and the sun are about the planet, in a world with an
+    /// `Atmosphere`; the backend draws the sky and the haze from it.
+    pub atmosphere: Option<crate::render::atmosphere::AtmosphereFrame>,
 }
 
 /// The per-frame drive: what every graphics backend must implement for a world
