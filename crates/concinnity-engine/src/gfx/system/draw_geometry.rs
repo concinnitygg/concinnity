@@ -96,6 +96,14 @@ pub(super) fn declared_probe_placements(ctx: &PipelineContext) -> Vec<ProbePlace
         .collect()
 }
 
+// Whether a world without declared probes gets auto-seeded ones: not a planet
+// world, whose frame moves would leave a seeded probe's cube behind.
+pub(super) fn seeds_probes(ctx: &PipelineContext) -> bool {
+    ctx.query::<concinnity_core::components::Planet>()
+        .next()
+        .is_none()
+}
+
 // Geometry-aware probe auto-seed for a world that declares no ReflectionProbe:
 // surface-voxelizing the static geometry detects a watertight single-mesh
 // interior, which object AABBs alone would read as a solid block. An
@@ -134,6 +142,14 @@ pub(super) fn auto_seed_probe_placements(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_planet_world_seeds_no_probes() {
+        let mut world = concinnity_core::ecs::World::new();
+        assert!(seeds_probes(&world.context()));
+        world.push(concinnity_core::components::Planet::default());
+        assert!(!seeds_probes(&world.context()));
+    }
+
     use super::*;
     use concinnity_core::gfx::render_types::{DrawObject, MaterialUniforms, NO_NORMAL_MAP_SLOT};
 
@@ -164,6 +180,7 @@ mod tests {
             resident: true,
             bb_min,
             bb_max,
+            local_bounds: None,
             cull_distance: 0.0,
             lod_alternates: Vec::new(),
         }

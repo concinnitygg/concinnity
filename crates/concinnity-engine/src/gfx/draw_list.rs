@@ -113,6 +113,24 @@ const UNCULLED_BB: ([f32; 3], [f32; 3]) = (
     [f32::NAN, f32::NAN, f32::NAN],
 );
 
+// A box as its (min, max) corners.
+type Aabb = ([f32; 3], [f32; 3]);
+
+// A prop draw's world culling box and the model-space box it follows: the
+// sentinel for a dynamic prop, else its mesh's box placed at `model`.
+fn culled_bounds(
+    item: &RenderableItem,
+    local_min: [f32; 3],
+    local_max: [f32; 3],
+    model: [[f32; 4]; 4],
+) -> ([f32; 3], [f32; 3], Option<Aabb>) {
+    if item.is_dynamic || !concinnity_core::gfx::lod::bounds_finite(local_min, local_max) {
+        return (UNCULLED_BB.0, UNCULLED_BB.1, None);
+    }
+    let (bb_min, bb_max) = frustum::transform_aabb(local_min, local_max, model);
+    (bb_min, bb_max, Some((local_min, local_max)))
+}
+
 fn local_bounds(verts: &[Vertex]) -> ([f32; 3], [f32; 3]) {
     if verts.is_empty() {
         return UNCULLED_BB;
@@ -134,11 +152,10 @@ fn local_bounds(verts: &[Vertex]) -> ([f32; 3], [f32; 3]) {
 // entity's MeshRenderer/ModelRenderer + tag components by
 // `decomposed_renderable_item`.
 //
-// An entity is dynamic (pulled out of the BVH and always drawn after a per-object
-// frustum test) when it carries a Pickup, Interactable, Parent, or Collider tag,
-// or lives in a planet world, where every entity moves whenever the simulated
-// frame moves. The BVH is built once at init and does not refit, so a moving
-// entity would otherwise risk being culled against its stale init-time AABB.
+// An entity is dynamic (never culled) when it carries a Pickup, Interactable,
+// Parent, or Collider tag. A static draw keeps its mesh's model-space box, so
+// a rigid move of the whole world (a planet's frame moving) re-places its
+// culling box with its model and it stays static.
 #[derive(Debug, PartialEq)]
 pub(crate) struct RenderableItem {
     pub asset_id: Option<AssetId>,
@@ -151,11 +168,10 @@ pub(crate) struct RenderableItem {
 
 // Build one entity's RenderableItem: read its renderer fields from its
 // MeshRenderer xor ModelRenderer, its dynamic flag from the Pickup /
-// Interactable / Parent / Collider tags or a Planet in the world, and its asset
-// id from its Identity.
+// Interactable / Parent / Collider tags, and its asset id from its Identity.
 pub(crate) fn decomposed_renderable_item(ctx: &PipelineContext, entity: Entity) -> RenderableItem {
     use concinnity_core::components::{
-        Collider, Interactable, MeshRenderer, ModelRenderer, Parent, Pickup, Planet,
+        Collider, Interactable, MeshRenderer, ModelRenderer, Parent, Pickup,
     };
 
     let (model, mesh, material, cull_distance) = if let Some(m) = ctx.get::<ModelRenderer>(entity) {
@@ -168,8 +184,7 @@ pub(crate) fn decomposed_renderable_item(ctx: &PipelineContext, entity: Entity) 
     let is_dynamic = ctx.get::<Pickup>(entity).is_some()
         || ctx.get::<Interactable>(entity).is_some()
         || ctx.get::<Parent>(entity).is_some()
-        || ctx.get::<Collider>(entity).is_some()
-        || ctx.query::<Planet>().next().is_some();
+        || ctx.get::<Collider>(entity).is_some();
     RenderableItem {
         asset_id: ctx.get::<Identity>(entity).map(|i| i.id()),
         model,
@@ -711,11 +726,8 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                         return None;
                     }
                 };
-                let (bb_min, bb_max) = if item.is_dynamic {
-                    UNCULLED_BB
-                } else {
-                    frustum::transform_aabb(local_min, local_max, model_mat)
-                };
+                let (bb_min, bb_max, local_bounds) =
+                    culled_bounds(item, local_min, local_max, model_mat);
                 union_local(local_min, local_max);
                 let slot = DrawIndex::from_usize(draw_objects.len());
                 prop_idxs.push(slot);
@@ -738,6 +750,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     resident: true,
                     bb_min,
                     bb_max,
+                    local_bounds,
                     cull_distance: item.cull_distance,
                     lod_alternates,
                 });
@@ -784,11 +797,8 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                     return None;
                 }
             };
-            let (bb_min, bb_max) = if item.is_dynamic {
-                UNCULLED_BB
-            } else {
-                frustum::transform_aabb(local_min, local_max, model_mat)
-            };
+            let (bb_min, bb_max, local_bounds) =
+                culled_bounds(item, local_min, local_max, model_mat);
             union_local(local_min, local_max);
             let slot = DrawIndex::from_usize(draw_objects.len());
             prop_idxs.push(slot);
@@ -812,6 +822,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 resident: true,
                 bb_min,
                 bb_max,
+                local_bounds,
                 cull_distance: item.cull_distance,
                 lod_alternates,
             });
@@ -954,6 +965,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
                 resident: true,
                 bb_min: UNCULLED_BB.0,
                 bb_max: UNCULLED_BB.1,
+                local_bounds: None,
                 cull_distance: 0.0,
                 lod_alternates: Vec::new(),
             });
@@ -998,6 +1010,7 @@ pub(crate) fn build_draw_list(inputs: DrawListInputs) -> Option<DrawListData> {
             resident: true,
             bb_min: UNCULLED_BB.0,
             bb_max: UNCULLED_BB.1,
+            local_bounds: None,
             cull_distance: 0.0,
             lod_alternates: lod_slices,
         });
@@ -1245,16 +1258,31 @@ mod tests {
         );
     }
 
-    // In a planet world every placement moves with the simulated frame, so
-    // none is frozen into the static BVH.
+    // A planet world's frame moves are rigid, so its placements stay static
+    // and keep the model-space box their culling box follows.
     #[test]
-    fn a_planet_world_makes_every_placement_dynamic() {
+    fn a_planet_world_keeps_placements_static() {
         use concinnity_core::components::{MeshRenderer, Planet};
         let mut world = World::new();
         let e = world.push(MeshRenderer::default());
-        assert!(!decomposed_renderable_item(&world.context(), e).is_dynamic);
         world.push(Planet::default());
-        assert!(decomposed_renderable_item(&world.context(), e).is_dynamic);
+        let item = decomposed_renderable_item(&world.context(), e);
+        assert!(!item.is_dynamic);
+        let model = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [5.0, 0.0, 0.0, 1.0],
+        ];
+        let (lo, hi, local) = culled_bounds(&item, [-1.0; 3], [1.0; 3], model);
+        assert_eq!((lo, hi), ([4.0, -1.0, -1.0], [6.0, 1.0, 1.0]));
+        assert_eq!(local, Some(([-1.0; 3], [1.0; 3])));
+        let dynamic = RenderableItem {
+            is_dynamic: true,
+            ..item
+        };
+        let (lo, _, local) = culled_bounds(&dynamic, [-1.0; 3], [1.0; 3], model);
+        assert!(lo[0].is_nan() && local.is_none());
     }
 
     fn mesh_item(mesh: AssetId) -> RenderableItem {

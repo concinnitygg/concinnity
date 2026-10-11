@@ -435,6 +435,10 @@ impl MtlContext {
         let view = PackView {
             cam_pos,
             mesh_glass_active: self.mesh_glass_active(),
+            horizon: self
+                .state
+                .horizon_occluder
+                .and_then(|o| o.seen_from(cam_pos)),
         };
         let texture_count = self.scene.textures.len();
         let (objects, objects_fresh) = self.rings.object.slot_fresh(

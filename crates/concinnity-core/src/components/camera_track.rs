@@ -181,8 +181,11 @@ pub struct CameraTrackArgs {
     crate::ecs::AssetFields,
 )]
 pub struct CameraTravelKey {
-    /// Offset from the camera's starting position reached at `end_seconds`.
-    pub offset: [f32; 3],
+    /// How far the leg moves the camera: from where the previous leg left it
+    /// to where it stands at `end_seconds`. Each leg carries its own
+    /// displacement rather than one from the track's start, so a long track
+    /// keeps every leg as precise as a short one.
+    pub delta: [f32; 3],
     /// Seconds from the track's start at which the camera arrives here.
     pub end_seconds: f32,
     /// How the run up to this point is paced.
@@ -244,7 +247,8 @@ pub struct CameraTurnKey {
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
 )]
 pub struct CameraTrack {
-    /// The travel track, as offsets from the camera's starting position.
+    /// The travel track, leg by leg, each a displacement from where the one
+    /// before it ended.
     pub travel: Vec<CameraTravelKey>,
     /// The turn track, as absolute headings.
     pub turn: Vec<CameraTurnKey>,
@@ -255,13 +259,12 @@ pub struct CameraTrack {
 
 impl CameraTrack {
     /// Translate the authored legs into the runtime keys: resolve each travel
-    /// leg's duration and accumulate its offset, gather the segment names, and
+    /// leg's duration and displacement, gather the segment names, and
     /// carry the turn legs through for the world start to time.
     pub fn bake(args: CameraTrackArgs) -> Self {
         let args = crate::components::validate::camera_track(args);
         let mut travel = Vec::with_capacity(args.travel.len());
         let mut segments: Vec<String> = Vec::new();
-        let mut offset = [0.0_f32; 3];
         let mut end_seconds = 0.0_f32;
         let mut segment = None;
         for leg in &args.travel {
@@ -277,12 +280,8 @@ impl CameraTrack {
             }
             let seconds = travel_seconds(leg);
             end_seconds += seconds;
-            offset = vec3::add(
-                offset,
-                vec3::scale(vec3::vec3_normalize(leg.direction), leg.distance),
-            );
             travel.push(CameraTravelKey {
-                offset,
+                delta: vec3::scale(vec3::vec3_normalize(leg.direction), leg.distance),
                 end_seconds,
                 ease: leg.ease,
                 cut: leg.cut || (seconds == 0.0 && leg.distance > 0.0),
@@ -385,7 +384,7 @@ mod tests {
     fn a_travel_leg_takes_its_distance_divided_by_its_speed() {
         let t = baked(vec![travel([0.0, 0.0, -1.0], 20.0, 4.0)], vec![]);
         assert_eq!(t.travel[0].end_seconds, 5.0);
-        assert_eq!(t.travel[0].offset, [0.0, 0.0, -20.0]);
+        assert_eq!(t.travel[0].delta, [0.0, 0.0, -20.0]);
     }
 
     #[test]
@@ -397,7 +396,7 @@ mod tests {
         let t = baked(vec![leg], vec![]);
         assert_eq!(t.travel[0].end_seconds, 3.0);
         // The distance is unchanged: the override moves the clock, not the path.
-        assert_eq!(t.travel[0].offset, [20.0, 0.0, 0.0]);
+        assert_eq!(t.travel[0].delta, [20.0, 0.0, 0.0]);
     }
 
     #[test]
@@ -414,11 +413,11 @@ mod tests {
         };
         let t = baked(vec![travel([1.0, 0.0, 0.0], 4.0, 2.0), hold], vec![]);
         assert_eq!(t.travel[1].end_seconds, 4.5);
-        assert_eq!(t.travel[1].offset, t.travel[0].offset);
+        assert_eq!(t.travel[1].delta, [0.0; 3]);
     }
 
     #[test]
-    fn offsets_accumulate_along_normalized_directions() {
+    fn each_leg_moves_its_own_distance_along_its_normalized_direction() {
         // The direction is not unit length, so the leg would overshoot if the
         // bake scaled by it rather than by its direction.
         let t = baked(
@@ -428,8 +427,8 @@ mod tests {
             ],
             vec![],
         );
-        assert_eq!(t.travel[0].offset, [0.0, 0.0, -10.0]);
-        assert_eq!(t.travel[1].offset, [6.0, 0.0, -10.0]);
+        assert_eq!(t.travel[0].delta, [0.0, 0.0, -10.0]);
+        assert_eq!(t.travel[1].delta, [6.0, 0.0, 0.0]);
         assert_eq!(t.travel[1].end_seconds, 16.0);
     }
 
@@ -444,7 +443,7 @@ mod tests {
         assert!(!t.travel[0].cut);
         assert!(t.travel[1].cut);
         assert_eq!(t.travel[1].end_seconds, t.travel[0].end_seconds);
-        assert_eq!(t.travel[1].offset, [2.0, 0.0, 12.0]);
+        assert_eq!(t.travel[1].delta, [0.0, 0.0, 12.0]);
     }
 
     // A leg that moves the camera in no time is a jump whether or not the
@@ -518,7 +517,7 @@ mod tests {
         // clock, silently rewriting a path the author laid out around it.
         let t = baked(vec![travel([0.0, 0.0, 0.0], 12.0, 4.0)], vec![]);
         assert_eq!(t.travel[0].end_seconds, 3.0);
-        assert_eq!(t.travel[0].offset, [0.0; 3]);
+        assert_eq!(t.travel[0].delta, [0.0; 3]);
     }
 
     #[test]
@@ -539,7 +538,7 @@ mod tests {
                 ..Default::default()
             }],
         );
-        assert_eq!(t.travel[0].offset, [0.0; 3]);
+        assert_eq!(t.travel[0].delta, [0.0; 3]);
         assert_eq!(t.travel[0].end_seconds, 0.0);
         // A target that is not a real angle is dropped, so the leg holds.
         assert_eq!(t.turn[0].yaw_deg, None);

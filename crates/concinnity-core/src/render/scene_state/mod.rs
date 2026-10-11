@@ -15,6 +15,7 @@ use core::cell::RefCell;
 
 use crate::gfx::render_types::{DrawIndex, DrawObject, clone_reserve, runtime_reserve_full};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
+use crate::planet::HorizonOccluder;
 use crate::render::backend::PlanetChunk;
 use crate::render::grass::DrawnPlanetTile;
 use crate::render::model_history::ModelHistory;
@@ -47,6 +48,9 @@ pub struct SceneState {
     pub gpu_dirty: GpuDirty,
     /// The streamed chunks that draw a planet's tiles.
     pub planet_chunks: BTreeMap<DrawIndex, PlanetChunk>,
+    /// A planet world's lowest ground, which hides the draws wholly behind
+    /// its horizon.
+    pub horizon_occluder: Option<HorizonOccluder>,
 }
 
 impl SceneState {
@@ -60,6 +64,7 @@ impl SceneState {
             placement: GeometryPlacement::default(),
             gpu_dirty: GpuDirty::default(),
             planet_chunks: BTreeMap::new(),
+            horizon_occluder: None,
         }
     }
 

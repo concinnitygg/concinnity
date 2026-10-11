@@ -154,6 +154,7 @@ pub(crate) fn draw_object() -> DrawObject {
         resident: true,
         bb_min: [-1.0, -2.0, -3.0],
         bb_max: [1.0, 2.0, 3.0],
+        local_bounds: None,
         cull_distance: 42.0,
         lod_alternates: Vec::new(),
     }

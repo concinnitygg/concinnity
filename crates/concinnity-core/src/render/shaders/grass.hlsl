@@ -911,6 +911,16 @@ GrassSite grass_planet_site(GrassLayer L, PlanetGrassTile T, uint2 g, uint2 cell
     site.hash = h;
     site.clump_salt = face_salt;
 
+    // Most far candidates fall to distance thinning, so that is tested before
+    // the meadow noise: a dropped candidate keeps density 0 and never pays for
+    // it. grass_grow makes the same test, so the field is unchanged.
+    float dist = distance(site.root, grass.cam_pos_distance.xyz);
+    float keep = grass_thinning(dist) * grass_fade(dist);
+    if (dist > grass.cull_distance || grass_unit(h, 5u) * (1.0 - grass.thinning.y) >= keep)
+    {
+        return site;
+    }
+
     // The share of a blade's ground this cell holds, then the meadow.
     float per_mesh_cell = cells / float(GRASS_PLANET_TILE_CELLS);
     float area = length(cross(edge_s, edge_t)) / (per_mesh_cell * per_mesh_cell);

@@ -1189,7 +1189,11 @@ mod tests {
             let cam = [0.0, s.height([0.0, 1.0, 0.0]) as f32 + 1.7, 0.0];
             let cam_world = LocalFrame::AUTHORED.to_world(cam);
             let tiles = lod
-                .select(cam_world, &|_| true)
+                .select(
+                    cam_world,
+                    &|_| true,
+                    &mut crate::planet::TileBoundsCache::new(s),
+                )
                 .draw
                 .into_iter()
                 .map(|id| {

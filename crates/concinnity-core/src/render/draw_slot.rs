@@ -121,7 +121,7 @@ pub fn set_chunk_model(
     let obj = objects
         .get_mut(draw_idx.index())
         .ok_or_else(|| format!("set_chunk_model: draw object {} out of range", draw_idx))?;
-    obj.model = model;
+    obj.set_model(model);
     Ok(())
 }
 

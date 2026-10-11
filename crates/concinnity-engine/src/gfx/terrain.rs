@@ -149,6 +149,7 @@ pub(crate) fn append_terrain_draws(
             resident: true,
             bb_min,
             bb_max,
+            local_bounds: Some(chunk.bounds),
             cull_distance: 0.0,
             lod_alternates: Vec::new(),
         });

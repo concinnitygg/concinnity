@@ -41,6 +41,27 @@ pub(super) fn sample<const N: usize>(start: [f32; N], keys: &[Key<N>], seconds: 
     from
 }
 
+/// How far into leg `leg` the track is `seconds` in: none of its value before
+/// the leg starts, the eased share of it during, and all of it after. A leg
+/// past the end of the track contributes nothing.
+pub(super) fn progress<const N: usize>(keys: &[Key<N>], leg: usize, seconds: f32) -> [f32; N] {
+    let Some(key) = keys.get(leg) else {
+        return [0.0; N];
+    };
+    let from = leg
+        .checked_sub(1)
+        .map_or(0.0, |prev| keys[prev].end_seconds);
+    let span = key.end_seconds - from;
+    let t = if seconds >= key.end_seconds {
+        1.0
+    } else if span > 0.0 {
+        ((seconds - from) / span).max(0.0)
+    } else {
+        0.0
+    };
+    lerp([0.0; N], key.value, key.ease.eval(t))
+}
+
 /// Which key covers `seconds`, or `None` for an empty track. Past the last key
 /// the last one still answers, so a finished track keeps reporting the segment
 /// it ended in.
@@ -94,6 +115,17 @@ mod tests {
                 cut: false,
             },
         ]
+    }
+
+    #[test]
+    fn a_leg_progresses_through_its_own_value_only() {
+        let keys = keys();
+        assert_eq!(progress(&keys, 0, 1.0), [5.0]);
+        assert_eq!(progress(&keys, 0, 3.0), [10.0], "done");
+        assert_eq!(progress(&keys, 1, 1.0), [0.0], "not started");
+        assert_eq!(progress(&keys, 1, 4.0), [15.0], "half of its own 30");
+        assert_eq!(progress(&keys, 1, 9.0), [30.0]);
+        assert_eq!(progress(&keys, 2, 9.0), [0.0], "past the track");
     }
 
     #[test]

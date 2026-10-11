@@ -1337,6 +1337,12 @@ pub struct DrawObject {
     pub bb_min: [f32; 3],
     /// Upper corner of the world-space culling AABB.
     pub bb_max: [f32; 3],
+    /// The mesh's own box, in model space, for a draw whose culling box
+    /// follows its model: every [`Self::set_model`] re-derives `bb_min` /
+    /// `bb_max` from it, so a draw moved after it was built (a planet world's
+    /// frame moving under it) stays cullable. `None` keeps the world box as
+    /// built.
+    pub local_bounds: Option<([f32; 3], [f32; 3])>,
     /// If > 0, the object is skipped when the camera is further than this from
     /// the AABB center. Lets a Prop opt in to distance-based unloading.
     pub cull_distance: f32,
@@ -1366,6 +1372,15 @@ impl DrawObject {
     /// frustum/distance culling. A degenerate box (NaN min) disables culling.
     pub fn cullable(&self) -> bool {
         crate::gfx::lod::bounds_finite(self.bb_min, self.bb_max)
+    }
+
+    /// Place the draw at `model`, its world box following when it carries
+    /// [`Self::local_bounds`].
+    pub fn set_model(&mut self, model: [[f32; 4]; 4]) {
+        self.model = model;
+        if let Some((lo, hi)) = self.local_bounds {
+            (self.bb_min, self.bb_max) = crate::gfx::frustum::transform_aabb(lo, hi, model);
+        }
     }
 }
 

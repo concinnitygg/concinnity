@@ -52,7 +52,7 @@ use concinnity_host::store::blob::payload_section_start;
 
 use super::backend_handoff::RuntimeHandoff;
 use super::blob_release::{blobs_to_release, retained_blobs};
-use super::draw_geometry::{auto_seed_probe_placements, declared_probe_placements};
+use super::draw_geometry::{auto_seed_probe_placements, declared_probe_placements, seeds_probes};
 use super::hot_reload_sources::{
     HotReloadSources, capture_hot_reload_sources, mesh_source_map, procedural_mesh_snapshot,
     procedural_mesh_source_map,
@@ -1608,10 +1608,11 @@ impl GraphicsSystem {
             .resource::<concinnity_core::render::backend_init::EmbeddedSurface>()
             .copied();
 
-        // Declared probes win; otherwise the geometry-aware auto-seed; otherwise an
-        // empty list, which lets the backend run its own coarse-AABB auto-seed.
+        // Declared probes win; otherwise the geometry-aware auto-seed, except in
+        // a planet world, whose frame moves would leave a seeded probe's cube
+        // behind; otherwise none.
         let mut probe_placements = declared_probe_placements(ctx);
-        if probe_placements.is_empty() {
+        if probe_placements.is_empty() && seeds_probes(ctx) {
             probe_placements = auto_seed_probe_placements(
                 &draw_objects,
                 &all_vertices,

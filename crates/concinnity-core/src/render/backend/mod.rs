@@ -170,6 +170,15 @@ pub trait RenderBackend:
         }
     }
 
+    /// Set the planet ground draws are hidden behind once wholly past its
+    /// horizon, or `None` for a world without one. Re-sent whenever the
+    /// simulated frame moves, since the planet's center moves with it.
+    fn set_horizon_occluder(&mut self, occluder: Option<crate::planet::HorizonOccluder>) {
+        if let Some(scene) = self.scene_mut() {
+            scene.horizon_occluder = occluder;
+        }
+    }
+
     /// Retire a draw object: hide it from every pass (main, shadow, velocity)
     /// and exclude it from the ray-tracing acceleration structure, so a
     /// despawned entity's slot leaves no ghost. The slot's geometry buffers are
@@ -385,6 +394,7 @@ mod tests {
                         material: MaterialUniforms::DEFAULT,
                         frame: 0,
                         planet_tile: None,
+                        bounds: None,
                     },
                     crate::render::draw_slot::SlotAlloc::Append(DrawIndex(0)),
                 )),

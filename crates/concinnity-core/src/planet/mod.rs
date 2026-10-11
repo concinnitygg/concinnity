@@ -14,10 +14,15 @@
 //!   catches up from.
 //! - [`ground_patch`]: the ground around one point as a height grid in the
 //!   simulated frame, for bodies to collide with.
+//! - [`GeoPosition`] and [`GeoPose`]: latitude, longitude and height on the
+//!   planet, and the conversions to and from the simulated frame.
+//! - [`Horizon`]: the planet's lowest ground as an occluder.
 
 pub(crate) mod dvec;
 mod frame;
+mod geo;
 mod ground;
+mod horizon;
 mod lod;
 mod rebase;
 mod shape;
@@ -25,8 +30,10 @@ mod tile;
 
 pub use dvec::{DMat3, DVec3};
 pub use frame::LocalFrame;
+pub use geo::{CameraGeo, GeoPose, GeoPosition, geo_axes, geo_direction, geo_lat_lon};
 pub use ground::{GroundPatch, ground_patch};
-pub use lod::{RETAIN_WIDTHS, SPLIT_WIDTHS, TileLod, TileSelection};
+pub use horizon::{Horizon, HorizonOccluder};
+pub use lod::{RETAIN_WIDTHS, SPLIT_WIDTHS, TileBoundsCache, TileLod, TileSelection};
 pub use rebase::{FrameRebases, Rebase, RebaseCursor, needs_rebase};
 pub use shape::{CubeFace, MAX_OCTAVES, MIN_OCTAVES, PlanetShape};
 pub use tile::{MAX_TILE_LEVEL, TILE_CELLS, TileBounds, TileId, TileMesh, tile_bounds, tile_mesh};
@@ -45,6 +52,11 @@ pub const FINEST_CELL_SIZE: f64 = 1.0;
 /// How far the camera strays from the simulated frame's origin before the
 /// frame moves to it, in meters.
 pub const REBASE_DISTANCE: f32 = 1_000.0;
+
+/// How near the camera something stays drawn although the planet's horizon
+/// hides it, in meters: twice the longest shadow distance a camera can be set
+/// to, so a caster just below the horizon still shadows the ground in view.
+pub const HORIZON_SHADOW_REACH: f64 = 640.0;
 
 /// An f32 point widened to double precision.
 pub fn dvec_from_f32(v: [f32; 3]) -> DVec3 {

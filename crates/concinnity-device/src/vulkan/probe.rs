@@ -84,18 +84,14 @@ fn capture_cull_params(frustum: &Frustum, cam_pos: [f32; 3], n_cull: u32) -> Cul
 pub(super) type VkProbeBake = ProbeBake<RenderingBake, PrefilteringBake>;
 
 impl VkContext {
-    // Set the reflection-probe placements (declared `ReflectionProbe` assets,
-    // converted to `ProbePlacement`s by the graphics system). An empty list
-    // auto-seeds a grid from the scene bounds, so existing scenes still get local
-    // reflections without authoring. The cube array grows to hold every
+    // Set the reflection-probe placements the graphics system resolved
+    // (declared `ReflectionProbe` assets, or a grid auto-seeded over the
+    // scene); an empty list bakes none. The cube array grows to hold every
     // placement; a world whose array cannot grow keeps the sky. Pushed once
     // after construction; the cube capture that fills the probe set runs across
     // later frames.
-    pub(super) fn set_reflection_probes(&mut self, declared: &[ProbePlacement]) {
-        let placements = reflection_probe::resolve_placements(
-            declared,
-            self.state.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)),
-        );
+    pub(super) fn set_reflection_probes(&mut self, placements: &[ProbePlacement]) {
+        let placements = placements.to_vec();
         // Idle first when probes are installed: the frames in flight may sample
         // the cubes the next bake overwrites.
         if self.probe.book.count() > 0 {

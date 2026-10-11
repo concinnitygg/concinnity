@@ -15,7 +15,8 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use concinnity_core::gfx::render_types::{DrawIndex, MaterialUniforms};
 use concinnity_core::planet::{
-    DVec3, LocalFrame, MAX_RESIDENT_TILES, PlanetFrame, TileId, TileLod, TileMesh, tile_mesh,
+    DVec3, HORIZON_SHADOW_REACH, Horizon, HorizonOccluder, LocalFrame, MAX_RESIDENT_TILES,
+    PlanetFrame, TileBoundsCache, TileId, TileLod, TileMesh, tile_mesh,
 };
 use concinnity_core::render::backend::{ChunkMesh, PlanetChunk};
 use concinnity_core::render::error;
@@ -56,20 +57,43 @@ struct TilePlan {
 // What the camera at authored point `camera` makes of `tiles`: the resident
 // tiles whose visibility flips, the tiles no longer worth keeping, and the
 // tiles to build next, coarsest and nearest first, within the in-flight and
-// residency bounds.
-fn plan(lod: &TileLod, tiles: &BTreeMap<TileId, Tile>, camera: DVec3) -> TilePlan {
+// residency bounds. A tile the quadtree draws stays hidden while it lies
+// wholly behind the planet's horizon.
+fn plan(
+    lod: &TileLod,
+    tiles: &BTreeMap<TileId, Tile>,
+    camera: DVec3,
+    bounds: &mut TileBoundsCache,
+) -> TilePlan {
     let resident = |t: TileId| matches!(tiles.get(&t), Some(Tile::Resident { .. }));
-    let selection = lod.select(camera, &resident);
-    let drawn: std::collections::BTreeSet<TileId> = selection.draw.iter().copied().collect();
-    let mut keep: std::collections::BTreeSet<TileId> = lod.retained(camera).into_iter().collect();
-    keep.extend(drawn.iter().copied());
+    let selection = lod.select(camera, &resident, bounds);
+    // Both lists sorted, so the walk over the (sorted) tiles below meets
+    // their entries in order and looks nothing up.
+    let mut drawn = selection.draw;
+    drawn.sort_unstable();
+    let mut keep = lod.retained(camera, bounds);
+    keep.extend_from_slice(&drawn);
+    keep.sort_unstable();
+    keep.dedup();
+    let (mut drawn, mut keep) = (Sorted::new(&drawn), Sorted::new(&keep));
+    let horizon = Horizon::new(
+        camera,
+        lod.shape.center,
+        lod.shape.radius,
+        HORIZON_SHADOW_REACH,
+    );
 
     let mut out = TilePlan::default();
     for (&id, tile) in tiles {
         match *tile {
             Tile::Resident { visible, .. } => {
-                let want = drawn.contains(&id);
-                if !keep.contains(&id) {
+                let kept = keep.contains(id);
+                let want = drawn.contains(id)
+                    && !horizon.is_some_and(|h| {
+                        let b = bounds.get(id);
+                        h.hides_sphere(b.center, b.radius)
+                    });
+                if !kept {
                     out.evict.push(id);
                 } else if want && !visible {
                     out.show.push(id);
@@ -77,7 +101,7 @@ fn plan(lod: &TileLod, tiles: &BTreeMap<TileId, Tile>, camera: DVec3) -> TilePla
                     out.hide.push(id);
                 }
             }
-            Tile::Pending if !keep.contains(&id) => out.evict.push(id),
+            Tile::Pending if !keep.contains(id) => out.evict.push(id),
             Tile::Pending => {}
         }
     }
@@ -92,7 +116,7 @@ fn plan(lod: &TileLod, tiles: &BTreeMap<TileId, Tile>, camera: DVec3) -> TilePla
         .iter()
         .filter(|id| !tiles.contains_key(id))
         .map(|&id| {
-            let b = concinnity_core::planet::tile_bounds(&lod.shape, id);
+            let b = bounds.get(id);
             let d = (0..3)
                 .map(|i| (camera[i] - b.center[i]).powi(2))
                 .sum::<f64>();
@@ -104,6 +128,27 @@ fn plan(lod: &TileLod, tiles: &BTreeMap<TileId, Tile>, camera: DVec3) -> TilePla
     out
 }
 
+// A sorted list asked about ascending ids: each answer resumes where the
+// last one stopped.
+struct Sorted<'a> {
+    ids: &'a [TileId],
+    at: usize,
+}
+
+impl<'a> Sorted<'a> {
+    fn new(ids: &'a [TileId]) -> Self {
+        Self { ids, at: 0 }
+    }
+
+    // Whether `id`, at or past every id asked about before, is listed.
+    fn contains(&mut self, id: TileId) -> bool {
+        while self.ids.get(self.at).is_some_and(|&t| t < id) {
+            self.at += 1;
+        }
+        self.ids.get(self.at) == Some(&id)
+    }
+}
+
 /// A planet's streamed terrain: its tiles, the workers that build them, and
 /// the material they draw with.
 pub(crate) struct PlanetTiles {
@@ -112,8 +157,11 @@ pub(crate) struct PlanetTiles {
     results: Receiver<(TileId, TileMesh)>,
     next_worker: usize,
     tiles: BTreeMap<TileId, Tile>,
+    bounds: TileBoundsCache,
     // The frame every resident tile's model matrix places it in.
     placed_in: LocalFrame,
+    // The frame the renderer's horizon occluder was last placed in.
+    occluder_in: Option<LocalFrame>,
     texture_slot: usize,
     normal_map_slot: usize,
     material: MaterialUniforms,
@@ -172,7 +220,9 @@ impl PlanetTiles {
             results,
             next_worker: 0,
             tiles: BTreeMap::new(),
+            bounds: TileBoundsCache::new(planet.shape),
             placed_in: planet.frame,
+            occluder_in: None,
             texture_slot: material.texture_slot,
             normal_map_slot: material.normal_map_slot,
             material: material.material,
@@ -217,9 +267,22 @@ impl PlanetTiles {
                 }
             }
         }
+        if self.occluder_in != Some(planet.frame) {
+            self.occluder_in = Some(planet.frame);
+            let occluder = HorizonOccluder {
+                center: planet.center(),
+                radius: planet.shape.radius as f32,
+            };
+            ops.record(move |backend| backend.set_horizon_occluder(Some(occluder)));
+        }
         self.add_finished(planet, ops, slots, frame);
 
-        let plan = plan(&self.lod, &self.tiles, planet.frame.to_world(camera));
+        let plan = plan(
+            &self.lod,
+            &self.tiles,
+            planet.frame.to_world(camera),
+            &mut self.bounds,
+        );
         for (ids, visible) in [(plan.show, true), (plan.hide, false)] {
             for id in ids {
                 if let Some(Tile::Resident {
@@ -291,6 +354,7 @@ impl PlanetTiles {
                             tile: id,
                             radial: mesh.radial,
                         }),
+                        bounds: Some(mesh.bounds),
                     },
                     dst,
                 );
@@ -360,7 +424,13 @@ mod tests {
     // at once than the in-flight bound.
     #[test]
     fn a_fresh_planet_asks_for_its_faces_first() {
-        let p = plan(&lod(), &BTreeMap::new(), CAMERA);
+        let l = lod();
+        let p = plan(
+            &l,
+            &BTreeMap::new(),
+            CAMERA,
+            &mut TileBoundsCache::new(l.shape),
+        );
         assert_eq!(p.request.len(), MAX_IN_FLIGHT);
         let mut first: Vec<TileId> = p.request[..6].to_vec();
         assert_eq!(
@@ -383,8 +453,10 @@ mod tests {
             .enumerate()
             .map(|(i, &f)| (TileId::root(f), resident(i as u32, false)))
             .collect();
-        let p = plan(&l, &tiles, CAMERA);
-        assert_eq!(p.show.len(), 6);
+        let p = plan(&l, &tiles, CAMERA, &mut TileBoundsCache::new(l.shape));
+        // From 40 m up the horizon is 3.6 km out: the sides and the bottom
+        // lie wholly behind it.
+        assert_eq!(p.show, vec![TileId::root(CubeFace(2))]);
         assert!(p.request.iter().all(|t| t.level == 1));
         assert_eq!(p.request[0].face, CubeFace(2), "the face under the camera");
     }
@@ -413,14 +485,65 @@ mod tests {
         for (i, c) in TileId::root(CubeFace(2)).children().iter().enumerate() {
             tiles.insert(*c, resident(10 + i as u32, false));
         }
-        let p = plan(&l, &tiles, CAMERA);
+        let p = plan(&l, &tiles, CAMERA, &mut TileBoundsCache::new(l.shape));
         assert!(p.evict.contains(&far) && p.evict.contains(&gone));
         assert_eq!(
             p.hide,
-            vec![TileId::root(CubeFace(2))],
-            "the top root gives way"
+            CubeFace::ALL.map(TileId::root).to_vec(),
+            "the top root gives way, the rest are behind the horizon"
         );
         assert_eq!(p.show.len(), 4, "to its four children");
+    }
+
+    // Tiles drawn by the quadtree but wholly behind the horizon stay hidden;
+    // those within shadow reach of the camera show, below the horizon or not.
+    #[test]
+    fn tiles_behind_the_horizon_stay_hidden() {
+        let l = lod();
+        let mut bounds = TileBoundsCache::new(l.shape);
+        let camera = [0.0, 32.0, 0.0];
+        let sel = l.select(camera, &|_| true, &mut bounds);
+        let tiles: BTreeMap<TileId, Tile> = sel
+            .wanted
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| (t, resident(i as u32, false)))
+            .collect();
+        let p = plan(&l, &tiles, camera, &mut bounds);
+        let horizon = Horizon::new(camera, l.shape.center, l.shape.radius, 0.0).unwrap();
+        let mut hidden = 0;
+        for &t in &sel.draw {
+            let b = bounds.get(t);
+            let near = (0..3)
+                .map(|i| (b.center[i] - camera[i]).powi(2))
+                .sum::<f64>()
+                .sqrt()
+                - b.radius
+                <= HORIZON_SHADOW_REACH;
+            let behind = horizon.hides_sphere(b.center, b.radius);
+            assert_eq!(p.show.contains(&t), near || !behind, "{t:?}");
+            hidden += usize::from(!p.show.contains(&t));
+        }
+        assert!(hidden > 0, "the far side is hidden");
+        assert!(p.show.len() > hidden / 4, "the near side shows");
+    }
+
+    #[test]
+    fn a_sorted_list_answers_ascending_questions() {
+        let ids: Vec<TileId> = (0..6)
+            .step_by(2)
+            .map(|x| TileId {
+                face: CubeFace(1),
+                level: 3,
+                x,
+                y: 0,
+            })
+            .collect();
+        let mut sorted = Sorted::new(&ids);
+        let asked: Vec<bool> = (0..7)
+            .map(|x| sorted.contains(TileId { x, ..ids[0] }))
+            .collect();
+        assert_eq!(asked, [true, false, true, false, true, false, false]);
     }
 
     #[test]

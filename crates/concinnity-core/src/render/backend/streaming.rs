@@ -38,6 +38,10 @@ pub struct ChunkMesh<'a> {
     pub frame: u64,
     /// The planet tile the chunk draws, when it is one.
     pub planet_tile: Option<PlanetChunk>,
+    /// The box around `verts` in model space, for a chunk the cull tests:
+    /// its culling box follows `model` from then on. `None` draws the chunk
+    /// unculled.
+    pub bounds: Option<([f32; 3], [f32; 3])>,
 }
 
 /// The planet tile a streamed chunk draws: which square of the planet, and

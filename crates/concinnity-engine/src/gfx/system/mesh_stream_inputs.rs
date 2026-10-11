@@ -170,6 +170,7 @@ mod tests {
             resident: true,
             bb_min,
             bb_max,
+            local_bounds: None,
             cull_distance: 0.0,
             lod_alternates: Vec::new(),
         }

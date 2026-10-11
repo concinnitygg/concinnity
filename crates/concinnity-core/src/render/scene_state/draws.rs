@@ -25,7 +25,7 @@ impl SceneState {
     pub fn update_models(&mut self, updates: &[(DrawIndex, [[f32; 4]; 4])]) {
         for &(index, model) in updates {
             if let Some(obj) = self.draw.objects.get_mut(index.index()) {
-                obj.model = model;
+                obj.set_model(model);
             }
         }
     }
@@ -94,6 +94,7 @@ impl SceneState {
             resident: true,
             bb_min: [f32::NAN; 3],
             bb_max: [f32::NAN; 3],
+            local_bounds: None,
             cull_distance: source.cull_distance,
             lod_alternates: source.lod_alternates.clone(),
         };
@@ -215,6 +216,64 @@ mod tests {
         s.update_models(&[(DrawIndex(1), MOVED), (DrawIndex(9), MOVED)]);
         assert_ne!(s.draw.objects[0].model, MOVED);
         assert_eq!(s.draw.objects[1].model, MOVED);
+    }
+
+    // A static draw carried through a planet frame move: its culling box
+    // follows the model into the new frame, so the camera carried with it
+    // still sees it, where the box it was built with would now be culled.
+    #[test]
+    fn a_static_draw_moved_with_the_frame_stays_culled_right() {
+        use crate::gfx::camera::view_matrix;
+        use crate::gfx::frustum::{Frustum, transform_aabb};
+        use crate::planet::LocalFrame;
+        use crate::render::depth::camera_projection;
+        use crate::transform::mat4_mul;
+
+        let mut s = scene(2);
+        // A tall post a kilometer out, and a draw whose box was built fixed.
+        let local = ([-0.6, -60.0, -0.6], [0.6, 60.0, 0.6]);
+        let post = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [3.0, 20.0, -1_060.0, 1.0],
+        ];
+        let built = transform_aabb(local.0, local.1, post);
+        for (i, follows) in [(0, true), (1, false)] {
+            let obj = &mut s.draw.objects[i];
+            (obj.bb_min, obj.bb_max) = built;
+            obj.local_bounds = follows.then_some(local);
+            obj.set_model(post);
+            assert_eq!((obj.bb_min, obj.bb_max), built);
+        }
+
+        // The camera walks to 1 km out and the frame moves under it, turned
+        // onto the planet's up there.
+        let camera = [0.0, 4.0, -1_000.0];
+        let center = [0.0, -50_000.0, 0.0];
+        let world = LocalFrame::AUTHORED.to_world(camera);
+        let up = crate::planet::dvec::normalize_or(
+            crate::planet::dvec::sub(world, center),
+            [0.0, 1.0, 0.0],
+        );
+        let (_, rebase) = LocalFrame::AUTHORED.recentered(camera, up);
+        let moved = rebase.apply_matrix(post);
+        s.update_models(&[(DrawIndex(0), moved), (DrawIndex(1), moved)]);
+
+        let proj = camera_projection(70f32.to_radians(), 16.0 / 9.0, 0.1);
+        let view = rebase.reproject(view_matrix(camera, 0.0, -0.1));
+        let frustum = Frustum::from_camera(mat4_mul(proj, view), Some(500.0));
+        let carried = &s.draw.objects[0];
+        assert_eq!(
+            (carried.bb_min, carried.bb_max),
+            transform_aabb(local.0, local.1, moved),
+            "not stale"
+        );
+        assert!(frustum.intersects_aabb(carried.bb_min, carried.bb_max));
+        // The fixed box stayed where the post was in the old frame, a
+        // kilometer behind the camera's new origin.
+        assert_eq!((s.draw.objects[1].bb_min, s.draw.objects[1].bb_max), built);
+        assert!(!frustum.intersects_aabb(built.0, built.1));
     }
 
     #[test]

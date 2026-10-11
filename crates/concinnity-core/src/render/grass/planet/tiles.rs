@@ -239,7 +239,11 @@ mod tests {
             s.center,
             [0.0, s.radius + s.height([0.0, 1.0, 0.0]) + 1.7, 0.0],
         );
-        let sel = lod.select(cam_world, &|_| true);
+        let sel = lod.select(
+            cam_world,
+            &|_| true,
+            &mut crate::planet::TileBoundsCache::new(s),
+        );
         let tiles: Vec<DrawnPlanetTile> =
             sel.draw.iter().map(|&id| drawn(&s, &frame, id)).collect();
         let center = frame.to_local(s.center);
@@ -400,7 +404,11 @@ mod tests {
                     .map(light)
                     .collect();
                 let selected: Vec<_> = lod
-                    .select(cam_world, &|_| true)
+                    .select(
+                        cam_world,
+                        &|_| true,
+                        &mut crate::planet::TileBoundsCache::new(s),
+                    )
                     .draw
                     .iter()
                     .map(|&id| light(id))

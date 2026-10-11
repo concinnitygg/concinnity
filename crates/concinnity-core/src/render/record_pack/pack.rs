@@ -5,6 +5,7 @@ use crate::gfx::render_types::{
     DrawObject, GpuDrawArgs, GpuObjectData, albedo_pool_index, draw_args_bucket_bits,
     draw_args_flags, normal_pool_index, pack_object_record,
 };
+use crate::planet::Horizon;
 use crate::render::model_history::HistoryWindow;
 
 /// What every chunk of one frame's pack reads besides its own draws.
@@ -15,6 +16,9 @@ pub struct PackView {
     /// Whether see-through glass draws in the transparent pass this frame
     /// instead of the opaque one, which disables its opaque record.
     pub mesh_glass_active: bool,
+    /// A planet's horizon seen from the eye: a bounded draw wholly behind it
+    /// is disabled in every pass.
+    pub horizon: Option<Horizon>,
 }
 
 /// One pack of the static draws: draw `i` fills record `i` of both outputs,
@@ -117,7 +121,11 @@ fn draw_args(
     let (index_offset, index_count) = obj.active_lod(lod::camera_distance(obj, view.cam_pos));
     // See-through glass leaves the opaque pass while it draws as transparent,
     // keeping its record so every per-record index stays put.
-    let opaque_visible = obj.visible && !(view.mesh_glass_active && obj.material.see_through != 0);
+    let behind = view
+        .horizon
+        .is_some_and(|h| obj.cullable() && h.hides_box(obj.bb_min, obj.bb_max));
+    let opaque_visible =
+        obj.visible && !behind && !(view.mesh_glass_active && obj.material.see_through != 0);
     GpuDrawArgs {
         index_count: index_count as u32,
         index_offset: index_offset as u32,
@@ -198,6 +206,7 @@ mod tests {
         PackView {
             cam_pos: [0.0, 0.0, 0.0],
             mesh_glass_active: true,
+            horizon: None,
         }
     }
 
@@ -230,6 +239,47 @@ mod tests {
             chunk.pack(&view(), &|obj| pool_object_record(obj, TEXTURES));
         }
         (records, args)
+    }
+
+    // A bounded draw wholly behind a planet's horizon is disabled; one in
+    // front of it, and an unbounded one anywhere, are not.
+    #[test]
+    fn a_draw_behind_the_horizon_is_disabled() {
+        use crate::gfx::render_types::DrawArgsFlags;
+        use crate::planet::HorizonOccluder;
+        let occluder = HorizonOccluder {
+            center: [0.0, -50_000.0, 0.0],
+            radius: 50_000.0,
+        };
+        let view = PackView {
+            cam_pos: [0.0, 2.0, 0.0],
+            horizon: occluder.seen_from([0.0, 2.0, 0.0]),
+            ..view()
+        };
+        let mut objs = objects(3);
+        for o in &mut objs {
+            o.visible = true;
+            o.resident = true;
+            o.material.see_through = 0;
+        }
+        // 5 km round the planet, on the ground, and 20 m ahead.
+        let a = 5_000.0_f32 / 50_000.0;
+        let far = [0.0, -50_000.0 + 50_000.0 * a.cos(), -50_000.0 * a.sin()];
+        objs[0].bb_min = [far[0] - 2.0, far[1] - 2.0, far[2] - 2.0];
+        objs[0].bb_max = [far[0] + 2.0, far[1] + 2.0, far[2] + 2.0];
+        objs[1].bb_min = [-1.0, 0.0, -21.0];
+        objs[1].bb_max = [1.0, 2.0, -19.0];
+        objs[2].bb_min = [f32::NAN; 3];
+        objs[2].model[3] = [far[0], far[1], far[2], 1.0];
+        let mut tracker = ModelHistory::new();
+        tracker.begin(HistoryMode::Untracked, objs.len());
+        let mut window = tracker.window();
+        let enabled: Vec<bool> = objs
+            .iter()
+            .enumerate()
+            .map(|(i, o)| draw_args(o, i, &view, &mut window).flags & DrawArgsFlags::ENABLED != 0)
+            .collect();
+        assert_eq!(enabled, vec![false, true, true]);
     }
 
     #[test]

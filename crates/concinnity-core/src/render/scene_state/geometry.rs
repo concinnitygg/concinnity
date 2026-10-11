@@ -306,8 +306,8 @@ impl SceneState {
     }
 
     /// Place one streamed chunk in the chunk headroom and write its draw at
-    /// `dst`. The chunk is never culled: the streaming window already bounds
-    /// how many are resident.
+    /// `dst`. A chunk with `bounds` is culled by its box placed at its model;
+    /// one without is never culled.
     pub fn add_chunk_mesh(
         &mut self,
         mesh: ChunkMesh<'_>,
@@ -323,6 +323,7 @@ impl SceneState {
             material,
             frame,
             planet_tile,
+            bounds,
         } = mesh;
         if verts.is_empty() || idxs.is_empty() {
             return Err(RenderError::Other(
@@ -365,12 +366,16 @@ impl SceneState {
             resident: true,
             bb_min: [f32::NAN; 3],
             bb_max: [f32::NAN; 3],
+            local_bounds: bounds,
             cull_distance: 0.0,
             // A chunk's distance LOD is the streaming window's choice of mesh
             // detail, so it carries no per-draw alternates.
             lod_alternates: Vec::new(),
         };
-        self.place_draw_object(obj, dst);
+        let slot = self.place_draw_object(obj, dst);
+        if let Some(obj) = self.draw.objects.get_mut(slot.index()) {
+            obj.set_model(model);
+        }
         match planet_tile {
             Some(chunk) => self.planet_chunks.insert(dst.slot(), chunk),
             None => self.planet_chunks.remove(&dst.slot()),
@@ -783,6 +788,7 @@ mod tests {
             material: MaterialUniforms::DEFAULT,
             frame: 0,
             planet_tile: None,
+            bounds: None,
         }
     }
 
@@ -817,6 +823,38 @@ mod tests {
         assert!(obj.visible && obj.resident && !obj.cullable());
         assert!(obj.lod_alternates.is_empty());
         assert!(scene.gpu_dirty.rt_topology);
+    }
+
+    // A chunk with a box is culled by it placed at its model, and the box
+    // follows the model when the chunk is re-placed.
+    #[test]
+    fn a_bounded_chunk_is_culled_by_its_placed_box() {
+        let mut scene = chunked(8, 8);
+        let mut w = Recorder::default();
+        let mut model = crate::transform::IDENTITY;
+        model[3] = [10.0, 0.0, 0.0, 1.0];
+        let verts = vertices(3);
+        let mesh = ChunkMesh {
+            model,
+            bounds: Some(([-1.0, 0.0, -1.0], [1.0, 2.0, 1.0])),
+            ..chunk(&verts, &[0, 1, 2])
+        };
+        scene
+            .add_chunk_mesh(mesh, SlotAlloc::Append(DrawIndex(0)), &mut w)
+            .expect("room for the chunk");
+        let obj = &scene.draw.objects[0];
+        assert!(obj.cullable());
+        assert_eq!(
+            (obj.bb_min, obj.bb_max),
+            ([9.0, 0.0, -1.0], [11.0, 2.0, 1.0])
+        );
+        model[3] = [0.0, 5.0, 0.0, 1.0];
+        scene.set_chunk_model(DrawIndex(0), model).unwrap();
+        let obj = &scene.draw.objects[0];
+        assert_eq!(
+            (obj.bb_min, obj.bb_max),
+            ([-1.0, 5.0, -1.0], [1.0, 7.0, 1.0])
+        );
     }
 
     // A planet chunk is listed with its tile while it is shown, with the model

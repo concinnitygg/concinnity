@@ -28,12 +28,16 @@ pub struct CameraTrackSystem {
     turn: Vec<Key<2>>,
     start_position: [f32; 3],
     start_angles_deg: [f32; 2],
-    // Where travel continues from after a planet world's frame moved: the
-    // camera's carried position, the track offset it was at, and the turn
-    // every later offset rides through. The start, a zero offset and no turn
-    // until the frame first moves.
+    // Travel is laid out leg by leg from where the camera is: `leg` is the
+    // leg under way, `anchor` where the camera stood when its progress was
+    // `anchor_progress` (the leg's start, or where a frame move carried it
+    // mid-leg), and `frame_turn` the turn every frame move so far gave the
+    // legs, which are authored in the frame the world started in. Every
+    // offset the camera rides is one leg's at most, so a long track stays as
+    // precise as a short one.
+    leg: usize,
     anchor: [f32; 3],
-    anchor_offset: [f32; 3],
+    anchor_progress: [f32; 3],
     frame_turn: crate::math::Quat,
     rebases: RebaseCursor,
     // Ticks are counted and multiplied rather than accumulated: a long run
@@ -53,7 +57,7 @@ impl CameraTrackSystem {
                 .travel
                 .iter()
                 .map(|key| Key {
-                    value: key.offset,
+                    value: key.delta,
                     end_seconds: key.end_seconds,
                     ease: key.ease,
                     cut: key.cut,
@@ -64,8 +68,9 @@ impl CameraTrackSystem {
             turn: Vec::new(),
             start_position: [0.0; 3],
             start_angles_deg: [0.0; 2],
+            leg: 0,
             anchor: [0.0; 3],
-            anchor_offset: [0.0; 3],
+            anchor_progress: [0.0; 3],
             frame_turn: [0.0, 0.0, 0.0, 1.0],
             rebases: RebaseCursor::default(),
             ticks: 0,
@@ -111,21 +116,38 @@ impl CameraTrackSystem {
         }
     }
 
+    // Re-anchor on every leg the clock has finished: each starts where the
+    // last one ended.
+    fn advance(&mut self) {
+        let elapsed = self.elapsed();
+        while let Some(key) = self.travel.get(self.leg)
+            && elapsed >= key.end_seconds
+        {
+            let rest = vec3::sub(key.value, self.anchor_progress);
+            self.anchor = vec3::add(self.anchor, quat_rotate(self.frame_turn, rest));
+            self.anchor_progress = [0.0; 3];
+            self.leg += 1;
+        }
+    }
+
+    // Where the track puts the camera at this instant.
+    fn position(&self) -> [f32; 3] {
+        let progress = timeline::progress(&self.travel, self.leg, self.elapsed());
+        let traveled = quat_rotate(self.frame_turn, vec3::sub(progress, self.anchor_progress));
+        vec3::add(self.anchor, traveled)
+    }
+
     // Write the pose the track holds at this instant onto the camera, and
     // publish where the track has reached.
-    fn apply(&self, ctx: &mut PipelineContext) {
+    fn apply(&mut self, ctx: &mut PipelineContext) {
+        self.advance();
         let elapsed = self.elapsed();
-        let offset = timeline::sample([0.0; 3], &self.travel, elapsed);
         let angles = timeline::sample(self.start_angles_deg, &self.turn, elapsed);
+        let position = self.position();
         if let Some(camera) = self.camera
             && let Some(cam) = ctx.get_mut::<Camera3D>(camera)
         {
-            let traveled = quat_rotate(self.frame_turn, vec3::sub(offset, self.anchor_offset));
-            cam.set_pose(
-                vec3::add(self.anchor, traveled),
-                angles[0].to_radians(),
-                angles[1].to_radians(),
-            );
+            cam.set_pose(position, angles[0].to_radians(), angles[1].to_radians());
         }
         let duration = self.duration();
         ctx.insert_resource(CameraTrackStatus {
@@ -160,7 +182,7 @@ impl System for CameraTrackSystem {
             && let Some(cam) = self.camera.and_then(|c| ctx.get::<Camera3D>(c))
         {
             self.anchor = cam.position;
-            self.anchor_offset = timeline::sample([0.0; 3], &self.travel, self.elapsed());
+            self.anchor_progress = timeline::progress(&self.travel, self.leg, self.elapsed());
             self.frame_turn = quat_normalize(quat_mul(rebase.rotation, self.frame_turn));
         }
         let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
@@ -317,6 +339,56 @@ mod tests {
             (0..3).all(|i| (got[i] - expected[i]).abs() < 1e-3),
             "{got:?} {expected:?}"
         );
+    }
+
+    // A 300 km track crossing hundreds of frame moves ends where its legs
+    // add up to, to millimeters: each leg is laid out from where the last
+    // one ended, so no offset grows with the track.
+    #[test]
+    fn a_long_track_through_many_moves_stays_precise() {
+        use crate::planet::Rebase;
+        let legs: Vec<CameraTravel> = (0..300)
+            .map(|i| {
+                let side = if i % 2 == 0 { 0.6 } else { -0.6 };
+                travel([1.0, 0.0, side], 1_000.0, 2_000.0)
+            })
+            .collect();
+        let (mut world, mut system) = world_with(track(legs, vec![]), [0.25, 2.0, 0.0], 0.0, 0.0);
+        world.insert_resource(FrameRebases::default());
+        system.init(&mut world.context());
+        let mut rebases = FrameRebases::default();
+        // Where the frame's origin sits, in the frame the track started in.
+        let mut origin = [0.0_f64; 3];
+        for _ in 0..(150 * TICKS_PER_SECOND + 30) {
+            system.step(&mut world.context());
+            let at = camera_position(&world);
+            if !crate::planet::needs_rebase(at, 1_000.0) {
+                continue;
+            }
+            let rebase = Rebase {
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                translation: [-at[0], -at[1], -at[2]],
+            };
+            for i in 0..3 {
+                origin[i] += f64::from(at[i]);
+            }
+            rebases.push(rebase);
+            world.insert_resource(rebases.clone());
+            for camera in world.context().query_mut::<Camera3D>() {
+                camera.position = rebase.apply_point(camera.position);
+            }
+        }
+        assert!(rebases.count() > 250, "{}", rebases.count());
+        let leg = 1_000.0 / (1.0_f64 + 0.36).sqrt();
+        let expected = [0.25 + 300.0 * leg, 2.0, 0.0];
+        let end = camera_position(&world);
+        let reached: [f64; 3] = core::array::from_fn(|i| origin[i] + f64::from(end[i]));
+        for i in 0..3 {
+            assert!(
+                (reached[i] - expected[i]).abs() < 5e-3,
+                "{reached:?} {expected:?}"
+            );
+        }
     }
 
     #[test]

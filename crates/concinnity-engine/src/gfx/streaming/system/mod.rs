@@ -712,6 +712,7 @@ impl StreamingState {
                         material: mat,
                         frame,
                         planet_tile: None,
+                        bounds: None,
                     };
                     if let Err(e) = backend.add_chunk_mesh(mesh, dst) {
                         tracing::warn!(

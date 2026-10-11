@@ -96,6 +96,7 @@ mod tests {
             resident: true,
             bb_min: [x - 0.5, -0.5, -0.5],
             bb_max: [x + 0.5, 0.5, 0.5],
+            local_bounds: None,
             cull_distance: 0.0,
             lod_alternates: Vec::new(),
         }
@@ -109,6 +110,7 @@ mod tests {
         let view = PackView {
             cam_pos: [0.0; 3],
             mesh_glass_active: false,
+            horizon: None,
         };
         packer.pack(
             StaticPack {

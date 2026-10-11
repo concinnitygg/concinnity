@@ -151,6 +151,10 @@ impl VkContext {
         // A see-through glass mesh (Layer 2) is disabled in the opaque pass when
         // the RT path is live: it draws in the transparent pass instead.
         let mesh_glass_active = self.mesh_glass_active();
+        let horizon = self
+            .state
+            .horizon_occluder
+            .and_then(|o| o.seen_from(cam_pos));
 
         // The static draws, one record each at their own index, packed in
         // place across the job pool once that pays.
@@ -176,6 +180,7 @@ impl VkContext {
                 &PackView {
                     cam_pos,
                     mesh_glass_active,
+                    horizon,
                 },
                 &|obj| pool_object_record(obj, texture_count),
             ),

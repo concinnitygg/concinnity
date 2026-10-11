@@ -61,9 +61,13 @@
 //! `--frame-priority normal|main_threads|all_threads` runs it under that
 //! `AppConfig::frame_priority` instead of the default, which is how the
 //! setting's cost and benefit are compared on a busy machine.
+//!
+//! `--world planet` runs a second world instead: a planet crossed over its
+//! grass and then from high above it (see `planet.rs`), reported the same way.
 
 mod overlay;
 mod palette;
+mod planet;
 mod stations;
 mod track;
 
@@ -85,41 +89,62 @@ const CAMERA_FOV_Y_DEGREES: f32 = 65.0;
 const WARMUP_SECONDS: f32 = 2.5;
 
 fn main() {
-    let priority = match frame_priority(std::env::args().skip(1)) {
-        Ok(priority) => priority,
+    let options = match Options::parse(std::env::args().skip(1)) {
+        Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(2);
         }
     };
-    let world = benchmark_world(priority).expect("the benchmark world compiles");
+    let world = benchmark_world(&options).expect("the benchmark world compiles");
     App::from_world(world).run().expect("the app runs");
 }
 
-// The priority `--frame-priority NAME` names, or the default without one.
-fn frame_priority(mut args: impl Iterator<Item = String>) -> Result<FramePriority, String> {
-    let mut priority = FramePriority::default();
-    while let Some(arg) = args.next() {
-        if arg != "--frame-priority" {
-            return Err(format!("unknown argument {arg:?}"));
-        }
-        let name = args.next().ok_or("--frame-priority needs a value")?;
-        priority = FramePriority::ALL
-            .iter()
-            .copied()
-            .find(|p| p.as_str() == name)
-            .ok_or_else(|| {
-                format!(
-                    "--frame-priority takes one of {}",
-                    FramePriority::NAMES.join(", ")
-                )
-            })?;
-    }
-    Ok(priority)
+// Which world runs, under which frame priority.
+struct Options {
+    priority: FramePriority,
+    planet: bool,
 }
 
-fn benchmark_world(frame_priority: FramePriority) -> Result<World, String> {
+impl Options {
+    // `--frame-priority NAME` and `--world corridor|planet`, each optional.
+    fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
+        let mut options = Self {
+            priority: FramePriority::default(),
+            planet: false,
+        };
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--frame-priority" => {
+                    let name = args.next().ok_or("--frame-priority needs a value")?;
+                    options.priority = FramePriority::ALL
+                        .iter()
+                        .copied()
+                        .find(|p| p.as_str() == name)
+                        .ok_or_else(|| {
+                            format!(
+                                "--frame-priority takes one of {}",
+                                FramePriority::NAMES.join(", ")
+                            )
+                        })?;
+                }
+                "--world" => {
+                    options.planet = match args.next().as_deref() {
+                        Some("corridor") => false,
+                        Some("planet") => true,
+                        _ => return Err("--world takes corridor or planet".to_string()),
+                    };
+                }
+                _ => return Err(format!("unknown argument {arg:?}")),
+            }
+        }
+        Ok(options)
+    }
+}
+
+fn benchmark_world(options: &Options) -> Result<World, String> {
     let mut world = cook::world();
+    let frame_priority = options.priority;
 
     world.add(
         "app",
@@ -147,6 +172,21 @@ fn benchmark_world(frame_priority: FramePriority) -> Result<World, String> {
             ..Default::default()
         },
     );
+    if options.planet {
+        world.add(
+            "post",
+            PostProcessConfig {
+                ssao: true,
+                ssao_radius: 0.5,
+                bloom_intensity: 0.3,
+                bloom_threshold: 1.2,
+                exposure_ev: -0.6,
+                ..Default::default()
+            },
+        );
+        planet::declare(&mut world);
+        return world.compile().map_err(|e| e.to_string());
+    }
     world.add(
         "post",
         PostProcessConfig {

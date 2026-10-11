@@ -1019,28 +1019,6 @@ fn seed_grid_probes(
     out
 }
 
-/// The placements a world reflects with: `declared` when it declares any, else
-/// probes auto-seeded over the scene objects' world-space `aabbs`, which serve
-/// as both the scene bounds and the occupancy that keeps a capture point out of
-/// a wall. A box with a non-finite corner is skipped. Empty when nothing is
-/// declared and no box is finite.
-pub fn resolve_placements(
-    declared: &[ProbePlacement],
-    aabbs: impl IntoIterator<Item = ([f32; 3], [f32; 3])>,
-) -> Vec<ProbePlacement> {
-    if !declared.is_empty() {
-        return declared.to_vec();
-    }
-    let occupancy: Vec<([f32; 3], [f32; 3])> = aabbs
-        .into_iter()
-        .filter(|(mn, mx)| mn.iter().chain(mx).all(|c| c.is_finite()))
-        .collect();
-    match fold_world_bounds(occupancy.iter().copied()) {
-        Some((mn, mx)) => auto_seed_probes(mn, mx, &occupancy),
-        None => Vec::new(),
-    }
-}
-
 /// Union the world-space AABBs of every scene object into one bounds, skipping
 /// any box with a non-finite corner (a degenerate / sentinel AABB). Returns
 /// `None` for an empty scene. The probe eye is then `probe_eye_point` of this.
@@ -1340,36 +1318,6 @@ mod tests {
             core::array::from_fn(|i| a[i].max(p.box_max[i]))
         });
         (mn, mx)
-    }
-
-    #[test]
-    fn resolve_placements_keeps_declared_probes() {
-        let declared = [ProbePlacement::from_center_extents(
-            [1.0, 2.0, 3.0],
-            [1.0; 3],
-        )];
-        let aabbs = [([-10.0, 0.0, -10.0], [10.0, 6.0, 10.0])];
-        assert_eq!(resolve_placements(&declared, aabbs), declared.to_vec());
-    }
-
-    #[test]
-    fn resolve_placements_seeds_from_the_finite_boxes() {
-        let wall = ([-10.0, 0.0, -10.0], [10.0, 6.0, 10.0]);
-        let degenerate = ([f32::NAN, 0.0, 0.0], [f32::INFINITY, 1.0, 1.0]);
-        let seeded = resolve_placements(&[], [wall, degenerate]);
-        assert_eq!(seeded, auto_seed_probes(wall.0, wall.1, &[wall]));
-        assert!(!seeded.is_empty());
-        assert!(
-            seeded.iter().all(|p| p.capture_distance.is_none()),
-            "a seeded probe captures without limit"
-        );
-    }
-
-    #[test]
-    fn resolve_placements_is_empty_without_a_finite_box() {
-        let degenerate = ([f32::NAN; 3], [f32::NAN; 3]);
-        assert!(resolve_placements(&[], [degenerate]).is_empty());
-        assert!(resolve_placements(&[], []).is_empty());
     }
 
     #[test]

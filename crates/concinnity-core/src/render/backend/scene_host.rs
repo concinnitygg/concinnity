@@ -235,6 +235,7 @@ mod tests {
             material: MaterialUniforms::DEFAULT,
             frame: 0,
             planet_tile: None,
+            bounds: None,
         };
         b.add_chunk_mesh(chunk, SlotAlloc::Append(DrawIndex(2)))
             .expect("room for the chunk");

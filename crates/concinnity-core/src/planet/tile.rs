@@ -132,6 +132,9 @@ pub struct TileMesh {
     /// The lowest and highest the surface's corners lie along the up at
     /// `origin`, in meters from it: every point of the surface lies between.
     pub radial: [f32; 2],
+    /// The box around every vertex, skirts included, relative to `origin`
+    /// with authored axes.
+    pub bounds: ([f32; 3], [f32; 3]),
 }
 
 /// The mesh of `tile` on `shape`.
@@ -247,11 +250,21 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
         indices.extend_from_slice(&[e0, s0, e1, e1, s0, s1]);
     }
 
+    let bounds = vertices.iter().fold(
+        ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]),
+        |(lo, hi), v| {
+            (
+                core::array::from_fn(|i| lo[i].min(v.pos[i])),
+                core::array::from_fn(|i| hi[i].max(v.pos[i])),
+            )
+        },
+    );
     TileMesh {
         origin,
         vertices,
         indices,
         radial,
+        bounds,
     }
 }
 
@@ -321,6 +334,19 @@ mod tests {
         // A face is 50 km * (pi / 2) across the middle, its 512 tiles a level
         // narrower near its center, where the spherified cube crowds them.
         assert!(b.width > 100.0 && b.width < 153.4, "{}", b.width);
+    }
+
+    #[test]
+    fn the_mesh_box_holds_every_vertex_tightly() {
+        let mesh = tile_mesh(&shape(), deep_tile());
+        let (lo, hi) = mesh.bounds;
+        for v in &mesh.vertices {
+            assert!((0..3).all(|i| v.pos[i] >= lo[i] && v.pos[i] <= hi[i]));
+        }
+        for i in 0..3 {
+            assert!(mesh.vertices.iter().any(|v| v.pos[i] == lo[i]));
+            assert!(mesh.vertices.iter().any(|v| v.pos[i] == hi[i]));
+        }
     }
 
     #[test]

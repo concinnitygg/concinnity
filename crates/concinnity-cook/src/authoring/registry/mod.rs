@@ -611,7 +611,8 @@ pub fn asset_entry<T: Authored>(id: &str, value: &T) -> std::io::Result<serde_js
 /// so a builder names it after the fact.
 ///
 /// A dotted `field` reaches into nested objects, so `on.enter` names the
-/// volume a behavior's `enter` source watches.
+/// volume a behavior's `enter` source watches, and a numeric step indexes a
+/// list, so `layers.0.grass` names a planet's first layer's grass.
 pub fn set_reference(
     entry: &mut serde_json::Value,
     field: &str,
@@ -620,16 +621,25 @@ pub fn set_reference(
     let invalid = |message: String| std::io::Error::new(std::io::ErrorKind::InvalidData, message);
     let mut at = entry
         .get_mut("args")
-        .and_then(|args| args.as_object_mut())
+        .filter(|args| args.is_object())
         .ok_or_else(|| invalid(format!("asset entry has no args to hold '{field}'")))?;
     let (path, key) = field.rsplit_once('.').unwrap_or(("", field));
     for step in path.split('.').filter(|step| !step.is_empty()) {
-        at = at
-            .get_mut(step)
-            .and_then(|next| next.as_object_mut())
+        let next = match at {
+            serde_json::Value::Object(fields) => fields.get_mut(step),
+            serde_json::Value::Array(items) => {
+                step.parse::<usize>().ok().and_then(|i| items.get_mut(i))
+            }
+            _ => None,
+        };
+        at = next
+            .filter(|next| next.is_object() || next.is_array())
             .ok_or_else(|| invalid(format!("'{field}' has no object at '{step}'")))?;
     }
-    at.insert(
+    let fields = at
+        .as_object_mut()
+        .ok_or_else(|| invalid(format!("'{field}' does not end in an object")))?;
+    fields.insert(
         key.to_string(),
         serde_json::Value::String(target.to_string()),
     );
@@ -663,6 +673,25 @@ mod authored_tests {
 
         let err = set_reference(&mut entry, "once.enter", "gate").expect_err("no object");
         assert!(err.to_string().contains("'once'"), "{err}");
+    }
+
+    // A numeric step indexes a list, and one past its end is refused.
+    #[test]
+    fn set_reference_indexes_into_a_list() {
+        let mut entry = serde_json::json!({
+            "type": "Planet",
+            "args": {"layers": [{"grass": null}, {"grass": null}]}
+        });
+        set_reference(&mut entry, "layers.1.grass", "meadow").expect("patched");
+        assert_eq!(entry["args"]["layers"][1]["grass"], "meadow");
+        assert!(entry["args"]["layers"][0]["grass"].is_null());
+        let err = set_reference(&mut entry, "layers.2.grass", "meadow").expect_err("past the end");
+        assert!(err.to_string().contains("'2'"), "{err}");
+        let err = set_reference(&mut entry, "layers.grass", "meadow").expect_err("a list");
+        assert!(
+            err.to_string().contains("does not end in an object"),
+            "{err}"
+        );
     }
 
     // The three shapes the generation has to cover: an args-schema override, a

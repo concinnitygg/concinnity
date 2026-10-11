@@ -57,9 +57,10 @@ pub struct QualitySettings {
 /// method, [`apply_quality_settings`](Self::apply_quality_settings), defaults to
 /// [`RenderError::Unsupported`] so the caller learns the rebuild did not happen.
 pub trait RenderTuning {
-    /// Supply the reflection-probe placements (from declared `ReflectionProbe`
-    /// assets, or empty to auto-seed from the scene bounds). The backend bakes a
-    /// cube per placement and samples the nearest for the specular reflection.
+    /// Supply the reflection-probe placements: declared `ReflectionProbe`
+    /// assets, or a grid the caller auto-seeded over the scene. An empty list
+    /// bakes none. The backend bakes a cube per placement and samples the
+    /// nearest for the specular reflection.
     /// Pushed once after construction. Default no-op: a backend without probe
     /// support keeps the sky reflection.
     fn set_reflection_probes(

@@ -20,7 +20,7 @@ mod ground;
 use concinnity_core::components::{Camera3D, Planet, SkyRotation};
 use concinnity_core::ecs::{MenuActive, PipelineContext, StepResult, System};
 use concinnity_core::planet::{
-    FrameRebases, GroundPatch, LocalFrame, PlanetFrame, PlanetGravity, PlanetGround,
+    CameraGeo, FrameRebases, GroundPatch, LocalFrame, PlanetFrame, PlanetGravity, PlanetGround,
     REBASE_DISTANCE, Rebase, needs_rebase,
 };
 use concinnity_core::sky::{SkyFrame, SkyOrientation};
@@ -183,6 +183,17 @@ fn camera_position(ctx: &PipelineContext) -> Option<[f32; 3]> {
     ctx.query::<Camera3D>().next().map(|c| c.position)
 }
 
+// Publish where on the planet the camera is and which way it looks.
+fn publish_camera_geo(ctx: &mut PipelineContext, frame: &PlanetFrame) {
+    let Some((position, yaw)) = ctx.query::<Camera3D>().next().map(|c| (c.position, c.yaw)) else {
+        return;
+    };
+    ctx.insert_resource(CameraGeo {
+        position: frame.geo_at(position),
+        heading: frame.heading_for_yaw(position, yaw),
+    });
+}
+
 impl System for PlanetSystem {
     fn init(&mut self, ctx: &mut PipelineContext) {
         self.sky_rotates = ctx.query::<SkyRotation>().next().is_some();
@@ -206,6 +217,7 @@ impl System for PlanetSystem {
         }
         self.worker = Some(GroundWorker::spawn(self.frame.shape));
         self.next_id = 1;
+        publish_camera_geo(ctx, &frame);
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
@@ -221,6 +233,7 @@ impl System for PlanetSystem {
         for camera in ctx.query_mut::<Camera3D>() {
             camera.up = frame.up_at(camera.position);
         }
+        publish_camera_geo(ctx, &frame);
         StepResult::Continue
     }
 }
@@ -319,6 +332,14 @@ mod tests {
             ctx.resource::<SkyOrientation>().is_some(),
             "no SkyRotation, so it is ours"
         );
+        // 300 m east of the start and 10 m up: on the equator, a third of a
+        // degree east, looking north.
+        let geo = ctx.resource::<CameraGeo>().unwrap();
+        assert!(geo.position.latitude.abs() < 1e-9, "{geo:?}");
+        let east = 300.0_f64.atan2(50_010.0).to_degrees();
+        assert!((geo.position.longitude - east).abs() < 1e-6, "{geo:?}");
+        assert!((geo.position.altitude - 10.9).abs() < 0.01, "{geo:?}");
+        assert!(geo.heading.abs() < 1e-3 || (geo.heading - 360.0).abs() < 1e-3);
     }
 
     // A camera that strays a kilometer moves the world once the patch for
@@ -332,6 +353,8 @@ mod tests {
         for camera in world.context().query_mut::<Camera3D>() {
             camera.position = [1_200.0, -14.0, 0.0];
         }
+        system.step(&mut world.context());
+        let before = *world.context().resource::<CameraGeo>().unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
             system.step(&mut world.context());
@@ -359,5 +382,16 @@ mod tests {
         );
         let gravity = ctx.resource::<PlanetGravity>().unwrap();
         assert!(gravity.center[0].abs() < 1.0 && gravity.center[1] < -49_000.0);
+        // The camera stood still while the world moved under it: the same
+        // place on the planet to a centimeter (1e-5 degrees is 9 mm here),
+        // facing the same way.
+        let after = ctx.resource::<CameraGeo>().unwrap();
+        assert!((after.position.latitude - before.position.latitude).abs() < 1e-5);
+        assert!((after.position.longitude - before.position.longitude).abs() < 1e-5);
+        assert!((after.position.altitude - before.position.altitude).abs() < 1e-2);
+        assert!(
+            (after.heading - before.heading).abs() < 1e-3,
+            "{before:?} {after:?}"
+        );
     }
 }

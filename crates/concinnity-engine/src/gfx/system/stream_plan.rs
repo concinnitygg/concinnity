@@ -220,6 +220,7 @@ mod tests {
             resident: true,
             bb_min: [0.0; 3],
             bb_max: [1.0; 3],
+            local_bounds: None,
             cull_distance: 0.0,
             lod_alternates: vec![LodSlice {
                 index_offset: 0,

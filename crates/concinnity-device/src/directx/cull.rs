@@ -459,6 +459,10 @@ impl DxContext {
             &PackView {
                 cam_pos,
                 mesh_glass_active,
+                horizon: self
+                    .state
+                    .horizon_occluder
+                    .and_then(|o| o.seen_from(cam_pos)),
             },
             &|obj| pool_object_record(obj, texture_count),
         );

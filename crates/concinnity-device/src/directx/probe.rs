@@ -166,17 +166,16 @@ pub(in crate::directx) struct FaceExtent {
 }
 
 impl DxContext {
-    // Set the reflection-probe placements (declared `ReflectionProbe` assets,
-    // converted to `ProbePlacement`s by the graphics system). An empty list
-    // auto-seeds a grid from the scene bounds, so existing scenes still get local
-    // reflections without authoring. Resets the staggered bake, and grows the
+    // Set the reflection-probe placements the graphics system resolved
+    // (declared `ReflectionProbe` assets, or a grid auto-seeded over the
+    // scene); an empty list bakes none. Resets the staggered bake, and grows the
     // cube array when the list outgrows it; a world whose array cannot grow keeps
     // the sky.
-    pub(super) fn set_reflection_probes(&mut self, declared: &[reflection_probe::ProbePlacement]) {
-        let placements = reflection_probe::resolve_placements(
-            declared,
-            self.state.draw.objects.iter().map(|o| (o.bb_min, o.bb_max)),
-        );
+    pub(super) fn set_reflection_probes(
+        &mut self,
+        placements: &[reflection_probe::ProbePlacement],
+    ) {
+        let placements = placements.to_vec();
         let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements));
         crate::probe_report::report_probe_placement(placed);
     }

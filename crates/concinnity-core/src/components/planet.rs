@@ -25,6 +25,13 @@ use alloc::vec::Vec;
 /// near it: the world is simulated around the camera, wherever on the planet
 /// it is. A world has at most one planet.
 ///
+/// Places on the planet are named by latitude and longitude, in degrees.
+/// Latitude 0, longitude 0 is straight up from the center, where a world
+/// whose center is below the origin starts; the north pole lies toward `-Z`
+/// from the center, so a camera at the start facing `-Z` faces north, and
+/// longitude grows eastward, toward `+X`. Altitude is measured above
+/// `radius`, height above the ground above the hills.
+///
 /// ```rust
 /// # use concinnity_core::components::Planet;
 /// Planet {
