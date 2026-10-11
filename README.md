@@ -274,4 +274,4 @@ Metal, and Vulkan) unless noted.
 [codecov-link]: https://codecov.io/gh/concinnitygg/concinnity
 [license-img]: https://img.shields.io/crates/l/concinnity.svg
 [license-link]: https://github.com/concinnitygg/concinnity/blob/main/LICENSE
-[build-guide]: https://github.com/concinnitygg/concinnity/blob/main/docs/development/building.md
+[build-guide]: https://github.com/concinnitygg/concinnity/blob/main/docs/building.md
