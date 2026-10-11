@@ -54,6 +54,7 @@ pub(crate) fn submit(
     // spawn slot ops, settings appliers, and streaming uploads all landed
     // before the draw when they ran in-place, and still do here.
     let mut replay = snap.ops.replay(backend);
+    let replay_us = micros_since(started);
 
     backend.set_ui_cursor_hidden(snap.ui.cursor_hidden);
     if let Some(on) = snap.ui.menu_mode {
@@ -163,6 +164,7 @@ pub(crate) fn submit(
 
     let mut render_stats = backend.render_stats();
     render_stats.render_cpu_us = micros_since(started).saturating_sub(render_stats.gpu_wait_us);
+    render_stats.replay_us = replay_us;
     SubmitOutcome {
         result: StepResult::Continue,
         render_stats: Some(render_stats),
@@ -247,6 +249,19 @@ mod tests {
             "{} us of {wall}",
             stats.render_cpu_us
         );
+    }
+
+    #[test]
+    fn the_replay_span_is_the_ops_replay_and_part_of_the_submission() {
+        let (_, mut backend) = recording_backend();
+        let mut snap = RenderSnapshot::default();
+        snap.ops
+            .record(|_| std::thread::sleep(std::time::Duration::from_millis(2)));
+        let stats = submit(&mut FramePolicy::default(), &mut snap, &mut backend)
+            .render_stats
+            .expect("a drawn frame");
+        assert!(stats.replay_us >= 2_000, "{} us", stats.replay_us);
+        assert!(stats.replay_us <= stats.render_cpu_us, "{stats:?}");
     }
 
     #[test]

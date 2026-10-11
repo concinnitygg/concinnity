@@ -65,6 +65,15 @@ pub struct RenderStats {
     /// always describe one frame. Left at zero by the backend itself, which
     /// cannot see the whole submission.
     pub render_cpu_us: u32,
+    /// Microseconds the render side spent replaying the frame's recorded
+    /// backend effects (slot ops, settings appliers, streaming uploads) before
+    /// drawing it. Part of `render_cpu_us`; left at zero by the backend.
+    pub replay_us: u32,
+    /// Wall microseconds the backend spent in its queue submit and present.
+    /// Part of the submission, and on a backend that counts its present as a
+    /// wait on the display, part of `gpu_wait_us` too. Zero on a backend that
+    /// does not time it.
+    pub submit_present_us: u32,
     /// The render thread's wait on this frame's parallel pass recording,
     /// against the recording work the workers did. Part of `render_cpu_us`.
     /// All zero on a backend that records serially.
@@ -120,6 +129,8 @@ impl Default for RenderStats {
             gpu_frame_us: 0,
             gpu_wait_us: 0,
             render_cpu_us: 0,
+            replay_us: 0,
+            submit_present_us: 0,
             recording_fan_out: FanOutTiming::default(),
             packing_fan_out: FanOutTiming::default(),
             pass_record_us: [0; MAX_PASS_TIMINGS],

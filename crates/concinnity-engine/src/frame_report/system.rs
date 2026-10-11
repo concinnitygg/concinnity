@@ -11,10 +11,6 @@ use crate::frame_report::reduce::{ReduceOptions, Report};
 use crate::frame_report::report::to_text;
 use crate::frame_report::sample::{FrameRun, FrameSample};
 
-// Frames a one-minute run at 60Hz would produce. Reserved up front so the
-// sample buffer does not grow inside the window it is measuring.
-const RESERVED_FRAMES: usize = 60 * 60;
-
 const MICROS_PER_MILLI: f32 = 1_000.0;
 
 /// Records one [`FrameSample`] per frame and prints what the run cost when it
@@ -101,7 +97,6 @@ impl System for FrameReportSystem {
             .next()
             .map(|track| track.segments.clone())
             .unwrap_or_default();
-        self.run.samples.reserve(RESERVED_FRAMES);
     }
 
     fn step(&mut self, ctx: &mut PipelineContext) -> StepResult {
@@ -278,10 +273,10 @@ mod tests {
 
         let samples = &system.run().samples;
         assert_eq!(samples.len(), 2);
-        assert_eq!(samples[0].gpu_wait_us, 29_800);
-        assert_eq!(samples[0].system_us[0], 400);
-        assert_eq!(samples[1].gpu_wait_us, 100);
-        assert_eq!(samples[1].system_us[0], 400);
+        assert_eq!(samples.get(0).unwrap().gpu_wait_us, 29_800);
+        assert_eq!(samples.get(0).unwrap().system_us[0], 400);
+        assert_eq!(samples.get(1).unwrap().gpu_wait_us, 100);
+        assert_eq!(samples.get(1).unwrap().system_us[0], 400);
         forget_report(system);
     }
 
@@ -306,7 +301,7 @@ mod tests {
         }
         assert_eq!(system.run().samples.len(), 1);
         assert!(system.run().segments.is_empty());
-        assert_eq!(system.run().samples[0].segment, None);
+        assert_eq!(system.run().samples.get(0).unwrap().segment, None);
         assert!(!system.run().completed);
         forget_report(system);
     }
@@ -323,7 +318,7 @@ mod tests {
         let run = system.run();
         assert!(run.samples.iter().all(|s| s.segment == Some(0)));
         // Track time advances on the fixed step, so successive samples differ.
-        assert!(run.samples[1].run_seconds > run.samples[0].run_seconds);
+        assert!(run.samples.get(1).unwrap().run_seconds > run.samples.get(0).unwrap().run_seconds);
         forget_report(system);
     }
 

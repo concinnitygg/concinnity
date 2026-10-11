@@ -164,6 +164,7 @@ fn write_slowest(out: &mut String, frames: &[SlowFrame]) {
         write_costs(out, "cpu", &frame.cpu);
         write_costs(out, "gpu", &frame.passes);
         write_costs(out, "record", &frame.recording);
+        write_costs(out, "render", &frame.render);
         for f in &frame.fan_outs {
             let _ = writeln!(
                 out,
@@ -232,6 +233,8 @@ mod tests {
             gpu_frame_us: frame_us / 2,
             gpu_wait_us: 250,
             render_cpu_us: 0,
+            replay_us: 0,
+            submit_present_us: 0,
             recording_fan_out: FanOutTiming::default(),
             packing_fan_out: FanOutTiming::default(),
             pass_record_us: [0; MAX_PASS_TIMINGS],
@@ -259,7 +262,7 @@ mod tests {
         let mut first = sample(0.0, Some(0), 10_000);
         first.pass_us[0] = 3_000;
         let run = FrameRun {
-            samples: vec![first, sample(1.0, Some(1), 40_000)],
+            samples: vec![first, sample(1.0, Some(1), 40_000)].into(),
             segments: vec!["approach".to_string(), "rays".to_string()],
             pass_names: vec!["main".to_string()],
             system_names: Vec::new(),
@@ -307,7 +310,7 @@ mod tests {
         first.pass_us[0] = 3_000;
         first.pass_us[1] = 500;
         let run = FrameRun {
-            samples: vec![first],
+            samples: vec![first].into(),
             segments: vec!["approach".to_string()],
             pass_names: vec!["main".to_string(), "sky".to_string()],
             system_names: Vec::new(),
@@ -331,7 +334,7 @@ mod tests {
     #[test]
     fn a_run_that_did_not_finish_is_flagged_before_its_numbers() {
         let run = FrameRun {
-            samples: vec![sample(0.0, Some(0), 10_000)],
+            samples: vec![sample(0.0, Some(0), 10_000)].into(),
             segments: vec!["approach".to_string()],
             pass_names: Vec::new(),
             system_names: Vec::new(),
@@ -350,8 +353,10 @@ mod tests {
         hitch.system_us[0] = 1_200;
         hitch.pass_us[0] = 4_000;
         hitch.pass_record_us[PassId::Main as usize] = 2_500;
+        hitch.replay_us = 150;
+        hitch.submit_present_us = 300;
         let run = FrameRun {
-            samples: vec![sample(0.0, Some(0), 10_000), hitch],
+            samples: vec![sample(0.0, Some(0), 10_000), hitch].into(),
             segments: vec!["approach".to_string(), "rays".to_string()],
             pass_names: vec!["main".to_string()],
             system_names: vec!["PhysicsSystem".to_string()],
@@ -371,6 +376,10 @@ mod tests {
         );
         assert!(text.contains("    gpu: main 4.00\n"), "{text}");
         assert!(text.contains("    record: main 2.50\n"), "{text}");
+        assert!(
+            text.contains("    render: submit and present 0.30, replay 0.15\n"),
+            "{text}"
+        );
         assert!(text.contains("10.00 ms at 0.00 s in approach"), "{text}");
     }
 
@@ -380,7 +389,7 @@ mod tests {
         only.system_us[0] = 600;
         only.render_cpu_us = 400;
         let run = FrameRun {
-            samples: vec![only],
+            samples: vec![only].into(),
             segments: vec!["approach".to_string()],
             pass_names: Vec::new(),
             system_names: vec!["PhysicsSystem".to_string()],
@@ -407,7 +416,7 @@ mod tests {
             ..recording
         };
         let run = FrameRun {
-            samples: vec![only],
+            samples: vec![only].into(),
             segments: vec!["approach".to_string()],
             pass_names: Vec::new(),
             system_names: vec!["BehaviorSystem".to_string()],
@@ -446,7 +455,7 @@ mod tests {
         // A backend without timestamp support still gets a table, just no
         // per-pass breakdown under it.
         let run = FrameRun {
-            samples: vec![sample(0.0, Some(0), 10_000)],
+            samples: vec![sample(0.0, Some(0), 10_000)].into(),
             segments: vec!["approach".to_string()],
             pass_names: Vec::new(),
             system_names: Vec::new(),

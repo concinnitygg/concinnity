@@ -15,6 +15,7 @@
 mod reduce;
 mod report;
 mod sample;
+mod sample_log;
 mod stats;
 mod system;
 
@@ -23,5 +24,6 @@ pub use reduce::{
 };
 pub use report::to_text;
 pub use sample::{FrameRun, FrameSample, MAX_SYSTEM_TIMINGS};
+pub use sample_log::SampleLog;
 pub use stats::Distribution;
 pub use system::FrameReportSystem;

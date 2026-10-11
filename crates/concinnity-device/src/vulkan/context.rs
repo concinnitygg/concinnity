@@ -1483,7 +1483,12 @@ impl VkContext {
         // timestamp) submits last, after every per-pass buffer.
         submit_bufs.push(cmd);
 
-        self.submit_and_present(frame, image_index, &submit_bufs)
+        let started = std::time::Instant::now();
+        let submitted = self.submit_and_present(frame, image_index, &submit_bufs);
+        let mut stats = self.frame_stats.get();
+        stats.submit_present_us = started.elapsed().as_micros().min(u32::MAX.into()) as u32;
+        self.frame_stats.set(stats);
+        submitted
     }
 
     // The frame's unlit flag for ViewUniforms, from the viewport view mode.

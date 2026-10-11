@@ -180,6 +180,11 @@ pub struct SlowFrame {
     /// The passes that took longest to record on the CPU, largest first: which
     /// jobs made up the render recording's job sum.
     pub recording: Vec<FrameCost>,
+    /// The render submission's own spans, largest first: replaying the
+    /// frame's backend effects, waiting on the pass recording, and the queue
+    /// submit and present. What they leave of the submission was the draw's
+    /// other work.
+    pub render: Vec<FrameCost>,
 }
 
 /// What one stretch of the run measured.
@@ -316,6 +321,14 @@ fn slowest_frames(measured: &[&FrameSample], run: &FrameRun) -> Vec<SlowFrame> {
                 PassId::ALL
                     .iter()
                     .map(|id| (id.name(), sample.pass_record_us[*id as usize])),
+            ),
+            render: largest(
+                [
+                    ("replay", sample.replay_us),
+                    ("recording", sample.recording_fan_out.wall_us),
+                    ("submit and present", sample.submit_present_us),
+                ]
+                .into_iter(),
             ),
         })
         .collect()
@@ -602,6 +615,8 @@ mod tests {
             gpu_frame_us: frame_us / 2,
             gpu_wait_us: 100,
             render_cpu_us: 0,
+            replay_us: 0,
+            submit_present_us: 0,
             recording_fan_out: FanOutTiming::default(),
             packing_fan_out: FanOutTiming::default(),
             pass_record_us: [0; MAX_PASS_TIMINGS],
@@ -616,7 +631,7 @@ mod tests {
 
     fn run_of(samples: Vec<FrameSample>) -> FrameRun {
         FrameRun {
-            samples,
+            samples: samples.into(),
             segments: vec!["shadows".to_string(), "rays".to_string()],
             pass_names: Vec::new(),
             system_names: Vec::new(),
@@ -1185,6 +1200,8 @@ mod tests {
         hitch.gpu_wait_us = 297_000;
         hitch.gpu_frame_us = 9_000;
         hitch.render_cpu_us = 700;
+        hitch.replay_us = 200;
+        hitch.recording_fan_out.wall_us = 350;
         hitch.system_us[0] = 1_200;
         hitch.system_us[1] = 0;
         hitch.system_us[2] = 400;
@@ -1220,6 +1237,13 @@ mod tests {
             .map(|p| (p.name.as_str(), p.us))
             .collect();
         assert_eq!(passes, [("main", 5_000), ("shadow", 1_000)]);
+        // The submission's own spans; a span that took nothing is left out.
+        let render: Vec<(&str, u32)> = frame
+            .render
+            .iter()
+            .map(|r| (r.name.as_str(), r.us))
+            .collect();
+        assert_eq!(render, [("recording", 350), ("replay", 200)]);
     }
 
     #[test]

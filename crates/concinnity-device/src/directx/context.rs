@@ -1094,6 +1094,7 @@ impl DxContext {
         }
 
         self.finish_frame_stats();
+        let started = std::time::Instant::now();
         let submitted = self.close_end_list(frame).and_then(|()| {
             self.submit_and_present(
                 start_cmd,
@@ -1103,6 +1104,9 @@ impl DxContext {
                 gpu_wait,
             )
         });
+        let mut stats = self.diagnostics.frame_stats.get();
+        stats.submit_present_us = started.elapsed().as_micros().min(u32::MAX.into()) as u32;
+        self.diagnostics.frame_stats.set(stats);
         // A frame that took the history prime but never reached the GPU leaves
         // the ring unwritten, so the next frame primes instead.
         if submitted.is_err() && recorded.primed_model_history {

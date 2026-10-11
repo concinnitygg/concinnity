@@ -2,6 +2,8 @@
 
 use concinnity_core::profile::{FanOutTiming, MAX_PASS_TIMINGS, RenderStats};
 
+use crate::frame_report::sample_log::SampleLog;
+
 /// How many per-system CPU timings a sample carries. The engine's own table is
 /// well inside this, and a world registering its own systems has headroom.
 pub const MAX_SYSTEM_TIMINGS: usize = 32;
@@ -29,6 +31,11 @@ pub struct FrameSample {
     /// Microseconds of CPU work the render side spent submitting the frame,
     /// its wait on the GPU excluded.
     pub render_cpu_us: u32,
+    /// The part of `render_cpu_us` spent replaying the frame's recorded
+    /// backend effects before the draw.
+    pub replay_us: u32,
+    /// Wall microseconds the backend spent in its queue submit and present.
+    pub submit_present_us: u32,
     /// The render thread's wait on the parallel pass recording, against the
     /// recording work inside it.
     pub recording_fan_out: FanOutTiming,
@@ -95,6 +102,8 @@ impl FrameSample {
             gpu_frame_us: render.gpu_frame_us,
             gpu_wait_us: render.gpu_wait_us,
             render_cpu_us: render.render_cpu_us,
+            replay_us: render.replay_us,
+            submit_present_us: render.submit_present_us,
             recording_fan_out: render.recording_fan_out,
             packing_fan_out: render.packing_fan_out,
             pass_record_us: render.pass_record_us,
@@ -114,7 +123,7 @@ impl FrameSample {
 #[derive(Debug, Default)]
 pub struct FrameRun {
     /// The frames, in the order they were drawn.
-    pub samples: Vec<FrameSample>,
+    pub samples: SampleLog,
     /// The names of the stretches the run is cut into. A sample's `segment`
     /// indexes this.
     pub segments: Vec<String>,
