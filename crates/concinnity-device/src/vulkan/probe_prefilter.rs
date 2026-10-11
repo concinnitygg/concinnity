@@ -51,11 +51,36 @@ fn cube_range(cube: u32, mips: u32) -> vk::ImageSubresourceRange {
     probe_set::range(0, mips, 6 * cube, 6)
 }
 
-/// The cube of the probe cube array one bake convolves into.
+/// The cube one convolution writes: cube `cube` of `image`, and one
+/// single-mip storage view of its six layers per mip.
 #[derive(Clone, Copy)]
-pub(super) struct ProbeSlice<'a> {
-    pub(super) cubes: &'a probe_set::ProbeCubeArray,
-    pub(super) index: usize,
+pub(super) struct PrefilterTarget<'a> {
+    pub(super) image: vk::Image,
+    pub(super) cube: u32,
+    pub(super) mip_views: &'a [vk::ImageView],
+}
+
+impl<'a> PrefilterTarget<'a> {
+    /// Cube `index` of the probe cube array, which must carry `mips` levels.
+    pub(super) fn probe(
+        cubes: &'a probe_set::ProbeCubeArray,
+        index: usize,
+        mips: u32,
+    ) -> RenderResult<Self> {
+        let mip_views = cubes
+            .mip_views(index)
+            .filter(|views| views.len() == mips as usize)
+            .ok_or_else(|| {
+                RenderError::Other(format!(
+                    "probe: the cube array has no cube {index} at {mips} mips"
+                ))
+            })?;
+        Ok(Self {
+            image: cubes.image(),
+            cube: index as u32,
+            mip_views,
+        })
+    }
 }
 
 /// The pipelines a probe bake convolves with, plus the layouts and the sampler
@@ -128,9 +153,11 @@ pub(super) struct PrefilterGpu {
     // The capture and every view of it the dispatches bind: the views are attached
     // to this image's lease, so holding the image holds them.
     capture: PooledImage,
-    // The probe cube array and the cube this bake writes. The array's own lease
-    // holds the storage views the sets below name; it outlives the bake, since a
-    // re-placement idles and drops every bake before replacing it.
+    // The capture's top mip as six array layers.
+    capture_top: vk::ImageView,
+    // The image and the cube this convolution writes. Its owner holds the
+    // storage views the sets below name and outlives the convolution: a probe
+    // re-placement idles and drops every bake before replacing the array.
     probe_image: vk::Image,
     probe_cube: u32,
     // Sets, all written once at construction: the mirror-mip copy, one
@@ -144,15 +171,16 @@ pub(super) struct PrefilterGpu {
 }
 
 impl PrefilterGpu {
-    /// Allocate the capture, its views and every descriptor set the bake's
-    /// dispatches bind, writing into `slice`. The capture starts in TRANSFER_DST
-    /// so the per-face copies can write it straight away.
+    /// Allocate the capture, its views and every descriptor set the
+    /// convolution's dispatches bind, writing into `target`, whose views must
+    /// cover the plan's mips. The capture starts undefined; a bake's per-face
+    /// copies move it to TRANSFER_DST before writing it.
     pub(super) fn new(
         device: &VkDevice,
         alloc: &DeviceAllocator,
         pipelines: &ProbePrefilterPipelines,
         plan: &PrefilterPlan,
-        slice: ProbeSlice<'_>,
+        target: PrefilterTarget<'_>,
     ) -> RenderResult<PrefilterGpu> {
         let mips = plan.mips();
         let capture = probe_set::create_image(
@@ -167,16 +195,13 @@ impl PrefilterGpu {
             },
         )
         .map_err(|e| e.context("probe capture cube"))?;
-        let probe_mip_views = slice
-            .cubes
-            .mip_views(slice.index)
-            .filter(|views| views.len() == mips as usize)
-            .ok_or_else(|| {
-                RenderError::Other(format!(
-                    "probe: the cube array has no cube {} at {mips} mips",
-                    slice.index
-                ))
-            })?;
+        if target.mip_views.len() != mips as usize {
+            return Err(RenderError::Other(format!(
+                "prefilter: the target has {} mip views, the plan {mips} mips",
+                target.mip_views.len()
+            )));
+        }
+        let probe_mip_views = target.mip_views;
         // Every view is attached to its image's lease, so the whole set retires
         // together whether the bake installs or is abandoned.
         let capture_cube_view = probe_set::create_view(
@@ -220,9 +245,10 @@ impl PrefilterGpu {
         }
 
         Ok(PrefilterGpu {
+            capture_top: capture_mip_views[0],
             capture,
-            probe_image: slice.cubes.image(),
-            probe_cube: slice.index as u32,
+            probe_image: target.image,
+            probe_cube: target.cube,
             mip0_set,
             downsample_sets,
             ggx_sets,
@@ -234,6 +260,17 @@ impl PrefilterGpu {
     /// The capture image the six face copies write into.
     pub(super) fn capture_image(&self) -> vk::Image {
         self.capture.image()
+    }
+
+    /// The capture's top mip as six array layers, for a kernel that draws
+    /// the faces in place of a render.
+    pub(super) fn capture_top_view(&self) -> vk::ImageView {
+        self.capture_top
+    }
+
+    /// Every mip and layer of the capture.
+    pub(super) fn capture_range(&self) -> vk::ImageSubresourceRange {
+        cube_range(0, self.mips)
     }
 }
 
@@ -298,27 +335,7 @@ impl super::context::VkContext {
             },
         );
 
-        self.dispatch_prefilter(
-            cmd,
-            pipelines.mip_pipeline_layout.handle(),
-            pipelines.mip0.handle(),
-            gpu.mip0_set,
-            &plan.mip0_params(),
-            plan.face_size(),
-        );
-        for (step, &set) in gpu.downsample_sets.iter().enumerate() {
-            let dst = step as u32 + 1;
-            // Each level reads the one the previous dispatch wrote.
-            storage_barrier(device, cmd);
-            self.dispatch_prefilter(
-                cmd,
-                pipelines.mip_pipeline_layout.handle(),
-                pipelines.downsample.handle(),
-                set,
-                &plan.downsample_params(dst),
-                plan.mip_face_size(dst),
-            );
-        }
+        self.record_prefilter_pyramid(cmd, pipelines, gpu, plan);
 
         transition(
             device,
@@ -353,10 +370,54 @@ impl super::context::VkContext {
             self.probe.prefilter.as_ref().ok_or_else(|| {
                 RenderError::Other("probe: prefilter pipelines missing".to_string())
             })?;
-        let set = *gpu
-            .ggx_sets
-            .get(dst_mip as usize - 1)
-            .ok_or_else(|| RenderError::Other("probe: convolution mip out of range".to_string()))?;
+        self.record_prefilter_ggx(cmd, pipelines, gpu, plan, dst_mip)
+    }
+
+    /// Record the mirror-mip copy and the pyramid reduction, the capture and
+    /// the destination both in GENERAL and ordered after their last access.
+    pub(in crate::vulkan) fn record_prefilter_pyramid(
+        &self,
+        cmd: vk::CommandBuffer,
+        pipelines: &ProbePrefilterPipelines,
+        gpu: &PrefilterGpu,
+        plan: &PrefilterPlan,
+    ) {
+        self.dispatch_prefilter(
+            cmd,
+            pipelines.mip_pipeline_layout.handle(),
+            pipelines.mip0.handle(),
+            gpu.mip0_set,
+            &plan.mip0_params(),
+            plan.face_size(),
+        );
+        for (step, &set) in gpu.downsample_sets.iter().enumerate() {
+            let dst = step as u32 + 1;
+            // Each level reads the one the previous dispatch wrote.
+            storage_barrier(&self.hw.device, cmd);
+            self.dispatch_prefilter(
+                cmd,
+                pipelines.mip_pipeline_layout.handle(),
+                pipelines.downsample.handle(),
+                set,
+                &plan.downsample_params(dst),
+                plan.mip_face_size(dst),
+            );
+        }
+    }
+
+    /// Record the GGX convolution producing destination mip `dst_mip`, the
+    /// capture in SHADER_READ_ONLY_OPTIMAL and the destination in GENERAL.
+    pub(in crate::vulkan) fn record_prefilter_ggx(
+        &self,
+        cmd: vk::CommandBuffer,
+        pipelines: &ProbePrefilterPipelines,
+        gpu: &PrefilterGpu,
+        plan: &PrefilterPlan,
+        dst_mip: u32,
+    ) -> RenderResult<()> {
+        let set = *gpu.ggx_sets.get(dst_mip as usize - 1).ok_or_else(|| {
+            RenderError::Other("prefilter: convolution mip out of range".to_string())
+        })?;
         self.dispatch_prefilter(
             cmd,
             pipelines.ggx_pipeline_layout.handle(),

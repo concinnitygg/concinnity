@@ -514,8 +514,10 @@ pub(super) fn build_atmosphere(
     msaa_samples: u32,
 ) -> RenderResult<Option<crate::directx::atmosphere::DxAtmosphere>> {
     use crate::directx::atmosphere::{
-        ATMOSPHERE_SRV_SLOTS, ATMOSPHERE_UAV_SLOTS, AtmosphereSlots, DxAtmosphere,
+        ATMOSPHERE_SRV_SLOTS, ATMOSPHERE_UAV_SLOTS, AtmosphereSlots, DxAtmosphere, DxSkyCube,
     };
+    use crate::directx::probe_prefilter::PrefilterSlots;
+    use concinnity_core::render::atmosphere::SKY_CUBE_PLAN;
     let Some(settings) = settings else {
         return Ok(None);
     };
@@ -534,7 +536,22 @@ pub(super) fn build_atmosphere(
         irradiance_srv_cpu: scene.env_map.irradiance.srv_cpu,
         depth_srv_gpu: descriptors.slot_gpu(layout.decal_depth_srv_slot),
     };
-    DxAtmosphere::new(&gpu.hw.alloc, settings, slots, msaa_samples, gpu.hot_reload).map(Some)
+    let sky_cube = DxSkyCube::new(
+        &gpu.hw.device,
+        PrefilterSlots::block(layout.sky_cube_base_slot, SKY_CUBE_PLAN.mips()),
+        |slot| descriptors.slot_cpu(slot),
+        scene.env_map.prefilter.srv_cpu,
+        gpu.hot_reload,
+    )?;
+    DxAtmosphere::new(
+        &gpu.hw.alloc,
+        settings,
+        slots,
+        sky_cube,
+        msaa_samples,
+        gpu.hot_reload,
+    )
+    .map(Some)
 }
 
 pub(super) fn build_raymarch(
@@ -563,12 +580,15 @@ pub(super) fn build_raymarch(
         crate::directx::raymarch::RaymarchSharedBindings {
             shadow_resource: shadow.resource.as_ref().map(|r| &r.resource),
             shadow_layers: shadow.layers,
-            // An atmosphere writes the diffuse light into its own cube.
+            // An atmosphere writes the environment's light into its own cubes.
             irradiance_resource: match atmosphere {
                 Some(atmosphere) => atmosphere.irradiance(),
                 None => &scene.env_map.irradiance.resource,
             },
-            prefilter_resource: &scene.env_map.prefilter.resource,
+            prefilter_resource: match atmosphere.and_then(|a| a.prefilter()) {
+                Some((cube, _)) => cube,
+                None => &scene.env_map.prefilter.resource,
+            },
         },
         crate::directx::raymarch::RaymarchDescriptorHandles {
             srv_base_cpu: descriptors.slot_cpu(raymarch_srv_base_slot),

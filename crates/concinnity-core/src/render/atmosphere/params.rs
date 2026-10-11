@@ -24,12 +24,17 @@ pub struct AtmosphereParams {
     pub ozone: [f32; 4],
     /// xyz = the ground's albedo, w = half the ozone layer's width in km.
     pub ground_albedo: [f32; 4],
-    /// x = ground radius, y = top radius, z = the aerial volume's reach, all
-    /// km; w = meters per world unit over meters per km (world units to km).
+    /// x = the tables' ground radius, y = their top radius, z = the aerial
+    /// volume's reach, all km; w = meters per world unit over meters per km
+    /// (world units to km).
     pub radii: [f32; 4],
-    /// xyz = the camera relative to the planet's center in km, w = its
+    /// xyz = the camera relative to the tables' planet center in km, w = its
     /// distance from the center.
     pub camera: [f32; 4],
+    /// The planet the sky is seen over, in km: x = its ground radius, y = its
+    /// top radius, z = the camera's distance from its center, w = unused.
+    /// Equal to the tables' unless the atmosphere has an apparent radius.
+    pub view_ground: [f32; 4],
     /// xyz = unit direction toward the sun, w = cosine of the disc's radius.
     pub sun_direction: [f32; 4],
     /// xyz = the sunlight above the air, w = unused.
@@ -63,6 +68,8 @@ impl AtmosphereParams {
     /// The block for `frame` drawn from `view`.
     pub fn new(s: &AtmosphereSettings, frame: &AtmosphereFrame, view: &AtmosphereView) -> Self {
         let v3 = |v: [f32; 3], w: f32| [v[0], v[1], v[2], w];
+        let table = s.with_ground_radius(frame.sky_ground_radius);
+        let camera = frame.table_camera_km(s);
         let disc: [f32; 3] = core::array::from_fn(|i| {
             frame.sun_illuminance[i] * frame.sun_transmittance[i] * s.sun_disc_intensity
         });
@@ -75,12 +82,13 @@ impl AtmosphereParams {
             ozone: v3(s.ozone_absorption, s.ozone_center),
             ground_albedo: v3(s.ground_albedo, s.ozone_half_width),
             radii: [
-                s.bottom_radius,
-                s.top_radius,
+                table.bottom_radius,
+                table.top_radius,
                 AERIAL_MAX_DISTANCE_KM,
                 1.0 / METERS_PER_KM,
             ],
-            camera: v3(frame.camera_km, length(frame.camera_km)),
+            camera: v3(camera, length(camera)),
+            view_ground: [s.bottom_radius, s.top_radius, length(frame.camera_km), 0.0],
             sun_direction: v3(frame.sun_direction, s.sun_cos_radius),
             sun_illuminance: v3(frame.sun_illuminance, 0.0),
             sun_disc: v3(disc, 0.0),
@@ -102,11 +110,11 @@ mod tests {
     use crate::components::{Atmosphere, DirectionalLight};
     use core::mem::{offset_of, size_of};
 
-    // Layout must match `AtmosphereParams` in atmosphere_common.hlsl: every
+    // Layout must match `AtmosphereParams` in atmosphere_types.hlsl: every
     // member a float4 lane, so MSL, SPIR-V and DXIL agree.
     #[test]
     fn atmosphere_params_layout_matches_the_shader() {
-        assert_eq!(size_of::<AtmosphereParams>(), 304);
+        assert_eq!(size_of::<AtmosphereParams>(), 320);
         assert_eq!(offset_of!(AtmosphereParams, inv_vp), 0);
         assert_eq!(offset_of!(AtmosphereParams, rayleigh), 64);
         assert_eq!(offset_of!(AtmosphereParams, mie_scattering), 80);
@@ -115,12 +123,13 @@ mod tests {
         assert_eq!(offset_of!(AtmosphereParams, ground_albedo), 128);
         assert_eq!(offset_of!(AtmosphereParams, radii), 144);
         assert_eq!(offset_of!(AtmosphereParams, camera), 160);
-        assert_eq!(offset_of!(AtmosphereParams, sun_direction), 176);
-        assert_eq!(offset_of!(AtmosphereParams, sun_illuminance), 192);
-        assert_eq!(offset_of!(AtmosphereParams, sun_disc), 208);
-        assert_eq!(offset_of!(AtmosphereParams, cam_pos), 224);
-        assert_eq!(offset_of!(AtmosphereParams, viewport), 240);
-        assert_eq!(offset_of!(AtmosphereParams, sky_rot), 256);
+        assert_eq!(offset_of!(AtmosphereParams, view_ground), 176);
+        assert_eq!(offset_of!(AtmosphereParams, sun_direction), 192);
+        assert_eq!(offset_of!(AtmosphereParams, sun_illuminance), 208);
+        assert_eq!(offset_of!(AtmosphereParams, sun_disc), 224);
+        assert_eq!(offset_of!(AtmosphereParams, cam_pos), 240);
+        assert_eq!(offset_of!(AtmosphereParams, viewport), 256);
+        assert_eq!(offset_of!(AtmosphereParams, sky_rot), 272);
     }
 
     #[test]
@@ -145,9 +154,42 @@ mod tests {
         assert_eq!(p.radii[0], 6360.0);
         assert!((p.rayleigh[3] + 1.0 / 8.0).abs() < 1e-7);
         assert_eq!(p.camera[3], 6360.5);
+        // Without an apparent radius the sky is seen over the tables' planet.
+        assert_eq!(p.view_ground, [p.radii[0], p.radii[1], p.camera[3], 0.0]);
+
         assert_eq!(p.viewport[2], 1.0 / 1600.0);
         // The disc is the sunlight through the air, times its brightness.
         let expected = 2.0 * frame.sun_transmittance[0] * s.sun_disc_intensity;
         assert!((p.sun_disc[0] - expected).abs() < 1e-3);
+    }
+
+    // With an apparent radius the tables sit over the bigger ground, the
+    // camera as high above it as above the true one, and the view lane keeps
+    // the true planet.
+    #[test]
+    fn an_apparent_radius_splits_the_tables_from_the_view() {
+        let s = AtmosphereSettings::resolve(
+            &Atmosphere {
+                apparent_radius_km: Some(6360.0),
+                ..Default::default()
+            },
+            Some(([0.0, -50_000.0, 0.0], 50_000.0)),
+        );
+        let sun = DirectionalLight::default();
+        let frame = AtmosphereFrame::new(&s, [0.0, 50.1, 0.0], &sun);
+        let p = AtmosphereParams::new(
+            &s,
+            &frame,
+            &AtmosphereView {
+                inv_vp: crate::transform::IDENTITY,
+                cam_pos: [0.0; 3],
+                viewport: [1.0, 1.0],
+                sky_rot: crate::sky::SkyOrientation::IDENTITY_ROWS,
+            },
+        );
+        assert_eq!([p.radii[0], p.radii[1]], [6360.0, 6460.0]);
+        assert!((p.camera[3] - 6360.1).abs() < 1e-2, "{:?}", p.camera);
+        assert_eq!([p.view_ground[0], p.view_ground[1]], [50.0, 150.0]);
+        assert!((p.view_ground[2] - 50.1).abs() < 1e-4);
     }
 }

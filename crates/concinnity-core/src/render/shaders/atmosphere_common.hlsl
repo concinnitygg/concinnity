@@ -126,9 +126,72 @@ float2 atmo_horizon_angles(float r)
     return float2(ATMO_PI - beta, beta);
 }
 
-float2 sky_view_uv(float r, float view_cos, float azimuth_cos)
+// The camera's distance from the center of the planet the sky is seen over,
+// kept inside its air as `atmo_camera_radius` keeps the tables'.
+float atmo_view_camera_radius()
 {
-    float2 angles = atmo_horizon_angles(r);
+    return clamp(ATMO.view_ground.z, ATMO.view_ground.x + 1e-3, ATMO.view_ground.y - 1e-3);
+}
+
+// `atmo_horizon_angles` for the planet the sky is seen over.
+float2 atmo_view_horizon_angles()
+{
+    float b = ATMO.view_ground.x;
+    float r = atmo_view_camera_radius();
+    float v_horizon = sqrt(max(r * r - b * b, 0.0));
+    float beta = acos(clamp(v_horizon / r, -1.0, 1.0));
+    return float2(ATMO_PI - beta, beta);
+}
+
+// Whether a view ray with up-cosine `mu` meets the ground of the planet the
+// sky is seen over.
+bool atmo_view_hits_ground(float mu)
+{
+    float b = ATMO.view_ground.x;
+    float r = atmo_view_camera_radius();
+    return mu < 0.0 && r * r * (mu * mu - 1.0) + b * b >= 0.0;
+}
+
+// `table_view_angle` in render::atmosphere: the angle from the zenith at
+// which the tables hold a view ray `view_angle` from it, the true horizon
+// stretched onto the tables'.
+float atmo_table_view_angle(float view_angle)
+{
+    float view_horizon = atmo_view_horizon_angles().x;
+    float table_horizon = atmo_horizon_angles(atmo_camera_radius()).x;
+    if (view_horizon == table_horizon)
+    {
+        return view_angle;
+    }
+    if (view_angle <= view_horizon)
+    {
+        return view_angle * table_horizon / max(view_horizon, 1e-6);
+    }
+    return table_horizon + (view_angle - view_horizon) * (ATMO_PI - table_horizon)
+         / max(ATMO_PI - view_horizon, 1e-6);
+}
+
+// The sun where the tables hold it: its azimuth kept, its height warped as a
+// view ray's is, so its glow in the sky sits behind its disc.
+float3 atmo_table_sun()
+{
+    float3 sun = ATMO.sun_direction.xyz;
+    float3 up = atmo_camera_up();
+    float mu = dot(up, sun);
+    float3 flat_sun = sun - up * mu;
+    float len = length(flat_sun);
+    if (atmo_view_horizon_angles().x == atmo_horizon_angles(atmo_camera_radius()).x || len < 1e-6)
+    {
+        return sun;
+    }
+    float a = atmo_table_view_angle(acos(clamp(mu, -1.0, 1.0)));
+    return up * cos(a) + flat_sun * (sin(a) / len);
+}
+
+// `sky_view_uv` in render::atmosphere, for a horizon at `angles`
+// (`atmo_horizon_angles`).
+float2 sky_view_uv_at(float2 angles, float view_cos, float azimuth_cos)
+{
     float view_angle = acos(clamp(view_cos, -1.0, 1.0));
     float v;
     if (view_angle < angles.x)
@@ -166,7 +229,8 @@ float2 sky_view_direction(float r, float2 uv)
 
 // The sky-view coordinate of world direction `dir` seen from the camera:
 // its cosine to the camera's up, and the cosine of its azimuth from the sun's
-// about that up.
+// about that up. Mapped against the true horizon, so the table's horizon
+// lands on it.
 float2 sky_view_uv_of(float3 dir)
 {
     float3 up = atmo_camera_up();
@@ -179,7 +243,7 @@ float2 sky_view_uv_of(float3 dir)
     float azimuth_cos = (lv > 1e-10 && ls > 1e-10)
         ? dot(view_flat, sun_flat) * rsqrt(lv * ls)
         : 1.0;
-    return sky_view_uv(atmo_camera_radius(), view_cos, azimuth_cos);
+    return sky_view_uv_at(atmo_view_horizon_angles(), view_cos, azimuth_cos);
 }
 
 // `aerial_slice_of` in render::atmosphere: the volume's depth coordinate of a

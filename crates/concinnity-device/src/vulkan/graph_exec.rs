@@ -1248,7 +1248,7 @@ impl VkContext {
             PassId::Fog => {
                 self.encode_fog(rec, params.frame_idx, params.vp_mat, params.cam_pos);
             }
-            PassId::Atmosphere => self.encode_atmosphere(rec, params.frame_idx),
+            PassId::Atmosphere => self.encode_atmosphere(rec, params.frame_idx)?,
             PassId::AerialPerspective => self.encode_aerial_perspective(rec, params.frame_idx),
             PassId::AutoExposure => {
                 self.encode_auto_exposure(rec, params.frame_idx);

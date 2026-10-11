@@ -2,9 +2,10 @@
 //! the tables, the compute pass that builds them, the haze pass that blends
 //! the aerial volume over the opaque scene, and the sky pipeline that draws
 //! the sky-view table behind it. The irradiance cube the last kernel writes
-//! takes the environment's irradiance SRV slot, so every table that reaches
-//! the environment's irradiance reads the atmosphere's. Like every texture the
-//! GPU writes, the tables and the cube are committed resources.
+//! takes the environment's irradiance SRV slot, and the sky cube the
+//! reflection prefilter convolves takes its prefilter slot, so every table
+//! that reaches the environment's light reads the atmosphere's. Like every
+//! texture the GPU writes, the tables and the cubes are committed resources.
 //!
 //! Every table and the cube rest readable by any shader stage; each kernel
 //! opens its output for unordered access and closes it again inside the pass,
@@ -13,11 +14,11 @@
 //! Mirrors src/metal/atmosphere.rs and src/vulkan/atmosphere.rs.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use concinnity_core::render::atmosphere::{
-    AERIAL_SIZE, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
-    IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_VIEW_HEIGHT, SKY_VIEW_WIDTH, TRANSMITTANCE_HEIGHT,
+    AERIAL_SIZE, AirTables, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
+    IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_CUBE_FACE, SKY_CUBE_PLAN, SKY_VIEW_HEIGHT,
+    SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, SkyCubeWork, TRANSMITTANCE_HEIGHT,
     TRANSMITTANCE_WIDTH, TableReadiness,
 };
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -30,13 +31,18 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::builtin_shaders::{
     AERIAL_PERSPECTIVE_FRAG, ATMOSPHERE_AERIAL, ATMOSPHERE_IRRADIANCE, ATMOSPHERE_MULTISCATTER,
-    ATMOSPHERE_SKY_VIEW, ATMOSPHERE_TRANSMITTANCE, CompileProgram, FULLSCREEN_VERT,
-    SKY_ATMOSPHERE_FRAG,
+    ATMOSPHERE_SKY_CUBE, ATMOSPHERE_SKY_VIEW, ATMOSPHERE_TRANSMITTANCE, CompileProgram,
+    FULLSCREEN_VERT, SKY_ATMOSPHERE_FRAG,
 };
 use super::com;
 use super::context::{DxContext, align256};
 use super::descriptor_slot::{DescriptorTables, SrvSlot};
 use super::error::map_hresult;
+use super::probe_prefilter::{
+    PrefilterSlots, ProbePrefilterPipelines, typed_uav_load_supported, uav_barrier,
+    write_cube_srv as write_mips_cube_srv, write_prefilter_views,
+};
+use super::probe_set::{CubeResource, create_cube_resource, write_cube_mip_uav};
 use super::pso::{Blend, GraphicsPso, Raster, compute_pso};
 use super::root_sig::{RootSig, SamplerState, Visibility};
 use super::texture::{HDR_FORMAT, transition_barrier};
@@ -55,6 +61,9 @@ const GROUP: u32 = 8;
 pub(in crate::directx) const ATMOSPHERE_SRV_SLOTS: usize = 4;
 /// See [`ATMOSPHERE_SRV_SLOTS`].
 pub(in crate::directx) const ATMOSPHERE_UAV_SLOTS: usize = 5;
+/// The heap slots the sky cube's convolution takes, laid out by
+/// `PrefilterSlots::block`.
+pub(in crate::directx) const SKY_CUBE_SLOTS: usize = PrefilterSlots::span(SKY_CUBE_PLAN.mips());
 
 // The CPU and GPU handles of the atmosphere's heap slots, the environment's
 // irradiance slot, and the main depth SRV the haze pass reads.
@@ -89,9 +98,75 @@ pub(in crate::directx) struct DxAtmosphere {
     sky_pso: ID3D12PipelineState,
     aerial_root_sig: ID3D12RootSignature,
     aerial_pso: ID3D12PipelineState,
-    air_tables_built: AtomicBool,
+    // `None` on a device that cannot load the capture's format through a
+    // UAV, which the prefilter needs; the surfaces then reflect no sky.
+    sky_cube: Option<DxSkyCube>,
+    // The ground the tables that depend on the air alone were built over.
+    air_tables: AirTables,
     // The frames that recorded the tables, for work recorded outside the frame.
     readiness: TableReadiness,
+}
+
+/// The sky drawn into a capture cube and convolved by the reflection-probe
+/// kernels into the cube whose SRV takes the environment's prefilter slot, a
+/// few steps a frame. Both cubes rest readable by any shader stage.
+pub(in crate::directx) struct DxSkyCube {
+    kernel: ID3D12PipelineState,
+    prefilter: ProbePrefilterPipelines,
+    capture: ID3D12Resource,
+    cube: ID3D12Resource,
+    slots: PrefilterSlots,
+    prefilter_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    schedule: Cell<SkyCubeSchedule>,
+    // This frame's steps, planned when its constants are.
+    work: Cell<SkyCubeWork>,
+}
+
+impl DxSkyCube {
+    /// The two cubes and their descriptors in `slots`, the cube's SRV in the
+    /// environment's prefilter slot `prefilter_srv_cpu`. `None` when the
+    /// device cannot run the prefilter.
+    pub(in crate::directx) fn new(
+        device: &ID3D12Device,
+        slots: PrefilterSlots,
+        cpu: impl Fn(usize) -> D3D12_CPU_DESCRIPTOR_HANDLE,
+        prefilter_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+        hot_reload: bool,
+    ) -> RenderResult<Option<Self>> {
+        if !typed_uav_load_supported(device) {
+            return Ok(None);
+        }
+        let cube_resource = |label: &'static str| {
+            create_cube_resource(
+                device,
+                CubeResource {
+                    face_size: SKY_CUBE_PLAN.face_size(),
+                    mips: SKY_CUBE_PLAN.mips(),
+                    cubes: 1,
+                    state: RESTING,
+                    label,
+                },
+            )
+        };
+        let capture = cube_resource("atmosphere sky capture")?;
+        let cube = cube_resource("atmosphere sky cube")?;
+        let mips = SKY_CUBE_PLAN.mips();
+        write_prefilter_views(device, slots, cpu, &capture, mips, |mip, handle| {
+            write_cube_mip_uav(device, &cube, 0, mip, handle)
+        });
+        write_mips_cube_srv(device, &cube, mips, prefilter_srv_cpu);
+        let kernel_root_sig = kernel_root_sig(device)?;
+        Ok(Some(Self {
+            kernel: kernel(device, &kernel_root_sig, &ATMOSPHERE_SKY_CUBE, hot_reload)?,
+            prefilter: ProbePrefilterPipelines::new(device, hot_reload)?,
+            capture,
+            cube,
+            slots,
+            prefilter_srv_cpu,
+            schedule: Cell::new(SkyCubeSchedule::new(mips)),
+            work: Cell::new(SkyCubeWork::default()),
+        }))
+    }
 }
 
 fn create_texture(
@@ -346,6 +421,7 @@ impl DxAtmosphere {
         alloc: &DeviceAllocator,
         settings: AtmosphereSettings,
         slots: AtmosphereSlots,
+        sky_cube: Option<DxSkyCube>,
         msaa_samples: u32,
         hot_reload: bool,
     ) -> RenderResult<Self> {
@@ -450,7 +526,8 @@ impl DxAtmosphere {
             sky_pso,
             aerial_root_sig,
             aerial_pso,
-            air_tables_built: AtomicBool::new(false),
+            sky_cube,
+            air_tables: AirTables::default(),
             readiness: TableReadiness::default(),
         })
     }
@@ -460,10 +537,21 @@ impl DxAtmosphere {
         &self.irradiance
     }
 
-    // Write the cube's SRV back into the environment's irradiance slot, after
-    // an environment reload wrote the map's there.
-    pub(in crate::directx) fn reclaim_irradiance_slot(&self, device: &ID3D12Device) {
+    // The prefiltered sky cube and its mip count, for a pass that views it in
+    // its own slots; `None` when the device has none.
+    pub(in crate::directx) fn prefilter(&self) -> Option<(&ID3D12Resource, u32)> {
+        self.sky_cube
+            .as_ref()
+            .map(|c| (&c.cube, SKY_CUBE_PLAN.mips()))
+    }
+
+    // Write the cubes' SRVs back into the environment's slots, after an
+    // environment reload wrote the map's there.
+    pub(in crate::directx) fn reclaim_environment_slots(&self, device: &ID3D12Device) {
         write_cube_srv(device, &self.irradiance, self.irradiance_srv_cpu);
+        if let Some(c) = &self.sky_cube {
+            write_mips_cube_srv(device, &c.cube, SKY_CUBE_PLAN.mips(), c.prefilter_srv_cpu);
+        }
     }
 
     // Rebuild every pipeline from the shader sources (shader hot reload).
@@ -473,6 +561,10 @@ impl DxAtmosphere {
         msaa_samples: u32,
     ) -> RenderResult<()> {
         let kernels = kernels(device, &self.kernel_root_sig, true)?;
+        if let Some(c) = self.sky_cube.as_mut() {
+            c.kernel = kernel(device, &self.kernel_root_sig, &ATMOSPHERE_SKY_CUBE, true)?;
+            c.schedule.set(SkyCubeSchedule::new(SKY_CUBE_PLAN.mips()));
+        }
         let sky_pso = super::sky::build_sky_pso(
             device,
             &SKY_ATMOSPHERE_FRAG,
@@ -484,7 +576,7 @@ impl DxAtmosphere {
         self.kernels = kernels;
         self.sky_pso = sky_pso;
         self.aerial_pso = aerial_pso;
-        self.air_tables_built.store(false, Ordering::Relaxed);
+        self.air_tables.invalidate();
         Ok(())
     }
 
@@ -504,6 +596,14 @@ impl DxContext {
             .frame
             .map(|f| AtmosphereParams::new(&atmo.settings, &f, &view));
         atmo.params.set(params);
+        if let Some(cube) = &atmo.sky_cube {
+            let mut schedule = cube.schedule.get();
+            cube.work.set(match atmo.frame {
+                Some(f) => schedule.plan(SkyCubeKey::new(&atmo.settings, &f, &view.sky_rot)),
+                None => SkyCubeWork::default(),
+            });
+            cube.schedule.set(schedule);
+        }
         if let (Some(params), Some(&ptr)) = (params, atmo.params_ptrs.get(frame_idx)) {
             // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer
             // init sized for this block, and the source is a separate live value.
@@ -519,7 +619,8 @@ impl DxContext {
 
     // Build this frame's tables: the sky view, the aerial volume and the
     // irradiance cube, after the transmittance and multiple-scattering tables
-    // on the first frame.
+    // when the ground they are built over has changed; then this frame's steps
+    // of the sky cube.
     pub(in crate::directx) fn encode_atmosphere(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -531,6 +632,7 @@ impl DxContext {
         let Some(params_gva) = atmo.params_gva(frame_idx) else {
             return;
         };
+        let ground = atmo.params.get().map_or(0.0, |p| p.radii[0]);
         let open = |r: &ID3D12Resource| {
             transition_barrier(r, RESTING, D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
         };
@@ -556,7 +658,7 @@ impl DxContext {
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
             cmd.SetComputeRootConstantBufferView(0, params_gva);
             cmd.set_compute_srv_table(1, atmo.srv_gpu[0]);
-            if !atmo.air_tables_built.swap(true, Ordering::Relaxed) {
+            if atmo.air_tables.take_rebuild(ground) {
                 cmd.ResourceBarrier(&[open(transmittance)]);
                 dispatch(
                     0,
@@ -587,6 +689,59 @@ impl DxContext {
             dispatch(4, [1, 1, 1]);
             cmd.ResourceBarrier(&[close(&atmo.irradiance)]);
         }
+        if let Some(cube) = &atmo.sky_cube {
+            self.encode_sky_cube(cmd, cube);
+        }
+    }
+
+    // This frame's steps of the sky cube: the sky drawn into the capture's top
+    // mip, the mirror copy and the pyramid, then the GGX mips. The capture is
+    // open for unordered access only while the sky and the pyramid are
+    // written, the cube while any of its mips are.
+    fn encode_sky_cube(&self, cmd: &ID3D12GraphicsCommandList, cube: &DxSkyCube) {
+        let work = cube.work.get();
+        if work.is_empty() {
+            return;
+        }
+        let open = |r: &ID3D12Resource| {
+            transition_barrier(r, RESTING, D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+        };
+        let close = |r: &ID3D12Resource| {
+            transition_barrier(r, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, RESTING)
+        };
+        if work.capture {
+            let groups = SKY_CUBE_FACE.div_ceil(GROUP);
+            // SAFETY: the command list is in the recording state with the kernel root signature,
+            // the constants and the table inputs still bound from the atmosphere's kernels, and
+            // every resource and descriptor these commands name is live for the call.
+            unsafe {
+                cmd.ResourceBarrier(&[open(&cube.capture), open(&cube.cube)]);
+                cmd.SetPipelineState(&cube.kernel);
+                cmd.set_compute_srv_table(
+                    2,
+                    self.descriptors.slot_gpu(cube.slots.capture_uav_base),
+                );
+                cmd.Dispatch(groups, groups, 6);
+            }
+            uav_barrier(cmd, &cube.capture);
+            self.record_prefilter_pyramid(
+                cmd,
+                &cube.prefilter,
+                cube.slots,
+                &cube.capture,
+                &SKY_CUBE_PLAN,
+            );
+            // SAFETY: as above.
+            unsafe { cmd.ResourceBarrier(&[close(&cube.capture)]) };
+        } else {
+            // SAFETY: as above.
+            unsafe { cmd.ResourceBarrier(&[open(&cube.cube)]) };
+        }
+        for mip in work.ggx_mips() {
+            self.record_prefilter_ggx(cmd, &cube.prefilter, cube.slots, &SKY_CUBE_PLAN, mip);
+        }
+        // SAFETY: as above.
+        unsafe { cmd.ResourceBarrier(&[close(&cube.cube)]) };
     }
 
     // Blend the air in front of each opaque surface over the resolved scene.

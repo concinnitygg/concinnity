@@ -240,7 +240,7 @@ impl DxContext {
             anisotropy,
         )?;
         let upscale = effects::build_upscale(&gpu, &descriptors, output, &post)?;
-        let scene =
+        let mut scene =
             scene_assets::build_scene_assets(&gpu, &descriptors, &media, &area_lights, &world)?;
         // The probe set, with the stand-in array in the SRV slot until a world
         // places a probe.
@@ -356,6 +356,11 @@ impl DxContext {
             fx.atmosphere,
             features.msaa_samples,
         )?;
+        // The atmosphere's sky cube now holds the environment's reflections.
+        if let Some((_, mips)) = atmosphere.as_ref().and_then(|a| a.prefilter()) {
+            scene.env_map.prefilter_mip_count = mips;
+        }
+
         let raymarch = effects::build_raymarch(
             &gpu,
             &descriptors,

@@ -4,7 +4,7 @@
 // kilometers. `render::atmosphere` mirrors the sizes, and its tests lock the
 // constants below to the Rust ones.
 //
-// AtmosphereParams (304 B) mirrors `render::atmosphere::AtmosphereParams`;
+// AtmosphereParams (320 B) mirrors `render::atmosphere::AtmosphereParams`;
 // every member is a float4 lane so the three targets lay it out alike.
 
 struct AtmosphereParams
@@ -20,11 +20,15 @@ struct AtmosphereParams
     float4 ozone;
     // xyz = ground albedo, w = half the ozone layer's width km.
     float4 ground_albedo;
-    // x = ground radius, y = top radius, z = aerial reach (km), w = km per
-    // world unit.
+    // The tables' planet: x = ground radius, y = top radius, z = aerial
+    // reach (km), w = km per world unit.
     float4 radii;
-    // xyz = camera relative to the planet's center (km), w = its length.
+    // xyz = camera relative to the tables' planet center (km), w = its length.
     float4 camera;
+    // The planet the sky is seen over: x = ground radius, y = top radius,
+    // z = the camera's distance from its center. The tables' own unless the
+    // atmosphere has an apparent radius.
+    float4 view_ground;
     // xyz = toward the sun, w = cosine of the disc's radius.
     float4 sun_direction;
     float4 sun_illuminance;
@@ -46,6 +50,8 @@ static const uint AERIAL_SIZE = 32u;
 static const float AERIAL_MAX_DISTANCE_KM = 32.0;
 static const uint IRRADIANCE_FACE = 16u;
 static const uint IRRADIANCE_SAMPLES = 512u;
+static const uint SKY_CUBE_FACE = 512u;
+
 // Steps along each sky-view and multiple-scattering ray.
 static const uint SKY_VIEW_STEPS = 30u;
 static const uint MULTISCATTER_STEPS = 20u;

@@ -29,10 +29,10 @@
 ///
 /// The sky is drawn behind everything, with the sun's disc in it. Distant
 /// surfaces fade into the air's color (aerial perspective), behind any
-/// [VolumetricFog](#volumetricfog), which stays the nearer layer. The light
-/// the sky casts fills the shadows as the ambient light, in place of the
-/// diffuse light of an [EnvironmentMap](#environmentmap); an environment map's
-/// reflections are still used when the world declares one.
+/// [VolumetricFog](#volumetricfog), which stays the nearer layer. The sky
+/// lights the scene in place of an [EnvironmentMap](#environmentmap): its
+/// light fills the shadows, and shiny surfaces reflect it, following the sun
+/// through the day.
 ///
 /// One per world. The defaults are Earth's.
 ///
@@ -106,4 +106,18 @@ pub struct Atmosphere {
     /// 0 hides the disc.
     #[asset(default = 1000.0)]
     pub sun_disc_intensity: f32,
+    /// Radius, in kilometers, of the planet the sky is drawn over while the
+    /// camera is near the ground, in place of the true one. A small planet's
+    /// own sky is a flat deep blue with a pale sun at sunset, since a ray
+    /// along its horizon crosses little air; drawn over an Earth-sized radius
+    /// it gets a pale horizon and red sunsets. The haze over the ground keeps
+    /// its true distances, and the horizon still meets the ground where it
+    /// really is. At least 1. `null` (the default) draws the sky over the
+    /// true radius.
+    pub apparent_radius_km: Option<f32>,
+    /// Heights above the ground, in kilometers, between which the sky fades
+    /// from `apparent_radius_km` to the true radius as the camera climbs, so
+    /// the planet's limb seen from high up is its own.
+    #[asset(default = [1.0, 20.0])]
+    pub apparent_radius_fade_km: [f32; 2],
 }

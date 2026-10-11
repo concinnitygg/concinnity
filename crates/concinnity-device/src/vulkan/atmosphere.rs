@@ -2,23 +2,24 @@
 //! the tables, the compute pass that builds them, the haze pass that blends
 //! the aerial volume over the opaque scene, and the sky pipeline that draws
 //! the sky-view table behind it. The irradiance cube the last kernel writes is
-//! the environment's irradiance cube, so every set that binds the
-//! environment's irradiance reads the atmosphere's.
+//! the environment's irradiance cube, and the sky cube the reflection
+//! prefilter convolves is its prefiltered cube, so every set that binds the
+//! environment's light reads the atmosphere's.
 //!
 //! The four tables rest in `GENERAL` for good: the kernels write them as
 //! storage images and every reader samples them there, so the steps between
-//! kernels are memory barriers that name no image. The irradiance cube rests
-//! sampled, as every global set declares it, and is opened to `GENERAL` for
-//! its one kernel and closed again inside the pass.
+//! kernels are memory barriers that name no image. The irradiance cube and the
+//! sky cube rest sampled, as every global set declares them, and the sky
+//! cube's capture rests sampled for the convolution; each is opened to
+//! `GENERAL` for the kernels that write it and closed again inside the pass.
 //!
 //! Mirrors src/metal/atmosphere.rs and src/directx/atmosphere.rs.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use ash::vk;
 use concinnity_core::render::atmosphere::{
-    AERIAL_SIZE, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
-    IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_VIEW_HEIGHT, SKY_VIEW_WIDTH, TRANSMITTANCE_HEIGHT,
+    AERIAL_SIZE, AirTables, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
+    IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_CUBE_FACE, SKY_CUBE_PLAN, SKY_VIEW_HEIGHT,
+    SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, SkyCubeWork, TRANSMITTANCE_HEIGHT,
     TRANSMITTANCE_WIDTH, TableReadiness,
 };
 use concinnity_core::render::error::RenderResult;
@@ -27,8 +28,8 @@ use concinnity_core::render::shader_programs::ShaderProgram;
 use super::allocator::{PooledBuffer, PooledImage};
 use super::builtin_shaders::{
     AERIAL_PERSPECTIVE_FRAG, ATMOSPHERE_AERIAL, ATMOSPHERE_IRRADIANCE, ATMOSPHERE_MULTISCATTER,
-    ATMOSPHERE_SKY_VIEW, ATMOSPHERE_TRANSMITTANCE, CompileProgram, FULLSCREEN_VERT,
-    SKY_ATMOSPHERE_FRAG,
+    ATMOSPHERE_SKY_CUBE, ATMOSPHERE_SKY_VIEW, ATMOSPHERE_TRANSMITTANCE, CompileProgram,
+    FULLSCREEN_VERT, SKY_ATMOSPHERE_FRAG,
 };
 use super::context::VkContext;
 use super::descriptor_layout::{Binding, PoolSizes};
@@ -37,6 +38,8 @@ use super::owned::{
     OwnedSampler, OwnedSetLayout, VkDevice,
 };
 use super::pipeline_desc::{Blend, GraphicsPipelineDesc, compute_pipeline};
+use super::probe_prefilter::{PrefilterGpu, PrefilterTarget, ProbePrefilterPipelines};
+use super::probe_set::{self, CubeImage};
 use super::record::Recorder;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
@@ -49,12 +52,19 @@ const TABLE_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 const GROUP: u32 = 8;
 
 // The kernels in dispatch order; each set's output binding is its own table.
-const KERNELS: usize = 5;
+const KERNELS: usize = 6;
 const TRANSMITTANCE: usize = 0;
 const MULTISCATTER: usize = 1;
 const SKY_VIEW: usize = 2;
 const AERIAL: usize = 3;
 const IRRADIANCE: usize = 4;
+const SKY_CUBE: usize = 5;
+
+// The stages that sample the environment's cubes.
+const CUBE_READERS: vk::PipelineStageFlags = vk::PipelineStageFlags::from_raw(
+    vk::PipelineStageFlags::FRAGMENT_SHADER.as_raw()
+        | vk::PipelineStageFlags::COMPUTE_SHADER.as_raw(),
+);
 
 // One table: its image and the one view every binding uses.
 struct Table {
@@ -90,6 +100,7 @@ pub(in crate::vulkan) struct VkAtmosphere {
     pub(in crate::vulkan) params: Option<AtmosphereParams>,
     tables: [Table; 4],
     irradiance_image: vk::Image,
+    sky_cube: SkyCube,
     params_ubos: Vec<PooledBuffer>,
     _pool: OwnedDescriptorPool,
     _sampler: OwnedSampler,
@@ -108,10 +119,21 @@ pub(in crate::vulkan) struct VkAtmosphere {
     aerial_pipeline: OwnedPipeline,
     aerial_sets: Vec<vk::DescriptorSet>,
     framebuffers: Vec<OwnedFramebuffer>,
-    // Whether the tables that depend on the air alone are built.
-    air_tables_built: AtomicBool,
+    // The ground the tables that depend on the air alone were built over.
+    air_tables: AirTables,
     // The frames that recorded the tables, for work recorded outside the frame.
     readiness: TableReadiness,
+}
+
+// The sky drawn into a capture cube and convolved by the reflection-probe
+// kernels into the environment's prefiltered cube, a few steps a frame.
+struct SkyCube {
+    image: vk::Image,
+    prefilter: ProbePrefilterPipelines,
+    gpu: PrefilterGpu,
+    schedule: SkyCubeSchedule,
+    // This frame's steps, planned when its constants are.
+    work: SkyCubeWork,
 }
 
 // The kernels' shared set: the constants, the three tables they may read, the
@@ -214,18 +236,63 @@ fn image_view(
         .map_err(|e| super::error::map_vk_result(e, "atmosphere table view"))
 }
 
-// The irradiance cube an atmosphere writes, which the caller installs as the
-// environment's before any set binds it: the cube, resting sampled once the
-// atmosphere is built, and the view of its six faces the kernel writes
-// through.
-pub(in crate::vulkan) struct IrradianceCube {
-    image: vk::Image,
-    faces: vk::ImageView,
+// The cubes an atmosphere writes, which the caller installs as the
+// environment's before any set binds them, both resting sampled once the
+// atmosphere is built: the irradiance cube and the view of its six faces its
+// kernel writes through, and the sky cube with a storage view per mip.
+pub(in crate::vulkan) struct AtmosphereCubes {
+    irradiance_image: vk::Image,
+    irradiance_faces: vk::ImageView,
+    sky_image: vk::Image,
+    sky_mip_views: Vec<vk::ImageView>,
 }
 
-pub(in crate::vulkan) fn create_irradiance_cube(
+/// The environment images an atmosphere replaces.
+pub(in crate::vulkan) struct EnvironmentCubes {
+    pub(in crate::vulkan) irradiance: GpuImage,
+    pub(in crate::vulkan) prefilter: GpuImage,
+}
+
+pub(in crate::vulkan) fn create_atmosphere_cubes(
     gpu: &GpuUploadContext<'_>,
-) -> RenderResult<(GpuImage, IrradianceCube)> {
+) -> RenderResult<(EnvironmentCubes, AtmosphereCubes)> {
+    let (irradiance, image, faces) = create_irradiance_cube(gpu)?;
+    let mips = SKY_CUBE_PLAN.mips();
+    let sky = probe_set::create_image(
+        gpu.alloc,
+        CubeImage {
+            face_size: SKY_CUBE_FACE,
+            mips,
+            layers: 6,
+            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
+        },
+    )
+    .map_err(|e| e.context("atmosphere sky cube"))?;
+    let sky_mip_views = probe_set::mip_storage_views(gpu.device, &sky, 0, mips)?;
+    let sky_view = probe_set::create_view(
+        gpu.device,
+        sky.image(),
+        vk::ImageViewType::CUBE,
+        probe_set::range(0, mips, 0, 6),
+    )?;
+    let sky_image = sky.image();
+    Ok((
+        EnvironmentCubes {
+            irradiance,
+            prefilter: GpuImage::from_pooled(sky, sky_view),
+        },
+        AtmosphereCubes {
+            irradiance_image: image,
+            irradiance_faces: faces,
+            sky_image,
+            sky_mip_views,
+        },
+    ))
+}
+
+fn create_irradiance_cube(
+    gpu: &GpuUploadContext<'_>,
+) -> RenderResult<(GpuImage, vk::Image, vk::ImageView)> {
     let info = vk::ImageCreateInfo::default()
         .flags(vk::ImageCreateFlags::CUBE_COMPATIBLE)
         .image_type(vk::ImageType::TYPE_2D)
@@ -255,10 +322,7 @@ pub(in crate::vulkan) fn create_irradiance_cube(
     pooled.attach_view(faces);
     let cube = image_view(gpu.device, pooled.image(), vk::ImageViewType::CUBE, 6)?;
     let image = pooled.image();
-    Ok((
-        GpuImage::from_pooled(pooled, cube),
-        IrradianceCube { image, faces },
-    ))
+    Ok((GpuImage::from_pooled(pooled, cube), image, faces))
 }
 
 fn create_sampler(device: &VkDevice) -> RenderResult<OwnedSampler> {
@@ -366,11 +430,11 @@ fn compile_kernel(
 }
 
 impl VkAtmosphere {
-    // The tables, pipelines and sets, writing `irradiance`.
+    // The tables, pipelines and sets, writing `cubes`.
     pub(in crate::vulkan) fn new(
         gpu: &GpuUploadContext<'_>,
         settings: AtmosphereSettings,
-        irradiance: IrradianceCube,
+        cubes: AtmosphereCubes,
         frames: usize,
         targets: AtmosphereTargets<'_>,
         sky: AtmosphereSky,
@@ -395,11 +459,45 @@ impl VkAtmosphere {
                 "aerial-perspective",
             )?,
         ];
-        let IrradianceCube {
-            image: irradiance_image,
-            faces: irradiance_faces,
-        } = irradiance;
+        let AtmosphereCubes {
+            irradiance_image,
+            irradiance_faces,
+            sky_image,
+            sky_mip_views,
+        } = cubes;
+        let prefilter = ProbePrefilterPipelines::new(device, hot_reload)?;
+        let sky_gpu = PrefilterGpu::new(
+            device,
+            gpu.alloc,
+            &prefilter,
+            &SKY_CUBE_PLAN,
+            PrefilterTarget {
+                image: sky_image,
+                cube: 0,
+                mip_views: &sky_mip_views,
+            },
+        )?;
         one_shot_submit(device, gpu.command_pool, gpu.queue, |cmd| {
+            // The sky cube and its capture rest sampled from the start, the
+            // state every frame's steps open them from.
+            for image in [sky_image, sky_gpu.capture_image()] {
+                transition_image_layout_range(
+                    device,
+                    cmd,
+                    image,
+                    LayoutTransition {
+                        old_layout: vk::ImageLayout::UNDEFINED,
+                        new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        aspect: vk::ImageAspectFlags::COLOR,
+                    },
+                    SubresourceRange {
+                        base_layer: 0,
+                        layer_count: 6,
+                        base_mip: 0,
+                        mip_count: SKY_CUBE_PLAN.mips(),
+                    },
+                );
+            }
             for table in &tables {
                 transition_image_layout_range(
                     device,
@@ -496,6 +594,12 @@ impl VkAtmosphere {
                 &ATMOSPHERE_IRRADIANCE,
                 hot_reload,
             )?,
+            compile_kernel(
+                device,
+                kernel_layout_handle,
+                &ATMOSPHERE_SKY_CUBE,
+                hot_reload,
+            )?,
         ];
         let outputs = [
             tables[0].view,
@@ -503,6 +607,7 @@ impl VkAtmosphere {
             tables[2].view,
             tables[3].view,
             irradiance_faces,
+            sky_gpu.capture_top_view(),
         ];
         let params_size = std::mem::size_of::<AtmosphereParams>() as u64;
         let mut kernel_sets = Vec::with_capacity(frames);
@@ -585,6 +690,13 @@ impl VkAtmosphere {
             params: None,
             tables,
             irradiance_image,
+            sky_cube: SkyCube {
+                image: sky_image,
+                prefilter,
+                gpu: sky_gpu,
+                schedule: SkyCubeSchedule::new(SKY_CUBE_PLAN.mips()),
+                work: SkyCubeWork::default(),
+            },
             params_ubos,
             _pool: pool,
             _sampler: sampler,
@@ -602,7 +714,7 @@ impl VkAtmosphere {
             aerial_pipeline,
             aerial_sets,
             framebuffers,
-            air_tables_built: AtomicBool::new(false),
+            air_tables: AirTables::default(),
             readiness: TableReadiness::default(),
         })
     }
@@ -654,6 +766,7 @@ impl VkAtmosphere {
             compile_kernel(device, layout, &ATMOSPHERE_SKY_VIEW, true)?,
             compile_kernel(device, layout, &ATMOSPHERE_AERIAL, true)?,
             compile_kernel(device, layout, &ATMOSPHERE_IRRADIANCE, true)?,
+            compile_kernel(device, layout, &ATMOSPHERE_SKY_CUBE, true)?,
         ];
         let sky_pipeline = super::sky::build_sky_pipeline(
             device,
@@ -673,7 +786,8 @@ impl VkAtmosphere {
         self.kernels = kernels;
         self.sky_pipeline = sky_pipeline;
         self.aerial_pipeline = aerial_pipeline;
-        self.air_tables_built.store(false, Ordering::Relaxed);
+        self.air_tables.invalidate();
+        self.sky_cube.schedule.reset();
         Ok(())
     }
 }
@@ -710,6 +824,17 @@ fn kernel_step(rec: &Recorder<'_>) {
         &[],
         &[],
     );
+}
+
+// A layout transition over `range` of `image` between sampled and GENERAL,
+// ordering the sampling reads against the kernel writes.
+fn image_barrier(
+    image: vk::Image,
+    range: vk::ImageSubresourceRange,
+    from: vk::ImageLayout,
+    to: vk::ImageLayout,
+) -> vk::ImageMemoryBarrier<'static> {
+    cube_barrier(image, from, to).subresource_range(range)
 }
 
 fn cube_barrier(
@@ -750,6 +875,14 @@ impl VkContext {
             atmo.params = atmo
                 .frame
                 .map(|f| AtmosphereParams::new(&atmo.settings, &f, &view));
+            atmo.sky_cube.work = match atmo.frame {
+                Some(f) => {
+                    atmo.sky_cube
+                        .schedule
+                        .plan(SkyCubeKey::new(&atmo.settings, &f, &view.sky_rot))
+                }
+                None => SkyCubeWork::default(),
+            };
             if let (Some(params), Some(ubo)) = (atmo.params, atmo.params_ubos.get(frame_idx)) {
                 ubo.write_val(0, &params);
             }
@@ -758,13 +891,18 @@ impl VkContext {
 
     // Build this frame's tables: the sky view, the aerial volume and the
     // irradiance cube, after the transmittance and multiple-scattering tables
-    // on the first frame.
-    pub(in crate::vulkan) fn encode_atmosphere(&self, rec: &Recorder<'_>, frame_idx: usize) {
+    // when the ground they are built over has changed; then this frame's steps
+    // of the sky cube.
+    pub(in crate::vulkan) fn encode_atmosphere(
+        &self,
+        rec: &Recorder<'_>,
+        frame_idx: usize,
+    ) -> RenderResult<()> {
         let Some(atmo) = self.atmosphere.as_ref() else {
-            return;
+            return Ok(());
         };
         let Some(sets) = atmo.kernel_sets.get(frame_idx) else {
-            return;
+            return Ok(());
         };
         let dispatch = |k: usize, groups: [u32; 3]| {
             rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &atmo.kernels[k]);
@@ -787,7 +925,8 @@ impl VkContext {
             &[],
         );
         atmo.readiness.note_recorded();
-        if !atmo.air_tables_built.swap(true, Ordering::Relaxed) {
+        let ground = atmo.params.map_or(0.0, |p| p.radii[0]);
+        if atmo.air_tables.take_rebuild(ground) {
             dispatch(
                 TRANSMITTANCE,
                 [
@@ -827,21 +966,88 @@ impl VkContext {
             )],
         );
         dispatch(IRRADIANCE, [1, 1, 1]);
+        let cube = &atmo.sky_cube;
+        let work = cube.work;
+        let sky_range = probe_set::range(0, SKY_CUBE_PLAN.mips(), 0, 6);
+        let open = |image| {
+            image_barrier(
+                image,
+                sky_range,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::ImageLayout::GENERAL,
+            )
+        };
+        if work.capture {
+            // The sky is drawn into the capture's top mip, then copied and
+            // reduced; last frame's samplers of the cube and the capture
+            // finish first.
+            rec.pipeline_barrier(
+                CUBE_READERS,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                &[],
+                &[],
+                &[open(cube.gpu.capture_image()), open(cube.image)],
+            );
+            dispatch(
+                SKY_CUBE,
+                [
+                    SKY_CUBE_FACE.div_ceil(GROUP),
+                    SKY_CUBE_FACE.div_ceil(GROUP),
+                    6,
+                ],
+            );
+            kernel_step(rec);
+            self.record_prefilter_pyramid(rec.raw(), &cube.prefilter, &cube.gpu, &SKY_CUBE_PLAN);
+            rec.pipeline_barrier(
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                &[],
+                &[],
+                &[image_barrier(
+                    cube.gpu.capture_image(),
+                    cube.gpu.capture_range(),
+                    vk::ImageLayout::GENERAL,
+                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                )],
+            );
+        } else if !work.is_empty() {
+            rec.pipeline_barrier(
+                CUBE_READERS,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                &[],
+                &[],
+                &[open(cube.image)],
+            );
+        }
+        for mip in work.ggx_mips() {
+            self.record_prefilter_ggx(rec.raw(), &cube.prefilter, &cube.gpu, &SKY_CUBE_PLAN, mip)?;
+        }
         // Every table is read by fragment shaders from here on: the sky, the
-        // haze, and the surfaces' ambient light through the closed cube.
+        // haze, and the surfaces' ambient light and reflections through the
+        // closed cubes.
+        let irradiance = cube_barrier(
+            atmo.irradiance_image,
+            vk::ImageLayout::GENERAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+        let sky = image_barrier(
+            cube.image,
+            sky_range,
+            vk::ImageLayout::GENERAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+        let closing = [irradiance, sky];
+        let closed = if work.is_empty() { 1 } else { 2 };
         rec.pipeline_barrier(
             vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            CUBE_READERS,
             &[vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
                 .dst_access_mask(vk::AccessFlags::SHADER_READ)],
             &[],
-            &[cube_barrier(
-                atmo.irradiance_image,
-                vk::ImageLayout::GENERAL,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            )],
+            &closing[..closed],
         );
+        Ok(())
     }
 
     // Blend the air in front of each opaque surface over the resolved scene.

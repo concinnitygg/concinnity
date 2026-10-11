@@ -21,6 +21,9 @@ pub const AERIAL_SIZE: u32 = 32;
 pub const AERIAL_MAX_DISTANCE_KM: f32 = 32.0;
 /// Edge of each face of the irradiance cube the atmosphere writes, in texels.
 pub const IRRADIANCE_FACE: u32 = 16;
+/// Edge of each face of the sky cube the reflections are prefiltered from,
+/// in texels.
+pub const SKY_CUBE_FACE: u32 = 512;
 
 /// Midpoint samples along each transmittance path. `TRANSMITTANCE_STEPS` in
 /// atmosphere_common.hlsl.
@@ -78,7 +81,7 @@ pub fn transmittance_r_mu(bottom: f32, top: f32, uv: [f32; 2]) -> (f32, f32) {
 
 // Angle between the zenith and the horizon seen from radius `r`, and the
 // horizon's angular depth below the level, in radians.
-fn horizon_angles(bottom: f32, r: f32) -> (f32, f32) {
+pub(super) fn horizon_angles(bottom: f32, r: f32) -> (f32, f32) {
     let v_horizon = sqrt((r * r - bottom * bottom).max(0.0));
     let beta = acos((v_horizon / r).clamp(-1.0, 1.0));
     (core::f32::consts::PI - beta, beta)
@@ -157,6 +160,7 @@ mod tests {
             ("SKY_VIEW_HEIGHT", SKY_VIEW_HEIGHT),
             ("AERIAL_SIZE", AERIAL_SIZE),
             ("IRRADIANCE_FACE", IRRADIANCE_FACE),
+            ("SKY_CUBE_FACE", SKY_CUBE_FACE),
         ];
         for (name, value) in pairs {
             assert_eq!(uint(src, name), value as usize, "{name}");

@@ -1,5 +1,6 @@
 //! The authored `Atmosphere` resolved against the world it sits in.
 
+use super::apparent::ApparentGround;
 use crate::components::Atmosphere;
 use crate::math::{cos, exp};
 
@@ -45,6 +46,9 @@ pub struct AtmosphereSettings {
     /// wraps a planet the world does not declare, centered straight below
     /// the world origin.
     pub planet_center: Option<[f64; 3]>,
+    /// The radius the sky is drawn over near the ground, when it is not the
+    /// true one.
+    pub apparent: Option<ApparentGround>,
 }
 
 impl AtmosphereSettings {
@@ -74,6 +78,33 @@ impl AtmosphereSettings {
             sun_cos_radius: cos(half_angle),
             sun_disc_intensity: a.sun_disc_intensity,
             planet_center: planet.map(|(center, _)| center),
+            apparent: a.apparent_radius_km.map(|radius| ApparentGround {
+                radius,
+                fade_start: a.apparent_radius_fade_km[0],
+                fade_end: a.apparent_radius_fade_km[1],
+            }),
+        }
+    }
+
+    /// The ground radius the sky's tables are built over for a camera
+    /// `height` kilometers above the ground: the true radius unless an
+    /// apparent one is set.
+    pub fn sky_ground_radius(&self, height: f32) -> f32 {
+        match self.apparent {
+            Some(apparent) => apparent.ground_radius(self.bottom_radius, height),
+            None => self.bottom_radius,
+        }
+    }
+
+    /// These settings over ground of `radius`, the air keeping its thickness.
+    pub fn with_ground_radius(&self, radius: f32) -> Self {
+        if radius == self.bottom_radius {
+            return *self;
+        }
+        Self {
+            bottom_radius: radius,
+            top_radius: radius + (self.top_radius - self.bottom_radius),
+            ..*self
         }
     }
 
@@ -128,6 +159,27 @@ mod tests {
         // A 0.53 degree disc has a 0.265 degree radius.
         assert!((s.sun_cos_radius - cos(0.265_f32.to_radians())).abs() < 1e-7);
         assert_eq!(s.planet_center, None);
+        assert_eq!(s.apparent, None);
+        assert_eq!(s.sky_ground_radius(3.0), 6360.0);
+    }
+
+    // An apparent radius builds the sky over a bigger ground near the
+    // planet, keeping the air's thickness, and the true one high above it.
+    #[test]
+    fn an_apparent_radius_moves_the_sky_ground() {
+        let s = AtmosphereSettings::resolve(
+            &Atmosphere {
+                apparent_radius_km: Some(6360.0),
+                ..Default::default()
+            },
+            Some(([0.0, -50_000.0, 0.0], 50_000.0)),
+        );
+        assert_eq!(s.sky_ground_radius(0.1), 6360.0);
+        assert_eq!(s.sky_ground_radius(30.0), 50.0);
+        let table = s.with_ground_radius(s.sky_ground_radius(0.1));
+        assert_eq!(table.bottom_radius, 6360.0);
+        assert_eq!(table.top_radius, 6460.0);
+        assert_eq!(s.with_ground_radius(50.0), s);
     }
 
     // A planet's radius replaces the authored one, and the air keeps its

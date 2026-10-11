@@ -68,11 +68,12 @@ impl MtlContext {
             &view.prefilter_mip_bytes,
         )?;
         let old = std::mem::replace(&mut self.scene.env_map, new_env);
-        // An atmosphere writes the irradiance cube; the map brings only its
-        // reflections.
+        // An atmosphere writes both cubes; the map is held for a world that
+        // drops it.
         if self.atmosphere.is_some() {
-            self.scene.env_map.irradiance = old.irradiance;
+            self.scene.env_map = old;
         }
+
         self.arg_buffers.texture_epoch += 1;
         Ok(())
     }

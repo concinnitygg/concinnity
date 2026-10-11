@@ -206,14 +206,18 @@ impl VkContext {
                 ssao_enabled: post.ssao.is_some(),
             },
         )?;
-        // An atmosphere writes the irradiance cube every set takes ambient light
-        // from, so it replaces the environment map's before any set binds it.
+        // An atmosphere writes the irradiance and prefiltered cubes every set
+        // takes ambient light and reflections from, so they replace the
+        // environment map's before any set binds them.
         let atmosphere_cube = match fx.atmosphere {
             Some(_) => {
-                let (image, cube) =
-                    crate::vulkan::atmosphere::create_irradiance_cube(&gpu.upload())?;
-                scene.env_map.irradiance = image;
-                Some(cube)
+                let (images, cubes) =
+                    crate::vulkan::atmosphere::create_atmosphere_cubes(&gpu.upload())?;
+                scene.env_map.irradiance = images.irradiance;
+                scene.env_map.prefilter = images.prefilter;
+                scene.prefilter_mip_count =
+                    concinnity_core::render::atmosphere::SKY_CUBE_PLAN.mips();
+                Some(cubes)
             }
             None => None,
         };

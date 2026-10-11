@@ -688,7 +688,7 @@ impl ProbeBakeDevice for VkContext {
             &self.hw.alloc,
             pipelines,
             &PLAN,
-            super::probe_prefilter::ProbeSlice { cubes, index },
+            super::probe_prefilter::PrefilterTarget::probe(cubes, index, PLAN.mips())?,
         )?;
 
         let rendering = RenderingBake {

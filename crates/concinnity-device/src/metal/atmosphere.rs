@@ -2,15 +2,15 @@
 //! compute pass that builds them, the haze pass that blends the aerial volume
 //! over the opaque scene, and the sky pipeline that draws the sky-view table
 //! behind it. The irradiance cube the last kernel writes is the environment's
-//! irradiance cube, so every pass that takes ambient light from it takes the
-//! atmosphere's.
+//! irradiance cube, and the sky cube the reflection prefilter convolves is
+//! its prefiltered cube, so every pass that takes ambient light or
+//! reflections from the environment takes the atmosphere's.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use concinnity_core::render::atmosphere::{
-    AERIAL_SIZE, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
-    IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_VIEW_HEIGHT, SKY_VIEW_WIDTH, TRANSMITTANCE_HEIGHT,
+    AERIAL_SIZE, AirTables, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
+    IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_CUBE_FACE, SKY_CUBE_PLAN, SKY_VIEW_HEIGHT,
+    SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, SkyCubeWork, TRANSMITTANCE_HEIGHT,
     TRANSMITTANCE_WIDTH, TableReadiness,
 };
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -27,7 +27,8 @@ use objc2_metal::{
 use super::allocator::{DeviceAllocator, PooledTexture};
 use super::builtin_shaders::{
     AERIAL_PERSPECTIVE_FRAG, ATMOSPHERE_AERIAL, ATMOSPHERE_IRRADIANCE, ATMOSPHERE_MULTISCATTER,
-    ATMOSPHERE_SKY_VIEW, ATMOSPHERE_TRANSMITTANCE, SKY_ATMOSPHERE_FRAG, compute_pipeline,
+    ATMOSPHERE_SKY_CUBE, ATMOSPHERE_SKY_VIEW, ATMOSPHERE_TRANSMITTANCE, SKY_ATMOSPHERE_FRAG,
+    compute_pipeline,
 };
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
@@ -35,6 +36,10 @@ use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
 use super::post::fullscreen::{
     FullscreenBlend, build_fullscreen_pipeline, set_fragment_sampler_range,
+};
+use super::probe_prefilter::{
+    PROBE_CUBE_FORMAT, PrefilterGpu, ProbePrefilterPipelines, create_capture_cube, dispatch_cube,
+    encode_ggx_mip, encode_pyramid,
 };
 use super::scoped_encoder::ScopedEncoder;
 
@@ -60,10 +65,29 @@ pub(super) struct AtmosphereState {
     kernels: Kernels,
     pub(super) sky_pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     aerial_pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-    // Whether the tables that depend on the air alone are built.
-    air_tables_built: AtomicBool,
+    sky_cube: SkyCube,
+    // The ground the tables that depend on the air alone were built over.
+    air_tables: AirTables,
     // The frames that recorded the tables, for work recorded outside the frame.
     readiness: TableReadiness,
+}
+
+// The sky drawn into a capture cube and convolved by the reflection-probe
+// kernels into the environment's prefiltered cube, a few steps a frame.
+struct SkyCube {
+    kernel: Kernel,
+    prefilter: ProbePrefilterPipelines,
+    gpu: PrefilterGpu,
+    schedule: SkyCubeSchedule,
+    // This frame's steps, planned when its constants are.
+    work: SkyCubeWork,
+}
+
+/// The cubes an atmosphere writes, which the caller installs as the
+/// environment's before anything binds them.
+pub(super) struct AtmosphereCubes {
+    pub(super) irradiance: PooledTexture,
+    pub(super) prefilter: PooledTexture,
 }
 
 struct Kernels {
@@ -75,15 +99,14 @@ struct Kernels {
 }
 
 impl AtmosphereState {
-    // The tables, the pipelines, and the irradiance cube the atmosphere
-    // writes, which the caller installs as the environment's.
+    // The tables, the pipelines, and the cubes the atmosphere writes.
     pub(super) fn build(
         device: &ProtocolObject<dyn MTLDevice>,
         allocator: &DeviceAllocator,
         settings: AtmosphereSettings,
         hdr_samples: u32,
         hot_reload: bool,
-    ) -> RenderResult<(Self, PooledTexture)> {
+    ) -> RenderResult<(Self, AtmosphereCubes)> {
         let table = |kind, width: u32, height: u32, depth: u32, label: &str| {
             let desc = TextureDesc {
                 kind,
@@ -149,6 +172,30 @@ impl AtmosphereState {
             )
         }
         .ok_or_else(|| RenderError::Other("failed to view the irradiance cube's faces".into()))?;
+        let prefilter = allocator.alloc_texture(
+            &TextureDesc {
+                kind: MTLTextureType::TypeCube,
+                format: PROBE_CUBE_FORMAT,
+                width: SKY_CUBE_FACE as usize,
+                height: SKY_CUBE_FACE as usize,
+                mip_count: SKY_CUBE_PLAN.mips() as usize,
+                usage: MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite,
+                ..Default::default()
+            }
+            .build(),
+        )?;
+        let sky_cube = SkyCube {
+            kernel: compute_pipeline(device, &ATMOSPHERE_SKY_CUBE, hot_reload)?,
+            prefilter: ProbePrefilterPipelines::new(device, hot_reload)?,
+            gpu: PrefilterGpu::new(
+                create_capture_cube(device, &SKY_CUBE_PLAN)?,
+                &prefilter,
+                0,
+                &SKY_CUBE_PLAN,
+            )?,
+            schedule: SkyCubeSchedule::new(SKY_CUBE_PLAN.mips()),
+            work: SkyCubeWork::default(),
+        };
         let kernels = Kernels {
             transmittance: compute_pipeline(device, &ATMOSPHERE_TRANSMITTANCE, hot_reload)?,
             multiscatter: compute_pipeline(device, &ATMOSPHERE_MULTISCATTER, hot_reload)?,
@@ -177,10 +224,17 @@ impl AtmosphereState {
             kernels,
             sky_pipeline,
             aerial_pipeline,
-            air_tables_built: AtomicBool::new(false),
+            sky_cube,
+            air_tables: AirTables::default(),
             readiness: TableReadiness::default(),
         };
-        Ok((state, irradiance))
+        Ok((
+            state,
+            AtmosphereCubes {
+                irradiance,
+                prefilter,
+            },
+        ))
     }
 }
 
@@ -227,8 +281,9 @@ fn dispatch_groups(
 impl MtlContext {
     // Build this frame's tables: the sky view, the aerial volume and the
     // irradiance cube, after the transmittance and multiple-scattering tables
-    // on the first frame. One encoder; its resources are hazard-tracked, so
-    // each dispatch waits for the writes the one before it made.
+    // when the ground they are built over has changed; then this frame's steps
+    // of the sky cube. One encoder; its resources are hazard-tracked, so each
+    // dispatch waits for the writes the one before it made.
     pub(in crate::metal) fn encode_atmosphere(
         &self,
         cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
@@ -254,7 +309,7 @@ impl MtlContext {
         enc.set_value(params, 0);
         enc.set_sampler(&self.composite.sampler, 0);
         atmo.readiness.note_recorded();
-        if !atmo.air_tables_built.swap(true, Ordering::Relaxed) {
+        if atmo.air_tables.take_rebuild(params.radii[0]) {
             enc.set_pipeline(&atmo.kernels.transmittance);
             enc.set_texture(&atmo.transmittance, 3);
             dispatch_texels(&enc, TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT);
@@ -275,6 +330,23 @@ impl MtlContext {
         enc.set_texture(&atmo.sky_view, 2);
         enc.set_texture(&atmo.irradiance_slices, 3);
         dispatch_groups(&enc, [1, 1]);
+        let cube = &atmo.sky_cube;
+        if cube.work.capture {
+            enc.set_pipeline(&cube.kernel);
+            enc.set_texture(cube.gpu.capture_top(), 3);
+            dispatch_cube(&enc, SKY_CUBE_FACE);
+            encode_pyramid(&enc, &cube.prefilter, &cube.gpu, &SKY_CUBE_PLAN);
+        }
+        for mip in cube.work.ggx_mips() {
+            encode_ggx_mip(
+                &enc,
+                &cube.prefilter,
+                &self.scene.cube_sampler,
+                &cube.gpu,
+                &SKY_CUBE_PLAN,
+                mip,
+            );
+        }
         Ok(0)
     }
 
@@ -333,6 +405,14 @@ impl MtlContext {
     ) {
         if let Some(atmo) = self.atmosphere.as_mut() {
             atmo.params = frame.map(|f| AtmosphereParams::new(&atmo.settings, &f, &view));
+            atmo.sky_cube.work = match frame {
+                Some(f) => {
+                    atmo.sky_cube
+                        .schedule
+                        .plan(SkyCubeKey::new(&atmo.settings, &f, &view.sky_rot))
+                }
+                None => SkyCubeWork::default(),
+            };
         }
     }
 }

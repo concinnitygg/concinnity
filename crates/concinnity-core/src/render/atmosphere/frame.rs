@@ -1,7 +1,7 @@
 //! What the atmosphere needs from each frame: where the camera is about the
 //! planet and where the sun is, and the sunlight that reaches the camera.
 
-use super::optics::sun_transmittance;
+use super::optics::{sun_transmittance, sun_transmittance_seen};
 use super::settings::AtmosphereSettings;
 use crate::components::DirectionalLight;
 use crate::math::vec3::{dot, length, normalize_or, scale};
@@ -13,6 +13,10 @@ pub struct AtmosphereFrame {
     /// The camera relative to the planet's center, in kilometers, in the
     /// axes the frame renders in.
     pub camera_km: [f32; 3],
+    /// The ground radius the sky's tables are built over this frame, in
+    /// kilometers: the planet's own unless the atmosphere sets an apparent
+    /// one.
+    pub sky_ground_radius: f32,
     /// Unit direction toward the sun, in the axes the frame renders in.
     pub sun_direction: [f32; 3],
     /// The sunlight above the air: the sun light's `color * intensity`.
@@ -29,12 +33,30 @@ impl AtmosphereFrame {
         let r = length(camera_km).max(settings.bottom_radius);
         let up = scale(camera_km, 1.0 / length(camera_km).max(1e-6));
         let mu = dot(up, sun_direction);
+        let ground = settings.sky_ground_radius(length(camera_km) - settings.bottom_radius);
+        let sun_transmittance = if ground == settings.bottom_radius {
+            sun_transmittance(settings, r, mu)
+        } else {
+            sun_transmittance_seen(settings, &settings.with_ground_radius(ground), r, mu)
+        };
         Self {
             camera_km,
+            sky_ground_radius: ground,
             sun_direction,
             sun_illuminance: scale(sun.color, sun.intensity),
-            sun_transmittance: sun_transmittance(settings, r, mu),
+            sun_transmittance,
         }
+    }
+
+    /// The camera in the sky tables' space: as high above their ground as it
+    /// is above the true ground, along the same up.
+    pub fn table_camera_km(&self, settings: &AtmosphereSettings) -> [f32; 3] {
+        if self.sky_ground_radius == settings.bottom_radius {
+            return self.camera_km;
+        }
+        let r = length(self.camera_km).max(1e-6);
+        let height = r - settings.bottom_radius;
+        scale(self.camera_km, (self.sky_ground_radius + height) / r)
     }
 
     /// The camera's height above the ground, in kilometers.
@@ -111,5 +133,43 @@ mod tests {
         assert_eq!(frame.sun_direction, [0.0, 1.0, 0.0]);
         assert_eq!(frame.sun_illuminance, [2.0, 1.0, 0.5]);
         assert!((frame.camera_height(&s) - 1.0).abs() < 1e-3);
+        assert_eq!(frame.sky_ground_radius, s.bottom_radius);
+        assert_eq!(frame.table_camera_km(&s), frame.camera_km);
+    }
+
+    // Near a small planet with an apparent radius the tables sit over the
+    // bigger ground at the camera's true height, and the sun is redder; high
+    // above it the frame is the planet's own.
+    #[test]
+    fn an_apparent_radius_moves_the_tables_near_the_ground() {
+        let small = |apparent| {
+            AtmosphereSettings::resolve(
+                &Atmosphere {
+                    apparent_radius_km: apparent,
+                    ..Default::default()
+                },
+                Some(([0.0, -50_000.0, 0.0], 50_000.0)),
+            )
+        };
+        let (own, seen) = (small(None), small(Some(6360.0)));
+        let sun = sun_at([1.0, 0.05, 0.0]);
+        let ground = [0.0, 50.09, 0.0];
+        let a = AtmosphereFrame::new(&own, ground, &sun);
+        let b = AtmosphereFrame::new(&seen, ground, &sun);
+        assert_eq!(b.sky_ground_radius, 6360.0);
+        let table = b.table_camera_km(&seen);
+        assert!((table[1] - 6360.09).abs() < 1e-2, "{table:?}");
+        let red = |f: &AtmosphereFrame| f.sun_transmittance[0] / f.sun_transmittance[2];
+        assert!(
+            red(&b) > 2.0 * red(&a),
+            "{:?} {:?}",
+            a.sun_transmittance,
+            b.sun_transmittance
+        );
+        let high = [0.0, 80.0, 0.0];
+        assert_eq!(
+            AtmosphereFrame::new(&own, high, &sun),
+            AtmosphereFrame::new(&seen, high, &sun)
+        );
     }
 }

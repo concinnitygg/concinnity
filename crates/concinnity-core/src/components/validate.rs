@@ -263,6 +263,14 @@ pub fn atmosphere(mut args: Atmosphere) -> Atmosphere {
     )
     .clamp(0.05, 10.0);
     args.sun_disc_intensity = finite_at_least(args.sun_disc_intensity, 0.0, 0.0);
+    args.apparent_radius_km = args
+        .apparent_radius_km
+        .filter(|r| r.is_finite())
+        .map(|r| r.max(1.0));
+    let [start, end] = args.apparent_radius_fade_km;
+    let start = finite_at_least(start, 0.0, defaults.apparent_radius_fade_km[0]);
+    let end = finite_at_least(end, start + 0.01, start + 0.01);
+    args.apparent_radius_fade_km = [start, end];
     args
 }
 
@@ -521,5 +529,25 @@ mod tests {
             ..DirectionalLight::default()
         });
         assert_eq!(d.intensity, 0.0);
+    }
+
+    // An apparent radius is floored at 1 km and a non-finite one dropped; the
+    // fade never ends before it starts.
+    #[test]
+    fn atmosphere_apparent_radius_is_sane() {
+        let a = atmosphere(Atmosphere {
+            apparent_radius_km: Some(0.2),
+            apparent_radius_fade_km: [5.0, 2.0],
+            ..Atmosphere::default()
+        });
+        assert_eq!(a.apparent_radius_km, Some(1.0));
+        assert_eq!(a.apparent_radius_fade_km, [5.0, 5.0 + 0.01]);
+        let a = atmosphere(Atmosphere {
+            apparent_radius_km: Some(f32::NAN),
+            apparent_radius_fade_km: [f32::NAN, 30.0],
+            ..Atmosphere::default()
+        });
+        assert_eq!(a.apparent_radius_km, None);
+        assert_eq!(a.apparent_radius_fade_km, [1.0, 30.0]);
     }
 }

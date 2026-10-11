@@ -742,12 +742,14 @@ fn write_raymarch_srvs(
         unsafe { device.CreateShaderResourceView(shadow, Some(&desc), slot_cpu(0)) };
     }
 
-    // irradiance + prefilter cubes at +1 / +2. Resource format is
-    // R32G32B32A32_FLOAT (see directx/texture.rs::upload_environment_map);
-    // the SRV view format must match its family.
+    // irradiance + prefilter cubes at +1 / +2, each viewed in its own format:
+    // an environment map's are RGBA32F, an atmosphere's prefiltered sky RGBA16F.
     for (i, res) in [irradiance_resource, prefilter_resource].iter().enumerate() {
+        // SAFETY: a property query on a live resource; it only reads.
+        let format = unsafe { res.GetDesc() }.Format;
         let desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
-            Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
+            Format: format,
+
             ViewDimension: D3D12_SRV_DIMENSION_TEXTURECUBE,
             Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
             Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {

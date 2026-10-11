@@ -13,11 +13,16 @@
 //                             view ray, slice by slice in depth
 //   ATMOSPHERE_IRRADIANCE     the sky projected onto spherical harmonics and
 //                             written out as the irradiance cube
+//   ATMOSPHERE_SKY_CUBE       the sky drawn into the faces of a cube, without
+//                             the sun's disc, for the reflection prefilter
 //
-// The first two depend on the air alone and run when it changes; the rest
-// run every frame. AERIAL_PERSPECTIVE is the fullscreen haze pass: it reads
-// the scene depth and the aerial volume and blends `(in-scatter, 1 - T)` over
-// the scene with the premultiplied `over` blend fog uses.
+// The first two depend on the air and the tables' ground alone and run when
+// either changes, the next three every frame, and the sky cube when its
+// reflections are refreshed. AERIAL_PERSPECTIVE is the fullscreen haze pass:
+// it reads the scene depth and the aerial volume and blends
+// `(in-scatter, 1 - T)` over the scene with the premultiplied `over` blend
+// fog uses.
+
 //
 // Every resource takes its Metal index from its register number. The written
 // table is the exception: D3D gives a UAV its own `u` space where Metal folds
@@ -47,14 +52,14 @@
 #if defined(ATMOSPHERE_SKY_VIEW) || defined(ATMOSPHERE_AERIAL)
 [[vk::binding(2, 0)]] Texture2D<float4> multiscatter_lut : register(t1);
 #endif
-#ifdef ATMOSPHERE_IRRADIANCE
+#if defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE)
 [[vk::binding(3, 0)]] Texture2D<float4> sky_view_lut : register(t2);
 #endif
 [[vk::binding(4, 0)]] SamplerState lut_sampler : register(s0);
 
 #if defined(ATMOSPHERE_AERIAL)
 #define ATMO_OUTPUT RWTexture3D<float4>
-#elif defined(ATMOSPHERE_IRRADIANCE)
+#elif defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE)
 #define ATMO_OUTPUT RWTexture2DArray<float4>
 #else
 #define ATMO_OUTPUT RWTexture2D<float4>
@@ -236,7 +241,7 @@ void atmosphere_sky_view_kernel(uint3 id : SV_DispatchThreadID)
     float sin_az = sqrt(saturate(1.0 - view.y * view.y));
     // The table's own frame: the camera on +Y, the sun in the XY plane.
     float3 dir = float3(sin_view * view.y, view.x, sin_view * sin_az);
-    float mu_s = dot(atmo_camera_up(), ATMO.sun_direction.xyz);
+    float mu_s = dot(atmo_camera_up(), atmo_table_sun());
     float3 sun = float3(sqrt(saturate(1.0 - mu_s * mu_s)), mu_s, 0.0);
     float3 origin = float3(0.0, r, 0.0);
 
@@ -277,7 +282,7 @@ void atmosphere_aerial_kernel(uint3 id : SV_DispatchThreadID)
     float2 ndc = float2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
     float3 dir = normalize(camera_view_ray(ATMO.inv_vp, ndc, ATMO.cam_pos.xyz));
     float3 origin = atmo_camera_up() * atmo_camera_radius();
-    float3 sun = ATMO.sun_direction.xyz;
+    float3 sun = atmo_table_sun();
     float3 radiance = (float3)0.0;
     float3 throughput = (float3)1.0;
     float near = 0.0;
@@ -293,14 +298,7 @@ void atmosphere_aerial_kernel(uint3 id : SV_DispatchThreadID)
 }
 #endif
 
-#ifdef ATMOSPHERE_IRRADIANCE
-// One group: each lane projects its share of the sky's samples, the lanes are
-// summed coefficient by coefficient, and then every lane writes its share of
-// the cube's texels.
-static const uint IRRADIANCE_LANES = 64u;
-groupshared float3 sh_lanes[IRRADIANCE_LANES * 9u];
-groupshared float3 sh_total[9];
-
+#if defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE)
 // The direction a cube texel at (u, v) in [-1, 1] faces. `probe_face_dir` in
 // probe_prefilter.hlsl, the hardware cube convention.
 float3 cube_face_dir(uint face, float u, float v)
@@ -321,6 +319,44 @@ float3 cube_face_dir(uint face, float u, float v)
         return float3(-u, -v, -1.0);
     }
 }
+
+// The world direction cube texel `xy` of a `size` square `face` stands for:
+// the cube is sampled through the sky rotation's rows, so its texel faces
+// the direction those rows take it to.
+float3 cube_texel_world_dir(uint face, uint2 xy, uint size)
+{
+    float2 st = (float2(xy) + 0.5) / float(size) * 2.0 - 1.0;
+    float3 c = normalize(cube_face_dir(face, st.x, st.y));
+    return ATMO.sky_rot[0].xyz * c.x + ATMO.sky_rot[1].xyz * c.y + ATMO.sky_rot[2].xyz * c.z;
+}
+#endif
+
+#ifdef ATMOSPHERE_SKY_CUBE
+// One thread per texel of the cube's top mip, six faces deep: the sky-view
+// table along the texel's direction, the ground below the horizon included.
+// The sun's disc is left out: the sun light's own specular term draws it.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void atmosphere_sky_cube_kernel(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= SKY_CUBE_FACE || id.y >= SKY_CUBE_FACE)
+    {
+        return;
+    }
+    float3 n = cube_texel_world_dir(id.z, id.xy, SKY_CUBE_FACE);
+    float3 l = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(n), 0.0).rgb;
+    atmo_out[id] = float4(min(l, (float3)60000.0), 1.0);
+}
+#endif
+
+#ifdef ATMOSPHERE_IRRADIANCE
+// One group: each lane projects its share of the sky's samples, the lanes are
+// summed coefficient by coefficient, and then every lane writes its share of
+// the cube's texels.
+static const uint IRRADIANCE_LANES = 64u;
+groupshared float3 sh_lanes[IRRADIANCE_LANES * 9u];
+groupshared float3 sh_total[9];
+
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -368,12 +404,8 @@ void atmosphere_irradiance_kernel(uint lane : SV_GroupIndex)
         uint face = p / (IRRADIANCE_FACE * IRRADIANCE_FACE);
         uint rest = p % (IRRADIANCE_FACE * IRRADIANCE_FACE);
         uint2 xy = uint2(rest % IRRADIANCE_FACE, rest / IRRADIANCE_FACE);
-        float2 st = (float2(xy) + 0.5) / float(IRRADIANCE_FACE) * 2.0 - 1.0;
-        // The cube is sampled through the sky rotation's rows, so its texel
-        // faces the world direction those rows take to it.
-        float3 c = normalize(cube_face_dir(face, st.x, st.y));
-        float3 n = ATMO.sky_rot[0].xyz * c.x + ATMO.sky_rot[1].xyz * c.y + ATMO.sky_rot[2].xyz * c.z;
-        sh9_basis(n, basis);
+        sh9_basis(cube_texel_world_dir(face, xy, IRRADIANCE_FACE), basis);
+
         float3 e = (float3)0.0;
         for (uint j = 0u; j < 9u; ++j)
         {

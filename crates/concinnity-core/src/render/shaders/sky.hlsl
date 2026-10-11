@@ -67,7 +67,8 @@ float4 sky_atmosphere_fragment(SkyVertexOut p) : SV_Target
     float3 color = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(dir), 0.0).rgb;
     float cos_sun = dot(dir, ATMO.sun_direction.xyz);
     float cos_radius = ATMO.sun_direction.w;
-    if (cos_sun > cos_radius && !ray_hits_ground(atmo_camera_radius(), dot(dir, atmo_camera_up())))
+    if (cos_sun > cos_radius && !atmo_view_hits_ground(dot(dir, atmo_camera_up())))
+
     {
         float x = saturate((1.0 - cos_sun) / max(1.0 - cos_radius, 1e-7));
         float limb = 1.0 - 0.6 * (1.0 - sqrt(1.0 - x));

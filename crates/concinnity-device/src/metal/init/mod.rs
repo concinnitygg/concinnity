@@ -215,21 +215,25 @@ impl MtlContext {
                 bindless: features.scene,
             },
         )?;
-        // An atmosphere writes the irradiance cube every pass takes its ambient
-        // light from, so it replaces the environment map's before anything
-        // binds it.
+        // An atmosphere writes the irradiance and prefiltered cubes every pass
+        // takes its ambient light and reflections from, so they replace the
+        // environment map's before anything binds them.
         let atmosphere = match fx.atmosphere {
             Some(settings) => {
-                let (state, irradiance) = super::atmosphere::AtmosphereState::build(
+                let (state, cubes) = super::atmosphere::AtmosphereState::build(
                     &hw.device,
                     &hw.allocator,
                     settings,
                     features.hdr_samples,
                     hot_reload,
                 )?;
-                scene.env_map.irradiance = irradiance;
+                scene.env_map.irradiance = cubes.irradiance;
+                scene.env_map.prefilter = cubes.prefilter;
+                scene.env_map.prefilter_mip_count =
+                    concinnity_core::render::atmosphere::SKY_CUBE_PLAN.mips();
                 Some(state)
             }
+
             None => None,
         };
         let targets = targets::build_targets(&gpu, &features)?;

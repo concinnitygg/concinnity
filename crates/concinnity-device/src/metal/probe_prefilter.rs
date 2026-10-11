@@ -118,7 +118,7 @@ pub(in crate::metal) struct PrefilterGpu {
 
 impl PrefilterGpu {
     /// Take ownership of a finished `capture` and make the per-mip write views
-    /// of it and of cube `slot` of the probe cube array `cubes`.
+    /// of it and of cube `slot` of `cubes`, a cube or a cube array.
     pub(in crate::metal) fn new(
         capture: Retained<ProtocolObject<dyn MTLTexture>>,
         cubes: &ProtocolObject<dyn MTLTexture>,
@@ -132,6 +132,12 @@ impl PrefilterGpu {
             capture_mip_views,
             probe_mip_views,
         })
+    }
+
+    /// The capture's top mip as six array slices, for a kernel that draws
+    /// the faces in place of a render.
+    pub(in crate::metal) fn capture_top(&self) -> &ProtocolObject<dyn MTLTexture> {
+        &self.capture_mip_views[0]
     }
 }
 
@@ -197,22 +203,7 @@ impl super::context::MtlContext {
             })?,
             ns_string!("probe-pyramid"),
         );
-
-        let params = plan.mip0_params();
-        enc.set_pipeline(&pipelines.mip0);
-        enc.set_value(&params, 0);
-        enc.set_texture(gpu.capture_mip_views[0].as_ref(), 0);
-        enc.set_texture(gpu.probe_mip_views[0].as_ref(), 1);
-        dispatch_cube(&enc, plan.face_size());
-
-        for mip in 1..plan.mips() {
-            let params = plan.downsample_params(mip);
-            enc.set_pipeline(&pipelines.downsample);
-            enc.set_value(&params, 0);
-            enc.set_texture(gpu.capture_mip_views[(mip - 1) as usize].as_ref(), 0);
-            enc.set_texture(gpu.capture_mip_views[mip as usize].as_ref(), 1);
-            dispatch_cube(&enc, plan.mip_face_size(mip));
-        }
+        encode_pyramid(&enc, pipelines, gpu, plan);
         Ok(())
     }
 
@@ -238,21 +229,70 @@ impl super::context::MtlContext {
             })?,
             ns_string!("probe-ggx"),
         );
-        let params = plan.ggx_params(dst_mip);
-        enc.set_pipeline(&pipelines.ggx);
-        enc.set_value(&params, 0);
-        enc.set_texture(gpu.capture.as_ref(), 0);
-        enc.set_sampler(&self.scene.cube_sampler, 0);
-        enc.set_texture(gpu.probe_mip_views[dst_mip as usize].as_ref(), 1);
-        dispatch_cube(&enc, plan.mip_face_size(dst_mip));
+        encode_ggx_mip(
+            &enc,
+            pipelines,
+            &self.scene.cube_sampler,
+            gpu,
+            plan,
+            dst_mip,
+        );
         Ok(())
     }
 }
 
-// Dispatch one thread per texel of a `size`-square cube face, six faces deep.
-// The kernels bounds-guard against `dst_size`, so a non-uniform remainder
-// returns early.
-fn dispatch_cube(enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>, size: u32) {
+/// Encode the source pyramid into `enc`: the firefly-clamped copy of the
+/// capture into the destination's mip 0, then the box reduction of each
+/// capture mip into the next. A serial compute encoder orders the chain.
+pub(in crate::metal) fn encode_pyramid(
+    enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
+    pipelines: &ProbePrefilterPipelines,
+    gpu: &PrefilterGpu,
+    plan: &PrefilterPlan,
+) {
+    let params = plan.mip0_params();
+    enc.set_pipeline(&pipelines.mip0);
+    enc.set_value(&params, 0);
+    enc.set_texture(gpu.capture_mip_views[0].as_ref(), 0);
+    enc.set_texture(gpu.probe_mip_views[0].as_ref(), 1);
+    dispatch_cube(enc, plan.face_size());
+
+    for mip in 1..plan.mips() {
+        let params = plan.downsample_params(mip);
+        enc.set_pipeline(&pipelines.downsample);
+        enc.set_value(&params, 0);
+        enc.set_texture(gpu.capture_mip_views[(mip - 1) as usize].as_ref(), 0);
+        enc.set_texture(gpu.capture_mip_views[mip as usize].as_ref(), 1);
+        dispatch_cube(enc, plan.mip_face_size(mip));
+    }
+}
+
+/// Encode into `enc` the GGX convolution producing the destination's mip
+/// `dst_mip`, sampling the whole capture pyramid through `sampler`.
+pub(in crate::metal) fn encode_ggx_mip(
+    enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
+    pipelines: &ProbePrefilterPipelines,
+    sampler: &ProtocolObject<dyn objc2_metal::MTLSamplerState>,
+    gpu: &PrefilterGpu,
+    plan: &PrefilterPlan,
+    dst_mip: u32,
+) {
+    let params = plan.ggx_params(dst_mip);
+    enc.set_pipeline(&pipelines.ggx);
+    enc.set_value(&params, 0);
+    enc.set_texture(gpu.capture.as_ref(), 0);
+    enc.set_sampler(sampler, 0);
+    enc.set_texture(gpu.probe_mip_views[dst_mip as usize].as_ref(), 1);
+    dispatch_cube(enc, plan.mip_face_size(dst_mip));
+}
+
+/// Dispatch one thread per texel of a `size`-square cube face, six faces
+/// deep. The kernels bounds-guard against their face size, so a non-uniform
+/// remainder returns early.
+pub(in crate::metal) fn dispatch_cube(
+    enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
+    size: u32,
+) {
     let grid = MTLSize {
         width: size.max(1) as usize,
         height: size.max(1) as usize,

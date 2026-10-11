@@ -20,6 +20,7 @@ pub(in crate::shader_layout) fn atmosphere() -> Vec<Case> {
         ground_albedo,
         radii,
         camera,
+        view_ground,
         sun_direction,
         sun_illuminance,
         sun_disc,

@@ -63,7 +63,7 @@ impl DxDescriptors {
     }
 
     // GPU handle of SRV heap `slot`.
-    pub(super) fn slot_gpu(&self, slot: usize) -> SrvSlot {
+    pub(in crate::directx) fn slot_gpu(&self, slot: usize) -> SrvSlot {
         SrvSlot::at(&self.srv_heap, self.srv_descriptor_size, slot)
     }
 }

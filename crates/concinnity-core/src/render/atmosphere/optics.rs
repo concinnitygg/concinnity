@@ -1,9 +1,10 @@
 //! Light lost along a straight path through the air: the CPU mirror of the
 //! transmittance table, which the sun's color is taken from.
 
+use super::apparent::{table_view_angle, zenith_horizon};
 use super::lut::TRANSMITTANCE_STEPS;
 use super::settings::AtmosphereSettings;
-use crate::math::{asin, exp, sqrt};
+use crate::math::{acos, asin, cos, exp, sqrt};
 
 /// Distance from radius `r` along a ray whose cosine to the local up is `mu`
 /// to where it leaves the sphere of `radius`, or 0 when it starts outside and
@@ -71,6 +72,31 @@ pub(super) fn sun_transmittance(s: &AtmosphereSettings, r: f32, mu: f32) -> [f32
     let horizon = -sqrt((1.0 - sin_h * sin_h).max(0.0));
     let mu = mu.max(horizon + 1e-4);
     transmittance(s, r, mu).map(|t| t * visible)
+}
+
+/// [`sun_transmittance`] for a camera at radius `r` over `view`'s ground
+/// whose sky is built over `table`'s: the disc sets at the true horizon, and
+/// its light crosses the table's air from as high above that ground, at the
+/// angle the horizon warp moves the sun to.
+pub(super) fn sun_transmittance_seen(
+    view: &AtmosphereSettings,
+    table: &AtmosphereSettings,
+    r: f32,
+    mu: f32,
+) -> [f32; 3] {
+    let visible = sun_visible_fraction(view, r, mu);
+    if visible <= 0.0 {
+        return [0.0; 3];
+    }
+    let r_table = table.bottom_radius + (r - view.bottom_radius);
+    let angle = table_view_angle(
+        acos(mu.clamp(-1.0, 1.0)),
+        zenith_horizon(view.bottom_radius, r),
+        zenith_horizon(table.bottom_radius, r_table),
+    );
+    let sin_h = table.bottom_radius / r_table.max(table.bottom_radius);
+    let horizon = -sqrt((1.0 - sin_h * sin_h).max(0.0));
+    transmittance(table, r_table, cos(angle).max(horizon + 1e-4)).map(|t| t * visible)
 }
 
 #[cfg(test)]
@@ -154,6 +180,29 @@ mod tests {
         let mu = -0.05;
         assert_eq!(sun_visible_fraction(&s, s.bottom_radius, mu), 0.0);
         assert_eq!(sun_visible_fraction(&s, s.bottom_radius + 20.0, mu), 1.0);
+    }
+
+    // Over a 50 km planet the low sun stays pale; seen through an Earth-sized
+    // sky it is red, and it still sets at the true horizon.
+    #[test]
+    fn an_apparent_ground_reddens_a_small_planets_sun() {
+        let small = AtmosphereSettings::resolve(
+            &Atmosphere::default(),
+            Some(([0.0, -50_000.0, 0.0], 50_000.0)),
+        );
+        let table = small.with_ground_radius(6360.0);
+        let r = small.bottom_radius + 0.002;
+        let mu = 3.0_f32.to_radians().sin();
+        let own = sun_transmittance(&small, r, mu);
+        let seen = sun_transmittance_seen(&small, &table, r, mu);
+        let ratio = |t: [f32; 3]| t[0] / t[2].max(1e-6);
+        assert!(ratio(own) < 2.0, "{own:?}");
+        assert!(ratio(seen) > 3.0 * ratio(own), "{seen:?} vs {own:?}");
+        // Below the small planet's horizon the sun is gone, as before.
+        assert_eq!(sun_transmittance_seen(&small, &table, r, -0.1), [0.0; 3]);
+        // A sun overhead is nearly white either way.
+        let noon = sun_transmittance_seen(&small, &table, r, 1.0);
+        assert!(noon.iter().all(|&t| t > 0.7), "{noon:?}");
     }
 
     #[test]

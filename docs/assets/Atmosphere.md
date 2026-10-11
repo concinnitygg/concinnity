@@ -31,10 +31,10 @@ height also follows where on the planet the camera stands.
 
 The sky is drawn behind everything, with the sun's disc in it. Distant
 surfaces fade into the air's color (aerial perspective), behind any
-[VolumetricFog](VolumetricFog.md), which stays the nearer layer. The light
-the sky casts fills the shadows as the ambient light, in place of the
-diffuse light of an [EnvironmentMap](EnvironmentMap.md); an environment map's
-reflections are still used when the world declares one.
+[VolumetricFog](VolumetricFog.md), which stays the nearer layer. The sky
+lights the scene in place of an [EnvironmentMap](EnvironmentMap.md): its
+light fills the shadows, and shiny surfaces reflect it, following the sun
+through the day.
 
 One per world. The defaults are Earth's.
 
@@ -54,3 +54,5 @@ One per world. The defaults are Earth's.
 - `ground_albedo`: An array of 3 floats. Linear-space color of the ground as seen from far above: the light it bounces back into the air. Defaults to `[0.3, 0.3, 0.3]`.
 - `sun_angular_diameter_deg`: A float. Angular diameter of the sun's disc, in degrees. Clamped to `[0.05, 10]`. Defaults to `0.53`.
 - `sun_disc_intensity`: A float. Brightness of the sun's disc, as a multiple of the sunlight it casts. 0 hides the disc. Defaults to `1000.0`.
+- `apparent_radius_km`: A float. Radius, in kilometers, of the planet the sky is drawn over while the camera is near the ground, in place of the true one. A small planet's own sky is a flat deep blue with a pale sun at sunset, since a ray along its horizon crosses little air; drawn over an Earth-sized radius it gets a pale horizon and red sunsets. The haze over the ground keeps its true distances, and the horizon still meets the ground where it really is. At least 1. `null` (the default) draws the sky over the true radius.
+- `apparent_radius_fade_km`: An array of 2 floats. Heights above the ground, in kilometers, between which the sky fades from `apparent_radius_km` to the true radius as the camera climbs, so the planet's limb seen from high up is its own. Defaults to `[1.0, 20.0]`.

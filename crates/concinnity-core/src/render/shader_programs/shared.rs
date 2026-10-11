@@ -368,6 +368,14 @@ pub static ATMOSPHERE_IRRADIANCE: ShaderProgram = ShaderProgram {
     gates: &["ATMOSPHERE_IRRADIANCE"],
     msaa: false,
 };
+/// `atmosphere_sky_cube_kernel` from `atmosphere.hlsl`.
+pub static ATMOSPHERE_SKY_CUBE: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "atmosphere_sky_cube_kernel",
+    label: "atmosphere_sky_cube.hlsl",
+    gates: &["ATMOSPHERE_SKY_CUBE"],
+    msaa: false,
+};
 /// `aerial_perspective_fragment` from `atmosphere.hlsl`.
 pub static AERIAL_PERSPECTIVE_FRAG: ShaderProgram = ShaderProgram {
     file: "atmosphere.hlsl",
@@ -729,6 +737,7 @@ pub static ALL: &[&ShaderProgram] = &[
     &ATMOSPHERE_SKY_VIEW,
     &ATMOSPHERE_AERIAL,
     &ATMOSPHERE_IRRADIANCE,
+    &ATMOSPHERE_SKY_CUBE,
     &AERIAL_PERSPECTIVE_FRAG,
     &AUTO_EXPOSURE_BUILD,
     &AUTO_EXPOSURE_AVERAGE,
