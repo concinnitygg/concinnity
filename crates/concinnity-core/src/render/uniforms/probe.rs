@@ -10,13 +10,15 @@
 /// capture point), so a static captured cube tracks a moving first-person
 /// camera. Four float4s keep every field 16-byte aligned. `box_min.w` is the
 /// enabled flag: 0 disables parallax (and signals no baked probe), so the shader
-/// samples the raw reflection vector.
+/// samples the raw reflection vector. `box_max.w` is the sky fallback flag: 0
+/// keeps the capture at any distance past the box.
 #[derive(Copy, Clone, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 pub struct ProbeUniforms {
     /// xyz = influence-box min; w = enabled (1.0 = parallax on, 0.0 = off).
     pub box_min: [f32; 4],
-    /// xyz = influence-box max; w unused.
+    /// xyz = influence-box max; w = sky fallback (1.0 = fade to the
+    /// environment past the influence, 0.0 = keep the capture).
     pub box_max: [f32; 4],
     /// xyz = probe capture position; w unused.
     pub probe_pos: [f32; 4],
@@ -50,9 +52,10 @@ impl ProbeUniforms {
     /// computes it: 0 inside [`Self::influence_bounds`], rising smoothly to 1
     /// one largest half-extent of the box beyond them. A capture stands in for
     /// the scenery about as far past its box as the box is wide. 0 for a record
-    /// without parallax (`box_min.w` off), which keeps the probe whole.
+    /// without parallax (`box_min.w` off) or without the sky fallback
+    /// (`box_max.w` off), which keeps the probe whole.
     pub fn sky_share(&self, point: [f32; 3]) -> f32 {
-        if self.box_min[3] <= 0.5 {
+        if self.box_min[3] <= 0.5 || self.box_max[3] <= 0.5 {
             return 0.0;
         }
         let (lo, hi) = self.influence_bounds();
@@ -171,7 +174,7 @@ mod tests {
     fn room() -> ProbeUniforms {
         ProbeUniforms {
             box_min: [-4.0, 0.0, -2.0, 1.0],
-            box_max: [4.0, 3.0, 2.0, 0.0],
+            box_max: [4.0, 3.0, 2.0, 1.0],
             probe_pos: [0.0, 1.5, 0.0, 0.0],
             blend_margin: [0.5, 0.5, 0.5, 0.0],
         }
@@ -219,6 +222,32 @@ mod tests {
             ..room()
         };
         assert_eq!(probe.sky_share([100.0, 1.5, 0.0]), 0.0);
+    }
+
+    #[test]
+    fn a_probe_without_the_sky_fallback_keeps_its_whole_share_at_any_distance() {
+        let probe = ProbeUniforms {
+            box_max: [4.0, 3.0, 2.0, 0.0],
+            ..room()
+        };
+        for d in [0.0, 0.5, 2.0, 4.0, 40.0, 1e6] {
+            assert_eq!(probe.sky_share([4.5 + d, 3.5 + d, 2.5 + d]), 0.0, "{d}");
+        }
+    }
+
+    #[test]
+    fn the_sky_fallback_flag_does_not_change_the_fade_when_on() {
+        let on = room();
+        let off = ProbeUniforms {
+            box_max: [4.0, 3.0, 2.0, 0.0],
+            ..room()
+        };
+        assert_eq!(on.influence_bounds(), off.influence_bounds());
+        assert_eq!(on.sky_share([0.0, 1.5, 2.5]), 0.0);
+        let half = on.sky_share([0.0, 1.5, 2.5 + 2.0]);
+        assert!((half - 0.5).abs() < 1e-6, "{half}");
+        assert_eq!(on.sky_share([0.0, 1.5, 2.5 + 4.0]), 1.0);
+        assert_eq!(off.sky_share([0.0, 1.5, 2.5 + 4.0]), 0.0);
     }
 
     // `ProbeSet` in `shaders/probe_types.hlsl`: the count and the cube mip

@@ -62,6 +62,24 @@
 ///     ..Default::default()
 /// };
 /// ```
+///
+/// A surface outside every probe's influence reflects the nearest probe's
+/// capture close to its box, fading to the sky one largest half-extent of the
+/// box further out, so far-off open ground reflects the sky rather than a
+/// distant capture. Turn `sky_fallback` off for a probe covering an enclosed
+/// space (a room, a cave, a tunnel), where no sky is visible: a surface past
+/// its box then keeps that probe's capture however far away it is.
+///
+/// ```rust
+/// # use concinnity_core::components::ReflectionProbe;
+/// // A hall the sky never reaches, even past the probe's box.
+/// ReflectionProbe {
+///     position: [0.0, 1.7, 0.0],
+///     half_extents: [6.0, 2.0, 4.0],
+///     sky_fallback: false,
+///     ..Default::default()
+/// };
+/// ```
 #[derive(
     Debug,
     Clone,
@@ -95,6 +113,12 @@ pub struct ReflectionProbe {
     /// surface. `null` (the default) is a fifth of the box's smallest
     /// half-extent.
     pub blend_distance: Option<f32>,
+    /// Whether a surface outside every probe's influence, for which this is
+    /// the nearest probe, fades from this capture to the sky with distance
+    /// from the box. `false` keeps this capture at any distance, for probes
+    /// covering enclosed spaces the sky cannot reach.
+    #[asset(default = true)]
+    pub sky_fallback: bool,
 }
 
 #[cfg(test)]
@@ -119,6 +143,16 @@ mod tests {
         assert_eq!(bare.blend_distance, None);
         let set: ReflectionProbe = crate::test_support::from_json(r#"{"blend_distance":1.5}"#);
         assert_eq!(set.blend_distance, Some(1.5));
+    }
+
+    #[test]
+    fn the_sky_fallback_is_on_unless_turned_off() {
+        let bare: ReflectionProbe = crate::test_support::from_json("{}");
+        assert!(bare.sky_fallback);
+        assert!(ReflectionProbe::default().sky_fallback);
+        let off: ReflectionProbe = crate::test_support::from_json(r#"{"sky_fallback":false}"#);
+        assert!(!off.sky_fallback);
+        assert!(!crate::components::validate::reflection_probe(off).sky_fallback);
     }
 
     #[test]

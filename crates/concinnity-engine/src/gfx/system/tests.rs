@@ -3774,7 +3774,7 @@ fn declared_reflection_probes_replace_the_auto_seed() {
         position: [x, 1.0, 0.0],
         half_extents: [4.0; 3],
         capture_distance,
-        blend_distance: None,
+        ..Default::default()
     });
     for probe in &probes {
         b.push(probe.clone());

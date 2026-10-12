@@ -34,9 +34,17 @@ Raise it where neighboring boxes meet in open space (two halves of a
 courtyard, a hall opening into a corridor) so the hand-off between them is
 a gradual cross-fade instead of a visible step.
 
+A surface outside every probe's influence reflects the nearest probe's
+capture close to its box, fading to the sky one largest half-extent of the
+box further out, so far-off open ground reflects the sky rather than a
+distant capture. Turn `sky_fallback` off for a probe covering an enclosed
+space (a room, a cave, a tunnel), where no sky is visible: a surface past
+its box then keeps that probe's capture however far away it is.
+
 ## Parameters
 
 - `position`: An array of 3 floats. World-space capture point the cubemap is rendered from. Put it at roughly eye height in open space (not inside geometry) for the area it serves. Defaults to `[0.0, 1.7, 0.0]`.
 - `half_extents`: An array of 3 floats. Half-size of the influence box around `position`, per axis. A surface inside `position` plus or minus `half_extents` may select this probe, and the box is the parallax-correction volume. Make it span the local space the probe represents (e.g. a room's walls). Defaults to `[10.0, 5.0, 10.0]`.
 - `capture_distance`: A float. How far the capture reaches, in world units: an object lying wholly farther than this from `position` along the axis a cube face looks down is left out of that face, so the capture covers a cube of this half-size around `position`. An object that straddles the distance is captured whole, never cut, and the sky shows wherever an object was left out. `null` (the default) captures without limit.
 - `blend_distance`: A float. How far past the influence box the probe's influence reaches, in meters, the same on every axis. A surface fades from this probe's reflection into its neighbors' over that distance either side of the box surface. `null` (the default) is a fifth of the box's smallest half-extent.
+- `sky_fallback`: A boolean. Whether a surface outside every probe's influence, for which this is the nearest probe, fades from this capture to the sky with distance from the box. `false` keeps this capture at any distance, for probes covering enclosed spaces the sky cannot reach. Defaults to `true`.

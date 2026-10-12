@@ -16,7 +16,7 @@
 struct ProbeUniforms
 {
     float4 box_min;      // xyz = influence-box min, w = enabled
-    float4 box_max;      // xyz = influence-box max
+    float4 box_max;      // xyz = influence-box max, w = sky fallback
     float4 probe_pos;    // xyz = capture position
     float4 blend_margin; // xyz = per-axis distance the weight fades over across the box surface
 };

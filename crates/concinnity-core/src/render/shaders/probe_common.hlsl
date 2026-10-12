@@ -180,10 +180,10 @@ bool probe_mask_blend(ProbeMask probes, float3 world_pos, float3 R, float level,
 // 0 out to the box grown by its blend margin, where that influence ends, rising
 // to 1 one largest half-extent of the box further out. A capture stands in for
 // the scenery about as far past its box as the box is wide. A probe without a
-// baked box keeps the reflection whole.
+// baked box or without the sky fallback keeps the reflection whole.
 float probe_sky_share(ProbeUniforms probe, float3 world_pos)
 {
-    if (probe.box_min.w <= 0.5)
+    if (probe.box_min.w <= 0.5 || probe.box_max.w <= 0.5)
     {
         return 0.0;
     }

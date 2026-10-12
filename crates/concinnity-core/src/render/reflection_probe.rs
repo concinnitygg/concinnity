@@ -75,6 +75,9 @@ pub struct ProbePlacement {
     /// Distance along each axis the probe's blend weight fades over across
     /// the box surface.
     pub blend_margin: [f32; 3],
+    /// Whether a point outside every probe's influence fades from this capture
+    /// to the environment with distance from the box, or keeps the capture.
+    pub sky_fallback: bool,
 }
 
 /// Fraction of a box's half-extent a probe's blend margin spans when nothing
@@ -108,6 +111,7 @@ impl From<&ReflectionProbe> for ProbePlacement {
         ProbePlacement {
             capture_distance: probe.capture_distance,
             blend_margin: uniform_blend_margin(probe.half_extents, probe.blend_distance),
+            sky_fallback: probe.sky_fallback,
             ..ProbePlacement::from_center_extents(probe.position, probe.half_extents)
         }
     }
@@ -124,6 +128,7 @@ impl ProbePlacement {
             box_max: core::array::from_fn(|i| position[i] + half_extents[i]),
             capture_distance: None,
             blend_margin: uniform_blend_margin(half_extents, None),
+            sky_fallback: true,
         }
     }
 
@@ -136,12 +141,13 @@ impl ProbePlacement {
             box_max,
             capture_distance: None,
             blend_margin: per_axis_blend_margin(box_min, box_max),
+            sky_fallback: true,
         }
     }
 
     /// The record the shaders read for this placement once its cube is baked:
-    /// the box with parallax enabled (`box_min.w = 1`), the capture point and
-    /// the blend margin.
+    /// the box with parallax enabled (`box_min.w = 1`), the sky fallback
+    /// (`box_max.w`), the capture point and the blend margin.
     pub fn uniforms(&self) -> crate::render::uniforms::ProbeUniforms {
         let [x0, y0, z0] = self.box_min;
         let [x1, y1, z1] = self.box_max;
@@ -149,7 +155,7 @@ impl ProbePlacement {
         let [mx, my, mz] = self.blend_margin;
         crate::render::uniforms::ProbeUniforms {
             box_min: [x0, y0, z0, 1.0],
-            box_max: [x1, y1, z1, 0.0],
+            box_max: [x1, y1, z1, if self.sky_fallback { 1.0 } else { 0.0 }],
             probe_pos: [px, py, pz, 0.0],
             blend_margin: [mx, my, mz, 0.0],
         }
@@ -1191,7 +1197,7 @@ mod tests {
     fn a_placement_record_enables_parallax_over_its_box() {
         let u = ProbePlacement::from_center_extents([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]).uniforms();
         assert_eq!(u.box_min, [-3.0, -3.0, -3.0, 1.0]);
-        assert_eq!(u.box_max, [5.0, 7.0, 9.0, 0.0]);
+        assert_eq!(u.box_max, [5.0, 7.0, 9.0, 1.0]);
         assert_eq!(u.probe_pos, [1.0, 2.0, 3.0, 0.0]);
         assert_eq!(u.blend_margin, [0.8, 0.8, 0.8, 0.0]);
     }
@@ -1241,6 +1247,19 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_probe_carries_its_sky_fallback_into_its_record() {
+        let on = ProbePlacement::from(&ReflectionProbe::default());
+        assert!(on.sky_fallback);
+        assert_eq!(on.uniforms().box_max[3], 1.0);
+        let off = ProbePlacement::from(&ReflectionProbe {
+            sky_fallback: false,
+            ..Default::default()
+        });
+        assert!(!off.sky_fallback);
+        assert_eq!(off.uniforms().box_max[3], 0.0);
+    }
+
+    #[test]
     fn placement_from_center_extents_builds_box() {
         let p = ProbePlacement::from_center_extents([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
         assert_eq!(p.box_min, [-3.0, -3.0, -3.0]);
@@ -1254,7 +1273,7 @@ mod tests {
             position: [1.0, 2.0, 3.0],
             half_extents: [4.0, 5.0, 6.0],
             capture_distance: Some(7.5),
-            blend_distance: None,
+            ..Default::default()
         };
         let p = ProbePlacement::from(&probe);
         assert_eq!(p.capture_distance, Some(7.5));
@@ -1328,6 +1347,7 @@ mod tests {
         let (union_min, union_max) = probe_union(&probes);
         assert_eq!(union_min, [-10.0, 0.0, -10.0]);
         assert_eq!(union_max, [10.0, 6.0, 10.0]);
+        assert!(probes.iter().all(|p| p.sky_fallback));
         // Degenerate scenes seed nothing.
         assert!(auto_seed_probes([0.0; 3], [0.0; 3], &[]).is_empty());
         assert!(auto_seed_probes([f32::NAN, 0.0, 0.0], [1.0, 1.0, 1.0], &[]).is_empty());
