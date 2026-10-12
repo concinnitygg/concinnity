@@ -156,7 +156,7 @@ impl PostProgram {
             // scene, velocity, history, reactive mask; `TaaParams`.
             PostProgram::TaaResolve => PostProgramBindings {
                 textures: 4,
-                constants: 8,
+                constants: 12,
                 probes: false,
             },
             // scene, normal+depth, roughness, prefilter cube; `SsrParams`.

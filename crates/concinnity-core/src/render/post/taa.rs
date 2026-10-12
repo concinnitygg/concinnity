@@ -14,6 +14,7 @@
 
 use alloc::vec::Vec;
 
+use crate::gfx::jitter::TAA_CYCLE;
 use crate::render::error::RenderResult;
 use crate::render::reactive_mask::ReactiveReader;
 use crate::render::render_graph::{
@@ -89,6 +90,12 @@ pub struct TaaPass<Pipeline, Target> {
     ring: HistoryRing,
     desc: TextureDesc,
 }
+
+// Thin-feature lock lost per frame the feature is not seen. A feature narrower
+// than a pixel covers no pixel center on some jitter frames; its lock has to
+// outlast the longest run of those for the resolve to hold its history, and a
+// feature the cycle hits at all is hit at least once per cycle.
+const LOCK_DECAY: f32 = 1.0 / TAA_CYCLE as f32;
 
 // The graph label the accumulation targets carry into a backend's own
 // debug naming.
@@ -219,6 +226,7 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
                 .cap()
                 .filter(|_| inputs.reactive.is_some())
                 .unwrap_or(0.0),
+            lock_decay: LOCK_DECAY,
         };
         // Without a mask the slot still needs a texture; the motion vectors
         // stand in, and the resolve does not read them there.
@@ -278,6 +286,7 @@ fn create_targets<D: PostPassDevice>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gfx::jitter::offset_in_cycle;
     use crate::render::post::device::resolve_extent;
 
     #[test]
@@ -315,6 +324,56 @@ mod tests {
         );
         pass.advance();
         assert!(pass.ring().valid());
+    }
+
+    // Whether a vertical feature spanning `[left, left + width)` pixels covers
+    // the center of pixel `pixel` on `frame`. Every backend's projection shifts
+    // the scene right by the jitter offset (it subtracts the offset from the
+    // view-z coefficient, and clip w is minus view z).
+    fn covers(left: f32, width: f32, pixel: f32, frame: u32) -> bool {
+        let [jx, _] = offset_in_cycle(frame, TAA_CYCLE);
+        let center = pixel + 0.5;
+        left + jx <= center && center < left + width + jx
+    }
+
+    #[test]
+    fn a_feature_narrower_than_a_pixel_misses_every_pixel_on_some_frames() {
+        // The night planet lamp post: 1.2 m wide at 1060 m is 0.73 px at
+        // 1600x900, its face spanning x = 801.46..802.18. On two frames of the
+        // cycle it covers no pixel center at all, so the frame holds no trace
+        // of it.
+        let missed = (0..TAA_CYCLE)
+            .filter(|&f| !covers(801.46, 0.73, 801.0, f) && !covers(801.46, 0.73, 802.0, f))
+            .count();
+        assert_eq!(missed, 2);
+    }
+
+    #[test]
+    fn a_thin_feature_stays_locked_between_the_frames_the_jitter_hits_it() {
+        // Mirrors the resolve's lock: set on a frame the pixel sees the feature,
+        // less `LOCK_DECAY` on every other. Once a pixel has seen a feature of
+        // any width at any phase, the lock must never run out while the
+        // feature stays put.
+        for w in 1..=64 {
+            let width = w as f32 / 64.0;
+            for p in 0..64 {
+                let left = p as f32 / 64.0;
+                let mut lock: Option<f32> = None;
+                for frame in 0..3 * TAA_CYCLE {
+                    lock = if covers(left, width, 0.0, frame) {
+                        Some(1.0)
+                    } else {
+                        lock.map(|l| (l - LOCK_DECAY).max(0.0))
+                    };
+                    if let Some(l) = lock {
+                        assert!(
+                            l > 0.0,
+                            "width {width} at {left}: lock ran out on frame {frame}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

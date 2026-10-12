@@ -4,7 +4,7 @@
 use crate::gfx::auto_exposure::{AutoExposureSettings, HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN};
 
 /// Input to the TAA resolve fragment shader. Matches `TaaParams` in
-/// `shaders/taa.hlsl`. 8 bytes.
+/// `shaders/taa.hlsl`. 12 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TaaParams {
@@ -14,6 +14,9 @@ pub struct TaaParams {
     /// ([`crate::render::reactive_mask::ReactiveReader::cap`]), or 0 when
     /// no mask was written this frame and the resolve ignores the bound one.
     pub reactive_max: f32,
+    /// Thin-feature lock lost per frame the feature is not seen: one over
+    /// [`crate::gfx::jitter::TAA_CYCLE`].
+    pub lock_decay: f32,
 }
 
 /// Input to the auto-exposure histogram kernels: the three luminance-mapping
@@ -92,9 +95,10 @@ mod tests {
 
     #[test]
     fn taa_params_layout_matches_shader() {
-        assert_eq!(size_of::<TaaParams>(), 8);
+        assert_eq!(size_of::<TaaParams>(), 12);
         assert_eq!(offset_of!(TaaParams, history_valid), 0);
         assert_eq!(offset_of!(TaaParams, reactive_max), 4);
+        assert_eq!(offset_of!(TaaParams, lock_decay), 8);
     }
 
     // Both Hi-Z param blocks are four tightly-packed uints, which is what the

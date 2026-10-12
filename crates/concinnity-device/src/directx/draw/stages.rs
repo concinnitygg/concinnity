@@ -603,7 +603,7 @@ impl DxContext {
                 p
             }
             (None, Some(taa)) => {
-                let [jx_px, jy_px] = jitter::offset_in_cycle(taa.frame.get(), 8);
+                let [jx_px, jy_px] = jitter::offset_in_cycle(taa.frame.get(), jitter::TAA_CYCLE);
                 let jx = jx_px * 2.0 / width.max(1) as f32;
                 let jy = jy_px * 2.0 / height.max(1) as f32;
                 let mut p = proj;

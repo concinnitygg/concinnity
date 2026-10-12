@@ -314,7 +314,7 @@ impl MtlContext {
         // its input in pixel coords; TAA reads NDC directly.
         let needs_jitter = self.taa.enabled || self.upscale.scaler.is_some();
         let proj_render = if needs_jitter {
-            let [jx_pix, jy_pix] = jitter::offset_in_cycle(self.taa.frame, 8);
+            let [jx_pix, jy_pix] = jitter::offset_in_cycle(self.taa.frame, jitter::TAA_CYCLE);
             let jx = jx_pix * 2.0 / render_w as f32;
             let jy = jy_pix * 2.0 / render_h as f32;
             if self.upscale.scaler.is_some() {

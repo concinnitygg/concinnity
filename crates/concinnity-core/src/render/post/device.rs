@@ -479,7 +479,7 @@ mod tests {
             sampler: PostSampler::LinearClamp,
         };
         let binds = [bind; 4];
-        let constants = [0u8; 8];
+        let constants = alloc::vec![0u8; PostProgram::TaaResolve.bindings().constants];
         let draw = draw_with(&pipeline, &binds, &constants);
         assert!(draw.check(PostProgram::TaaResolve.bindings()).is_ok());
     }
@@ -501,7 +501,8 @@ mod tests {
         let declared = PostProgram::TaaResolve.bindings();
         let three = [bind; 3];
         let four = [bind; 4];
-        let err = draw_with(&pipeline, &three, &[0u8; 8])
+        let constants = alloc::vec![0u8; declared.constants];
+        let err = draw_with(&pipeline, &three, &constants)
             .check(declared)
             .expect_err("one source short");
         assert!(

@@ -39,7 +39,7 @@ pub(in crate::shader_layout) fn atmosphere() -> Vec<Case> {
 
 pub(in crate::shader_layout) fn taa() -> Vec<Case> {
     vec![everywhere(
-        mirror!(TaaParams => "TaaParams" { history_valid, reactive_max, }),
+        mirror!(TaaParams => "TaaParams" { history_valid, reactive_max, lock_decay, }),
     )]
 }
 

@@ -1,6 +1,7 @@
 // Temporal anti-aliasing resolve: blend the current HDR frame with the
-// reprojected, neighborhood-clipped history buffer. Single source for every
-// backend; pairs with `fullscreen_vertex` in fullscreen.hlsl.
+// reprojected, neighborhood-clipped history buffer. The history's alpha carries
+// each pixel's thin-feature lock (see the resolve below). Single source for
+// every backend; pairs with `fullscreen_vertex` in fullscreen.hlsl.
 //
 // Each of the four sources is a `Texture2D` and a `SamplerState`: Vulkan binds
 // the textures at 0..3 and their samplers at 4..7. The register numbers are the
@@ -16,6 +17,9 @@ struct TaaParams
     // when no mask was written this frame; the bound texture is then a stand-in
     // and is not read.
     float reactive_max;
+    // Lock a thin feature loses each frame it is not seen: one over the jitter
+    // cycle length, so a feature the jitter hits once per cycle stays locked.
+    float lock_decay;
 };
 
 [[vk::binding(0, 0)]] Texture2D<float4> scene_tex : register(t0);
@@ -41,6 +45,22 @@ static const float TAA_BLEND = 0.9;
 // 1.0 is the Playdead/Karis default; lower tightens (less ghosting, more
 // flicker), higher loosens.
 static const float TAA_VARIANCE_GAMMA = 1.0;
+
+// Luma ratio under which two neighborhood samples count as the same surface
+// for the thin-feature test.
+static const float TAA_LOCK_SIMILAR = 1.1;
+
+// Largest screen-space motion, in pixels per frame, a thin feature may have and
+// still be locked. A lock outlives the feature by up to one jitter cycle, so a
+// feature this slow can leave a stale lock at most a couple of pixels behind.
+static const float TAA_LOCK_MOTION_PX = 0.25;
+
+// Largest luma standard deviation, as a fraction of the mean, the 3x3
+// neighborhood may have for a lock to hold the clip off. A thin feature the
+// jitter missed leaves the plain background it stood on; a textured or busy
+// neighborhood (dense foliage, a blade sliding past another) is one where the
+// missing feature may as well have moved, so the clip decides there.
+static const float TAA_LOCK_FLAT = 0.25;
 
 // Finite ceiling every sampled color is clamped to. Largest finite half - the
 // scene/history targets are RGBA16Float, so an HDR specular that overflowed the
@@ -90,6 +110,56 @@ float3 clip_to_aabb(float3 bmin, float3 bmax, float3 hist)
     return (ma > 1.0) ? (center + v / ma) : hist;
 }
 
+// Whether two lumas are the same surface to the thin-feature test. A ratio, so
+// the test reads the same at night as at noon; the tiny bias only keeps a pair
+// of zeros from dividing by zero.
+bool taa_similar(float a, float b)
+{
+    return (max(a, b) + 1e-12) < TAA_LOCK_SIMILAR * (min(a, b) + 1e-12);
+}
+
+// Whether the 3x3 lumas (row-major, center at 4) put a thin feature at the
+// center: a ridge brighter or darker than every neighbor it differs from, with
+// no uniform 2x2 block around it. A feature narrower than a pixel passes; an
+// edge or a flat surface always has a uniform block.
+bool taa_thin_feature(float luma[9])
+{
+    float nucleus = luma[4];
+    uint similar = 1u << 4;
+    float lo = 3.0e38;
+    float hi = 0.0;
+    for (uint i = 0; i < 9; ++i)
+    {
+        if (i == 4)
+        {
+            continue;
+        }
+        if (taa_similar(luma[i], nucleus))
+        {
+            similar |= 1u << i;
+        }
+        else
+        {
+            lo = min(lo, luma[i]);
+            hi = max(hi, luma[i]);
+        }
+    }
+    if (!(nucleus > hi || nucleus < lo))
+    {
+        return false;
+    }
+    // The four 2x2 blocks that contain the center.
+    const uint blocks[4] = { 0x1Bu, 0x36u, 0xD8u, 0x1B0u };
+    for (uint b = 0; b < 4; ++b)
+    {
+        if ((similar & blocks[b]) == blocks[b])
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 [shader("pixel")]
 float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
 {
@@ -103,6 +173,7 @@ float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     // moments (and therefore the box) NaN.
     float3 m1 = (float3)(0.0);
     float3 m2 = (float3)(0.0);
+    float luma[9];
     for (int dy = -1; dy <= 1; ++dy)
     {
         for (int dx = -1; dx <= 1; ++dx)
@@ -111,6 +182,7 @@ float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
             float3 c = rgb_to_ycocg(s);
             m1 += c;
             m2 += c * c;
+            luma[(dy + 1) * 3 + dx + 1] = c.x;
         }
     }
     float3 mean  = m1 / 9.0;
@@ -129,15 +201,41 @@ float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     // target, and a NaN read here would survive clip_to_aabb (a NaN fails the
     // ma > 1 test, so the unclipped NaN is returned) and poison every later
     // frame through the feedback.
-    float3 hist = rgb_to_ycocg(taa_sanitize(history_tex.Sample(history_samp, prev_uv).rgb));
-    hist = clip_to_aabb(bmin, bmax, hist);
+    float4 hist_raw = history_tex.Sample(history_samp, prev_uv);
+    float3 hist = rgb_to_ycocg(taa_sanitize(hist_raw.rgb));
 
     // Accumulate only when there is valid, on-screen history; otherwise the
     // current frame passes straight through (first frame, resize, off-screen).
-    float alpha = (params.history_valid > 0.5 && on_screen) ? TAA_BLEND : 0.0;
+    bool has_history = params.history_valid > 0.5 && on_screen;
+
+    // Thin-feature lock, carried in the history's alpha. A feature narrower
+    // than a pixel covers no pixel center on some jitter frames; on those the
+    // 3x3 box above holds no trace of it and the clip would erase its history,
+    // so it blinks. A lock, set while the feature is seen and decaying over one
+    // jitter cycle, holds the clip off on those frames so the pixel settles at
+    // the feature's coverage instead. On a frame that sees the feature the box
+    // holds it and the clip runs as usual. A jitter miss and a thin feature
+    // moving away look alike in one frame, so a lock forms only where the
+    // surface is nearly still on screen (a highlight sliding across a moving
+    // prop never locks), and holds the clip off only over a flat neighborhood.
+    float lock = has_history ? saturate(select(isnan(hist_raw.a), 0.0, hist_raw.a)) : 0.0;
+    lock = max(lock - params.lock_decay, 0.0);
+    float2 motion_px = motion * texture_size(scene_tex);
+    bool thin = taa_thin_feature(luma);
+    if (thin && dot(motion_px, motion_px) < TAA_LOCK_MOTION_PX * TAA_LOCK_MOTION_PX)
+    {
+        lock = 1.0;
+    }
+    bool flat = sigma.x <= TAA_LOCK_FLAT * mean.x;
+
+    float alpha = has_history ? TAA_BLEND : 0.0;
     if (params.reactive_max > 0.0)
     {
-        alpha *= 1.0 - min(saturate(reactive_tex.Sample(reactive_samp, uv).r), params.reactive_max);
+        float reactive = min(saturate(reactive_tex.Sample(reactive_samp, uv).r), params.reactive_max);
+        alpha *= 1.0 - reactive;
+        lock *= 1.0 - reactive;
     }
-    return float4(lerp(cur, ycocg_to_rgb(hist), alpha), 1.0);
+    float hold = (!thin && flat) ? lock : 0.0;
+    hist = lerp(clip_to_aabb(bmin, bmax, hist), hist, hold);
+    return float4(lerp(cur, ycocg_to_rgb(hist), alpha), lock);
 }

@@ -28,6 +28,11 @@ pub fn radical_inverse(mut index: u32, base: u32) -> f32 {
     r
 }
 
+/// Frames in the jitter cycle the TAA resolve accumulates under, on every
+/// backend. The resolve's thin-feature lock lasts this long, so a feature the
+/// cycle hits once stays locked until it is hit again.
+pub const TAA_CYCLE: u32 = 8;
+
 /// The frame's jitter offset in `[-0.5, 0.5]` render-pixel units, from a
 /// 16-frame Halton (2, 3) cycle.
 ///
