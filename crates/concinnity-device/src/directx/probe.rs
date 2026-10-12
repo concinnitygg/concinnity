@@ -322,7 +322,8 @@ impl DxContext {
                 ambient_occlusion: 0.0,
                 sky_rot: self.state.view.sky_rot,
                 irradiance: self.irradiance_lane(),
-                _pad: [0.0; 3],
+                pre_exposure: 1.0,
+                _pad: [0.0; 2],
             };
             let cbv = alloc.alloc_buffer(
                 256,

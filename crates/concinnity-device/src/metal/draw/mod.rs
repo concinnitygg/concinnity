@@ -205,6 +205,7 @@ impl MtlContext {
                 cam_pos,
                 viewport: [render_w as f32, render_h as f32],
                 sky_rot,
+                pre_exposure: self.pre_exposure.value(),
             },
         );
 

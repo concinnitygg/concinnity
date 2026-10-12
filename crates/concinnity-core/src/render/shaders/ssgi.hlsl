@@ -49,6 +49,10 @@ struct SsgiParams
     uint levels;
     // Render-resolution divisor of the trace.
     uint gi_scale;
+    // What last frame's accumulation is multiplied by to read at this frame's
+    // pre-exposure; the trace and its accumulation stay in the pre-exposed
+    // scale of the scene they gather.
+    float history_scale;
 };
 
 [[vk::push_constant]] ConstantBuffer<SsgiParams> params : register(b0);
@@ -412,7 +416,7 @@ float4 ssgi_trace_fragment(
     // cap.
     float4 hist = ssgi_history(uv + velocity.Load(int3(q, 0)).rg, depth, int2(low));
     float len = min(hist.a + 1.0, SSGI_MAX_HISTORY);
-    return float4(lerp(hist.rgb, indirect, 1.0 / len), len);
+    return float4(lerp(hist.rgb * params.history_scale, indirect, 1.0 / len), len);
 }
 
 #elif defined(SSGI_COMPOSITE)

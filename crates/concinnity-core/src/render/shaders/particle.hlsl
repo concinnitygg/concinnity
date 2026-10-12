@@ -44,7 +44,8 @@
 struct ParticleView
 {
     float4x4 vp;
-    // xyz = world-space camera right, the first billboard axis.
+    // xyz = world-space camera right, the first billboard axis; w = the scale
+    // the HDR chain is written at.
     float4 cam_right;
     // xyz = world-space camera up, the second billboard axis.
     float4 cam_up;
@@ -90,6 +91,9 @@ struct ParticleVertexOut
     [[vk::location(1)]] float4 color : TEXCOORD1;
     // Constant across the quad, so interpolating it would only cost bandwidth.
     [[vk::location(2)]] nointerpolation float discard_flag : TEXCOORD2;
+    // The view block's pre-exposure, handed on because only the vertex stage
+    // binds the view.
+    [[vk::location(3)]] nointerpolation float pre_exposure : TEXCOORD3;
     float4 position : SV_Position;
 };
 
@@ -108,6 +112,7 @@ ParticleVertexOut particle_vertex(uint vid : SV_VertexID, uint iid : SV_Instance
         o.uv = float2(0.0, 0.0);
         o.color = float4(0.0, 0.0, 0.0, 0.0);
         o.discard_flag = 1.0;
+        o.pre_exposure = view.cam_right.w;
         return o;
     }
 
@@ -130,6 +135,7 @@ ParticleVertexOut particle_vertex(uint vid : SV_VertexID, uint iid : SV_Instance
     o.uv = corner * 0.5 + 0.5;
     o.color = color;
     o.discard_flag = 0.0;
+    o.pre_exposure = view.cam_right.w;
     return o;
 }
 
@@ -163,9 +169,10 @@ ParticleFragmentOut particle_fragment(ParticleVertexOut i)
     float2 uv = float2(i.uv.x, 1.0 - i.uv.y);
     float4 sampled = albedo.Sample(albedo_sampler, uv);
     ParticleFragmentOut o;
-    o.color = float4(sampled.rgb * i.color.rgb, sampled.a * i.color.a);
+    float4 color = float4(sampled.rgb * i.color.rgb, sampled.a * i.color.a);
     // The light a sprite adds counts as much as its coverage: a bright spark
     // fading out is nearly transparent yet still the brightest thing there.
-    o.reactive = reactive_write(max(o.color.a, o.color.a * reactive_luminance(o.color.rgb)));
+    o.reactive = reactive_write(max(color.a, color.a * reactive_luminance(color.rgb)));
+    o.color = float4(color.rgb * i.pre_exposure, color.a);
     return o;
 }

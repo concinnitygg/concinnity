@@ -76,7 +76,7 @@ impl DxContext {
             );
             cmd.ClearRenderTargetView(
                 self.targets.hdr.color_rtv,
-                &self.state.view.clear_color,
+                &self.pre_exposure.clear_color(self.state.view.clear_color),
                 None,
             );
             cmd.ClearDepthStencilView(depth_dsv, D3D12_CLEAR_FLAG_DEPTH, DEPTH_CLEAR, 0, None);

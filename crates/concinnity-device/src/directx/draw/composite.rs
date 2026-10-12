@@ -120,7 +120,7 @@ impl fullscreen::CompositeEncoder for DxContext {
                 self.state.view.view_distance,
             );
             let composite = CompositeParams {
-                post: self.post_process,
+                post: self.pre_exposure.post_params(&self.post_process),
                 fade: self.state.view.scene_fade,
                 view_mode: args.channel_view,
                 depth_near,

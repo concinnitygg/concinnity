@@ -25,7 +25,9 @@ struct SsrParams
     // IBL prefilter cubemap mip count; 0 means no EnvironmentMap is bound and
     // the cube fallback is skipped.
     float prefilter_mip_count;
-    float _pad;
+    // The scale the HDR chain is written at. The scene taps carry it; the
+    // probe and sky fallback, absolute radiance, is multiplied by it.
+    float pre_exposure;
     // Camera-to-world transform (the rigid inverse of the view matrix): its 3x3
     // turns the view-space reflection ray into the world-space direction the
     // cubemap is sampled with, and its translation column lets the resolve
@@ -154,16 +156,16 @@ float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Targ
         probe = probe_mask_specular(probe_mask_at(uv, world_pos), world_pos, r_world,
                                     probe_lod(roughness), sky_share);
     }
-    float3 env = probe;
+    float3 env = probe * params.pre_exposure;
     if (sky_share > 0.0)
     {
         float3 sky = base;
         if (params.prefilter_mip_count > 0.5)
         {
             float lod = roughness * (params.prefilter_mip_count - 1.0);
-            sky = prefilter.SampleLevel(prefilter_samp, SKY_DIR(r_world), lod).rgb;
+            sky = prefilter.SampleLevel(prefilter_samp, SKY_DIR(r_world), lod).rgb * params.pre_exposure;
         }
-        env = lerp(probe, sky, sky_share);
+        env = lerp(env, sky, sky_share);
     }
 
     float3 step_v = r_dir * params.stride;

@@ -98,7 +98,8 @@ impl MtlContext {
             vp,
             inv_vp,
             viewport,
-            _pad: [0.0; 2],
+            pre_exposure: self.pre_exposure.value(),
+            _pad: 0.0,
         };
 
         let pass_desc = MTLRenderPassDescriptor::new();

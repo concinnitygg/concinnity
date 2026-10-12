@@ -38,14 +38,15 @@ pub(in crate::shader_layout) fn atmosphere() -> Vec<Case> {
 }
 
 pub(in crate::shader_layout) fn taa() -> Vec<Case> {
-    vec![everywhere(
-        mirror!(TaaParams => "TaaParams" { history_valid, reactive_max, lock_decay, }),
-    )]
+    vec![everywhere(mirror!(TaaParams => "TaaParams" {
+        history_valid,
+        reactive_max,
+        lock_decay,
+        history_scale,
+    }))]
 }
 
 pub(in crate::shader_layout) fn bloom() -> Vec<Case> {
-    // The prefilter declares only the six floats it reads; the tone-map fields
-    // the composite adds are uploaded but never touched here.
     vec![everywhere(
         mirror!(PostProcessParams => "PostProcessParams" {
             bloom_intensity,
@@ -54,15 +55,17 @@ pub(in crate::shader_layout) fn bloom() -> Vec<Case> {
             exposure,
             vignette,
             lut_strength,
-            [hdr_output, pq_output, fxaa] => [],
+            hdr_output,
+            pq_output,
+            fxaa,
+            pre_exposure,
         }),
     )]
 }
 
 pub(in crate::shader_layout) fn composite() -> Vec<Case> {
     // The shader flattens the nested post block into its own leading floats, so
-    // each member of it is checked through its path. This is the only
-    // declaration that spells out all nine: the bloom prefilter declares six.
+    // each member of it is checked through its path.
     vec![everywhere(mirror!(CompositeParams => "CompositeParams" {
         [post.bloom_intensity] => ["bloom_intensity"],
         [post.bloom_threshold] => ["bloom_threshold"],
@@ -73,6 +76,7 @@ pub(in crate::shader_layout) fn composite() -> Vec<Case> {
         [post.hdr_output] => ["hdr_output"],
         [post.pq_output] => ["pq_output"],
         [post.fxaa] => ["fxaa"],
+        [post.pre_exposure] => ["pre_exposure"],
         fade,
         view_mode,
         depth_near,
@@ -99,7 +103,7 @@ pub(in crate::shader_layout) fn ssr() -> Vec<Case> {
         stride,
         thickness,
         prefilter_mip_count,
-        _pad,
+        pre_exposure,
         inv_view,
         sky_rot,
     }))]
@@ -117,6 +121,7 @@ pub(in crate::shader_layout) fn ssgi() -> Vec<Case> {
         frame,
         levels,
         gi_scale,
+        history_scale,
         [_pad] => [],
     }))]
 }
@@ -127,7 +132,7 @@ pub(in crate::shader_layout) fn auto_exposure() -> Vec<Case> {
             lum_log2_min,
             lum_log2_range,
             lum_to_bin_scale,
-            _pad,
+            pre_exposure,
         }),
     )]
 }

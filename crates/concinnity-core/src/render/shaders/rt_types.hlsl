@@ -19,7 +19,9 @@ struct RtParams
     // Per-axis divisor of the reduced glass reflection pre-pass; 1.0 when glass
     // traces its reflection in place.
     float trace_divisor;
-    float _pad2;
+    // The scale the HDR chain is written at: the reflection pass shades in
+    // absolute radiance and multiplies what it writes by it.
+    float pre_exposure;
     // float4 rather than float3 + scalar: MSL sizes a constant-buffer float3 at
     // 16 bytes, so only the padded form matches the CPU layout on every target.
     float4 cam_pos;    // xyz: world camera position

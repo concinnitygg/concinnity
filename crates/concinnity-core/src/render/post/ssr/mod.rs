@@ -146,7 +146,7 @@ mod tests {
             stride: 0.6,
             thickness: 0.3,
             prefilter_mip_count: 6.0,
-            _pad: 0.0,
+            pre_exposure: 1.0,
             inv_view: [[0.0; 4]; 4],
             sky_rot: [[0.0; 4]; 3],
         }

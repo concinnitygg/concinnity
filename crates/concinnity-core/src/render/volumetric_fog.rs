@@ -94,7 +94,8 @@ impl FogSettings {
     /// world positions from depth; `cam_pos` is the camera origin; `sun_dir`
     /// and `sun_color` are the first directional light's direction (toward
     /// the light) and `intensity * color`. `viewport` is the HDR resolve
-    /// target's pixel dimensions.
+    /// target's pixel dimensions, and `pre_exposure` the scale it is written
+    /// at.
     pub fn params(
         &self,
         inv_vp: [[f32; 4]; 4],
@@ -102,6 +103,7 @@ impl FogSettings {
         sun_dir: [f32; 3],
         sun_color: [f32; 3],
         viewport: [f32; 2],
+        pre_exposure: f32,
     ) -> FogParams {
         let viewport = [viewport[0].max(MIN_VIEWPORT), viewport[1].max(MIN_VIEWPORT)];
         FogParams {
@@ -121,7 +123,8 @@ impl FogSettings {
             ambient: self.ambient,
             viewport,
             inv_max_distance: 1.0 / self.max_distance,
-            _pad3: [0.0; 3],
+            pre_exposure,
+            _pad3: [0.0; 2],
         }
     }
 }
@@ -256,15 +259,24 @@ mod tests {
             [0.0, 1.0, 0.0],
             [1.0; 3],
             [1280.0, 720.0],
+            4.0,
         );
         assert!((p.inv_max_distance - (1.0 / 50.0)).abs() < 1e-6);
         assert_eq!(p.viewport, [1280.0, 720.0]);
+        assert_eq!(p.pre_exposure, 4.0);
     }
 
     #[test]
     fn params_floor_a_degenerate_viewport() {
         let s = FogSettings::resolve([0.7; 3], 0.05, 0.2, 0.0, 50.0, 0.4, 0.15);
-        let p = s.params(IDENTITY, [0.0; 3], [0.0, 1.0, 0.0], [1.0; 3], [0.0, 0.0]);
+        let p = s.params(
+            IDENTITY,
+            [0.0; 3],
+            [0.0, 1.0, 0.0],
+            [1.0; 3],
+            [0.0, 0.0],
+            1.0,
+        );
         assert!(p.viewport[0] >= MIN_VIEWPORT);
         assert!(p.viewport[1] >= MIN_VIEWPORT);
     }
@@ -272,10 +284,17 @@ mod tests {
     #[test]
     fn params_zero_padding_words_are_zero() {
         let s = FogSettings::resolve([0.7; 3], 0.05, 0.2, 0.0, 50.0, 0.4, 0.15);
-        let p = s.params(IDENTITY, [0.0; 3], [0.0, 1.0, 0.0], [1.0; 3], [1.0, 1.0]);
+        let p = s.params(
+            IDENTITY,
+            [0.0; 3],
+            [0.0, 1.0, 0.0],
+            [1.0; 3],
+            [1.0, 1.0],
+            1.0,
+        );
         assert_eq!(p._pad0, 0.0);
         assert_eq!(p._pad1, 0.0);
         assert_eq!(p._pad2, 0.0);
-        assert_eq!(p._pad3, [0.0; 3]);
+        assert_eq!(p._pad3, [0.0; 2]);
     }
 }

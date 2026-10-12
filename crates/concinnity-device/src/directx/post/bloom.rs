@@ -99,7 +99,7 @@ impl DxContext {
             cmd,
             scene_srv,
             bloom_top.attachment(),
-            &self.post_process,
+            &self.pre_exposure.post_params(&self.post_process),
         )?;
         let sampled = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         let target = D3D12_RESOURCE_STATE_RENDER_TARGET;

@@ -20,6 +20,8 @@ struct TaaParams
     // Lock a thin feature loses each frame it is not seen: one over the jitter
     // cycle length, so a feature the jitter hits once per cycle stays locked.
     float lock_decay;
+    // What the history is multiplied by to read at this frame's pre-exposure.
+    float history_scale;
 };
 
 [[vk::binding(0, 0)]] Texture2D<float4> scene_tex : register(t0);
@@ -202,7 +204,7 @@ float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     // ma > 1 test, so the unclipped NaN is returned) and poison every later
     // frame through the feedback.
     float4 hist_raw = history_tex.Sample(history_samp, prev_uv);
-    float3 hist = rgb_to_ycocg(taa_sanitize(hist_raw.rgb));
+    float3 hist = rgb_to_ycocg(taa_sanitize(hist_raw.rgb * params.history_scale));
 
     // Accumulate only when there is valid, on-screen history; otherwise the
     // current frame passes straight through (first frame, resize, off-screen).

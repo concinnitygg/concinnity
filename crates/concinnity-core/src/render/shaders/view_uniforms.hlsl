@@ -24,7 +24,9 @@ struct ViewUniforms
     // 1.0 when the irradiance cube holds the environment's diffuse light (an
     // environment map's or an atmosphere's); 0.0 falls back to a flat ambient.
     float irradiance;
-    float _pad_view0;
+    // The scale the pass's color target is written at: the frame's
+    // pre-exposure for the main pass, 1.0 for a probe or mirror face.
+    float pre_exposure;
     float _pad_view1;
     float _pad_view2;
 };

@@ -36,7 +36,9 @@ struct RaymarchView
     // or an Atmosphere; 0 means the ambient helper takes its hemispheric
     // fallback.
     float irradiance;
-    float _pad_view0;
+    // The scale the HDR chain is written at: the scene shown through a surface
+    // is divided by it, the pass's output multiplied.
+    float pre_exposure;
     float _pad_view1;
     float _pad_view2;
 };

@@ -588,7 +588,7 @@ impl DxContext {
         let view_uni = ParticleView {
             vp,
             cam_right,
-            _pad0: 0.0,
+            pre_exposure: self.pre_exposure.value(),
             cam_up,
             _pad1: 0.0,
         };

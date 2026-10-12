@@ -10,7 +10,7 @@ struct TransparentView
 {
     float4x4 vp;       // world -> clip (jittered when TAA is on)
     float4x4 inv_vp;   // clip -> world
-    float4 camera_pos; // xyz: world-space camera
+    float4 camera_pos; // xyz: world-space camera, w: the HDR chain's pre-exposure
     float2 viewport;   // attachment dimensions in pixels
     float time;        // seconds since startup
     // Mips in the sky prefilter cube; 0 = no EnvironmentMap bound, and each
@@ -44,11 +44,3 @@ struct TransparentOut
     float4 color    : SV_Target0;
     float  reactive : SV_Target1;
 };
-
-TransparentOut transparent_out(float4 color, float reactive)
-{
-    TransparentOut o;
-    o.color = color;
-    o.reactive = reactive_write(reactive);
-    return o;
-}

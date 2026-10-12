@@ -72,7 +72,8 @@ struct FogParams
     // Width / height of the HDR resolve in pixels.
     float2 viewport;
     float inv_max_distance;
-    float _pad3a;
+    // The scale the HDR chain is written at.
+    float pre_exposure;
     float _pad3b;
     float _pad3c;
 };
@@ -322,7 +323,8 @@ float4 fog_fragment(
 
     // The volume already stores camera->slice integrated (scattered, 1 - T), so
     // the trilinear sample IS the output blend pair.
-    return fog_volume.SampleLevel(fog_volume_samp, float3(uv, z01), 0);
+    float4 fog_blend = fog_volume.SampleLevel(fog_volume_samp, float3(uv, z01), 0);
+    return float4(fog_blend.rgb * fog.pre_exposure, fog_blend.a);
 }
 
 #endif

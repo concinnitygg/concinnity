@@ -329,7 +329,8 @@ impl DxContext {
         let view_uni = LineView {
             vp,
             occluded_alpha: OCCLUDED_ALPHA,
-            _pad: [0.0; 3],
+            pre_exposure: self.pre_exposure.value(),
+            _pad: [0.0; 2],
         };
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges

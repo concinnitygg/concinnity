@@ -77,9 +77,12 @@ impl VkContext {
         let Some(gbuffer) = self.gbuffer_targets().and_then(|gb| gb.frame(frame_idx)) else {
             return;
         };
-        let params = ssgi
-            .settings
-            .params(fov_y_radians, aspect, ssgi.pass.frame());
+        let params = ssgi.settings.params(
+            fov_y_radians,
+            aspect,
+            ssgi.pass.frame(),
+            self.pre_exposure.history_scale(),
+        );
         let device = self.post_device(frame_idx);
         let scene = self.hdr_scene_attachment(frame_idx);
         if let Err(e) = ssgi.pass.encode(

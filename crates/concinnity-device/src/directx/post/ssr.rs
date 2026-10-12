@@ -8,7 +8,7 @@
 
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::{PostExtent, PostPassDevice};
-use concinnity_core::render::post::ssr::settings::SsrSettings;
+use concinnity_core::render::post::ssr::settings::{SsrParamsInputs, SsrSettings};
 use concinnity_core::render::post::ssr::{SsrInputs, SsrPass, target_desc};
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -179,14 +179,15 @@ impl DxContext {
             [v[0][2], v[1][2], v[2][2], 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let params = resolve.settings.params(
+        let params = resolve.settings.params(SsrParamsInputs {
             fov_y_radians,
             aspect,
             inv_view_rot,
             cam_pos,
-            self.scene.env_map.prefilter_mip_count as f32,
-            self.state.view.sky_rot,
-        );
+            prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
+            sky_rot: self.state.view.sky_rot,
+            pre_exposure: self.pre_exposure.value(),
+        });
         let device = self.post_device(frame_idx);
         if let Err(e) = resolve.pass.encode(
             &device,

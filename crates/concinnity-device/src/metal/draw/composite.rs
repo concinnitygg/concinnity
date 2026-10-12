@@ -106,7 +106,7 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
             self.ctx.state.view.view_distance,
         );
         let composite = render_types::CompositeParams {
-            post: self.ctx.post_process,
+            post: self.ctx.pre_exposure.post_params(&self.ctx.post_process),
             fade: self.ctx.state.view.scene_fade,
             view_mode: self.channel_view,
             depth_near,

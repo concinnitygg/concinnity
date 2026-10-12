@@ -186,7 +186,7 @@ impl MtlContext {
             && object_buffer.is_some()
             && self.cull.pipeline_phase2.is_some();
         let main_pass_desc = MTLRenderPassDescriptor::new();
-        let [r, g, b, a] = self.state.view.clear_color;
+        let [r, g, b, a] = self.pre_exposure.clear_color(self.state.view.clear_color);
         // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
         // declares.
         unsafe {
@@ -386,7 +386,8 @@ impl MtlContext {
             ambient_occlusion: 0.0,
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
-            _pad: [0.0; 3],
+            pre_exposure: 1.0,
+            _pad: [0.0; 2],
         };
 
         self.bind_clusters(&encoder, pass.clusters);
@@ -624,7 +625,8 @@ impl MtlContext {
             ambient_occlusion: 1.0,
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
-            _pad: [0.0; 3],
+            pre_exposure: self.pre_exposure.value(),
+            _pad: [0.0; 2],
         }
     }
 

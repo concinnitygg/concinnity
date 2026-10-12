@@ -62,7 +62,7 @@ pub(in crate::shader_layout) fn decal() -> Vec<Case> {
     vec![
         on(
             METAL_AND_DIRECTX,
-            mirror!(DecalView => "DecalView" { vp, inv_vp, viewport, _pad, }),
+            mirror!(DecalView => "DecalView" { vp, inv_vp, viewport, pre_exposure, _pad, }),
         ),
         on(
             METAL_AND_DIRECTX,
@@ -83,7 +83,8 @@ pub(in crate::shader_layout) fn line() -> Vec<Case> {
     vec![everywhere(mirror!(LineView => "LineView" {
         vp,
         occluded_alpha,
-        [_pad] => ["_pad0", "_pad1", "_pad2"],
+        pre_exposure,
+        [_pad] => ["_pad1", "_pad2"],
     }))]
 }
 
@@ -185,7 +186,7 @@ pub(in crate::shader_layout) fn particle() -> Vec<Case> {
     vec![
         everywhere(mirror!(ParticleView => "ParticleView" {
             vp,
-            [cam_right, _pad0] => ["cam_right"],
+            [cam_right, pre_exposure] => ["cam_right"],
             [cam_up, _pad1] => ["cam_up"],
         })),
         everywhere(mirror!(GpuParticle => "Particle" {

@@ -1316,6 +1316,7 @@ impl VkContext {
             prefilter_mip_count: self.scene.prefilter_mip_count as f32,
             irradiance: self.irradiance_lane(),
             sky_rot: self.state.view.sky_rot,
+            pre_exposure: self.pre_exposure.value(),
         }
     }
 
@@ -1347,7 +1348,8 @@ impl VkContext {
             prev_vp: [[0.0; 4]; 4],
             view_mat: [[0.0; 4]; 4],
             irradiance: 0.0,
-            _pad: [0.0; 3],
+            pre_exposure: 1.0,
+            _pad: [0.0; 2],
         };
         ubo.write_val(0, &view);
     }

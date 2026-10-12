@@ -921,6 +921,7 @@ impl VkContext {
             sun_color: self.fog.sun_color,
             prefilter_mip_count: self.scene.prefilter_mip_count as f32,
             sky_rot: self.state.view.sky_rot,
+            pre_exposure: self.pre_exposure.value(),
         });
         rt.params_buffers[frame_idx].write_val(0, &params);
 

@@ -34,6 +34,7 @@ struct AtmosphereParams
     float4 sun_illuminance;
     // xyz = the disc's radiance seen from the camera.
     float4 sun_disc;
+    // xyz = the camera's world position, w = the HDR chain's pre-exposure.
     float4 cam_pos;
     // xy = target size in pixels, zw = its reciprocal.
     float4 viewport;

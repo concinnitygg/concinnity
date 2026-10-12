@@ -723,6 +723,7 @@ impl VkContext {
             self.fog.sun_dir,
             self.fog.sun_color,
             viewport_pix,
+            self.pre_exposure.value(),
         );
         // Per-frame FogFroxelParams: world->view matrix + the volume's discrete
         // dimensions + the linear-Z `[near, max_distance]` mapping. `near` is

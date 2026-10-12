@@ -591,7 +591,8 @@ impl VkContext {
             vp,
             inv_vp,
             viewport: viewport_pix,
-            _pad: [0.0; 2],
+            pre_exposure: self.pre_exposure.value(),
+            _pad: 0.0,
         };
         decals.view_ubos[frame_idx].write_val(0, &view_uni);
 

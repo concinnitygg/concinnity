@@ -1244,6 +1244,7 @@ impl DxContext {
                 sun_color: self.fog.sun_color,
                 prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
                 sky_rot: self.state.view.sky_rot,
+                pre_exposure: self.pre_exposure.value(),
             });
             // Traced glass reads the reduced layers back only when the pre-pass
             // below fills them this frame; otherwise it traces in place.

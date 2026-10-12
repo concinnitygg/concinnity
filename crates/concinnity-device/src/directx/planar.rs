@@ -546,7 +546,8 @@ impl DxContext {
                 ambient_occlusion: 0.0,
                 sky_rot: self.state.view.sky_rot,
                 irradiance: self.irradiance_lane(),
-                _pad: [0.0; 3],
+                pre_exposure: 1.0,
+                _pad: [0.0; 2],
             };
             let ring = set.ring_index(slot, params.frame_idx);
             // SAFETY: `ring < planes.len() * frames`; the CBV is 256 bytes and

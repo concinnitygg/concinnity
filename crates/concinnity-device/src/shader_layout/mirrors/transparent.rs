@@ -116,7 +116,7 @@ pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
             prefilter_mip_count,
             sun_shadows,
             trace_divisor,
-            _pad2,
+            pre_exposure,
             cam_pos,
             sun_dir,
             sun_color,
@@ -155,7 +155,8 @@ pub(in crate::shader_layout) fn fog() -> Vec<Case> {
             ambient,
             viewport,
             inv_max_distance,
-            [_pad3] => ["_pad3a", "_pad3b", "_pad3c"],
+            pre_exposure,
+            [_pad3] => ["_pad3b", "_pad3c"],
         })),
         everywhere(mirror!(FogFroxelParams => "FogFroxelParams" {
             view,

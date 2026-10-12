@@ -414,6 +414,7 @@ impl VkContext {
             text,
             bloom: Some(bloom),
             post_process: features.post_process,
+            pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure::UNIT,
             taa,
             post: screen.post,
             upscale,

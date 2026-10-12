@@ -280,6 +280,7 @@ impl DxContext {
                 cam_pos,
                 viewport: [width as f32, height as f32],
                 sky_rot: self.state.view.sky_rot,
+                pre_exposure: self.pre_exposure.value(),
             },
         );
 
@@ -334,7 +335,8 @@ impl DxContext {
             ambient_occlusion: 1.0,
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
-            _pad: [0.0; 3],
+            pre_exposure: self.pre_exposure.value(),
+            _pad: [0.0; 2],
         };
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges

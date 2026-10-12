@@ -156,7 +156,7 @@ impl PostProgram {
             // scene, velocity, history, reactive mask; `TaaParams`.
             PostProgram::TaaResolve => PostProgramBindings {
                 textures: 4,
-                constants: 12,
+                constants: 16,
                 probes: false,
             },
             // scene, normal+depth, roughness, prefilter cube; `SsrParams`.
@@ -178,7 +178,7 @@ impl PostProgram {
             PostProgram::SsgiTrace => ssgi(6),
             // accumulation, pyramid, G-buffer; `SsgiParams`.
             PostProgram::SsgiComposite => ssgi(3),
-            // The scene; the prefix of `PostProcessParams` it reads.
+            // The scene; `PostProcessParams`.
             PostProgram::BloomPrefilter => sources(1, BLOOM_PREFILTER_CONSTANTS),
             // The octave it reduces or expands; no constants.
             PostProgram::BloomDownsample | PostProgram::BloomUpsample => sources(1, 0),
@@ -199,11 +199,10 @@ impl PostProgram {
     }
 }
 
-/// Bytes of `PostProcessParams` the bloom prefilter declares: the leading
-/// bloom, exposure, vignette and grade fields, up to the display-output flags
-/// only the composite reads.
+/// Bytes of `PostProcessParams` the bloom prefilter declares: all of it, since
+/// the pre-exposure it reads comes last.
 pub const BLOOM_PREFILTER_CONSTANTS: usize =
-    core::mem::offset_of!(crate::gfx::render_types::PostProcessParams, hdr_output);
+    core::mem::size_of::<crate::gfx::render_types::PostProcessParams>();
 
 // A program reading `textures` sources and `constants` bytes, without the
 // probe set.
@@ -462,7 +461,7 @@ mod tests {
         // The other half of the contract. The blocks themselves are pinned to
         // the shaders by `shader_layout`'s reflection mirrors, so pinning the
         // declaration to the block reaches the source through them.
-        use core::mem::{offset_of, size_of};
+        use core::mem::size_of;
         let blocks = [
             (PostProgram::TaaResolve, size_of::<TaaParams>()),
             (PostProgram::SsrResolve, size_of::<SsrParams>()),
@@ -470,12 +469,9 @@ mod tests {
             (PostProgram::SsgiReduce, 0),
             (PostProgram::SsgiTrace, size_of::<SsgiParams>()),
             (PostProgram::SsgiComposite, size_of::<SsgiParams>()),
-            // The shader declares `PostProcessParams` through `lut_strength`,
-            // which `shader_layout`'s bloom mirror holds field by field.
-            (
-                PostProgram::BloomPrefilter,
-                offset_of!(PostProcessParams, lut_strength) + size_of::<f32>(),
-            ),
+            // The shader declares all of `PostProcessParams`, which
+            // `shader_layout`'s bloom mirror holds field by field.
+            (PostProgram::BloomPrefilter, size_of::<PostProcessParams>()),
             (PostProgram::BloomDownsample, 0),
             (PostProgram::BloomUpsample, 0),
             (PostProgram::ReflectionBlur, 0),

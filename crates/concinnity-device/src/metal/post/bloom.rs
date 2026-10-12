@@ -49,7 +49,7 @@ impl MtlContext {
                 top,
                 top_ref: top,
             },
-            &self.post_process,
+            &self.pre_exposure.post_params(&self.post_process),
         )?;
         Ok(0)
     }

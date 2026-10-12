@@ -755,6 +755,8 @@ pub(crate) struct DxContext {
     // Post-process tunables (bloom / exposure / vignette). Drives whether the
     // bloom chain runs and feeds the bloom-prefilter + composite root constants.
     pub(super) post_process: render_types::PostProcessParams,
+    // The scale the frame's HDR chain is written at, advanced once per frame.
+    pub(super) pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure,
 
     // Unified geometry G-buffer pre-pass. `Some` whenever any screen-space
     // consumer (SSR, SSGI, SSAO, TAA, or temporal upscaling) is enabled: one

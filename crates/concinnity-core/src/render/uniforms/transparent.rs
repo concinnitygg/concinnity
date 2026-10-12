@@ -17,7 +17,9 @@ pub struct TransparentView {
     pub vp: [[f32; 4]; 4],
     /// Inverse view-projection matrix, column-major.
     pub inv_vp: [[f32; 4]; 4],
-    /// World-space camera position (xyz). `.w` is ignored by the shader.
+    /// World-space camera position (xyz); `w` is the scale the HDR chain is
+    /// written at: the scene snapshot is divided by it, the pass's output
+    /// multiplied.
     pub camera_pos: [f32; 4],
     /// Render-target width / height in pixels: the shader uses this to
     /// turn its fragment position into a normalized screen UV.
@@ -49,7 +51,7 @@ impl TransparentView {
         Self {
             vp: camera.vp,
             inv_vp: camera.inv_vp,
-            camera_pos: [c[0], c[1], c[2], 0.0],
+            camera_pos: [c[0], c[1], c[2], camera.pre_exposure],
             viewport: camera.viewport,
             time: camera.time,
             prefilter_mip_count: camera.prefilter_mip_count,
@@ -293,7 +295,7 @@ mod tests {
         let view = TransparentView::new(&camera, &lights);
         assert_eq!(view.vp, camera.vp);
         assert_eq!(view.inv_vp, camera.inv_vp);
-        assert_eq!(view.camera_pos, [3.0, 4.0, 5.0, 0.0]);
+        assert_eq!(view.camera_pos, [3.0, 4.0, 5.0, camera.pre_exposure]);
         assert_eq!(view.viewport, camera.viewport);
         assert_eq!(view.time, camera.time);
         assert_eq!(view.prefilter_mip_count, camera.prefilter_mip_count);

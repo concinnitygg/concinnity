@@ -42,8 +42,11 @@ pub struct RaymarchView {
     /// `EnvironmentMap` or an `Atmosphere`; 0 means the ambient helper takes
     /// its hemispheric fallback.
     pub irradiance: f32,
+    /// The scale the HDR chain is written at; the scene a surface shows
+    /// through is divided by it, what the pass writes multiplied.
+    pub pre_exposure: f32,
     /// Padding completing the lane `irradiance` opens.
-    pub _pad: [f32; 3],
+    pub _pad: [f32; 2],
 }
 
 impl RaymarchView {
@@ -63,7 +66,8 @@ impl RaymarchView {
             prev_vp: camera.vp,
             view_mat: IDENTITY,
             irradiance: camera.irradiance,
-            _pad: [0.0; 3],
+            pre_exposure: camera.pre_exposure,
+            _pad: [0.0; 2],
         }
     }
 
@@ -155,6 +159,7 @@ mod tests {
         assert_eq!(view.prev_vp, camera.vp);
         assert_eq!(view.view_mat, IDENTITY);
         assert_eq!(view.irradiance, camera.irradiance);
+        assert_eq!(view.pre_exposure, camera.pre_exposure);
     }
 
     #[test]

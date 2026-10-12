@@ -525,7 +525,8 @@ impl VkContext {
         let view_uni = LineView {
             vp,
             occluded_alpha: OCCLUDED_ALPHA,
-            _pad: [0.0; 3],
+            pre_exposure: self.pre_exposure.value(),
+            _pad: [0.0; 2],
         };
         lines.view_ubos[frame_idx].write_val(0, &view_uni);
         slot.buffer.write_slice(0, vertices);

@@ -95,6 +95,7 @@ impl MtlContext {
                 scene: scene_input,
                 velocity,
                 reactive: reactive_written.then(|| self.targets.hdr.reactive_mask.as_ref()),
+                history_scale: self.pre_exposure.history_scale(),
             },
         )?;
         Ok(0)

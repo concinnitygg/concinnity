@@ -65,7 +65,25 @@ SamplerState cube_sampler : register(s2);
 
 #endif
 
-float4 scene_sample(float2 uv) { return scene_color.Sample(scene_color_sampler, uv); }
+// The HDR chain's pre-exposure: the snapshot is divided by it so producers
+// shade in absolute radiance, and what they write is multiplied by it.
+float pre_exposure() { return view.camera_pos.w; }
+
+float4 scene_sample(float2 uv)
+{
+    float4 c = scene_color.Sample(scene_color_sampler, uv);
+    return float4(c.rgb / pre_exposure(), c.a);
+}
+
+// A producer's straight-alpha color, in absolute radiance, and its reactive
+// share, as the pass writes them.
+TransparentOut transparent_out(float4 color, float reactive)
+{
+    TransparentOut o;
+    o.color = float4(color.rgb * pre_exposure(), color.a);
+    o.reactive = reactive_write(reactive);
+    return o;
+}
 float3 prefilter_level(float3 dir, float lod)
 {
     return prefilter_cube.SampleLevel(prefilter_cube_sampler, SKY_DIR(dir), lod).rgb;

@@ -33,7 +33,9 @@ struct DecalView
     float4x4 inv_vp;
     // Attachment width, height in pixels.
     float2 viewport;
-    float2 _pad;
+    // The scale the HDR chain is written at.
+    float pre_exposure;
+    float _pad;
 };
 
 // Per-decal uniforms, 160 B. Mirrors `DecalParams`.
@@ -144,5 +146,5 @@ float4 decal_fragment(DecalVertexOut i) : SV_Target
     uv.y = 1.0 - uv.y;
     float4 tex = decal_tex.Sample(decal_tex_sampler, uv);
 
-    return float4(tex.rgb * params.tint.rgb, tex.a * params.tint.a * fade);
+    return float4(tex.rgb * params.tint.rgb * view.pre_exposure, tex.a * params.tint.a * fade);
 }

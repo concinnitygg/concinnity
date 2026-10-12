@@ -95,7 +95,7 @@ impl fullscreen::CompositeEncoder for VkContext {
                 self.state.view.view_distance,
             );
             let composite = CompositeParams {
-                post: self.post_process,
+                post: self.pre_exposure.post_params(&self.post_process),
                 fade: self.state.view.scene_fade,
                 view_mode: if self.state.view.mode.is_gbuffer_channel() {
                     self.state.view.mode as u32

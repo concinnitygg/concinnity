@@ -36,7 +36,8 @@ struct LineView
     // occluded lines outright; a small value leaves a hint of the line showing
     // through, which is what makes it useful for orienting in a dense scene.
     float occluded_alpha;
-    float _pad0;
+    // The scale the HDR chain is written at.
+    float pre_exposure;
     float _pad1;
     float _pad2;
 };
@@ -107,5 +108,5 @@ float4 line_fragment(LineVertexOut i) : SV_Target
     {
         discard;
     }
-    return float4(i.color.rgb, alpha);
+    return float4(i.color.rgb * view.pre_exposure, alpha);
 }

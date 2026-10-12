@@ -443,6 +443,7 @@ impl DxContext {
             composite,
             bloom: Some(bloom),
             post_process: features.post_process,
+            pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure::UNIT,
             gbuffer,
             taa,
             ssao,

@@ -2,8 +2,10 @@
 //! luminance histogram the backends measure a frame with, and the running EMA
 //! that turns that measurement into the next frame's exposure.
 
+mod pre_exposure;
 mod state;
 
+pub use pre_exposure::PreExposure;
 pub use state::{
     AutoExposureState, ExposureAdaptation, HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN,
 };

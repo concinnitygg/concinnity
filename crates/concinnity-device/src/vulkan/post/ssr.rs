@@ -8,7 +8,7 @@
 use ash::vk;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::device::PostPassDevice;
-use concinnity_core::render::post::ssr::settings::SsrSettings;
+use concinnity_core::render::post::ssr::settings::{SsrParamsInputs, SsrSettings};
 use concinnity_core::render::post::ssr::{SsrInputs, SsrPass, target_desc};
 
 use crate::vulkan::context::VkContext;
@@ -95,14 +95,15 @@ impl VkContext {
             [v[0][2], v[1][2], v[2][2], 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let params = settings.params(
+        let params = settings.params(SsrParamsInputs {
             fov_y_radians,
             aspect,
             inv_view_rot,
             cam_pos,
-            self.scene.prefilter_mip_count as f32,
-            self.state.view.sky_rot,
-        );
+            prefilter_mip_count: self.scene.prefilter_mip_count as f32,
+            sky_rot: self.state.view.sky_rot,
+            pre_exposure: self.pre_exposure.value(),
+        });
         let device = self.post_device(frame_idx);
         let scene =
             &self.targets.hdr_resolve_images[frame_idx % self.targets.hdr_resolve_images.len()];

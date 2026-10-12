@@ -720,7 +720,7 @@ impl PostProcessTunables {
 /// defaults), plus the two display-output flags the backend resolves from the
 /// display's EDR capability at init. Pushed verbatim to the bloom prefilter and
 /// composite fragment shaders, so the layout must stay in sync with the
-/// `PostUniforms` struct in those shaders. 36 bytes.
+/// `PostUniforms` struct in those shaders. 40 bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct PostProcessParams {
@@ -760,6 +760,11 @@ pub struct PostProcessParams {
     /// `Off`. Always ignored on the HDR path, which never runs FXAA. Stored
     /// as a float so the shader branches on `> 0.5` without a cast.
     pub fxaa: f32,
+    /// The scale the HDR chain is written at; 1.0 here. The shaders' copy
+    /// ([`crate::gfx::auto_exposure::PreExposure::post_params`]) carries the
+    /// frame's value, with it divided out of `exposure`, and the bloom
+    /// prefilter divides it out of its firefly weight.
+    pub pre_exposure: f32,
 }
 
 impl PostProcessParams {
@@ -790,7 +795,7 @@ impl PostProcessParams {
 /// Fragment constants for the composite pass: the authored post-process
 /// tunables plus the scene-transition fade the backend owns. Pushed verbatim to
 /// the composite fragment shader, so the layout must stay in sync with the
-/// `CompositeParams` struct there. 56 bytes.
+/// `CompositeParams` struct there. 60 bytes.
 ///
 /// The fade is not a `PostProcessParams` field because that struct is resolved
 /// from the `PostProcessConfig` asset and re-pushed whenever a settings slider
@@ -879,8 +884,9 @@ pub struct SsrParams {
     /// IBL prefilter cubemap mip count. 0 when no EnvironmentMap is bound: the
     /// resolve then skips the cube fallback and keeps the base shading instead.
     pub prefilter_mip_count: f32,
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad: f32,
+    /// The scale the HDR chain is written at; the probe and sky fallback,
+    /// absolute radiance, is multiplied by it to match the scene taps.
+    pub pre_exposure: f32,
     /// Camera-to-world transform (column-major, the rigid inverse of the view
     /// matrix): the orthonormal 3x3 turns a view-space reflection ray into the
     /// world-space direction the cubemap is sampled with, and the translation
@@ -924,8 +930,11 @@ pub struct SsgiParams {
     pub levels: u32,
     /// Render-resolution divisor of the trace.
     pub gi_scale: u32,
+    /// What last frame's accumulation is multiplied by to read at this
+    /// frame's pre-exposure ([`crate::gfx::auto_exposure::PreExposure::history_scale`]).
+    pub history_scale: f32,
     /// Tail padding to a 16-byte multiple.
-    pub _pad: [u32; 2],
+    pub _pad: u32,
 }
 
 /// Per-frame uniform for the hardware ray-traced reflection pass. Like
@@ -958,8 +967,9 @@ pub struct RtParams {
     /// Per-axis divisor of the reduced glass reflection pre-pass; 1.0 when
     /// glass traces its reflection in place.
     pub trace_divisor: f32,
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad2: f32,
+    /// The scale the HDR chain is written at; the reflection pass shades in
+    /// absolute radiance and multiplies what it writes by it.
+    pub pre_exposure: f32,
     /// World-space camera position (`xyz`); the reflection ray origin. `w` unused.
     pub cam_pos: [f32; 4],
     /// World-space unit direction *toward* the sun (`xyz`); the hit-shading N·L
@@ -1086,8 +1096,11 @@ pub struct FogParams {
     /// Pre-computed reciprocal of `max_distance`; the shader uses it to skip
     /// a per-step `1 / max_distance` divide.
     pub inv_max_distance: f32,
+    /// The scale the HDR chain is written at; the fog's in-scattered light is
+    /// multiplied by it as it blends over the scene.
+    pub pre_exposure: f32,
     /// Padding so the field layout matches the shader-side struct.
-    pub _pad3: [f32; 3],
+    pub _pad3: [f32; 2],
 }
 
 /// Per-frame uniform consumed by the volumetric-fog froxel compute kernel and
@@ -1955,18 +1968,38 @@ mod tests {
         assert_eq!(albedo_pool_index(0, 0), 0);
     }
 
-    // Thirteen scalars: the post tunables, the fade, the view selector and the
-    // depth view's two distances.
+    // Three float4 lanes of scalars after the four vector lanes; the
+    // pre-exposure opens the last one.
+    #[test]
+    fn fog_params_layout_matches_the_shader() {
+        assert_eq!(size_of::<FogParams>(), 176);
+        assert_eq!(offset_of!(FogParams, color), 64);
+        assert_eq!(offset_of!(FogParams, cam_pos), 80);
+        assert_eq!(offset_of!(FogParams, sun_dir), 96);
+        assert_eq!(offset_of!(FogParams, sun_color), 112);
+        assert_eq!(offset_of!(FogParams, density), 128);
+        assert_eq!(offset_of!(FogParams, ambient), 148);
+        assert_eq!(offset_of!(FogParams, viewport), 152);
+        assert_eq!(offset_of!(FogParams, inv_max_distance), 160);
+        assert_eq!(offset_of!(FogParams, pre_exposure), 164);
+        assert_eq!(offset_of!(FogParams, _pad3), 168);
+    }
+
+    // Fifteen scalars: the post tunables with the pre-exposure, the fade, the
+    // view selector, the depth view's two distances and the reactive flag.
     #[test]
     fn composite_params_layout_matches_shaders() {
-        assert_eq!(size_of::<CompositeParams>(), 56);
+        assert_eq!(size_of::<CompositeParams>(), 60);
         assert_eq!(offset_of!(CompositeParams, post), 0);
-        assert_eq!(size_of::<PostProcessParams>(), 36);
-        assert_eq!(offset_of!(CompositeParams, fade), 36);
-        assert_eq!(offset_of!(CompositeParams, view_mode), 40);
-        assert_eq!(offset_of!(CompositeParams, depth_near), 44);
-        assert_eq!(offset_of!(CompositeParams, depth_far), 48);
-        assert_eq!(offset_of!(CompositeParams, reactive_valid), 52);
+        assert_eq!(size_of::<PostProcessParams>(), 40);
+        assert_eq!(offset_of!(PostProcessParams, exposure), 12);
+        assert_eq!(offset_of!(PostProcessParams, fxaa), 32);
+        assert_eq!(offset_of!(PostProcessParams, pre_exposure), 36);
+        assert_eq!(offset_of!(CompositeParams, fade), 40);
+        assert_eq!(offset_of!(CompositeParams, view_mode), 44);
+        assert_eq!(offset_of!(CompositeParams, depth_near), 48);
+        assert_eq!(offset_of!(CompositeParams, depth_far), 52);
+        assert_eq!(offset_of!(CompositeParams, reactive_valid), 56);
     }
 
     #[test]
@@ -2142,7 +2175,7 @@ mod tests {
         assert_eq!(offset_of!(SsrParams, stride), 16);
         assert_eq!(offset_of!(SsrParams, thickness), 20);
         assert_eq!(offset_of!(SsrParams, prefilter_mip_count), 24);
-        assert_eq!(offset_of!(SsrParams, _pad), 28);
+        assert_eq!(offset_of!(SsrParams, pre_exposure), 28);
         assert_eq!(offset_of!(SsrParams, inv_view), 32);
         assert_eq!(offset_of!(SsrParams, sky_rot), 96);
         assert_eq!(size_of::<SsrParams>() % 16, 0);
@@ -2170,7 +2203,8 @@ mod tests {
         assert_eq!(offset_of!(SsgiParams, frame), 28);
         assert_eq!(offset_of!(SsgiParams, levels), 32);
         assert_eq!(offset_of!(SsgiParams, gi_scale), 36);
-        assert_eq!(offset_of!(SsgiParams, _pad), 40);
+        assert_eq!(offset_of!(SsgiParams, history_scale), 40);
+        assert_eq!(offset_of!(SsgiParams, _pad), 44);
     }
 
     // The RT kernel's parameter block, with every vec3 padded to a float4.
@@ -2184,7 +2218,7 @@ mod tests {
         assert_eq!(offset_of!(RtParams, prefilter_mip_count), 16);
         assert_eq!(offset_of!(RtParams, sun_shadows), 20);
         assert_eq!(offset_of!(RtParams, trace_divisor), 24);
-        assert_eq!(offset_of!(RtParams, _pad2), 28);
+        assert_eq!(offset_of!(RtParams, pre_exposure), 28);
         assert_eq!(offset_of!(RtParams, cam_pos), 32);
         assert_eq!(offset_of!(RtParams, sun_dir), 48);
         assert_eq!(offset_of!(RtParams, sun_color), 64);

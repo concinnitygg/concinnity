@@ -82,9 +82,12 @@ impl DxContext {
         // With no G-buffer there is nothing to trace against, so skip rather
         // than read a stale descriptor.
         let Some(gbuffer) = &self.gbuffer else { return };
-        let params = ssgi
-            .settings
-            .params(fov_y_radians, aspect, ssgi.pass.frame());
+        let params = ssgi.settings.params(
+            fov_y_radians,
+            aspect,
+            ssgi.pass.frame(),
+            self.pre_exposure.history_scale(),
+        );
         let device = self.post_device(frame_idx);
         let normal_depth = gbuffer.normal_depth_srv_gpu;
         if let Err(e) = ssgi

@@ -500,6 +500,7 @@ impl DxContext {
             self.fog.sun_dir,
             self.fog.sun_color,
             viewport,
+            self.pre_exposure.value(),
         );
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
         // init sized for this payload, and the source is a separate live value, so the ranges

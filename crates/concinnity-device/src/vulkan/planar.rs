@@ -758,7 +758,8 @@ impl VkContext {
                 ambient_occlusion: 0.0,
                 sky_rot: self.state.view.sky_rot,
                 irradiance: self.irradiance_lane(),
-                _pad: [0.0; 3],
+                pre_exposure: 1.0,
+                _pad: [0.0; 2],
             };
             let ring = slot * set.frames + params.frame_idx;
             set.view_bufs[ring].write_val(0, &view);

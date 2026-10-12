@@ -4,7 +4,7 @@
 use crate::gfx::auto_exposure::{AutoExposureSettings, HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN};
 
 /// Input to the TAA resolve fragment shader. Matches `TaaParams` in
-/// `shaders/taa.hlsl`. 12 bytes.
+/// `shaders/taa.hlsl`. 16 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TaaParams {
@@ -17,10 +17,12 @@ pub struct TaaParams {
     /// Thin-feature lock lost per frame the feature is not seen: one over
     /// [`crate::gfx::jitter::TAA_CYCLE`].
     pub lock_decay: f32,
+    /// What the history is multiplied by to read at this frame's pre-exposure.
+    pub history_scale: f32,
 }
 
 /// Input to the auto-exposure histogram kernels: the three luminance-mapping
-/// scalars then a pad rounding to 16 bytes. Matches `AutoExposureParams` in
+/// scalars, then the pre-exposure the measured scene was written at. Matches `AutoExposureParams` in
 /// `shaders/auto_exposure.hlsl`.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
@@ -32,8 +34,9 @@ pub struct AutoExposureParams {
     /// `HISTOGRAM_BINS / lum_log2_range`. The build kernel multiplies the
     /// centered log-luminance by this to derive a bin index.
     pub lum_to_bin_scale: f32,
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad: f32,
+    /// The scale the measured HDR chain was written at; the build kernel
+    /// divides it out, so the histogram holds absolute luminance.
+    pub pre_exposure: f32,
 }
 
 impl AutoExposureParams {
@@ -47,14 +50,18 @@ impl AutoExposureParams {
             lum_log2_min: floor,
             lum_log2_range: LUM_LOG2_MAX - floor,
             lum_to_bin_scale: HISTOGRAM_BINS as f32 / (LUM_LOG2_MAX - floor),
-            _pad: 0.0,
+            pre_exposure: 1.0,
         }
     }
 
     /// The histogram a renderer adapting with `settings` builds (the default
-    /// one without auto-exposure).
-    pub fn for_settings(settings: Option<&AutoExposureSettings>) -> Self {
-        settings.map_or(Self::HISTOGRAM, |s| Self::spanning(s.histogram_floor()))
+    /// one without auto-exposure) over a scene written at `pre_exposure`.
+    pub fn for_settings(settings: Option<&AutoExposureSettings>, pre_exposure: f32) -> Self {
+        let span = settings.map_or(Self::HISTOGRAM, |s| Self::spanning(s.histogram_floor()));
+        Self {
+            pre_exposure,
+            ..span
+        }
     }
 }
 
@@ -95,10 +102,11 @@ mod tests {
 
     #[test]
     fn taa_params_layout_matches_shader() {
-        assert_eq!(size_of::<TaaParams>(), 12);
+        assert_eq!(size_of::<TaaParams>(), 16);
         assert_eq!(offset_of!(TaaParams, history_valid), 0);
         assert_eq!(offset_of!(TaaParams, reactive_max), 4);
         assert_eq!(offset_of!(TaaParams, lock_decay), 8);
+        assert_eq!(offset_of!(TaaParams, history_scale), 12);
     }
 
     // Both Hi-Z param blocks are four tightly-packed uints, which is what the
@@ -127,7 +135,7 @@ mod tests {
         assert_eq!(offset_of!(AutoExposureParams, lum_log2_min), 0);
         assert_eq!(offset_of!(AutoExposureParams, lum_log2_range), 4);
         assert_eq!(offset_of!(AutoExposureParams, lum_to_bin_scale), 8);
-        assert_eq!(offset_of!(AutoExposureParams, _pad), 12);
+        assert_eq!(offset_of!(AutoExposureParams, pre_exposure), 12);
     }
 
     // The scale maps the whole log-luminance span onto exactly the bin count.
@@ -138,5 +146,14 @@ mod tests {
         assert_eq!(p.lum_log2_range, LUM_LOG2_MAX - LUM_LOG2_MIN);
         let bins = p.lum_to_bin_scale * p.lum_log2_range;
         assert!((bins - HISTOGRAM_BINS as f32).abs() < 1e-4, "{bins}");
+        assert_eq!(p.pre_exposure, 1.0);
+    }
+
+    // The pre-exposure rides along whichever span the settings pick.
+    #[test]
+    fn for_settings_carries_the_pre_exposure() {
+        let p = AutoExposureParams::for_settings(None, 8.0);
+        assert_eq!(p.lum_log2_min, LUM_LOG2_MIN);
+        assert_eq!(p.pre_exposure, 8.0);
     }
 }

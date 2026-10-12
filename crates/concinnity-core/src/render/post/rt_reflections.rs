@@ -69,6 +69,8 @@ pub struct RtParamsInputs {
     /// Rows of the sky's inverse rotation, so a missed ray samples the same
     /// oriented sky the main pass shows. Identity when the sky does not turn.
     pub sky_rot: [[f32; 4]; 3],
+    /// The scale the HDR chain is written at.
+    pub pre_exposure: f32,
 }
 
 impl RtReflectionSettings {
@@ -115,6 +117,7 @@ impl RtReflectionSettings {
             sun_color,
             prefilter_mip_count,
             sky_rot,
+            pre_exposure,
         } = inputs;
         let inv_view = camera_to_world(inv_view_rot, cam_pos);
         let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
@@ -126,7 +129,7 @@ impl RtReflectionSettings {
             prefilter_mip_count,
             sun_shadows: if self.sun_shadows { 1.0 } else { 0.0 },
             trace_divisor: self.divisor.max(1) as f32,
-            _pad2: 0.0,
+            pre_exposure,
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
             sun_dir: [sun_dir[0], sun_dir[1], sun_dir[2], 0.0],
             sun_color: [sun_color[0], sun_color[1], sun_color[2], 0.0],
@@ -213,6 +216,7 @@ mod tests {
             sun_color: [1.0; 3],
             prefilter_mip_count: 0.0,
             sky_rot: SkyOrientation::IDENTITY_ROWS,
+            pre_exposure: 1.0,
         };
         let on = RtReflectionSettings::resolve(0.7, 40.0);
         assert_eq!(on.params(inputs).sun_shadows, 1.0);
@@ -234,6 +238,7 @@ mod tests {
             sun_color: [1.0; 3],
             prefilter_mip_count: 0.0,
             sky_rot: SkyOrientation::IDENTITY_ROWS,
+            pre_exposure: 1.0,
         };
         let full = RtReflectionSettings::resolve(0.7, 40.0);
         assert_eq!(full.params(inputs).trace_divisor, 1.0);
@@ -271,6 +276,7 @@ mod tests {
             sun_color: [1.0, 0.9, 0.8],
             prefilter_mip_count: 6.0,
             sky_rot: SkyOrientation::IDENTITY_ROWS,
+            pre_exposure: 1.0,
         });
         assert_eq!(p.intensity, 0.8);
         assert_eq!(p.max_distance, 40.0);
@@ -297,6 +303,7 @@ mod tests {
             sun_color: [1.0, 1.0, 1.0],
             prefilter_mip_count: 6.0,
             sky_rot: SkyOrientation::IDENTITY_ROWS,
+            pre_exposure: 1.0,
         });
         assert_eq!(p.inv_view[3], [3.0, 4.0, 5.0, 1.0]);
         // The rotation columns are untouched.
@@ -315,6 +322,7 @@ mod tests {
             sun_color: [1.0, 1.0, 1.0],
             prefilter_mip_count: 0.0,
             sky_rot: SkyOrientation::IDENTITY_ROWS,
+            pre_exposure: 1.0,
         });
         assert!(p.aspect >= MIN_ASPECT);
     }

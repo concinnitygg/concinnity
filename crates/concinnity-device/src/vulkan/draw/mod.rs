@@ -359,6 +359,7 @@ impl VkContext {
                 cam_pos,
                 viewport: [extent.width as f32, extent.height as f32],
                 sky_rot: self.state.view.sky_rot,
+                pre_exposure: self.pre_exposure.value(),
             },
         );
 
@@ -412,7 +413,8 @@ impl VkContext {
             ambient_occlusion: 1.0,
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
-            _pad: [0.0; 3],
+            pre_exposure: self.pre_exposure.value(),
+            _pad: [0.0; 2],
         };
         self.uniforms.view_ubo_buffers[frame_idx].write_val(0, &view_uni);
 

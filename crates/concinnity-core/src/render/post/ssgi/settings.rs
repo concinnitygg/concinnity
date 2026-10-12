@@ -119,8 +119,15 @@ impl SsgiSettings {
     /// and where the pass's accumulation stands. `fov_y_radians` is the
     /// vertical field of view and `aspect` the viewport width / height ratio:
     /// together they give the view-ray scale the trace needs to project a
-    /// view-space ray point to a UV.
-    pub fn params(&self, fov_y_radians: f32, aspect: f32, frame: SsgiFrame) -> SsgiParams {
+    /// view-space ray point to a UV. `history_scale` rescales last frame's
+    /// accumulation to this frame's pre-exposure.
+    pub fn params(
+        &self,
+        fov_y_radians: f32,
+        aspect: f32,
+        frame: SsgiFrame,
+        history_scale: f32,
+    ) -> SsgiParams {
         let (tan_half_fov_y, aspect) = view_ray_scale(fov_y_radians, aspect);
         SsgiParams {
             intensity: self.intensity,
@@ -133,7 +140,8 @@ impl SsgiSettings {
             frame: frame.frame,
             levels: frame.levels,
             gi_scale: self.gi_scale,
-            _pad: [0; 2],
+            history_scale,
+            _pad: 0,
         }
     }
 }
@@ -262,7 +270,7 @@ mod tests {
     #[test]
     fn params_carry_the_tunables_the_camera_and_the_frame() {
         let s = SsgiSettings::resolve(0.6, 12.0, 2, 2);
-        let p = s.params(core::f32::consts::FRAC_PI_2, 1.6, FRAME);
+        let p = s.params(core::f32::consts::FRAC_PI_2, 1.6, FRAME, 2.0);
         assert_eq!(p.intensity, 0.6);
         assert_eq!(p.max_distance, 12.0);
         // A 90-degree vertical FOV has tan(45 deg) == 1.
@@ -272,25 +280,26 @@ mod tests {
         assert_eq!(p.rays, 2);
         assert_eq!(p.gi_scale, 2);
         assert_eq!((p.frame, p.levels, p.history_valid), (7, 5, 1.0));
+        assert_eq!(p.history_scale, 2.0);
 
         let fresh = SsgiFrame {
             history_valid: false,
             ..FRAME
         };
-        assert_eq!(s.params(1.0, 1.0, fresh).history_valid, 0.0);
+        assert_eq!(s.params(1.0, 1.0, fresh, 1.0).history_valid, 0.0);
     }
 
     #[test]
     fn the_thickness_scales_with_the_reach() {
-        let near = SsgiSettings::resolve(0.6, 6.0, 1, 2).params(1.0, 1.0, FRAME);
-        let far = SsgiSettings::resolve(0.6, 12.0, 1, 2).params(1.0, 1.0, FRAME);
+        let near = SsgiSettings::resolve(0.6, 6.0, 1, 2).params(1.0, 1.0, FRAME, 1.0);
+        let far = SsgiSettings::resolve(0.6, 12.0, 1, 2).params(1.0, 1.0, FRAME, 1.0);
         assert!((far.thickness - 2.0 * near.thickness).abs() < 1.0e-5);
     }
 
     #[test]
     fn params_floor_a_degenerate_aspect() {
         let s = SsgiSettings::resolve(0.6, 8.0, DEFAULT_RAYS, 1);
-        let p = s.params(core::f32::consts::FRAC_PI_2, 0.0, FRAME);
+        let p = s.params(core::f32::consts::FRAC_PI_2, 0.0, FRAME, 1.0);
         assert!(p.aspect >= MIN_ASPECT);
     }
 }

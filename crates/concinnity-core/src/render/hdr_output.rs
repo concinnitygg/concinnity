@@ -133,6 +133,7 @@ impl HdrOutputMode {
             hdr_output: self.shader_flag(),
             pq_output: self.pq_flag(),
             fxaa: tunables.fxaa,
+            pre_exposure: 1.0,
         }
     }
 }

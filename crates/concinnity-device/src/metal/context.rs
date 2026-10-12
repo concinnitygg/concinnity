@@ -646,6 +646,8 @@ pub(crate) struct MtlContext {
     // the bloom prefilter and composite fragment shaders. `bloom_intensity`
     // of 0 skips the bloom passes entirely.
     pub(super) post_process: render_types::PostProcessParams,
+    // The scale the frame's HDR chain is written at, advanced once per frame.
+    pub(super) pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure,
     // Temporal-anti-aliasing feature state: the toggle, resolve pipeline,
     // ping-pong history buffers, and per-frame bookkeeping. See [`TaaState`].
     pub(super) taa: TaaState,

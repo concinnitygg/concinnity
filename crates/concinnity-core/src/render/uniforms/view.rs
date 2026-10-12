@@ -24,6 +24,9 @@ pub struct PassCamera {
     /// Rows of the rotation taking a world direction into the environment
     /// cubemaps' baked frame.
     pub sky_rot: [[f32; 4]; 3],
+    /// The scale the frame's HDR chain is written at
+    /// ([`crate::gfx::auto_exposure::PreExposure`]).
+    pub pre_exposure: f32,
 }
 
 /// Per-frame view-projection uniforms, uploaded once per frame and shared across
@@ -77,8 +80,14 @@ pub struct ViewUniforms {
     /// light (an environment map's, or an atmosphere's), so surfaces take
     /// their ambient light from it; 0.0 falls back to a flat ambient.
     pub irradiance: f32,
+    /// The scale the pass's color target is written at
+    /// ([`crate::gfx::auto_exposure::PreExposure`]): the frame's pre-exposure
+    /// for the main pass, 1.0 for a probe or mirror face, which stays
+    /// absolute. Occupies what was pad space, so the offsets in the
+    /// user-shader binding contract are unchanged.
+    pub pre_exposure: f32,
     /// Pads the block to a whole `float4`.
-    pub _pad: [f32; 3],
+    pub _pad: [f32; 2],
 }
 
 /// Per-frame view inputs to the unified G-buffer pre-pass. The jittered current
@@ -150,6 +159,7 @@ pub(super) fn test_camera() -> PassCamera {
         prefilter_mip_count: 7.0,
         irradiance: 1.0,
         sky_rot: [[8.0; 4]; 3],
+        pre_exposure: 9.5,
     }
 }
 
@@ -175,7 +185,8 @@ mod tests {
         // A float4 array is 16-byte aligned on every target.
         assert_eq!(offset_of!(ViewUniforms, sky_rot), 160);
         assert_eq!(offset_of!(ViewUniforms, irradiance), 208);
-        assert_eq!(offset_of!(ViewUniforms, _pad), 212);
+        assert_eq!(offset_of!(ViewUniforms, pre_exposure), 212);
+        assert_eq!(offset_of!(ViewUniforms, _pad), 216);
         assert_eq!(size_of::<ViewUniforms>() % 16, 0);
     }
 

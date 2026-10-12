@@ -112,7 +112,10 @@ float3 prefilter_sample_lod(float3 d, float lod)
 {
     return prefilter_cube.SampleLevel(cube_samp, d, lod).rgb;
 }
-float3 scene_sample(float2 uv) { return scene_color.SampleLevel(scene_samp, uv, 0.0).rgb; }
+float3 scene_sample(float2 uv)
+{
+    return scene_color.SampleLevel(scene_samp, uv, 0.0).rgb / view_cb.pre_exposure;
+}
 
 #else
 
@@ -128,7 +131,10 @@ float3 prefilter_sample_lod(float3 d, float lod)
 {
     return prefilter_cube.SampleLevel(cube_samp, d, lod).rgb;
 }
-float3 scene_sample(float2 uv) { return scene_color.SampleLevel(scene_samp, uv, 0.0).rgb; }
+float3 scene_sample(float2 uv)
+{
+    return scene_color.SampleLevel(scene_samp, uv, 0.0).rgb / view_cb.pre_exposure;
+}
 
 #endif
 
@@ -244,7 +250,7 @@ void raymarch_surface(RaymarchVertexOut input, out float4 color, out float depth
     // Reprojecting through the same matrix the proxy rasterized with puts the
     // hit in the rasterized geometry's depth space exactly.
     float4 hit_clip = mul(VIEW.vp, float4(hit_pos, 1.0));
-    color = float4(lit, 1.0);
+    color = float4(lit * VIEW.pre_exposure, 1.0);
     depth = hit_clip.z / max(hit_clip.w, 1e-6);
 }
 
@@ -337,7 +343,7 @@ float4 raymarch_volumetric_fragment(RaymarchVertexOut input) : SV_Target
 
     float alpha = 1.0 - transmittance;
     if (alpha < 0.005) discard;
-    return float4(luminance, alpha);
+    return float4(luminance * VIEW.pre_exposure, alpha);
 }
 
 #endif

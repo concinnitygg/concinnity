@@ -465,7 +465,7 @@ float4 aerial_perspective_fragment(
     float slice = aerial_slice_of(distance) * float(AERIAL_SIZE);
     float fade = saturate(slice * 2.0);
     float w = max(slice, 0.5) / float(AERIAL_SIZE);
-    float4 haze = aerial_volume.SampleLevel(lut_sampler, float3(uv, w), 0.0);
-    return haze * fade;
+    float4 haze = aerial_volume.SampleLevel(lut_sampler, float3(uv, w), 0.0) * fade;
+    return float4(haze.rgb * ATMO.cam_pos.w, haze.a);
 }
 #endif

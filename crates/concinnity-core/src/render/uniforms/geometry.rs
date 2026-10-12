@@ -13,8 +13,11 @@ pub struct DecalView {
     pub inv_vp: [[f32; 4]; 4],
     /// HDR target dimensions in pixels: drives the screen->NDC conversion.
     pub viewport: [f32; 2],
+    /// The scale the HDR chain is written at; the stamped color is multiplied
+    /// by it.
+    pub pre_exposure: f32,
     /// Padding so the field layout matches the shader-side struct.
-    pub _pad: [f32; 2],
+    pub _pad: f32,
 }
 
 /// Per-decal uniforms uploaded before each draw. Matches `DecalParams` in
@@ -48,8 +51,11 @@ pub struct LineView {
     pub vp: [[f32; 4]; 4],
     /// Alpha multiplier applied where a line falls behind scene geometry.
     pub occluded_alpha: f32,
+    /// The scale the HDR chain is written at; the line color is multiplied by
+    /// it.
+    pub pre_exposure: f32,
     /// Padding so the field layout matches the shader-side struct.
-    pub _pad: [f32; 3],
+    pub _pad: [f32; 2],
 }
 
 /// Per-frame view inputs to the particle render pass. Matches `ParticleView` in
@@ -60,10 +66,11 @@ pub struct ParticleView {
     /// View-projection matrix used by the main pass.
     pub vp: [[f32; 4]; 4],
     /// World-space camera right vector: drives the first billboard axis. The
-    /// shader reads a float4 whose trailing component is unused padding.
+    /// shader reads it as the `xyz` of a float4 whose `w` is `pre_exposure`.
     pub cam_right: [f32; 3],
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad0: f32,
+    /// The scale the HDR chain is written at; the sprite color is multiplied
+    /// by it.
+    pub pre_exposure: f32,
     /// World-space camera up vector: drives the second billboard axis.
     pub cam_up: [f32; 3],
     /// Padding so the field layout matches the shader-side struct.
@@ -119,6 +126,43 @@ pub struct ModelHistoryParams {
     pub record_count: u32,
     /// Pads the block to the 16-byte floor a constant buffer binds at.
     pub _pad: [u32; 3],
+}
+
+#[cfg(test)]
+mod view_layout_tests {
+    use super::*;
+    use core::mem::{offset_of, size_of};
+
+    // Two float4x4s, then the viewport and the pre-exposure in one lane.
+    #[test]
+    fn decal_view_layout_matches_the_shader() {
+        assert_eq!(size_of::<DecalView>(), 144);
+        assert_eq!(offset_of!(DecalView, vp), 0);
+        assert_eq!(offset_of!(DecalView, inv_vp), 64);
+        assert_eq!(offset_of!(DecalView, viewport), 128);
+        assert_eq!(offset_of!(DecalView, pre_exposure), 136);
+        assert_eq!(offset_of!(DecalView, _pad), 140);
+    }
+
+    #[test]
+    fn line_view_layout_matches_the_shader() {
+        assert_eq!(size_of::<LineView>(), 80);
+        assert_eq!(offset_of!(LineView, vp), 0);
+        assert_eq!(offset_of!(LineView, occluded_alpha), 64);
+        assert_eq!(offset_of!(LineView, pre_exposure), 68);
+        assert_eq!(offset_of!(LineView, _pad), 72);
+    }
+
+    // The two axes are float4 lanes; the pre-exposure is the first one's `w`.
+    #[test]
+    fn particle_view_layout_matches_the_shader() {
+        assert_eq!(size_of::<ParticleView>(), 96);
+        assert_eq!(offset_of!(ParticleView, vp), 0);
+        assert_eq!(offset_of!(ParticleView, cam_right), 64);
+        assert_eq!(offset_of!(ParticleView, pre_exposure), 76);
+        assert_eq!(offset_of!(ParticleView, cam_up), 80);
+        assert_eq!(offset_of!(ParticleView, _pad1), 92);
+    }
 }
 
 #[cfg(test)]

@@ -54,6 +54,32 @@ pub struct SsrSettings {
     pub max_distance: f32,
 }
 
+/// Per-frame camera inputs for building the SSR GPU uniform.
+/// `fov_y_radians` / `aspect` give the view-ray scale the resolve projects a
+/// view-space ray point to a UV with. `inv_view_rot` (the view-to-world
+/// rotation) and `cam_pos` form the camera-to-world transform, and
+/// `prefilter_mip_count` is the IBL prefilter cubemap mip count (0 = no IBL);
+/// the resolve uses these to sample the cubemap (or a reflection probe) as a
+/// reflection fallback, through the sky's inverse rotation `sky_rot`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SsrParamsInputs {
+    /// Vertical field of view in radians.
+    pub fov_y_radians: f32,
+    /// Viewport aspect ratio, width over height.
+    pub aspect: f32,
+    /// View-to-world rotation, column-major.
+    pub inv_view_rot: [[f32; 4]; 4],
+    /// World-space camera position.
+    pub cam_pos: [f32; 3],
+    /// IBL cubemap mip count; 0 when there is no IBL fallback.
+    pub prefilter_mip_count: f32,
+    /// Rows of the sky's inverse rotation.
+    pub sky_rot: [[f32; 4]; 3],
+    /// The scale the HDR chain is written at; the absolute fallback radiance
+    /// is multiplied by it to match the scene taps.
+    pub pre_exposure: f32,
+}
+
 impl SsrSettings {
     /// Resolve the SSR tunables into clamped settings, or `None` when the `ssr`
     /// toggle is off.
@@ -77,23 +103,17 @@ impl SsrSettings {
     }
 
     /// Build the per-frame GPU uniform from these settings and the active
-    /// camera. `fov_y_radians` is the vertical field of view and `aspect` the
-    /// viewport width / height ratio: together they give the view-ray scale
-    /// the resolve pass needs to project a view-space ray point to a UV.
-    /// `inv_view_rot` is the view-space to world-space rotation and `cam_pos` the
-    /// world camera position (together the rigid camera-to-world transform), and
-    /// `prefilter_mip_count` the IBL prefilter cubemap mip count (0 = no IBL); the
-    /// resolve uses these to sample the cubemap (or a reflection probe) as a
-    /// reflection fallback, through the sky's inverse rotation `sky_rot`.
-    pub fn params(
-        &self,
-        fov_y_radians: f32,
-        aspect: f32,
-        inv_view_rot: [[f32; 4]; 4],
-        cam_pos: [f32; 3],
-        prefilter_mip_count: f32,
-        sky_rot: [[f32; 4]; 3],
-    ) -> SsrParams {
+    /// camera.
+    pub fn params(&self, inputs: SsrParamsInputs) -> SsrParams {
+        let SsrParamsInputs {
+            fov_y_radians,
+            aspect,
+            inv_view_rot,
+            cam_pos,
+            prefilter_mip_count,
+            sky_rot,
+            pre_exposure,
+        } = inputs;
         let stride = self.max_distance / MAX_STEPS as f32;
         // The resolve rebuilds the world-space surface position the reflection
         // probe box-projects against, so it needs the full camera-to-world.
@@ -107,7 +127,7 @@ impl SsrSettings {
             stride,
             thickness: stride * THICKNESS_SCALE,
             prefilter_mip_count,
-            _pad: 0.0,
+            pre_exposure,
             inv_view,
             sky_rot,
         }
@@ -196,14 +216,15 @@ mod tests {
     #[test]
     fn params_derive_stride_and_thickness_from_distance() {
         let s = SsrSettings::resolve(0.7, 48.0);
-        let p = s.params(
-            core::f32::consts::FRAC_PI_2,
-            1.6,
-            IDENTITY,
-            [0.0; 3],
-            6.0,
-            SkyOrientation::IDENTITY_ROWS,
-        );
+        let p = s.params(SsrParamsInputs {
+            fov_y_radians: core::f32::consts::FRAC_PI_2,
+            aspect: 1.6,
+            inv_view_rot: IDENTITY,
+            cam_pos: [0.0; 3],
+            prefilter_mip_count: 6.0,
+            sky_rot: SkyOrientation::IDENTITY_ROWS,
+            pre_exposure: 1.0,
+        });
         // 48 units over 48 steps -> a 1-unit stride.
         assert!((p.stride - 1.0).abs() < 1.0e-5);
         assert!((p.thickness - THICKNESS_SCALE).abs() < 1.0e-5);
@@ -215,29 +236,32 @@ mod tests {
     #[test]
     fn params_floor_a_degenerate_aspect() {
         let s = SsrSettings::resolve(0.7, 40.0);
-        let p = s.params(
-            core::f32::consts::FRAC_PI_2,
-            0.0,
-            IDENTITY,
-            [0.0; 3],
-            0.0,
-            SkyOrientation::IDENTITY_ROWS,
-        );
+        let p = s.params(SsrParamsInputs {
+            fov_y_radians: core::f32::consts::FRAC_PI_2,
+            aspect: 0.0,
+            inv_view_rot: IDENTITY,
+            cam_pos: [0.0; 3],
+            prefilter_mip_count: 0.0,
+            sky_rot: SkyOrientation::IDENTITY_ROWS,
+            pre_exposure: 1.0,
+        });
         assert!(p.aspect >= MIN_ASPECT);
     }
 
     #[test]
     fn params_pass_through_ibl_fallback_inputs() {
         let s = SsrSettings::resolve(0.7, 40.0);
-        let p = s.params(
-            core::f32::consts::FRAC_PI_2,
-            1.6,
-            IDENTITY,
-            [0.0; 3],
-            7.0,
-            SkyOrientation::IDENTITY_ROWS,
-        );
+        let p = s.params(SsrParamsInputs {
+            fov_y_radians: core::f32::consts::FRAC_PI_2,
+            aspect: 1.6,
+            inv_view_rot: IDENTITY,
+            cam_pos: [0.0; 3],
+            prefilter_mip_count: 7.0,
+            sky_rot: SkyOrientation::IDENTITY_ROWS,
+            pre_exposure: 1.0,
+        });
         assert_eq!(p.prefilter_mip_count, 7.0);
+        assert_eq!(p.pre_exposure, 1.0);
         // Identity rotation + a zero camera position leaves the matrix identity.
         assert_eq!(p.inv_view, IDENTITY);
     }
@@ -248,14 +272,15 @@ mod tests {
         // resolve can lift a reconstructed view-space surface point to the right
         // world point for reflection-probe box projection.
         let s = SsrSettings::resolve(0.7, 40.0);
-        let p = s.params(
-            core::f32::consts::FRAC_PI_2,
-            1.6,
-            IDENTITY,
-            [3.0, 4.0, 5.0],
-            6.0,
-            SkyOrientation::IDENTITY_ROWS,
-        );
+        let p = s.params(SsrParamsInputs {
+            fov_y_radians: core::f32::consts::FRAC_PI_2,
+            aspect: 1.6,
+            inv_view_rot: IDENTITY,
+            cam_pos: [3.0, 4.0, 5.0],
+            prefilter_mip_count: 6.0,
+            sky_rot: SkyOrientation::IDENTITY_ROWS,
+            pre_exposure: 1.0,
+        });
         assert_eq!(p.inv_view[3], [3.0, 4.0, 5.0, 1.0]);
         // The rotation columns are untouched.
         assert_eq!(p.inv_view[0], [1.0, 0.0, 0.0, 0.0]);

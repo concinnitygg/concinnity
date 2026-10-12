@@ -443,7 +443,7 @@ mod tests {
     const DRAWS: usize = DEPTH_LEVELS as usize + 2;
 
     fn params(pass: &SsgiPass<MockPipeline, usize>) -> SsgiParams {
-        SsgiSettings::resolve(1.0, 8.0, 1, 2).params(1.0, 1.5, pass.frame())
+        SsgiSettings::resolve(1.0, 8.0, 1, 2).params(1.0, 1.5, pass.frame(), 1.0)
     }
 
     fn encode_frame(device: &MockDevice, pass: &SsgiPass<MockPipeline, usize>) -> Vec<MockDraw> {

@@ -282,6 +282,7 @@ mod tests {
                 [0.0, 1.0, 0.0, 0.0],
                 [0.0, 0.0, 1.0, 0.0],
             ],
+            pre_exposure: 1.0,
         };
         RaymarchView::new(&camera)
     }

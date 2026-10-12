@@ -122,6 +122,7 @@ impl MtlContext {
 
         let params = AutoExposureParams::for_settings(
             self.auto_exposure.adaptation.as_ref().map(|a| &a.settings),
+            self.pre_exposure.value(),
         );
         let hdr_tex: &ProtocolObject<dyn objc2_metal::MTLTexture> =
             self.targets.hdr.hdr_resolve.as_ref();

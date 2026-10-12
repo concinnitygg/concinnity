@@ -42,7 +42,8 @@ pub struct AtmosphereParams {
     pub sun_illuminance: [f32; 4],
     /// xyz = the sun disc's radiance as seen from the camera, w = unused.
     pub sun_disc: [f32; 4],
-    /// xyz = the camera's world position, w = unused.
+    /// xyz = the camera's world position, w = the scale the HDR chain is
+    /// written at, which the haze pass multiplies its in-scattered light by.
     pub cam_pos: [f32; 4],
     /// xy = the target's size in pixels, zw = its reciprocal.
     pub viewport: [f32; 4],
@@ -79,6 +80,8 @@ pub struct AtmosphereView {
     pub viewport: [f32; 2],
     /// Rows of the sky's inverse rotation.
     pub sky_rot: [[f32; 4]; 3],
+    /// The scale the HDR chain is written at.
+    pub pre_exposure: f32,
 }
 
 impl AtmosphereParams {
@@ -115,7 +118,7 @@ impl AtmosphereParams {
             sun_direction: v3(frame.sun_direction, s.sun_cos_radius),
             sun_illuminance: v3(frame.sun_illuminance, 0.0),
             sun_disc: v3(disc, 0.0),
-            cam_pos: v3(view.cam_pos, 0.0),
+            cam_pos: v3(view.cam_pos, view.pre_exposure),
             viewport: [
                 viewport[0],
                 viewport[1],
@@ -186,6 +189,7 @@ mod tests {
                 cam_pos: [1.0, 2.0, 3.0],
                 viewport: [1600.0, 900.0],
                 sky_rot: crate::sky::SkyOrientation::IDENTITY_ROWS,
+                pre_exposure: 4.0,
             },
         );
         assert_eq!(p.radii[0], 6360.0);
@@ -195,6 +199,7 @@ mod tests {
         assert_eq!(p.view_ground, [p.radii[0], p.radii[1], p.camera[3], 0.0]);
 
         assert_eq!(p.viewport[2], 1.0 / 1600.0);
+        assert_eq!(p.cam_pos, [1.0, 2.0, 3.0, 4.0]);
         // No night sky: its lanes are off and no direction reaches the moon.
         assert_eq!(p.moon_up[3], 0.0);
         assert_eq!(p.moon_direction[3], 2.0);
@@ -226,6 +231,7 @@ mod tests {
                 cam_pos: [0.0; 3],
                 viewport: [1.0, 1.0],
                 sky_rot: crate::sky::SkyOrientation::IDENTITY_ROWS,
+                pre_exposure: 1.0,
             },
         );
         assert_eq!([p.radii[0], p.radii[1]], [6360.0, 6460.0]);

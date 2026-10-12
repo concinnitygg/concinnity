@@ -89,6 +89,7 @@ impl DxContext {
                 scene: self.scene_srv_for_post(),
                 velocity: gbuffer.velocity_srv_gpu,
                 reactive: reactive_written.then(|| self.targets.reactive_mask.srv_gpu()),
+                history_scale: self.pre_exposure.history_scale(),
             },
         ) {
             tracing::error!("TAA resolve: {e}");

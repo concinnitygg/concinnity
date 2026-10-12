@@ -85,13 +85,14 @@ float4 sky_atmosphere_fragment(SkyVertexOut p) : SV_Target
         color += ATMO.sun_disc.xyz * limb;
     }
     // Kept inside the half-float range the scene is stored in.
-    return float4(min(color, (float3)60000.0), 1.0);
+    return float4(min(color * VIEW.pre_exposure, (float3)60000.0), 1.0);
 }
 #else
 [shader("pixel")]
 float4 sky_fragment(SkyVertexOut p) : SV_Target
 {
     float3 dir = normalize(p.ray);
-    return float4(prefilter_cube.SampleLevel(cube_sampler, SKY_DIR(dir), 0.0).rgb, 1.0);
+    float3 sky = prefilter_cube.SampleLevel(cube_sampler, SKY_DIR(dir), 0.0).rgb;
+    return float4(sky * VIEW.pre_exposure, 1.0);
 }
 #endif

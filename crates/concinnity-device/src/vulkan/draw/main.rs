@@ -64,7 +64,7 @@ impl VkContext {
         // resolve attachment doesn't need a clear (resolve overwrites);
         // a `ClearValue::default()` placeholder keeps the slice index
         // aligned with `main_render_pass`'s attachment count.
-        let [r, g, b, a] = self.state.view.clear_color;
+        let [r, g, b, a] = self.pre_exposure.clear_color(self.state.view.clear_color);
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
                 float32: [r, g, b, a],

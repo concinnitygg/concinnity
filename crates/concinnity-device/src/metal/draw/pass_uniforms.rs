@@ -4,6 +4,7 @@
 use concinnity_core::gfx::render_types;
 use concinnity_core::render::error;
 use concinnity_core::render::post::rt_reflections::RtParamsInputs;
+use concinnity_core::render::post::ssr::settings::SsrParamsInputs;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::uniforms::GBufferView;
 use concinnity_core::render::view_history::ViewFrame;
@@ -85,20 +86,28 @@ impl MtlContext {
                 [0.0, 0.0, 0.0, 1.0],
             ];
             let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
-            settings.params(
+            settings.params(SsrParamsInputs {
                 fov_y_radians,
                 aspect,
                 inv_view_rot,
                 cam_pos,
                 prefilter_mip_count,
                 sky_rot,
-            )
+                pre_exposure: self.pre_exposure.value(),
+            })
         });
-        let ssgi_params = self
-            .ssgi
-            .settings
-            .zip(self.ssgi.pass.as_ref())
-            .map(|(settings, pass)| settings.params(fov_y_radians, aspect, pass.frame()));
+        let ssgi_params =
+            self.ssgi
+                .settings
+                .zip(self.ssgi.pass.as_ref())
+                .map(|(settings, pass)| {
+                    settings.params(
+                        fov_y_radians,
+                        aspect,
+                        pass.frame(),
+                        self.pre_exposure.history_scale(),
+                    )
+                });
         // RT-reflection params: built only when the acceleration structure is
         // live (so they stay in lockstep with `rt_reflections_enabled`). Carries
         // the camera-to-world transform + sun the kernel shades hits with, like
@@ -131,6 +140,7 @@ impl MtlContext {
                         sun_color,
                         prefilter_mip_count,
                         sky_rot,
+                        pre_exposure: self.pre_exposure.value(),
                     })
                 });
         // The live settings, dropped when the medium cannot affect the frame (a
@@ -163,7 +173,14 @@ impl MtlContext {
             // un-jittered inv_vp keeps the volume stable frame to frame; its offset
             // versus the jittered depth buffer is far below the coarse froxel grid.
             let fog_inv_vp = mat4_inverse(mat4_mul(proj, self.state.view.matrix));
-            fog.params(fog_inv_vp, cam_pos, sun.direction, sun_color, viewport)
+            fog.params(
+                fog_inv_vp,
+                cam_pos,
+                sun.direction,
+                sun_color,
+                viewport,
+                self.pre_exposure.value(),
+            )
         });
         // FogFroxel volume extras: view matrix + volume dimensions + near/far
         // so the compute kernel can place each froxel in world-space and the

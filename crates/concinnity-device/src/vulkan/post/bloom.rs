@@ -63,7 +63,7 @@ impl VkContext {
                 top,
                 top_ref: view,
             },
-            &self.post_process,
+            &self.pre_exposure.post_params(&self.post_process),
         )
     }
 

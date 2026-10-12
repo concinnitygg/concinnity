@@ -1371,6 +1371,7 @@ impl DxContext {
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             irradiance: self.irradiance_lane(),
             sky_rot: self.state.view.sky_rot,
+            pre_exposure: self.pre_exposure.value(),
         };
         let view = &RaymarchView::for_gbuffer(&camera, gbuffer);
         let draws = surfaces().map(|(v, psos)| (psos.get(v.faces(view)), v.volume_cbuffer_gva));

@@ -235,6 +235,7 @@ impl MtlContext {
         // auto-exposure is disabled -- the static authored EV then drives the
         // exposure multiplier unchanged.
         self.update_auto_exposure(elapsed, ring_slot);
+        self.pre_exposure.advance(1.0);
     }
 
     // Picks this frame's shadow cascades and spot slices; returns the cascade aspect.

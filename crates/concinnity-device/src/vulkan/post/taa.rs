@@ -100,6 +100,7 @@ impl VkContext {
                     .reactive_mask(frame_idx)
                     .filter(|_| reactive_written)
                     .map(|m| m.view),
+                history_scale: self.pre_exposure.history_scale(),
             },
         ) {
             tracing::error!("TAA resolve: {e}");

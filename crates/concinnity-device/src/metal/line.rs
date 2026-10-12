@@ -123,7 +123,8 @@ impl MtlContext {
         let view = concinnity_core::render::uniforms::LineView {
             vp,
             occluded_alpha: OCCLUDED_ALPHA,
-            _pad: [0.0; 3],
+            pre_exposure: self.pre_exposure.value(),
+            _pad: [0.0; 2],
         };
 
         let pass_desc = MTLRenderPassDescriptor::new();

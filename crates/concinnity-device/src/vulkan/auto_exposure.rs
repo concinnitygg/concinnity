@@ -341,6 +341,7 @@ impl VkContext {
         };
         let params = AutoExposureParams::for_settings(
             self.auto_exposure.adaptation.as_ref().map(|a| &a.settings),
+            self.pre_exposure.value(),
         );
         let extent = self.targets.render_extent;
         if extent.width == 0 || extent.height == 0 {

@@ -1107,6 +1107,8 @@ pub(crate) struct VkContext {
     // vignette). Drives whether the bloom passes run and feeds the composite
     // + bloom-prefilter push constants.
     pub(super) post_process: render_types::PostProcessParams,
+    // The scale the frame's HDR chain is written at, advanced once per frame.
+    pub(super) pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure,
 
     // Temporal anti-aliasing resources. `Some` only when the world's
     // `PostProcessConfig` set `taa: true`; `None` skips the velocity pre-pass
@@ -1435,6 +1437,8 @@ impl VkContext {
         let Some(image_index) = self.acquire_frame(frame, &mut gpu_wait)? else {
             return Ok(());
         };
+        // Only a frame that renders moves the history's pre-exposure on.
+        self.pre_exposure.advance(1.0);
 
         // Cheap-cloneable handle (ash::Device is Arc-like). Holding a local
         // copy avoids tying the rest of the function to `&self.hw.device` while

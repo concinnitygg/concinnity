@@ -1485,8 +1485,8 @@ float3 grass_light(float3 albedo, float3 N, float3 V, float3 L, float3 radiance)
     return (diffuse + translucent) * radiance + sheen * radiance * nl;
 }
 
-[shader("pixel")]
-float4 grass_fragment(GrassVertexOut p) : SV_Target
+// The blade's lit color in absolute radiance.
+float4 grass_radiance(GrassVertexOut p)
 {
     float t = p.t_u_depth.x;
     float view_depth = p.t_u_depth.z;
@@ -1566,6 +1566,13 @@ float4 grass_fragment(GrassVertexOut p) : SV_Target
         ambient *= ssao_sample(screen_xy / ssao_size());
     }
     return float4(ambient + Lo * occlusion, 1.0);
+}
+
+[shader("pixel")]
+float4 grass_fragment(GrassVertexOut p) : SV_Target
+{
+    float4 color = grass_radiance(p);
+    return float4(color.rgb * VIEW.pre_exposure, color.a);
 }
 
 #else // SURFACE_PREPASS

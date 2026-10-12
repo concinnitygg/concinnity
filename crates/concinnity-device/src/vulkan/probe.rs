@@ -854,7 +854,8 @@ impl RenderingBake {
                 ambient_occlusion: 0.0,
                 sky_rot,
                 irradiance,
-                _pad: [0.0; 3],
+                pre_exposure: 1.0,
+                _pad: [0.0; 2],
             };
             buf.write_val(0, &view);
         }

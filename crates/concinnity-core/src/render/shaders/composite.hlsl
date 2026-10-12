@@ -10,7 +10,7 @@
 // alike. Textures 3-7 are declared but sampled only while a channel view is
 // active.
 
-// Layout matches `CompositeParams` in render_types.rs (56 B): the
+// Layout matches `CompositeParams` in render_types.rs (60 B): the
 // `PostProcessParams` fields followed by the fade, the channel-view selector,
 // the depth view's distance range, and whether the reactive mask was written.
 struct CompositeParams
@@ -31,6 +31,9 @@ struct CompositeParams
     // 1.0 = run the FXAA edge filter on the SDR path; 0.0 = skip it (the Off
     // anti-aliasing mode). Ignored on the HDR path, which never runs FXAA.
     float fxaa;
+    // The scale the HDR chain was written at; `exposure` already has it
+    // divided out.
+    float pre_exposure;
     // Scene-transition fade to black in [0, 1]. 0 leaves the frame untouched.
     float fade;
     // Channel view selector (ViewMode discriminant): 0 composites the scene;

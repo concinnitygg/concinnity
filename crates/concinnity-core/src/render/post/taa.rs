@@ -74,6 +74,9 @@ pub struct TaaInputs<'t, D: PostPassDevice + ?Sized + 't> {
     /// The reactive mask, when a particle or transparent pass wrote it this
     /// frame.
     pub reactive: Option<D::TextureRef<'t>>,
+    /// What the history is multiplied by to read at this frame's pre-exposure
+    /// ([`crate::gfx::auto_exposure::PreExposure::history_scale`]).
+    pub history_scale: f32,
 }
 
 /// The temporal resolve: its pipeline, its accumulation targets, and the ring
@@ -227,6 +230,7 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
                 .filter(|_| inputs.reactive.is_some())
                 .unwrap_or(0.0),
             lock_decay: LOCK_DECAY,
+            history_scale: inputs.history_scale,
         };
         // Without a mask the slot still needs a texture; the motion vectors
         // stand in, and the resolve does not read them there.

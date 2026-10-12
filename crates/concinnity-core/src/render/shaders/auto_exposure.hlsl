@@ -37,7 +37,9 @@ struct AutoExposureParams
     // Pre-computed HISTOGRAM_BINS / lum_log2_range, so the build kernel maps a
     // centered log-luminance to a bin index without a per-pixel divide.
     float lum_to_bin_scale;
-    float _pad;
+    // The scale the measured scene was written at, divided out so the bins
+    // hold absolute luminance.
+    float pre_exposure;
 };
 
 // The params slot is a host difference, not a target one: DirectX hands them
@@ -79,7 +81,7 @@ void histogram_build(uint3 gid : SV_DispatchThreadID, uint tid : SV_GroupIndex)
         float3 c = hdr_texture.Load(int3(int2(gid.xy), 0)).rgb;
         // Rec. 709 luminance. The 1e-6 floor keeps log2 finite on a fully black
         // pixel, which would otherwise reach bin 0 through a -inf clamp.
-        float lum = max(dot(c, float3(0.2126, 0.7152, 0.0722)), 1.0e-6);
+        float lum = max(dot(c, float3(0.2126, 0.7152, 0.0722)) / params.pre_exposure, 1.0e-6);
         float lum_log2 = clamp(
             log2(lum),
             params.lum_log2_min,

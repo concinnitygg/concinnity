@@ -235,10 +235,10 @@ float4 rt_reflections_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_T
         reflected = probe;
         if (sky_share > 0.0)
         {
-            float3 sky = ibl ? prefilter_level(dir, roughness * max_mip) : base;
+            float3 sky = ibl ? prefilter_level(dir, roughness * max_mip) : base / rt_params.pre_exposure;
             reflected = lerp(probe, sky, sky_share);
         }
     }
 
-    return float4(reflected, weight);
+    return float4(reflected * rt_params.pre_exposure, weight);
 }
