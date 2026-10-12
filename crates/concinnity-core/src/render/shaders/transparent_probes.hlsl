@@ -45,23 +45,26 @@ float2 transparent_screen_uv(float3 p)
 {PROBE_COMMON}
 
 // The reflection a transparent surface of `roughness` at `world_pos` falls back
-// to along `r`: the probes
-// covering the point, else the sky prefilter cube where an EnvironmentMap is
-// bound, else `bare`. Each cube is read at its own roughness-keyed mip.
+// to along `r`: the probes, fading far outside every probe box to the sky
+// prefilter cube where an EnvironmentMap is bound, else to `bare`, as the main
+// pass's reflection does. Each cube is read at its own roughness-keyed mip.
 float3 transparent_environment(float3 world_pos, float3 r, float roughness, float3 bare)
 {
+    float3 probe = (float3)(0.0);
+    float sky_share = 1.0;
     if (PROBE_SET.count > 0u)
     {
-        float3 radiance;
         ProbeMask probes = probe_mask_at(transparent_screen_uv(world_pos), world_pos);
-        if (probe_mask_blend(probes, world_pos, r, probe_lod(roughness), radiance))
+        probe = probe_mask_specular(probes, world_pos, r, probe_lod(roughness), sky_share);
+        if (sky_share <= 0.0)
         {
-            return radiance;
+            return probe;
         }
     }
+    float3 sky = bare;
     if (view.prefilter_mip_count > 0.5)
     {
-        return prefilter_level(r, roughness * (view.prefilter_mip_count - 1.0));
+        sky = prefilter_level(r, roughness * (view.prefilter_mip_count - 1.0));
     }
-    return bare;
+    return lerp(probe, sky, sky_share);
 }

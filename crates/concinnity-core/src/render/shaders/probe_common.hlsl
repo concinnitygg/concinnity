@@ -146,9 +146,13 @@ float probe_weight(uint i, float3 world_pos)
     return smoothstep(-1.0, 1.0, sd);
 }
 
-// `probe_mask_blend` at mip `level`, the footprint already applied.
-bool probe_mask_blend_level(ProbeMask probes, float3 world_pos, float3 R, float level,
-                            out float3 radiance)
+// The influence-weighted blend of `probes` at `world_pos` along world-space ray
+// `R` (partition of unity): the weight-normalized sum of each covering probe's
+// box-projected sample at mip `level`, the footprint already applied, in index
+// order, into `radiance`. False, with `radiance` zero, when no probe's influence
+// reaches the point.
+bool probe_mask_blend(ProbeMask probes, float3 world_pos, float3 R, float level,
+                      out float3 radiance)
 {
     float3 acc = (float3)(0.0);
     float wsum = 0.0;
@@ -171,29 +175,39 @@ bool probe_mask_blend_level(ProbeMask probes, float3 world_pos, float3 R, float 
     return wsum > 0.0;
 }
 
-// The influence-weighted blend of `probes` at `world_pos` along world-space ray
-// `R` (partition of unity): the weight-normalized sum of each covering probe's
-// box-projected sample at the roughness mip `lod`, in index order, into
-// `radiance`. False, with `radiance` zero, when no probe's influence reaches the
-// point.
-//
-// Uncovered points take one of two fallbacks. The main pass, SSR and RT
-// reflections call `probe_mask_specular`, which falls back to the nearest probe
-// in the cluster's nearest mask, however far away its box is. The transparent
-// passes branch on this instead and fall back to the sky, since a wide surface
-// outside every box would otherwise show one capture of somewhere else.
-bool probe_mask_blend(ProbeMask probes, float3 world_pos, float3 R, float lod, out float3 radiance)
+// How much of the reflection at `world_pos` belongs to the environment rather
+// than to `probe`, the nearest capture of a point no probe's influence reaches:
+// 0 out to the box grown by its blend margin, where that influence ends, rising
+// to 1 one largest half-extent of the box further out. A capture stands in for
+// the scenery about as far past its box as the box is wide. A probe without a
+// baked box keeps the reflection whole.
+float probe_sky_share(ProbeUniforms probe, float3 world_pos)
 {
-    return probe_mask_blend_level(probes, world_pos, R, probe_footprint_lod(R, lod), radiance);
+    if (probe.box_min.w <= 0.5)
+    {
+        return 0.0;
+    }
+    float3 c = 0.5 * (probe.box_min.xyz + probe.box_max.xyz);
+    float3 he = 0.5 * (probe.box_max.xyz - probe.box_min.xyz);
+    float3 outside = max(abs(world_pos - c) - he - probe.blend_margin.xyz, (float3)(0.0));
+    float reach = max(max(he.x, he.y), max(he.z, 1e-4));
+    return smoothstep(0.0, reach, length(outside));
 }
 
-// Probe radiance for `world_pos` along world-space ray `R`: the blend of every
-// probe covering the point, else the nearest probe by capture distance.
-float3 probe_mask_specular(ProbeMask probes, float3 world_pos, float3 R, float lod)
+// Probe radiance for `world_pos` along world-space ray `R` at the roughness mip
+// `lod`: the blend of every probe covering the point, else the nearest probe by
+// capture distance from the mask's nearest set. `sky_share` is how much of the
+// result the caller replaces with what a world without probes reflects there
+// (the environment cube, or nothing): 0 on the blend, `probe_sky_share` of the
+// nearest probe off it, so a surface far outside every box reflects the sky
+// rather than one capture of somewhere else.
+float3 probe_mask_specular(ProbeMask probes, float3 world_pos, float3 R, float lod,
+                           out float sky_share)
 {
+    sky_share = 0.0;
     float level = probe_footprint_lod(R, lod);
     float3 blended;
-    if (probe_mask_blend_level(probes, world_pos, R, level, blended))
+    if (probe_mask_blend(probes, world_pos, R, level, blended))
     {
         return blended;
     }
@@ -214,6 +228,10 @@ float3 probe_mask_specular(ProbeMask probes, float3 world_pos, float3 R, float l
             }
         }
     }
+    sky_share = probe_sky_share(PROBE_RECORDS[near_i], world_pos);
+    if (sky_share >= 1.0)
+    {
+        return (float3)(0.0);
+    }
     return sample_probe_radiance(near_i, PROBE_RECORDS[near_i], world_pos, R, level);
 }
-

@@ -222,16 +222,21 @@ float4 rt_reflections_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_T
     if (!rt_trace_reflection(pw + nw * 0.01, dir, ibl, max_mip, reflected))
     {
         // The ray escaped the scene: the local reflection probe (box-parallax,
-        // blended across covering probes) when one is baked, else the IBL
+        // blended across covering probes) when one is baked, fading far outside
+        // every probe box to what a world without probes shows: the IBL
         // prefilter sky, else the base shading.
+        float3 probe = (float3)(0.0);
+        float sky_share = 1.0;
         if (probe_set.count > 0u)
         {
-            reflected = probe_mask_specular(probe_mask_at(uv, pw), pw, dir,
-                                            probe_lod(roughness));
+            probe = probe_mask_specular(probe_mask_at(uv, pw), pw, dir,
+                                        probe_lod(roughness), sky_share);
         }
-        else
+        reflected = probe;
+        if (sky_share > 0.0)
         {
-            reflected = ibl ? prefilter_level(dir, roughness * max_mip) : base;
+            float3 sky = ibl ? prefilter_level(dir, roughness * max_mip) : base;
+            reflected = lerp(probe, sky, sky_share);
         }
     }
 

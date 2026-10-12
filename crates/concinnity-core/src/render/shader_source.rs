@@ -437,7 +437,7 @@ mod tests {
         for (marker, _) in FRAGMENTS {
             assert!(!src.contains(marker), "unspliced {marker}");
         }
-        let helper = src.find("bool probe_mask_blend(");
+        let helper = src.find("float3 probe_mask_specular(");
         let caller = src.find("float3 transparent_environment(");
         assert!(helper.is_some() && helper < caller);
     }

@@ -43,6 +43,28 @@ impl ProbeUniforms {
             core::array::from_fn(|i| self.box_max[i] + margin[i]),
         )
     }
+
+    /// How much of the reflection at `point` the environment takes over from
+    /// this probe when it is the nearest capture of a point no probe's
+    /// influence reaches, as `probe_sky_share` in `shaders/probe_common.hlsl`
+    /// computes it: 0 inside [`Self::influence_bounds`], rising smoothly to 1
+    /// one largest half-extent of the box beyond them. A capture stands in for
+    /// the scenery about as far past its box as the box is wide. 0 for a record
+    /// without parallax (`box_min.w` off), which keeps the probe whole.
+    pub fn sky_share(&self, point: [f32; 3]) -> f32 {
+        if self.box_min[3] <= 0.5 {
+            return 0.0;
+        }
+        let (lo, hi) = self.influence_bounds();
+        let outside: [f32; 3] =
+            core::array::from_fn(|i| (lo[i] - point[i]).max(point[i] - hi[i]).max(0.0));
+        let distance = crate::math::sqrt(outside.iter().map(|d| d * d).sum());
+        let reach = (0..3)
+            .map(|i| 0.5 * (self.box_max[i] - self.box_min[i]))
+            .fold(1e-4f32, f32::max);
+        let t = (distance / reach).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
 }
 
 /// The header of the probe set: how many records of the probe record buffer are
@@ -144,6 +166,59 @@ mod tests {
         assert_eq!(probe.blend_margin(), [0.5, 0.25, 2.0]);
         let (lo, hi) = probe.influence_bounds();
         assert_eq!((lo, hi), ([-4.5, -0.25, -12.0], [4.5, 2.25, 12.0]));
+    }
+
+    fn room() -> ProbeUniforms {
+        ProbeUniforms {
+            box_min: [-4.0, 0.0, -2.0, 1.0],
+            box_max: [4.0, 3.0, 2.0, 0.0],
+            probe_pos: [0.0, 1.5, 0.0, 0.0],
+            blend_margin: [0.5, 0.5, 0.5, 0.0],
+        }
+    }
+
+    #[test]
+    fn the_sky_takes_no_share_within_the_probes_influence() {
+        let probe = room();
+        assert_eq!(probe.sky_share([0.0, 1.5, 0.0]), 0.0);
+        assert_eq!(probe.sky_share([4.5, 3.5, 2.5]), 0.0);
+        assert_eq!(probe.sky_share([-4.5, -0.5, 0.0]), 0.0);
+    }
+
+    #[test]
+    fn the_sky_takes_over_one_largest_half_extent_past_the_influence() {
+        let probe = room();
+        // The largest half-extent is 4 (x), whichever axis the point leaves by.
+        assert_eq!(probe.sky_share([0.0, 1.5, 2.5 + 4.0]), 1.0);
+        assert_eq!(probe.sky_share([0.0, 3.5 + 4.0, 0.0]), 1.0);
+        assert_eq!(probe.sky_share([100.0, 1.5, 0.0]), 1.0);
+        let half = probe.sky_share([0.0, 1.5, 2.5 + 2.0]);
+        assert!((half - 0.5).abs() < 1e-6, "{half}");
+    }
+
+    #[test]
+    fn the_sky_share_rises_with_distance_from_a_corner() {
+        let probe = room();
+        let mut last = 0.0;
+        for step in 1..=14 {
+            let d = step as f32 * 0.2;
+            let share = probe.sky_share([4.5 + d, 3.5 + d, 2.5]);
+            assert!(share > last && share <= 1.0, "{d}: {share} after {last}");
+            last = share;
+        }
+        // A diagonal step of d out of the corner is sqrt(2) d away.
+        let diagonal = probe.sky_share([4.5 + 2.0, 3.5 + 2.0, 0.0]);
+        let straight = probe.sky_share([4.5 + 2.0 * core::f32::consts::SQRT_2, 1.5, 0.0]);
+        assert!((diagonal - straight).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_probe_without_parallax_keeps_its_whole_share() {
+        let probe = ProbeUniforms {
+            box_min: [-4.0, 0.0, -2.0, 0.0],
+            ..room()
+        };
+        assert_eq!(probe.sky_share([100.0, 1.5, 0.0]), 0.0);
     }
 
     // `ProbeSet` in `shaders/probe_types.hlsl`: the count and the cube mip

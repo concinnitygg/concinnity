@@ -138,24 +138,32 @@ float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Targ
     // direction at a roughness-keyed mip so a rougher surface reflects a
     // blurrier environment. With a baked reflection probe this is the local
     // scene capture (box-projected + blended across covering probes), the same
-    // source the forward IBL specular term uses, rather than the foreign sky
-    // HDR; otherwise it is the IBL prefilter cube. With neither there is
-    // nothing to fall back to, so missed rays keep the base shading.
+    // source the forward IBL specular term uses, fading to the IBL prefilter
+    // cube far outside every probe box; without probes it is that cube. With
+    // neither there is nothing to fall back to, so missed rays keep the base
+    // shading.
     float3 r_world = mul((float3x3)params.inv_view, r_dir);
-    float3 env = base;
+    float3 probe = (float3)(0.0);
+    float sky_share = 1.0;
     if (probe_set.count > 0u)
     {
         // The full inv_view (its translation column carries the camera
         // position) lifts the view-space surface point p to world space,
         // which the probe box-projection needs.
         float3 world_pos = mul(params.inv_view, float4(p, 1.0)).xyz;
-        env = probe_mask_specular(probe_mask_at(uv, world_pos), world_pos, r_world,
-                                  probe_lod(roughness));
+        probe = probe_mask_specular(probe_mask_at(uv, world_pos), world_pos, r_world,
+                                    probe_lod(roughness), sky_share);
     }
-    else if (params.prefilter_mip_count > 0.5)
+    float3 env = probe;
+    if (sky_share > 0.0)
     {
-        float lod = roughness * (params.prefilter_mip_count - 1.0);
-        env = prefilter.SampleLevel(prefilter_samp, SKY_DIR(r_world), lod).rgb;
+        float3 sky = base;
+        if (params.prefilter_mip_count > 0.5)
+        {
+            float lod = roughness * (params.prefilter_mip_count - 1.0);
+            sky = prefilter.SampleLevel(prefilter_samp, SKY_DIR(r_world), lod).rgb;
+        }
+        env = lerp(probe, sky, sky_share);
     }
 
     float3 step_v = r_dir * params.stride;

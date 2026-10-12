@@ -290,20 +290,43 @@ float2 ltc_magnitude_sample(float2 uv)
 
 {PROBE_COMMON}
 
+// The environment prefilter cube's mip for ray `R` at the roughness mip `lod`,
+// widened by the ray's screen footprint as a probe tap's is.
+float prefilter_footprint_level(float3 R, float lod)
+{
+    uint size, height, mips;
+    prefilter_cube.GetDimensions(0, size, height, mips);
+    float sweep = max(length(ddx(R)), length(ddy(R)));
+    return lod + max(log2(sweep * 0.5 * float(size)), 0.0);
+}
+
 // The reflection tap `shade_surface` reads for a surface of `roughness`, into
-// `radiance`: the fragment's `probes` where any probe is baked, else the
-// imported environment prefilter cube. False when there is neither.
+// `radiance`: the fragment's `probes` where any probe is baked, fading to the
+// imported environment prefilter cube (or to nothing without one) far outside
+// every probe box, else that cube alone. False when there is neither.
 bool environment_specular(ProbeMask probes, float3 world_pos, float3 R, float roughness,
                           out float3 radiance)
 {
+    bool sky = VIEW.prefilter_mip_count > 0.5;
+    float sky_lod = roughness * (VIEW.prefilter_mip_count - 1.0);
     if (PROBE_SET.count > 0u)
     {
-        radiance = probe_mask_specular(probes, world_pos, R, probe_lod(roughness));
+        // The level is taken here, where every lane of the quad still runs.
+        float sky_level = sky ? prefilter_footprint_level(R, sky_lod) : 0.0;
+        float sky_share;
+        radiance = probe_mask_specular(probes, world_pos, R, probe_lod(roughness), sky_share);
+        if (sky_share > 0.0)
+        {
+            float3 sky_radiance = sky
+                ? prefilter_cube.SampleLevel(cube_sampler, SKY_DIR(R), sky_level).rgb
+                : (float3)(0.0);
+            radiance = lerp(radiance, sky_radiance, sky_share);
+        }
         return true;
     }
-    if (VIEW.prefilter_mip_count > 0.5)
+    if (sky)
     {
-        radiance = prefilter_sample_bias(R, roughness * (VIEW.prefilter_mip_count - 1.0));
+        radiance = prefilter_sample_bias(R, sky_lod);
         return true;
     }
     radiance = (float3)(0.0);
