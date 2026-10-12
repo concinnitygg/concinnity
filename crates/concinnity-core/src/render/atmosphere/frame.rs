@@ -1,10 +1,14 @@
 //! What the atmosphere needs from each frame: where the camera is about the
 //! planet and where the sun is, and the sunlight that reaches the camera.
 
-use super::optics::{sun_transmittance, sun_transmittance_seen};
+use super::optics::{
+    disc_set_depth, disc_transmittance, disc_transmittance_seen, sun_transmittance,
+    sun_transmittance_seen,
+};
 use super::settings::AtmosphereSettings;
 use crate::components::DirectionalLight;
 use crate::math::vec3::{dot, length, normalize_or, scale};
+use crate::render::night_sky::{NightFrame, moon_share};
 
 /// The atmosphere's per-frame inputs, carried from extraction to the
 /// backend.
@@ -23,6 +27,11 @@ pub struct AtmosphereFrame {
     pub sun_illuminance: [f32; 3],
     /// The fraction of that sunlight that reaches the camera, per color.
     pub sun_transmittance: [f32; 3],
+    /// How far, in radians, the sun has sunk below the horizon past fully
+    /// setting: negative while any of its disc is up.
+    pub sun_set_depth: f32,
+    /// The night sky behind the air, if the world has one.
+    pub night: Option<NightFrame>,
 }
 
 impl AtmosphereFrame {
@@ -45,6 +54,34 @@ impl AtmosphereFrame {
             sun_direction,
             sun_illuminance: scale(sun.color, sun.intensity),
             sun_transmittance,
+            sun_set_depth: disc_set_depth(settings, r, mu, settings.sun_cos_radius),
+            night: None,
+        }
+    }
+
+    /// This frame with `night` behind the air: its moon's light dimmed by
+    /// the air between it and the camera as the sun's is, and switched on
+    /// by the handover once the sun has set.
+    #[must_use]
+    pub fn with_night(self, settings: &AtmosphereSettings, mut night: NightFrame) -> Self {
+        if let (Some(moon), Some(resolved)) =
+            (night.moon.as_mut(), settings.night.and_then(|n| n.moon))
+        {
+            let r = length(self.camera_km).max(settings.bottom_radius);
+            let up = scale(self.camera_km, 1.0 / length(self.camera_km).max(1e-6));
+            let mu = dot(up, moon.direction);
+            let cos_radius = resolved.cos_radius;
+            moon.transmittance = if self.sky_ground_radius == settings.bottom_radius {
+                disc_transmittance(settings, r, mu, cos_radius)
+            } else {
+                let table = settings.with_ground_radius(self.sky_ground_radius);
+                disc_transmittance_seen(settings, &table, r, mu, cos_radius)
+            };
+            moon.share = moon_share(self.sun_set_depth);
+        }
+        Self {
+            night: Some(night),
+            ..self
         }
     }
 
@@ -135,6 +172,43 @@ mod tests {
         assert!((frame.camera_height(&s) - 1.0).abs() < 1e-3);
         assert_eq!(frame.sky_ground_radius, s.bottom_radius);
         assert_eq!(frame.table_camera_km(&s), frame.camera_km);
+    }
+
+    // A night sky's moon is dimmed by the air like the sun, and lights the
+    // scene only once the sun has set.
+    #[test]
+    fn the_moon_is_lit_through_the_air_after_sunset() {
+        use crate::components::NightSky;
+        use crate::render::night_sky::NightSkySettings;
+        let s = earth().with_night(Some(NightSkySettings::resolve(&NightSky::default())));
+        let camera = [0.0, s.bottom_radius + 0.002, 0.0];
+        let night_with_moon = |moon_dir: [f32; 3]| {
+            let mut n = NightFrame::new(
+                s.night.as_ref().expect("night"),
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+                &crate::sky::SkyOrientation::default(),
+            );
+            if let Some(m) = n.moon.as_mut() {
+                m.direction = moon_dir;
+            }
+            n
+        };
+        let day = AtmosphereFrame::new(&s, camera, &sun_at([0.0, 1.0, 0.0]));
+        let night = AtmosphereFrame::new(&s, camera, &sun_at([0.0, -0.5, 0.8]));
+        assert!(day.sun_set_depth < 0.0 && night.sun_set_depth > 0.2);
+        let high = night.with_night(&s, night_with_moon([0.0, 1.0, 0.0]));
+        let low = night.with_night(&s, night_with_moon([1.0, 0.03, 0.0]));
+        let set = night.with_night(&s, night_with_moon([1.0, -0.2, 0.0]));
+        let moon = |f: AtmosphereFrame| f.night.and_then(|n| n.moon).expect("moon");
+        assert!(moon(high).transmittance.iter().all(|&t| t > 0.75));
+        assert!(moon(low).transmittance[0] > 2.0 * moon(low).transmittance[2]);
+        assert_eq!(moon(set).transmittance, [0.0; 3]);
+        assert_eq!(moon(high).share, 1.0);
+        assert_eq!(
+            moon(day.with_night(&s, night_with_moon([0.0, 1.0, 0.0]))).share,
+            0.0
+        );
     }
 
     // Near a small planet with an apparent radius the tables sit over the

@@ -171,7 +171,9 @@ pub struct PostProcessConfig {
     /// applied before this clamp.
     #[asset(default = -8.0)]
     pub auto_exposure_min_ev: f32,
-    /// Upper bound on the adapted exposure (EV).
+    /// Upper bound on the adapted exposure (EV): how far a dark scene is
+    /// brightened, at most 16. A night under a [NightSky](#nightsky) wants
+    /// about 13.
     #[asset(default = 8.0)]
     pub auto_exposure_max_ev: f32,
     /// How quickly exposure chases a new target (per second). Higher converges

@@ -339,7 +339,9 @@ impl VkContext {
         let Some(resources) = self.auto_exposure.resources.as_ref() else {
             return;
         };
-        let params = AutoExposureParams::HISTOGRAM;
+        let params = AutoExposureParams::for_settings(
+            self.auto_exposure.adaptation.as_ref().map(|a| &a.settings),
+        );
         let extent = self.targets.render_extent;
         if extent.width == 0 || extent.height == 0 {
             return;

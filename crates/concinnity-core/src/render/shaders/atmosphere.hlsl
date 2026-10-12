@@ -74,6 +74,7 @@
 
 #define ATMO atmo_cb
 {ATMOSPHERE_COMMON}
+{NIGHT_SKY}
 
 #if defined(ATMOSPHERE_MULTISCATTER) || defined(ATMOSPHERE_SKY_VIEW) || defined(ATMOSPHERE_AERIAL)
 // Light surviving the path from radius `r` with up-cosine `mu` to the top of
@@ -263,7 +264,10 @@ void atmosphere_sky_view_kernel(uint3 id : SV_DispatchThreadID)
         radiance += throughput * atmo_transmittance(atmo_bottom(), mu_g) * saturate(mu_g)
                   * ATMO.ground_albedo.xyz / ATMO_PI;
     }
-    atmo_out[id.xy] = float4(radiance * ATMO.sun_illuminance.xyz, 1.0);
+    // Alpha: the light from beyond the air that survives the ray, for the
+    // night sky drawn behind it; none past the ground.
+    float beyond = ground >= 0.0 ? 0.0 : dot(throughput, (float3)(1.0 / 3.0));
+    atmo_out[id.xy] = float4(radiance * ATMO.sun_illuminance.xyz, beyond);
 }
 #endif
 
@@ -333,8 +337,9 @@ float3 cube_texel_world_dir(uint face, uint2 xy, uint size)
 
 #ifdef ATMOSPHERE_SKY_CUBE
 // One thread per texel of the cube's top mip, six faces deep: the sky-view
-// table along the texel's direction, the ground below the horizon included.
-// The sun's disc is left out: the sun light's own specular term draws it.
+// table along the texel's direction, the ground below the horizon included,
+// and any night sky behind it but its stars. The sun's disc is left out: the
+// sun light's own specular term draws it.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void atmosphere_sky_cube_kernel(uint3 id : SV_DispatchThreadID)
@@ -344,7 +349,12 @@ void atmosphere_sky_cube_kernel(uint3 id : SV_DispatchThreadID)
         return;
     }
     float3 n = cube_texel_world_dir(id.z, id.xy, SKY_CUBE_FACE);
-    float3 l = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(n), 0.0).rgb;
+    float4 view = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(n), 0.0);
+    float3 l = view.rgb;
+    if (night_sky_on())
+    {
+        l += night_sky_reflected(n, 0.5 * ATMO_PI / float(SKY_CUBE_FACE), view.a);
+    }
     atmo_out[id] = float4(min(l, (float3)60000.0), 1.0);
 }
 #endif
@@ -373,7 +383,12 @@ void atmosphere_irradiance_kernel(uint lane : SV_GroupIndex)
     for (uint k = 0u; k < per_lane; ++k)
     {
         float3 d = fibonacci_direction(lane * per_lane + k, IRRADIANCE_SAMPLES);
-        float3 l = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(d), 0.0).rgb;
+        float4 view = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(d), 0.0);
+        float3 l = view.rgb;
+        if (night_sky_on())
+        {
+            l += night_sky_ambient(d, view.a);
+        }
         sh9_basis(d, basis);
         for (uint j = 0u; j < 9u; ++j)
         {

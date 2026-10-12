@@ -1288,6 +1288,7 @@ mod tests {
                 "Wind",
                 "Planet",
                 "Atmosphere",
+                "NightSky",
             ]
         );
         assert_eq!(
@@ -1311,6 +1312,7 @@ mod tests {
                 "Terrain",
                 "Planet",
                 "Atmosphere",
+                "NightSky",
                 // The build-only group sorts after the stored one, and the
                 // resource group after that.
                 "MainMenu",

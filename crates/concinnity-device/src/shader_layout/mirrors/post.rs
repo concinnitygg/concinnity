@@ -27,6 +27,13 @@ pub(in crate::shader_layout) fn atmosphere() -> Vec<Case> {
         cam_pos,
         viewport,
         sky_rot,
+        night,
+        galactic_pole,
+        galactic_center,
+        moon_direction,
+        moon_face,
+        moon_up,
+        galaxies,
     }))]
 }
 

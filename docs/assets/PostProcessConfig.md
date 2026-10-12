@@ -51,7 +51,7 @@ value.
 - `ssgi_rays`: An integer. Hemisphere rays traced per pixel each frame, clamped to `[1, 4]`. The indirect light is accumulated over frames, so more rays settle it faster after the camera reveals new surfaces or the lighting changes, at a higher cost. Only matters when `indirect_lighting` is `ssgi`. Defaults to `1`.
 - `auto_exposure`: A boolean. Auto-exposure toggle. Adapts exposure each frame toward a balanced mid-tone. The authored `exposure_ev` then acts as an additive bias in stops on top of the adapted value. Defaults to `false`.
 - `auto_exposure_min_ev`: A float. Lower bound on the adapted exposure (EV). The `exposure_ev` bias is applied before this clamp. Defaults to `-8.0`.
-- `auto_exposure_max_ev`: A float. Upper bound on the adapted exposure (EV). Defaults to `8.0`.
+- `auto_exposure_max_ev`: A float. Upper bound on the adapted exposure (EV): how far a dark scene is brightened, at most 16. A night under a [NightSky](NightSky.md) wants about 13. Defaults to `8.0`.
 - `auto_exposure_speed`: A float. How quickly exposure chases a new target (per second). Higher converges faster but can pump under flickering content; 1-3 is comfortable. Defaults to `1.5`.
 - `hdr_display`: A boolean. HDR display output toggle. On a capable display, emits extended-range HDR instead of the standard tonemapped output. Falls back to standard output when the display or platform doesn't support HDR. Defaults to `false`.
 - `hdr_pq`: A boolean. PQ (HDR10) output mode. When true, and `hdr_display` is on, and the display has HDR headroom, output is PQ-encoded for HDR10 panels. No effect when `hdr_display` is off. Defaults to `false`.

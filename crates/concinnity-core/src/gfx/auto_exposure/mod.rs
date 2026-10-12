@@ -66,6 +66,15 @@ impl AutoExposureSettings {
             target_log_lum: if hdr_aware { HDR_MIDDLE_GRAY_LOG2 } else { 0.0 },
         }
     }
+
+    /// The darkest log2 luminance the histogram measures: two stops under
+    /// the darkest scene `max_ev` can lift to scene white, and never above
+    /// [`LUM_LOG2_MIN`], so the default range (`max_ev` 8) keeps its bins and
+    /// a night world that raises `max_ev` is measured where it sits rather
+    /// than dropped into the sub-floor bin.
+    pub fn histogram_floor(&self) -> f32 {
+        LUM_LOG2_MIN.min(-self.max_ev - 2.0)
+    }
 }
 
 #[cfg(test)]
@@ -84,5 +93,27 @@ mod tests {
         assert_eq!(s.min_ev, -EV_LIMIT);
         assert_eq!(s.max_ev, EV_LIMIT);
         assert_eq!(s.speed, MAX_SPEED);
+    }
+
+    // The default range keeps the fixed floor; a night range reaches down to
+    // a scene two stops under what the clamp can lift.
+    #[test]
+    fn the_histogram_floor_follows_the_max_ev() {
+        assert_eq!(
+            AutoExposureSettings::resolve(-8.0, 8.0, 1.5, false).histogram_floor(),
+            LUM_LOG2_MIN
+        );
+        assert_eq!(
+            AutoExposureSettings::resolve(-8.0, 8.0, 1.5, true).histogram_floor(),
+            LUM_LOG2_MIN
+        );
+        assert_eq!(
+            AutoExposureSettings::resolve(-8.0, 3.0, 1.5, false).histogram_floor(),
+            LUM_LOG2_MIN
+        );
+        assert_eq!(
+            AutoExposureSettings::resolve(-8.0, 16.0, 1.5, false).histogram_floor(),
+            -18.0
+        );
     }
 }

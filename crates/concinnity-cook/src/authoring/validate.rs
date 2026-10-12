@@ -6,7 +6,7 @@
 
 pub use concinnity_core::components::validate::volumetric_fog;
 pub(crate) use concinnity_core::components::validate::{
-    atmosphere, decal, directional_light, glass_panel, grass, instanced_prop, material,
+    atmosphere, decal, directional_light, glass_panel, grass, instanced_prop, material, night_sky,
     particle_emitter, planet, point_light, prop, rect_area_light, reflection_probe, rigid_body,
     sdf_volume, sky_rotation, spot_light, terrain, voxel_chunk, water_surface, wind,
 };

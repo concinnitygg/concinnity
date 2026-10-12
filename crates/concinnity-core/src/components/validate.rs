@@ -7,7 +7,7 @@
 
 use crate::components::{
     Atmosphere, CameraTrackArgs, Decal, DirectionalLight, GlassPanel, Grass, InstancedProp,
-    MAX_WATER_WAVES, Material, ParticleEmitter, Planet, PointLight, Prop, RectAreaLight,
+    MAX_WATER_WAVES, Material, NightSky, ParticleEmitter, Planet, PointLight, Prop, RectAreaLight,
     ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, Terrain,
     VolumetricFog, VoxelChunk, WaterSurface, WaterWave, Wind,
 };
@@ -274,6 +274,37 @@ pub fn atmosphere(mut args: Atmosphere) -> Atmosphere {
     args
 }
 
+/// Clamp a `NightSky`'s authored values into their valid ranges:
+/// brightnesses non-negative, the faintest magnitude within what the star
+/// grid holds, at most the galaxies the sky's shaders carry, and the moon a
+/// real size on a path that runs forward.
+pub fn night_sky(mut args: NightSky) -> NightSky {
+    let defaults = NightSky::default();
+    let limits = crate::render::night_sky::LIMIT_RANGE;
+    args.star_brightness = finite_at_least(args.star_brightness, 0.0, 0.0);
+    args.star_limit_magnitude = finite_or(args.star_limit_magnitude, defaults.star_limit_magnitude)
+        .clamp(limits[0], limits[1]);
+    args.milky_way_brightness = finite_at_least(args.milky_way_brightness, 0.0, 0.0);
+    args.milky_way_tilt_deg =
+        finite_or(args.milky_way_tilt_deg, defaults.milky_way_tilt_deg).clamp(0.0, 180.0);
+    args.milky_way_turn_deg = finite_or(args.milky_way_turn_deg, 0.0);
+    args.milky_way_core_deg = finite_or(args.milky_way_core_deg, 0.0);
+    args.galaxies = args
+        .galaxies
+        .min(crate::render::night_sky::MAX_GALAXIES as u32);
+    args.moon_start_deg = finite_or(args.moon_start_deg, defaults.moon_start_deg);
+    args.moon_period_days = finite_at_least(args.moon_period_days, 0.0, 0.0);
+    args.moon_inclination_deg = finite_or(args.moon_inclination_deg, 0.0).clamp(-90.0, 90.0);
+    args.moon_angular_diameter_deg = finite_or(
+        args.moon_angular_diameter_deg,
+        defaults.moon_angular_diameter_deg,
+    )
+    .clamp(0.05, 20.0);
+    args.moon_brightness = finite_at_least(args.moon_brightness, 0.0, 0.0);
+    args.moon_disc_brightness = finite_at_least(args.moon_disc_brightness, 0.0, 0.0);
+    args
+}
+
 // `value`, or `fallback` when it is not a finite number.
 fn finite_or(value: f32, fallback: f32) -> f32 {
     if value.is_finite() { value } else { fallback }
@@ -514,6 +545,24 @@ mod tests {
             (t.extent, t.resolution, t.amplitude, t.elevation_max),
             (d.extent, d.resolution, d.amplitude, d.elevation_max)
         );
+    }
+
+    #[test]
+    fn a_night_sky_is_clamped_into_range() {
+        let n = night_sky(NightSky {
+            star_limit_magnitude: 30.0,
+            galaxies: 99,
+            moon_period_days: -4.0,
+            moon_angular_diameter_deg: f32::NAN,
+            milky_way_brightness: -1.0,
+            ..NightSky::default()
+        });
+        assert_eq!(n.star_limit_magnitude, 8.0);
+        assert_eq!(n.galaxies, 16);
+        assert_eq!(n.moon_period_days, 0.0);
+        assert_eq!(n.moon_angular_diameter_deg, 0.52);
+        assert_eq!(n.milky_way_brightness, 0.0);
+        assert_eq!(night_sky(NightSky::default()), NightSky::default());
     }
 
     #[test]

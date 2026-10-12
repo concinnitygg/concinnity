@@ -2,14 +2,15 @@
 
 use crate::gfx::terrain::{LoadedTerrain, grass_terrains};
 use concinnity_core::components::{
-    Atmosphere, Decal, GlassPanel, Grass, ParticleEmitter, Planet, SdfVolume, VolumetricFog,
-    WaterSurface, Wind,
+    Atmosphere, Decal, GlassPanel, Grass, NightSky, ParticleEmitter, Planet, SdfVolume,
+    VolumetricFog, WaterSurface, Wind,
 };
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::render::atmosphere::AtmosphereSettings;
 use concinnity_core::render::backend_init::{SdfVolumeSource, WorldFx};
 use concinnity_core::render::grass::{GrassField, PlanetGrass};
+use concinnity_core::render::night_sky::NightSkySettings;
 use concinnity_core::render::{decal, particles, volumetric_fog};
 use concinnity_host::thread::asset_id;
 
@@ -59,10 +60,19 @@ pub(super) fn drain_world_fx(
         }
         None => terrain_grass,
     };
-    // One atmosphere per world, wrapped around the world's planet if it has one.
-    let atmosphere = ctx.drain::<Atmosphere>().into_iter().next().map(|a| {
-        AtmosphereSettings::resolve(&a, planet.map(|p| (p.center.map(f64::from), p.radius)))
-    });
+    // One atmosphere per world, wrapped around the world's planet if it has
+    // one. A night sky with no atmosphere is seen through a vacuum.
+    let planet = planet.map(|p| (p.center.map(f64::from), p.radius));
+    let night = ctx
+        .drain::<NightSky>()
+        .into_iter()
+        .next()
+        .map(|n| NightSkySettings::resolve(&n));
+    let atmosphere = match ctx.drain::<Atmosphere>().into_iter().next() {
+        Some(a) => Some(AtmosphereSettings::resolve(&a, planet)),
+        None => night.map(|_| AtmosphereSettings::vacuum(planet)),
+    }
+    .map(|s| s.with_night(night));
     WorldFx {
         decals,
         particles,

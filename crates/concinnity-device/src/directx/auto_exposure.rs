@@ -259,7 +259,9 @@ impl DxContext {
             return;
         };
 
-        let params = AutoExposureParams::HISTOGRAM;
+        let params = AutoExposureParams::for_settings(
+            self.auto_exposure.adaptation.as_ref().map(|a| &a.settings),
+        );
         let source = self.auto_exposure_source();
 
         // The build kernel needs the HDR scene readable in a compute (i.e.

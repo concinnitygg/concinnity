@@ -49,6 +49,7 @@ pub mod ltc;
 pub mod material_params;
 pub mod mipmap;
 pub mod model_history;
+pub mod night_sky;
 pub mod ops;
 pub mod overlay_maps;
 pub mod parallel_ctx;

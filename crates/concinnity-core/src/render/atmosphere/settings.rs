@@ -3,6 +3,7 @@
 use super::apparent::ApparentGround;
 use crate::components::Atmosphere;
 use crate::math::{cos, exp};
+use crate::render::night_sky::NightSkySettings;
 
 /// Meters in a kilometer: world units are meters, the atmosphere's are
 /// kilometers.
@@ -49,6 +50,8 @@ pub struct AtmosphereSettings {
     /// The radius the sky is drawn over near the ground, when it is not the
     /// true one.
     pub apparent: Option<ApparentGround>,
+    /// The night sky drawn behind the air, if the world has one.
+    pub night: Option<NightSkySettings>,
 }
 
 impl AtmosphereSettings {
@@ -83,7 +86,32 @@ impl AtmosphereSettings {
                 fade_start: a.apparent_radius_fade_km[0],
                 fade_end: a.apparent_radius_fade_km[1],
             }),
+            night: None,
         }
+    }
+
+    /// No air at all, around the world's planet or under a flat world as
+    /// [`resolve`](Self::resolve) places it: the sky a world with a night sky
+    /// and no atmosphere is drawn through. Nothing scatters or dims the light
+    /// and the ground below the horizon is black.
+    pub fn vacuum(planet: Option<([f64; 3], f32)>) -> Self {
+        Self::resolve(
+            &Atmosphere {
+                rayleigh_scattering: [0.0; 3],
+                mie_scattering: [0.0; 3],
+                mie_absorption: [0.0; 3],
+                ozone_absorption: [0.0; 3],
+                ground_albedo: [0.0; 3],
+                ..Default::default()
+            },
+            planet,
+        )
+    }
+
+    /// These settings with `night` drawn behind the air.
+    #[must_use]
+    pub fn with_night(self, night: Option<NightSkySettings>) -> Self {
+        Self { night, ..self }
     }
 
     /// The ground radius the sky's tables are built over for a camera
@@ -193,6 +221,20 @@ mod tests {
         assert_eq!(s.bottom_radius, 50.0);
         assert_eq!(s.top_radius, 150.0);
         assert_eq!(s.planet_center, Some([0.0, -50_000.0, 0.0]));
+    }
+
+    // A vacuum dims nothing at any height, and keeps the planet it wraps.
+    #[test]
+    fn a_vacuum_has_no_extinction() {
+        let s = AtmosphereSettings::vacuum(Some(([0.0, -50_000.0, 0.0], 50_000.0)));
+        assert_eq!(s.bottom_radius, 50.0);
+        for h in [0.0, 5.0, 25.0, 90.0] {
+            assert_eq!(s.extinction_at(h), [0.0; 3]);
+        }
+        assert_eq!(s.ground_albedo, [0.0; 3]);
+        assert!(s.night.is_none());
+        let night = crate::render::night_sky::NightSkySettings::resolve(&Default::default());
+        assert_eq!(s.with_night(Some(night)).night, Some(night));
     }
 
     // Authored nonsense is clamped before it reaches a divisor.

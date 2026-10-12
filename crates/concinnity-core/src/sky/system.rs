@@ -17,6 +17,7 @@ pub struct SkyRotationSystem {
     axis: [f32; 3],
     degrees_per_second: f32,
     angle_deg: f32,
+    turns: i32,
     pivots: Vec<Entity>,
 }
 
@@ -27,13 +28,14 @@ impl SkyRotationSystem {
             axis: rotation.axis,
             degrees_per_second: rotation.degrees_per_second,
             angle_deg: rotation.angle_deg,
+            turns: 0,
             pivots: Vec::new(),
         }
     }
 
     // Publish the current orientation and carry it onto every pivot entity.
     fn publish(&self, ctx: &mut PipelineContext) {
-        let mut sky = SkyOrientation::new(self.axis, self.angle_deg);
+        let mut sky = SkyOrientation::new(self.axis, self.angle_deg).with_turns(self.turns);
         if let Some(frame) = ctx.resource::<SkyFrame>() {
             sky = sky.in_frame(&frame.0);
         }
@@ -73,12 +75,15 @@ impl System for SkyRotationSystem {
         let turned = self.degrees_per_second * timing.ticks as f32 * timing.tick_dt;
         // Kept within one turn, so a long session never loses precision to a
         // large angle.
-        let wrapped = (self.angle_deg + turned) % FULL_TURN_DEG;
+        let total = self.angle_deg + turned;
+        let wrapped = total % FULL_TURN_DEG;
         self.angle_deg = if wrapped < 0.0 {
             wrapped + FULL_TURN_DEG
         } else {
             wrapped
         };
+        let whole = crate::math::round((total - self.angle_deg) / FULL_TURN_DEG) as i32;
+        self.turns = self.turns.saturating_add(whole);
         self.publish(ctx);
         StepResult::Continue
     }
@@ -185,6 +190,9 @@ mod tests {
             .expect("published")
             .angle_deg;
         assert!((angle - 300.0).abs() < 1e-2, "{angle}");
+        // Wrapping below zero counted one turn back.
+        let turns = world.resource::<SkyOrientation>().expect("published").turns;
+        assert_eq!(turns, -1);
         let orientation = SkyOrientation::new([1.0, 0.0, 0.0], -60.0).rotate([0.0, 0.0, 1.0]);
         let published = world
             .resource::<SkyOrientation>()
@@ -194,6 +202,25 @@ mod tests {
             (0..3).all(|i| (orientation[i] - published[i]).abs() < 1e-3),
             "{orientation:?} {published:?}"
         );
+    }
+
+    // The turns run on past the angle's wrap, one per full turn.
+    #[test]
+    fn full_turns_are_counted() {
+        let (mut world, mut system) = world_with(SkyRotation {
+            degrees_per_second: 400.0,
+            ..Default::default()
+        });
+        system.init(&mut world.context());
+        for _ in 0..120 {
+            system.step(&mut world.context());
+        }
+        let sky = world
+            .resource::<SkyOrientation>()
+            .copied()
+            .expect("published");
+        assert_eq!(sky.turns, 2);
+        assert!((sky.angle_deg - 80.0).abs() < 0.1, "{}", sky.angle_deg);
     }
 
     // A paused world holds still: the sky is simulation, not presentation.

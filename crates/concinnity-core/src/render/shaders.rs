@@ -41,6 +41,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("main_shading.hlsl", MAIN_SHADING),
     ("main_types.hlsl", MAIN_TYPES),
     ("model_history.hlsl", MODEL_HISTORY),
+    ("night_sky.hlsl", NIGHT_SKY),
     ("object_common.hlsl", OBJECT_COMMON),
     ("particle.hlsl", PARTICLE),
     ("particle_simulate.hlsl", PARTICLE_SIMULATE),
@@ -145,6 +146,8 @@ pub const MAIN_SHADING: &str = include_str!("shaders/main_shading.hlsl");
 pub const MAIN_TYPES: &str = include_str!("shaders/main_types.hlsl");
 /// `model_history.hlsl`.
 pub const MODEL_HISTORY: &str = include_str!("shaders/model_history.hlsl");
+/// `night_sky.hlsl`.
+pub const NIGHT_SKY: &str = include_str!("shaders/night_sky.hlsl");
 /// `object_common.hlsl`.
 pub const OBJECT_COMMON: &str = include_str!("shaders/object_common.hlsl");
 /// `particle.hlsl`.

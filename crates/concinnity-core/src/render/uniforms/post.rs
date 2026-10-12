@@ -1,7 +1,7 @@
 //! The small parameter blocks the fullscreen post passes and the two compute
 //! helpers that feed them take.
 
-use crate::gfx::auto_exposure::{HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN};
+use crate::gfx::auto_exposure::{AutoExposureSettings, HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN};
 
 /// Input to the TAA resolve fragment shader. Matches `TaaParams` in
 /// `shaders/taa.hlsl`. 8 bytes.
@@ -34,14 +34,25 @@ pub struct AutoExposureParams {
 }
 
 impl AutoExposureParams {
-    /// The mapping for the histogram the engine builds: `HISTOGRAM_BINS` bins
-    /// spanning `LUM_LOG2_MIN..LUM_LOG2_MAX`.
-    pub const HISTOGRAM: Self = Self {
-        lum_log2_min: LUM_LOG2_MIN,
-        lum_log2_range: LUM_LOG2_MAX - LUM_LOG2_MIN,
-        lum_to_bin_scale: HISTOGRAM_BINS as f32 / (LUM_LOG2_MAX - LUM_LOG2_MIN),
-        _pad: 0.0,
-    };
+    /// The mapping for the histogram the engine builds by default:
+    /// `HISTOGRAM_BINS` bins spanning `LUM_LOG2_MIN..LUM_LOG2_MAX`.
+    pub const HISTOGRAM: Self = Self::spanning(LUM_LOG2_MIN);
+
+    /// `HISTOGRAM_BINS` bins spanning `floor..LUM_LOG2_MAX`.
+    pub const fn spanning(floor: f32) -> Self {
+        Self {
+            lum_log2_min: floor,
+            lum_log2_range: LUM_LOG2_MAX - floor,
+            lum_to_bin_scale: HISTOGRAM_BINS as f32 / (LUM_LOG2_MAX - floor),
+            _pad: 0.0,
+        }
+    }
+
+    /// The histogram a renderer adapting with `settings` builds (the default
+    /// one without auto-exposure).
+    pub fn for_settings(settings: Option<&AutoExposureSettings>) -> Self {
+        settings.map_or(Self::HISTOGRAM, |s| Self::spanning(s.histogram_floor()))
+    }
 }
 
 /// Per-dispatch params for the Hi-Z build kernels: four tightly-packed uints.

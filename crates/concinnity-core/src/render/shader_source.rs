@@ -98,6 +98,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{SKY_RAY}", "sky_ray.hlsl"),
     ("{ATMOSPHERE_TYPES}", "atmosphere_types.hlsl"),
     ("{ATMOSPHERE_COMMON}", "atmosphere_common.hlsl"),
+    ("{NIGHT_SKY}", "night_sky.hlsl"),
     ("{WIND}", "wind.hlsl"),
     ("{HIZ_TEST}", "hiz_test.hlsl"),
     // REFLECTION_CUT trails MAIN_SHADING, which carries its marker.

@@ -4,7 +4,7 @@
 // kilometers. `render::atmosphere` mirrors the sizes, and its tests lock the
 // constants below to the Rust ones.
 //
-// AtmosphereParams (320 B) mirrors `render::atmosphere::AtmosphereParams`;
+// AtmosphereParams (928 B) mirrors `render::atmosphere::AtmosphereParams`;
 // every member is a float4 lane so the three targets lay it out alike.
 
 struct AtmosphereParams
@@ -38,7 +38,25 @@ struct AtmosphereParams
     // xy = target size in pixels, zw = its reciprocal.
     float4 viewport;
     float4 sky_rot[3];
+    // The night sky behind the air (render::night_sky::NightLanes): x = a
+    // magnitude-0 star's light, y = the faintest magnitude, z = the Milky
+    // Way's radiance at its heart, w = galaxies drawn.
+    float4 night;
+    // xyz = the Milky Way's pole on the celestial sphere, w = the seed.
+    float4 galactic_pole;
+    // xyz = the direction of its core, w = stars per steradian.
+    float4 galactic_center;
+    // xyz = toward the moon, w = cosine of its radius (2 without a moon).
+    float4 moon_direction;
+    // xyz = the moon's face lit head-on, w = its dark side's share.
+    float4 moon_face;
+    // xyz = up across the moon's face, w = 1 when the night sky draws.
+    float4 moon_up;
+    // Two lanes per galaxy, NIGHT_MAX_GALAXIES of them.
+    float4 galaxies[32];
 };
+
+static const uint NIGHT_MAX_GALAXIES = 16u;
 
 static const uint TRANSMITTANCE_STEPS = 40u;
 static const uint TRANSMITTANCE_WIDTH = 256u;

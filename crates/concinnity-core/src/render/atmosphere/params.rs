@@ -4,6 +4,7 @@ use super::frame::AtmosphereFrame;
 use super::lut::AERIAL_MAX_DISTANCE_KM;
 use super::settings::{AtmosphereSettings, METERS_PER_KM};
 use crate::math::vec3::length;
+use crate::render::night_sky::{MAX_GALAXIES, NightLanes};
 
 /// The atmosphere's constants, shared by the table kernels, the sky draw and
 /// the haze pass. Mirrors `AtmosphereParams` in atmosphere_common.hlsl. Every
@@ -49,6 +50,22 @@ pub struct AtmosphereParams {
     /// (`SkyOrientation::sample_rows`): the irradiance cube is written in the
     /// frame every cube sample is taken in.
     pub sky_rot: [[f32; 4]; 3],
+    /// The night sky (`NightLanes::night`): star and Milky Way brightness,
+    /// the faintest magnitude and the galaxy count; all zero without one.
+    pub night: [f32; 4],
+    /// xyz = the Milky Way's pole on the celestial sphere, w = the seed.
+    pub galactic_pole: [f32; 4],
+    /// xyz = the direction of its core, w = stars per steradian.
+    pub galactic_center: [f32; 4],
+    /// xyz = toward the moon, w = cosine of its radius (2 without one).
+    pub moon_direction: [f32; 4],
+    /// xyz = the moon's face lit head-on, w = its dark side's share.
+    pub moon_face: [f32; 4],
+    /// xyz = up across the moon's face, w = 1 when the night sky draws.
+    pub moon_up: [f32; 4],
+    /// Two lanes per galaxy: direction and brightness, then long axis and
+    /// shape.
+    pub galaxies: [[f32; 4]; 2 * MAX_GALAXIES],
 }
 
 /// The view the atmosphere is drawn for.
@@ -74,6 +91,12 @@ impl AtmosphereParams {
             frame.sun_illuminance[i] * frame.sun_transmittance[i] * s.sun_disc_intensity
         });
         let viewport = [view.viewport[0].max(1.0), view.viewport[1].max(1.0)];
+        let night = match (&s.night, &frame.night) {
+            (Some(settings), Some(night)) => {
+                NightLanes::new(settings, night, frame.sun_illuminance)
+            }
+            _ => NightLanes::OFF,
+        };
         Self {
             inv_vp: view.inv_vp,
             rayleigh: v3(s.rayleigh_scattering, -1.0 / s.rayleigh_scale_height),
@@ -100,6 +123,13 @@ impl AtmosphereParams {
                 1.0 / viewport[1],
             ],
             sky_rot: view.sky_rot,
+            night: night.night,
+            galactic_pole: night.galactic_pole,
+            galactic_center: night.galactic_center,
+            moon_direction: night.moon_direction,
+            moon_face: night.moon_face,
+            moon_up: night.moon_up,
+            galaxies: night.galaxies,
         }
     }
 }
@@ -114,7 +144,7 @@ mod tests {
     // member a float4 lane, so MSL, SPIR-V and DXIL agree.
     #[test]
     fn atmosphere_params_layout_matches_the_shader() {
-        assert_eq!(size_of::<AtmosphereParams>(), 320);
+        assert_eq!(size_of::<AtmosphereParams>(), 928);
         assert_eq!(offset_of!(AtmosphereParams, inv_vp), 0);
         assert_eq!(offset_of!(AtmosphereParams, rayleigh), 64);
         assert_eq!(offset_of!(AtmosphereParams, mie_scattering), 80);
@@ -130,6 +160,13 @@ mod tests {
         assert_eq!(offset_of!(AtmosphereParams, cam_pos), 240);
         assert_eq!(offset_of!(AtmosphereParams, viewport), 256);
         assert_eq!(offset_of!(AtmosphereParams, sky_rot), 272);
+        assert_eq!(offset_of!(AtmosphereParams, night), 320);
+        assert_eq!(offset_of!(AtmosphereParams, galactic_pole), 336);
+        assert_eq!(offset_of!(AtmosphereParams, galactic_center), 352);
+        assert_eq!(offset_of!(AtmosphereParams, moon_direction), 368);
+        assert_eq!(offset_of!(AtmosphereParams, moon_face), 384);
+        assert_eq!(offset_of!(AtmosphereParams, moon_up), 400);
+        assert_eq!(offset_of!(AtmosphereParams, galaxies), 416);
     }
 
     #[test]
@@ -158,6 +195,10 @@ mod tests {
         assert_eq!(p.view_ground, [p.radii[0], p.radii[1], p.camera[3], 0.0]);
 
         assert_eq!(p.viewport[2], 1.0 / 1600.0);
+        // No night sky: its lanes are off and no direction reaches the moon.
+        assert_eq!(p.moon_up[3], 0.0);
+        assert_eq!(p.moon_direction[3], 2.0);
+        assert_eq!(p.night, [0.0; 4]);
         // The disc is the sunlight through the air, times its brightness.
         let expected = 2.0 * frame.sun_transmittance[0] * s.sun_disc_intensity;
         assert!((p.sun_disc[0] - expected).abs() < 1e-3);

@@ -50,7 +50,9 @@ pub use lut::{
     aerial_slice_distance, aerial_slice_of, sky_view_direction, sky_view_uv, transmittance_r_mu,
     transmittance_uv,
 };
-pub use optics::{optical_depth, sun_visible_fraction, transmittance};
+pub use optics::{
+    disc_set_depth, disc_visible_fraction, optical_depth, sun_visible_fraction, transmittance,
+};
 pub use params::{AtmosphereParams, AtmosphereView};
 pub use readiness::TableReadiness;
 pub use settings::AtmosphereSettings;

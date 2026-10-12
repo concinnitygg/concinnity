@@ -43,6 +43,7 @@
 - [MaterialPalette](MaterialPalette.md) - A named set of [Material](Material.md) entries with short aliases.
 - [Mesh](Mesh.md) - Raw geometry. Supply `vertices` and `indices` directly, or import them from a binary glTF file with `source` + `primitive_index`.
 - [Model](Model.md) - An ordered list of sub-meshes, each with its own material.
+- [NightSky](NightSky.md) - The sky beyond the air: stars, the Milky Way, distant galaxies and the moon, fixed to the celestial sphere so they rise and set as a [SkyRotation](SkyRotation.md) turns it.
 - [OptionSelect](OptionSelect.md) - A settings row that cycles through a fixed set of values on click.
 - [Panel](Panel.md) - A titled background container for grouping UI overlay elements.
 - [ParticleEmitter](ParticleEmitter.md) - A billboard particle emitter.

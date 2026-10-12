@@ -1,22 +1,29 @@
-// The atmosphere's per-frame inputs, and the sun light it drives: the first
-// directional light, lit through the air between the sun and the camera.
+// The atmosphere's per-frame inputs, and the lights it drives: the sun, lit
+// through the air between it and the camera, and at night the moon, which
+// takes over the shadowed first place once the sun has set.
 
-use concinnity_core::components::DirectionalLight;
+use concinnity_core::components::{DirectionalLight, SkyRotation};
 use concinnity_core::ecs::PipelineContext;
 use concinnity_core::gfx::render_types::LightUniforms;
 use concinnity_core::planet::PlanetFrame;
 use concinnity_core::render::atmosphere::{AtmosphereFrame, AtmosphereSettings, sun_light};
 use concinnity_core::render::lights::DirectionalLightSet;
+use concinnity_core::render::night_sky::{NightFrame, shadowed_first};
 use concinnity_core::sky::SkyOrientation;
 
-// How far the sun's transmittance may drift from what the lights were last
-// pushed with before they are pushed again.
-const SUN_TOLERANCE: f32 = 1e-3;
+// How far the sun's transmittance, or the moon's light as a share of its
+// full brightness, may drift from what the lights were last pushed with
+// before they are pushed again.
+const LIGHT_TOLERANCE: f32 = 1e-3;
 
-// The world's atmosphere and the sun color the backend last received.
+// What the lights were last pushed for: the sun's transmittance and the
+// moon's share of its full light, per color.
+type PushedLights = ([f32; 3], [f32; 3]);
+
+// The world's atmosphere and the lights the backend last received.
 pub(super) struct AtmosphereDrive {
     settings: AtmosphereSettings,
-    pushed: Option<[f32; 3]>,
+    pushed: Option<PushedLights>,
 }
 
 impl AtmosphereDrive {
@@ -28,9 +35,9 @@ impl AtmosphereDrive {
     }
 
     // This frame's inputs for a camera at `cam_pos` in the simulated frame,
-    // and the directional set to install when the sun's light has changed
-    // since it was last pushed (or `turned` already carries a new set, which
-    // this one then replaces).
+    // and the directional set to install when the sun's or the moon's light
+    // has changed since it was last pushed (or `turned` already carries a new
+    // set, which this one then replaces).
     pub(super) fn frame(
         &mut self,
         ctx: &PipelineContext,
@@ -51,20 +58,63 @@ impl AtmosphereDrive {
             .resource::<PlanetFrame>()
             .map(|f| f.frame.to_local_f64(f.shape.center))
             .or(self.settings.planet_center);
-        let frame = AtmosphereFrame::new(
+        let mut frame = AtmosphereFrame::new(
             &self.settings,
             self.settings.camera_km(camera, center),
             &sun,
         );
-        let changed = self.pushed.is_none_or(|p| {
-            (0..3).any(|i| (p[i] - frame.sun_transmittance[i]).abs() > SUN_TOLERANCE)
+        if let Some(night) = &self.settings.night {
+            // The celestial pole is the sky's axis, or straight up for a sky
+            // that does not turn.
+            let pole = ctx
+                .query::<SkyRotation>()
+                .next()
+                .map_or([0.0, 1.0, 0.0], |r| r.axis);
+            let night = NightFrame::new(night, pole, lights[0].direction, &sky);
+            frame = frame.with_night(&self.settings, night);
+        }
+        let moon = moon_light(&self.settings, &frame, &lights[0]);
+        let key = (frame.sun_transmittance, moon.map_or([0.0; 3], |m| m.1));
+        let changed = self.pushed.is_none_or(|(sun, moon)| {
+            (0..3).any(|i| {
+                (sun[i] - key.0[i]).abs() > LIGHT_TOLERANCE
+                    || (moon[i] - key.1[i]).abs() > LIGHT_TOLERANCE
+            })
         });
         let set = (changed || turned.is_some()).then(|| {
-            self.pushed = Some(frame.sun_transmittance);
-            sun_driven_set(&frame, &lights, &sky)
+            self.pushed = Some(key);
+            let under_sky = super::scene_lights::lights_under_sky(lights.iter(), &sky);
+            let turned = under_sky.as_slice();
+            let share = frame.night.and_then(|n| n.moon).map_or(0.0, |m| m.share);
+            shadowed_first(
+                sun_light(&frame, &turned[0]),
+                moon.map(|m| m.0),
+                share,
+                &turned[1..],
+            )
         });
         (frame, set)
     }
+}
+
+// The moon's full light through the air as a directional light (the sun's
+// light above the air scaled by the moon's brightness and phase, tinted by
+// the air toward the moon), and that light per color as a share of the full
+// moon's above the air, switched by the handover share.
+fn moon_light(
+    settings: &AtmosphereSettings,
+    frame: &AtmosphereFrame,
+    sun: &DirectionalLight,
+) -> Option<(DirectionalLight, [f32; 3])> {
+    let moon = frame.night?.moon?;
+    let brightness = settings.night?.moon?.brightness;
+    let light = DirectionalLight {
+        direction: moon.direction,
+        color: core::array::from_fn(|i| sun.color[i] * moon.transmittance[i]),
+        intensity: sun.intensity * brightness * moon.phase,
+    };
+    let seen = moon.transmittance.map(|t| t * moon.phase * moon.share);
+    Some((light, seen))
 }
 
 // The world's directional lights as authored, or the neutral sun a world with
@@ -80,23 +130,6 @@ fn authored_lights(ctx: &PipelineContext) -> Vec<DirectionalLight> {
         color: d.color,
         intensity: d.intensity,
     }]
-}
-
-// The directional set under the sky's rotation, its first light (the sun)
-// tinted by the air it reaches the camera through.
-fn sun_driven_set(
-    frame: &AtmosphereFrame,
-    lights: &[DirectionalLight],
-    sky: &SkyOrientation,
-) -> DirectionalLightSet {
-    let turned = super::scene_lights::lights_under_sky(lights.iter(), sky);
-    DirectionalLightSet::collect(turned.as_slice().iter().enumerate().map(|(i, light)| {
-        if i == 0 {
-            sun_light(frame, light)
-        } else {
-            *light
-        }
-    }))
 }
 
 #[cfg(test)]
@@ -156,6 +189,29 @@ mod tests {
         let set = set.expect("installed");
         assert_eq!(set.as_slice()[0].color, [0.0; 3]);
         assert_eq!(set.as_slice()[1].color, [0.2, 0.3, 0.4]);
+    }
+
+    // At night under a full moon the moon holds the shadowed place, lit
+    // through the air; by day the sun keeps it and the moon casts nothing.
+    #[test]
+    fn the_moon_takes_the_shadows_at_night() {
+        use concinnity_core::render::night_sky::NightSkySettings;
+        let settings = AtmosphereSettings::resolve(&Atmosphere::default(), None)
+            .with_night(Some(NightSkySettings::resolve(&Default::default())));
+        let mut night = world_with_sun([0.1, -1.0, 0.0]);
+        let mut drive = AtmosphereDrive::new(settings);
+        let (frame, set) = drive.frame(&night.context(), [0.0, 2.0, 0.0], None);
+        let first = set.expect("installed").as_slice()[0];
+        let moon = frame.night.and_then(|n| n.moon).expect("a moon");
+        assert_eq!(first.direction, moon.direction);
+        assert!(moon.direction[1] > 0.9, "full: opposite the sun");
+        assert!((first.intensity - 2.0 * 1.5e-4 * moon.phase).abs() < 1e-7);
+        assert!(first.color.iter().all(|&c| c > 0.7), "{:?}", first.color);
+        let mut day = world_with_sun([0.1, 1.0, 0.0]);
+        let (_, set) = AtmosphereDrive::new(settings).frame(&day.context(), [0.0, 2.0, 0.0], None);
+        let set = set.expect("installed");
+        assert_eq!(set.as_slice().len(), 1);
+        assert_eq!(set.as_slice()[0].intensity, 2.0);
     }
 
     // A world with no directional light is lit by the neutral sun, through the

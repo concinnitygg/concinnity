@@ -14,7 +14,8 @@
 // their own register spaces.
 //
 // Under SKY_ATMOSPHERE the sky is the world's atmosphere instead: the
-// sky-view table around the camera, with the sun's disc drawn into it. Its
+// sky-view table around the camera, with the sun's disc drawn into it and
+// any night sky behind it, dimmed by the air (the table's alpha). Its
 // constant block, the table and its sampler take set 1 on Vulkan and slot 1,
 // 0 and 0 on Metal and DirectX, beside the same view block.
 
@@ -30,6 +31,7 @@
 [[vk::binding(2, 1)]] SamplerState lut_sampler : register(s0);
 #define ATMO atmo_cb
 {ATMOSPHERE_COMMON}
+{NIGHT_SKY}
 #elif defined(CN_BACKEND_VULKAN)
 [[vk::binding(0, 0)]] ConstantBuffer<ViewUniforms> view_cb : register(b0);
 [[vk::binding(5, 0)]] TextureCube<float4> prefilter_cube : register(t0);
@@ -58,13 +60,21 @@ SkyVertexOut sky_vertex(uint vid : SV_VertexID)
 }
 
 #ifdef SKY_ATMOSPHERE
-// The sky-view table along the pixel's ray, and the sun's disc where the ray
-// meets it above the horizon, darkened toward its limb.
+// The sky-view table along the pixel's ray over any night sky behind it, and
+// the sun's disc where the ray meets it above the horizon, darkened toward
+// its limb.
 [shader("pixel")]
 float4 sky_atmosphere_fragment(SkyVertexOut p) : SV_Target
 {
     float3 dir = normalize(p.ray);
-    float3 color = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(dir), 0.0).rgb;
+    float4 view = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(dir), 0.0);
+    float3 color = view.rgb;
+    float3 dir_dx = ddx(dir);
+    float3 dir_dy = ddy(dir);
+    if (night_sky_on())
+    {
+        color += night_sky_radiance(dir, dir_dx, dir_dy, view.a);
+    }
     float cos_sun = dot(dir, ATMO.sun_direction.xyz);
     float cos_radius = ATMO.sun_direction.w;
     if (cos_sun > cos_radius && !atmo_view_hits_ground(dot(dir, atmo_camera_up())))

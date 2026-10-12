@@ -39,6 +39,7 @@ pub use super::key_event::{KeyEvent, KeyMods, KeyPress};
 pub use super::layout_container::{Justify, LabelBox, LabelPlacement, LayoutContainer, LayoutRow};
 pub use super::loading_overlay::LoadingOverlay;
 pub use super::model::{Model, SubMeshRef};
+pub use super::night_sky::NightSky;
 pub use super::particle_emitter::ParticleEmitter;
 pub use super::physics_config::PhysicsConfig;
 pub use super::physics_joint::{PhysicsJoint, PhysicsJointKind};

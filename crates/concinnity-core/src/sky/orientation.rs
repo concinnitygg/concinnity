@@ -11,6 +11,9 @@ use crate::transform::quat_to_mat3;
 pub struct SkyOrientation {
     /// The current angle in degrees, carried so the system can resume from it.
     pub angle_deg: f32,
+    /// Full turns made before `angle_deg`: the count of days, for a clock
+    /// that runs on past the angle's wrap.
+    pub turns: i32,
     // Column-major rotation taking a direction from the sky's baked frame into
     // world space. Held rather than recomputed because every consumer wants it.
     rotation: [[f32; 3]; 3],
@@ -20,6 +23,7 @@ impl Default for SkyOrientation {
     fn default() -> Self {
         Self {
             angle_deg: 0.0,
+            turns: 0,
             rotation: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         }
     }
@@ -44,8 +48,15 @@ impl SkyOrientation {
         let q = quat_from_axis_angle(axis, -angle_deg.to_radians());
         Self {
             angle_deg,
+            turns: 0,
             rotation: quat_to_mat3(q),
         }
+    }
+
+    /// The same orientation after `turns` full turns.
+    #[must_use]
+    pub fn with_turns(self, turns: i32) -> Self {
+        Self { turns, ..self }
     }
 
     /// The same sky seen from a frame turned away from the one it was

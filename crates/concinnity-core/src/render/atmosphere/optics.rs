@@ -51,23 +51,55 @@ pub fn transmittance(s: &AtmosphereSettings, r: f32, mu: f32) -> [f32; 3] {
 /// sun's center at cosine `mu` to the local up: 1 with the whole disc up, 0
 /// once it has set, eased across the disc's own width between.
 pub fn sun_visible_fraction(s: &AtmosphereSettings, r: f32, mu: f32) -> f32 {
+    disc_visible_fraction(s, r, mu, s.sun_cos_radius)
+}
+
+/// [`sun_visible_fraction`] for any disc in the sky whose angular radius has
+/// cosine `cos_radius`.
+pub fn disc_visible_fraction(s: &AtmosphereSettings, r: f32, mu: f32, cos_radius: f32) -> f32 {
+    let radius = disc_radius(cos_radius);
+    let x = ((above_horizon(s, r, mu) + radius) / (2.0 * radius)).clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+/// How far below the horizon, seen from radius `r`, the top of a disc with
+/// its center at cosine `mu` to the local up has sunk, in radians: negative
+/// while any of it is up, 0 the moment it has fully set.
+pub fn disc_set_depth(s: &AtmosphereSettings, r: f32, mu: f32, cos_radius: f32) -> f32 {
+    -(above_horizon(s, r, mu) + disc_radius(cos_radius))
+}
+
+// The elevation of cosine `mu` above the horizon seen from radius `r`.
+fn above_horizon(s: &AtmosphereSettings, r: f32, mu: f32) -> f32 {
     let sin_h = s.bottom_radius / r.max(s.bottom_radius);
     let horizon = -sqrt((1.0 - sin_h * sin_h).max(0.0));
-    let radius = crate::math::acos(s.sun_cos_radius).max(1e-4);
-    let above = asin(mu.clamp(-1.0, 1.0)) - asin(horizon);
-    let x = ((above + radius) / (2.0 * radius)).clamp(0.0, 1.0);
-    x * x * (3.0 - 2.0 * x)
+    asin(mu.clamp(-1.0, 1.0)) - asin(horizon)
+}
+
+fn disc_radius(cos_radius: f32) -> f32 {
+    acos(cos_radius.clamp(-1.0, 1.0)).max(1e-4)
 }
 
 /// The sunlight reaching radius `r` from a sun at cosine `mu`, as a factor of
 /// the light above the air: the transmittance of the path, scaled by the
 /// part of the disc still above the horizon.
 pub(super) fn sun_transmittance(s: &AtmosphereSettings, r: f32, mu: f32) -> [f32; 3] {
-    let visible = sun_visible_fraction(s, r, mu);
+    disc_transmittance(s, r, mu, s.sun_cos_radius)
+}
+
+/// [`sun_transmittance`] for any disc in the sky whose angular radius has
+/// cosine `cos_radius`.
+pub(super) fn disc_transmittance(
+    s: &AtmosphereSettings,
+    r: f32,
+    mu: f32,
+    cos_radius: f32,
+) -> [f32; 3] {
+    let visible = disc_visible_fraction(s, r, mu, cos_radius);
     if visible <= 0.0 {
         return [0.0; 3];
     }
-    // A sun straddling the horizon is lit through the grazing path.
+    // A disc straddling the horizon is lit through the grazing path.
     let sin_h = s.bottom_radius / r.max(s.bottom_radius);
     let horizon = -sqrt((1.0 - sin_h * sin_h).max(0.0));
     let mu = mu.max(horizon + 1e-4);
@@ -84,7 +116,19 @@ pub(super) fn sun_transmittance_seen(
     r: f32,
     mu: f32,
 ) -> [f32; 3] {
-    let visible = sun_visible_fraction(view, r, mu);
+    disc_transmittance_seen(view, table, r, mu, view.sun_cos_radius)
+}
+
+/// [`sun_transmittance_seen`] for any disc whose angular radius has cosine
+/// `cos_radius`.
+pub(super) fn disc_transmittance_seen(
+    view: &AtmosphereSettings,
+    table: &AtmosphereSettings,
+    r: f32,
+    mu: f32,
+    cos_radius: f32,
+) -> [f32; 3] {
+    let visible = disc_visible_fraction(view, r, mu, cos_radius);
     if visible <= 0.0 {
         return [0.0; 3];
     }
@@ -171,6 +215,27 @@ mod tests {
         assert_eq!(sun_transmittance(&s, r, -0.2), [0.0; 3]);
         let setting = sun_transmittance(&s, r, 0.0);
         assert!(setting[0] > 0.0 && setting[0] < 0.5, "{setting:?}");
+    }
+
+    // The set depth is 0 the moment the disc's top touches the horizon and
+    // grows as it sinks; the visible fraction is 0 from there on.
+    #[test]
+    fn a_disc_sinks_below_the_horizon_by_its_set_depth() {
+        let s = earth();
+        let r = s.bottom_radius;
+        let radius = crate::math::acos(s.sun_cos_radius);
+        let depth =
+            |deg: f32| disc_set_depth(&s, r, crate::math::sin(deg.to_radians()), s.sun_cos_radius);
+        assert!((depth(-radius.to_degrees())).abs() < 1e-5);
+        assert!(depth(0.0) < 0.0);
+        assert!((depth(-5.0) - (5.0_f32.to_radians() - radius)).abs() < 1e-5);
+        assert_eq!(
+            sun_visible_fraction(&s, r, crate::math::sin(-radius - 1e-4)),
+            0.0
+        );
+        // A wider disc takes longer to set.
+        let moon = crate::math::cos(1.0_f32.to_radians());
+        assert!(disc_visible_fraction(&s, r, crate::math::sin(-0.6_f32.to_radians()), moon) > 0.0);
     }
 
     // From high up the horizon dips, so the sun stays up longer.
