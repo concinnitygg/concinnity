@@ -201,7 +201,7 @@ impl UpscaleBackend for XessUpscaler {
                 .reactive
                 .map_or(ptr::null_mut(), Interface::as_raw),
             p_output_texture: self.output.resource().as_raw(),
-            frame: self.ctx.frame(camera.jitter_offset),
+            frame: self.ctx.frame(camera.jitter_offset, camera.pre_exposure),
             p_descriptor_heap: ptr::null_mut(),
             descriptor_heap_offset: 0,
         };

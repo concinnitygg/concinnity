@@ -45,6 +45,9 @@ use super::scoped_encoder::ScopedEncoder;
 
 // The format every table and the irradiance cube are stored in.
 const TABLE_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA16Float;
+// Absolute radiance, which a night sky takes below half float's range: the
+// environment maps' irradiance cubes are full float too.
+const IRRADIANCE_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA32Float;
 
 type Texture = Retained<ProtocolObject<dyn MTLTexture>>;
 type Kernel = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
@@ -153,7 +156,7 @@ impl AtmosphereState {
         let irradiance = allocator.alloc_texture(
             &TextureDesc {
                 kind: MTLTextureType::TypeCube,
-                format: TABLE_FORMAT,
+                format: IRRADIANCE_FORMAT,
                 width: IRRADIANCE_FACE as usize,
                 height: IRRADIANCE_FACE as usize,
                 usage: MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite,
@@ -165,7 +168,7 @@ impl AtmosphereState {
         // keeps the cube's own format, so it reinterprets nothing.
         let irradiance_slices = unsafe {
             irradiance.newTextureViewWithPixelFormat_textureType_levels_slices(
-                TABLE_FORMAT,
+                IRRADIANCE_FORMAT,
                 MTLTextureType::Type2DArray,
                 NSRange::new(0, 1),
                 NSRange::new(0, 6),

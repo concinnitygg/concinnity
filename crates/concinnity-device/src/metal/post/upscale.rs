@@ -164,9 +164,9 @@ impl MetalFXUpscaler {
             descriptor.setInputHeight(input_height as usize);
             descriptor.setOutputWidth(output_width as usize);
             descriptor.setOutputHeight(output_height as usize);
-            // We do not author a pre-exposed color buffer (the input is
-            // linear HDR fresh from the SSR / HDR resolve), so leave
-            // auto-exposure off and let MetalFX use its built-in heuristic.
+            // The input is linear HDR at the frame's pre-exposure, which each
+            // encode hands over through `preExposure`, so leave auto-exposure
+            // off and let MetalFX use its built-in heuristic.
             descriptor.setAutoExposureEnabled(false);
         }
         // The reactive mask input arrived in macOS 14.4; on an older OS the
@@ -312,6 +312,10 @@ impl MtlContext {
 
             // `depthReversed` means near is device depth 1.
             upscaler.scaler.setDepthReversed(CAMERA_DEPTH.reversed);
+
+            // MetalFX divides the input by this, so its history holds steady
+            // across exposure changes.
+            upscaler.scaler.setPreExposure(self.pre_exposure.value());
 
             // The first frame after a rebuild or a history reset discards
             // history. The latch is raised on the main thread between frames.

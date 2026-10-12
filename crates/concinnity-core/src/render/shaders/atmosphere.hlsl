@@ -64,10 +64,16 @@
 #else
 #define ATMO_OUTPUT RWTexture2D<float4>
 #endif
-#ifdef CN_BACKEND_DIRECTX
-[[vk::binding(5, 0)]] [[vk::image_format("rgba16f")]] ATMO_OUTPUT atmo_out : register(u0);
+// The irradiance cube is full float, every table half float.
+#ifdef ATMOSPHERE_IRRADIANCE
+#define ATMO_OUTPUT_FORMAT "rgba32f"
 #else
-[[vk::binding(5, 0)]] [[vk::image_format("rgba16f")]] ATMO_OUTPUT atmo_out : register(u3);
+#define ATMO_OUTPUT_FORMAT "rgba16f"
+#endif
+#ifdef CN_BACKEND_DIRECTX
+[[vk::binding(5, 0)]] [[vk::image_format(ATMO_OUTPUT_FORMAT)]] ATMO_OUTPUT atmo_out : register(u0);
+#else
+[[vk::binding(5, 0)]] [[vk::image_format(ATMO_OUTPUT_FORMAT)]] ATMO_OUTPUT atmo_out : register(u3);
 #endif
 
 #endif
@@ -265,9 +271,11 @@ void atmosphere_sky_view_kernel(uint3 id : SV_DispatchThreadID)
                   * ATMO.ground_albedo.xyz / ATMO_PI;
     }
     // Alpha: the light from beyond the air that survives the ray, for the
-    // night sky drawn behind it; none past the ground.
+    // night sky drawn behind it; none past the ground. The radiance is stored
+    // at the frame's pre-exposure, which keeps a twilight sky in half float's
+    // normal range.
     float beyond = ground >= 0.0 ? 0.0 : dot(throughput, (float3)(1.0 / 3.0));
-    atmo_out[id.xy] = float4(radiance * ATMO.sun_illuminance.xyz, beyond);
+    atmo_out[id.xy] = float4(radiance * ATMO.sun_illuminance.xyz * ATMO.cam_pos.w, beyond);
 }
 #endif
 
@@ -297,7 +305,8 @@ void atmosphere_aerial_kernel(uint3 id : SV_DispatchThreadID)
         atmo_step(origin + dir * (near + 0.5 * dt), dir, sun, dt, radiance, throughput);
         near = far;
         float t = dot(throughput, (float3)(1.0 / 3.0));
-        atmo_out[uint3(id.xy, z)] = float4(radiance * ATMO.sun_illuminance.xyz, 1.0 - t);
+        atmo_out[uint3(id.xy, z)] =
+            float4(radiance * ATMO.sun_illuminance.xyz * ATMO.cam_pos.w, 1.0 - t);
     }
 }
 #endif
@@ -350,7 +359,8 @@ void atmosphere_sky_cube_kernel(uint3 id : SV_DispatchThreadID)
     }
     float3 n = cube_texel_world_dir(id.z, id.xy, SKY_CUBE_FACE);
     float4 view = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(n), 0.0);
-    float3 l = view.rgb;
+    // The cube holds absolute radiance; the table holds it pre-exposed.
+    float3 l = view.rgb / ATMO.cam_pos.w;
     if (night_sky_on())
     {
         l += night_sky_reflected(n, 0.5 * ATMO_PI / float(SKY_CUBE_FACE), view.a);
@@ -384,7 +394,7 @@ void atmosphere_irradiance_kernel(uint lane : SV_GroupIndex)
     {
         float3 d = fibonacci_direction(lane * per_lane + k, IRRADIANCE_SAMPLES);
         float4 view = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(d), 0.0);
-        float3 l = view.rgb;
+        float3 l = view.rgb / ATMO.cam_pos.w;
         if (night_sky_on())
         {
             l += night_sky_ambient(d, view.a);
@@ -465,7 +475,7 @@ float4 aerial_perspective_fragment(
     float slice = aerial_slice_of(distance) * float(AERIAL_SIZE);
     float fade = saturate(slice * 2.0);
     float w = max(slice, 0.5) / float(AERIAL_SIZE);
-    float4 haze = aerial_volume.SampleLevel(lut_sampler, float3(uv, w), 0.0) * fade;
-    return float4(haze.rgb * ATMO.cam_pos.w, haze.a);
+    // The volume already holds its in-scattered light pre-exposed.
+    return aerial_volume.SampleLevel(lut_sampler, float3(uv, w), 0.0) * fade;
 }
 #endif

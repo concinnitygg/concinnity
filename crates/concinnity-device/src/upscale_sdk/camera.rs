@@ -13,6 +13,10 @@ pub(crate) struct UpscaleCamera {
     /// Distance to the near plane, at least a millimeter.
     pub(crate) near: f32,
     pub(crate) fov_y_radians: f32,
+    /// The scale the color input was written at (the frame's pre-exposure),
+    /// which the upscaler divides out so its history holds steady across
+    /// exposure changes.
+    pub(crate) pre_exposure: f32,
 }
 
 impl UpscaleCamera {
@@ -21,12 +25,14 @@ impl UpscaleCamera {
         elapsed: f32,
         near: f32,
         fov_y_radians: f32,
+        pre_exposure: f32,
     ) -> Self {
         Self {
             jitter_offset,
             elapsed,
             near: near.max(1e-3),
             fov_y_radians,
+            pre_exposure,
         }
     }
 }
@@ -61,7 +67,7 @@ mod tests {
 
     #[test]
     fn near_plane_is_kept_off_zero() {
-        assert_eq!(UpscaleCamera::new([0.0; 2], 0.0, 0.0, 1.0).near, 1e-3);
-        assert_eq!(UpscaleCamera::new([0.0; 2], 0.0, 0.5, 1.0).near, 0.5);
+        assert_eq!(UpscaleCamera::new([0.0; 2], 0.0, 0.0, 1.0, 1.0).near, 1e-3);
+        assert_eq!(UpscaleCamera::new([0.0; 2], 0.0, 0.5, 1.0, 1.0).near, 0.5);
     }
 }

@@ -132,7 +132,7 @@ impl DxContext {
         // consume `self.post_process.exposure`. No-op when auto-exposure is
         // disabled.
         self.update_auto_exposure(elapsed, frame);
-        self.pre_exposure.advance(1.0);
+        self.pre_exposure.advance(self.post_process.exposure);
     }
 
     // Whole-frame and per-pass GPU times this slot's last submission resolved.

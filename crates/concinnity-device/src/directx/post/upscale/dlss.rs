@@ -254,6 +254,7 @@ impl UpscaleBackend for DlssUpscaler {
             set_evaluate_parameters(
                 params,
                 camera.jitter_offset,
+                camera.pre_exposure,
                 crate::upscale_reset::consume(&self.reset),
                 self.extent,
             );

@@ -1438,7 +1438,7 @@ impl VkContext {
             return Ok(());
         };
         // Only a frame that renders moves the history's pre-exposure on.
-        self.pre_exposure.advance(1.0);
+        self.pre_exposure.advance(self.post_process.exposure);
 
         // Cheap-cloneable handle (ash::Device is Arc-like). Holding a local
         // copy avoids tying the rest of the function to `&self.hw.device` while

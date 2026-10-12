@@ -555,7 +555,7 @@ impl<L: SdkLibrary> FfxContext<L> {
             enable_sharpening: false,
             sharpness: 0.0,
             frame_time_delta: self.clock.delta_ms(camera.elapsed),
-            pre_exposure: 1.0,
+            pre_exposure: camera.pre_exposure,
             reset: crate::upscale_reset::consume(&self.reset),
             camera_near,
             camera_far,

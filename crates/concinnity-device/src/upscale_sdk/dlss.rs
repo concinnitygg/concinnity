@@ -73,6 +73,7 @@ pub(crate) const P_OUTPUT: &[u8] = b"Output\0";
 pub(crate) const P_DEPTH: &[u8] = b"Depth\0";
 pub(crate) const P_MOTION_VECTORS: &[u8] = b"MotionVectors\0";
 const P_JITTER_X: &[u8] = b"Jitter.Offset.X\0";
+const P_PRE_EXPOSURE: &[u8] = b"DLSS.Pre.Exposure\0";
 const P_JITTER_Y: &[u8] = b"Jitter.Offset.Y\0";
 const P_MV_SCALE_X: &[u8] = b"MV.Scale.X\0";
 const P_MV_SCALE_Y: &[u8] = b"MV.Scale.Y\0";
@@ -228,8 +229,8 @@ pub(crate) unsafe fn set_create_parameters(
 }
 
 /// Fill the per-frame evaluate parameters other than the resources: the
-/// jitter (render pixels), the motion-vector scale, the history reset and the
-/// render subrect.
+/// jitter (render pixels), the motion-vector scale, the color's pre-exposure,
+/// the history reset and the render subrect.
 ///
 /// # Safety
 ///
@@ -237,6 +238,7 @@ pub(crate) unsafe fn set_create_parameters(
 pub(crate) unsafe fn set_evaluate_parameters(
     params: *mut c_void,
     jitter: [f32; 2],
+    pre_exposure: f32,
     reset: bool,
     extent: UpscaleExtent,
 ) {
@@ -249,6 +251,7 @@ pub(crate) unsafe fn set_evaluate_parameters(
         // in render pixels.
         NVSDK_NGX_Parameter_SetF(params, P_MV_SCALE_X.as_ptr(), rw as f32);
         NVSDK_NGX_Parameter_SetF(params, P_MV_SCALE_Y.as_ptr(), rh as f32);
+        NVSDK_NGX_Parameter_SetF(params, P_PRE_EXPOSURE.as_ptr(), pre_exposure);
         NVSDK_NGX_Parameter_SetI(params, P_RESET.as_ptr(), i32::from(reset));
         NVSDK_NGX_Parameter_SetUI(params, P_SUBRECT_WIDTH.as_ptr(), rw);
         NVSDK_NGX_Parameter_SetUI(params, P_SUBRECT_HEIGHT.as_ptr(), rh);

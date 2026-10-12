@@ -49,6 +49,9 @@ use super::texture::{
 };
 
 const TABLE_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
+// Absolute radiance, which a night sky takes below half float's range: the
+// environment maps' irradiance cubes are full float too.
+const IRRADIANCE_FORMAT: vk::Format = vk::Format::R32G32B32A32_SFLOAT;
 const GROUP: u32 = 8;
 
 // The kernels in dispatch order; each set's output binding is its own table.
@@ -208,6 +211,7 @@ fn create_table(gpu: &GpuUploadContext<'_>, extent: [u32; 3], label: &str) -> Re
         } else {
             vk::ImageViewType::TYPE_2D
         },
+        TABLE_FORMAT,
         1,
     )?;
     image.attach_view(view);
@@ -218,12 +222,13 @@ fn image_view(
     device: &VkDevice,
     image: vk::Image,
     view_type: vk::ImageViewType,
+    format: vk::Format,
     layers: u32,
 ) -> RenderResult<vk::ImageView> {
     let info = vk::ImageViewCreateInfo::default()
         .image(image)
         .view_type(view_type)
-        .format(TABLE_FORMAT)
+        .format(format)
         .subresource_range(vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
             base_mip_level: 0,
@@ -303,7 +308,7 @@ fn create_irradiance_cube(
         })
         .mip_levels(1)
         .array_layers(6)
-        .format(TABLE_FORMAT)
+        .format(IRRADIANCE_FORMAT)
         .tiling(vk::ImageTiling::OPTIMAL)
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED)
@@ -317,10 +322,17 @@ fn create_irradiance_cube(
         gpu.device,
         pooled.image(),
         vk::ImageViewType::TYPE_2D_ARRAY,
+        IRRADIANCE_FORMAT,
         6,
     )?;
     pooled.attach_view(faces);
-    let cube = image_view(gpu.device, pooled.image(), vk::ImageViewType::CUBE, 6)?;
+    let cube = image_view(
+        gpu.device,
+        pooled.image(),
+        vk::ImageViewType::CUBE,
+        IRRADIANCE_FORMAT,
+        6,
+    )?;
     let image = pooled.image();
     Ok((GpuImage::from_pooled(pooled, cube), image, faces))
 }

@@ -365,6 +365,7 @@ impl crate::directx::context::DxContext {
                 params.elapsed,
                 params.near,
                 params.fov_y_radians,
+                self.pre_exposure.value(),
             ),
         );
         if local_mask {

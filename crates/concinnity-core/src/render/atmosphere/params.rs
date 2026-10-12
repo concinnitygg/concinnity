@@ -42,8 +42,9 @@ pub struct AtmosphereParams {
     pub sun_illuminance: [f32; 4],
     /// xyz = the sun disc's radiance as seen from the camera, w = unused.
     pub sun_disc: [f32; 4],
-    /// xyz = the camera's world position, w = the scale the HDR chain is
-    /// written at, which the haze pass multiplies its in-scattered light by.
+    /// xyz = the camera's world position, w = the frame's pre-exposure: the
+    /// sky-view table and the aerial volume store their radiance at it, and
+    /// the kernels building the absolute cubes divide it back out.
     pub cam_pos: [f32; 4],
     /// xy = the target's size in pixels, zw = its reciprocal.
     pub viewport: [f32; 4],

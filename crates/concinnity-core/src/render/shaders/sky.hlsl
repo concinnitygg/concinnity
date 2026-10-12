@@ -68,12 +68,15 @@ float4 sky_atmosphere_fragment(SkyVertexOut p) : SV_Target
 {
     float3 dir = normalize(p.ray);
     float4 view = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(dir), 0.0);
-    float3 color = view.rgb;
+    // The table holds the frame's pre-exposure; a probe or mirror face draws
+    // at its own.
+    float3 color = view.rgb * (VIEW.pre_exposure / ATMO.cam_pos.w);
     float3 dir_dx = ddx(dir);
     float3 dir_dy = ddy(dir);
+    float3 beyond = (float3)0.0;
     if (night_sky_on())
     {
-        color += night_sky_radiance(dir, dir_dx, dir_dy, view.a);
+        beyond += night_sky_radiance(dir, dir_dx, dir_dy, view.a);
     }
     float cos_sun = dot(dir, ATMO.sun_direction.xyz);
     float cos_radius = ATMO.sun_direction.w;
@@ -82,10 +85,12 @@ float4 sky_atmosphere_fragment(SkyVertexOut p) : SV_Target
     {
         float x = saturate((1.0 - cos_sun) / max(1.0 - cos_radius, 1e-7));
         float limb = 1.0 - 0.6 * (1.0 - sqrt(1.0 - x));
-        color += ATMO.sun_disc.xyz * limb;
+        beyond += ATMO.sun_disc.xyz * limb;
     }
-    // Kept inside the half-float range the scene is stored in.
-    return float4(min(color * VIEW.pre_exposure, (float3)60000.0), 1.0);
+    color += beyond * VIEW.pre_exposure;
+    // Kept inside the half-float range the scene is stored in: the disc's
+    // radiance is not, at any exposure that shows the sky around it.
+    return float4(min(color, (float3)60000.0), 1.0);
 }
 #else
 [shader("pixel")]

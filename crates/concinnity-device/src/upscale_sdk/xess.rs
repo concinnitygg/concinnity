@@ -101,13 +101,14 @@ pub(crate) struct XessExecuteFrame {
 
 impl XessExecuteFrame {
     // One frame at `jitter` (render pixels, within `[-0.5, 0.5]`) over the
-    // whole render and output extents.
-    fn new(jitter: [f32; 2], reset: bool, extent: UpscaleExtent) -> Self {
+    // whole render and output extents. XeSS scales its input color by
+    // `exposure_scale`, so the color's pre-exposure is undone there.
+    fn new(jitter: [f32; 2], pre_exposure: f32, reset: bool, extent: UpscaleExtent) -> Self {
         let origin = xess_2d_t { x: 0, y: 0 };
         Self {
             jitter_offset_x: jitter[0],
             jitter_offset_y: jitter[1],
-            exposure_scale: 1.0,
+            exposure_scale: 1.0 / pre_exposure,
             reset_history: u32::from(reset),
             input_width: extent.render.0,
             input_height: extent.render.1,
@@ -214,12 +215,13 @@ impl<L> XessContext<L> {
         self.extent
     }
 
-    /// The shared execute fields of this frame at `jitter`. The first frame
-    /// after creation, and the first after [`Self::request_history_reset`],
-    /// resets XeSS's history.
-    pub(crate) fn frame(&self, jitter: [f32; 2]) -> XessExecuteFrame {
+    /// The shared execute fields of this frame at `jitter`, its color written
+    /// at `pre_exposure`. The first frame after creation, and the first after
+    /// [`Self::request_history_reset`], resets XeSS's history.
+    pub(crate) fn frame(&self, jitter: [f32; 2], pre_exposure: f32) -> XessExecuteFrame {
         XessExecuteFrame::new(
             jitter,
+            pre_exposure,
             crate::upscale_reset::consume(&self.reset),
             self.extent,
         )
@@ -357,16 +359,16 @@ mod tests {
     #[test]
     fn a_frame_covers_the_render_extent_from_the_origin() {
         let extent = UpscaleExtent::resolve((1920, 1080), 0.5);
-        let frame = XessExecuteFrame::new([0.25, -0.25], true, extent);
+        let frame = XessExecuteFrame::new([0.25, -0.25], 4.0, true, extent);
         assert_eq!((frame.input_width, frame.input_height), (960, 540));
         assert_eq!(frame.reset_history, 1);
-        assert_eq!(frame.exposure_scale, 1.0);
+        assert_eq!(frame.exposure_scale, 0.25);
         assert_eq!(
             (frame.jitter_offset_x, frame.jitter_offset_y),
             (0.25, -0.25)
         );
         assert_eq!(
-            XessExecuteFrame::new([0.0; 2], false, extent).reset_history,
+            XessExecuteFrame::new([0.0; 2], 1.0, false, extent).reset_history,
             0
         );
     }

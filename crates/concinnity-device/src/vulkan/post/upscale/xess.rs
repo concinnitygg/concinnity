@@ -324,7 +324,7 @@ impl VkUpscaleBackend for XessUpscaler {
                 .reactive
                 .map_or_else(ImageViewInfo::empty, ImageViewInfo::of),
             output_texture: ImageViewInfo::of(&self.output.as_upscale_image()),
-            frame: self.ctx.frame(camera.jitter_offset),
+            frame: self.ctx.frame(camera.jitter_offset, camera.pre_exposure),
         };
         // SAFETY: `ctx` holds the live context, `cmd` is recording, and `params` is a live local
         // naming images the frame keeps alive until the buffer executes.
