@@ -11,8 +11,10 @@ use concinnity_core::ecs::{ComponentAsset, ResourceRecord, World};
 use concinnity_core::platform::Platform;
 use concinnity_host::store::blob::BlobData;
 
-use crate::authoring::registry::{Authored, asset_entry, set_reference};
-use crate::authoring::world::write_world_jsonl;
+use crate::authoring::registry::{Authored, RegisteredType, asset_entry, set_reference};
+use crate::authoring::world::{
+    entry_handle, entry_handles, find_entry, parse_world_jsonl, write_world_jsonl,
+};
 use crate::build_only::{LoadedWorld, prepare_world};
 use crate::pipeline::{PipelineResult, build_compiled, write_blobs_to};
 
@@ -79,6 +81,54 @@ impl WorldBuilder {
             Err(e) => {
                 self.error.get_or_insert((e.kind(), e.to_string()));
             }
+        }
+        self
+    }
+
+    /// Declare every entry of world file text, one `["Type", {args}]` per
+    /// line, in file order after the assets already declared. An entry
+    /// without a `$id` is listed by its anonymous label, such as `Prop#0`.
+    pub fn add_jsonl(&mut self, text: &str) -> &mut Self {
+        let entries = match parse_world_jsonl(text) {
+            Ok(entries) => entries,
+            Err(e) => {
+                self.error
+                    .get_or_insert((std::io::ErrorKind::InvalidData, e.to_string()));
+                return self;
+            }
+        };
+        for entry in entries {
+            let ty = entry.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            let Some(registered) = RegisteredType::parse(ty) else {
+                self.error.get_or_insert((
+                    std::io::ErrorKind::InvalidData,
+                    format!("unknown asset type '{ty}'"),
+                ));
+                return self;
+            };
+            self.entries.push(entry);
+            let id = entry_handle(&self.entries, self.entries.len() - 1).unwrap_or_default();
+            self.declared.push((id, registered.as_str()));
+        }
+        self
+    }
+
+    /// Remove the declared asset `handle` names: its `$id`, or the label of
+    /// an anonymous entry, such as `RigidBody#0`. Naming nothing is an error
+    /// at compile.
+    pub fn remove(&mut self, handle: &str) -> &mut Self {
+        let Some(index) = find_entry(&self.entries, handle) else {
+            self.error.get_or_insert((
+                std::io::ErrorKind::NotFound,
+                format!("remove(\"{handle}\"): no asset by that name"),
+            ));
+            return self;
+        };
+        self.entries.remove(index);
+        self.declared.remove(index);
+        // Anonymous labels count their type's entries, so later ones shift.
+        for ((id, _), handle) in self.declared.iter_mut().zip(entry_handles(&self.entries)) {
+            *id = handle.unwrap_or_default();
         }
         self
     }
@@ -324,6 +374,70 @@ mod tests {
             .add("sun", DirectionalLight::default());
         let declared: Vec<_> = spec.declared().collect();
         assert_eq!(declared, [("menu", "Scene"), ("sun", "DirectionalLight")]);
+    }
+
+    // World file text declares its entries in file order after the typed
+    // ones, an anonymous entry under its label, and compiles like them.
+    #[test]
+    fn world_file_text_declares_its_entries_in_order() {
+        let mut spec = builder();
+        spec.add("sun", DirectionalLight::default()).add_jsonl(
+            "// a comment line\n\
+             [\"Material\",{\"$id\":\"stone\",\"roughness\":0.9}]\n\
+             \n\
+             [\"Material\",{\"roughness\":0.3}]\n",
+        );
+        let declared: Vec<_> = spec.declared().collect();
+        assert_eq!(
+            declared,
+            [
+                ("sun", "DirectionalLight"),
+                ("stone", "Material"),
+                ("Material#0", "Material")
+            ]
+        );
+        let world = spec.compile().expect("the text compiles");
+        assert!(world.query::<DirectionalLight>().next().is_some());
+    }
+
+    // A malformed line and an unknown type each fail the compile with what
+    // was wrong, rather than dropping the entry.
+    #[test]
+    fn bad_world_file_text_is_a_compile_error() {
+        let err = builder()
+            .add_jsonl("{\"not\":\"a line\"}\n")
+            .compile()
+            .expect_err("an object is not a line");
+        assert!(err.to_string().contains("line 1"), "{err}");
+
+        let err = builder()
+            .add_jsonl("[\"NoSuchAsset\",{}]\n")
+            .compile()
+            .expect_err("the type is unknown");
+        assert!(err.to_string().contains("NoSuchAsset"), "{err}");
+    }
+
+    // Removing by `$id` or by anonymous label drops that entry, and the
+    // anonymous entries after it are relabeled.
+    #[test]
+    fn remove_drops_the_named_entry() {
+        let mut spec = builder();
+        spec.add_jsonl(
+            "[\"Material\",{\"roughness\":0.1}]\n\
+             [\"Material\",{\"$id\":\"stone\"}]\n\
+             [\"Material\",{\"roughness\":0.3}]\n",
+        )
+        .remove("Material#0")
+        .remove("stone");
+        let declared: Vec<_> = spec.declared().collect();
+        assert_eq!(declared, [("Material#0", "Material")]);
+        spec.compile().expect("what remains compiles");
+
+        let err = builder()
+            .remove("missing")
+            .compile()
+            .expect_err("nothing is named missing");
+        assert!(err.to_string().contains("missing"), "{err}");
     }
 
     // The search root is what a bare `source` filename resolves under, so a

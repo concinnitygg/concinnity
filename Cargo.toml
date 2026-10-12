@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.19.138"
+version = "0.19.139"
 description = "Asset-driven world engine"
 authors = ["Grant Wilkes <grant@concinnity.gg>"]
 edition = "2024"
@@ -116,6 +116,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [build-dependencies]
@@ -126,7 +127,7 @@ name = "cube"
 required-features = ["std"]
 
 [[example]]
-name = "benchmark"
+name = "planet"
 required-features = ["cook"]
 
 [lints]

@@ -147,6 +147,29 @@ impl WorldBuilder {
         self
     }
 
+    /// Declare every entry of world file text, one `["Type", {args}]` per
+    /// line, in file order after the assets already declared.
+    ///
+    /// ```no_run
+    /// # use concinnity::cook;
+    /// cook::world()
+    ///     .add_jsonl(r#"["DirectionalLight",{"$id":"sun","intensity":2.2}]"#)
+    ///     .write_blob("data/0")
+    ///     .expect("the world is written to data/0");
+    /// ```
+    pub fn add_jsonl(&mut self, text: &str) -> &mut Self {
+        self.0.add_jsonl(text);
+        self
+    }
+
+    /// Remove the declared asset `handle` names: its `$id`, or the label of
+    /// an anonymous entry, such as `RigidBody#0`. Naming nothing is an error
+    /// at compile.
+    pub fn remove(&mut self, handle: &str) -> &mut Self {
+        self.0.remove(handle);
+        self
+    }
+
     /// The assets declared so far, as `(id, type)` pairs in declaration
     /// order. Declaration order is load-bearing for scenes: the first `Scene`
     /// is the one active at world start.
