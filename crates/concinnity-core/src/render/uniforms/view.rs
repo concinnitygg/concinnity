@@ -74,7 +74,8 @@ pub struct ViewUniforms {
     /// rotation (`SkyOrientation::sample_rows`), identity when the world
     /// declares no `SkyRotation`. Every cubemap sample helper applies it, so
     /// the sky, the ambient fill and the glossy reflections turn together.
-    /// One `float4` per row; `w` is unused.
+    /// One `float4` per row; row 0's `w` is the environment prefilter cube's
+    /// storage scale as a base-2 log (`radiance_storage::with_sky_cube_scale`).
     pub sky_rot: [[f32; 4]; 3],
     /// 1.0 when the bound irradiance cube holds the environment's diffuse
     /// light (an environment map's, or an atmosphere's), so surfaces take
@@ -82,9 +83,10 @@ pub struct ViewUniforms {
     pub irradiance: f32,
     /// The scale the pass's color target is written at
     /// ([`crate::gfx::auto_exposure::PreExposure`]): the frame's pre-exposure
-    /// for the main pass, 1.0 for a probe or mirror face, which stays
-    /// absolute. Occupies what was pad space, so the offsets in the
-    /// user-shader binding contract are unchanged.
+    /// for the main pass, the probes' storage scale for a probe face
+    /// ([`crate::render::radiance_storage::PROBE_STORAGE_SCALE`]), 1.0 for a
+    /// mirror face, which stays absolute. Occupies what was pad space, so the
+    /// offsets in the user-shader binding contract are unchanged.
     pub pre_exposure: f32,
     /// Pads the block to a whole `float4`.
     pub _pad: [f32; 2],

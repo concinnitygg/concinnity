@@ -46,6 +46,7 @@ use concinnity_core::render::probe_bake::{
     CAPTURE_FACES, ProbeBake, ProbeBakeDevice, capture_ring_slot,
 };
 use concinnity_core::render::probe_book::ProbeBook;
+use concinnity_core::render::radiance_storage::{PROBE_STORAGE_SCALE, probe_clear_color};
 use concinnity_core::render::reflection_probe::{self, PrefilterPlan, ProbePlacement};
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -263,7 +264,7 @@ impl DxContext {
             size,
             sample_count,
             rtv,
-            self.state.view.clear_color,
+            probe_clear_color(self.state.view.clear_color),
         )?;
         let depth = create_bake_depth(device, size, sample_count, dsv)?;
         // A single-sample resolve target only when MSAA is on.
@@ -322,7 +323,7 @@ impl DxContext {
                 ambient_occlusion: 0.0,
                 sky_rot: self.state.view.sky_rot,
                 irradiance: self.irradiance_lane(),
-                pre_exposure: 1.0,
+                pre_exposure: PROBE_STORAGE_SCALE,
                 _pad: [0.0; 2],
             };
             let cbv = alloc.alloc_buffer(
@@ -737,7 +738,11 @@ impl DxContext {
         // slice these commands name is live for the call.
         unsafe {
             cmd.OMSetRenderTargets(1, Some(&rtv), false, Some(&dsv));
-            cmd.ClearRenderTargetView(rtv, &self.state.view.clear_color, Some(&[scissor]));
+            cmd.ClearRenderTargetView(
+                rtv,
+                &probe_clear_color(self.state.view.clear_color),
+                Some(&[scissor]),
+            );
             cmd.ClearDepthStencilView(
                 dsv,
                 D3D12_CLEAR_FLAG_DEPTH,

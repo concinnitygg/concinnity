@@ -31,6 +31,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("glass_mesh.hlsl", GLASS_MESH),
     ("glass_reflection.hlsl", GLASS_REFLECTION),
     ("grass.hlsl", GRASS),
+    ("hdr_store.hlsl", HDR_STORE),
     ("hiz_build.hlsl", HIZ_BUILD),
     ("hiz_test.hlsl", HIZ_TEST),
     ("light_cull.hlsl", LIGHT_CULL),
@@ -126,6 +127,8 @@ pub const GLASS_MESH: &str = include_str!("shaders/glass_mesh.hlsl");
 pub const GLASS_REFLECTION: &str = include_str!("shaders/glass_reflection.hlsl");
 /// `grass.hlsl`.
 pub const GRASS: &str = include_str!("shaders/grass.hlsl");
+/// `hdr_store.hlsl`.
+pub const HDR_STORE: &str = include_str!("shaders/hdr_store.hlsl");
 /// `hiz_build.hlsl`.
 pub const HIZ_BUILD: &str = include_str!("shaders/hiz_build.hlsl");
 /// `hiz_test.hlsl`.

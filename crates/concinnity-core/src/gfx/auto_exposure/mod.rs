@@ -18,9 +18,10 @@ const MIN_SPEED: f32 = 1.0e-3;
 // is indistinguishable from "no adaptation" visually, just noisier.
 const MAX_SPEED: f32 = 20.0;
 
-// Clamp range for `min_ev` / `max_ev` so a stray value cannot push exposure to
-// `inf` / `0`. Matches the `EXPOSURE_EV_LIMIT` in [`PostProcessConfig`].
-const EV_LIMIT: f32 = 16.0;
+/// Largest exposure, in stops either way, that the authored exposure and the
+/// auto-exposure bounds clamp to: enough to adapt from daylight to a scene
+/// lit by starlight, about 7 orders of magnitude darker.
+pub const EV_LIMIT: f32 = 24.0;
 
 /// `log2(0.18)`: perceptual middle-gray in linear light. AE shifts the
 /// scene's geometric-mean luminance to this value on the HDR output path so
@@ -116,6 +117,10 @@ mod tests {
         assert_eq!(
             AutoExposureSettings::resolve(-8.0, 16.0, 1.5, false).histogram_floor(),
             -18.0
+        );
+        assert_eq!(
+            AutoExposureSettings::resolve(-8.0, 100.0, 1.5, false).histogram_floor(),
+            -EV_LIMIT - 2.0
         );
     }
 }

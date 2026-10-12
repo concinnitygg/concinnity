@@ -30,10 +30,13 @@ sun has fully set the moon takes them over, its light fading in over the
 next 6 degrees of the sun's descent, and it hands them back the same way
 before sunrise, so neither light pops.
 
-Night is far darker than day. A world with auto-exposure that should
-adapt to it needs a higher `auto_exposure_max_ev` on its
-[PostProcessConfig](PostProcessConfig.md), around 13, which keeps a night
-darker than day while its stars and moonlit ground read.
+The defaults are the real sky's: a full moon lights the ground about
+400000 times less than the sun, and the Milky Way is fainter still. A
+world with auto-exposure that should adapt to the night needs its
+[PostProcessConfig](PostProcessConfig.md) to allow it: an
+`auto_exposure_max_ev` of 24, since a moonlit or starlit scene adapts at
+around 19 to 20, and an `exposure_ev` about 4 stops under, so moonlit
+ground reads while the night stays darker than day and dusk stays dim.
 
 One per world. Brightnesses are relative to the sunlight, so the night
 keeps its balance with any sun.
@@ -53,5 +56,5 @@ keeps its balance with any sun.
 - `moon_period_days`: A float. Days, each a full turn of the sky, the moon takes to come back to the same phase. 0 holds it still against the stars. Defaults to `29.53`.
 - `moon_inclination_deg`: A float. Tilt of the moon's path, in degrees. Untilted, the path is the great circle that leaves the sun heading due east; the tilt turns it about the line to the sun, carrying the moon north and south of that circle. Defaults to `5.1`.
 - `moon_angular_diameter_deg`: A float. Angular diameter of the moon's disc, in degrees. Clamped to `[0.05, 20]`. Defaults to `0.52`.
-- `moon_brightness`: A float. The full moon's light as a fraction of the sunlight. A real full moon gives about 0.000002; the default is brighter, so a moonlit scene reads without the scene's precision running out in the dark.
-- `moon_disc_brightness`: A float. Brightness of the moon's face: 1 is as bright as a white surface the full moon lights head-on. Defaults to `0.5`.
+- `moon_brightness`: A float. The full moon's light as a fraction of the sunlight. The default is the real moon's, 14 magnitudes fainter than the sun.
+- `moon_disc_brightness`: A float. Brightness of the moon's face as a multiple of the face whose light, over the whole disc, is `moon_brightness`. At 1 the full moon's face is as bright as a gray rock in sunlight, far brighter than the ground it lights. Defaults to `1.0`.

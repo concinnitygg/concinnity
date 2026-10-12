@@ -28,10 +28,13 @@
 /// next 6 degrees of the sun's descent, and it hands them back the same way
 /// before sunrise, so neither light pops.
 ///
-/// Night is far darker than day. A world with auto-exposure that should
-/// adapt to it needs a higher `auto_exposure_max_ev` on its
-/// [PostProcessConfig](#postprocessconfig), around 13, which keeps a night
-/// darker than day while its stars and moonlit ground read.
+/// The defaults are the real sky's: a full moon lights the ground about
+/// 400000 times less than the sun, and the Milky Way is fainter still. A
+/// world with auto-exposure that should adapt to the night needs its
+/// [PostProcessConfig](#postprocessconfig) to allow it: an
+/// `auto_exposure_max_ev` of 24, since a moonlit or starlit scene adapts at
+/// around 19 to 20, and an `exposure_ev` about 4 stops under, so moonlit
+/// ground reads while the night stays darker than day and dusk stays dim.
 ///
 /// One per world. Brightnesses are relative to the sunlight, so the night
 /// keeps its balance with any sun.
@@ -103,13 +106,14 @@ pub struct NightSky {
     /// `[0.05, 20]`.
     #[asset(default = 0.52)]
     pub moon_angular_diameter_deg: f32,
-    /// The full moon's light as a fraction of the sunlight. A real full moon
-    /// gives about 0.000002; the default is brighter, so a moonlit scene
-    /// reads without the scene's precision running out in the dark.
-    #[asset(default = 0.00015)]
+    /// The full moon's light as a fraction of the sunlight. The default is
+    /// the real moon's, 14 magnitudes fainter than the sun.
+    #[asset(default = 0.0000025)]
     pub moon_brightness: f32,
-    /// Brightness of the moon's face: 1 is as bright as a white surface the
-    /// full moon lights head-on.
-    #[asset(default = 0.5)]
+    /// Brightness of the moon's face as a multiple of the face whose light,
+    /// over the whole disc, is `moon_brightness`. At 1 the full moon's face
+    /// is as bright as a gray rock in sunlight, far brighter than the ground
+    /// it lights.
+    #[asset(default = 1.0)]
     pub moon_disc_brightness: f32,
 }

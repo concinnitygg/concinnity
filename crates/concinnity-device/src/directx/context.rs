@@ -19,6 +19,7 @@ use concinnity_core::render::pass_timing;
 use concinnity_core::render::planar_reflection;
 use concinnity_core::render::post::reflection_path::ReflectionPath;
 use concinnity_core::render::probe_book::ProbeBook;
+use concinnity_core::render::radiance_storage::with_sky_cube_scale;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::retire_pool::RetirePool;
 use concinnity_core::render::scene_flow;
@@ -981,7 +982,7 @@ impl DxContext {
         self.state.view.show = show;
         self.state.view.near = near;
         self.state.view.view_distance = view_distance;
-        self.state.view.sky_rot = sky_rot;
+        self.state.view.sky_rot = with_sky_cube_scale(sky_rot, self.atmosphere.is_some());
         self.apply_pending_rebuilds()?;
         // A moved world's decals and grass move with it whatever happens to
         // history.

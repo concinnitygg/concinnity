@@ -59,6 +59,7 @@ pub mod planar_reflection;
 pub mod post;
 pub mod probe_bake;
 pub mod probe_book;
+pub mod radiance_storage;
 pub mod range_alloc;
 pub mod reactive_mask;
 pub mod record_pack;

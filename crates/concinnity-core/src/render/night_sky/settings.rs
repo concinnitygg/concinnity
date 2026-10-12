@@ -9,13 +9,13 @@ use crate::components::NightSky;
 use crate::math::cos;
 
 /// Light of a magnitude-0 star, as a fraction of the sunlight, at
-/// `star_brightness` 1. About 500 times a real star's, in step with the
-/// default moon's: the night is lifted to where the half-float scene keeps
-/// its faint glow, and exposure brings it back down.
-pub const STAR_ZERO_ILLUMINANCE: f32 = 1.0e-8;
+/// `star_brightness` 1: the 26.74 magnitudes between a star like Vega and
+/// the sun above the air.
+pub const STAR_ZERO_ILLUMINANCE: f32 = 2.0e-11;
 /// Radiance at the Milky Way's heart, as a fraction of the sunlight, at
-/// `milky_way_brightness` 1.
-pub const MILKY_WAY_RADIANCE: f32 = 1.0e-5;
+/// `milky_way_brightness` 1: about 20 magnitudes per square arcsecond, its
+/// brightest star clouds.
+pub const MILKY_WAY_RADIANCE: f32 = 8.6e-9;
 /// How much brighter galaxies are drawn than their magnitudes, so the larger
 /// ones show as more than their cores.
 pub const GALAXY_GAIN: f32 = 4.0;

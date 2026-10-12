@@ -277,7 +277,7 @@ float3 irradiance_sample(float3 n)
 }
 float3 prefilter_sample_bias(float3 dir, float lod)
 {
-    return prefilter_cube.SampleBias(cube_sampler, SKY_DIR(dir), lod).rgb;
+    return prefilter_cube.SampleBias(cube_sampler, SKY_DIR(dir), lod).rgb * SKY_CUBE_READ;
 }
 float4 ltc_matrix_sample(float2 uv)
 {
@@ -318,7 +318,7 @@ bool environment_specular(ProbeMask probes, float3 world_pos, float3 R, float ro
         if (sky_share > 0.0)
         {
             float3 sky_radiance = sky
-                ? prefilter_cube.SampleLevel(cube_sampler, SKY_DIR(R), sky_level).rgb
+                ? prefilter_cube.SampleLevel(cube_sampler, SKY_DIR(R), sky_level).rgb * SKY_CUBE_READ
                 : (float3)(0.0);
             radiance = lerp(radiance, sky_radiance, sky_share);
         }

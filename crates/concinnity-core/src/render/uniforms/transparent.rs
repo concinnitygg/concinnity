@@ -32,7 +32,7 @@ pub struct TransparentView {
     pub prefilter_mip_count: f32,
     /// Rows of the rotation taking a world-space direction into the environment
     /// cubemap's baked frame, mirroring `ViewUniforms.sky_rot` so this pass's
-    /// sky taps turn with the main one. One `float4` per row; `w` is unused.
+    /// sky taps turn with the main one, and read the cube at its storage scale.
     pub sky_rot: [[f32; 4]; 3],
     /// `[x, y, z, _]`: unit direction toward the scene's sun, the first
     /// directional light. Zero when the world declares none.

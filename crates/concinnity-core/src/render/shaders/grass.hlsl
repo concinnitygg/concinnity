@@ -1572,7 +1572,7 @@ float4 grass_radiance(GrassVertexOut p)
 float4 grass_fragment(GrassVertexOut p) : SV_Target
 {
     float4 color = grass_radiance(p);
-    return float4(color.rgb * VIEW.pre_exposure, color.a);
+    return float4(hdr_store_cap(color.rgb * VIEW.pre_exposure), color.a);
 }
 
 #else // SURFACE_PREPASS

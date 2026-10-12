@@ -44,6 +44,9 @@
 
 // A world direction in the sky cube's own frame; every sky tap goes through it,
 // so a missed ray lands on the same oriented sky the main pass shows.
+// What a tap of the environment prefilter cube is multiplied by: the inverse
+// of the scale it is stored at, carried as a base-2 log in row 0's w.
+#define SKY_CUBE_READ exp2(-rt_params.sky_rot[0].w)
 #define SKY_DIR(d) float3(dot(rt_params.sky_rot[0].xyz, (d)), \
                           dot(rt_params.sky_rot[1].xyz, (d)), \
                           dot(rt_params.sky_rot[2].xyz, (d)))
@@ -114,7 +117,7 @@ SamplerState cube_sampler : register(s1);
 
 float3 prefilter_level(float3 dir, float lod)
 {
-    return prefilter.SampleLevel(prefilter_sampler, SKY_DIR(dir), lod).rgb;
+    return prefilter.SampleLevel(prefilter_sampler, SKY_DIR(dir), lod).rgb * SKY_CUBE_READ;
 }
 
 // The forward global set, bound here only for its reflection probes: a ray

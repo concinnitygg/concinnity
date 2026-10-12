@@ -7,6 +7,8 @@
 // AtmosphereParams (928 B) mirrors `render::atmosphere::AtmosphereParams`;
 // every member is a float4 lane so the three targets lay it out alike.
 
+{HDR_STORE}
+
 struct AtmosphereParams
 {
     float4x4 inv_vp;

@@ -40,6 +40,9 @@ struct SsrParams
 
 // A world direction in the sky cube's own frame; the sky fallback goes through
 // it so a resolved reflection matches the sky the main pass shows.
+// What a tap of the environment prefilter cube is multiplied by: the inverse
+// of the scale it is stored at, carried as a base-2 log in row 0's w.
+#define SKY_CUBE_READ exp2(-params.sky_rot[0].w)
 #define SKY_DIR(d) float3(dot(params.sky_rot[0].xyz, (d)), \
                           dot(params.sky_rot[1].xyz, (d)), \
                           dot(params.sky_rot[2].xyz, (d)))
@@ -163,7 +166,8 @@ float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Targ
         if (params.prefilter_mip_count > 0.5)
         {
             float lod = roughness * (params.prefilter_mip_count - 1.0);
-            sky = prefilter.SampleLevel(prefilter_samp, SKY_DIR(r_world), lod).rgb * params.pre_exposure;
+            sky = prefilter.SampleLevel(prefilter_samp, SKY_DIR(r_world), lod).rgb
+                * (SKY_CUBE_READ * params.pre_exposure);
         }
         env = lerp(env, sky, sky_share);
     }

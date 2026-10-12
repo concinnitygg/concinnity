@@ -24,6 +24,7 @@ use concinnity_core::render::atmosphere::AtmosphereView;
 use concinnity_core::render::backend::FrameParams;
 use concinnity_core::render::error;
 use concinnity_core::render::post::device::PostExtent;
+use concinnity_core::render::radiance_storage::with_sky_cube_scale;
 use concinnity_core::render::reactive_mask::ReactiveMaskPlan;
 use concinnity_core::render::render_graph;
 use concinnity_core::render::rt_accel::RtUpdate;
@@ -88,7 +89,7 @@ impl MtlContext {
         self.state.view.mode = view_mode;
         self.state.view.near = near;
         self.state.view.view_distance = view_distance;
-        self.state.view.sky_rot = sky_rot;
+        self.state.view.sky_rot = with_sky_cube_scale(sky_rot, self.atmosphere.is_some());
         self.apply_pending_rebuilds()?;
         // A moved world's decals and grass move with it whatever happens to
         // history.
@@ -188,7 +189,7 @@ impl MtlContext {
             near,
             view_distance,
             cam_pos,
-            sky_rot,
+            sky_rot: self.state.view.sky_rot,
             proj,
             vp,
             render_w,

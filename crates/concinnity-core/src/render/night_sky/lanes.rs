@@ -21,13 +21,19 @@ pub struct NightLanes {
     /// xyz = toward the moon, w = cosine of its disc's radius (2 without a
     /// moon, which no direction reaches).
     pub moon_direction: [f32; 4],
-    /// xyz = the radiance of the moon's face lit head-on, through the air;
+    /// xyz = the radiance of the moon's face lit head-on, through the air,
+    /// such that the full moon's face, over its disc, sends the moon's light;
     /// w = the share its dark side keeps.
     pub moon_face: [f32; 4],
     /// xyz = up across the moon's face, w = 1 when the night sky draws.
     pub moon_up: [f32; 4],
     /// Two lanes per galaxy (`galaxies::galaxy_lanes`).
     pub galaxies: [[f32; 4]; 2 * MAX_GALAXIES],
+}
+
+// Solid angle of a disc whose angular radius has cosine `cos_radius`.
+fn disc_solid_angle(cos_radius: f32) -> f32 {
+    (2.0 * PI * (1.0 - cos_radius)).max(1e-12)
 }
 
 impl NightLanes {
@@ -60,7 +66,7 @@ impl NightLanes {
         }
         let (moon_direction, moon_face, moon_up) = match (frame.moon, settings.moon) {
             (Some(m), Some(s)) => {
-                let k = s.disc_brightness * s.brightness * 1.5 / PI;
+                let k = s.disc_brightness * s.brightness * 1.5 / disc_solid_angle(s.cos_radius);
                 let face = core::array::from_fn(|i| k * sun_illuminance[i] * m.transmittance[i]);
                 (
                     v3(m.direction, s.cos_radius),
@@ -110,8 +116,8 @@ mod tests {
         assert_eq!(lanes.moon_up[3], 1.0);
         assert!(lanes.moon_direction[3] < 1.0);
         let moon = s.moon.expect("moon");
-        let face = moon.disc_brightness * moon.brightness * 1.5 / PI * 2.0 * 0.5;
-        assert!((lanes.moon_face[0] - face).abs() < 1e-9);
+        let face = moon.disc_brightness * moon.brightness * 1.5 / disc_solid_angle(moon.cos_radius);
+        assert!((lanes.moon_face[0] / (face * 2.0 * 0.5) - 1.0).abs() < 1e-5);
         // Two galaxies take four lanes; the rest stay zero.
         assert!(lanes.galaxies[3][3] != 0.0);
         assert_eq!(lanes.galaxies[4], [0.0; 4]);

@@ -4,6 +4,8 @@
 // program.
 // Nothing here may spell the marker itself.
 
+{HDR_STORE}
+
 // Layout matches `TransparentView` / the TransparentViewBlock UBO (240 B). One
 // host block feeds every producer.
 struct TransparentView
@@ -29,6 +31,9 @@ struct TransparentView
 {CLUSTER_TYPES}
 
 // A world direction in the sky cube's own frame; every sky tap goes through it.
+// What a tap of the environment prefilter cube is multiplied by: the inverse
+// of the scale it is stored at, carried as a base-2 log in row 0's w.
+#define SKY_CUBE_READ exp2(-view.sky_rot[0].w)
 #define SKY_DIR(d) float3(dot(view.sky_rot[0].xyz, (d)), \
                           dot(view.sky_rot[1].xyz, (d)), \
                           dot(view.sky_rot[2].xyz, (d)))

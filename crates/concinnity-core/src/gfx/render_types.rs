@@ -896,7 +896,8 @@ pub struct SsrParams {
     pub inv_view: [[f32; 4]; 4],
     /// Rows of the rotation taking a world-space direction into the environment
     /// cubemap's baked frame, mirroring `ViewUniforms.sky_rot` so the resolve's
-    /// sky fallback turns with the main pass. One `float4` per row; `w` unused.
+    /// sky fallback turns with the main pass, and reads the cube at its
+    /// storage scale.
     pub sky_rot: [[f32; 4]; 3],
 }
 

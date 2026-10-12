@@ -22,6 +22,7 @@ use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PixelRect;
 use concinnity_core::render::post::reflection_path::ReflectionPath;
+use concinnity_core::render::radiance_storage::PROBE_STORAGE_SCALE;
 use concinnity_core::render::uniforms::ViewUniforms;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -108,16 +109,19 @@ pub(in crate::metal) struct FacePass<'a> {
     pub scissor: Option<PixelRect>,
     pub clusters: Option<ClusterGrid<'a>>,
     pub timer: PassTimer,
+    // The scale the face's radiance is stored at.
+    pub storage_scale: f32,
 }
 
 impl FacePass<'_> {
-    // The whole target through the main cull ICB, unclustered and untimed: the
-    // probe capture.
+    // The whole target through the main cull ICB, unclustered and untimed, at
+    // the probes' storage scale: the probe capture.
     pub(in crate::metal) const PROBE: FacePass<'static> = FacePass {
         icb_override: None,
         scissor: None,
         clusters: None,
         timer: PassTimer::None,
+        storage_scale: PROBE_STORAGE_SCALE,
     };
 }
 
@@ -317,6 +321,7 @@ impl MtlContext {
         } = camera;
         let desc = MTLRenderPassDescriptor::new();
         let [r, g, b, a] = self.state.view.clear_color;
+        let [r, g, b] = [r, g, b].map(|c| c * pass.storage_scale);
         // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
         // declares.
         unsafe {
@@ -386,7 +391,7 @@ impl MtlContext {
             ambient_occlusion: 0.0,
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
-            pre_exposure: 1.0,
+            pre_exposure: pass.storage_scale,
             _pad: [0.0; 2],
         };
 

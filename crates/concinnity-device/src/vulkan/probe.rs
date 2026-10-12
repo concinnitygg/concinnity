@@ -30,6 +30,7 @@ use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::probe_bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
 use concinnity_core::render::probe_book::ProbeBook;
+use concinnity_core::render::radiance_storage::{PROBE_STORAGE_SCALE, probe_clear_color};
 use concinnity_core::render::reflection_probe::{self, PrefilterPlan, ProbePlacement};
 
 use super::allocator::PooledBuffer;
@@ -541,7 +542,7 @@ impl VkContext {
             return;
         };
         let device = &self.hw.device;
-        let [r, g, b, a] = self.state.view.clear_color;
+        let [r, g, b, a] = probe_clear_color(self.state.view.clear_color);
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
                 float32: [r, g, b, a],
@@ -854,7 +855,7 @@ impl RenderingBake {
                 ambient_occlusion: 0.0,
                 sky_rot,
                 irradiance,
-                pre_exposure: 1.0,
+                pre_exposure: PROBE_STORAGE_SCALE,
                 _pad: [0.0; 2],
             };
             buf.write_val(0, &view);

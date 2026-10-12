@@ -12,14 +12,17 @@ use super::frame::AtmosphereFrame;
 use super::lut::SKY_CUBE_FACE;
 use super::settings::AtmosphereSettings;
 use crate::math::vec3::{dot, length, scale};
+use crate::render::radiance_storage::SKY_CUBE_STORAGE_SCALE;
 use crate::render::reflection_probe::PrefilterPlan;
 
 /// What the sky cube is prefiltered with: the probes' faces and firefly
 /// clamp, at half their GGX samples (the sky has no fine detail, and the
-/// sun's disc is left to the light's own highlight). The faces match an
-/// environment map's because the specular tap biases the hardware's level of
-/// detail, which a smaller cube would shift toward its sharp mips.
-pub const SKY_CUBE_PLAN: PrefilterPlan = PrefilterPlan::new(SKY_CUBE_FACE, 64, 12.0);
+/// sun's disc is left to the light's own highlight), over a cube stored at
+/// [`SKY_CUBE_STORAGE_SCALE`]. The faces match an environment map's because
+/// the specular tap biases the hardware's level of detail, which a smaller
+/// cube would shift toward its sharp mips.
+pub const SKY_CUBE_PLAN: PrefilterPlan =
+    PrefilterPlan::new(SKY_CUBE_FACE, 64, 12.0).stored_at(SKY_CUBE_STORAGE_SCALE);
 
 /// How far the sun, or the ground's up, may turn in the cube's frame, in
 /// degrees, before the cube is redrawn: about two minutes of an Earth day,

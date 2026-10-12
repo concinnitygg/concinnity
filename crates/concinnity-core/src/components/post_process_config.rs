@@ -3,6 +3,7 @@
 //! renderer's clamped `gfx` settings.
 
 use crate::components::Vocabulary;
+use crate::gfx::auto_exposure::EV_LIMIT;
 use crate::gfx::render_types::PostProcessTunables;
 use crate::math::exp2;
 
@@ -172,8 +173,8 @@ pub struct PostProcessConfig {
     #[asset(default = -8.0)]
     pub auto_exposure_min_ev: f32,
     /// Upper bound on the adapted exposure (EV): how far a dark scene is
-    /// brightened, at most 16. A night under a [NightSky](#nightsky) wants
-    /// about 13.
+    /// brightened, at most 24. A night under a [NightSky](#nightsky) adapts
+    /// at around 19 to 20, so wants 24.
     #[asset(default = 8.0)]
     pub auto_exposure_max_ev: f32,
     /// How quickly exposure chases a new target (per second). Higher converges
@@ -524,10 +525,6 @@ mod tests {
     }
 }
 
-// `exposure_ev` is clamped to this range before resolving to a multiplier so a
-// stray value cannot push the scene to `inf` / `0`.
-const EXPOSURE_EV_LIMIT: f32 = 16.0;
-
 /// Resolution of the authored tunables into the clamped, GPU-facing `gfx` settings.
 impl PostProcessConfig {
     /// Resolve the authored fields into the GPU-facing `PostProcessTunables`:
@@ -536,9 +533,7 @@ impl PostProcessConfig {
     /// not authored, so they are absent here: the backend adds them to the full
     /// `PostProcessParams` once it has negotiated EDR support with the display.
     pub fn resolve(&self) -> PostProcessTunables {
-        let ev = self
-            .exposure_ev
-            .clamp(-EXPOSURE_EV_LIMIT, EXPOSURE_EV_LIMIT);
+        let ev = self.exposure_ev.clamp(-EV_LIMIT, EV_LIMIT);
         PostProcessTunables {
             bloom_intensity: self.bloom_intensity.max(0.0),
             bloom_threshold: self.bloom_threshold.max(0.0),
@@ -621,7 +616,7 @@ mod runtime_tests {
         };
         let exposure = cfg.resolve().exposure;
         assert!(exposure.is_finite());
-        assert_eq!(exposure, EXPOSURE_EV_LIMIT.exp2());
+        assert_eq!(exposure, EV_LIMIT.exp2());
     }
 
     #[test]

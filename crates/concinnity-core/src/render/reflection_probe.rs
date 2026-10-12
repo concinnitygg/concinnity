@@ -16,6 +16,7 @@ use crate::gfx::projection::view_from_basis;
 use crate::math::vec3::dot;
 use crate::math::{ceil, floor, powi, round, sqrt};
 use crate::render::depth::camera_projection;
+use crate::render::radiance_storage::PROBE_STORAGE_SCALE;
 use crate::render::uniforms::ProbePrefilterParams;
 use crate::transform::mat4_mul;
 use alloc::vec;
@@ -323,6 +324,7 @@ pub struct PrefilterPlan {
     mips: u32,
     samples: u32,
     clamp: f32,
+    storage_scale: f32,
 }
 
 impl PrefilterPlan {
@@ -335,11 +337,13 @@ impl PrefilterPlan {
     /// pyramid level matching its own footprint, so a sparse set still integrates
     /// a wide lobe without aliasing. The clamp matches the asset default, so a
     /// captured probe and an imported HDR suppress the same bright-square fringe.
+    /// The faces are stored at [`PROBE_STORAGE_SCALE`].
     pub const RUNTIME: PrefilterPlan = PrefilterPlan {
         face_size: 512,
         mips: em::max_mip_count(512),
         samples: 128,
         clamp: 12.0,
+        storage_scale: PROBE_STORAGE_SCALE,
     };
 
     /// A plan over `face_size` faces at `samples` GGX samples and firefly cap
@@ -350,6 +354,16 @@ impl PrefilterPlan {
             mips: em::max_mip_count(face_size),
             samples,
             clamp,
+            storage_scale: 1.0,
+        }
+    }
+
+    /// This plan over a cube whose radiance is stored at `scale`: the firefly
+    /// cap, given in absolute radiance, is applied at the same scale.
+    pub const fn stored_at(self, scale: f32) -> PrefilterPlan {
+        PrefilterPlan {
+            storage_scale: scale,
+            ..self
         }
     }
 
@@ -403,7 +417,7 @@ impl PrefilterPlan {
             sample_count: self.samples,
             src_mip: 0,
             roughness: 0.0,
-            clamp_lum: self.clamp,
+            clamp_lum: self.clamp * self.storage_scale,
             src_mip_count: self.mips as f32,
             _pad: 0.0,
         }
@@ -1896,6 +1910,19 @@ mod tests {
             // A 2x2 reduction, so the source is exactly twice the destination.
             assert_eq!(plan.mip_face_size(p.src_mip), 2 * p.dst_size);
         }
+    }
+
+    // The firefly cap is authored in absolute radiance and applied where the
+    // cube stores it.
+    #[test]
+    fn the_firefly_clamp_follows_the_storage_scale() {
+        assert_eq!(
+            PrefilterPlan::RUNTIME.mip0_params().clamp_lum,
+            12.0 * PROBE_STORAGE_SCALE
+        );
+        let plain = PrefilterPlan::new(64, 16, 4.0);
+        assert_eq!(plain.mip0_params().clamp_lum, 4.0);
+        assert_eq!(plain.stored_at(8.0).ggx_params(1).clamp_lum, 32.0);
     }
 
     #[test]

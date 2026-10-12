@@ -345,6 +345,10 @@ float3 cube_texel_world_dir(uint face, uint2 xy, uint size)
 #endif
 
 #ifdef ATMOSPHERE_SKY_CUBE
+// The scale the cube is stored at, so a night sky's faint glow keeps its
+// half-float steps. Mirrors `render::radiance_storage::SKY_CUBE_STORAGE_SCALE`.
+static const float SKY_CUBE_STORAGE_SCALE = 1024.0;
+
 // One thread per texel of the cube's top mip, six faces deep: the sky-view
 // table along the texel's direction, the ground below the horizon included,
 // and any night sky behind it but its stars. The sun's disc is left out: the
@@ -359,13 +363,14 @@ void atmosphere_sky_cube_kernel(uint3 id : SV_DispatchThreadID)
     }
     float3 n = cube_texel_world_dir(id.z, id.xy, SKY_CUBE_FACE);
     float4 view = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(n), 0.0);
-    // The cube holds absolute radiance; the table holds it pre-exposed.
+    // The cube holds radiance at its storage scale; the table holds it
+    // pre-exposed.
     float3 l = view.rgb / ATMO.cam_pos.w;
     if (night_sky_on())
     {
         l += night_sky_reflected(n, 0.5 * ATMO_PI / float(SKY_CUBE_FACE), view.a);
     }
-    atmo_out[id] = float4(min(l, (float3)60000.0), 1.0);
+    atmo_out[id] = float4(hdr_store_cap(l * SKY_CUBE_STORAGE_SCALE), 1.0);
 }
 #endif
 

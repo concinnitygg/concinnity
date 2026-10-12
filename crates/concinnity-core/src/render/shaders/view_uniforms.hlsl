@@ -2,6 +2,8 @@
 // forward main pass, the sky, and the probe and mirror re-renders of both.
 // Layout must match `ViewUniforms` in render::uniforms.
 
+{HDR_STORE}
+
 struct ViewUniforms
 {
     float4x4 vp;
@@ -25,7 +27,8 @@ struct ViewUniforms
     // environment map's or an atmosphere's); 0.0 falls back to a flat ambient.
     float irradiance;
     // The scale the pass's color target is written at: the frame's
-    // pre-exposure for the main pass, 1.0 for a probe or mirror face.
+    // pre-exposure for the main pass, PROBE_STORAGE_SCALE for a probe face,
+    // 1.0 for a mirror face.
     float pre_exposure;
     float _pad_view1;
     float _pad_view2;
@@ -34,6 +37,9 @@ struct ViewUniforms
 // A world direction in the environment cubemaps' own frame. Every sky tap goes
 // through this, so the sky, the ambient fill and the reflections turn together.
 // Defined as a macro because VIEW is a per-backend binding named below.
+// What a tap of the environment prefilter cube is multiplied by: the inverse
+// of the scale it is stored at, carried as a base-2 log in row 0's w.
+#define SKY_CUBE_READ exp2(-VIEW.sky_rot[0].w)
 #define SKY_DIR(d) float3(dot(VIEW.sky_rot[0].xyz, (d)), \
                           dot(VIEW.sky_rot[1].xyz, (d)), \
                           dot(VIEW.sky_rot[2].xyz, (d)))

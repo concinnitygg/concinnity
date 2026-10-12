@@ -80,11 +80,11 @@ float4 scene_sample(float2 uv)
 TransparentOut transparent_out(float4 color, float reactive)
 {
     TransparentOut o;
-    o.color = float4(color.rgb * pre_exposure(), color.a);
+    o.color = float4(hdr_store_cap(color.rgb * pre_exposure()), color.a);
     o.reactive = reactive_write(reactive);
     return o;
 }
 float3 prefilter_level(float3 dir, float lod)
 {
-    return prefilter_cube.SampleLevel(prefilter_cube_sampler, SKY_DIR(dir), lod).rgb;
+    return prefilter_cube.SampleLevel(prefilter_cube_sampler, SKY_DIR(dir), lod).rgb * SKY_CUBE_READ;
 }

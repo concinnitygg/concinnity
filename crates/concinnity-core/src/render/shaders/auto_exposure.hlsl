@@ -79,9 +79,10 @@ void histogram_build(uint3 gid : SV_DispatchThreadID, uint tid : SV_GroupIndex)
     if (gid.x < w && gid.y < h)
     {
         float3 c = hdr_texture.Load(int3(int2(gid.xy), 0)).rgb;
-        // Rec. 709 luminance. The 1e-6 floor keeps log2 finite on a fully black
-        // pixel, which would otherwise reach bin 0 through a -inf clamp.
-        float lum = max(dot(c, float3(0.2126, 0.7152, 0.0722)) / params.pre_exposure, 1.0e-6);
+        // Rec. 709 luminance. The floor keeps log2 finite on a fully black
+        // pixel and sits far under any histogram floor, so black lands in the
+        // sub-floor bin.
+        float lum = max(dot(c, float3(0.2126, 0.7152, 0.0722)) / params.pre_exposure, 1.0e-30);
         float lum_log2 = clamp(
             log2(lum),
             params.lum_log2_min,

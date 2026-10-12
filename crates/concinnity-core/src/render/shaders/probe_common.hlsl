@@ -33,7 +33,8 @@ float probe_footprint_lod(float3 R, float lod)
 // Slice `i` of the probe cube array at mip `lod`.
 float3 probe_cube_sample(uint i, float3 dir, float lod)
 {
-    return probe_cubes.SampleLevel(probe_cube_sampler, float4(dir, float(i)), lod).rgb;
+    return probe_cubes.SampleLevel(probe_cube_sampler, float4(dir, float(i)), lod).rgb
+        * (1.0 / PROBE_STORAGE_SCALE);
 }
 
 // The probes a lookup may read: a cluster's two masks at CLUSTER_LIST[`base`],

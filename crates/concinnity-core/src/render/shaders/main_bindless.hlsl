@@ -78,7 +78,7 @@ float4 fragment_main_bindless(VertexOut v) : SV_Target
     GpuObjectData od = OBJECTS[v.object_id];
     surface_params_row = od.params_index;
     float4 color = shade(v, od);
-    return float4(color.rgb * VIEW.pre_exposure, color.a);
+    return float4(hdr_store_cap(color.rgb * VIEW.pre_exposure), color.a);
 }
 
 #else // SURFACE_PREPASS

@@ -135,7 +135,7 @@ fn authored_lights(ctx: &PipelineContext) -> Vec<DirectionalLight> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::Atmosphere;
+    use concinnity_core::components::{Atmosphere, NightSky};
     use concinnity_core::ecs::World;
 
     fn drive() -> AtmosphereDrive {
@@ -205,7 +205,8 @@ mod tests {
         let moon = frame.night.and_then(|n| n.moon).expect("a moon");
         assert_eq!(first.direction, moon.direction);
         assert!(moon.direction[1] > 0.9, "full: opposite the sun");
-        assert!((first.intensity - 2.0 * 1.5e-4 * moon.phase).abs() < 1e-7);
+        let full = 2.0 * NightSky::default().moon_brightness * moon.phase;
+        assert!((first.intensity / full - 1.0).abs() < 1e-4);
         assert!(first.color.iter().all(|&c| c > 0.7), "{:?}", first.color);
         let mut day = world_with_sun([0.1, 1.0, 0.0]);
         let (_, set) = AtmosphereDrive::new(settings).frame(&day.context(), [0.0, 2.0, 0.0], None);

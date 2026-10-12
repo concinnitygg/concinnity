@@ -333,6 +333,7 @@ impl MtlContext {
                     scissor: Some(crop),
                     clusters,
                     timer: PassTimer::span(PassId::PlanarReflection, i, crops.len()),
+                    storage_scale: 1.0,
                 },
             )?;
         }

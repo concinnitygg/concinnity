@@ -18,6 +18,7 @@ use concinnity_core::components::{
     AaMode, ControlsCommand, PassResolution, PostProcessConfig, SettingOp, ShadowUpdate,
     UpscaleQuality, UpscalerBackend, WindowMode,
 };
+use concinnity_core::gfx::auto_exposure::EV_LIMIT;
 use concinnity_core::gfx::render_types::PostProcessTunables;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::GpuVendor;
@@ -532,14 +533,13 @@ fn hundred_scale_from(stored: f32, min: f32, max: f32) -> f32 {
 }
 
 // The post-process ranges are practical UI ceilings; `apply` mirrors the clamps
-// in `PostProcessConfig::resolve` and each feature's `*Settings::resolve`. The
-// 16.0 EV bound mirrors core's `EXPOSURE_EV_LIMIT`.
+// in `PostProcessConfig::resolve` and each feature's `*Settings::resolve`.
 pub(crate) static SLIDERS: [SliderSetting; 20] = [
     // Authored in EV (centered on neutral), applied as the multiplier 2^ev.
     SliderSetting {
         key: SettingKey::Exposure,
         range: (-3.0, 3.0),
-        apply: |v| v.clamp(-16.0, 16.0).exp2(),
+        apply: |v| v.clamp(-EV_LIMIT, EV_LIMIT).exp2(),
         // Guard log2(0); the slider range keeps the multiplier well above this.
         recover: |stored| stored.max(1.0e-6).log2(),
         format: format_ev,
@@ -685,8 +685,8 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
     // resolved.
     SliderSetting {
         key: SettingKey::AutoExposureMinEv,
-        range: (-16.0, 16.0),
-        apply: |v| v.clamp(-16.0, 16.0),
+        range: (-EV_LIMIT, EV_LIMIT),
+        apply: |v| v.clamp(-EV_LIMIT, EV_LIMIT),
         recover: identity,
         format: format_ev,
         target: SliderTarget::PostConfig {
@@ -696,8 +696,8 @@ pub(crate) static SLIDERS: [SliderSetting; 20] = [
     },
     SliderSetting {
         key: SettingKey::AutoExposureMaxEv,
-        range: (-16.0, 16.0),
-        apply: |v| v.clamp(-16.0, 16.0),
+        range: (-EV_LIMIT, EV_LIMIT),
+        apply: |v| v.clamp(-EV_LIMIT, EV_LIMIT),
         recover: identity,
         format: format_ev,
         target: SliderTarget::PostConfig {
@@ -1536,8 +1536,8 @@ mod tests {
         assert_eq!(apply(SettingKey::SsrMaxDistance, 1.0e6), 200.0);
         assert_eq!(apply(SettingKey::SsgiIntensity, 99.0), 4.0);
         assert_eq!(apply(SettingKey::SsgiMaxDistance, 1.0e6), 100.0);
-        assert_eq!(apply(SettingKey::AutoExposureMinEv, -100.0), -16.0);
-        assert_eq!(apply(SettingKey::AutoExposureMaxEv, 100.0), 16.0);
+        assert_eq!(apply(SettingKey::AutoExposureMinEv, -100.0), -EV_LIMIT);
+        assert_eq!(apply(SettingKey::AutoExposureMaxEv, 100.0), EV_LIMIT);
         assert_eq!(apply(SettingKey::AutoExposureSpeed, 100.0), 20.0);
     }
 

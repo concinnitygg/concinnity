@@ -90,14 +90,14 @@ float4 sky_atmosphere_fragment(SkyVertexOut p) : SV_Target
     color += beyond * VIEW.pre_exposure;
     // Kept inside the half-float range the scene is stored in: the disc's
     // radiance is not, at any exposure that shows the sky around it.
-    return float4(min(color, (float3)60000.0), 1.0);
+    return float4(min(color, (float3)HDR_STORE_MAX), 1.0);
 }
 #else
 [shader("pixel")]
 float4 sky_fragment(SkyVertexOut p) : SV_Target
 {
     float3 dir = normalize(p.ray);
-    float3 sky = prefilter_cube.SampleLevel(cube_sampler, SKY_DIR(dir), 0.0).rgb;
-    return float4(sky * VIEW.pre_exposure, 1.0);
+    float3 sky = prefilter_cube.SampleLevel(cube_sampler, SKY_DIR(dir), 0.0).rgb * SKY_CUBE_READ;
+    return float4(hdr_store_cap(sky * VIEW.pre_exposure), 1.0);
 }
 #endif

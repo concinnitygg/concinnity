@@ -8,6 +8,7 @@
 // same two buffers the forward main pass does.
 
 {LIGHT_TYPES}
+{HDR_STORE}
 
 struct RaymarchView
 {

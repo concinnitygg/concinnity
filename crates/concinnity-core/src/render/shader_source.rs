@@ -101,6 +101,9 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{NIGHT_SKY}", "night_sky.hlsl"),
     ("{WIND}", "wind.hlsl"),
     ("{HIZ_TEST}", "hiz_test.hlsl"),
+    // HDR_STORE trails every fragment that carries it (VIEW_UNIFORMS,
+    // TRANSPARENT_TYPES, RAYMARCH_TYPES, ATMOSPHERE_TYPES).
+    ("{HDR_STORE}", "hdr_store.hlsl"),
     // REFLECTION_CUT trails MAIN_SHADING, which carries its marker.
     ("{REFLECTION_CUT}", "reflection_cut.hlsl"),
     // The two hooks a world Shader defines, with the engine's own shading as
