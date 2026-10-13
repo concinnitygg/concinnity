@@ -41,6 +41,7 @@ use concinnity_core::render::uniforms::GlassMeshParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
+use super::decal::upload_static_buffer;
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc};
 use super::reactive_mask::{self, WriterRenderPasses};
@@ -136,23 +137,29 @@ pub(in crate::vulkan) struct RecordDescriptors<'a> {
 }
 
 impl TransparentRecord {
-    // Upload one record's static geometry (host-visible, written once) and its
+    // Upload one record's static geometry (device-local, staged once) and its
     // params into every frame slot's UBO, then allocate + write one descriptor
-    // set per slot.
+    // set per slot. The geometry must not stay in host-visible memory: on a
+    // discrete GPU that is system RAM, and an ocean grid's few MB would cross
+    // the bus on every draw.
     pub(in crate::vulkan) fn upload(
-        alloc: &DeviceAllocator,
+        gpu: &GpuUploadContext<'_>,
         descriptors: RecordDescriptors,
         upload: RecordUpload<'_>,
     ) -> RenderResult<Self> {
+        let alloc = gpu.alloc;
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-        let vb_bytes = std::mem::size_of_val(upload.vertices) as u64;
-        let ib_bytes = std::mem::size_of_val(upload.indices) as u64;
-        let vertex_buffer =
-            alloc.create_buffer(vb_bytes, vk::BufferUsageFlags::VERTEX_BUFFER, host)?;
-        let index_buffer =
-            alloc.create_buffer(ib_bytes, vk::BufferUsageFlags::INDEX_BUFFER, host)?;
-        vertex_buffer.write_slice(0, upload.vertices);
-        index_buffer.write_slice(0, upload.indices);
+        let static_buffer = |bytes: &[u8], usage| {
+            upload_static_buffer(alloc, gpu.device, gpu.command_pool, gpu.queue, bytes, usage)
+        };
+        let vertex_buffer = static_buffer(
+            bytemuck::cast_slice(upload.vertices),
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+        )?;
+        let index_buffer = static_buffer(
+            bytemuck::cast_slice(upload.indices),
+            vk::BufferUsageFlags::INDEX_BUFFER,
+        )?;
 
         let frames = descriptors.frames.max(1);
         let mut params_ubos = Vec::with_capacity(frames);
@@ -1354,6 +1361,9 @@ pub(in crate::vulkan) struct ProducerCtx<'a> {
     // The simulated oceans' arrays every record's set points at, `None` for a
     // world with no water.
     pub ocean: Option<OceanViews>,
+    // Where records stage their static geometry.
+    pub command_pool: vk::CommandPool,
+    pub queue: vk::Queue,
     pub msaa: bool,
     pub hot_reload: bool,
     pub bindless_pool_size: usize,
@@ -1366,6 +1376,16 @@ pub(in crate::vulkan) struct ProducerCtx<'a> {
 }
 
 impl<'a> ProducerCtx<'a> {
+    // The upload path a record's static geometry is staged through.
+    pub(in crate::vulkan) fn gpu(&self) -> GpuUploadContext<'a> {
+        GpuUploadContext {
+            alloc: self.alloc,
+            device: self.device,
+            command_pool: self.command_pool,
+            queue: self.queue,
+        }
+    }
+
     // The descriptor plumbing for one record, resolving its planar slot to the
     // mirror target it samples (or the stand-in).
     pub(in crate::vulkan) fn record_descriptors(
@@ -1563,6 +1583,8 @@ impl TransparentResources {
             planar_target_views: content.planar_target_views,
             sampler,
             ocean: content.ocean,
+            command_pool,
+            queue,
             msaa,
             hot_reload,
             bindless_pool_size,

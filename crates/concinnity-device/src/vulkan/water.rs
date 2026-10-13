@@ -16,7 +16,6 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::water::WaterBody;
 use concinnity_core::render::water::frame::WaterMotion;
 
-use super::allocator::DeviceAllocator;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::transparent::{
     ProducerCtx, RecordUpload, TransparentProducer, TransparentRecord, TransparentVertexInput,
@@ -75,7 +74,6 @@ fn compile_water_rt_shaders(
 // Upload one surface's tessellated grid VB + IB and its per-frame `WaterParams`
 // UBOs, then allocate + write the surface's descriptor sets.
 fn build_surface_record(
-    alloc: &DeviceAllocator,
     ctx: &ProducerCtx,
     body: &WaterBody,
     planar_slot: Option<usize>,
@@ -84,7 +82,7 @@ fn build_surface_record(
     let (vertices, indices) = body.mesh().map_err(RenderError::Other)?;
     let motion = WaterMotion::new(body, planar_slot.is_some());
     let record = TransparentRecord::upload(
-        alloc,
+        &ctx.gpu(),
         ctx.record_descriptors(planar_slot),
         RecordUpload {
             vertices: &vertices,
@@ -137,7 +135,7 @@ pub(in crate::vulkan) fn build_water_producer(
     let mut water = Vec::with_capacity(surfaces.len());
     for (i, surface) in surfaces.iter().enumerate() {
         let planar_slot = planar_slots.get(i).copied().flatten();
-        let (record, motion) = build_surface_record(ctx.alloc, &ctx, surface, planar_slot)?;
+        let (record, motion) = build_surface_record(&ctx, surface, planar_slot)?;
         records.push(record);
         water.push(motion);
     }

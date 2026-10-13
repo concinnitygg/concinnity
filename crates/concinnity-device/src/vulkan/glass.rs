@@ -16,7 +16,6 @@ use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::uniforms::GlassParams;
 
-use super::allocator::DeviceAllocator;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::transparent::{
     GlassMeshProducer, ProducerCtx, RecordUpload, TracedGlassPipelines, TransparentProducer,
@@ -91,7 +90,6 @@ fn compile_glass_rt_shaders(
 // Upload one panel's static quad VB + IB and its per-panel `GlassParams` UBO,
 // then allocate + write the panel's descriptor set.
 fn build_panel_record(
-    alloc: &DeviceAllocator,
     ctx: &ProducerCtx,
     panel: &GlassPanel,
     planar_slot: Option<usize>,
@@ -114,7 +112,7 @@ fn build_panel_record(
 
     let params = GlassParams::from_panel(panel, planar_slot.is_some());
     TransparentRecord::upload(
-        alloc,
+        &ctx.gpu(),
         ctx.record_descriptors(planar_slot),
         RecordUpload {
             vertices: &packed,
@@ -175,7 +173,7 @@ pub(in crate::vulkan) fn build_glass_producer(
     let mut records = Vec::with_capacity(panels.len());
     for (i, panel) in panels.iter().enumerate() {
         let planar_slot = planar_slots.get(i).copied().flatten();
-        records.push(build_panel_record(ctx.alloc, &ctx, panel, planar_slot)?);
+        records.push(build_panel_record(&ctx, panel, planar_slot)?);
     }
 
     Ok(TransparentProducer {
