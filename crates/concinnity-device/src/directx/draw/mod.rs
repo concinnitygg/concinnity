@@ -51,9 +51,9 @@ pub(super) struct RecordFrameTargets<'a> {
 // Per-frame camera / view state plus the overlay text drawn with it.
 #[derive(Clone, Copy)]
 pub(super) struct RecordFrameView<'a> {
-    pub elapsed: f32,
-    // `elapsed` unrounded, for the water's per-frame wave phases.
-    pub elapsed_f64: f64,
+    // Seconds since the world started, narrowed to f32 where a pass needs no
+    // more; the water's motion takes it whole.
+    pub elapsed: f64,
     pub fov_y_radians: f32,
     pub near: f32,
     pub view_distance: Option<f32>,
@@ -178,7 +178,6 @@ impl DxContext {
         } = targets;
         let RecordFrameView {
             elapsed,
-            elapsed_f64,
             fov_y_radians,
             near,
             view_distance,
@@ -330,7 +329,7 @@ impl DxContext {
         let view_uni = ViewUniforms {
             vp: vp_mat,
             view: self.state.view.matrix,
-            elapsed,
+            elapsed: elapsed as f32,
             reflections_enabled,
             cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2]],
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
@@ -433,7 +432,6 @@ impl DxContext {
             fov_y_radians,
             aspect,
             elapsed,
-            elapsed_f64,
             near,
             prime_model_history,
             grass_benders,
@@ -460,7 +458,7 @@ impl DxContext {
 
         self.advance_temporal_state(concinnity_core::render::view_history::ViewFrame {
             vp: cur_vp,
-            elapsed,
+            elapsed: elapsed as f32,
             cam_pos,
         });
 

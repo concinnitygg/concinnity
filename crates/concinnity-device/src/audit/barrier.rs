@@ -221,6 +221,16 @@ const AUDITS: &[BackendAudit] = &[
                 7,
                 Reason::IntraPass,
             ),
+            // The ocean simulation's kernels: the last frame's water draw
+            // before the arrays are rewritten, each kernel's writes before the
+            // next one's reads, and the water draw's reads after the last. All
+            // inside the one node; the arrays rest in GENERAL on either side.
+            (
+                "water_sim.rs",
+                "rec.pipeline_barrier(",
+                3,
+                Reason::IntraPass,
+            ),
             // The haze pass's scene attachment, like the fog pass's.
             (
                 "atmosphere.rs",
@@ -282,6 +292,10 @@ const AUDITS: &[BackendAudit] = &[
             // closes it again inside the node, the sky cube's capture and cube
             // around the steps that write them.
             ("atmosphere.rs", ".ResourceBarrier(", 10, Reason::IntraPass),
+            // The ocean's arrays, opened for unordered access at the head of
+            // the simulation node, each mip handed back to the resting state
+            // once written so the next reduction reads it.
+            ("water_sim.rs", ".ResourceBarrier(", 3, Reason::IntraPass),
             // The one-shot zero-init of a new emitter's pool, into COPY_DEST and
             // back to its UNORDERED_ACCESS resting state. The pool's
             // UAV -> NON_PIXEL_SHADER_RESOURCE pair crosses the sim -> draw node

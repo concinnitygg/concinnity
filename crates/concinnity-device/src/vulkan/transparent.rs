@@ -50,12 +50,14 @@ use super::texture::{
     GpuImage, GpuUploadContext, ImageSpec, LayoutTransition, SubresourceRange, create_image,
     create_image_view, one_shot_submit, transition_image_layout_range, upload_texture,
 };
+use super::water_sim::OceanViews;
 use super::wire_cache::WireCache;
 use crate::vulkan::depth;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSetLayout, VkDevice,
 };
+use concinnity_core::render::water::frame::WaterMotion;
 
 // The live acceleration-structure handles wired into the transparent RT
 // descriptor ring. Passed once at init (`None` when RT is not live at launch)
@@ -130,6 +132,7 @@ pub(in crate::vulkan) struct RecordDescriptors<'a> {
     pub params_set_layout: vk::DescriptorSetLayout,
     pub planar_view: vk::ImageView,
     pub sampler: vk::Sampler,
+    pub ocean: Option<OceanViews>,
 }
 
 impl TransparentRecord {
@@ -169,10 +172,14 @@ impl TransparentRecord {
             write_params_set(
                 descriptors.device,
                 set,
-                ubo.buffer(),
-                upload.params.len() as u64,
-                descriptors.planar_view,
-                descriptors.sampler,
+                ParamsSetTargets {
+                    buffer: ubo.buffer(),
+                    offset: 0,
+                    size: upload.params.len() as u64,
+                    planar_view: descriptors.planar_view,
+                    sampler: descriptors.sampler,
+                    ocean: descriptors.ocean,
+                },
             );
         }
 
@@ -203,21 +210,29 @@ pub(in crate::vulkan) struct TransparentProducer {
     pub reflection_flat_pso: Option<OwnedPipeline>,
     pub reflection_textured_pso: Option<OwnedPipeline>,
     pub records: Vec<TransparentRecord>,
-    pub water: Vec<super::water::WaterMotion>,
+    pub water: Vec<WaterMotion>,
 }
 
 impl TransparentProducer {
-    // Write each visible water surface's params, advanced to `time` seconds,
-    // into its `frame_idx` copy.
-    fn advance_water(&self, frame_idx: usize, time: f64) {
+    // Write each visible water surface's params, advanced to `time` seconds
+    // and seen from `camera`, into its `frame_idx` copy.
+    fn advance_water(&self, frame_idx: usize, time: f64, camera: [f32; 3]) {
         for (record, water) in self.records.iter().zip(&self.water) {
             if !record.visible {
                 continue;
             }
             if let Some(ubo) = record.params_ubos.get(frame_idx) {
-                ubo.write_slice(0, bytemuck::bytes_of(&water.params_at(time)));
+                ubo.write_slice(0, bytemuck::bytes_of(&water.params_at(time, camera)));
             }
         }
+    }
+
+    // True when a visible record samples a simulated ocean.
+    pub(in crate::vulkan) fn samples_ocean(&self) -> bool {
+        self.records
+            .iter()
+            .zip(&self.water)
+            .any(|(r, w)| r.visible && w.body().ocean.is_some())
     }
 
     // Pick this producer's pipeline for the frame: the sharp per-pixel trace when
@@ -344,14 +359,17 @@ impl GlassMeshProducer {
         let params_sets = alloc_descriptor_sets(device, pool.handle(), &layouts)?;
         for frame in 0..frames {
             for slot in 0..count {
-                write_params_set_at(
+                write_params_set(
                     device,
                     params_sets[frame * count + slot],
-                    params_buffers[frame].buffer(),
-                    slot as u64 * params_stride,
-                    std::mem::size_of::<GlassMeshParams>() as u64,
-                    ctx.stand_in_view,
-                    ctx.sampler,
+                    ParamsSetTargets {
+                        buffer: params_buffers[frame].buffer(),
+                        offset: slot as u64 * params_stride,
+                        size: std::mem::size_of::<GlassMeshParams>() as u64,
+                        planar_view: ctx.stand_in_view,
+                        sampler: ctx.sampler,
+                        ocean: None,
+                    },
                 );
             }
         }
@@ -936,15 +954,21 @@ fn view_set_bindings() -> [Binding; 6] {
 }
 
 // Set 1: one record's params UBO (0), the planar reflection target it samples
-// (1) and that target's sampler (2). The UBO is visible to the vertex stage
-// because the water vertex stage reads its wave table out of it.
-fn params_set_bindings() -> [Binding; 3] {
+// (1) and that target's sampler (2), then the simulated oceans' displacement
+// and slope arrays (3, 4) and their sampler (5). The UBO is visible to the
+// vertex stage because the water vertex stage reads its wave table out of it,
+// and the oceans' arrays because it displaces by them; only water reads 3..5.
+fn params_set_bindings() -> [Binding; 6] {
     use vk::DescriptorType as T;
     let frag = vk::ShaderStageFlags::FRAGMENT;
+    let both = vk::ShaderStageFlags::VERTEX | frag;
     [
-        (0, T::UNIFORM_BUFFER, vk::ShaderStageFlags::VERTEX | frag),
+        (0, T::UNIFORM_BUFFER, both),
         (1, T::SAMPLED_IMAGE, frag),
         (2, T::SAMPLER, frag),
+        (3, T::SAMPLED_IMAGE, both),
+        (4, T::SAMPLED_IMAGE, both),
+        (5, T::SAMPLER, both),
     ]
 }
 
@@ -1002,51 +1026,40 @@ fn write_view_set_images(device: &VkDevice, set: vk::DescriptorSet, inputs: View
         .apply(device);
 }
 
-// Write a record's params set: its uniform block (binding 0), the planar
-// reflection target it samples (binding 1) -- its slot's mirror render, or the
-// 1x1 stand-in for a slotless record (the shaders gate on the `planar` flag) --
-// and the sampler that target is read through (binding 2).
-fn write_params_set(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    params_ubo: vk::Buffer,
-    params_size: u64,
+// What one params set points at: a uniform block (binding 0) at `offset` into
+// `buffer`, the planar reflection target the record samples (binding 1) -- its
+// slot's mirror render, or the 1x1 stand-in for a slotless record (the shaders
+// gate on the `planar` flag) -- with the sampler it is read through (binding
+// 2), and the oceans' arrays (bindings 3..5) where the world has water.
+#[derive(Clone, Copy)]
+struct ParamsSetTargets {
+    buffer: vk::Buffer,
+    offset: u64,
+    size: u64,
     planar_view: vk::ImageView,
     sampler: vk::Sampler,
-) {
-    write_params_set_at(
-        device,
-        set,
-        params_ubo,
-        0,
-        params_size,
-        planar_view,
-        sampler,
-    );
+    ocean: Option<OceanViews>,
 }
 
-// The same write at an explicit offset into the buffer, so the mesh producer can
-// point one set per mesh at its own block of a shared per-frame ring.
-fn write_params_set_at(
-    device: &VkDevice,
-    set: vk::DescriptorSet,
-    params_ubo: vk::Buffer,
-    params_offset: u64,
-    params_size: u64,
-    planar_view: vk::ImageView,
-    sampler: vk::Sampler,
-) {
-    SetWrites::new(set)
+fn write_params_set(device: &VkDevice, set: vk::DescriptorSet, t: ParamsSetTargets) {
+    let writes = SetWrites::new(set)
         .buffer(
             0,
             vk::DescriptorType::UNIFORM_BUFFER,
-            params_ubo,
-            params_offset,
-            params_size,
+            t.buffer,
+            t.offset,
+            t.size,
         )
-        .sampled_image(1, planar_view)
-        .sampler(2, sampler)
-        .apply(device);
+        .sampled_image(1, t.planar_view)
+        .sampler(2, t.sampler);
+    let writes = match t.ocean {
+        Some(o) => writes
+            .sampled_image_in(3, o.displacement, vk::ImageLayout::GENERAL)
+            .sampled_image_in(4, o.slopes, vk::ImageLayout::GENERAL)
+            .sampler(5, o.sampler),
+        None => writes,
+    };
+    writes.apply(device);
 }
 
 // Point a params set's planar binding (1) at `view`.
@@ -1284,6 +1297,8 @@ pub(in crate::vulkan) struct TransparentContent<'a> {
     pub glass_planar_slots: &'a [Option<usize>],
     pub water_surfaces: &'a [concinnity_core::render::water::WaterBody],
     pub water_planar_slots: &'a [Option<usize>],
+    // The simulated oceans' arrays, `None` for a world with no water.
+    pub ocean: Option<OceanViews>,
     pub planar_target_views: &'a [vk::ImageView],
     // Indices into the context's draw objects of every see-through material.
     // Empty when no material opted in; those meshes then render opaque.
@@ -1336,6 +1351,9 @@ pub(in crate::vulkan) struct ProducerCtx<'a> {
     pub stand_in_view: vk::ImageView,
     pub planar_target_views: &'a [vk::ImageView],
     pub sampler: vk::Sampler,
+    // The simulated oceans' arrays every record's set points at, `None` for a
+    // world with no water.
+    pub ocean: Option<OceanViews>,
     pub msaa: bool,
     pub hot_reload: bool,
     pub bindless_pool_size: usize,
@@ -1363,6 +1381,7 @@ impl<'a> ProducerCtx<'a> {
                 .and_then(|s| self.planar_target_views.get(s).copied())
                 .unwrap_or(self.stand_in_view),
             sampler: self.sampler,
+            ocean: self.ocean,
         }
     }
 }
@@ -1543,6 +1562,7 @@ impl TransparentResources {
             stand_in_view: empty_layer.view,
             planar_target_views: content.planar_target_views,
             sampler,
+            ocean: content.ocean,
             msaa,
             hot_reload,
             bindless_pool_size,
@@ -2041,10 +2061,26 @@ impl VkContext {
     // Write each visible water surface's params, advanced to `time` seconds
     // into the world, into frame slot `frame_idx`'s copy, ahead of this frame's
     // `encode_transparent`.
-    pub(in crate::vulkan) fn advance_transparent_water(&self, frame_idx: usize, time: f64) {
+    pub(in crate::vulkan) fn advance_transparent_water(
+        &self,
+        frame_idx: usize,
+        time: f64,
+        camera: [f32; 3],
+    ) {
         if let Some(water) = self.transparent.as_ref().and_then(|t| t.water.as_ref()) {
-            water.advance_water(frame_idx, time);
+            water.advance_water(frame_idx, time, camera);
         }
+    }
+
+    // True when a visible surface samples a simulated ocean, so `WaterSim` has
+    // a reader this frame.
+    pub(in crate::vulkan) fn water_sim_live(&self) -> bool {
+        self.water_sim.as_ref().is_some_and(|o| o.simulates())
+            && self
+                .transparent
+                .as_ref()
+                .and_then(|t| t.water.as_ref())
+                .is_some_and(|w| w.samples_ocean())
     }
 
     pub(in crate::vulkan) fn encode_transparent(

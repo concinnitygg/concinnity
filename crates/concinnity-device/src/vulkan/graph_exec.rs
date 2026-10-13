@@ -521,10 +521,9 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // Frame-global elapsed seconds. The particle encoder needs it to
     // derive `dt` from the last-frame snapshot it stashed in a `Cell`;
     // the compute kernel multiplies dt against `spawn_rate` and the
-    // integration step.
-    pub elapsed: f32,
-    // `elapsed` unrounded, for the water's per-frame wave phases.
-    pub elapsed_f64: f64,
+    // integration step. Narrowed at each use; the water's motion takes it
+    // whole.
+    pub elapsed: f64,
     // Camera near-plane in view units. The FogFroxel kernel needs it to map
     // each Z slab onto the linear-Z `[near, max_distance]` volume range, and
     // the temporal-upscale dispatch (FSR; DLSS / XeSS ignore it) needs it with
@@ -563,7 +562,7 @@ impl VkContext {
         // the `&self` `encode_particles` (which may run on a parallel-recording
         // worker) never mutates the particle `Cell`s. `None` when the pass is
         // inert. Mirrors Metal's `prepare_particle_pass` hoist.
-        let particle_frame = self.prepare_particle_pass(params.elapsed);
+        let particle_frame = self.prepare_particle_pass(params.elapsed as f32);
         // The grass block for the kernel and both draws, written once here and
         // only on a frame whose graph runs the kernel, so the draw-argument
         // slot it fills alternates frame to frame.
@@ -576,7 +575,7 @@ impl VkContext {
                     frame_idx: params.frame_idx,
                     cam_pos: params.cam_pos,
                     vp: params.cur_vp,
-                    elapsed: params.elapsed,
+                    elapsed: params.elapsed as f32,
                     cast: graph.passes.iter().any(|p| p.id == PassId::GrassShadow),
                     benders: params.grass_benders,
                 })
@@ -1207,7 +1206,7 @@ impl VkContext {
                     cmd,
                     params.frame_idx,
                     params.cam_pos,
-                    params.elapsed,
+                    params.elapsed as f32,
                     grass_frame,
                 );
             }
@@ -1251,6 +1250,7 @@ impl VkContext {
                 self.encode_fog(rec, params.frame_idx, params.vp_mat, params.cam_pos);
             }
             PassId::Atmosphere => self.encode_atmosphere(rec, params.frame_idx)?,
+            PassId::WaterSim => self.encode_water_sim(rec, params.elapsed),
             PassId::AerialPerspective => self.encode_aerial_perspective(rec, params.frame_idx),
             PassId::AutoExposure => {
                 self.encode_auto_exposure(rec, params.frame_idx);
@@ -1287,7 +1287,8 @@ impl VkContext {
                 // Composite each visible SDF volume into the scene. Uses the
                 // jittered VP (the matrix the main pass rasterized depth with)
                 // so the reprojected hit depth shares the scene's depth space.
-                let view = self.build_raymarch_view(params.vp_mat, params.cam_pos, params.elapsed);
+                let view =
+                    self.build_raymarch_view(params.vp_mat, params.cam_pos, params.elapsed as f32);
                 self.encode_raymarch(cmd, params.frame_idx, &view)?;
             }
             PassId::PlanarReflection => {
@@ -1306,10 +1307,13 @@ impl VkContext {
                 // jittered VP (the matrix the main pass rasterized depth with) so a
                 // record's clip-space depth matches the stored main-depth the
                 // fragment shader tests against.
-                let view =
-                    self.build_transparent_view(params.vp_mat, params.cam_pos, params.elapsed);
+                let view = self.build_transparent_view(
+                    params.vp_mat,
+                    params.cam_pos,
+                    params.elapsed as f32,
+                );
                 let write = params.reactive.transparent;
-                self.advance_transparent_water(params.frame_idx, params.elapsed_f64);
+                self.advance_transparent_water(params.frame_idx, params.elapsed, params.cam_pos);
                 let drew = self.encode_transparent(
                     cmd,
                     params.frame_idx,
@@ -1369,7 +1373,7 @@ impl VkContext {
                     GbufferPrepassView {
                         jittered_vp: params.vp_mat,
                         cur_vp: params.cur_vp,
-                        elapsed: params.elapsed,
+                        elapsed: params.elapsed as f32,
                         cam_pos: params.cam_pos,
                     },
                     velocity_active,

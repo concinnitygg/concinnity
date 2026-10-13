@@ -774,7 +774,7 @@ impl VkContext {
             },
             UpscaleCamera::new(
                 upscaler.jitter().get(),
-                params.elapsed,
+                params.elapsed as f32,
                 params.near,
                 params.fov_y_radians,
                 self.pre_exposure.value(),

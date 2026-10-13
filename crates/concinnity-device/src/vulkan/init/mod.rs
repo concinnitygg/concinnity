@@ -433,6 +433,7 @@ impl VkContext {
             sky,
             atmosphere,
             transparent: world_fx.transparent,
+            water_sim: world_fx.water_sim,
             planar_reflection: world_fx.planar_reflection,
             particle: Default::default(),
             grass,

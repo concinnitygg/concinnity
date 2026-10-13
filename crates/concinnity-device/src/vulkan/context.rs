@@ -907,6 +907,9 @@ pub(super) struct VkSceneAssets {
     // pool slots follow the last real texture.
     pub(super) fallback_textures: Vec<GpuImage>,
     pub(super) linear_sampler: OwnedSampler,
+    // The anisotropic degree `linear_sampler` filters at, which the ocean's
+    // sampler shares.
+    pub(super) anisotropy: f32,
     // Trilinear clamp sampler the IBL cubes, the probe cubes and the LTC tables
     // are read through.
     pub(super) cube_sampler: OwnedSampler,
@@ -1216,6 +1219,9 @@ pub(crate) struct VkContext {
     // back-to-front over the post-SSR scene between `SsrResolve` and
     // `TaaResolve`. Mirrors `src/directx/transparent.rs`.
     pub(super) transparent: Option<crate::vulkan::transparent::TransparentResources>,
+    // The simulated oceans' cascade arrays, which every water draw binds.
+    // `Some` whenever the world declared a `WaterSurface`.
+    pub(super) water_sim: Option<crate::vulkan::water_sim::OceanSim>,
 
     // Planar reflections for the transparent pass's flat reflectors: one
     // render-resolution mirror render per distinct reflector plane (a water
@@ -1477,8 +1483,7 @@ impl VkContext {
                 frame_idx: frame,
             },
             RecordFrameView {
-                elapsed,
-                elapsed_f64,
+                elapsed: elapsed_f64,
                 fov_y_radians,
                 near,
                 view_distance,

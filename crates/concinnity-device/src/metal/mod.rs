@@ -64,6 +64,7 @@ mod texture;
 mod transient_pool;
 mod transparent;
 mod water;
+mod water_sim;
 mod world_shaders;
 
 pub(crate) use context::MtlContext;

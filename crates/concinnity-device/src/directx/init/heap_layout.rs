@@ -44,6 +44,7 @@
 //!   [atmosphere_srv_base_slot..]   ATMOSPHERE_SRV_SLOTS atmosphere table SRVs
 //!   [atmosphere_uav_base_slot..]   ATMOSPHERE_UAV_SLOTS atmosphere table + cube UAVs
 //!   [sky_cube_base_slot..]         SKY_CUBE_SLOTS the atmosphere's sky-cube prefilter
+//!   [ocean_base_slot..]            OCEAN_SLOTS the simulated ocean's arrays and mip UAVs
 //!   srv_slots                      total descriptor count (heap size)
 //!
 //! The RTV heap follows the same cascade in `RtvHeapLayout`, and the DSV heap's
@@ -58,6 +59,7 @@ use crate::directx::decal::MAX_DECALS;
 use crate::directx::particle::MAX_EMITTERS;
 use crate::directx::post::descriptors::POST_TARGET_SLOTS;
 use crate::directx::probe_prefilter::PROBE_MAX_MIPS;
+use crate::directx::water_sim::OCEAN_SLOTS;
 
 // Per-world feature counts that size the variable-length blocks of the SRV
 // heap. The fixed-size blocks (decals, particles, raymarch, Hi-Z, fog,
@@ -147,6 +149,9 @@ pub(in crate::directx) struct SrvHeapLayout {
     // The atmosphere's sky cube and the capture it is prefiltered from (see
     // `PrefilterSlots::block`). Always reserved, like the tables'.
     pub sky_cube_base_slot: usize,
+    // The simulated ocean's array SRVs and per-mip UAVs (see `OCEAN_SLOTS`).
+    // Always reserved, like the atmosphere's.
+    pub ocean_base_slot: usize,
     pub srv_slots: usize,
 }
 
@@ -214,7 +219,8 @@ impl SrvHeapLayout {
         let atmosphere_srv_base_slot = reactive_mask_srv_slot + 1;
         let atmosphere_uav_base_slot = atmosphere_srv_base_slot + ATMOSPHERE_SRV_SLOTS;
         let sky_cube_base_slot = atmosphere_uav_base_slot + ATMOSPHERE_UAV_SLOTS;
-        let srv_slots = sky_cube_base_slot + SKY_CUBE_SLOTS;
+        let ocean_base_slot = sky_cube_base_slot + SKY_CUBE_SLOTS;
+        let srv_slots = ocean_base_slot + OCEAN_SLOTS;
         Self {
             atlas_base_slot,
             hdr_srv_slot,
@@ -248,6 +254,7 @@ impl SrvHeapLayout {
             atmosphere_srv_base_slot,
             atmosphere_uav_base_slot,
             sky_cube_base_slot,
+            ocean_base_slot,
             srv_slots,
         }
     }
@@ -347,7 +354,7 @@ mod tests {
     // with the running total and fails the assert.
     fn assert_gap_free(p: &SrvHeapParams) {
         let l = SrvHeapLayout::compute(p);
-        let blocks: [(usize, usize); 32] = [
+        let blocks: [(usize, usize); 33] = [
             (l.atlas_base_slot, p.n_atlases.max(1)),
             (l.hdr_srv_slot, 1),
             (l.lut_srv_slot, 1),
@@ -383,6 +390,7 @@ mod tests {
             (l.atmosphere_srv_base_slot, ATMOSPHERE_SRV_SLOTS),
             (l.atmosphere_uav_base_slot, ATMOSPHERE_UAV_SLOTS),
             (l.sky_cube_base_slot, SKY_CUBE_SLOTS),
+            (l.ocean_base_slot, OCEAN_SLOTS),
         ];
         let mut expected_base = GLOBAL_SRV_COUNT;
         for (i, (base, count)) in blocks.iter().enumerate() {

@@ -748,7 +748,7 @@ impl VkContext {
             let view = ViewUniforms {
                 vp: m.view_proj,
                 view: m.view,
-                elapsed: params.elapsed,
+                elapsed: params.elapsed as f32,
                 // No reflection composite runs over the mirror render, so the
                 // forward probe specular is its only reflection source; the EMPTY
                 // ProbeSet then leaves it on the sky path.

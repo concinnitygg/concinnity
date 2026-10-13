@@ -202,6 +202,11 @@ pub(super) static GRASS_GENERATE: Program = Program {
     splices: &[],
 };
 
+pub(super) static WATER_FFT_ROWS: Program = Program {
+    row: &shared::WATER_FFT_ROWS,
+    splices: &[],
+};
+
 pub(super) static GRASS_BEND: Program = Program {
     row: &shared::GRASS_BEND,
     splices: &[],

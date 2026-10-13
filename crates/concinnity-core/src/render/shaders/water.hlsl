@@ -3,9 +3,16 @@
 // The second producer of the engine's transparent pass (`PassId::Transparent`,
 // after the SSR resolve and before TAA), alongside `glass.hlsl`. Where a glass
 // pane is a flat quad the vertex stage only projects, a water surface is a
-// tessellated XZ grid (see geometry::water_grid) moved by a sum of waves the
-// host resolves from the world's wind and the surface's swell
-// (render::water::WaterBody), longest first:
+// tessellated XZ grid moved by a sum of waves the host resolves from the
+// world's wind and the surface's swell (render::water::WaterBody), longest
+// first. Everything is measured from an anchor the host picks each frame: the
+// surface's center for a summed body, the camera for a simulated ocean, whose
+// grid follows the camera and is clamped to the surface's rectangle. A large
+// body's wind sea comes from its simulated ocean's cascades
+// (water_fft.hlsl) instead of the sum: the vertex stage adds their
+// displacement, filtered to its grid cell, and the fragment their slopes,
+// whose mip-filtered second moments carry what the pixel cannot resolve into
+// the roughness (LEAN). Summed:
 //
 //   * The long waves, down to two grid cells, displace the grid as Gerstner
 //     waves; anything shorter would alias between vertices.
@@ -86,6 +93,10 @@ static const uint WATER_MAX_WAVES = 24u;
 // array length is part of the `WaterParams` layout too.
 static const uint WATER_RIPPLES = 4u;
 
+// Cascades one simulated ocean runs at most. Mirrors `MAX_OCEAN_CASCADES` in
+// `core::render::water::ocean`.
+static const uint WATER_OCEAN_MAX_CASCADES = 4u;
+
 {PROBE_TYPES}
 
 #ifdef WATER_RT
@@ -101,7 +112,7 @@ static const uint WATER_RIPPLES = 4u;
 // One wave of the sum, packed into two float4 lanes so the CPU `[f32; 4]` pair
 // is byte-identical on every target. Matches `WaterWaveGpu` (32 B). The pinch
 // is the Gerstner horizontal displacement per meter of amplitude, 0 for a wave
-// that only shades. The phase is the wave's at the surface center this frame,
+// that only shades. The phase is the wave's at the anchor this frame,
 // which the host wraps into [0, tau), so no time ever reaches the sum.
 struct WaterWave
 {
@@ -110,7 +121,7 @@ struct WaterWave
 };
 
 // One ripple octave. Matches `WaterRippleGpu` (32 B). The offset is its noise
-// coordinate at the surface center this frame, in lattice cells, which the
+// coordinate at the anchor this frame, in lattice cells, which the
 // host wraps into one WATER_NOISE_PERIOD.
 struct WaterRipple
 {
@@ -118,12 +129,20 @@ struct WaterRipple
     float4 offset; // [along the heading, along the crests, _, _]
 };
 
+// Where a body samples its simulated ocean. Matches `WaterOceanGpu` (64 B).
+struct WaterOcean
+{
+    uint4 layers;        // [cascades, first layer, texels per side, _]
+    float4 inv_lengths;  // 1 / each cascade's side, per meter
+    float4 offsets[2];   // the anchor's place in each cascade's tile, [u, v] pairs
+};
+
 // Per-surface tunables, refreshed every frame. Layout matches `WaterParams`
-// (1040 B); the vec3 fields are float4 so MSL's 16-byte constant-buffer float3
+// (1136 B); the vec3 fields are float4 so MSL's 16-byte constant-buffer float3
 // cannot desynchronize them from the CPU struct.
 struct WaterParams
 {
-    float4 center;         // world-space surface center
+    float4 anchor;        // world-space point everything is measured from
     float4 deep_color;    // body reflectance at full column depth, [0, 1]
     float4 shallow_color; // body reflectance at the shore, [0, 1]
     float depth_falloff;
@@ -147,15 +166,35 @@ struct WaterParams
     // pass ran, and the RT entry honors it too.
     float4 planar;
     WaterRipple ripples[WATER_RIPPLES];
-    // [x, z, _, _]: the ripples' domain warp coordinate at the surface center
-    // this frame, in its noise cells, wrapped like the ripple offsets.
+    // [x, z, _, _]: the ripples' domain warp coordinate at the anchor this
+    // frame, in its noise cells, wrapped like the ripple offsets.
     float4 ripple_warp;
+    // [min x, min z, max x, max z]: the surface relative to the anchor.
+    float4 rest_bounds;
+    // [inner cell, inner half-width, widening, _]: the grid's local cell size
+    // is `inner + max(|x| - half, 0) * widening` along each axis.
+    float4 grid;
+    WaterOcean ocean;
 };
 
 // ---- Resource bindings ----
 
 #define TRANSPARENT_PARAMS WaterParams
 {TRANSPARENT_SCENE}
+
+// The simulated oceans' cascades, one layer each: (dx, dy, dz, jacobian) and
+// (sx, sz, sx^2, sz^2), with mips, read through a wrapping anisotropic
+// sampler. Bound for every surface; a summed body has no cascades and never
+// samples them.
+#ifdef CN_BACKEND_DIRECTX
+Texture2DArray<float4> ocean_displacement : register(t15);
+Texture2DArray<float4> ocean_slopes : register(t16);
+SamplerState ocean_sampler : register(s4);
+#else
+[[vk::binding(3, 1)]] Texture2DArray<float4> ocean_displacement : register(t9);
+[[vk::binding(4, 1)]] Texture2DArray<float4> ocean_slopes : register(t10);
+[[vk::binding(5, 1)]] SamplerState ocean_sampler : register(s6);
+#endif
 
 // This surface's planar reflection target, bound per surface and sampled at the
 // fragment's screen UV when `planar.x > 0.5`; a surface with no planar slot
@@ -223,11 +262,12 @@ struct WaterVertexIn
 struct WaterVertexOut
 {
     [[vk::location(0)]] float3 world_pos : TEXCOORD0;
-    // The flat-rest XZ the vertex was displaced from, relative to the surface
-    // center; the fragment evaluates the wave normal there itself, so the
-    // grid's density sets only the silhouette of the displacement, never the
-    // shading. Center-relative, so its precision follows the surface's size
-    // rather than its distance from the world origin.
+    // The flat-rest XZ the vertex was displaced from, relative to the anchor;
+    // the fragment evaluates the wave normal there itself, so the grid's
+    // density sets only the silhouette of the displacement, never the
+    // shading. Anchor-relative, so its precision follows the distance from
+    // the surface's center, or for an ocean from the camera, rather than from
+    // the world origin.
     [[vk::location(1)]] float2 local_xz : TEXCOORD1;
     float4 position : SV_Position;
 };
@@ -253,15 +293,15 @@ float water_pixel_meters(float clip_w)
     return 2.0 * clip_w / max(p11 * view.viewport.y, 1e-6);
 }
 
-// The phase of `w` this frame at center-relative rest position `xz`.
+// The phase of `w` this frame at anchor-relative rest position `xz`.
 float water_phase(WaterWave w, float2 xz)
 {
     return w.dir_amp_k.w * dot(w.dir_amp_k.xy, xz) + w.motion.y;
 }
 
-// The grid point at center-relative flat-rest XZ `local_xz` displaced by the
+// The grid point at anchor-relative flat-rest XZ `local_xz` displaced by the
 // long waves, each a horizontal pinch plus a vertical sinusoid, faded by a
-// pixel `footprint` meters across; still relative to the center. Reference:
+// pixel `footprint` meters across; still relative to the anchor. Reference:
 // NVIDIA, "Effective Water Simulation from Physical Models", GPU Gems 1.
 float3 water_displace(float2 local_xz, float footprint)
 {
@@ -340,6 +380,40 @@ float water_ripple_variance(float speed)
                  * smoothstep(WATER_RIPPLE_ONSET.x, WATER_RIPPLE_ONSET.y, speed);
 }
 
+// The texture coordinate of anchor-relative `xz` in cascade `c`'s tile: one
+// tile per its side, starting at the anchor's place in it, shifted half a
+// texel so texel `i` sits at `i` texels from the tile's origin on every mip.
+float2 water_ocean_uv(float2 xz, uint c)
+{
+    float4 pair = params.ocean.offsets[c >> 1u];
+    float2 offset = (c & 1u) == 0u ? pair.xy : pair.zw;
+    return xz * params.ocean.inv_lengths[c] + offset + 0.5 / float(params.ocean.layers.z);
+}
+
+// The ocean grid's cell size at anchor-relative `xz`, along its coarser axis.
+float water_grid_cell(float2 xz)
+{
+    float2 cell = params.grid.x + max(abs(xz) - params.grid.y, (float2)0.0) * params.grid.z;
+    return max(cell.x, cell.y);
+}
+
+// The simulated ocean's displacement at anchor-relative rest XZ `xz`, each
+// cascade read at the mip whose texels span `footprint` meters.
+float3 water_ocean_displace(float2 xz, float footprint)
+{
+    float3 d = (float3)0.0;
+    uint count = min(params.ocean.layers.x, WATER_OCEAN_MAX_CASCADES);
+    float size = float(params.ocean.layers.z);
+    for (uint c = 0u; c < count; c++)
+    {
+        float texels = footprint * params.ocean.inv_lengths[c] * size;
+        float lod = max(log2(max(texels, 1e-6)), 0.0);
+        float layer = float(params.ocean.layers.y + c);
+        d += ocean_displacement.SampleLevel(ocean_sampler, float3(water_ocean_uv(xz, c), layer), lod).xyz;
+    }
+    return d;
+}
+
 // The shading at one rest position: the wave normal, and the GGX alpha that
 // carries the slopes too fine for the pixel.
 struct WaterShading
@@ -348,15 +422,29 @@ struct WaterShading
     float alpha;
 };
 
-// Every wave and ripple at center-relative rest XZ `local_xz`, faded by the
+// Every wave and ripple at anchor-relative rest XZ `local_xz`, faded by the
 // pixel's footprint (`dx`, `dy`: the rest position's screen derivatives). The
 // analytic partials against (x, z) give the normal at the displaced point;
-// what the fades remove is added to the base roughness as slope variance.
+// what the fades remove is added to the base roughness as slope variance. A
+// simulated ocean's cascades add their filtered slopes, and the variance
+// their mips averaged away.
 WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
 {
     float3 binormal = float3(1.0, 0.0, 0.0); // dP/dx
     float3 tangent = float3(0.0, 0.0, 1.0);  // dP/dz
     float removed = 0.0;
+
+    uint cascades = min(params.ocean.layers.x, WATER_OCEAN_MAX_CASCADES);
+    for (uint c = 0u; c < cascades; c++)
+    {
+        float inv_length = params.ocean.inv_lengths[c];
+        float layer = float(params.ocean.layers.y + c);
+        float4 m = ocean_slopes.SampleGrad(ocean_sampler, float3(water_ocean_uv(local_xz, c), layer),
+                                           dx * inv_length, dy * inv_length);
+        binormal.y += m.x;
+        tangent.y += m.y;
+        removed += max(m.z - m.x * m.x, 0.0) + max(m.w - m.y * m.y, 0.0);
+    }
 
     uint count = min(params.wave_count, WATER_MAX_WAVES);
     for (uint i = 0u; i < count; i++)
@@ -388,7 +476,7 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
     // crests bend over a slowly drifting domain warp so they never line up
     // into a pattern.
     Wind wind = wind_unpack(params.wind, params.wind_gust);
-    float speed = wind_speed(wind, local_xz + params.center.xz, view.time) * params.wind_gust.y;
+    float speed = wind_speed(wind, local_xz + params.anchor.xz, view.time) * params.wind_gust.y;
     float variance = water_ripple_variance(speed);
     float per_ripple = sqrt(variance * (1.0 - WATER_UNRESOLVED_RIPPLE) / float(WATER_RIPPLES));
     float2 warp_at = local_xz * WATER_WARP_FREQUENCY + params.ripple_warp.xy;
@@ -423,13 +511,21 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
 [shader("vertex")]
 WaterVertexOut water_vertex(WaterVertexIn v)
 {
-    // The grid is built centered on the origin in the XZ plane, so the surface
-    // center rides in through the params rather than the vertex buffer, and
-    // the waves are summed before it is added.
-    float2 local_xz = v.pos.xz;
-    float3 rest = float3(local_xz.x, 0.0, local_xz.y) + params.center.xyz;
+    // The grid is built around the origin in the XZ plane, so the anchor
+    // rides in through the params rather than the vertex buffer, and the
+    // waves are summed before it is added. A summed body's grid lies inside
+    // the surface already; an ocean's follows the camera and is held to it.
+    float2 local_xz = clamp(v.pos.xz, params.rest_bounds.xy, params.rest_bounds.zw);
+    float3 rest = float3(local_xz.x, 0.0, local_xz.y) + params.anchor.xyz;
     float rest_w = mul(view.vp, float4(rest, 1.0)).w;
-    float3 pos = water_displace(local_xz, water_pixel_meters(rest_w)) + params.center.xyz;
+    float footprint = water_pixel_meters(rest_w);
+    float3 pos = water_displace(local_xz, footprint);
+    if (params.ocean.layers.x > 0u)
+    {
+        // Nothing finer than two cells, which the grid would alias.
+        pos += water_ocean_displace(local_xz, max(footprint, 2.0 * water_grid_cell(local_xz)));
+    }
+    pos += params.anchor.xyz;
 
     WaterVertexOut o;
     o.world_pos = pos;

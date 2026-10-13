@@ -317,7 +317,7 @@ impl MtlContext {
                     resolve_slice: 0,
                 },
                 MainPassCamera {
-                    elapsed: params.elapsed,
+                    elapsed: params.elapsed as f32,
                     vp: m.view_proj,
                     view: m.view,
                     cam_pos: m.eye,

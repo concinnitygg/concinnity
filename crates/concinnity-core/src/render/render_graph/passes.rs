@@ -263,6 +263,13 @@ pass_ids! {
     /// hdr_resolve RMW chain just before `Fog`, so a volumetric fog stays the
     /// nearer layer. Gated on `FrameGraphInputs::atmosphere_enabled`.
     AerialPerspective => "aerial_perspective",
+    /// The simulated ocean: a compute pass that evolves every large water
+    /// body's spectrum to this frame, runs its inverse FFTs and reduces the
+    /// resulting displacement and slope arrays down their mips, which
+    /// `Transparent` samples in both the water's vertex and fragment stages.
+    /// It reads nothing else in the frame, so the schedule may run it on the
+    /// async queue. Gated on `FrameGraphInputs::water_sim_enabled`.
+    WaterSim => "water_sim",
 }
 
 impl PassId {

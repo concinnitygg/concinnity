@@ -232,6 +232,9 @@ pub(super) struct WaterState {
     // per-surface fragment / vertex uniforms, built once at init from the
     // asset.
     pub surfaces: Vec<super::water::WaterSurfaceRecord>,
+    // The simulated oceans' cascade arrays, which every water draw binds.
+    // `Some` whenever the world declared a `WaterSurface`.
+    pub ocean: Option<super::water_sim::OceanSim>,
 }
 
 // Transparent glass: the `GlassPanel` producer and the see-through mesh path.

@@ -345,8 +345,11 @@ pub(super) struct WorldEffects {
     pub(super) raymarch: Option<RaymarchResources>,
     pub(super) planar_reflection: Option<PlanarReflectionSet>,
     pub(super) transparent: Option<TransparentResources>,
+    pub(super) water_sim: Option<crate::vulkan::water_sim::OceanSim>,
     pub(super) auto_exposure: AutoExposureState,
 }
+
+use crate::vulkan::texture::GpuUploadContext;
 
 pub(super) fn build_world_effects(
     gpu: &InitGpu<'_>,
@@ -475,6 +478,16 @@ pub(super) fn build_world_effects(
     // transparent pass so each record's planar binding can point at its plane's
     // target. `slots[i]` is reflector `i`'s target slot (or `None`), water first,
     // then glass, matching the other backends.
+    // A mirror renders the culled scene, so a world with no cull records has
+    // nothing to mirror: its reflectors keep the probe / sky path.
+    let planar = if n_cull == 0 {
+        PlanarBudget {
+            planes: 0,
+            ..planar
+        }
+    } else {
+        planar
+    };
     let planar = PlanarReflectors::plan(&fx.water_surfaces, &fx.glass_panels, planar);
     let planar_slots = planar.assignment.slots.clone();
     if planar.overflow() > 0 {
@@ -540,6 +553,23 @@ pub(super) fn build_world_effects(
     // active, else this slot's HDR resolve), so the scene target per frame slot
     // is resolved here; the main-depth views feed the fragments' manual
     // occlusion test.
+    // The simulated oceans, whose arrays every water draw binds, built ahead
+    // of the transparent pass that writes them into its records' sets.
+    let water_sim = (!fx.water_surfaces.is_empty())
+        .then(|| {
+            crate::vulkan::water_sim::OceanSim::new(
+                &GpuUploadContext {
+                    alloc,
+                    device,
+                    command_pool,
+                    queue: graphics_queue,
+                },
+                &fx.ocean,
+                scene.anisotropy,
+                hot_reload,
+            )
+        })
+        .transpose()?;
     let transparent = if fx.glass_panels.is_empty()
         && fx.water_surfaces.is_empty()
         && !rt.has_seethrough_meshes
@@ -611,6 +641,7 @@ pub(super) fn build_world_effects(
                 glass_planar_slots,
                 water_surfaces: &fx.water_surfaces,
                 water_planar_slots,
+                ocean: water_sim.as_ref().map(|o| o.views()),
                 planar_target_views: &planar_target_views,
                 seethrough_mesh_indices: &rt.seethrough_mesh_indices,
             },
@@ -664,6 +695,7 @@ pub(super) fn build_world_effects(
         raymarch,
         planar_reflection,
         transparent,
+        water_sim,
         auto_exposure: AutoExposureState {
             resources: auto_exposure,
             adaptation,

@@ -292,6 +292,11 @@ pub struct FrameGraphInputs {
     /// and an `AerialPerspective` render pass on the hdr_resolve chain ahead
     /// of `Fog`.
     pub atmosphere_enabled: bool,
+    /// `true` when a water surface takes its sea from a simulated ocean and
+    /// the backend built the simulation. With `transparent_enabled` the graph
+    /// adds a `WaterSim` compute pass whose cascade arrays `Transparent` reads
+    /// in its vertex and fragment stages.
+    pub water_sim_enabled: bool,
 }
 
 impl FrameGraphInputs {
@@ -363,6 +368,7 @@ impl FrameGraphInputs {
             grass_enabled: false,
             grass_shadow_enabled: false,
             atmosphere_enabled: false,
+            water_sim_enabled: false,
         }
     }
 }
@@ -422,6 +428,10 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
         i.grass_enabled = true;
         i.shadow_enabled = true;
         i.grass_shadow_enabled = true;
+    }),
+    ("water_sim", |i| {
+        i.transparent_enabled = true;
+        i.water_sim_enabled = true;
     }),
 ];
 
@@ -768,6 +778,17 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         None
     };
 
+    // The simulated ocean (compute): evolves and transforms every simulated
+    // sea into its cascade arrays, which only the water draw reads. Like the
+    // particle simulation it depends on nothing else in the frame, so it is
+    // declared ahead of the raster front it can overlap. The arrays are
+    // backend-owned and rewritten whole each frame.
+    let water_cascades = (inputs.water_sim_enabled && inputs.transparent_enabled).then(|| {
+        let cascades = b.import_texture("water_cascades", water_cascades_desc());
+        b.add_pass(PassId::WaterSim, PassKind::Compute)
+            .write_texture(cascades)
+    });
+
     // Spot shadows: one depth-only render per shadowed spot into its slice of
     // the spot shadow array. Like the cascade pass it precedes Main, which
     // samples the array; backend-owned, so the import tracks dependencies only.
@@ -1076,6 +1097,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             if let Some(h) = shadow_v1 {
                 trans.read_texture(h);
             }
+            if let Some(h) = water_cascades {
+                trans.read_texture_in_stage(h, ReadStages::VERTEX | ReadStages::FRAGMENT);
+            }
             // RMW the resolve output. The read declares the sample dependency
             // (translucents sample the resolved scene for refraction); the
             // write produces the blended version downstream passes consume.
@@ -1099,6 +1123,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         }
         if let Some(h) = shadow_v1 {
             trans.read_texture(h);
+        }
+        if let Some(h) = water_cascades {
+            trans.read_texture_in_stage(h, ReadStages::VERTEX | ReadStages::FRAGMENT);
         }
         trans.read_texture(hdr_resolve_cur);
         reactive_mask = reactive_mask.map(|m| trans.write_texture(m));
@@ -1220,6 +1247,22 @@ fn atmosphere_luts_desc() -> TextureDesc {
         PixelFormat::Rgba16Float,
         TextureUsage::STORAGE.union(TextureUsage::SHADER_READ),
     )
+}
+
+fn water_cascades_desc() -> TextureDesc {
+    // Stands for both cascade arrays of every simulation, at the finest
+    // quality; the backend owns them and transitions them itself.
+    use crate::render::uniforms::ocean::ocean_mip_levels;
+    use crate::render::water::ocean::OceanQuality;
+    let size = OceanQuality::FULL.size;
+    TextureDesc::texture_2d(
+        TextureSize::Absolute(size),
+        TextureSize::Absolute(size),
+        PixelFormat::Rgba16Float,
+        TextureUsage::STORAGE.union(TextureUsage::SHADER_READ),
+    )
+    .with_array_layers(OceanQuality::FULL.cascades)
+    .with_mip_levels(ocean_mip_levels(size))
 }
 
 fn froxel_volume_desc() -> TextureDesc {
@@ -2693,6 +2736,32 @@ mod tests {
                 .iter()
                 .all(|p| p.id != PassId::Atmosphere && p.id != PassId::AerialPerspective)
         );
+    }
+
+    // The ocean is simulated ahead of the transparent pass, which reads its
+    // arrays in the water's vertex and fragment stages, with or without a
+    // reflection resolve; with no transparent pass there is nothing to feed.
+    #[test]
+    fn the_ocean_simulation_feeds_the_water_draw() {
+        for ssr in [false, true] {
+            let mut i = all_off();
+            i.transparent_enabled = true;
+            i.water_sim_enabled = true;
+            i.ssr_enabled = ssr;
+            let g = build_frame_graph(&i).expect("compiles");
+            let at = |id| g.pass_index(id).expect("present");
+            assert!(at(PassId::WaterSim) < at(PassId::Transparent));
+            let read = g.passes[at(PassId::Transparent)]
+                .reads
+                .iter()
+                .find(|r| g.resources[r.resource_index()].label == "water_cascades")
+                .expect("the water draw declares the cascade read");
+            assert_eq!(read.stage(), ReadStages::VERTEX | ReadStages::FRAGMENT);
+        }
+        let mut i = all_off();
+        i.water_sim_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert!(g.pass_index(PassId::WaterSim).is_none());
     }
 
     #[test]

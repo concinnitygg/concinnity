@@ -103,6 +103,7 @@ pub(super) fn build_scene_assets(
         textures,
         fallback_textures,
         linear_sampler,
+        anisotropy: scene_aniso,
         cube_sampler,
         prefilter_mip_count: env_map.prefilter_mip_count,
         env_map,

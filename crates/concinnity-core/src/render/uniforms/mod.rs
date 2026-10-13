@@ -14,6 +14,7 @@ pub mod directx;
 pub mod geometry;
 pub mod grass;
 pub mod metal;
+pub mod ocean;
 pub mod post;
 pub mod probe;
 pub mod raymarch;
@@ -32,7 +33,7 @@ pub use probe::{
 };
 pub use raymarch::{RaymarchShadowCascade, RaymarchView, RaymarchVolumeUniforms};
 pub use transparent::{
-    GlassMeshParams, GlassParams, TransparentView, WATER_MAX_WAVES, WaterParams, WaterRippleGpu,
-    WaterWaveGpu,
+    GlassMeshParams, GlassParams, TransparentView, WATER_MAX_WAVES, WaterOceanGpu, WaterParams,
+    WaterRippleGpu, WaterWaveGpu,
 };
 pub use view::{GBufferView, PassCamera, ViewUniforms};

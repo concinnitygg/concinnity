@@ -834,6 +834,9 @@ pub(crate) struct DxContext {
     // The world's atmosphere, when it declares one: the sky, the haze and the
     // ambient light. See `directx/atmosphere.rs`.
     pub(super) atmosphere: Option<super::atmosphere::DxAtmosphere>,
+    // The simulated oceans' cascade arrays, which every water draw binds.
+    // `Some` whenever the world declared a `WaterSurface`.
+    pub(super) water_sim: Option<super::water_sim::DxOceanSim>,
 
     // The shared `PassId::Transparent` slot and its two producers, translucent
     // glass panes and water surfaces. `Some` only when the world declared a
@@ -1075,8 +1078,7 @@ impl DxContext {
                 frame_idx: frame,
             },
             crate::directx::draw::RecordFrameView {
-                elapsed,
-                elapsed_f64,
+                elapsed: elapsed_f64,
                 fov_y_radians,
                 near,
                 view_distance,

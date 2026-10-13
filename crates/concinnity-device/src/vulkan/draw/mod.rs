@@ -46,9 +46,9 @@ pub(super) struct RecordFrameTargets {
 // Per-frame camera / view state plus the overlay text drawn with it. Drives the
 // projection, cascade selection, sub-pixel jitter, and view UBO for this frame.
 pub(super) struct RecordFrameView<'a> {
-    pub elapsed: f32,
-    // `elapsed` unrounded, for the water's per-frame wave phases.
-    pub elapsed_f64: f64,
+    // Seconds since the world started, narrowed to f32 where a pass needs no
+    // more; the water's motion takes it whole.
+    pub elapsed: f64,
     pub fov_y_radians: f32,
     pub near: f32,
     pub view_distance: Option<f32>,
@@ -292,7 +292,6 @@ impl VkContext {
         } = targets;
         let RecordFrameView {
             elapsed,
-            elapsed_f64,
             fov_y_radians,
             near,
             view_distance,
@@ -399,7 +398,7 @@ impl VkContext {
         let view_uni = ViewUniforms {
             vp: vp_mat,
             view: self.state.view.matrix,
-            elapsed,
+            elapsed: elapsed as f32,
             // Hand glossy dielectric specular to the SSR / RT resolve when its
             // composite owns the scene image and a resolve writes reflections
             // into it this frame, else the forward shader keeps it all.
@@ -509,7 +508,6 @@ impl VkContext {
             fov_y_radians,
             aspect,
             elapsed,
-            elapsed_f64,
             near,
             grass_benders,
             planar: self
@@ -531,7 +529,7 @@ impl VkContext {
 
         self.advance_temporal_state(concinnity_core::render::view_history::ViewFrame {
             vp: cur_vp,
-            elapsed,
+            elapsed: elapsed as f32,
             cam_pos,
         });
 
@@ -692,6 +690,8 @@ impl VkContext {
                 && self.fog.settings.is_some_and(|s| s.contributes()),
             // The atmosphere runs on every frame that carries its inputs.
             atmosphere_enabled: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
+            // The ocean runs while a visible surface samples it.
+            water_sim_enabled: self.water_sim_live(),
             decals_enabled: self.decal.resources.is_some() && !self.decal.set.is_empty(),
             // The SSR pre-pass G-buffer is shared with SSGI, so it runs whenever
             // `self.ssr` exists (built for SSR resolve *or* SSGI).

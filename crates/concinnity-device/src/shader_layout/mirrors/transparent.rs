@@ -8,8 +8,8 @@ use concinnity_core::gfx::render_types::{
     FogFroxelParams, FogParams, RtGeomEntry, RtParams, ShadowUniforms,
 };
 use concinnity_core::render::uniforms::{
-    GlassMeshParams, GlassParams, ProbeSet, ProbeUniforms, TransparentView, WaterParams,
-    WaterRippleGpu, WaterWaveGpu,
+    GlassMeshParams, GlassParams, ProbeSet, ProbeUniforms, TransparentView, WaterOceanGpu,
+    WaterParams, WaterRippleGpu, WaterWaveGpu,
 };
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
@@ -92,8 +92,13 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
         })),
         everywhere(mirror!(WaterWaveGpu => "WaterWave" { dir_amp_k, motion, })),
         everywhere(mirror!(WaterRippleGpu => "WaterRipple" { shape, offset, })),
+        everywhere(mirror!(WaterOceanGpu => "WaterOcean" {
+            layers,
+            inv_lengths,
+            offsets,
+        })),
         everywhere(mirror!(WaterParams => "WaterParams" {
-            center,
+            anchor,
             deep_color,
             shallow_color,
             depth_falloff,
@@ -110,6 +115,9 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
             planar,
             ripples,
             ripple_warp,
+            rest_bounds,
+            grid,
+            ocean,
         })),
         everywhere(mirror!(ShadowUniforms => "ShadowUniforms" {
             light_vps,

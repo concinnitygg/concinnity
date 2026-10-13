@@ -119,6 +119,8 @@ pub(in crate::directx) enum SamplerState {
     LinearClampTransparentBorder,
     // Bilinear shadow-map depth compare, clamp to edge.
     ShadowCompare,
+    // Trilinear with 16x anisotropy, repeat.
+    AnisotropicWrap,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,6 +157,16 @@ impl StaticSampler {
                 shadow_sample_compare(),
                 D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
             ),
+            SamplerState::AnisotropicWrap => (
+                D3D12_FILTER_ANISOTROPIC,
+                D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+                D3D12_COMPARISON_FUNC_ALWAYS,
+                D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK,
+            ),
+        };
+        let max_anisotropy = match self.state {
+            SamplerState::AnisotropicWrap => 16,
+            _ => 0,
         };
         D3D12_STATIC_SAMPLER_DESC {
             Filter: filter,
@@ -163,6 +175,7 @@ impl StaticSampler {
             AddressW: address,
             ComparisonFunc: compare,
             BorderColor: border,
+            MaxAnisotropy: max_anisotropy,
             MinLOD: 0.0,
             MaxLOD: f32::MAX,
             ShaderRegister: self.register,

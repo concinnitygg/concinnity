@@ -42,6 +42,7 @@ use concinnity_core::render::depth::DEPTH_CLEAR;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::rt_reflections::RtParamsInputs;
 use concinnity_core::render::reactive_mask::ReactiveWrite;
+use concinnity_core::render::water::frame::WaterMotion;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -232,18 +233,26 @@ pub(in crate::directx) struct TransparentProducer {
     pub reflection_flat_pso: Option<ID3D12PipelineState>,
     pub reflection_textured_pso: Option<ID3D12PipelineState>,
     pub records: Vec<TransparentRecord>,
-    pub water: Vec<super::water::WaterMotion>,
+    pub water: Vec<WaterMotion>,
 }
 
 impl TransparentProducer {
-    // Write each visible water surface's params, advanced to `time` seconds,
-    // into its `frame_idx` block.
-    fn advance_water(&self, frame_idx: usize, time: f64) {
+    // Write each visible water surface's params, advanced to `time` seconds
+    // and seen from `camera`, into its `frame_idx` block.
+    fn advance_water(&self, frame_idx: usize, time: f64, camera: [f32; 3]) {
         for (record, water) in self.records.iter().zip(&self.water) {
             if record.visible {
-                record.write_water_params(frame_idx, &water.params_at(time));
+                record.write_water_params(frame_idx, &water.params_at(time, camera));
             }
         }
+    }
+
+    // True when a visible record samples a simulated ocean.
+    fn samples_ocean(&self) -> bool {
+        self.records
+            .iter()
+            .zip(&self.water)
+            .any(|(r, w)| r.visible && w.body().ocean.is_some())
     }
 }
 
@@ -463,8 +472,9 @@ use concinnity_core::render::transparent::ordered_visible;
 //   [10] root SRV t22 per-cluster light lists and probe masks
 //   [11] table  t13..14 the cascaded shadow map and the sky irradiance cube
 //   [12] root CBV b3  ShadowUniforms
+//   [13] table  t15..16 the simulated oceans' displacement and slope arrays
 //   static sampler s0 : linear clamp ; s2 : cube mip-linear clamp ;
-//   s3 : shadow compare
+//   s3 : shadow compare ; s4 : anisotropic wrap (every stage)
 //
 // b1 is visible to every stage: the water vertex stage reads its wave table out
 // of the params block, where the glass vertex stage reads only the view.
@@ -485,6 +495,11 @@ const PROBE_RECORDS_ROOT_RT: u32 = 17;
 // both signatures by the shadow uniforms CBV (b3).
 const BODY_LIGHT_ROOT_BASE: u32 = 11;
 const BODY_LIGHT_ROOT_RT: u32 = 20;
+// Root parameter index of the oceans' array table (t15..t16), last in both
+// signatures and visible to every stage: the water's vertex stage displaces
+// by it.
+const OCEAN_ROOT_BASE: u32 = 13;
+const OCEAN_ROOT_RT: u32 = 22;
 
 fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::{All, Pixel};
@@ -504,15 +519,18 @@ fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
         .srv(22, Pixel) // [10] t22 cluster lists
         .srv_table(13, 2, Pixel) // [11] t13..t14 shadow map + irradiance cube
         .cbv(3, Pixel) // [12] b3 ShadowUniforms
+        .srv_table(15, 2, All) // [13] t15..t16 ocean arrays
         // s0: the scene snapshot / depth. s2: the prefilter + probe cube array.
-        // s3: the shadow compare.
+        // s3: the shadow compare. s4: the ocean arrays.
         .static_sampler(SamplerState::LinearClamp, 0, Pixel)
         .static_sampler(SamplerState::LinearClamp, 2, Pixel)
         .static_sampler(SamplerState::ShadowCompare, 3, Pixel)
+        .static_sampler(SamplerState::AnisotropicWrap, 4, All)
         .input_layout();
-    debug_assert_eq!(sig.len() - 6, PLANAR_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 5, PROBE_RECORDS_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 2, BODY_LIGHT_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 7, PLANAR_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 6, PROBE_RECORDS_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 3, BODY_LIGHT_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 1, OCEAN_ROOT_BASE);
     sig.build(device, "transparent root sig")
 }
 
@@ -609,7 +627,9 @@ fn transparent_pso(
 //   [19] root SRV t22  per-cluster light lists and probe masks
 //   [20] table  t13..14 the cascaded shadow map and the sky irradiance cube
 //   [21] root CBV b3   ShadowUniforms
-//   static samplers s0 linear-clamp, s1 linear-repeat, s2 cube linear-clamp
+//   [22] table  t15..16 the simulated oceans' displacement and slope arrays
+//   static samplers s0 linear-clamp, s1 linear-repeat, s2 cube linear-clamp,
+//                   s3 shadow compare, s4 anisotropic wrap (every stage)
 //
 // [15] is what the base signature carries at [7]: the water fragment samples its
 // mirror plane in place of tracing wherever it has one, so the resolve has to
@@ -642,15 +662,18 @@ fn create_transparent_rt_root_signature(
         .srv(22, Pixel) // [19] t22 cluster lists
         .srv_table(13, 2, Pixel) // [20] t13..t14 shadow map + irradiance cube
         .cbv(3, Pixel) // [21] b3 ShadowUniforms
+        .srv_table(15, 2, All) // [22] t15..t16 ocean arrays
         .static_sampler(SamplerState::LinearClamp, 0, Pixel) // s0 scene / depth
         .static_sampler(SamplerState::LinearWrap, 1, Pixel) // s1 hit albedo / normal map
         .static_sampler(SamplerState::LinearClamp, 2, Pixel) // s2 prefilter + probe cubes
         .static_sampler(SamplerState::ShadowCompare, 3, Pixel) // s3 shadow compare
+        .static_sampler(SamplerState::AnisotropicWrap, 4, All) // s4 ocean arrays
         .input_layout();
-    debug_assert_eq!(sig.len() - 7, PLANAR_ROOT_RT);
-    debug_assert_eq!(sig.len() - 6, GLASS_REFLECTION_ROOT_RT);
-    debug_assert_eq!(sig.len() - 5, PROBE_RECORDS_ROOT_RT);
-    debug_assert_eq!(sig.len() - 2, BODY_LIGHT_ROOT_RT);
+    debug_assert_eq!(sig.len() - 8, PLANAR_ROOT_RT);
+    debug_assert_eq!(sig.len() - 7, GLASS_REFLECTION_ROOT_RT);
+    debug_assert_eq!(sig.len() - 6, PROBE_RECORDS_ROOT_RT);
+    debug_assert_eq!(sig.len() - 3, BODY_LIGHT_ROOT_RT);
+    debug_assert_eq!(sig.len() - 1, OCEAN_ROOT_RT);
     sig.build(device, "transparent rt root sig")
 }
 
@@ -1247,10 +1270,26 @@ impl DxContext {
     // Write each visible water surface's params, advanced to `time` seconds
     // into the world, into frame slot `frame_idx`'s copy, ahead of this frame's
     // `encode_transparent`.
-    pub(in crate::directx) fn advance_transparent_water(&self, frame_idx: usize, time: f64) {
+    pub(in crate::directx) fn advance_transparent_water(
+        &self,
+        frame_idx: usize,
+        time: f64,
+        camera: [f32; 3],
+    ) {
         if let Some(water) = self.transparent.as_ref().and_then(|t| t.water.as_ref()) {
-            water.advance_water(frame_idx, time);
+            water.advance_water(frame_idx, time, camera);
         }
+    }
+
+    // True when a visible surface samples a simulated ocean, so `WaterSim` has
+    // a reader this frame.
+    pub(in crate::directx) fn water_sim_live(&self) -> bool {
+        self.water_sim.as_ref().is_some_and(|o| o.simulates())
+            && self
+                .transparent
+                .as_ref()
+                .and_then(|t| t.water.as_ref())
+                .is_some_and(|w| w.samples_ocean())
     }
 
     pub(in crate::directx) fn encode_transparent(
@@ -1427,13 +1466,19 @@ impl DxContext {
 
         // The one per-record binding whose root parameter moves between the two
         // signatures (the RT one appends it past the trace's inputs).
-        let (planar_root, probe_records_root, body_light_root) = if rt_live {
-            (PLANAR_ROOT_RT, PROBE_RECORDS_ROOT_RT, BODY_LIGHT_ROOT_RT)
+        let (planar_root, probe_records_root, body_light_root, ocean_root) = if rt_live {
+            (
+                PLANAR_ROOT_RT,
+                PROBE_RECORDS_ROOT_RT,
+                BODY_LIGHT_ROOT_RT,
+                OCEAN_ROOT_RT,
+            )
         } else {
             (
                 PLANAR_ROOT_BASE,
                 PROBE_RECORDS_ROOT_BASE,
                 BODY_LIGHT_ROOT_BASE,
+                OCEAN_ROOT_BASE,
             )
         };
         let shadow_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
@@ -1462,6 +1507,10 @@ impl DxContext {
             cmd.SetGraphicsRootShaderResourceView(probe_records_root + 2, probes.cluster_list);
             cmd.set_graphics_srv_table(body_light_root, self.body_light_srvs_gpu());
             cmd.SetGraphicsRootConstantBufferView(body_light_root + 1, shadow_gva);
+            // The oceans' arrays, which exist wherever water does.
+            if let Some(ocean) = &self.water_sim {
+                cmd.set_graphics_srv_table(ocean_root, ocean.srv_table());
+            }
         }
         if rt_live {
             // Sharp per-pixel trace. Bind the RT inputs once before the draw loop

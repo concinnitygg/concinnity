@@ -329,6 +329,11 @@ fn grass_layouts_match_the_shader() {
 }
 
 #[test]
+fn water_fft_layouts_match_the_shader() {
+    check(&programs::WATER_FFT_ROWS, &mirrors::geometry::water_fft());
+}
+
+#[test]
 fn grass_bend_layouts_match_the_shader() {
     check(&programs::GRASS_BEND, &mirrors::geometry::grass_bend());
 }

@@ -211,6 +211,23 @@ impl MtlContext {
             WATER_IRRADIANCE_TEXTURE_INDEX,
         );
         enc.set_fragment_sampler(self.shadow.sampler.as_ref(), WATER_SHADOW_SAMPLER_INDEX);
+        // The simulated oceans' cascades, which the water's vertex stage
+        // displaces by and its fragment stage shades from; frame-constant too.
+        if let Some(ocean) = &self.water.ocean {
+            use super::water_sim::{
+                OCEAN_DISPLACEMENT_TEXTURE_INDEX, OCEAN_SAMPLER_INDEX, OCEAN_SLOPES_TEXTURE_INDEX,
+            };
+            let a = &ocean.arrays;
+            for (texture, index) in [
+                (&a.displacement, OCEAN_DISPLACEMENT_TEXTURE_INDEX),
+                (&a.slopes, OCEAN_SLOPES_TEXTURE_INDEX),
+            ] {
+                enc.set_vertex_texture(texture, index);
+                enc.set_fragment_texture(texture, index);
+            }
+            enc.set_vertex_sampler(&a.sampler, OCEAN_SAMPLER_INDEX);
+            enc.set_fragment_sampler(&a.sampler, OCEAN_SAMPLER_INDEX);
+        }
         // The main camera's cluster grid, which bins the probes a surface
         // blends, takes the params at buffer(12) and the lists at buffer(13).
         self.probe_bindings().bind(

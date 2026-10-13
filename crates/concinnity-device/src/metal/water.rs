@@ -29,13 +29,13 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::geometry::water_grid::build_water_grid;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::transparent;
 use concinnity_core::render::uniforms::{TransparentView, WaterParams};
 use concinnity_core::render::water::WaterBody;
+use concinnity_core::render::water::frame::WaterMotion;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLRenderPipelineState, MTLResourceOptions};
@@ -46,14 +46,13 @@ use super::error::allocation_failed;
 use super::glass::build_transparent_pipeline_stages;
 use super::transparent::{TransparentDraw, bytes_of};
 
-// Per-surface GPU state: a static tessellated grid VB + IB, and the body its
-// params move with each frame.
+// Per-surface GPU state: a static tessellated grid VB + IB, and the motion its
+// params take each frame.
 pub(in crate::metal) struct WaterSurfaceRecord {
     pub(in crate::metal) vertex_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     pub(in crate::metal) index_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     pub(in crate::metal) index_count: u32,
-    pub(in crate::metal) params: WaterParams,
-    pub(in crate::metal) body: WaterBody,
+    pub(in crate::metal) motion: WaterMotion,
     pub(in crate::metal) visible: bool,
     // World-space center, for the back-to-front camera-distance sort.
     pub(in crate::metal) center: [f32; 3],
@@ -64,10 +63,9 @@ pub(in crate::metal) struct WaterSurfaceRecord {
     pub(in crate::metal) planar_slot: Option<usize>,
 }
 
-// Build a [`WaterSurfaceRecord`] for one resolved `WaterSurface`. Calls the
-// shared `geometry::water_grid` to produce the tessellated mesh and uploads
-// it once; per-frame uniforms (the view, and the params advanced to the frame's
-// time) come in through the encoder.
+// Build a [`WaterSurfaceRecord`] for one resolved `WaterSurface`: its grid
+// (`WaterBody::mesh`) uploads once; per-frame uniforms (the view, and the
+// params advanced to the frame's time and camera) come in through the encoder.
 pub(in crate::metal) fn build_water_surface_record(
     device: &ProtocolObject<dyn MTLDevice>,
     body: &WaterBody,
@@ -75,23 +73,7 @@ pub(in crate::metal) fn build_water_surface_record(
     let surface = &body.surface;
     // A grid the core geometry refuses (too many vertices for a u16 index) is a
     // world-authoring limit, not a device failure.
-    let (verts, idxs) =
-        build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)
-            .map_err(RenderError::Other)?;
-
-    // Flatten into the standard Vertex layout. Tangent + color are filled
-    // with placeholders since the water shader rebuilds the normal frame
-    // analytically and the fragment ignores per-vertex color.
-    let packed: Vec<Vertex> = verts
-        .into_iter()
-        .map(|(pos, normal, color, uv)| Vertex {
-            pos,
-            normal,
-            tangent: [1.0, 0.0, 0.0],
-            color,
-            uv,
-        })
-        .collect();
+    let (packed, idxs) = body.mesh().map_err(RenderError::Other)?;
     let vb_bytes = packed.len() * std::mem::size_of::<Vertex>();
     let ib_bytes = idxs.len() * std::mem::size_of::<u16>();
 
@@ -120,8 +102,7 @@ pub(in crate::metal) fn build_water_surface_record(
         vertex_buffer: vb,
         index_buffer: ib,
         index_count: idxs.len() as u32,
-        params: WaterParams::from_body(body, false),
-        body: body.clone(),
+        motion: WaterMotion::new(body, false),
         visible: surface.visible,
         center: surface.center,
         // Patched after `assign_planar_slots` runs over all reflectors in init.
@@ -139,6 +120,17 @@ impl MtlContext {
             .surfaces
             .iter()
             .any(|s| s.visible && s.planar_slot.is_some())
+    }
+
+    // True when a visible surface samples a simulated ocean, so `WaterSim` has
+    // a reader this frame.
+    pub(in crate::metal) fn water_sim_live(&self) -> bool {
+        self.water.ocean.as_ref().is_some_and(|o| o.simulates())
+            && self
+                .water
+                .surfaces
+                .iter()
+                .any(|s| s.visible && s.motion.body().ocean.is_some())
     }
 
     // Contribute one [`TransparentDraw`] per visible water surface to the
@@ -188,8 +180,7 @@ impl MtlContext {
             }
             // Everything but the motion and the planar flag below is
             // asset-side-static.
-            let mut params = surface.params;
-            params.advance(&surface.body.motion_at(time));
+            let mut params = surface.motion.params_at(time, [cam[0], cam[1], cam[2]]);
             let mut fragment_textures = vec![
                 // The refraction snapshot (texture 0) + resolved main depth
                 // (texture 1). The IBL prefilter cube (texture 2), the probe cube
@@ -207,7 +198,7 @@ impl MtlContext {
                     .planar_slot
                     .and_then(|s| planar_set.and_then(|set| set.targets.get(s)))
             {
-                params.planar = WaterParams::planar_lane(surface.params.roughness, true);
+                params.planar = WaterParams::planar_lane(surface.motion.params().roughness, true);
                 fragment_textures.push((
                     super::transparent::GLASS_PLANAR_TEXTURE_INDEX,
                     targets.resolve.clone(),

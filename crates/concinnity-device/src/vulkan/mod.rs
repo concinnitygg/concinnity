@@ -63,6 +63,7 @@ mod transient_pool;
 mod transparent;
 mod upload_ring;
 mod water;
+mod water_sim;
 mod window;
 mod wire_cache;
 mod wireframe;

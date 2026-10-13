@@ -362,7 +362,7 @@ impl crate::directx::context::DxContext {
             },
             UpscaleCamera::new(
                 self.upscale.jitter.get(),
-                params.elapsed,
+                params.elapsed as f32,
                 params.near,
                 params.fov_y_radians,
                 self.pre_exposure.value(),

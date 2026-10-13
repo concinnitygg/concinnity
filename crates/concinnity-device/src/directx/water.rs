@@ -11,11 +11,9 @@
 //! `builtin_shaders`; the ray-traced fragment needs shader model 6.5 for its
 //! inline ray query, the base pair 6.0.
 
-use concinnity_core::geometry::water_grid::build_water_grid;
-use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::uniforms::WaterParams;
 use concinnity_core::render::water::WaterBody;
+use concinnity_core::render::water::frame::WaterMotion;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::DeviceAllocator;
@@ -25,22 +23,6 @@ use crate::directx::context::dump_on_err;
 use crate::directx::transparent::{
     RecordUpload, TransparentProducer, TransparentRecord, create_transparent_pso,
 };
-
-// A surface's params as built, and the body whose waves and ripples move them
-// each frame.
-pub(in crate::directx) struct WaterMotion {
-    body: WaterBody,
-    params: WaterParams,
-}
-
-impl WaterMotion {
-    // The params advanced to `time` seconds into the world.
-    pub(in crate::directx) fn params_at(&self, time: f64) -> WaterParams {
-        let mut params = self.params;
-        params.advance(&self.body.motion_at(time));
-        params
-    }
-}
 
 // Compile the water vertex + fragment shaders. The fragment comes in an MSAA
 // pair, which keeps its depth SRV declaration in sync with the resource's sample
@@ -159,40 +141,20 @@ pub(in crate::directx) fn build_water_producer(
     for (i, body) in surfaces.iter().enumerate() {
         let surface = &body.surface;
         let planar_slot = planar_slots.get(i).copied().flatten();
-        let (verts, idxs) =
-            build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)
-                .map_err(RenderError::Other)?;
-
-        // Flatten into the standard Vertex layout. Tangent and color are
-        // placeholders: the water shader rebuilds its normal frame analytically
-        // from the wave derivatives and the fragment ignores per-vertex color.
-        let packed: Vec<Vertex> = verts
-            .into_iter()
-            .map(|(pos, normal, color, uv)| Vertex {
-                pos,
-                normal,
-                tangent: [1.0, 0.0, 0.0],
-                color,
-                uv,
-            })
-            .collect();
-
-        let params = WaterParams::from_body(body, planar_slot.is_some());
+        let (vertices, indices) = body.mesh().map_err(RenderError::Other)?;
+        let motion = WaterMotion::new(body, planar_slot.is_some());
         records.push(TransparentRecord::upload(
             alloc,
             RecordUpload {
-                vertices: &packed,
-                indices: &idxs,
-                params: bytemuck::bytes_of(&params),
+                vertices: &vertices,
+                indices: &indices,
+                params: bytemuck::bytes_of(motion.params()),
                 visible: surface.visible,
                 center: surface.center,
                 planar_slot,
             },
         )?);
-        water.push(WaterMotion {
-            body: body.clone(),
-            params,
-        });
+        water.push(motion);
     }
 
     Ok(TransparentProducer {

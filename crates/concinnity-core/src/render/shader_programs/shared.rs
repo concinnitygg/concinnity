@@ -641,6 +641,33 @@ pub static WATER_FRAG_RT_TEXTURED: ShaderProgram = ShaderProgram {
     msaa: true,
 };
 
+// The simulated ocean's kernels: the row and column halves of its FFT and the
+// mip reduction of its outputs.
+/// `water_fft_rows` from `water_fft.hlsl`.
+pub static WATER_FFT_ROWS: ShaderProgram = ShaderProgram {
+    file: "water_fft.hlsl",
+    entry: "water_fft_rows",
+    label: "water_fft_rows.hlsl",
+    gates: &["WATER_FFT_ROWS"],
+    msaa: false,
+};
+/// `water_fft_columns` from `water_fft.hlsl`.
+pub static WATER_FFT_COLUMNS: ShaderProgram = ShaderProgram {
+    file: "water_fft.hlsl",
+    entry: "water_fft_columns",
+    label: "water_fft_columns.hlsl",
+    gates: &["WATER_FFT_COLUMNS"],
+    msaa: false,
+};
+/// `water_mip` from `water_fft.hlsl`.
+pub static WATER_MIP: ShaderProgram = ShaderProgram {
+    file: "water_fft.hlsl",
+    entry: "water_mip",
+    label: "water_mip.hlsl",
+    gates: &["WATER_MIP"],
+    msaa: false,
+};
+
 // Grass: the blade kernel, the bend pass and the cascade's depth-only draw, then
 // the blade pair the G-buffer pre-pass draws (under the pre-pass's own gate,
 // like the surfaces') and the pair Main draws.
@@ -776,6 +803,9 @@ pub static ALL: &[&ShaderProgram] = &[
     &WATER_FRAG,
     &WATER_FRAG_RT,
     &WATER_FRAG_RT_TEXTURED,
+    &WATER_FFT_ROWS,
+    &WATER_FFT_COLUMNS,
+    &WATER_MIP,
     &GRASS_GENERATE,
     &GRASS_BEND,
     &GRASS_SHADOW_VERT,

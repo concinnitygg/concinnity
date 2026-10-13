@@ -82,6 +82,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("transparent_types.hlsl", TRANSPARENT_TYPES),
     ("view_uniforms.hlsl", VIEW_UNIFORMS),
     ("water.hlsl", WATER),
+    ("water_fft.hlsl", WATER_FFT),
     ("wind.hlsl", WIND),
 ];
 
@@ -230,5 +231,7 @@ pub const TRANSPARENT_TYPES: &str = include_str!("shaders/transparent_types.hlsl
 pub const VIEW_UNIFORMS: &str = include_str!("shaders/view_uniforms.hlsl");
 /// `water.hlsl`.
 pub const WATER: &str = include_str!("shaders/water.hlsl");
+/// `water_fft.hlsl`.
+pub const WATER_FFT: &str = include_str!("shaders/water_fft.hlsl");
 /// `wind.hlsl`.
 pub const WIND: &str = include_str!("shaders/wind.hlsl");

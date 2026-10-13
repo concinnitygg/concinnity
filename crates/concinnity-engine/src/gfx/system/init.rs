@@ -1582,7 +1582,14 @@ impl GraphicsSystem {
             crate::gfx::planet_grass::resolve(p, &crate::gfx::terrain::grass_by_id(ctx))
         });
         let planet_far_field = planet_grass.as_ref().and_then(|g| g.far_field());
-        let fx = drain_world_fx(ctx, texture_count, &terrains, planet_grass, planet.as_ref());
+        let fx = drain_world_fx(
+            ctx,
+            texture_count,
+            &terrains,
+            planet_grass,
+            planet.as_ref(),
+            quality_ceiling.ocean,
+        );
         self.grows_grass = fx.grass.is_some();
         self.atmosphere = fx.atmosphere.map(super::atmosphere::AtmosphereDrive::new);
         let sdf_fields = if capture_sources {

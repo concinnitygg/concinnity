@@ -325,6 +325,48 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         registers: &[("view", "b0"), ("params", "b1")],
     },
     DxilAbi {
+        program: &shared::WATER_VERT,
+        registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_FRAG,
+        registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_FRAG_RT,
+        registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_FRAG_RT_TEXTURED,
+        registers: WATER_OCEAN_REGISTERS,
+    },
+    // The simulated ocean's kernels, under their own root signature in
+    // `directx/water_sim.rs`: the root constants, the spectrum and row
+    // transforms as root views, and one table of the four mip UAVs.
+    DxilAbi {
+        program: &shared::WATER_FFT_ROWS,
+        registers: &[("params", "b0"), ("spectrum", "t5"), ("rows", "u6")],
+    },
+    DxilAbi {
+        program: &shared::WATER_FFT_COLUMNS,
+        registers: &[
+            ("params", "b0"),
+            ("rows", "u6"),
+            ("dst_displacement", "u2"),
+            ("dst_slopes", "u3"),
+        ],
+    },
+    DxilAbi {
+        program: &shared::WATER_MIP,
+        registers: &[
+            ("params", "b0"),
+            ("src_displacement", "t0"),
+            ("src_slopes", "t1"),
+            ("dst_displacement", "u2"),
+            ("dst_slopes", "u3"),
+        ],
+    },
+    DxilAbi {
         program: &shared::WATER_FRAG,
         registers: GLASS_REGISTERS,
     },
@@ -548,6 +590,14 @@ const WATER_RT_REGISTERS: &[(&str, &str)] = &[
     ("probe_records", "t21"),
     ("cluster", "b6"),
     ("cluster_list", "t22"),
+];
+
+// The simulated oceans' cascade arrays and their sampler, a table and a static
+// sampler visible to every stage in both signatures.
+const WATER_OCEAN_REGISTERS: &[(&str, &str)] = &[
+    ("ocean_displacement", "t15"),
+    ("ocean_slopes", "t16"),
+    ("ocean_sampler", "s4"),
 ];
 
 // The light every water fragment's body is lit by: the cascaded shadow and the
@@ -903,6 +953,39 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         slots: &[&[("bend", "buffer(0)"), ("bend_field", "buffer(1)")]],
         argument_ids: &[],
     },
+    // The simulated ocean's kernels, from `metal/water_sim.rs`: the constants
+    // at buffer(0), the spectrum and row transforms at buffer(5) and (6), and
+    // the source and destination mips at texture(0..3), all by register.
+    MetalAbi {
+        program: &shared::WATER_FFT_ROWS,
+        slots: &[&[
+            ("params", "buffer(0)"),
+            ("spectrum", "buffer(5)"),
+            ("rows", "buffer(6)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_FFT_COLUMNS,
+        slots: &[&[
+            ("params", "buffer(0)"),
+            ("rows", "buffer(6)"),
+            ("dst_displacement", "texture(2)"),
+            ("dst_slopes", "texture(3)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_MIP,
+        slots: &[&[
+            ("params", "buffer(0)"),
+            ("src_displacement", "texture(0)"),
+            ("src_slopes", "texture(1)"),
+            ("dst_displacement", "texture(2)"),
+            ("dst_slopes", "texture(3)"),
+        ]],
+        argument_ids: &[],
+    },
     // The cascade's blades draw in the shadow pass under their own pipeline,
     // which binds only the shadow block and the cascade's blades.
     MetalAbi {
@@ -1124,6 +1207,16 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     MetalAbi {
         program: &shared::GLASS_MESH_REFLECTION_FRAG_TEXTURED,
         slots: GLASS_REFLECTION_TEXTURED_SLOTS,
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_VERT,
+        slots: &[&[
+            ("view", "buffer(5)"),
+            ("params", "buffer(6)"),
+            ("ocean_displacement", "texture(9)"),
+            ("ocean_sampler", "sampler(6)"),
+        ]],
         argument_ids: &[],
     },
     MetalAbi {
@@ -1643,12 +1736,18 @@ const WATER_BODY_LIGHT_SLOTS: &[(&str, &str)] = &[
     ("irradiance_cube", "texture(8)"),
     ("shadow_sampler", "sampler(5)"),
 ];
+// The simulated oceans' slopes, which every water fragment shades from.
+const WATER_OCEAN_SLOTS: &[(&str, &str)] = &[
+    ("ocean_slopes", "texture(10)"),
+    ("ocean_sampler", "sampler(6)"),
+];
 const WATER_SLOTS: &[&[(&str, &str)]] = &[
     TRANSPARENT_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,
     WATER_BODY_LIGHT_SLOTS,
+    WATER_OCEAN_SLOTS,
 ];
 const WATER_RT_SLOTS: &[&[(&str, &str)]] = &[
     TRANSPARENT_SLOTS,
@@ -1657,6 +1756,7 @@ const WATER_RT_SLOTS: &[&[(&str, &str)]] = &[
     PLANAR_SLOTS,
     TRANSPARENT_TRACE_SLOTS,
     WATER_BODY_LIGHT_SLOTS,
+    WATER_OCEAN_SLOTS,
 ];
 const WATER_RT_TEXTURED_SLOTS: &[&[(&str, &str)]] = &[
     TRANSPARENT_SLOTS,
@@ -1666,6 +1766,7 @@ const WATER_RT_TEXTURED_SLOTS: &[&[(&str, &str)]] = &[
     TRANSPARENT_TRACE_SLOTS,
     TRANSPARENT_POOL_SLOTS,
     WATER_BODY_LIGHT_SLOTS,
+    WATER_OCEAN_SLOTS,
 ];
 
 // Every DirectX program's registers against the root signature its host

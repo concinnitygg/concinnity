@@ -271,6 +271,17 @@ impl PassBuilder<'_> {
         self.push_read(h.resource, h.version, h.is_valid(), None)
     }
 
+    // Declare that this pass reads `h` in `stage` rather than in the one its
+    // `PassKind` implies: the water draw samples the ocean's arrays in its
+    // vertex stage as well as its fragment stage.
+    pub(crate) fn read_texture_in_stage(
+        &mut self,
+        h: TextureHandle,
+        stage: ReadStages,
+    ) -> &mut Self {
+        self.push_read(h.resource, h.version, h.is_valid(), Some(stage))
+    }
+
     // Declare that this pass reads `h`. Same INVALID-safety as
     // `read_texture`.
     pub(crate) fn read_buffer(&mut self, h: BufferHandle) -> &mut Self {

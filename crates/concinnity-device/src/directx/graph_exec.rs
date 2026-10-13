@@ -581,9 +581,8 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // Seconds since the engine started. Consumed by ParticlesDraw's
     // bundled compute sim (delta-time computed against the last
     // per-emitter elapsed snapshot stored on `DxContext`).
-    pub elapsed: f32,
-    // `elapsed` unrounded, for the water's per-frame wave phases.
-    pub elapsed_f64: f64,
+    // Narrowed at each use; the water's motion takes it whole.
+    pub elapsed: f64,
     // Camera near-plane in view units. Consumed by `FogFroxel` to map the
     // front edge of the froxel volume onto view-space depth, and by
     // `Upscale` (FSR3 dispatch's `cameraNear`).
@@ -632,7 +631,7 @@ impl DxContext {
         // encodes, so the sim and draw halves record on separate workers against
         // one consistent frame. `None` when the pass is inert. Mirrors Vulkan's
         // and Metal's `prepare_particle_pass` hoist.
-        let particle_frame = self.prepare_particle_pass(params.frame_idx, params.elapsed);
+        let particle_frame = self.prepare_particle_pass(params.frame_idx, params.elapsed as f32);
         let particle_ref = particle_frame.as_ref();
         // The grass block for the kernel and both draws, written once here and
         // only on a frame whose graph runs the kernel, so the draw-argument
@@ -646,7 +645,7 @@ impl DxContext {
                     frame_idx: params.frame_idx,
                     cam_pos: params.cam_pos,
                     vp: params.cur_vp,
-                    elapsed: params.elapsed,
+                    elapsed: params.elapsed as f32,
                     cast: graph.passes.iter().any(|p| p.id == PassId::GrassShadow),
                     benders: params.grass_benders,
                 })
@@ -1207,7 +1206,7 @@ impl DxContext {
             inv_vp: mat4_inverse(vp),
             cam_pos: params.cam_pos,
             viewport: [params.width as f32, params.height as f32],
-            time: params.elapsed,
+            time: params.elapsed as f32,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             irradiance: self.irradiance_lane(),
             sky_rot: self.state.view.sky_rot,
@@ -1354,6 +1353,7 @@ impl DxContext {
                 self.encode_fog(cmd, params.frame_idx, params.vp_mat, params.cam_pos);
             }
             PassId::Atmosphere => self.encode_atmosphere(cmd, params.frame_idx),
+            PassId::WaterSim => self.encode_water_sim(cmd, params.elapsed),
             PassId::AerialPerspective => self.encode_aerial_perspective(cmd, params.frame_idx),
             PassId::ParticlesSim => {
                 // Integrates each live emitter's persistent pool. The graph's only
@@ -1448,7 +1448,7 @@ impl DxContext {
                     .reactive_mask
                     .clear(cmd, params.reactive.transparent);
                 let view = self.build_transparent_view(params);
-                self.advance_transparent_water(params.frame_idx, params.elapsed_f64);
+                self.advance_transparent_water(params.frame_idx, params.elapsed, params.cam_pos);
                 self.encode_transparent(
                     cmd,
                     params.frame_idx,
@@ -1517,7 +1517,7 @@ impl DxContext {
                     crate::directx::post::gbuffer::GbufferPrepassView {
                         jittered_vp: params.vp_mat,
                         cur_vp: params.cur_vp,
-                        elapsed: params.elapsed,
+                        elapsed: params.elapsed as f32,
                         cam_pos: params.cam_pos,
                     },
                     crate::directx::post::gbuffer::GbufferPrepassFrame {

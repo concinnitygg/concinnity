@@ -688,11 +688,14 @@ mod tests {
         // decoration pass. All are compute passes with real GPU cost, and
         // neither of the latter two could move while its run's transition sat on
         // the run's first reader.
+        // The ocean simulation reads nothing but its own spectra, so it
+        // overlaps the raster front the way the particle simulation does.
         for id in [
             PassId::LightCull,
             PassId::ParticlesSim,
             PassId::FogFroxel,
             PassId::HizFinal,
+            PassId::WaterSim,
         ] {
             assert!(
                 async_passes.contains(&id),

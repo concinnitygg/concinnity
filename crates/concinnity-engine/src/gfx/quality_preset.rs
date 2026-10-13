@@ -13,6 +13,7 @@
 use concinnity_core::components::{AaMode, PassResolution, ShadowUpdate, UpscaleQuality};
 use concinnity_core::render::backend::{GpuProfile, GpuTier};
 use concinnity_core::render::planar_reflection;
+use concinnity_core::render::water::ocean::OceanQuality;
 use serde::{Deserialize, Serialize};
 
 /// Persisted master graphics-quality choice. `Auto` resolves from the detected
@@ -114,6 +115,11 @@ pub(crate) struct QualityCeiling {
     // the no-ceiling value is `Full`, and a lower tier trades mirror sharpness
     // for a quarter (or less) of the mirror's shading cost.
     pub(crate) planar_reflection_resolution: PassResolution,
+    // How finely large water's simulated ocean runs (restart-required: the
+    // cascade arrays are allocated at backend init). No world-authored value:
+    // the no-ceiling value is the full simulation, and a lower tier runs
+    // fewer or coarser cascades, leaving more of the sea to the ripples.
+    pub(crate) ocean: OceanQuality,
 }
 
 // The authored anti-aliasing mode clamped under a ceiling: the cheaper of the
@@ -191,6 +197,7 @@ const NONE: QualityCeiling = QualityCeiling {
     shadow_cascades: SHADOW_CASCADES_MAX,
     planar_reflection_planes: PLANAR_PLANES_MAX,
     planar_reflection_resolution: PassResolution::Full,
+    ocean: OceanQuality::FULL,
 };
 const LOW: QualityCeiling = QualityCeiling {
     aa_mode: AaMode::Fxaa,
@@ -214,6 +221,10 @@ const LOW: QualityCeiling = QualityCeiling {
     // (e.g. a floor plus one wall); further reflectors take the probe cube.
     planar_reflection_planes: 2,
     planar_reflection_resolution: PassResolution::Half,
+    ocean: OceanQuality {
+        size: 128,
+        cascades: 2,
+    },
 };
 const MEDIUM: QualityCeiling = QualityCeiling {
     aa_mode: AaMode::Taa,
@@ -236,6 +247,10 @@ const MEDIUM: QualityCeiling = QualityCeiling {
     // Entry discrete: one more mirror plane than Low before the probe fallback.
     planar_reflection_planes: 3,
     planar_reflection_resolution: PassResolution::Half,
+    ocean: OceanQuality {
+        size: 128,
+        cascades: 3,
+    },
 };
 const HIGH: QualityCeiling = QualityCeiling {
     aa_mode: AaMode::Taa,
@@ -259,6 +274,7 @@ const HIGH: QualityCeiling = QualityCeiling {
     // pre-scaling default, so a capable GPU is never downgraded.
     planar_reflection_planes: PLANAR_PLANES_MAX,
     planar_reflection_resolution: PassResolution::Full,
+    ocean: OceanQuality::FULL,
 };
 const ULTRA: QualityCeiling = QualityCeiling {
     aa_mode: AaMode::Taa,
@@ -280,6 +296,7 @@ const ULTRA: QualityCeiling = QualityCeiling {
     shadow_cascades: SHADOW_CASCADES_MAX,
     planar_reflection_planes: PLANAR_PLANES_MAX,
     planar_reflection_resolution: PassResolution::Full,
+    ocean: OceanQuality::FULL,
 };
 
 // The active ceiling for the persisted preset and detected GPU. `Auto` maps the
@@ -531,6 +548,34 @@ mod tests {
                 lo.planar_reflection_resolution >= hi.planar_reflection_resolution,
                 "a higher tier permitted a coarser planar mirror"
             );
+            // The ocean simulation is never coarser or narrower a tier up.
+            assert!(lo.ocean.size <= hi.ocean.size, "ocean size dropped");
+            assert!(
+                lo.ocean.cascades <= hi.ocean.cascades,
+                "ocean cascades dropped"
+            );
+        }
+    }
+
+    // The top tiers run the full simulation; the lowest runs two cascades of
+    // 128, which the simulation supports as is.
+    #[test]
+    fn the_ocean_simulation_scales_with_tier() {
+        let ultra = resolve_ceiling(QualityPreset::Ultra, &GpuProfile::UNKNOWN);
+        assert_eq!(ultra.ocean, OceanQuality::FULL);
+        let custom = resolve_ceiling(QualityPreset::Custom, &GpuProfile::UNKNOWN);
+        assert_eq!(custom.ocean, OceanQuality::FULL);
+        let low = resolve_ceiling(QualityPreset::Low, &GpuProfile::UNKNOWN);
+        assert_eq!(
+            low.ocean,
+            OceanQuality {
+                size: 128,
+                cascades: 2
+            }
+        );
+        for preset in QualityPreset::ALL {
+            let c = resolve_ceiling(preset, &GpuProfile::UNKNOWN);
+            assert_eq!(c.ocean.clamped(), c.ocean, "{preset:?}");
         }
     }
 

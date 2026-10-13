@@ -7,6 +7,7 @@ use crate::components::GlassPanel;
 use crate::gfx::render_types::LightUniforms;
 use crate::render::lights::glint_sun;
 use crate::render::water::motion::BodyMotion;
+use crate::render::water::ocean::{BodyOcean, MAX_OCEAN_CASCADES};
 use crate::render::water::ripples::{RIPPLES, Ripple};
 use crate::render::water::{BodyWave, WaterBody};
 
@@ -156,7 +157,7 @@ pub const WATER_MAX_WAVES: usize = crate::render::water::MAX_WAVES;
 pub struct WaterWaveGpu {
     /// `[direction.x, direction.z, amplitude, wavenumber]`.
     pub dir_amp_k: [f32; 4],
-    /// `[pinch, phase, _, _]`, the phase at the surface center this frame
+    /// `[pinch, phase, _, _]`, the phase at the anchor this frame
     /// ([`BodyMotion::wave_phases`]).
     pub motion: [f32; 4],
 }
@@ -184,7 +185,7 @@ impl WaterWaveGpu {
 pub struct WaterRippleGpu {
     /// `[heading.x, heading.z, wavelength, _]`.
     pub shape: [f32; 4],
-    /// `[along, across, _, _]`: the noise offset at the surface center this
+    /// `[along, across, _, _]`: the noise offset at the anchor this
     /// frame, in lattice cells ([`BodyMotion::ripple_offsets`]).
     pub offset: [f32; 4],
 }
@@ -199,16 +200,54 @@ impl WaterRippleGpu {
     }
 }
 
+/// Where a body samples its simulated ocean. Matches `WaterOcean` in
+/// `shaders/water.hlsl`. 64 bytes.
+#[derive(Copy, Clone, Default, Debug, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct WaterOceanGpu {
+    /// `[cascades, first layer, texels per side, _]`; no cascades for a body
+    /// whose sea is summed.
+    pub layers: [u32; 4],
+    /// One over each cascade's side, per meter; zero past the cascades.
+    pub inv_lengths: [f32; 4],
+    /// Where the anchor falls in each cascade's tile, `[u0, v0, u1, v1]` and
+    /// `[u2, v2, u3, v3]` ([`BodyMotion::ocean_offsets`]).
+    pub offsets: [[f32; 4]; 2],
+}
+
+impl WaterOceanGpu {
+    /// The block for a body's share of an ocean, at no offset.
+    pub fn from_ocean(ocean: &BodyOcean) -> Self {
+        let c = &ocean.cascades;
+        let mut inv_lengths = [0.0; 4];
+        for (slot, &l) in inv_lengths.iter_mut().zip(c.lengths()) {
+            *slot = 1.0 / l;
+        }
+        Self {
+            layers: [c.count() as u32, ocean.first_layer, c.size(), 0],
+            inv_lengths,
+            offsets: [[0.0; 4]; 2],
+        }
+    }
+
+    fn offsets_lane(offsets: &[[f32; 2]; MAX_OCEAN_CASCADES]) -> [[f32; 4]; 2] {
+        let [a, b, c, d] = *offsets;
+        [[a[0], a[1], b[0], b[1]], [c[0], c[1], d[0], d[1]]]
+    }
+}
+
 /// Per-surface tunables for a `WaterSurface`, uploaded once per surface per
-/// frame: the wave phases and ripple offsets move with time (see
-/// [`WaterParams::advance`]). The vec3-ish fields are `[f32; 4]` so the layout
-/// is byte-identical to the shader's `float4`. Matches `WaterParams` in
-/// `shaders/water.hlsl`. 1040 bytes.
-#[derive(Copy, Clone, bytemuck::NoUninit)]
+/// frame: the anchor, the wave phases, the ripple offsets and the ocean tile
+/// offsets move with time and the camera (see [`WaterParams::advance`]). The
+/// vec3-ish fields are `[f32; 4]` so the layout is byte-identical to the
+/// shader's `float4`. Matches `WaterParams` in `shaders/water.hlsl`. 1136
+/// bytes.
+#[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct WaterParams {
-    /// `[x, y, z, _]`: world-space surface center.
-    pub center: [f32; 4],
+    /// `[x, y, z, _]`: the world-space point the grid and everything that
+    /// moves on it are measured from ([`BodyMotion::anchor`]).
+    pub anchor: [f32; 4],
     /// `[r, g, b, _]`: body reflectance in `[0, 1]` at full column depth.
     pub deep_color: [f32; 4],
     /// `[r, g, b, _]`: body reflectance in `[0, 1]` just above the seabed, and
@@ -250,9 +289,17 @@ pub struct WaterParams {
     pub planar: [f32; 4],
     /// The ripple octaves, longest first.
     pub ripples: [WaterRippleGpu; RIPPLES],
-    /// `[x, z, _, _]`: the ripples' domain warp offset at the surface center
-    /// this frame, in its noise cells ([`BodyMotion::warp_offset`]).
+    /// `[x, z, _, _]`: the ripples' domain warp offset at the anchor this
+    /// frame, in its noise cells ([`BodyMotion::warp_offset`]).
     pub ripple_warp: [f32; 4],
+    /// The surface's rectangle relative to the anchor, `[min x, min z, max
+    /// x, max z]`, which the grid is clamped to.
+    pub rest_bounds: [f32; 4],
+    /// `[inner cell, inner half-width, widening, _]`: the grid's local cell
+    /// size is `inner + max(|x| - half, 0) * widening` per axis.
+    pub grid: [f32; 4],
+    /// The simulated ocean the body samples.
+    pub ocean: WaterOceanGpu,
 }
 
 // How far the mirror lookup is pushed per unit of wave slope, per unit of the
@@ -289,7 +336,7 @@ impl WaterParams {
     /// [`WaterParams::planar_lane`].
     pub fn from_body(body: &WaterBody, planar: bool) -> Self {
         let surface = &body.surface;
-        let motion = body.motion_at(0.0);
+        let motion = body.motion_at(0.0, body.anchor(surface.center));
         let mut waves = [WaterWaveGpu::default(); WATER_MAX_WAVES];
         for ((slot, src), &phase) in waves.iter_mut().zip(&body.waves).zip(&motion.wave_phases) {
             *slot = WaterWaveGpu::from_wave(src, phase);
@@ -300,7 +347,7 @@ impl WaterParams {
         let wave_count = body.waves.len().min(WATER_MAX_WAVES);
         let [wind, gust] = body.wind.gpu_rows();
         Self {
-            center: [surface.center[0], surface.center[1], surface.center[2], 0.0],
+            anchor: anchor_lane(&motion),
             deep_color: reflectance(surface.deep_color),
             shallow_color: reflectance(surface.shallow_color),
             depth_falloff: surface.depth_falloff_meters,
@@ -317,13 +364,25 @@ impl WaterParams {
             planar: Self::planar_lane(surface.roughness, planar),
             ripples,
             ripple_warp: warp_lane(&motion),
+            rest_bounds: motion.rest_bounds,
+            grid: body.grid_lane(),
+            ocean: body
+                .ocean
+                .as_ref()
+                .map_or_else(WaterOceanGpu::default, |o| WaterOceanGpu {
+                    offsets: WaterOceanGpu::offsets_lane(&motion.ocean_offsets),
+                    ..WaterOceanGpu::from_ocean(o)
+                }),
         }
     }
 
-    /// Moves the block to the instant `motion` describes: each wave's phase
-    /// and each ripple's offset, all small numbers the shader adds to what
-    /// varies across the surface.
+    /// Moves the block to the instant and anchor `motion` describes: each
+    /// wave's phase, each ripple's and each cascade's offset, all small
+    /// numbers the shader adds to what varies across the surface.
     pub fn advance(&mut self, motion: &BodyMotion) {
+        self.anchor = anchor_lane(motion);
+        self.rest_bounds = motion.rest_bounds;
+        self.ocean.offsets = WaterOceanGpu::offsets_lane(&motion.ocean_offsets);
         for (wave, &phase) in self.waves.iter_mut().zip(&motion.wave_phases) {
             wave.motion[1] = phase;
         }
@@ -336,6 +395,11 @@ impl WaterParams {
 
 fn warp_lane(motion: &BodyMotion) -> [f32; 4] {
     [motion.warp_offset[0], motion.warp_offset[1], 0.0, 0.0]
+}
+
+fn anchor_lane(motion: &BodyMotion) -> [f32; 4] {
+    let [x, y, z] = motion.anchor;
+    [x, y, z, 0.0]
 }
 
 #[cfg(test)]
@@ -449,8 +513,8 @@ mod tests {
     // two 16-byte rows.
     #[test]
     fn water_params_layout_matches_shader() {
-        assert_eq!(size_of::<WaterParams>(), 1040);
-        assert_eq!(offset_of!(WaterParams, center), 0);
+        assert_eq!(size_of::<WaterParams>(), 1136);
+        assert_eq!(offset_of!(WaterParams, anchor), 0);
         assert_eq!(offset_of!(WaterParams, deep_color), 16);
         assert_eq!(offset_of!(WaterParams, shallow_color), 32);
         assert_eq!(offset_of!(WaterParams, depth_falloff), 48);
@@ -467,6 +531,13 @@ mod tests {
         assert_eq!(offset_of!(WaterParams, planar), 880);
         assert_eq!(offset_of!(WaterParams, ripples), 896);
         assert_eq!(offset_of!(WaterParams, ripple_warp), 1024);
+        assert_eq!(offset_of!(WaterParams, rest_bounds), 1040);
+        assert_eq!(offset_of!(WaterParams, grid), 1056);
+        assert_eq!(offset_of!(WaterParams, ocean), 1072);
+        assert_eq!(size_of::<WaterOceanGpu>(), 64);
+        assert_eq!(offset_of!(WaterOceanGpu, layers), 0);
+        assert_eq!(offset_of!(WaterOceanGpu, inv_lengths), 16);
+        assert_eq!(offset_of!(WaterOceanGpu, offsets), 32);
         assert_eq!(size_of::<WaterWaveGpu>(), 32);
         assert_eq!(offset_of!(WaterWaveGpu, dir_amp_k), 0);
         assert_eq!(offset_of!(WaterWaveGpu, motion), 16);
@@ -537,7 +608,8 @@ mod tests {
         });
         let built = WaterParams::from_body(&b, false);
         let mut p = built;
-        let motion = b.motion_at(37.5);
+        let center = b.anchor([0.0; 3]);
+        let motion = b.motion_at(37.5, center);
         p.advance(&motion);
         for (i, w) in b.waves.iter().enumerate() {
             assert_eq!(
@@ -550,11 +622,12 @@ mod tests {
             assert_eq!(p.ripples[r], want);
         }
         assert_eq!(p.ripple_warp[..2], motion.warp_offset);
-        assert_eq!(p.center, built.center);
+        assert_eq!(p.anchor, built.anchor);
+        assert_eq!(p.rest_bounds, built.rest_bounds);
         assert_eq!(p.wind_gust, built.wind_gust);
         assert_ne!(p.waves[0], built.waves[0]);
         // Advancing back to the start gives the block as built.
-        p.advance(&b.motion_at(0.0));
+        p.advance(&b.motion_at(0.0, center));
         assert_eq!(bytemuck::bytes_of(&p), bytemuck::bytes_of(&built));
     }
 
@@ -575,7 +648,7 @@ mod tests {
         };
         let b = body(&surface);
         let p = WaterParams::from_body(&b, true);
-        assert_eq!(p.center, [1.0, 2.0, 3.0, 0.0]);
+        assert_eq!(p.anchor, [1.0, 2.0, 3.0, 0.0]);
         assert_eq!(p.deep_color, [0.02, 0.05, 0.12, 0.0]);
         assert_eq!(p.shallow_color, [0.1, 0.3, 0.4, 0.0]);
         assert_eq!(p.depth_falloff, 3.0);
@@ -586,7 +659,10 @@ mod tests {
         assert_eq!(p.refraction_strength, 0.05);
         assert_eq!(p.wave_count as usize, b.waves.len());
         assert_eq!(p.displace_count as usize, b.displacing);
-        let motion = b.motion_at(0.0);
+        let motion = b.motion_at(0.0, b.anchor([0.0; 3]));
+        assert_eq!(p.rest_bounds, motion.rest_bounds);
+        assert_eq!(p.grid, b.grid_lane());
+        assert_eq!(p.ocean, WaterOceanGpu::default());
         assert_eq!(
             p.waves[0],
             WaterWaveGpu::from_wave(&b.waves[0], motion.wave_phases[0])

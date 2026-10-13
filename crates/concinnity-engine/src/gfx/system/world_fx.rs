@@ -12,6 +12,7 @@ use concinnity_core::render::backend_init::{SdfVolumeSource, WorldFx};
 use concinnity_core::render::grass::{GrassField, PlanetGrass};
 use concinnity_core::render::night_sky::NightSkySettings;
 use concinnity_core::render::water::WaterBody;
+use concinnity_core::render::water::ocean::OceanQuality;
 use concinnity_core::render::wind::WindField;
 use concinnity_core::render::{decal, particles, volumetric_fog};
 use concinnity_host::thread::asset_id;
@@ -25,6 +26,7 @@ pub(super) fn drain_world_fx(
     terrains: &[LoadedTerrain],
     planet_grass: Option<PlanetGrass>,
     planet: Option<&Planet>,
+    ocean_quality: OceanQuality,
 ) -> WorldFx {
     let decals: Vec<Decal> = ctx.drain::<Decal>();
     let decals = decal::build_decal_records(&decals.iter().collect::<Vec<_>>(), texture_count);
@@ -44,11 +46,8 @@ pub(super) fn drain_world_fx(
     // water surface takes its waves from.
     let wind = ctx.drain::<Wind>().into_iter().next();
     let wind_field = WindField::new(wind.as_ref());
-    let water_surfaces = ctx
-        .drain::<WaterSurface>()
-        .iter()
-        .map(|w| WaterBody::resolve(w, &wind_field))
-        .collect();
+    let (water_surfaces, ocean) =
+        WaterBody::resolve_all(&ctx.drain::<WaterSurface>(), &wind_field, ocean_quality);
     let grass: std::collections::HashMap<AssetId, Grass> = ctx
         .drain_with_ids::<Grass>()
         .into_iter()
@@ -86,6 +85,7 @@ pub(super) fn drain_world_fx(
         particles,
         fog,
         water_surfaces,
+        ocean,
         glass_panels,
         sdf_volumes,
         grass,

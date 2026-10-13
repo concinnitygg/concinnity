@@ -80,6 +80,66 @@ fn dimensionless_fetch(wind_speed: f32, fetch: f32) -> f32 {
     (GRAVITY * fetch / (wind_speed * wind_speed)).min(FULLY_DEVELOPED_FETCH)
 }
 
+/// The shape of the sea a wind builds over a fetch: where its energy peaks
+/// and how much of it there is. Both the summed waves and the simulated ocean
+/// sample their spectrum from it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SeaShape {
+    /// The angular frequency carrying the most energy, in radians per second.
+    pub peak_omega: f32,
+    /// The JONSWAP energy scale (Phillips' constant for this fetch).
+    pub alpha: f32,
+}
+
+impl SeaShape {
+    /// The sea a `wind_speed` m/s wind builds over `fetch` meters, or `None`
+    /// below [`CALM_WIND`] or over no fetch.
+    pub fn new(wind_speed: f32, fetch: f32) -> Option<Self> {
+        // Written to also refuse a NaN speed or fetch.
+        let calm = wind_speed.is_nan() || wind_speed < CALM_WIND;
+        if calm || fetch.is_nan() || fetch <= 0.0 {
+            return None;
+        }
+        Some(Self {
+            peak_omega: peak_angular_frequency(wind_speed, fetch),
+            alpha: 0.076 * powf(dimensionless_fetch(wind_speed, fetch), -0.22),
+        })
+    }
+
+    /// The wavelength of the waves carrying the most energy, in meters.
+    pub fn peak_wavelength(&self) -> f32 {
+        wavelength_of(self.peak_omega)
+    }
+
+    /// The energy density at angular frequency `omega`, in m^2 s.
+    pub fn density(&self, omega: f32) -> f32 {
+        jonswap(omega, self.peak_omega, self.alpha)
+    }
+
+    /// The standard deviation, in radians, of the heading of waves of
+    /// angular frequency `omega` around the wind.
+    pub fn spread(&self, omega: f32) -> f32 {
+        spread_radians(omega, self.peak_omega)
+    }
+
+    /// The variance, in square meters, of the height the waves between
+    /// angular frequencies `lo` and `hi` raise.
+    pub fn variance_between(&self, lo: f32, hi: f32) -> f32 {
+        const STEPS: usize = 512;
+        if lo <= 0.0 || hi <= lo {
+            return 0.0;
+        }
+        // Midpoint rule in log frequency, where the spectrum is smooth.
+        let step = ln(hi / lo) / STEPS as f32;
+        (0..STEPS)
+            .map(|i| {
+                let omega = lo * exp((i as f32 + 0.5) * step);
+                self.density(omega) * omega * step
+            })
+            .sum()
+    }
+}
+
 // The JONSWAP energy density at `omega` around the peak `omega_p`, in m^2 s.
 fn jonswap(omega: f32, omega_p: f32, alpha: f32) -> f32 {
     let r = omega_p / omega;
@@ -124,14 +184,10 @@ pub(super) fn unit_hash(i: u32, salt: u32) -> f32 {
 /// for waves far from the peak, with every few running across it. The same
 /// inputs give the same waves. Empty below [`CALM_WIND`].
 pub fn wind_sea(wind_speed: f32, direction: [f32; 2], fetch: f32) -> Vec<Wave> {
-    // Written to also refuse a NaN speed or fetch.
-    let calm = wind_speed.is_nan() || wind_speed < CALM_WIND;
-    if calm || fetch.is_nan() || fetch <= 0.0 {
+    let Some(sea) = SeaShape::new(wind_speed, fetch) else {
         return Vec::new();
-    }
-    let omega_p = peak_angular_frequency(wind_speed, fetch);
-    let alpha = 0.076 * powf(dimensionless_fetch(wind_speed, fetch), -0.22);
-    let longest = wavelength_of(omega_p) * LONGEST_PER_PEAK;
+    };
+    let longest = sea.peak_wavelength() * LONGEST_PER_PEAK;
     let ratio = powf(
         SHORTEST_PER_PEAK / LONGEST_PER_PEAK,
         1.0 / (WIND_SEA_WAVES - 1) as f32,
@@ -146,7 +202,7 @@ pub fn wind_sea(wind_speed: f32, direction: [f32; 2], fetch: f32) -> Vec<Wave> {
         .map(|i| {
             let wavelength = longest * powf(ratio, i as f32);
             let omega = sqrt(GRAVITY * TAU / wavelength);
-            let mut amplitude = sqrt(2.0 * jonswap(omega, omega_p, alpha) * omega * band);
+            let mut amplitude = sqrt(2.0 * sea.density(omega) * omega * band);
             let seed = i as u32;
             let heading = if i % CROSS_WIND_EVERY == 2 {
                 amplitude *= CROSS_WIND_AMPLITUDE;
@@ -160,7 +216,7 @@ pub fn wind_sea(wind_speed: f32, direction: [f32; 2], fetch: f32) -> Vec<Wave> {
                 // An even scatter over [-1, 1], which a uniform of this width
                 // turns into the band's standard deviation.
                 let u = 2.0 * crate::math::fract(i as f32 * 0.618_034 + 0.31) - 1.0;
-                u * sqrt(3.0) * spread_radians(omega, omega_p)
+                u * sqrt(3.0) * sea.spread(omega)
             };
             let angle = wind_angle + heading;
             Wave {

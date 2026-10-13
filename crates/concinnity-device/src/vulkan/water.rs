@@ -12,11 +12,9 @@
 //! as the DirectX and Metal hosts.
 
 use ash::vk;
-use concinnity_core::geometry::water_grid::build_water_grid;
-use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::uniforms::WaterParams;
 use concinnity_core::render::water::WaterBody;
+use concinnity_core::render::water::frame::WaterMotion;
 
 use super::allocator::DeviceAllocator;
 use crate::vulkan::builtin_shaders::CompileProgram;
@@ -74,22 +72,6 @@ fn compile_water_rt_shaders(
     })
 }
 
-// A surface's params as built, and the body whose waves and ripples move them
-// each frame.
-pub(in crate::vulkan) struct WaterMotion {
-    body: WaterBody,
-    params: WaterParams,
-}
-
-impl WaterMotion {
-    // The params advanced to `time` seconds into the world.
-    pub(in crate::vulkan) fn params_at(&self, time: f64) -> WaterParams {
-        let mut params = self.params;
-        params.advance(&self.body.motion_at(time));
-        params
-    }
-}
-
 // Upload one surface's tessellated grid VB + IB and its per-frame `WaterParams`
 // UBOs, then allocate + write the surface's descriptor sets.
 fn build_surface_record(
@@ -99,41 +81,20 @@ fn build_surface_record(
     planar_slot: Option<usize>,
 ) -> RenderResult<(TransparentRecord, WaterMotion)> {
     let surface = &body.surface;
-    let (verts, idxs) =
-        build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)
-            .map_err(RenderError::Other)?;
-
-    // Flatten into the standard engine `Vertex` layout. Tangent and color are
-    // placeholders: the water shader rebuilds its normal frame analytically from
-    // the wave derivatives and the fragment ignores per-vertex color.
-    let packed: Vec<Vertex> = verts
-        .into_iter()
-        .map(|(pos, normal, color, uv)| Vertex {
-            pos,
-            normal,
-            tangent: [1.0, 0.0, 0.0],
-            color,
-            uv,
-        })
-        .collect();
-
-    let params = WaterParams::from_body(body, planar_slot.is_some());
+    let (vertices, indices) = body.mesh().map_err(RenderError::Other)?;
+    let motion = WaterMotion::new(body, planar_slot.is_some());
     let record = TransparentRecord::upload(
         alloc,
         ctx.record_descriptors(planar_slot),
         RecordUpload {
-            vertices: &packed,
-            indices: &idxs,
-            params: bytemuck::bytes_of(&params),
+            vertices: &vertices,
+            indices: &indices,
+            params: bytemuck::bytes_of(motion.params()),
             visible: surface.visible,
             center: surface.center,
             planar_slot,
         },
     )?;
-    let motion = WaterMotion {
-        body: body.clone(),
-        params,
-    };
     Ok((record, motion))
 }
 

@@ -537,7 +537,7 @@ impl DxContext {
             let view = ViewUniforms {
                 vp: m.view_proj,
                 view: m.view,
-                elapsed: params.elapsed,
+                elapsed: params.elapsed as f32,
                 // No reflection resolve runs over the planar mirror render, so
                 // the forward probe specular is its only reflection source.
                 reflections_enabled: 0.0,

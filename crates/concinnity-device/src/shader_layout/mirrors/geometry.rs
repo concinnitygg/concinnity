@@ -14,6 +14,7 @@ use concinnity_core::render::uniforms::grass::{
     GpuGrassBlade, GrassBendParams, GrassLayerGpu, GrassParams, PlanetGrassTileGpu,
 };
 use concinnity_core::render::uniforms::metal::CullUniforms as MetalCullParams;
+use concinnity_core::render::uniforms::ocean::OceanFftParams;
 use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams as VkCullParams};
 use concinnity_core::render::uniforms::{
     DecalParams, DecalView, GBufferView, GpuParticle, LineView, ParticleView, SkinParams,
@@ -165,6 +166,17 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             bend,
         })),
     ]
+}
+
+pub(in crate::shader_layout) fn water_fft() -> Vec<Case> {
+    vec![everywhere(mirror!(OceanFftParams => "WaterFftParams" {
+        grid,
+        lengths,
+        time_fraction,
+        choppiness,
+        mip_size,
+        _pad,
+    }))]
 }
 
 pub(in crate::shader_layout) fn grass_bend() -> Vec<Case> {

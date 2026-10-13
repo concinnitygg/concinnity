@@ -418,6 +418,8 @@ impl MtlContext {
             hiz_build_enabled: self.cull.hiz.is_some(),
             // The atmosphere runs on every frame that carries its inputs.
             atmosphere_enabled: self.atmosphere.as_ref().is_some_and(|a| a.params.is_some()),
+            // The ocean runs while a visible surface samples it.
+            water_sim_enabled: self.water_sim_live(),
             // The mask is one of the HDR targets, so it always exists.
             reactive_mask_enabled: true,
             upscale_reads_reactive: ReactiveReader::MetalFx.reads()

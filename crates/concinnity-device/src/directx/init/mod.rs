@@ -21,7 +21,9 @@
 //! root signature and PSO builders, and `adapter.rs` the adapter selection.
 
 use concinnity_core::gfx::render_types::{FALLBACK_TEXTURE_COUNT, PostProcessParams};
-use concinnity_core::render::backend_init::{self, BackendInit, PostSettings, WorldShader};
+use concinnity_core::render::backend_init::{
+    self, BackendInit, PlanarBudget, PostSettings, WorldShader,
+};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::scene_state::{DrawList, SceneState};
 
@@ -219,6 +221,17 @@ impl DxContext {
             hot_reload,
         };
 
+        // A mirror renders the culled scene, so a world with no cull records
+        // has nothing to mirror: its reflectors keep the probe / sky path.
+        let plan = cull::plan_cull(&world);
+        let planar = if plan.n_cull == 0 {
+            PlanarBudget {
+                planes: 0,
+                ..planar
+            }
+        } else {
+            planar
+        };
         let planar = effects::plan_planar(&fx, planar);
         let planar_slots = planar.assignment.slots.clone();
         let rtv = RtvHeapLayout::compute(features.msaa_samples);
@@ -282,7 +295,6 @@ impl DxContext {
             shadows.map_size,
         )?;
 
-        let plan = cull::plan_cull(&world);
         let cull = cull::build_cull(
             &gpu,
             cull::CullInputs {
@@ -384,6 +396,22 @@ impl DxContext {
             plan.n_cull,
             clear_color,
         )?;
+        // The simulated oceans, whose arrays every water draw binds.
+        let water_sim = (!fx.water_surfaces.is_empty())
+            .then(|| {
+                let base = descriptors.layout.ocean_base_slot;
+                super::water_sim::DxOceanSim::new(
+                    &gpu.hw.alloc,
+                    &fx.ocean,
+                    super::water_sim::OceanSlots {
+                        cpu: |i| descriptors.slot_cpu(base + i),
+                        gpu: descriptors.slot_gpu(base),
+                        stride: descriptors.srv_descriptor_size,
+                    },
+                    hot_reload,
+                )
+            })
+            .transpose()?;
         let transparent = effects::build_transparent(
             &gpu,
             effects::TransparentInputs {
@@ -458,6 +486,7 @@ impl DxContext {
             sky,
             atmosphere,
             transparent,
+            water_sim,
             planar_reflection,
             fog,
             particle,

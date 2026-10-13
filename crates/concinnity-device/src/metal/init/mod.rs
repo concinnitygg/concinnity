@@ -276,7 +276,7 @@ impl MtlContext {
         let planar = world_fx::plan_planar(&fx.water_surfaces, &fx.glass_panels, planar);
         let n_water = fx.water_surfaces.len();
         let slots = &planar.assignment.slots;
-        let water = world_fx::build_water(&gpu, &fx.water_surfaces, &slots[..n_water])?;
+        let water = world_fx::build_water(&gpu, &fx.water_surfaces, &slots[..n_water], &fx.ocean)?;
         let glass = world_fx::build_glass(
             &gpu,
             &fx.glass_panels,

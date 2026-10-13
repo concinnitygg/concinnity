@@ -14,6 +14,7 @@ use concinnity_core::render::particles::ParticleEmitterRecord;
 use concinnity_core::render::planar_reflection::PlanarReflectors;
 use concinnity_core::render::volumetric_fog::FogSettings;
 use concinnity_core::render::water::WaterBody;
+use concinnity_core::render::water::ocean::OceanPlan;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -237,14 +238,19 @@ pub(super) fn plan_planar(
 // Transparent water surfaces. Built only when the world declared
 // ≥1 `WaterSurface`; the transparent-pass executor stays a no-op
 // otherwise. Per-surface tessellated grids upload once at init, each recording
-// the planar slot `plan_planar` gave it.
+// the planar slot `plan_planar` gave it, beside the simulated oceans `ocean`
+// plans.
 pub(super) fn build_water(
     gpu: &InitGpu<'_>,
     water_surfaces: &[WaterBody],
     planar_slots: &[Option<usize>],
+    ocean: &OceanPlan,
 ) -> RenderResult<WaterState> {
     let device = &*gpu.hw.device;
     let hot_reload = gpu.hot_reload;
+    let ocean = (!water_surfaces.is_empty())
+        .then(|| crate::metal::water_sim::OceanSim::build(device, ocean, hot_reload))
+        .transpose()?;
     let (pipeline, pipeline_rt, pipeline_rt_textured, surfaces) = if water_surfaces.is_empty() {
         (None, None, None, Vec::new())
     } else {
@@ -276,6 +282,7 @@ pub(super) fn build_water(
         pipeline_rt,
         pipeline_rt_textured,
         surfaces,
+        ocean,
     })
 }
 

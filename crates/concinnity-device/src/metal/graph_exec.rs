@@ -143,10 +143,9 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // clear (it is the only surviving world pass in the masked graph), skipping
     // every geometry sub-path so nothing of the world draws behind the menu.
     pub world_hidden: bool,
-    // Main-pass params, computed by draw_frame before the graph dispatch.
-    pub elapsed: f32,
-    // `elapsed` unrounded, for the water's per-frame wave phases.
-    pub elapsed_f64: f64,
+    // Seconds since the world started, which each pass narrows to f32 where
+    // it needs no more; the water's motion takes it whole.
+    pub elapsed: f64,
     pub vp: [[f32; 4]; 4],
     // Inverse of `vp`, computed once in `draw_frame` and shared by every pass
     // that reconstructs world-space position from depth (fog / decals /
@@ -297,7 +296,7 @@ impl MtlContext {
         // to happen before the read-only `encode_particles` path runs. We
         // build the (dt, frame_index, per-emitter spawn budgets) tuple
         // once here and stash it for the match arm below.
-        let particle_frame = self.prepare_particle_pass(params.elapsed);
+        let particle_frame = self.prepare_particle_pass(params.elapsed as f32);
         self.diagnostics
             .draw_calls_accum
             .store(0, Ordering::Relaxed);
@@ -535,7 +534,7 @@ impl MtlContext {
                 self.targets.hdr.width as f32,
                 self.targets.hdr.height as f32,
             ],
-            time: params.elapsed,
+            time: params.elapsed as f32,
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             irradiance: self.irradiance_lane(),
             sky_rot: self.state.view.sky_rot,
@@ -614,7 +613,7 @@ impl MtlContext {
             PassId::Main2 => self.encode_main_pass_phase2(
                 cmd_buf,
                 crate::metal::draw::main::MainPassCamera {
-                    elapsed: params.elapsed,
+                    elapsed: params.elapsed as f32,
                     vp: params.vp,
                     view: self.state.view.matrix,
                     cam_pos: params.cam_pos,
@@ -654,7 +653,7 @@ impl MtlContext {
             PassId::Main => self.encode_main_pass(
                 cmd_buf,
                 crate::metal::draw::main::MainPassCamera {
-                    elapsed: params.elapsed,
+                    elapsed: params.elapsed as f32,
                     vp: params.vp,
                     view: self.state.view.matrix,
                     cam_pos: params.cam_pos,
@@ -697,7 +696,7 @@ impl MtlContext {
                 // un-jittered cur/prev VPs drive the motion vector.
                 let main_view =
                     self.main_view_uniforms(&crate::metal::draw::main::MainPassCamera {
-                        elapsed: params.elapsed,
+                        elapsed: params.elapsed as f32,
                         vp: params.vp,
                         view: self.state.view.matrix,
                         cam_pos: params.cam_pos,
@@ -798,6 +797,10 @@ impl MtlContext {
                 self.encode_decals(cmd_buf, params.vp, params.inv_vp, params.frustum)?
             }
             PassId::Atmosphere => self.encode_atmosphere(cmd_buf)?,
+            PassId::WaterSim => {
+                self.encode_water_sim(cmd_buf, params.elapsed)?;
+                0
+            }
             PassId::AerialPerspective => self.encode_aerial_perspective(cmd_buf)?,
             PassId::Fog => {
                 let fog_params = pass_input(params.fog_params, PassId::Fog, "fog_params")?;
@@ -889,7 +892,7 @@ impl MtlContext {
                 let mut draws = Vec::new();
                 self.collect_water_transparent_draws(
                     &view,
-                    params.elapsed_f64,
+                    params.elapsed,
                     params.bindless_tex_args.is_some(),
                     &mirrors,
                     &mut draws,

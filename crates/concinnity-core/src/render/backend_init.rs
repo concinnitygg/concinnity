@@ -184,6 +184,8 @@ pub struct WorldFx {
     pub fog: Option<FogSettings>,
     /// Transparent water surfaces, each resolved against the world's wind.
     pub water_surfaces: Vec<crate::render::water::WaterBody>,
+    /// The simulated oceans the large surfaces share.
+    pub ocean: crate::render::water::ocean::OceanPlan,
     /// Refractive glass panels declared by the world.
     pub glass_panels: Vec<GlassPanel>,
     /// Raymarched SDF volumes, each paired with its compiled payload.
@@ -440,6 +442,7 @@ impl<'a> BackendInit<'a> {
                 particles: Vec::new(),
                 fog: None,
                 water_surfaces: Vec::new(),
+                ocean: crate::render::water::ocean::OceanPlan::new(Default::default()),
                 glass_panels: Vec::new(),
                 sdf_volumes: Vec::new(),
                 grass: None,
@@ -530,6 +533,7 @@ mod tests {
             particles: Vec::new(),
             fog: None,
             water_surfaces: Vec::new(),
+            ocean: crate::render::water::ocean::OceanPlan::new(Default::default()),
             glass_panels: Vec::new(),
             sdf_volumes: Vec::new(),
             grass: None,
