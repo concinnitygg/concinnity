@@ -161,13 +161,30 @@ pub fn glass_panel(mut args: GlassPanel) -> GlassPanel {
 /// Clamp a `WaterSurface`'s authored fields into their valid ranges.
 pub fn water_surface(mut args: WaterSurface) -> WaterSurface {
     args.subdivisions = args.subdivisions.clamp(8, 255);
-    if args.waves.len() > MAX_WATER_WAVES {
-        args.waves.truncate(MAX_WATER_WAVES);
-    }
-    if args.waves.is_empty() {
-        args.waves.push(WaterWave::default());
+    args.fetch_meters = finite_at_least(args.fetch_meters, 1.0, 1000.0);
+    args.wind_response = finite_at_least(args.wind_response, 0.0, 1.0);
+    args.waves.truncate(MAX_WATER_WAVES);
+    for w in &mut args.waves {
+        *w = water_wave(*w);
     }
     args
+}
+
+// Clamp one authored swell wave: a non-negative height, a wavelength of at
+// least a centimeter, a unit direction (+X when it has no length) and a
+// steepness in [0, 1].
+fn water_wave(mut w: WaterWave) -> WaterWave {
+    w.amplitude = finite_at_least(w.amplitude, 0.0, 0.0);
+    w.wavelength = finite_at_least(w.wavelength, 0.01, 4.0);
+    let [x, z] = w.direction;
+    let len = crate::math::hypot(x, z);
+    w.direction = if len > 1e-6 && len.is_finite() {
+        [x / len, z / len]
+    } else {
+        [1.0, 0.0]
+    };
+    w.steepness = finite_at_least(w.steepness, 0.0, 0.0).min(1.0);
+    w
 }
 
 /// Clamp a `Wind`'s authored fields into their valid ranges.
@@ -434,14 +451,30 @@ mod tests {
     }
 
     #[test]
-    fn water_surface_clamps_subdivisions_and_guarantees_a_wave() {
+    fn water_surface_clamps_its_fields_and_swell() {
+        let swell = WaterWave {
+            amplitude: -1.0,
+            wavelength: 0.0,
+            direction: [0.0, 0.0],
+            steepness: 3.0,
+        };
         let w = water_surface(WaterSurface {
             subdivisions: 3,
-            waves: alloc::vec::Vec::new(),
+            fetch_meters: f32::NAN,
+            wind_response: -2.0,
+            waves: alloc::vec![swell; 6],
             ..WaterSurface::default()
         });
         assert_eq!(w.subdivisions, 8);
-        assert_eq!(w.waves.len(), 1);
+        assert_eq!(w.fetch_meters, 1000.0);
+        assert_eq!(w.wind_response, 0.0);
+        assert_eq!(w.waves.len(), MAX_WATER_WAVES);
+        let s = w.waves[0];
+        assert_eq!(
+            (s.amplitude, s.wavelength, s.direction, s.steepness),
+            (0.0, 0.01, [1.0, 0.0], 1.0)
+        );
+        assert!(WaterSurface::default().waves.is_empty());
     }
 
     #[test]

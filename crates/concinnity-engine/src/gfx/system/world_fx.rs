@@ -11,6 +11,8 @@ use concinnity_core::render::atmosphere::AtmosphereSettings;
 use concinnity_core::render::backend_init::{SdfVolumeSource, WorldFx};
 use concinnity_core::render::grass::{GrassField, PlanetGrass};
 use concinnity_core::render::night_sky::NightSkySettings;
+use concinnity_core::render::water::WaterBody;
+use concinnity_core::render::wind::WindField;
 use concinnity_core::render::{decal, particles, volumetric_fog};
 use concinnity_host::thread::asset_id;
 
@@ -29,7 +31,6 @@ pub(super) fn drain_world_fx(
     let emitters: Vec<ParticleEmitter> = ctx.drain::<ParticleEmitter>();
     let particles =
         particles::build_particle_records(&emitters.iter().collect::<Vec<_>>(), texture_count);
-    let water_surfaces = ctx.drain::<WaterSurface>();
     let glass_panels = ctx.drain::<GlassPanel>();
     let sdf_volumes = drain_sdf_volumes(ctx);
     // The first enabled fog wins: the fog pass models one homogeneous medium.
@@ -39,8 +40,15 @@ pub(super) fn drain_world_fx(
         .into_iter()
         .find(|f| f.enabled)
         .and_then(|f| volumetric_fog::resolve_asset(&f));
-    // One wind per world, which every terrain's grass sways in.
+    // One wind per world, which every terrain's grass sways in and every
+    // water surface takes its waves from.
     let wind = ctx.drain::<Wind>().into_iter().next();
+    let wind_field = WindField::new(wind.as_ref());
+    let water_surfaces = ctx
+        .drain::<WaterSurface>()
+        .iter()
+        .map(|w| WaterBody::resolve(w, &wind_field))
+        .collect();
     let grass: std::collections::HashMap<AssetId, Grass> = ctx
         .drain_with_ids::<Grass>()
         .into_iter()

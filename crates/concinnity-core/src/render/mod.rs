@@ -97,5 +97,6 @@ pub mod uniforms;
 
 pub mod view_history;
 pub mod volumetric_fog;
+pub mod water;
 pub mod wind;
 pub mod world_pipelines;

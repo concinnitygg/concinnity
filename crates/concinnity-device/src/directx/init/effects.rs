@@ -3,7 +3,7 @@
 //! unified G-buffer, and the decal, fog, particle, auto-exposure, raymarch,
 //! planar reflection and transparent resources.
 
-use concinnity_core::components::{GlassPanel, WaterSurface};
+use concinnity_core::components::GlassPanel;
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::render_types::{DrawObject, LightUniforms};
 use concinnity_core::render::backend_init::{PlanarBudget, PostSettings, SdfVolumeSource, WorldFx};
@@ -685,7 +685,7 @@ pub(super) struct TransparentInputs<'a> {
     pub(super) reflection_divisor: u32,
     pub(super) planar_slots: &'a [Option<usize>],
     pub(super) glass_panels: &'a [GlassPanel],
-    pub(super) water_surfaces: &'a [WaterSurface],
+    pub(super) water_surfaces: &'a [concinnity_core::render::water::WaterBody],
     pub(super) draw_objects: &'a [DrawObject],
 }
 

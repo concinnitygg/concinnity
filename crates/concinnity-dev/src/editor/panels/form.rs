@@ -1421,18 +1421,35 @@ mod tests {
         assert!(get_at_path(&empty, "a.b.missing").is_none());
     }
 
-    // A variable-length array (WaterSurface's `waves`, default 1 element) becomes an
+    // A WaterSurface entry with one authored swell wave: its `waves` list is the
+    // form's variable-length array of objects. (The default has none, and an
+    // empty list has no element to template its fields from.)
+    fn one_swell() -> Map<String, Value> {
+        let mut args = base_args("WaterSurface");
+        args.insert(
+            "waves".into(),
+            serde_json::json!([{
+                "amplitude": 0.15,
+                "wavelength": 4.0,
+                "direction": [1.0, 0.0],
+                "steepness": 0.4
+            }]),
+        );
+        args
+    }
+
+    // A variable-length array (WaterSurface's `waves`, here 1 element) becomes an
     // Array header field carrying the element count, followed by each element's
     // leaves keyed by index.
     #[test]
     fn fields_for_exposes_an_array_header_and_element_leaves() {
-        let fields = fields_for("WaterSurface", None);
+        let fields = fields_for("WaterSurface", Some(&one_swell()));
         let waves = fields
             .iter()
             .find(|f| f.key == "waves")
             .expect("a waves array header");
         assert_eq!(waves.kind, FieldKind::Array);
-        assert_eq!(waves.variant_idx, 1, "the default has one wave");
+        assert_eq!(waves.variant_idx, 1, "the entry has one wave");
         // The element's fields are indexed dotted-path leaves.
         assert_eq!(
             fields
@@ -1463,7 +1480,7 @@ mod tests {
 
     #[test]
     fn add_and_remove_array_elem_grow_and_shrink_from_a_template() {
-        let mut args = base_args("WaterSurface");
+        let mut args = one_swell();
         let len =
             |a: &Map<String, Value>| get_at_path(a, "waves").unwrap().as_array().unwrap().len();
         assert_eq!(len(&args), 1);
@@ -1475,15 +1492,11 @@ mod tests {
         );
         assert!(remove_array_elem(&mut args, "waves"));
         assert_eq!(len(&args), 1, "shrank");
-        // Removing down to empty then adding still works (template falls back to the
-        // type default's element).
+        // Removing down to empty leaves nothing to template from: the type's
+        // default has no wave either.
         assert!(remove_array_elem(&mut args, "waves"));
         assert_eq!(len(&args), 0);
-        assert!(
-            add_array_elem("WaterSurface", &mut args, "waves"),
-            "an emptied array regrows from the default template"
-        );
-        assert_eq!(len(&args), 1);
+        assert!(!add_array_elem("WaterSurface", &mut args, "waves"));
     }
 
     #[test]
@@ -1503,7 +1516,7 @@ mod tests {
 
     #[test]
     fn path_helpers_navigate_array_indices() {
-        let mut args = base_args("WaterSurface");
+        let mut args = one_swell();
         assert!(
             get_at_path(&args, "waves.0.amplitude")
                 .and_then(Value::as_f64)
@@ -1659,14 +1672,15 @@ mod tests {
     // Editing an array element's leaf writes back into that element and cooks.
     #[test]
     fn assemble_writes_an_array_element_value() {
-        let fields = fields_for("WaterSurface", None);
+        let seed = one_swell();
+        let fields = fields_for("WaterSurface", Some(&seed));
         let idx = fields
             .iter()
             .position(|f| f.key == "waves.0.amplitude")
             .expect("a waves.0.amplitude field");
         let mut texts: Vec<String> = fields.iter().map(|f| f.initial.clone()).collect();
         texts[idx] = "3.25".into();
-        let args = assemble("WaterSurface", None, &fields, &texts);
+        let args = assemble("WaterSurface", Some(&seed), &fields, &texts);
         assert_eq!(
             get_at_path(&args, "waves.0.amplitude").and_then(Value::as_f64),
             Some(3.25)
@@ -1690,7 +1704,7 @@ mod tests {
         );
         // Sanity: an object-element array (WaterSurface.waves) still IS growable.
         assert!(
-            fields_for("WaterSurface", None)
+            fields_for("WaterSurface", Some(&one_swell()))
                 .iter()
                 .any(|f| f.key == "waves" && f.kind == FieldKind::Array),
             "an object array is still editable"
@@ -1703,7 +1717,7 @@ mod tests {
     // silently dropped, and a field past the pool is still derived.
     #[test]
     fn fields_for_exposes_more_than_the_control_pool() {
-        let fields = fields_for("WaterSurface", None);
+        let fields = fields_for("WaterSurface", Some(&one_swell()));
         assert!(
             fields.len() > FIELD_POOL,
             "WaterSurface exposes {} fields, past the {FIELD_POOL}-slot pool",
@@ -1720,7 +1734,7 @@ mod tests {
     // an off-window field's value on capture.
     #[test]
     fn current_text_renders_a_stored_value_or_empty() {
-        let mut args = base_args("WaterSurface");
+        let mut args = one_swell();
         assert_eq!(
             current_text(&args, "roughness"),
             value_text(&args["roughness"])

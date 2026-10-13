@@ -1,4 +1,4 @@
-//! A spinning black cube over a still dark pool, the editor's clapper-board
+//! A spinning black cube over a dark pool ruffled by a light breeze, the editor's clapper-board
 //! mark on each face and its edges picked out in light, under a green sun that
 //! rises behind the viewpoint, crosses the frame, and sets into the water. The
 //! sky is airless: black between sharp stars, a Milky Way and a few faint
@@ -30,7 +30,7 @@ mod logo;
 use concinnity::components::{
     Atmosphere, Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, DirectionalLight,
     GraphicsConfig, NightSky, PostProcessConfig, ProceduralMesh, Prop, SkyRotation, WaterSurface,
-    WaterWave, Window,
+    Wind, Window,
 };
 use concinnity::{App, AssetId, MaterialHandle, MeshHandle, Ref, World, bake};
 
@@ -169,51 +169,45 @@ fn cube_world() -> Result<World, concinnity::Error> {
         intensity: 10.0,
     });
 
-    // Near-black water, almost flat. The renderer mirrors the scene across the
-    // surface's plane and renders it again into it, so the cube reflects in the
-    // pool; the wave normals then bend that reflection, which is the only thing
-    // that gives the stillness away. Both waves are long, shallow and slow (a
-    // crest crosses its own wavelength in about fifteen seconds), and the foam
-    // a shoreline would carry is turned off. A low `fresnel_power` keeps the
-    // reflection strong head-on instead of only at grazing angles. The
-    // roughness does double duty: it widens the sun's specular lobe into the
-    // glitter path running back toward the camera, and it scales how far the
-    // wave normals push the mirror's screen lookup. The body colors are
-    // reflectances lit by the sun, so the water darkens as the sun sinks and
-    // is black once it has set; they lean blue against the green light. The
-    // grid itself is the engine's to build: the backends tessellate it at
-    // start from nothing but this component. The grid's 16-bit indices cap it
-    // at 255 cells a side, so over a pool this wide a cell spans several
-    // waves; that is fine, since the wave normal the shading and the mirror
-    // use is evaluated per fragment, and the displacement itself is too
-    // shallow to see at that scale.
+    // A light, gusty breeze: the only thing moving the water. Its gusts roll
+    // across the pool as darker, rougher patches, with glassier water between.
+    world.add_component(Wind {
+        direction: [1.0, 0.30],
+        strength: 2.0,
+        gustiness: 0.6,
+        gust_scale: 30.0,
+    });
+
+    // Near-black water. The renderer mirrors the scene across the surface's
+    // plane and renders it again into it, so the cube reflects in the pool;
+    // the breeze's waves and ripples then bend that reflection. The wind
+    // raises them over the pool's own width (`fetch_meters`), so they stay
+    // small, and every one is finer than the grid: they shade the surface
+    // rather than move it, evaluated per fragment, which is what lets a pool
+    // this wide keep a grid of 255 cells a side (the cap its 16-bit indices
+    // set). The foam a shoreline would carry is turned off. A low
+    // `fresnel_power` keeps the reflection strong head-on instead of only at
+    // grazing angles. The roughness is the surface's floor: the ripples too
+    // fine for a pixel widen it further, which is what spreads the sun's
+    // specular lobe into the glitter path running back toward the camera. The
+    // body colors are reflectances lit by the sun, so the water darkens as the
+    // sun sinks and is black once it has set; they lean blue against the
+    // green light. The grid itself is the engine's to build: the backends
+    // tessellate it at start from nothing but this component.
     world.add_component(WaterSurface {
         center: [0.0, 0.0, 0.0],
         extent: [WATER_HALF_EXTENT, WATER_HALF_EXTENT],
         subdivisions: 240,
-        waves: vec![
-            WaterWave {
-                amplitude: 0.050,
-                wavelength: 3.4,
-                speed: 0.22,
-                direction: [1.0, 0.30],
-                steepness: 0.05,
-            },
-            WaterWave {
-                amplitude: 0.035,
-                wavelength: 2.1,
-                speed: 0.16,
-                direction: [-0.35, 1.0],
-                steepness: 0.05,
-            },
-        ],
+        fetch_meters: 2.0 * WATER_HALF_EXTENT,
+        wind_response: 1.0,
+        waves: Vec::new(),
         deep_color: [0.004, 0.005, 0.016],
         shallow_color: [0.012, 0.017, 0.032],
         depth_falloff_meters: 1.5,
         foam_width_meters: 0.0,
         foam_intensity: 0.0,
         fresnel_power: 0.5,
-        roughness: 0.10,
+        roughness: 0.05,
         refraction_strength: 0.02,
         visible: true,
     });

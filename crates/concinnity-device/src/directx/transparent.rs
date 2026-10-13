@@ -34,7 +34,7 @@
 //! draws -- so it runs only under the RT root signature and is inert while RT
 //! is off.
 
-use concinnity_core::components::{GlassPanel, WaterSurface};
+use concinnity_core::components::GlassPanel;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::render::depth::DEPTH_CLEAR;
@@ -763,7 +763,7 @@ pub(in crate::directx) struct TransparentSceneTargets {
 pub(in crate::directx) struct TransparentContent<'a> {
     pub glass_panels: &'a [GlassPanel],
     pub glass_planar_slots: &'a [Option<usize>],
-    pub water_surfaces: &'a [WaterSurface],
+    pub water_surfaces: &'a [concinnity_core::render::water::WaterBody],
     pub water_planar_slots: &'a [Option<usize>],
     // Indices into the context's draw objects of every see-through material.
     // Empty when no material opted in; those meshes then render opaque.

@@ -3,10 +3,25 @@
 // The second producer of the engine's transparent pass (`PassId::Transparent`,
 // after the SSR resolve and before TAA), alongside `glass.hlsl`. Where a glass
 // pane is a flat quad the vertex stage only projects, a water surface is a
-// tessellated XZ grid (see geometry::water_grid) the vertex stage displaces by a
-// sum of Gerstner waves. The fragment stage takes the world-space normal from
-// the analytic derivatives of that same sum at its own rest position, so a
-// coarse grid shades as finely as a dense one, then composites, in order:
+// tessellated XZ grid (see geometry::water_grid) moved by a sum of waves the
+// host resolves from the world's wind and the surface's swell
+// (render::water::WaterBody), longest first:
+//
+//   * The long waves, down to two grid cells, displace the grid as Gerstner
+//     waves; anything shorter would alias between vertices.
+//   * The fragment stage takes the world-space normal from the analytic
+//     derivatives of every wave at its own rest position, the short ones as a
+//     plain height field, so a coarse grid shades as finely as a dense one.
+//   * Below the shortest wave, procedural ripples down to about a centimeter,
+//     whose strength follows the local wind: the shared gust field (wind.hlsl)
+//     roughens patches that roll downwind in step with the grass, and leaves
+//     glassy water in the lulls. With no wind only sub-millimeter ripples stay.
+//   * Every wave and ripple fades out as its wavelength shrinks to a few
+//     pixels, and the slope variance it carried folds into the GGX roughness
+//     (LEAN / Toksvig), along with the share of the ripples too fine to draw
+//     at all, so the far field turns into a glitter path instead of aliasing.
+//
+// It then composites, in order:
 //
 //   * Refraction - the pre-transparent scene snapshot at a normal-perturbed
 //                  screen UV, so the seabed bends under the waves.
@@ -62,10 +77,10 @@
 
 {DEPTH_CONVENTION}
 
-// Waves summed per surface. Mirrors `MAX_WATER_WAVES` in concinnity-asset and
+// Waves summed per surface: the wind sea plus the authored swell. Mirrors
 // `WATER_MAX_WAVES` in `core::render`'s uniforms; the array length is part of
 // the `WaterParams` layout, so it is a constant here rather than a define.
-static const uint MAX_WATER_WAVES = 4u;
+static const uint WATER_MAX_WAVES = 24u;
 
 {PROBE_TYPES}
 
@@ -77,16 +92,20 @@ static const uint MAX_WATER_WAVES = 4u;
 
 {LIGHT_TYPES}
 
-// One Gerstner wave, packed into two float4 lanes so the CPU `[f32; 4]` pair is
-// byte-identical on every target. Matches `WaterWaveGpu` (32 B).
+{WIND}
+
+// One wave of the sum, packed into two float4 lanes so the CPU `[f32; 4]` pair
+// is byte-identical on every target. Matches `WaterWaveGpu` (32 B). The pinch
+// is the Gerstner horizontal displacement per meter of amplitude, 0 for a wave
+// that only shades.
 struct WaterWave
 {
-    float4 dir_amp_wave;    // [direction.x, direction.y, amplitude, wavelength]
-    float4 speed_steep_pad; // [speed, steepness, _, _]
+    float4 dir_amp_k; // [direction.x, direction.z, amplitude, wavenumber]
+    float4 motion;    // [angular speed, pinch, phase, _]
 };
 
 // Per-surface tunables. Layout matches `WaterParams` / the WaterParamsBlock UBO
-// (224 B); the vec3 fields are float4 so MSL's 16-byte constant-buffer float3
+// (896 B); the vec3 fields are float4 so MSL's 16-byte constant-buffer float3
 // cannot desynchronize them from the CPU struct.
 struct WaterParams
 {
@@ -100,9 +119,13 @@ struct WaterParams
     float roughness;
     float refraction_strength;
     uint wave_count;
-    // Aligns `waves` to 16, which its float4 lanes require.
-    float _pad;
-    WaterWave waves[MAX_WATER_WAVES];
+    // The first `displace_count` waves move the grid; the rest shade it.
+    uint displace_count;
+    // The wind, as wind.hlsl unpacks it: [direction.x, direction.z, strength,
+    // gustiness] and [1 / gust scale, wind response, longest ripple (m), _].
+    float4 wind;
+    float4 wind_gust;
+    WaterWave waves[WATER_MAX_WAVES];
     // [strength, distortion, _, _]. `strength > 0.5` selects the sharp planar
     // reflection over the trace / probe / sky cube; `distortion` scales the
     // wave-normal perturbation of its screen-UV lookup. Set on both paths: the
@@ -189,59 +212,187 @@ struct WaterVertexOut
     float4 position : SV_Position;
 };
 
-// The displaced surface point and its normal for one flat-rest XZ position.
-struct WaterPoint
-{
-    float3 pos;
-    float3 normal;
-};
+static const float WATER_TAU = 6.28318530718;
+static const float WATER_GRAVITY = 9.81;
 
-// Sum up to MAX_WATER_WAVES Gerstner waves at a flat-rest XZ position. Each wave
-// is a horizontal pinch plus a vertical sinusoid; the analytic partials against
-// (x, z) give the world-space normal at the displaced point. Reference: NVIDIA,
-// "Effective Water Simulation from Physical Models", GPU Gems 1.
-WaterPoint gerstner_displace(float2 rest_xz, float time)
-{
-    float3 displaced = float3(rest_xz.x, 0.0, rest_xz.y);
-    float3 binormal = float3(1.0, 0.0, 0.0); // dP/dx
-    float3 tangent = float3(0.0, 0.0, 1.0);  // dP/dz
+// A wave fades out over this span of its wavelength in pixels: drawn whole
+// above the second, gone below the first.
+static const float2 WATER_FADE_PIXELS = float2(3.0, 6.0);
 
-    uint count = min(params.wave_count, MAX_WATER_WAVES);
+// How much of `wavelength` survives a pixel `footprint` meters across.
+float water_fade(float wavelength, float footprint)
+{
+    return smoothstep(WATER_FADE_PIXELS.x, WATER_FADE_PIXELS.y, wavelength / max(footprint, 1e-6));
+}
+
+// Meters one pixel spans at clip-space depth `clip_w`. The view is rigid, so
+// the length of the view-projection's second row is the projection's
+// vertical scale.
+float water_pixel_meters(float clip_w)
+{
+    float p11 = length(view.vp[1].xyz);
+    return 2.0 * clip_w / max(p11 * view.viewport.y, 1e-6);
+}
+
+// The phase of `w` at rest position `xz` at time `time`.
+float water_phase(WaterWave w, float2 xz, float time)
+{
+    return w.dir_amp_k.w * dot(w.dir_amp_k.xy, xz) - w.motion.x * time + w.motion.z;
+}
+
+// The grid point at flat-rest XZ `rest_xz` displaced by the long waves, each a
+// horizontal pinch plus a vertical sinusoid, faded by a pixel `footprint`
+// meters across. Reference: NVIDIA, "Effective Water Simulation from Physical
+// Models", GPU Gems 1.
+float3 water_displace(float2 rest_xz, float time, float footprint)
+{
+    float3 p = float3(rest_xz.x, 0.0, rest_xz.y);
+    uint count = min(params.displace_count, WATER_MAX_WAVES);
     for (uint i = 0u; i < count; i++)
     {
-        float2 dir = normalize(params.waves[i].dir_amp_wave.xy);
-        float amp = params.waves[i].dir_amp_wave.z;
-        float wavelen = max(params.waves[i].dir_amp_wave.w, 1e-3);
-        float speed = params.waves[i].speed_steep_pad.x;
-        float steep = saturate(params.waves[i].speed_steep_pad.y);
+        WaterWave w = params.waves[i];
+        float amp = w.dir_amp_k.z * water_fade(WATER_TAU / w.dir_amp_k.w, footprint);
+        float s, c;
+        sincos(water_phase(w, rest_xz, time), s, c);
+        p.xz += w.dir_amp_k.xy * (w.motion.y * amp * c);
+        p.y += amp * s;
+    }
+    return p;
+}
 
-        float k = 2.0 * 3.14159265358979 / wavelen;
-        float phase = k * dot(dir, rest_xz) - speed * k * time;
-        float c = cos(phase);
-        float s = sin(phase);
+// Ripples below the shortest wave: octaves of value noise, this many, from the
+// longest ripple (`wind_gust.z`) down to WATER_RIPPLE_SHORTEST meters. Noise
+// rather than sinusoids, so no octave can line up into a lattice; each is
+// squeezed across its heading so its crests run a few lengths long, and is
+// carried along that heading at its own speed.
+static const uint WATER_RIPPLES = 4u;
+// A crest's length over the ripple's, inverted: how much less the noise
+// varies along a crest than across it.
+static const float WATER_RIPPLE_CREST = 0.4;
+// The rms gradient of the value noise per unit of its frequency, which turns a
+// slope target into a height.
+static const float WATER_NOISE_SLOPE = 0.5;
+static const float WATER_RIPPLE_SHORTEST = 0.012;
+// The widest a ripple heads off the wind, in radians.
+static const float WATER_RIPPLE_SPREAD = 0.6;
+// Surface tension over density, m^3 / s^2: capillary ripples outrun gravity
+// waves of the same length.
+static const float WATER_TENSION = 7.28e-5;
+// The ripples' summed slope variance: a floor still water keeps, and a rise
+// per m/s of local wind past a gentle onset (about Cox and Munk's), so a lull
+// lies glassy and a gust roughens the water.
+static const float WATER_STILL_RIPPLE_VARIANCE = 2.0e-4;
+static const float WATER_RIPPLE_VARIANCE_PER_SPEED = 0.0045;
+static const float2 WATER_RIPPLE_ONSET = float2(0.5, 2.5);
+// The share of that variance in ripples finer than any drawn, which goes
+// straight into the roughness.
+static const float WATER_UNRESOLVED_RIPPLE = 0.35;
 
-        // Steepness normalized by wave count so summed crests cannot pinch past
-        // self-intersection.
-        float q = steep / (k * amp * max(float(count), 1.0));
+// wind_noise at `p` with its gradient: `(value, d/dx, d/dy)`.
+float3 water_noise_grad(float2 p)
+{
+    float2 cell = floor(p);
+    float2 f = p - cell;
+    float2 s = f * f * (3.0 - 2.0 * f);
+    float2 ds = 6.0 * f * (1.0 - f);
+    float a = wind_lattice(cell);
+    float b = wind_lattice(cell + float2(1.0, 0.0));
+    float c = wind_lattice(cell + float2(0.0, 1.0));
+    float d = wind_lattice(cell + float2(1.0, 1.0));
+    float k = a - b - c + d;
+    float n = a + (b - a) * s.x + (c - a) * s.y + k * s.x * s.y;
+    return float3(n, ds * float2((b - a) + k * s.y, (c - a) + k * s.x));
+}
 
-        displaced.x += q * amp * dir.x * c;
-        displaced.z += q * amp * dir.y * c;
-        displaced.y += amp * s;
+// The ripples' slope variance under a local wind of `speed` m/s.
+float water_ripple_variance(float speed)
+{
+    return WATER_STILL_RIPPLE_VARIANCE
+           + WATER_RIPPLE_VARIANCE_PER_SPEED * speed
+                 * smoothstep(WATER_RIPPLE_ONSET.x, WATER_RIPPLE_ONSET.y, speed);
+}
 
-        float wa = k * amp;
+// The shading at one rest position: the wave normal, and the GGX alpha that
+// carries the slopes too fine for the pixel.
+struct WaterShading
+{
+    float3 normal;
+    float alpha;
+};
+
+// Every wave and ripple at rest XZ `rest_xz`, faded by the pixel's footprint
+// (`dx`, `dy`: the rest position's screen derivatives). The analytic partials
+// against (x, z) give the normal at the displaced point; what the fades remove
+// is added to the base roughness as slope variance.
+WaterShading water_shading(float2 rest_xz, float time, float2 dx, float2 dy)
+{
+    float3 binormal = float3(1.0, 0.0, 0.0); // dP/dx
+    float3 tangent = float3(0.0, 0.0, 1.0);  // dP/dz
+    float removed = 0.0;
+
+    uint count = min(params.wave_count, WATER_MAX_WAVES);
+    for (uint i = 0u; i < count; i++)
+    {
+        WaterWave w = params.waves[i];
+        float2 dir = w.dir_amp_k.xy;
+        float k = w.dir_amp_k.w;
+        // The footprint along the wave's travel is what blurs it.
+        float foot = max(abs(dot(dir, dx)), abs(dot(dir, dy)));
+        float fade = water_fade(WATER_TAU / k, foot);
+        float slope = k * w.dir_amp_k.z;
+        removed += (1.0 - fade * fade) * 0.5 * slope * slope;
+
+        float wa = slope * fade;
+        float q = w.motion.y;
+        float s, c;
+        sincos(water_phase(w, rest_xz, time), s, c);
         binormal.x += -q * dir.x * dir.x * wa * s;
         binormal.y += dir.x * wa * c;
         binormal.z += -q * dir.x * dir.y * wa * s;
-
         tangent.x += -q * dir.x * dir.y * wa * s;
         tangent.y += dir.y * wa * c;
         tangent.z += -q * dir.y * dir.y * wa * s;
     }
 
-    WaterPoint p;
-    p.pos = displaced;
-    p.normal = normalize(cross(tangent, binormal));
-    return p;
+    // The ripples ride the local wind, gusts and all, at this surface's
+    // response; their crests bend over a slowly drifting domain warp so they
+    // never line up into a pattern.
+    Wind wind = wind_unpack(params.wind, params.wind_gust);
+    float speed = wind_speed(wind, rest_xz, time) * params.wind_gust.y;
+    float variance = water_ripple_variance(speed);
+    float per_ripple = sqrt(variance * (1.0 - WATER_UNRESOLVED_RIPPLE) / float(WATER_RIPPLES));
+    float2 warp_at = (rest_xz - wind.dir * (0.3 * time)) * 2.0;
+    float2 warped = rest_xz + 0.08 * float2(wind_noise(warp_at), wind_noise(warp_at + 17.0));
+    float wind_angle = atan2(wind.dir.y, wind.dir.x);
+    float longest = max(params.wind_gust.z, WATER_RIPPLE_SHORTEST);
+    for (uint r = 0u; r < WATER_RIPPLES; r++)
+    {
+        float t = float(r) / float(WATER_RIPPLES - 1u);
+        float wavelength = longest * pow(WATER_RIPPLE_SHORTEST / longest, t);
+        float k = WATER_TAU / wavelength;
+        float speed_r = sqrt(WATER_GRAVITY / k + WATER_TENSION * k);
+        float heading = wind_angle + (frac(float(r) * 0.618034 + 0.2) * 2.0 - 1.0) * WATER_RIPPLE_SPREAD;
+        float2 dir = float2(cos(heading), sin(heading));
+        float2 across = float2(-dir.y, dir.x);
+        float fade = water_fade(wavelength, max(length(dx), length(dy)));
+        removed += (1.0 - fade * fade) * per_ripple * per_ripple;
+
+        float2 q = float2(dot(warped, dir) - speed_r * time,
+                          dot(warped, across) * WATER_RIPPLE_CREST) / wavelength
+                   + float(r) * 17.31;
+        float3 n = water_noise_grad(q);
+        float height = per_ripple * wavelength / WATER_NOISE_SLOPE;
+        float2 slope = (n.y * dir + n.z * WATER_RIPPLE_CREST * across) * (height * fade / wavelength);
+        binormal.y += slope.x;
+        tangent.y += slope.y;
+    }
+
+    WaterShading o;
+    o.normal = normalize(cross(tangent, binormal));
+    float base = max(params.roughness, 0.02);
+    base *= base;
+    o.alpha = sqrt(base * base + removed + variance * WATER_UNRESOLVED_RIPPLE);
+    return o;
 }
 
 [shader("vertex")]
@@ -250,13 +401,14 @@ WaterVertexOut water_vertex(WaterVertexIn v)
     // The grid is built centered on the origin in the XZ plane, so the surface
     // center rides in through the params rather than the vertex buffer.
     float2 rest_xz = float2(v.pos.x + params.center.x, v.pos.z + params.center.z);
-    WaterPoint p = gerstner_displace(rest_xz, view.time);
-    p.pos.y += params.center.y;
+    float rest_w = mul(view.vp, float4(rest_xz.x, params.center.y, rest_xz.y, 1.0)).w;
+    float3 pos = water_displace(rest_xz, view.time, water_pixel_meters(rest_w));
+    pos.y += params.center.y;
 
     WaterVertexOut o;
-    o.world_pos = p.pos;
+    o.world_pos = pos;
     o.rest_xz = rest_xz;
-    o.position = mul(view.vp, float4(p.pos, 1.0));
+    o.position = mul(view.vp, float4(pos, 1.0));
     return o;
 }
 
@@ -325,6 +477,8 @@ float water_sun_shadow(float3 world_pos, float2 screen_xy)
 struct WaterSurfacePoint
 {
     float3 normal;
+    // GGX alpha, the base roughness widened by the slopes the pixel filtered.
+    float alpha;
     float2 frag_uv;
     float3 below;
     float camera_distance;
@@ -333,7 +487,9 @@ struct WaterSurfacePoint
 WaterSurfacePoint water_surface(WaterVertexOut i)
 {
     WaterSurfacePoint s;
-    s.normal = gerstner_displace(i.rest_xz, view.time).normal;
+    WaterShading shading = water_shading(i.rest_xz, view.time, ddx(i.rest_xz), ddy(i.rest_xz));
+    s.normal = shading.normal;
+    s.alpha = shading.alpha;
 
     float2 vp_dim = max(view.viewport, (float2)(1.0));
     s.frag_uv = i.position.xy / vp_dim;
@@ -395,21 +551,21 @@ float3 water_planar_reflection(WaterSurfacePoint s)
 // The coverage test matters more here than anywhere else: a pool routinely
 // stretches past every probe box in the world, and the probe set's own
 // out-of-box fallback would hand the whole surface one foreign capture.
-float3 water_environment(float3 world_pos, float3 r)
+float3 water_environment(float3 world_pos, float3 r, float alpha)
 {
     float horizon = saturate(r.y * 0.5 + 0.5);
     float3 gradient = lerp(float3(0.55, 0.62, 0.7), float3(0.25, 0.45, 0.7), horizon);
     // Blurrier water reads a coarser cube level.
-    return transparent_environment(world_pos, r, saturate(params.roughness), gradient);
+    return transparent_environment(world_pos, r, saturate(sqrt(alpha)), gradient);
 }
 
-// The sun's specular lobe off this fragment's wave normal: GGX with a
+// The sun's specular lobe off this fragment's wave normal at GGX `alpha`: GGX with a
 // height-correlated Smith visibility term and the water-vs-air F0, driven by the
 // first directional light the view block carries. A high sun draws a compact
 // disc; a low one spreads the same lobe into a path running toward the camera,
 // since the wave slopes that mirror it span more of the surface. Zero when the
 // world declares no directional light, whose `sun_color` is zero.
-float3 water_sun_glint(float3 normal, float3 view_dir)
+float3 water_sun_glint(float3 normal, float3 view_dir, float alpha)
 {
     float n_dot_l = dot(normal, view.sun_dir.xyz);
     if (n_dot_l <= 0.0)
@@ -421,8 +577,6 @@ float3 water_sun_glint(float3 normal, float3 view_dir)
     float n_dot_h = saturate(dot(normal, h));
     float v_dot_h = saturate(dot(view_dir, h));
 
-    float alpha = max(params.roughness, 0.02);
-    alpha *= alpha;
     float a2 = alpha * alpha;
     float denom = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
     float d = a2 / max(3.14159265358979 * denom * denom, 1e-6);
@@ -455,7 +609,7 @@ TransparentOut water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflec
 {
     float n_dot_v = saturate(dot(s.normal, view_dir));
     float fresnel = 0.02 + 0.98 * pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
-    float3 glint = water_sun_glint(s.normal, view_dir);
+    float3 glint = water_sun_glint(s.normal, view_dir, s.alpha);
     float3 color = lerp(s.below, reflection, fresnel) + glint;
     float near = 1.0 - smoothstep(WATER_REACTIVE_FADE_METERS.x, WATER_REACTIVE_FADE_METERS.y,
                                   s.camera_distance);
@@ -490,7 +644,7 @@ TransparentOut water_rt_fragment(WaterVertexOut i)
         reflection = water_planar_reflection(s);
     }
     // No mirror plane for this surface, so trace instead. The per-fragment
-    // Gerstner normal makes `R` vary across the surface, so the traced
+    // wave normal makes `R` vary across the surface, so the traced
     // reflection follows the waves rather than mirroring one flat plane.
     else
     {
@@ -499,7 +653,7 @@ TransparentOut water_rt_fragment(WaterVertexOut i)
                                  view.prefilter_mip_count > 0.5,
                                  view.prefilter_mip_count - 1.0, reflection))
         {
-            reflection = water_environment(i.world_pos, r);
+            reflection = water_environment(i.world_pos, r, s.alpha);
         }
     }
     return water_resolve(s, view_dir, reflection);
@@ -524,7 +678,7 @@ TransparentOut water_fragment(WaterVertexOut i)
     }
     else
     {
-        reflection = water_environment(i.world_pos, reflect(-view_dir, s.normal));
+        reflection = water_environment(i.world_pos, reflect(-view_dir, s.normal), s.alpha);
     }
     return water_resolve(s, view_dir, reflection);
 }

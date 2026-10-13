@@ -29,13 +29,13 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::WaterSurface;
 use concinnity_core::geometry::water_grid::build_water_grid;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PlanarFramePlan;
 use concinnity_core::render::transparent;
 use concinnity_core::render::uniforms::{TransparentView, WaterParams};
+use concinnity_core::render::water::WaterBody;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLRenderPipelineState, MTLResourceOptions};
@@ -62,13 +62,14 @@ pub(in crate::metal) struct WaterSurfaceRecord {
     pub(in crate::metal) planar_slot: Option<usize>,
 }
 
-// Build a [`WaterSurfaceRecord`] for one `WaterSurface` asset. Calls the
+// Build a [`WaterSurfaceRecord`] for one resolved `WaterSurface`. Calls the
 // shared `geometry::water_grid` to produce the tessellated mesh and uploads
 // it once; per-frame uniforms (time, view) come in through the encoder.
 pub(in crate::metal) fn build_water_surface_record(
     device: &ProtocolObject<dyn MTLDevice>,
-    surface: &WaterSurface,
+    body: &WaterBody,
 ) -> RenderResult<WaterSurfaceRecord> {
+    let surface = &body.surface;
     // A grid the core geometry refuses (too many vertices for a u16 index) is a
     // world-authoring limit, not a device failure.
     let (verts, idxs) =
@@ -116,7 +117,7 @@ pub(in crate::metal) fn build_water_surface_record(
         vertex_buffer: vb,
         index_buffer: ib,
         index_count: idxs.len() as u32,
-        params: WaterParams::from_surface(surface, false),
+        params: WaterParams::from_body(body, false),
         visible: surface.visible,
         center: surface.center,
         // Patched after `assign_planar_slots` runs over all reflectors in init.

@@ -6,8 +6,7 @@
 //! the same struct; each reads the fields its feature set consumes.
 
 use crate::components::{
-    GlassPanel, PassResolution, SdfVolume, ShaderPrograms, ShadowUpdate, UpscalerBackend,
-    WaterSurface, Window,
+    GlassPanel, PassResolution, SdfVolume, ShaderPrograms, ShadowUpdate, UpscalerBackend, Window,
 };
 use crate::gfx::auto_exposure::AutoExposureSettings;
 use crate::gfx::mesh_payload::Vertex;
@@ -183,9 +182,8 @@ pub struct WorldFx {
     pub particles: Vec<ParticleEmitterRecord>,
     /// Volumetric fog settings, or `None` when the world declares none.
     pub fog: Option<FogSettings>,
-    /// Transparent water surfaces; rendered by Metal today, accepted by the
-    /// other backends for parity until their water ports land.
-    pub water_surfaces: Vec<WaterSurface>,
+    /// Transparent water surfaces, each resolved against the world's wind.
+    pub water_surfaces: Vec<crate::render::water::WaterBody>,
     /// Refractive glass panels declared by the world.
     pub glass_panels: Vec<GlassPanel>,
     /// Raymarched SDF volumes, each paired with its compiled payload.
@@ -512,6 +510,7 @@ fn trim_scene_features(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::WaterSurface;
 
     fn empty_scene() -> SceneData<'static> {
         SceneData {
@@ -637,7 +636,11 @@ mod tests {
         // renders into the HDR scene chain).
         let scene = empty_scene();
         let mut fx = empty_fx();
-        fx.water_surfaces.push(WaterSurface::default());
+        fx.water_surfaces
+            .push(crate::render::water::WaterBody::resolve(
+                &WaterSurface::default(),
+                &crate::render::wind::WindField::STILL,
+            ));
         assert!(RenderRequirements::derive(&scene, &fx, false).scene);
 
         let mut fx = empty_fx();

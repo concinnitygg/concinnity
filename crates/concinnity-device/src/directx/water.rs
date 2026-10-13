@@ -11,11 +11,11 @@
 //! `builtin_shaders`; the ray-traced fragment needs shader model 6.5 for its
 //! inline ray query, the base pair 6.0.
 
-use concinnity_core::components::WaterSurface;
 use concinnity_core::geometry::water_grid::build_water_grid;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::WaterParams;
+use concinnity_core::render::water::WaterBody;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::DeviceAllocator;
@@ -102,7 +102,7 @@ pub(in crate::directx) struct WaterBuild<'a> {
 // probe/planar path runs.
 pub(in crate::directx) fn build_water_producer(
     build: WaterBuild,
-    surfaces: &[WaterSurface],
+    surfaces: &[WaterBody],
     // Per-surface planar resolve slot (aligned with `surfaces`); `None` surfaces
     // keep the probe/sky reflection. From `assign_planar_slots`.
     planar_slots: &[Option<usize>],
@@ -139,7 +139,8 @@ pub(in crate::directx) fn build_water_producer(
     };
 
     let mut records = Vec::with_capacity(surfaces.len());
-    for (i, surface) in surfaces.iter().enumerate() {
+    for (i, body) in surfaces.iter().enumerate() {
+        let surface = &body.surface;
         let planar_slot = planar_slots.get(i).copied().flatten();
         let (verts, idxs) =
             build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)
@@ -159,7 +160,7 @@ pub(in crate::directx) fn build_water_producer(
             })
             .collect();
 
-        let params = WaterParams::from_surface(surface, planar_slot.is_some());
+        let params = WaterParams::from_body(body, planar_slot.is_some());
         records.push(TransparentRecord::upload(
             alloc,
             RecordUpload {

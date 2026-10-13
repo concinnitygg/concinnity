@@ -24,7 +24,7 @@
 //! as the DirectX and Metal hosts.
 
 use ash::vk;
-use concinnity_core::components::{GlassPanel, WaterSurface};
+use concinnity_core::components::GlassPanel;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -1257,7 +1257,7 @@ pub(in crate::vulkan) struct TransparentSceneTargets<'a> {
 pub(in crate::vulkan) struct TransparentContent<'a> {
     pub glass_panels: &'a [GlassPanel],
     pub glass_planar_slots: &'a [Option<usize>],
-    pub water_surfaces: &'a [WaterSurface],
+    pub water_surfaces: &'a [concinnity_core::render::water::WaterBody],
     pub water_planar_slots: &'a [Option<usize>],
     pub planar_target_views: &'a [vk::ImageView],
     // Indices into the context's draw objects of every see-through material.

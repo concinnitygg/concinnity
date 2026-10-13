@@ -12,11 +12,11 @@
 //! as the DirectX and Metal hosts.
 
 use ash::vk;
-use concinnity_core::components::WaterSurface;
 use concinnity_core::geometry::water_grid::build_water_grid;
 use concinnity_core::gfx::mesh_payload::Vertex;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::WaterParams;
+use concinnity_core::render::water::WaterBody;
 
 use super::allocator::DeviceAllocator;
 use crate::vulkan::builtin_shaders::CompileProgram;
@@ -79,9 +79,10 @@ fn compile_water_rt_shaders(
 fn build_surface_record(
     alloc: &DeviceAllocator,
     ctx: &ProducerCtx,
-    surface: &WaterSurface,
+    body: &WaterBody,
     planar_slot: Option<usize>,
 ) -> RenderResult<TransparentRecord> {
+    let surface = &body.surface;
     let (verts, idxs) =
         build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)
             .map_err(RenderError::Other)?;
@@ -100,7 +101,7 @@ fn build_surface_record(
         })
         .collect();
 
-    let params = WaterParams::from_surface(surface, planar_slot.is_some());
+    let params = WaterParams::from_body(body, planar_slot.is_some());
     TransparentRecord::upload(
         alloc,
         ctx.record_descriptors(planar_slot),
@@ -122,7 +123,7 @@ fn build_surface_record(
 // probe/planar path runs.
 pub(in crate::vulkan) fn build_water_producer(
     ctx: ProducerCtx,
-    surfaces: &[WaterSurface],
+    surfaces: &[WaterBody],
     // Per-surface planar resolve slot (aligned with `surfaces`); `None` surfaces
     // keep the probe/sky reflection. From `assign_planar_slots`.
     planar_slots: &[Option<usize>],

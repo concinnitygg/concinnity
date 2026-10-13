@@ -4,7 +4,7 @@
 //! never rebuilds them.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::{GlassPanel, WaterSurface};
+use concinnity_core::components::GlassPanel;
 use concinnity_core::gfx::render_types::DrawObject;
 use concinnity_core::render::backend_init::PlanarBudget;
 use concinnity_core::render::backend_init::SdfVolumeSource;
@@ -13,6 +13,7 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::particles::ParticleEmitterRecord;
 use concinnity_core::render::planar_reflection::PlanarReflectors;
 use concinnity_core::render::volumetric_fog::FogSettings;
+use concinnity_core::render::water::WaterBody;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -216,7 +217,7 @@ pub(super) fn build_particles(
 // get no slot and keep the box-projected probe cube (warned here, not silently
 // dropped).
 pub(super) fn plan_planar(
-    water_surfaces: &[WaterSurface],
+    water_surfaces: &[WaterBody],
     glass_panels: &[GlassPanel],
     budget: PlanarBudget,
 ) -> PlanarReflectors {
@@ -239,7 +240,7 @@ pub(super) fn plan_planar(
 // the planar slot `plan_planar` gave it.
 pub(super) fn build_water(
     gpu: &InitGpu<'_>,
-    water_surfaces: &[WaterSurface],
+    water_surfaces: &[WaterBody],
     planar_slots: &[Option<usize>],
 ) -> RenderResult<WaterState> {
     let device = &*gpu.hw.device;

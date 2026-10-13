@@ -1,18 +1,17 @@
 // Animated water-surface schema.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
-/// Maximum number of waves per water surface. Shared by the render backends'
-/// wave uniforms and the build-side water validator.
+/// Maximum number of authored swell waves per water surface; the wind's own
+/// waves come on top of these.
 pub const MAX_WATER_WAVES: usize = 4;
 
-/// One wave in a water surface's motion. A surface sums up to four of these
-/// to displace its flat grid. Each wave travels
-/// horizontally along `direction`, rising and falling with `amplitude` peak
-/// height, `wavelength` distance between crests, and `speed` meters per second.
-/// `steepness` in [0, 1] pinches the crests and broadens the troughs (choppier
-/// water).
+/// One authored swell wave on a water surface, on top of the waves the wind
+/// raises. Swell is the long, regular motion left by distant weather: it rolls
+/// along `direction`, rising and falling `amplitude` around the rest height,
+/// `wavelength` between crests, at the speed deep water carries a wave that
+/// long (about 1.25 m/s times the square root of the wavelength in meters).
+/// `steepness` in [0, 1] pinches the crests and broadens the troughs.
 #[derive(
     Debug,
     Clone,
@@ -30,10 +29,7 @@ pub struct WaterWave {
     /// Distance between successive crests, in world units.
     #[asset(default = 4.0)]
     pub wavelength: f32,
-    /// Horizontal travel speed, in meters per second.
-    #[asset(default = 1.0)]
-    pub speed: f32,
-    /// Horizontal travel direction `[x, z]`.
+    /// Horizontal travel direction `[x, z]`. Does not need to be normalized.
     #[asset(default = [1.0, 0.0])]
     pub direction: [f32; 2],
     /// Crest sharpness in [0, 1]. 0 is a smooth sine; higher pinches crests and
@@ -44,8 +40,19 @@ pub struct WaterWave {
 
 /// A translucent animated water surface.
 ///
-/// A flat, subdivided horizontal surface whose vertices ripple with summed
-/// waves. It refracts and reflects the scene, and its body is lit like any
+/// A flat, subdivided horizontal surface moved by the world's `Wind`. The wind
+/// raises a field of waves of many lengths, mostly running downwind with some
+/// crossing it, each traveling at the speed deep water carries a wave of its
+/// length, plus fine ripples that roughen the surface. Gusts roll across it in
+/// step with the grass: rough dark patches where a gust touches down, glassier
+/// water in the lulls. A stronger wind and a longer `fetch_meters` (the open
+/// water the wind blows across) build longer, taller waves; with no `Wind`
+/// the water lies almost mirror-still. Authored `waves` add swell on top.
+///
+/// Far off, waves too fine to draw fold into a rougher surface, so the sun or
+/// moon spreads into a glittering path instead of shimmering.
+///
+/// It refracts and reflects the scene, and its body is lit like any
 /// other surface: the sun or moon (in shadow where the scene casts one) and the
 /// sky's light scatter back out of the water, off a reflectance that blends
 /// from `shallow_color` to `deep_color` as the water deepens. Shoreline foam is
@@ -89,9 +96,16 @@ pub struct WaterSurface {
     /// Clamped to [8, 255].
     #[asset(default = 64)]
     pub subdivisions: u32,
-    /// The waves summed to animate the surface (up to 4). Defaults to a single
-    /// gentle wave.
-    #[asset(default = vec![WaterWave::default()])]
+    /// The open water the wind blows across, in meters: how large a sea it can
+    /// build. A pond is tens of meters, a lake one to a few thousand, an open
+    /// sea a hundred thousand or more. At least 1.
+    #[asset(default = 1000.0)]
+    pub fetch_meters: f32,
+    /// How strongly the wind moves this surface, at least 0. 0 is sheltered
+    /// water the wind never touches, 1 the full wind; above 1 exaggerates it.
+    #[asset(default = 1.0)]
+    pub wind_response: f32,
+    /// Extra swell rolling over the wind's waves, up to 4. None by default.
     pub waves: Vec<WaterWave>,
     /// Linear-space RGB reflectance of deep water's body, each channel in
     /// [0, 1]: the share of the light reaching the surface that a deep column

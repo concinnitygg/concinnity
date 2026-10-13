@@ -1618,7 +1618,10 @@ impl GraphicsSystem {
                 &draw_objects,
                 &all_vertices,
                 &all_indices,
-                &fx.water_surfaces,
+                &fx.water_surfaces
+                    .iter()
+                    .map(|w| w.surface.clone())
+                    .collect::<Vec<_>>(),
                 &fx.glass_panels,
             )
             .unwrap_or_default();

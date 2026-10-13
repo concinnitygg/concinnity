@@ -3,9 +3,10 @@
 //! meshes, and water surfaces.
 
 use super::PassCamera;
-use crate::components::{GlassPanel, WaterSurface, WaterWave};
+use crate::components::GlassPanel;
 use crate::gfx::render_types::LightUniforms;
 use crate::render::lights::glint_sun;
+use crate::render::water::{BodyWave, WaterBody};
 
 /// Per-frame view inputs shared by every draw in the transparent pass (water,
 /// glass), bound once for the whole pass. Matches `TransparentView` in
@@ -141,35 +142,41 @@ pub struct GlassMeshParams {
     pub prefilter_mip_count: f32,
 }
 
-/// Maximum waves summed per `WaterParams`: the `WaterSurface` asset's limit.
-/// Mirrors `MAX_WATER_WAVES` in `shaders/water.hlsl`.
-pub const WATER_MAX_WAVES: usize = crate::components::MAX_WATER_WAVES;
+/// Maximum waves summed per `WaterParams`: the wind sea plus the authored
+/// swell. Mirrors `WATER_MAX_WAVES` in `shaders/water.hlsl`.
+pub const WATER_MAX_WAVES: usize = crate::render::water::MAX_WAVES;
 
-/// One Gerstner wave coefficient set, packed into two `float4` lanes so the
-/// layout is identical on every target. Matches `WaterWave` in
-/// `shaders/water.hlsl`. 32 bytes.
-#[derive(Copy, Clone, Default, bytemuck::Zeroable, bytemuck::Pod)]
+/// One wave of the sum, packed into two `float4` lanes so the layout is
+/// identical on every target. Matches `WaterWave` in `shaders/water.hlsl`.
+/// 32 bytes.
+#[derive(Copy, Clone, Default, Debug, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 pub struct WaterWaveGpu {
-    /// `[direction.x, direction.y, amplitude, wavelength]`.
-    pub dir_amp_wave: [f32; 4],
-    /// `[speed, steepness, _, _]`.
-    pub speed_steep_pad: [f32; 4],
+    /// `[direction.x, direction.z, amplitude, wavenumber]`.
+    pub dir_amp_k: [f32; 4],
+    /// `[angular speed, pinch, phase, _]`.
+    pub motion: [f32; 4],
 }
 
 impl WaterWaveGpu {
-    /// The shader-side lanes for one authored wave.
-    pub fn from_wave(w: &WaterWave) -> Self {
+    /// The shader-side lanes for one wave of a body.
+    pub fn from_wave(w: &BodyWave) -> Self {
+        let wave = &w.wave;
         Self {
-            dir_amp_wave: [w.direction[0], w.direction[1], w.amplitude, w.wavelength],
-            speed_steep_pad: [w.speed, w.steepness, 0.0, 0.0],
+            dir_amp_k: [
+                wave.direction[0],
+                wave.direction[1],
+                wave.amplitude,
+                wave.wavenumber(),
+            ],
+            motion: [wave.angular_speed(), w.pinch, wave.phase, 0.0],
         }
     }
 }
 
 /// Per-surface tunables for a `WaterSurface`, uploaded once per surface. The
 /// vec3-ish fields are `[f32; 4]` so the layout is byte-identical to the
-/// shader's `float4`. Matches `WaterParams` in `shaders/water.hlsl`. 224 bytes.
+/// shader's `float4`. Matches `WaterParams` in `shaders/water.hlsl`. 896 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct WaterParams {
@@ -188,15 +195,24 @@ pub struct WaterParams {
     pub foam_intensity: f32,
     /// Exponent of the Fresnel reflectance curve.
     pub fresnel_power: f32,
-    /// Perceptual roughness in `[0, 1]`; picks the reflection's prefilter mip.
+    /// Perceptual roughness in `[0, 1]` of the surface at rest; the waves
+    /// filtered out of a pixel and the ripples finer than the shader draws
+    /// add to it.
     pub roughness: f32,
     /// How far refraction offsets the sampled background.
     pub refraction_strength: f32,
     /// Live entries in `waves`.
     pub wave_count: u32,
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad: f32,
-    /// Wave coefficients; the first `wave_count` entries are live.
+    /// How many of the live `waves`, from the first, displace the grid.
+    pub displace_count: u32,
+    /// The wind, `WindField::gpu_rows()[0]`: `[direction.x, direction.z,
+    /// strength, gustiness]`.
+    pub wind: [f32; 4],
+    /// `[1 / gust_scale, wind_response, ripple wavelength, _]`: the gusts'
+    /// scale, how strongly the wind roughens this surface, and the longest
+    /// ripple, in meters.
+    pub wind_gust: [f32; 4],
+    /// Wave coefficients, longest first; the first `wave_count` are live.
     pub waves: [WaterWaveGpu; WATER_MAX_WAVES],
     /// Planar reflection control: `[strength, distortion, _, _]`. `strength >
     /// 0.5` selects the sharp planar reflection (the scene re-rendered mirrored
@@ -236,14 +252,17 @@ impl WaterParams {
         [1.0, distortion, 0.0, 0.0]
     }
 
-    /// The per-surface block for an authored surface, keeping at most
+    /// The per-surface block for a resolved body, keeping at most
     /// [`WATER_MAX_WAVES`] of its waves. `planar` is whether the surface holds
     /// a planar reflection slot, see [`WaterParams::planar_lane`].
-    pub fn from_surface(surface: &WaterSurface, planar: bool) -> Self {
+    pub fn from_body(body: &WaterBody, planar: bool) -> Self {
+        let surface = &body.surface;
         let mut waves = [WaterWaveGpu::default(); WATER_MAX_WAVES];
-        for (slot, src) in waves.iter_mut().zip(surface.waves.iter()) {
+        for (slot, src) in waves.iter_mut().zip(body.waves.iter()) {
             *slot = WaterWaveGpu::from_wave(src);
         }
+        let wave_count = body.waves.len().min(WATER_MAX_WAVES);
+        let [wind, gust] = body.wind.gpu_rows();
         Self {
             center: [surface.center[0], surface.center[1], surface.center[2], 0.0],
             deep_color: reflectance(surface.deep_color),
@@ -254,8 +273,10 @@ impl WaterParams {
             fresnel_power: surface.fresnel_power,
             roughness: surface.roughness,
             refraction_strength: surface.refraction_strength,
-            wave_count: surface.waves.len().min(WATER_MAX_WAVES) as u32,
-            _pad: 0.0,
+            wave_count: wave_count as u32,
+            displace_count: body.displacing.min(wave_count) as u32,
+            wind,
+            wind_gust: [gust[0], surface.wind_response, body.ripple_wavelength, 0.0],
             waves,
             planar: Self::planar_lane(surface.roughness, planar),
         }
@@ -265,6 +286,9 @@ impl WaterParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::{WaterSurface, WaterWave, Wind};
+    use crate::render::water::spectrum::Wave;
+    use crate::render::wind::WindField;
     use alloc::vec;
     use core::mem::{offset_of, size_of};
 
@@ -272,7 +296,7 @@ mod tests {
     fn the_wave_count_matches_the_shader() {
         let src = crate::render::shaders::WATER;
         assert_eq!(
-            crate::render::shader_consts::uint(src, "MAX_WATER_WAVES"),
+            crate::render::shader_consts::uint(src, "WATER_MAX_WAVES"),
             WATER_MAX_WAVES
         );
     }
@@ -366,11 +390,10 @@ mod tests {
     }
 
     // `waves` is an array of float4-carrying structs, so the shader aligns it to
-    // 16 and the seven live scalars ahead of it need `_pad` to reach that
-    // boundary. Nothing else pins the pad, so it is asserted here.
+    // 16; the eight scalars ahead of the wind rows fill two 16-byte rows.
     #[test]
     fn water_params_layout_matches_shader() {
-        assert_eq!(size_of::<WaterParams>(), 224);
+        assert_eq!(size_of::<WaterParams>(), 896);
         assert_eq!(offset_of!(WaterParams, center), 0);
         assert_eq!(offset_of!(WaterParams, deep_color), 16);
         assert_eq!(offset_of!(WaterParams, shallow_color), 32);
@@ -381,10 +404,14 @@ mod tests {
         assert_eq!(offset_of!(WaterParams, roughness), 64);
         assert_eq!(offset_of!(WaterParams, refraction_strength), 68);
         assert_eq!(offset_of!(WaterParams, wave_count), 72);
-        assert_eq!(offset_of!(WaterParams, _pad), 76);
-        assert_eq!(offset_of!(WaterParams, waves), 80);
-        assert_eq!(offset_of!(WaterParams, planar), 208);
+        assert_eq!(offset_of!(WaterParams, displace_count), 76);
+        assert_eq!(offset_of!(WaterParams, wind), 80);
+        assert_eq!(offset_of!(WaterParams, wind_gust), 96);
+        assert_eq!(offset_of!(WaterParams, waves), 112);
+        assert_eq!(offset_of!(WaterParams, planar), 880);
         assert_eq!(size_of::<WaterWaveGpu>(), 32);
+        assert_eq!(offset_of!(WaterWaveGpu, dir_amp_k), 0);
+        assert_eq!(offset_of!(WaterWaveGpu, motion), 16);
     }
 
     // The body colors are reflectances: whatever is authored, each channel the
@@ -396,31 +423,38 @@ mod tests {
             shallow_color: [f32::NAN, 1.0, f32::INFINITY],
             ..Default::default()
         };
-        let p = WaterParams::from_surface(&surface, false);
+        let p = WaterParams::from_body(&body(&surface), false);
         assert_eq!(p.deep_color, [0.0, 0.25, 1.0, 0.0]);
         assert_eq!(p.shallow_color, [0.0, 1.0, 1.0, 0.0]);
-        let defaults = WaterParams::from_surface(&WaterSurface::default(), false);
+        let defaults = WaterParams::from_body(&body(&WaterSurface::default()), false);
         let d = WaterSurface::default();
         assert_eq!(defaults.deep_color[..3], d.deep_color);
         assert_eq!(defaults.shallow_color[..3], d.shallow_color);
     }
 
-    #[test]
-    fn from_wave_packs_the_lanes() {
-        let w = WaterWave {
-            amplitude: 0.25,
-            wavelength: 3.0,
-            speed: 1.5,
-            direction: [0.6, -0.8],
-            steepness: 0.4,
-        };
-        let g = WaterWaveGpu::from_wave(&w);
-        assert_eq!(g.dir_amp_wave, [0.6, -0.8, 0.25, 3.0]);
-        assert_eq!(g.speed_steep_pad, [1.5, 0.4, 0.0, 0.0]);
+    fn body(surface: &WaterSurface) -> WaterBody {
+        WaterBody::resolve(surface, &WindField::new(Some(&Wind::default())))
     }
 
     #[test]
-    fn from_surface_maps_fields() {
+    fn from_wave_packs_the_lanes() {
+        let w = BodyWave {
+            wave: Wave {
+                direction: [0.6, -0.8],
+                amplitude: 0.25,
+                wavelength: 3.0,
+                phase: 1.5,
+                steepness: 0.4,
+            },
+            pinch: 0.7,
+        };
+        let g = WaterWaveGpu::from_wave(&w);
+        assert_eq!(g.dir_amp_k, [0.6, -0.8, 0.25, w.wave.wavenumber()]);
+        assert_eq!(g.motion, [w.wave.angular_speed(), 0.7, 1.5, 0.0]);
+    }
+
+    #[test]
+    fn from_body_maps_fields() {
         let surface = WaterSurface {
             center: [1.0, 2.0, 3.0],
             deep_color: [0.02, 0.05, 0.12],
@@ -431,10 +465,11 @@ mod tests {
             fresnel_power: 4.0,
             roughness: 0.08,
             refraction_strength: 0.05,
-            waves: vec![WaterWave::default(), WaterWave::default()],
+            wind_response: 0.5,
             ..Default::default()
         };
-        let p = WaterParams::from_surface(&surface, true);
+        let b = body(&surface);
+        let p = WaterParams::from_body(&b, true);
         assert_eq!(p.center, [1.0, 2.0, 3.0, 0.0]);
         assert_eq!(p.deep_color, [0.02, 0.05, 0.12, 0.0]);
         assert_eq!(p.shallow_color, [0.1, 0.3, 0.4, 0.0]);
@@ -444,23 +479,29 @@ mod tests {
         assert_eq!(p.fresnel_power, 4.0);
         assert_eq!(p.roughness, 0.08);
         assert_eq!(p.refraction_strength, 0.05);
-        assert_eq!(p.wave_count, 2);
+        assert_eq!(p.wave_count as usize, b.waves.len());
+        assert_eq!(p.displace_count as usize, b.displacing);
+        assert_eq!(p.waves[0], WaterWaveGpu::from_wave(&b.waves[0]));
+        assert_eq!(p.waves[b.waves.len()], WaterWaveGpu::default());
+        let [wind, gust] = b.wind.gpu_rows();
+        assert_eq!(p.wind, wind);
+        assert_eq!(p.wind_gust, [gust[0], 0.5, b.ripple_wavelength, 0.0]);
         assert_eq!(p.planar, WaterParams::planar_lane(0.08, true));
         assert!(p.planar[0] > 0.5 && p.planar[1] > 0.0);
         // A slotless surface keeps the probe / sky path.
-        assert_eq!(WaterParams::from_surface(&surface, false).planar, [0.0; 4]);
+        assert_eq!(WaterParams::from_body(&b, false).planar, [0.0; 4]);
     }
 
-    // More authored waves than the shader's array can hold must clamp rather
-    // than overflow the fixed lane count.
+    // The fullest sum a body can hold, a whole wind sea and every swell wave
+    // the asset allows, fits the shader's array.
     #[test]
-    fn from_surface_clamps_the_wave_count() {
+    fn the_fullest_body_fits_the_wave_array() {
         let surface = WaterSurface {
-            waves: vec![WaterWave::default(); WATER_MAX_WAVES + 3],
+            waves: vec![WaterWave::default(); crate::components::MAX_WATER_WAVES + 3],
             ..Default::default()
         };
         assert_eq!(
-            WaterParams::from_surface(&surface, false).wave_count,
+            WaterParams::from_body(&body(&surface), false).wave_count,
             WATER_MAX_WAVES as u32
         );
     }

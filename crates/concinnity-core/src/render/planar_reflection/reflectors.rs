@@ -8,10 +8,10 @@ use crate::components::{GlassPanel, PassResolution, WaterSurface};
 use crate::geometry::glass_quad::plane_basis;
 use crate::math::vec3::normalize_or;
 use crate::render::backend_init::PlanarBudget;
-use crate::render::uniforms::{WATER_MAX_WAVES, WaterParams};
+use crate::render::uniforms::WaterParams;
+use crate::render::water::WaterBody;
 use crate::transform::Mat4;
 use alloc::vec::Vec;
-use core::f32::consts::TAU;
 
 /// The rest plane of a water surface: horizontal through its center, normal +y.
 pub fn water_plane(surface: &WaterSurface) -> [f32; 4] {
@@ -28,19 +28,12 @@ pub fn pane_plane(normal: [f32; 3], center: [f32; 3]) -> [f32; 4] {
     ]
 }
 
-// The box a water surface's displaced grid stays inside, widened by how far
-// its mirror lookup is pushed off the fragment by the wave normal. The Gerstner
-// sum moves a vertex at most `amplitude` vertically and `steepness / (k * count)`
-// horizontally per wave (see `gerstner_displace` in water.hlsl).
-fn water_hull(surface: &WaterSurface) -> ReflectorHull {
-    let waves = &surface.waves[..surface.waves.len().min(WATER_MAX_WAVES)];
-    let count = waves.len().max(1) as f32;
-    let (mut rise, mut sway) = (0.0f32, 0.0f32);
-    for w in waves {
-        rise += w.amplitude.abs();
-        let k = TAU / w.wavelength.max(1e-3);
-        sway += w.steepness.clamp(0.0, 1.0) / (k * count);
-    }
+// The box a water body's displaced grid stays inside, widened by how far its
+// mirror lookup is pushed off the fragment by the wave normal (see
+// `water_displace` in water.hlsl and `WaterBody::reach`).
+fn water_hull(body: &WaterBody) -> ReflectorHull {
+    let surface = &body.surface;
+    let [rise, sway] = body.reach();
     let lookup = WaterParams::planar_lane(surface.roughness, true)[1];
     ReflectorHull::aabb(
         surface.center,
@@ -90,16 +83,16 @@ impl PlanarReflectors {
     /// Group every reflector's plane into at most `budget.planes` mirror slots
     /// (capped at [`MAX_PLANAR_PLANES`]). Water is listed first so it keeps a
     /// slot when the budget is tight.
-    pub fn plan(water: &[WaterSurface], glass: &[GlassPanel], budget: PlanarBudget) -> Self {
+    pub fn plan(water: &[WaterBody], glass: &[GlassPanel], budget: PlanarBudget) -> Self {
         let planes: Vec<[f32; 4]> = water
             .iter()
-            .map(water_plane)
+            .map(|w| water_plane(&w.surface))
             .chain(glass.iter().map(|g| pane_plane(g.normal, g.center)))
             .collect();
         let assignment = assign_planar_slots(&planes, budget.planes.min(MAX_PLANAR_PLANES));
         let hulls = water
             .iter()
-            .map(|w| (w.visible, water_hull(w)))
+            .map(|w| (w.surface.visible, water_hull(w)))
             .chain(glass.iter().map(|g| (g.visible, glass_hull(g))));
         let reflectors = hulls
             .zip(&assignment.slots)
@@ -143,6 +136,7 @@ mod tests {
     use super::*;
     use crate::components::WaterWave;
     use crate::render::depth::camera_projection;
+    use crate::render::wind::WindField;
     use crate::transform::mat4_mul;
     use alloc::vec;
 
@@ -163,12 +157,16 @@ mod tests {
         }
     }
 
-    fn pool(center: [f32; 3]) -> WaterSurface {
+    fn pool_surface(center: [f32; 3]) -> WaterSurface {
         WaterSurface {
             center,
             extent: [4.0, 3.0],
             ..Default::default()
         }
+    }
+
+    fn pool(center: [f32; 3]) -> WaterBody {
+        WaterBody::resolve(&pool_surface(center), &WindField::STILL)
     }
 
     fn pane(center: [f32; 3], normal: [f32; 3]) -> GlassPanel {
@@ -197,7 +195,10 @@ mod tests {
 
     #[test]
     fn water_plane_is_horizontal_at_the_surface() {
-        assert_eq!(water_plane(&pool([1.0, -2.0, 3.0])), [0.0, 1.0, 0.0, 2.0]);
+        assert_eq!(
+            water_plane(&pool_surface([1.0, -2.0, 3.0])),
+            [0.0, 1.0, 0.0, 2.0]
+        );
     }
 
     #[test]
@@ -240,20 +241,23 @@ mod tests {
 
     #[test]
     fn the_water_hull_covers_the_wave_crests_and_the_ripple_lookup() {
-        let mut water = pool([0.0, 0.0, 0.0]);
-        water.waves = vec![WaterWave {
+        let mut surface = pool_surface([0.0, 0.0, 0.0]);
+        surface.waves = vec![WaterWave {
             amplitude: 0.5,
             wavelength: 4.0,
             steepness: 1.0,
             ..Default::default()
         }];
-        water.roughness = 1.0;
-        let flat = {
-            let mut w = water.clone();
-            w.waves.clear();
-            w.roughness = 0.0;
-            w
-        };
+        surface.roughness = 1.0;
+        let flat = WaterBody::resolve(
+            &WaterSurface {
+                waves: Vec::new(),
+                roughness: 0.0,
+                ..surface.clone()
+            },
+            &WindField::STILL,
+        );
+        let water = WaterBody::resolve(&surface, &WindField::STILL);
         // Seen from above and in front: the crests rise toward the camera, so
         // the waved surface reaches lower on screen than the flat one.
         let vp = looking_down_z_from([0.0, 6.0, 30.0]);
