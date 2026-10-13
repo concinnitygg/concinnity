@@ -1,23 +1,25 @@
 //! A spinning black cube over a still dark pool, the editor's clapper-board
 //! mark on each face and its edges picked out in light, under a green sun that
 //! rises behind the viewpoint, crosses the frame, and sets into the water. The
-//! sky behind it is a generated starfield, and it turns as a whole, so the
-//! stars, the sun's light, its body and the image-based lighting all travel
-//! together. The renderer's optional work -- ray-traced reflections
+//! sky is airless: black between sharp stars, a Milky Way and a few faint
+//! galaxies, with the sun's disc among them. It turns as a whole, so the
+//! stars, the sun's light and disc, and the reflections and fill the sky casts
+//! all travel together. The renderer's optional work -- ray-traced reflections
 //! (screen-space where the GPU has no ray tracing), screen-space global
 //! illumination, ambient occlusion, temporal anti-aliasing -- is not requested
 //! here: it is what the engine defaults to, clamped per GPU by the `Auto`
 //! graphics quality preset. What this world does author is the look of a
-//! nearly black scene: its exposure, bloom threshold, and ambient fill.
+//! nearly black scene: its exposure, bloom threshold and ambient fill, and
+//! stars bright enough to hold their own beside the sun.
 //!
 //! Nothing is read from or written to disk, and no authoring step runs: the
 //! world is assembled here, component by component, and what is not a
-//! component -- the cube's geometry, the mark and frame laid over it, the
-//! lighting it reflects -- is baked in place with the [`bake`] functions and
-//! handed over raw. Everything that happens after [`App::run`] is the engine
-//! reacting to that data: the water grid is tessellated, the spin behavior is
-//! compiled, the world gains the defaults it declares nothing of its own for,
-//! and the starfield is drawn behind everything as the background.
+//! component -- the cube's geometry and the mark and frame laid over it -- is
+//! baked in place with the [`bake`] functions and handed over raw. Everything
+//! that happens after [`App::run`] is the engine reacting to that data: the
+//! water grid is tessellated, the spin behavior is compiled, the world gains
+//! the defaults it declares nothing of its own for, and the sky is drawn behind
+//! everything and captured into the cube the scene reflects and is lit by.
 //!
 //! The camera has no controller, so the viewpoint stays on the cube.
 //!
@@ -26,8 +28,9 @@
 mod logo;
 
 use concinnity::components::{
-    Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, DirectionalLight, GraphicsConfig,
-    PostProcessConfig, ProceduralMesh, Prop, SkyRotation, WaterSurface, WaterWave, Window,
+    Atmosphere, Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, DirectionalLight,
+    GraphicsConfig, NightSky, PostProcessConfig, ProceduralMesh, Prop, SkyRotation, WaterSurface,
+    WaterWave, Window,
 };
 use concinnity::{App, AssetId, MaterialHandle, MeshHandle, Ref, World, bake};
 
@@ -47,32 +50,28 @@ const EDGE_WIDTH: f32 = 0.02;
 // How far the mark and the frame sit off the cube's surface, so they draw
 // over it rather than fighting it for depth.
 const SURFACE_LIFT: f32 = 0.004;
-// The sun's direction, how far out it hangs, and its size. The body sits on
-// the light's own direction, so the two agree wherever the sky has carried
-// them. It hangs far enough out that the pool can reach almost to the far
-// plane and still end where the sun sets; the radius keeps the disc the same
-// size on screen as it would be at a twentieth of the distance.
+// The sun's direction, the width of its disc, and the disc's brightness as a
+// multiple of the sunlight: enough to bloom into a green halo.
 const SUN_DIRECTION: [f32; 3] = [0.35, 0.55, 1.0];
-const SUN_DISTANCE: f32 = 480.0;
-const SUN_RADIUS: f32 = 12.0;
+const SUN_DIAMETER_DEGREES: f32 = 2.9;
+const SUN_DISC_INTENSITY: f32 = 0.5;
 // The celestial sphere: its pole, and how fast it turns. About a minute to
 // bring the sun from behind the camera, overhead, and down into the pool.
 const SKY_AXIS: [f32; 3] = [1.0, 0.0, 0.0];
 const SKY_DEGREES_PER_SECOND: f32 = 3.0;
-// The name the sun hangs off, so it orbits with the sky rather than sitting
-// still while its light moves.
-const SKY_PIVOT: AssetId = AssetId(1);
-// The cube's three layers, named so the spin below can reach them and nothing
-// else -- the sun is a prop too, and turning it would pull it off its orbit.
-const CUBE_LAYERS: [AssetId; 3] = [AssetId(2), AssetId(3), AssetId(4)];
-// Half the pool's width, reaching exactly as far as the point the sun sets
-// at. A body that sets beyond the far edge loses its reflection off that edge
-// before it reaches the edge itself; one that sets short of the edge crosses
-// the edge line on the way down. Setting on the edge, the disc meets its own
-// reflection on the line where the water and the sky meet. The edge is far
-// enough out that, from a camera two units up, it sits within a quarter of a
-// degree of eye level: the stars meet their reflections on that line too.
-const WATER_HALF_EXTENT: f32 = 459.0;
+// The stars, the Milky Way and the galaxies, as multiples of the real sky's.
+// Far past physical: real stars vanish beside a sun, these keep their place
+// in the frame.
+const STAR_BRIGHTNESS: f32 = 3.0e6;
+const MILKY_WAY_BRIGHTNESS: f32 = 5.0e5;
+const GALAXIES: u32 = 6;
+// The cube's three layers, named so the spin below can reach them.
+const CUBE_LAYERS: [AssetId; 3] = [AssetId(1), AssetId(2), AssetId(3)];
+// Half the pool's width. The sun and the stars are at infinity, so each meets
+// its reflection at eye level; this far out, from a camera two units up, the
+// pool's edge sits a twentieth of a degree under that line, less than a
+// pixel, so the water runs right up to where they meet.
+const WATER_HALF_EXTENT: f32 = 2400.0;
 // The fixed viewpoint: on the cube, tipped down just far enough that the
 // horizon sits a little above the frame's center, with sky over it.
 const CAMERA_POSITION: [f32; 3] = [0.0, 2.0, 9.0];
@@ -115,8 +114,9 @@ fn cube_world() -> Result<World, concinnity::Error> {
     // sun alone carries the cube, and bloom catches only the edge frame, the
     // sun's disc and the brightest stars. Auto-exposure stays off (its
     // default) for the same reason -- an average-brightness meter would lift
-    // this frame to gray. Which effects run is not decided here; the quality
-    // preset picks those from the GPU.
+    // this frame to gray. With a fixed exposure the scene is written at that
+    // exposure, so the grading here is the grading on screen. Which effects
+    // run is not decided here; the quality preset picks those from the GPU.
     world.add_component(PostProcessConfig {
         ambient_intensity: 0.2,
         bloom_intensity: 0.45,
@@ -126,71 +126,47 @@ fn cube_world() -> Result<World, concinnity::Error> {
         ..Default::default()
     });
 
-    // A generated starfield, convolved here into the two cubemaps the shaders
-    // light with. The map is also drawn as the background, so the same bake is
-    // both the stars on screen and the scene's cold fill. The face
-    // size is what the stars are drawn at on screen, so it is four times the
-    // one this used to bake at; the sample count, which only affects the
-    // blurred reflection mips, comes down to pay for it.
-    let ibl = bake::environment_map(&bake::EnvironmentMap {
-        generator: "stars".to_string(),
-        prefilter_face_size: 1024,
-        irradiance_face_size: 32,
-        prefilter_samples: 128,
+    // The sky beyond the air, drawn per pixel, so the stars stay single sharp
+    // points. No moon: the green sun is the one body in this sky.
+    world.add_component(NightSky {
+        star_brightness: STAR_BRIGHTNESS,
+        milky_way_brightness: MILKY_WAY_BRIGHTNESS,
+        galaxies: GALAXIES,
+        moon: false,
         ..Default::default()
-    })?;
-    world.add_environment_map(ibl);
+    });
+    // No air: nothing scatters, so the sky stays black around the sun. Declared
+    // only for the sun's disc, which is the light's own color, wider than the
+    // real sun's and far dimmer.
+    world.add_component(Atmosphere {
+        rayleigh_scattering: [0.0; 3],
+        mie_scattering: [0.0; 3],
+        mie_absorption: [0.0; 3],
+        ozone_absorption: [0.0; 3],
+        ground_albedo: [0.0; 3],
+        sun_angular_diameter_deg: SUN_DIAMETER_DEGREES,
+        sun_disc_intensity: SUN_DISC_INTENSITY,
+        ..Default::default()
+    });
 
-    // The turning sky. It carries the sun's light and its body together, so
-    // the two never disagree about where the sun is: the light's direction is
-    // rotated each frame and the body orbits the pivot as its parent.
-    world.add_identified(
-        SKY_PIVOT,
-        SkyRotation {
-            axis: SKY_AXIS,
-            degrees_per_second: SKY_DEGREES_PER_SECOND,
-            angle_deg: 0.0,
-        },
-    );
+    // The turning sky. It carries the stars, the sun's light and its disc
+    // together, so none of them disagrees about where the sun is.
+    world.add_component(SkyRotation {
+        axis: SKY_AXIS,
+        degrees_per_second: SKY_DEGREES_PER_SECOND,
+        angle_deg: 0.0,
+    });
 
     // The sun: one green light, starting high behind the camera and rising
     // over it as the sky turns. The one directional light in the world, which
     // also keeps the engine's neutral fallback light out. Bright enough that
     // its specular lobe reads as a glitter path on the water and as a hard
-    // highlight on whichever cube face is turned to it.
+    // highlight on whichever cube face is turned to it. Its disc sets into the
+    // pool and meets its reflection at the horizon.
     world.add_component(DirectionalLight {
         direction: SUN_DIRECTION,
         color: [0.52, 0.95, 0.70],
         intensity: 10.0,
-    });
-
-    // The sun's body. A directional light has none, so the sun is an emissive
-    // sphere hung on the light's own direction, parented to the sky so the two
-    // travel together. It starts behind the camera and out of frame, rises over
-    // it, and sets into the pool, where the water mirrors it once it is in
-    // front. It carries no light of its own; the emissive is well over the
-    // bloom threshold, so the disc blooms rather than reading as a flat circle.
-    let sun = ProceduralMesh {
-        generator: "sphere".to_string(),
-        radius: Some(SUN_RADIUS),
-        segments: Some(48),
-        rings: Some(24),
-        ..Default::default()
-    };
-    let sun_mesh = world.add_mesh(bake::procedural_mesh(sun)?)?;
-    let sun_material = world.add_material(bake::Material {
-        roughness: 1.0,
-        metallic: 0.0,
-        tint: [0.0, 0.0, 0.0],
-        emissive_factor: [0.45, 4.60, 1.30],
-        ..Default::default()
-    });
-    world.add_component(Prop {
-        mesh: Some(sun_mesh),
-        material: Some(sun_material),
-        position: sun_position(),
-        parent: Some(Ref::new(SKY_PIVOT)),
-        ..Default::default()
     });
 
     // Near-black water, almost flat. The renderer mirrors the scene across the
@@ -202,10 +178,12 @@ fn cube_world() -> Result<World, concinnity::Error> {
     // reflection strong head-on instead of only at grazing angles. The
     // roughness does double duty: it widens the sun's specular lobe into the
     // glitter path running back toward the camera, and it scales how far the
-    // wave normals push the mirror's screen lookup. The grid
-    // itself is the engine's to build: the backends tessellate it at start
-    // from nothing but this component. The grid's 16-bit indices cap it at
-    // 255 cells a side, so over a pool this wide a cell spans a couple of
+    // wave normals push the mirror's screen lookup. The body colors are
+    // reflectances lit by the sun, so the water darkens as the sun sinks and
+    // is black once it has set; they lean blue against the green light. The
+    // grid itself is the engine's to build: the backends tessellate it at
+    // start from nothing but this component. The grid's 16-bit indices cap it
+    // at 255 cells a side, so over a pool this wide a cell spans several
     // waves; that is fine, since the wave normal the shading and the mirror
     // use is evaluated per fragment, and the displacement itself is too
     // shallow to see at that scale.
@@ -229,8 +207,8 @@ fn cube_world() -> Result<World, concinnity::Error> {
                 steepness: 0.05,
             },
         ],
-        deep_color: [0.006, 0.010, 0.018],
-        shallow_color: [0.02, 0.05, 0.07],
+        deep_color: [0.004, 0.005, 0.016],
+        shallow_color: [0.012, 0.017, 0.032],
         depth_falloff_meters: 1.5,
         foam_width_meters: 0.0,
         foam_intensity: 0.0,
@@ -286,14 +264,6 @@ fn cube_world() -> Result<World, concinnity::Error> {
     Ok(world)
 }
 
-// The sun's body sits on the light's direction, `SUN_DISTANCE` out. Local to
-// the sky pivot, which is at the origin, so the sky's rotation carries it.
-fn sun_position() -> [f32; 3] {
-    let d = SUN_DIRECTION;
-    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-    std::array::from_fn(|k| d[k] / len * SUN_DISTANCE)
-}
-
 // One layer of the cube, at the cube's transform.
 fn place_on_cube(world: &mut World, id: AssetId, mesh: MeshHandle, material: MaterialHandle) {
     world.add_identified(
@@ -308,9 +278,7 @@ fn place_on_cube(world: &mut World, id: AssetId, mesh: MeshHandle, material: Mat
     );
 }
 
-// The spin, written to each of the cube's three layers by name. It runs once a
-// tick, world-scoped: a behavior scoped to `Prop` would reach every prop in the
-// world, and the sun is a prop too.
+// The spin, written to each of the cube's three layers by name, once a tick.
 fn spin_behavior() -> Behavior {
     Behavior {
         on: BehaviorSource::Tick,
