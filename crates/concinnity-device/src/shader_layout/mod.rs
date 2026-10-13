@@ -415,6 +415,7 @@ fn ssr_layouts_match_the_shader() {
 #[test]
 fn ssgi_layouts_match_the_shader() {
     check(&programs::SSGI_TRACE, &mirrors::post::ssgi());
+    check(&programs::SSGI_ACCUMULATE, &mirrors::post::ssgi());
 }
 
 #[test]

@@ -20,8 +20,8 @@
 use crate::render::shader_programs::ShaderProgram;
 use crate::render::shader_programs::shared::{
     BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, REFLECTION_BLUR, REFLECTION_COMPOSITE,
-    SSAO_BLUR, SSAO_DEPTH, SSAO_KERNEL, SSGI_COMPOSITE, SSGI_DEPTH, SSGI_REDUCE, SSGI_TRACE,
-    SSR_RESOLVE, TAA_FRAG,
+    SSAO_BLUR, SSAO_DEPTH, SSAO_KERNEL, SSGI_ACCUMULATE, SSGI_COMPOSITE, SSGI_DEPTH, SSGI_REDUCE,
+    SSGI_TRACE, SSR_RESOLVE, TAA_FRAG,
 };
 
 /// A fullscreen post-pass fragment program. The vertex stage is always
@@ -43,6 +43,9 @@ pub enum PostProgram {
     /// `ssgi_trace_fragment` from `ssgi.hlsl`: the hemisphere rays traced
     /// through the pyramid and accumulated over reprojected history.
     SsgiTrace,
+    /// `ssgi_accumulate_fragment` from `ssgi.hlsl`: last frame's long
+    /// accumulation, bounded by the trace's short one and blended with it.
+    SsgiAccumulate,
     /// `ssgi_composite_fragment` from `ssgi.hlsl`: the depth-aware upsample the
     /// accumulated term is blended into the scene through.
     SsgiComposite,
@@ -92,12 +95,13 @@ pub struct PostProgramBindings {
 
 impl PostProgram {
     /// Every post program, in declaration order.
-    pub const ALL: [PostProgram; 14] = [
+    pub const ALL: [PostProgram; 15] = [
         PostProgram::TaaResolve,
         PostProgram::SsrResolve,
         PostProgram::SsgiDepth,
         PostProgram::SsgiReduce,
         PostProgram::SsgiTrace,
+        PostProgram::SsgiAccumulate,
         PostProgram::SsgiComposite,
         PostProgram::BloomPrefilter,
         PostProgram::BloomDownsample,
@@ -118,6 +122,7 @@ impl PostProgram {
             PostProgram::SsgiDepth => "ssgi depth",
             PostProgram::SsgiReduce => "ssgi reduce",
             PostProgram::SsgiTrace => "ssgi trace",
+            PostProgram::SsgiAccumulate => "ssgi accumulate",
             PostProgram::SsgiComposite => "ssgi composite",
             PostProgram::BloomPrefilter => "bloom prefilter",
             PostProgram::BloomDownsample => "bloom downsample",
@@ -138,6 +143,7 @@ impl PostProgram {
             PostProgram::SsgiDepth => &SSGI_DEPTH,
             PostProgram::SsgiReduce => &SSGI_REDUCE,
             PostProgram::SsgiTrace => &SSGI_TRACE,
+            PostProgram::SsgiAccumulate => &SSGI_ACCUMULATE,
             PostProgram::SsgiComposite => &SSGI_COMPOSITE,
             PostProgram::BloomPrefilter => &BLOOM_PREFILTER,
             PostProgram::BloomDownsample => &BLOOM_DOWNSAMPLE,
@@ -176,6 +182,9 @@ impl PostProgram {
             // scene, G-buffer, velocity, pyramid, previous pyramid, history;
             // `SsgiParams`.
             PostProgram::SsgiTrace => ssgi(6),
+            // fast accumulation, G-buffer, velocity, pyramid, previous pyramid,
+            // history; `SsgiParams`.
+            PostProgram::SsgiAccumulate => ssgi(6),
             // accumulation, pyramid, G-buffer; `SsgiParams`.
             PostProgram::SsgiComposite => ssgi(3),
             // The scene; `PostProcessParams`.
@@ -238,20 +247,22 @@ mod tests {
     }
 
     // The source lines a compile with `defines` keeps: `#if defined(..)`,
-    // `#elif defined(..)`, `#ifdef`, `#ifndef`, `#else` and `#endif` are
-    // evaluated, so a variant's declarations are counted and its siblings' are
-    // not. A macro the shader defines for itself counts as undefined, which is
+    // `#elif defined(..)` (either joined by `||`), `#ifdef`, `#ifndef`, `#else`
+    // and `#endif` are evaluated, so a variant's declarations are counted and
+    // its siblings' are not. A macro the shader defines for itself counts as undefined, which is
     // what every guard in the post sources tests for.
     fn active_lines<'s>(src: &'s str, defines: &[&str]) -> Vec<&'s str> {
         // Per open conditional: whether its enclosing region is live, whether a
         // branch has been taken, and whether the current branch is live.
         let mut stack: Vec<(bool, bool, bool)> = Vec::new();
         let defined = |cond: &str| {
-            let name = cond
-                .trim()
-                .trim_start_matches("defined")
-                .trim_matches(|c| c == '(' || c == ')' || c == ' ');
-            defines.contains(&name)
+            cond.split("||").any(|term| {
+                let name = term
+                    .trim()
+                    .trim_start_matches("defined")
+                    .trim_matches(|c| c == '(' || c == ')' || c == ' ');
+                defines.contains(&name)
+            })
         };
         let live = |stack: &[(bool, bool, bool)]| stack.last().is_none_or(|s| s.2);
         let mut out = Vec::new();
@@ -408,6 +419,9 @@ mod tests {
         let src = "#if defined(A)\na;\n#elif defined(B)\nb;\n#else\nc;\n#endif\nd;";
         assert_eq!(active_lines(src, &["A"]), ["a;", "d;"]);
         assert_eq!(active_lines(src, &["B"]), ["b;", "d;"]);
+        let either = "#if defined(A) || defined(B)\nab;\n#endif";
+        assert_eq!(active_lines(either, &["B"]), ["ab;"]);
+        assert!(active_lines(either, &["C"]).is_empty());
         assert_eq!(active_lines(src, &[]), ["c;", "d;"]);
         let nested = "#ifndef X\n#if defined(A)\na;\n#endif\nn;\n#endif";
         assert_eq!(active_lines(nested, &["X", "A"]), Vec::<&str>::new());
@@ -468,6 +482,7 @@ mod tests {
             (PostProgram::SsgiDepth, size_of::<SsgiParams>()),
             (PostProgram::SsgiReduce, 0),
             (PostProgram::SsgiTrace, size_of::<SsgiParams>()),
+            (PostProgram::SsgiAccumulate, size_of::<SsgiParams>()),
             (PostProgram::SsgiComposite, size_of::<SsgiParams>()),
             // The shader declares all of `PostProcessParams`, which
             // `shader_layout`'s bloom mirror holds field by field.

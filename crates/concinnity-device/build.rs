@@ -1295,6 +1295,19 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         argument_ids: &[],
     },
     MetalAbi {
+        program: &shared::SSGI_ACCUMULATE,
+        slots: &[&[
+            ("params", "buffer(0)"),
+            ("fast", "texture(0)"),
+            ("gbuffer", "texture(1)"),
+            ("velocity", "texture(2)"),
+            ("pyramid", "texture(3)"),
+            ("prev_pyramid", "texture(4)"),
+            ("history", "texture(5)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
         program: &shared::SSGI_COMPOSITE,
         slots: &[&[
             ("params", "buffer(0)"),

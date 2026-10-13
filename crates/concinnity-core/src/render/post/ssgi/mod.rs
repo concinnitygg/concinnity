@@ -7,14 +7,19 @@
 //!    the G-buffer, the top of a depth pyramid;
 //! 2. the pyramid's remaining levels, each the depth range of the level below;
 //! 3. the trace: cosine-weighted hemisphere rays walked through the pyramid,
-//!    the lit scene color each one hits blended into last frame's
-//!    accumulation, reprojected by the G-buffer's motion vectors and rejected
-//!    where last frame's pyramid saw another surface.
+//!    the lit scene color each one hits blended into last frame's fast
+//!    accumulation (a few frames long), reprojected by the G-buffer's motion
+//!    vectors and rejected where last frame's pyramid saw another surface;
+//! 4. the accumulation: last frame's long accumulation, reprojected the same
+//!    way and clamped to the neighborhood of this frame's fast one, blended
+//!    with it. The fast one follows a moving light source within a few frames,
+//!    so the long one cannot keep a bounce that has moved away, while a still
+//!    scene keeps the long one's smoothness.
 //!
-//! Then at full resolution, 4. the composite: a depth-aware upsample and
+//! Then at full resolution, 5. the composite: a depth-aware upsample and
 //! denoise of the accumulation, added into the scene.
 //!
-//! The pyramids and the accumulation are each a ping-pong pair, so the trace
+//! The pyramids and both accumulations are each a ping-pong pair, so the trace
 //! reads what the previous frame wrote. It also reads the scene the composite
 //! then writes. A backend whose resource states follow the graph has to move
 //! the scene between those two draws, which is why the stages are also
@@ -56,15 +61,17 @@ pub struct SsgiInputs<'t, D: PostPassDevice + ?Sized + 't> {
     pub velocity: D::TextureRef<'t>,
 }
 
-/// The four pipelines, built together. What shader hot reload rebuilds and
+/// The five pipelines, built together. What shader hot reload rebuilds and
 /// hands to [`SsgiPass::swap_pipelines`].
 pub struct SsgiPipelines<Pipeline> {
     /// The pyramid's top level from the G-buffer.
     pub depth: Pipeline,
     /// One more pyramid level from the one below.
     pub reduce: Pipeline,
-    /// The hemisphere trace and its accumulation.
+    /// The hemisphere trace and its fast accumulation.
     pub trace: Pipeline,
+    /// The long accumulation, bounded by the fast one.
+    pub accumulate: Pipeline,
     /// The upsample, adding into the scene.
     pub composite: Pipeline,
 }
@@ -77,6 +84,11 @@ pub fn build_pipelines<D: PostPassDevice>(device: &D) -> RenderResult<SsgiPipeli
         depth: device.create_pipeline(PostProgram::SsgiDepth, depth, PostBlend::Replace)?,
         reduce: device.create_pipeline(PostProgram::SsgiReduce, depth, PostBlend::Replace)?,
         trace: device.create_pipeline(PostProgram::SsgiTrace, color, PostBlend::Replace)?,
+        accumulate: device.create_pipeline(
+            PostProgram::SsgiAccumulate,
+            color,
+            PostBlend::Replace,
+        )?,
         composite: device.create_pipeline(
             PostProgram::SsgiComposite,
             color,
@@ -88,12 +100,14 @@ pub fn build_pipelines<D: PostPassDevice>(device: &D) -> RenderResult<SsgiPipeli
 // The graph labels the targets carry into a backend's own debug naming.
 const DEPTH_LABEL: &str = "ssgi_depth";
 const HISTORY_LABEL: &str = "ssgi_history";
+const FAST_LABEL: &str = "ssgi_fast";
 
-// The targets sized to one render resolution: a pyramid and an accumulation
-// per ring slot.
+// The targets sized to one render resolution: a pyramid and both
+// accumulations per ring slot.
 struct SsgiTargets<Target> {
     depth: Vec<Target>,
     history: Vec<Target>,
+    fast: Vec<Target>,
     levels: u32,
 }
 
@@ -107,6 +121,7 @@ impl<Target> SsgiTargets<Target> {
         let mut targets = Self {
             depth: Vec::with_capacity(slots),
             history: Vec::with_capacity(slots),
+            fast: Vec::with_capacity(slots),
             levels: pyramid_levels(resolve_extent(&gi, extent)),
         };
         for _ in 0..slots {
@@ -116,6 +131,9 @@ impl<Target> SsgiTargets<Target> {
             targets
                 .history
                 .push(device.create_target(HISTORY_LABEL, &gi, extent)?);
+            targets
+                .fast
+                .push(device.create_target(FAST_LABEL, &gi, extent)?);
         }
         Ok(targets)
     }
@@ -128,6 +146,11 @@ impl<Target> SsgiTargets<Target> {
     // The accumulation in ring slot `slot`.
     fn history(&self, slot: usize) -> RenderResult<&Target> {
         ring_slot(&self.history, slot, HISTORY_LABEL)
+    }
+
+    // The fast accumulation in ring slot `slot`.
+    fn fast(&self, slot: usize) -> RenderResult<&Target> {
+        ring_slot(&self.fast, slot, FAST_LABEL)
     }
 }
 
@@ -218,6 +241,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
         // sets of rings (and their descriptors) at once.
         self.targets.depth.clear();
         self.targets.history.clear();
+        self.targets.fast.clear();
         self.ring.invalidate();
         self.targets = SsgiTargets::new(device, self.gi_scale, extent, slots)?;
         Ok(())
@@ -300,8 +324,10 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
         Ok(())
     }
 
-    /// Encode the trace: hemisphere rays walked through this frame's pyramid,
-    /// sampling the scene where they hit, accumulated into this frame's slot.
+    /// Encode the trace and the accumulation: hemisphere rays walked through
+    /// this frame's pyramid, sampling the scene where they hit, accumulated
+    /// into this frame's fast slot, which then bounds and feeds the long
+    /// accumulation in this frame's slot.
     pub fn encode_trace<'t, D>(
         &'t self,
         device: &D,
@@ -314,28 +340,46 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
     {
         let (write, read) = (self.ring.write(), self.ring.history());
         let targets = &self.targets;
-        let encoded = device.encode(
+        let depth = device.target_ref(targets.depth(write)?);
+        let prev_depth = device.target_ref(targets.depth(read)?);
+        device.encode(
             rec,
             &private_draw(
-                device.target_attachment(targets.history(write)?),
+                device.target_attachment(targets.fast(write)?),
                 PostTiming::None,
                 &self.pipelines.trace,
                 &[
                     screen::<D>(inputs.scene),
                     screen::<D>(inputs.normal_depth),
                     screen::<D>(inputs.velocity),
-                    screen::<D>(device.target_ref(targets.depth(write)?)),
-                    screen::<D>(device.target_ref(targets.depth(read)?)),
-                    screen::<D>(device.target_ref(targets.history(read)?)),
+                    screen::<D>(depth),
+                    screen::<D>(prev_depth),
+                    screen::<D>(device.target_ref(targets.fast(read)?)),
                 ],
                 bytemuck::bytes_of(params),
                 "SSGI trace",
             ),
-        );
-        if encoded.is_ok() {
-            self.traced.store(true, Ordering::Relaxed);
-        }
-        encoded
+        )?;
+        device.encode(
+            rec,
+            &private_draw(
+                device.target_attachment(targets.history(write)?),
+                PostTiming::None,
+                &self.pipelines.accumulate,
+                &[
+                    screen::<D>(device.target_ref(targets.fast(write)?)),
+                    screen::<D>(inputs.normal_depth),
+                    screen::<D>(inputs.velocity),
+                    screen::<D>(depth),
+                    screen::<D>(prev_depth),
+                    screen::<D>(device.target_ref(targets.history(read)?)),
+                ],
+                bytemuck::bytes_of(params),
+                "SSGI accumulate",
+            ),
+        )?;
+        self.traced.store(true, Ordering::Relaxed);
+        Ok(())
     }
 
     /// Encode the composite: this frame's accumulation upsampled over
@@ -429,18 +473,22 @@ mod tests {
 
     // Target indices in the order `SsgiTargets::new` creates them.
     const fn depth(slot: usize) -> usize {
-        2 * slot
+        3 * slot
     }
     const fn history(slot: usize) -> usize {
-        2 * slot + 1
+        3 * slot + 1
+    }
+    const fn fast(slot: usize) -> usize {
+        3 * slot + 2
     }
 
     const SCENE: MockTexture = MockTexture::External(1);
     const NORMAL_DEPTH: MockTexture = MockTexture::External(2);
     const VELOCITY: MockTexture = MockTexture::External(3);
 
-    // Draws per frame: the pyramid's levels, the trace and the composite.
-    const DRAWS: usize = DEPTH_LEVELS as usize + 2;
+    // Draws per frame: the pyramid's levels, the trace, the accumulation and
+    // the composite.
+    const DRAWS: usize = DEPTH_LEVELS as usize + 3;
 
     fn params(pass: &SsgiPass<MockPipeline, usize>) -> SsgiParams {
         SsgiSettings::resolve(1.0, 8.0, 1, 2).params(1.0, 1.5, pass.frame(), 1.0)
@@ -468,11 +516,11 @@ mod tests {
     }
 
     #[test]
-    fn the_pass_creates_a_pyramid_and_an_accumulation_per_slot() {
+    fn the_pass_creates_a_pyramid_and_both_accumulations_per_slot() {
         let device = MockDevice::new();
         SsgiPass::new(&device, 2, EXTENT).expect("pass");
         let targets = device.targets.borrow();
-        assert_eq!(targets.len(), 4);
+        assert_eq!(targets.len(), 6);
         let half = PostExtent {
             width: 640,
             height: 360,
@@ -482,6 +530,8 @@ mod tests {
             assert_eq!(targets[depth(slot)].levels, DEPTH_LEVELS);
             assert_eq!(targets[history(slot)].label, HISTORY_LABEL);
             assert_eq!(targets[history(slot)].levels, 1);
+            assert_eq!(targets[fast(slot)].label, FAST_LABEL);
+            assert_eq!(targets[fast(slot)].levels, 1);
         }
         assert!(targets.iter().all(|t| t.extent == half));
     }
@@ -510,14 +560,18 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_builds_the_pyramid_then_traces_and_composites() {
+    fn a_frame_builds_the_pyramid_then_traces_accumulates_and_composites() {
         let device = MockDevice::new();
         let pass = SsgiPass::new(&device, 2, EXTENT).expect("pass");
         let draws = encode_frame(&device, &pass);
         let programs: Vec<PostProgram> = draws.iter().map(|d| d.program).collect();
         let mut expected = vec![PostProgram::SsgiDepth];
         expected.extend((1..DEPTH_LEVELS).map(|_| PostProgram::SsgiReduce));
-        expected.extend([PostProgram::SsgiTrace, PostProgram::SsgiComposite]);
+        expected.extend([
+            PostProgram::SsgiTrace,
+            PostProgram::SsgiAccumulate,
+            PostProgram::SsgiComposite,
+        ]);
         assert_eq!(programs, expected);
 
         // The pyramid: level 0 from the G-buffer, each level after it from the
@@ -533,12 +587,25 @@ mod tests {
         }
 
         let n = DEPTH_LEVELS as usize;
-        let (trace, composite) = (&draws[n], &draws[n + 1]);
-        assert_eq!(trace.target, MockTexture::Target(history(0)));
+        let (trace, accumulate, composite) = (&draws[n], &draws[n + 1], &draws[n + 2]);
+        assert_eq!(trace.target, MockTexture::Target(fast(0)));
         assert_eq!(
             binds(trace),
             [
                 SCENE,
+                NORMAL_DEPTH,
+                VELOCITY,
+                MockTexture::Target(d),
+                MockTexture::Target(depth(1)),
+                MockTexture::Target(fast(1)),
+            ]
+        );
+        // The long accumulation reads the fast one this frame's trace wrote.
+        assert_eq!(accumulate.target, MockTexture::Target(history(0)));
+        assert_eq!(
+            binds(accumulate),
+            [
+                MockTexture::Target(fast(0)),
                 NORMAL_DEPTH,
                 VELOCITY,
                 MockTexture::Target(d),
@@ -571,12 +638,13 @@ mod tests {
         }
         let p = build_pipelines(&device).expect("pipelines");
         assert_eq!(p.composite.blend, PostBlend::Additive);
-        for other in [&p.depth, &p.reduce, &p.trace] {
+        for other in [&p.depth, &p.reduce, &p.trace, &p.accumulate] {
             assert_eq!(other.blend, PostBlend::Replace);
         }
         assert_eq!(p.depth.format, PixelFormat::Rg32Float);
         assert_eq!(p.reduce.format, PixelFormat::Rg32Float);
         assert_eq!(p.trace.format, PixelFormat::Rgba16Float);
+        assert_eq!(p.accumulate.format, PixelFormat::Rgba16Float);
     }
 
     #[test]
@@ -604,11 +672,15 @@ mod tests {
         let second = encode_frame(&device, &pass);
         assert_eq!(first[0].target, MockTexture::Level(depth(0), 0));
         assert_eq!(second[0].target, MockTexture::Level(depth(1), 0));
-        assert_eq!(second[n].target, MockTexture::Target(history(1)));
-        // Last frame's pyramid and accumulation are this frame's history.
+        assert_eq!(second[n].target, MockTexture::Target(fast(1)));
+        assert_eq!(second[n + 1].target, MockTexture::Target(history(1)));
+        // Last frame's pyramid and accumulations are this frame's history.
         let trace = binds(&second[n]);
         assert_eq!(trace[4], MockTexture::Target(depth(0)));
-        assert_eq!(trace[5], MockTexture::Target(history(0)));
+        assert_eq!(trace[5], MockTexture::Target(fast(0)));
+        let accumulate = binds(&second[n + 1]);
+        assert_eq!(accumulate[4], MockTexture::Target(depth(0)));
+        assert_eq!(accumulate[5], MockTexture::Target(history(0)));
     }
 
     #[test]
@@ -678,12 +750,12 @@ mod tests {
         )
         .expect("resize");
         let targets = device.targets.borrow().clone();
-        assert_eq!(targets.len(), 8);
+        assert_eq!(targets.len(), 12);
         let resized = PostExtent {
             width: 1280,
             height: 720,
         };
-        assert!(targets[4..].iter().all(|t| t.extent == resized));
+        assert!(targets[6..].iter().all(|t| t.extent == resized));
         assert_eq!(encode_frame(&device, &pass).len(), DRAWS);
     }
 

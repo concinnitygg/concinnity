@@ -283,6 +283,14 @@ pub static SSGI_TRACE: ShaderProgram = ShaderProgram {
     gates: &["SSGI_TRACE"],
     msaa: false,
 };
+/// `ssgi_accumulate_fragment` from `ssgi.hlsl`.
+pub static SSGI_ACCUMULATE: ShaderProgram = ShaderProgram {
+    file: "ssgi.hlsl",
+    entry: "ssgi_accumulate_fragment",
+    label: "ssgi_accumulate.hlsl",
+    gates: &["SSGI_ACCUMULATE"],
+    msaa: false,
+};
 /// `ssgi_composite_fragment` from `ssgi.hlsl`.
 pub static SSGI_COMPOSITE: ShaderProgram = ShaderProgram {
     file: "ssgi.hlsl",
@@ -727,6 +735,7 @@ pub static ALL: &[&ShaderProgram] = &[
     &SSGI_DEPTH,
     &SSGI_REDUCE,
     &SSGI_TRACE,
+    &SSGI_ACCUMULATE,
     &SSGI_COMPOSITE,
     &REFLECTION_BLUR,
     &REFLECTION_COMPOSITE,

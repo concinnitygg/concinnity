@@ -242,6 +242,11 @@ pub(super) static SSGI_TRACE: Program = Program {
     splices: &[],
 };
 
+pub(super) static SSGI_ACCUMULATE: Program = Program {
+    row: &shared::SSGI_ACCUMULATE,
+    splices: &[],
+};
+
 pub(super) static FOG_FROXEL: Program = Program {
     row: &shared::FOG_FROXEL,
     splices: &[],

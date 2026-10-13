@@ -9,13 +9,17 @@
 //   SSGI_TRACE     - per trace pixel, cosine-weighted hemisphere rays traced
 //                    through the depth pyramid, returning the lit scene
 //                    color at each on-screen hit, blended into last frame's
-//                    accumulation reprojected by the motion vectors. Misses
-//                    contribute nothing (the IBL ambient already covers the
-//                    off-screen / sky term), and the cosine-weighted sampling
-//                    folds the cos(theta) / pdf factor away, so the estimate of
-//                    the (albedo-free) indirect irradiance is the mean hit
-//                    radiance. Writes the accumulation (rgb) and its length in
-//                    frames (a).
+//                    short (fast) accumulation reprojected by the motion
+//                    vectors. Misses contribute nothing (the IBL ambient
+//                    already covers the off-screen / sky term), and the
+//                    cosine-weighted sampling folds the cos(theta) / pdf factor
+//                    away, so the estimate of the (albedo-free) indirect
+//                    irradiance is the mean hit radiance. Writes the fast
+//                    accumulation (rgb) and its length in frames (a).
+//   SSGI_ACCUMULATE - the long accumulation: last frame's, reprojected, clamped
+//                    to the fast accumulation's neighborhood, then blended
+//                    with it. Writes the accumulation (rgb) and its length in
+//                    frames (a) the composite reads.
 //   SSGI_COMPOSITE - a depth-aware upsample and denoise of the accumulation at
 //                    full resolution, which the pipeline additively blends into
 //                    the scene.
@@ -153,13 +157,30 @@ float4 ssgi_reduce_fragment(
     return float4(range, 0.0, 0.0);
 }
 
-#elif defined(SSGI_TRACE)
+#elif defined(SSGI_TRACE) || defined(SSGI_ACCUMULATE)
 
-// binding 0 = lit scene radiance (the bounce-radiance source); 1 = the
+// Longest accumulation, in frames: the blend weight of a new frame never drops
+// below its reciprocal.
+static const float SSGI_MAX_HISTORY = 32.0;
+// Longest fast accumulation, in frames. Short enough to follow a moving light
+// source within a few frames, long enough that its neighborhood is a usable
+// bound on the long accumulation at one ray per pixel.
+static const float SSGI_FAST_HISTORY = 3.0;
+// Relative depth change past which a history texel is another surface.
+static const float SSGI_DEPTH_TOLERANCE = 0.1;
+
+// binding 0 = the trace's lit scene radiance (the bounce-radiance source), or
+// the accumulation's fast accumulation from this frame's trace; 1 = the
 // G-buffer; 2 = the motion vectors; 3 = this frame's depth pyramid, every
-// level; 4 = last frame's pyramid; 5 = last frame's accumulation.
+// level; 4 = last frame's pyramid; 5 = last frame's accumulation of the kind
+// this variant writes.
+#if defined(SSGI_TRACE)
 [[vk::binding(0, 0)]] Texture2D<float4> scene : register(t0);
 [[vk::binding(6, 0)]] SamplerState scene_samp : register(s0);
+#else
+[[vk::binding(0, 0)]] Texture2D<float4> fast : register(t0);
+[[vk::binding(6, 0)]] SamplerState fast_samp : register(s0);
+#endif
 [[vk::binding(1, 0)]] Texture2D<float4> gbuffer : register(t1);
 [[vk::binding(7, 0)]] SamplerState gbuffer_samp : register(s1);
 [[vk::binding(2, 0)]] Texture2D<float4> velocity : register(t2);
@@ -177,11 +198,6 @@ static const uint SSGI_MAX_ITERATIONS = 48;
 // Distance, in trace pixels, a ray travels at full precision; each doubling
 // past it lets the finest level the ray resolves climb by one.
 static const float SSGI_EXACT_REACH = 64.0;
-// Longest accumulation, in frames: the blend weight of a new frame never drops
-// below its reciprocal.
-static const float SSGI_MAX_HISTORY = 32.0;
-// Relative depth change past which a history texel is another surface.
-static const float SSGI_DEPTH_TOLERANCE = 0.1;
 // Closest view depth a ray may reach before it is cut off at the camera.
 static const float SSGI_NEAR = 0.05;
 // Origin offset along the surface normal, as a fraction of the thickness, so a
@@ -364,6 +380,8 @@ float4 ssgi_history(float2 prev_uv, float depth, int2 low)
     return wsum > 1e-3 ? sum / wsum : (float4)(0.0);
 }
 
+#if defined(SSGI_TRACE)
+
 [shader("pixel")]
 float4 ssgi_trace_fragment(
     [[vk::location(0)]] float2 vertex_uv : TEXCOORD0,
@@ -412,12 +430,72 @@ float4 ssgi_trace_fragment(
 
     // No neighborhood clip: at one ray per pixel a whole neighborhood misses
     // together often enough that clipping to it would keep resetting sparse
-    // light to black. A lighting change instead settles within the history
-    // cap.
+    // light to black. The fast accumulation settles a lighting change within a
+    // few frames, and bounds the long one.
     float4 hist = ssgi_history(uv + velocity.Load(int3(q, 0)).rg, depth, int2(low));
-    float len = min(hist.a + 1.0, SSGI_MAX_HISTORY);
+    float len = min(hist.a + 1.0, SSGI_FAST_HISTORY);
     return float4(lerp(hist.rgb * params.history_scale, indirect, 1.0 / len), len);
 }
+
+#else
+
+// Standard deviations of the fast accumulation's neighborhood the long
+// accumulation may stray from it. Wide enough that a converged pixel's noise
+// stays inside, so a still scene keeps the long accumulation's smoothness;
+// a bounce that moved away leaves it, and the long accumulation follows within
+// the fast one's few frames instead of its own.
+static const float SSGI_HISTORY_CLAMP = 1.0;
+
+[shader("pixel")]
+float4 ssgi_accumulate_fragment(
+    [[vk::location(0)]] float2 vertex_uv : TEXCOORD0,
+    float4 pixel : SV_Position) : SV_Target
+{
+    int2 p = int2(pixel.xy);
+    float depth = pyramid.Load(int3(p, 0)).r;
+    if (ssgi_is_sky(depth))
+    {
+        return (float4)(0.0);
+    }
+    int2 low = int2(texture_size(pyramid));
+    int2 full = int2(texture_size(gbuffer));
+    int2 q = ssgi_closest_texel(gbuffer, p, full, low);
+    float2 uv = (float2(q) + 0.5) / float2(full);
+    float3 current = fast.Load(int3(p, 0)).rgb;
+
+    // The fast accumulation's mean and spread over the 3x3 around the pixel,
+    // on its own surface.
+    float3 m1 = (float3)(0.0);
+    float3 m2 = (float3)(0.0);
+    float n = 0.0;
+    for (int y = -1; y <= 1; y++)
+    {
+        for (int x = -1; x <= 1; x++)
+        {
+            int2 tap = clamp(p + int2(x, y), 0, low - 1);
+            float tap_depth = pyramid.Load(int3(tap, 0)).r;
+            if (abs(tap_depth - depth) > depth * SSGI_DEPTH_TOLERANCE)
+            {
+                continue;
+            }
+            float3 c = fast.Load(int3(tap, 0)).rgb;
+            m1 += c;
+            m2 += c * c;
+            n += 1.0;
+        }
+    }
+    float3 mean = m1 / n;
+    float3 sigma = sqrt(max(m2 / n - mean * mean, (float3)(0.0)));
+    float3 lo = min(mean - SSGI_HISTORY_CLAMP * sigma, current);
+    float3 hi = max(mean + SSGI_HISTORY_CLAMP * sigma, current);
+
+    float4 hist = ssgi_history(uv + velocity.Load(int3(q, 0)).rg, depth, low);
+    float len = min(hist.a + 1.0, SSGI_MAX_HISTORY);
+    float3 bounded = clamp(hist.rgb * params.history_scale, lo, hi);
+    return float4(lerp(bounded, current, 1.0 / len), len);
+}
+
+#endif
 
 #elif defined(SSGI_COMPOSITE)
 
@@ -489,5 +567,5 @@ float4 ssgi_composite_fragment(
 }
 
 #else
-#error "ssgi.hlsl: define SSGI_DEPTH, SSGI_REDUCE, SSGI_TRACE or SSGI_COMPOSITE"
+#error "ssgi.hlsl: define SSGI_DEPTH, SSGI_REDUCE, SSGI_TRACE, SSGI_ACCUMULATE or SSGI_COMPOSITE"
 #endif

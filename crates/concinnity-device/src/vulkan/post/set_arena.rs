@@ -24,8 +24,8 @@ use crate::vulkan::owned::{OwnedDescriptorPool, VkDevice};
 use crate::vulkan::resources::source_set_bindings;
 
 // Sets one frame's post passes may allocate: one per draw. A frame with every
-// pass on draws at most 24 (bloom's chain 11, SSGI 7, SSAO and the reflection
-// composite 2 each, TAA and the SSR resolve 1 each), so this is double that.
+// pass on draws at most 25 (bloom's chain 11, SSGI 8, SSAO and the reflection
+// composite 2 each, TAA and the SSR resolve 1 each), so this is about double that.
 const SETS_PER_FRAME: u32 = 48;
 
 // Sources one set may hold, each an image and a sampler. The widest post pass
