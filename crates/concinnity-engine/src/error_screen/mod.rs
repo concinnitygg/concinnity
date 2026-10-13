@@ -90,7 +90,7 @@ fn run_loop(backend: &mut dyn RenderBackend, message: &str, fonts: &FontSet) {
         // Metal pumps its window events inside `draw_frame`, so the draw comes
         // before the input sample, exactly as the world's frame path orders it.
         if let Err(e) = backend.draw_frame(FrameParams {
-            elapsed: started.elapsed().as_secs_f32(),
+            elapsed: started.elapsed().as_secs_f64(),
             fov_y_radians: 1.0,
             near: 0.1,
             view_distance: None,

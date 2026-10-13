@@ -46,12 +46,14 @@ use super::error::allocation_failed;
 use super::glass::build_transparent_pipeline_stages;
 use super::transparent::{TransparentDraw, bytes_of};
 
-// Per-surface GPU state: a static tessellated grid VB + IB.
+// Per-surface GPU state: a static tessellated grid VB + IB, and the body its
+// params move with each frame.
 pub(in crate::metal) struct WaterSurfaceRecord {
     pub(in crate::metal) vertex_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     pub(in crate::metal) index_buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     pub(in crate::metal) index_count: u32,
     pub(in crate::metal) params: WaterParams,
+    pub(in crate::metal) body: WaterBody,
     pub(in crate::metal) visible: bool,
     // World-space center, for the back-to-front camera-distance sort.
     pub(in crate::metal) center: [f32; 3],
@@ -64,7 +66,8 @@ pub(in crate::metal) struct WaterSurfaceRecord {
 
 // Build a [`WaterSurfaceRecord`] for one resolved `WaterSurface`. Calls the
 // shared `geometry::water_grid` to produce the tessellated mesh and uploads
-// it once; per-frame uniforms (time, view) come in through the encoder.
+// it once; per-frame uniforms (the view, and the params advanced to the frame's
+// time) come in through the encoder.
 pub(in crate::metal) fn build_water_surface_record(
     device: &ProtocolObject<dyn MTLDevice>,
     body: &WaterBody,
@@ -118,6 +121,7 @@ pub(in crate::metal) fn build_water_surface_record(
         index_buffer: ib,
         index_count: idxs.len() as u32,
         params: WaterParams::from_body(body, false),
+        body: body.clone(),
         visible: surface.visible,
         center: surface.center,
         // Patched after `assign_planar_slots` runs over all reflectors in init.
@@ -147,6 +151,9 @@ impl MtlContext {
     pub(in crate::metal) fn collect_water_transparent_draws(
         &self,
         view: &TransparentView,
+        // Seconds since the world started, which the waves and ripples are
+        // advanced to.
+        time: f64,
         bindless: bool,
         mirrors: &PlanarFramePlan,
         out: &mut Vec<TransparentDraw>,
@@ -179,8 +186,10 @@ impl MtlContext {
             if !surface.visible {
                 continue;
             }
-            // Everything but the planar flag below is asset-side-static.
+            // Everything but the motion and the planar flag below is
+            // asset-side-static.
             let mut params = surface.params;
+            params.advance(&surface.body.motion_at(time));
             let mut fragment_textures = vec![
                 // The refraction snapshot (texture 0) + resolved main depth
                 // (texture 1). The IBL prefilter cube (texture 2), the probe cube

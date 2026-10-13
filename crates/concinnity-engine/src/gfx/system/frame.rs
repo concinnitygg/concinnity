@@ -267,7 +267,7 @@ impl GraphicsSystem {
         // `app::pacing`), so the frame time here already reflects the capped
         // interval.
         let frame_time = ctx.resource::<FrameTime>().copied().unwrap_or_default();
-        self.render_secs += frame_time.dt.max(0.0);
+        self.render_secs += f64::from(frame_time.dt.max(0.0));
         let elapsed = self.render_secs;
 
         // read projection from Camera3D; the screen + camera position for the

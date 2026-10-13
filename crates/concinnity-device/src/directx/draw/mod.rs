@@ -52,6 +52,8 @@ pub(super) struct RecordFrameTargets<'a> {
 #[derive(Clone, Copy)]
 pub(super) struct RecordFrameView<'a> {
     pub elapsed: f32,
+    // `elapsed` unrounded, for the water's per-frame wave phases.
+    pub elapsed_f64: f64,
     pub fov_y_radians: f32,
     pub near: f32,
     pub view_distance: Option<f32>,
@@ -176,6 +178,7 @@ impl DxContext {
         } = targets;
         let RecordFrameView {
             elapsed,
+            elapsed_f64,
             fov_y_radians,
             near,
             view_distance,
@@ -430,6 +433,7 @@ impl DxContext {
             fov_y_radians,
             aspect,
             elapsed,
+            elapsed_f64,
             near,
             prime_model_history,
             grass_benders,

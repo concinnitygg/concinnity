@@ -6,7 +6,8 @@
 //! producer back-to-front by camera distance, and draws them into the post-SSR
 //! scene target with straight-alpha blending.
 //!
-//! The pane and water producers contribute records built once at init. The mesh
+//! The pane and water producers contribute records built once at init; a water
+//! record's params are rewritten each frame as its waves move. The mesh
 //! producer cannot: a see-through mesh draws from the SHARED scene vertex / index
 //! buffers at the offsets its `DrawObject` carries, and both those offsets (LOD
 //! picks per frame) and its params (model matrix, material tint) change at
@@ -69,15 +70,15 @@ const RT_PARAMS_UBO_SIZE: u64 = 144;
 // that lives in `core::render`; re-export it so the encode path and the
 // graph's view builder can keep naming it through this module.
 use concinnity_core::render::transparent::SeeThroughMesh;
-use concinnity_core::render::uniforms::GlassMeshParams;
 pub(in crate::directx) use concinnity_core::render::uniforms::TransparentView;
+use concinnity_core::render::uniforms::{GlassMeshParams, WaterParams};
 
 pub(in crate::directx) use concinnity_core::render::transparent::Producer;
 
 // One drawable record of either producer: a static world-space (glass) or
-// origin-centered grid (water) VB + IB plus a per-record uniform CBV. Both are
-// built once at init and never change at runtime, so there is no per-frame work
-// beyond projection.
+// origin-centered grid (water) VB + IB plus a per-record uniform CBV. Built
+// once at init; only a water record's params change afterwards, rewritten into
+// the frame slot's block each frame.
 pub(in crate::directx) struct TransparentRecord {
     #[expect(
         dead_code,
@@ -92,12 +93,18 @@ pub(in crate::directx) struct TransparentRecord {
     index_buffer: PooledBuffer,
     index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
     index_count: u32,
+    // One 256-aligned params block per frame slot, persistently mapped, so a
+    // record whose params move (a water surface's waves) writes this frame's
+    // block while the GPU may still read the previous one.
     #[expect(
         dead_code,
         reason = "held to keep the GPU memory alive; the encoder binds through params_cbuffer_gva"
     )]
     params_cbuffer: PooledBuffer,
     params_cbuffer_gva: u64,
+    params_ptr: *mut u8,
+    params_block: u64,
+    frames: usize,
     visible: bool,
     // World-space center, used for the back-to-front camera-distance sort.
     center: [f32; 3],
@@ -121,9 +128,9 @@ pub(in crate::directx) struct RecordUpload<'a> {
 }
 
 impl TransparentRecord {
-    // Upload one record's static geometry and its per-record params CBV. The
-    // params buffer is persistently mapped and written once here: nothing in the
-    // record changes after init.
+    // Upload one record's static geometry and its params into every frame
+    // slot's block of its CBV buffer, which stays persistently mapped for the
+    // producers whose params move.
     pub(in crate::directx) fn upload(
         alloc: &DeviceAllocator,
         upload: RecordUpload<'_>,
@@ -147,8 +154,10 @@ impl TransparentRecord {
             Format: DXGI_FORMAT_R16_UINT,
         };
 
+        let frames = alloc.frames_in_flight().max(1);
+        let params_block = align256(upload.params.len() as u64);
         let params_cbuffer = alloc.alloc_buffer(
-            align256(upload.params.len() as u64),
+            params_block * frames as u64,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
@@ -157,12 +166,19 @@ impl TransparentRecord {
         // that receives the mapping.
         unsafe { params_cbuffer.Map(0, None, Some(&mut p)) }
             .map_err(|e| map_hresult(e.code(), "map transparent params cb"))?;
-        // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and the
-        // source is a separate allocation, so the ranges cannot overlap. Persistently mapped,
-        // never unmapped.
-        unsafe {
-            std::ptr::copy_nonoverlapping(upload.params.as_ptr(), p as *mut u8, upload.params.len())
-        };
+        let params_ptr = p as *mut u8;
+        for frame in 0..frames {
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold one block per
+            // frame slot, `frame`'s block holds the payload, and the source is a separate
+            // allocation, so the ranges cannot overlap. Persistently mapped, never unmapped.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    upload.params.as_ptr(),
+                    params_ptr.add(frame * params_block as usize),
+                    upload.params.len(),
+                )
+            };
+        }
         let params_cbuffer_gva = com::gpu_va(&params_cbuffer);
 
         Ok(Self {
@@ -173,16 +189,40 @@ impl TransparentRecord {
             index_count: upload.indices.len() as u32,
             params_cbuffer,
             params_cbuffer_gva,
+            params_ptr,
+            params_block,
+            frames,
             visible: upload.visible,
             center: upload.center,
             planar_slot: upload.planar_slot,
         })
     }
+
+    // The GPU address of the params block for frame slot `frame_idx`.
+    fn params_gva(&self, frame_idx: usize) -> u64 {
+        self.params_cbuffer_gva + (frame_idx % self.frames) as u64 * self.params_block
+    }
+
+    // Overwrite a water record's params block for frame slot `frame_idx`, whose
+    // GPU reads the frame fence has retired. Only the water producer calls this,
+    // and its records were uploaded from a `WaterParams`, so each block holds
+    // exactly one.
+    fn write_water_params(&self, frame_idx: usize, params: &WaterParams) {
+        let bytes = bytemuck::bytes_of(params);
+        let offset = (frame_idx % self.frames) * self.params_block as usize;
+        // SAFETY: the destination is `frame_idx`'s block of the persistent mapping, which this
+        // water record's upload sized (256-aligned) for one `WaterParams`, and the source is a
+        // separate live value, so the ranges cannot overlap.
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.params_ptr.add(offset), bytes.len())
+        };
+    }
 }
 
 // One producer's pipelines plus its records. The RT pair is `Some` only when the
 // GPU supports DXR and the DXC compile succeeded; a live RT toggle then selects
-// them with no rebuild.
+// them with no rebuild. `water` is aligned with `records` for the water producer
+// and empty for glass, whose params never change.
 pub(in crate::directx) struct TransparentProducer {
     pub pso: ID3D12PipelineState,
     pub flat_rt_pso: Option<ID3D12PipelineState>,
@@ -192,6 +232,19 @@ pub(in crate::directx) struct TransparentProducer {
     pub reflection_flat_pso: Option<ID3D12PipelineState>,
     pub reflection_textured_pso: Option<ID3D12PipelineState>,
     pub records: Vec<TransparentRecord>,
+    pub water: Vec<super::water::WaterMotion>,
+}
+
+impl TransparentProducer {
+    // Write each visible water surface's params, advanced to `time` seconds,
+    // into its `frame_idx` block.
+    fn advance_water(&self, frame_idx: usize, time: f64) {
+        for (record, water) in self.records.iter().zip(&self.water) {
+            if record.visible {
+                record.write_water_params(frame_idx, &water.params_at(time));
+            }
+        }
+    }
 }
 
 impl TransparentProducer {
@@ -1191,6 +1244,15 @@ impl DxContext {
         )
     }
 
+    // Write each visible water surface's params, advanced to `time` seconds
+    // into the world, into frame slot `frame_idx`'s copy, ahead of this frame's
+    // `encode_transparent`.
+    pub(in crate::directx) fn advance_transparent_water(&self, frame_idx: usize, time: f64) {
+        if let Some(water) = self.transparent.as_ref().and_then(|t| t.water.as_ref()) {
+            water.advance_water(frame_idx, time);
+        }
+    }
+
     pub(in crate::directx) fn encode_transparent(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -1439,6 +1501,7 @@ impl DxContext {
 
         let frame = TransparentFrame {
             cmd,
+            frame_idx,
             planar_root,
             textured,
             mesh_draws: &mesh_draws,
@@ -1584,7 +1647,7 @@ impl DxContext {
             unsafe {
                 cmd.IASetVertexBuffers(0, Some(&[r.vertex_buffer_view]));
                 cmd.IASetIndexBuffer(Some(&r.index_buffer_view));
-                cmd.SetGraphicsRootConstantBufferView(1, r.params_cbuffer_gva);
+                cmd.SetGraphicsRootConstantBufferView(1, r.params_gva(frame.frame_idx));
                 cmd.set_graphics_srv_table(frame.planar_root, planar_srv);
                 cmd.DrawIndexedInstanced(r.index_count, 1, 0, 0, 0);
             }
@@ -1597,6 +1660,7 @@ impl DxContext {
 // and the scene pass.
 struct TransparentFrame<'a> {
     cmd: &'a ID3D12GraphicsCommandList,
+    frame_idx: usize,
     planar_root: u32,
     textured: bool,
     mesh_draws: &'a [GlassMeshDraw],

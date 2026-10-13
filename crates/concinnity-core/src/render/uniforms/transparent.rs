@@ -6,6 +6,8 @@ use super::PassCamera;
 use crate::components::GlassPanel;
 use crate::gfx::render_types::LightUniforms;
 use crate::render::lights::glint_sun;
+use crate::render::water::motion::BodyMotion;
+use crate::render::water::ripples::{RIPPLES, Ripple};
 use crate::render::water::{BodyWave, WaterBody};
 
 /// Per-frame view inputs shared by every draw in the transparent pass (water,
@@ -25,7 +27,7 @@ pub struct TransparentView {
     /// Render-target width / height in pixels: the shader uses this to
     /// turn its fragment position into a normalized screen UV.
     pub viewport: [f32; 2],
-    /// Wall-clock seconds since startup, fed to the Gerstner sum.
+    /// Seconds since the world started, which the water's gusts follow.
     pub time: f32,
     /// Mip count of the bound IBL prefilter cube; 0 signals "no environment map",
     /// where the glass reflection falls back to a white rim. Per-frame state, so
@@ -154,13 +156,14 @@ pub const WATER_MAX_WAVES: usize = crate::render::water::MAX_WAVES;
 pub struct WaterWaveGpu {
     /// `[direction.x, direction.z, amplitude, wavenumber]`.
     pub dir_amp_k: [f32; 4],
-    /// `[angular speed, pinch, phase, _]`.
+    /// `[pinch, phase, _, _]`, the phase at the surface center this frame
+    /// ([`BodyMotion::wave_phases`]).
     pub motion: [f32; 4],
 }
 
 impl WaterWaveGpu {
-    /// The shader-side lanes for one wave of a body.
-    pub fn from_wave(w: &BodyWave) -> Self {
+    /// The shader-side lanes for one wave of a body at `phase`.
+    pub fn from_wave(w: &BodyWave, phase: f32) -> Self {
         let wave = &w.wave;
         Self {
             dir_amp_k: [
@@ -169,14 +172,38 @@ impl WaterWaveGpu {
                 wave.amplitude,
                 wave.wavenumber(),
             ],
-            motion: [wave.angular_speed(), w.pinch, wave.phase, 0.0],
+            motion: [w.pinch, phase, 0.0, 0.0],
         }
     }
 }
 
-/// Per-surface tunables for a `WaterSurface`, uploaded once per surface. The
-/// vec3-ish fields are `[f32; 4]` so the layout is byte-identical to the
-/// shader's `float4`. Matches `WaterParams` in `shaders/water.hlsl`. 896 bytes.
+/// One ripple octave, packed into two `float4` lanes. Matches `WaterRipple` in
+/// `shaders/water.hlsl`. 32 bytes.
+#[derive(Copy, Clone, Default, Debug, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
+pub struct WaterRippleGpu {
+    /// `[heading.x, heading.z, wavelength, _]`.
+    pub shape: [f32; 4],
+    /// `[along, across, _, _]`: the noise offset at the surface center this
+    /// frame, in lattice cells ([`BodyMotion::ripple_offsets`]).
+    pub offset: [f32; 4],
+}
+
+impl WaterRippleGpu {
+    /// The shader-side lanes for one ripple octave at `offset`.
+    pub fn from_ripple(r: &Ripple, offset: [f32; 2]) -> Self {
+        Self {
+            shape: [r.direction[0], r.direction[1], r.wavelength, 0.0],
+            offset: [offset[0], offset[1], 0.0, 0.0],
+        }
+    }
+}
+
+/// Per-surface tunables for a `WaterSurface`, uploaded once per surface per
+/// frame: the wave phases and ripple offsets move with time (see
+/// [`WaterParams::advance`]). The vec3-ish fields are `[f32; 4]` so the layout
+/// is byte-identical to the shader's `float4`. Matches `WaterParams` in
+/// `shaders/water.hlsl`. 1040 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct WaterParams {
@@ -208,9 +235,8 @@ pub struct WaterParams {
     /// The wind, `WindField::gpu_rows()[0]`: `[direction.x, direction.z,
     /// strength, gustiness]`.
     pub wind: [f32; 4],
-    /// `[1 / gust_scale, wind_response, ripple wavelength, _]`: the gusts'
-    /// scale, how strongly the wind roughens this surface, and the longest
-    /// ripple, in meters.
+    /// `[1 / gust_scale, wind_response, _, _]`: the gusts' scale, and how
+    /// strongly the wind roughens this surface.
     pub wind_gust: [f32; 4],
     /// Wave coefficients, longest first; the first `wave_count` are live.
     pub waves: [WaterWaveGpu; WATER_MAX_WAVES],
@@ -222,6 +248,11 @@ pub struct WaterParams {
     /// no planar slot, or the plane overflowed the budget), keeping the probe /
     /// sky path.
     pub planar: [f32; 4],
+    /// The ripple octaves, longest first.
+    pub ripples: [WaterRippleGpu; RIPPLES],
+    /// `[x, z, _, _]`: the ripples' domain warp offset at the surface center
+    /// this frame, in its noise cells ([`BodyMotion::warp_offset`]).
+    pub ripple_warp: [f32; 4],
 }
 
 // How far the mirror lookup is pushed per unit of wave slope, per unit of the
@@ -252,15 +283,20 @@ impl WaterParams {
         [1.0, distortion, 0.0, 0.0]
     }
 
-    /// The per-surface block for a resolved body, keeping at most
-    /// [`WATER_MAX_WAVES`] of its waves. `planar` is whether the surface holds
-    /// a planar reflection slot, see [`WaterParams::planar_lane`].
+    /// The per-surface block for a resolved body at the world's start,
+    /// keeping at most [`WATER_MAX_WAVES`] of its waves. `planar` is whether
+    /// the surface holds a planar reflection slot, see
+    /// [`WaterParams::planar_lane`].
     pub fn from_body(body: &WaterBody, planar: bool) -> Self {
         let surface = &body.surface;
+        let motion = body.motion_at(0.0);
         let mut waves = [WaterWaveGpu::default(); WATER_MAX_WAVES];
-        for (slot, src) in waves.iter_mut().zip(body.waves.iter()) {
-            *slot = WaterWaveGpu::from_wave(src);
+        for ((slot, src), &phase) in waves.iter_mut().zip(&body.waves).zip(&motion.wave_phases) {
+            *slot = WaterWaveGpu::from_wave(src, phase);
         }
+        let ripples = core::array::from_fn(|r| {
+            WaterRippleGpu::from_ripple(&body.ripples[r], motion.ripple_offsets[r])
+        });
         let wave_count = body.waves.len().min(WATER_MAX_WAVES);
         let [wind, gust] = body.wind.gpu_rows();
         Self {
@@ -276,11 +312,30 @@ impl WaterParams {
             wave_count: wave_count as u32,
             displace_count: body.displacing.min(wave_count) as u32,
             wind,
-            wind_gust: [gust[0], surface.wind_response, body.ripple_wavelength, 0.0],
+            wind_gust: [gust[0], surface.wind_response, 0.0, 0.0],
             waves,
             planar: Self::planar_lane(surface.roughness, planar),
+            ripples,
+            ripple_warp: warp_lane(&motion),
         }
     }
+
+    /// Moves the block to the instant `motion` describes: each wave's phase
+    /// and each ripple's offset, all small numbers the shader adds to what
+    /// varies across the surface.
+    pub fn advance(&mut self, motion: &BodyMotion) {
+        for (wave, &phase) in self.waves.iter_mut().zip(&motion.wave_phases) {
+            wave.motion[1] = phase;
+        }
+        for (ripple, offset) in self.ripples.iter_mut().zip(&motion.ripple_offsets) {
+            ripple.offset = [offset[0], offset[1], 0.0, 0.0];
+        }
+        self.ripple_warp = warp_lane(motion);
+    }
+}
+
+fn warp_lane(motion: &BodyMotion) -> [f32; 4] {
+    [motion.warp_offset[0], motion.warp_offset[1], 0.0, 0.0]
 }
 
 #[cfg(test)]
@@ -389,11 +444,12 @@ mod tests {
         assert_eq!(offset_of!(GlassParams, planar), 60);
     }
 
-    // `waves` is an array of float4-carrying structs, so the shader aligns it to
-    // 16; the eight scalars ahead of the wind rows fill two 16-byte rows.
+    // `waves` and `ripples` are arrays of float4-carrying structs, so the
+    // shader aligns them to 16; the eight scalars ahead of the wind rows fill
+    // two 16-byte rows.
     #[test]
     fn water_params_layout_matches_shader() {
-        assert_eq!(size_of::<WaterParams>(), 896);
+        assert_eq!(size_of::<WaterParams>(), 1040);
         assert_eq!(offset_of!(WaterParams, center), 0);
         assert_eq!(offset_of!(WaterParams, deep_color), 16);
         assert_eq!(offset_of!(WaterParams, shallow_color), 32);
@@ -409,9 +465,14 @@ mod tests {
         assert_eq!(offset_of!(WaterParams, wind_gust), 96);
         assert_eq!(offset_of!(WaterParams, waves), 112);
         assert_eq!(offset_of!(WaterParams, planar), 880);
+        assert_eq!(offset_of!(WaterParams, ripples), 896);
+        assert_eq!(offset_of!(WaterParams, ripple_warp), 1024);
         assert_eq!(size_of::<WaterWaveGpu>(), 32);
         assert_eq!(offset_of!(WaterWaveGpu, dir_amp_k), 0);
         assert_eq!(offset_of!(WaterWaveGpu, motion), 16);
+        assert_eq!(size_of::<WaterRippleGpu>(), 32);
+        assert_eq!(offset_of!(WaterRippleGpu, shape), 0);
+        assert_eq!(offset_of!(WaterRippleGpu, offset), 16);
     }
 
     // The body colors are reflectances: whatever is authored, each channel the
@@ -448,9 +509,53 @@ mod tests {
             },
             pinch: 0.7,
         };
-        let g = WaterWaveGpu::from_wave(&w);
+        let g = WaterWaveGpu::from_wave(&w, 2.5);
         assert_eq!(g.dir_amp_k, [0.6, -0.8, 0.25, w.wave.wavenumber()]);
-        assert_eq!(g.motion, [w.wave.angular_speed(), 0.7, 1.5, 0.0]);
+        assert_eq!(g.motion, [0.7, 2.5, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn from_ripple_packs_the_lanes() {
+        let r = Ripple {
+            direction: [0.6, 0.8],
+            wavelength: 0.05,
+            speed: 0.3,
+            seed: 17.31,
+        };
+        let g = WaterRippleGpu::from_ripple(&r, [3.0, -4.0]);
+        assert_eq!(g.shape, [0.6, 0.8, 0.05, 0.0]);
+        assert_eq!(g.offset, [3.0, -4.0, 0.0, 0.0]);
+    }
+
+    // Advancing moves every phase and offset to the given instant and leaves
+    // the rest of the block as built.
+    #[test]
+    fn advance_moves_only_the_phases_and_offsets() {
+        let b = body(&WaterSurface {
+            center: [120.0, 0.0, -40.0],
+            ..Default::default()
+        });
+        let built = WaterParams::from_body(&b, false);
+        let mut p = built;
+        let motion = b.motion_at(37.5);
+        p.advance(&motion);
+        for (i, w) in b.waves.iter().enumerate() {
+            assert_eq!(
+                p.waves[i],
+                WaterWaveGpu::from_wave(w, motion.wave_phases[i])
+            );
+        }
+        for (r, ripple) in b.ripples.iter().enumerate() {
+            let want = WaterRippleGpu::from_ripple(ripple, motion.ripple_offsets[r]);
+            assert_eq!(p.ripples[r], want);
+        }
+        assert_eq!(p.ripple_warp[..2], motion.warp_offset);
+        assert_eq!(p.center, built.center);
+        assert_eq!(p.wind_gust, built.wind_gust);
+        assert_ne!(p.waves[0], built.waves[0]);
+        // Advancing back to the start gives the block as built.
+        p.advance(&b.motion_at(0.0));
+        assert_eq!(bytemuck::bytes_of(&p), bytemuck::bytes_of(&built));
     }
 
     #[test]
@@ -481,11 +586,20 @@ mod tests {
         assert_eq!(p.refraction_strength, 0.05);
         assert_eq!(p.wave_count as usize, b.waves.len());
         assert_eq!(p.displace_count as usize, b.displacing);
-        assert_eq!(p.waves[0], WaterWaveGpu::from_wave(&b.waves[0]));
+        let motion = b.motion_at(0.0);
+        assert_eq!(
+            p.waves[0],
+            WaterWaveGpu::from_wave(&b.waves[0], motion.wave_phases[0])
+        );
         assert_eq!(p.waves[b.waves.len()], WaterWaveGpu::default());
+        assert_eq!(
+            p.ripples[0],
+            WaterRippleGpu::from_ripple(&b.ripples[0], motion.ripple_offsets[0])
+        );
+        assert_eq!(p.ripple_warp[..2], motion.warp_offset);
         let [wind, gust] = b.wind.gpu_rows();
         assert_eq!(p.wind, wind);
-        assert_eq!(p.wind_gust, [gust[0], 0.5, b.ripple_wavelength, 0.0]);
+        assert_eq!(p.wind_gust, [gust[0], 0.5, 0.0, 0.0]);
         assert_eq!(p.planar, WaterParams::planar_lane(0.08, true));
         assert!(p.planar[0] > 0.5 && p.planar[1] > 0.0);
         // A slotless surface keeps the probe / sky path.

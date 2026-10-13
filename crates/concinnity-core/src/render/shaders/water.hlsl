@@ -82,6 +82,10 @@
 // the `WaterParams` layout, so it is a constant here rather than a define.
 static const uint WATER_MAX_WAVES = 24u;
 
+// Ripple octaves. Mirrors `RIPPLES` in `core::render::water::ripples`; the
+// array length is part of the `WaterParams` layout too.
+static const uint WATER_RIPPLES = 4u;
+
 {PROBE_TYPES}
 
 #ifdef WATER_RT
@@ -97,15 +101,25 @@ static const uint WATER_MAX_WAVES = 24u;
 // One wave of the sum, packed into two float4 lanes so the CPU `[f32; 4]` pair
 // is byte-identical on every target. Matches `WaterWaveGpu` (32 B). The pinch
 // is the Gerstner horizontal displacement per meter of amplitude, 0 for a wave
-// that only shades.
+// that only shades. The phase is the wave's at the surface center this frame,
+// which the host wraps into [0, tau), so no time ever reaches the sum.
 struct WaterWave
 {
     float4 dir_amp_k; // [direction.x, direction.z, amplitude, wavenumber]
-    float4 motion;    // [angular speed, pinch, phase, _]
+    float4 motion;    // [pinch, phase, _, _]
 };
 
-// Per-surface tunables. Layout matches `WaterParams` / the WaterParamsBlock UBO
-// (896 B); the vec3 fields are float4 so MSL's 16-byte constant-buffer float3
+// One ripple octave. Matches `WaterRippleGpu` (32 B). The offset is its noise
+// coordinate at the surface center this frame, in lattice cells, which the
+// host wraps into one WATER_NOISE_PERIOD.
+struct WaterRipple
+{
+    float4 shape;  // [heading.x, heading.z, wavelength, _]
+    float4 offset; // [along the heading, along the crests, _, _]
+};
+
+// Per-surface tunables, refreshed every frame. Layout matches `WaterParams`
+// (1040 B); the vec3 fields are float4 so MSL's 16-byte constant-buffer float3
 // cannot desynchronize them from the CPU struct.
 struct WaterParams
 {
@@ -122,7 +136,7 @@ struct WaterParams
     // The first `displace_count` waves move the grid; the rest shade it.
     uint displace_count;
     // The wind, as wind.hlsl unpacks it: [direction.x, direction.z, strength,
-    // gustiness] and [1 / gust scale, wind response, longest ripple (m), _].
+    // gustiness] and [1 / gust scale, wind response, _, _].
     float4 wind;
     float4 wind_gust;
     WaterWave waves[WATER_MAX_WAVES];
@@ -132,6 +146,10 @@ struct WaterParams
     // host raises it whenever this surface holds a mirror slot and the planar
     // pass ran, and the RT entry honors it too.
     float4 planar;
+    WaterRipple ripples[WATER_RIPPLES];
+    // [x, z, _, _]: the ripples' domain warp coordinate at the surface center
+    // this frame, in its noise cells, wrapped like the ripple offsets.
+    float4 ripple_warp;
 };
 
 // ---- Resource bindings ----
@@ -205,15 +223,16 @@ struct WaterVertexIn
 struct WaterVertexOut
 {
     [[vk::location(0)]] float3 world_pos : TEXCOORD0;
-    // The flat-rest XZ the vertex was displaced from; the fragment evaluates
-    // the wave normal there itself, so the grid's density sets only the
-    // silhouette of the displacement, never the shading.
-    [[vk::location(1)]] float2 rest_xz : TEXCOORD1;
+    // The flat-rest XZ the vertex was displaced from, relative to the surface
+    // center; the fragment evaluates the wave normal there itself, so the
+    // grid's density sets only the silhouette of the displacement, never the
+    // shading. Center-relative, so its precision follows the surface's size
+    // rather than its distance from the world origin.
+    [[vk::location(1)]] float2 local_xz : TEXCOORD1;
     float4 position : SV_Position;
 };
 
 static const float WATER_TAU = 6.28318530718;
-static const float WATER_GRAVITY = 9.81;
 
 // A wave fades out over this span of its wavelength in pixels: drawn whole
 // above the second, gone below the first.
@@ -234,50 +253,49 @@ float water_pixel_meters(float clip_w)
     return 2.0 * clip_w / max(p11 * view.viewport.y, 1e-6);
 }
 
-// The phase of `w` at rest position `xz` at time `time`.
-float water_phase(WaterWave w, float2 xz, float time)
+// The phase of `w` this frame at center-relative rest position `xz`.
+float water_phase(WaterWave w, float2 xz)
 {
-    return w.dir_amp_k.w * dot(w.dir_amp_k.xy, xz) - w.motion.x * time + w.motion.z;
+    return w.dir_amp_k.w * dot(w.dir_amp_k.xy, xz) + w.motion.y;
 }
 
-// The grid point at flat-rest XZ `rest_xz` displaced by the long waves, each a
-// horizontal pinch plus a vertical sinusoid, faded by a pixel `footprint`
-// meters across. Reference: NVIDIA, "Effective Water Simulation from Physical
-// Models", GPU Gems 1.
-float3 water_displace(float2 rest_xz, float time, float footprint)
+// The grid point at center-relative flat-rest XZ `local_xz` displaced by the
+// long waves, each a horizontal pinch plus a vertical sinusoid, faded by a
+// pixel `footprint` meters across; still relative to the center. Reference:
+// NVIDIA, "Effective Water Simulation from Physical Models", GPU Gems 1.
+float3 water_displace(float2 local_xz, float footprint)
 {
-    float3 p = float3(rest_xz.x, 0.0, rest_xz.y);
+    float3 p = float3(local_xz.x, 0.0, local_xz.y);
     uint count = min(params.displace_count, WATER_MAX_WAVES);
     for (uint i = 0u; i < count; i++)
     {
         WaterWave w = params.waves[i];
         float amp = w.dir_amp_k.z * water_fade(WATER_TAU / w.dir_amp_k.w, footprint);
         float s, c;
-        sincos(water_phase(w, rest_xz, time), s, c);
-        p.xz += w.dir_amp_k.xy * (w.motion.y * amp * c);
+        sincos(water_phase(w, local_xz), s, c);
+        p.xz += w.dir_amp_k.xy * (w.motion.x * amp * c);
         p.y += amp * s;
     }
     return p;
 }
 
-// Ripples below the shortest wave: octaves of value noise, this many, from the
-// longest ripple (`wind_gust.z`) down to WATER_RIPPLE_SHORTEST meters. Noise
-// rather than sinusoids, so no octave can line up into a lattice; each is
-// squeezed across its heading so its crests run a few lengths long, and is
-// carried along that heading at its own speed.
-static const uint WATER_RIPPLES = 4u;
+// Ripples below the shortest wave: octaves of value noise (`params.ripples`,
+// shaped by core::render::water::ripples) from the shortest wave down to about
+// a centimeter. Noise rather than sinusoids, so no octave can line up into a
+// lattice; each is squeezed across its heading so its crests run a few lengths
+// long, and is carried along that heading at its own speed by the host.
+//
 // A crest's length over the ripple's, inverted: how much less the noise
-// varies along a crest than across it.
+// varies along a crest than across it. Mirrors `RIPPLE_CREST`.
 static const float WATER_RIPPLE_CREST = 0.4;
 // The rms gradient of the value noise per unit of its frequency, which turns a
 // slope target into a height.
 static const float WATER_NOISE_SLOPE = 0.5;
-static const float WATER_RIPPLE_SHORTEST = 0.012;
-// The widest a ripple heads off the wind, in radians.
-static const float WATER_RIPPLE_SPREAD = 0.6;
-// Surface tension over density, m^3 / s^2: capillary ripples outrun gravity
-// waves of the same length.
-static const float WATER_TENSION = 7.28e-5;
+// The noise lattice repeats every this many cells, so the host can carry each
+// offset modulo it. Mirrors `NOISE_PERIOD`.
+static const float WATER_NOISE_PERIOD = 4096.0;
+// The domain warp's noise frequency, per meter. Mirrors `WARP_FREQUENCY`.
+static const float WATER_WARP_FREQUENCY = 2.0;
 // The ripples' summed slope variance: a floor still water keeps, and a rise
 // per m/s of local wind past a gentle onset (about Cox and Munk's), so a lull
 // lies glassy and a gust roughens the water.
@@ -288,17 +306,27 @@ static const float2 WATER_RIPPLE_ONSET = float2(0.5, 2.5);
 // straight into the roughness.
 static const float WATER_UNRESOLVED_RIPPLE = 0.35;
 
-// wind_noise at `p` with its gradient: `(value, d/dx, d/dy)`.
+// wind_lattice at `cell` wrapped into the one period centered on zero: the
+// same values there, repeating outside it. Exact, since every term is an
+// integer or a power of two.
+float water_lattice(float2 cell)
+{
+    float2 half_period = (float2)(0.5 * WATER_NOISE_PERIOD);
+    return wind_lattice(cell - WATER_NOISE_PERIOD * floor((cell + half_period) / WATER_NOISE_PERIOD));
+}
+
+// Value noise on the periodic lattice at `p` with its gradient: `(value,
+// d/dx, d/dy)`.
 float3 water_noise_grad(float2 p)
 {
     float2 cell = floor(p);
     float2 f = p - cell;
     float2 s = f * f * (3.0 - 2.0 * f);
     float2 ds = 6.0 * f * (1.0 - f);
-    float a = wind_lattice(cell);
-    float b = wind_lattice(cell + float2(1.0, 0.0));
-    float c = wind_lattice(cell + float2(0.0, 1.0));
-    float d = wind_lattice(cell + float2(1.0, 1.0));
+    float a = water_lattice(cell);
+    float b = water_lattice(cell + float2(1.0, 0.0));
+    float c = water_lattice(cell + float2(0.0, 1.0));
+    float d = water_lattice(cell + float2(1.0, 1.0));
     float k = a - b - c + d;
     float n = a + (b - a) * s.x + (c - a) * s.y + k * s.x * s.y;
     return float3(n, ds * float2((b - a) + k * s.y, (c - a) + k * s.x));
@@ -320,11 +348,11 @@ struct WaterShading
     float alpha;
 };
 
-// Every wave and ripple at rest XZ `rest_xz`, faded by the pixel's footprint
-// (`dx`, `dy`: the rest position's screen derivatives). The analytic partials
-// against (x, z) give the normal at the displaced point; what the fades remove
-// is added to the base roughness as slope variance.
-WaterShading water_shading(float2 rest_xz, float time, float2 dx, float2 dy)
+// Every wave and ripple at center-relative rest XZ `local_xz`, faded by the
+// pixel's footprint (`dx`, `dy`: the rest position's screen derivatives). The
+// analytic partials against (x, z) give the normal at the displaced point;
+// what the fades remove is added to the base roughness as slope variance.
+WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
 {
     float3 binormal = float3(1.0, 0.0, 0.0); // dP/dx
     float3 tangent = float3(0.0, 0.0, 1.0);  // dP/dz
@@ -343,9 +371,9 @@ WaterShading water_shading(float2 rest_xz, float time, float2 dx, float2 dy)
         removed += (1.0 - fade * fade) * 0.5 * slope * slope;
 
         float wa = slope * fade;
-        float q = w.motion.y;
+        float q = w.motion.x;
         float s, c;
-        sincos(water_phase(w, rest_xz, time), s, c);
+        sincos(water_phase(w, local_xz), s, c);
         binormal.x += -q * dir.x * dir.x * wa * s;
         binormal.y += dir.x * wa * c;
         binormal.z += -q * dir.x * dir.y * wa * s;
@@ -355,31 +383,28 @@ WaterShading water_shading(float2 rest_xz, float time, float2 dx, float2 dy)
     }
 
     // The ripples ride the local wind, gusts and all, at this surface's
-    // response; their crests bend over a slowly drifting domain warp so they
-    // never line up into a pattern.
+    // response. The gust field is the shared one, read at world XZ and the
+    // view's time so it rolls downwind in step with the grass. The ripples'
+    // crests bend over a slowly drifting domain warp so they never line up
+    // into a pattern.
     Wind wind = wind_unpack(params.wind, params.wind_gust);
-    float speed = wind_speed(wind, rest_xz, time) * params.wind_gust.y;
+    float speed = wind_speed(wind, local_xz + params.center.xz, view.time) * params.wind_gust.y;
     float variance = water_ripple_variance(speed);
     float per_ripple = sqrt(variance * (1.0 - WATER_UNRESOLVED_RIPPLE) / float(WATER_RIPPLES));
-    float2 warp_at = (rest_xz - wind.dir * (0.3 * time)) * 2.0;
-    float2 warped = rest_xz + 0.08 * float2(wind_noise(warp_at), wind_noise(warp_at + 17.0));
-    float wind_angle = atan2(wind.dir.y, wind.dir.x);
-    float longest = max(params.wind_gust.z, WATER_RIPPLE_SHORTEST);
+    float2 warp_at = local_xz * WATER_WARP_FREQUENCY + params.ripple_warp.xy;
+    float2 warped = local_xz + 0.08 * float2(water_noise_grad(warp_at).x,
+                                             water_noise_grad(warp_at + 17.0).x);
     for (uint r = 0u; r < WATER_RIPPLES; r++)
     {
-        float t = float(r) / float(WATER_RIPPLES - 1u);
-        float wavelength = longest * pow(WATER_RIPPLE_SHORTEST / longest, t);
-        float k = WATER_TAU / wavelength;
-        float speed_r = sqrt(WATER_GRAVITY / k + WATER_TENSION * k);
-        float heading = wind_angle + (frac(float(r) * 0.618034 + 0.2) * 2.0 - 1.0) * WATER_RIPPLE_SPREAD;
-        float2 dir = float2(cos(heading), sin(heading));
+        WaterRipple ripple = params.ripples[r];
+        float2 dir = ripple.shape.xy;
+        float wavelength = ripple.shape.z;
         float2 across = float2(-dir.y, dir.x);
         float fade = water_fade(wavelength, max(length(dx), length(dy)));
         removed += (1.0 - fade * fade) * per_ripple * per_ripple;
 
-        float2 q = float2(dot(warped, dir) - speed_r * time,
-                          dot(warped, across) * WATER_RIPPLE_CREST) / wavelength
-                   + float(r) * 17.31;
+        float2 q = float2(dot(warped, dir), dot(warped, across) * WATER_RIPPLE_CREST) / wavelength
+                   + ripple.offset.xy;
         float3 n = water_noise_grad(q);
         float height = per_ripple * wavelength / WATER_NOISE_SLOPE;
         float2 slope = (n.y * dir + n.z * WATER_RIPPLE_CREST * across) * (height * fade / wavelength);
@@ -399,15 +424,16 @@ WaterShading water_shading(float2 rest_xz, float time, float2 dx, float2 dy)
 WaterVertexOut water_vertex(WaterVertexIn v)
 {
     // The grid is built centered on the origin in the XZ plane, so the surface
-    // center rides in through the params rather than the vertex buffer.
-    float2 rest_xz = float2(v.pos.x + params.center.x, v.pos.z + params.center.z);
-    float rest_w = mul(view.vp, float4(rest_xz.x, params.center.y, rest_xz.y, 1.0)).w;
-    float3 pos = water_displace(rest_xz, view.time, water_pixel_meters(rest_w));
-    pos.y += params.center.y;
+    // center rides in through the params rather than the vertex buffer, and
+    // the waves are summed before it is added.
+    float2 local_xz = v.pos.xz;
+    float3 rest = float3(local_xz.x, 0.0, local_xz.y) + params.center.xyz;
+    float rest_w = mul(view.vp, float4(rest, 1.0)).w;
+    float3 pos = water_displace(local_xz, water_pixel_meters(rest_w)) + params.center.xyz;
 
     WaterVertexOut o;
     o.world_pos = pos;
-    o.rest_xz = rest_xz;
+    o.local_xz = local_xz;
     o.position = mul(view.vp, float4(pos, 1.0));
     return o;
 }
@@ -484,10 +510,12 @@ struct WaterSurfacePoint
     float camera_distance;
 };
 
-WaterSurfacePoint water_surface(WaterVertexOut i)
+// `dx`, `dy` are the screen derivatives of `i.local_xz`, which the entry
+// takes before its occlusion `discard`: a quad with a killed lane has none.
+WaterSurfacePoint water_surface(WaterVertexOut i, float2 dx, float2 dy)
 {
     WaterSurfacePoint s;
-    WaterShading shading = water_shading(i.rest_xz, view.time, ddx(i.rest_xz), ddy(i.rest_xz));
+    WaterShading shading = water_shading(i.local_xz, dx, dy);
     s.normal = shading.normal;
     s.alpha = shading.alpha;
 
@@ -631,12 +659,16 @@ bool water_occluded(WaterVertexOut i)
 [shader("pixel")]
 TransparentOut water_rt_fragment(WaterVertexOut i)
 {
+    // Derivatives first: after the discard below, a quad on the shoreline may
+    // have lost a lane, and its derivatives are undefined.
+    float2 dx = ddx(i.local_xz);
+    float2 dy = ddy(i.local_xz);
     if (water_occluded(i))
     {
         discard;
     }
     float3 view_dir = normalize(view.camera_pos.xyz - i.world_pos);
-    WaterSurfacePoint s = water_surface(i);
+    WaterSurfacePoint s = water_surface(i, dx, dy);
 
     float3 reflection;
     if (params.planar.x > 0.5)
@@ -664,12 +696,16 @@ TransparentOut water_rt_fragment(WaterVertexOut i)
 [shader("pixel")]
 TransparentOut water_fragment(WaterVertexOut i)
 {
+    // Derivatives first: after the discard below, a quad on the shoreline may
+    // have lost a lane, and its derivatives are undefined.
+    float2 dx = ddx(i.local_xz);
+    float2 dy = ddy(i.local_xz);
     if (water_occluded(i))
     {
         discard;
     }
     float3 view_dir = normalize(view.camera_pos.xyz - i.world_pos);
-    WaterSurfacePoint s = water_surface(i);
+    WaterSurfacePoint s = water_surface(i, dx, dy);
 
     float3 reflection;
     if (params.planar.x > 0.5)

@@ -523,6 +523,8 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // the compute kernel multiplies dt against `spawn_rate` and the
     // integration step.
     pub elapsed: f32,
+    // `elapsed` unrounded, for the water's per-frame wave phases.
+    pub elapsed_f64: f64,
     // Camera near-plane in view units. The FogFroxel kernel needs it to map
     // each Z slab onto the linear-Z `[near, max_distance]` volume range, and
     // the temporal-upscale dispatch (FSR; DLSS / XeSS ignore it) needs it with
@@ -1307,6 +1309,7 @@ impl VkContext {
                 let view =
                     self.build_transparent_view(params.vp_mat, params.cam_pos, params.elapsed);
                 let write = params.reactive.transparent;
+                self.advance_transparent_water(params.frame_idx, params.elapsed_f64);
                 let drew = self.encode_transparent(
                     cmd,
                     params.frame_idx,

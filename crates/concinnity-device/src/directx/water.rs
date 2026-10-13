@@ -26,6 +26,22 @@ use crate::directx::transparent::{
     RecordUpload, TransparentProducer, TransparentRecord, create_transparent_pso,
 };
 
+// A surface's params as built, and the body whose waves and ripples move them
+// each frame.
+pub(in crate::directx) struct WaterMotion {
+    body: WaterBody,
+    params: WaterParams,
+}
+
+impl WaterMotion {
+    // The params advanced to `time` seconds into the world.
+    pub(in crate::directx) fn params_at(&self, time: f64) -> WaterParams {
+        let mut params = self.params;
+        params.advance(&self.body.motion_at(time));
+        params
+    }
+}
+
 // Compile the water vertex + fragment shaders. The fragment comes in an MSAA
 // pair, which keeps its depth SRV declaration in sync with the resource's sample
 // count; the vertex reads no depth and serves both pipelines. Used at init and
@@ -139,6 +155,7 @@ pub(in crate::directx) fn build_water_producer(
     };
 
     let mut records = Vec::with_capacity(surfaces.len());
+    let mut water = Vec::with_capacity(surfaces.len());
     for (i, body) in surfaces.iter().enumerate() {
         let surface = &body.surface;
         let planar_slot = planar_slots.get(i).copied().flatten();
@@ -172,6 +189,10 @@ pub(in crate::directx) fn build_water_producer(
                 planar_slot,
             },
         )?);
+        water.push(WaterMotion {
+            body: body.clone(),
+            params,
+        });
     }
 
     Ok(TransparentProducer {
@@ -181,6 +202,7 @@ pub(in crate::directx) fn build_water_producer(
         reflection_flat_pso: None,
         reflection_textured_pso: None,
         records,
+        water,
     })
 }
 

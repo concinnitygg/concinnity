@@ -32,6 +32,7 @@ pub use probe::{
 };
 pub use raymarch::{RaymarchShadowCascade, RaymarchView, RaymarchVolumeUniforms};
 pub use transparent::{
-    GlassMeshParams, GlassParams, TransparentView, WATER_MAX_WAVES, WaterParams, WaterWaveGpu,
+    GlassMeshParams, GlassParams, TransparentView, WATER_MAX_WAVES, WaterParams, WaterRippleGpu,
+    WaterWaveGpu,
 };
 pub use view::{GBufferView, PassCamera, ViewUniforms};

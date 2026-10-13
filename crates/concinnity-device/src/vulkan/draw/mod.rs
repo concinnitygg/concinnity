@@ -47,6 +47,8 @@ pub(super) struct RecordFrameTargets {
 // projection, cascade selection, sub-pixel jitter, and view UBO for this frame.
 pub(super) struct RecordFrameView<'a> {
     pub elapsed: f32,
+    // `elapsed` unrounded, for the water's per-frame wave phases.
+    pub elapsed_f64: f64,
     pub fov_y_radians: f32,
     pub near: f32,
     pub view_distance: Option<f32>,
@@ -290,6 +292,7 @@ impl VkContext {
         } = targets;
         let RecordFrameView {
             elapsed,
+            elapsed_f64,
             fov_y_radians,
             near,
             view_distance,
@@ -506,6 +509,7 @@ impl VkContext {
             fov_y_radians,
             aspect,
             elapsed,
+            elapsed_f64,
             near,
             grass_benders,
             planar: self

@@ -2,11 +2,14 @@
 //! world's wind raises on it plus its authored swell, and which of those move
 //! the grid rather than only its shading.
 
+pub mod motion;
+pub mod ripples;
 pub mod spectrum;
 
 use crate::components::{MAX_WATER_WAVES, WaterSurface};
 use crate::render::wind::WindField;
 use alloc::vec::Vec;
+use ripples::{RIPPLES, Ripple};
 use spectrum::{WIND_SEA_WAVES, Wave, unit_hash, wind_sea};
 
 /// The most waves one surface sums: the wind sea plus the authored swell.
@@ -55,6 +58,8 @@ pub struct WaterBody {
     /// The wavelength, in meters, the shader's ripples start below: the
     /// shortest wave of the wind sea, or [`STILL_RIPPLE_WAVELENGTH`].
     pub ripple_wavelength: f32,
+    /// The ripple octaves, longest first, starting at `ripple_wavelength`.
+    pub ripples: [Ripple; RIPPLES],
 }
 
 impl WaterBody {
@@ -104,6 +109,7 @@ impl WaterBody {
             waves,
             displacing,
             ripple_wavelength,
+            ripples: ripples::ripples(wind.direction, ripple_wavelength),
         }
     }
 

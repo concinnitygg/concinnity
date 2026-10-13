@@ -79,7 +79,7 @@ pub(crate) struct GraphicsSystem {
     max_frames: Option<u64>,
     failed: bool,
     // Seconds of frame time this system has rendered, the shaders' clock.
-    render_secs: f32,
+    render_secs: f64,
     frame_count: u64,
     // Per-class recovery for failed frames; see `frame_policy`.
     frame_policy: frame_policy::FramePolicy,

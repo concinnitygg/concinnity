@@ -74,14 +74,30 @@ fn compile_water_rt_shaders(
     })
 }
 
-// Upload one surface's tessellated grid VB + IB and its per-surface
-// `WaterParams` UBO, then allocate + write the surface's descriptor set.
+// A surface's params as built, and the body whose waves and ripples move them
+// each frame.
+pub(in crate::vulkan) struct WaterMotion {
+    body: WaterBody,
+    params: WaterParams,
+}
+
+impl WaterMotion {
+    // The params advanced to `time` seconds into the world.
+    pub(in crate::vulkan) fn params_at(&self, time: f64) -> WaterParams {
+        let mut params = self.params;
+        params.advance(&self.body.motion_at(time));
+        params
+    }
+}
+
+// Upload one surface's tessellated grid VB + IB and its per-frame `WaterParams`
+// UBOs, then allocate + write the surface's descriptor sets.
 fn build_surface_record(
     alloc: &DeviceAllocator,
     ctx: &ProducerCtx,
     body: &WaterBody,
     planar_slot: Option<usize>,
-) -> RenderResult<TransparentRecord> {
+) -> RenderResult<(TransparentRecord, WaterMotion)> {
     let surface = &body.surface;
     let (verts, idxs) =
         build_water_grid(surface.extent[0], surface.extent[1], surface.subdivisions)
@@ -102,7 +118,7 @@ fn build_surface_record(
         .collect();
 
     let params = WaterParams::from_body(body, planar_slot.is_some());
-    TransparentRecord::upload(
+    let record = TransparentRecord::upload(
         alloc,
         ctx.record_descriptors(planar_slot),
         RecordUpload {
@@ -113,7 +129,12 @@ fn build_surface_record(
             center: surface.center,
             planar_slot,
         },
-    )
+    )?;
+    let motion = WaterMotion {
+        body: body.clone(),
+        params,
+    };
+    Ok((record, motion))
 }
 
 // Build the water pipelines and one record per authored surface. The RT pair is
@@ -152,9 +173,12 @@ pub(in crate::vulkan) fn build_water_producer(
     };
 
     let mut records = Vec::with_capacity(surfaces.len());
+    let mut water = Vec::with_capacity(surfaces.len());
     for (i, surface) in surfaces.iter().enumerate() {
         let planar_slot = planar_slots.get(i).copied().flatten();
-        records.push(build_surface_record(ctx.alloc, &ctx, surface, planar_slot)?);
+        let (record, motion) = build_surface_record(ctx.alloc, &ctx, surface, planar_slot)?;
+        records.push(record);
+        water.push(motion);
     }
 
     Ok(TransparentProducer {
@@ -164,6 +188,7 @@ pub(in crate::vulkan) fn build_water_producer(
         reflection_flat_pso: None,
         reflection_textured_pso: None,
         records,
+        water,
     })
 }
 

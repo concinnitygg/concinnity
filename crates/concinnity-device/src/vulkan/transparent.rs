@@ -1,7 +1,8 @@
 //! The engine's `PassId::Transparent` slot on the Vulkan backend: one render
 //! pass, drawn after the SSR resolve and before TAA, with two producers -- glass
 //! panes (`glass.rs`) and water surfaces (`water.rs`). Each contributes records
-//! built once at init; the pass snapshots the pre-transparent scene, orders every
+//! built once at init (a water record's params are rewritten each frame as its
+//! waves move); the pass snapshots the pre-transparent scene, orders every
 //! record of both producers back-to-front by camera distance, and draws them into
 //! the post-SSR scene image (`SsrResources::output` when SSR is on, else
 //! `hdr_resolve_images[frame]`), alpha-blending over it. Downstream TAA / bloom /
@@ -88,20 +89,21 @@ pub(in crate::vulkan) struct TransparentRtDynamic {
 pub(in crate::vulkan) use concinnity_core::render::transparent::Producer;
 
 // Per-record GPU state: the static world-space quad (glass) or origin-centered
-// grid (water) VB + IB, the per-record params UBO + its descriptor set, and the
-// visibility flag.
+// grid (water) VB + IB, one params UBO + descriptor set per frame slot, and the
+// visibility flag. A record whose params move (a water surface's waves) writes
+// this frame's copy while the GPU may still read the previous one.
 pub(in crate::vulkan) struct TransparentRecord {
     vertex_buffer: PooledBuffer,
     index_buffer: PooledBuffer,
     index_count: u32,
-    _params_ubo: PooledBuffer,
-    params_set: vk::DescriptorSet,
+    params_ubos: Vec<PooledBuffer>,
+    params_sets: Vec<vk::DescriptorSet>,
     visible: bool,
     // World-space center, used for the back-to-front camera-distance sort.
     center: [f32; 3],
     // The record's planar reflection slot (its mirror render's target), or `None`
     // when it falls back to the probe cube. Drives the resize re-point of the
-    // planar binding (binding 1 of `params_set`).
+    // planar binding (binding 1 of each of `params_sets`).
     planar_slot: Option<usize>,
 }
 
@@ -117,12 +119,13 @@ pub(in crate::vulkan) struct RecordUpload<'a> {
     pub planar_slot: Option<usize>,
 }
 
-// The descriptor plumbing a record needs: the pool + layout its params set comes
-// from, the planar target it samples (or the 1x1 stand-in), and the linear
-// sampler bound alongside.
+// The descriptor plumbing a record needs: the pool + layout its params sets come
+// from, how many frame slots it keeps a copy for, the planar target it samples
+// (or the 1x1 stand-in), and the linear sampler bound alongside.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct RecordDescriptors<'a> {
     pub device: &'a VkDevice,
+    pub frames: usize,
     pub pool: vk::DescriptorPool,
     pub params_set_layout: vk::DescriptorSetLayout,
     pub planar_view: vk::ImageView,
@@ -131,7 +134,8 @@ pub(in crate::vulkan) struct RecordDescriptors<'a> {
 
 impl TransparentRecord {
     // Upload one record's static geometry (host-visible, written once) and its
-    // per-record params UBO, then allocate + write the record's descriptor set.
+    // params into every frame slot's UBO, then allocate + write one descriptor
+    // set per slot.
     pub(in crate::vulkan) fn upload(
         alloc: &DeviceAllocator,
         descriptors: RecordDescriptors,
@@ -147,33 +151,37 @@ impl TransparentRecord {
         vertex_buffer.write_slice(0, upload.vertices);
         index_buffer.write_slice(0, upload.indices);
 
-        let params_ubo = alloc.create_buffer(
-            upload.params.len() as u64,
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
-            host,
-        )?;
-        params_ubo.write_slice(0, upload.params);
+        let frames = descriptors.frames.max(1);
+        let mut params_ubos = Vec::with_capacity(frames);
+        for _ in 0..frames {
+            let ubo = alloc.create_buffer(
+                upload.params.len() as u64,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                host,
+            )?;
+            ubo.write_slice(0, upload.params);
+            params_ubos.push(ubo);
+        }
 
-        let params_set = alloc_descriptor_sets(
-            descriptors.device,
-            descriptors.pool,
-            &[descriptors.params_set_layout],
-        )?[0];
-        write_params_set(
-            descriptors.device,
-            params_set,
-            params_ubo.buffer(),
-            upload.params.len() as u64,
-            descriptors.planar_view,
-            descriptors.sampler,
-        );
+        let layouts = vec![descriptors.params_set_layout; frames];
+        let params_sets = alloc_descriptor_sets(descriptors.device, descriptors.pool, &layouts)?;
+        for (&set, ubo) in params_sets.iter().zip(&params_ubos) {
+            write_params_set(
+                descriptors.device,
+                set,
+                ubo.buffer(),
+                upload.params.len() as u64,
+                descriptors.planar_view,
+                descriptors.sampler,
+            );
+        }
 
         Ok(Self {
             vertex_buffer,
             index_buffer,
             index_count: upload.indices.len() as u32,
-            _params_ubo: params_ubo,
-            params_set,
+            params_ubos,
+            params_sets,
             visible: upload.visible,
             center: upload.center,
             planar_slot: upload.planar_slot,
@@ -184,6 +192,8 @@ impl TransparentRecord {
 // One producer's pipelines plus its records. The RT pair is `Some` only when the
 // device is RT-capable and the compile succeeded; a live RT toggle then selects
 // it with no rebuild. The textured variant additionally needs the bindless pool.
+// `water` is aligned with `records` for the water producer and empty for glass,
+// whose params never change.
 pub(in crate::vulkan) struct TransparentProducer {
     pub pipeline: OwnedPipeline,
     pub flat_rt_pso: Option<OwnedPipeline>,
@@ -193,9 +203,23 @@ pub(in crate::vulkan) struct TransparentProducer {
     pub reflection_flat_pso: Option<OwnedPipeline>,
     pub reflection_textured_pso: Option<OwnedPipeline>,
     pub records: Vec<TransparentRecord>,
+    pub water: Vec<super::water::WaterMotion>,
 }
 
 impl TransparentProducer {
+    // Write each visible water surface's params, advanced to `time` seconds,
+    // into its `frame_idx` copy.
+    fn advance_water(&self, frame_idx: usize, time: f64) {
+        for (record, water) in self.records.iter().zip(&self.water) {
+            if !record.visible {
+                continue;
+            }
+            if let Some(ubo) = record.params_ubos.get(frame_idx) {
+                ubo.write_slice(0, bytemuck::bytes_of(&water.params_at(time)));
+            }
+        }
+    }
+
     // Pick this producer's pipeline for the frame: the sharp per-pixel trace when
     // RT is live, the textured variant when the bindless pool exists as well, and
     // the probe / planar pipeline otherwise.
@@ -930,8 +954,9 @@ fn create_descriptor_pool(
     records: usize,
 ) -> RenderResult<OwnedDescriptorPool> {
     // One view set per frame per `FrameViewSets` slot.
+    // One params set per record per frame slot.
     let v = (frames * FrameViewSets::COUNT) as u32;
-    let r = records as u32;
+    let r = (records * frames) as u32;
     let sizes = PoolSizes::default()
         .sets(&view_set_bindings(), v)
         .sets(&params_set_bindings(), r)
@@ -1314,7 +1339,8 @@ pub(in crate::vulkan) struct ProducerCtx<'a> {
     pub msaa: bool,
     pub hot_reload: bool,
     pub bindless_pool_size: usize,
-    // Ring depth, for the mesh producer's per-frame params buffers.
+    // Ring depth, for the per-frame params copies of every record and of the
+    // mesh producer.
     pub frames: usize,
     // The device's `minUniformBufferOffsetAlignment`, which the mesh producer's
     // per-mesh params blocks must be spaced by.
@@ -1330,6 +1356,7 @@ impl<'a> ProducerCtx<'a> {
     ) -> RecordDescriptors<'a> {
         RecordDescriptors {
             device: self.device,
+            frames: self.frames,
             pool: self.pool,
             params_set_layout: self.params_set_layout,
             planar_view: planar_slot
@@ -1847,7 +1874,9 @@ impl TransparentResources {
         {
             for r in &producer.records {
                 if let Some(&view) = r.planar_slot.and_then(|s| planar_target_views.get(s)) {
-                    write_planar_view(device, r.params_set, view);
+                    for &set in &r.params_sets {
+                        write_planar_view(device, set, view);
+                    }
                 }
             }
         }
@@ -2009,6 +2038,15 @@ impl VkContext {
     // transparent content or nothing is visible. Leaves the scene image
     // SHADER_READ_ONLY and the main depth DEPTH_STENCIL_ATTACHMENT_OPTIMAL for the
     // downstream stack.
+    // Write each visible water surface's params, advanced to `time` seconds
+    // into the world, into frame slot `frame_idx`'s copy, ahead of this frame's
+    // `encode_transparent`.
+    pub(in crate::vulkan) fn advance_transparent_water(&self, frame_idx: usize, time: f64) {
+        if let Some(water) = self.transparent.as_ref().and_then(|t| t.water.as_ref()) {
+            water.advance_water(frame_idx, time);
+        }
+    }
+
     pub(in crate::vulkan) fn encode_transparent(
         &self,
         cmd: vk::CommandBuffer,
@@ -2457,7 +2495,7 @@ impl VkContext {
                     vk::PipelineBindPoint::GRAPHICS,
                     frame.layout,
                     1,
-                    std::slice::from_ref(&r.params_set),
+                    std::slice::from_ref(&r.params_sets[frame.frame_idx]),
                     &[],
                 );
                 device.cmd_bind_vertex_buffers(cmd, 0, &[r.vertex_buffer.buffer()], &[0]);

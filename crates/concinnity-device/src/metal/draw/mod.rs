@@ -65,7 +65,7 @@ impl MtlContext {
 
     fn draw_frame_inner(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
         let FrameParams {
-            elapsed,
+            elapsed: elapsed_f64,
             fov_y_radians,
             near,
             view_distance,
@@ -81,6 +81,7 @@ impl MtlContext {
             grass_benders,
             atmosphere,
         } = params;
+        let elapsed = elapsed_f64 as f32;
         let mtm = objc2::MainThreadMarker::new().ok_or_else(|| {
             error::RenderError::Other("draw_frame must be called from the main thread".into())
         })?;
@@ -289,6 +290,7 @@ impl MtlContext {
             ring_slot,
             world_hidden,
             elapsed,
+            elapsed_f64,
             vp,
             inv_vp,
             frustum: &frustum,

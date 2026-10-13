@@ -145,6 +145,8 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     pub world_hidden: bool,
     // Main-pass params, computed by draw_frame before the graph dispatch.
     pub elapsed: f32,
+    // `elapsed` unrounded, for the water's per-frame wave phases.
+    pub elapsed_f64: f64,
     pub vp: [[f32; 4]; 4],
     // Inverse of `vp`, computed once in `draw_frame` and shared by every pass
     // that reconstructs world-space position from depth (fog / decals /
@@ -887,6 +889,7 @@ impl MtlContext {
                 let mut draws = Vec::new();
                 self.collect_water_transparent_draws(
                     &view,
+                    params.elapsed_f64,
                     params.bindless_tex_args.is_some(),
                     &mirrors,
                     &mut draws,

@@ -1378,7 +1378,7 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 impl VkContext {
     pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
         let FrameParams {
-            elapsed,
+            elapsed: elapsed_f64,
             fov_y_radians,
             near,
             view_distance,
@@ -1394,6 +1394,7 @@ impl VkContext {
             grass_benders,
             atmosphere,
         } = params;
+        let elapsed = elapsed_f64 as f32;
         if let Some(atmo) = self.atmosphere.as_mut() {
             atmo.frame = atmosphere;
         }
@@ -1477,6 +1478,7 @@ impl VkContext {
             },
             RecordFrameView {
                 elapsed,
+                elapsed_f64,
                 fov_y_radians,
                 near,
                 view_distance,

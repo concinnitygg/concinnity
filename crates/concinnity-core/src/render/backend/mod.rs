@@ -76,8 +76,10 @@ use crate::render::scene_flow::SceneControl;
 /// and presents only the overlay (`text_calls`) over a cleared target.
 #[derive(Clone, Copy)]
 pub struct FrameParams<'a> {
-    /// Seconds since the world started, for time-driven effects.
-    pub elapsed: f32,
+    /// Seconds since the world started, for time-driven effects. Kept in f64 so
+    /// a backend can derive phases that stay exact over hours of uptime; the
+    /// shaders take it rounded to f32.
+    pub elapsed: f64,
     /// Vertical field of view in radians.
     pub fov_y_radians: f32,
     /// Near clip distance in world units.

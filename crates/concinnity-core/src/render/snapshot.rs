@@ -15,8 +15,8 @@ type Mat4 = [[f32; 4]; 4];
 /// Camera and frame-wide flags for one frame's draw.
 #[derive(Clone, Copy, Debug)]
 pub struct FrameScalars {
-    /// Seconds since the world started.
-    pub elapsed: f32,
+    /// Seconds since the world started, in f64 so it stays exact over hours.
+    pub elapsed: f64,
     /// Vertical field of view in radians.
     pub fov_y_radians: f32,
     /// Near clip distance in world units.

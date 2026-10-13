@@ -582,6 +582,8 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // bundled compute sim (delta-time computed against the last
     // per-emitter elapsed snapshot stored on `DxContext`).
     pub elapsed: f32,
+    // `elapsed` unrounded, for the water's per-frame wave phases.
+    pub elapsed_f64: f64,
     // Camera near-plane in view units. Consumed by `FogFroxel` to map the
     // front edge of the froxel volume onto view-space depth, and by
     // `Upscale` (FSR3 dispatch's `cameraNear`).
@@ -1446,6 +1448,7 @@ impl DxContext {
                     .reactive_mask
                     .clear(cmd, params.reactive.transparent);
                 let view = self.build_transparent_view(params);
+                self.advance_transparent_water(params.frame_idx, params.elapsed_f64);
                 self.encode_transparent(
                     cmd,
                     params.frame_idx,

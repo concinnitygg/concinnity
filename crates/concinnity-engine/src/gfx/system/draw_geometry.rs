@@ -114,11 +114,11 @@ pub(super) fn seeds_probes(ctx: &PipelineContext) -> bool {
 // would otherwise sit outside the grid. Occupancy stays geometry-only, since
 // it answers "is this capture point inside a wall", which a plane does not make
 // true. `None` when nothing is bounded, leaving the backend's own AABB seed.
-pub(super) fn auto_seed_probe_placements(
+pub(super) fn auto_seed_probe_placements<'a>(
     draw_objects: &[render_types::DrawObject],
     vertices: &[Vertex],
     indices: &[u32],
-    water_surfaces: &[WaterSurface],
+    water_surfaces: impl IntoIterator<Item = &'a WaterSurface>,
     glass_panels: &[GlassPanel],
 ) -> Option<Vec<ProbePlacement>> {
     let occupancy: Vec<([f32; 3], [f32; 3])> = draw_objects
@@ -127,7 +127,7 @@ pub(super) fn auto_seed_probe_placements(
         .filter(|(mn, mx)| mn.iter().chain(mx).all(|c| c.is_finite()))
         .collect();
     let reflectors = water_surfaces
-        .iter()
+        .into_iter()
         .map(|w| reflection_probe::reflector_bounds(w.center, [w.extent[0], 0.0, w.extent[1]]))
         .chain(glass_panels.iter().map(|g| {
             // A pane is an oriented quad; its longest half-side bounds it on
