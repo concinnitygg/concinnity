@@ -33,6 +33,7 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::{
     self, PLANAR_CLIP_BIAS, PLANAR_CROP_MARGIN, PixelRect, PlanarReflectors,
 };
+use concinnity_core::render::radiance_storage::FaceStorage;
 use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -515,6 +516,7 @@ impl DxContext {
         // the reflection aligned with the reflective fragment's screen-space sample.
         let proj = mat4_mul(params.vp_mat, mat4_inverse(self.state.view.matrix));
         let prefilter_mip_count = self.scene.env_map.prefilter_mip_count as f32;
+        let storage = FaceStorage::mirror(&self.pre_exposure);
 
         // Per kept plane: compute the reflected matrices, write the reflected
         // view CBV, and collect the cropped reflected frustum + eye for the
@@ -546,7 +548,7 @@ impl DxContext {
                 ambient_occlusion: 0.0,
                 sky_rot: self.state.view.sky_rot,
                 irradiance: self.irradiance_lane(),
-                pre_exposure: 1.0,
+                pre_exposure: storage.scale(),
                 _pad: [0.0; 2],
             };
             let ring = set.ring_index(slot, params.frame_idx);
@@ -631,6 +633,7 @@ impl DxContext {
                     light_gva: params.light_gva,
                     shadow_ubo_gva: params.shadow_ubo_gva,
                     clusters: clustered[slot].then(|| set.cluster_grid(slot, params.frame_idx)),
+                    storage,
                 },
                 crate::directx::probe::IndirectDraw {
                     indirect,

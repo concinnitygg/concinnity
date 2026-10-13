@@ -31,6 +31,7 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection::{
     self, PLANAR_CLIP_BIAS, PLANAR_CROP_MARGIN, PlanarReflectors,
 };
+use concinnity_core::render::radiance_storage::FaceStorage;
 use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
 use objc2::rc::Retained;
@@ -333,7 +334,7 @@ impl MtlContext {
                     scissor: Some(crop),
                     clusters,
                     timer: PassTimer::span(PassId::PlanarReflection, i, crops.len()),
-                    storage_scale: 1.0,
+                    storage: FaceStorage::mirror(&self.pre_exposure),
                 },
             )?;
         }

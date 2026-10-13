@@ -1,8 +1,10 @@
 //! Radiance kept in half-float targets: the cap every scene writer applies,
-//! and the fixed scales the baked reflection cubes are stored at.
+//! the fixed scales the baked reflection cubes are stored at, and the scale
+//! each off-camera face is drawn at.
 //!
 //! The scene chain is written at the frame's pre-exposure, so it always sits
-//! near the middle of half float's range. Probe faces and the atmosphere's
+//! near the middle of half float's range. A planar mirror is drawn again every
+//! frame, so it takes the frame's pre-exposure too. Probe faces and the atmosphere's
 //! sky cube are drawn once and read for many frames, so they cannot carry a
 //! frame's exposure. Stored absolute, a moonlit scene (about 1e-7 of the
 //! sunlight) falls into half float's subnormal range, where it bands, and the
@@ -11,6 +13,7 @@
 //! on read. Mirrored in `shaders/hdr_store.hlsl`, `probe_types.hlsl` and
 //! `atmosphere.hlsl`.
 
+use crate::gfx::auto_exposure::PreExposure;
 use crate::math::log2;
 
 /// The largest value a channel of a half-float scene target is written at.
@@ -29,12 +32,39 @@ pub const PROBE_STORAGE_SCALE: f32 = 256.0;
 /// while the Milky Way's faint floor keeps distinct half-float steps.
 pub const SKY_CUBE_STORAGE_SCALE: f32 = 1024.0;
 
-/// A probe face's clear: the background radiance `clear` (alpha kept) at
-/// [`PROBE_STORAGE_SCALE`].
-pub fn probe_clear_color(clear: [f32; 4]) -> [f32; 4] {
-    let [r, g, b, a] = clear;
-    let s = PROBE_STORAGE_SCALE;
-    [r * s, g * s, b * s, a]
+/// The scale an off-camera face's radiance is written at, and the clear that
+/// goes with it. Every face the main shading draws into carries one, through
+/// `ViewUniforms::pre_exposure`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaceStorage {
+    scale: f32,
+}
+
+impl FaceStorage {
+    /// A reflection probe face, stored at [`PROBE_STORAGE_SCALE`].
+    pub const PROBE: Self = Self {
+        scale: PROBE_STORAGE_SCALE,
+    };
+
+    /// A planar mirror: drawn every frame and read only by that frame's
+    /// transparent pass, so it is written at the frame's pre-exposure, as the
+    /// main view is, and its readers divide it out as they do the scene's.
+    pub fn mirror(pre: &PreExposure) -> Self {
+        Self { scale: pre.value() }
+    }
+
+    /// The scale the face's radiance is multiplied by.
+    pub fn scale(self) -> f32 {
+        self.scale
+    }
+
+    /// The face's clear: the background radiance `clear` at the face's
+    /// scale, its alpha kept.
+    pub fn clear_color(self, clear: [f32; 4]) -> [f32; 4] {
+        let [r, g, b, a] = clear;
+        let s = self.scale;
+        [r * s, g * s, b * s, a]
+    }
 }
 
 /// `rgb` capped to [`HDR_STORE_MAX`] in its brightest channel, its hue kept.
@@ -157,10 +187,41 @@ mod tests {
     #[test]
     fn a_probe_face_clears_at_its_scale() {
         let s = PROBE_STORAGE_SCALE;
+        assert_eq!(FaceStorage::PROBE.scale(), s);
         assert_eq!(
-            probe_clear_color([0.5, 0.25, 0.0, 1.0]),
+            FaceStorage::PROBE.clear_color([0.5, 0.25, 0.0, 1.0]),
             [0.5 * s, 0.25 * s, 0.0, 1.0]
         );
+    }
+
+    // A mirror follows the frame's pre-exposure, including its fallback for a
+    // value it cannot use, and clears at it.
+    #[test]
+    fn a_mirror_is_drawn_at_the_frames_pre_exposure() {
+        let mut pre = PreExposure::new(0.25);
+        pre.advance(2f32.powi(20));
+        let mirror = FaceStorage::mirror(&pre);
+        assert_eq!(mirror.scale(), pre.value());
+        assert_eq!(
+            mirror.clear_color([1.0, 0.5, 0.0, 0.75]),
+            pre.clear_color([1.0, 0.5, 0.0, 0.75])
+        );
+        assert_eq!(
+            FaceStorage::mirror(&PreExposure::new(f32::NAN)).scale(),
+            1.0
+        );
+    }
+
+    // Moonlit ground (about 1e-7 absolute) bands into a handful of half-float
+    // steps in an absolute mirror and keeps its gradient at a night
+    // pre-exposure; a sunlit surface at a day one keeps its precision.
+    #[test]
+    fn a_moonlit_mirror_keeps_its_gradient() {
+        let ramp = || (0..64).map(|i| 5e-8 + i as f32 * 2e-9);
+        let night = FaceStorage::mirror(&PreExposure::new(2f32.powi(20))).scale();
+        assert!(worst_error(ramp(), night) < 0.002);
+        let day = FaceStorage::mirror(&PreExposure::new(2f32.powi(-13))).scale();
+        assert!((round_trip(5000.0, day) - 5000.0).abs() < 5.0);
     }
 
     #[test]

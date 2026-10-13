@@ -19,8 +19,10 @@
 //!   bloom prefilter's firefly weight.
 //! - The main pass clears to the authored background times the pre-exposure
 //!   ([`PreExposure::clear_color`]).
-//! - Probe faces, planar mirrors and the sky and irradiance cubes are not the
-//!   frame's chain: they render at a pre-exposure of 1 and stay absolute.
+//! - A planar mirror is drawn every frame, at the frame's pre-exposure, and
+//!   its readers divide it out like a read of the chain. Probe faces and the
+//!   sky and irradiance cubes are read across frames, so they are stored at
+//!   fixed scales instead (`render::radiance_storage`).
 
 use crate::gfx::render_types::PostProcessParams;
 

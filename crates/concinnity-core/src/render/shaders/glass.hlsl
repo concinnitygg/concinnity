@@ -91,9 +91,10 @@ Texture2D<float4> planar_reflection : register(t3);
 [[vk::binding(2, 1)]] SamplerState planar_reflection_sampler : register(s3);
 #endif
 
-float4 planar_sample(float2 uv)
+// The mirror is drawn at the frame's pre-exposure; this returns it absolute.
+float3 planar_sample(float2 uv)
 {
-    return planar_reflection.Sample(planar_reflection_sampler, uv);
+    return planar_reflection.Sample(planar_reflection_sampler, uv).rgb / pre_exposure();
 }
 
 #ifdef GLASS_RT
@@ -281,7 +282,7 @@ TransparentOut glass_fragment(GlassVertexOut i)
     // reflector and is sampled at the fragment's own screen UV with no
     // distortion.
     float3 r = reflect(-view_dir, s.normal);
-    float3 reflection = params.planar > 0.5 ? planar_sample(s.frag_uv).rgb
+    float3 reflection = params.planar > 0.5 ? planar_sample(s.frag_uv)
                                             : glass_environment(i.world_pos, r);
     return glass_resolve(s, view_dir, reflection);
 }

@@ -68,8 +68,7 @@ float4 sky_atmosphere_fragment(SkyVertexOut p) : SV_Target
 {
     float3 dir = normalize(p.ray);
     float4 view = sky_view_lut.SampleLevel(lut_sampler, sky_view_uv_of(dir), 0.0);
-    // The table holds the frame's pre-exposure; a probe or mirror face draws
-    // at its own.
+    // The table holds the frame's pre-exposure; a probe face draws at its own.
     float3 color = view.rgb * (VIEW.pre_exposure / ATMO.cam_pos.w);
     float3 dir_dx = ddx(dir);
     float3 dir_dy = ddy(dir);

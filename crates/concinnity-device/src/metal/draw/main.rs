@@ -22,7 +22,7 @@ use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::planar_reflection::PixelRect;
 use concinnity_core::render::post::reflection_path::ReflectionPath;
-use concinnity_core::render::radiance_storage::PROBE_STORAGE_SCALE;
+use concinnity_core::render::radiance_storage::FaceStorage;
 use concinnity_core::render::uniforms::ViewUniforms;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -110,7 +110,7 @@ pub(in crate::metal) struct FacePass<'a> {
     pub clusters: Option<ClusterGrid<'a>>,
     pub timer: PassTimer,
     // The scale the face's radiance is stored at.
-    pub storage_scale: f32,
+    pub storage: FaceStorage,
 }
 
 impl FacePass<'_> {
@@ -121,7 +121,7 @@ impl FacePass<'_> {
         scissor: None,
         clusters: None,
         timer: PassTimer::None,
-        storage_scale: PROBE_STORAGE_SCALE,
+        storage: FaceStorage::PROBE,
     };
 }
 
@@ -320,8 +320,7 @@ impl MtlContext {
             cam_pos,
         } = camera;
         let desc = MTLRenderPassDescriptor::new();
-        let [r, g, b, a] = self.state.view.clear_color;
-        let [r, g, b] = [r, g, b].map(|c| c * pass.storage_scale);
+        let [r, g, b, a] = pass.storage.clear_color(self.state.view.clear_color);
         // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
         // declares.
         unsafe {
@@ -391,7 +390,7 @@ impl MtlContext {
             ambient_occlusion: 0.0,
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
-            pre_exposure: pass.storage_scale,
+            pre_exposure: pass.storage.scale(),
             _pad: [0.0; 2],
         };
 

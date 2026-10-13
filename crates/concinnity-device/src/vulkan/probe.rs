@@ -30,7 +30,7 @@ use concinnity_core::gfx::render_types;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::probe_bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
 use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::radiance_storage::{PROBE_STORAGE_SCALE, probe_clear_color};
+use concinnity_core::render::radiance_storage::FaceStorage;
 use concinnity_core::render::reflection_probe::{self, PrefilterPlan, ProbePlacement};
 
 use super::allocator::PooledBuffer;
@@ -284,7 +284,10 @@ impl VkContext {
             cmd,
             framebuffer,
             FaceArea::whole(extent),
-            global_set,
+            FaceView {
+                global_set,
+                storage: FaceStorage::PROBE,
+            },
             bindless_set,
             indirect,
         );
@@ -531,10 +534,14 @@ impl VkContext {
         cmd: vk::CommandBuffer,
         framebuffer: vk::Framebuffer,
         area: FaceArea,
-        global_set: vk::DescriptorSet,
+        view: FaceView,
         bindless_set: vk::DescriptorSet,
         indirect: vk::Buffer,
     ) {
+        let FaceView {
+            global_set,
+            storage,
+        } = view;
         let (Some(pipeline), Some(layout)) = (
             self.cull.bindless_pipeline.as_ref(),
             self.cull.bindless_pipeline_layout.as_ref(),
@@ -542,7 +549,7 @@ impl VkContext {
             return;
         };
         let device = &self.hw.device;
-        let [r, g, b, a] = probe_clear_color(self.state.view.clear_color);
+        let [r, g, b, a] = storage.clear_color(self.state.view.clear_color);
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
                 float32: [r, g, b, a],
@@ -799,6 +806,14 @@ impl ProbeBakeDevice for VkContext {
     }
 }
 
+// The view an off-camera render draws from: the global set holding its view
+// block, and the scale that block writes the face at, which its clear follows.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct FaceView {
+    pub(in crate::vulkan) global_set: vk::DescriptorSet,
+    pub(in crate::vulkan) storage: FaceStorage,
+}
+
 // Where an off-camera render draws in its framebuffer: the full `extent` the
 // viewport maps the projection onto, and the `render_area` (inside it) that is
 // cleared, drawn and stored. Texels outside the area keep whatever they held.
@@ -855,7 +870,7 @@ impl RenderingBake {
                 ambient_occlusion: 0.0,
                 sky_rot,
                 irradiance,
-                pre_exposure: PROBE_STORAGE_SCALE,
+                pre_exposure: FaceStorage::PROBE.scale(),
                 _pad: [0.0; 2],
             };
             buf.write_val(0, &view);

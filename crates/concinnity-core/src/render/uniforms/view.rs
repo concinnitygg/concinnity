@@ -84,8 +84,9 @@ pub struct ViewUniforms {
     /// The scale the pass's color target is written at
     /// ([`crate::gfx::auto_exposure::PreExposure`]): the frame's pre-exposure
     /// for the main pass, the probes' storage scale for a probe face
-    /// ([`crate::render::radiance_storage::PROBE_STORAGE_SCALE`]), 1.0 for a
-    /// mirror face, which stays absolute. Occupies what was pad space, so the
+    /// ([`crate::render::radiance_storage::PROBE_STORAGE_SCALE`]), the frame's
+    /// pre-exposure again for a planar mirror
+    /// ([`crate::render::radiance_storage::FaceStorage`]). Occupies what was pad space, so the
     /// offsets in the user-shader binding contract are unchanged.
     pub pre_exposure: f32,
     /// Pads the block to a whole `float4`.

@@ -29,6 +29,7 @@ use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::planar_reflection::{
     self, PLANAR_CLIP_BIAS, PLANAR_CROP_MARGIN, PlanarReflectors,
 };
+use concinnity_core::render::radiance_storage::FaceStorage;
 use concinnity_core::transform::mat4_inverse;
 use concinnity_core::transform::mat4_mul;
 
@@ -41,7 +42,7 @@ use super::graph_exec::GraphFrameParams;
 use super::light_cull::{
     LightCullInputs, cluster_list_size, light_cull_set_bindings, write_light_cull_set,
 };
-use super::probe::FaceArea;
+use super::probe::{FaceArea, FaceView};
 use super::record::Recorder;
 use super::resources::alloc_descriptor_sets;
 use super::set_writes::SetWrites;
@@ -728,6 +729,7 @@ impl VkContext {
         // reflection aligned with the reflective fragment's screen-space sample.
         let proj = mat4_mul(params.vp_mat, mat4_inverse(self.state.view.matrix));
         let prefilter_mip_count = self.scene.prefilter_mip_count as f32;
+        let storage = FaceStorage::mirror(&self.pre_exposure);
         let extent = vk::Extent2D {
             width: set.width,
             height: set.height,
@@ -758,7 +760,7 @@ impl VkContext {
                 ambient_occlusion: 0.0,
                 sky_rot: self.state.view.sky_rot,
                 irradiance: self.irradiance_lane(),
-                pre_exposure: 1.0,
+                pre_exposure: storage.scale(),
                 _pad: [0.0; 2],
             };
             let ring = slot * set.frames + params.frame_idx;
@@ -846,7 +848,10 @@ impl VkContext {
                         },
                     },
                 },
-                set.global_sets[ring],
+                FaceView {
+                    global_set: set.global_sets[ring],
+                    storage,
+                },
                 bindless_set,
                 set.cull_indirect_bufs[ring].buffer(),
             );

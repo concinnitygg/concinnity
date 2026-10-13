@@ -122,7 +122,11 @@ Texture2D<float4> planar_reflection : register(t3);
 [[vk::binding(2, 1)]] SamplerState planar_reflection_sampler : register(s3);
 #endif
 
-float4 planar_sample(float2 uv) { return planar_reflection.Sample(planar_reflection_sampler, uv); }
+// The mirror is drawn at the frame's pre-exposure; this returns it absolute.
+float3 planar_sample(float2 uv)
+{
+    return planar_reflection.Sample(planar_reflection_sampler, uv).rgb / pre_exposure();
+}
 
 {TRANSPARENT_PROBES}
 
@@ -307,7 +311,7 @@ float3 water_planar_reflection(WaterSurfacePoint s)
 {
     float2 uv = clamp(s.frag_uv + s.normal.xz * params.planar.y,
                       (float2)(0.001), (float2)(0.999));
-    return planar_sample(uv).rgb;
+    return planar_sample(uv);
 }
 
 // The reflection a surface with no sharp source falls back to: the local

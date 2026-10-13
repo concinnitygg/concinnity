@@ -46,7 +46,7 @@ use concinnity_core::render::probe_bake::{
     CAPTURE_FACES, ProbeBake, ProbeBakeDevice, capture_ring_slot,
 };
 use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::radiance_storage::{PROBE_STORAGE_SCALE, probe_clear_color};
+use concinnity_core::render::radiance_storage::FaceStorage;
 use concinnity_core::render::reflection_probe::{self, PrefilterPlan, ProbePlacement};
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -136,14 +136,16 @@ pub(in crate::directx) struct FaceTargets {
 }
 
 // GPU virtual addresses of the per-capture view / light / shadow constant
-// buffers, and the cluster grid binned for the capture's viewpoint (`None`
-// shades every local light and probe).
+// buffers, the cluster grid binned for the capture's viewpoint (`None`
+// shades every local light and probe), and the scale the view block writes
+// the face at, which its clear follows.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct FaceUniforms<'a> {
     pub view_gva: u64,
     pub light_gva: u64,
     pub shadow_ubo_gva: u64,
     pub clusters: Option<ClusterGrid<'a>>,
+    pub storage: FaceStorage,
 }
 
 // The indirect draw for one capture region: the command buffer, its byte offset,
@@ -264,7 +266,7 @@ impl DxContext {
             size,
             sample_count,
             rtv,
-            probe_clear_color(self.state.view.clear_color),
+            FaceStorage::PROBE.clear_color(self.state.view.clear_color),
         )?;
         let depth = create_bake_depth(device, size, sample_count, dsv)?;
         // A single-sample resolve target only when MSAA is on.
@@ -323,7 +325,7 @@ impl DxContext {
                 ambient_occlusion: 0.0,
                 sky_rot: self.state.view.sky_rot,
                 irradiance: self.irradiance_lane(),
-                pre_exposure: PROBE_STORAGE_SCALE,
+                pre_exposure: FaceStorage::PROBE.scale(),
                 _pad: [0.0; 2],
             };
             let cbv = alloc.alloc_buffer(
@@ -437,6 +439,7 @@ impl DxContext {
                 light_gva,
                 shadow_ubo_gva: shadow_gva,
                 clusters: None,
+                storage: FaceStorage::PROBE,
             },
             IndirectDraw {
                 indirect,
@@ -684,6 +687,7 @@ impl DxContext {
             light_gva,
             shadow_ubo_gva,
             clusters,
+            storage,
         } = uniforms;
         let (cluster_params_gva, cluster_list_gva) = match clusters {
             Some(grid) => (grid.params_gva, com::gpu_va(grid.lists)),
@@ -740,7 +744,7 @@ impl DxContext {
             cmd.OMSetRenderTargets(1, Some(&rtv), false, Some(&dsv));
             cmd.ClearRenderTargetView(
                 rtv,
-                &probe_clear_color(self.state.view.clear_color),
+                &storage.clear_color(self.state.view.clear_color),
                 Some(&[scissor]),
             );
             cmd.ClearDepthStencilView(
