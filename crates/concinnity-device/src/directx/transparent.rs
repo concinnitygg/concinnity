@@ -349,7 +349,7 @@ pub(in crate::directx) struct TransparentResources {
     water: Option<TransparentProducer>,
     glass_mesh: Option<GlassMeshProducer>,
 
-    // Per-frame view UBO (single 240-byte block), persistently mapped.
+    // Per-frame view UBO (single 256-byte block), persistently mapped.
     view_ubo_resources: Vec<PooledBuffer>,
     view_ubo_ptrs: Vec<*mut u8>,
 
@@ -408,7 +408,10 @@ use concinnity_core::render::transparent::ordered_visible;
 //   [8] root SRV t21  reflection-probe records
 //   [9] root CBV b6   ClusterParams (the main camera's cluster grid)
 //   [10] root SRV t22 per-cluster light lists and probe masks
-//   static sampler s0 : linear clamp ; s2 : cube mip-linear clamp
+//   [11] table  t13..14 the cascaded shadow map and the sky irradiance cube
+//   [12] root CBV b3  ShadowUniforms
+//   static sampler s0 : linear clamp ; s2 : cube mip-linear clamp ;
+//   s3 : shadow compare
 //
 // b1 is visible to every stage: the water vertex stage reads its wave table out
 // of the params block, where the glass vertex stage reads only the view.
@@ -424,6 +427,11 @@ const GLASS_REFLECTION_ROOT_RT: u32 = 16;
 // signatures by the cluster grid's params CBV (b6) and lists SRV (t22).
 const PROBE_RECORDS_ROOT_BASE: u32 = 8;
 const PROBE_RECORDS_ROOT_RT: u32 = 17;
+// Root parameter index of the water body's light table (t13..t14: the shadow
+// map and the irradiance cube, the heap's two leading global SRVs), followed in
+// both signatures by the shadow uniforms CBV (b3).
+const BODY_LIGHT_ROOT_BASE: u32 = 11;
+const BODY_LIGHT_ROOT_RT: u32 = 20;
 
 fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::{All, Pixel};
@@ -441,12 +449,17 @@ fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
         .srv(21, Pixel) // [8] t21 probe records
         .cbv(6, Pixel) // [9] b6 ClusterParams
         .srv(22, Pixel) // [10] t22 cluster lists
+        .srv_table(13, 2, Pixel) // [11] t13..t14 shadow map + irradiance cube
+        .cbv(3, Pixel) // [12] b3 ShadowUniforms
         // s0: the scene snapshot / depth. s2: the prefilter + probe cube array.
+        // s3: the shadow compare.
         .static_sampler(SamplerState::LinearClamp, 0, Pixel)
         .static_sampler(SamplerState::LinearClamp, 2, Pixel)
+        .static_sampler(SamplerState::ShadowCompare, 3, Pixel)
         .input_layout();
-    debug_assert_eq!(sig.len() - 4, PLANAR_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 3, PROBE_RECORDS_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 6, PLANAR_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 5, PROBE_RECORDS_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 2, BODY_LIGHT_ROOT_BASE);
     sig.build(device, "transparent root sig")
 }
 
@@ -541,6 +554,8 @@ fn transparent_pso(
 //   [17] root SRV t21  reflection-probe records
 //   [18] root CBV b6   ClusterParams (the main camera's cluster grid)
 //   [19] root SRV t22  per-cluster light lists and probe masks
+//   [20] table  t13..14 the cascaded shadow map and the sky irradiance cube
+//   [21] root CBV b3   ShadowUniforms
 //   static samplers s0 linear-clamp, s1 linear-repeat, s2 cube linear-clamp
 //
 // [15] is what the base signature carries at [7]: the water fragment samples its
@@ -572,13 +587,17 @@ fn create_transparent_rt_root_signature(
         .srv(21, Pixel) // [17] t21 probe records
         .cbv(6, Pixel) // [18] b6 ClusterParams
         .srv(22, Pixel) // [19] t22 cluster lists
+        .srv_table(13, 2, Pixel) // [20] t13..t14 shadow map + irradiance cube
+        .cbv(3, Pixel) // [21] b3 ShadowUniforms
         .static_sampler(SamplerState::LinearClamp, 0, Pixel) // s0 scene / depth
         .static_sampler(SamplerState::LinearWrap, 1, Pixel) // s1 hit albedo / normal map
         .static_sampler(SamplerState::LinearClamp, 2, Pixel) // s2 prefilter + probe cubes
+        .static_sampler(SamplerState::ShadowCompare, 3, Pixel) // s3 shadow compare
         .input_layout();
-    debug_assert_eq!(sig.len() - 5, PLANAR_ROOT_RT);
-    debug_assert_eq!(sig.len() - 4, GLASS_REFLECTION_ROOT_RT);
-    debug_assert_eq!(sig.len() - 3, PROBE_RECORDS_ROOT_RT);
+    debug_assert_eq!(sig.len() - 7, PLANAR_ROOT_RT);
+    debug_assert_eq!(sig.len() - 6, GLASS_REFLECTION_ROOT_RT);
+    debug_assert_eq!(sig.len() - 5, PROBE_RECORDS_ROOT_RT);
+    debug_assert_eq!(sig.len() - 2, BODY_LIGHT_ROOT_RT);
     sig.build(device, "transparent rt root sig")
 }
 
@@ -1161,6 +1180,17 @@ impl DxContext {
     // every visible glass pane and water surface back-to-front into the post-SSR
     // scene target with SRC_ALPHA blending. No-op when the world has no
     // transparent content or nothing is visible.
+    // The water body's light table: the heap's leading global SRVs, the cascaded
+    // shadow map (slot 0) and the irradiance cube (slot 1), which the main pass
+    // and the raymarched surfaces read from the same slots.
+    fn body_light_srvs_gpu(&self) -> SrvSlot {
+        SrvSlot::at(
+            &self.descriptors.srv_heap,
+            self.descriptors.srv_descriptor_size,
+            0,
+        )
+    }
+
     pub(in crate::directx) fn encode_transparent(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -1335,11 +1365,16 @@ impl DxContext {
 
         // The one per-record binding whose root parameter moves between the two
         // signatures (the RT one appends it past the trace's inputs).
-        let (planar_root, probe_records_root) = if rt_live {
-            (PLANAR_ROOT_RT, PROBE_RECORDS_ROOT_RT)
+        let (planar_root, probe_records_root, body_light_root) = if rt_live {
+            (PLANAR_ROOT_RT, PROBE_RECORDS_ROOT_RT, BODY_LIGHT_ROOT_RT)
         } else {
-            (PLANAR_ROOT_BASE, PROBE_RECORDS_ROOT_BASE)
+            (
+                PLANAR_ROOT_BASE,
+                PROBE_RECORDS_ROOT_BASE,
+                BODY_LIGHT_ROOT_BASE,
+            )
         };
+        let shadow_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
         // The two producers share their root signature, so it binds once and only
         // the pipeline changes across the draw loop.
         let root_sig = if rt_live {
@@ -1363,6 +1398,8 @@ impl DxContext {
             cmd.SetGraphicsRootShaderResourceView(probe_records_root, probes.records);
             cmd.SetGraphicsRootConstantBufferView(probe_records_root + 1, probes.cluster_cbv);
             cmd.SetGraphicsRootShaderResourceView(probe_records_root + 2, probes.cluster_list);
+            cmd.set_graphics_srv_table(body_light_root, self.body_light_srvs_gpu());
+            cmd.SetGraphicsRootConstantBufferView(body_light_root + 1, shadow_gva);
         }
         if rt_live {
             // Sharp per-pixel trace. Bind the RT inputs once before the draw loop

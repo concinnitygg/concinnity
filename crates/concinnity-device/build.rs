@@ -318,7 +318,8 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     // Water shares every register glass declares, which is what lets one root
     // signature per path serve both producers of the transparent pass. The RT
     // pair additionally reads the planar resolve at t3 (see
-    // WATER_RT_REGISTERS), which the shared RT signature has a table for.
+    // WATER_RT_REGISTERS), which the shared RT signature has a table for, and
+    // every water fragment the body's light (WATER_BODY_LIGHT_REGISTERS).
     DxilAbi {
         program: &shared::WATER_VERT,
         registers: &[("view", "b0"), ("params", "b1")],
@@ -326,6 +327,14 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     DxilAbi {
         program: &shared::WATER_FRAG,
         registers: GLASS_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_FRAG,
+        registers: WATER_BODY_LIGHT_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_FRAG_RT,
+        registers: WATER_BODY_LIGHT_REGISTERS,
     },
     DxilAbi {
         program: &shared::WATER_FRAG_RT,
@@ -539,6 +548,15 @@ const WATER_RT_REGISTERS: &[(&str, &str)] = &[
     ("probe_records", "t21"),
     ("cluster", "b6"),
     ("cluster_list", "t22"),
+];
+
+// The light every water fragment's body is lit by: the cascaded shadow and the
+// sky irradiance cube, a table and a CBV past the probe set in both signatures.
+const WATER_BODY_LIGHT_REGISTERS: &[(&str, &str)] = &[
+    ("shadow_cb", "b3"),
+    ("shadow_map", "t13"),
+    ("irradiance_cube", "t14"),
+    ("shadow_sampler", "s3"),
 ];
 
 const WATER_RT_TEXTURED_REGISTERS: &[(&str, &str)] = &[
@@ -1110,7 +1128,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     MetalAbi {
         program: &shared::WATER_FRAG,
-        slots: GLASS_SLOTS,
+        slots: WATER_SLOTS,
         argument_ids: &[],
     },
     MetalAbi {
@@ -1617,12 +1635,28 @@ const GLASS_REFLECTION_TEXTURED_SLOTS: &[&[(&str, &str)]] = &[
     REFLECTION_PEEL_SLOTS,
     TRANSPARENT_POOL_SLOTS,
 ];
+// The light the water body is lit by: the cascaded shadow and the sky
+// irradiance cube.
+const WATER_BODY_LIGHT_SLOTS: &[(&str, &str)] = &[
+    ("shadow_cb", "buffer(14)"),
+    ("shadow_map", "texture(7)"),
+    ("irradiance_cube", "texture(8)"),
+    ("shadow_sampler", "sampler(5)"),
+];
+const WATER_SLOTS: &[&[(&str, &str)]] = &[
+    TRANSPARENT_SLOTS,
+    TRANSPARENT_PROBE_SLOTS,
+    SCENE_COLOR_SLOTS,
+    PLANAR_SLOTS,
+    WATER_BODY_LIGHT_SLOTS,
+];
 const WATER_RT_SLOTS: &[&[(&str, &str)]] = &[
     TRANSPARENT_SLOTS,
     TRANSPARENT_PROBE_SLOTS,
     SCENE_COLOR_SLOTS,
     PLANAR_SLOTS,
     TRANSPARENT_TRACE_SLOTS,
+    WATER_BODY_LIGHT_SLOTS,
 ];
 const WATER_RT_TEXTURED_SLOTS: &[&[(&str, &str)]] = &[
     TRANSPARENT_SLOTS,
@@ -1631,6 +1665,7 @@ const WATER_RT_TEXTURED_SLOTS: &[&[(&str, &str)]] = &[
     PLANAR_SLOTS,
     TRANSPARENT_TRACE_SLOTS,
     TRANSPARENT_POOL_SLOTS,
+    WATER_BODY_LIGHT_SLOTS,
 ];
 
 // Every DirectX program's registers against the root signature its host

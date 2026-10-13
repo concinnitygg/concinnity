@@ -1,8 +1,8 @@
 //! The transparent pass's three producers, the ray-traced reflection resolve, and
 //! the fog pair. `TransparentView` is declared by glass.hlsl, glass_mesh.hlsl
 //! and water.hlsl alike, so all three are mirrored: they are separate
-//! declarations that can drift apart. The fog froxel kernel binds the shared
-//! `ShadowUniforms` from `light_types.hlsl`.
+//! declarations that can drift apart. The water body and the fog froxel kernel
+//! bind the shared `ShadowUniforms` from `light_types.hlsl`.
 
 use concinnity_core::gfx::render_types::{
     FogFroxelParams, FogParams, RtGeomEntry, RtParams, ShadowUniforms,
@@ -26,6 +26,7 @@ pub(in crate::shader_layout) fn glass() -> Vec<Case> {
             sky_rot,
             sun_dir,
             sun_color,
+            ambient,
         })),
         everywhere(mirror!(GlassParams => "GlassParams" {
             center,
@@ -62,6 +63,7 @@ pub(in crate::shader_layout) fn glass_mesh() -> Vec<Case> {
             sky_rot,
             sun_dir,
             sun_color,
+            ambient,
         })),
         everywhere(mirror!(GlassMeshParams => "GlassMeshParams" {
             model,
@@ -86,6 +88,7 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
             sky_rot,
             sun_dir,
             sun_color,
+            ambient,
         })),
         everywhere(mirror!(WaterWaveGpu => "WaterWave" { dir_amp_wave, speed_steep_pad, })),
         everywhere(mirror!(WaterParams => "WaterParams" {
@@ -102,6 +105,12 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
             _pad,
             waves,
             planar,
+        })),
+        everywhere(mirror!(ShadowUniforms => "ShadowUniforms" {
+            light_vps,
+            cascade_splits,
+            active_cascades,
+            [_pad] => ["_pad0", "_pad1", "_pad2"],
         })),
     ]
 }

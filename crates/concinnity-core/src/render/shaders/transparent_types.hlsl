@@ -6,7 +6,7 @@
 
 {HDR_STORE}
 
-// Layout matches `TransparentView` / the TransparentViewBlock UBO (240 B). One
+// Layout matches `TransparentView` / the TransparentViewBlock UBO (256 B). One
 // host block feeds every producer.
 struct TransparentView
 {
@@ -26,6 +26,9 @@ struct TransparentView
     // directional light, which the water glint reads as no sun.
     float4 sun_dir;
     float4 sun_color;
+    // x: 1 when the irradiance cube holds the sky's diffuse light, else a flat
+    // ambient stands in. y: the authored indirect-light multiplier.
+    float4 ambient;
 };
 
 {CLUSTER_TYPES}

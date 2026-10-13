@@ -1,6 +1,6 @@
 // SHADOW_BIAS marker: the depth-compare offset a cascade sample is taken with,
-// shared by the rasterized main pass and the raymarched surfaces so both take
-// the shadow the other would at the same point.
+// shared by the cascade sample (SHADOW_CASCADE) and the raymarched surfaces so
+// both take the shadow the other would at the same point.
 //
 // Needs `SHADOW_UNI` and `shadow_map_size()` from the including shader.
 

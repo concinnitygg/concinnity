@@ -98,6 +98,13 @@ const GLASS_POOL_SAMPLER_INDEX: usize = 4;
 // glass shaders.
 const GLASS_REFLECTION_TEXTURE_INDEX: usize = 4;
 const GLASS_REFLECTION_BACK_TEXTURE_INDEX: usize = 5;
+// The light water.hlsl's body is lit by, pinned by its `register()`s: the
+// cascaded shadow's uniforms, map and compare sampler, and the sky irradiance
+// cube.
+const WATER_SHADOW_UNIFORMS_BUFFER_INDEX: usize = 14;
+const WATER_SHADOW_MAP_TEXTURE_INDEX: usize = 7;
+const WATER_IRRADIANCE_TEXTURE_INDEX: usize = 8;
+const WATER_SHADOW_SAMPLER_INDEX: usize = 5;
 
 // What the transparent pass takes for the frame: the view and RT inputs its
 // encoders bind, and how it treats the reactive mask.
@@ -194,6 +201,16 @@ impl MtlContext {
         // keeps the sky-only fallback. The per-draw bindings never touch these
         // slots, so the state persists.
         enc.set_fragment_texture(self.scene.env_map.prefilter.as_ref(), 2);
+        // The water body's light, frame-constant like the sources above. Always
+        // bound: a world with no shadow stage has the 1x1 fallback map and no
+        // live cascade, and one with no sky the fallback irradiance cube.
+        enc.set_fragment_value(&self.shadow.uniforms, WATER_SHADOW_UNIFORMS_BUFFER_INDEX);
+        enc.set_fragment_texture(self.shadow.map.as_ref(), WATER_SHADOW_MAP_TEXTURE_INDEX);
+        enc.set_fragment_texture(
+            self.scene.env_map.irradiance.as_ref(),
+            WATER_IRRADIANCE_TEXTURE_INDEX,
+        );
+        enc.set_fragment_sampler(self.shadow.sampler.as_ref(), WATER_SHADOW_SAMPLER_INDEX);
         // The main camera's cluster grid, which bins the probes a surface
         // blends, takes the params at buffer(12) and the lists at buffer(13).
         self.probe_bindings().bind(

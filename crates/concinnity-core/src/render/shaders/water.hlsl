@@ -10,9 +10,13 @@
 //
 //   * Refraction - the pre-transparent scene snapshot at a normal-perturbed
 //                  screen UV, so the seabed bends under the waves.
-//   * Tint       - shallow to deep by the water-column thickness the main depth
-//                  gives, an exponential falloff over `depth_falloff`.
-//   * Foam       - a soft band where the seabed is just below the surface.
+//   * Body       - the light the water column scatters back out: the sun or
+//                  moon (through its cascaded shadow) and the sky's
+//                  irradiance, off a reflectance blended shallow to deep by
+//                  the column thickness the main depth gives, an exponential
+//                  falloff over `depth_falloff`.
+//   * Foam       - a lit white diffuse band where the seabed is just below the
+//                  surface.
 //   * Reflection - see below, plus a GGX specular lobe for the scene's sun off
 //                  the same wave normal.
 //   * Fresnel    - Schlick with a water-vs-air F0 of 0.02, shaped by
@@ -71,6 +75,8 @@ static const uint MAX_WATER_WAVES = 4u;
 
 {TRANSPARENT_TYPES}
 
+{LIGHT_TYPES}
+
 // One Gerstner wave, packed into two float4 lanes so the CPU `[f32; 4]` pair is
 // byte-identical on every target. Matches `WaterWaveGpu` (32 B).
 struct WaterWave
@@ -85,8 +91,8 @@ struct WaterWave
 struct WaterParams
 {
     float4 center;         // world-space surface center
-    float4 deep_color;    // linear RGB at full column depth
-    float4 shallow_color; // linear RGB at the shore
+    float4 deep_color;    // body reflectance at full column depth, [0, 1]
+    float4 shallow_color; // body reflectance at the shore, [0, 1]
     float depth_falloff;
     float foam_width;
     float foam_intensity;
@@ -127,6 +133,36 @@ float3 planar_sample(float2 uv)
 {
     return planar_reflection.Sample(planar_reflection_sampler, uv).rgb / pre_exposure();
 }
+
+// The light the body is lit by: the main pass's cascaded shadow of the first
+// directional light and the sky's irradiance cube. The Vulkan bindings are the
+// forward global set's own, which the pass binds as set 2.
+#ifdef CN_BACKEND_DIRECTX
+ConstantBuffer<ShadowUniforms> shadow_cb : register(b3);
+Texture2DArray<float> shadow_map : register(t13);
+TextureCube<float4> irradiance_cube : register(t14);
+SamplerComparisonState shadow_sampler : register(s3);
+#else
+[[vk::binding(2, 2)]] ConstantBuffer<ShadowUniforms> shadow_cb : register(b14);
+[[vk::binding(3, 2)]] Texture2DArray<float> shadow_map : register(t7);
+[[vk::binding(4, 2)]] TextureCube<float4> irradiance_cube : register(t8);
+[[vk::binding(18, 2)]] SamplerComparisonState shadow_sampler : register(s5);
+#endif
+
+#define SHADOW_UNI shadow_cb
+
+float shadow_map_cmp(float3 uv_layer, float ref)
+{
+    return shadow_map.SampleCmpLevelZero(shadow_sampler, uv_layer, ref);
+}
+float2 shadow_map_size()
+{
+    uint w, h, e;
+    shadow_map.GetDimensions(w, h, e);
+    return float2(float(w), float(h));
+}
+
+{SHADOW_CASCADE}
 
 {TRANSPARENT_PROBES}
 
@@ -256,9 +292,36 @@ float water_scene_distance(float2 ndc_xy, float depth01)
     return distance(world, view.camera_pos.xyz);
 }
 
+// The radiance a white Lambertian surface facing `n` reflects: the sun's
+// irradiance through `shadow` plus the sky's, both over pi. Without an
+// irradiance cube the sky is the main pass's flat ambient fill.
+static const float WATER_INV_PI = 0.318309886;
+static const float WATER_FLAT_AMBIENT = 0.03;
+
+float3 water_lambert(float3 n, float shadow)
+{
+    float3 sun = view.sun_color.rgb * (saturate(dot(n, view.sun_dir.xyz)) * shadow * WATER_INV_PI);
+    float3 sky = view.ambient.x > 0.5
+        ? irradiance_cube.SampleLevel(prefilter_cube_sampler, SKY_DIR(n), 0.0).rgb * WATER_INV_PI
+        : (float3)(WATER_FLAT_AMBIENT);
+    return sun + sky * view.ambient.y;
+}
+
+// The sun's shadow at a surface point, skipped when there is no sun to cast it.
+float water_sun_shadow(float3 world_pos, float2 screen_xy)
+{
+    if (dot(view.sun_color.rgb, (float3)(1.0)) <= 0.0)
+    {
+        return 1.0;
+    }
+    // Clip w is the view-space depth the main pass selects its cascade by.
+    float view_depth = mul(view.vp, float4(world_pos, 1.0)).w;
+    return shadow_factor_cascaded(world_pos, view_depth, screen_xy);
+}
+
 // The surface at this fragment: the wave normal, the fragment's screen UV, and
-// everything below the waterline -- the refracted scene, tinted by column depth
-// and brightened to foam where the seabed is close.
+// everything below the waterline -- the refracted scene, the light the column
+// scatters back out, and foam where the seabed is close.
 struct WaterSurfacePoint
 {
     float3 normal;
@@ -291,15 +354,24 @@ WaterSurfacePoint water_surface(WaterVertexOut i)
     s.camera_distance = water_dist;
     float water_depth = max(scene_dist - water_dist, 0.0);
 
-    // Tint: exponential shallow to deep blend over `depth_falloff` meters.
+    // The body as a lit single-scatter layer: light entering the flat surface
+    // (the sun past its entry Fresnel, and the sky) is scattered back out by
+    // the column as a Lambertian reflector of the shallow-to-deep reflectance,
+    // its share growing as the column thickens over `depth_falloff` meters.
+    // The seabed seen through the shallows is filtered by the shallow color.
+    float shadow = water_sun_shadow(i.world_pos, i.position.xy);
+    float sun_entry = 1.0 - (0.02 + 0.98 * pow(1.0 - saturate(view.sun_dir.y), 5.0));
+    float3 body_light = water_lambert(float3(0.0, 1.0, 0.0), shadow * sun_entry);
     float depth_t = 1.0 - exp(-water_depth / max(params.depth_falloff, 1e-3));
-    float3 tinted = lerp(params.shallow_color.rgb, params.deep_color.rgb, depth_t);
-    float3 below = lerp(refracted * params.shallow_color.rgb, tinted, depth_t);
+    float3 scattered = lerp(params.shallow_color.rgb, params.deep_color.rgb, depth_t) * body_light;
+    float3 below = lerp(refracted * params.shallow_color.rgb, scattered, depth_t);
 
-    // Foam: a soft band where the seabed is just below the surface, which is
-    // both the shoreline and any intersection line with standing geometry.
+    // Foam: a white diffuse surface on the waves in a soft band where the
+    // seabed is just below the surface, which is both the shoreline and any
+    // intersection line with standing geometry.
     float foam_t = saturate(1.0 - water_depth / max(params.foam_width, 1e-3));
-    s.below = lerp(below, (float3)(1.0), foam_t * foam_t * params.foam_intensity);
+    float3 foam = water_lambert(s.normal, shadow);
+    s.below = lerp(below, foam, foam_t * foam_t * params.foam_intensity);
     return s;
 }
 

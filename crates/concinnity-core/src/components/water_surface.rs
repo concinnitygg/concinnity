@@ -45,8 +45,11 @@ pub struct WaterWave {
 /// A translucent animated water surface.
 ///
 /// A flat, subdivided horizontal surface whose vertices ripple with summed
-/// waves. It refracts and reflects the scene, blends from a shallow to a deep
-/// color with depth, and adds shoreline foam.
+/// waves. It refracts and reflects the scene, and its body is lit like any
+/// other surface: the sun or moon (in shadow where the scene casts one) and the
+/// sky's light scatter back out of the water, off a reflectance that blends
+/// from `shallow_color` to `deep_color` as the water deepens. Shoreline foam is
+/// a lit white surface.
 ///
 /// The surface is positioned by `center` and sized by `extent` (XZ
 /// half-widths). The mesh itself is flat; all height variation comes from the
@@ -90,13 +93,17 @@ pub struct WaterSurface {
     /// gentle wave.
     #[asset(default = vec![WaterWave::default()])]
     pub waves: Vec<WaterWave>,
-    /// Linear-space RGB color of deep water.
+    /// Linear-space RGB reflectance of deep water's body, each channel in
+    /// [0, 1]: the share of the light reaching the surface that a deep column
+    /// scatters back out. Values outside [0, 1] are clamped.
     #[asset(default = [0.02, 0.05, 0.15])]
     pub deep_color: [f32; 3],
-    /// Linear-space RGB color of shallow water near the shore.
+    /// Linear-space RGB reflectance of shallow water's body near the shore,
+    /// each channel in [0, 1]. The seabed seen through the shallows is
+    /// filtered by it too. Values outside [0, 1] are clamped.
     #[asset(default = [0.20, 0.50, 0.55])]
     pub shallow_color: [f32; 3],
-    /// Depth over which the color blends from shallow to deep, in meters.
+    /// Depth over which the reflectance blends from shallow to deep, in meters.
     #[asset(default = 4.0)]
     pub depth_falloff_meters: f32,
     /// Width of the shoreline foam band, in meters.

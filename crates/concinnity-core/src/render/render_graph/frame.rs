@@ -1072,6 +1072,10 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             if let Some(h) = planar_mirrors {
                 trans.read_texture(h);
             }
+            // The water body is lit through the sun's cascaded shadow.
+            if let Some(h) = shadow_v1 {
+                trans.read_texture(h);
+            }
             // RMW the resolve output. The read declares the sample dependency
             // (translucents sample the resolved scene for refraction); the
             // write produces the blended version downstream passes consume.
@@ -1091,6 +1095,9 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             trans.read_buffer(h);
         }
         if let Some(h) = planar_mirrors {
+            trans.read_texture(h);
+        }
+        if let Some(h) = shadow_v1 {
             trans.read_texture(h);
         }
         trans.read_texture(hdr_resolve_cur);
@@ -2241,6 +2248,33 @@ mod tests {
             );
             assert!(pos(PassId::LightCull) < trans);
             assert!(g.resources[lists].lifetime.last >= trans);
+        }
+    }
+
+    #[test]
+    fn transparent_reads_the_shadow_map_with_and_without_a_resolve() {
+        // The water body is lit through the sun's cascades, so Transparent reads
+        // the shadow map Main sampled, on either side of the resolve branch.
+        for ssr in [false, true] {
+            let mut i = all_off();
+            i.shadow_enabled = true;
+            i.ssr_enabled = ssr;
+            i.ssr_prepass_enabled = ssr;
+            i.transparent_enabled = true;
+            let g = build_frame_graph(&i).expect("compiles");
+            let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+            let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+            let shadow = resource_of(&g, "shadow_map");
+            let trans = pos(PassId::Transparent);
+            assert!(
+                g.passes[trans]
+                    .reads
+                    .iter()
+                    .any(|r| r.resource_index() == shadow),
+                "Transparent reads the shadow map (ssr: {ssr})"
+            );
+            assert!(pos(PassId::Shadow) < trans);
+            assert!(g.resources[shadow].lifetime.last >= trans);
         }
     }
 

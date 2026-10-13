@@ -9,7 +9,7 @@ use crate::render::lights::glint_sun;
 
 /// Per-frame view inputs shared by every draw in the transparent pass (water,
 /// glass), bound once for the whole pass. Matches `TransparentView` in
-/// `shaders/glass.hlsl` and `shaders/water.hlsl`. 240 bytes.
+/// `shaders/glass.hlsl` and `shaders/water.hlsl`. 256 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TransparentView {
@@ -38,9 +38,14 @@ pub struct TransparentView {
     /// directional light. Zero when the world declares none.
     pub sun_dir: [f32; 4],
     /// `[r, g, b, _]`: that light's color times its intensity, which the water
-    /// glint scales by. Zero when the world declares no directional light, and
-    /// the shader draws no glint.
+    /// glint and the water body's lighting scale by. Zero when the world
+    /// declares no directional light, and the shader draws no glint.
     pub sun_color: [f32; 4],
+    /// `[irradiance, intensity, _, _]`: 1 in `irradiance` when the bound
+    /// irradiance cube holds the sky's diffuse light (else the water body takes
+    /// the main pass's flat ambient), and the authored indirect-light multiplier
+    /// (`PostProcessConfig.ambient_intensity`) in `intensity`.
+    pub ambient: [f32; 4],
 }
 
 impl TransparentView {
@@ -58,6 +63,7 @@ impl TransparentView {
             sky_rot: camera.sky_rot,
             sun_dir,
             sun_color,
+            ambient: [camera.irradiance, lights.ambient_intensity, 0.0, 0.0],
         }
     }
 }
@@ -169,9 +175,10 @@ impl WaterWaveGpu {
 pub struct WaterParams {
     /// `[x, y, z, _]`: world-space surface center.
     pub center: [f32; 4],
-    /// `[r, g, b, _]`: water tint at full column depth.
+    /// `[r, g, b, _]`: body reflectance in `[0, 1]` at full column depth.
     pub deep_color: [f32; 4],
-    /// `[r, g, b, _]`: water tint just above the seabed.
+    /// `[r, g, b, _]`: body reflectance in `[0, 1]` just above the seabed, and
+    /// the filter on the seabed seen through the shallows.
     pub shallow_color: [f32; 4],
     /// Depth over which the tint blends from shallow to deep, in meters.
     pub depth_falloff: f32,
@@ -208,6 +215,14 @@ pub struct WaterParams {
 const PLANAR_DISTORTION_PER_ROUGHNESS: f32 = 0.6;
 const PLANAR_DISTORTION_MAX: f32 = 0.06;
 
+// An authored body color as the shader's reflectance lane, each channel held to
+// [0, 1] so the column never returns more light than reaches it. A NaN channel
+// reads as black.
+fn reflectance(rgb: [f32; 3]) -> [f32; 4] {
+    let r = |c: f32| if c.is_nan() { 0.0 } else { c.clamp(0.0, 1.0) };
+    [r(rgb[0]), r(rgb[1]), r(rgb[2]), 0.0]
+}
+
 impl WaterParams {
     /// The `planar` lane for a surface of `roughness`: the mirror selected
     /// with its ripple offset scaled by the roughness when `mirrored`, else
@@ -231,18 +246,8 @@ impl WaterParams {
         }
         Self {
             center: [surface.center[0], surface.center[1], surface.center[2], 0.0],
-            deep_color: [
-                surface.deep_color[0],
-                surface.deep_color[1],
-                surface.deep_color[2],
-                0.0,
-            ],
-            shallow_color: [
-                surface.shallow_color[0],
-                surface.shallow_color[1],
-                surface.shallow_color[2],
-                0.0,
-            ],
+            deep_color: reflectance(surface.deep_color),
+            shallow_color: reflectance(surface.shallow_color),
             depth_falloff: surface.depth_falloff_meters,
             foam_width: surface.foam_width_meters,
             foam_intensity: surface.foam_intensity,
@@ -301,13 +306,17 @@ mod tests {
         assert_eq!(view.prefilter_mip_count, camera.prefilter_mip_count);
         assert_eq!(view.sky_rot, camera.sky_rot);
         assert_eq!((view.sun_dir, view.sun_color), glint_sun(&lights));
+        assert_eq!(
+            view.ambient,
+            [camera.irradiance, lights.ambient_intensity, 0.0, 0.0]
+        );
     }
 
     // The per-frame block every transparent draw shares. `sky_rot` is a float4
     // array, so it needs the 16-byte boundary the scalars ahead of it land on.
     #[test]
     fn transparent_view_layout_matches_shader() {
-        assert_eq!(size_of::<TransparentView>(), 240);
+        assert_eq!(size_of::<TransparentView>(), 256);
         assert_eq!(offset_of!(TransparentView, vp), 0);
         assert_eq!(offset_of!(TransparentView, inv_vp), 64);
         assert_eq!(offset_of!(TransparentView, camera_pos), 128);
@@ -317,6 +326,7 @@ mod tests {
         assert_eq!(offset_of!(TransparentView, sky_rot), 160);
         assert_eq!(offset_of!(TransparentView, sun_dir), 208);
         assert_eq!(offset_of!(TransparentView, sun_color), 224);
+        assert_eq!(offset_of!(TransparentView, ambient), 240);
         assert_eq!(size_of::<TransparentView>() % 16, 0);
     }
 
@@ -375,6 +385,24 @@ mod tests {
         assert_eq!(offset_of!(WaterParams, waves), 80);
         assert_eq!(offset_of!(WaterParams, planar), 208);
         assert_eq!(size_of::<WaterWaveGpu>(), 32);
+    }
+
+    // The body colors are reflectances: whatever is authored, each channel the
+    // shader sees lies in [0, 1].
+    #[test]
+    fn the_body_colors_are_held_to_reflectances() {
+        let surface = WaterSurface {
+            deep_color: [-0.5, 0.25, 3.0],
+            shallow_color: [f32::NAN, 1.0, f32::INFINITY],
+            ..Default::default()
+        };
+        let p = WaterParams::from_surface(&surface, false);
+        assert_eq!(p.deep_color, [0.0, 0.25, 1.0, 0.0]);
+        assert_eq!(p.shallow_color, [0.0, 1.0, 1.0, 0.0]);
+        let defaults = WaterParams::from_surface(&WaterSurface::default(), false);
+        let d = WaterSurface::default();
+        assert_eq!(defaults.deep_color[..3], d.deep_color);
+        assert_eq!(defaults.shallow_color[..3], d.shallow_color);
     }
 
     #[test]

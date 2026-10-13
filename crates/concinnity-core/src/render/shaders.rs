@@ -63,6 +63,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("rt_types.hlsl", RT_TYPES),
     ("shadow.hlsl", SHADOW),
     ("shadow_bias.hlsl", SHADOW_BIAS),
+    ("shadow_cascade.hlsl", SHADOW_CASCADE),
     ("sky.hlsl", SKY),
     ("sky_ray.hlsl", SKY_RAY),
     ("specular_aa.hlsl", SPECULAR_AA),
@@ -191,6 +192,8 @@ pub const RT_TYPES: &str = include_str!("shaders/rt_types.hlsl");
 pub const SHADOW: &str = include_str!("shaders/shadow.hlsl");
 /// `shadow_bias.hlsl`.
 pub const SHADOW_BIAS: &str = include_str!("shaders/shadow_bias.hlsl");
+/// `shadow_cascade.hlsl`.
+pub const SHADOW_CASCADE: &str = include_str!("shaders/shadow_cascade.hlsl");
 /// `sky.hlsl`.
 pub const SKY: &str = include_str!("shaders/sky.hlsl");
 /// `sky_ray.hlsl`.
