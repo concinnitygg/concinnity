@@ -17,7 +17,7 @@ mod benchmark;
 
 use std::path::PathBuf;
 
-use concinnity::components::Planet;
+use concinnity::components::{GraphicsConfig, Planet};
 use concinnity::{App, cook};
 
 const WORLD: &str = include_str!("planet.jsonl");
@@ -34,7 +34,11 @@ fn run() -> Result<(), String> {
     let mut world = cook::world();
     world.add_jsonl(WORLD);
     if benchmark {
-        benchmark::inject(&mut world, &declared_planet(WORLD)?);
+        benchmark::inject(
+            &mut world,
+            &declared_planet(WORLD)?,
+            declared_graphics(WORLD)?,
+        );
     }
     let blob = blob_path();
     world.write_blob(&blob).map_err(|e| e.to_string())?;
@@ -62,23 +66,38 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<bool, String> {
 // The planet the world file declares, for the shape the benchmark path rides.
 // Its references are names in the file, so they are left out.
 fn declared_planet(text: &str) -> Result<Planet, String> {
+    let args = declared(text, "Planet", &["material", "layers"])?;
+    serde_json::from_value(args).map_err(|e| e.to_string())
+}
+
+// The graphics settings the world file declares, which the benchmark keeps
+// but for the frame-rate cap.
+fn declared_graphics(text: &str) -> Result<GraphicsConfig, String> {
+    let args = declared(text, "GraphicsConfig", &[])?;
+    serde_json::from_value(args).map_err(|e| e.to_string())
+}
+
+// The args of the first `ty` entry the world file declares, without the
+// `unnamed` fields.
+fn declared(text: &str, ty: &str, unnamed: &[&str]) -> Result<serde_json::Value, String> {
     for line in text.lines() {
         let Ok(serde_json::Value::Array(columns)) = serde_json::from_str(line) else {
             continue;
         };
         if let [
-            serde_json::Value::String(ty),
+            serde_json::Value::String(declared),
             serde_json::Value::Object(args),
         ] = &columns[..]
-            && ty == "Planet"
+            && declared == ty
         {
             let mut args = args.clone();
-            args.remove("material");
-            args.remove("layers");
-            return serde_json::from_value(args.into()).map_err(|e| e.to_string());
+            for field in unnamed {
+                args.remove(*field);
+            }
+            return Ok(args.into());
         }
     }
-    Err("the world declares no Planet".to_string())
+    Err(format!("the world declares no {ty}"))
 }
 
 // The blob lands beside the executable, inside the build's target dir.

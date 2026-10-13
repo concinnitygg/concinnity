@@ -27,7 +27,8 @@ pub const UPSCALE_BACKEND_OPTIONS: [&str; 4] = ["Auto", "FSR 3", "DLSS", "XeSS"]
 
 // Frame-rate cap options (Video Display group), in cycle order. "Unlimited" is
 // no cap; the rest are target FPS. The client pairs these with the numeric caps.
-pub(crate) const FPS_CAP_OPTIONS: [&str; 6] = ["Unlimited", "30", "60", "120", "144", "240"];
+pub(crate) const FPS_CAP_OPTIONS: [&str; 8] =
+    ["Unlimited", "30", "60", "120", "144", "240", "300", "360"];
 
 /// Pass resolution options (SSGI trace, ray-traced reflection trace,
 /// reflection blur), finest first, matching `PassResolution::ALL`.

@@ -183,6 +183,16 @@ impl AppKitWindow {
         ((content_h - laid_out_h) as f32).max(0.0)
     }
 
+    // Whether the window is off screen: minimized to the Dock, or its app
+    // hidden. Occlusion does not count, so a covered window or a sleeping
+    // display keeps running. False in embedded mode, where the host owns the
+    // window.
+    pub(crate) fn window_minimized(&self) -> bool {
+        self.window
+            .as_ref()
+            .is_some_and(|w| w.isMiniaturized() || !w.isVisible())
+    }
+
     // Whether the window has closed. Hiding the app or minimizing the window
     // leaves it open.
     pub(crate) fn closed(&self) -> bool {

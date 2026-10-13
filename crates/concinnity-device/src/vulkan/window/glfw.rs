@@ -393,6 +393,10 @@ impl GlfwWindow {
         self.cursor_outside_window
     }
 
+    pub(crate) fn window_minimized(&self) -> bool {
+        self.window.is_iconified()
+    }
+
     // Per-poll bookkeeping for an in-engine UI cursor (a menu), mirroring the
     // Metal `update_ui_cursor_confinement`: report whether the real cursor has
     // left the window content area so the renderer can stop drawing the in-engine

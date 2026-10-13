@@ -121,7 +121,7 @@ pub use protocol::{
     FrameTime, GpuMemoryPressure, HiddenAssets, HudLayers, HudPrefs, MenuActive, MenuOverride,
     OpenDropdown, OverlayImage, OverlayImages, PickEntry, PickIndex, ScheduleMode, ScreenStack,
     SimTiming, TraceEvent, TracePath, TracePaths, TraceRequest, TraceStep, TraceVal,
-    TransientSaves, ViewOverrides, WorldLines, WorldPhysicsBudget,
+    TransientSaves, ViewOverrides, WindowMinimized, WorldLines, WorldPhysicsBudget,
 };
 
 // The runtime behavior trait every engine system implements + its per-step

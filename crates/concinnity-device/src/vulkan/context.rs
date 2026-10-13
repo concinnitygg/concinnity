@@ -1667,6 +1667,10 @@ impl VkContext {
         self.window().cursor_outside_window()
     }
 
+    pub(crate) fn window_minimized(&self) -> bool {
+        self.window().window_minimized()
+    }
+
     // A togglable menu coexists with a captured camera; see
     // `RenderBackend::set_menu_mode`.
     pub(crate) fn set_menu_mode(&mut self, on: bool) {

@@ -30,6 +30,7 @@ use concinnity_core::components::StoryReload;
 use concinnity_core::ecs::{
     Access, ComponentId, CursorState, DesiredCursor, EventStore, FlyCam, FrameTime, HudLayers,
     HudPrefs, MenuActive, MenuOverride, OpenDropdown, ScheduleMode, ScreenStack, SimTiming,
+    WindowMinimized,
 };
 use std::any::TypeId;
 use std::sync::OnceLock;
@@ -85,6 +86,7 @@ define_access_ids! {
         ScreenStack,
         FlyCam,
         CursorState,
+        WindowMinimized,
         HudPrefs,
         OpenDropdown,
         crate::ecs::DisabledSettingRows,

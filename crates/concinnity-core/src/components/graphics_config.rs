@@ -58,15 +58,18 @@ pub struct GraphicsConfig {
     #[asset(default = 2)]
     pub frames_in_flight: u32,
     /// Cap the frame rate to the display refresh (vsync). Defaults to `false`:
-    /// the render loop runs uncapped (DirectX presents with tearing allowed,
-    /// Vulkan uses a mailbox present mode), which is what a benchmark wants. Set
-    /// to `true` to lock presentation to the monitor refresh, eliminating tearing
-    /// and the wasted frames that never reach the screen.
+    /// presentation is not tied to the refresh (DirectX presents with tearing
+    /// allowed, Vulkan uses a mailbox present mode) and `fps_cap` alone bounds
+    /// the frame rate. Set to `true` to lock presentation to the monitor
+    /// refresh, eliminating tearing and the wasted frames that never reach the
+    /// screen.
     pub vsync: bool,
-    /// Cap the frame rate to this many frames per second. `0` (default) leaves
-    /// the loop uncapped. The cap is a CPU-side frame pacer, so it composes with
-    /// `vsync`: the more restrictive of the two wins. Useful for limiting heat,
-    /// fan noise, and power draw, or matching a fixed refresh.
+    /// Cap the frame rate to this many frames per second, `300` by default.
+    /// `0` leaves the loop uncapped, which is what GPU cost measurement wants: a
+    /// capped GPU idles between frames and lowers its clocks. The cap is a
+    /// CPU-side frame pacer, so it composes with `vsync`: the more restrictive
+    /// of the two wins. Lower caps limit heat, fan noise, and power draw.
+    #[asset(default = 300)]
     pub fps_cap: u32,
     /// Background clear color [r, g, b, a] in linear 0..1 space.
     #[asset(default = [0.01, 0.01, 0.02, 1.0])]
@@ -108,6 +111,13 @@ pub struct GraphicsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_rate_is_capped_by_default() {
+        assert_eq!(GraphicsConfig::default().fps_cap, 300);
+        let parsed: GraphicsConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(parsed.fps_cap, 300);
+    }
 
     #[test]
     fn shadow_update_names_parse_in_snake_case() {

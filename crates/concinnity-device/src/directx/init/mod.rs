@@ -51,6 +51,8 @@ pub(super) mod shadow;
 mod targets;
 mod text;
 
+pub(in crate::directx) use bootstrap::swapchain_flags;
+
 // Per-mip Hi-Z UAV slots reserved at init: the deepest pyramid the two SPD
 // dispatches write at any size, so the heap layout survives a resize.
 pub(in crate::directx) const HIZ_MAX_MIPS: usize =

@@ -20,6 +20,9 @@ use windows::Win32::System::Threading::WaitForSingleObject;
 use windows::core::Interface;
 
 use crate::directx::context::DxContext;
+
+// The longest a frame start waits for DXGI to accept another present.
+const FRAME_LATENCY_TIMEOUT_MS: u32 = 1000;
 use crate::directx::error::{self, map_hresult};
 use crate::gpu_wait::GpuWait;
 
@@ -78,6 +81,13 @@ impl DxContext {
         // both block the CPU on the GPU inside `draw_frame`, which the engine
         // times its graphics system around.
         let mut gpu_wait = crate::gpu_wait::GpuWait::none();
+        // Start the frame only once DXGI may queue its present. Bounded, so a
+        // display that stops consuming presents cannot wedge the loop.
+        gpu_wait.measure(|| {
+            // SAFETY: the handle came from this context's swapchain and lives as long as the
+            // context, and the wait borrows nothing else.
+            unsafe { WaitForSingleObject(self.swapchain.frame_latency, FRAME_LATENCY_TIMEOUT_MS) }
+        });
         // SAFETY: the fence and the event were created from this device and are live for the call.
         let completed = unsafe { self.frame_sync.fence.GetCompletedValue() };
         if self.frame_sync.fence_values[frame] > completed {

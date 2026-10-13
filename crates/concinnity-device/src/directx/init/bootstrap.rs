@@ -234,11 +234,7 @@ pub(super) fn setup(
         BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
         BufferCount: BACK_BUFFERS as u32,
         SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-        Flags: if allow_tearing {
-            DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0 as u32
-        } else {
-            0
-        },
+        Flags: swapchain_flags(allow_tearing).0 as u32,
         ..Default::default()
     };
     let sc_base: IDXGISwapChain1 =
@@ -356,6 +352,18 @@ pub(super) fn setup(
         allow_tearing,
     };
     Ok((hw, swapchain))
+}
+
+// The flags a swapchain is created with, which every `ResizeBuffers` must
+// repeat: always a frame-latency waitable object, which paces the frame start
+// to the presents DXGI may still queue, plus tearing when presenting uncapped.
+pub(in crate::directx) fn swapchain_flags(allow_tearing: bool) -> DXGI_SWAP_CHAIN_FLAG {
+    let waitable = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    if allow_tearing {
+        DXGI_SWAP_CHAIN_FLAG(waitable.0 | DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0)
+    } else {
+        waitable
+    }
 }
 
 // Swapchain pixel format on the HDR path. RGBA16Float gives the compositor
@@ -485,7 +493,18 @@ pub(super) fn resolve_sample_count(supported: u32, requested: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_sample_count;
+    use super::{resolve_sample_count, swapchain_flags};
+    use windows::Win32::Graphics::Dxgi::{
+        DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+    };
+
+    #[test]
+    fn every_swapchain_is_latency_waitable_and_tears_only_when_asked() {
+        let waitable = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0;
+        let tearing = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0;
+        assert_eq!(swapchain_flags(false).0, waitable);
+        assert_eq!(swapchain_flags(true).0, waitable | tearing);
+    }
 
     #[test]
     fn a_temporal_request_collapses_to_one_sample() {

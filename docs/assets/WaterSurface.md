@@ -13,6 +13,14 @@ water in the lulls. A stronger wind and a longer `fetch_meters` (the open
 water the wind blows across) build longer, taller waves; with no `Wind`
 the water lies almost mirror-still. Authored `waves` add swell on top.
 
+Large open water, a surface hundreds of meters to kilometers across, is a
+simulated ocean: its wind waves rise, cross and fade continuously over the
+whole surface with no repeating pattern, crests sharpen and troughs
+broaden, and the water stays as detailed beside the camera as anywhere,
+however large the surface or far from the world origin. Pools, ponds and
+small lakes keep a lighter sum of waves. The graphics quality setting
+trades the ocean's finest detail for speed.
+
 Far off, waves too fine to draw fold into a rougher surface, so the sun or
 moon spreads into a glittering path instead of shimmering.
 

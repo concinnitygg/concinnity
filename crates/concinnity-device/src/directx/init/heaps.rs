@@ -94,6 +94,18 @@ pub(super) fn build_swapchain(
     // off without tearing -> sync interval 0, no flag (flip-model refresh
     // pacing, the best available fallback).
     let present_sync_interval: u32 = if vsync { 1 } else { 0 };
+    // Hold the presents DXGI queues ahead of the display to the frames in
+    // flight (its default is three), so a refresh-paced run does not add a
+    // frame of input latency on top of the CPU's own lead.
+    // DXGI accepts 1 to 16.
+    let frames = gpu.hw.swapchain_config.frames_in_flight.clamp(1, 16) as u32;
+    // SAFETY: a setter on the live swapchain, which was created with the waitable-object flag the
+    // call requires; it takes only a scalar.
+    unsafe { swapchain.handle.SetMaximumFrameLatency(frames) }
+        .map_err(|e| map_hresult(e.code(), "SetMaximumFrameLatency"))?;
+    // SAFETY: a query on the live swapchain, created with the waitable-object flag. Each call
+    // returns a new handle, which `SwapchainState::frame_latency` owns from here.
+    let frame_latency = unsafe { swapchain.handle.GetFrameLatencyWaitableObject() };
     Ok(SwapchainState {
         handle: swapchain.handle,
         back_buffers,
@@ -102,6 +114,7 @@ pub(super) fn build_swapchain(
         format: swapchain.format,
         present_sync_interval,
         allow_tearing: swapchain.allow_tearing,
+        frame_latency,
         last_present_index: None,
     })
 }

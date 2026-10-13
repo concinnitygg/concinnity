@@ -108,6 +108,11 @@ impl MtlContext {
         if !self.pump_window_events(mtm) {
             return Ok(());
         }
+        // Nothing a minimized window draws can be seen; park the frame until
+        // it is restored.
+        if self.window().appkit.window_minimized() {
+            return Ok(());
+        }
         let Some(AcquiredFrame {
             frame_slot,
             drawable,

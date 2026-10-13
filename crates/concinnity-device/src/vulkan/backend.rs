@@ -66,6 +66,7 @@ impl WindowControl for VkContext {
     forward! { assert = debug_assert_main_thread;
         fn set_ui_cursor_hidden(&mut self, hidden: bool);
         fn cursor_outside_window(&self) -> bool;
+        fn window_minimized(&self) -> bool;
         fn set_menu_mode(&mut self, on: bool);
         fn set_camera_capture(&mut self, capture: bool);
         fn set_vsync(&mut self, on: bool);

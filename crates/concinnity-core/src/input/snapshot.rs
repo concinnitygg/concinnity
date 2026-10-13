@@ -85,6 +85,8 @@ pub struct InputPacket {
     /// Window chrome overlapping the top of the render surface, in the same
     /// logical units as `viewport` (see `RenderBackend::top_content_inset`).
     pub top_inset: f32,
+    /// Whether the window is minimized (see `WindowControl::window_minimized`).
+    pub window_minimized: bool,
 }
 
 impl InputPacket {
@@ -97,6 +99,7 @@ impl InputPacket {
             cursor_outside_window: backend.cursor_outside_window(),
             viewport: backend.logical_size(),
             top_inset: backend.top_content_inset(),
+            window_minimized: backend.window_minimized(),
         }
     }
 
@@ -122,6 +125,7 @@ impl InputPacket {
         self.cursor_outside_window = newer.cursor_outside_window;
         self.viewport = newer.viewport;
         self.top_inset = newer.top_inset;
+        self.window_minimized = newer.window_minimized;
     }
 }
 
@@ -167,6 +171,7 @@ mod tests {
             cursor_outside_window: true,
             viewport: (100.0, 100.0),
             top_inset: 0.0,
+            window_minimized: true,
         };
         pending.merge_from(InputPacket {
             raw: InputSnapshot {
@@ -181,6 +186,7 @@ mod tests {
             cursor_outside_window: false,
             viewport: (200.0, 150.0),
             top_inset: 28.0,
+            window_minimized: false,
         });
         assert!(pending.raw.jump, "the earlier pulse survives");
         assert!(pending.raw.left_click);
@@ -203,6 +209,7 @@ mod tests {
             pending.top_inset, 28.0,
             "the window metrics take the newer value"
         );
+        assert!(!pending.window_minimized);
     }
 
     #[test]

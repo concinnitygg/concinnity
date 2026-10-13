@@ -18,7 +18,7 @@ use concinnity_core::components::{
 };
 use concinnity_core::ecs::{
     Access, CursorState, EventCursor, FlyCam, FrameTime, MenuActive, PipelineContext, ScreenStack,
-    StepResult, System,
+    StepResult, System, WindowMinimized,
 };
 use concinnity_core::input::snapshot::InputSnapshot;
 
@@ -135,6 +135,7 @@ impl System for InputSystem {
             .writes_resources(crate::resource_mask![
                 crate::ecs::InputMailbox,
                 CursorState,
+                WindowMinimized,
                 FrameInput,
             ])
     }
@@ -183,6 +184,7 @@ impl System for InputSystem {
             pos: (raw.mouse_x, raw.mouse_y),
             outside_window: cursor_outside,
         });
+        ctx.insert_resource(WindowMinimized(packet.window_minimized));
 
         // Live controls changes (a gamepad rebind or deadzone slider) sent by
         // SettingsSystem earlier this tick.

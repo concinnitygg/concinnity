@@ -2,11 +2,28 @@
 //! steps, so no system pays the sleep inside its own step time and the cap
 //! applies whichever systems the world built. The cap value comes from the
 //! `FrameRateCap` resource (published by GraphicsSystem from GraphicsConfig +
-//! the live settings row), and is the only limit the pacer applies.
+//! the live settings row), lowered to a background rate while the
+//! `WindowMinimized` resource says nothing drawn can be seen.
 
-use concinnity_core::ecs::FrameRateCap;
-use concinnity_core::ecs::World;
+use concinnity_core::ecs::{FrameRateCap, SimTiming, WindowMinimized, World};
 use std::time::{Duration, Instant};
+
+// The rate a minimized window is held to whatever the cap: few enough frames
+// to idle the GPU, enough that every frame's simulation ticks fit under the
+// per-frame tick limit, so the world keeps running at full speed behind it.
+const MINIMIZED_FPS: u32 = 30;
+const _: () =
+    assert!(MINIMIZED_FPS * SimTiming::MAX_TICKS_PER_FRAME >= (1.0 / SimTiming::TICK_DT) as u32);
+
+// The cap the pacer holds this frame to: the published one, lowered to
+// `MINIMIZED_FPS` while the window is minimized (0 is uncapped).
+fn effective_cap(cap: u32, minimized: bool) -> u32 {
+    match (minimized, cap) {
+        (false, cap) => cap,
+        (true, 0) => MINIMIZED_FPS,
+        (true, cap) => cap.min(MINIMIZED_FPS),
+    }
+}
 
 // Frame-pacing math for the FPS cap, split from the sleep so the drift / no-burst
 // logic is unit-testable. Given the current time, the previously scheduled
@@ -21,6 +38,37 @@ fn pace_deadline(now: Instant, prev: Option<Instant>, target: Duration) -> (Inst
     (wait_until, wait_until + target)
 }
 
+// How far ahead of a deadline the pacer stops sleeping and spins. Learned from
+// how late the OS actually wakes the thread, so a precise scheduler spins for
+// microseconds and a coarse one still meets the deadline.
+#[derive(Debug, Clone, Copy)]
+struct SleepMargin(Duration);
+
+impl SleepMargin {
+    const MIN: Duration = Duration::from_micros(100);
+    const MAX: Duration = Duration::from_millis(3);
+    const INITIAL: Duration = Duration::from_millis(1);
+
+    // Record one sleep that asked for `requested` and took `actual`. A late
+    // wake raises the margin at once, with headroom; prompt wakes let it
+    // decay slowly, so one lucky wake never invites the next late one.
+    fn observe(&mut self, requested: Duration, actual: Duration) {
+        let late = actual.saturating_sub(requested);
+        let wanted = (late + late / 2).clamp(Self::MIN, Self::MAX);
+        self.0 = if wanted >= self.0 {
+            wanted
+        } else {
+            self.0 - (self.0 - wanted) / 16
+        };
+    }
+}
+
+impl Default for SleepMargin {
+    fn default() -> Self {
+        Self(Self::INITIAL)
+    }
+}
+
 // Holds each frame's start to the target interval so the loop runs at most
 // `FrameRateCap` frames a second. One per `Runtime`, driven once per world step.
 #[derive(Debug, Default)]
@@ -31,13 +79,16 @@ pub(crate) struct FramePacer {
     // the pacer (clears the deadline) so switching caps never leaves one stale
     // long wait, mirroring the old in-step rebase on the settings change.
     last_cap: u32,
+    margin: SleepMargin,
 }
 
 impl FramePacer {
     // Pace the upcoming world step from the world's published pacing state.
-    // No-op (and deadline cleared) while no cap is published or the cap is 0.
+    // No-op (and deadline cleared) while no cap is in force.
     pub(crate) fn pace(&mut self, world: &World) {
         let cap = world.resource::<FrameRateCap>().map(|c| c.0).unwrap_or(0);
+        let minimized = world.resource::<WindowMinimized>().is_some_and(|m| m.0);
+        let cap = effective_cap(cap, minimized);
         if cap != self.last_cap {
             self.deadline = None;
             self.last_cap = cap;
@@ -48,11 +99,17 @@ impl FramePacer {
         }
         let target = Duration::from_secs_f64(1.0 / cap as f64);
         let (wait_until, next) = pace_deadline(Instant::now(), self.deadline, target);
-        // Coarse-sleep to ~1ms before the deadline, then spin for
-        // sub-millisecond precision.
-        while let Some(remaining) = wait_until.checked_duration_since(Instant::now()) {
-            if remaining > Duration::from_millis(1) {
-                std::thread::sleep(remaining - Duration::from_millis(1));
+        // Sleep to the learned margin before the deadline, then spin the rest.
+        loop {
+            let now = Instant::now();
+            let remaining = wait_until.saturating_duration_since(now);
+            if remaining.is_zero() {
+                break;
+            }
+            if remaining > self.margin.0 {
+                let requested = remaining - self.margin.0;
+                std::thread::sleep(requested);
+                self.margin.observe(requested, now.elapsed());
             } else {
                 std::hint::spin_loop();
             }
@@ -141,5 +198,61 @@ mod tests {
         let mut pacer = FramePacer::default();
         pacer.pace(&world);
         assert!(pacer.deadline.is_none());
+    }
+
+    #[test]
+    fn a_minimized_window_runs_at_the_background_rate() {
+        assert_eq!(effective_cap(0, true), MINIMIZED_FPS);
+        assert_eq!(effective_cap(300, true), MINIMIZED_FPS);
+        assert_eq!(effective_cap(10, true), 10, "a lower cap still wins");
+        assert_eq!(effective_cap(0, false), 0);
+        assert_eq!(effective_cap(300, false), 300);
+    }
+
+    // Minimizing an uncapped run paces it, and restoring it lifts the pace.
+    #[test]
+    fn minimizing_paces_an_uncapped_run() {
+        let mut world = World::new();
+        world.insert_resource(FrameRateCap(0));
+        world.insert_resource(WindowMinimized(true));
+        let mut pacer = FramePacer::default();
+        pacer.pace(&world);
+        assert_eq!(pacer.last_cap, MINIMIZED_FPS);
+        assert!(pacer.deadline.is_some());
+        world.insert_resource(WindowMinimized(false));
+        pacer.pace(&world);
+        assert!(pacer.deadline.is_none());
+    }
+
+    #[test]
+    fn a_late_wake_raises_the_sleep_margin_with_headroom() {
+        let mut margin = SleepMargin::default();
+        let asked = Duration::from_millis(2);
+        margin.observe(asked, asked + Duration::from_millis(2));
+        assert_eq!(margin.0, Duration::from_millis(3));
+    }
+
+    #[test]
+    fn prompt_wakes_let_the_sleep_margin_decay_to_its_floor() {
+        let mut margin = SleepMargin::default();
+        let asked = Duration::from_millis(2);
+        margin.observe(asked, asked + Duration::from_micros(20));
+        assert!(margin.0 < SleepMargin::INITIAL, "one prompt wake lowers it");
+        assert!(
+            margin.0 > SleepMargin::MIN,
+            "but only by a step, not to the floor"
+        );
+        for _ in 0..500 {
+            margin.observe(asked, asked);
+        }
+        assert!(margin.0 - SleepMargin::MIN < Duration::from_micros(1));
+    }
+
+    #[test]
+    fn the_sleep_margin_never_exceeds_its_ceiling() {
+        let mut margin = SleepMargin::default();
+        let asked = Duration::from_millis(1);
+        margin.observe(asked, asked + Duration::from_millis(20));
+        assert_eq!(margin.0, SleepMargin::MAX);
     }
 }

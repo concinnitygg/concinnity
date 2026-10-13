@@ -200,6 +200,12 @@ pub(crate) fn set_ui_cursor_hidden(state: &mut WindowState, hidden: bool) {
 // The window's client area in screen coordinates (top-left origin, y down),
 // or None if the rect query fails. Shared by the confinement's content-area
 // test and its fullscreen `ClipCursor` bounds.
+// Whether the window is minimized to the taskbar.
+pub(crate) fn is_minimized(hwnd: HWND) -> bool {
+    // SAFETY: `hwnd` is this window's live handle, and the call only reads its show state.
+    unsafe { IsIconic(hwnd) }.as_bool()
+}
+
 fn client_screen_rect(hwnd: HWND) -> Option<RECT> {
     let mut rect = RECT::default();
     // SAFETY: `hwnd` is this window's live handle, and `rect` is a live local the call fills.

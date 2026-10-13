@@ -94,6 +94,7 @@ impl WindowControl for MtlContext {
         via = self.window().appkit, via_mut = self.window_mut().appkit;
         fn set_ui_cursor_hidden(&mut self, hidden: bool);
         fn cursor_outside_window(&self) -> bool;
+        fn window_minimized(&self) -> bool;
         fn set_menu_mode(&mut self, on: bool);
         fn set_camera_capture(&mut self, capture: bool);
         fn set_window_mode(&mut self, mode: components::WindowMode);

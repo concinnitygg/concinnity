@@ -111,6 +111,10 @@ impl Win32Window {
         self.win_state.cursor_outside_window
     }
 
+    pub(crate) fn window_minimized(&self) -> bool {
+        window::is_minimized(self.win_state.hwnd)
+    }
+
     // Replace the runtime movement key map; takes effect on the next message.
     pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
         self.win_state.key.set_keymap(keymap);

@@ -14,7 +14,6 @@
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
 use windows::Win32::Graphics::Direct3D12::*;
-use windows::Win32::Graphics::Dxgi::*;
 
 use crate::directx::context::{BACK_BUFFERS, DxContext};
 use crate::directx::descriptor_slot::SrvSlot;
@@ -146,12 +145,8 @@ impl DxContext {
         }
         self.swapchain.back_buffers.clear();
         // ResizeBuffers must be passed the same flags the swapchain was created
-        // with, so an ALLOW_TEARING (uncapped) swapchain keeps the flag here.
-        let resize_flags = if self.swapchain.allow_tearing {
-            DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
-        } else {
-            DXGI_SWAP_CHAIN_FLAG(0)
-        };
+        // with.
+        let resize_flags = crate::directx::init::swapchain_flags(self.swapchain.allow_tearing);
         // SAFETY: the swapchain is live, every back-buffer reference this context held was dropped
         // above, and the call takes only scalars besides the format and flags.
         if let Err(e) = unsafe {

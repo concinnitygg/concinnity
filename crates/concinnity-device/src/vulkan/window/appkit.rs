@@ -143,6 +143,10 @@ impl AppKitVkWindow {
         self.win.cursor_outside_window()
     }
 
+    pub(crate) fn window_minimized(&self) -> bool {
+        self.win.window_minimized()
+    }
+
     pub(crate) fn set_keymap(&mut self, keymap: &KeyMap) {
         self.win.set_keymap(keymap);
     }

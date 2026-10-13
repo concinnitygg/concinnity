@@ -96,6 +96,12 @@ impl Default for FrameTime {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FrameRateCap(pub u32);
 
+/// Whether the window is minimized, published by InputSystem from each frame's
+/// sampled window state and read by the runtime-level frame pacer, which holds
+/// a minimized run to a background rate.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WindowMinimized(pub bool);
+
 /// An external per-frame driver (the `cn editor` HUD) can force the world's
 /// "menu active" state through this resource: `Some(true)` frees the cursor and
 /// freezes gameplay/physics/animation (edit mode), `Some(false)` captures the

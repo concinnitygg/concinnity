@@ -68,7 +68,7 @@ pub(crate) fn setting_available(
 // The discrete numeric levels each `*_at` / `*_index` mapping recovers from an
 // option index (the ordered labels for these live in core's option registry).
 // An authored value off a discrete level snaps to the nearest.
-const FPS_CAP_VALUES: [u32; 6] = [0, 30, 60, 120, 144, 240];
+const FPS_CAP_VALUES: [u32; 8] = [0, 30, 60, 120, 144, 240, 300, 360];
 const SSGI_RAYS_COUNTS: [u32; 3] = [1, 2, 4];
 const SHADOW_RESOLUTION_SIZES: [u32; 4] = [0, 1024, 2048, 4096];
 const SHADOW_DISTANCE_VALUES: [u32; 4] = [40, 80, 160, 320];
@@ -926,6 +926,9 @@ mod tests {
         // An authored cap off the discrete levels snaps to the nearest.
         assert_eq!(fps_cap_index(58), fps_cap_index(60));
         assert_eq!(fps_cap_index(1000), FPS_CAP_VALUES.len() - 1);
+        // The engine default has a row of its own.
+        let default_cap = concinnity_core::components::GraphicsConfig::default().fps_cap;
+        assert_eq!(fps_cap_at(fps_cap_index(default_cap)), default_cap);
     }
 
     #[test]

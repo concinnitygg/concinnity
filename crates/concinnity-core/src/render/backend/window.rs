@@ -57,6 +57,13 @@ pub trait WindowControl {
         false
     }
 
+    /// Whether the window is minimized (on macOS also: its app is hidden), so
+    /// nothing it draws can be seen. A covered or occluded window does not
+    /// count. Default `false`: a headless backend has no window to minimize.
+    fn window_minimized(&self) -> bool {
+        false
+    }
+
     /// Tell the backend a togglable menu (a Screen toggled by an Escape KeyBinding)
     /// coexists with a captured camera. In this mode Escape routes to the ECS
     /// (so the menu shows/hides) instead of releasing the cursor inline, and a

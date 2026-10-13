@@ -453,6 +453,9 @@ pub(super) struct SwapchainState {
     // DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING (vsync off + tearing supported); it
     // selects the tearing present flag and must be mirrored in ResizeBuffers.
     pub allow_tearing: bool,
+    // Signaled while DXGI may queue another present; the frame start waits on
+    // it. Owned here and closed in `DxContext::drop`.
+    pub frame_latency: windows::Win32::Foundation::HANDLE,
     // Back-buffer index of the most recently presented frame. `None` until the
     // first `draw_frame` presents. The headless `screenshot` path copies this
     // buffer (the one currently on screen); `GetCurrentBackBufferIndex` after a
@@ -1000,6 +1003,12 @@ impl DxContext {
             self.rebase_temporal_history(&rebase);
         }
 
+        // Nothing a minimized window draws can be seen; park the frame until
+        // it is restored. `window_closed` keeps pumping messages meanwhile.
+        if self.window_minimized() {
+            return Ok(());
+        }
+
         let frame = self.current_frame;
 
         let gpu_wait = self.wait_frame_slot(frame)?;
@@ -1452,6 +1461,10 @@ impl DxContext {
         self.win().cursor_outside_window
     }
 
+    pub(crate) fn window_minimized(&self) -> bool {
+        window::is_minimized(self.win().hwnd)
+    }
+
     // A togglable menu coexists with a captured camera; see
     // `RenderBackend::set_menu_mode`. The wnd_proc reads this flag to route
     // Escape to the ECS and suppress click-to-recapture.
@@ -1758,6 +1771,9 @@ impl Drop for DxContext {
         // SAFETY: the event was created in `DxContext::new`, is closed exactly once here, and
         // `wait_idle` at the top of `drop` retired every wait that used it.
         unsafe { CloseHandle(self.frame_sync.fence_event) }.ok();
+        // SAFETY: the swapchain handed this handle out in `build_swapchain`, it is closed exactly
+        // once here, and no frame is waiting on it after `wait_idle`.
+        unsafe { CloseHandle(self.swapchain.frame_latency) }.ok();
         // The remaining COM objects (device, swapchain, heaps, etc.) are reference-
         // counted and released automatically when the struct fields are dropped.
     }
