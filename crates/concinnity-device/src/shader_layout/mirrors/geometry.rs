@@ -172,10 +172,12 @@ pub(in crate::shader_layout) fn water_fft() -> Vec<Case> {
     vec![everywhere(mirror!(OceanFftParams => "WaterFftParams" {
         grid,
         lengths,
+        foam_thresholds,
+        foam_inv_ramps,
         time_fraction,
         choppiness,
         mip_size,
-        _pad,
+        foam_keep,
     }))]
 }
 

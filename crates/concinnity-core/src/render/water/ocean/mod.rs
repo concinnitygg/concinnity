@@ -15,6 +15,7 @@ pub mod cascades;
 pub mod clock;
 #[cfg(test)]
 mod fields;
+pub mod foam;
 pub mod grid;
 pub mod initial;
 
@@ -143,6 +144,8 @@ pub struct OceanSimulation {
     pub cascades: Cascades,
     /// Its first cascade's layer in the shared arrays; the rest follow.
     pub first_layer: u32,
+    /// Where its cascades whitecap.
+    pub foam: foam::FoamCalibration,
 }
 
 /// A body's share of a simulated ocean, and the grid it is drawn on.
@@ -185,9 +188,11 @@ impl OceanPlan {
             None if self.simulations.len() < MAX_OCEAN_SIMULATIONS => {
                 let shape = sea.shape()?;
                 let first_layer = self.layer_count();
+                let cascades = Cascades::new(shape.peak_wavelength(), self.quality);
                 self.simulations.push(OceanSimulation {
                     sea,
-                    cascades: Cascades::new(shape.peak_wavelength(), self.quality),
+                    foam: foam::FoamCalibration::new(&sea, &cascades),
+                    cascades,
                     first_layer,
                 });
                 self.simulations.len() - 1

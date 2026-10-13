@@ -3,6 +3,8 @@
 //! fills them each frame from the shared `water_fft.hlsl` kernels. Every
 //! resource here is device-created and hazard-tracked, and the kernels run
 //! in one serial compute encoder, so each dispatch sees the last one's writes.
+//! The foam buffer outlives frames; the next frame's node waits for this
+//! one's through `graph_events::plan_frame`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::render::error::{RenderError, RenderResult};
@@ -11,6 +13,7 @@ use concinnity_core::render::uniforms::ocean::{
     OCEAN_FFT_THREADS, OCEAN_MIP_GROUP, OceanFftParams, ocean_mip_groups, ocean_mip_levels,
 };
 use concinnity_core::render::water::ocean::OceanPlan;
+use concinnity_core::render::water::ocean::foam::FoamClock;
 use concinnity_core::render::water::ocean::initial::initial_spectrum;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -21,6 +24,7 @@ use objc2_metal::{
     MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerMipFilter, MTLSamplerState, MTLSize,
     MTLStorageMode, MTLTexture, MTLTextureType, MTLTextureUsage,
 };
+use std::cell::Cell;
 
 use super::builtin_shaders::{WATER_FFT_COLUMNS, WATER_FFT_ROWS, WATER_MIP, compute_pipeline};
 use super::context::MtlContext;
@@ -39,6 +43,7 @@ const CASCADE_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA16Float;
 const PARAMS_INDEX: usize = 0;
 const SPECTRUM_INDEX: usize = 5;
 const ROWS_INDEX: usize = 6;
+const FOAM_INDEX: usize = 7;
 const SRC_DISPLACEMENT_INDEX: usize = 0;
 const SRC_SLOPES_INDEX: usize = 1;
 const DST_DISPLACEMENT_INDEX: usize = 2;
@@ -73,6 +78,9 @@ struct OceanKernels {
     spectrum: Buffer,
     // Every layer's row transforms, two float4 per texel.
     row_data: Buffer,
+    // Every layer's foam, one float per texel, kept across frames.
+    foam: Buffer,
+    foam_clock: Cell<FoamClock>,
     // One view per mip level of each array, every layer.
     displacement_mips: Vec<Texture>,
     slope_mips: Vec<Texture>,
@@ -119,6 +127,12 @@ impl OceanSim {
         let row_data = device
             .newBufferWithLength_options(row_bytes, MTLResourceOptions::StorageModePrivate)
             .ok_or_else(|| allocation_failed("the ocean row transforms"))?;
+        let foam = device
+            .newBufferWithLength_options(
+                texels.len() * std::mem::size_of::<f32>(),
+                MTLResourceOptions::StorageModePrivate,
+            )
+            .ok_or_else(|| allocation_failed("the ocean foam"))?;
         Ok(Self {
             arrays: OceanArrays {
                 displacement,
@@ -132,6 +146,8 @@ impl OceanSim {
                 mip: compute_pipeline(device, &WATER_MIP, hot_reload)?,
                 spectrum,
                 row_data,
+                foam,
+                foam_clock: Cell::new(FoamClock::default()),
                 displacement_mips,
                 slope_mips,
             }),
@@ -260,9 +276,13 @@ impl MtlContext {
         );
         enc.set_buffer(&k.spectrum, 0, SPECTRUM_INDEX);
         enc.set_buffer(&k.row_data, 0, ROWS_INDEX);
+        enc.set_buffer(&k.foam, 0, FOAM_INDEX);
+        let mut clock = k.foam_clock.get();
+        let keep = clock.advance(time);
+        k.foam_clock.set(clock);
         let fft = [OCEAN_FFT_THREADS, 1];
         for sim in &k.plan.simulations {
-            let params = OceanFftParams::simulate(sim, time);
+            let params = OceanFftParams::simulate(sim, time, keep);
             let [size, _, _, cascades] = params.grid;
             enc.set_value(&params, PARAMS_INDEX);
             enc.set_pipeline(&k.rows);

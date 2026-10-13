@@ -7,8 +7,8 @@
 //
 //   WATER_FFT_ROWS     evolves each cascade's initial spectrum to this frame
 //                      and runs the inverse FFT along every row, into `rows`
-//   WATER_FFT_COLUMNS  runs the inverse FFT along every column of `rows` and
-//                      writes mip 0 of both arrays
+//   WATER_FFT_COLUMNS  runs the inverse FFT along every column of `rows`,
+//                      steps the foam, and writes mip 0 of both arrays
 //   WATER_MIP          reduces both arrays' mip `L - 1` into mip `L` by 2x2
 //                      box averages, which keeps the slope moments exact
 //
@@ -22,25 +22,35 @@
 //
 // The outputs per texel, in the arrays' layer for the cascade:
 //
-//   displacement  (dx, dy, dz, jacobian): the horizontal displacement scaled
-//                 by the choppiness, the height, and the Jacobian of the
-//                 horizontal map, which falls below zero where crests fold
+//   displacement  (dx, dy, dz, foam): the horizontal displacement scaled
+//                 by the choppiness, the height, and the whitecap foam
 //   slopes        (sx, sz, sx^2, sz^2): the slope of the displaced surface and
 //                 its square, whose mip averages give the slope variance
 //
-// Every resource takes its Metal index from its register number: the two
+// The foam is the one field that outlives a frame: `foam` keeps each texel's
+// across frames. Each frame it fades by `foam_keep` and is topped up where
+// the Jacobian of the horizontal map, which falls toward zero as crests
+// sharpen and below it where they fold, drops under the cascade's threshold,
+// so a breaking crest leaves a fading streak behind it. The foam reads the
+// Jacobian to first order, `1 + chop * (d dx / dx + d dz / dz)`, a Gaussian
+// field whose threshold core::render::water::ocean::foam calibrates to the
+// wind from the spectrum.
+//
+// Every resource takes its Metal index from its register number: the three
 // buffers sit past the parameter block in the buffer namespace, and the four
 // array views (two read-only, two writable) fold into the texture namespace in
 // register order.
 
 struct WaterFftParams
 {
-    uint4 grid;       // [texels per side, log2 of it, first layer, cascades]
-    float4 lengths;   // each cascade's side, in meters
+    uint4 grid;             // [texels per side, log2 of it, first layer, cascades]
+    float4 lengths;         // each cascade's side, in meters
+    float4 foam_thresholds; // the Jacobian each cascade starts to foam below
+    float4 foam_inv_ramps;  // 1 / the Jacobian span its foam ramps up over
     float time_fraction;
     float choppiness;
     uint mip_size;
-    uint _pad;
+    float foam_keep;        // the share of last frame's foam that survives
 };
 
 // The largest cascade side, and threads per FFT group: one butterfly per pair
@@ -59,6 +69,10 @@ static const float WATER_FFT_TAU = 6.28318530718;
 #endif
 #if defined(WATER_FFT_ROWS) || defined(WATER_FFT_COLUMNS)
 [[vk::binding(1, 0)]] RWStructuredBuffer<float4> rows : register(u6);
+#endif
+#if defined(WATER_FFT_COLUMNS)
+// Each layer's foam, texel after texel, kept across frames.
+[[vk::binding(6, 0)]] RWStructuredBuffer<float> foam : register(u7);
 #endif
 #if defined(WATER_MIP)
 // Read-only views of mip `L - 1`, so the reduction needs no typed loads from
@@ -225,6 +239,21 @@ void water_fft_rows(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
 // but finite slope.
 static const float WATER_MIN_JACOBIAN = 0.1;
 
+// Texel `at`'s foam this frame, of `cascade`, whose first-order Jacobian is
+// `jacobian`:
+// last frame's faded, or what the crest injects, whichever is more. A keep
+// of zero restarts from clear water without reading what the buffer held.
+// Mirrored by the tests of `ocean::foam` in core.
+float water_foam_step(uint at, uint cascade, float jacobian)
+{
+    float injected = saturate((params.foam_thresholds[cascade] - jacobian)
+                              * params.foam_inv_ramps[cascade]);
+    float kept = params.foam_keep > 0.0 ? foam[at] * params.foam_keep : 0.0;
+    float f = max(kept, injected);
+    foam[at] = f;
+    return f;
+}
+
 [shader("compute")]
 [numthreads(WATER_FFT_THREADS, 1, 1)]
 void water_fft_columns(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
@@ -266,8 +295,9 @@ void water_fft_columns(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID
             // surface where the displacement carried the point.
             float2 slope = float2(jzz * b.x - jxz * b.y, jxx * b.y - jxz * b.x)
                            / max(jacobian, WATER_MIN_JACOBIAN);
+            float f = water_foam_step(water_texel(layer, x, y, size), cascade, jxx + jzz - 1.0);
             uint3 texel = uint3(x, y, layer);
-            dst_displacement[texel] = float4(chop * a.x, a.z, chop * a.y, jacobian);
+            dst_displacement[texel] = float4(chop * a.x, a.z, chop * a.y, f);
             dst_slopes[texel] = float4(slope, slope * slope);
         }
     }

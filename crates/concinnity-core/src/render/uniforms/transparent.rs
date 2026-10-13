@@ -7,6 +7,7 @@ use crate::components::GlassPanel;
 use crate::gfx::render_types::LightUniforms;
 use crate::render::lights::glint_sun;
 use crate::render::water::motion::BodyMotion;
+use crate::render::water::ocean::foam::FOAM_CASCADES;
 use crate::render::water::ocean::{BodyOcean, MAX_OCEAN_CASCADES};
 use crate::render::water::ripples::{RIPPLES, Ripple};
 use crate::render::water::{BodyWave, WaterBody};
@@ -205,8 +206,8 @@ impl WaterRippleGpu {
 #[derive(Copy, Clone, Default, Debug, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 pub struct WaterOceanGpu {
-    /// `[cascades, first layer, texels per side, _]`; no cascades for a body
-    /// whose sea is summed.
+    /// `[cascades, first layer, texels per side, whitecapping cascades]`; no
+    /// cascades for a body whose sea is summed.
     pub layers: [u32; 4],
     /// One over each cascade's side, per meter; zero past the cascades.
     pub inv_lengths: [f32; 4],
@@ -224,7 +225,12 @@ impl WaterOceanGpu {
             *slot = 1.0 / l;
         }
         Self {
-            layers: [c.count() as u32, ocean.first_layer, c.size(), 0],
+            layers: [
+                c.count() as u32,
+                ocean.first_layer,
+                c.size(),
+                c.count().min(FOAM_CASCADES) as u32,
+            ],
             inv_lengths,
             offsets: [[0.0; 4]; 2],
         }
@@ -544,6 +550,32 @@ mod tests {
         assert_eq!(size_of::<WaterRippleGpu>(), 32);
         assert_eq!(offset_of!(WaterRippleGpu, shape), 0);
         assert_eq!(offset_of!(WaterRippleGpu, offset), 16);
+    }
+
+    // An ocean's block names its cascades, where they sit and how many of
+    // them whitecap: the longest ones, never more than it has.
+    #[test]
+    fn an_ocean_block_names_its_whitecapping_cascades() {
+        use crate::render::water::ocean::cascades::Cascades;
+        use crate::render::water::ocean::grid::OceanGrid;
+        use crate::render::water::ocean::{OceanQuality, foam::FOAM_CASCADES};
+        let body = |cascades: u32| BodyOcean {
+            simulation: 0,
+            cascades: Cascades::new(
+                56.0,
+                OceanQuality {
+                    size: 256,
+                    cascades,
+                },
+            ),
+            first_layer: 3,
+            grid: OceanGrid::new(56.0, [6000.0, 6000.0]),
+        };
+        let full = WaterOceanGpu::from_ocean(&body(3));
+        assert_eq!(full.layers, [3, 3, 256, FOAM_CASCADES as u32]);
+        assert!((full.inv_lengths[0] * 560.0 - 1.0).abs() < 1e-5);
+        assert_eq!(full.inv_lengths[3], 0.0);
+        assert_eq!(WaterOceanGpu::from_ocean(&body(1)).layers[3], 1);
     }
 
     // The body colors are reflectances: whatever is authored, each channel the

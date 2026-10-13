@@ -23,21 +23,26 @@ fn times_i(z: Complex) -> Complex {
 /// One texel's field spectra, as the shader packs them before the inverse
 /// FFT.
 #[derive(Debug, Clone, Copy)]
-struct TexelFields {
+pub(super) struct TexelFields {
     height: Complex,
     /// Horizontal displacement per unit choppiness, along X and Z.
     dx: Complex,
     dz: Complex,
     /// The displacement's derivatives per unit choppiness: d dx / dx,
     /// d dz / dz and d dx / dz.
-    jxx: Complex,
-    jzz: Complex,
+    pub(super) jxx: Complex,
+    pub(super) jzz: Complex,
     jxz: Complex,
 }
 
 /// The fields of the texel at wavenumber `k` holding `texel`, whose mirror
 /// texel at `-k` holds `mirror`, `time_fraction` into the repeat.
-fn evolve(texel: [f32; 4], mirror: [f32; 4], time_fraction: f32, k: [f32; 2]) -> TexelFields {
+pub(super) fn evolve(
+    texel: [f32; 4],
+    mirror: [f32; 4],
+    time_fraction: f32,
+    k: [f32; 2],
+) -> TexelFields {
     let x = texel[2] * time_fraction;
     let phase = TAU * (x - libm::floorf(x));
     let e = [libm::cosf(phase), libm::sinf(phase)];

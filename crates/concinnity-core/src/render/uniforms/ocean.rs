@@ -1,5 +1,6 @@
 //! What each dispatch of the ocean simulation reads: the simulation's grid and
-//! cascades, how far into the repeat period the frame is, and, for the mip
+//! cascades, how far into the repeat period the frame is, where its cascades
+//! whitecap and how much of last frame's foam survives, and, for the mip
 //! reduction, which level it writes.
 
 use crate::render::water::ocean::clock::time_fraction;
@@ -15,7 +16,7 @@ pub const OCEAN_MIP_GROUP: u32 = 8;
 
 /// One dispatch's constants. Vulkan pushes them, DirectX hands them over as
 /// root constants and Metal writes them to buffer(0). Matches
-/// `WaterFftParams` in `shaders/water_fft.hlsl`. 48 bytes.
+/// `WaterFftParams` in `shaders/water_fft.hlsl`. 80 bytes.
 #[derive(Copy, Clone, Default, Debug, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 pub struct OceanFftParams {
@@ -23,6 +24,12 @@ pub struct OceanFftParams {
     pub grid: [u32; 4],
     /// Each cascade's side, in meters; zero past the cascades.
     pub lengths: [f32; 4],
+    /// The Jacobian below which each cascade injects foam
+    /// ([`FoamCalibration`](crate::render::water::ocean::foam::FoamCalibration)).
+    pub foam_thresholds: [f32; 4],
+    /// One over the Jacobian span each cascade's injection ramps over; zero
+    /// for a cascade that never foams.
+    pub foam_inv_ramps: [f32; 4],
     /// How far into the repeat period the frame is, in `[0, 1)`.
     pub time_fraction: f32,
     /// Horizontal displacement per meter of height
@@ -30,13 +37,16 @@ pub struct OceanFftParams {
     pub choppiness: f32,
     /// The side of the mip level a reduction writes; unused by the FFT.
     pub mip_size: u32,
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad: u32,
+    /// The share of last frame's foam that survives this one
+    /// ([`FoamClock::advance`](crate::render::water::ocean::foam::FoamClock::advance));
+    /// zero restarts it from clear water.
+    pub foam_keep: f32,
 }
 
 impl OceanFftParams {
-    /// The FFT's constants for `sim` at `time` seconds into the world.
-    pub fn simulate(sim: &OceanSimulation, time: f64) -> Self {
+    /// The FFT's constants for `sim` at `time` seconds into the world, with
+    /// `foam_keep` of last frame's foam surviving.
+    pub fn simulate(sim: &OceanSimulation, time: f64, foam_keep: f32) -> Self {
         let c = &sim.cascades;
         let size = c.size();
         Self {
@@ -47,10 +57,12 @@ impl OceanFftParams {
                 c.count() as u32,
             ],
             lengths: c.padded_lengths(),
+            foam_thresholds: sim.foam.thresholds,
+            foam_inv_ramps: sim.foam.inv_ramps,
             time_fraction: time_fraction(time),
             choppiness: OCEAN_CHOPPINESS,
             mip_size: size,
-            _pad: 0,
+            foam_keep,
         }
     }
 
@@ -78,18 +90,21 @@ mod tests {
     use super::*;
     use crate::render::water::ocean::cascades::Cascades;
     use crate::render::water::ocean::clock::OCEAN_REPEAT_SECONDS;
+    use crate::render::water::ocean::foam::FoamCalibration;
     use crate::render::water::ocean::{OceanQuality, OceanSea};
     use core::mem::{offset_of, size_of};
 
     #[test]
     fn ocean_fft_params_layout_matches_shader() {
-        assert_eq!(size_of::<OceanFftParams>(), 48);
+        assert_eq!(size_of::<OceanFftParams>(), 80);
         assert_eq!(offset_of!(OceanFftParams, grid), 0);
         assert_eq!(offset_of!(OceanFftParams, lengths), 16);
-        assert_eq!(offset_of!(OceanFftParams, time_fraction), 32);
-        assert_eq!(offset_of!(OceanFftParams, choppiness), 36);
-        assert_eq!(offset_of!(OceanFftParams, mip_size), 40);
-        assert_eq!(offset_of!(OceanFftParams, _pad), 44);
+        assert_eq!(offset_of!(OceanFftParams, foam_thresholds), 32);
+        assert_eq!(offset_of!(OceanFftParams, foam_inv_ramps), 48);
+        assert_eq!(offset_of!(OceanFftParams, time_fraction), 64);
+        assert_eq!(offset_of!(OceanFftParams, choppiness), 68);
+        assert_eq!(offset_of!(OceanFftParams, mip_size), 72);
+        assert_eq!(offset_of!(OceanFftParams, foam_keep), 76);
     }
 
     #[test]
@@ -108,20 +123,26 @@ mod tests {
 
     #[test]
     fn a_simulation_fills_its_dispatch() {
+        let sea = OceanSea {
+            wind_speed: 9.0,
+            direction: [1.0, 0.0],
+            fetch: 1.0e5,
+        };
+        let cascades = Cascades::new(56.0, OceanQuality::FULL);
         let sim = OceanSimulation {
-            sea: OceanSea {
-                wind_speed: 9.0,
-                direction: [1.0, 0.0],
-                fetch: 1.0e5,
-            },
-            cascades: Cascades::new(56.0, OceanQuality::FULL),
+            foam: FoamCalibration::new(&sea, &cascades),
+            sea,
+            cascades,
             first_layer: 3,
         };
-        let p = OceanFftParams::simulate(&sim, 2.0 * OCEAN_REPEAT_SECONDS + 64.0);
+        let p = OceanFftParams::simulate(&sim, 2.0 * OCEAN_REPEAT_SECONDS + 64.0, 0.5);
         assert_eq!(p.grid, [256, 8, 3, 3]);
         assert_eq!(p.lengths, sim.cascades.padded_lengths());
         assert_eq!(p.time_fraction, 0.25);
         assert_eq!(p.choppiness, OCEAN_CHOPPINESS);
+        assert_eq!(p.foam_thresholds, sim.foam.thresholds);
+        assert_eq!(p.foam_inv_ramps, sim.foam.inv_ramps);
+        assert_eq!(p.foam_keep, 0.5);
         let r = p.reduce(3);
         assert_eq!(r.mip_size, 32);
         assert_eq!(r.grid, p.grid);

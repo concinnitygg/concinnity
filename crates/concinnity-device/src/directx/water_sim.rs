@@ -8,14 +8,18 @@
 //! crosses the node boundary in a different state. Their descriptors take the
 //! heap's ocean block: the two array SRVs the water draw reads as one table,
 //! then, per mip level, the table one reduction binds: an SRV of each array's
-//! source mip, then a UAV of each array's destination mip.
+//! source mip, then a UAV of each array's destination mip. The foam buffer,
+//! the one resource that carries state from frame to frame, stays in unordered
+//! access and is bound as a root UAV.
 
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::uniforms::ocean::{
     OceanFftParams, ocean_mip_groups, ocean_mip_levels,
 };
+use concinnity_core::render::water::ocean::foam::FoamClock;
 use concinnity_core::render::water::ocean::initial::initial_spectrum;
 use concinnity_core::render::water::ocean::{OceanPlan, OceanQuality};
+use std::cell::Cell;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -48,6 +52,7 @@ const PARAMS_ROOT: u32 = 0;
 const SPECTRUM_ROOT: u32 = 1;
 const ROWS_ROOT: u32 = 2;
 const MIPS_ROOT: u32 = 3;
+const FOAM_ROOT: u32 = 4;
 
 // Where the ocean block lies in the shader-visible heap.
 pub(in crate::directx) struct OceanSlots<F: Fn(usize) -> D3D12_CPU_DESCRIPTOR_HANDLE> {
@@ -76,6 +81,9 @@ struct OceanKernels {
     mip: ID3D12PipelineState,
     spectrum: PooledBuffer,
     row_data: ID3D12Resource,
+    // Every layer's foam, one float per texel, kept across frames.
+    foam: ID3D12Resource,
+    foam_clock: Cell<FoamClock>,
     // Each mip level's table: two source SRVs, two destination UAVs.
     mip_tables: Vec<SrvSlot>,
     // Mip levels per array.
@@ -163,12 +171,18 @@ impl OceanKernels {
             2 * bytes.len() as u64,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
         )?;
+        let foam = create_uav_buffer(
+            device,
+            (texels.len() * std::mem::size_of::<f32>()) as u64,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        )?;
         let sig = RootSig::new()
             .constants::<OceanFftParams>(0, Visibility::All)
             .srv(5, Visibility::All)
             .uav(6, Visibility::All)
-            .table(&[Range::srv(0, 2), Range::uav(2, 2)], Visibility::All);
-        debug_assert_eq!(sig.len(), MIPS_ROOT + 1);
+            .table(&[Range::srv(0, 2), Range::uav(2, 2)], Visibility::All)
+            .uav(7, Visibility::All);
+        debug_assert_eq!(sig.len(), FOAM_ROOT + 1);
         let root_sig = sig.build(device, "ocean root sig")?;
         let kernel = |program: &concinnity_core::render::shader_programs::ShaderProgram,
                       label: &str| {
@@ -182,6 +196,8 @@ impl OceanKernels {
             root_sig,
             spectrum,
             row_data,
+            foam,
+            foam_clock: Cell::new(FoamClock::default()),
             mip_tables,
             mips,
         })
@@ -323,6 +339,9 @@ impl DxContext {
             return;
         };
         let arrays = [&ocean.displacement, &ocean.slopes];
+        let mut clock = k.foam_clock.get();
+        let keep = clock.advance(time);
+        k.foam_clock.set(clock);
         // Mip `level` of `cascades` layers from `first`, written, made readable.
         let written = |level: u32, first: u32, cascades: u32| -> Vec<D3D12_RESOURCE_BARRIER> {
             arrays
@@ -352,8 +371,9 @@ impl DxContext {
             cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]);
             cmd.SetComputeRootShaderResourceView(SPECTRUM_ROOT, com::gpu_va(&k.spectrum));
             cmd.SetComputeRootUnorderedAccessView(ROWS_ROOT, com::gpu_va(&k.row_data));
+            cmd.SetComputeRootUnorderedAccessView(FOAM_ROOT, com::gpu_va(&k.foam));
             for sim in &k.plan.simulations {
-                let params = OceanFftParams::simulate(sim, time);
+                let params = OceanFftParams::simulate(sim, time, keep);
                 let [size, _, first, cascades] = params.grid;
                 cmd.set_compute_root_constants(PARAMS_ROOT, &params);
                 cmd.set_compute_srv_table(MIPS_ROOT, k.mip_tables[0]);
@@ -374,6 +394,7 @@ impl DxContext {
                 cmd.ResourceBarrier(&written(k.mips - 1, first, cascades));
                 uav_barrier(cmd, &k.row_data);
             }
+            uav_barrier(cmd, &k.foam);
         }
     }
 }

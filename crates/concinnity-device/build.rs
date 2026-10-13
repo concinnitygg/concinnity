@@ -354,6 +354,7 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             ("rows", "u6"),
             ("dst_displacement", "u2"),
             ("dst_slopes", "u3"),
+            ("foam", "u7"),
         ],
     },
     DxilAbi {
@@ -972,6 +973,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("rows", "buffer(6)"),
             ("dst_displacement", "texture(2)"),
             ("dst_slopes", "texture(3)"),
+            ("foam", "buffer(7)"),
         ]],
         argument_ids: &[],
     },
@@ -1736,8 +1738,10 @@ const WATER_BODY_LIGHT_SLOTS: &[(&str, &str)] = &[
     ("irradiance_cube", "texture(8)"),
     ("shadow_sampler", "sampler(5)"),
 ];
-// The simulated oceans' slopes, which every water fragment shades from.
+// The simulated oceans' cascades, whose slopes and foam every water fragment
+// shades from.
 const WATER_OCEAN_SLOTS: &[(&str, &str)] = &[
+    ("ocean_displacement", "texture(9)"),
     ("ocean_slopes", "texture(10)"),
     ("ocean_sampler", "sampler(6)"),
 ];

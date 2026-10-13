@@ -57,14 +57,22 @@ pub struct WaterWave {
 /// small lakes keep a lighter sum of waves. The graphics quality setting
 /// trades the ocean's finest detail for speed.
 ///
+/// A simulated ocean whitecaps: where a crest grows steep enough to break, a
+/// patch of white foam appears on it and stays behind as the wave runs on,
+/// thinning into lacy streaks over a few seconds. How much of the sea is
+/// white follows the wind as at sea: almost none below about 4 m/s, about
+/// one percent at 10 m/s, a few percent at 14 m/s and more in a gale.
+/// Whitecaps are rough, so they hide the reflection and the sun's glint
+/// beneath them. Smaller water never whitecaps.
+///
 /// Far off, waves too fine to draw fold into a rougher surface, so the sun or
 /// moon spreads into a glittering path instead of shimmering.
 ///
 /// It refracts and reflects the scene, and its body is lit like any
 /// other surface: the sun or moon (in shadow where the scene casts one) and the
 /// sky's light scatter back out of the water, off a reflectance that blends
-/// from `shallow_color` to `deep_color` as the water deepens. Shoreline foam is
-/// a lit white surface.
+/// from `shallow_color` to `deep_color` as the water deepens. Shoreline foam
+/// and whitecaps are a lit white surface.
 ///
 /// The surface is positioned by `center` and sized by `extent` (XZ
 /// half-widths). The mesh itself is flat; all height variation comes from the
@@ -131,7 +139,7 @@ pub struct WaterSurface {
     /// Width of the shoreline foam band, in meters.
     #[asset(default = 0.30)]
     pub foam_width_meters: f32,
-    /// Strength of the shoreline foam, in [0, 1].
+    /// Strength of the shoreline foam and of an ocean's whitecaps, in [0, 1].
     #[asset(default = 0.8)]
     pub foam_intensity: f32,
     /// Sharpness of the grazing-angle reflection. Higher confines reflections to

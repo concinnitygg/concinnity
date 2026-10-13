@@ -5,8 +5,9 @@
 //! Both arrays rest in `GENERAL` for good, like the atmosphere's tables: the
 //! kernels write them as storage images and the water draw samples them in
 //! that layout, so every step is a memory barrier that names no image. The
-//! node orders itself against the last frame's water draw at its head and the
-//! next draw against its writes at its tail.
+//! node orders itself against the last frame's water draw and foam step at its
+//! head and the next draw against its writes at its tail. The foam buffer is
+//! the one resource that carries state from frame to frame.
 
 use ash::vk;
 use concinnity_core::render::error::RenderResult;
@@ -15,7 +16,9 @@ use concinnity_core::render::uniforms::ocean::{
     OceanFftParams, ocean_mip_groups, ocean_mip_levels,
 };
 use concinnity_core::render::water::ocean::OceanPlan;
+use concinnity_core::render::water::ocean::foam::FoamClock;
 use concinnity_core::render::water::ocean::initial::initial_spectrum;
+use std::cell::Cell;
 
 use super::allocator::{PooledBuffer, PooledImage};
 use super::builtin_shaders::{self, CompileProgram};
@@ -36,8 +39,8 @@ use super::texture::{
 const CASCADE_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
 // The kernels' set: the spectrum, the row transforms, the source mip of each
-// array (read-only) and the destination mip of each.
-fn kernel_bindings() -> [Binding; 6] {
+// array (read-only), the destination mip of each, and the foam.
+fn kernel_bindings() -> [Binding; 7] {
     use vk::DescriptorType as T;
     let c = vk::ShaderStageFlags::COMPUTE;
     [
@@ -47,6 +50,7 @@ fn kernel_bindings() -> [Binding; 6] {
         (3, T::SAMPLED_IMAGE, c),
         (4, T::STORAGE_IMAGE, c),
         (5, T::STORAGE_IMAGE, c),
+        (6, T::STORAGE_BUFFER, c),
     ]
 }
 
@@ -88,6 +92,8 @@ struct OceanKernels {
     sets: Vec<vk::DescriptorSet>,
     _spectrum: PooledBuffer,
     _rows: PooledBuffer,
+    _foam: PooledBuffer,
+    foam_clock: Cell<FoamClock>,
 }
 
 impl OceanSim {
@@ -189,6 +195,12 @@ impl OceanKernels {
             vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
+        let foam_bytes = (texels.len() * std::mem::size_of::<f32>()) as u64;
+        let foam = gpu.alloc.create_buffer(
+            foam_bytes,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
 
         let set_layout = create_descriptor_set_layout(device, &kernel_bindings())?;
         let push = vk::PushConstantRange::default()
@@ -237,6 +249,7 @@ impl OceanKernels {
                 .sampled_image_in(3, slopes.mips[src], vk::ImageLayout::GENERAL)
                 .storage_image(4, displacement.mips[level])
                 .storage_image(5, slopes.mips[level])
+                .storage_buffer(6, foam.buffer(), foam_bytes)
                 .apply(device);
         }
         Ok(Self {
@@ -250,6 +263,8 @@ impl OceanKernels {
             sets,
             _spectrum: spectrum,
             _rows: rows,
+            _foam: foam,
+            foam_clock: Cell::new(FoamClock::default()),
         })
     }
 }
@@ -361,18 +376,23 @@ impl VkContext {
         let draw_stages =
             vk::PipelineStageFlags::VERTEX_SHADER | vk::PipelineStageFlags::FRAGMENT_SHADER;
         // The last frame's water draw finishes reading before the arrays are
-        // rewritten.
+        // rewritten, and its foam is what this frame's fades.
         rec.pipeline_barrier(
-            draw_stages,
+            draw_stages | vk::PipelineStageFlags::COMPUTE_SHADER,
             vk::PipelineStageFlags::COMPUTE_SHADER,
-            &[vk::MemoryBarrier::default()],
+            &[vk::MemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)],
             &[],
             &[],
         );
+        let mut clock = k.foam_clock.get();
+        let keep = clock.advance(time);
+        k.foam_clock.set(clock);
         let compute = vk::ShaderStageFlags::COMPUTE;
         let levels = k.sets.len();
         for sim in &k.plan.simulations {
-            let params = OceanFftParams::simulate(sim, time);
+            let params = OceanFftParams::simulate(sim, time, keep);
             let [size, _, _, cascades] = params.grid;
             rec.bind_descriptor_sets(
                 vk::PipelineBindPoint::COMPUTE,

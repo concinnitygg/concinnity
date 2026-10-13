@@ -12,7 +12,8 @@
 // (water_fft.hlsl) instead of the sum: the vertex stage adds their
 // displacement, filtered to its grid cell, and the fragment their slopes,
 // whose mip-filtered second moments carry what the pixel cannot resolve into
-// the roughness (LEAN). Summed:
+// the roughness (LEAN), and the whitecap foam its longest cascades keep where
+// crests break. Summed:
 //
 //   * The long waves, down to two grid cells, displace the grid as Gerstner
 //     waves; anything shorter would alias between vertices.
@@ -37,8 +38,11 @@
 //                  irradiance, off a reflectance blended shallow to deep by
 //                  the column thickness the main depth gives, an exponential
 //                  falloff over `depth_falloff`.
-//   * Foam       - a lit white diffuse band where the seabed is just below the
-//                  surface.
+//   * Foam       - a lit white diffuse layer: a band where the seabed is just
+//                  below the surface, and on a simulated ocean the whitecaps
+//                  on breaking crests and the streaks they leave, broken up
+//                  by procedural lace. Whitecaps are rough and cover the
+//                  reflection and the sun's glint beneath them.
 //   * Reflection - see below, plus a GGX specular lobe for the scene's sun off
 //                  the same wave normal.
 //   * Fresnel    - Schlick with a water-vs-air F0 of 0.02, shaped by
@@ -132,7 +136,7 @@ struct WaterRipple
 // Where a body samples its simulated ocean. Matches `WaterOceanGpu` (64 B).
 struct WaterOcean
 {
-    uint4 layers;        // [cascades, first layer, texels per side, _]
+    uint4 layers;        // [cascades, first layer, texels per side, whitecapping cascades]
     float4 inv_lengths;  // 1 / each cascade's side, per meter
     float4 offsets[2];   // the anchor's place in each cascade's tile, [u, v] pairs
 };
@@ -182,7 +186,7 @@ struct WaterParams
 #define TRANSPARENT_PARAMS WaterParams
 {TRANSPARENT_SCENE}
 
-// The simulated oceans' cascades, one layer each: (dx, dy, dz, jacobian) and
+// The simulated oceans' cascades, one layer each: (dx, dy, dz, foam) and
 // (sx, sz, sx^2, sz^2), with mips, read through a wrapping anisotropic
 // sampler. Bound for every surface; a summed body has no cascades and never
 // samples them.
@@ -414,13 +418,61 @@ float3 water_ocean_displace(float2 xz, float footprint)
     return d;
 }
 
-// The shading at one rest position: the wave normal, and the GGX alpha that
-// carries the slopes too fine for the pixel.
+// The shading at one rest position: the wave normal, the GGX alpha that
+// carries the slopes too fine for the pixel, and the whitecap cover.
 struct WaterShading
 {
     float3 normal;
     float alpha;
+    float foam;
 };
+
+// Whitecap lace: value noise over two octaves, the coarser this many meters
+// a cell, the finer a quarter of it.
+static const float WATER_FOAM_CELL = 0.2;
+// How soft a lace edge is, in noise units.
+static const float WATER_FOAM_EDGE = 0.08;
+
+// Value noise in [0, 1] at `p` on a lattice that repeats every `period`
+// cells, `p` within one period.
+float water_periodic_noise(float2 p, float period)
+{
+    float2 cell = floor(p);
+    float2 f = p - cell;
+    float2 s = f * f * (3.0 - 2.0 * f);
+    float2 next = cell + 1.0;
+    next = select(next >= period, (float2)0.0, next);
+    float a = wind_lattice(cell);
+    float b = wind_lattice(float2(next.x, cell.y));
+    float c = wind_lattice(float2(cell.x, next.y));
+    float d = wind_lattice(next);
+    return lerp(lerp(a, b, s.x), lerp(c, d, s.x), s.y);
+}
+
+// The lace that breaks up whitecap `cover` at anchor-relative rest XZ
+// `local_xz`, seen through a pixel `footprint` meters across: the noise is
+// cut at `1 - cover`, so dense foam stays whole and thinning foam breaks into
+// ever smaller white flecks rather than dimming, while lace too fine for the
+// pixel fades back to `cover` itself. Laid on the tile of the finest
+// whitecapping cascade, a whole number of cells across, so it stays fixed to
+// the sea as the tile offsets wrap.
+float water_foam_lace(float cover, float2 local_xz, float footprint)
+{
+    uint c = params.ocean.layers.w - 1u;
+    float2 uv = water_ocean_uv(local_xz, c);
+    uv -= floor(uv);
+    float period = max(round(1.0 / (params.ocean.inv_lengths[c] * WATER_FOAM_CELL)), 1.0);
+    float coarse = water_periodic_noise(uv * period, period);
+    float fine = water_periodic_noise(uv * (4.0 * period), 4.0 * period);
+    // Two octaves of value noise, stretched toward an even spread over
+    // [0, 1] so the share above the cut is about `cover`.
+    float lace = saturate(0.5 + 2.5 * (0.65 * (coarse - 0.5) + 0.35 * (fine - 0.5)));
+    // The stretch clips the noise at one, so foam thinner than an edge
+    // fades out rather than keeping those clipped flecks.
+    float cut = smoothstep(1.0 - cover - WATER_FOAM_EDGE, 1.0 - cover + WATER_FOAM_EDGE, lace)
+                * saturate(cover / WATER_FOAM_EDGE);
+    return lerp(cover, cut, water_fade(WATER_FOAM_CELL, footprint));
+}
 
 // Every wave and ripple at anchor-relative rest XZ `local_xz`, faded by the
 // pixel's footprint (`dx`, `dy`: the rest position's screen derivatives). The
@@ -433,17 +485,26 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
     float3 binormal = float3(1.0, 0.0, 0.0); // dP/dx
     float3 tangent = float3(0.0, 0.0, 1.0);  // dP/dz
     float removed = 0.0;
+    // The share of the surface no cascade's whitecap covers.
+    float clear = 1.0;
 
     uint cascades = min(params.ocean.layers.x, WATER_OCEAN_MAX_CASCADES);
+    uint foaming = min(params.ocean.layers.w, cascades);
     for (uint c = 0u; c < cascades; c++)
     {
         float inv_length = params.ocean.inv_lengths[c];
         float layer = float(params.ocean.layers.y + c);
-        float4 m = ocean_slopes.SampleGrad(ocean_sampler, float3(water_ocean_uv(local_xz, c), layer),
-                                           dx * inv_length, dy * inv_length);
+        float3 uv = float3(water_ocean_uv(local_xz, c), layer);
+        float2 gx = dx * inv_length;
+        float2 gy = dy * inv_length;
+        float4 m = ocean_slopes.SampleGrad(ocean_sampler, uv, gx, gy);
         binormal.y += m.x;
         tangent.y += m.y;
         removed += max(m.z - m.x * m.x, 0.0) + max(m.w - m.y * m.y, 0.0);
+        if (c < foaming)
+        {
+            clear *= 1.0 - saturate(ocean_displacement.SampleGrad(ocean_sampler, uv, gx, gy).w);
+        }
     }
 
     uint count = min(params.wave_count, WATER_MAX_WAVES);
@@ -505,6 +566,7 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
     float base = max(params.roughness, 0.02);
     base *= base;
     o.alpha = sqrt(base * base + removed + variance * WATER_UNRESOLVED_RIPPLE);
+    o.foam = foaming > 0u ? water_foam_lace(1.0 - clear, local_xz, max(length(dx), length(dy))) : 0.0;
     return o;
 }
 
@@ -570,6 +632,8 @@ float water_scene_distance(float2 ndc_xy, float depth01)
 // irradiance through `shadow` plus the sky's, both over pi. Without an
 // irradiance cube the sky is the main pass's flat ambient fill.
 static const float WATER_INV_PI = 0.318309886;
+// The GGX alpha whitecaps roughen the surface toward.
+static const float WATER_FOAM_ALPHA = 0.6;
 static const float WATER_FLAT_AMBIENT = 0.03;
 
 float3 water_lambert(float3 n, float shadow)
@@ -595,12 +659,15 @@ float water_sun_shadow(float3 world_pos, float2 screen_xy)
 
 // The surface at this fragment: the wave normal, the fragment's screen UV, and
 // everything below the waterline -- the refracted scene, the light the column
-// scatters back out, and foam where the seabed is close.
+// scatters back out, and foam where the seabed is close or a crest breaks.
 struct WaterSurfacePoint
 {
     float3 normal;
-    // GGX alpha, the base roughness widened by the slopes the pixel filtered.
+    // GGX alpha, the base roughness widened by the slopes the pixel filtered
+    // and by whitecaps.
     float alpha;
+    // The whitecap cover, which hides the reflection and the glint.
+    float foam;
     float2 frag_uv;
     float3 below;
     float camera_distance;
@@ -613,7 +680,8 @@ WaterSurfacePoint water_surface(WaterVertexOut i, float2 dx, float2 dy)
     WaterSurfacePoint s;
     WaterShading shading = water_shading(i.local_xz, dx, dy);
     s.normal = shading.normal;
-    s.alpha = shading.alpha;
+    s.foam = saturate(shading.foam * params.foam_intensity);
+    s.alpha = max(shading.alpha, s.foam * WATER_FOAM_ALPHA);
 
     float2 vp_dim = max(view.viewport, (float2)(1.0));
     s.frag_uv = i.position.xy / vp_dim;
@@ -648,10 +716,12 @@ WaterSurfacePoint water_surface(WaterVertexOut i, float2 dx, float2 dy)
 
     // Foam: a white diffuse surface on the waves in a soft band where the
     // seabed is just below the surface, which is both the shoreline and any
-    // intersection line with standing geometry.
+    // intersection line with standing geometry, and over the whitecaps.
     float foam_t = saturate(1.0 - water_depth / max(params.foam_width, 1e-3));
+    float shore = foam_t * foam_t;
+    float cover = shore + shading.foam * (1.0 - shore);
     float3 foam = water_lambert(s.normal, shadow);
-    s.below = lerp(below, foam, foam_t * foam_t * params.foam_intensity);
+    s.below = lerp(below, foam, cover * params.foam_intensity);
     return s;
 }
 
@@ -733,8 +803,11 @@ TransparentOut water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflec
 {
     float n_dot_v = saturate(dot(s.normal, view_dir));
     float fresnel = 0.02 + 0.98 * pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
-    float3 glint = water_sun_glint(s.normal, view_dir, s.alpha);
-    float3 color = lerp(s.below, reflection, fresnel) + glint;
+    // Whitecaps lie on top of the water: what they cover neither mirrors nor
+    // glints.
+    float open = 1.0 - s.foam;
+    float3 glint = water_sun_glint(s.normal, view_dir, s.alpha) * open;
+    float3 color = lerp(s.below, reflection, fresnel * open) + glint;
     float near = 1.0 - smoothstep(WATER_REACTIVE_FADE_METERS.x, WATER_REACTIVE_FADE_METERS.y,
                                   s.camera_distance);
     float reactive = max(reactive_luminance(glint), fresnel * WATER_REACTIVE_FRESNEL * near);
