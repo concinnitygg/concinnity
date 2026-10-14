@@ -2,8 +2,9 @@
 //! resolves feed, the RT reflection pipelines with their output target, and the
 //! acceleration structure they trace.
 
-use concinnity_core::render::backend_init::{PostSettings, SceneData};
+use concinnity_core::render::backend_init::{RenderLaunch, SceneData};
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::settings::ResolvedGraphics;
 
 use super::InitGpu;
 use crate::directx::context::{DxRayTracing, DxSceneAssets, DxTargets};
@@ -25,14 +26,14 @@ use crate::directx::transparent::TransparentResources;
 pub(super) fn build_reflection_composite(
     device: &DxPostDevice,
     targets: &DxTargets,
-    post: &PostSettings,
+    graphics: &ResolvedGraphics,
 ) -> RenderResult<Option<DxReflectionCompositePass>> {
-    if post.ssr.is_none() && post.rt_reflections.is_none() {
+    if graphics.ssr().is_none() && graphics.rt_reflections().is_none() {
         return Ok(None);
     }
     Ok(Some(build_composite(
         device,
-        post.reflection_blur_scale,
+        graphics.reflection_blur_scale(),
         targets.extent.render_width,
         targets.extent.render_height,
     )?))
@@ -48,10 +49,10 @@ pub(super) fn build_rt_reflections(
     gpu: &InitGpu<'_>,
     slots: &QualitySlotHandles,
     targets: &DxTargets,
-    post: &PostSettings,
+    graphics: &ResolvedGraphics,
 ) -> Option<RtReflectionsResources> {
     let hw = gpu.hw;
-    match (post.rt_reflections, hw.rt_capable) {
+    match (graphics.rt_reflections(), hw.rt_capable) {
         (Some(settings), true) => match RtReflectionsResources::new(
             RtBuildContext {
                 alloc: &hw.alloc,
@@ -83,7 +84,7 @@ pub(super) struct RtInputs<'a> {
     pub(super) scene: &'a DxSceneAssets,
     pub(super) reflections: Option<&'a RtReflectionsResources>,
     pub(super) transparent: Option<&'a TransparentResources>,
-    pub(super) post: &'a PostSettings,
+    pub(super) launch: RenderLaunch,
 }
 
 // Hardware-RT acceleration structure. Built once over the shared static
@@ -100,7 +101,7 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRa
         scene,
         reflections,
         transparent,
-        post,
+        launch,
     } = inputs;
     let hw = gpu.hw;
     let accel = if reflections.is_some() {
@@ -132,11 +133,11 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRa
         .flatten();
     DxRayTracing {
         accel,
-        dynamic_mode: post.rt_dynamic,
+        dynamic_mode: launch.rt_dynamic,
         update_streak: Default::default(),
         retired: Default::default(),
         retire_tick: 0,
-        skinned_geometry: post.rt_skinned_geometry,
+        skinned_geometry: launch.rt_skinned_geometry,
         skin,
     }
 }

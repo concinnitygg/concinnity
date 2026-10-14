@@ -1064,6 +1064,12 @@ impl DxContext {
     // the executor's phase-2 arms all gate on it identically. Mirrors Metal's
     // `CullState.two_pass_occlusion` gate.
     pub(in crate::directx) fn two_pass_occlusion_active(&self) -> bool {
+        self.two_pass_occlusion_built() && self.cull_count() > 0
+    }
+
+    // Whether launch built two-pass occlusion: requested, with the phase-two
+    // cull, the Hi-Z pyramid and the bindless main pass.
+    pub(in crate::directx) fn two_pass_occlusion_built(&self) -> bool {
         self.cull.occlusion_two_pass
             && self
                 .cull
@@ -1072,7 +1078,6 @@ impl DxContext {
                 .is_some_and(|k| k.pso_phase2.is_some())
             && self.cull.hiz.is_some()
             && self.cull.main_bindless_pso.is_some()
-            && self.cull_count() > 0
     }
 }
 

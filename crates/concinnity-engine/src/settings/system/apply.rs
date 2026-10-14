@@ -8,7 +8,6 @@ use concinnity_core::components::{
 };
 use concinnity_core::ecs::FrameRateCap;
 use concinnity_core::ecs::PipelineContext;
-use concinnity_core::render::backend_init::ShadowCadence;
 use concinnity_core::render::history_reset::{HistoryResetCauses, PendingHistoryReset};
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::window::display_mode;
@@ -19,7 +18,7 @@ use crate::config::Settings;
 use crate::settings;
 use crate::settings::{SettingKey, SliderSetting, SliderTarget};
 use concinnity_core::settings::UserGraphicsSettings;
-use concinnity_core::settings::rows::{GraphicsSliderTarget, quality_cycle, quality_toggle};
+use concinnity_core::settings::rows::{quality_cycle, quality_toggle};
 
 // A cycle row's option labels.
 pub(super) type RowOptions = &'static [&'static str];
@@ -36,42 +35,42 @@ pub(super) struct BoolRow {
 pub(super) static BOOL_ROWS: [BoolRow; 8] = [
     BoolRow {
         key: SettingKey::Vsync,
-        state: |s| &mut s.graphics.vsync,
+        state: |s| &mut s.resolved.graphics.frame_pacing.vsync,
         persisted: |g| &mut g.vsync,
     },
     BoolRow {
         key: SettingKey::PerfStats,
-        state: |s| &mut s.graphics.perf_stats,
+        state: |s| &mut s.resolved.perf_stats,
         persisted: |g| &mut g.perf_stats,
     },
     BoolRow {
         key: SettingKey::ShowFps,
-        state: |s| &mut s.graphics.show_fps,
+        state: |s| &mut s.resolved.show_fps,
         persisted: |g| &mut g.show_fps,
     },
     BoolRow {
         key: SettingKey::ShowVram,
-        state: |s| &mut s.graphics.show_vram,
+        state: |s| &mut s.resolved.show_vram,
         persisted: |g| &mut g.show_vram,
     },
     BoolRow {
         key: SettingKey::OcclusionTwoPass,
-        state: |s| &mut s.graphics.occlusion_two_pass,
+        state: |s| &mut s.resolved.graphics.culling.two_pass_occlusion,
         persisted: |g| &mut g.occlusion_two_pass,
     },
     BoolRow {
         key: SettingKey::TemporalUpscaling,
-        state: |s| &mut s.graphics.temporal_upscaling,
+        state: |s| &mut s.resolved.graphics.anti_aliasing.upscaling,
         persisted: |g| &mut g.temporal_upscaling,
     },
     BoolRow {
         key: SettingKey::HdrDisplay,
-        state: |s| &mut s.graphics.hdr_display,
+        state: |s| &mut s.resolved.graphics.display.hdr,
         persisted: |g| &mut g.hdr_display,
     },
     BoolRow {
         key: SettingKey::HdrPq,
-        state: |s| &mut s.graphics.hdr_pq,
+        state: |s| &mut s.resolved.graphics.display.pq,
         persisted: |g| &mut g.hdr_pq,
     },
 ];
@@ -116,6 +115,9 @@ impl SettingsState {
             Some(events) => events.read(&mut self.setting_cmd_cursor).cloned().collect(),
             None => Vec::new(),
         };
+        if setting_cmds.is_empty() {
+            return;
+        }
         // One settings snapshot serves the whole command batch: loaded lazily
         // (from the in-memory cache after the first change, so a
         // queued-but-unflushed background write is never re-read stale from
@@ -128,6 +130,9 @@ impl SettingsState {
         let tree = ctx
             .resource::<concinnity_host::store::paths::StateTree>()
             .cloned();
+        // The batch's handlers move the resolved settings; one plan carries the
+        // whole move to the backend afterward.
+        let before = self.resolved.clone();
         for mut cmd in setting_cmds {
             let cfg = cfg.get_or_insert_with(|| Settings::load(tree.as_ref()));
             if !self.slider_step_fraction(ctx, &mut cmd) {
@@ -137,6 +142,7 @@ impl SettingsState {
             cfg_dirty |= changed;
             reset_history |= changed && settings::resets_temporal_history(cmd.setting);
         }
+        self.record_change(&before, ops);
         if reset_history {
             PendingHistoryReset::raise(ctx, HistoryResetCauses::SETTINGS_CHANGE);
         }
@@ -238,12 +244,12 @@ impl SettingsState {
             | K::Fov => {
                 return match op {
                     SettingOp::SetFraction(frac) => settings::slider(cmd.setting)
-                        .is_some_and(|slider| self.apply_slider(ctx, ops, cfg, cmd, slider, frac)),
+                        .is_some_and(|slider| self.apply_slider(ctx, cfg, cmd, slider, frac)),
                     _ => misrouted(cmd),
                 };
             }
             _ if !stepper => return misrouted(cmd),
-            K::GraphicsQuality => return self.apply_quality_preset(ctx, ops, cfg, cmd),
+            K::GraphicsQuality => return self.apply_quality_preset(ctx, cfg, cmd),
             K::Resolution => return self.apply_resolution(ctx, ops, cfg, cmd),
             key @ (K::Vsync
             | K::PerfStats
@@ -252,9 +258,7 @@ impl SettingsState {
             | K::OcclusionTwoPass
             | K::TemporalUpscaling
             | K::HdrDisplay
-            | K::HdrPq) => {
-                bool_row(key).map(|row| self.apply_bool_row(ctx, ops, cfg, row, opts, op))
-            }
+            | K::HdrPq) => bool_row(key).map(|row| self.apply_bool_row(ctx, cfg, row, opts, op)),
             K::MasterVolume => Some(apply_volume(ctx, cfg, AudioTarget::Master, opts, op)),
             K::MusicVolume => Some(apply_volume(ctx, cfg, AudioTarget::Music, opts, op)),
             K::SfxVolume => Some(apply_volume(ctx, cfg, AudioTarget::Sfx, opts, op)),
@@ -277,29 +281,24 @@ impl SettingsState {
             | K::RayTracedReflections
             | K::RtReflectionShadows
             | K::Ssgi
-            | K::AutoExposure) => quality_toggle(key)
-                .map(|row| self.apply_quality_toggle(ctx, ops, cfg, row, opts, op)),
+            | K::AutoExposure) => {
+                quality_toggle(key).map(|row| self.apply_quality_toggle(ctx, cfg, row, opts, op))
+            }
             key @ (K::AaMode
             | K::SsgiResolution
             | K::SsgiRays
             | K::RtReflectionResolution
             | K::ReflectionBlurResolution) => {
-                quality_cycle(key).map(|row| self.apply_quality_cycle(ctx, ops, cfg, row, opts, op))
+                quality_cycle(key).map(|row| self.apply_quality_cycle(ctx, cfg, row, opts, op))
             }
-            K::ShadowMapSize => {
-                Some(self.apply_shadow_row(ctx, ops, cfg, ShadowRow::MapSize, opts, op))
-            }
-            K::Anisotropy => {
-                Some(self.apply_shadow_row(ctx, ops, cfg, ShadowRow::Anisotropy, opts, op))
-            }
-            K::ShadowUpdate => {
-                Some(self.apply_shadow_row(ctx, ops, cfg, ShadowRow::Update, opts, op))
-            }
+            K::ShadowMapSize => Some(self.apply_shadow_row(ctx, cfg, ShadowRow::MapSize, opts, op)),
+            K::Anisotropy => Some(self.apply_shadow_row(ctx, cfg, ShadowRow::Anisotropy, opts, op)),
+            K::ShadowUpdate => Some(self.apply_shadow_row(ctx, cfg, ShadowRow::Update, opts, op)),
             K::ShadowDistance => {
-                Some(self.apply_shadow_row(ctx, ops, cfg, ShadowRow::Distance, opts, op))
+                Some(self.apply_shadow_row(ctx, cfg, ShadowRow::Distance, opts, op))
             }
             K::ShadowCascades => {
-                Some(self.apply_shadow_row(ctx, ops, cfg, ShadowRow::Cascades, opts, op))
+                Some(self.apply_shadow_row(ctx, cfg, ShadowRow::Cascades, opts, op))
             }
             K::FramesInFlight => {
                 Some(self.apply_system_row(cfg, SystemRow::FramesInFlight, opts, op))
@@ -322,7 +321,6 @@ impl SettingsState {
     fn apply_slider(
         &mut self,
         ctx: &mut PipelineContext,
-        ops: &mut RenderOps,
         cfg: &mut Settings,
         cmd: &SettingCommand,
         slider: &SliderSetting,
@@ -331,26 +329,9 @@ impl SettingsState {
         let value = slider.value_at(frac);
         let stored = slider.apply(value);
         match &slider.target {
-            SliderTarget::Graphics(row) => match &row.target {
-                GraphicsSliderTarget::PostProcess { field, .. } => {
-                    *(field.get_mut)(&mut self.graphics.post_process) = stored;
-                    let params = self.graphics.post_process;
-                    ops.record(move |backend| backend.update_post_process(params));
-                }
-                // The stored config is what a later rebuild re-derives from; the
-                // live push mutates the backend's settings without one.
-                GraphicsSliderTarget::Effect { field, .. } => {
-                    *(field.get_mut)(&mut self.graphics.quality.effects) = stored;
-                    let quality = self.graphics.quality_settings();
-                    ops.record(move |backend| backend.update_quality_params(quality));
-                }
-                GraphicsSliderTarget::Ambient { .. } => {
-                    self.graphics.ambient_intensity = stored;
-                    let params = self.graphics.post_process;
-                    ops.record(move |backend| backend.update_post_process(params));
-                    ops.record(move |backend| backend.set_ambient_intensity(stored));
-                }
-            },
+            SliderTarget::Graphics(row) => {
+                *(row.field.get_mut)(&mut self.resolved.graphics) = stored;
+            }
             SliderTarget::Controls { command, .. } => {
                 ctx.events_mut::<ControlsCommand>().send(command(stored));
             }
@@ -398,7 +379,6 @@ impl SettingsState {
     fn apply_bool_row(
         &mut self,
         ctx: &mut PipelineContext,
-        ops: &mut RenderOps,
         cfg: &mut Settings,
         row: &BoolRow,
         opts: RowOptions,
@@ -408,11 +388,9 @@ impl SettingsState {
         let on = next == 1;
         *(row.state)(self) = on;
         *(row.persisted)(&mut cfg.graphics) = Some(on);
-        match row.key {
-            SettingKey::Vsync => ops.record(move |backend| backend.set_vsync(on)),
-            // The stats master grays or restores its two sub-rows.
-            SettingKey::PerfStats => set_rows_grayed(ctx, &self.perf_sub_row_labels, !on),
-            _ => {}
+        // The stats master grays or restores its two sub-rows.
+        if row.key == SettingKey::PerfStats {
+            set_rows_grayed(ctx, &self.perf_sub_row_labels, !on);
         }
         opts[next]
     }
@@ -424,7 +402,6 @@ impl SettingsState {
     fn apply_shadow_row(
         &mut self,
         ctx: &mut PipelineContext,
-        ops: &mut RenderOps,
         cfg: &mut Settings,
         row: ShadowRow,
         opts: RowOptions,
@@ -432,44 +409,43 @@ impl SettingsState {
     ) -> &'static str {
         let next = match row {
             ShadowRow::MapSize => {
-                let cur = settings::shadow_resolution_index(self.graphics.quality.shadow_map_size);
+                let cur =
+                    settings::shadow_resolution_index(self.resolved.graphics.shadows.map_size);
                 let next = settings::cycle(cur, opts.len(), op);
-                self.graphics.quality.shadow_map_size = settings::shadow_resolution_at(next);
-                cfg.graphics.shadow_map_size = Some(self.graphics.quality.shadow_map_size);
+                self.resolved.graphics.shadows.map_size = settings::shadow_resolution_at(next);
+                cfg.graphics.shadow_map_size = Some(self.resolved.graphics.shadows.map_size);
                 next
             }
             ShadowRow::Anisotropy => {
-                let cur = settings::anisotropy_index(self.graphics.quality.anisotropy);
+                let cur =
+                    settings::anisotropy_index(self.resolved.graphics.texture_filtering.anisotropy);
                 let next = settings::cycle(cur, opts.len(), op);
-                self.graphics.quality.anisotropy = settings::anisotropy_at(next);
-                cfg.graphics.anisotropy = Some(self.graphics.quality.anisotropy);
+                self.resolved.graphics.texture_filtering.anisotropy = settings::anisotropy_at(next);
+                cfg.graphics.anisotropy = Some(self.resolved.graphics.texture_filtering.anisotropy);
                 next
             }
             ShadowRow::Update => {
-                let cadence = &mut self.graphics.quality.shadow_cadence;
-                let cur = settings::shadow_update_index(cadence.update);
+                let shadows = &mut self.resolved.graphics.shadows;
+                let cur = settings::shadow_update_index(shadows.update);
                 let next = settings::cycle(cur, opts.len(), op);
-                cadence.update = settings::shadow_update_at(next);
-                cfg.graphics.shadow_update = Some(cadence.update);
-                record_shadow_cadence(ops, *cadence);
+                shadows.update = settings::shadow_update_at(next);
+                cfg.graphics.shadow_update = Some(shadows.update);
                 next
             }
             ShadowRow::Distance => {
-                let cadence = &mut self.graphics.quality.shadow_cadence;
-                let cur = settings::shadow_distance_index(cadence.distance);
+                let shadows = &mut self.resolved.graphics.shadows;
+                let cur = settings::shadow_distance_index(shadows.distance);
                 let next = settings::cycle(cur, opts.len(), op);
-                cadence.distance = settings::shadow_distance_at(next);
-                cfg.graphics.shadow_distance = Some(cadence.distance);
-                record_shadow_cadence(ops, *cadence);
+                shadows.distance = settings::shadow_distance_at(next);
+                cfg.graphics.shadow_distance = Some(shadows.distance);
                 next
             }
             ShadowRow::Cascades => {
-                let cadence = &mut self.graphics.quality.shadow_cadence;
-                let cur = settings::shadow_cascades_index(cadence.cascades);
+                let shadows = &mut self.resolved.graphics.shadows;
+                let cur = settings::shadow_cascades_index(shadows.cascades);
                 let next = settings::cycle(cur, opts.len(), op);
-                cadence.cascades = settings::shadow_cascades_at(next);
-                cfg.graphics.shadow_cascades = Some(cadence.cascades);
-                record_shadow_cadence(ops, *cadence);
+                shadows.cascades = settings::shadow_cascades_at(next);
+                cfg.graphics.shadow_cascades = Some(shadows.cascades);
                 next
             }
         };
@@ -491,13 +467,13 @@ impl SettingsState {
     ) -> &'static str {
         let next = match row {
             DisplayRow::FpsCap => {
-                let cur = settings::fps_cap_index(self.graphics.fps_cap);
+                let cur = settings::fps_cap_index(self.resolved.graphics.frame_pacing.fps_cap);
                 let next = settings::cycle(cur, opts.len(), op);
-                self.graphics.fps_cap = settings::fps_cap_at(next);
+                self.resolved.graphics.frame_pacing.fps_cap = settings::fps_cap_at(next);
                 // No backend call: the runtime-level pacer reads the republished cap
                 // before the next step, and the change re-bases its deadline.
-                ctx.insert_resource(FrameRateCap(self.graphics.fps_cap));
-                cfg.graphics.fps_cap = Some(self.graphics.fps_cap);
+                ctx.insert_resource(FrameRateCap(self.resolved.graphics.frame_pacing.fps_cap));
+                cfg.graphics.fps_cap = Some(self.resolved.graphics.frame_pacing.fps_cap);
                 next
             }
             DisplayRow::WindowMode => {
@@ -522,10 +498,14 @@ impl SettingsState {
                 next
             }
             DisplayRow::RenderScale => {
-                let cur = settings::render_scale_index(self.graphics.quality.render_scale);
+                let cur = settings::render_scale_index(
+                    self.resolved.graphics.anti_aliasing.upscale_quality,
+                );
                 let next = settings::cycle(cur, opts.len(), op);
-                self.graphics.quality.render_scale = settings::render_scale_at(next);
-                cfg.graphics.render_scale = Some(self.graphics.quality.render_scale);
+                self.resolved.graphics.anti_aliasing.upscale_quality =
+                    settings::render_scale_at(next);
+                cfg.graphics.render_scale =
+                    Some(self.resolved.graphics.anti_aliasing.upscale_quality);
                 self.opt_out_of_preset(ctx, cfg);
                 next
             }
@@ -533,7 +513,8 @@ impl SettingsState {
                 // Skip upscalers this GPU vendor does not offer (DLSS NVIDIA-only,
                 // XeSS Intel-only); Auto and FSR3 are always available, so the
                 // loop terminates.
-                let cur = settings::upscale_backend_index(self.graphics.upscale_backend);
+                let cur =
+                    settings::upscale_backend_index(self.resolved.graphics.anti_aliasing.upscaler);
                 let mut next = settings::cycle(cur, opts.len(), op);
                 while !settings::upscale_backend_available(
                     settings::upscale_backend_at(next),
@@ -541,15 +522,15 @@ impl SettingsState {
                 ) {
                     next = settings::cycle(next, opts.len(), op);
                 }
-                self.graphics.upscale_backend = settings::upscale_backend_at(next);
-                cfg.graphics.upscale_backend = Some(self.graphics.upscale_backend);
+                self.resolved.graphics.anti_aliasing.upscaler = settings::upscale_backend_at(next);
+                cfg.graphics.upscale_backend = Some(self.resolved.graphics.anti_aliasing.upscaler);
                 next
             }
             DisplayRow::DlssPreset => {
-                let cur = settings::dlss_preset_index(self.graphics.dlss_preset);
+                let cur = settings::dlss_preset_index(self.resolved.graphics.dlss_preset);
                 let next = settings::cycle(cur, opts.len(), op);
-                self.graphics.dlss_preset = settings::dlss_preset_at(next);
-                cfg.graphics.dlss_preset = Some(self.graphics.dlss_preset);
+                self.resolved.graphics.dlss_preset = settings::dlss_preset_at(next);
+                cfg.graphics.dlss_preset = Some(self.resolved.graphics.dlss_preset);
                 next
             }
         };
@@ -567,20 +548,21 @@ impl SettingsState {
     ) -> &'static str {
         let next = match row {
             SystemRow::FramesInFlight => {
-                let cur = settings::frames_in_flight_index(self.graphics.frames_in_flight as u32);
+                let pacing = &mut self.resolved.graphics.frame_pacing;
+                let cur = settings::frames_in_flight_index(pacing.frames_in_flight);
                 let next = settings::cycle(cur, opts.len(), op);
-                self.graphics.frames_in_flight = settings::frames_in_flight_at(next) as usize;
-                cfg.graphics.frames_in_flight = Some(self.graphics.frames_in_flight as u32);
+                pacing.frames_in_flight = settings::frames_in_flight_at(next);
+                cfg.graphics.frames_in_flight = Some(pacing.frames_in_flight);
                 next
             }
             // One row drives both the streaming pool cap and the per-frame upload
             // budget.
             SystemRow::TextureQuality => {
-                let cur = settings::texture_quality_index(self.graphics.texture_cap);
+                let cur = settings::texture_quality_index(self.resolved.texture_cap);
                 let next = settings::cycle(cur, opts.len(), op);
                 let (cap, budget) = settings::texture_quality_at(next);
-                self.graphics.texture_cap = cap;
-                self.graphics.texture_budget = budget;
+                self.resolved.texture_cap = cap;
+                self.resolved.texture_budget = budget;
                 cfg.graphics.texture_cap = Some(cap);
                 cfg.graphics.texture_budget = Some(budget);
                 next
@@ -588,10 +570,6 @@ impl SettingsState {
         };
         opts[next]
     }
-}
-
-fn record_shadow_cadence(ops: &mut RenderOps, cadence: ShadowCadence) {
-    ops.record(move |backend| backend.set_shadow_cadence(cadence));
 }
 
 // Cycle a volume row's gain, persist it, and hand it to AudioSystem as an

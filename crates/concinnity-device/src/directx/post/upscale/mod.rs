@@ -17,6 +17,7 @@ use std::ffi::{CStr, c_void};
 use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_core::render::upscaler::UpscalerAvailability;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -28,7 +29,7 @@ use crate::directx::error::map_hresult;
 use crate::directx::graph_exec::GraphFrameParams;
 use crate::directx::texture::transition_barrier;
 use crate::upscale_sdk::{
-    Availability, ResolvedBackend, SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest,
+    ResolvedBackend, SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest,
 };
 
 #[cfg(ngx_sdk_bundled)]
@@ -245,8 +246,10 @@ impl SdkLibrary for Dll {
 
 // The SDKs this build bundles. FFX additionally needs the Agility SDK's newer
 // D3D12 runtime beside the executable, which only an opt-in build bundles.
-fn availability() -> Availability {
-    Availability {
+// The vendor upscalers this build bundles. The pre-backend probe reports the
+// same set, so the settings predict the choice this backend makes.
+pub(in crate::directx) fn availability() -> UpscalerAvailability {
+    UpscalerAvailability {
         dlss: cfg!(ngx_sdk_bundled),
         xess: cfg!(xess_sdk_bundled),
         fsr: cfg!(agility_sdk_configured),

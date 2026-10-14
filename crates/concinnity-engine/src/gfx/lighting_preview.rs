@@ -18,7 +18,7 @@ use concinnity_core::components::{DirectionalLight, GraphicsConfig, VolumetricFo
 use concinnity_core::ecs::World;
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::render::volumetric_fog;
-use concinnity_core::settings::{QualityEffects, WorldAssets, WorldSettings};
+use concinnity_core::settings::{ResolvedGraphics, WorldAssets, WorldSettings};
 
 use crate::ecs::ActiveRenderQueues;
 use crate::settings::system::{SettingsSlot, SettingsState};
@@ -132,11 +132,12 @@ struct LiveChanges {
 // toggles and resolution knobs beside them alone. The shadows section moves
 // whole, as its map size is only read back through the resolved quality.
 fn adopt_live(world: &mut WorldSettings, edited: &WorldSettings) -> LiveChanges {
+    let (world, edited) = (&mut world.graphics, &edited.graphics);
     let mut look = false;
     macro_rules! adopt {
-        ($($dst:ident).+ <- $($src:ident).+) => {
-            if world.$($dst).+ != edited.$($src).+ {
-                world.$($dst).+ = edited.$($src).+;
+        ($($field:ident).+) => {
+            if world.$($field).+ != edited.$($field).+ {
+                world.$($field).+ = edited.$($field).+;
                 look = true;
             }
         };
@@ -147,21 +148,21 @@ fn adopt_live(world: &mut WorldSettings, edited: &WorldSettings) -> LiveChanges 
         || from.update != to.update
         || from.map_size != to.map_size;
     world.shadows = edited.shadows.clone();
-    adopt!(effects.ambient_occlusion.radius <- effects.ambient_occlusion.radius);
-    adopt!(effects.ambient_occlusion.intensity <- effects.ambient_occlusion.intensity);
-    adopt!(effects.reflections.intensity <- effects.reflections.intensity);
-    adopt!(effects.reflections.max_distance <- effects.reflections.max_distance);
-    adopt!(effects.indirect_lighting.ambient_intensity <- effects.indirect_lighting.ambient_intensity);
-    adopt!(effects.indirect_lighting.ssgi_intensity <- effects.indirect_lighting.ssgi_intensity);
-    adopt!(effects.indirect_lighting.ssgi_max_distance <- effects.indirect_lighting.ssgi_max_distance);
-    adopt!(effects.exposure.ev <- effects.exposure.ev);
-    adopt!(effects.exposure.auto_min_ev <- effects.exposure.auto_min_ev);
-    adopt!(effects.exposure.auto_max_ev <- effects.exposure.auto_max_ev);
-    adopt!(effects.exposure.auto_speed <- effects.exposure.auto_speed);
-    adopt!(bloom.intensity <- bloom.intensity);
-    adopt!(bloom.threshold <- bloom.threshold);
-    adopt!(bloom.knee <- bloom.knee);
-    adopt!(vignette.strength <- vignette.strength);
+    adopt!(ambient_occlusion.radius);
+    adopt!(ambient_occlusion.intensity);
+    adopt!(reflections.intensity);
+    adopt!(reflections.max_distance);
+    adopt!(indirect_lighting.ambient_intensity);
+    adopt!(indirect_lighting.ssgi_intensity);
+    adopt!(indirect_lighting.ssgi_max_distance);
+    adopt!(exposure.ev);
+    adopt!(exposure.auto_min_ev);
+    adopt!(exposure.auto_max_ev);
+    adopt!(exposure.auto_speed);
+    adopt!(bloom.intensity);
+    adopt!(bloom.threshold);
+    adopt!(bloom.knee);
+    adopt!(vignette.strength);
     LiveChanges { shadows, look }
 }
 
@@ -169,14 +170,9 @@ fn adopt_live(world: &mut WorldSettings, edited: &WorldSettings) -> LiveChanges 
 fn push_shadows(state: &mut SettingsState, ops: &mut RenderOps) {
     let user = state.persisted_graphics().clone();
     let resolved = state.resolve_quality(&user, &state.ceiling());
-
-    let quality = &mut state.graphics.quality;
-    quality.shadow_map_size = resolved.shadow_map_size;
-    let cadence = resolved.shadow_cadence;
-    if cadence != quality.shadow_cadence {
-        quality.shadow_cadence = cadence;
-        ops.record(move |backend| backend.set_shadow_cadence(cadence));
-    }
+    let before = state.resolved.clone();
+    state.resolved.graphics.shadows = resolved.shadows;
+    state.record_change(&before, ops);
 }
 
 // Re-resolve the look tuning and push the composite params, the per-feature
@@ -184,28 +180,13 @@ fn push_shadows(state: &mut SettingsState, ops: &mut RenderOps) {
 fn push_look(state: &mut SettingsState, ops: &mut RenderOps) {
     let user = state.persisted_graphics().clone();
     let resolved = state.resolve(&user, &state.ceiling());
-
-    let effects = &mut state.graphics.quality.effects;
-    copy_live_effects(effects, &resolved.quality.effects);
-
-    // `fxaa` follows the live AA mode, which no field here can move.
-    let mut params = resolved.post_process;
-    params.fxaa = effects.anti_aliasing.mode.fxaa_flag();
-    state.graphics.post_process = params;
-    ops.record(move |backend| backend.update_post_process(params));
-
-    let quality = state.graphics.quality.quality_settings();
-    ops.record(move |backend| backend.update_quality_params(quality));
-
-    let ambient = resolved.ambient_intensity;
-    if ambient != state.graphics.ambient_intensity {
-        state.graphics.ambient_intensity = ambient;
-        ops.record(move |backend| backend.set_ambient_intensity(ambient));
-    }
+    let before = state.resolved.clone();
+    copy_live_fields(&mut state.resolved.graphics, &resolved.graphics);
+    state.record_change(&before, ops);
 }
 
-// Copy the live effect scalars from resolved effects onto held ones.
-fn copy_live_effects(dst: &mut QualityEffects, src: &QualityEffects) {
+// Copy the live look fields from resolved settings onto held ones.
+fn copy_live_fields(dst: &mut ResolvedGraphics, src: &ResolvedGraphics) {
     dst.ambient_occlusion.radius = src.ambient_occlusion.radius;
     dst.ambient_occlusion.intensity = src.ambient_occlusion.intensity;
     dst.reflections.intensity = src.reflections.intensity;
@@ -219,6 +200,9 @@ fn copy_live_effects(dst: &mut QualityEffects, src: &QualityEffects) {
     d.auto_min_ev = s.auto_min_ev;
     d.auto_max_ev = s.auto_max_ev;
     d.auto_speed = s.auto_speed;
+    dst.bloom = src.bloom.clone();
+    dst.vignette = src.vignette.clone();
+    dst.lut_strength = src.lut_strength;
 }
 
 // Run `f` against the parked settings state and the frame's op queue, taking
@@ -400,13 +384,13 @@ mod tests {
         assert_eq!(
             calls,
             vec![Call::SetShadowCadence(
-                state.graphics.quality.shadow_cadence
+                state.resolved.graphics.shadow_cadence()
             )]
         );
-        assert_eq!(state.graphics.quality.shadow_cadence.distance, 120);
-        assert_eq!(state.authored.shadows.distance, 120);
-        assert_eq!(state.graphics.quality.shadow_cadence.cascades, 2);
-        assert_eq!(state.authored.shadows.cascades, 2);
+        assert_eq!(state.resolved.graphics.shadows.distance, 120);
+        assert_eq!(state.authored.graphics.shadows.distance, 120);
+        assert_eq!(state.resolved.graphics.shadows.cascades, 2);
+        assert_eq!(state.authored.graphics.shadows.cascades, 2);
     }
 
     // Re-applying the same config records nothing: the seam is edge-triggered,
@@ -428,7 +412,7 @@ mod tests {
     fn a_persisted_override_outranks_the_edited_world() {
         let mut state = SettingsState::for_tests();
         state.persisted_graphics.shadow_distance = Some(500);
-        state.graphics.quality.shadow_cadence.distance = 500;
+        state.resolved.graphics.shadows.distance = 500;
         let mut f = Fixture::with_state(state);
 
         assert!(apply_graphics(&mut f.world, &shadows()));
@@ -440,11 +424,11 @@ mod tests {
         assert_eq!(cadence.cascades, 2, "the rest do");
         let state = f.state();
         assert_eq!(
-            state.graphics.quality.shadow_cadence.distance, 500,
+            state.resolved.graphics.shadows.distance, 500,
             "the user's value stands"
         );
         assert_eq!(
-            state.authored.shadows.distance, 120,
+            state.authored.graphics.shadows.distance, 120,
             "the world's value is still recorded as the baseline"
         );
     }
@@ -468,7 +452,7 @@ mod tests {
         assert!(apply_graphics(&mut f.world, &config));
         f.replay();
         assert_eq!(
-            f.state().graphics.quality.shadow_cadence.distance,
+            f.state().resolved.graphics.shadows.distance,
             ceiling.shadow_distance,
             "the ceiling holds"
         );
@@ -498,15 +482,15 @@ mod tests {
         assert!(calls.contains(&Call::UpdateQualityParams));
         assert!(calls.contains(&Call::SetAmbientIntensity(0.25)));
         let state = f.state();
-        assert_eq!(state.graphics.ambient_intensity, 0.25);
-        let held = &state.graphics.quality.effects;
+        assert_eq!(state.resolved.graphics.ambient_intensity(), 0.25);
+        let held = &state.resolved.graphics;
         assert_eq!(held.indirect_lighting.ssgi_intensity, 0.75);
         assert_eq!(held.exposure.ev, 2.0);
         assert_eq!(
-            state.authored.effects.indirect_lighting.ssgi_intensity,
+            state.authored.graphics.indirect_lighting.ssgi_intensity,
             0.75
         );
-        assert_eq!(state.graphics.post_process.exposure, 4.0);
+        assert_eq!(state.resolved.graphics.post_process().exposure, 4.0);
     }
 
     // The toggles beside the live scalars are not this seam's to move: an edit
@@ -523,19 +507,19 @@ mod tests {
             },
             ..Default::default()
         };
-        let held_mode = f.state().graphics.quality.effects.anti_aliasing.mode;
+        let held_mode = f.state().resolved.graphics.anti_aliasing.mode;
         assert_ne!(held_mode, AaMode::Off);
         apply_graphics(&mut f.world, &config);
         let state = f.state();
         assert_eq!(
-            state.graphics.quality.effects.ambient_occlusion.enabled,
+            state.resolved.graphics.ambient_occlusion.enabled,
             AmbientOcclusion::default().enabled
         );
         assert_eq!(
-            state.authored.effects.ambient_occlusion.enabled,
+            state.authored.graphics.ambient_occlusion.enabled,
             AmbientOcclusion::default().enabled
         );
-        assert_eq!(state.graphics.quality.effects.anti_aliasing.mode, held_mode);
+        assert_eq!(state.resolved.graphics.anti_aliasing.mode, held_mode);
     }
 
     // Fog resolves through the same clamp chain the build runs, and disabling
@@ -604,7 +588,8 @@ mod tests {
     }
 
     // A look edit that leaves the shadows section alone records no cadence,
-    // and a shadows edit records no composite update.
+    // a shadows edit records no composite update, and a sub-quality edit
+    // pushes the feature scalars alone.
     #[test]
     fn an_edit_pushes_only_the_groups_it_moved() {
         let mut f = Fixture::new();
@@ -619,10 +604,6 @@ mod tests {
         look.ambient_occlusion.radius = Some(2.0);
         assert!(apply_graphics(&mut f.world, &look));
         let calls = f.replay();
-        assert!(calls.contains(&Call::UpdatePostProcess), "{calls:?}");
-        assert!(
-            !calls.iter().any(|c| matches!(c, Call::SetShadowCadence(_))),
-            "{calls:?}"
-        );
+        assert_eq!(calls, [Call::UpdateQualityParams]);
     }
 }

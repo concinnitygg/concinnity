@@ -5,11 +5,12 @@
 
 use ash::vk;
 use concinnity_core::gfx::auto_exposure;
-use concinnity_core::render::backend_init::{PlanarBudget, PostSettings, WorldFx};
+use concinnity_core::render::backend_init::{PlanarBudget, WorldFx};
 use concinnity_core::render::decal;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::lights;
 use concinnity_core::render::planar_reflection::PlanarReflectors;
+use concinnity_core::settings::ResolvedGraphics;
 
 use super::ray_tracing::RtResources;
 use super::{Features, InitGpu};
@@ -48,14 +49,14 @@ use crate::vulkan::transparent::TransparentResources;
 pub(super) fn build_upscale(
     gpu: &InitGpu<'_>,
     swapchain_extent: vk::Extent2D,
-    post: &PostSettings,
+    graphics: &ResolvedGraphics,
     requested: &mut crate::upscale_sdk::UpscaleRequest,
 ) -> RenderResult<(Option<Box<dyn VkUpscaleBackend>>, vk::Extent2D)> {
     let InitGpu {
         hw, command_pool, ..
     } = *gpu;
     let device = &hw.device;
-    let upscale = if post.temporal_upscaling {
+    let upscale = if graphics.anti_aliasing.upscaling {
         let (built, resolved) = crate::vulkan::post::build_upscaler(
             crate::vulkan::post::upscale::UpscalerGpu {
                 alloc: &hw.alloc,
@@ -66,7 +67,7 @@ pub(super) fn build_upscale(
                 queue: hw.graphics_queue,
             },
             (swapchain_extent.width, swapchain_extent.height),
-            post.upscale_scale,
+            graphics.upscale_scale(),
             requested,
         )?;
         // Arm the messenger's benign-error budget for DLSS (see
@@ -132,7 +133,7 @@ pub(super) fn shared_post_device<'a>(
 }
 
 pub(super) struct ScreenSpaceInputs<'a> {
-    pub(super) post: &'a PostSettings,
+    pub(super) graphics: &'a ResolvedGraphics,
     pub(super) features: &'a Features,
     pub(super) targets: &'a VkTargets,
     pub(super) scene: &'a VkSceneAssets,
@@ -160,7 +161,7 @@ pub(super) fn build_screen_space(
     } = *gpu;
     let (device, alloc) = (&hw.device, &hw.alloc);
     let ScreenSpaceInputs {
-        post,
+        graphics,
         features,
         targets,
         scene,
@@ -172,7 +173,7 @@ pub(super) fn build_screen_space(
 
     // SSAO (GTAO): the shared depth copy, kernel + blur. Its blurred output is
     // the transient pool's per-frame `ao_output`, read per frame.
-    let ssao = match post.ssao {
+    let ssao = match graphics.ssao() {
         Some(settings) => Some(SsaoResources::new(
             &init_post_device,
             settings,
@@ -186,10 +187,10 @@ pub(super) fn build_screen_space(
     // with SSGI and RT, so `SsrResources` is built whenever any of them is
     // on; its settings stay `None` unless SSR itself is authored, and the
     // resolve runs only when it is and RT did not take its graph slot.
-    let ssr = if post.ssr.is_some() || post.ssgi.is_some() || features.rt_wanted {
+    let ssr = if graphics.ssr().is_some() || graphics.ssgi().is_some() || features.rt_wanted {
         Some(crate::vulkan::post::ssr::SsrResources::new(
             &init_post_device,
-            post.ssr,
+            graphics.ssr(),
             render_extent,
         )?)
     } else {
@@ -231,7 +232,7 @@ pub(super) fn build_screen_space(
     // accumulated GI pass. Built only when the world selected
     // `indirect_lighting: ssgi`; it samples the unified pre-pass G-buffer,
     // which SSGI forces on, and each frame's HDR resolve.
-    let ssgi = match post.ssgi {
+    let ssgi = match graphics.ssgi() {
         Some(settings) => Some(crate::vulkan::post::ssgi::SsgiResources::new(
             &init_post_device,
             settings,
@@ -336,7 +337,7 @@ pub(super) struct WorldEffectInputs<'a> {
     pub(super) n_cull: usize,
     pub(super) rt: &'a RtResources,
     pub(super) geometry: &'a VkGeometry,
-    pub(super) post: &'a PostSettings,
+    pub(super) graphics: &'a ResolvedGraphics,
 }
 
 pub(super) struct WorldEffects {
@@ -372,7 +373,7 @@ pub(super) fn build_world_effects(
         n_cull,
         rt,
         geometry,
-        post,
+        graphics,
     } = inputs;
     let GlobalBindings {
         uniforms,
@@ -627,7 +628,7 @@ pub(super) fn build_world_effects(
                 height: render_extent.height,
                 global_set_layout: descriptors.global_set_layout.handle(),
                 hot_reload,
-                reflection_divisor: post.rt_reflections.map_or(1, |rt| rt.divisor),
+                reflection_divisor: graphics.rt_reflections().map_or(1, |rt| rt.divisor),
             },
             crate::vulkan::transparent::TransparentSceneTargets {
                 scene_views: &scene_views,
@@ -662,7 +663,7 @@ pub(super) fn build_world_effects(
     // `Exposure` opted in. With auto-exposure off every
     // field below is None and the static authored EV continues to
     // drive `post_process.exposure` unchanged.
-    let (auto_exposure, adaptation) = if let Some(settings) = post.auto_exposure.as_ref() {
+    let (auto_exposure, adaptation) = if let Some(settings) = graphics.auto_exposure().as_ref() {
         let resources = crate::vulkan::auto_exposure::AutoExposureResources::new(
             alloc,
             device,
@@ -671,7 +672,7 @@ pub(super) fn build_world_effects(
             hot_reload,
         )?;
         let adaptation =
-            auto_exposure::ExposureAdaptation::new(*settings, post.auto_exposure_bias_ev);
+            auto_exposure::ExposureAdaptation::new(*settings, graphics.auto_exposure_bias_ev());
         (Some(resources), Some(adaptation))
     } else {
         (None, None)

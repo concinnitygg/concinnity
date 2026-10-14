@@ -131,6 +131,12 @@ impl VkContext {
     // and the executor's phase-2 arms all gate on it identically. Mirrors
     // `directx/cull.rs::two_pass_occlusion_active`.
     pub(in crate::vulkan) fn two_pass_occlusion_active(&self) -> bool {
+        self.two_pass_occlusion_built() && self.cull_count() > 0
+    }
+
+    // Whether launch built two-pass occlusion: requested, with the phase-two
+    // cull, the Hi-Z pyramid and the second indirect buffers.
+    pub(in crate::vulkan) fn two_pass_occlusion_built(&self) -> bool {
         self.cull.occlusion_two_pass
             && self
                 .cull
@@ -139,7 +145,6 @@ impl VkContext {
                 .is_some_and(|k| k.pipeline_phase2.is_some())
             && self.cull.hiz.is_some()
             && !self.cull.indirect_buffers2.is_empty()
-            && self.cull_count() > 0
     }
 
     // Dispatch the compute-driven cull pass for frame slot

@@ -16,7 +16,6 @@ use concinnity_core::components::{
     ControlsCommand, SettingOp, ShadowUpdate, UpscalerBackend, WindowMode,
 };
 use concinnity_core::gfx::auto_exposure::EV_LIMIT;
-use concinnity_core::gfx::render_types::PostProcessTunables;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::GpuVendor;
 use concinnity_core::render::dlss::DlssPreset;
@@ -26,13 +25,17 @@ use crate::config::Settings;
 // (labels + classification) lives in core so the cook and the client agree on
 // every setting's option count, and is re-exported here alongside the
 // client-only half below.
-use concinnity_core::settings::QualityEffects;
+use concinnity_core::settings::ResolvedGraphics;
 use concinnity_core::settings::levels::nearest_count_index;
 pub(crate) use concinnity_core::settings::levels::{render_scale_at, render_scale_index};
-use concinnity_core::settings::rows::{
-    GRAPHICS_SLIDERS, GraphicsSlider, GraphicsSliderTarget, Lens,
-};
+use concinnity_core::settings::rows::{GRAPHICS_SLIDERS, GraphicsSlider, Lens};
 pub(crate) use concinnity_core::settings::{SettingKey, options};
+
+// The value label an unavailable row shows: the resolved value, marked as one
+// the device cannot change.
+pub(crate) fn unsupported_label(value: &str) -> String {
+    format!("{value} (not supported)")
+}
 
 // Whether setting `key` can be changed on a device with the given capabilities
 // and GPU vendor. A gated setting (e.g. `ray_traced_reflections`, which needs
@@ -390,19 +393,9 @@ impl SliderSetting {
 
     // The user-facing value the slider shows: the live render state, or the
     // persisted choice (else the default) for a controls slider.
-    pub(crate) fn current_value(
-        &self,
-        post_process: &PostProcessTunables,
-        effects: &QualityEffects,
-        ambient_intensity: f32,
-        persisted: &Settings,
-    ) -> f32 {
+    pub(crate) fn current_value(&self, graphics: &ResolvedGraphics, persisted: &Settings) -> f32 {
         let stored = match &self.target {
-            SliderTarget::Graphics(row) => match &row.target {
-                GraphicsSliderTarget::PostProcess { field, .. } => *(field.get)(post_process),
-                GraphicsSliderTarget::Effect { field, .. } => *(field.get)(effects),
-                GraphicsSliderTarget::Ambient { .. } => ambient_intensity,
-            },
+            SliderTarget::Graphics(row) => *(row.field.get)(graphics),
             SliderTarget::Controls {
                 persisted: lens,
                 default,
@@ -416,7 +409,7 @@ impl SliderSetting {
     pub(crate) fn persist(&self, cfg: &mut Settings, value: f32) {
         match &self.target {
             SliderTarget::Graphics(row) => {
-                *(row.target.persisted().get_mut)(&mut cfg.graphics) = Some(value);
+                *(row.persisted.get_mut)(&mut cfg.graphics) = Some(value);
             }
             SliderTarget::Controls { persisted, .. } => {
                 *(persisted.get_mut)(cfg) = Some(self.apply(value));
@@ -463,12 +456,11 @@ fn hundred_scale_from(stored: f32, min: f32, max: f32) -> f32 {
 // The post-process ranges are practical UI ceilings; the graphics clamps live
 // with their rows in `concinnity_core::settings::rows`.
 pub(crate) static SLIDERS: [SliderSetting; 20] = [
-    // Authored in EV (centered on neutral), applied as the multiplier 2^ev.
+    // Authored in EV (centered on neutral); the composite applies 2^ev.
     SliderSetting {
         key: SettingKey::Exposure,
         range: (-3.0, 3.0),
-        // Guard log2(0); the slider range keeps the multiplier well above this.
-        recover: |stored| stored.max(1.0e-6).log2(),
+        recover: identity,
         format: format_ev,
         target: SliderTarget::Graphics(&GRAPHICS_SLIDERS[0]),
     },
@@ -1311,23 +1303,14 @@ mod tests {
     // unchanged, so no two keys share a live or persisted field.
     #[test]
     fn no_two_sliders_alias_one_field() {
-        let mut post_process = PostProcessTunables::DEFAULT;
-        let mut effects = QualityEffects::default();
+        let mut graphics = ResolvedGraphics::default();
         let mut cfg = Settings::default();
         let marker = |i: usize| 1000.0 + i as f32;
         for (i, s) in SLIDERS.iter().enumerate() {
             match &s.target {
                 SliderTarget::Graphics(row) => {
-                    *(row.target.persisted().get_mut)(&mut cfg.graphics) = Some(marker(i));
-                    match &row.target {
-                        GraphicsSliderTarget::PostProcess { field, .. } => {
-                            *(field.get_mut)(&mut post_process) = marker(i);
-                        }
-                        GraphicsSliderTarget::Effect { field, .. } => {
-                            *(field.get_mut)(&mut effects) = marker(i);
-                        }
-                        GraphicsSliderTarget::Ambient { .. } => {}
-                    }
+                    *(row.persisted.get_mut)(&mut cfg.graphics) = Some(marker(i));
+                    *(row.field.get_mut)(&mut graphics) = marker(i);
                 }
                 SliderTarget::Controls { persisted, .. } => {
                     *(persisted.get_mut)(&mut cfg) = Some(marker(i));
@@ -1337,14 +1320,8 @@ mod tests {
         for (i, s) in SLIDERS.iter().enumerate() {
             let (live, persisted) = match &s.target {
                 SliderTarget::Graphics(row) => (
-                    match &row.target {
-                        GraphicsSliderTarget::PostProcess { field, .. } => {
-                            Some(*(field.get)(&post_process))
-                        }
-                        GraphicsSliderTarget::Effect { field, .. } => Some(*(field.get)(&effects)),
-                        GraphicsSliderTarget::Ambient { .. } => None,
-                    },
-                    *(row.target.persisted().get)(&cfg.graphics),
+                    Some(*(row.field.get)(&graphics)),
+                    *(row.persisted.get)(&cfg.graphics),
                 ),
                 SliderTarget::Controls { persisted, .. } => (None, *(persisted.get)(&cfg)),
             };
@@ -1381,19 +1358,14 @@ mod tests {
 
     #[test]
     fn current_value_reads_live_state_or_the_persisted_controls() {
-        let post_process = PostProcessTunables {
-            exposure: 4.0,
-            ..PostProcessTunables::DEFAULT
-        };
-        let effects = QualityEffects::default();
+        let mut graphics = ResolvedGraphics::default();
+        graphics.exposure.ev = 2.0;
+        graphics.indirect_lighting.ambient_intensity = 1.5;
+        let effects = graphics.clone();
         let mut cfg = Settings::default();
         cfg.controls.gamepad_deadzone = Some(0.25);
-        let read = |key: SettingKey| {
-            slider(key)
-                .unwrap()
-                .current_value(&post_process, &effects, 1.5, &cfg)
-        };
-        assert!((read(SettingKey::Exposure) - 2.0).abs() < 1.0e-5);
+        let read = |key: SettingKey| slider(key).unwrap().current_value(&graphics, &cfg);
+        assert_eq!(read(SettingKey::Exposure), 2.0);
         assert_eq!(read(SettingKey::AmbientIntensity), 1.5);
         assert_eq!(
             read(SettingKey::SsaoRadius),
@@ -1412,9 +1384,9 @@ mod tests {
         assert_eq!(apply(SettingKey::Vignette, 2.0), 1.0);
         assert_eq!(apply(SettingKey::LutStrength, -1.0), 0.0);
         assert_eq!(apply(SettingKey::AmbientIntensity, 100.0), 16.0);
-        // Exposure stores the linear multiplier 2^ev (clamped EV).
-        assert_eq!(apply(SettingKey::Exposure, 2.0), 4.0);
-        assert!(((slider(SettingKey::Exposure).unwrap().recover)(4.0) - 2.0).abs() < 1.0e-5);
+        // Exposure stores the clamped EV.
+        assert_eq!(apply(SettingKey::Exposure, 2.0), 2.0);
+        assert_eq!(apply(SettingKey::Exposure, -100.0), -EV_LIMIT);
         // Per-feature sub-quality sliders clamp to their `*Settings::resolve`
         // domains; bloom_knee is lower-bounded like the other bloom params.
         assert_eq!(apply(SettingKey::BloomKnee, -1.0), 0.0);
@@ -1429,40 +1401,19 @@ mod tests {
     }
 
     #[test]
-    fn quality_param_sliders_are_independent_sliders() {
-        // The sub-quality sliders are look tuning, not preset-governed knobs.
-        let quality_params: Vec<SettingKey> = SLIDERS
-            .iter()
-            .filter(|s| {
-                matches!(
-                    s.target,
-                    SliderTarget::Graphics(GraphicsSlider {
-                        target: GraphicsSliderTarget::Effect { .. },
-                        ..
-                    })
-                )
-            })
-            .map(|s| s.key)
-            .collect();
-        assert_eq!(quality_params.len(), 9);
-        for key in quality_params {
-            assert!(
-                concinnity_core::settings::rows::quality_cycle(key).is_none(),
-                "{key:?} should not be preset-governed"
-            );
+    fn graphics_sliders_are_independent_of_the_preset() {
+        // Every graphics slider is look tuning, never a preset-governed knob.
+        for s in &SLIDERS {
+            if let SliderTarget::Graphics(row) = s.target {
+                assert!(
+                    concinnity_core::settings::rows::quality_cycle(row.key).is_none(),
+                    "{:?} should not be preset-governed",
+                    row.key
+                );
+            }
         }
-        // bloom_knee is a PostProcessParams field, not a quality param.
-        assert!(matches!(
-            slider(SettingKey::BloomKnee).unwrap().target,
-            SliderTarget::Graphics(GraphicsSlider {
-                target: GraphicsSliderTarget::PostProcess { .. },
-                ..
-            })
-        ));
     }
 
-    // Each graphics slider row names the resolver's row for its own key, and
-    // every resolver row has a slider.
     #[test]
     fn graphics_sliders_point_at_their_own_resolver_rows() {
         let mut rows = Vec::new();

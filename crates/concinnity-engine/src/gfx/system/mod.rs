@@ -291,18 +291,24 @@ impl GraphicsSystem {
         self.state.as_ref().map(StateTree::assets_dir)
     }
 
-    // Detect the GPU performance profile for quality auto-config. Probes the
-    // real device in production; a test-injected profile takes its place so
-    // unit tests never create a GPU handle.
-    fn detect_gpu_profile(&self) -> backend::GpuProfile {
+    // Detect the GPU performance profile for quality auto-config and what the
+    // device can run. Probes the real device in production; a test-injected
+    // profile takes its place so unit tests never create a GPU handle.
+    fn detect_device(&self) -> backend::DeviceProbe {
         #[cfg(test)]
         if let Some(hooks) = &self.test_hooks {
-            return hooks.gpu_profile;
+            return backend::DeviceProbe {
+                profile: hooks.gpu_profile,
+                capabilities: backend::DeviceCapabilities::ALL,
+            };
         }
         // A GPU that classifies as nothing clamps nothing. A machine with no
         // GPU at all never reaches here: the run resolved to headless and this
         // system was left out of the schedule.
-        crate::device::probe_gpu_profile().unwrap_or(backend::GpuProfile::UNKNOWN)
+        crate::device::probe_device().unwrap_or(backend::DeviceProbe {
+            profile: backend::GpuProfile::UNKNOWN,
+            capabilities: backend::DeviceCapabilities::ALL,
+        })
     }
 
     // Seed and persist the first-launch `Auto` quality preset.

@@ -2045,11 +2045,12 @@ impl VkContext {
         self.seethrough_meshes_enabled() && self.rt_transparent_active()
     }
 
-    // Whether any see-through mesh would actually draw this frame. Only then does
-    // the mesh producer contribute, so the graph's Transparent node is not
-    // scheduled for a world whose glass is all hidden or evicted.
-    pub(in crate::vulkan) fn mesh_glass_visible(&self) -> bool {
-        self.mesh_glass_active()
+    // Whether a see-through mesh is visible and its pipelines are built, whether
+    // or not the pass can trace this frame. The graph's Transparent node takes
+    // the mesh producer only when both hold, so a world whose glass is all
+    // hidden or evicted does not schedule it.
+    pub(in crate::vulkan) fn see_through_mesh_visible(&self) -> bool {
+        self.seethrough_meshes_enabled()
             && self.transparent.as_ref().is_some_and(|t| {
                 t.seethrough_mesh_indices().iter().any(|&i| {
                     self.state

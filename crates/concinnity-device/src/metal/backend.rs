@@ -5,16 +5,14 @@ use concinnity_core::bake;
 use concinnity_core::components;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::SkinnedVertex;
-use concinnity_core::gfx::render_types::{
-    MATERIAL_PARAM_COUNT, PostProcessTunables, SkinnedDrawObject,
-};
+use concinnity_core::gfx::render_types::{MATERIAL_PARAM_COUNT, SkinnedDrawObject};
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::profile::RenderStats;
 use concinnity_core::render::backend;
 use concinnity_core::render::backend::{
-    BackendProbe, DrawStreaming, FrameParams, LiveEdit, QualitySettings, RenderBackend,
-    RenderTuning, SceneEffects, SkinnedDraws, SkinnedIndex, WindowControl,
+    BackendProbe, DrawStreaming, FrameParams, LiveEdit, RenderBackend, RenderTuning, SceneEffects,
+    SkinnedDraws, SkinnedIndex, WindowControl,
 };
 use concinnity_core::render::backend_init;
 use concinnity_core::render::decal;
@@ -115,14 +113,10 @@ impl WindowControl for MtlContext {
 
 impl RenderTuning for MtlContext {
     forward! { assert = debug_assert_main_thread;
+        fn apply_settings(&mut self, graphics: &concinnity_core::settings::ResolvedGraphics, plan: &concinnity_core::settings::apply::ApplyPlan) -> RenderResult<()>;
         fn set_reflection_probes(&mut self, probes: &[reflection_probe::ProbePlacement]);
-        fn update_post_process(&mut self, tunables: PostProcessTunables);
-        fn set_ambient_intensity(&mut self, value: f32);
         fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
         fn move_local_lights(&mut self, lights: &concinnity_core::render::lights::LightData, uniforms: &concinnity_core::gfx::render_types::LightUniforms) -> RenderResult<()>;
-        fn apply_quality_settings(&mut self, settings: QualitySettings) -> RenderResult<()>;
-        fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence);
-        fn update_quality_params(&mut self, settings: QualitySettings);
         fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>);
     }
 }

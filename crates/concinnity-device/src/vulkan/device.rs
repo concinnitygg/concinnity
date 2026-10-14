@@ -66,6 +66,51 @@ pub(super) fn query_queue_families(
     }
 }
 
+// Whether `pd` can trace inline `rayQueryEXT` against a scene acceleration
+// structure: VK_KHR_acceleration_structure (+ its
+// VK_KHR_deferred_host_operations dependency) and VK_KHR_ray_query present, and
+// the `accelerationStructure` / `rayQuery` / `bufferDeviceAddress` /
+// non-uniform sampled-image indexing features supported. RDNA2 / Turing and up.
+// The pre-backend probe asks the same question, so the settings never resolve
+// ray tracing on for a device that cannot create it. `instance` must be Vulkan
+// 1.1 or newer.
+pub(super) fn ray_query_supported(instance: &ash::Instance, pd: vk::PhysicalDevice) -> bool {
+    // SAFETY: an enumeration query on a live instance handle; it only reads, and ash sizes the
+    // output vector from the count the driver reports.
+    let exts = unsafe { instance.enumerate_device_extension_properties(pd) }.unwrap_or_default();
+    let has_ext = |needle: &[u8]| {
+        exts.iter().any(|e| {
+            // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow
+            // does not outlive the properties entry it points into.
+            let name = unsafe { CStr::from_ptr(e.extension_name.as_ptr()) };
+            name.to_bytes() == needle
+        })
+    };
+    if !(has_ext(b"VK_KHR_acceleration_structure")
+        && has_ext(b"VK_KHR_ray_query")
+        && has_ext(b"VK_KHR_deferred_host_operations"))
+    {
+        return false;
+    }
+    let mut accel = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
+    let mut ray_query = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
+    let mut bda = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
+    let mut indexing = vk::PhysicalDeviceDescriptorIndexingFeatures::default();
+    {
+        let mut probe = vk::PhysicalDeviceFeatures2::default()
+            .push_next(&mut accel)
+            .push_next(&mut ray_query)
+            .push_next(&mut bda)
+            .push_next(&mut indexing);
+        // SAFETY: a property query on a live handle; it only reads.
+        unsafe { instance.get_physical_device_features2(pd, &mut probe) };
+    }
+    accel.acceleration_structure != 0
+        && ray_query.ray_query != 0
+        && bda.buffer_device_address != 0
+        && indexing.shader_sampled_image_array_non_uniform_indexing != 0
+}
+
 // A built logical device and the optional capabilities it was created with.
 pub(super) struct LogicalDevice {
     pub device: Device,
@@ -159,18 +204,6 @@ pub(super) fn create_logical_device(
     let has_mem_reqs2 = has_ext(b"VK_KHR_get_memory_requirements2");
     let has_dedicated = has_ext(b"VK_KHR_dedicated_allocation");
 
-    // Hardware ray-traced reflections trace inline `rayQueryEXT` against a
-    // scene acceleration structure, which needs VK_KHR_acceleration_structure
-    // (+ its VK_KHR_deferred_host_operations dependency) and VK_KHR_ray_query,
-    // plus the `accelerationStructure` / `rayQuery` / `bufferDeviceAddress`
-    // features enabled. All four are RDNA2 / Turing-and-up; on an older GPU the
-    // probe fails and the caller falls back to SSR. XeSS owns the device-feature
-    // chain (it appends a Vulkan12Features), so RT is not co-enabled there.
-    let has_accel_struct = has_ext(b"VK_KHR_acceleration_structure");
-    let has_ray_query = has_ext(b"VK_KHR_ray_query");
-    let has_deferred_host = has_ext(b"VK_KHR_deferred_host_operations");
-    let rt_exts_present = has_accel_struct && has_ray_query && has_deferred_host;
-
     // A portability driver (MoltenVK) exposes `VK_KHR_portability_subset`, and
     // Vulkan requires an implementation that exposes it to have it enabled, so
     // `create_device` is invalid without this.
@@ -180,9 +213,6 @@ pub(super) fn create_logical_device(
     let mut f16_probe = vk::PhysicalDeviceShaderFloat16Int8Features::default();
     let mut s16_probe = vk::PhysicalDevice16BitStorageFeatures::default();
     let mut sub_probe = vk::PhysicalDeviceShaderSubgroupExtendedTypesFeatures::default();
-    let mut accel_probe = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
-    let mut rq_probe = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
-    let mut rt_bda_probe = vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
     // Descriptor indexing serves three independent needs, so it is probed
     // unconditionally: every bindless shader indexes the texture pool with a
     // non-uniform index via `nonuniformEXT`
@@ -210,12 +240,6 @@ pub(super) fn create_logical_device(
             probe = probe.push_next(&mut portability_probe);
         }
         probe = probe.push_next(&mut di_probe);
-        if rt_exts_present {
-            probe = probe
-                .push_next(&mut accel_probe)
-                .push_next(&mut rq_probe)
-                .push_next(&mut rt_bda_probe);
-        }
         // SAFETY: a property query on a live handle; it only reads.
         unsafe { instance.get_physical_device_features2(pd, &mut probe) };
     }
@@ -226,11 +250,7 @@ pub(super) fn create_logical_device(
     // feature is supported, and XeSS is not the active backend (it forbids a
     // second feature chain). Resolved finally below; this captures the device's
     // capability half.
-    let rt_device_capable = rt_exts_present
-        && accel_probe.acceleration_structure != 0
-        && rq_probe.ray_query != 0
-        && rt_bda_probe.buffer_device_address != 0
-        && di_probe.shader_sampled_image_array_non_uniform_indexing != 0;
+    let rt_device_capable = ray_query_supported(instance, pd);
 
     // Owned extension names, kept alive for the `create_device` call (the raw
     // ptr array below borrows from this).
@@ -405,7 +425,7 @@ pub(super) fn create_logical_device(
     // backend and the device supports it (probed); otherwise inert.
     // `bufferDeviceAddress` is needed by DLSS (NGX) and by the RT path (the
     // acceleration-structure build inputs + scratch are addressed by device
-    // address). RT already probed it above (`rt_bda_probe`). Enabled whenever RT
+    // address). RT already probed it (`ray_query_supported`). Enabled whenever RT
     // is capable so a live RT toggle has it available, even if RT is off at
     // launch (the only added cost on a capable-but-RT-off device).
     let want_bda = rt_capable

@@ -19,7 +19,6 @@ use concinnity_core::components::Transform;
 use concinnity_core::components::UiAction;
 use concinnity_core::components::WindowMode;
 use concinnity_core::components::build_skeleton_from_joint_defs;
-use concinnity_core::components::hdr_sample_count;
 use concinnity_core::components::{
     BlockType, Camera3D, GraphicsConfig, HitRegion, Material, Model, Shader, StreamingConfig,
     VoxelWorld, Window,
@@ -70,15 +69,13 @@ use crate::gfx::material_entry::MaterialEntry;
 use crate::settings::system::{SettingsSlot, SettingsState};
 use concinnity_core::settings::quality::{preset_label, resolve_ceiling};
 use concinnity_core::settings::rows::{quality_cycle, quality_toggle};
-use concinnity_core::settings::{
-    QualityCeiling, QualityPreset, ResolvedSettings, WorldAssets, WorldSettings,
-};
+use concinnity_core::settings::{QualityCeiling, QualityPreset, WorldAssets, WorldSettings};
 
 // The resolved render config `init_render_settings` returns beside the live
-// settings state: the packed post-processing config handed to the backend ctor,
-// the quality ceiling (planar-reflection budget), and the drained StreamingConfig.
+// settings state: the launch's ray-tracing requests, the quality ceiling
+// (planar-reflection budget), and the drained StreamingConfig.
 struct ResolvedRenderConfig {
-    post: backend_init::PostSettings,
+    launch: backend_init::RenderLaunch,
     quality_ceiling: QualityCeiling,
     streaming_config: Option<StreamingConfig>,
     // Raw world ambient (`IndirectLighting.ambient_intensity`, no user override),
@@ -204,6 +201,7 @@ fn font_less_text(ctx: &PipelineContext) -> bool {
 // The GPU the backend is built for and the quality preset resolved against it.
 struct DetectedQuality {
     gpu_profile: backend::GpuProfile,
+    capabilities: backend::DeviceCapabilities,
     preset: QualityPreset,
     ceiling: QualityCeiling,
 }
@@ -253,38 +251,6 @@ fn color_lut_strength(ctx: &mut PipelineContext) -> Option<f32> {
     concinnity_core::bake::color_lut::strength(bytes).ok()
 }
 
-// The post-processing config the backend is built with.
-pub(super) fn post_settings(
-    graphics: &ResolvedSettings,
-    launch: &LaunchRequest,
-) -> backend_init::PostSettings {
-    let aa_mode = graphics.quality.effects.anti_aliasing.mode;
-    let quality = graphics.quality_settings();
-    backend_init::PostSettings {
-        post_process: graphics.post_process,
-        taa_enabled: quality.taa,
-        // Restart-class: the main-pass pipelines, render targets and planar /
-        // probe faces all bake the count, so a live AA toggle keeps it.
-        hdr_samples: hdr_sample_count(aa_mode, graphics.temporal_upscaling),
-        ssao: quality.ssao,
-        ssr: quality.ssr,
-        ssgi: quality.ssgi,
-        rt_reflections: quality.rt_reflections,
-        rt_dynamic: launch.resolve_rt_dynamic(),
-        rt_skinned_geometry: launch.resolve_rt_skinned_geometry(),
-        reflection_blur_scale: quality.reflection_blur_scale,
-        auto_exposure: quality.auto_exposure,
-        auto_exposure_bias_ev: quality.auto_exposure_bias_ev,
-        hdr_display: graphics.hdr_display,
-        hdr_pq: graphics.hdr_pq,
-        temporal_upscaling: graphics.temporal_upscaling,
-        upscale_scale: graphics.quality.render_scale.scale(),
-        upscale_backend: graphics.upscale_backend,
-        dlss_preset: graphics.dlss_preset,
-        occlusion_two_pass: graphics.occlusion_two_pass,
-    }
-}
-
 // Set every settings-menu row to its live value before the first render, so a
 // persisted or authored choice shows instead of the build's placeholder. Must
 // run before UiInputSystem.init drains the HitRegions and ScrollPanels.
@@ -298,53 +264,54 @@ fn sync_menu_labels(
     let music_volume = volume_of(persisted.audio.music_volume);
     let sfx_volume = volume_of(persisted.audio.sfx_volume);
     let voice_volume = volume_of(persisted.audio.voice_volume);
-    let g = &settings.graphics;
+    let r = &settings.resolved;
+    let g = &r.graphics;
     sync_setting_value_labels(ctx, |key| match key {
-        SettingKey::Vsync => Some(g.vsync as usize),
-        SettingKey::FpsCap => Some(crate::settings::fps_cap_index(g.fps_cap)),
+        SettingKey::Vsync => Some(g.frame_pacing.vsync as usize),
+        SettingKey::FpsCap => Some(crate::settings::fps_cap_index(g.frame_pacing.fps_cap)),
         SettingKey::WindowMode => Some(crate::settings::window_mode_index(
             settings.window_args.mode,
         )),
         // Resolution is a dynamic dropdown, labeled once the backend has
         // enumerated the display modes.
-        SettingKey::RenderScale => {
-            Some(crate::settings::render_scale_index(g.quality.render_scale))
-        }
-        SettingKey::UpscaleBackend => {
-            Some(crate::settings::upscale_backend_index(g.upscale_backend))
-        }
+        SettingKey::RenderScale => Some(crate::settings::render_scale_index(
+            g.anti_aliasing.upscale_quality,
+        )),
+        SettingKey::UpscaleBackend => Some(crate::settings::upscale_backend_index(
+            g.anti_aliasing.upscaler,
+        )),
         SettingKey::DlssPreset => Some(crate::settings::dlss_preset_index(g.dlss_preset)),
         SettingKey::MasterVolume => Some(crate::settings::volume_index(master_volume)),
         SettingKey::MusicVolume => Some(crate::settings::volume_index(music_volume)),
         SettingKey::SfxVolume => Some(crate::settings::volume_index(sfx_volume)),
         SettingKey::VoiceVolume => Some(crate::settings::volume_index(voice_volume)),
-        SettingKey::TemporalUpscaling => Some(g.temporal_upscaling as usize),
-        SettingKey::HdrDisplay => Some(g.hdr_display as usize),
-        SettingKey::HdrPq => Some(g.hdr_pq as usize),
-        SettingKey::PerfStats => Some(g.perf_stats as usize),
-        SettingKey::ShowFps => Some(g.show_fps as usize),
-        SettingKey::ShowVram => Some(g.show_vram as usize),
-        SettingKey::ShadowMapSize => Some(crate::settings::shadow_resolution_index(
-            g.quality.shadow_map_size,
+        SettingKey::TemporalUpscaling => Some(g.anti_aliasing.upscaling as usize),
+        SettingKey::HdrDisplay => Some(g.display.hdr as usize),
+        SettingKey::HdrPq => Some(g.display.pq as usize),
+        SettingKey::PerfStats => Some(r.perf_stats as usize),
+        SettingKey::ShowFps => Some(r.show_fps as usize),
+        SettingKey::ShowVram => Some(r.show_vram as usize),
+        SettingKey::ShadowMapSize => {
+            Some(crate::settings::shadow_resolution_index(g.shadows.map_size))
+        }
+        SettingKey::ShadowUpdate => Some(crate::settings::shadow_update_index(g.shadows.update)),
+        SettingKey::ShadowDistance => {
+            Some(crate::settings::shadow_distance_index(g.shadows.distance))
+        }
+        SettingKey::ShadowCascades => {
+            Some(crate::settings::shadow_cascades_index(g.shadows.cascades))
+        }
+        SettingKey::Anisotropy => Some(crate::settings::anisotropy_index(
+            g.texture_filtering.anisotropy,
         )),
-        SettingKey::ShadowUpdate => Some(crate::settings::shadow_update_index(
-            g.quality.shadow_cadence.update,
-        )),
-        SettingKey::ShadowDistance => Some(crate::settings::shadow_distance_index(
-            g.quality.shadow_cadence.distance,
-        )),
-        SettingKey::ShadowCascades => Some(crate::settings::shadow_cascades_index(
-            g.quality.shadow_cadence.cascades,
-        )),
-        SettingKey::Anisotropy => Some(crate::settings::anisotropy_index(g.quality.anisotropy)),
         SettingKey::FramesInFlight => Some(crate::settings::frames_in_flight_index(
-            g.frames_in_flight as u32,
+            g.frame_pacing.frames_in_flight,
         )),
-        SettingKey::OcclusionTwoPass => Some(g.occlusion_two_pass as usize),
-        SettingKey::TextureQuality => Some(crate::settings::texture_quality_index(g.texture_cap)),
+        SettingKey::OcclusionTwoPass => Some(g.culling.two_pass_occlusion as usize),
+        SettingKey::TextureQuality => Some(crate::settings::texture_quality_index(r.texture_cap)),
         key => quality_toggle(key)
-            .map(|row| (row.get)(&g.quality.effects) as usize)
-            .or_else(|| quality_cycle(key).map(|row| (row.index)(&g.quality.effects))),
+            .map(|row| (row.get)(g) as usize)
+            .or_else(|| quality_cycle(key).map(|row| (row.index)(g))),
     });
     // After the generic sync: under Auto the master row names the resolved
     // tier ("Auto (High)"), which the static option table cannot express.
@@ -367,7 +334,10 @@ impl GraphicsSystem {
         launch: &LaunchRequest,
         persisted: &crate::config::Settings,
     ) -> DetectedQuality {
-        let gpu_profile = self.detect_gpu_profile();
+        let backend::DeviceProbe {
+            profile: gpu_profile,
+            capabilities,
+        } = self.detect_device();
         ctx.insert_resource(gpu_profile);
         crate::crash::note(
             "gpu",
@@ -389,6 +359,7 @@ impl GraphicsSystem {
         );
         DetectedQuality {
             gpu_profile,
+            capabilities,
             preset,
             ceiling,
         }
@@ -408,6 +379,7 @@ impl GraphicsSystem {
         let mut settings = SettingsState::new();
         settings.persisted_graphics = user_graphics.clone();
         settings.gpu_profile = quality.gpu_profile;
+        settings.capabilities = quality.capabilities;
         settings.quality_preset = quality.preset;
 
         if let Some(w) = ctx.drain::<Window>().into_iter().next() {
@@ -433,14 +405,14 @@ impl GraphicsSystem {
             lut_strength: color_lut_strength(ctx),
             streaming: streaming_config.as_ref(),
         });
-        self.clear_color = settings.authored.background.color;
+        self.clear_color = settings.authored.graphics.background.color;
         // `--dlss-preset` wins for this launch, shown on the row and never
         // persisted unless the row itself changes.
         settings.session = launch.session_overrides();
-        settings.graphics = settings.resolve(user_graphics, &quality.ceiling);
+        settings.resolved = settings.resolve(user_graphics, &quality.ceiling);
         if let Some(sc) = streaming_config.as_mut() {
-            sc.texture_cap = settings.graphics.texture_cap;
-            sc.texture_budget = settings.graphics.texture_budget;
+            sc.texture_cap = settings.resolved.texture_cap;
+            sc.texture_budget = settings.resolved.texture_budget;
         }
         settings.keymap = persisted.controls.keymap.unwrap_or_default();
         settings.gamepad_map = persisted.controls.gamepad_map.unwrap_or_default();
@@ -450,7 +422,10 @@ impl GraphicsSystem {
 
         (
             ResolvedRenderConfig {
-                post: post_settings(&settings.graphics, launch),
+                launch: backend_init::RenderLaunch {
+                    rt_dynamic: launch.resolve_rt_dynamic(),
+                    rt_skinned_geometry: launch.resolve_rt_skinned_geometry(),
+                },
                 quality_ceiling: quality.ceiling,
                 streaming_config,
                 world_ambient_intensity: settings.authored.world_ambient(),
@@ -1033,7 +1008,9 @@ impl GraphicsSystem {
         ctx.insert_resource(crate::ecs::DisplayModes(settings.display_modes.clone()));
         // The resolved frame-rate cap (world value or persisted override) for
         // the runtime-level pacer; the settings row's live change republishes it.
-        ctx.insert_resource(FrameRateCap(settings.graphics.fps_cap));
+        ctx.insert_resource(FrameRateCap(
+            settings.resolved.graphics.frame_pacing.fps_cap,
+        ));
         let idx = display_mode::index_of(&settings.display_modes, settings.effective_resolution());
         if let Some(m) = settings.display_modes.get(idx) {
             set_setting_row_label(ctx, SettingKey::Resolution, &m.label());
@@ -1043,7 +1020,7 @@ impl GraphicsSystem {
     // Decide cursor handling and push the post-build backend config: menu mode,
     // ambient scale, key map, the startup cursor grab (plain first-person worlds
     // only), and the device capability flags that gate the settings rows.
-    fn finalize_backend_config(&mut self, ctx: &mut PipelineContext, settings: &SettingsState) {
+    fn finalize_backend_config(&mut self, ctx: &mut PipelineContext, settings: &mut SettingsState) {
         // A plain first-person world (Camera3D, no UI) captures the cursor at
         // startup. A Camera3D world that also has UI (a MainMenu's HitRegion /
         // KeyBinding) is "menu mode": capture is driven per-frame in `run_step`.
@@ -1077,7 +1054,15 @@ impl GraphicsSystem {
             // override). The backend already seeds the world value at its own
             // init, so this is the path that applies a persisted Ambient-slider
             // choice; idempotent when there is no override.
-            backend.set_ambient_intensity(settings.graphics.ambient_intensity);
+            let ambient = concinnity_core::settings::apply::ApplyPlan::live(
+                concinnity_core::settings::apply::LiveChanges {
+                    ambient: true,
+                    ..Default::default()
+                },
+            );
+            if let Err(e) = backend.apply_settings(&settings.resolved.graphics, &ambient) {
+                tracing::error!("GraphicsSystem: ambient push failed: {e}");
+            }
             // Push the movement key map (the persisted rebinds, or the default).
             // The backend decodes physical keys through it; idempotent with its
             // own default seed when there is no override.
@@ -1087,6 +1072,9 @@ impl GraphicsSystem {
             }
         }
         self.caps = device_caps;
+        // The built backend is the authority on what it can run from here on
+        // (Vulkan settles ray tracing beside the upscaler it actually built).
+        settings.capabilities = device_caps;
         // Publish the flags for the systems that cannot reach the backend
         // themselves (the editor's live draw seam asks whether a rewritten draw
         // slot would land).
@@ -1395,7 +1383,7 @@ impl GraphicsSystem {
         (self.debug_hud_chips, self.stat_hud_chips) = capture_hud_chips(ctx);
         let (
             ResolvedRenderConfig {
-                post,
+                launch: render_launch,
                 quality_ceiling,
                 streaming_config,
                 world_ambient_intensity,
@@ -1637,14 +1625,16 @@ impl GraphicsSystem {
         // scene-scoped feature before any backend resource is sized), and
         // hand the result to the compile-time-selected backend.
         use concinnity_core::render::backend_init::{
-            BackendInit, MediaPayloads, PlanarBudget, SceneData, ShadowParams, WorldShader,
+            BackendInit, MediaPayloads, PlanarBudget, SceneData, WorldShader,
         };
         let mut backend_init = BackendInit {
             window: &settings.window_args,
             validation,
-            frames_in_flight: settings.graphics.frames_in_flight,
-            vsync: settings.graphics.vsync,
-            clear_color: self.clear_color,
+            graphics: settings.resolved.graphics.clone(),
+            // Restart-class: the main-pass pipelines, render targets and planar /
+            // probe faces all bake the count, so a live AA toggle keeps it.
+            hdr_samples: settings.resolved.graphics.hdr_samples(),
+            launch: render_launch,
             hot_reload,
             capture,
             embedded_surface,
@@ -1688,18 +1678,12 @@ impl GraphicsSystem {
             local_lights: light_data.lights,
             spot_shadows: light_data.spot_shadows,
             area_lights: light_data.area_lights,
-            shadows: ShadowParams {
-                map_size: settings.graphics.quality.shadow_map_size,
-                cadence: settings.graphics.quality.shadow_cadence,
-            },
-            anisotropy: settings.graphics.quality.anisotropy,
             // Restart-required: the mirror targets are allocated once at backend
             // init, so the quality ceiling scales the engine capacity here.
             planar: PlanarBudget {
                 planes: quality_ceiling.planar_reflection_planes as usize,
                 resolution: quality_ceiling.planar_reflection_resolution,
             },
-            post,
             fx,
             requirements: Default::default(),
         };
@@ -1774,7 +1758,7 @@ impl GraphicsSystem {
             material_map: &material_map,
         });
 
-        self.finalize_backend_config(ctx, &settings);
+        self.finalize_backend_config(ctx, &mut settings);
 
         self.setup_scene_flow(ctx);
 
@@ -1782,7 +1766,7 @@ impl GraphicsSystem {
             ctx,
             RuntimeHandoff {
                 draw_object_count,
-                frames_in_flight: settings.graphics.frames_in_flight,
+                frames_in_flight: settings.resolved.graphics.frames_in_flight(),
                 skinned_pool_reservations: &skinned_pool_reservations,
                 fog: fog_settings,
                 texture_name_slots,
@@ -1794,7 +1778,7 @@ impl GraphicsSystem {
             settings.window_args.width,
             settings.window_args.height,
             settings.window_args.title,
-            settings.graphics.frames_in_flight,
+            settings.resolved.graphics.frame_pacing.frames_in_flight,
             draw_object_count,
             cluster_count,
             total_instances,

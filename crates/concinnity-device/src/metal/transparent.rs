@@ -173,9 +173,14 @@ impl MtlContext {
     // re-render alive for it. A device whose Metal compiler rejects the ray
     // query is exactly that failure.
     pub(in crate::metal) fn rt_transparent_active(&self) -> bool {
+        self.reflection_path().rt_trace && self.transparent_rt_pipelines_ready()
+    }
+
+    // Whether every live transparent producer built its ray-traced pipeline.
+    pub(in crate::metal) fn transparent_rt_pipelines_ready(&self) -> bool {
         let water_ready = self.water.pipeline.is_none() || self.water.pipeline_rt.is_some();
         let glass_ready = self.glass.pipeline.is_none() || self.glass.pipeline_rt.is_some();
-        self.rt.accel.is_some() && water_ready && glass_ready
+        water_ready && glass_ready
     }
 
     // Bind what every transparent draw reads and no draw overrides: the shared

@@ -11,10 +11,11 @@
 //! particle-sim reset and no multi-second geometry re-upload).
 
 use concinnity_core::gfx::render_types;
-use concinnity_core::render::backend;
-use concinnity_core::render::backend::QualitySettings;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_core::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
+use concinnity_core::settings::ResolvedGraphics;
+use concinnity_core::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
 
 use super::auto_exposure::AutoExposureGpu;
 use super::context::MtlContext;
@@ -31,6 +32,13 @@ use super::raytrace::{
     raytracing_supported,
 };
 use super::transient_pool::TransientTexturePool;
+
+// Every HDR target set carries the reactive mask, and the post chain picks its
+// scene input each frame.
+const METAL_TRAITS: BackendTraits = BackendTraits {
+    reactive_mask: true,
+    composite_scene_fixed: false,
+};
 
 // The toggle-controlled subset of the effects stack: the features the Quality
 // settings group switches on and off at runtime (TAA, SSAO, SSR, SSGI, RT
@@ -94,19 +102,38 @@ impl MtlContext {
     // wholesale; SSGI's trace resolution and ray count ride
     // `apply_quality_settings` (the resolution sizes its targets), so only its
     // scalar intensity / distance are updated.
-    pub(crate) fn update_quality_params(&mut self, q: backend::QualitySettings) {
-        if let (Some(live), Some(cur)) = (q.ssao, self.ssao.settings.as_mut()) {
+    pub(crate) fn update_quality_params(&mut self, g: &ResolvedGraphics) {
+        if let (Some(live), Some(cur)) = (g.ssao(), self.ssao.settings.as_mut()) {
             *cur = live;
         }
-        if let (Some(live), Some(cur)) = (q.ssr, self.ssr.settings.as_mut()) {
+        if let (Some(live), Some(cur)) = (g.ssr(), self.ssr.settings.as_mut()) {
             *cur = live;
         }
-        if let (Some(live), Some(cur)) = (q.ssgi, self.ssgi.settings.as_mut()) {
+        if let (Some(live), Some(cur)) = (g.ssgi(), self.ssgi.settings.as_mut()) {
             cur.intensity = live.intensity;
             cur.max_distance = live.max_distance;
         }
-        if let (Some(live), Some(cur)) = (q.auto_exposure, self.auto_exposure.adaptation.as_mut()) {
+        if let (Some(live), Some(cur)) = (g.auto_exposure(), self.auto_exposure.adaptation.as_mut())
+        {
             cur.settings = live;
+        }
+        self.refresh_gates(g);
+    }
+
+    // Gate the runtime-switched passes on `graphics` and what is built now.
+    pub(super) fn refresh_gates(&mut self, graphics: &ResolvedGraphics) {
+        self.gates = FeatureGates::new(graphics, &self.build_status(), METAL_TRAITS);
+    }
+
+    fn build_status(&self) -> BuildStatus {
+        BuildStatus {
+            taa: self.taa.pass.is_some(),
+            ssao: self.ssao.pass.is_some(),
+            ssr_resolve: self.ssr.resolve.is_some(),
+            rt_pass: self.rt.settings.is_some(),
+            ssgi: self.ssgi.pass.is_some(),
+            auto_exposure: self.auto_exposure.pipelines.is_some(),
+            gbuffer: self.gbuffer.targets.is_some(),
         }
     }
 
@@ -115,20 +142,20 @@ impl MtlContext {
     // `draw_frame`). An effect build failure returns before anything is
     // swapped; a later failure keeps the rebuilt state and returns the first
     // error once the rest has been applied.
-    pub(crate) fn apply_quality_settings(&mut self, q: QualitySettings) -> RenderResult<()> {
-        // RT reflections only when the GPU supports hardware ray tracing;
-        // otherwise the toggle persists + value-syncs but renders nothing,
-        // matching the init-time fallback. The refusal is reported the way the
-        // other two backends report theirs, so a request driven from the debug
-        // port or a persisted settings file does not read as a success.
+    pub(crate) fn apply_quality_settings(&mut self, g: &ResolvedGraphics) -> RenderResult<()> {
+        // The resolved settings never ask for ray tracing the device cannot
+        // run; a request that does is a probe / backend disagreement, reported
+        // and refused rather than built.
         let rt_capable = raytracing_supported(&self.hw.device);
-        if q.rt_reflections.is_some() && !rt_capable {
-            tracing::warn!(
-                "ray-traced reflections requested but the device does not support \
-                 hardware ray tracing; keeping SSR"
+        let mut settings = EffectSettings::new(g);
+        if settings.rt_reflection.is_some() && !rt_capable {
+            tracing::error!(
+                "the resolved settings asked for ray-traced reflections the device cannot run; \
+                 the capability probe and the backend disagree"
             );
         }
-        let rt_settings = q.rt_reflections.filter(|_| rt_capable);
+        settings.rt_reflection = settings.rt_reflection.filter(|_| rt_capable);
+        let rt_settings = settings.rt_reflection;
 
         // TAA is bypassed while the MetalFX upscaler is active (the scaler does
         // its own temporal accumulation); the velocity pre-pass + G-buffer are
@@ -137,17 +164,8 @@ impl MtlContext {
         // `MtlContext::new`. Render dimensions come from the live HDR targets
         // (render-resolution, already post-upscale).
         let upscaling_active = self.upscale.scaler.is_some();
-        let taa_effective = q.taa && !upscaling_active;
+        let taa_effective = g.taa() && !upscaling_active;
         let needs_velocity = taa_effective || upscaling_active;
-        let settings = EffectSettings {
-            ssao: &q.ssao,
-            ssr: &q.ssr,
-            ssgi: &q.ssgi,
-            rt_reflection: &rt_settings,
-            auto_exposure: &q.auto_exposure,
-            reflection_blur_scale: q.reflection_blur_scale,
-            auto_exposure_bias_ev: q.auto_exposure_bias_ev,
-        };
 
         let effects = self.build_quality_effects(&settings, taa_effective, needs_velocity)?;
         let mut first_err: Option<RenderError> = None;
@@ -234,6 +252,7 @@ impl MtlContext {
             last_elapsed: self.auto_exposure.last_elapsed,
             ..effects.auto_exposure
         };
+        self.refresh_gates(g);
         first_err.map_or(Ok(()), Err)
     }
 
@@ -275,7 +294,7 @@ impl MtlContext {
             ssr: build_ssr(&post_device, settings, render)?,
             gbuffer: build_gbuffer(device, gbuffer_enabled, render, hot_reload)?,
             ssgi: build_ssgi(&post_device, settings, render)?,
-            rt: build_rt_pipelines(device, settings.rt_reflection, hot_reload)?,
+            rt: build_rt_pipelines(device, &settings.rt_reflection, hot_reload)?,
             auto_exposure: build_auto_exposure(
                 device,
                 settings,
@@ -283,5 +302,42 @@ impl MtlContext {
                 hot_reload,
             )?,
         })
+    }
+}
+
+impl MtlContext {
+    // Apply a settings change in the plan order every backend shares.
+    pub(crate) fn apply_settings(
+        &mut self,
+        graphics: &ResolvedGraphics,
+        plan: &ApplyPlan,
+    ) -> RenderResult<()> {
+        apply_plan(self, graphics, plan)
+    }
+}
+
+impl SettingsTarget for MtlContext {
+    fn rebuild_features(&mut self, graphics: &ResolvedGraphics) -> RenderResult<()> {
+        self.apply_quality_settings(graphics)
+    }
+
+    fn push_feature_params(&mut self, graphics: &ResolvedGraphics) {
+        self.update_quality_params(graphics);
+    }
+
+    fn push_post_process(&mut self, tunables: render_types::PostProcessTunables) {
+        self.update_post_process(tunables);
+    }
+
+    fn push_ambient(&mut self, value: f32) {
+        self.set_ambient_intensity(value);
+    }
+
+    fn push_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
+        self.set_shadow_cadence(cadence);
+    }
+
+    fn push_vsync(&mut self, on: bool) {
+        self.set_vsync(on);
     }
 }

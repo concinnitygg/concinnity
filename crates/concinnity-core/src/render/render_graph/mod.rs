@@ -19,6 +19,7 @@ mod barrier_place;
 mod builder;
 mod compile;
 mod frame;
+mod gates;
 mod passes;
 mod reach;
 mod schedule;
@@ -32,6 +33,7 @@ pub(crate) use compile::GraphError;
 pub use compile::{CompiledGraph, CompiledPass, CompiledResource};
 pub(crate) use frame::bloom_top_desc;
 pub use frame::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z, FrameGraphInputs, build_frame_graph};
+pub use gates::{BackendTraits, BuildStatus, FeatureGates, FrameFacts, frame_graph_inputs};
 pub use passes::{PASS_COUNT, PASS_NAMES, PassId};
 pub use schedule::{CrossQueueWait, PassQueue};
 pub use transient::{

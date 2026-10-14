@@ -4,10 +4,11 @@
 
 use ash::vk;
 use concinnity_core::components;
-use concinnity_core::render::backend_init::{self, PostSettings};
+use concinnity_core::render::backend_init;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::pass_timing;
+use concinnity_core::settings::ResolvedGraphics;
 use std::ffi::{CStr, CString, c_char};
 
 use crate::vulkan::context::{SwapchainState, VkHardware};
@@ -20,7 +21,7 @@ pub(super) struct HardwareRequest<'a> {
     pub(super) validation: bool,
     pub(super) frames: usize,
     pub(super) vsync: bool,
-    pub(super) post: &'a PostSettings,
+    pub(super) graphics: &'a ResolvedGraphics,
 }
 
 impl HardwareRequest<'_> {
@@ -30,8 +31,8 @@ impl HardwareRequest<'_> {
     fn swapchain_config(&self) -> backend_init::SwapchainConfig {
         backend_init::SwapchainConfig {
             frames_in_flight: self.frames,
-            hdr_display: self.post.hdr_display,
-            hdr_pq: self.post.hdr_pq,
+            hdr_display: self.graphics.display.hdr,
+            hdr_pq: self.graphics.display.pq,
         }
     }
 }
@@ -67,11 +68,14 @@ pub(super) fn acquire_hardware(
         validation,
         frames,
         vsync,
-        post,
+        graphics,
         ..
     } = *req;
-    let hdr_display = post.hdr_display;
-    let (temporal_upscaling, upscale_backend) = (post.temporal_upscaling, post.upscale_backend);
+    let hdr_display = graphics.display.hdr;
+    let (temporal_upscaling, upscale_backend) = (
+        graphics.anti_aliasing.upscaling,
+        graphics.anti_aliasing.upscaler,
+    );
     // Platform window: native Win32 on Windows, AppKit on macOS, GLFW on Linux.
     let mut window = crate::vulkan::window::PlatformWindow::new(
         title,
@@ -352,7 +356,7 @@ pub(super) fn acquire_hardware(
         physical_device,
         surface,
         swapchain_colorspace_ext_available,
-        post,
+        graphics,
     );
     let swapchain_loader = ash::khr::swapchain::Device::new(&instance, &device);
     let (swapchain, swapchain_images, swapchain_format, swapchain_extent) = create_swapchain_inner(
@@ -429,9 +433,9 @@ fn resolve_hdr_mode(
     physical_device: vk::PhysicalDevice,
     surface: vk::SurfaceKHR,
     swapchain_colorspace_ext_available: bool,
-    post: &PostSettings,
+    graphics: &ResolvedGraphics,
 ) -> hdr_output::HdrOutputMode {
-    let (hdr_display, hdr_pq) = (post.hdr_display, post.hdr_pq);
+    let (hdr_display, hdr_pq) = (graphics.display.hdr, graphics.display.pq);
     // HDR-output resolve. The world's `hdr_display` toggle is the
     // gate; even on a capable display, no HDR unless the asset opts
     // in. The reverse (`hdr_display = true` on an SDR-only surface,

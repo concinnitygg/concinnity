@@ -104,7 +104,7 @@ impl Resolution {
 /// of the columns [`World::renders`] reads.
 pub fn resolve(world: &World) -> Resolution {
     resolve_with(world, crate::device::AVAILABLE, || {
-        crate::device::probe_gpu_profile().is_some()
+        crate::device::probe_device().is_some()
     })
 }
 

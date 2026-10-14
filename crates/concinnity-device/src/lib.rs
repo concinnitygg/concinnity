@@ -74,4 +74,4 @@ pub(crate) mod rt_report;
 pub(crate) mod suballoc;
 
 mod factory;
-pub use factory::{init_backend, probe_gpu_profile};
+pub use factory::{init_backend, probe_device};

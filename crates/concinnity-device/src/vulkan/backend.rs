@@ -5,7 +5,6 @@ use concinnity_core::bake;
 use concinnity_core::components;
 use concinnity_core::gfx::mesh_payload;
 use concinnity_core::gfx::mesh_payload::SkinnedVertex;
-use concinnity_core::gfx::render_types;
 use concinnity_core::gfx::render_types::SkinnedDrawObject;
 use concinnity_core::input::keymap::KeyMap;
 use concinnity_core::input::snapshot::InputSnapshot;
@@ -88,17 +87,10 @@ impl WindowControl for VkContext {
 
 impl RenderTuning for VkContext {
     forward! { assert = debug_assert_main_thread;
-        fn update_post_process(
-            &mut self,
-            tunables: render_types::PostProcessTunables,
-        );
-        fn set_ambient_intensity(&mut self, value: f32);
+        fn apply_settings(&mut self, graphics: &concinnity_core::settings::ResolvedGraphics, plan: &concinnity_core::settings::apply::ApplyPlan) -> RenderResult<()>;
         fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
         fn move_local_lights(&mut self, lights: &concinnity_core::render::lights::LightData, uniforms: &concinnity_core::gfx::render_types::LightUniforms) -> RenderResult<()>;
         fn set_reflection_probes(&mut self, probes: &[reflection_probe::ProbePlacement]);
-        fn apply_quality_settings(&mut self, settings: backend::QualitySettings) -> RenderResult<()>;
-        fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence);
-        fn update_quality_params(&mut self, settings: backend::QualitySettings);
     }
 
     fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>) {

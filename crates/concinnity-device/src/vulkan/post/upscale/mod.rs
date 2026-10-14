@@ -25,10 +25,9 @@ use concinnity_core::components::UpscalerBackend;
 use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_core::render::upscaler::UpscalerAvailability;
 
-use crate::upscale_sdk::{
-    Availability, SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest, preferred,
-};
+use crate::upscale_sdk::{SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest, preferred};
 use crate::vulkan::allocator::DeviceAllocator;
 use crate::vulkan::context::{HDR_FORMAT, VkContext};
 use crate::vulkan::graph_exec::GraphFrameParams;
@@ -340,8 +339,10 @@ fn image_barrier(
 
 // The SDKs this build bundles. DLSS links NGX statically; XeSS and FFX are
 // runtime libraries tried only when `build.rs` bundled them.
-fn availability() -> Availability {
-    Availability {
+// The vendor upscalers this build bundles. The pre-backend probe reports the
+// same set, so the settings predict the choice this backend makes.
+pub(in crate::vulkan) fn availability() -> UpscalerAvailability {
+    UpscalerAvailability {
         dlss: cfg!(ngx_sdk_bundled),
         xess: cfg!(xess_sdk_bundled),
         fsr: cfg!(ffx_sdk_bundled),

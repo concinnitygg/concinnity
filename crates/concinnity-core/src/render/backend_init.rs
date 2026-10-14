@@ -6,23 +6,18 @@
 //! the same struct; each reads the fields its feature set consumes.
 
 use crate::components::{
-    GlassPanel, PassResolution, SdfVolume, ShaderPrograms, ShadowUpdate, UpscalerBackend, Window,
+    GlassPanel, PassResolution, SdfVolume, ShaderPrograms, ShadowUpdate, Window,
 };
-use crate::gfx::auto_exposure::AutoExposureSettings;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{
     AreaLightData, DrawObject, GpuLight, GpuMaterialParams, InstancedCluster, LightUniforms,
-    PostProcessTunables, SpotShadowData,
+    SpotShadowData,
 };
 use crate::render::decal::DecalRecord;
-use crate::render::dlss::DlssPreset;
 use crate::render::particles::ParticleEmitterRecord;
-use crate::render::post::rt_reflections::RtReflectionSettings;
-use crate::render::post::ssao::settings::SsaoSettings;
-use crate::render::post::ssgi::settings::SsgiSettings;
-use crate::render::post::ssr::settings::SsrSettings;
 use crate::render::rt_geom::RtDynamicMode;
 use crate::render::volumetric_fog::FogSettings;
+use crate::settings::ResolvedGraphics;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -116,61 +111,26 @@ pub struct ShadowParams {
     pub cadence: ShadowCadence,
 }
 
-/// Post-process and display settings resolved from the settings assets (plus
-/// the user's persisted overrides, the quality-preset ceiling, and the
-/// launch's render requests). Every Option here is an init-time gate: None
-/// allocates nothing.
-pub struct PostSettings {
-    /// Composite tunables pushed to the post pass. The backend pairs them with
-    /// the display-output flags it negotiates below (`hdr_display` / `hdr_pq`)
-    /// to build the uniform the shaders read.
-    pub post_process: PostProcessTunables,
-    /// Whether the temporal anti-aliasing pass runs.
-    pub taa_enabled: bool,
-    /// Sample count for the off-screen HDR color + depth attachments, resolved
-    /// by [`crate::components::hdr_sample_count`] from the anti-aliasing mode
-    /// and the upscaling request. `1` means no multisampling: the color target
-    /// is the scene spine and no resolve step runs. Each backend clamps it to
-    /// what the device reports for the HDR format.
-    pub hdr_samples: u32,
-    /// Screen-space ambient occlusion, or `None` when off.
-    pub ssao: Option<SsaoSettings>,
-    /// Screen-space reflections, or `None` when off.
-    pub ssr: Option<SsrSettings>,
-    /// Screen-space global illumination, or `None` when off.
-    pub ssgi: Option<SsgiSettings>,
-    /// Requires an RT-capable GPU; backends fall back to SSR without one.
-    pub rt_reflections: Option<RtReflectionSettings>,
+/// How the launch asks ray tracing to treat the scene. Not graphics settings:
+/// the CLI picks them for one run.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct RenderLaunch {
     /// How the ray-tracing acceleration structure tracks moving props. Inert
-    /// when `rt_reflections` is None.
+    /// without ray-traced reflections.
     pub rt_dynamic: RtDynamicMode,
     /// Whether skinned meshes join the ray-tracing acceleration structure.
     /// False leaves the BVH over static + instanced geometry only, so nothing
     /// animated appears in a ray-traced reflection.
     pub rt_skinned_geometry: bool,
-    /// Per-axis divisor for the roughness-aware reflection blur target.
-    pub reflection_blur_scale: u32,
-    /// Auto-exposure, or `None` when off.
-    pub auto_exposure: Option<AutoExposureSettings>,
-    /// Authored exposure_ev carried as a bias on the adapted EV when
-    /// auto-exposure is on; otherwise baked into post_process.exposure.
-    pub auto_exposure_bias_ev: f32,
-    /// HDR display request; each backend gates it on its own EDR / color-
-    /// space capability probe and falls back to SDR with a warning.
-    pub hdr_display: bool,
-    /// PQ-encoded HDR output; honored by Metal today, accepted elsewhere.
-    pub hdr_pq: bool,
-    /// Whether temporal upscaling runs.
-    pub temporal_upscaling: bool,
-    /// Per-axis input-to-output ratio; ignored when upscaling is off.
-    pub upscale_scale: f32,
-    /// Upscaler selector for DirectX / Vulkan (FSR3 / DLSS / XeSS); Metal
-    /// always uses MetalFX and ignores it.
-    pub upscale_backend: UpscalerBackend,
-    /// The render preset DLSS runs when it is the upscaler.
-    pub dlss_preset: DlssPreset,
-    /// Two-pass Hi-Z occlusion request; gated on the bindless cull path.
-    pub occlusion_two_pass: bool,
+}
+
+impl Default for RenderLaunch {
+    fn default() -> Self {
+        Self {
+            rt_dynamic: RtDynamicMode::Auto,
+            rt_skinned_geometry: true,
+        }
+    }
 }
 
 /// World-authored effect content drained from components. Empty / None means
@@ -232,12 +192,16 @@ pub struct BackendInit<'a> {
     pub window: &'a Window,
     /// Debug-layer toggle for the DirectX / Vulkan validation layers.
     pub validation: bool,
-    /// Frames the backend keeps in flight.
-    pub frames_in_flight: usize,
-    /// Whether presentation waits for vertical blank.
-    pub vsync: bool,
-    /// Linear RGBA the target is cleared to.
-    pub clear_color: [f32; 4],
+    /// The resolved graphics settings the backend is built with.
+    pub graphics: ResolvedGraphics,
+    /// Sample count for the off-screen HDR color + depth attachments,
+    /// [`ResolvedGraphics::hdr_samples`] before any trim. `1` means no
+    /// multisampling: the color target is the scene spine and no resolve step
+    /// runs. Each backend clamps it to what the device reports for the HDR
+    /// format.
+    pub hdr_samples: u32,
+    /// The launch's ray-tracing requests.
+    pub launch: RenderLaunch,
     /// True only under `cn debug`: disk-first shader resolution + watcher.
     pub hot_reload: bool,
     /// Keep the presented frame blit-readable so `screenshot` can capture it.
@@ -270,14 +234,8 @@ pub struct BackendInit<'a> {
     /// One entry per rectangular area light, indexed by `GpuLight.data_index`.
     /// Empty when the world declares none.
     pub area_lights: Vec<AreaLightData>,
-    /// Shadow-mapping settings.
-    pub shadows: ShadowParams,
-    /// Scene-sampler max anisotropy, clamped to the GPU's range at init.
-    pub anisotropy: u32,
     /// Planar-reflection limits from the quality preset / GPU tier ceiling.
     pub planar: PlanarBudget,
-    /// Post-process and display settings.
-    pub post: PostSettings,
     /// World-authored effect content.
     pub fx: WorldFx,
     /// Derived by `resolve_requirements()`; the conservative default assumes a
@@ -376,9 +334,9 @@ impl<'a> BackendInit<'a> {
         let mut init = Self {
             window,
             validation: false,
-            frames_in_flight: 2,
-            vsync: true,
-            clear_color: [0.0, 0.0, 0.0, 1.0],
+            graphics: minimal_graphics(),
+            hdr_samples: crate::components::HDR_MULTISAMPLE_COUNT,
+            launch: RenderLaunch::default(),
             hot_reload: false,
             capture: false,
             embedded_surface: None,
@@ -406,37 +364,7 @@ impl<'a> BackendInit<'a> {
             local_lights: Vec::new(),
             spot_shadows: Vec::new(),
             area_lights: Vec::new(),
-            shadows: ShadowParams {
-                map_size: 0,
-                cadence: ShadowCadence {
-                    update: ShadowUpdate::default(),
-                    distance: 0,
-                    cascades: 1,
-                },
-            },
-            anisotropy: 1,
             planar: PlanarBudget::NONE,
-            post: PostSettings {
-                post_process: PostProcessTunables::DEFAULT,
-                taa_enabled: false,
-                hdr_samples: crate::components::HDR_MULTISAMPLE_COUNT,
-                ssao: None,
-                ssr: None,
-                ssgi: None,
-                rt_reflections: None,
-                rt_dynamic: RtDynamicMode::Auto,
-                rt_skinned_geometry: true,
-                reflection_blur_scale: 1,
-                auto_exposure: None,
-                auto_exposure_bias_ev: 0.0,
-                hdr_display: false,
-                hdr_pq: false,
-                temporal_upscaling: false,
-                upscale_scale: 1.0,
-                upscale_backend: UpscalerBackend::Auto,
-                dlss_preset: DlssPreset::Default,
-                occlusion_two_pass: false,
-            },
             fx: WorldFx {
                 decals: Vec::new(),
                 particles: Vec::new(),
@@ -463,9 +391,9 @@ impl<'a> BackendInit<'a> {
             // buffers (e.g. Metal stores `frames_in_flight.max(1)`), so an
             // out-of-range authored 0 does not read as a swapchain change vs a
             // backend that already clamped it, spuriously forcing a full rebuild.
-            frames_in_flight: self.frames_in_flight.max(1),
-            hdr_display: self.post.hdr_display,
-            hdr_pq: self.post.hdr_pq,
+            frames_in_flight: self.graphics.frames_in_flight(),
+            hdr_display: self.graphics.display.hdr,
+            hdr_pq: self.graphics.display.pq,
         }
     }
 
@@ -477,37 +405,24 @@ impl<'a> BackendInit<'a> {
         let sky = self.media.env_map_bytes.is_some() && self.media.env_map_background;
         let req = RenderRequirements::derive(&self.scene, &self.fx, sky);
         if !req.scene {
-            trim_scene_features(
-                &mut self.shadows,
-                &mut self.post,
-                &mut self.fx,
-                &mut self.planar,
-            );
+            self.graphics.trim_scene_features();
+            self.fx.fog = None;
+            self.planar.planes = 0;
         }
         self.requirements = req;
     }
 }
 
-// Force off every feature that only decorates a 3D scene. All of these are
-// existing init-time gates in the backends, so zeroing them here means every
-// backend skips the matching resources with no backend-side changes.
-fn trim_scene_features(
-    shadows: &mut ShadowParams,
-    post: &mut PostSettings,
-    fx: &mut WorldFx,
-    planar: &mut PlanarBudget,
-) {
-    shadows.map_size = 0;
-    post.taa_enabled = false;
-    post.ssao = None;
-    post.ssr = None;
-    post.ssgi = None;
-    post.rt_reflections = None;
-    post.auto_exposure = None;
-    post.temporal_upscaling = false;
-    post.occlusion_two_pass = false;
-    fx.fog = None;
-    planar.planes = 0;
+// The settings the startup error screen stands up with: two frames in flight,
+// display sync, a black clear, no shadows and no anisotropy.
+fn minimal_graphics() -> ResolvedGraphics {
+    let mut graphics = ResolvedGraphics::default();
+    graphics.frame_pacing.frames_in_flight = 2;
+    graphics.frame_pacing.vsync = true;
+    graphics.background.color = [0.0, 0.0, 0.0, 1.0];
+    graphics.shadows.map_size = 0;
+    graphics.texture_filtering.anisotropy = 1;
+    graphics
 }
 
 #[cfg(test)]
@@ -538,32 +453,6 @@ mod tests {
             sdf_volumes: Vec::new(),
             grass: None,
             atmosphere: None,
-        }
-    }
-
-    fn full_post() -> PostSettings {
-        PostSettings {
-            post_process: PostProcessTunables::DEFAULT,
-            taa_enabled: true,
-            // Temporal: `hdr_sample_count` resolves both of this world's
-            // temporal flags to a single-sample target.
-            hdr_samples: 1,
-            ssao: Some(SsaoSettings::resolve(0.5, 1.0)),
-            ssr: None,
-            ssgi: None,
-            rt_reflections: None,
-            rt_dynamic: RtDynamicMode::Auto,
-            rt_skinned_geometry: true,
-            reflection_blur_scale: 2,
-            auto_exposure: None,
-            auto_exposure_bias_ev: 0.0,
-            hdr_display: false,
-            hdr_pq: false,
-            temporal_upscaling: true,
-            upscale_scale: 0.5,
-            upscale_backend: UpscalerBackend::Auto,
-            dlss_preset: DlssPreset::Default,
-            occlusion_two_pass: true,
         }
     }
 
@@ -613,9 +502,9 @@ mod tests {
         // No scene content, so `resolve_requirements` ran and trimmed the
         // scene-scoped features.
         assert!(!init.requirements.scene);
-        assert_eq!(init.shadows.map_size, 0);
-        assert!(!init.post.taa_enabled);
-        assert!(init.post.ssao.is_none());
+        assert_eq!(init.graphics.shadows.map_size, 0);
+        assert!(!init.graphics.taa());
+        assert!(init.graphics.ssao().is_none());
         assert_eq!(init.planar.planes, 0);
     }
 
@@ -658,30 +547,33 @@ mod tests {
         assert!(RenderRequirements::derive(&scene, &fx, false).scene);
     }
 
+    // A world with every scene feature on loses each of them, keeps the
+    // composite's FXAA, and keeps the HDR sample count it was resolved with.
     #[test]
     fn sceneless_world_trims_scene_features() {
-        let mut shadows = ShadowParams {
-            map_size: 2048,
-            cadence: ShadowCadence {
-                update: ShadowUpdate::default(),
-                distance: 120,
-                cascades: 4,
-            },
-        };
-        let mut post = full_post();
-        let mut fx = empty_fx();
-        let mut planar = PlanarBudget {
+        let window = Window::default();
+        let mut init = BackendInit::minimal(&window, Vec::new());
+        let mut graphics = ResolvedGraphics::default();
+        graphics.anti_aliasing.upscaling = true;
+        graphics.exposure.auto = true;
+        init.hdr_samples = graphics.hdr_samples();
+        init.graphics = graphics;
+        init.planar = PlanarBudget {
             planes: 3,
             resolution: PassResolution::Half,
         };
-        trim_scene_features(&mut shadows, &mut post, &mut fx, &mut planar);
-        assert_eq!(shadows.map_size, 0);
-        assert!(!post.taa_enabled);
-        assert!(post.ssao.is_none());
-        assert!(!post.temporal_upscaling);
-        assert!(!post.occlusion_two_pass);
-        assert!(fx.fog.is_none());
-        assert_eq!(planar.planes, 0);
+        let fxaa = init.graphics.post_process().fxaa;
+        init.resolve_requirements();
+        let g = &init.graphics;
+        assert_eq!(g.shadows.map_size, 0);
+        assert!(!g.taa());
+        assert!(g.ssao().is_none() && g.ssr().is_none() && g.ssgi().is_none());
+        assert!(g.rt_reflections().is_none() && g.auto_exposure().is_none());
+        assert!(!g.anti_aliasing.upscaling);
+        assert!(!g.culling.two_pass_occlusion);
+        assert_eq!(g.post_process().fxaa, fxaa);
+        assert_eq!(init.hdr_samples, 1);
+        assert_eq!(init.planar.planes, 0);
     }
 
     #[test]

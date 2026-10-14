@@ -260,14 +260,7 @@ impl DxContext {
             self.uniforms.light_uniforms.num_local_lights,
             self.probe.book.count(),
         );
-        let seed_inputs = self.frame_graph_inputs(
-            width,
-            height,
-            bindless_cull_enabled,
-            clustered,
-            lines,
-            world_hidden,
-        );
+        let seed_inputs = self.frame_graph_inputs(width, height, clustered, lines, world_hidden);
         let FrameProjection {
             proj,
             cur_vp,

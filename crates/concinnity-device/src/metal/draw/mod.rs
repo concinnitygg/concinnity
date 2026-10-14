@@ -189,7 +189,6 @@ impl MtlContext {
             gbuffer_view,
             scene_input,
             scene_color,
-            transparent_active,
         } = self.frame_pass_uniforms(PassUniformArgs {
             fov_y_radians,
             aspect,
@@ -235,10 +234,8 @@ impl MtlContext {
         // frame start above and stays alive through `presentDrawable`
         // below.
         let graph_inputs = self.frame_graph_inputs(GraphInputArgs {
-            bindless_cull_enabled: object_buffer.is_some() && cull_draw_args.is_some(),
-            velocity_active,
+            cull_ready: object_buffer.is_some() && cull_draw_args.is_some(),
             fog_settings: fog_settings.as_ref(),
-            transparent_active,
             lines,
             world_hidden,
             clustered,
@@ -317,7 +314,7 @@ impl MtlContext {
             grass: grass_frame.as_ref(),
             scene_pre_taa: if self.taa.enabled
                 || self.upscale.scaler.is_some()
-                || transparent_active
+                || graph_inputs.transparent_enabled
             {
                 Some(&scene_input)
             } else {

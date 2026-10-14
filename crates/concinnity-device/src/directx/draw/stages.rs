@@ -10,7 +10,7 @@ use concinnity_core::profile::PassTiming;
 use concinnity_core::render::depth::camera_projection;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::pass_timing;
-use concinnity_core::render::render_graph::{self, FrameGraphInputs};
+use concinnity_core::render::render_graph::{self, FrameFacts, FrameGraphInputs};
 use concinnity_core::render::shadow_schedule::{CascadeCamera, CascadeLight};
 use concinnity_core::render::view_history::ViewFrame;
 use concinnity_core::transform::mat4_mul;
@@ -430,142 +430,64 @@ impl DxContext {
         Ok(())
     }
 
-    // Seeds the shared frame-graph builder from this frame's live feature state.
+    // This frame's graph inputs: the shared gates over the live settings and
+    // what this frame holds, masked by the viewport's view mode and show flags.
     pub(super) fn frame_graph_inputs(
         &self,
         width: u32,
         height: u32,
-        bindless_cull_enabled: bool,
         clustered: bool,
         lines: &[LineVertex],
         world_hidden: bool,
     ) -> FrameGraphInputs {
-        // Per-frame seed inputs for the shared backend-agnostic frame builder
-        // ([gfx/render_graph/frame.rs](../../gfx/render_graph/frame.rs)).
-        // Every backend (Metal / Vulkan / DirectX) now drives the same builder.
-        // FSR3 owns its own temporal accumulation, so when the upscaler
-        // is built the engine bypasses the TAA pass entirely. The G-buffer
-        // pre-pass still runs; FSR consumes its motion vectors.
-        let upscale_on = self.upscale.backend.is_some();
-        let taa_on = self.taa.is_some() && !upscale_on;
-        let reflection_path = self.reflection_path();
-        let seed_inputs = FrameGraphInputs {
-            shadow_enabled: !self.shadow.dsvs.is_empty(),
-            shadow_map_size: self.shadow.map_size,
+        let facts = FrameFacts {
             hdr_width: width,
             hdr_height: height,
             hdr_sample_count: self.targets.hdr.msaa_samples,
-            bindless_cull_enabled,
-            bloom_enabled: self.post_process.bloom_intensity > 0.0,
-            velocity_enabled: self.reads_motion(),
-            taa_enabled: taa_on,
-            // The SSR resolve, which a live RT trace takes the slot from.
-            ssr_enabled: reflection_path.ssr_resolve,
-            // The SSR depth + normal pre-pass feeds SSR resolve *and* SSGI, so
-            // `SsrResources` (and thus this flag) is on whenever either is.
-            ssr_prepass_enabled: self.ssr.is_some(),
-            auto_exposure_enabled: self.auto_exposure.resources.is_some(),
-            particles_enabled: self.particle.resources.is_some()
-                && !self.particle.records.is_empty(),
-            // The blades draw under the GPU-driven pass's root signatures, so
-            // grass rides that path.
-            grass_enabled: self.grass.is_some() && bindless_cull_enabled,
-            grass_shadow_enabled: self.grass_casts(),
-            // Gated on the resources (built at init when the world declared a
-            // VolumetricFog) and on live settings that can affect the frame, so
-            // runtime `update_fog_settings(None)` -- or an authored zero density,
-            // which integrates to a transparent black over the whole volume --
-            // drops the FogFroxel + Fog passes from the graph entirely. Mirrors
-            // Vulkan + Metal; without the settings half a settings-None frame would still
-            // emit the (bailing) Fog pass, and the graph-driven froxel-volume
-            // consumer barrier would transition the volume with no encoder to
-            // reset it.
-            fog_enabled: self.fog.resources.is_some()
-                && self.fog.settings.is_some_and(|s| s.contributes()),
-            // The atmosphere runs on every frame that carries its inputs.
-            atmosphere_enabled: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
-            // The ocean runs while a visible surface samples it.
-            water_sim_enabled: self.water_sim_live(),
-            // `DecalState` is built at init unconditionally so a runtime
-            // `add_decal` works from a world that declared none, so the
-            // resources half alone is always true. The live half drops the
-            // pass (and its depth-read transition) from the graph until a
-            // decal exists. Mirrors Vulkan + Metal.
-            decals_enabled: self.decal.state.is_some() && !self.decal.set.is_empty(),
-            ssao_enabled: self.ssao.resources.is_some(),
-            // FSR3 upscaling (runs at native resolution as a TAA
-            // replacement). `Some` only when the FFX DLL loaded;
-            // otherwise the renderer silently falls back to TAA-or-none.
-            // When on, the engine sets `taa_enabled = false` below
-            // (FSR's temporal accumulation supersedes TAA) and
-            // `velocity_enabled = true` (FSR needs motion vectors).
-            upscale_enabled: self.upscale.backend.is_some(),
-            // Generic translucent pass: on when the world declared visible
-            // `GlassPanel` or `WaterSurface`. The shared builder then seeds the
-            // Transparent node and the executor draws every record back-to-front
-            // over the post-SSR scene.
-            transparent_enabled: self.transparent_enabled(),
-            // Planar mirrors: a node ahead of Transparent whenever it samples
-            // them. Which planes render is decided per frame from the plan.
-            planar_reflection_enabled: self.planar_pass_needed(),
-            // Raymarched SDF volumes. Gated on the resources existing and a
-            // currently visible volume.
-            raymarch_enabled: self.raymarch_enabled(),
-            // Two-pass Hi-Z occlusion: inserts HizBuild / Cull2 / Main2 after
-            // Main when the world requested `occlusion_two_pass` and the bindless
-            // GPU-cull path + phase-2 pipeline are live. `two_pass_occlusion_active`
-            // is the single gate the executor's phase-2 arms + the Main resolve
-            // skip share, so the graph shape matches what the executor dispatches.
-            two_pass_occlusion_enabled: self.two_pass_occlusion_active(),
-            // The terminal Hi-Z build. Present whenever the GPU-cull path built a
-            // pyramid: the frame ends by reducing its final depth into it for the
-            // next frame's phase-1 occlusion test.
-            hiz_build_enabled: self.cull.hiz.is_some(),
-            // The mask is one of the scene targets, so it always exists.
-            reactive_mask_enabled: true,
-            upscale_reads_reactive: self
+            shadow: !self.shadow.dsvs.is_empty(),
+            shadow_map_size: self.shadow.map_size,
+            shadowed_spot_count: self.spot_shadow.count(),
+            spot_shadow_slice_size: self.spot_shadow.slice_size,
+            world_hidden,
+            cull_ready: self.cull.main_bindless_pso.is_some(),
+            cull_records: self.cull_count(),
+            two_pass_ready: self.two_pass_occlusion_built(),
+            hiz: self.cull.hiz.is_some(),
+            bloom_chain: self.bloom.is_some(),
+            bloom_intensity: self.post_process.bloom_intensity,
+            upscaler: self.upscale.backend.is_some(),
+            upscaler_reads_reactive: self
                 .upscale
                 .backend
                 .as_ref()
                 .is_some_and(|u| u.reactive_reader().reads()),
-            // Screen-space global illumination: inserts the `Ssgi` RMW node
-            // after `Raymarch` and before `Decals`. On when the world selected
-            // `indirect_lighting: ssgi` (which also forces the SSR pre-pass on
-            // above so the gather has a G-buffer).
-            ssgi_enabled: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
-            // Hardware ray-traced reflections (DXR inline `RayQuery`). On when
-            // the world authored `ray_traced_reflections`, the GPU supports the
-            // DXR tier, and the DXC compile + acceleration-structure build
-            // succeeded (`rt_reflections` + `rt.accel` both live). The shared
-            // builder then seeds `RtReflections` in the SsrResolve slot.
-            rt_reflections_enabled: reflection_path.rt_trace,
-            // One jittered traversal writes normal+depth, roughness, and motion
-            // for every screen-space consumer, replacing the separate SSR /
-            // SSAO / velocity geometry pre-passes. On whenever the G-buffer
-            // resources exist (any of SSR / SSGI / SSAO / TAA / FSR enabled).
-            gbuffer_prepass_enabled: self.gbuffer.is_some(),
-            // An opaque menu backdrop hides the scene: the shared builder masks
-            // every world pass off, collapsing to Main (a bare clear, fed the
-            // empty scene below) -> Composite (presents the overlay).
-            world_hidden,
-            // Clustered light binning, sharing the gate that sets `use_clusters`
-            // below: the pipeline is built only for a world with local lights,
-            // and the live count has to still be non-zero. Otherwise the forward
-            // pass brute-forces an empty light list.
-            clustering_enabled: clustered,
-            // Zero drops the SpotShadow node and its imported array from the
-            // graph entirely, which is the common case (no shadow-casting spot).
-            shadowed_spot_count: self.spot_shadow.count(),
-            spot_shadow_slice_size: self.spot_shadow.slice_size,
-            // Lines run only on the frames a system published them (the
-            // `cn editor` axes), and only once their resources are live: the
-            // build is lazy, so a shipped runtime never compiles them.
-            lines_enabled: !lines.is_empty() && self.lines.resources.is_some(),
-            // Set by the view-mode mask below (occlusion view only).
-            composite_reads_ao: false,
-            composite_reads_motion: false,
-            composite_reads_reactive: false,
+            bvh_live: self.rt.accel.is_some(),
+            particles: self.particle.resources.is_some()
+                && self.particle.records.iter().any(|p| p.is_some()),
+            fog: self.fog.resources.is_some() && self.fog.settings.is_some_and(|s| s.contributes()),
+            // `DecalState` is built at init unconditionally so a runtime
+            // `add_decal` works from a world that declared none.
+            decals: self.decal.state.is_some() && !self.decal.set.is_empty(),
+            visible_surfaces: self.transparent.as_ref().is_some_and(|t| t.any_visible()),
+            visible_see_through: self.see_through_mesh_visible(),
+            rt_transparent_ready: self
+                .transparent
+                .as_ref()
+                .is_some_and(|t| t.rt_pipelines_ready()),
+            planar_targets: self.planar_reflection.is_some(),
+            water_planar_slot: self
+                .transparent
+                .as_ref()
+                .is_some_and(|t| t.water_planar_slot_live()),
+            lines: !lines.is_empty() && self.lines.resources.is_some(),
+            visible_volumes: self.raymarch_enabled(),
+            atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
+            water_sim: self.water_sim_live(),
+            grass: self.grass.is_some(),
+            grass_casts: self.grass_casts(),
+            clustered,
         };
+        let seed_inputs = render_graph::frame_graph_inputs(&self.gates, &facts);
         // The viewport's view mode + show flags mask the seeded inputs (the
         // per-frame counterpart of the init-time trims); Lit with every flag
         // set is the identity, so a shipped runtime is unaffected.

@@ -2,9 +2,10 @@
 //! fall back through when one fails to initialize.
 
 use concinnity_core::components::UpscalerBackend;
-use concinnity_core::render::backend_init::PostSettings;
 use concinnity_core::render::dlss::DlssPreset;
 use concinnity_core::render::error::RenderResult;
+use concinnity_core::render::upscaler::{UpscalerAvailability, VendorUpscaler, upscaler_order};
+use concinnity_core::settings::ResolvedGraphics;
 
 /// What temporal upscaling was asked for: the upscaler, and the render preset
 /// DLSS runs if it is the one built. Kept by a backend so a resize rebuilds
@@ -13,16 +14,16 @@ use concinnity_core::render::error::RenderResult;
 pub(crate) struct UpscaleRequest {
     pub(crate) backend: UpscalerBackend,
     pub(crate) dlss_preset: DlssPreset,
-    refused: Availability,
+    refused: UpscalerAvailability,
 }
 
 impl UpscaleRequest {
-    /// The request a backend's post settings make.
-    pub(crate) fn from_post(post: &PostSettings) -> Self {
+    /// The request a backend's graphics settings make.
+    pub(crate) fn from_graphics(graphics: &ResolvedGraphics) -> Self {
         Self {
-            backend: post.upscale_backend,
-            dlss_preset: post.dlss_preset,
-            refused: Availability::NONE,
+            backend: graphics.anti_aliasing.upscaler,
+            dlss_preset: graphics.dlss_preset,
+            refused: UpscalerAvailability::NONE,
         }
     }
 
@@ -45,59 +46,26 @@ pub(crate) enum ResolvedBackend {
     Native,
 }
 
-/// Which upscaler SDKs this build can try.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Availability {
-    pub(crate) dlss: bool,
-    pub(crate) xess: bool,
-    pub(crate) fsr: bool,
-}
-
-impl Availability {
-    const NONE: Self = Self {
-        dlss: false,
-        xess: false,
-        fsr: false,
-    };
-
-    fn without(self, refused: Self) -> Self {
-        Self {
-            dlss: self.dlss && !refused.dlss,
-            xess: self.xess && !refused.xess,
-            fsr: self.fsr && !refused.fsr,
-        }
-    }
-
-    fn mark(&mut self, candidate: ResolvedBackend) {
-        match candidate {
-            ResolvedBackend::Dlss => self.dlss = true,
-            ResolvedBackend::Xess => self.xess = true,
-            ResolvedBackend::Fsr => self.fsr = true,
-            ResolvedBackend::Native => {}
+impl From<VendorUpscaler> for ResolvedBackend {
+    fn from(upscaler: VendorUpscaler) -> Self {
+        match upscaler {
+            VendorUpscaler::Dlss => Self::Dlss,
+            VendorUpscaler::Xess => Self::Xess,
+            VendorUpscaler::Fsr => Self::Fsr,
         }
     }
 }
 
-// The candidates in the order they are tried: the explicitly requested one
-// first when available, then the automatic priority (DLSS, XeSS, FSR), then
+// The candidates in the order they are tried (the shared vendor order), then
 // Native, which is always last and always available.
-fn backend_order(requested: UpscalerBackend, available: Availability) -> Vec<ResolvedBackend> {
-    let mut order = Vec::with_capacity(4);
-    match requested {
-        UpscalerBackend::Dlss if available.dlss => order.push(ResolvedBackend::Dlss),
-        UpscalerBackend::Xess if available.xess => order.push(ResolvedBackend::Xess),
-        UpscalerBackend::Fsr3 if available.fsr => order.push(ResolvedBackend::Fsr),
-        _ => {}
-    }
-    for (candidate, avail) in [
-        (ResolvedBackend::Dlss, available.dlss),
-        (ResolvedBackend::Xess, available.xess),
-        (ResolvedBackend::Fsr, available.fsr),
-    ] {
-        if avail && !order.contains(&candidate) {
-            order.push(candidate);
-        }
-    }
+fn backend_order(
+    requested: UpscalerBackend,
+    available: UpscalerAvailability,
+) -> Vec<ResolvedBackend> {
+    let mut order: Vec<ResolvedBackend> = upscaler_order(requested, available)
+        .into_iter()
+        .map(ResolvedBackend::from)
+        .collect();
     order.push(ResolvedBackend::Native);
     order
 }
@@ -105,7 +73,10 @@ fn backend_order(requested: UpscalerBackend, available: Availability) -> Vec<Res
 /// The first candidate `requested` resolves to before any initialization is
 /// tried.
 #[cfg(any(backend_vk, test))]
-pub(crate) fn preferred(requested: UpscalerBackend, available: Availability) -> ResolvedBackend {
+pub(crate) fn preferred(
+    requested: UpscalerBackend,
+    available: UpscalerAvailability,
+) -> ResolvedBackend {
     backend_order(requested, available)
         .first()
         .copied()
@@ -120,7 +91,7 @@ impl UpscaleRequest {
     /// the search.
     pub(crate) fn build_first_available<T>(
         &mut self,
-        available: Availability,
+        available: UpscalerAvailability,
         output: (u32, u32),
         mut build: impl FnMut(ResolvedBackend, DlssPreset) -> RenderResult<Option<T>>,
     ) -> RenderResult<(Option<T>, ResolvedBackend)> {
@@ -135,11 +106,22 @@ impl UpscaleRequest {
                 );
                 return Ok((Some(built), candidate));
             }
-            self.refused.mark(candidate);
+            if let Some(vendor) = vendor_of(candidate) {
+                self.refused.mark(vendor);
+            }
             tracing::warn!("temporal upscaling: {candidate:?} unavailable, trying next backend");
         }
         tracing::info!("temporal upscaling: no backend available, rendering at native resolution");
         Ok((None, ResolvedBackend::Native))
+    }
+}
+
+fn vendor_of(backend: ResolvedBackend) -> Option<VendorUpscaler> {
+    match backend {
+        ResolvedBackend::Dlss => Some(VendorUpscaler::Dlss),
+        ResolvedBackend::Xess => Some(VendorUpscaler::Xess),
+        ResolvedBackend::Fsr => Some(VendorUpscaler::Fsr),
+        ResolvedBackend::Native => None,
     }
 }
 
@@ -148,81 +130,27 @@ mod tests {
     use super::*;
     use concinnity_core::components::UpscalerBackend as B;
 
-    fn avail(dlss: bool, xess: bool, fsr: bool) -> Availability {
-        Availability { dlss, xess, fsr }
+    fn avail(dlss: bool, xess: bool, fsr: bool) -> UpscalerAvailability {
+        UpscalerAvailability { dlss, xess, fsr }
     }
 
     fn request(backend: UpscalerBackend) -> UpscaleRequest {
         UpscaleRequest {
             backend,
             dlss_preset: DlssPreset::Default,
-            refused: Availability::NONE,
+            refused: UpscalerAvailability::NONE,
         }
     }
 
     #[test]
-    fn auto_prefers_dlss_then_xess_then_fsr_then_native() {
+    fn the_order_ends_native() {
         assert_eq!(
-            preferred(B::Auto, avail(true, true, true)),
-            ResolvedBackend::Dlss
-        );
-        assert_eq!(
-            preferred(B::Auto, avail(false, true, true)),
-            ResolvedBackend::Xess
-        );
-        assert_eq!(
-            preferred(B::Auto, avail(false, false, true)),
-            ResolvedBackend::Fsr
+            backend_order(B::Fsr3, avail(false, false, true)),
+            [ResolvedBackend::Fsr, ResolvedBackend::Native]
         );
         assert_eq!(
             preferred(B::Auto, avail(false, false, false)),
             ResolvedBackend::Native
-        );
-    }
-
-    #[test]
-    fn explicit_choice_used_when_available() {
-        assert_eq!(
-            preferred(B::Dlss, avail(true, true, true)),
-            ResolvedBackend::Dlss
-        );
-        assert_eq!(
-            preferred(B::Xess, avail(true, true, true)),
-            ResolvedBackend::Xess
-        );
-        assert_eq!(
-            preferred(B::Fsr3, avail(true, true, true)),
-            ResolvedBackend::Fsr
-        );
-    }
-
-    #[test]
-    fn explicit_choice_falls_through_when_unavailable() {
-        assert_eq!(
-            preferred(B::Dlss, avail(false, true, true)),
-            ResolvedBackend::Xess
-        );
-        assert_eq!(
-            preferred(B::Xess, avail(false, false, true)),
-            ResolvedBackend::Fsr
-        );
-        assert_eq!(
-            preferred(B::Fsr3, avail(false, false, false)),
-            ResolvedBackend::Native
-        );
-    }
-
-    #[test]
-    fn every_order_lists_each_candidate_once_and_ends_native() {
-        let order = backend_order(B::Fsr3, avail(true, true, true));
-        assert_eq!(
-            order,
-            [
-                ResolvedBackend::Fsr,
-                ResolvedBackend::Dlss,
-                ResolvedBackend::Xess,
-                ResolvedBackend::Native
-            ]
         );
     }
 

@@ -1,7 +1,7 @@
 //! Hardware ray-traced reflections: the resolve and skinning pipelines, and the
 //! scene acceleration structure built over the uploaded geometry.
 
-use concinnity_core::render::backend_init::{PostSettings, SceneData};
+use concinnity_core::render::backend_init::{RenderLaunch, SceneData};
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
 use objc2::runtime::ProtocolObject;
@@ -20,7 +20,8 @@ pub(super) struct RtInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) scene: &'a MtlSceneAssets,
     pub(super) glass: &'a GlassState,
-    pub(super) post: &'a PostSettings,
+    pub(super) rt_reflections: Option<RtReflectionSettings>,
+    pub(super) launch: RenderLaunch,
 }
 
 pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> RenderResult<RtState> {
@@ -28,10 +29,11 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
         world,
         scene,
         glass,
-        post,
+        rt_reflections,
+        launch,
     } = inputs;
     let device = &*gpu.hw.device;
-    let pipelines = build_rt_pipelines(device, &post.rt_reflections, gpu.hot_reload)?;
+    let pipelines = build_rt_pipelines(device, &rt_reflections, gpu.hot_reload)?;
 
     // The Layer 2 path is enabled when at least one material opts into
     // see-through AND the mesh pipeline built (RT-capable device). Mirrors
@@ -47,7 +49,7 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
     // `rt_reflections_enabled` on this being Some). It needs the shared
     // geometry buffers + draw list; resolution-independent, so untouched on
     // resize. A wholesale rebuild on geometry change is the current update path.
-    let accel = if post.rt_reflections.is_some() && raytracing_supported(device) {
+    let accel = if rt_reflections.is_some() && raytracing_supported(device) {
         match build_rt_accel(
             RtGpu {
                 device,
@@ -86,9 +88,10 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
             }
         }
     } else {
-        if post.rt_reflections.is_some() {
-            tracing::warn!(
-                "ray-traced reflections requested but this GPU does not support hardware ray tracing; falling back (no RT reflections)"
+        if rt_reflections.is_some() {
+            tracing::error!(
+                "the resolved settings asked for ray-traced reflections the device cannot run; \
+                 the capability probe and the backend disagree"
             );
         }
         None
@@ -97,15 +100,15 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
     if accel.is_some() {
         tracing::info!(
             "ray-traced reflections: dynamic transform mode = {:?}",
-            post.rt_dynamic
+            launch.rt_dynamic
         );
     }
 
     Ok(RtState {
-        settings: post.rt_reflections,
+        settings: rt_reflections,
         accel,
-        dynamic_mode: post.rt_dynamic,
-        skinned_geometry: post.rt_skinned_geometry,
+        dynamic_mode: launch.rt_dynamic,
+        skinned_geometry: launch.rt_skinned_geometry,
         update_streak: concinnity_core::render::rt_accel::FailureStreak::default(),
         pipelines,
         retired: concinnity_core::render::retire_pool::RetirePool::new(),

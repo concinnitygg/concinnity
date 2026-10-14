@@ -48,7 +48,6 @@ pub(super) struct PassUniforms {
     pub(super) gbuffer_view: GBufferView,
     pub(super) scene_input: Retained<ProtocolObject<dyn MTLTexture>>,
     pub(super) scene_color: Retained<ProtocolObject<dyn MTLTexture>>,
-    pub(super) transparent_active: bool,
 }
 
 impl MtlContext {
@@ -283,17 +282,6 @@ impl MtlContext {
             scene_input.clone()
         };
 
-        // The transparent pass runs when any translucent producer is live.
-        // Drives both the graph-input gate (whether the slot is inserted) and the
-        // `scene_pre_taa` supply in `GraphFrameParams` (the pass reads + writes
-        // it). With
-        // SSR off `scene_input` aliases `hdr_resolve`, which is the correct
-        // RMW target: the transparent encoder blits a scene copy first, so the
-        // self-read for refraction is safe.
-        let transparent_active = (self.water.pipeline.is_some()
-            && self.water.surfaces.iter().any(|s| s.visible))
-            || (self.glass.pipeline.is_some() && self.glass.panels.iter().any(|p| p.visible))
-            || self.mesh_glass_visible();
         Ok(PassUniforms {
             ssao_params,
             ssr_params,
@@ -308,7 +296,6 @@ impl MtlContext {
             gbuffer_view,
             scene_input,
             scene_color,
-            transparent_active,
         })
     }
 }

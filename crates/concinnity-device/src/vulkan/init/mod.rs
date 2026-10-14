@@ -18,9 +18,10 @@
 
 use ash::vk;
 use concinnity_core::gfx::render_types::PostProcessParams;
-use concinnity_core::render::backend_init::{BackendInit, PostSettings, WorldShader};
+use concinnity_core::render::backend_init::{BackendInit, WorldShader};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::scene_state::{DrawList, SceneState};
+use concinnity_core::settings::ResolvedGraphics;
 
 use super::context::*;
 use super::geometry_upload::GeometryUploads;
@@ -61,8 +62,8 @@ impl InitGpu<'_> {
     }
 }
 
-// The feature gates every stage agrees on, resolved once from the world's post
-// settings and the device.
+// The feature gates every stage agrees on, resolved once from the world's
+// graphics settings and the device.
 struct Features {
     taa_enabled: bool,
     msaa_samples: vk::SampleCountFlags,
@@ -72,12 +73,12 @@ struct Features {
 }
 
 impl Features {
-    fn resolve(hw: &VkHardware, post: &PostSettings) -> Self {
+    fn resolve(hw: &VkHardware, graphics: &ResolvedGraphics, hdr_samples: u32) -> Self {
         // Temporal upscaling (FSR) consumes the velocity pre-pass's
         // render-resolution motion + depth, which TaaResources owns, so force
         // the TAA stack built when upscaling is on (the TAA *resolve* is still
         // dropped from the frame graph; only the velocity pre-pass is reused).
-        let taa_enabled = post.taa_enabled || post.temporal_upscaling;
+        let taa_enabled = graphics.taa() || graphics.anti_aliasing.upscaling;
         // The device's ceiling for the HDR format, re-queried on both paths since
         // the outgoing world's AA mode may differ; the resolved setting is what
         // the world actually asks for. A temporal technique resolves it to one
@@ -85,15 +86,21 @@ impl Features {
         // makes the color image the scene spine.
         let msaa_samples = super::device::resolve_sample_count(
             super::device::get_max_usable_sample_count(&hw.instance, hw.physical_device),
-            post.hdr_samples,
+            hdr_samples,
         );
         tracing::info!("vulkan HDR target: {}x MSAA", msaa_samples.as_raw().max(1));
         // Pair the authored tunables with the resolved HDR mode (freshly
         // negotiated or inherited on a reload), which drives the composite
         // shader's `hdr_output > 0.5` branch and its in-branch `pq_output`
         // encode flag. Mirrors `DxContext::new`.
-        let post_process = hw.hdr_mode.post_process_params(post.post_process);
-        let rt_wanted = post.rt_reflections.is_some() && hw.rt_capable;
+        let post_process = hw.hdr_mode.post_process_params(graphics.post_process());
+        let rt_wanted = graphics.rt_reflections().is_some() && hw.rt_capable;
+        if graphics.rt_reflections().is_some() && !hw.rt_capable {
+            tracing::error!(
+                "the resolved settings asked for ray-traced reflections the device cannot run; \
+                 the capability probe and the backend disagree"
+            );
+        }
         Self {
             taa_enabled,
             msaa_samples,
@@ -104,9 +111,9 @@ impl Features {
             // disagreeing would mean the pool places no images while the feature
             // expects them, or the reverse.
             gbuffer_enabled: taa_enabled
-                || post.ssao.is_some()
-                || post.ssr.is_some()
-                || post.ssgi.is_some()
+                || graphics.ssao().is_some()
+                || graphics.ssr().is_some()
+                || graphics.ssgi().is_some()
                 || rt_wanted,
         }
     }
@@ -133,9 +140,9 @@ impl VkContext {
         let BackendInit {
             window,
             validation,
-            frames_in_flight,
-            vsync,
-            clear_color,
+            graphics,
+            hdr_samples,
+            launch,
             hot_reload,
             // Vulkan retains the presented swapchain index unconditionally, so
             // capture needs no arming here.
@@ -148,13 +155,13 @@ impl VkContext {
             local_lights,
             spot_shadows,
             area_lights,
-            shadows,
-            anisotropy,
             planar,
-            post,
             fx,
             requirements: _,
         } = init;
+        let vsync = graphics.frame_pacing.vsync;
+        let clear_color = graphics.background.color;
+        let shadows = graphics.shadow_params();
         // Entry 0 is the world default program; entries 1.. are the
         // material-referenced shader buckets (see `world_shaders.rs`). The world
         // default program is never deferred (bucket 0 always decodes at init);
@@ -169,20 +176,20 @@ impl VkContext {
         // can `debug_assert_main_thread` against it; the Send invariant rests on
         // the context being touched from this thread alone.
         super::context::record_main_thread();
-        let frames = frames_in_flight.max(1);
+        let frames = graphics.frames_in_flight();
 
         let request = bootstrap::HardwareRequest {
             window,
             validation,
             frames,
             vsync,
-            post: &post,
+            graphics: &graphics,
         };
         let (hw, swapchain) = match reuse {
             Some(reuse) => bootstrap::inherit_hardware(reuse, &request)?,
             None => bootstrap::acquire_hardware(&request)?,
         };
-        let features = Features::resolve(&hw, &post);
+        let features = Features::resolve(&hw, &graphics, hdr_samples);
         let command_pool = commands::create_command_pool(&hw)?;
         let gpu = InitGpu {
             hw: &hw,
@@ -191,19 +198,20 @@ impl VkContext {
             hot_reload,
         };
 
-        let mut upscale_requested = crate::upscale_sdk::UpscaleRequest::from_post(&post);
+        let mut upscale_requested = crate::upscale_sdk::UpscaleRequest::from_graphics(&graphics);
         let (upscale, render_extent) =
-            effects::build_upscale(&gpu, swapchain.extent, &post, &mut upscale_requested)?;
+            effects::build_upscale(&gpu, swapchain.extent, &graphics, &mut upscale_requested)?;
         commands::reset_timestamp_queries(&gpu)?;
         let area_light = scene_data::build_area_lights(&gpu, &area_lights)?;
-        let mut scene = scene_assets::build_scene_assets(&gpu, &media, anisotropy)?;
+        let mut scene =
+            scene_assets::build_scene_assets(&gpu, &media, graphics.texture_filtering.anisotropy)?;
         let targets = targets::build_render_targets(
             &gpu,
             targets::TargetInputs {
                 swapchain: &swapchain,
                 features: &features,
                 render_extent,
-                ssao_enabled: post.ssao.is_some(),
+                ssao_enabled: graphics.ssao().is_some(),
             },
         )?;
         // An atmosphere writes the irradiance and prefiltered cubes every set
@@ -258,7 +266,7 @@ impl VkContext {
         let screen = effects::build_screen_space(
             &gpu,
             effects::ScreenSpaceInputs {
-                post: &post,
+                graphics: &graphics,
                 features: &features,
                 targets: &targets,
                 scene: &scene,
@@ -272,7 +280,7 @@ impl VkContext {
                 world: &world,
                 world_shaders: &world_shaders,
                 plan: &plan,
-                occlusion_two_pass: post.occlusion_two_pass,
+                occlusion_two_pass: graphics.culling.two_pass_occlusion,
                 descriptors: &descriptors,
                 targets: &targets,
                 scene: &scene,
@@ -292,7 +300,8 @@ impl VkContext {
                 gbuffer: screen.gbuffer.as_ref(),
                 descriptors: &descriptors,
                 cull: &cull,
-                post: &post,
+                graphics: &graphics,
+                launch,
                 post_support: &screen.post,
                 rt_wanted: features.rt_wanted,
             },
@@ -341,7 +350,7 @@ impl VkContext {
                 n_cull: plan.n_cull,
                 rt: &rt,
                 geometry: &geometry,
-                post: &post,
+                graphics: &graphics,
             },
             &globals,
         )?;
@@ -462,6 +471,7 @@ impl VkContext {
                 clear_color,
             ),
             graph_cache: None,
+            gates: Default::default(),
             barrier_scratch: None,
             wireframe: Default::default(),
             probe: ProbeState::new(probe_prefilter, probe_gpu),
@@ -481,6 +491,7 @@ impl VkContext {
         // descriptor sets land before the first frame.
         me.upload_initial_particles(fx.particles)?;
         me.sync_grass_prepass(false);
+        me.refresh_gates(&graphics);
         // Every init upload above was synchronous (its one-shot idled the
         // queue), so init's remaining staging debris is retirable now; reclaim
         // it so the stats below report the steady footprint, not init's peak.

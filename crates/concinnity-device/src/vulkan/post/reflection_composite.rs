@@ -46,11 +46,6 @@ impl VkContext {
         )
     }
 
-    // Whether the SSR resolve runs: SSR is authored and RT did not take its slot.
-    pub(in crate::vulkan) fn ssr_resolve_active(&self) -> bool {
-        self.reflection_path().ssr_resolve
-    }
-
     // The pre-TAA scene image for frame slot `frame`: the composite's output when
     // one exists, which is exactly when a resolve node writes it every frame.
     pub(in crate::vulkan) fn post_scene_image(&self, frame: usize) -> &GpuImage {

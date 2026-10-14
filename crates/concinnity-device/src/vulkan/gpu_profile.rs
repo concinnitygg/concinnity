@@ -1,4 +1,4 @@
-//! Pre-backend GPU performance probe for Vulkan. Loads the Vulkan entry, creates a
+//! Pre-backend GPU performance and capability probe for Vulkan. Loads the Vulkan entry, creates a
 //! throwaway surface-free / extension-free / layer-free instance, picks a physical
 //! device (preferring a discrete GPU), classifies it, and destroys the instance --
 //! all WITHOUT a surface, swapchain, logical device, or validation layer, so the
@@ -10,22 +10,39 @@
 
 use ash::vk;
 use concinnity_core::render::backend::{
-    GpuClassInput, GpuProfile, GpuVendor, apple_family_from_device_name, classify_tier,
+    DeviceCapabilities, DeviceProbe, GpuClassInput, GpuProfile, GpuVendor,
+    apple_family_from_device_name, classify_tier,
 };
 
-pub(crate) fn probe_gpu_profile() -> Option<GpuProfile> {
-    probe_device()
+// What a device that can (or cannot) trace ray queries supports. The built
+// context reports the same answer.
+pub(super) fn capabilities(ray_tracing: bool) -> DeviceCapabilities {
+    DeviceCapabilities {
+        ray_tracing,
+        // XeSS appends its own Vulkan12Features chain, which cannot coexist
+        // with the ray-query feature structs.
+        ray_tracing_with_xess: false,
+        selectable_upscaler: true,
+        upscalers: super::post::upscale::availability(),
+        // The cull BVH + RT tables key fixed build-time slot indices and
+        // cannot refit; only the runtime-append region recycles.
+        reuses_build_slots: false,
+        // Per-object material state is baked into the GPU records at build
+        // time, so a slot rewrite in `SceneState` would not reach the frame.
+        rewrites_draws: false,
+    }
 }
 
-fn probe_device() -> Option<GpuProfile> {
+pub(crate) fn probe_device() -> Option<DeviceProbe> {
     // Dynamically load the Vulkan loader; `None` when it is absent.
     let entry = super::loader::load_entry().ok()?;
     // A minimal instance: no window/surface extensions, no validation layer, no
     // debug-utils messenger. Enumerating + querying physical devices needs none
-    // of those, so the probe stays cheap and avoids loader-layer init. The one
+    // of those, so the probe stays cheap and avoids loader-layer init. Vulkan
+    // 1.1 for the feature query the ray-tracing check makes. The one
     // exception is `VK_KHR_portability_enumeration`, without which the loader
     // hides a portability driver (MoltenVK) and the probe sees no device at all.
-    let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_0);
+    let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
     // SAFETY: an enumeration query on a live instance handle; it only reads, and ash sizes the
     // output vector from the count the driver reports.
     let available = unsafe { entry.enumerate_instance_extension_properties(None) }.ok()?;
@@ -64,7 +81,7 @@ fn probe_device() -> Option<GpuProfile> {
 // present). Falls back to the first enumerated device when none qualifies (the
 // renderer would then fail to init, so the tier is moot, but a best-effort
 // classification is harmless).
-fn pick_and_classify(instance: &ash::Instance) -> Option<GpuProfile> {
+fn pick_and_classify(instance: &ash::Instance) -> Option<DeviceProbe> {
     // SAFETY: an enumeration query on a live instance handle; it only reads, and ash sizes the
     // output vector from the count the driver reports.
     let devices = unsafe { instance.enumerate_physical_devices() }.ok()?;
@@ -73,7 +90,10 @@ fn pick_and_classify(instance: &ash::Instance) -> Option<GpuProfile> {
         .copied()
         .find(|&pd| renderer_eligible(instance, pd))
         .or_else(|| devices.first().copied())?;
-    Some(device_profile(instance, chosen))
+    Some(DeviceProbe {
+        profile: device_profile(instance, chosen),
+        capabilities: capabilities(super::device::ray_query_supported(instance, chosen)),
+    })
 }
 
 // Whether a device has a graphics queue family and exposes `VK_KHR_swapchain`,

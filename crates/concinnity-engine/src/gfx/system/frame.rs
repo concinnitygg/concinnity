@@ -688,6 +688,11 @@ impl GraphicsSystem {
                     .map(|r| r.elements.iter().map(|e| e.id()).collect())
             })
             .collect();
+        for &id in &gated_value_labels {
+            crate::ecs::by_asset_id::update::<TextLabel>(ctx, Some(id), |l| {
+                l.content = settings::unsupported_label(&l.content);
+            });
+        }
         let dim = expand_dim_set(&gated_value_labels, &rows);
         for id in dim {
             crate::ecs::by_asset_id::update::<TextLabel>(ctx, Some(id), |l| {

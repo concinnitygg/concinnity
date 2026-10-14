@@ -15,7 +15,6 @@ use concinnity_core::components::{
 };
 use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{FrameRateCap, HudPrefs, StepResult, System, World};
-use concinnity_core::gfx::render_types;
 use concinnity_core::input::keymap::{Bindable, KeyMap};
 use concinnity_core::render::backend::{GpuProfile, GpuVendor};
 use concinnity_core::render::backend_init::ShadowCadence;
@@ -33,7 +32,7 @@ use crate::gfx::system::{RebindViz, SliderViz};
 use crate::settings;
 use crate::settings::SettingKey;
 use concinnity_core::settings::quality::QualityPreset;
-use concinnity_core::settings::resolve::{ResolvedQuality, ResolvedSettings, WorldSettings};
+use concinnity_core::settings::resolve::{ResolvedSettings, WorldSettings};
 
 // The value label ids the fixture wires up, so a test can assert a row relabeled
 // without standing up a whole menu.
@@ -90,34 +89,27 @@ impl Fixture {
             cascades: settings::shadow_cascades_at(0),
         };
         let mut authored = WorldSettings::default();
-        authored.shadows.map_size = settings::shadow_resolution_at(0);
-        authored.shadows.update = shadow_cadence.update;
-        authored.shadows.distance = shadow_cadence.distance;
-        authored.shadows.cascades = shadow_cadence.cascades;
-        authored.texture_filtering.anisotropy = settings::anisotropy_at(0);
-        let graphics = ResolvedSettings {
-            quality: ResolvedQuality {
-                effects: Default::default(),
-                hdr_metering: false,
-                render_scale: settings::render_scale_at(0),
-                shadow_map_size: settings::shadow_resolution_at(0),
-                shadow_cadence,
-                anisotropy: settings::anisotropy_at(0),
-            },
-            post_process: render_types::PostProcessTunables::DEFAULT,
-            ambient_intensity: 1.0,
-            vsync: false,
-            fps_cap: settings::fps_cap_at(0),
+        let g = &mut authored.graphics;
+        g.shadows.map_size = settings::shadow_resolution_at(0);
+        g.shadows.update = shadow_cadence.update;
+        g.shadows.distance = shadow_cadence.distance;
+        g.shadows.cascades = shadow_cadence.cascades;
+        g.texture_filtering.anisotropy = settings::anisotropy_at(0);
+        let mut graphics = authored.graphics.clone();
+        graphics.anti_aliasing.upscale_quality = settings::render_scale_at(0);
+        graphics.anti_aliasing.upscaler = settings::upscale_backend_at(0);
+        graphics.frame_pacing.vsync = false;
+        graphics.frame_pacing.fps_cap = settings::fps_cap_at(0);
+        graphics.frame_pacing.frames_in_flight = settings::frames_in_flight_at(0);
+        graphics.display.hdr = false;
+        graphics.display.pq = false;
+        graphics.dlss_preset = settings::dlss_preset_at(0);
+        graphics.culling.two_pass_occlusion = false;
+        let resolved = ResolvedSettings {
+            graphics,
             perf_stats: true,
             show_fps: true,
             show_vram: false,
-            frames_in_flight: settings::frames_in_flight_at(0) as usize,
-            hdr_display: false,
-            hdr_pq: false,
-            temporal_upscaling: false,
-            upscale_backend: settings::upscale_backend_at(0),
-            dlss_preset: settings::dlss_preset_at(0),
-            occlusion_two_pass: false,
             texture_cap: settings::texture_quality_at(0).0,
             texture_budget: settings::texture_quality_at(0).1,
         };
@@ -154,9 +146,10 @@ impl Fixture {
             }],
             cycle_value_labels,
             authored,
-            graphics,
+            resolved,
             quality_preset: QualityPreset::Custom,
             gpu_profile,
+            capabilities: concinnity_core::render::backend::DeviceCapabilities::ALL,
             perf_sub_row_labels: vec![(SUB_ROW_LABEL, LIT)],
             window_args: Default::default(),
             display_modes: Vec::new(),
@@ -301,7 +294,10 @@ fn vsync_cycles_live_and_persists() {
     let mut f = Fixture::new();
     f.next(SettingKey::Vsync);
 
-    assert!(f.state.graphics.vsync, "the row cycled Off -> On");
+    assert!(
+        f.state.resolved.graphics.frame_pacing.vsync,
+        "the row cycled Off -> On"
+    );
     assert!(f.saw(&Call::SetVsync(true)), "applied live");
     assert_eq!(f.label(VALUE_LABEL), "On");
     assert_eq!(f.persisted().graphics.vsync, Some(true));
@@ -312,7 +308,10 @@ fn vsync_cycles_live_and_persists() {
 fn cycling_prev_wraps_the_option_list() {
     let mut f = Fixture::new();
     f.apply(vec![cycle(SettingKey::Vsync, SettingOp::Prev)]);
-    assert!(f.state.graphics.vsync, "Off wraps back to the last option");
+    assert!(
+        f.state.resolved.graphics.frame_pacing.vsync,
+        "Off wraps back to the last option"
+    );
 }
 
 // A dropdown pick jumps straight to an option index rather than stepping.
@@ -324,7 +323,7 @@ fn set_index_jumps_to_the_chosen_option() {
         SettingOp::SetIndex(2),
     )]);
     assert_eq!(
-        f.state.graphics.quality.shadow_cadence.cascades,
+        f.state.resolved.graphics.shadows.cascades,
         settings::shadow_cascades_at(2)
     );
 }
@@ -400,7 +399,7 @@ fn slider_applies_live_and_persists_only_on_release() {
     let mut f = Fixture::new();
     f.apply(vec![drag(SettingKey::Exposure, 1.0, false)]);
 
-    let mid_drag = f.state.graphics.post_process.exposure;
+    let mid_drag = f.state.resolved.graphics.post_process().exposure;
     assert!(f.saw(&Call::UpdatePostProcess), "applied live mid-drag");
     assert!(
         f.saved.lock().unwrap().is_empty(),
@@ -409,7 +408,8 @@ fn slider_applies_live_and_persists_only_on_release() {
 
     f.apply(vec![drag(SettingKey::Exposure, 1.0, true)]);
     assert_eq!(
-        f.state.graphics.post_process.exposure, mid_drag,
+        f.state.resolved.graphics.post_process().exposure,
+        mid_drag,
         "same value applied"
     );
     assert!(
@@ -418,8 +418,8 @@ fn slider_applies_live_and_persists_only_on_release() {
     );
 }
 
-// The slider stores the transformed render value but persists the authored one
-// (exposure persists as EV, applies as a linear multiplier).
+// The slider persists the authored EV and the composite applies it as a linear
+// multiplier.
 #[test]
 fn exposure_slider_persists_ev_and_applies_the_multiplier() {
     let mut f = Fixture::new();
@@ -429,9 +429,9 @@ fn exposure_slider_persists_ev_and_applies_the_multiplier() {
     let ev = f.persisted().graphics.exposure_ev.expect("persisted");
     let exposure = settings::slider(SettingKey::Exposure).expect("exposure is a slider");
     assert_eq!(
-        f.state.graphics.post_process.exposure,
-        exposure.apply(ev),
-        "the live param is the EV mapped through the apply transform"
+        f.state.resolved.graphics.post_process().exposure,
+        concinnity_core::math::exp2(exposure.apply(ev)),
+        "the live param is 2^ev of the clamped EV"
     );
     assert_eq!(f.label(VALUE_LABEL), (exposure.format)(ev));
 }
@@ -590,12 +590,23 @@ fn quality_param_slider_updates_quality_params() {
 
 // Ambient scale lives in the light uniforms, so it takes its own setter on top
 // of the post-process push.
+// A bloom drag reaches the composite: the plan pushes the post-process
+// tunables, and the backend reads the new intensity.
+#[test]
+fn a_bloom_drag_pushes_the_composite() {
+    let mut f = Fixture::new();
+    f.state.resolved.graphics.bloom.intensity = 0.0;
+    f.apply(vec![drag(SettingKey::BloomIntensity, 1.0, false)]);
+    assert!(f.state.resolved.graphics.bloom.intensity > 0.0);
+    assert!(f.saw(&Call::UpdatePostProcess));
+}
+
 #[test]
 fn ambient_slider_takes_the_dedicated_setter() {
     let mut f = Fixture::new();
-    f.apply(vec![drag(SettingKey::AmbientIntensity, 0.25, true)]);
+    f.apply(vec![drag(SettingKey::AmbientIntensity, 0.75, true)]);
 
-    let applied = f.state.graphics.ambient_intensity;
+    let applied = f.state.resolved.graphics.ambient_intensity();
     assert!(f.saw(&Call::SetAmbientIntensity(applied)));
     assert!(f.persisted().graphics.ambient_intensity.is_some());
 }
@@ -746,10 +757,10 @@ fn fps_cap_publishes_the_frame_rate_cap_resource() {
         .resource::<FrameRateCap>()
         .map(|c| c.0)
         .expect("cap published");
-    assert_eq!(published, f.state.graphics.fps_cap);
+    assert_eq!(published, f.state.resolved.graphics.frame_pacing.fps_cap);
     assert_eq!(
         f.persisted().graphics.fps_cap,
-        Some(f.state.graphics.fps_cap)
+        Some(f.state.resolved.graphics.frame_pacing.fps_cap)
     );
 }
 
@@ -782,14 +793,14 @@ fn perf_stats_master_grays_and_restores_the_sub_rows() {
     let mut f = Fixture::new();
     f.next(SettingKey::PerfStats);
 
-    assert!(!f.state.graphics.perf_stats, "cycled On -> Off");
+    assert!(!f.state.resolved.perf_stats, "cycled On -> Off");
     assert_eq!(
         f.label_color(SUB_ROW_LABEL),
         super::rows::DISABLED_ROW_COLOR
     );
 
     f.next(SettingKey::PerfStats);
-    assert!(f.state.graphics.perf_stats);
+    assert!(f.state.resolved.perf_stats);
     assert_eq!(
         f.label_color(SUB_ROW_LABEL),
         LIT,
@@ -929,7 +940,6 @@ fn quality_cycle_knob_rebuilds_and_flips_to_custom() {
 // pressure for the streaming valve; any other failure only logs.
 #[test]
 fn quality_rebuild_out_of_memory_raises_memory_pressure() {
-    use concinnity_core::render::backend::QualitySettings;
     use concinnity_core::render::error::RenderError;
 
     for (error, pressure) in [
@@ -942,18 +952,13 @@ fn quality_rebuild_out_of_memory_raises_memory_pressure() {
         let (calls, mut backend) = recording_backend();
         calls.lock().unwrap().fail_quality = Some(error);
         let mut queue = ops::RenderOps::default();
-        super::quality::record_quality_apply(
+        let mut plan = concinnity_core::settings::apply::ApplyPlan::default();
+        plan.rebuild
+            .insert(concinnity_core::settings::apply::RebuildFeature::Ssao);
+        super::record_plan(
             &mut queue,
-            QualitySettings {
-                taa: false,
-                ssao: None,
-                ssr: None,
-                rt_reflections: None,
-                ssgi: None,
-                reflection_blur_scale: 1,
-                auto_exposure: None,
-                auto_exposure_bias_ev: 0.0,
-            },
+            &concinnity_core::settings::ResolvedGraphics::default(),
+            plan,
         );
 
         let outcome = queue.replay(&mut backend);
@@ -974,11 +979,8 @@ fn aa_mode_cycle_refreshes_the_composite_fxaa_flag() {
         )),
     )]);
 
-    assert_eq!(
-        f.state.graphics.quality.effects.anti_aliasing.mode,
-        AaMode::Fxaa
-    );
-    assert_eq!(f.state.graphics.post_process.fxaa, 1.0);
+    assert_eq!(f.state.resolved.graphics.anti_aliasing.mode, AaMode::Fxaa);
+    assert_eq!(f.state.resolved.graphics.post_process().fxaa, 1.0);
     assert!(f.saw(&Call::UpdatePostProcess));
 
     f.apply(vec![cycle(
@@ -987,7 +989,7 @@ fn aa_mode_cycle_refreshes_the_composite_fxaa_flag() {
             AaMode::Off,
         )),
     )]);
-    assert_eq!(f.state.graphics.post_process.fxaa, 0.0);
+    assert_eq!(f.state.resolved.graphics.post_process().fxaa, 0.0);
 }
 
 // The live shadow knobs (cadence, distance, cascades) reach the backend the same
@@ -998,21 +1000,21 @@ fn live_shadow_knobs_push_to_the_backend() {
 
     f.next(SettingKey::ShadowUpdate);
     assert!(f.saw(&Call::SetShadowCadence(
-        f.state.graphics.quality.shadow_cadence
+        f.state.resolved.graphics.shadow_cadence()
     )));
     assert_eq!(
-        f.state.graphics.quality.shadow_cadence.update,
+        f.state.resolved.graphics.shadows.update,
         settings::shadow_update_at(1)
     );
 
     f.next(SettingKey::ShadowDistance);
     assert!(f.saw(&Call::SetShadowCadence(
-        f.state.graphics.quality.shadow_cadence
+        f.state.resolved.graphics.shadow_cadence()
     )));
 
     f.next(SettingKey::ShadowCascades);
     assert!(f.saw(&Call::SetShadowCadence(
-        f.state.graphics.quality.shadow_cadence
+        f.state.resolved.graphics.shadow_cadence()
     )));
 
     assert_eq!(f.state.quality_preset, QualityPreset::Custom);
@@ -1084,9 +1086,12 @@ fn upscale_backend_cycle_skips_unavailable_vendors() {
     for _ in 0..settings::options(SettingKey::UpscaleBackend).unwrap().len() * 2 {
         f.next(SettingKey::UpscaleBackend);
         assert!(
-            settings::upscale_backend_available(f.state.graphics.upscale_backend, GpuVendor::Other),
+            settings::upscale_backend_available(
+                f.state.resolved.graphics.anti_aliasing.upscaler,
+                GpuVendor::Other
+            ),
             "landed on an unavailable upscaler: {:?}",
-            f.state.graphics.upscale_backend
+            f.state.resolved.graphics.anti_aliasing.upscaler
         );
     }
 }
@@ -1101,7 +1106,7 @@ fn upscale_backend_cycle_reaches_dlss_on_nvidia() {
     let mut seen = false;
     for _ in 0..settings::options(SettingKey::UpscaleBackend).unwrap().len() {
         f.next(SettingKey::UpscaleBackend);
-        seen |= f.state.graphics.upscale_backend == UpscalerBackend::Dlss;
+        seen |= f.state.resolved.graphics.anti_aliasing.upscaler == UpscalerBackend::Dlss;
     }
     assert!(seen, "DLSS is reachable on an NVIDIA device");
 }
@@ -1119,7 +1124,7 @@ fn dlss_preset_cycles_and_persists_without_resetting_history() {
         DlssPreset::Default,
     ] {
         f.next(SettingKey::DlssPreset);
-        assert_eq!(f.state.graphics.dlss_preset, want);
+        assert_eq!(f.state.resolved.graphics.dlss_preset, want);
     }
     assert_eq!(
         f.persisted().graphics.dlss_preset,
@@ -1148,9 +1153,9 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
     // An authored look with the expensive features on, then a user override that
     // turned one off: picking a preset must re-derive from the authored baseline,
     // not from the override.
-    f.state.authored.effects.ambient_occlusion.enabled = true;
-    f.state.authored.effects.reflections.screen_space = true;
-    f.state.graphics.quality.effects.ambient_occlusion.enabled = false;
+    f.state.authored.graphics.ambient_occlusion.enabled = true;
+    f.state.authored.graphics.reflections.screen_space = true;
+    f.state.resolved.graphics.ambient_occlusion.enabled = false;
     f.state
         .cycle_value_labels
         .insert(SettingKey::Ssao, TOGGLE_LABEL);
@@ -1166,14 +1171,13 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
 
     assert_eq!(f.state.quality_preset, QualityPreset::Ultra);
     assert!(
-        f.state.graphics.quality.effects.ambient_occlusion.enabled,
+        f.state.resolved.graphics.ambient_occlusion.enabled,
         "the authored feature is restored, not the cleared override"
     );
-    assert!(f.saw(&Call::ApplyQualitySettings));
-    assert!(f.saw(&Call::UpdatePostProcess));
-    assert!(f.saw(&Call::SetShadowCadence(
-        f.state.graphics.quality.shadow_cadence
-    )));
+    assert!(
+        f.saw(&Call::ApplyQualitySettings),
+        "the restored feature rebuilds"
+    );
     assert_eq!(f.label(TOGGLE_LABEL), "On", "the dependent row relabeled");
     assert_eq!(
         f.label(QUALITY_LABEL),
@@ -1200,8 +1204,8 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
 #[test]
 fn graphics_quality_preset_keeps_the_look_tuning_sliders() {
     let mut f = Fixture::new();
-    f.state.authored.effects.ambient_occlusion.radius = 0.5;
-    f.state.graphics.quality.effects.ambient_occlusion.radius = 1.5;
+    f.state.authored.graphics.ambient_occlusion.radius = 0.5;
+    f.state.resolved.graphics.ambient_occlusion.radius = 1.5;
     f.state
         .settings_cache
         .as_mut()
@@ -1218,21 +1222,47 @@ fn graphics_quality_preset_keeps_the_look_tuning_sliders() {
         persist: true,
     }]);
 
-    assert_eq!(
-        f.state.graphics.quality.effects.ambient_occlusion.radius,
-        1.5
-    );
+    assert_eq!(f.state.resolved.graphics.ambient_occlusion.radius, 1.5);
     assert_eq!(f.persisted().graphics.ssao_radius, Some(1.5));
 }
 
 // A Low preset clamps the authored look off: the ceiling never enables a feature
 // the world did not author, but it does force expensive ones off.
+// On a device without ray tracing a preset change resolves the RT row off and
+// labels it unsupported, even with a stored choice to turn it on.
+#[test]
+fn a_preset_change_marks_an_unsupported_row() {
+    let mut f = Fixture::new();
+    f.state.capabilities = concinnity_core::render::backend::DeviceCapabilities {
+        ray_tracing: false,
+        ..concinnity_core::render::backend::DeviceCapabilities::ALL
+    };
+    f.state.authored.graphics.reflections.ray_traced = true;
+    f.state.persisted_graphics.ray_traced_reflections = Some(true);
+    f.state
+        .cycle_value_labels
+        .insert(SettingKey::RayTracedReflections, TOGGLE_LABEL);
+
+    f.apply(vec![SettingCommand {
+        setting: SettingKey::GraphicsQuality,
+        op: SettingOp::SetIndex(concinnity_core::settings::quality::preset_index(
+            QualityPreset::Ultra,
+        )),
+        value_label: Some(QUALITY_LABEL),
+        persist: true,
+    }]);
+
+    assert!(!f.state.resolved.graphics.reflections.ray_traced);
+    assert_eq!(f.label(TOGGLE_LABEL), "Off (not supported)");
+}
+
 #[test]
 fn low_preset_clamps_the_authored_features_off() {
     let mut f = Fixture::new();
-    f.state.authored.effects.ambient_occlusion.enabled = true;
-    f.state.authored.effects.indirect_lighting.technique = IndirectTechnique::Ssgi;
-    f.state.graphics.quality.effects = f.state.authored.effects.clone();
+    f.state.authored.graphics.ambient_occlusion.enabled = true;
+    f.state.authored.graphics.indirect_lighting.technique = IndirectTechnique::Ssgi;
+    let authored = f.state.authored.graphics.clone();
+    f.state.resolved.graphics.adopt_quality(&authored);
 
     f.apply(vec![SettingCommand {
         setting: SettingKey::GraphicsQuality,
@@ -1249,7 +1279,7 @@ fn low_preset_clamps_the_authored_features_off() {
     );
     assert!(!ceiling.ssgi, "the Low ceiling disallows SSGI");
     assert_eq!(
-        f.state.graphics.quality.effects.indirect_lighting.technique,
+        f.state.resolved.graphics.indirect_lighting.technique,
         IndirectTechnique::Ibl,
         "the authored feature is clamped off"
     );
@@ -1298,15 +1328,15 @@ fn an_empty_drain_persists_nothing() {
 #[test]
 fn hud_prefs_publish_under_the_master_toggle() {
     let mut f = Fixture::new();
-    f.state.graphics.show_fps = true;
-    f.state.graphics.show_vram = true;
+    f.state.resolved.show_fps = true;
+    f.state.resolved.show_vram = true;
 
     f.state.publish_hud_state(&mut f.world.context());
     let prefs = *f.world.context().resource::<HudPrefs>().unwrap();
     assert!(prefs.show_fps);
     assert!(prefs.show_vram);
 
-    f.state.graphics.perf_stats = false;
+    f.state.resolved.perf_stats = false;
     f.state.publish_hud_state(&mut f.world.context());
     let prefs = *f.world.context().resource::<HudPrefs>().unwrap();
     assert!(!prefs.show_fps, "the master gates the sub-readout");
@@ -1329,7 +1359,7 @@ fn disabled_rows_publish_alongside_the_gray_out() {
         .unwrap();
     assert!(rows.is_empty(), "every row is live in fullscreen");
 
-    f.state.graphics.perf_stats = false;
+    f.state.resolved.perf_stats = false;
     f.state.window_args.mode = WindowMode::Windowed;
     f.state.publish_hud_state(&mut f.world.context());
     let rows = f

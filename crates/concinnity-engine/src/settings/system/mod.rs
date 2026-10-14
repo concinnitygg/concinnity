@@ -28,12 +28,14 @@ use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::ecs::{EventCursor, HudPrefs, PipelineContext, StepResult, System};
 use concinnity_core::input::keymap;
 use concinnity_core::render::backend;
+use concinnity_core::render::error::RenderError;
 use concinnity_core::render::ops::RenderOps;
 use concinnity_core::render::scene_flow;
 use concinnity_core::render::snapshot;
+use concinnity_core::settings::apply::{ApplyPlan, plan_apply};
 use concinnity_core::settings::quality::resolve_ceiling;
 use concinnity_core::settings::{
-    QualityCeiling, QualityPreset, ResolvedQuality, ResolvedSettings, SettingKey, SettingsLayers,
+    QualityCeiling, QualityPreset, ResolvedGraphics, ResolvedSettings, SettingKey, SettingsLayers,
     UserGraphicsSettings, WorldSettings,
 };
 use concinnity_core::window::display_mode;
@@ -67,11 +69,13 @@ pub(crate) struct SettingsState {
     // The world's authored graphics values a preset change or authoring edit
     // re-resolves from, and the live resolved values the rows display and cycle.
     pub(crate) authored: WorldSettings,
-    pub(crate) graphics: ResolvedSettings,
+    pub(crate) resolved: ResolvedSettings,
     // The live master "Graphics Quality" preset; an explicit per-row change
     // flips it to Custom.
     pub(crate) quality_preset: QualityPreset,
     pub(crate) gpu_profile: backend::GpuProfile,
+    // What the probed device can run, which clamps every resolution.
+    pub(crate) capabilities: backend::DeviceCapabilities,
     // The captured stats sub-row labels the "Display performance stats" master
     // toggle grays.
     pub(crate) perf_sub_row_labels: Vec<(AssetId, [f32; 3])>,
@@ -166,6 +170,22 @@ impl System for SettingsSystem {
     }
 }
 
+// Record `plan` against `graphics` when it reaches the renderer. A failed
+// rebuild is logged, and running out of device memory raises the replay's memory
+// pressure for the streaming valve.
+pub(crate) fn record_plan(ops: &mut RenderOps, graphics: &ResolvedGraphics, plan: ApplyPlan) {
+    if !plan.touches_renderer() {
+        return;
+    }
+    let graphics = graphics.clone();
+    ops.record_with(move |backend, out| {
+        if let Err(e) = backend.apply_settings(&graphics, &plan) {
+            tracing::error!("SettingsSystem: settings apply failed: {e}");
+            out.memory_pressure |= matches!(e, RenderError::OutOfDeviceMemory(_));
+        }
+    });
+}
+
 impl SettingsState {
     // The state before init resolves anything: an unconfigured world's graphics,
     // the `Auto` preset, and no rows captured.
@@ -178,9 +198,10 @@ impl SettingsState {
             sliders: Vec::new(),
             cycle_value_labels: std::collections::HashMap::new(),
             authored: WorldSettings::default(),
-            graphics: ResolvedSettings::default(),
+            resolved: ResolvedSettings::default(),
             quality_preset: QualityPreset::Auto,
             gpu_profile: backend::GpuProfile::UNKNOWN,
+            capabilities: backend::DeviceCapabilities::ALL,
             perf_sub_row_labels: Vec::new(),
             window_args: Window::default(),
             display_modes: Vec::new(),
@@ -214,21 +235,24 @@ impl SettingsState {
             fog_built: true,
             ..Self::new()
         };
-        state.authored.shadows.map_size = 2048;
-        state.authored.shadows.update = shadow_cadence.update;
-        state.authored.shadows.distance = shadow_cadence.distance;
-        state.authored.shadows.cascades = shadow_cadence.cascades;
-        state.authored.texture_filtering.anisotropy = 8;
-        let g = &mut state.graphics;
-        g.quality.shadow_map_size = 2048;
-        g.quality.shadow_cadence = shadow_cadence;
-        g.quality.anisotropy = 8;
-        g.vsync = true;
-        g.fps_cap = 0;
-        g.frames_in_flight = 2;
-        g.occlusion_two_pass = false;
-        g.texture_cap = 0;
-        g.texture_budget = 0;
+        state.authored.graphics.shadows.map_size = 2048;
+        state.authored.graphics.shadows.update = shadow_cadence.update;
+        state.authored.graphics.shadows.distance = shadow_cadence.distance;
+        state.authored.graphics.shadows.cascades = shadow_cadence.cascades;
+        state.authored.graphics.texture_filtering.anisotropy = 8;
+        let r = &mut state.resolved;
+        let g = &mut r.graphics;
+        g.shadows.map_size = 2048;
+        g.shadows.update = shadow_cadence.update;
+        g.shadows.distance = shadow_cadence.distance;
+        g.shadows.cascades = shadow_cadence.cascades;
+        g.texture_filtering.anisotropy = 8;
+        g.frame_pacing.vsync = true;
+        g.frame_pacing.fps_cap = 0;
+        g.frame_pacing.frames_in_flight = 2;
+        g.culling.two_pass_occlusion = false;
+        r.texture_cap = 0;
+        r.texture_budget = 0;
         state
     }
 
@@ -247,9 +271,8 @@ impl SettingsState {
     }
 
     // The resolver's layers: the authored baseline, `ceiling`, the user's
-    // `user` choices and this launch's overrides. The backend reports its
-    // capabilities only once built, so every layer resolves for a device that
-    // can run everything and the backend falls back where it cannot.
+    // `user` choices and this launch's overrides, clamped to what the probed
+    // device can run.
     fn layers<'a>(
         &'a self,
         user: &'a UserGraphicsSettings,
@@ -257,6 +280,7 @@ impl SettingsState {
     ) -> SettingsLayers<'a> {
         SettingsLayers {
             session: Some(&self.session),
+            capabilities: &self.capabilities,
             ..SettingsLayers::new(&self.authored, ceiling, user)
         }
     }
@@ -270,12 +294,20 @@ impl SettingsState {
         self.layers(user, ceiling).resolve()
     }
 
+    // Record the backend work that moving the resolved settings from `before`
+    // to their current values takes: one plan, in one op.
+    pub(crate) fn record_change(&self, before: &ResolvedSettings, ops: &mut RenderOps) {
+        let after = &self.resolved;
+        let plan = plan_apply(&after.diff(before), &before.graphics, &after.graphics);
+        record_plan(ops, &after.graphics, plan);
+    }
+
     // The preset-governed group, resolved under `user`'s choices and `ceiling`.
     pub(crate) fn resolve_quality(
         &self,
         user: &UserGraphicsSettings,
         ceiling: &QualityCeiling,
-    ) -> ResolvedQuality {
+    ) -> ResolvedGraphics {
         self.layers(user, ceiling).resolve_quality()
     }
 
@@ -347,8 +379,8 @@ impl SettingsState {
         // change -- steady-state frames skip the HashSet allocation the
         // disabled-rows set would otherwise churn every frame.
         let prefs = HudPrefs {
-            show_fps: self.graphics.perf_stats && self.graphics.show_fps,
-            show_vram: self.graphics.perf_stats && self.graphics.show_vram,
+            show_fps: self.resolved.perf_stats && self.resolved.show_fps,
+            show_vram: self.resolved.perf_stats && self.resolved.show_vram,
         };
         if self.published_hud_prefs != Some(prefs) {
             ctx.insert_resource(prefs);
@@ -359,10 +391,10 @@ impl SettingsState {
         // the window, borderless covers the display), so it is inert in the other
         // modes. The disabled-rows set is fully determined by these two inputs.
         let is_fullscreen = self.window_args.mode == WindowMode::Fullscreen;
-        let inputs = (self.graphics.perf_stats, is_fullscreen);
+        let inputs = (self.resolved.perf_stats, is_fullscreen);
         if self.published_disabled_inputs != Some(inputs) {
             let mut disabled_rows = std::collections::HashSet::new();
-            if !self.graphics.perf_stats {
+            if !self.resolved.perf_stats {
                 disabled_rows.extend([SettingKey::ShowFps, SettingKey::ShowVram]);
             }
             if !is_fullscreen {

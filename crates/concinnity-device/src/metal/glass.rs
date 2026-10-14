@@ -518,22 +518,18 @@ impl MtlContext {
     }
 
     // Whether the transparent-mesh (Layer 2) path is live this frame: a material
-    // opted into see-through, the mesh pipeline was built, AND RT is on
-    // (`rt.accel`, the per-pixel trace needs the BVH). When false, those meshes
+    // opted into see-through, the mesh pipeline was built, AND the transparent
+    // pass traces (the per-pixel trace needs the BVH). When false, those meshes
     // render opaque + reflective in the main pass (Layer 1) and the producer /
     // opaque-skip / BLAS-exclude all stay inert.
     pub(in crate::metal) fn mesh_glass_active(&self) -> bool {
-        self.seethrough_meshes_enabled() && self.rt.accel.is_some()
+        self.seethrough_meshes_enabled() && self.rt_transparent_active()
     }
 
-    // Whether a see-through mesh actually draws this frame. Panes and water
-    // answer this from their static records; a mesh's visibility lives in
-    // `draw.objects`, so the graph gate has to ask separately or a world whose
-    // only translucent producer is a mesh gets no transparent pass and the mesh
-    // disappears (it is already skipped in the opaque pass and the BLAS).
-    // Mirrors `DxContext::mesh_glass_visible`.
-    pub(in crate::metal) fn mesh_glass_visible(&self) -> bool {
-        self.mesh_glass_active()
+    // Whether a see-through mesh is visible and its pipelines are built,
+    // whether or not ray tracing is live to draw it.
+    pub(in crate::metal) fn see_through_mesh_visible(&self) -> bool {
+        self.seethrough_meshes_enabled()
             && self.glass.seethrough_mesh_indices.iter().any(|&i| {
                 self.state
                     .draw

@@ -25,7 +25,6 @@
 use ash::vk;
 use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::planar_reflection;
 use concinnity_core::render::post::rt_reflections::{RtParamsInputs, RtReflectionSettings};
 use concinnity_core::render::rt_accel::seed_wanted;
 
@@ -677,22 +676,6 @@ impl VkContext {
     // planar re-render even when a producer's RT pipelines failed to build,
     // leaving its fallback sampling a stale resolve. Mirrors
     // `DxContext::rt_transparent_active`.
-    // True when the transparent pass samples planar mirrors, which puts the
-    // `PlanarReflection` node in the graph. Water takes the mirror over its own
-    // trace wherever it holds a slot (see `water.hlsl`), so a visible water
-    // surface keeps the mirrors alive even while the trace is live; a glass-only
-    // world under a live trace skips them. Shared with the other backends through
-    // `planar_reflection::planar_pass_needed`.
-    pub(in crate::vulkan) fn planar_pass_needed(&self) -> bool {
-        planar_reflection::planar_pass_needed(
-            self.planar_reflection.is_some(),
-            self.transparent
-                .as_ref()
-                .is_some_and(|t| t.water_planar_slot_live()),
-            self.rt_transparent_active(),
-        )
-    }
-
     pub(in crate::vulkan) fn rt_transparent_active(&self) -> bool {
         self.rt_reflections_active()
             && self

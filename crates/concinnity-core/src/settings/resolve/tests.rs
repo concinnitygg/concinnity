@@ -4,8 +4,13 @@ use crate::components::{
     FramePacingOverrides, IndirectTechnique, PassResolution, ShadowUpdate, ShadowsOverrides,
     TextureFilteringOverrides,
 };
+use crate::components::{
+    AmbientOcclusion, AntiAliasing, Bloom, Culling, Display, Exposure, FramePacing,
+    IndirectLighting, Reflections, Shadows, TextureFiltering, UpscaleQuality, Vignette,
+};
 use crate::ecs::asset_fields::ApplyClass;
 use crate::render::backend::{GpuProfile, GpuTier};
+use crate::render::dlss::DlssPreset;
 use crate::settings::quality::{QualityPreset, resolve_ceiling};
 use alloc::vec::Vec;
 
@@ -23,7 +28,7 @@ fn ceiling_for(preset: QualityPreset, tier: GpuTier) -> QualityCeiling {
 // settles a world that declares none of the settings assets.
 #[test]
 fn the_low_ceiling_clamps_the_schema_defaults_off() {
-    let mut cfg = QualityEffects::default();
+    let mut cfg = ResolvedGraphics::default();
     clamp_quality_under_ceiling(
         &mut cfg,
         &UserGraphicsSettings::default(),
@@ -38,7 +43,7 @@ fn the_low_ceiling_clamps_the_schema_defaults_off() {
 
 #[test]
 fn the_top_ceiling_leaves_the_schema_defaults_alone() {
-    let mut cfg = QualityEffects::default();
+    let mut cfg = ResolvedGraphics::default();
     clamp_quality_under_ceiling(
         &mut cfg,
         &UserGraphicsSettings::default(),
@@ -52,8 +57,8 @@ fn the_top_ceiling_leaves_the_schema_defaults_alone() {
 }
 
 // Effects with every quality-governed feature authored off.
-fn all_off() -> QualityEffects {
-    QualityEffects {
+fn all_off() -> ResolvedGraphics {
+    ResolvedGraphics {
         ambient_occlusion: AmbientOcclusion {
             enabled: false,
             ..Default::default()
@@ -71,7 +76,7 @@ fn all_off() -> QualityEffects {
             mode: AaMode::Off,
             ..Default::default()
         },
-        exposure: Exposure::default(),
+        ..Default::default()
     }
 }
 
@@ -99,7 +104,7 @@ fn a_user_override_wins_over_the_ceiling() {
         aa_mode: Some(AaMode::Taa),
         ..UserGraphicsSettings::default()
     };
-    let mut cfg = QualityEffects::default();
+    let mut cfg = ResolvedGraphics::default();
     cfg.ambient_occlusion.enabled = false;
     cfg.anti_aliasing.mode = AaMode::Off;
     overlay_quality_overrides(&mut cfg, &user);
@@ -160,21 +165,21 @@ fn a_user_override_beats_the_world_value() {
         perf_stats: Some(false),
         ..UserGraphicsSettings::default()
     };
-    let r = resolve_graphics(&world, &user, &low());
-    assert!(!r.vsync);
-    assert_eq!(r.fps_cap, 30);
-    assert!(!r.hdr_display);
-    assert_eq!(r.upscale_backend, UpscalerBackend::Auto);
-    assert_eq!(r.dlss_preset, DlssPreset::L);
+    let r = resolve_settings(&world, &user, &low());
+    assert!(!r.graphics.frame_pacing.vsync);
+    assert_eq!(r.graphics.frame_pacing.fps_cap, 30);
+    assert!(!r.graphics.display.hdr);
+    assert_eq!(r.graphics.anti_aliasing.upscaler, UpscalerBackend::Auto);
+    assert_eq!(r.graphics.dlss_preset, DlssPreset::L);
     assert!(!r.perf_stats);
     assert!(r.show_fps, "an untouched stats toggle defaults on");
 
-    let r = resolve_graphics(&world, &UserGraphicsSettings::default(), &low());
-    assert!(r.vsync);
-    assert_eq!(r.fps_cap, 60);
-    assert!(r.hdr_display);
-    assert_eq!(r.upscale_backend, UpscalerBackend::Fsr3);
-    assert_eq!(r.dlss_preset, DlssPreset::Default);
+    let r = resolve_settings(&world, &UserGraphicsSettings::default(), &low());
+    assert!(r.graphics.frame_pacing.vsync);
+    assert_eq!(r.graphics.frame_pacing.fps_cap, 60);
+    assert!(r.graphics.display.hdr);
+    assert_eq!(r.graphics.anti_aliasing.upscaler, UpscalerBackend::Fsr3);
+    assert_eq!(r.graphics.dlss_preset, DlssPreset::Default);
 }
 
 #[test]
@@ -191,27 +196,27 @@ fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
         },
         ..Default::default()
     });
-    let q = resolve_graphics(&world, &UserGraphicsSettings::default(), &low()).quality;
-    assert_eq!(q.shadow_map_size, 1024);
+    let q = resolve_settings(&world, &UserGraphicsSettings::default(), &low()).graphics;
+    assert_eq!(q.shadows.map_size, 1024);
     assert_eq!(
-        q.shadow_cadence,
+        q.shadow_cadence(),
         ShadowCadence {
             update: ShadowUpdate::Hybrid,
             distance: 40,
             cascades: 2,
         }
     );
-    assert_eq!(q.anisotropy, 4);
+    assert_eq!(q.texture_filtering.anisotropy, 4);
 
     let user = UserGraphicsSettings {
         shadow_map_size: Some(4096),
         shadow_distance: Some(200),
         ..UserGraphicsSettings::default()
     };
-    let q = resolve_graphics(&world, &user, &low()).quality;
-    assert_eq!(q.shadow_map_size, 4096);
-    assert_eq!(q.shadow_cadence.distance, 200);
-    assert_eq!(q.shadow_cadence.cascades, 2);
+    let q = resolve_settings(&world, &user, &low()).graphics;
+    assert_eq!(q.shadows.map_size, 4096);
+    assert_eq!(q.shadows.distance, 200);
+    assert_eq!(q.shadows.cascades, 2);
 }
 
 #[test]
@@ -223,13 +228,22 @@ fn a_frames_in_flight_override_clamps_to_three() {
         },
         ..Default::default()
     });
-    let r = resolve_graphics(&world, &UserGraphicsSettings::default(), &low());
-    assert_eq!(r.frames_in_flight, 7, "the world value is not clamped");
+    let r = resolve_settings(&world, &UserGraphicsSettings::default(), &low());
+    assert_eq!(
+        r.graphics.frame_pacing.frames_in_flight, 7,
+        "the world value is not clamped"
+    );
     let user = UserGraphicsSettings {
         frames_in_flight: Some(7),
         ..UserGraphicsSettings::default()
     };
-    assert_eq!(resolve_graphics(&world, &user, &low()).frames_in_flight, 3);
+    assert_eq!(
+        resolve_settings(&world, &user, &low())
+            .graphics
+            .frame_pacing
+            .frames_in_flight,
+        3
+    );
 }
 
 #[test]
@@ -246,7 +260,10 @@ fn render_scale_takes_the_more_aggressive_of_world_and_ceiling() {
             render_scale: user,
             ..UserGraphicsSettings::default()
         };
-        resolve_graphics(&world, &user, &low()).quality.render_scale
+        resolve_settings(&world, &user, &low())
+            .graphics
+            .anti_aliasing
+            .upscale_quality
     };
     assert_eq!(
         scale(UpscaleQuality::Quality, None),
@@ -274,15 +291,21 @@ fn an_unset_field_resolves_like_its_default_set_explicitly() {
         ..Default::default()
     };
     for ceiling in [low(), QualityCeiling::NONE] {
-        let bare = resolve_graphics(&WorldSettings::default(), &none, &ceiling);
-        let empty = resolve_graphics(&authored(GraphicsConfig::default()), &none, &ceiling);
-        let set = resolve_graphics(&authored(every.clone()), &none, &ceiling);
-        assert!(bare.occlusion_two_pass);
+        let bare = resolve_settings(&WorldSettings::default(), &none, &ceiling);
+        let empty = resolve_settings(&authored(GraphicsConfig::default()), &none, &ceiling);
+        let set = resolve_settings(&authored(every.clone()), &none, &ceiling);
+        assert!(bare.graphics.culling.two_pass_occlusion);
         for r in [&empty, &set] {
-            assert_eq!(r.occlusion_two_pass, bare.occlusion_two_pass);
-            assert_eq!(r.quality.render_scale, bare.quality.render_scale);
-            assert_eq!(r.quality.shadow_map_size, bare.quality.shadow_map_size);
-            assert_eq!(r.quality.shadow_cadence, bare.quality.shadow_cadence);
+            assert_eq!(
+                r.graphics.culling.two_pass_occlusion,
+                bare.graphics.culling.two_pass_occlusion
+            );
+            assert_eq!(
+                r.graphics.anti_aliasing.upscale_quality,
+                bare.graphics.anti_aliasing.upscale_quality
+            );
+            assert_eq!(r.graphics.shadows.map_size, bare.graphics.shadows.map_size);
+            assert_eq!(r.graphics.shadow_cadence(), bare.graphics.shadow_cadence());
         }
     }
 }
@@ -295,7 +318,7 @@ fn texture_overrides_apply_only_where_the_world_streams() {
         ..UserGraphicsSettings::default()
     };
     let defaults = StreamingConfig::default();
-    let r = resolve_graphics(&WorldSettings::default(), &user, &low());
+    let r = resolve_settings(&WorldSettings::default(), &user, &low());
     assert_eq!(
         (r.texture_cap, r.texture_budget),
         (defaults.texture_cap, defaults.texture_budget)
@@ -304,17 +327,17 @@ fn texture_overrides_apply_only_where_the_world_streams() {
         streaming: Some(&defaults),
         ..Default::default()
     });
-    let r = resolve_graphics(&streaming, &user, &low());
+    let r = resolve_settings(&streaming, &user, &low());
     assert_eq!((r.texture_cap, r.texture_budget), (10, 1));
 }
 
 #[test]
 fn the_fxaa_flag_follows_the_clamped_aa_mode() {
     let world = WorldSettings::default();
-    assert_eq!(world.effects.anti_aliasing.mode, AaMode::Taa);
-    let r = resolve_graphics(&world, &UserGraphicsSettings::default(), &low());
-    assert_eq!(r.quality.effects.anti_aliasing.mode, AaMode::Fxaa);
-    assert_eq!(r.post_process.fxaa, AaMode::Fxaa.fxaa_flag());
+    assert_eq!(world.graphics.anti_aliasing.mode, AaMode::Taa);
+    let r = resolve_settings(&world, &UserGraphicsSettings::default(), &low());
+    assert_eq!(r.graphics.anti_aliasing.mode, AaMode::Fxaa);
+    assert_eq!(r.graphics.post_process().fxaa, AaMode::Fxaa.fxaa_flag());
 }
 
 // Look tuning is not preset-governed, so a cleared set of Quality-row
@@ -333,7 +356,7 @@ fn the_quality_group_keeps_the_look_tuning_sliders() {
         ..UserGraphicsSettings::default()
     };
     let q = resolve_quality(&world, &user, &low());
-    assert_eq!(q.effects.ambient_occlusion.radius, 1.5);
+    assert_eq!(q.ambient_occlusion.radius, 1.5);
 }
 
 // Each layer beats the one below it: a scene beats the world, the ceiling
@@ -368,17 +391,17 @@ fn each_layer_beats_the_one_below_it() {
     let none = UserGraphicsSettings::default();
     let mut layers = SettingsLayers::new(&world, &QualityCeiling::NONE, &none);
     let base = layers.resolve();
-    assert_eq!(base.quality.shadow_cadence.distance, 60);
-    assert_eq!(base.fps_cap, 120);
+    assert_eq!(base.graphics.shadows.distance, 60);
+    assert_eq!(base.graphics.frame_pacing.fps_cap, 120);
 
     layers.scene = Some(&scene);
     let scened = layers.resolve();
-    assert_eq!(scened.quality.shadow_cadence.distance, 300);
-    assert_eq!(scened.fps_cap, 90);
+    assert_eq!(scened.graphics.shadows.distance, 300);
+    assert_eq!(scened.graphics.frame_pacing.fps_cap, 90);
 
     let low = low();
     layers.ceiling = &low;
-    assert_eq!(layers.resolve().quality.shadow_cadence.distance, 40);
+    assert_eq!(layers.resolve().graphics.shadows.distance, 40);
 
     let user = UserGraphicsSettings {
         shadow_distance: Some(200),
@@ -387,8 +410,8 @@ fn each_layer_beats_the_one_below_it() {
     };
     layers.user = &user;
     let chosen = layers.resolve();
-    assert_eq!(chosen.quality.shadow_cadence.distance, 200);
-    assert_eq!(chosen.fps_cap, 60);
+    assert_eq!(chosen.graphics.shadows.distance, 200);
+    assert_eq!(chosen.graphics.frame_pacing.fps_cap, 60);
 
     let session = UserGraphicsSettings {
         fps_cap: Some(0),
@@ -396,8 +419,8 @@ fn each_layer_beats_the_one_below_it() {
     };
     layers.session = Some(&session);
     let sessioned = layers.resolve();
-    assert_eq!(sessioned.fps_cap, 0);
-    assert_eq!(sessioned.quality.shadow_cadence.distance, 200);
+    assert_eq!(sessioned.graphics.frame_pacing.fps_cap, 0);
+    assert_eq!(sessioned.graphics.shadows.distance, 200);
 }
 
 // A scene replaces only the fields it sets; the world's other fields, set or
@@ -424,11 +447,11 @@ fn a_scene_replaces_only_the_fields_it_sets() {
     };
     layers.scene = Some(&scene);
     let r = layers.resolve();
-    assert!(r.occlusion_two_pass);
-    let ao = &r.quality.effects.ambient_occlusion;
+    assert!(r.graphics.culling.two_pass_occlusion);
+    let ao = &r.graphics.ambient_occlusion;
     assert!(!ao.enabled);
     assert_eq!(ao.radius, 2.0);
-    assert!(!layers.resolve_quality().effects.ambient_occlusion.enabled);
+    assert!(!layers.resolve_quality().ambient_occlusion.enabled);
 }
 
 // The sparse authored layer sits between the section defaults and the
@@ -446,28 +469,31 @@ fn a_sparse_world_layers_between_the_defaults_and_the_ceiling() {
     });
     let none = UserGraphicsSettings::default();
     let mut layers = SettingsLayers::new(&world, &QualityCeiling::NONE, &none);
-    let top = layers.resolve().quality;
-    assert_eq!(top.shadow_map_size, 8192, "set replaces the default");
-    assert_eq!(top.shadow_cadence.distance, 80, "unset takes the default");
+    let top = layers.resolve().graphics;
+    assert_eq!(top.shadows.map_size, 8192, "set replaces the default");
+    assert_eq!(top.shadows.distance, 80, "unset takes the default");
 
     let low = low();
     layers.ceiling = &low;
-    let capped = layers.resolve().quality;
-    assert_eq!(capped.shadow_map_size, 1024, "the ceiling caps a set field");
-    assert_eq!(capped.shadow_cadence.distance, 40, "and an unset one");
+    let capped = layers.resolve().graphics;
+    assert_eq!(
+        capped.shadows.map_size, 1024,
+        "the ceiling caps a set field"
+    );
+    assert_eq!(capped.shadows.distance, 40, "and an unset one");
 
     let user = UserGraphicsSettings {
         shadow_map_size: Some(2048),
         ..Default::default()
     };
     layers.user = &user;
-    assert_eq!(layers.resolve().quality.shadow_map_size, 2048);
+    assert_eq!(layers.resolve().graphics.shadows.map_size, 2048);
     let session = UserGraphicsSettings {
         shadow_map_size: Some(512),
         ..Default::default()
     };
     layers.session = Some(&session);
-    assert_eq!(layers.resolve().quality.shadow_map_size, 512);
+    assert_eq!(layers.resolve().graphics.shadows.map_size, 512);
 }
 
 // With nothing authored, each tier's resolution of a quality-governed field
@@ -484,18 +510,18 @@ fn an_unset_world_resolves_to_the_tier_capped_defaults() {
     ];
     for (tier, cap) in tiers {
         assert_eq!(ceiling_for(QualityPreset::Auto, tier), cap);
-        let r = resolve_graphics(&WorldSettings::default(), &none, &cap);
-        let q = &r.quality;
-        let fx = &q.effects;
-        assert_eq!(q.shadow_map_size, 4096.min(cap.shadow_map_size));
+        let r = resolve_settings(&WorldSettings::default(), &none, &cap);
+        let q = &r.graphics;
+        let fx = q;
+        assert_eq!(q.shadows.map_size, 4096.min(cap.shadow_map_size));
         let update = match cap.allow_every_frame_shadows {
             true => ShadowUpdate::EveryFrame,
             false => ShadowUpdate::Hybrid,
         };
-        assert_eq!(q.shadow_cadence.update, update);
-        assert_eq!(q.shadow_cadence.distance, 80.min(cap.shadow_distance));
-        assert_eq!(q.shadow_cadence.cascades, 4.min(cap.shadow_cascades));
-        assert_eq!(q.anisotropy, 16.min(cap.anisotropy));
+        assert_eq!(q.shadows.update, update);
+        assert_eq!(q.shadows.distance, 80.min(cap.shadow_distance));
+        assert_eq!(q.shadows.cascades, 4.min(cap.shadow_cascades));
+        assert_eq!(q.texture_filtering.anisotropy, 16.min(cap.anisotropy));
         assert_eq!(fx.ambient_occlusion.enabled, cap.ssao);
         assert_eq!(fx.reflections.screen_space, cap.ssr);
         assert_eq!(fx.reflections.ray_traced, cap.ray_traced_reflections);
@@ -523,14 +549,21 @@ fn an_unset_world_resolves_to_the_tier_capped_defaults() {
         );
         assert_eq!(fx.anti_aliasing.mode, cap.aa_mode);
         assert_eq!(
-            q.render_scale,
+            q.anti_aliasing.upscale_quality,
             more_aggressive_upscale(UpscaleQuality::Quality, cap.min_upscale)
         );
         // Fields no tier governs resolve to their section defaults.
-        assert_eq!(r.fps_cap, FramePacing::default().fps_cap);
-        assert_eq!(r.frames_in_flight, 2);
-        assert!(!r.vsync && !r.hdr_display && !r.temporal_upscaling);
-        assert!(r.occlusion_two_pass);
+        assert_eq!(
+            r.graphics.frame_pacing.fps_cap,
+            FramePacing::default().fps_cap
+        );
+        assert_eq!(r.graphics.frame_pacing.frames_in_flight, 2);
+        assert!(
+            !r.graphics.frame_pacing.vsync
+                && !r.graphics.display.hdr
+                && !r.graphics.anti_aliasing.upscaling
+        );
+        assert!(r.graphics.culling.two_pass_occlusion);
         assert_eq!(fx.ambient_occlusion.radius, 0.5);
         assert!(!fx.exposure.auto);
     }
@@ -548,8 +581,11 @@ fn capabilities_clamp_after_every_layer() {
     };
     let mut layers = SettingsLayers::new(&world, &QualityCeiling::NONE, &user);
     let capable = layers.resolve();
-    assert!(capable.quality.effects.reflections.ray_traced);
-    assert_eq!(capable.upscale_backend, UpscalerBackend::Dlss);
+    assert!(capable.graphics.reflections.ray_traced);
+    assert_eq!(
+        capable.graphics.anti_aliasing.upscaler,
+        UpscalerBackend::Dlss
+    );
 
     let caps = DeviceCapabilities {
         ray_tracing: false,
@@ -558,14 +594,84 @@ fn capabilities_clamp_after_every_layer() {
     };
     layers.capabilities = &caps;
     let r = layers.resolve();
-    assert!(!r.quality.effects.reflections.ray_traced);
-    assert!(r.quality_settings().rt_reflections.is_none());
-    assert_eq!(r.upscale_backend, UpscalerBackend::Auto);
+    assert!(!r.graphics.reflections.ray_traced);
+    assert!(r.graphics.rt_reflections().is_none());
+    assert_eq!(r.graphics.anti_aliasing.upscaler, UpscalerBackend::Auto);
     assert!(
-        r.quality.effects.reflections.screen_space,
+        r.graphics.reflections.screen_space,
         "screen-space reflections stay"
     );
-    assert!(!layers.resolve_quality().effects.reflections.ray_traced);
+    assert!(!layers.resolve_quality().reflections.ray_traced);
+}
+
+// Ray tracing resolves off where the upscaler the request resolves to is XeSS
+// and the device cannot run the two together, and stays on wherever either
+// half differs.
+#[test]
+fn ray_tracing_gives_way_to_xess_where_they_cannot_share_the_device() {
+    use crate::render::upscaler::UpscalerAvailability;
+    let world = WorldSettings::default();
+    let rt_with = |upscaling: bool, upscaler: UpscalerBackend, caps: DeviceCapabilities| {
+        let user = UserGraphicsSettings {
+            ray_traced_reflections: Some(true),
+            temporal_upscaling: Some(upscaling),
+            upscale_backend: Some(upscaler),
+            ..Default::default()
+        };
+        let mut layers = SettingsLayers::new(&world, &QualityCeiling::NONE, &user);
+        layers.capabilities = &caps;
+        layers.resolve().graphics.reflections.ray_traced
+    };
+    let vulkan = DeviceCapabilities {
+        ray_tracing_with_xess: false,
+        ..DeviceCapabilities::ALL
+    };
+    assert!(!rt_with(true, UpscalerBackend::Xess, vulkan));
+    assert!(
+        rt_with(false, UpscalerBackend::Xess, vulkan),
+        "no upscaling"
+    );
+    assert!(rt_with(true, UpscalerBackend::Dlss, vulkan), "DLSS leads");
+    let only_xess = DeviceCapabilities {
+        upscalers: UpscalerAvailability {
+            dlss: false,
+            xess: true,
+            fsr: true,
+        },
+        ..vulkan
+    };
+    assert!(
+        !rt_with(true, UpscalerBackend::Auto, only_xess),
+        "Auto picks XeSS"
+    );
+    assert!(
+        rt_with(true, UpscalerBackend::Fsr3, only_xess),
+        "FSR asked for"
+    );
+    assert!(
+        rt_with(true, UpscalerBackend::Xess, DeviceCapabilities::ALL),
+        "a device that can run both"
+    );
+}
+
+// A clamp shapes the resolution, never the user's stored choice, so the same
+// settings file turns the feature on where the device can run it.
+#[test]
+fn a_capability_clamp_leaves_the_stored_choice_alone() {
+    let world = WorldSettings::default();
+    let user = UserGraphicsSettings {
+        ray_traced_reflections: Some(true),
+        ..Default::default()
+    };
+    let before = user.clone();
+    let caps = DeviceCapabilities {
+        ray_tracing: false,
+        ..DeviceCapabilities::ALL
+    };
+    let mut layers = SettingsLayers::new(&world, &QualityCeiling::NONE, &user);
+    layers.capabilities = &caps;
+    assert!(!layers.resolve().graphics.reflections.ray_traced);
+    assert_eq!(user, before);
 }
 
 #[test]
@@ -652,15 +758,92 @@ fn every_diffed_field_declares_its_apply_class() {
 }
 
 #[test]
-fn quality_settings_follow_the_resolved_config() {
+fn derived_feature_settings_follow_the_resolved_sections() {
     let world = WorldSettings::default();
     let none = UserGraphicsSettings::default();
-    let r = SettingsLayers::new(&world, &low(), &none).resolve();
-    let q = r.quality_settings();
-    assert!(!q.taa, "the Low ceiling caps TAA to FXAA");
-    assert!(q.ssao.is_none() && q.ssr.is_none() && q.ssgi.is_none());
-    let r = SettingsLayers::new(&world, &QualityCeiling::NONE, &none).resolve();
-    let q = r.quality_settings();
-    assert!(q.taa);
-    assert!(q.ssao.is_some() && q.ssr.is_some() && q.rt_reflections.is_some());
+    let g = SettingsLayers::new(&world, &low(), &none)
+        .resolve()
+        .graphics;
+    assert!(!g.taa(), "the Low ceiling caps TAA to FXAA");
+    assert!(g.ssao().is_none() && g.ssr().is_none() && g.ssgi().is_none());
+    let g = SettingsLayers::new(&world, &QualityCeiling::NONE, &none)
+        .resolve()
+        .graphics;
+    assert!(g.taa());
+    assert!(g.ssao().is_some() && g.ssr().is_some() && g.rt_reflections().is_some());
+    assert_eq!(g.reflection_blur_scale(), g.reflections.blur_divisor());
+    assert_eq!(g.hdr_samples(), 1, "TAA renders single-sampled");
+}
+
+// The look sliders write their section fields, so the composite tunables and
+// the auto-exposure bias both follow a moved exposure slider.
+#[test]
+fn a_slider_sets_its_section_field() {
+    let world = WorldSettings::default();
+    let user = UserGraphicsSettings {
+        exposure_ev: Some(1.5),
+        bloom_intensity: Some(-2.0),
+        lut_strength: Some(0.25),
+        ambient_intensity: Some(3.0),
+        ..Default::default()
+    };
+    let g = SettingsLayers::new(&world, &QualityCeiling::NONE, &user)
+        .resolve()
+        .graphics;
+    assert_eq!(g.exposure.ev, 1.5);
+    assert_eq!(g.auto_exposure_bias_ev(), 1.5);
+    let tunables = g.post_process();
+    assert_eq!(tunables.exposure, crate::math::exp2(1.5));
+    assert_eq!(tunables.bloom_intensity, 0.0);
+    assert_eq!(tunables.lut_strength, 0.25);
+    assert_eq!(g.ambient_intensity(), 3.0);
+}
+
+// Auto-exposure meters for the display output the user resolved, not only
+// the one the world authored.
+#[test]
+fn auto_exposure_meters_for_the_resolved_display() {
+    let world = authored(GraphicsConfig {
+        display: DisplayOverrides {
+            hdr: Some(true),
+            ..Default::default()
+        },
+        exposure: crate::components::ExposureOverrides {
+            auto: Some(true),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let user = UserGraphicsSettings {
+        hdr_display: Some(false),
+        ..Default::default()
+    };
+    let g = SettingsLayers::new(&world, &QualityCeiling::NONE, &user)
+        .resolve()
+        .graphics;
+    assert_eq!(g.auto_exposure(), g.exposure.auto_settings(false));
+}
+
+// A preset change adopts the re-resolved quality group and leaves every other
+// resolved value as it was.
+#[test]
+fn adopting_a_quality_group_keeps_the_rest() {
+    let world = WorldSettings::default();
+    let user = UserGraphicsSettings {
+        fps_cap: Some(30),
+        temporal_upscaling: Some(true),
+        ..Default::default()
+    };
+    let mut r = SettingsLayers::new(&world, &QualityCeiling::NONE, &user).resolve();
+    let quality =
+        SettingsLayers::new(&world, &low(), &UserGraphicsSettings::default()).resolve_quality();
+    r.set_quality(quality.clone());
+    assert_eq!(r.graphics.anti_aliasing.mode, quality.anti_aliasing.mode);
+    assert_eq!(r.graphics.shadows.map_size, quality.shadows.map_size);
+    assert_eq!(
+        r.graphics.anti_aliasing.upscale_quality,
+        quality.anti_aliasing.upscale_quality
+    );
+    assert_eq!(r.graphics.frame_pacing.fps_cap, 30);
+    assert!(r.graphics.anti_aliasing.upscaling);
 }

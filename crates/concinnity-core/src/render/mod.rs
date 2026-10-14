@@ -94,7 +94,7 @@ pub mod transparent;
 /// The `#[repr(C)]` blocks the CPU uploads into the shaders, declared once for
 /// every backend except where only one backend binds a block.
 pub mod uniforms;
-
+pub mod upscaler;
 pub mod view_history;
 pub mod volumetric_fog;
 pub mod water;

@@ -623,6 +623,9 @@ pub(crate) struct MtlContext {
     // during `execute_graph` (which needs `&mut self`) and put back after, so a
     // steady scene compiles once.
     pub(super) graph_cache: Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>,
+    // The runtime-switched passes the resolved settings and the last apply
+    // built leave on.
+    pub(super) gates: render_graph::FeatureGates,
     // InstancedProp clusters. See [`InstancedState`].
     pub(super) instanced: InstancedState,
     // Scene assets. See [`MtlSceneAssets`].
@@ -1173,20 +1176,9 @@ impl MtlContext {
         .ok_or_else(|| super::error::allocation_failed("indirect command buffer"))
     }
 
-    // Device capability flags for the settings menu. Ray tracing is queried
-    // from the live MTLDevice (cheap; the same check the RT pass gates on).
+    // Device capability flags, the same answer the pre-backend probe gave.
     pub(crate) fn capabilities(&self) -> backend::DeviceCapabilities {
-        backend::DeviceCapabilities {
-            ray_tracing: super::raytrace::raytracing_supported(&self.hw.device),
-            // Upscaling always goes through MetalFX; there is no selector.
-            selectable_upscaler: false,
-            // The per-frame RT topology refresh re-admits recycled build-time
-            // slots, so every retired slot may be reused.
-            reuses_build_slots: true,
-            // The per-object buffer is rebuilt from `draw.objects` every frame,
-            // so a slot's rewritten material draws on the next one.
-            rewrites_draws: true,
-        }
+        super::gpu_profile::device_capabilities(&self.hw.device)
     }
 
     // Coarse GPU performance profile for default-quality selection, read live

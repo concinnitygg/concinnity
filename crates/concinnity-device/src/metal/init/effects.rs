@@ -6,7 +6,6 @@
 
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::auto_exposure::{AutoExposureSettings, ExposureAdaptation};
-use concinnity_core::render::backend_init::PostSettings;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
@@ -16,6 +15,7 @@ use concinnity_core::render::post::ssgi::SsgiPass;
 use concinnity_core::render::post::ssgi::settings::SsgiSettings;
 use concinnity_core::render::post::ssr::SsrPass;
 use concinnity_core::render::post::ssr::settings::SsrSettings;
+use concinnity_core::settings::ResolvedGraphics;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
@@ -39,12 +39,12 @@ use crate::metal::texture::create_fallback_texture;
 // are built at all. `reflection_blur_scale` and `auto_exposure_bias_ev` ride
 // along because they only make sense paired with their feature (SSR/RT and
 // auto-exposure respectively).
-pub(in crate::metal) struct EffectSettings<'a> {
-    pub ssao: &'a Option<SsaoSettings>,
-    pub ssr: &'a Option<SsrSettings>,
-    pub ssgi: &'a Option<SsgiSettings>,
-    pub rt_reflection: &'a Option<RtReflectionSettings>,
-    pub auto_exposure: &'a Option<AutoExposureSettings>,
+pub(in crate::metal) struct EffectSettings {
+    pub ssao: Option<SsaoSettings>,
+    pub ssr: Option<SsrSettings>,
+    pub ssgi: Option<SsgiSettings>,
+    pub rt_reflection: Option<RtReflectionSettings>,
+    pub auto_exposure: Option<AutoExposureSettings>,
     // Per-axis divisor for the roughness-aware reflection blur target, resolved
     // from the world's `reflection_blur_resolution`. Sizes the blur target at
     // render / this; held by the composite so resize reuses it.
@@ -52,16 +52,16 @@ pub(in crate::metal) struct EffectSettings<'a> {
     pub auto_exposure_bias_ev: f32,
 }
 
-impl<'a> EffectSettings<'a> {
-    pub(super) fn from_post(post: &'a PostSettings) -> Self {
+impl EffectSettings {
+    pub(in crate::metal) fn new(graphics: &ResolvedGraphics) -> Self {
         Self {
-            ssao: &post.ssao,
-            ssr: &post.ssr,
-            ssgi: &post.ssgi,
-            rt_reflection: &post.rt_reflections,
-            auto_exposure: &post.auto_exposure,
-            reflection_blur_scale: post.reflection_blur_scale,
-            auto_exposure_bias_ev: post.auto_exposure_bias_ev,
+            ssao: graphics.ssao(),
+            ssr: graphics.ssr(),
+            ssgi: graphics.ssgi(),
+            rt_reflection: graphics.rt_reflections(),
+            auto_exposure: graphics.auto_exposure(),
+            reflection_blur_scale: graphics.reflection_blur_scale(),
+            auto_exposure_bias_ev: graphics.auto_exposure_bias_ev(),
         }
     }
 
@@ -93,12 +93,12 @@ impl<'a> EffectSettings<'a> {
 pub(super) fn build_upscale(
     gpu: &InitGpu<'_>,
     output: (u32, u32),
-    post: &PostSettings,
+    graphics: &ResolvedGraphics,
 ) -> UpscaleState {
     let device = &*gpu.hw.device;
-    let upscaler = if post.temporal_upscaling {
+    let upscaler = if graphics.anti_aliasing.upscaling {
         if temporal_scaler_supported(device) {
-            match MetalFXUpscaler::new(device, output.0, output.1, post.upscale_scale) {
+            match MetalFXUpscaler::new(device, output.0, output.1, graphics.upscale_scale()) {
                 Ok(u) => {
                     tracing::info!(
                         "MetalFX: temporal upscaling on: render {}x{} → present {}x{} ({}x scale)",
@@ -131,7 +131,7 @@ pub(super) fn build_upscale(
     // is rounded to whole pixels, so feeding it back into the next rebuild
     // shrinks the input a little further every resize.
     let scale = if upscaler.is_some() {
-        post.upscale_scale
+        graphics.upscale_scale()
     } else {
         1.0
     };
@@ -203,7 +203,7 @@ pub(in crate::metal) fn build_ssao(
         None => None,
     };
     Ok(SsaoState {
-        settings: *settings.ssao,
+        settings: settings.ssao,
         pass,
         white: create_fallback_texture(alloc)?,
     })
@@ -251,7 +251,7 @@ pub(in crate::metal) fn build_ssr(
         None
     };
     Ok(SsrState {
-        settings: *settings.ssr,
+        settings: settings.ssr,
         reflection,
         resolve,
         composite,
@@ -305,7 +305,7 @@ pub(in crate::metal) fn build_ssgi(
         None => None,
     };
     Ok(SsgiState {
-        settings: *settings.ssgi,
+        settings: settings.ssgi,
         pass,
     })
 }

@@ -1301,6 +1301,9 @@ pub(crate) struct VkContext {
     // rebuilding it. Taken out during `execute_graph` (which needs `&mut self`)
     // and put back after, so a steady scene compiles the graph once.
     pub(super) graph_cache: Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>,
+    // The runtime-switched passes the resolved settings and the last apply
+    // built leave on.
+    pub(super) gates: render_graph::FeatureGates,
     // Scratch the graph executor refills each frame: the per-resource barrier
     // targets and the per-pass aliasing barriers. Their contents are derived from
     // live state every frame (so no handle can go stale here); only the
@@ -1805,22 +1808,27 @@ impl VkContext {
     // auto-exposure are fully scalar, so they are replaced wholesale; SSGI's trace
     // resolution sizes its targets and rides `apply_quality_settings` with its ray
     // count, so only its scalar intensity / distance are updated.
-    pub(crate) fn update_quality_params(&mut self, q: backend::QualitySettings) {
-        if let (Some(live), Some(cur)) = (q.ssao, self.ssao.as_mut().map(|s| &mut s.settings)) {
+    pub(crate) fn update_quality_params(
+        &mut self,
+        g: &concinnity_core::settings::ResolvedGraphics,
+    ) {
+        if let (Some(live), Some(cur)) = (g.ssao(), self.ssao.as_mut().map(|s| &mut s.settings)) {
             *cur = live;
         }
         if let (Some(live), Some(cur)) =
-            (q.ssr, self.ssr.as_mut().and_then(|s| s.settings.as_mut()))
+            (g.ssr(), self.ssr.as_mut().and_then(|s| s.settings.as_mut()))
         {
             *cur = live;
         }
-        if let (Some(live), Some(cur)) = (q.ssgi, self.ssgi.as_mut().map(|s| &mut s.settings)) {
+        if let (Some(live), Some(cur)) = (g.ssgi(), self.ssgi.as_mut().map(|s| &mut s.settings)) {
             cur.intensity = live.intensity;
             cur.max_distance = live.max_distance;
         }
-        if let (Some(live), Some(cur)) = (q.auto_exposure, self.auto_exposure.adaptation.as_mut()) {
+        if let (Some(live), Some(cur)) = (g.auto_exposure(), self.auto_exposure.adaptation.as_mut())
+        {
             cur.settings = live;
         }
+        self.refresh_gates(g);
     }
 
     // Public accessor for the shared shader-reload flag. Cloning the `Arc`
@@ -1867,19 +1875,9 @@ impl VkContext {
 
     // Device capability flags for the settings menu. RT reflects whether the
     // ray-query device extensions were enabled at device creation
-    // (`rt_capable`).
+    // (`rt_capable`), which XeSS rules out.
     pub(crate) fn capabilities(&self) -> backend::DeviceCapabilities {
-        backend::DeviceCapabilities {
-            ray_tracing: self.hw.rt_capable,
-            selectable_upscaler: true,
-            // The cull BVH + RT tables key fixed build-time slot indices and
-            // cannot refit; only the runtime-append region recycles (tracked
-            // as the RT incremental topology parity item).
-            reuses_build_slots: false,
-            // Per-object material state is baked into the GPU records at build
-            // time, so a slot rewrite in `SceneState` would not reach the frame.
-            rewrites_draws: false,
-        }
+        super::gpu_profile::capabilities(self.hw.rt_capable)
     }
 
     // Coarse GPU performance profile for default-quality selection, read live

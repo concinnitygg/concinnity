@@ -57,13 +57,13 @@ pub use live_edit::{
 pub use null::NullBackend;
 pub use pipeline_builder::{PipelineBuilder, PreparedPipelines};
 pub use probe::{
-    BackendProbe, DeviceCapabilities, GpuClassInput, GpuProfile, GpuTier, GpuVendor,
+    BackendProbe, DeviceCapabilities, DeviceProbe, GpuClassInput, GpuProfile, GpuTier, GpuVendor,
     apple_family_from_device_name, classify_tier,
 };
 pub use scene_host::{GeometryEdit, SceneHost};
 pub use skinned::SkinnedDraws;
 pub use streaming::{ChunkMesh, DrawStreaming, PlanetChunk};
-pub use tuning::{QualitySettings, RenderTuning};
+pub use tuning::RenderTuning;
 pub use window::WindowControl;
 
 use crate::gfx::render_types::{LineVertex, TextDrawCall};
@@ -203,7 +203,7 @@ mod tests {
     use super::*;
 
     use crate::components::ShaderPrograms;
-    use crate::gfx::render_types::{MaterialUniforms, PostProcessTunables};
+    use crate::gfx::render_types::MaterialUniforms;
     use crate::input::keymap::KeyMap;
     use crate::profile::RenderStats;
     use crate::render::backend_init::BackendInit;
@@ -216,21 +216,6 @@ mod tests {
         [0.0, 0.0, 1.0, 0.0],
         [0.0, 0.0, 0.0, 1.0],
     ];
-
-    // Minimal QualitySettings with every feature off, so no *Settings sub-type
-    // needs constructing.
-    fn stub_quality() -> QualitySettings {
-        QualitySettings {
-            taa: false,
-            ssao: None,
-            ssr: None,
-            rt_reflections: None,
-            ssgi: None,
-            reflection_blur_scale: 1,
-            auto_exposure: None,
-            auto_exposure_bias_ev: 0.0,
-        }
-    }
 
     #[test]
     fn default_query_methods_report_conservative_values() {
@@ -293,19 +278,23 @@ mod tests {
         });
 
         // Live look + input tunable no-ops.
-        backend.update_post_process(PostProcessTunables::DEFAULT);
-        backend.set_ambient_intensity(1.0);
         backend.set_keymap(&KeyMap::default());
+        let graphics = crate::settings::ResolvedGraphics::default();
+        let mut plan =
+            crate::settings::apply::ApplyPlan::live(crate::settings::apply::LiveChanges {
+                post_process: true,
+                ambient: true,
+                shadow_cadence: true,
+                feature_params: true,
+                vsync: true,
+            });
+        assert!(backend.apply_settings(&graphics, &plan).is_ok());
+        plan.rebuild
+            .insert(crate::settings::apply::RebuildFeature::Ssao);
         assert!(matches!(
-            backend.apply_quality_settings(stub_quality()),
+            backend.apply_settings(&graphics, &plan),
             Err(RenderError::Unsupported { .. })
         ));
-        backend.update_quality_params(stub_quality());
-        backend.set_shadow_cadence(crate::render::backend_init::ShadowCadence {
-            update: crate::components::ShadowUpdate::EveryFrame,
-            distance: 200,
-            cascades: 3,
-        });
         backend.update_fog_settings(None);
         backend.update_directional_lights(&[]);
         backend.set_draw_material(DrawIndex(0), MaterialUniforms::DEFAULT, 0, 0);

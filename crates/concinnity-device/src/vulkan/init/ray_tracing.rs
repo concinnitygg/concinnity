@@ -2,9 +2,10 @@
 //! that traces it, and the reflection composite the SSR resolve shares.
 
 use ash::vk;
-use concinnity_core::render::backend_init::{PostSettings, SceneData};
+use concinnity_core::render::backend_init::{RenderLaunch, SceneData};
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_core::settings::ResolvedGraphics;
 
 use super::InitGpu;
 use super::effects::shared_post_device;
@@ -27,7 +28,8 @@ pub(super) struct RtInputs<'a> {
     pub(super) gbuffer: Option<&'a GbufferResources>,
     pub(super) descriptors: &'a VkDescriptors,
     pub(super) cull: &'a VkCull,
-    pub(super) post: &'a PostSettings,
+    pub(super) graphics: &'a ResolvedGraphics,
+    pub(super) launch: RenderLaunch,
     pub(super) post_support: &'a PostSupport,
     pub(super) rt_wanted: bool,
 }
@@ -59,7 +61,8 @@ pub(super) fn build_rt_reflections(
         gbuffer,
         descriptors,
         cull,
-        post,
+        graphics,
+        launch,
         post_support,
         rt_wanted,
     } = inputs;
@@ -117,7 +120,8 @@ pub(super) fn build_rt_reflections(
                 height: render_extent.height,
                 frames,
             },
-            post.rt_reflections
+            graphics
+                .rt_reflections()
                 .expect("rt_wanted implies rt_settings is Some"),
             crate::vulkan::post::rt_reflections::RtStaticInputs {
                 vertex_buffer: geometry.vertex_buffer.buffer(),
@@ -183,25 +187,28 @@ pub(super) fn build_rt_reflections(
     // write radiance+weight into their output target; this blurs by roughness
     // and composites over the scene into its own output, which then replaces
     // the raw resolve output as the scene image every downstream pass samples.
-    let composite_opt =
-        if ReflectionPath::new(post.ssr.is_some(), rt_opt.is_some(), rt_accel_opt.is_some())
-            .composite
-        {
-            Some(build_reflection_composite(
-                &shared_post_device(gpu, post_support, scene, descriptors),
-                post.reflection_blur_scale,
-                render_extent,
-            )?)
-        } else {
-            None
-        };
+    let composite_opt = if ReflectionPath::new(
+        graphics.ssr().is_some(),
+        rt_opt.is_some(),
+        rt_accel_opt.is_some(),
+    )
+    .composite
+    {
+        Some(build_reflection_composite(
+            &shared_post_device(gpu, post_support, scene, descriptors),
+            graphics.reflection_blur_scale(),
+            render_extent,
+        )?)
+    } else {
+        None
+    };
     Ok(RtResources {
         state: VkRayTracing {
             accel: rt_accel_opt,
             retired: RetirePool::new(),
             retire_tick: 0,
-            dynamic_mode: post.rt_dynamic,
-            skinned_geometry: post.rt_skinned_geometry,
+            dynamic_mode: launch.rt_dynamic,
+            skinned_geometry: launch.rt_skinned_geometry,
             update_streak: Default::default(),
             skin: rt_opt
                 .is_some()

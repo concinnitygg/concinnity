@@ -165,9 +165,9 @@ pub struct UserGraphicsSettings {
     pub rt_reflection_resolution: Option<PassResolution>,
     /// Per-feature sub-quality tunables (SSAO radius / intensity, SSR intensity /
     /// distance, SSGI intensity / distance, auto-exposure EV bounds + speed). Each
-    /// `None` uses the world's authored value. Applied live on Metal via
-    /// `update_quality_params` (the backend re-reads them into a per-frame uniform,
-    /// no pass rebuild); look-tuning knobs, independent of the quality preset.
+    /// `None` uses the world's authored value. Applied live: the backend
+    /// re-reads them into a per-frame uniform with no pass rebuild. Look-tuning
+    /// knobs, independent of the quality preset.
     #[serde(default)]
     pub ssao_radius: Option<f32>,
     /// `AmbientOcclusion.intensity`.

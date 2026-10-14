@@ -1,20 +1,18 @@
 //! The settings rows the resolver reads: the quality feature toggles and cycle
 //! knobs the preset governs, and the graphics sliders. Each row states how it
-//! reads and writes its field of the quality-governed assets, where the user's
+//! reads and writes its field of the resolved graphics settings, where the user's
 //! choice for it persists, and how a ceiling clamps it. The settings menu drives the same
 //! rows, so what the menu shows is what resolution produces.
 
 use crate::components::IndirectTechnique;
 use crate::gfx::auto_exposure::EV_LIMIT;
-use crate::gfx::render_types::PostProcessTunables;
-use crate::math::exp2;
 use crate::settings::SettingKey;
 use crate::settings::levels::{
     aa_mode_at, aa_mode_index, pass_resolution_at, pass_resolution_index, ssgi_rays_at,
     ssgi_rays_index,
 };
 use crate::settings::quality::{QualityCeiling, clamp_aa_mode};
-use crate::settings::resolve::QualityEffects;
+use crate::settings::resolve::ResolvedGraphics;
 use crate::settings::user::UserGraphicsSettings;
 
 /// A shared and a mutable accessor for the same field of `T`.
@@ -39,9 +37,9 @@ pub struct QualityToggle {
     /// The settings row.
     pub key: SettingKey,
     /// Whether the feature is on.
-    pub get: fn(&QualityEffects) -> bool,
+    pub get: fn(&ResolvedGraphics) -> bool,
     /// Turn the feature on or off.
-    pub set: fn(&mut QualityEffects, bool),
+    pub set: fn(&mut ResolvedGraphics, bool),
     /// Where the user's choice persists.
     pub persisted: Lens<UserGraphicsSettings, Option<bool>>,
     /// Whether the ceiling permits the feature on.
@@ -54,19 +52,19 @@ pub struct QualityCycle {
     /// The settings row.
     pub key: SettingKey,
     /// The option index the value shows as.
-    pub index: fn(&QualityEffects) -> usize,
+    pub index: fn(&ResolvedGraphics) -> usize,
     /// Set the value to the one at an option index.
-    pub set: fn(&mut QualityEffects, usize),
+    pub set: fn(&mut ResolvedGraphics, usize),
     /// Write the user's choice, where they made one, over the value.
-    pub overlay: fn(&mut QualityEffects, &UserGraphicsSettings),
+    pub overlay: fn(&mut ResolvedGraphics, &UserGraphicsSettings),
     /// Persist the value as the user's choice.
-    pub persist: fn(&QualityEffects, &mut UserGraphicsSettings),
+    pub persist: fn(&ResolvedGraphics, &mut UserGraphicsSettings),
     /// Whether the user made a choice.
     pub overridden: fn(&UserGraphicsSettings) -> bool,
     /// Forget the user's choice.
     pub clear: fn(&mut UserGraphicsSettings),
     /// Lower the value under the ceiling.
-    pub clamp: fn(&mut QualityEffects, &QualityCeiling),
+    pub clamp: fn(&mut ResolvedGraphics, &QualityCeiling),
 }
 
 // A toggle whose persisted and ceiling fields share one name.
@@ -205,45 +203,9 @@ pub fn quality_cycle(key: SettingKey) -> Option<&'static QualityCycle> {
     QUALITY_CYCLES.iter().find(|row| row.key == key)
 }
 
-/// The resolved state a graphics slider drives.
-pub enum GraphicsSliderTarget {
-    /// A composite tunable, pushed live through `update_post_process`.
-    PostProcess {
-        /// The tunable.
-        field: Lens<PostProcessTunables, f32>,
-        /// Where the user's choice persists.
-        persisted: Lens<UserGraphicsSettings, Option<f32>>,
-    },
-    /// A per-feature sub-quality field of the quality-governed assets, pushed
-    /// live through `update_quality_params`. Look tuning, so no ceiling clamps
-    /// it.
-    Effect {
-        /// The field.
-        field: Lens<QualityEffects, f32>,
-        /// Where the user's choice persists.
-        persisted: Lens<UserGraphicsSettings, Option<f32>>,
-    },
-    /// The ambient (IBL) scale, which rides the light uniforms.
-    Ambient {
-        /// Where the user's choice persists.
-        persisted: Lens<UserGraphicsSettings, Option<f32>>,
-    },
-}
-
-impl GraphicsSliderTarget {
-    /// Where the user's choice persists.
-    pub fn persisted(&self) -> &Lens<UserGraphicsSettings, Option<f32>> {
-        match self {
-            Self::PostProcess { persisted, .. }
-            | Self::Effect { persisted, .. }
-            | Self::Ambient { persisted } => persisted,
-        }
-    }
-}
-
 /// A graphics slider: the clamp from the value the user picks to the value
-/// applied, and the state it drives. The persisted choice is the user-facing
-/// value.
+/// applied, and the resolved field it sets. The persisted choice is the
+/// user-facing value.
 pub struct GraphicsSlider {
     /// The settings row.
     pub key: SettingKey,
@@ -251,141 +213,90 @@ pub struct GraphicsSlider {
     /// domain. The clamps mirror `post_process_tunables` and each feature's
     /// `*Settings::resolve`.
     pub apply: fn(f32) -> f32,
-    /// What the applied value drives.
-    pub target: GraphicsSliderTarget,
+    /// The resolved field the applied value sets.
+    pub field: Lens<ResolvedGraphics, f32>,
+    /// Where the user's choice persists.
+    pub persisted: Lens<UserGraphicsSettings, Option<f32>>,
+}
+
+// A slider over the resolved field at `$path`, persisted as `$field`.
+macro_rules! slider {
+    ($key:ident, $field:ident, $($path:ident).+, $apply:expr) => {
+        GraphicsSlider {
+            key: SettingKey::$key,
+            apply: $apply,
+            field: lens!($($path).+),
+            persisted: lens!($field),
+        }
+    };
 }
 
 /// Every graphics slider.
 pub static GRAPHICS_SLIDERS: [GraphicsSlider; 16] = [
-    // Authored in EV (centered on neutral), applied as the multiplier 2^ev.
-    GraphicsSlider {
-        key: SettingKey::Exposure,
-        apply: |v| exp2(v.clamp(-EV_LIMIT, EV_LIMIT)),
-        target: GraphicsSliderTarget::PostProcess {
-            field: lens!(exposure),
-            persisted: lens!(exposure_ev),
-        },
-    },
-    GraphicsSlider {
-        key: SettingKey::BloomIntensity,
-        apply: |v| v.max(0.0),
-        target: GraphicsSliderTarget::PostProcess {
-            field: lens!(bloom_intensity),
-            persisted: lens!(bloom_intensity),
-        },
-    },
-    GraphicsSlider {
-        key: SettingKey::BloomThreshold,
-        apply: |v| v.max(0.0),
-        target: GraphicsSliderTarget::PostProcess {
-            field: lens!(bloom_threshold),
-            persisted: lens!(bloom_threshold),
-        },
-    },
-    GraphicsSlider {
-        key: SettingKey::Vignette,
-        apply: |v| v.clamp(0.0, 1.0),
-        target: GraphicsSliderTarget::PostProcess {
-            field: lens!(vignette),
-            persisted: lens!(vignette),
-        },
-    },
-    GraphicsSlider {
-        key: SettingKey::LutStrength,
-        apply: |v| v.clamp(0.0, 1.0),
-        target: GraphicsSliderTarget::PostProcess {
-            field: lens!(lut_strength),
-            persisted: lens!(lut_strength),
-        },
-    },
-    GraphicsSlider {
-        key: SettingKey::AmbientIntensity,
-        apply: |v| v.clamp(0.0, 16.0),
-        target: GraphicsSliderTarget::Ambient {
-            persisted: lens!(ambient_intensity),
-        },
-    },
-    GraphicsSlider {
-        key: SettingKey::BloomKnee,
-        apply: |v| v.max(0.0),
-        target: GraphicsSliderTarget::PostProcess {
-            field: lens!(bloom_knee),
-            persisted: lens!(bloom_knee),
-        },
-    },
-    GraphicsSlider {
-        key: SettingKey::SsaoRadius,
-        apply: |v| v.max(1.0e-3),
-        target: GraphicsSliderTarget::Effect {
-            field: lens!(ambient_occlusion.radius),
-            persisted: lens!(ssao_radius),
-        },
-    },
-    GraphicsSlider {
-        key: SettingKey::SsaoIntensity,
-        apply: |v| v.clamp(0.0, 4.0),
-        target: GraphicsSliderTarget::Effect {
-            field: lens!(ambient_occlusion.intensity),
-            persisted: lens!(ssao_intensity),
-        },
-    },
-    GraphicsSlider {
-        key: SettingKey::SsrIntensity,
-        apply: |v| v.clamp(0.0, 1.0),
-        target: GraphicsSliderTarget::Effect {
-            field: lens!(reflections.intensity),
-            persisted: lens!(ssr_intensity),
-        },
-    },
-    GraphicsSlider {
-        key: SettingKey::SsrMaxDistance,
-        apply: |v| v.clamp(1.0, 200.0),
-        target: GraphicsSliderTarget::Effect {
-            field: lens!(reflections.max_distance),
-            persisted: lens!(ssr_max_distance),
-        },
-    },
-    GraphicsSlider {
-        key: SettingKey::SsgiIntensity,
-        apply: |v| v.clamp(0.0, 4.0),
-        target: GraphicsSliderTarget::Effect {
-            field: lens!(indirect_lighting.ssgi_intensity),
-            persisted: lens!(ssgi_intensity),
-        },
-    },
-    GraphicsSlider {
-        key: SettingKey::SsgiMaxDistance,
-        apply: |v| v.clamp(0.5, 100.0),
-        target: GraphicsSliderTarget::Effect {
-            field: lens!(indirect_lighting.ssgi_max_distance),
-            persisted: lens!(ssgi_max_distance),
-        },
-    },
+    // Authored in EV (centered on neutral); the composite applies 2^ev.
+    slider!(Exposure, exposure_ev, exposure.ev, |v| v
+        .clamp(-EV_LIMIT, EV_LIMIT)),
+    slider!(BloomIntensity, bloom_intensity, bloom.intensity, |v| v
+        .max(0.0)),
+    slider!(BloomThreshold, bloom_threshold, bloom.threshold, |v| v
+        .max(0.0)),
+    slider!(Vignette, vignette, vignette.strength, |v| v.clamp(0.0, 1.0)),
+    slider!(LutStrength, lut_strength, lut_strength, |v| v
+        .clamp(0.0, 1.0)),
+    slider!(
+        AmbientIntensity,
+        ambient_intensity,
+        indirect_lighting.ambient_intensity,
+        |v| v.clamp(0.0, 16.0)
+    ),
+    slider!(BloomKnee, bloom_knee, bloom.knee, |v| v.max(0.0)),
+    slider!(SsaoRadius, ssao_radius, ambient_occlusion.radius, |v| v
+        .max(1.0e-3)),
+    slider!(
+        SsaoIntensity,
+        ssao_intensity,
+        ambient_occlusion.intensity,
+        |v| v.clamp(0.0, 4.0)
+    ),
+    slider!(SsrIntensity, ssr_intensity, reflections.intensity, |v| v
+        .clamp(0.0, 1.0)),
+    slider!(
+        SsrMaxDistance,
+        ssr_max_distance,
+        reflections.max_distance,
+        |v| v.clamp(1.0, 200.0)
+    ),
+    slider!(
+        SsgiIntensity,
+        ssgi_intensity,
+        indirect_lighting.ssgi_intensity,
+        |v| v.clamp(0.0, 4.0)
+    ),
+    slider!(
+        SsgiMaxDistance,
+        ssgi_max_distance,
+        indirect_lighting.ssgi_max_distance,
+        |v| v.clamp(0.5, 100.0)
+    ),
     // The resolve also orders the EV bounds (min <= max).
-    GraphicsSlider {
-        key: SettingKey::AutoExposureMinEv,
-        apply: |v| v.clamp(-EV_LIMIT, EV_LIMIT),
-        target: GraphicsSliderTarget::Effect {
-            field: lens!(exposure.auto_min_ev),
-            persisted: lens!(auto_exposure_min_ev),
-        },
-    },
-    GraphicsSlider {
-        key: SettingKey::AutoExposureMaxEv,
-        apply: |v| v.clamp(-EV_LIMIT, EV_LIMIT),
-        target: GraphicsSliderTarget::Effect {
-            field: lens!(exposure.auto_max_ev),
-            persisted: lens!(auto_exposure_max_ev),
-        },
-    },
-    GraphicsSlider {
-        key: SettingKey::AutoExposureSpeed,
-        apply: |v| v.clamp(1.0e-3, 20.0),
-        target: GraphicsSliderTarget::Effect {
-            field: lens!(exposure.auto_speed),
-            persisted: lens!(auto_exposure_speed),
-        },
-    },
+    slider!(
+        AutoExposureMinEv,
+        auto_exposure_min_ev,
+        exposure.auto_min_ev,
+        |v| v.clamp(-EV_LIMIT, EV_LIMIT)
+    ),
+    slider!(
+        AutoExposureMaxEv,
+        auto_exposure_max_ev,
+        exposure.auto_max_ev,
+        |v| v.clamp(-EV_LIMIT, EV_LIMIT)
+    ),
+    slider!(
+        AutoExposureSpeed,
+        auto_exposure_speed,
+        exposure.auto_speed,
+        |v| v.clamp(1.0e-3, 20.0)
+    ),
 ];
 
 /// The graphics slider for `key`, or `None` if it is not one.

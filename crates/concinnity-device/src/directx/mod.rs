@@ -60,4 +60,4 @@ mod wireframe;
 mod world_shaders;
 
 pub(crate) use context::DxContext;
-pub(crate) use gpu_profile::probe_gpu_profile;
+pub(crate) use gpu_profile::probe_device;

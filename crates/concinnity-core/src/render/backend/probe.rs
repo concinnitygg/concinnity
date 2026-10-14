@@ -9,6 +9,7 @@
 
 use crate::profile::RenderStats;
 use crate::render::error::{RenderError, RenderResult};
+use crate::render::upscaler::UpscalerAvailability;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -21,13 +22,18 @@ use alloc::vec::Vec;
 #[derive(Clone, Copy, Debug)]
 pub struct DeviceCapabilities {
     /// Hardware ray tracing for the RT-reflections pass: DXR 1.1 on DirectX, the
-    /// ray-query device extensions on Vulkan (and not under XeSS), and
-    /// `MTLDevice::supportsRaytracing` on Metal.
+    /// ray-query device extensions on Vulkan, and `MTLDevice::supportsRaytracing`
+    /// on Metal.
     pub ray_tracing: bool,
+    /// Whether ray tracing can run beside the XeSS upscaler. Vulkan cannot: XeSS
+    /// owns the device-feature chain the ray-query features would join.
+    pub ray_tracing_with_xess: bool,
     /// Whether the upscaler implementation is a choice (FSR3 / DLSS / XeSS)
     /// rather than fixed. DirectX and Vulkan offer the selection; Metal always
     /// upscales through MetalFX, so the row has nothing to pick.
     pub selectable_upscaler: bool,
+    /// The vendor upscalers this build can try, in the shared fallback order.
+    pub upscalers: UpscalerAvailability,
     /// Whether a retired build-time draw slot may be recycled by a runtime
     /// clone. Metal's per-frame RT topology refresh re-admits recycled
     /// build-time slots; DirectX / Vulkan key their cull BVH + RT tables to
@@ -49,10 +55,22 @@ impl DeviceCapabilities {
     /// out and every live draw edit is applied in place.
     pub const ALL: Self = Self {
         ray_tracing: true,
+        ray_tracing_with_xess: true,
         selectable_upscaler: true,
+        upscalers: UpscalerAvailability::ALL,
         reuses_build_slots: true,
         rewrites_draws: true,
     };
+}
+
+/// What the pre-backend probe learns about the GPU a run would render on,
+/// before the settings that size the renderer resolve.
+#[derive(Clone, Copy, Debug)]
+pub struct DeviceProbe {
+    /// The coarse performance class the quality tier follows.
+    pub profile: GpuProfile,
+    /// What the device can run, which clamps the resolved settings.
+    pub capabilities: DeviceCapabilities,
 }
 
 impl Default for DeviceCapabilities {

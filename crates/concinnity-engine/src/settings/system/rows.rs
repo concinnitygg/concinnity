@@ -158,12 +158,7 @@ impl SettingsState {
             let Some(slider) = settings::slider(s.key) else {
                 continue;
             };
-            let value = slider.current_value(
-                &self.graphics.post_process,
-                &self.graphics.quality.effects,
-                self.graphics.ambient_intensity,
-                persisted,
-            );
+            let value = slider.current_value(&self.resolved.graphics, persisted);
             let hx = s.track_x + slider.fraction(value) * (s.track_w - s.handle_w).max(0.0);
             set_sprite_x(ctx, s.handle_id, hx);
             set_label_content(ctx, s.value_id, &(slider.format)(value));
@@ -243,7 +238,7 @@ impl SettingsState {
     pub(crate) fn capture_perf_sub_rows(&mut self, ctx: &mut PipelineContext) {
         self.perf_sub_row_labels =
             capture_row_labels(ctx, &[SettingKey::ShowFps, SettingKey::ShowVram]);
-        set_rows_grayed(ctx, &self.perf_sub_row_labels, !self.graphics.perf_stats);
+        set_rows_grayed(ctx, &self.perf_sub_row_labels, !self.resolved.perf_stats);
     }
 
     // Capture the Resolution row's labels and apply the initial gray from the
@@ -489,7 +484,7 @@ mod tests {
                 Some(1),
             ));
             let mut state = SettingsState::for_tests();
-            state.graphics.perf_stats = perf_stats;
+            state.resolved.perf_stats = perf_stats;
             let mut ctx = world.context();
 
             state.capture_perf_sub_rows(&mut ctx);

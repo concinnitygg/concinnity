@@ -17,7 +17,7 @@ use crate::directx::error::map_hresult;
 /// The adapter the renderer will run on, together with the device made on it.
 /// The device is kept rather than remade because creating it is what proved
 /// the adapter usable.
-pub(super) struct Selection {
+pub(in crate::directx) struct Selection {
     pub adapter: IDXGIAdapter1,
     pub device: ID3D12Device,
 }
@@ -34,7 +34,7 @@ pub(super) struct Selection {
 /// Every rejection is carried rather than counted, since the reason a
 /// particular machine cannot run the renderer is the whole content of both the
 /// warning and, when even the software adapter fails, the error.
-pub(super) fn select(factory: &IDXGIFactory4) -> RenderResult<Selection> {
+pub(in crate::directx) fn select(factory: &IDXGIFactory4) -> RenderResult<Selection> {
     let mut rejections: Vec<String> = Vec::new();
 
     let mut i = 0u32;

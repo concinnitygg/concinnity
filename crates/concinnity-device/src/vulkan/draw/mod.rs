@@ -23,7 +23,7 @@ use concinnity_core::render::lights;
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::pass_timing;
 use concinnity_core::render::render_graph;
-use concinnity_core::render::render_graph::{FrameGraphInputs, build_frame_graph};
+use concinnity_core::render::render_graph::{FrameFacts, FrameGraphInputs, build_frame_graph};
 use concinnity_core::transform::mat4_mul;
 // `ViewUniforms` (the std140 main-pass `ViewBlock` UBO) is a GPU-free layout
 // struct that lives in `core::render`; re-export it so
@@ -636,8 +636,8 @@ impl VkContext {
         Ok(start_cmd)
     }
 
-    // This frame's graph inputs: the passes the live resources and settings run,
-    // masked by the viewport's view mode and show flags.
+    // This frame's graph inputs: the shared gates over the live settings and
+    // what this frame holds, masked by the viewport's view mode and show flags.
     fn frame_graph_inputs(
         &self,
         extent: vk::Extent2D,
@@ -645,136 +645,51 @@ impl VkContext {
         lines_published: bool,
         world_hidden: bool,
     ) -> FrameGraphInputs {
-        //  Per-frame seed inputs for the shared backend-agnostic frame
-        //  builder ([gfx/render_graph/frame.rs](../../gfx/render_graph/frame.rs)).
-        //  The flags track whether each pipeline is built: the encoders skip
-        //  cheaply when there is nothing live to draw.
-        // Every reader of the G-buffer drops out while its targets are missing.
-        let gbuffer = self.gbuffer_targets().is_some();
-        let seed_inputs = FrameGraphInputs {
-            shadow_enabled: self.shadow.enabled(),
-            shadow_map_size: self.shadow.map_size,
+        let facts = FrameFacts {
             hdr_width: extent.width,
             hdr_height: extent.height,
             hdr_sample_count: self.targets.msaa_samples.as_raw(),
-            bindless_cull_enabled: self.cull.cull_kernels.is_some() && self.cull_count() > 0,
-            auto_exposure_enabled: self.auto_exposure.resources.is_some(),
-            bloom_enabled: self.post_process.bloom_intensity > 0.0,
-            // Velocity (motion vectors) runs for TAA, temporal upscaling (FSR
-            // consumes them) and the SSGI accumulation; TAA resources are
-            // forced built under upscaling, so `taa.is_some()` already implies
-            // it, but spell out the upscale case too.
-            velocity_enabled: self.reads_motion(),
-            // TAA resolve and Upscale are mutually exclusive (both do temporal
-            // accumulation and share the graph slot). Drop TAA when upscaling.
-            taa_enabled: self.taa.is_some() && self.upscale.is_none(),
-            // The SSR *resolve* (reflection compositing). `self.ssr` may exist
-            // for a SSGI-only build (it owns the shared pre-pass G-buffer), so
-            // gate the resolve node on whether it runs, not `ssr.is_some()`.
-            ssr_enabled: self.ssr_resolve_active(),
-            particles_enabled: self.particle.resources.is_some()
-                && self.particle.records.iter().any(|p| p.is_some()),
-            // The blades draw over the GPU-driven pass's sets, so grass rides
-            // that path.
-            grass_enabled: self.grass.is_some()
-                && self.cull.cull_kernels.is_some()
-                && self.cull_count() > 0,
-            grass_shadow_enabled: self.grass_casts(),
-            // Gated on the resources (built at init when the world declared a
-            // VolumetricFog) and on live settings that can affect the frame, so
-            // runtime `update_fog_settings(None)` -- or an authored zero density,
-            // which integrates to a transparent black over the whole volume --
-            // drops the FogFroxel + Fog passes from the graph entirely. Mirrors
-            // Metal's gate.
-            fog_enabled: self.fog.resources.is_some()
-                && self.fog.settings.is_some_and(|s| s.contributes()),
-            // The atmosphere runs on every frame that carries its inputs.
-            atmosphere_enabled: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
-            // The ocean runs while a visible surface samples it.
-            water_sim_enabled: self.water_sim_live(),
-            decals_enabled: self.decal.resources.is_some() && !self.decal.set.is_empty(),
-            // The SSR pre-pass G-buffer is shared with SSGI, so it runs whenever
-            // `self.ssr` exists (built for SSR resolve *or* SSGI).
-            ssr_prepass_enabled: self.ssr.is_some(),
-            ssao_enabled: gbuffer && self.ssao.is_some(),
-            // Gated on the resources (built at init when the world declares at
-            // least one SdfVolume) AND a currently-visible volume, so an
-            // all-hidden world drops the pass from the graph.
-            raymarch_enabled: self.raymarch.as_ref().is_some_and(|r| r.any_visible()),
-            // Temporal upscaling (FSR via FidelityFX). `Some` only when the
-            // world opted in AND the FFX VK runtime + context built; the shared
-            // builder then runs `Upscale` in the `TaaResolve` slot, reading the
-            // post-SSR scene + velocity and writing the swapchain-res scene the
-            // bloom + composite stack samples.
-            upscale_enabled: gbuffer && self.upscale.is_some(),
-            // Transparent / translucent pass: on when the world declared a
-            // visible `GlassPanel` or `WaterSurface`. The shared builder then
-            // seeds the Transparent node and the executor draws every record
-            // back-to-front over the post-SSR scene.
-            transparent_enabled: self.transparent.as_ref().is_some_and(|t| t.any_visible())
-                || self.mesh_glass_visible(),
-            // Planar mirrors: a node ahead of Transparent whenever it samples
-            // them. Which planes render is decided per frame from the plan.
-            planar_reflection_enabled: self.planar_pass_needed(),
-            // Two-pass Hi-Z occlusion: inserts HizBuild -> Cull2 -> Main2 after
-            // Main when the world requested `occlusion_two_pass` and the bindless
-            // GPU-cull path + phase-2 resources are live. `two_pass_occlusion_active`
-            // is the single gate the executor's phase-2 arms + the phase-1
-            // render-pass selection share, so the graph shape matches what the
-            // executor dispatches. The graph builder further ANDs this with
-            // `bindless_cull_enabled`, which is already implied here.
-            two_pass_occlusion_enabled: self.two_pass_occlusion_active(),
-            // The terminal Hi-Z build. Present whenever the GPU-cull path built a
-            // pyramid: the frame ends by reducing its final depth into it for the
-            // next frame's phase-1 occlusion test.
-            hiz_build_enabled: self.cull.hiz.is_some(),
-            // The mask is one of the scene targets, so it always exists; the
-            // writers carry it unless the device lacks per-target blending.
-            reactive_mask_enabled: self.hw.device.writer_targets().carries_mask(),
-            upscale_reads_reactive: self
+            shadow: self.shadow.enabled(),
+            shadow_map_size: self.shadow.map_size,
+            shadowed_spot_count: self.spot_shadow.count(),
+            spot_shadow_slice_size: self.spot_shadow.slice_size,
+            world_hidden,
+            cull_ready: self.cull.cull_kernels.is_some(),
+            cull_records: self.cull_count(),
+            two_pass_ready: self.two_pass_occlusion_built(),
+            hiz: self.cull.hiz.is_some(),
+            bloom_chain: self.bloom.is_some(),
+            bloom_intensity: self.post_process.bloom_intensity,
+            upscaler: self.upscale.is_some(),
+            upscaler_reads_reactive: self
                 .upscale
                 .as_ref()
                 .is_some_and(|u| u.reactive_reader().reads()),
-            // Screen-space global illumination. Built only when the world
-            // selected `indirect_lighting: ssgi`; the graph then inserts the
-            // `Ssgi` node on the hdr_resolve RMW chain (which forces the SSR
-            // pre-pass on, since `self.ssr` is built for SSGI too). Also asks the
-            // settings whether they contribute: a zero intensity would otherwise
-            // pay a hemisphere ray-march to add exactly zero.
-            ssgi_enabled: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
-            // Hardware ray-traced reflections (`VK_KHR_ray_query`). The shared
-            // builder emits `RtReflections` in the `SsrResolve` slot while the
-            // trace is live (RT takes precedence; SSR is the fallback), and also
-            // while the RT pass has no BVH and no authored SSR covers for it, to
-            // keep the reflection composite fed.
-            rt_reflections_enabled: gbuffer && self.reflection_path().rt_node,
-            // Geometry pre-pass: one `GBufferPrepass` node rasterizes the
-            // normal+depth / roughness / velocity MRT every screen-space consumer
-            // (SSR / SSAO / SSGI / TAA / FSR) reads. On exactly when the buffer
-            // was built, which is when any of those consumers is live. Mirrors
-            // DirectX's `gbuffer_prepass_enabled: self.gbuffer.is_some()`.
-            gbuffer_prepass_enabled: gbuffer,
-            // An opaque menu backdrop hides the scene: the shared builder masks
-            // every world pass off, collapsing to Main (a bare clear, fed the
-            // empty scene below) -> Composite (presents the overlay).
-            world_hidden,
-            // Clustered binning, sharing the gate that sets `use_clusters`
-            // below: a local light or a baked probe has to be live. Otherwise
-            // every reader brute-forces the empty light and probe sets.
-            clustering_enabled: clustered,
-            // Zero drops the SpotShadow node and its imported array from the
-            // graph entirely, which is the common case (no shadow-casting spot).
-            shadowed_spot_count: self.spot_shadow.count(),
-            spot_shadow_slice_size: self.spot_shadow.slice_size,
-            // Lines run only on the frames a system published them (the
-            // `cn editor` axes), and only once their resources are live: the
-            // build is lazy, so a shipped runtime never compiles them.
-            lines_enabled: lines_published && self.lines.resources.is_some(),
-            // Set by the view-mode mask below (occlusion view only).
-            composite_reads_ao: false,
-            composite_reads_motion: false,
-            composite_reads_reactive: false,
+            bvh_live: self.rt.accel.is_some(),
+            particles: self.particle.resources.is_some()
+                && self.particle.records.iter().any(|p| p.is_some()),
+            fog: self.fog.resources.is_some() && self.fog.settings.is_some_and(|s| s.contributes()),
+            decals: self.decal.resources.is_some() && !self.decal.set.is_empty(),
+            visible_surfaces: self.transparent.as_ref().is_some_and(|t| t.any_visible()),
+            visible_see_through: self.see_through_mesh_visible(),
+            rt_transparent_ready: self
+                .transparent
+                .as_ref()
+                .is_some_and(|t| t.rt_pipelines_ready()),
+            planar_targets: self.planar_reflection.is_some(),
+            water_planar_slot: self
+                .transparent
+                .as_ref()
+                .is_some_and(|t| t.water_planar_slot_live()),
+            lines: lines_published && self.lines.resources.is_some(),
+            visible_volumes: self.raymarch.as_ref().is_some_and(|r| r.any_visible()),
+            atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
+            water_sim: self.water_sim_live(),
+            grass: self.grass.is_some(),
+            grass_casts: self.grass_casts(),
+            clustered,
         };
+        let seed_inputs = render_graph::frame_graph_inputs(&self.gates, &facts);
         // The viewport's view mode + show flags mask the seeded inputs (the
         // per-frame counterpart of the init-time trims); Lit with every flag
         // set is the identity, so a shipped runtime is unaffected.

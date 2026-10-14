@@ -4,9 +4,6 @@
 
 use concinnity_core::components::{SettingCommand, SettingOp};
 use concinnity_core::ecs::PipelineContext;
-use concinnity_core::render::backend::QualitySettings;
-use concinnity_core::render::error::RenderError;
-use concinnity_core::render::ops::RenderOps;
 
 use super::SettingsState;
 use super::apply::RowOptions;
@@ -30,7 +27,6 @@ impl SettingsState {
     pub(super) fn apply_quality_preset(
         &mut self,
         ctx: &mut PipelineContext,
-        ops: &mut RenderOps,
         cfg: &mut Settings,
         cmd: &SettingCommand,
     ) -> bool {
@@ -54,19 +50,8 @@ impl SettingsState {
         cfg.graphics.shadow_cascades = None;
         cfg.graphics.anisotropy = None;
         cfg.graphics.render_scale = None;
-        self.graphics
+        self.resolved
             .set_quality(self.resolve_quality(&cfg.graphics, &ceiling));
-
-        let quality = self.graphics.quality_settings();
-        record_quality_apply(ops, quality);
-        // Auto-exposure may have flipped off; re-push the static post-process
-        // params so exposure reverts. The fxaa flag rides along.
-        let params = self.graphics.post_process;
-        ops.record(move |backend| backend.update_post_process(params));
-        // The render scale, shadow resolution, and anisotropy are
-        // restart-required, so they only relabel.
-        let cadence = self.graphics.quality.shadow_cadence;
-        ops.record(move |backend| backend.set_shadow_cadence(cadence));
 
         self.relabel_preset_dependents(ctx);
         // The master row's own label carries the Auto(tier) suffix.
@@ -82,37 +67,37 @@ impl SettingsState {
     // cannot be re-queried here.
     fn relabel_preset_dependents(&self, ctx: &mut PipelineContext) {
         for row in &QUALITY_TOGGLES {
-            let on = (row.get)(&self.graphics.quality.effects);
+            let on = (row.get)(&self.resolved.graphics);
             self.relabel_option(ctx, row.key, on as usize);
         }
         self.relabel_option(
             ctx,
             SettingKey::RenderScale,
-            settings::render_scale_index(self.graphics.quality.render_scale),
+            settings::render_scale_index(self.resolved.graphics.anti_aliasing.upscale_quality),
         );
         for row in &QUALITY_CYCLES {
-            self.relabel_option(ctx, row.key, (row.index)(&self.graphics.quality.effects));
+            self.relabel_option(ctx, row.key, (row.index)(&self.resolved.graphics));
         }
         for (key, idx) in [
             (
                 SettingKey::ShadowMapSize,
-                settings::shadow_resolution_index(self.graphics.quality.shadow_map_size),
+                settings::shadow_resolution_index(self.resolved.graphics.shadows.map_size),
             ),
             (
                 SettingKey::ShadowUpdate,
-                settings::shadow_update_index(self.graphics.quality.shadow_cadence.update),
+                settings::shadow_update_index(self.resolved.graphics.shadows.update),
             ),
             (
                 SettingKey::ShadowDistance,
-                settings::shadow_distance_index(self.graphics.quality.shadow_cadence.distance),
+                settings::shadow_distance_index(self.resolved.graphics.shadows.distance),
             ),
             (
                 SettingKey::ShadowCascades,
-                settings::shadow_cascades_index(self.graphics.quality.shadow_cadence.cascades),
+                settings::shadow_cascades_index(self.resolved.graphics.shadows.cascades),
             ),
             (
                 SettingKey::Anisotropy,
-                settings::anisotropy_index(self.graphics.quality.anisotropy),
+                settings::anisotropy_index(self.resolved.graphics.texture_filtering.anisotropy),
             ),
         ] {
             self.relabel_option(ctx, key, idx);
@@ -121,69 +106,51 @@ impl SettingsState {
 
     // Set a captured cycle row's value label to its option at `index`.
     fn relabel_option(&self, ctx: &mut PipelineContext, key: SettingKey, index: usize) {
-        if let Some(text) = settings::options(key).and_then(|o| o.get(index).copied()) {
+        let Some(text) = settings::options(key).and_then(|o| o.get(index).copied()) else {
+            return;
+        };
+        if settings::setting_available(key, &self.capabilities, self.gpu_profile.vendor) {
             set_cached_row_label(&self.cycle_value_labels, ctx, key, text);
+        } else {
+            let text = settings::unsupported_label(text);
+            set_cached_row_label(&self.cycle_value_labels, ctx, key, &text);
         }
     }
 
-    // Flip a quality feature on the stored config, persist it, and rebuild the
-    // affected render resources live (a no-op backend keeps the choice for the
-    // next launch).
+    // Flip a quality feature on the stored config and persist it; the batch's
+    // plan rebuilds the affected render resources.
     pub(super) fn apply_quality_toggle(
         &mut self,
         ctx: &mut PipelineContext,
-        ops: &mut RenderOps,
         cfg: &mut Settings,
         row: &QualityToggle,
         opts: RowOptions,
         op: SettingOp,
     ) -> &'static str {
-        let cur = (row.get)(&self.graphics.quality.effects);
+        let cur = (row.get)(&self.resolved.graphics);
         let next = settings::cycle(cur as usize, opts.len(), op);
         let on = next == 1;
-        (row.set)(&mut self.graphics.quality.effects, on);
+        (row.set)(&mut self.resolved.graphics, on);
         *(row.persisted.get_mut)(&mut cfg.graphics) = Some(on);
         self.opt_out_of_preset(ctx, cfg);
-        let quality = self.graphics.quality_settings();
-        record_quality_apply(ops, quality);
-        // Auto-exposure overwrites the backend's live exposure each frame while
-        // it runs, so its copy freezes at the last adapted value once toggled
-        // off. Re-push the static params (the authored / slider EV) so exposure
-        // reverts; on a toggle-on the AE loop overwrites it next frame.
-        if row.key == SettingKey::AutoExposure {
-            let params = self.graphics.post_process;
-            ops.record(move |backend| backend.update_post_process(params));
-        }
         opts[next]
     }
 
-    // Cycle a quality knob on the stored config, persist it, and rebuild the
-    // affected effect live through the same path as the toggles (the sub-tunable
-    // travels in the feature's settings payload).
+    // Cycle a quality knob on the stored config and persist it; the batch's
+    // plan rebuilds the affected effect.
     pub(super) fn apply_quality_cycle(
         &mut self,
         ctx: &mut PipelineContext,
-        ops: &mut RenderOps,
         cfg: &mut Settings,
         row: &QualityCycle,
         opts: RowOptions,
         op: SettingOp,
     ) -> &'static str {
-        let cur = (row.index)(&self.graphics.quality.effects);
+        let cur = (row.index)(&self.resolved.graphics);
         let next = settings::cycle(cur, opts.len(), op);
-        (row.set)(&mut self.graphics.quality.effects, next);
-        (row.persist)(&self.graphics.quality.effects, &mut cfg.graphics);
+        (row.set)(&mut self.resolved.graphics, next);
+        (row.persist)(&self.resolved.graphics, &mut cfg.graphics);
         self.opt_out_of_preset(ctx, cfg);
-        let quality = self.graphics.quality_settings();
-        record_quality_apply(ops, quality);
-        // The AA mode also drives the composite FXAA flag, which rides
-        // PostProcessParams rather than the rebuild above.
-        if row.key == SettingKey::AaMode {
-            self.graphics.post_process.fxaa =
-                self.graphics.quality.effects.anti_aliasing.mode.fxaa_flag();
-            let params = self.graphics.post_process;
-            ops.record(move |backend| backend.update_post_process(params));
-        }
         opts[next]
     }
 
@@ -199,15 +166,4 @@ impl SettingsState {
             self.quality_preset.name(),
         );
     }
-}
-
-// Record a live quality rebuild. A failure is logged, and running out of device
-// memory raises the replay's memory pressure for the streaming valve.
-pub(super) fn record_quality_apply(ops: &mut RenderOps, quality: QualitySettings) {
-    ops.record_with(move |backend, out| {
-        if let Err(e) = backend.apply_quality_settings(quality) {
-            tracing::error!("SettingsSystem: quality rebuild failed: {e}");
-            out.memory_pressure |= matches!(e, RenderError::OutOfDeviceMemory(_));
-        }
-    });
 }

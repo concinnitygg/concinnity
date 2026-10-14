@@ -31,6 +31,8 @@ use concinnity_core::render::reflection_probe;
 use concinnity_core::render::scene_flow::SceneControl;
 use concinnity_core::render::scene_state::SceneState;
 use concinnity_core::render::volumetric_fog;
+use concinnity_core::settings::ResolvedGraphics;
+use concinnity_core::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
 use concinnity_core::window::display_mode;
 use std::sync::{Arc, Mutex};
 
@@ -205,7 +207,7 @@ pub(crate) struct MockState {
     pub(crate) fail_texture_upload: Option<RenderError>,
     // When set, evict_texture_slot returns this error instead of Ok.
     pub(crate) fail_texture_evict: Option<RenderError>,
-    // When set, apply_quality_settings returns this error instead of Ok.
+    // When set, a settings apply's rebuild returns this error instead of Ok.
     pub(crate) fail_quality: Option<RenderError>,
     // Snapshot the next take_input() returns, then reset to default
     // (matching a real backend's drain-on-poll semantics).
@@ -300,9 +302,9 @@ fn record_init(state: &Arc<Mutex<MockState>>, init: BackendInit<'_>) {
         window_width: init.window.width,
         window_height: init.window.height,
         window_title: init.window.title.clone(),
-        clear_color: init.clear_color,
-        frames_in_flight: init.frames_in_flight,
-        vsync: init.vsync,
+        clear_color: init.graphics.background.color,
+        frames_in_flight: init.graphics.frames_in_flight(),
+        vsync: init.graphics.frame_pacing.vsync,
         capture: init.capture,
         embedded_surface: init.embedded_surface.is_some(),
         vertex_count: init.scene.vertices.len(),
@@ -312,17 +314,17 @@ fn record_init(state: &Arc<Mutex<MockState>>, init: BackendInit<'_>) {
         n_skinned: init.scene.n_skinned,
         texture_count: init.media.textures.len(),
         text_atlas_count: init.media.text_atlases.len(),
-        shadows: init.shadows,
-        anisotropy: init.anisotropy,
+        shadows: init.graphics.shadow_params(),
+        anisotropy: init.graphics.texture_filtering.anisotropy,
         scene_required: init.requirements.scene,
         fog: init.fx.fog.is_some(),
         grass: init.fx.grass.is_some(),
-        taa_enabled: init.post.taa_enabled,
-        ssao_enabled: init.post.ssao.is_some(),
-        rt_reflections_on: init.post.rt_reflections.is_some(),
-        rt_dynamic: init.post.rt_dynamic,
-        rt_skinned_geometry: init.post.rt_skinned_geometry,
-        dlss_preset: init.post.dlss_preset,
+        taa_enabled: init.graphics.taa(),
+        ssao_enabled: init.graphics.ssao().is_some(),
+        rt_reflections_on: init.graphics.rt_reflections().is_some(),
+        rt_dynamic: init.launch.rt_dynamic,
+        rt_skinned_geometry: init.launch.rt_skinned_geometry,
+        dlss_preset: init.graphics.dlss_preset,
     });
 }
 
@@ -670,12 +672,16 @@ impl WindowControl for MockBackend {
 }
 
 impl RenderTuning for MockBackend {
-    fn set_reflection_probes(&mut self, probes: &[reflection_probe::ProbePlacement]) {
-        self.record(Call::SetReflectionProbes(probes.to_vec()));
+    fn apply_settings(
+        &mut self,
+        graphics: &ResolvedGraphics,
+        plan: &ApplyPlan,
+    ) -> RenderResult<()> {
+        apply_plan(self, graphics, plan)
     }
 
-    fn set_ambient_intensity(&mut self, value: f32) {
-        self.record(Call::SetAmbientIntensity(value));
+    fn set_reflection_probes(&mut self, probes: &[reflection_probe::ProbePlacement]) {
+        self.record(Call::SetReflectionProbes(probes.to_vec()));
     }
 
     fn update_directional_lights(&mut self, lights: &[DirectionalLight]) {
@@ -690,23 +696,34 @@ impl RenderTuning for MockBackend {
     fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>) {
         self.record(Call::UpdateFogSettings(settings));
     }
+}
 
-    fn set_shadow_cadence(&mut self, cadence: ShadowCadence) {
-        self.record(Call::SetShadowCadence(cadence));
-    }
-
-    fn update_post_process(&mut self, _tunables: render_types::PostProcessTunables) {
-        self.record(Call::UpdatePostProcess);
-    }
-
-    fn apply_quality_settings(&mut self, _settings: backend::QualitySettings) -> RenderResult<()> {
+// The plan's pieces, each recorded as the call it stands for.
+impl SettingsTarget for MockBackend {
+    fn rebuild_features(&mut self, _graphics: &ResolvedGraphics) -> RenderResult<()> {
         let mut s = self.state.lock().unwrap();
         s.calls.push(Call::ApplyQualitySettings);
         s.fail_quality.clone().map_or(Ok(()), Err)
     }
 
-    fn update_quality_params(&mut self, _settings: backend::QualitySettings) {
+    fn push_feature_params(&mut self, _graphics: &ResolvedGraphics) {
         self.record(Call::UpdateQualityParams);
+    }
+
+    fn push_post_process(&mut self, _tunables: render_types::PostProcessTunables) {
+        self.record(Call::UpdatePostProcess);
+    }
+
+    fn push_ambient(&mut self, value: f32) {
+        self.record(Call::SetAmbientIntensity(value));
+    }
+
+    fn push_shadow_cadence(&mut self, cadence: ShadowCadence) {
+        self.record(Call::SetShadowCadence(cadence));
+    }
+
+    fn push_vsync(&mut self, on: bool) {
+        self.record(Call::SetVsync(on));
     }
 }
 

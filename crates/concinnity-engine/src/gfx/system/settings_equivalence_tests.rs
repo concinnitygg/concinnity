@@ -1,9 +1,16 @@
 // Pins what the settings chain hands the backend for a matrix of inputs: every
 // preset (Auto over each GPU tier), worlds authored above and below every
 // ceiling, and the user's overrides on and off. Each case folds the resolved
-// settings, the backend's `PostSettings` and `QualitySettings`, and a preset
-// change's re-resolved quality group into one digest, so a change to any value
-// the backend receives fails here by name.
+// settings, what the backend reads from them, and a preset change's
+// re-resolved quality group into one digest, so a change to any value the
+// backend receives fails here by name. The text keeps the shape of the
+// settings structs the digests were pinned over.
+//
+// The exposure slider once moved only the composite's exposure, and
+// auto-exposure metered for the world's authored display. The slider now sets
+// the resolved EV, which also biases auto-exposure, and metering follows the
+// resolved display; the text prints both as the pinned digests saw them, and
+// `user_overrides_reach_the_exposure_bias_and_metering` checks the new values.
 //
 // The `bare` world (no `GraphicsConfig`) once resolved two values apart from
 // the section defaults: two-pass occlusion off and an upscaler at native scale.
@@ -16,13 +23,13 @@ use concinnity_core::components::{
     Shadows, StreamingConfig, TextureFiltering, UpscaleQuality, UpscalerBackend, Vignette,
     WindowMode,
 };
-use concinnity_core::render::backend::{GpuProfile, GpuTier, QualitySettings};
-use concinnity_core::render::backend_init::PostSettings;
+use concinnity_core::render::backend::{GpuProfile, GpuTier};
 use concinnity_core::render::dlss::DlssPreset;
 
 use concinnity_core::settings::quality::{more_aggressive_upscale, resolve_ceiling};
 use concinnity_core::settings::{
-    QualityPreset, ResolvedSettings, UserGraphicsSettings, WorldAssets, WorldSettings,
+    QualityPreset, ResolvedGraphics, ResolvedSettings, UserGraphicsSettings, WorldAssets,
+    WorldSettings,
 };
 
 use crate::app::run::LaunchRequest;
@@ -311,25 +318,32 @@ fn users() -> Vec<(&'static str, UserGraphicsSettings)> {
 // The values the settings chain resolves, in a shape independent of the
 // structs that carry them. The quality group prints as the single config the
 // pinned digests were taken over: the resolved effects, and the world's values
-// for the fields no layer above it moves.
-fn resolved_text(g: &ResolvedSettings, world: &WorldSettings) -> String {
+// for the fields no layer above it moved then.
+fn resolved_text(r: &ResolvedSettings, world: &WorldSettings, two_pass: bool) -> String {
+    let g = &r.graphics;
     format!(
         "{:?}",
         (
             (
-                &PostProcessConfig::of(&g.quality.effects, world),
-                g.quality.render_scale,
-                g.quality.shadow_map_size,
-                g.quality.shadow_cadence,
-                g.quality.anisotropy,
+                &PostProcessConfig::of(g, world),
+                g.anti_aliasing.upscale_quality,
+                g.shadows.map_size,
+                g.shadow_cadence(),
+                g.texture_filtering.anisotropy,
             ),
-            g.post_process,
-            g.ambient_intensity,
-            (g.vsync, g.fps_cap, g.perf_stats, g.show_fps, g.show_vram),
-            g.frames_in_flight,
-            (g.hdr_display, g.hdr_pq, g.temporal_upscaling),
-            (g.upscale_backend, g.dlss_preset, g.occlusion_two_pass),
-            (g.texture_cap, g.texture_budget),
+            g.post_process(),
+            g.ambient_intensity(),
+            (
+                g.frame_pacing.vsync,
+                g.frame_pacing.fps_cap,
+                r.perf_stats,
+                r.show_fps,
+                r.show_vram
+            ),
+            g.frame_pacing.frames_in_flight as usize,
+            (g.display.hdr, g.display.pq, g.anti_aliasing.upscaling),
+            (g.anti_aliasing.upscaler, g.dlss_preset, two_pass),
+            (r.texture_cap, r.texture_budget),
         )
     )
 }
@@ -374,20 +388,20 @@ struct PostProcessConfig {
 }
 
 impl PostProcessConfig {
-    fn of(effects: &concinnity_core::settings::QualityEffects, world: &WorldSettings) -> Self {
-        let ao = &effects.ambient_occlusion;
-        let r = &effects.reflections;
-        let gi = &effects.indirect_lighting;
-        let aa = &effects.anti_aliasing;
-        let ex = &effects.exposure;
+    fn of(g: &ResolvedGraphics, world: &WorldSettings) -> Self {
+        let w = &world.graphics;
+        let ao = &g.ambient_occlusion;
+        let r = &g.reflections;
+        let gi = &g.indirect_lighting;
+        let ex = &g.exposure;
         Self {
-            bloom_intensity: world.bloom.intensity,
-            bloom_threshold: world.bloom.threshold,
-            bloom_knee: world.bloom.knee,
-            exposure_ev: ex.ev,
-            vignette_strength: world.vignette.strength,
-            lut_strength: world.lut_strength,
-            aa_mode: aa.mode,
+            bloom_intensity: w.bloom.intensity,
+            bloom_threshold: w.bloom.threshold,
+            bloom_knee: w.bloom.knee,
+            exposure_ev: w.exposure.ev,
+            vignette_strength: w.vignette.strength,
+            lut_strength: w.lut_strength,
+            aa_mode: g.anti_aliasing.mode,
             ssao: ao.enabled,
             ssao_radius: ao.radius,
             ssao_intensity: ao.intensity,
@@ -399,7 +413,7 @@ impl PostProcessConfig {
             rt_reflection_shadows: r.ray_traced_shadows,
             reflection_blur_resolution: r.blur_resolution,
             indirect_lighting: gi.technique,
-            ambient_intensity: gi.ambient_intensity,
+            ambient_intensity: w.indirect_lighting.ambient_intensity,
             ssgi_intensity: gi.ssgi_intensity,
             ssgi_max_distance: gi.ssgi_max_distance,
             ssgi_resolution: gi.ssgi_resolution,
@@ -408,49 +422,76 @@ impl PostProcessConfig {
             auto_exposure_min_ev: ex.auto_min_ev,
             auto_exposure_max_ev: ex.auto_max_ev,
             auto_exposure_speed: ex.auto_speed,
-            hdr_display: world.display.hdr,
-            hdr_pq: world.display.pq,
-            temporal_upscaling: aa.upscaling,
-            upscale_quality: aa.upscale_quality,
-            upscale_backend: aa.upscaler,
-            occlusion_two_pass: world.culling.two_pass_occlusion,
+            hdr_display: w.display.hdr,
+            hdr_pq: w.display.pq,
+            temporal_upscaling: w.anti_aliasing.upscaling,
+            upscale_quality: w.anti_aliasing.upscale_quality,
+            upscale_backend: w.anti_aliasing.upscaler,
+            occlusion_two_pass: w.culling.two_pass_occlusion,
         }
     }
 }
 
-fn post_settings_text(p: &PostSettings) -> String {
+// What the backend reads at init, in the field order of the pinned digests.
+fn backend_text(
+    g: &ResolvedGraphics,
+    world: &WorldSettings,
+    launch: &LaunchRequest,
+    bare: Option<(f32, bool)>,
+) -> String {
+    let (upscale_scale, two_pass) =
+        bare.unwrap_or((g.upscale_scale(), g.culling.two_pass_occlusion));
     format!(
         "{:?}",
         (
-            (p.post_process, p.taa_enabled, p.hdr_samples),
-            (p.ssao, p.ssr, p.ssgi, p.rt_reflections),
-            (p.rt_dynamic, p.rt_skinned_geometry, p.reflection_blur_scale),
-            (p.auto_exposure, p.auto_exposure_bias_ev),
+            (g.post_process(), g.taa(), g.hdr_samples()),
+            (g.ssao(), g.ssr(), g.ssgi(), g.rt_reflections()),
             (
-                p.hdr_display,
-                p.hdr_pq,
-                p.temporal_upscaling,
-                p.upscale_scale
+                launch.resolve_rt_dynamic(),
+                launch.resolve_rt_skinned_geometry(),
+                g.reflection_blur_scale()
             ),
-            (p.upscale_backend, p.dlss_preset, p.occlusion_two_pass),
+            legacy_exposure(g, world),
+            (
+                g.display.hdr,
+                g.display.pq,
+                g.anti_aliasing.upscaling,
+                upscale_scale
+            ),
+            (g.anti_aliasing.upscaler, g.dlss_preset, two_pass),
         )
     )
 }
 
-fn quality_text(q: &QualitySettings) -> String {
+// What a live quality rebuild reads, in the field order of the pinned digests.
+fn quality_text(g: &ResolvedGraphics, world: &WorldSettings) -> String {
+    let (auto_exposure, bias) = legacy_exposure(g, world);
     format!(
         "{:?}",
         (
-            q.taa,
-            q.ssao,
-            q.ssr,
-            q.rt_reflections,
-            q.ssgi,
-            q.reflection_blur_scale,
-            q.auto_exposure,
-            q.auto_exposure_bias_ev,
+            g.taa(),
+            g.ssao(),
+            g.ssr(),
+            g.rt_reflections(),
+            g.ssgi(),
+            g.reflection_blur_scale(),
+            auto_exposure,
+            bias,
         )
     )
+}
+
+// Auto-exposure as the pinned digests saw it: metered for the world's display,
+// biased by the world's EV.
+fn legacy_exposure(
+    g: &ResolvedGraphics,
+    world: &WorldSettings,
+) -> (
+    Option<concinnity_core::gfx::auto_exposure::AutoExposureSettings>,
+    f32,
+) {
+    let w = &world.graphics;
+    (g.exposure.auto_settings(w.display.hdr), w.exposure.ev)
 }
 
 // The user's choices after a preset change: every preset-governed override
@@ -493,34 +534,39 @@ fn case_text(
     let mut state = SettingsState::new();
     state.authored = world.clone();
     state.session = launch.session_overrides();
-    let mut graphics = state.resolve(user, &ceiling);
-    let mut post = super::init::post_settings(&graphics, &launch);
-    let quality = graphics.quality_settings();
+    let resolved = state.resolve(user, &ceiling);
 
     let cleared = preset_cleared(user);
-    let mut after_preset = graphics.clone();
+    let mut after_preset = resolved.clone();
     after_preset.set_quality(state.resolve_quality(&cleared, &ceiling));
-    if world_name == "bare" {
+    let (bare, two_pass, after_two_pass) = if world_name == "bare" {
         let render_scale = user.render_scale.unwrap_or_else(|| {
             more_aggressive_upscale(UpscaleQuality::default(), ceiling.min_upscale)
         });
-        assert_eq!(post.upscale_scale, render_scale.scale());
+        let g = &resolved.graphics;
+        assert_eq!(g.upscale_scale(), render_scale.scale());
         let two_pass = user.occlusion_two_pass.unwrap_or(true);
-        assert_eq!(graphics.occlusion_two_pass, two_pass);
-        assert_eq!(after_preset.occlusion_two_pass, two_pass);
-        assert_eq!(post.occlusion_two_pass, two_pass);
+        assert_eq!(g.culling.two_pass_occlusion, two_pass);
+        assert_eq!(after_preset.graphics.culling.two_pass_occlusion, two_pass);
         let legacy_two_pass = user.occlusion_two_pass.unwrap_or(false);
-        graphics.occlusion_two_pass = legacy_two_pass;
-        after_preset.occlusion_two_pass = legacy_two_pass;
-        post.occlusion_two_pass = legacy_two_pass;
-        post.upscale_scale = 1.0;
-    }
+        (
+            Some((1.0, legacy_two_pass)),
+            legacy_two_pass,
+            legacy_two_pass,
+        )
+    } else {
+        (
+            None,
+            resolved.graphics.culling.two_pass_occlusion,
+            after_preset.graphics.culling.two_pass_occlusion,
+        )
+    };
     format!(
         "{}\n{}\n{}\n{}",
-        resolved_text(&graphics, world),
-        post_settings_text(&post),
-        quality_text(&quality),
-        resolved_text(&after_preset, world),
+        resolved_text(&resolved, world, two_pass),
+        backend_text(&resolved.graphics, world, &launch, bare),
+        quality_text(&resolved.graphics, world),
+        resolved_text(&after_preset, world, after_two_pass),
     )
 }
 
@@ -737,7 +783,6 @@ fn a_bare_world_resolves_to_the_section_defaults() {
         };
         (scale, true)
     };
-    let launch = LaunchRequest::default();
     let bare = WorldSettings::default();
     for (user_name, user) in users() {
         for (ceiling_name, preset, tier) in ceilings() {
@@ -748,13 +793,11 @@ fn a_bare_world_resolves_to_the_section_defaults() {
             let ceiling = resolve_ceiling(preset, &profile);
             let mut state = SettingsState::new();
             state.authored = bare.clone();
-            let graphics = state.resolve(&user, &ceiling);
-            let post = super::init::post_settings(&graphics, &launch);
+            let graphics = state.resolve(&user, &ceiling).graphics;
             let (scale, two_pass) = expected(user_name, &ceiling_name);
             let case = format!("{user_name}/{ceiling_name}");
-            assert_eq!(post.upscale_scale, scale, "{case}");
-            assert_eq!(graphics.occlusion_two_pass, two_pass, "{case}");
-            assert_eq!(post.occlusion_two_pass, two_pass, "{case}");
+            assert_eq!(graphics.upscale_scale(), scale, "{case}");
+            assert_eq!(graphics.culling.two_pass_occlusion, two_pass, "{case}");
         }
     }
 }
@@ -776,6 +819,30 @@ fn a_bare_world_resolves_like_every_field_set_to_its_default() {
                 case_text("", &defaults, &user, preset, tier),
                 "{user_name}/{ceiling_name}"
             );
+        }
+    }
+}
+
+// The exposure slider sets the resolved EV, which auto-exposure takes as its
+// bias, and auto-exposure meters for the display the user resolved.
+#[test]
+fn user_overrides_reach_the_exposure_bias_and_metering() {
+    use concinnity_core::gfx::auto_exposure::EV_LIMIT;
+    for (world_name, world) in worlds() {
+        for (user_name, user) in users() {
+            let mut state = SettingsState::new();
+            state.authored = world.clone();
+            let g = state
+                .resolve(&user, &concinnity_core::settings::QualityCeiling::NONE)
+                .graphics;
+            let w = &world.graphics;
+            let case = format!("{world_name}/{user_name}");
+            let ev = user
+                .exposure_ev
+                .map_or(w.exposure.ev, |v| v.clamp(-EV_LIMIT, EV_LIMIT));
+            assert_eq!(g.auto_exposure_bias_ev(), ev, "{case}");
+            let hdr = user.hdr_display.unwrap_or(w.display.hdr);
+            assert_eq!(g.auto_exposure(), g.exposure.auto_settings(hdr), "{case}");
         }
     }
 }

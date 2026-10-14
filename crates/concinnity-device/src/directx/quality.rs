@@ -18,18 +18,22 @@
 //! fence-waited BLAS + TLAS over current geometry) plus the DXR reflection pass,
 //! so a live enable hitches once proportional to triangle count; and RT is only
 //! live-toggleable on a GPU that reports the DXR 1.1 tier (queried once at init
-//! into `hw.rt_capable`), else the toggle no-ops with a warning and RT stays whatever
-//! it launched as. The RT output reserves its fixed heap slot unconditionally like
+//! into `hw.rt_capable`), which the resolved settings already respect. The RT output reserves its fixed heap slot unconditionally like
 //! the other five features, so an enable builds into it without shifting any other
 //! slot; the dynamic `scene_srv_for_post` picks the RT output over SSR each frame,
 //! so no rewire or rebuild is needed.
 
 use concinnity_core::gfx::auto_exposure;
-use concinnity_core::render::backend::QualitySettings;
+use concinnity_core::gfx::render_types;
+use concinnity_core::render::backend_init;
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::post::reflection_path::ReflectionPath;
 use concinnity_core::render::post::rt_reflections;
-use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
+use concinnity_core::render::render_graph::{
+    BackendTraits, BuildStatus, FeatureGates, PoolGates, plan_pool_slots,
+};
+use concinnity_core::settings::ResolvedGraphics;
+use concinnity_core::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use concinnity_core::render::post::device::PostExtent;
@@ -55,10 +59,10 @@ pub(in crate::directx) struct QualitySlotHandles {
 }
 
 impl DxContext {
-    // Bring the toggle-controlled features to match `q`, applied between frames
+    // Bring the toggle-controlled features to match `g`, applied between frames
     // (the GraphicsSystem reads the SettingCommand before the next draw_frame).
     // A build failure returns early and leaves the prior state intact.
-    pub(crate) fn apply_quality_settings(&mut self, q: QualitySettings) -> RenderResult<()> {
+    pub(crate) fn apply_quality_settings(&mut self, g: &ResolvedGraphics) -> RenderResult<()> {
         // Every build / teardown below frees or replaces GPU resources a prior
         // frame may still reference; drain the device first so the swap is safe.
         self.wait_idle();
@@ -69,26 +73,26 @@ impl DxContext {
         let slots = self.quality_slots;
 
         // RT is gated on the GPU reporting the DXR 1.1 tier: a non-DXR GPU cannot
-        // build the acceleration structure, so the toggle no-ops with a warning
-        // and RT stays whatever it launched as (persisted for the next launch).
-        let rt_settings = q.rt_reflections.filter(|_| self.hw.rt_capable);
+        // build the acceleration structure. The resolved settings never ask for
+        // it there; a request that does is reported and refused.
+        let rt_settings = g.rt_reflections().filter(|_| self.hw.rt_capable);
         let desired_rt = rt_settings.is_some();
-        if q.rt_reflections.is_some() && !self.hw.rt_capable {
-            tracing::warn!(
-                "ray-traced reflections requested but the GPU does not report DXR \
-                 tier 1.1; keeping SSR"
+        if g.rt_reflections().is_some() && !self.hw.rt_capable {
+            tracing::error!(
+                "the resolved settings asked for ray-traced reflections the device cannot run; \
+                 the capability probe and the backend disagree"
             );
         }
 
-        let desired_ssr = q.ssr.is_some();
-        let desired_ssgi = q.ssgi.is_some();
-        let desired_ssao = q.ssao.is_some();
-        let desired_ae = q.auto_exposure.is_some();
+        let desired_ssr = g.ssr().is_some();
+        let desired_ssgi = g.ssgi().is_some();
+        let desired_ssao = g.ssao().is_some();
+        let desired_ae = g.auto_exposure().is_some();
         // TAA resources are forced present while temporal upscaling is active
         // (the upscaler consumes the velocity pre-pass); the TAA resolve is then
         // dropped from the graph. Mirrors the init `taa_enabled` derivation.
         let upscale_on = self.upscale.backend.is_some();
-        let desired_taa = q.taa || upscale_on;
+        let desired_taa = g.taa() || upscale_on;
 
         // The SSR pre-pass resources (`SsrResources`) exist whenever SSR, SSGI,
         // or RT is on (SSGI / RT reuse the SSR resolve's G-buffer plumbing); its
@@ -149,7 +153,7 @@ impl DxContext {
             self.taa = None;
         }
 
-        // SSR pre-pass + resolve. `q.ssr` (Option) drives the resolve half:
+        // SSR pre-pass + resolve. `g.ssr()` (Option) drives the resolve half:
         // `Some` builds it (SSR authored), `None` leaves it off (SSGI-only /
         // RT-only build the pre-pass but no resolve), matching init.
         if ssr_needed && self.ssr.is_none() {
@@ -157,7 +161,7 @@ impl DxContext {
                 &self.post_device(0),
                 render_w,
                 render_h,
-                q.ssr,
+                g.ssr(),
             )?;
             self.ssr = Some(ssr);
         } else if !ssr_needed && self.ssr.is_some() {
@@ -167,11 +171,11 @@ impl DxContext {
         // SSGI (samples the unified G-buffer; `gbuffer_needed` keeps it alive). A
         // new trace resolution resizes every target, so it rebuilds the pass; the
         // ray count rides the settings.
-        let ssgi_rescaled = match (q.ssgi, self.ssgi.as_ref()) {
+        let ssgi_rescaled = match (g.ssgi(), self.ssgi.as_ref()) {
             (Some(settings), Some(live)) => settings.gi_scale != live.settings.gi_scale,
             _ => false,
         };
-        if let Some(settings) = q.ssgi
+        if let Some(settings) = g.ssgi()
             && (self.ssgi.is_none() || ssgi_rescaled)
         {
             if ssgi_rescaled {
@@ -186,7 +190,7 @@ impl DxContext {
             self.ssgi = Some(ssgi);
         } else if !desired_ssgi && self.ssgi.is_some() {
             self.ssgi = None;
-        } else if let (Some(settings), Some(ssgi)) = (q.ssgi, self.ssgi.as_mut()) {
+        } else if let (Some(settings), Some(ssgi)) = (g.ssgi(), self.ssgi.as_mut()) {
             ssgi.settings = settings;
         }
 
@@ -250,7 +254,7 @@ impl DxContext {
         if refl_composite_needed && self.reflection_composite.is_none() {
             let rc = build_reflection_composite(
                 &self.post_device(0),
-                q.reflection_blur_scale,
+                g.reflection_blur_scale(),
                 render_w,
                 render_h,
             )?;
@@ -260,7 +264,7 @@ impl DxContext {
         } else if let Some(mut rc) = self.reflection_composite.take() {
             let r = rc.set_blur_scale(
                 &self.post_device(0),
-                q.reflection_blur_scale,
+                g.reflection_blur_scale(),
                 PostExtent {
                     width: render_w,
                     height: render_h,
@@ -278,8 +282,8 @@ impl DxContext {
             let resources =
                 super::auto_exposure::AutoExposureResources::new(&self.hw.alloc, hot_reload)?;
             self.auto_exposure.resources = Some(resources);
-            self.auto_exposure.adaptation = q.auto_exposure.map(|settings| {
-                auto_exposure::ExposureAdaptation::new(settings, q.auto_exposure_bias_ev)
+            self.auto_exposure.adaptation = g.auto_exposure().map(|settings| {
+                auto_exposure::ExposureAdaptation::new(settings, g.auto_exposure_bias_ev())
             });
         } else if !desired_ae && self.auto_exposure.resources.is_some() {
             self.auto_exposure.resources = None;
@@ -295,7 +299,7 @@ impl DxContext {
         // turn-off needs no rewire beyond dropping the resources.
         let ssao_was = self.ssao.resources.is_some();
         let gbuffer_enabled = self.gbuffer.is_some();
-        if let Some(settings) = q.ssao
+        if let Some(settings) = g.ssao()
             && !ssao_was
         {
             self.rebuild_transient_pool_and_consumers(true, gbuffer_enabled)?;
@@ -323,7 +327,31 @@ impl DxContext {
             self.rebuild_transient_pool_and_consumers(false, gbuffer_enabled)?;
         }
 
+        self.refresh_gates(g);
         Ok(())
+    }
+
+    // Gate the runtime-switched passes on `graphics` and what is built now.
+    // Every scene target set carries the reactive mask, and the post chain
+    // picks its scene input each frame.
+    pub(super) fn refresh_gates(&mut self, graphics: &ResolvedGraphics) {
+        let traits = BackendTraits {
+            reactive_mask: true,
+            composite_scene_fixed: false,
+        };
+        self.gates = FeatureGates::new(graphics, &self.build_status(), traits);
+    }
+
+    fn build_status(&self) -> BuildStatus {
+        BuildStatus {
+            taa: self.taa.is_some(),
+            ssao: self.ssao.resources.is_some(),
+            ssr_resolve: self.ssr.as_ref().is_some_and(|s| s.resolve.is_some()),
+            rt_pass: self.rt_reflections.is_some(),
+            ssgi: self.ssgi.is_some(),
+            auto_exposure: self.auto_exposure.resources.is_some(),
+            gbuffer: self.gbuffer.is_some(),
+        }
     }
 
     // Build the RT reflection pass + acceleration structure at runtime (a live
@@ -455,5 +483,42 @@ impl DxContext {
             r?;
         }
         Ok(())
+    }
+}
+
+impl DxContext {
+    // Apply a settings change in the plan order every backend shares.
+    pub(crate) fn apply_settings(
+        &mut self,
+        graphics: &ResolvedGraphics,
+        plan: &ApplyPlan,
+    ) -> RenderResult<()> {
+        apply_plan(self, graphics, plan)
+    }
+}
+
+impl SettingsTarget for DxContext {
+    fn rebuild_features(&mut self, graphics: &ResolvedGraphics) -> RenderResult<()> {
+        self.apply_quality_settings(graphics)
+    }
+
+    fn push_feature_params(&mut self, graphics: &ResolvedGraphics) {
+        self.update_quality_params(graphics);
+    }
+
+    fn push_post_process(&mut self, tunables: render_types::PostProcessTunables) {
+        self.update_post_process(tunables);
+    }
+
+    fn push_ambient(&mut self, value: f32) {
+        self.set_ambient_intensity(value);
+    }
+
+    fn push_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
+        self.set_shadow_cadence(cadence);
+    }
+
+    fn push_vsync(&mut self, on: bool) {
+        self.set_vsync(on);
     }
 }

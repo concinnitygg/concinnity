@@ -16,7 +16,6 @@ use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::hdr_output;
 use concinnity_core::render::lights;
 use concinnity_core::render::pass_timing;
-use concinnity_core::render::planar_reflection;
 use concinnity_core::render::post::reflection_path::ReflectionPath;
 use concinnity_core::render::probe_book::ProbeBook;
 use concinnity_core::render::radiance_storage::with_sky_cube_scale;
@@ -623,9 +622,8 @@ pub(super) struct DxHardware {
     pub adapter: Option<IDXGIAdapter3>,
     // D3D12 validation message sink (`Some` only when validation=true).
     pub info_queue: Option<ID3D12InfoQueue>,
-    // Whether the GPU reports the DXR 1.1 tier. Gates the live RT-reflections
-    // toggle: an enable on a non-DXR GPU no-ops with a warning, mirroring the
-    // init fallback to SSR.
+    // Whether the GPU reports the DXR 1.1 tier. Reported as the ray-tracing
+    // capability and checked again before any RT build.
     pub rt_capable: bool,
     // The resolved HDR-output mode. (The DXGI format is in `swapchain.format`.)
     pub hdr_mode: hdr_output::HdrOutputMode,
@@ -728,6 +726,9 @@ pub(crate) struct DxContext {
     // once and reuses it thereafter.
     pub(super) graph_cache:
         RefCell<Option<(render_graph::FrameGraphInputs, render_graph::CompiledGraph)>>,
+    // The runtime-switched passes the resolved settings and the last apply
+    // built leave on.
+    pub(super) gates: render_graph::FeatureGates,
 
     // Geometry writes staged for the next copy submit. See [`GeometryUploads`].
     pub(super) geometry_uploads: RefCell<GeometryUploads>,
@@ -844,8 +845,8 @@ pub(crate) struct DxContext {
     // The shared `PassId::Transparent` slot and its two producers, translucent
     // glass panes and water surfaces. `Some` only when the world declared a
     // `GlassPanel` or a `WaterSurface`; with neither the field stays `None` and
-    // the pass is skipped. Render-graph inclusion is gated on
-    // `Self::transparent_enabled()`. Mirrors src/metal's transparent encoder.
+    // the pass is skipped. Render-graph inclusion follows the shared
+    // frame-graph gates. Mirrors src/metal's transparent encoder.
     pub(super) transparent: Option<super::transparent::TransparentResources>,
 
     // Planar reflections for the transparent pass's flat reflectors: a per-frame
@@ -1281,31 +1282,6 @@ impl DxContext {
                 .is_some_and(|t| t.rt_pipelines_ready())
     }
 
-    // True when the transparent pass samples planar mirrors, which puts the
-    // `PlanarReflection` node in the graph. Water takes the mirror over its own
-    // trace wherever it holds a slot (see `water.hlsl`), so a visible water
-    // surface keeps the mirrors alive even while the trace is live; a glass-only
-    // world under a live trace skips them. Shared with the other backends through
-    // `planar_reflection::planar_pass_needed`.
-    pub(super) fn planar_pass_needed(&self) -> bool {
-        planar_reflection::planar_pass_needed(
-            self.planar_reflection.is_some(),
-            self.transparent
-                .as_ref()
-                .is_some_and(|t| t.water_planar_slot_live()),
-            self.rt_transparent_active(),
-        )
-    }
-
-    // True when the render graph should include `PassId::Transparent`. Wraps
-    // the `transparent.any_visible()` check plus this frame's see-through mesh
-    // visibility, which lives in `draw.objects` rather than in a static record;
-    // drives `FrameGraphInputs::transparent_enabled` in
-    // `record_frame::seed_inputs`.
-    pub(super) fn transparent_enabled(&self) -> bool {
-        self.transparent.as_ref().is_some_and(|t| t.any_visible()) || self.mesh_glass_visible()
-    }
-
     // Whether a material opted into Layer 2 see-through glass AND the device can
     // drive it (the mesh pipelines built). Independent of `rt.accel`, so it
     // answers "would the see-through path run if RT is on" -- used at the RT-BLAS
@@ -1329,11 +1305,12 @@ impl DxContext {
         self.seethrough_meshes_enabled() && self.rt_transparent_active()
     }
 
-    // Whether any see-through mesh would actually draw this frame. Only then does
-    // the mesh producer contribute, so the graph's Transparent node is not
-    // scheduled for a world whose glass is all hidden or evicted.
-    fn mesh_glass_visible(&self) -> bool {
-        self.mesh_glass_active()
+    // Whether a see-through mesh is visible and its pipelines are built, whether
+    // or not the pass can trace this frame. The graph's Transparent node takes
+    // the mesh producer only when both hold, so a world whose glass is all
+    // hidden or evicted does not schedule it.
+    pub(super) fn see_through_mesh_visible(&self) -> bool {
+        self.seethrough_meshes_enabled()
             && self.transparent.as_ref().is_some_and(|t| {
                 t.seethrough_mesh_indices().iter().any(|&i| {
                     self.state
@@ -1641,22 +1618,27 @@ impl DxContext {
     // resolution sizes its targets and rides `apply_quality_settings` with its ray
     // count, so only its scalar intensity / distance are updated. The SSR settings live one level deeper than Metal's (inside the
     // optional `resolve` half), so a SSGI-only build with no resolve is skipped.
-    pub(crate) fn update_quality_params(&mut self, q: backend::QualitySettings) {
-        if let (Some(live), Some(res)) = (q.ssao, self.ssao.resources.as_mut()) {
+    pub(crate) fn update_quality_params(
+        &mut self,
+        g: &concinnity_core::settings::ResolvedGraphics,
+    ) {
+        if let (Some(live), Some(res)) = (g.ssao(), self.ssao.resources.as_mut()) {
             res.settings = live;
         }
-        if let (Some(live), Some(res)) = (q.ssr, self.ssr.as_mut())
+        if let (Some(live), Some(res)) = (g.ssr(), self.ssr.as_mut())
             && let Some(r) = res.resolve.as_mut()
         {
             r.settings = live;
         }
-        if let (Some(live), Some(res)) = (q.ssgi, self.ssgi.as_mut()) {
+        if let (Some(live), Some(res)) = (g.ssgi(), self.ssgi.as_mut()) {
             res.settings.intensity = live.intensity;
             res.settings.max_distance = live.max_distance;
         }
-        if let (Some(live), Some(cur)) = (q.auto_exposure, self.auto_exposure.adaptation.as_mut()) {
+        if let (Some(live), Some(cur)) = (g.auto_exposure(), self.auto_exposure.adaptation.as_mut())
+        {
             cur.settings = live;
         }
+        self.refresh_gates(g);
     }
 
     // Replace the runtime movement key map. The window message loop decodes
@@ -1684,17 +1666,7 @@ impl DxContext {
     // Device capability flags for the settings menu. RT reflects the DXR-tier
     // query made at init (`hw.rt_capable`).
     pub(crate) fn capabilities(&self) -> backend::DeviceCapabilities {
-        backend::DeviceCapabilities {
-            ray_tracing: self.hw.rt_capable,
-            selectable_upscaler: true,
-            // The cull BVH + RT tables key fixed build-time slot indices and
-            // cannot refit; only the runtime-append region recycles (tracked
-            // as the RT incremental topology parity item).
-            reuses_build_slots: false,
-            // Per-object material state is baked into the GPU records at build
-            // time, so a slot rewrite in `SceneState` would not reach the frame.
-            rewrites_draws: false,
-        }
+        super::gpu_profile::capabilities(self.hw.rt_capable)
     }
 
     // Coarse GPU performance profile for default-quality selection, read live

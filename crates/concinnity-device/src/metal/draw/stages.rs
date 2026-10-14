@@ -11,7 +11,7 @@ use concinnity_core::render::depth::camera_projection;
 use concinnity_core::render::error;
 use concinnity_core::render::model_history::HistoryMode;
 use concinnity_core::render::reactive_mask::ReactiveReader;
-use concinnity_core::render::render_graph::{self, FrameGraphInputs};
+use concinnity_core::render::render_graph::{self, FrameFacts, FrameGraphInputs};
 use concinnity_core::render::shadow_schedule::{CascadeCamera, CascadeLight};
 use concinnity_core::render::view_history::ViewFrame;
 use concinnity_core::render::volumetric_fog::FogSettings;
@@ -43,10 +43,9 @@ pub(super) struct FrameProjection {
 
 // The per-frame locals `frame_graph_inputs` gates passes on.
 pub(super) struct GraphInputArgs<'a> {
-    pub(super) bindless_cull_enabled: bool,
-    pub(super) velocity_active: bool,
+    // This frame's cull record buffers were built.
+    pub(super) cull_ready: bool,
     pub(super) fog_settings: Option<&'a FogSettings>,
-    pub(super) transparent_active: bool,
     pub(super) lines: &'a [LineVertex],
     pub(super) world_hidden: bool,
     pub(super) clustered: bool,
@@ -345,119 +344,62 @@ impl MtlContext {
         }
     }
 
-    // This frame's graph inputs: the passes the live resources and settings run,
-    // masked by the viewport's view mode and show flags.
+    // This frame's graph inputs: the shared gates over the live settings and
+    // what this frame holds, masked by the viewport's view mode and show flags.
     pub(super) fn frame_graph_inputs(&self, args: GraphInputArgs<'_>) -> FrameGraphInputs {
         let GraphInputArgs {
-            bindless_cull_enabled,
-            velocity_active,
+            cull_ready,
             fog_settings,
-            transparent_active,
             lines,
             world_hidden,
             clustered,
             view_mode,
             show,
         } = args;
-        let reflection_path = self.reflection_path();
-        let graph_inputs = FrameGraphInputs {
-            shadow_enabled: self.shadow.enabled,
-            shadow_map_size: self.shadow.map_size,
+        let particles = &self.particle;
+        let facts = FrameFacts {
             hdr_width: self.targets.hdr.width,
             hdr_height: self.targets.hdr.height,
             hdr_sample_count: self.targets.hdr.sample_count,
-            bindless_cull_enabled,
-            auto_exposure_enabled: self.auto_exposure.pipelines.is_some(),
-            // Gated on the chain existing: a scene-less world builds none.
-            bloom_enabled: self.post_process.bloom_intensity > 0.0 && self.bloom.is_some(),
-            // Velocity runs whenever something reprojects through it: TAA,
-            // the upscaler, or the SSGI accumulation. TaaResolve / Upscale /
-            // Ssgi declare a read edge on it for ordering.
-            velocity_enabled: velocity_active,
-            taa_enabled: self.taa.enabled,
-            ssr_enabled: reflection_path.ssr_resolve,
-            particles_enabled: self.particle.pipelines.is_some()
-                && !self.particle.records.is_empty()
-                && !self.particle.emitter_state.is_empty(),
-            fog_enabled: self.fog.pipeline.is_some() && fog_settings.is_some(),
-            decals_enabled: self.decal.pipeline.is_some() && !self.decal.set.is_empty(),
-            // The SSR depth + normal + roughness pre-pass also feeds SSGI and
-            // the RT-reflection kernel, so it runs when SSR, SSGI, *or* RT
-            // reflections are on (RT keys off the live acceleration structure).
-            ssr_prepass_enabled: self.ssr.settings.is_some()
-                || self.ssgi.settings.is_some()
-                || self.rt.accel.is_some(),
-            ssao_enabled: self.ssao.settings.is_some(),
-            upscale_enabled: self.upscale.scaler.is_some(),
-            // Transparent pass runs when at least one translucent producer
-            // (`WaterSurface` or `GlassPanel`) exists; the executor
-            // short-circuits an empty draw list, but gating here keeps the
-            // graph builder from inserting the slot at all.
-            transparent_enabled: transparent_active,
-            planar_reflection_enabled: self.planar_mirrors_needed(),
-            // Lines run only on the frames a system published them (the
-            // `cn editor` axes), and only once their pipeline is live: the
-            // build above is lazy, so a shipped runtime never compiles it.
-            lines_enabled: !lines.is_empty() && self.lines.pipeline.is_some(),
-            // Raymarch runs when at least one `SdfVolume` is live; the
-            // per-volume pipeline cache is populated in lockstep with
-            // the volume vec at init. Tightened to the real `is_some()
-            // && !empty()` predicate once the context fields land
-            // alongside `encode_raymarch` (see metal/raymarch.rs).
-            raymarch_enabled: !self.raymarch.volumes.is_empty(),
-            // Two-pass Hi-Z occlusion. Resolved from
-            // `Culling.two_pass_occlusion` (and gated at init on the
-            // bindless cull path existing). The graph builder further ANDs this
-            // with `bindless_cull_enabled` for this frame, so a frame with no
-            // static geometry simply runs single-pass. When on, the builder
-            // inserts HizBuild → Cull2 → Main2 between Main and the post chain.
-            two_pass_occlusion_enabled: self.cull.two_pass_occlusion,
-            // The terminal Hi-Z build. Present whenever the GPU-cull path built a
-            // pyramid: the frame ends by reducing its final depth into it for the
-            // next frame's phase-1 occlusion test.
-            hiz_build_enabled: self.cull.hiz.is_some(),
-            // The atmosphere runs on every frame that carries its inputs.
-            atmosphere_enabled: self.atmosphere.as_ref().is_some_and(|a| a.params.is_some()),
-            // The ocean runs while a visible surface samples it.
-            water_sim_enabled: self.water_sim_live(),
-            // The mask is one of the HDR targets, so it always exists.
-            reactive_mask_enabled: true,
-            upscale_reads_reactive: ReactiveReader::MetalFx.reads()
-                && self.upscale.scaler.as_ref().is_some_and(|s| s.reactive),
-            // SSGI runs when `indirect_lighting: "ssgi"` resolved settings that
-            // contribute: the composite scales by intensity, so zero would pay a
-            // hemisphere trace to add nothing. The builder inserts the Ssgi
-            // RMW pass after Raymarch on the hdr_resolve chain; the trace reads
-            // the SSR pre-pass G-buffer (forced on above via
-            // `ssr_prepass_enabled`).
-            ssgi_enabled: self.ssgi.settings.is_some_and(|s| s.contributes()),
-            // RT reflections run when the scene acceleration structure is live
-            // (RT requested + GPU supports it + scene has geometry). The builder
-            // inserts the RtReflections pass in the SsrResolve slot, which a live
-            // trace takes from SSR.
-            rt_reflections_enabled: reflection_path.rt_trace,
-            // The lit blades shade on the bindings the GPU-driven surfaces leave
-            // bound, so grass rides that path.
-            grass_enabled: self.grass.is_some() && bindless_cull_enabled,
-            grass_shadow_enabled: self.grass_casts(),
-            // Metal collapses the SSR / SSAO / velocity pre-passes into one
-            // GBufferPrepass node; the other backends keep them separate.
-            gbuffer_prepass_enabled: true,
-            // An opaque menu backdrop hides the scene: the builder masks every
-            // world pass off, collapsing to Main (a bare clear, fed the empty
-            // scene above) -> Composite (presents the overlay).
-            world_hidden,
-            // Clustered binning runs while a local light or a baked probe is
-            // live. The builder inserts LightCull before Main, and Main, the SSR
-            // resolve and the transparent pass read its per-cluster lists.
-            clustering_enabled: clustered,
-            // Set by the view-mode mask below (occlusion view only).
-            composite_reads_ao: false,
-            composite_reads_motion: false,
-            composite_reads_reactive: false,
+            shadow: self.shadow.enabled,
+            shadow_map_size: self.shadow.map_size,
             shadowed_spot_count: self.spot_shadow.count,
             spot_shadow_slice_size: render_types::spot_shadow_slice_size(self.shadow.map_size),
+            world_hidden,
+            cull_ready,
+            cull_records: self.cull_count(),
+            two_pass_ready: self.cull.two_pass_occlusion,
+            hiz: self.cull.hiz.is_some(),
+            bloom_chain: self.bloom.is_some(),
+            bloom_intensity: self.post_process.bloom_intensity,
+            upscaler: self.upscale.scaler.is_some(),
+            upscaler_reads_reactive: ReactiveReader::MetalFx.reads()
+                && self.upscale.scaler.as_ref().is_some_and(|s| s.reactive),
+            bvh_live: self.rt.accel.is_some(),
+            particles: particles.pipelines.is_some()
+                && !particles.records.is_empty()
+                && !particles.emitter_state.is_empty(),
+            fog: self.fog.pipeline.is_some() && fog_settings.is_some(),
+            decals: self.decal.pipeline.is_some() && !self.decal.set.is_empty(),
+            visible_surfaces: (self.water.pipeline.is_some()
+                && self.water.surfaces.iter().any(|s| s.visible))
+                || (self.glass.pipeline.is_some() && self.glass.panels.iter().any(|p| p.visible)),
+            visible_see_through: self.see_through_mesh_visible(),
+            rt_transparent_ready: self.transparent_rt_pipelines_ready(),
+            planar_targets: self
+                .planar_reflection
+                .as_ref()
+                .is_some_and(|s| !s.targets.is_empty()),
+            water_planar_slot: self.water_planar_slot_live(),
+            lines: !lines.is_empty() && self.lines.pipeline.is_some(),
+            visible_volumes: self.raymarch.volumes.iter().any(|v| v.visible),
+            atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.params.is_some()),
+            water_sim: self.water_sim_live(),
+            grass: self.grass.is_some(),
+            grass_casts: self.grass_casts(),
+            clustered,
         };
+        let graph_inputs = render_graph::frame_graph_inputs(&self.gates, &facts);
         // The viewport's view mode + show flags mask the seeded inputs (the
         // per-frame counterpart of the init-time trims); Lit with every flag
         // set is the identity, so a shipped runtime is unaffected.

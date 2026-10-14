@@ -6,7 +6,7 @@
 use concinnity_core::components::GlassPanel;
 use concinnity_core::gfx::auto_exposure;
 use concinnity_core::gfx::render_types::{DrawObject, LightUniforms};
-use concinnity_core::render::backend_init::{PlanarBudget, PostSettings, SdfVolumeSource, WorldFx};
+use concinnity_core::render::backend_init::{PlanarBudget, SdfVolumeSource, WorldFx};
 use concinnity_core::render::decal::{self, DecalRecord};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::lights;
@@ -15,6 +15,7 @@ use concinnity_core::render::planar_reflection::PlanarReflectors;
 use concinnity_core::render::post::device::PostExtent;
 use concinnity_core::render::post::ssao::settings::SsaoSettings;
 use concinnity_core::render::volumetric_fog::FogSettings;
+use concinnity_core::settings::ResolvedGraphics;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::heap_layout::{DSV_GBUFFER_DEPTH_SLOT, DSV_GLASS_REFLECTION_DEPTH_SLOT, RtvHeapLayout};
@@ -56,20 +57,20 @@ pub(super) fn build_upscale(
     gpu: &InitGpu<'_>,
     descriptors: &DxDescriptors,
     output: (u32, u32),
-    post: &PostSettings,
+    graphics: &ResolvedGraphics,
 ) -> RenderResult<UpscaleState> {
     let hw = gpu.hw;
     let layout = &descriptors.layout;
     let (width, height) = output;
-    let mut requested = crate::upscale_sdk::UpscaleRequest::from_post(post);
-    let upscaler = if post.temporal_upscaling {
+    let mut requested = crate::upscale_sdk::UpscaleRequest::from_graphics(graphics);
+    let upscaler = if graphics.anti_aliasing.upscaling {
         crate::directx::post::upscale::build_upscaler(
             crate::directx::post::upscale::UpscaleDevice {
                 device: &hw.device,
                 command_queue: &hw.command_queue,
             },
             (width, height),
-            post.upscale_scale,
+            graphics.upscale_scale(),
             crate::directx::post::upscale::UpscalerDescriptors {
                 uav_cpu: descriptors.slot_cpu(layout.upscale_uav_slot),
                 srv_cpu: descriptors.slot_cpu(layout.upscale_srv_slot),
@@ -230,19 +231,22 @@ pub(super) fn build_ssao(
 
 // SSR: a fullscreen resolve reading the unified G-buffer pre-pass. The
 // resources are built whenever SSR *or* SSGI *or* RT reflections are on (all
-// reuse the G-buffer); `post.ssr` (the resolve half) stays `None` for a
+// reuse the G-buffer); `graphics.ssr()` (the resolve half) stays `None` for a
 // SSGI-only or RT-only build, which then holds no resolve or target.
 pub(super) fn build_ssr(
     post_device: &DxPostDevice<'_>,
     targets: &DxTargets,
-    post: &PostSettings,
+    graphics: &ResolvedGraphics,
 ) -> RenderResult<Option<SsrResources>> {
-    let ssr = if post.ssr.is_some() || post.ssgi.is_some() || post.rt_reflections.is_some() {
+    let ssr = if graphics.ssr().is_some()
+        || graphics.ssgi().is_some()
+        || graphics.rt_reflections().is_some()
+    {
         Some(SsrResources::new(
             post_device,
             targets.extent.render_width,
             targets.extent.render_height,
-            post.ssr,
+            graphics.ssr(),
         )?)
     } else {
         None
@@ -256,9 +260,9 @@ pub(super) fn build_ssr(
 pub(super) fn build_ssgi(
     post_device: &DxPostDevice<'_>,
     targets: &DxTargets,
-    post: &PostSettings,
+    graphics: &ResolvedGraphics,
 ) -> RenderResult<Option<SsgiResources>> {
-    let ssgi = match post.ssgi {
+    let ssgi = match graphics.ssgi() {
         Some(settings) => Some(SsgiResources::new(
             post_device,
             targets.extent.render_width,
@@ -475,16 +479,16 @@ pub(super) fn build_particles(
 // to drive `post_process.exposure` unchanged.
 pub(super) fn build_auto_exposure(
     gpu: &InitGpu<'_>,
-    post: &PostSettings,
+    graphics: &ResolvedGraphics,
 ) -> RenderResult<AutoExposureState> {
     let hw = gpu.hw;
-    let (resources, adaptation) = if let Some(settings) = post.auto_exposure.as_ref() {
+    let (resources, adaptation) = if let Some(settings) = graphics.auto_exposure().as_ref() {
         let resources = dump_on_err(
             hw.info_queue.as_ref(),
             crate::directx::auto_exposure::AutoExposureResources::new(&hw.alloc, gpu.hot_reload),
         )?;
         let adaptation =
-            auto_exposure::ExposureAdaptation::new(*settings, post.auto_exposure_bias_ev);
+            auto_exposure::ExposureAdaptation::new(*settings, graphics.auto_exposure_bias_ev());
         (Some(resources), Some(adaptation))
     } else {
         (None, None)

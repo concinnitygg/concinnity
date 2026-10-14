@@ -6,7 +6,7 @@
 //! construction reports `Unsupported`, and a machine with no GPU is what the
 //! probe reports.
 
-use concinnity_core::render::backend::{GpuProfile, RenderBackend};
+use concinnity_core::render::backend::{DeviceProbe, RenderBackend};
 use concinnity_core::render::backend_init::BackendInit;
 use concinnity_core::render::error::RenderResult;
 
@@ -14,21 +14,22 @@ use concinnity_core::render::error::RenderResult;
 /// headless loop as the only one that can run a world.
 pub const AVAILABLE: bool = cfg!(any(backend_metal, backend_dx, backend_vk));
 
-/// Classify the GPU the renderer would draw on, without building it.
+/// Classify the GPU the renderer would draw on and read what it can run,
+/// without building the renderer.
 ///
 /// `None` means the machine exposes no usable GPU, which is the one hardware
 /// condition that resolves a run to headless. A GPU that is present but
-/// unclassifiable comes back as `Some(GpuProfile::UNKNOWN)`, which quality
+/// unclassifiable comes back with `GpuProfile::UNKNOWN`, which quality
 /// auto-config reads as "no clamp".
-pub(crate) fn probe_gpu_profile() -> Option<GpuProfile> {
-    // Both the run-mode resolution and the quality ceiling ask, and a machine's
-    // GPU does not come and go mid-process, so the throwaway device handle is
-    // built once.
-    static PROBED: std::sync::OnceLock<Option<GpuProfile>> = std::sync::OnceLock::new();
+pub(crate) fn probe_device() -> Option<DeviceProbe> {
+    // Run-mode resolution, the quality ceiling and the capability clamp all
+    // ask, and a machine's GPU does not come and go mid-process, so the
+    // throwaway device handle is built once.
+    static PROBED: std::sync::OnceLock<Option<DeviceProbe>> = std::sync::OnceLock::new();
     *PROBED.get_or_init(|| {
         #[cfg(any(backend_metal, backend_dx, backend_vk))]
         {
-            concinnity_device::probe_gpu_profile()
+            concinnity_device::probe_device()
         }
         #[cfg(not(any(backend_metal, backend_dx, backend_vk)))]
         {

@@ -1,62 +1,49 @@
-//! Pre-backend GPU performance probe for DirectX. Enumerates the DXGI adapter the
-//! renderer would pick (the first non-software adapter that supports D3D12) and
-//! classifies it WITHOUT creating a device, swapchain, or pipelines, so the
-//! auto-config quality ceiling can be resolved before the backend (and its render
+//! Pre-backend GPU performance and capability probe for DirectX. Selects the DXGI
+//! adapter the renderer would (through the same selection device creation
+//! makes) and classifies it WITHOUT a swapchain or pipelines, so the quality
+//! ceiling and the capability clamp resolve before the backend (and its render
 //! targets) are built. Mirrors `DxContext::gpu_profile` exactly (vendor id +
-//! dedicated VRAM) and the standalone `metal/gpu_profile.rs` pattern. Returns
-//! `None` on any failure (no factory, no suitable adapter, desc query fails),
-//! which resolves the run to headless.
+//! dedicated VRAM). Returns `None` when no adapter can run the renderer, which
+//! resolves the run to headless.
 
-use concinnity_core::render::backend::{GpuClassInput, GpuProfile, GpuVendor, classify_tier};
-use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
-use windows::Win32::Graphics::Direct3D12::*;
+use concinnity_core::render::backend::{
+    DeviceCapabilities, DeviceProbe, GpuClassInput, GpuProfile, GpuVendor, classify_tier,
+};
 use windows::Win32::Graphics::Dxgi::*;
 
-pub(crate) fn probe_gpu_profile() -> Option<GpuProfile> {
-    probe_adapter()
+// What a device that can (or cannot) run DXR 1.1 supports. The built context
+// reports the same answer.
+pub(super) fn capabilities(ray_tracing: bool) -> DeviceCapabilities {
+    DeviceCapabilities {
+        ray_tracing,
+        ray_tracing_with_xess: true,
+        selectable_upscaler: true,
+        upscalers: super::post::upscale::availability(),
+        // The cull BVH + RT tables key fixed build-time slot indices and
+        // cannot refit; only the runtime-append region recycles.
+        reuses_build_slots: false,
+        // Per-object material state is baked into the GPU records at build
+        // time, so a slot rewrite in `SceneState` would not reach the frame.
+        rewrites_draws: false,
+    }
 }
 
-// Build a throwaway DXGI factory (no debug flag, so it never needs the
-// "Graphics Tools" optional feature), pick the first non-software adapter that
-// supports D3D12, and classify it. No device is created: the D3D12 support check
-// passes a null device-out pointer, a pure capability query. Mirrors the
-// adapter loop in `init/adapter.rs::select`.
-fn probe_adapter() -> Option<GpuProfile> {
+// Pick the adapter the renderer will (the same selection device creation
+// makes, software adapter last), classify it, and ask its device for the DXR
+// tier. The device is dropped on return. Built on a throwaway DXGI factory with
+// no debug flag, so it never needs the "Graphics Tools" optional feature.
+pub(crate) fn probe_device() -> Option<DeviceProbe> {
     let factory: IDXGIFactory4 =
         // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
         // new COM object lands in a binding that owns it.
         unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) }.ok()?;
-    let mut i = 0u32;
-    // SAFETY: a query on a live COM object; the descriptor it reads and the out-parameters it fills
-    // are live locals that outlive the call.
-    while let Ok(adapter) = unsafe { factory.EnumAdapters1(i) } {
-        i += 1;
-        // SAFETY: a property query on a live COM object; it only reads.
-        let desc = match unsafe { adapter.GetDesc1() } {
-            Ok(d) => d,
-            Err(_) => continue,
-        };
-        // Skip the software (WARP) adapter; it is not the render target.
-        if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32) != 0 {
-            continue;
-        }
-        // D3D12 support as a pure capability check (a null device-out pointer
-        // builds no device).
-        // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
-        // new COM object lands in a binding that owns it.
-        let supported = unsafe {
-            D3D12CreateDevice(
-                &adapter,
-                D3D_FEATURE_LEVEL_11_0,
-                std::ptr::null_mut::<Option<ID3D12Device>>(),
-            )
-        }
-        .is_ok();
-        if supported {
-            return Some(adapter_profile(&desc));
-        }
-    }
-    None
+    let selection = super::init::select_adapter(&factory).ok()?;
+    // SAFETY: a property query on a live COM object; it only reads.
+    let desc = unsafe { selection.adapter.GetDesc1() }.ok()?;
+    Some(DeviceProbe {
+        profile: adapter_profile(&desc),
+        capabilities: capabilities(super::raytrace::raytracing_supported(&selection.device)),
+    })
 }
 
 // Classify a chosen adapter's description, mirroring `DxContext::gpu_profile`.

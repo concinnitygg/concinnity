@@ -12,6 +12,7 @@
 //! the renderer is built with, reading the settings rows in [`rows`]. Reading
 //! the user's choices from disk and detecting the GPU are the engine's.
 
+pub mod apply;
 mod key;
 pub mod levels;
 pub mod quality;
@@ -22,8 +23,8 @@ pub mod user;
 pub use key::{SettingKey, SettingKind};
 pub use quality::{QualityCeiling, QualityPreset};
 pub use resolve::{
-    QualityEffects, ResolvedQuality, ResolvedSettings, SceneOverride, SettingsDiff, SettingsLayers,
-    WorldAssets, WorldSettings,
+    ResolvedGraphics, ResolvedSettings, SceneOverride, SettingsDiff, SettingsLayers, WorldAssets,
+    WorldSettings,
 };
 pub use user::UserGraphicsSettings;
 

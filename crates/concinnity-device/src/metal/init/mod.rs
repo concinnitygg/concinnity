@@ -23,10 +23,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::gfx::render_types::{ClusterParams, PostProcessParams};
-use concinnity_core::render::backend_init::{BackendInit, PostSettings};
+use concinnity_core::render::backend_init::BackendInit;
 use concinnity_core::render::error::RenderResult;
 use concinnity_core::render::scene_state::{DrawList, SceneState};
 use concinnity_core::render::view_history::ViewHistory;
+use concinnity_core::settings::ResolvedGraphics;
 
 use self::effects::EffectSettings;
 use super::context::*;
@@ -86,12 +87,13 @@ struct Features {
 impl Features {
     fn resolve(
         hw: &MtlHardware,
-        post: &PostSettings,
+        graphics: &ResolvedGraphics,
+        hdr_samples: u32,
         scene: bool,
         output: (u32, u32),
         upscale: &UpscaleState,
     ) -> Self {
-        let hdr_samples = post.hdr_samples.max(1);
+        let hdr_samples = hdr_samples.max(1);
         tracing::info!("metal HDR target: {hdr_samples}x MSAA");
         // Render resolution comes from the scaler, which owns the clamp to the
         // device's supported range.
@@ -105,7 +107,7 @@ impl Features {
         // carries downstream; the asset `taa` flag is ignored when upscaling
         // is on.
         let upscaling_active = upscale.scaler.is_some();
-        let taa_enabled = post.taa_enabled && !upscaling_active;
+        let taa_enabled = graphics.taa() && !upscaling_active;
         let needs_velocity = taa_enabled || upscaling_active;
         Self {
             scene,
@@ -113,14 +115,14 @@ impl Features {
             output,
             render,
             taa_enabled,
-            ssao_enabled: post.ssao.is_some(),
-            gbuffer_enabled: EffectSettings::from_post(post).gbuffer_needed(needs_velocity),
+            ssao_enabled: graphics.ssao().is_some(),
+            gbuffer_enabled: EffectSettings::new(graphics).gbuffer_needed(needs_velocity),
             // Pair the authored tunables with the resolved mode's output flags.
             // On the SDR path both flags stay 0.0 and the shader runs the full
             // ACES + gamma + FXAA + LUT chain unchanged. On the HDR path
             // `hdr_output` lights up; `pq_output` further picks PQ-encode vs
             // scRGB-linear passthrough inside that branch.
-            post_process: hw.hdr_mode.post_process_params(post.post_process),
+            post_process: hw.hdr_mode.post_process_params(graphics.post_process()),
         }
     }
 }
@@ -146,9 +148,9 @@ impl MtlContext {
             // The Metal validation layer is enabled by the CLI re-execing with
             // MTL_DEBUG_LAYER, not through this flag.
             validation: _,
-            frames_in_flight,
-            vsync,
-            clear_color,
+            graphics,
+            hdr_samples,
+            launch,
             hot_reload,
             capture,
             embedded_surface,
@@ -165,13 +167,12 @@ impl MtlContext {
             local_lights,
             spot_shadows,
             area_lights,
-            shadows,
-            anisotropy,
             planar,
-            post,
             fx,
             requirements,
         } = init;
+        let frames_in_flight = graphics.frames_in_flight();
+        let shadows = graphics.shadow_params();
 
         // Scene-less (UI / text only) worlds clamp the HDR / bloom / effect
         // targets to 1x1; keyed off the derived requirements rather than raw
@@ -189,19 +190,26 @@ impl MtlContext {
                 embedded: embedded_surface,
             },
             bootstrap::HdrRequest {
-                display_requested: post.hdr_display,
-                pq_requested: post.hdr_pq,
+                display_requested: graphics.display.hdr,
+                pq_requested: graphics.display.pq,
             },
             frames_in_flight,
-            vsync,
+            graphics.frame_pacing.vsync,
         )?;
         let gpu = InitGpu {
             hw: &hw,
             hot_reload,
             frames_in_flight,
         };
-        let upscale = effects::build_upscale(&gpu, output, &post);
-        let features = Features::resolve(&hw, &post, requirements.scene, output, &upscale);
+        let upscale = effects::build_upscale(&gpu, output, &graphics);
+        let features = Features::resolve(
+            &hw,
+            &graphics,
+            hdr_samples,
+            requirements.scene,
+            output,
+            &upscale,
+        );
         let vert_desc = pipelines::make_vertex_descriptor();
 
         let mut scene = scene_assets::build_scene_assets(
@@ -211,7 +219,7 @@ impl MtlContext {
                 media: &media,
                 local_lights: &local_lights,
                 area_lights: &area_lights,
-                anisotropy,
+                anisotropy: graphics.texture_filtering.anisotropy,
                 bindless: features.scene,
             },
         )?;
@@ -247,7 +255,7 @@ impl MtlContext {
                 vert_desc: &vert_desc,
                 features: &features,
                 shadow_enabled: shadow.enabled,
-                occlusion_two_pass: post.occlusion_two_pass,
+                occlusion_two_pass: graphics.culling.two_pass_occlusion,
             },
         )?;
         let probe = cull::build_probe(&gpu, &cull)?;
@@ -256,7 +264,7 @@ impl MtlContext {
         let composite = composite::build_composite(&gpu)?;
         let post_device = effects::post_device(&gpu, &composite, &scene);
         let bloom = bloom::build_bloom(&post_device, features.scene, features.output)?;
-        let settings = EffectSettings::from_post(&post);
+        let settings = EffectSettings::new(&graphics);
         let taa = effects::build_taa(&post_device, features.taa_enabled, features.render)?;
         let ssao = effects::build_ssao(&post_device, &hw.allocator, &settings, features.render)?;
         let ssr = effects::build_ssr(&post_device, &settings, features.render)?;
@@ -311,7 +319,8 @@ impl MtlContext {
                 world: &world,
                 scene: &scene,
                 glass: &glass,
-                post: &post,
+                rt_reflections: settings.rt_reflection,
+                launch,
             },
         )?;
         let instanced = cull::build_instanced(world.instanced_clusters, scene.textures.len());
@@ -319,15 +328,16 @@ impl MtlContext {
         // Every instance is one more cull record after the static objects.
         let n_instances = instanced.clusters.iter().map(|c| c.instances.len()).sum();
 
-        let ctx = Self {
+        let mut ctx = Self {
             last_present_texture: None,
             cull,
             arg_buffers,
             state: SceneState::new(
                 DrawList::unreserved(world.draw_objects, n_instances),
-                clear_color,
+                graphics.background.color,
             ),
             graph_cache: None,
+            gates: Default::default(),
             instanced,
             scene,
             light_uniforms,
@@ -373,6 +383,7 @@ impl MtlContext {
             atmosphere,
             hw,
         };
+        ctx.refresh_gates(&graphics);
         let pooled = ctx.hw.allocator.stats();
         tracing::info!(
             "device allocator: {} heap(s), {} KiB reserved for {} KiB of resources",

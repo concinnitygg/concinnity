@@ -8,28 +8,28 @@ use concinnity_core::render::backend;
 use concinnity_core::render::backend_init;
 use concinnity_core::render::error::RenderResult;
 
-/// Probe a cheap throwaway device handle to classify the GPU, so the auto-config
-/// quality ceiling can influence the render targets / effect pipelines the backend
-/// sizes at init. Each backend creates only the cheap handle it needs and
-/// classifies it: Metal the default-device handle, DirectX the DXGI adapter (no
-/// device / swapchain), Vulkan a surface-free instance (destroyed immediately).
+/// Probe a cheap throwaway device handle to classify the GPU and read what it
+/// can run, so the quality ceiling and the capability clamp can shape the render
+/// targets and effect pipelines the backend sizes at init. Each backend creates
+/// only the handle it needs: Metal the default-device handle, DirectX the
+/// adapter it would select (with the device that selection makes), Vulkan a
+/// surface-free instance (destroyed immediately).
 ///
 /// `None` means the machine exposes no usable GPU at all. That is a different
-/// answer from a GPU this code cannot classify (`Some(GpuProfile::UNKNOWN)`):
-/// the first can only run headless, the second renders at an unclamped
-/// quality.
-pub fn probe_gpu_profile() -> Option<backend::GpuProfile> {
+/// answer from a GPU this code cannot classify (`GpuProfile::UNKNOWN`): the
+/// first can only run headless, the second renders at an unclamped quality.
+pub fn probe_device() -> Option<backend::DeviceProbe> {
     #[cfg(backend_dx)]
     {
-        crate::directx::probe_gpu_profile()
+        crate::directx::probe_device()
     }
     #[cfg(backend_vk)]
     {
-        crate::vulkan::probe_gpu_profile()
+        crate::vulkan::probe_device()
     }
     #[cfg(backend_metal)]
     {
-        crate::metal::probe_gpu_profile()
+        crate::metal::probe_device()
     }
     #[cfg(not(any(backend_dx, backend_vk, backend_metal)))]
     {

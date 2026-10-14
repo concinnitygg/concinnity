@@ -21,11 +21,10 @@
 //! root signature and PSO builders, and `adapter.rs` the adapter selection.
 
 use concinnity_core::gfx::render_types::{FALLBACK_TEXTURE_COUNT, PostProcessParams};
-use concinnity_core::render::backend_init::{
-    self, BackendInit, PlanarBudget, PostSettings, WorldShader,
-};
+use concinnity_core::render::backend_init::{self, BackendInit, PlanarBudget, WorldShader};
 use concinnity_core::render::error::{RenderError, RenderResult};
 use concinnity_core::render::scene_state::{DrawList, SceneState};
+use concinnity_core::settings::ResolvedGraphics;
 
 use self::heap_layout::{RtvHeapLayout, SrvHeapParams};
 use super::context::*;
@@ -34,6 +33,8 @@ use super::hot_reload::HotReloadState;
 use super::resources::skinning::SkinnedState;
 
 mod adapter;
+
+pub(in crate::directx) use adapter::select as select_adapter;
 mod bloom;
 mod bootstrap;
 mod commands;
@@ -76,22 +77,20 @@ struct Features {
 }
 
 impl Features {
-    fn resolve(hw: &DxHardware, post: &PostSettings) -> Self {
+    fn resolve(hw: &DxHardware, graphics: &ResolvedGraphics, hdr_samples: u32) -> Self {
         // FSR3 needs the velocity buffer + the TAA-velocity pre-pass
         // PSOs, both of which live inside `TaaResources`. When upscale
         // is on we force the TAA resources to be built even if the
         // world's `AntiAliasing.mode` is off; the TAA *resolve*
         // pass is still skipped (see `record_frame::seed_inputs`),
         // because FSR owns the temporal accumulation.
-        let taa_enabled = post.taa_enabled || post.temporal_upscaling;
+        let taa_enabled = graphics.taa() || graphics.anti_aliasing.upscaling;
         // The adapter ceiling clamped to what the world asks for. A temporal
         // technique resolves it to one sample, which drops the resolve step and
         // makes `hdr.color` the scene spine; every PSO bakes the result into its
         // `SampleDesc`.
-        let msaa_samples = bootstrap::resolve_sample_count(
-            bootstrap::query_msaa_samples(&hw.device),
-            post.hdr_samples,
-        );
+        let msaa_samples =
+            bootstrap::resolve_sample_count(bootstrap::query_msaa_samples(&hw.device), hdr_samples);
         // Pair the authored tunables with the resolved mode's output flags. On
         // the SDR path both stay 0.0 and the shader runs the full ACES + gamma
         // + FXAA + LUT chain unchanged. Inside the HDR branch, `pq_output`
@@ -100,19 +99,19 @@ impl Features {
         // may have already downgraded the encoding when
         // `CheckColorSpaceSupport(HDR10 PQ)` came back negative, so composing
         // after `setup` returns is what makes `hw.hdr_mode` the source of truth.
-        let post_process = hw.hdr_mode.post_process_params(post.post_process);
+        let post_process = hw.hdr_mode.post_process_params(graphics.post_process());
         // Hardware ray-tracing capability. RT reflection resources + the
         // acceleration structure are built only when the world authored
         // `ray_traced_reflections` AND the GPU reports the DXR 1.1 tier inline
-        // `RayQuery` needs; otherwise the renderer falls back to SSR.
-        let rt_enabled = post.rt_reflections.is_some() && hw.rt_capable;
-        if post.rt_reflections.is_some() && !hw.rt_capable {
-            tracing::warn!(
-                "ray_traced_reflections requested but the GPU does not report DXR \
-                 tier 1.1; falling back to screen-space reflections"
+        // `RayQuery` needs, which the resolved settings already respect.
+        let rt_enabled = graphics.rt_reflections().is_some() && hw.rt_capable;
+        if graphics.rt_reflections().is_some() && !hw.rt_capable {
+            tracing::error!(
+                "the resolved settings asked for ray-traced reflections the device cannot run; \
+                 the capability probe and the backend disagree"
             );
         }
-        let ssao_enabled = post.ssao.is_some();
+        let ssao_enabled = graphics.ssao().is_some();
         Self {
             taa_enabled,
             msaa_samples,
@@ -123,8 +122,8 @@ impl Features {
             // `taa_enabled` already folds in temporal upscaling.
             gbuffer_enabled: taa_enabled
                 || ssao_enabled
-                || post.ssr.is_some()
-                || post.ssgi.is_some()
+                || graphics.ssr().is_some()
+                || graphics.ssgi().is_some()
                 || rt_enabled,
         }
     }
@@ -150,9 +149,9 @@ impl DxContext {
         let BackendInit {
             window,
             validation,
-            frames_in_flight,
-            vsync,
-            clear_color,
+            graphics,
+            hdr_samples,
+            launch,
             hot_reload,
             // DirectX retains the presented back-buffer index unconditionally,
             // so capture needs no arming here.
@@ -165,14 +164,15 @@ impl DxContext {
             local_lights,
             spot_shadows,
             area_lights,
-            shadows,
-            // Clamped to the D3D12 1..16 range where the sampler is built.
-            anisotropy,
             planar,
-            post,
             fx,
             requirements: _,
         } = init;
+        let vsync = graphics.frame_pacing.vsync;
+        let clear_color = graphics.background.color;
+        let shadows = graphics.shadow_params();
+        // Clamped to the D3D12 1..16 range where the sampler is built.
+        let anisotropy = graphics.texture_filtering.anisotropy;
         // Entry 0 is the world default program; entries 1.. are the
         // material-referenced shader buckets (see `world_shaders.rs`). The world
         // default program is never deferred (bucket 0 always decodes at init);
@@ -191,9 +191,9 @@ impl DxContext {
 
         // The swapchain config the caller's reload gate compares against.
         let swapchain_config = backend_init::SwapchainConfig {
-            frames_in_flight: frames_in_flight.max(1),
-            hdr_display: post.hdr_display,
-            hdr_pq: post.hdr_pq,
+            frames_in_flight: graphics.frames_in_flight(),
+            hdr_display: graphics.display.hdr,
+            hdr_pq: graphics.display.pq,
         };
         // A live editor reload hands over the hardware and swapchain (HDR was
         // already negotiated on the unchanged swapchain, so `setup` is skipped).
@@ -213,7 +213,7 @@ impl DxContext {
                 swapchain_config,
             )?,
         };
-        let features = Features::resolve(&hw, &post);
+        let features = Features::resolve(&hw, &graphics, hdr_samples);
         // Persisted pipeline library: seeded from disk when a blob for this
         // adapter exists, consulted by every PSO creation below. No-op on the
         // reload path, where it is already installed.
@@ -254,7 +254,7 @@ impl DxContext {
             },
             anisotropy,
         )?;
-        let upscale = effects::build_upscale(&gpu, &descriptors, output, &post)?;
+        let upscale = effects::build_upscale(&gpu, &descriptors, output, &graphics)?;
         let mut scene =
             scene_assets::build_scene_assets(&gpu, &descriptors, &media, &area_lights, &world)?;
         // The probe set, with the stand-in array in the SRV slot until a world
@@ -309,7 +309,7 @@ impl DxContext {
                 shadow_enabled: shadow.map_size > 0,
                 spot_slices: spot_shadow.count() as usize,
                 gbuffer_enabled: features.gbuffer_enabled,
-                occlusion_two_pass: post.occlusion_two_pass,
+                occlusion_two_pass: graphics.culling.two_pass_occlusion,
             },
         )?;
         // The blades draw under the GPU-driven pass's two root signatures, so a
@@ -337,14 +337,15 @@ impl DxContext {
             effects::build_quality_slots(&gpu, &descriptors, &swapchain, &targets, &rtv);
         let post_device = effects::post_device(&gpu, &descriptors, &post_descriptors);
         let reflection_composite =
-            ray_tracing::build_reflection_composite(&post_device, &targets, &post)?;
+            ray_tracing::build_reflection_composite(&post_device, &targets, &graphics)?;
         let bloom = bloom::build_bloom(&post_device, &targets, output)?;
         let taa = effects::build_taa(&post_device, &features, &targets)?;
-        let ssao = effects::build_ssao(&gpu, &post_device, &descriptors, &targets, post.ssao)?;
-        let ssr = effects::build_ssr(&post_device, &targets, &post)?;
-        let ssgi = effects::build_ssgi(&post_device, &targets, &post)?;
+        let ssao =
+            effects::build_ssao(&gpu, &post_device, &descriptors, &targets, graphics.ssao())?;
+        let ssr = effects::build_ssr(&post_device, &targets, &graphics)?;
+        let ssgi = effects::build_ssgi(&post_device, &targets, &graphics)?;
         let rt_reflections =
-            ray_tracing::build_rt_reflections(&gpu, &quality_slots, &targets, &post);
+            ray_tracing::build_rt_reflections(&gpu, &quality_slots, &targets, &graphics);
         let gbuffer =
             effects::build_gbuffer(&gpu, &targets, &quality_slots, features.gbuffer_enabled)?;
 
@@ -362,7 +363,7 @@ impl DxContext {
         let commands = commands::build_commands(&gpu)?;
         let frame_sync = commands::build_frame_sync(&gpu)?;
         let timestamps = commands::build_timestamps(&gpu);
-        let auto_exposure = effects::build_auto_exposure(&gpu, &post)?;
+        let auto_exposure = effects::build_auto_exposure(&gpu, &graphics)?;
         let atmosphere = effects::build_atmosphere(
             &gpu,
             &descriptors,
@@ -420,7 +421,7 @@ impl DxContext {
                 descriptors: &descriptors,
                 targets: &targets,
                 reflection_slots: quality_slots.glass_reflection,
-                reflection_divisor: post.rt_reflections.map_or(1, |rt| rt.divisor),
+                reflection_divisor: graphics.rt_reflections().map_or(1, |rt| rt.divisor),
                 planar_slots: &planar_slots,
                 glass_panels: &fx.glass_panels,
                 water_surfaces: &fx.water_surfaces,
@@ -434,7 +435,7 @@ impl DxContext {
                 scene: &scene,
                 reflections: rt_reflections.as_ref(),
                 transparent: transparent.as_ref(),
-                post: &post,
+                launch,
             },
         );
 
@@ -455,7 +456,7 @@ impl DxContext {
             pooled.in_use_bytes / 1024,
         );
 
-        Ok(Self {
+        let mut ctx = Self {
             post: post_descriptors,
             swapchain,
             targets,
@@ -506,6 +507,7 @@ impl DxContext {
                 clear_color,
             ),
             graph_cache: std::cell::RefCell::new(None),
+            gates: Default::default(),
             instanced: DxInstanced::new(world.instanced_clusters),
             wireframe: Default::default(),
             diagnostics: Default::default(),
@@ -516,7 +518,9 @@ impl DxContext {
             quality_slots,
             probe: ProbeState::new(probe_prefilter, probe_gpu),
             hw,
-        })
+        };
+        ctx.refresh_gates(&graphics);
+        Ok(ctx)
     }
 }
 

@@ -3,7 +3,7 @@ use crate::components::{AaMode, PassResolution};
 use crate::render::backend::{GpuProfile, GpuTier};
 use crate::settings::options;
 use crate::settings::quality::{QualityPreset, resolve_ceiling};
-use crate::settings::resolve::{QualityEffects, overlay_quality_overrides};
+use crate::settings::resolve::{ResolvedGraphics, overlay_quality_overrides};
 use alloc::vec::Vec;
 
 fn low_ceiling() -> QualityCeiling {
@@ -57,13 +57,13 @@ fn lookups_find_their_own_rows_only() {
 fn toggle_rows_round_trip_through_set_and_persist() {
     for row in &QUALITY_TOGGLES {
         for on in [true, false] {
-            let mut cfg = QualityEffects::default();
+            let mut cfg = ResolvedGraphics::default();
             (row.set)(&mut cfg, on);
             assert_eq!((row.get)(&cfg), on, "{:?} get after set", row.key);
 
             let mut user = UserGraphicsSettings::default();
             *(row.persisted.get_mut)(&mut user) = Some(on);
-            let mut overlaid = QualityEffects::default();
+            let mut overlaid = ResolvedGraphics::default();
             (row.set)(&mut overlaid, !on);
             overlay_quality_overrides(&mut overlaid, &user);
             assert_eq!((row.get)(&overlaid), on, "{:?} overlay", row.key);
@@ -76,7 +76,7 @@ fn cycle_rows_round_trip_through_set_and_persist() {
     for row in &QUALITY_CYCLES {
         let count = options(row.key).unwrap().len();
         for index in 0..count {
-            let mut cfg = QualityEffects::default();
+            let mut cfg = ResolvedGraphics::default();
             (row.set)(&mut cfg, index);
             assert_eq!((row.index)(&cfg), index, "{:?} get after set", row.key);
 
@@ -87,7 +87,7 @@ fn cycle_rows_round_trip_through_set_and_persist() {
             let mut cleared = user.clone();
             (row.clear)(&mut cleared);
             assert!(!(row.overridden)(&cleared), "{:?} cleared", row.key);
-            let mut overlaid = QualityEffects::default();
+            let mut overlaid = ResolvedGraphics::default();
             (row.set)(&mut overlaid, (index + 1) % count);
             (row.overlay)(&mut overlaid, &user);
             assert_eq!((row.index)(&overlaid), index, "{:?} overlay", row.key);
@@ -99,7 +99,7 @@ fn cycle_rows_round_trip_through_set_and_persist() {
 #[test]
 fn cycle_clamp_lowers_to_the_ceiling() {
     let ceiling = low_ceiling();
-    let mut cfg = QualityEffects::default();
+    let mut cfg = ResolvedGraphics::default();
     cfg.anti_aliasing.mode = AaMode::Taa;
     cfg.indirect_lighting.ssgi_resolution = PassResolution::Full;
     cfg.indirect_lighting.ssgi_rays = 4;
@@ -126,7 +126,7 @@ fn cycle_clamp_never_raises() {
     for row in &QUALITY_CYCLES {
         let count = options(row.key).unwrap().len();
         for index in 0..count {
-            let mut cfg = QualityEffects::default();
+            let mut cfg = ResolvedGraphics::default();
             (row.set)(&mut cfg, index);
             (row.clamp)(&mut cfg, &low);
             let lowered = (row.index)(&cfg);
@@ -152,13 +152,16 @@ fn every_graphics_slider_is_a_distinct_slider_key() {
 }
 
 // A slider's persisted choice is the user-facing value; its applied value is
-// what the resolved state holds.
+// what the resolved section holds.
 #[test]
-fn the_exposure_slider_applies_stops_as_a_multiplier() {
+fn the_exposure_slider_sets_clamped_stops() {
     let exposure = graphics_slider(SettingKey::Exposure).unwrap();
-    assert_eq!((exposure.apply)(1.0), 2.0);
-    assert_eq!((exposure.apply)(-100.0), exp2(-EV_LIMIT));
+    assert_eq!((exposure.apply)(1.0), 1.0);
+    assert_eq!((exposure.apply)(-100.0), -EV_LIMIT);
     let mut user = UserGraphicsSettings::default();
-    *(exposure.target.persisted().get_mut)(&mut user) = Some(0.5);
+    *(exposure.persisted.get_mut)(&mut user) = Some(0.5);
     assert_eq!(user.exposure_ev, Some(0.5));
+    let mut graphics = ResolvedGraphics::default();
+    *(exposure.field.get_mut)(&mut graphics) = (exposure.apply)(0.5);
+    assert_eq!(graphics.exposure.ev, 0.5);
 }
